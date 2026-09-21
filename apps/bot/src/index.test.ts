@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import * as shared from '@binarius/shared';
 
-describe('package bootstrap', () => {
-  it('resolves', () => {
-    expect(true).toBe(true);
+describe('workspace resolution', () => {
+  it('resolves @binarius/shared', () => {
+    expect(shared).toBeDefined();
   });
 });

@@ -13,14 +13,15 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 
 ## Requirements
 
-- Node.js >= 22.12.0 (see `.node-version`)
+- Node.js ^22.13.0 || ^24.0.0 || >=26.0.0 (pinned in `.node-version`)
 - pnpm 10.34.1 (managed via Corepack, see `packageManager` in `package.json`)
 
 ## Commands
 
 ```bash
-pnpm install     # install all workspace dependencies
-pnpm typecheck   # tsc -b across the project-reference graph
-pnpm lint        # eslint .
-pnpm test        # vitest run
+pnpm install             # install all workspace dependencies
+pnpm typecheck           # tsc -b across the project-reference graph
+pnpm lint                # eslint .
+pnpm test                # vitest run
+pnpm test apps/backend   # one package's tests (path filter)
 ```
