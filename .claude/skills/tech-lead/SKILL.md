@@ -146,9 +146,9 @@ git log --oneline -3
 
 Confirm: working tree clean; local `main` not behind `origin/main` (else `git pull --rebase origin main` first). Report any divergence before proceeding.
 
-**MCP preflight (mandatory, same phase):**
+**Preflight checks (mandatory, same phase):**
 
-1. **Codex MCP** — trivial ping call. If unavailable, run `.claude/scripts/start-codex-mcp.sh` and re-check. Still down → STOP and ask the user. Never start the pipeline knowing a mandatory checkpoint can't run.
+1. **Codex** — invoke `Skill(skill: "codex:setup")` (the official `codex` plugin, `openai-codex` marketplace — not MCP; `codex mcp-server` was removed upstream in codex-cli 0.153.0+). If it reports Codex missing/unauthenticated and offers to fix it, let it; still not ready → STOP and ask the user. Never start the pipeline knowing a mandatory checkpoint can't run.
 2. **GitHub** — `gh auth status`; if stale, ask the user to `gh auth login` / refresh before proceeding.
 
 **Timeout policy (every checkpoint):** if a Codex call times out twice in a row, offer the skip decision immediately — no third attempt by default.

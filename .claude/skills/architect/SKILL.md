@@ -7,7 +7,7 @@ description: Plans implementation for GitHub issues before they move to In Progr
 
 ## Overview
 
-Researches issues and writes implementation plans before any code is written. The plan is the primary artifact. Before it's final, run an independent **Codex plan review via MCP** and incorporate any Blocker/Major gaps.
+Researches issues and writes implementation plans before any code is written. The plan is the primary artifact. Before it's final, run an independent **Codex plan review** (via the `codex` plugin's `rescue` skill — see Step 7) and incorporate any Blocker/Major gaps.
 
 ## When to Invoke
 
@@ -96,9 +96,13 @@ Grow this table over time — every row should trace to a real review finding (s
 |---|---|
 | [ЗАПОЛНИТЬ по мере накопления PR-ревью] | |
 
-### Step 7: Run Codex plan review via MCP
+### Step 7: Run Codex plan review
 
-Build the prompt from `.claude/codex-plan-review-prompt.md`. Pass: the issue/acceptance criteria, the draft plan, the domain coverage table, affected files/schema/API list, the project's critical invariants (`.claude/CLAUDE.md` → Планирование задач и База данных). Timeout policy: 2 attempts, then stop and ask (`~/.claude/CLAUDE.md` → ABSOLUTE RULE).
+Codex integration in this project is the official `codex` Claude Code plugin (`openai-codex` marketplace) — **not MCP**. `codex mcp-server` was removed upstream in codex-cli 0.153.0+; every Codex binary on record for this machine postdates that removal, so no MCP-based path exists. The plugin's `review`/`adversarial-review`/`status`/`result`/`cancel` commands are user-only (`disable-model-invocation: true` in their frontmatter) and cannot be called by a skill. Its `rescue` skill has no such restriction — it is the only plugin surface this skill can invoke directly, so it is what carries the plan-review checkpoint.
+
+1. Build the review request text from `.claude/codex-plan-review-prompt.md`: the issue/acceptance criteria, the draft plan, the domain coverage table, affected files/schema/API list, the project's critical invariants (`.claude/CLAUDE.md` → Планирование задач и База данных). State explicitly in the request that this is **review only — read-only, do not write or edit any files** (the rescue skill defaults to a write-capable Codex run unless the request says otherwise).
+2. Invoke: `Skill(skill: "codex:rescue", args: "--wait --fresh <the request text>")`. `--fresh` skips the resume-thread prompt (this is a one-shot review, not a continuation); `--wait` runs it in the foreground since a plan review is a checkpoint, not a fire-and-forget task.
+3. If the result reports Codex missing/unauthenticated, invoke `Skill(skill: "codex:setup")` once to check/fix, then retry. Timeout/failure policy: 2 attempts total, then stop and ask (`~/.claude/CLAUDE.md` → ABSOLUTE RULE).
 
 Ask for findings only — missing domain entities, skipped edge cases, wrong ownership/placement, schema/contract drift, auth/multi-tenant risks. Revise the draft before posting if Blocker/Major found.
 
@@ -116,7 +120,7 @@ Post the final plan as an issue comment (`/github` skill), then move the issue t
 
 ### Step 2: Re-check the revised plan with Codex
 
-Send: original plan, review findings, proposed revised steps. Ask whether the revision fully covers the gap.
+Same mechanism as Step 7 above (`Skill(skill: "codex:rescue", args: "--wait --fresh <request>")`, read-only framing). Send: original plan, review findings, proposed revised steps. Ask whether the revision fully covers the gap.
 
 ### Step 3: Post a clarifying comment
 

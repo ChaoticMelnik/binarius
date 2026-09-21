@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "codex": {
-      "type": "stdio",
-      "command": "zsh",
-      "args": ["-lc", "./.claude/scripts/start-codex-mcp.sh"]
-    }
-  }
-}

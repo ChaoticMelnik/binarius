@@ -1,5 +1,7 @@
 Review plan
 
+This is a review-only request. Read-only — do not write, edit, or apply any changes to any file.
+
 Issue: <issue number / title>
 Goal: <what should be delivered>
 Scope:
@@ -14,7 +16,7 @@ Draft plan:
 1. <step>
 
 Review only for gaps, missing invariants, hidden dependencies, missing tests, rollout risks, and wrong assumptions.
-Read the scoped files directly via MCP. Use CodeGraph first for structural checks if configured; otherwise read files directly.
+Read the scoped files directly. Use CodeGraph first for structural checks if configured; otherwise read files directly.
 
 Mandatory checks (answer each explicitly — this list grows over time; add a new numbered check whenever a real Blocker/Major traces back to something not covered here, never remove one without reason):
 1. Does every mutating endpoint have the same authorization pattern as its neighbors in the same file?

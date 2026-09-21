@@ -11,7 +11,7 @@ Two modes:
 1. **Task Review** — a specific PR for an issue In Review.
 2. **Project Review** — full codebase, no specific issue named.
 
-Post findings immediately, no additional approval needed. Codex via MCP is a required independent reviewer in both modes.
+Post findings immediately, no additional approval needed. Codex (via the `codex` plugin's `rescue` skill — see Step 3a) is a required independent reviewer in both modes.
 
 ## Mode Detection
 
@@ -36,7 +36,10 @@ Check diff size first: `gh pr diff <N> | wc -l`.
 
 **Small-diff rule:** < 50 lines (initial review) or < 20 lines (re-review) → run only Codex + code-review agent (3a + 3c), skip security/simplify.
 
-**3a. Codex review** *(always)* — send the issue, the plan's "Accepted risks / trade-offs" section with the instruction not to re-raise them, the PR diff, the check-command output. Timeout policy: 2 attempts, then stop and ask.
+**3a. Codex review** *(always)* — Codex integration here is the official `codex` Claude Code plugin (`openai-codex` marketplace), not MCP (`codex mcp-server` was removed upstream in codex-cli 0.153.0+, and no Codex binary on this machine still has it). Its `review`/`adversarial-review` commands are user-only (`disable-model-invocation: true`) and cannot be invoked by a skill; its `rescue` skill has no such restriction and is what this step uses:
+  1. Build the request from `.claude/codex-review-prompt.md`: the issue, the plan's "Accepted risks / trade-offs" section with the instruction not to re-raise them, the PR diff (`gh pr diff <N>`), the check-command output. State explicitly that this is **review only — read-only, do not write or edit any files**.
+  2. Invoke `Skill(skill: "codex:rescue", args: "--wait --fresh <the request text>")`.
+  3. If Codex is missing/unauthenticated, invoke `Skill(skill: "codex:setup")` once, then retry. Timeout/failure policy: 2 attempts total, then stop and ask.
 
 **3b. Security review agent** *(skip on small diff)* — spawn `Agent` with the full `/security-review` prompt.
 
