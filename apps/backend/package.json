@@ -3,8 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts"
+  },
   "dependencies": {
+    "@binarius/db": "workspace:*",
     "@binarius/shared": "workspace:*",
-    "@binarius/db": "workspace:*"
+    "fastify": "^5.12.5",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
   }
 }
