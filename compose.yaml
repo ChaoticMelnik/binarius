@@ -1,0 +1,195 @@
+x-app-environment: &app-environment
+  DATABASE_URL: postgres://${POSTGRES_USER:-binarius}:${POSTGRES_PASSWORD:-binarius}@postgres:5432/${POSTGRES_DB:-binarius}
+  REDIS_URL: redis://redis:6379
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  HEALTH_TIMEOUT_MS: ${HEALTH_TIMEOUT_MS:-2000}
+
+# valueless entries pass through only when set (shell or .env); ${VAR:-} would inject ""
+x-broker-environment: &broker-environment
+  BROKER_CLIENT_ID:
+  BROKER_CLIENT_SECRET:
+  BROKER_WS_URL:
+
+x-app: &app
+  build: .
+  init: true
+  restart: ${COMPOSE_RESTART:-unless-stopped}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+x-watch-shared: &watch-shared
+  path: ./packages/shared/src
+  target: /app/packages/shared/src
+  action: sync
+
+x-watch-db: &watch-db
+  path: ./packages/db/src
+  target: /app/packages/db/src
+  action: sync
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-binarius}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-binarius}
+      POSTGRES_DB: ${POSTGRES_DB:-binarius}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    <<: *app
+    command: pnpm --filter @binarius/backend dev
+    environment:
+      <<: [*app-environment, *broker-environment]
+      PORT: "3000"
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
+    healthcheck:
+      # 127.0.0.1, not localhost: Alpine resolves localhost to ::1 and the server binds 0.0.0.0
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+      interval: 10s
+      # above the HEALTH_TIMEOUT_MS ceiling (2500): the probe sees the app's verdict, not a killed check
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    develop:
+      watch:
+        - path: ./apps/backend/src
+          target: /app/apps/backend/src
+          action: sync
+        - *watch-shared
+        - *watch-db
+        - path: ./apps/backend/package.json
+          action: rebuild
+        - path: ./apps/backend/tsconfig.json
+          action: rebuild
+        - path: ./packages/shared/package.json
+          action: rebuild
+        - path: ./packages/shared/tsconfig.json
+          action: rebuild
+        - path: ./packages/db/package.json
+          action: rebuild
+        - path: ./packages/db/tsconfig.json
+          action: rebuild
+        - path: ./package.json
+          action: rebuild
+        - path: ./pnpm-lock.yaml
+          action: rebuild
+        - path: ./pnpm-workspace.yaml
+          action: rebuild
+        - path: ./tsconfig.base.json
+          action: rebuild
+
+  bot:
+    <<: *app
+    command: pnpm --filter @binarius/bot dev
+    environment:
+      <<: *app-environment
+      TELEGRAM_BOT_TOKEN:
+    develop:
+      watch:
+        - path: ./apps/bot/src
+          target: /app/apps/bot/src
+          action: sync
+        - *watch-shared
+        - path: ./apps/bot/package.json
+          action: rebuild
+        - path: ./apps/bot/tsconfig.json
+          action: rebuild
+        - path: ./packages/shared/package.json
+          action: rebuild
+        - path: ./packages/shared/tsconfig.json
+          action: rebuild
+        - path: ./package.json
+          action: rebuild
+        - path: ./pnpm-lock.yaml
+          action: rebuild
+        - path: ./pnpm-workspace.yaml
+          action: rebuild
+        - path: ./tsconfig.base.json
+          action: rebuild
+
+  trading-worker:
+    <<: *app
+    command: pnpm --filter @binarius/trading-worker dev
+    environment:
+      <<: [*app-environment, *broker-environment]
+    develop:
+      watch:
+        - path: ./apps/trading-worker/src
+          target: /app/apps/trading-worker/src
+          action: sync
+        - *watch-shared
+        - *watch-db
+        - path: ./apps/trading-worker/package.json
+          action: rebuild
+        - path: ./apps/trading-worker/tsconfig.json
+          action: rebuild
+        - path: ./packages/shared/package.json
+          action: rebuild
+        - path: ./packages/shared/tsconfig.json
+          action: rebuild
+        - path: ./packages/db/package.json
+          action: rebuild
+        - path: ./packages/db/tsconfig.json
+          action: rebuild
+        - path: ./package.json
+          action: rebuild
+        - path: ./pnpm-lock.yaml
+          action: rebuild
+        - path: ./pnpm-workspace.yaml
+          action: rebuild
+        - path: ./tsconfig.base.json
+          action: rebuild
+
+  web:
+    <<: *app
+    command: pnpm --filter @binarius/web dev
+    environment:
+      <<: *app-environment
+    develop:
+      watch:
+        - path: ./apps/web/src
+          target: /app/apps/web/src
+          action: sync
+        - *watch-shared
+        - path: ./apps/web/package.json
+          action: rebuild
+        - path: ./apps/web/tsconfig.json
+          action: rebuild
+        - path: ./packages/shared/package.json
+          action: rebuild
+        - path: ./packages/shared/tsconfig.json
+          action: rebuild
+        - path: ./package.json
+          action: rebuild
+        - path: ./pnpm-lock.yaml
+          action: rebuild
+        - path: ./pnpm-workspace.yaml
+          action: rebuild
+        - path: ./tsconfig.base.json
+          action: rebuild
+
+volumes:
+  pgdata:

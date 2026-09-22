@@ -5,18 +5,121 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: binarius
+          POSTGRES_PASSWORD: binarius
+          POSTGRES_DB: binarius
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U binarius -d binarius"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://binarius:binarius@localhost:5432/binarius
     steps:
       - uses: actions/checkout@v4
+        with:
+          # the migration immutability check diffs against the PR base branch
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Schema changes carry a committed migration
+        run: |
+          pnpm db:generate
+          if [ -n "$(git status --porcelain packages/db/drizzle)" ]; then
+            git status --short packages/db/drizzle
+            echo "::error::packages/db schema changed without a committed migration (run pnpm db:generate)"
+            exit 1
+          fi
+      - run: pnpm db:check
+      - name: Committed migrations are immutable
+        env:
+          # a pull request compares against its base branch, a push against its own previous
+          # commit; github.base_ref is empty on push, and falling back to main there would
+          # compare HEAD with itself and pass vacuously
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -n "$BASE_REF" ]; then
+            git fetch --quiet origin "$BASE_REF"
+            base="$(git merge-base "origin/$BASE_REF" HEAD)"
+          elif [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            base="$BEFORE_SHA"
+          else
+            echo "no base revision (first commit) - nothing to compare"
+            exit 0
+          fi
+          # separate statements: an unresolvable base must fail the step, not silently pass
+          diff="$(git diff --name-status "$base" HEAD -- 'packages/db/drizzle/*.sql' 'packages/db/drizzle/meta/*_snapshot.json')"
+          changed="$(printf '%s\n' "$diff" | grep -vE '^(A|$)' || true)"
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            echo "::error::committed migrations are immutable (forward-only): add a new migration instead"
+            exit 1
+          fi
+          # the journal legitimately grows, so it is compared as a prefix: existing entries
+          # must be untouched (the migrator keys on their `when`, and never re-reads the hash)
+          if git show "$base:packages/db/drizzle/meta/_journal.json" > /tmp/base_journal.json 2>/dev/null; then
+            base_has_journal=1
+          else
+            # the base predates packages/db entirely: nothing to hold immutable yet
+            base_has_journal=0
+            echo '{"entries":[]}' > /tmp/base_journal.json
+          fi
+          BASE_HAS_JOURNAL="$base_has_journal" python3 - <<'PY'
+          import json, os, sys
+          base = json.load(open('/tmp/base_journal.json'))
+          head = json.load(open('packages/db/drizzle/meta/_journal.json'))
+          if head['entries'][:len(base['entries'])] != base['entries']:
+              print('::error::an already-committed migration journal entry was modified')
+              sys.exit(1)
+          # only meaningful once the base actually has a journal; comparing against the
+          # empty fallback would fail every PR that introduces packages/db
+          if os.environ['BASE_HAS_JOURNAL'] == '1':
+              for field in ('version', 'dialect'):
+                  if base.get(field) != head.get(field):
+                      print(f'::error::journal {field} changed: {base.get(field)} -> {head.get(field)}')
+                      sys.exit(1)
+          appended = len(head['entries']) - len(base['entries'])
+          print(f"journal: {len(base['entries'])} existing entries unchanged, {appended} appended")
+          PY
+      - run: pnpm db:migrate
       # test runs before typecheck: typecheck emits dist/, which would mask a broken exports map
       - run: pnpm test
       - run: pnpm typecheck
       - run: pnpm lint
+
+  compose:
+    runs-on: ubuntu-latest
+    env:
+      # a crashing service would otherwise be restarted forever and --wait would burn the whole timeout
+      COMPOSE_RESTART: 'no'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dockerfile Node version matches .node-version
+        run: test "$(sed -n 's/^ARG NODE_VERSION=//p' Dockerfile)" = "$(cat .node-version)"
+      - run: docker compose config -q
+      - run: docker compose up -d --build --wait --wait-timeout 120
+      - run: curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'
+      - if: failure()
+        continue-on-error: true
+        run: docker compose logs
+      - if: always()
+        continue-on-error: true
+        run: docker compose down -v
