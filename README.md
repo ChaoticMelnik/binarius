@@ -42,4 +42,26 @@ Plain `docker compose up` starts everything without file sync. `--build` matters
 `--watch` starts from the last built image and only picks up edits made after it started.
 Under `--watch`, edits to `src/` restart the affected app; edits to a `package.json`,
 `pnpm-lock.yaml`, or a tsconfig rebuild the image. Postgres (`5432`), Redis (`6379`), and the
-backend (`3000`) are published on `127.0.0.1` only. `pnpm test` never needs Docker.
+backend (`3000`) are published on `127.0.0.1` only.
+
+## Database
+
+`packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
+The `packages/db` tests run against a real, migrated Postgres named by `DATABASE_URL` and fail
+without one — `pnpm test` therefore needs the compose Postgres:
+
+```bash
+docker compose up -d postgres
+export DATABASE_URL=postgres://binarius:binarius@localhost:5432/binarius   # the .env.example value
+pnpm db:migrate          # apply pending migrations (idempotent)
+pnpm test
+```
+
+If another Postgres already owns host port 5432, set `POSTGRES_PORT=5433` in `.env` and use that
+port in `DATABASE_URL`.
+
+Changing the schema: edit `packages/db/src/schema/*`, run `pnpm db:generate`, read the generated SQL
+(no DROP without a decision), `pnpm db:migrate`, and commit the migration with its `meta/` files
+(`.claude/CLAUDE.md` → База данных). Committed migrations are never edited — CI rejects that; add a
+new one. `pnpm db:check` validates the migration journal. Triggers and other objects drizzle-kit does
+not model go into a custom migration (`drizzle-kit generate --custom`).
