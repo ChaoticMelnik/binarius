@@ -1,18 +1,34 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type {
   BinaryPair,
+  BrokerError,
   BrokerUser,
   Candle,
+  ChartRequest,
   ClosedTrade,
   OpenTrade,
   OpenTradeRequest,
 } from './broker';
 import type { DecimalString } from './money';
 import type { OAuthTokens, WidgetSession, WidgetSessionRequest } from './oauth';
-import type { PartnerPositions, PartnerRefLink, PartnerStats, PartnerTraderStats } from './partner';
+import type {
+  PartnerErrorWire,
+  PartnerPositions,
+  PartnerRefLink,
+  PartnerStats,
+  PartnerTraderStats,
+} from './partner';
 import type { AssetsUpdate, PriceUpdate, SocketOpenTradeRequest } from './socket';
 import type { TradeIntent } from './trading';
+import * as broker from './broker';
+import * as ids from './ids';
 import * as shared from './index';
+import * as money from './money';
+import * as oauth from './oauth';
+import * as partner from './partner';
+import * as socket from './socket';
+import * as time from './time';
+import * as trading from './trading';
 
 // every field issue #6 lists, on the domain type it belongs to
 describe('contract coverage (issue #6)', () => {
@@ -99,12 +115,19 @@ describe('contract coverage (issue #6)', () => {
     >();
     expectTypeOf<OpenTrade['amount']>().toEqualTypeOf<DecimalString>();
     expectTypeOf<ClosedTrade['profit']>().toEqualTypeOf<DecimalString>();
+    expectTypeOf<OpenTrade['source']>().toEqualTypeOf<
+      'api' | 'platform' | (string & {}) | undefined
+    >();
     expectTypeOf<keyof OpenTradeRequest>().toEqualTypeOf<
       'assetId' | 'amount' | 'action' | 'durationSec' | 'isDemo'
     >();
     expectTypeOf<keyof SocketOpenTradeRequest>().toEqualTypeOf<
       'assetId' | 'amount' | 'action' | 'durationSec'
     >();
+    expectTypeOf<keyof ChartRequest>().toEqualTypeOf<
+      'assetId' | 'interval' | 'limit' | 'startTime'
+    >();
+    expectTypeOf<keyof BrokerError>().toEqualTypeOf<'message' | 'details'>();
   });
 
   it('Partner DTOs', () => {
@@ -118,6 +141,10 @@ describe('contract coverage (issue #6)', () => {
       | 'depositsCardRuCount'
     >();
     expectTypeOf<PartnerTraderStats['balance']>().toEqualTypeOf<DecimalString>();
+    expectTypeOf<PartnerTraderStats['uid']>().toEqualTypeOf<string>();
+    expectTypeOf<PartnerTraderStats['depositsCount']>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<PartnerErrorWire['code']>().toEqualTypeOf<number | string>();
+    expectTypeOf<PartnerErrorWire['reason']>().toEqualTypeOf<string>();
     expectTypeOf<keyof PartnerTraderStats>().toEqualTypeOf<
       | 'uid'
       | 'balance'
@@ -152,16 +179,11 @@ describe('contract coverage (issue #6)', () => {
   });
 
   it('root index re-exports every module', () => {
-    for (const name of [
-      'decimalStringSchema',
-      'normalizeUnixMs',
-      'TradeIntentStatus',
-      'parseBinaryPair',
-      'parseOAuthTokenResponse',
-      'parsePartnerStats',
-      'decodeSocketPayload',
-    ]) {
-      expect(shared).toHaveProperty(name);
+    const modules = { money, time, ids, trading, broker, oauth, partner, socket };
+    for (const [moduleName, module] of Object.entries(modules)) {
+      for (const [key, value] of Object.entries(module)) {
+        expect(shared, `${moduleName}.${key}`).toHaveProperty(key, value);
+      }
     }
   });
 });

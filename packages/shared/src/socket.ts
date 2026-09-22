@@ -1,27 +1,17 @@
 import * as z from 'zod';
 import {
-  binaryPairWireSchema,
-  brokerBalanceWireSchema,
-  brokerUserWireSchema,
   closedTradeWireSchema,
-  toBinaryPair,
-  toBrokerBalance,
-  toBrokerUser,
+  openTradeRequestWireSchema,
   toClosedTrade,
-  toOpenTrade,
-  openTradeWireSchema,
-  type BinaryPair,
   type BinaryPairWire,
-  type BrokerBalance,
   type BrokerBalanceWire,
-  type BrokerUser,
   type BrokerUserWire,
   type ClosedTrade,
-  type OpenTrade,
+  type OpenTradeRequest,
   type OpenTradeWire,
 } from './broker';
-import { decimalStringSchema, type DecimalString } from './money';
-import { tradeActionSchema, type TradeAction, type TradeMode } from './trading';
+import { idWireSchema } from './ids';
+import type { TradeMode } from './trading';
 
 // Contract per spike #8 §1 (read from binodex/broker-web, not live-verified). Event maps are typed
 // with WIRE payloads: the server may deliver them as bytes, so decode first (decodeSocketPayload),
@@ -58,7 +48,7 @@ export function modeEvent<M extends TradeMode, E extends ModeScopedEvent>(
 // --- Client → server payloads -----------------------------------------------------------------
 
 export const userAuthWireSchema = z.object({
-  id: z.union([z.int(), z.string().min(1)]),
+  id: idWireSchema,
   token: z.string().min(1),
 });
 export type UserAuthWire = z.infer<typeof userAuthWireSchema>;
@@ -69,20 +59,10 @@ export const priceSubscribeWireSchema = z.object({
 export type PriceSubscribeWire = z.infer<typeof priceSubscribeWireSchema>;
 
 // the mode travels in the event name, so unlike the REST body there is no is_demo here
-export const socketOpenTradeRequestWireSchema = z.object({
-  asset_id: z.int(),
-  amount: decimalStringSchema,
-  action: tradeActionSchema,
-  duration: z.int().positive(),
-});
+export const socketOpenTradeRequestWireSchema = openTradeRequestWireSchema.omit({ is_demo: true });
 export type SocketOpenTradeRequestWire = z.infer<typeof socketOpenTradeRequestWireSchema>;
 
-export interface SocketOpenTradeRequest {
-  assetId: number;
-  amount: DecimalString;
-  action: TradeAction;
-  durationSec: number;
-}
+export type SocketOpenTradeRequest = Omit<OpenTradeRequest, 'isDemo'>;
 
 export function toSocketOpenTradeRequestWire(
   request: SocketOpenTradeRequest,
@@ -119,10 +99,8 @@ export function toPriceUpdate(wire: PriceUpdateWire): PriceUpdate {
   return { assetId, price, timestamp };
 }
 
-export const assetsListWireSchema = z.array(binaryPairWireSchema);
-export type AssetsListWire = z.infer<typeof assetsListWireSchema>;
-
-// #8 leaves open whether the patch is keyed by asset_id or id: either is accepted, both must agree
+// TODO(#8): drop the id alias once the patch key is confirmed; until then either is accepted and
+// both must agree when present
 export const assetsUpdateWireSchema = z
   .looseObject({
     asset_id: z.int().optional(),
@@ -148,6 +126,7 @@ export interface AssetsUpdate {
 
 export function toAssetsUpdate(wire: AssetsUpdateWire): AssetsUpdate {
   const assetId = wire.asset_id ?? wire.id;
+  // the refine guarantees one key, but that is invisible to the inferred type
   if (assetId === undefined) throw new Error('assets_update without asset_id or id');
   return {
     assetId,
@@ -224,7 +203,8 @@ function parseJson(text: string): unknown {
   }
 }
 
-function decodeBytes(bytes: Uint8Array): string {
+// a detached ArrayBuffer fails inside decode() as well, so every byte-level failure lands here
+function decodeBytes(bytes: ArrayBuffer | ArrayBufferView): string {
   try {
     return utf8.decode(bytes);
   } catch (cause) {
@@ -232,30 +212,24 @@ function decodeBytes(bytes: Uint8Array): string {
   }
 }
 
-function isByteEnvelope(value: unknown): value is { data: unknown[] } {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'data' in value &&
-    Array.isArray((value as { data: unknown }).data)
-  );
+const isByte = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 255;
+
+// only a non-empty all-byte `data` array counts as an envelope; any other object is a payload
+function byteEnvelopeBytes(value: unknown): Uint8Array | undefined {
+  if (typeof value !== 'object' || value === null || !('data' in value)) return undefined;
+  const { data } = value;
+  if (!Array.isArray(data) || data.length === 0 || !data.every(isByte)) return undefined;
+  return Uint8Array.from(data);
 }
 
-// JSON string, ArrayBuffer, any TypedArray/DataView (respecting its byte offset), or a
+// JSON string, ArrayBuffer, any TypedArray/DataView (decoded over its own byte range), or a
 // { data: number[] } byte envelope → parsed JSON; anything else is treated as already decoded
 export function decodeSocketPayload(raw: unknown): unknown {
   if (typeof raw === 'string') return parseJson(raw);
-  if (raw instanceof ArrayBuffer) return parseJson(decodeBytes(new Uint8Array(raw)));
-  if (ArrayBuffer.isView(raw)) {
-    return parseJson(decodeBytes(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)));
-  }
-  if (isByteEnvelope(raw)) {
-    const bytes = raw.data;
-    if (!bytes.every((b) => Number.isInteger(b) && (b as number) >= 0 && (b as number) <= 255)) {
-      throw new SocketPayloadDecodeError('socket byte envelope contains non-byte values');
-    }
-    return parseJson(decodeBytes(Uint8Array.from(bytes as number[])));
-  }
+  if (raw instanceof ArrayBuffer || ArrayBuffer.isView(raw)) return parseJson(decodeBytes(raw));
+  const envelope = byteEnvelopeBytes(raw);
+  if (envelope !== undefined) return parseJson(decodeBytes(envelope));
   return raw;
 }
 
@@ -267,10 +241,7 @@ export function safeDecodeSocketPayload(raw: unknown): SafeDecodeResult {
     return { ok: true, value: decodeSocketPayload(raw) };
   } catch (error) {
     if (error instanceof SocketPayloadDecodeError) return { ok: false, error };
-    return {
-      ok: false,
-      error: new SocketPayloadDecodeError('socket payload decoding failed', { cause: error }),
-    };
+    throw error;
   }
 }
 
@@ -278,21 +249,29 @@ export function safeDecodeSocketPayload(raw: unknown): SafeDecodeResult {
 
 export const parseUserAuthError = (input: unknown): UserAuthErrorWire =>
   userAuthErrorWireSchema.parse(input);
+export const safeParseUserAuthError = (input: unknown) => userAuthErrorWireSchema.safeParse(input);
 export const parsePriceUpdate = (input: unknown): PriceUpdate =>
   toPriceUpdate(priceUpdateWireSchema.parse(input));
 export const safeParsePriceUpdate = (input: unknown) => priceUpdateWireSchema.safeParse(input);
-export const parseAssetsList = (input: unknown): BinaryPair[] =>
-  assetsListWireSchema.parse(input).map(toBinaryPair);
 export const parseAssetsUpdate = (input: unknown): AssetsUpdate =>
   toAssetsUpdate(assetsUpdateWireSchema.parse(input));
 export const safeParseAssetsUpdate = (input: unknown) => assetsUpdateWireSchema.safeParse(input);
-export const parseSocketOpenTradeSuccess = (input: unknown): OpenTrade =>
-  toOpenTrade(openTradeWireSchema.parse(input));
 export const parseOpenTradeFail = (input: unknown): OpenTradeFailure[] =>
   toOpenTradeFailures(openTradeFailWireSchema.parse(input));
+export const safeParseOpenTradeFail = (input: unknown) => openTradeFailWireSchema.safeParse(input);
 export const parseCloseTradeSuccess = (input: unknown): ClosedTrade[] =>
   closeTradeSuccessWireSchema.parse(input).trades.map(toClosedTrade);
-export const parseUpdateBalance = (input: unknown): BrokerBalance =>
-  toBrokerBalance(brokerBalanceWireSchema.parse(input));
-export const parseUserData = (input: unknown): BrokerUser =>
-  toBrokerUser(brokerUserWireSchema.parse(input));
+export const safeParseCloseTradeSuccess = (input: unknown) =>
+  closeTradeSuccessWireSchema.safeParse(input);
+
+// these socket payloads are the REST shapes verbatim, so the parsers are the broker ones
+export {
+  parseBinaryPairs as parseAssetsList,
+  parseBrokerBalance as parseUpdateBalance,
+  parseBrokerUser as parseUserData,
+  parseOpenTrade as parseSocketOpenTradeSuccess,
+  safeParseBinaryPairs as safeParseAssetsList,
+  safeParseBrokerBalance as safeParseUpdateBalance,
+  safeParseBrokerUser as safeParseUserData,
+  safeParseOpenTrade as safeParseSocketOpenTradeSuccess,
+} from './broker';
