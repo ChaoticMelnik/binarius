@@ -1,6 +1,7 @@
 ---
 name: tech-lead
 description: Orchestrates the full issue lifecycle and monitors process compliance. If given an issue directly, runs architect + implementer + reviewer phases. After each issue, reports on process deviations and recommends improvements.
+model: inherit
 ---
 
 # Tech Lead Role
@@ -14,6 +15,8 @@ Two modes:
 Mandatory stop points follow `~/.claude/CLAUDE.md` → Skill Orchestration → Pipeline autonomy, as waived (or not) by this repo's own `.claude/CLAUDE.md` → Git-процесс. As of bootstrap, nothing is waived here: `/implementer` stops for commit authorization and again before push/PR; the merge stop point is never waivable at all — `/reviewer` reports a clean PR and waits for the user to merge it, unless this repo's CLAUDE.md has separately opted into agent-executed merges with a per-merge `AskUserQuestion` confirmation.
 
 Tech Lead also owns enforcement of the two Codex checkpoints: plan review during Architect, code review during Reviewer — both mandatory (`~/.claude/CLAUDE.md` → ABSOLUTE RULE).
+
+Model per role is fixed by `.claude/CLAUDE.md` → Модели по ролям pipeline: this skill runs on the session model (`model: inherit`), `/architect` switches to Fable, `/implementer` and `/reviewer` to Opus — each via its own frontmatter at `Skill(...)` invocation time, reviewer sub-agents via an explicit `model` on every spawn. Never ask the owner to switch `/model` between phases; the skills do it, and the session model is only the fallback.
 
 ---
 
@@ -46,6 +49,14 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 - [ ] Codex code review ran before the reviewer finalized the verdict
 - [ ] If issues found: reviewer returned the issue to **Todo** before any re-implementation started
 - [ ] If clean: reviewer posted the ready-to-merge comment and did not self-approve
+
+### Model policy — check
+
+- [ ] Each phase ran on its policy model (`.claude/CLAUDE.md` → Модели по ролям pipeline): Architect on Fable, Implementer and Reviewer on Opus, `/simplify` sub-agent on Sonnet. Verify from the session transcript, not from frontmatter:
+  ```bash
+  grep -o '"model":"[^"]*"' ~/.claude/projects/-Users-user-Documents-Binarius/<session-id>.jsonl | sort | uniq -c
+  ```
+  Only the session model in the output means the per-skill switch did not happen. Severity: Major if Architect ran below Fable, Minor if another phase ran above its policy model (cost only).
 
 ### Report format
 
@@ -150,6 +161,7 @@ Confirm: working tree clean; local `main` not behind `origin/main` (else `git pu
 
 1. **Codex** — invoke `Skill(skill: "codex:setup")` (the official `codex` plugin, `openai-codex` marketplace — not MCP; `codex mcp-server` was removed upstream in codex-cli 0.153.0+). If it reports Codex missing/unauthenticated and offers to fix it, let it; still not ready → STOP and ask the user. Never start the pipeline knowing a mandatory checkpoint can't run.
 2. **GitHub** — `gh auth status`; if stale, ask the user to `gh auth login` / refresh before proceeding.
+3. **Model** — the system prompt names the session model. The policy fallback is Fable (`.claude/CLAUDE.md` → Модели по ролям pipeline). If the session runs on anything else, continue, but record it as a deviation in the Phase 3 audit: an owner prompt mid-phase would then drop `/architect` below Fable.
 
 **Timeout policy (every checkpoint):** if a Codex call times out twice in a row, offer the skip decision immediately — no third attempt by default.
 
