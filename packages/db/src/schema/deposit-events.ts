@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  foreignKey,
   index,
   jsonb,
   numeric,
@@ -10,7 +11,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import type { DecimalString } from '@binarius/shared';
-import { createdAt, id, inList } from './columns';
+import { createdAt, id, inList, positiveMoney } from './columns';
 import { brokerAccounts } from './broker-accounts';
 import { users } from './users';
 
@@ -45,6 +46,14 @@ export const depositEvents = pgTable(
     createdAt: createdAt(),
   },
   (t) => [
+    // when both are present the account must belong to the named user, or a postback
+    // credits someone who did not pay; MATCH SIMPLE leaves the skeleton's nullable rows alone
+    foreignKey({
+      name: 'deposit_events_account_owner_fk',
+      columns: [t.brokerAccountId, t.userId],
+      foreignColumns: [brokerAccounts.id, brokerAccounts.userId],
+    }),
+    positiveMoney('deposit_events_amount_check', t.amount, true),
     uniqueIndex('deposit_events_postback_id_idx').on(t.postbackId),
     uniqueIndex('deposit_events_payment_id_idx')
       .on(t.paymentId)

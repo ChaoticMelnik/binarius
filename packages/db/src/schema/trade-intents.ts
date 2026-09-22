@@ -1,6 +1,5 @@
 import { sql } from 'drizzle-orm';
 import {
-  bigint,
   check,
   foreignKey,
   index,
@@ -20,7 +19,15 @@ import {
   TradeMode,
   type DecimalString,
 } from '@binarius/shared';
-import { createdAt, id, inList, sqlLiteralList, updatedAt } from './columns';
+import {
+  createdAt,
+  id,
+  inList,
+  positiveMoney,
+  sqlLiteralList,
+  tokenAmount,
+  updatedAt,
+} from './columns';
 import { brokerAccounts } from './broker-accounts';
 import { tradingSessions } from './trading-sessions';
 import { users } from './users';
@@ -57,9 +64,7 @@ export const tradeIntents = pgTable(
     status: text('status').$type<TradeIntentStatus>().notNull().default(TradeIntentStatus.Planned),
     // ARCH-03: the worker re-reads the intent and rejects a job whose version moved on
     version: integer('version').notNull().default(1),
-    tokensReserved: bigint('tokens_reserved', { mode: 'bigint' })
-      .notNull()
-      .default(sql`0`),
+    tokensReserved: tokenAmount('tokens_reserved'),
     transport: text('transport').$type<TradeTransport>(),
     submittedAt: timestamp('submitted_at', { withTimezone: true }),
     lastError: text('last_error'),
@@ -74,26 +79,29 @@ export const tradeIntents = pgTable(
     uniqueIndex('trade_intents_active_account_idx')
       .on(t.brokerAccountId)
       .where(sql`${t.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})`),
-    // target of the composite FK from broker_trades
-    unique('trade_intents_id_account_key').on(t.id, t.brokerAccountId),
+    // FK target for broker_trades: mode is part of the key so a demo intent cannot
+    // parent a real trade
+    unique('trade_intents_id_account_mode_key').on(t.id, t.brokerAccountId, t.mode),
+    // FK target for token_ledger.intent_id
+    unique('trade_intents_id_user_key').on(t.id, t.userId),
     // the intent's user must own the broker account
     foreignKey({
       name: 'trade_intents_account_owner_fk',
       columns: [t.brokerAccountId, t.userId],
       foreignColumns: [brokerAccounts.id, brokerAccounts.userId],
     }),
-    // the session, when set, must belong to the same account
+    // the session, when set, must belong to the same account and run in the same mode
     foreignKey({
       name: 'trade_intents_session_account_fk',
-      columns: [t.tradingSessionId, t.brokerAccountId],
-      foreignColumns: [tradingSessions.id, tradingSessions.brokerAccountId],
+      columns: [t.tradingSessionId, t.brokerAccountId, t.mode],
+      foreignColumns: [tradingSessions.id, tradingSessions.brokerAccountId, tradingSessions.mode],
     }),
     inList('trade_intents_mode_check', t.mode, TradeMode),
     inList('trade_intents_action_check', t.action, TradeAction),
     inList('trade_intents_status_check', t.status, TradeIntentStatus),
     inList('trade_intents_transport_check', t.transport, TradeTransport),
     check('trade_intents_asset_id_check', sql`${t.assetId} > 0`),
-    check('trade_intents_amount_check', sql`${t.amount} > 0`),
+    positiveMoney('trade_intents_amount_check', t.amount),
     check('trade_intents_duration_sec_check', sql`${t.durationSec} > 0`),
     check('trade_intents_tokens_reserved_check', sql`${t.tokensReserved} >= 0`),
     index('trade_intents_account_status_idx').on(t.brokerAccountId, t.status),

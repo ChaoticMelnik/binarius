@@ -52,10 +52,16 @@ export const outboxEvents = pgTable(
     unique('outbox_events_topic_intent_key').on(t.topic, t.intentId),
     inList('outbox_events_topic_check', t.topic, OutboxTopic),
     inList('outbox_events_status_check', t.status, OutboxStatus),
-    // the column is the FK/uniqueness key, the payload is the publisher's contract: keep them equal
+    // The column is the FK/uniqueness key, the payload is the publisher's contract: keep them
+    // equal. The key-existence test is what makes this false rather than NULL for a payload
+    // that omits intent_id (a CHECK passes on NULL), and comparing text to text keeps the
+    // uuid cast out of the constraint, so malformed input is 23514 and never 22P02.
     check(
       'outbox_events_payload_check',
-      sql`jsonb_typeof(${t.payload}) = 'object' and (${t.payload} ->> 'intent_id')::uuid = ${t.intentId}`,
+      sql`jsonb_typeof(${t.payload}) = 'object'
+          and ${t.payload} ? 'intent_id'
+          and jsonb_typeof(${t.payload} -> 'intent_id') = 'string'
+          and lower(${t.payload} ->> 'intent_id') = ${t.intentId}::text`,
     ),
     index('outbox_events_pending_idx')
       .on(t.availableAt)
