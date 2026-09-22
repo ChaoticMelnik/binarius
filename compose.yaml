@@ -2,17 +2,17 @@ x-app-environment: &app-environment
   DATABASE_URL: postgres://${POSTGRES_USER:-binarius}:${POSTGRES_PASSWORD:-binarius}@postgres:5432/${POSTGRES_DB:-binarius}
   REDIS_URL: redis://redis:6379
   LOG_LEVEL: ${LOG_LEVEL:-info}
-  BROKER_CLIENT_ID: ${BROKER_CLIENT_ID:-}
-  BROKER_CLIENT_SECRET: ${BROKER_CLIENT_SECRET:-}
-  BROKER_WS_URL: ${BROKER_WS_URL:-}
+  HEALTH_TIMEOUT_MS: ${HEALTH_TIMEOUT_MS:-2000}
+  # valueless entries pass through only when set (shell or .env); ${VAR:-} would inject ""
+  BROKER_CLIENT_ID:
+  BROKER_CLIENT_SECRET:
+  BROKER_WS_URL:
 
 x-app: &app
   build: .
+  image: binarius-dev
   init: true
-  restart: unless-stopped
-  env_file:
-    - path: .env
-      required: false
+  restart: ${COMPOSE_RESTART:-unless-stopped}
   depends_on:
     postgres:
       condition: service_healthy
@@ -23,37 +23,11 @@ x-watch-shared: &watch-shared
   path: ./packages/shared/src
   target: /app/packages/shared/src
   action: sync
-  initial_sync: true
 
 x-watch-db: &watch-db
   path: ./packages/db/src
   target: /app/packages/db/src
   action: sync
-  initial_sync: true
-
-x-rebuild-root-package: &rebuild-root-package
-  path: ./package.json
-  action: rebuild
-
-x-rebuild-lockfile: &rebuild-lockfile
-  path: ./pnpm-lock.yaml
-  action: rebuild
-
-x-rebuild-workspace: &rebuild-workspace
-  path: ./pnpm-workspace.yaml
-  action: rebuild
-
-x-rebuild-tsconfig-base: &rebuild-tsconfig-base
-  path: ./tsconfig.base.json
-  action: rebuild
-
-x-rebuild-shared-package: &rebuild-shared-package
-  path: ./packages/shared/package.json
-  action: rebuild
-
-x-rebuild-db-package: &rebuild-db-package
-  path: ./packages/db/package.json
-  action: rebuild
 
 services:
   postgres:
@@ -94,6 +68,7 @@ services:
       # 127.0.0.1, not localhost: Alpine resolves localhost to ::1 and the server binds 0.0.0.0
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
       interval: 10s
+      # must exceed HEALTH_TIMEOUT_MS, or a slow dependency flips the container to unhealthy instead of a 503
       timeout: 3s
       retries: 5
       start_period: 20s
@@ -102,42 +77,57 @@ services:
         - path: ./apps/backend/src
           target: /app/apps/backend/src
           action: sync
-          initial_sync: true
         - *watch-shared
         - *watch-db
         - path: ./apps/backend/package.json
           action: rebuild
         - path: ./apps/backend/tsconfig.json
           action: rebuild
-        - *rebuild-shared-package
-        - *rebuild-db-package
-        - *rebuild-root-package
-        - *rebuild-lockfile
-        - *rebuild-workspace
-        - *rebuild-tsconfig-base
+        - path: ./packages/shared/package.json
+          action: rebuild
+        - path: ./packages/shared/tsconfig.json
+          action: rebuild
+        - path: ./packages/db/package.json
+          action: rebuild
+        - path: ./packages/db/tsconfig.json
+          action: rebuild
+        - path: ./package.json
+          action: rebuild
+        - path: ./pnpm-lock.yaml
+          action: rebuild
+        - path: ./pnpm-workspace.yaml
+          action: rebuild
+        - path: ./tsconfig.base.json
+          action: rebuild
 
   bot:
     <<: *app
     command: pnpm --filter @binarius/bot dev
     environment:
       <<: *app-environment
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN:
     develop:
       watch:
         - path: ./apps/bot/src
           target: /app/apps/bot/src
           action: sync
-          initial_sync: true
         - *watch-shared
         - path: ./apps/bot/package.json
           action: rebuild
         - path: ./apps/bot/tsconfig.json
           action: rebuild
-        - *rebuild-shared-package
-        - *rebuild-root-package
-        - *rebuild-lockfile
-        - *rebuild-workspace
-        - *rebuild-tsconfig-base
+        - path: ./packages/shared/package.json
+          action: rebuild
+        - path: ./packages/shared/tsconfig.json
+          action: rebuild
+        - path: ./package.json
+          action: rebuild
+        - path: ./pnpm-lock.yaml
+          action: rebuild
+        - path: ./pnpm-workspace.yaml
+          action: rebuild
+        - path: ./tsconfig.base.json
+          action: rebuild
 
   trading-worker:
     <<: *app
@@ -149,19 +139,28 @@ services:
         - path: ./apps/trading-worker/src
           target: /app/apps/trading-worker/src
           action: sync
-          initial_sync: true
         - *watch-shared
         - *watch-db
         - path: ./apps/trading-worker/package.json
           action: rebuild
         - path: ./apps/trading-worker/tsconfig.json
           action: rebuild
-        - *rebuild-shared-package
-        - *rebuild-db-package
-        - *rebuild-root-package
-        - *rebuild-lockfile
-        - *rebuild-workspace
-        - *rebuild-tsconfig-base
+        - path: ./packages/shared/package.json
+          action: rebuild
+        - path: ./packages/shared/tsconfig.json
+          action: rebuild
+        - path: ./packages/db/package.json
+          action: rebuild
+        - path: ./packages/db/tsconfig.json
+          action: rebuild
+        - path: ./package.json
+          action: rebuild
+        - path: ./pnpm-lock.yaml
+          action: rebuild
+        - path: ./pnpm-workspace.yaml
+          action: rebuild
+        - path: ./tsconfig.base.json
+          action: rebuild
 
   web:
     <<: *app
@@ -173,17 +172,23 @@ services:
         - path: ./apps/web/src
           target: /app/apps/web/src
           action: sync
-          initial_sync: true
         - *watch-shared
         - path: ./apps/web/package.json
           action: rebuild
         - path: ./apps/web/tsconfig.json
           action: rebuild
-        - *rebuild-shared-package
-        - *rebuild-root-package
-        - *rebuild-lockfile
-        - *rebuild-workspace
-        - *rebuild-tsconfig-base
+        - path: ./packages/shared/package.json
+          action: rebuild
+        - path: ./packages/shared/tsconfig.json
+          action: rebuild
+        - path: ./package.json
+          action: rebuild
+        - path: ./pnpm-lock.yaml
+          action: rebuild
+        - path: ./pnpm-workspace.yaml
+          action: rebuild
+        - path: ./tsconfig.base.json
+          action: rebuild
 
 volumes:
   pgdata:

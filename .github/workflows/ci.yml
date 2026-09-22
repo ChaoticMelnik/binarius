@@ -23,14 +23,19 @@ jobs:
 
   compose:
     runs-on: ubuntu-latest
+    env:
+      # a crashing service would otherwise be restarted forever and --wait would burn the whole timeout
+      COMPOSE_RESTART: "no"
     steps:
       - uses: actions/checkout@v4
       - name: Dockerfile Node version matches .node-version
         run: test "$(sed -n 's/^ARG NODE_VERSION=//p' Dockerfile)" = "$(cat .node-version)"
       - run: docker compose config -q
-      - run: docker compose up -d --build --wait --wait-timeout 180
+      - run: docker compose up -d --build --wait --wait-timeout 120
       - run: curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'
       - if: failure()
+        continue-on-error: true
         run: docker compose logs
       - if: always()
+        continue-on-error: true
         run: docker compose down -v
