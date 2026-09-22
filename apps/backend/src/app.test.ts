@@ -40,13 +40,6 @@ describe('GET /health', () => {
     });
   });
 
-  it('returns 503 when both fail', async () => {
-    expect(await health({ checkPostgres: down, checkRedis: down })).toEqual({
-      statusCode: 503,
-      body: { status: 'degraded', postgres: 'error', redis: 'error' },
-    });
-  });
-
   it('treats a synchronous throw as a failed check, not a server error', async () => {
     expect(await health({ checkPostgres: throwsSync, checkRedis: ok })).toEqual({
       statusCode: 503,

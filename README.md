@@ -29,15 +29,17 @@ pnpm test apps/backend   # one package's tests (path filter)
 ## Docker dev environment
 
 Postgres, Redis, and the four apps run in containers; the apps hot-reload from your working tree.
+The apps are not meant to run outside Docker in this repo state.
 
 ```bash
-cp .env.example .env        # optional: every value is also the compose default
-docker compose up --watch   # build, start, sync src/ edits into the containers
-curl localhost:3000/health  # {"status":"ok","postgres":"ok","redis":"ok"}
-docker compose down -v      # stop and drop the Postgres volume
+cp .env.example .env                # optional: every value is also the compose default
+docker compose up --build --watch   # build, start, sync src/ edits into the containers
+curl 127.0.0.1:3000/health          # {"status":"ok","postgres":"ok","redis":"ok"}
+docker compose down -v              # stop and drop the Postgres volume
 ```
 
-Plain `docker compose up` starts everything without file sync. Under `--watch`, edits to
-`src/` restart the affected app; edits to a `package.json`, `pnpm-lock.yaml`, or a tsconfig
-rebuild the image. Postgres (`5432`), Redis (`6379`), and the backend (`3000`) are published on
-`127.0.0.1` only. `pnpm test` never needs Docker.
+Plain `docker compose up` starts everything without file sync. `--build` matters: without it,
+`--watch` starts from the last built image and only picks up edits made after it started.
+Under `--watch`, edits to `src/` restart the affected app; edits to a `package.json`,
+`pnpm-lock.yaml`, or a tsconfig rebuild the image. Postgres (`5432`), Redis (`6379`), and the
+backend (`3000`) are published on `127.0.0.1` only. `pnpm test` never needs Docker.
