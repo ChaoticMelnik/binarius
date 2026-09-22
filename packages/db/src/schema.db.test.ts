@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { TransactionRollbackError, eq, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -15,7 +14,6 @@ import {
   users,
 } from './schema/index';
 import type { DecimalString } from '@binarius/shared';
-
 // Integration tests: a migrated Postgres named by DATABASE_URL (README → Database).
 // Each case runs in one transaction that is rolled back at the end; Postgres aborts a
 // transaction after its first error, so every case expects exactly one error code.
@@ -23,16 +21,13 @@ const url = process.env.DATABASE_URL;
 if (url === undefined || url === '') {
   throw new Error('DATABASE_URL is required for packages/db integration tests (see README)');
 }
-
 const pool = new Pool({ connectionString: url });
 const db = createDb(pool);
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
-
 beforeAll(async () => {
   await pool.query('select 1 from trade_intents limit 0');
 });
 afterAll(() => pool.end());
-
 async function rolledBack(run: (tx: Tx) => Promise<void>): Promise<void> {
   await db
     .transaction(async (tx) => {
@@ -43,20 +38,43 @@ async function rolledBack(run: (tx: Tx) => Promise<void>): Promise<void> {
       if (!(error instanceof TransactionRollbackError)) throw error;
     });
 }
-
+// Constraints the suite has actually seen the database enforce. Recorded by the matchers
+// below at MATCH time, not at construction: a name mentioned in a comment, or passed by a
+// test that never runs, must not count as covered. The gate at the end of this file compares
+// this registry against the live catalog.
+const observed = new Set<string>();
+/** wraps an asymmetric matcher so a successful match registers the constraint it proved */
+function recording(name: string, inner: ReturnType<typeof expect.objectContaining>) {
+  return {
+    asymmetricMatch(other: unknown): boolean {
+      const matched = (
+        inner as unknown as { asymmetricMatch(v: unknown): boolean }
+      ).asymmetricMatch(other);
+      if (matched) observed.add(name);
+      return matched;
+    },
+    toString: () => `observed(${name})`,
+    getExpectedType: () => 'object',
+    toAsymmetricMatcher: () => `observed(${name})`,
+  };
+}
 // drizzle wraps driver errors in DrizzleQueryError; the Postgres error with its SQLSTATE and
 // the name of the constraint that fired is the cause. Asserting the name keeps a test from
 // passing because some *other* constraint rejected the row.
 const pgError = (code: string, constraint: string) =>
-  expect.objectContaining({ cause: expect.objectContaining({ code, constraint }) });
-
+  recording(
+    constraint,
+    expect.objectContaining({ cause: expect.objectContaining({ code, constraint }) }),
+  );
 // raise_append_only() is a trigger, and PostgreSQL populates no `constraint` field for it,
 // so those cases assert the code and the message instead
 const triggerError = (table: string) =>
-  expect.objectContaining({
-    cause: expect.objectContaining({ code: 'P0001', message: `${table} is append-only` }),
-  });
-
+  recording(
+    `${table}_append_only`,
+    expect.objectContaining({
+      cause: expect.objectContaining({ code: 'P0001', message: `${table} is append-only` }),
+    }),
+  );
 let seq = 0;
 async function seedAccount(tx: Tx) {
   const n = ++seq;
@@ -77,7 +95,6 @@ async function seedAccount(tx: Tx) {
     .returning({ id: brokerAccounts.id });
   return { userId: user!.id, accountId: account!.id };
 }
-
 async function seedDeposit(tx: Tx, seed: { accountId: string; userId: string }): Promise<string> {
   const [row] = await tx
     .insert(depositEvents)
@@ -90,7 +107,6 @@ async function seedDeposit(tx: Tx, seed: { accountId: string; userId: string }):
     .returning({ id: depositEvents.id });
   return row!.id;
 }
-
 const intent = (
   seed: { accountId: string; userId: string },
   clientRequestId: string,
@@ -106,7 +122,6 @@ const intent = (
   clientRequestId,
   ...patch,
 });
-
 const trade = (seed: { accountId: string }, patch: Record<string, unknown> = {}) => ({
   brokerAccountId: seed.accountId,
   brokerTradeId: `t-${++seq}`,
@@ -121,26 +136,6 @@ const trade = (seed: { accountId: string }, patch: Record<string, unknown> = {})
   raw: {},
   ...patch,
 });
-
-// Twice now a constraint shipped without a test and the suite stayed green, so the coverage
-// claim is checked by the suite instead of by eye: every CHECK and unique index in the schema
-// must be named somewhere in this file. A new constraint without a case fails here.
-describe('constraint coverage', () => {
-  it('names every CHECK and unique index in a test', async () => {
-    const source = await readFile(new URL(import.meta.url), 'utf8');
-    const { rows } = await pool.query<{ conname: string }>(`
-      select conname from pg_constraint
-        where contype in ('c', 'u') and connamespace = 'public'::regnamespace
-      union
-      select indexname as conname from pg_indexes
-        where schemaname = 'public' and indexdef like 'CREATE UNIQUE%'
-    `);
-    const names = rows.map((r) => r.conname).filter((n) => !n.endsWith('_pkey'));
-    expect(names.length).toBeGreaterThan(30);
-    expect(names.filter((name) => !source.includes(name)).sort()).toEqual([]);
-  });
-});
-
 // The enum CHECKs and the plain uniques are mechanical, but they are what keeps a typo in a
 // status list or a missing dedupe from reaching production, and the coverage test above will
 // not accept a constraint that nothing exercises.
@@ -230,7 +225,6 @@ describe('enum and uniqueness constraints', () => {
       await expect(insert(tx)).rejects.toEqual(pgError('23514', constraint));
     });
   });
-
   it.each([
     ['trade_intents_mode_check', { mode: 'bogus' }],
     ['trade_intents_action_check', { action: 'bogus' }],
@@ -244,7 +238,6 @@ describe('enum and uniqueness constraints', () => {
       );
     });
   });
-
   it.each([
     ['broker_trades_mode_check', { mode: 'bogus' }],
     ['broker_trades_action_check', { action: 'bogus' }],
@@ -258,7 +251,6 @@ describe('enum and uniqueness constraints', () => {
       );
     });
   });
-
   // these two need a real intent and a well-formed payload, or the FK and the payload CHECK
   // would fire first and the test would pass for the wrong reason
   it.each([
@@ -275,7 +267,6 @@ describe('enum and uniqueness constraints', () => {
       ).rejects.toEqual(pgError('23514', constraint));
     });
   });
-
   it('enforces users_telegram_user_id_idx', async () => {
     await rolledBack(async (tx) => {
       await tx.insert(users).values({ telegramUserId: 971_001n });
@@ -284,7 +275,6 @@ describe('enum and uniqueness constraints', () => {
       );
     });
   });
-
   // a broker account is bound to one Binarius user: a second user cannot claim the same
   // broker_user_id
   it('enforces broker_accounts_broker_user_id_idx', async () => {
@@ -310,7 +300,6 @@ describe('enum and uniqueness constraints', () => {
       ).rejects.toEqual(pgError('23505', 'broker_accounts_broker_user_id_idx'));
     });
   });
-
   it.each([
     [
       'auth_sessions_token_hash_idx',
@@ -320,6 +309,7 @@ describe('enum and uniqueness constraints', () => {
         ),
     ],
     [
+      // per user: see the per-user test below for the other half of this key
       'notification_jobs_dedupe_key_idx',
       (tx: Tx, userId: string) =>
         tx.execute(
@@ -333,7 +323,6 @@ describe('enum and uniqueness constraints', () => {
       await expect(insert(tx, seed.userId)).rejects.toEqual(pgError('23505', constraint));
     });
   });
-
   it.each([
     ['bonus_rules_code_idx', sql`insert into bonus_rules (code, kind) values ('dup', 'k')`],
     [
@@ -344,6 +333,24 @@ describe('enum and uniqueness constraints', () => {
     await rolledBack(async (tx) => {
       await tx.execute(statement);
       await expect(tx.execute(statement)).rejects.toEqual(pgError('23505', constraint));
+    });
+  });
+  // a broadcast keyed by date must reach every user, so the key is per user, not global
+  it('accepts one dedupe_key across two users', async () => {
+    await rolledBack(async (tx) => {
+      const first = await seedAccount(tx);
+      const second = await seedAccount(tx);
+      for (const seed of [first, second]) {
+        await tx.execute(
+          sql`insert into notification_jobs (user_id, kind, dedupe_key)
+              values (${seed.userId}, 'daily-summary', 'daily-summary-2026-09-22')`,
+        );
+      }
+      const { rows } = await tx.execute<{ count: string }>(
+        sql`select count(*)::text as count from notification_jobs
+              where dedupe_key = 'daily-summary-2026-09-22'`,
+      );
+      expect(rows[0]!.count).toBe('2');
     });
   });
 
@@ -357,27 +364,28 @@ describe('enum and uniqueness constraints', () => {
       ).rejects.toEqual(pgError('23505', 'broker_trades_account_trade_key'));
     });
   });
-
   // these four exist only as FK targets, so they are asserted structurally rather than by a
   // duplicate insert: a composite unique on (id, ...) cannot be violated while id is the PK
+  // these five cannot be violated by an insert — a composite unique on (id, …) is unreachable
+  // while id is the PK — so they are covered by asserting the catalog, and registered in the
+  // coverage set only once that assertion has passed
   it('keeps the composite FK targets in place', async () => {
-    const { rows } = await pool.query<{ conname: string }>(`
-      select conname from pg_constraint
-        where contype = 'u' and connamespace = 'public'::regnamespace
-          and conname in ('broker_accounts_id_user_id_key', 'deposit_events_id_user_key',
-                          'trade_intents_id_user_key', 'trade_intents_id_account_mode_key',
-                          'trading_sessions_id_account_mode_key')
-    `);
-    expect(rows.map((r) => r.conname).sort()).toEqual([
+    const expected = [
       'broker_accounts_id_user_id_key',
       'deposit_events_id_user_key',
       'trade_intents_id_account_mode_key',
       'trade_intents_id_user_key',
       'trading_sessions_id_account_mode_key',
-    ]);
+    ];
+    const { rows } = await pool.query<{ conname: string }>(
+      `select conname from pg_constraint
+         where contype = 'u' and connamespace = 'public'::regnamespace and conname = any($1)`,
+      [expected],
+    );
+    expect(rows.map((r) => r.conname).sort()).toEqual(expected);
+    for (const name of expected) observed.add(name);
   });
 });
-
 describe('trade_intents', () => {
   it('stores an intent and reads money back as a decimal string', async () => {
     await rolledBack(async (tx) => {
@@ -387,7 +395,6 @@ describe('trade_intents', () => {
       expect(row!.amount).toBe('10.00000000');
     });
   });
-
   it('rejects a second intent with the same client_request_id for the account', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -397,7 +404,6 @@ describe('trade_intents', () => {
       );
     });
   });
-
   it('allows only one non-terminal intent per account', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -407,7 +413,6 @@ describe('trade_intents', () => {
       );
     });
   });
-
   it('allows a new intent once the previous one is terminal', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -417,7 +422,6 @@ describe('trade_intents', () => {
       expect(row!.status).toBe('planned');
     });
   });
-
   it('rejects an intent whose user does not own the broker account', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -427,7 +431,6 @@ describe('trade_intents', () => {
       ).rejects.toEqual(pgError('23503', 'trade_intents_account_owner_fk'));
     });
   });
-
   it('rejects an intent whose mode disagrees with its trading session', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -442,7 +445,6 @@ describe('trade_intents', () => {
       ).rejects.toEqual(pgError('23503', 'trade_intents_session_account_fk'));
     });
   });
-
   it('accepts an intent whose mode matches its trading session', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -457,7 +459,6 @@ describe('trade_intents', () => {
       expect(row!.tradingSessionId).toBe(session!.id);
     });
   });
-
   it.each([
     ['an unknown status', { status: 'bogus' }, 'trade_intents_status_check'],
     ['a zero amount', { amount: '0' }, 'trade_intents_amount_check'],
@@ -473,7 +474,6 @@ describe('trade_intents', () => {
     });
   });
 });
-
 describe('users and token_ledger', () => {
   it('rejects a negative balance', async () => {
     await rolledBack(async (tx) => {
@@ -482,7 +482,6 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23514', 'users_token_balance_check'));
     });
   });
-
   it('rejects a reserve above the balance', async () => {
     await rolledBack(async (tx) => {
       await expect(
@@ -490,7 +489,6 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23514', 'users_token_reserved_check'));
     });
   });
-
   it('allows one reservation per intent', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -502,7 +500,6 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23505', 'token_ledger_reserve_intent_idx'));
     });
   });
-
   it('allows one terminal row per intent', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -517,7 +514,6 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23505', 'token_ledger_terminal_intent_idx'));
     });
   });
-
   it('rejects a ledger row referencing another user’s intent', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -530,7 +526,6 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23503', 'token_ledger_intent_owner_fk'));
     });
   });
-
   it('rejects a reservation without an intent reference', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -539,7 +534,6 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23514', 'token_ledger_reference_check'));
     });
   });
-
   it('rejects a non-intent kind carrying an intent reference', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -554,7 +548,6 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23514', 'token_ledger_reference_check'));
     });
   });
-
   it.each([
     ['a reserve that frees tokens', { kind: 'reserve' as const, reservedDelta: -500n }],
     ['a release that holds tokens', { kind: 'release' as const, reservedDelta: 500n }],
@@ -571,7 +564,6 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23514', 'token_ledger_delta_shape_check'));
     });
   });
-
   it('rejects a negative purchase', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -586,30 +578,42 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23514', 'token_ledger_delta_shape_check'));
     });
   });
-
-  it('credits one deposit event only once, whatever the kind', async () => {
+  // one row per deposit PER KIND. Keying on the deposit alone would let whichever of the two
+  // arrived first take the only slot and block the other forever, on an append-only table.
+  it('accepts a purchase and a deposit-linked bonus for the same deposit', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       const deposit = await seedDeposit(tx, seed);
-      await tx.insert(tokenLedger).values({
-        userId: seed.userId,
-        kind: 'purchase',
-        balanceDelta: 1000n,
-        depositEventId: deposit,
-      });
-      // the second credit arrives as a bonus rather than a purchase: keying the uniqueness on
-      // the FK column instead of on a self-declared label is what closes this
-      await expect(
-        tx.insert(tokenLedger).values({
+      await tx
+        .insert(tokenLedger)
+        .values({
           userId: seed.userId,
-          kind: 'bonus',
-          balanceDelta: 50n,
+          kind: 'purchase',
+          balanceDelta: 1000n,
           depositEventId: deposit,
-        }),
-      ).rejects.toEqual(pgError('23505', 'token_ledger_deposit_event_idx'));
+        });
+      const [bonus] = await tx
+        .insert(tokenLedger)
+        .values({ userId: seed.userId, kind: 'bonus', balanceDelta: 100n, depositEventId: deposit })
+        .returning({ id: tokenLedger.id });
+      expect(bonus!.id).toBeDefined();
     });
   });
 
+  it.each([
+    ['purchase' as const, 1000n],
+    ['bonus' as const, 100n],
+  ])('credits one deposit only once per kind (%s)', async (kind, delta) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const deposit = await seedDeposit(tx, seed);
+      const row = { userId: seed.userId, kind, balanceDelta: delta, depositEventId: deposit };
+      await tx.insert(tokenLedger).values(row);
+      await expect(tx.insert(tokenLedger).values(row)).rejects.toEqual(
+        pgError('23505', 'token_ledger_deposit_event_idx'),
+      );
+    });
+  });
   it('rejects a credit for another user’s deposit', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -625,7 +629,6 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23503', 'token_ledger_deposit_owner_fk'));
     });
   });
-
   it.each([
     ['a purchase without a deposit reference', { kind: 'purchase' as const, balanceDelta: 10n }],
     [
@@ -642,7 +645,6 @@ describe('users and token_ledger', () => {
       ).rejects.toEqual(pgError('23514', 'token_ledger_reference_check'));
     });
   });
-
   it.each([
     [
       'UPDATE',
@@ -660,13 +662,11 @@ describe('users and token_ledger', () => {
       await expect(mutate(tx, row!.id)).rejects.toEqual(triggerError('token_ledger'));
     });
   });
-
   it.each(['token_ledger', 'audit_log'])('is append-only against TRUNCATE on %s', async (table) => {
     await rolledBack(async (tx) => {
       await expect(tx.execute(sql.raw(`truncate ${table}`))).rejects.toEqual(triggerError(table));
     });
   });
-
   it('protects audit_log against UPDATE', async () => {
     await rolledBack(async (tx) => {
       await tx.execute(sql`insert into audit_log (actor_type, action) values ('system', 'probe')`);
@@ -676,7 +676,6 @@ describe('users and token_ledger', () => {
     });
   });
 });
-
 describe('outbox_events', () => {
   it('accepts a well-formed payload and rejects a duplicate', async () => {
     await rolledBack(async (tx) => {
@@ -688,7 +687,6 @@ describe('outbox_events', () => {
       ).rejects.toEqual(pgError('23505', 'outbox_events_topic_intent_key'));
     });
   });
-
   // the CHECK must be false, not NULL, for each of these: a NULL CHECK passes
   it.each([
     ['an empty payload', {}],
@@ -709,7 +707,6 @@ describe('outbox_events', () => {
       ).rejects.toEqual(pgError('23514', 'outbox_events_payload_check'));
     });
   });
-
   // the publisher builds jobId from the payload, so a case-shifted id would enqueue the same
   // intent under a second job id — the equality is byte-for-byte, not case-insensitive
   it('rejects a case-shifted intent_id', async () => {
@@ -723,7 +720,6 @@ describe('outbox_events', () => {
       ).rejects.toEqual(pgError('23514', 'outbox_events_payload_check'));
     });
   });
-
   it('tolerates extra payload keys', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -739,7 +735,6 @@ describe('outbox_events', () => {
     });
   });
 });
-
 describe('broker_trades', () => {
   it('links a trade to an intent once', async () => {
     await rolledBack(async (tx) => {
@@ -751,7 +746,6 @@ describe('broker_trades', () => {
       ).rejects.toEqual(pgError('23505', 'broker_trades_intent_id_key'));
     });
   });
-
   it('rejects a trade linked to another account’s intent', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -762,7 +756,6 @@ describe('broker_trades', () => {
       ).rejects.toEqual(pgError('23503', 'broker_trades_intent_account_fk'));
     });
   });
-
   it('rejects a real trade against a demo intent', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -772,7 +765,6 @@ describe('broker_trades', () => {
       ).rejects.toEqual(pgError('23503', 'broker_trades_intent_account_fk'));
     });
   });
-
   // profit is the one signed money column: this case exists so that re-tightening the
   // constraint to `> 0` cannot pass a suite made only of rejections
   it('accepts a settled trade with a negative profit', async () => {
@@ -792,7 +784,6 @@ describe('broker_trades', () => {
       expect(row!.profit).toBe('-10.00000000');
     });
   });
-
   // the settlement group moves as a unit in both directions
   it.each([
     ['closing without the other two columns', { status: 'closed' as const }],
@@ -810,7 +801,6 @@ describe('broker_trades', () => {
       );
     });
   });
-
   it('accepts a fully settled trade', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -828,7 +818,6 @@ describe('broker_trades', () => {
       expect(row!.profit).toBe('8.50000000');
     });
   });
-
   it.each([
     ['a NaN amount', { amount: 'NaN' }, 'broker_trades_amount_check'],
     [
@@ -876,7 +865,6 @@ describe('broker_trades', () => {
     });
   });
 });
-
 describe('trade_intents blocking', () => {
   // ARCH-04 parks an intent in manual_review when reconciliation could not determine whether
   // the order reached the broker: tokens are still reserved and a position may be open, so the
@@ -892,13 +880,25 @@ describe('trade_intents blocking', () => {
       );
     });
   });
-
-  it('lets an operator resolve manual_review, which unblocks the account', async () => {
+  // the one assertion that ties the shared transition table to the index predicate: they live
+  // in different packages and nothing else connects them
+  it('unblocks the account once the operator resolves manual_review', async () => {
     expect(canTransition('manual_review', 'settled')).toBe(true);
-    expect(canTransition('manual_review', 'rejected')).toBe(true);
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [parked] = await tx
+        .insert(tradeIntents)
+        .values(intent(seed, 'r1', { status: 'manual_review', tokensReserved: 5n }))
+        .returning({ id: tradeIntents.id });
+      await tx
+        .update(tradeIntents)
+        .set({ status: 'settled' })
+        .where(eq(tradeIntents.id, parked!.id));
+      const [next] = await tx.insert(tradeIntents).values(intent(seed, 'r2')).returning();
+      expect(next!.status).toBe('planned');
+    });
   });
 });
-
 describe('deposit_events', () => {
   it('rejects a deposit whose account belongs to another user', async () => {
     await rolledBack(async (tx) => {
@@ -914,7 +914,6 @@ describe('deposit_events', () => {
       ).rejects.toEqual(pgError('23503', 'deposit_events_account_owner_fk'));
     });
   });
-
   it('rejects a negative amount', async () => {
     await rolledBack(async (tx) => {
       await expect(
@@ -926,7 +925,6 @@ describe('deposit_events', () => {
       ).rejects.toEqual(pgError('23514', 'deposit_events_amount_check'));
     });
   });
-
   // the composite FK is MATCH SIMPLE, so it is satisfied whenever either column is NULL;
   // this CHECK is what stops a credit claimed for a user with no account behind it
   it('rejects a user without an account', async () => {
@@ -942,7 +940,6 @@ describe('deposit_events', () => {
       ).rejects.toEqual(pgError('23514', 'deposit_events_owner_pair_check'));
     });
   });
-
   it.each([
     ['an unattributed postback', {}],
     ['an account without a user yet', { withAccount: true }],
@@ -961,7 +958,6 @@ describe('deposit_events', () => {
       expect(row!.status).toBe('received');
     });
   });
-
   it('rejects a NaN amount', async () => {
     await rolledBack(async (tx) => {
       await expect(
@@ -971,7 +967,6 @@ describe('deposit_events', () => {
       ).rejects.toEqual(pgError('23514', 'deposit_events_amount_check'));
     });
   });
-
   it('dedupes by postback id', async () => {
     await rolledBack(async (tx) => {
       await tx.insert(depositEvents).values({ postbackId: 'p-3', payload: {} });
@@ -979,5 +974,23 @@ describe('deposit_events', () => {
         tx.insert(depositEvents).values({ postbackId: 'p-3', payload: {} }),
       ).rejects.toEqual(pgError('23505', 'deposit_events_postback_id_idx'));
     });
+  });
+});
+// Placed last so it runs after every case above. A constraint counts as covered only when a
+// test actually observed the database enforcing it — the matchers register on match, and the
+// structural assertion registers after it passes. Textual matching was the previous bar and
+// it accepted a name in a comment, in a skipped test, or spelled as part of another name.
+describe('constraint coverage', () => {
+  it('has seen the database enforce every CHECK and unique index', async () => {
+    const { rows } = await pool.query<{ conname: string }>(`
+      select conname from pg_constraint
+        where contype in ('c', 'u') and connamespace = 'public'::regnamespace
+      union
+      select indexname as conname from pg_indexes
+        where schemaname = 'public' and indexdef like 'CREATE UNIQUE%'
+    `);
+    const declared = rows.map((r) => r.conname).filter((n) => !n.endsWith('_pkey'));
+    expect(declared.length).toBeGreaterThan(30);
+    expect(declared.filter((name) => !observed.has(name)).sort()).toEqual([]);
   });
 });

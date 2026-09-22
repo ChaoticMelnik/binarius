@@ -31,7 +31,11 @@ export interface OutboxPayload {
 }
 
 // ARCH-03: written in the same transaction as the intent; the publisher turns pending rows
-// into BullMQ jobs with jobId = intent_id. The payload carries only the intent id, never tokens.
+// into BullMQ jobs. The payload carries only the intent id, never tokens.
+// The uniqueness key is (topic, intent_id), so one intent legitimately has a row per topic —
+// the job id must therefore be `topic:intent_id`, not the intent id alone, or the second
+// topic's job would collide with the first and be dropped while its row still flips to
+// published.
 export const outboxEvents = pgTable(
   'outbox_events',
   {
@@ -56,8 +60,8 @@ export const outboxEvents = pgTable(
     // byte-equal. The key-existence test is what makes this false rather than NULL for a payload
     // that omits intent_id (a CHECK passes on NULL), and comparing text to text keeps the
     // uuid cast out of the constraint, so malformed input is 23514 and never 22P02.
-    // No case folding: the publisher builds jobId from the payload, so an id that differs from
-    // the column in any way — including case — would enqueue the same intent under a second id.
+    // No case folding: the publisher reads the id from the payload, so an id that differs from
+    // the column in any way — including case — would build a different job id than the row.
     check(
       'outbox_events_payload_check',
       sql`jsonb_typeof(${t.payload}) = 'object'

@@ -26,7 +26,10 @@ export const DepositEventStatus = {
 export type DepositEventStatus = (typeof DepositEventStatus)[keyof typeof DepositEventStatus];
 
 // skeleton (#7): the postback contract is confirmed in #12; a postback is stored before it
-// is credited and deduplicated by postback_id and payment_id
+// is credited and deduplicated by postback_id and payment_id.
+// Not enforced here, and #12's to enforce at credit time: `status` and `amount` stay mutable
+// after a token_ledger row references the deposit, and a deposit in `failed`/`ignored` can
+// still be credited — the FK keys on (id, user_id), not on status.
 export const depositEvents = pgTable(
   'deposit_events',
   {

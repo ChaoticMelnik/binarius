@@ -269,7 +269,7 @@ CREATE INDEX "auth_sessions_user_id_idx" ON "auth_sessions" USING btree ("user_i
 CREATE INDEX "auth_sessions_expires_at_idx" ON "auth_sessions" USING btree ("expires_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "token_ledger_reserve_intent_idx" ON "token_ledger" USING btree ("intent_id") WHERE "token_ledger"."kind" = 'reserve';--> statement-breakpoint
 CREATE UNIQUE INDEX "token_ledger_terminal_intent_idx" ON "token_ledger" USING btree ("intent_id") WHERE "token_ledger"."kind" in ('release', 'settle');--> statement-breakpoint
-CREATE UNIQUE INDEX "token_ledger_deposit_event_idx" ON "token_ledger" USING btree ("deposit_event_id") WHERE "token_ledger"."deposit_event_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "token_ledger_deposit_event_idx" ON "token_ledger" USING btree ("deposit_event_id","kind") WHERE "token_ledger"."deposit_event_id" is not null;--> statement-breakpoint
 CREATE INDEX "token_ledger_user_created_idx" ON "token_ledger" USING btree ("user_id","created_at");--> statement-breakpoint
 CREATE INDEX "token_ledger_intent_id_idx" ON "token_ledger" USING btree ("intent_id");--> statement-breakpoint
 CREATE INDEX "trading_sessions_account_status_idx" ON "trading_sessions" USING btree ("broker_account_id","status");--> statement-breakpoint
@@ -286,7 +286,7 @@ CREATE UNIQUE INDEX "deposit_events_payment_id_idx" ON "deposit_events" USING bt
 CREATE INDEX "deposit_events_user_id_idx" ON "deposit_events" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "deposit_events_broker_account_id_idx" ON "deposit_events" USING btree ("broker_account_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "bonus_rules_code_idx" ON "bonus_rules" USING btree ("code");--> statement-breakpoint
-CREATE UNIQUE INDEX "notification_jobs_dedupe_key_idx" ON "notification_jobs" USING btree ("dedupe_key") WHERE "notification_jobs"."dedupe_key" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "notification_jobs_dedupe_key_idx" ON "notification_jobs" USING btree ("user_id","dedupe_key") WHERE "notification_jobs"."dedupe_key" is not null;--> statement-breakpoint
 CREATE INDEX "notification_jobs_status_scheduled_idx" ON "notification_jobs" USING btree ("status","scheduled_at");--> statement-breakpoint
 CREATE INDEX "notification_jobs_user_id_idx" ON "notification_jobs" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "audit_log_entity_idx" ON "audit_log" USING btree ("entity_type","entity_id");--> statement-breakpoint
