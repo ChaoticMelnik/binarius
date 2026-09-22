@@ -27,6 +27,15 @@ Status option ids:
 
 Stable for the life of the project. Filled in once during bootstrap (Step 2). Never call `gh project field-list`/`item-list` again just to look these up.
 
+### Reading the Pipeline Status field in `--jq`
+
+`gh project item-list --format json` lowercases the first letter of every custom field name, so the key is **`.["pipeline Status"]`**, not `.["Pipeline Status"]`. Verified against gh 2.96.0. Both wrong spellings fail silently:
+
+- `.["Pipeline Status"]` yields `null` for every item, which looks exactly like "no issue is in that status."
+- `.status` is the board's **built-in** Status field, which this project does not keep in sync with Pipeline Status — as of 2026-09-23 it reports `Todo` for 26 issues whose Pipeline Status is `Backlog`. Never substitute it.
+
+The templates below use `(.["pipeline Status"] // .["Pipeline Status"])` so a future gh change to either spelling keeps working. If a status query ever returns `null` or an empty list, verify the key against `gh project item-list 2 --owner ChaoticMelnik --format json --jq '.items[0] | keys'` before concluding the board is empty.
+
 ---
 
 ## Core rule: filter before it reaches context
@@ -57,7 +66,7 @@ gh issue view <N> --repo ChaoticMelnik/binarius --json number,title,state,url,la
 
 ```bash
 gh project item-list 2 --owner ChaoticMelnik --format json \
-  --jq '.items[] | select(.content.number == <N>) | {status: .["Pipeline Status"], itemId: .id}'
+  --jq '.items[] | select(.content.number == <N>) | {status: (.["pipeline Status"] // .["Pipeline Status"]), itemId: .id}'
 ```
 
 `itemId` (the Project item id, not the issue number) is required for the next operation.
@@ -75,7 +84,7 @@ Substitute the target status's option id from the Project Constants block above.
 
 ```bash
 gh project item-list 2 --owner ChaoticMelnik --format json \
-  --jq '[.items[] | select(.["Pipeline Status"] == "In Review") | {number: .content.number, title: .content.title, url: .content.url}]'
+  --jq '[.items[] | select((.["pipeline Status"] // .["Pipeline Status"]) == "In Review") | {number: .content.number, title: .content.title, url: .content.url}]'
 ```
 
 ## Operation: Post a comment
@@ -105,7 +114,7 @@ Returns the issue URL directly — already short, no extra formatting needed.
 | Read issue + comments | `gh issue view --json ...,comments` + `--jq` template above |
 | Find current status | `gh project item-list` + `select(.content.number == N)` |
 | Update status | `gh project item-edit --single-select-option-id ...` |
-| List issues by status | `gh project item-list` + `select(.["Pipeline Status"] == ...)` |
+| List issues by status | `gh project item-list` + `select(.["pipeline Status"] == ...)` |
 | Post comment | `gh issue comment` |
 | Create issue | `gh issue create` |
 
