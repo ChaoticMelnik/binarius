@@ -8,6 +8,37 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./money": {
+      "types": "./src/money.ts",
+      "default": "./src/money.ts"
+    },
+    "./time": {
+      "types": "./src/time.ts",
+      "default": "./src/time.ts"
+    },
+    "./trading": {
+      "types": "./src/trading.ts",
+      "default": "./src/trading.ts"
+    },
+    "./broker": {
+      "types": "./src/broker.ts",
+      "default": "./src/broker.ts"
+    },
+    "./oauth": {
+      "types": "./src/oauth.ts",
+      "default": "./src/oauth.ts"
+    },
+    "./partner": {
+      "types": "./src/partner.ts",
+      "default": "./src/partner.ts"
+    },
+    "./socket": {
+      "types": "./src/socket.ts",
+      "default": "./src/socket.ts"
     }
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
   }
 }
