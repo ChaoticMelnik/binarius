@@ -95,3 +95,39 @@ PR #47, rebase-merged as `c073c19` + `27b63ad` + `c0ccbd3`.
 7. Tech Lead preflight: verify every runtime the acceptance criteria exercise, including plugin parity with CI.
 8. Codex checkpoints: inline all context (no network in the sandbox); run long reviews in background mode and poll `status`/`result`.
 9. Follow-up candidates: consolidated in the iteration-2 LGTM comment on PR #47.
+
+---
+
+## #6 — Shared contracts: money, trading, broker, oauth, partner, socket (2026-09-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Plan + Codex plan review | Plan posted before In Progress (8-question clarify); Codex Blocker (string-only wire money) folded in |
+| Architect | Plan Update after review | Posted before re-implementation (4-question clarify); Codex re-check attempt 1 died mid-run, attempt 2 hit the Codex usage limit — partial result accepted by owner decision; M3 withdrawn after `tsc --listFiles` verification |
+| Implementer | Branch / commits / PR | `feat/6-shared-contracts`; `#6:` commits; PR #48 with `Closes #6`, test plan, iteration section; In Review right after push; diff limited to `packages/shared` |
+| Implementer | Check command | Green both iterations (16/187 → 17/233 tests); prettier clean; nine subpaths verified through tsx |
+| Reviewer | Iteration 1 | Codex + security + code-review high + simplify; M1, M2 valid, M3 false positive; returned to Todo |
+| Reviewer | Rerun | Codex + three agents; all first-review findings closed; no Blocker/Major; 6 Minors; LGTM; merge asked via AskUserQuestion |
+| Tech-lead | Merge / Done | Rebase merge `243902a`, branch deleted; Done only after `state == MERGED` |
+| Tech-lead | Process | Commit/push autonomy was exercised while the waiver lived only in unmerged PR #1; surfaced to the owner, PR #1 merged 2026-09-22 |
+
+### Review iterations: 1
+
+### Findings
+| Finding | Severity | Root cause | Missed at step |
+|---------|----------|------------|-----------------|
+| Partner `uid` string-only vs `int \| string` id policy | Major | Id policy stated in prose, no shared primitive | Architect plan (entity list) |
+| No pre-submit failure edge in the transition table | Major | Table transcribed from the plan's reading of ARCH-03, not derived from the diagram | Architect clarify |
+| d.ts "collides with auto-included `@types/node`" | Major (false positive) | Reviewer assumed TS ≤5 defaults; TS 6 defaults `types` to `[]` | Reviewer Step 4 (verify tooling claims) |
+| `assets_update` union proposal does not narrow | Minor | Narrowing asserted without a probe | Architect plan (tsc probe) |
+| Nine missing `safeParseX`, untyped chart params | Minor | Parsers/params not enumerated in the coverage table | Architect plan |
+| Rerun Minors: `canTransition` prototype keys, Partner `source` strict, `asset_id` positivity, decoder comment, weak tests, envelope marker | Minor | Constraint changes applied to the named entity only; comment written from assumption | Implementer self-review |
+| Autonomy waiver only in unmerged PR #1 | Process | CLAUDE.md change never merged; harness loads the checked-out branch's copy | Tech-lead Phase 0 |
+| Codex usage limit mid-pipeline | Process | Shared quota, reset 15:18 | Tech-lead Phase 0 |
+
+### Process improvement proposals
+1. Phase 0 preflight: `git diff origin/main -- .claude/CLAUDE.md` must be empty; check Codex quota/reset time with availability.
+2. Reviewer: verify tooling-level claims with the tool before labeling a Major; severity re-verification applies to own findings.
+3. Architect: back every type-inference claim with a `tsc` probe; enumerate every parser and request shape in the domain coverage table.
+4. Implementer self-review: when relaxing or tightening a constraint, grep the domain for the same construct before committing.
