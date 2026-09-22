@@ -58,6 +58,8 @@ describe('TradeIntentStatus', () => {
     ['reconciling', 'accepted'],
     ['reconciling', 'rejected'],
     ['reconciling', 'manual_review'],
+    ['manual_review', 'settled'],
+    ['manual_review', 'rejected'],
   ] as const)('allows %s -> %s', (from, to) => {
     expect(canTransition(from, to)).toBe(true);
   });
@@ -78,21 +80,32 @@ describe('TradeIntentStatus', () => {
     const sources = Object.entries(TRADE_INTENT_TRANSITIONS)
       .filter(([, targets]) => targets.includes(TradeIntentStatus.Rejected))
       .map(([from]) => from);
-    expect(sources).toEqual(['planned', 'reserved', 'queued', 'submitting', 'reconciling']);
+    expect(sources.sort()).toEqual(
+      ['manual_review', 'planned', 'queued', 'reconciling', 'reserved', 'submitting'].sort(),
+    );
+  });
+
+  // #7 derives its "one active intent per account" index from the terminal set, so a status
+  // with no way out would block an account permanently
+  it('leaves every non-terminal status a way to conclude', () => {
+    const stuck = Object.entries(TRADE_INTENT_TRANSITIONS)
+      .filter(([, targets]) => targets.length === 0)
+      .map(([status]) => status);
+    expect(stuck.sort()).toEqual([TradeIntentStatus.Rejected, TradeIntentStatus.Settled].sort());
   });
 
   it('answers false for a status outside the enum instead of throwing', () => {
     expect(canTransition('bogus' as never, 'rejected')).toBe(false);
   });
 
-  it('marks settled, rejected and manual_review as terminal', () => {
-    for (const status of [
-      TradeIntentStatus.Settled,
-      TradeIntentStatus.Rejected,
-      TradeIntentStatus.ManualReview,
-    ]) {
+  it('marks settled and rejected as terminal', () => {
+    for (const status of [TradeIntentStatus.Settled, TradeIntentStatus.Rejected]) {
       expect(TRADE_INTENT_TRANSITIONS[status]).toEqual([]);
     }
+  });
+
+  it('keeps manual_review non-terminal so a parked intent can be resolved', () => {
+    expect(TRADE_INTENT_TRANSITIONS[TradeIntentStatus.ManualReview]).not.toEqual([]);
   });
 });
 

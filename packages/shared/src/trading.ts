@@ -28,6 +28,9 @@ export const tradeIntentStatusSchema = z.enum(TradeIntentStatus);
 // accepted → settled; unknown → reconciling → accepted | rejected | manual_review.
 // A failure before the order reaches the broker (planned/reserved/queued) is a terminal rejected;
 // unknown is reachable only from submitting because only a sent order can have an unknown outcome.
+// manual_review concludes to settled or rejected: it is a human decision, not a dead end, and
+// without those edges an intent parked there could never be resolved — which matters because
+// #7's "one active intent per account" index treats every non-terminal status as blocking.
 export const TRADE_INTENT_TRANSITIONS: Readonly<
   Record<TradeIntentStatus, readonly TradeIntentStatus[]>
 > = {
@@ -40,7 +43,7 @@ export const TRADE_INTENT_TRANSITIONS: Readonly<
   rejected: [],
   unknown: ['reconciling'],
   reconciling: ['accepted', 'rejected', 'manual_review'],
-  manual_review: [],
+  manual_review: ['settled', 'rejected'],
 };
 
 // `from` is usually a DB column at runtime, so an out-of-enum value answers false, not TypeError
