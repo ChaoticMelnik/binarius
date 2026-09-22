@@ -47,8 +47,11 @@ export const notificationJobs = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
+    // per user, not global: a scheduled or broadcast job is keyed by event or date
+    // (`daily-summary-2026-09-22`), so a global unique would deliver to the first user and
+    // silently drop everyone else
     uniqueIndex('notification_jobs_dedupe_key_idx')
-      .on(t.dedupeKey)
+      .on(t.userId, t.dedupeKey)
       .where(sql`${t.dedupeKey} is not null`),
     index('notification_jobs_status_scheduled_idx').on(t.status, t.scheduledAt),
     index('notification_jobs_user_id_idx').on(t.userId),

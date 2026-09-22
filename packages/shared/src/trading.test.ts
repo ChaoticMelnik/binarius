@@ -21,6 +21,32 @@ const intent = {
   createdAt: '2026-09-22T09:21:52.000Z',
 };
 
+type TransitionMap = Readonly<Record<TradeIntentStatus, readonly TradeIntentStatus[]>>;
+
+// the expected terminals are named, not derived from the graph under test
+const EXPECTED_TERMINALS: readonly TradeIntentStatus[] = [
+  TradeIntentStatus.Settled,
+  TradeIntentStatus.Rejected,
+];
+
+function statusesThatCannotConclude(transitions: TransitionMap): string[] {
+  const concludes = (from: TradeIntentStatus): boolean => {
+    const seen = new Set<TradeIntentStatus>();
+    const queue: TradeIntentStatus[] = [from];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (EXPECTED_TERMINALS.includes(current)) return true;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      queue.push(...transitions[current]);
+    }
+    return false;
+  };
+  return Object.keys(transitions)
+    .filter((status) => !concludes(status as TradeIntentStatus))
+    .sort();
+}
+
 describe('TradeIntentStatus', () => {
   it('lists every ARCH-03 state exactly once', () => {
     expect(tradeIntentStatusSchema.options).toEqual([
@@ -86,12 +112,28 @@ describe('TradeIntentStatus', () => {
   });
 
   // #7 derives its "one active intent per account" index from the terminal set, so a status
-  // with no way out would block an account permanently
-  it('leaves every non-terminal status a way to conclude', () => {
+  // that cannot reach a terminal would block an account permanently. Two separate invariants:
+  // the terminal set is exactly these two, AND every status can actually get there. Checking
+  // only the first misses a cycle; deriving the terminals from the same graph inside the
+  // reachability check would make an accidental dead end look terminal and pass.
+  it('has exactly settled and rejected as terminal', () => {
     const stuck = Object.entries(TRADE_INTENT_TRANSITIONS)
       .filter(([, targets]) => targets.length === 0)
       .map(([status]) => status);
     expect(stuck.sort()).toEqual([TradeIntentStatus.Rejected, TradeIntentStatus.Settled].sort());
+  });
+
+  it('lets every status reach settled or rejected', () => {
+    expect(statusesThatCannotConclude(TRADE_INTENT_TRANSITIONS)).toEqual([]);
+  });
+
+  it('would catch a cycle that never concludes', () => {
+    const cyclic: TransitionMap = {
+      ...TRADE_INTENT_TRANSITIONS,
+      reconciling: [TradeIntentStatus.ManualReview],
+      manual_review: [TradeIntentStatus.Reconciling],
+    };
+    expect(statusesThatCannotConclude(cyclic)).toEqual(['manual_review', 'reconciling', 'unknown']);
   });
 
   it('answers false for a status outside the enum instead of throwing', () => {
