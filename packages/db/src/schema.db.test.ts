@@ -28,6 +28,7 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 beforeAll(async () => {
   await pool.query('select 1 from trade_intents limit 0');
 });
+afterAll(() => pool.end());
 async function rolledBack(run: (tx: Tx) => Promise<void>): Promise<void> {
   await db
     .transaction(async (tx) => {
@@ -1095,23 +1096,27 @@ describe('deposit_events', () => {
   });
 });
 
-// A file-level afterAll, not a final test: it then runs after every suite in the file
-// regardless of ordering, where a trailing `describe` silently depends on Vitest not
-// shuffling. A constraint counts as covered only when a test actually observed the database
-// enforcing it — the helpers register after their assertion passes, and the structural test
-// registers its FK targets after its own. Textual matching was the previous bar and it
-// accepted a name in a comment, in a skipped test, or spelled as part of another name.
-afterAll(async () => {
-  const { rows } = await pool.query<{ conname: string }>(`
-    select conname from pg_constraint
-      where contype in ('c', 'u') and connamespace = 'public'::regnamespace
-    union
-    select indexname as conname from pg_indexes
-      where schemaname = 'public' and indexdef like 'CREATE UNIQUE%'
-  `);
-  const declared = rows.map((r) => r.conname).filter((n) => !n.endsWith('_pkey'));
-  const uncovered = declared.filter((name) => !observed.has(name)).sort();
-  await pool.end();
-  expect(declared.length).toBeGreaterThan(30);
-  expect(uncovered, 'constraints no test observed the database enforcing').toEqual([]);
+// The gate is the last test in the file, not an afterAll: as a test it is excluded by a
+// name filter along with everything else, so debugging one case does not produce a red file
+// about the constraints that run did not touch. It must run last, which
+// `sequence.shuffle: false` in vitest.config.ts pins for the default run; passing
+// `--sequence.shuffle` explicitly overrides that and fails this gate — the safe direction.
+// A constraint counts as covered only when a test actually observed the database enforcing
+// it — the helpers register after their assertion passes, and the structural test registers
+// its FK targets after its own. Textual matching was the previous bar and it accepted a name
+// in a comment, in a skipped test, or spelled as part of another name.
+describe('constraint coverage', () => {
+  it('has seen the database enforce every CHECK and unique index', async () => {
+    const { rows } = await pool.query<{ conname: string }>(`
+      select conname from pg_constraint
+        where contype in ('c', 'u') and connamespace = 'public'::regnamespace
+      union
+      select indexname as conname from pg_indexes
+        where schemaname = 'public' and indexdef like 'CREATE UNIQUE%'
+    `);
+    const declared = rows.map((r) => r.conname).filter((n) => !n.endsWith('_pkey'));
+    const uncovered = declared.filter((name) => !observed.has(name)).sort();
+    expect(declared.length).toBeGreaterThan(30);
+    expect(uncovered, 'constraints no test observed the database enforcing').toEqual([]);
+  });
 });
