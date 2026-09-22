@@ -45,3 +45,53 @@ PR #45, rebase-merged as `722d288` + `513dfb9`.
 6. Tech Lead preflight: if the plan's file list includes `.github/workflows/*`, verify the `workflow` scope or an SSH remote before implementation.
 7. Reviewer: do not run the check command concurrently with a spawned `/code-review` agent on the same tree; its recipe runs `pnpm typecheck` regardless of the prompt.
 8. Hardening follow-ups surfaced (owner decides whether to file): `emitDeclarationOnly` in `tsconfig.base.json`; CI `concurrency` group; `.npmrc` `engine-strict=true`; replace deprecated `tseslint.config()` with `defineConfig`; cosmetic cleanups (dead top-level `types`, `*.tsbuildinfo` gitignore line, README/CI comment wording).
+
+---
+
+## #3 — Docker Compose dev-окружение (2026-09-22)
+
+PR #47, rebase-merged as `c073c19` + `27b63ad` + `c0ccbd3`.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Preflight | Docker absent on the dev machine — found during the architect pass, not Phase 0. Owner chose Colima + docker CLI (Homebrew); `docker-buildx` added later so the local builder matches CI. |
+| Architect | `/clarify` | 4 questions (Docker, container scope, healthcheck depth, env contract). |
+| Architect | Plan + Codex plan review | Codex 7 Major + 4 Minor (placeholder liveness, YAML shallow merge, pg connect timeout, URI-encoded credentials, LAN ports, `quit()` rejection, env validation depth) — all verified and folded in before posting. |
+| Implementer | `/clarify` | 4 questions (timeout-test technique, CI job placement, container user, commit granularity). |
+| Implementer | Build / verify | Real `up --wait`, degraded path, watch restart on own and shared `src`, graceful `down`. Two plan errors found and flagged: `lazyConnect` + no offline queue failed the first probe; `localhost` resolves to `::1` on Alpine. |
+| Reviewer | Iteration 1 | Codex + security + code-review high + simplify. CI red (`initial_sync` rejected by the runner's Compose) + failure-path steps dying on the same validation → 2 Major, 10 Minor → Todo. Two review agents died on an API 403 and were relaunched on another model. |
+| Architect | Plan Update 1 + Codex re-check | `/clarify` 4 questions. Codex 5 Minors folded in (`${VAR}` still injects `""` → valueless entries; root manifest before `pnpm fetch` for the Corepack pin; `%FF`/IPv6 host checks; `LogLevel` import site; log the failing check's error). |
+| Implementer | Iteration 1 | `/clarify` 3 questions; empirical check of valueless-entry semantics; 12 files; owner-confirmed `HEALTH_TIMEOUT_MS` env instead of a constant. |
+| Reviewer | Re-review 1 | No Blocker/Major; Minors → LGTM. Codex ran in background mode after a foreground timeout. Owner chose one more iteration on Minors 1–4 at the merge checkpoint. |
+| Architect | Plan Update 2 + Codex re-check | `/clarify` 4 questions. Codex attempt 1 failed (no network in sandbox; context inlined on retry); re-check: probe comment must not promise a body; `down -v` noted as destructive (dev volume empty until #7). |
+| Implementer | Iteration 2 | `/clarify` 3 questions; 6 files. Found and reverted the shared `image:` tag (concurrent one-tag builds collide under the classic builder). Fail-fast check needed to run without `tsx watch`. |
+| Reviewer | Re-review 2 | All four passes clean (Codex re-run in background after a 10-minute foreground kill). Per-merge `AskUserQuestion` → rebase merge, branch deleted. Done after `state == MERGED`. |
+
+### Review iterations: 2 (1 reviewer-returned, 1 owner-requested)
+
+### Findings
+
+| Finding | Severity | Root cause | Missed at step |
+|---------|----------|------------|-----------------|
+| `initial_sync` rejected by the CI runner's Compose | Major | Compose features verified only against Homebrew's version | Architect Step 7, Implementer Step 5 |
+| CI failure-path steps died on the same validation | Major | Diagnostics assumed compose itself cannot fail pre-build | Architect Step 6 |
+| `env_file` on the shared anchor leaked `.env` into every container | Minor | Two injection paths for one contract | Architect Step 6 |
+| `${VAR:-}` injected `""` for secrets | Minor | Interpolation semantics assumed | Architect Step 6 |
+| `lazyConnect` first-probe failure; `localhost` → `::1` | Minor (pre-review) | Client/probe details not exercised until the real stack ran | Architect Step 6 |
+| `HEALTH_TIMEOUT_MS` env vs fixed probe timeout | Minor | Clarify-driven change altered an invariant held only in prose | Implementer clarify |
+| Shared `image:` tag collided under the classic builder | Minor | Optional suggestion accepted without local reproduction | Reviewer Step 4 |
+| Docker / buildx absent locally | Process | Preflight did not check the runtimes the acceptance criteria need | Tech Lead Phase 0 |
+
+### Process improvement proposals
+
+1. Architect: for CI-executed tooling, verify every feature against the runner image's version, not the local one.
+2. Architect: diagnostic/cleanup CI steps must tolerate the failure they exist to diagnose.
+3. Architect: apply "single source per fact" to env delivery and secrets scoping, not only versions.
+4. Architect: verify Compose interpolation/env semantics with `docker compose config` before planning; probes target `127.0.0.1`; lazily-connecting clients cannot pass their own first check.
+5. Implementer: when a clarify answer changes a plan constraint, state the affected invariant in the PR body.
+6. Reviewer: re-verify "optional improvement" suggestions like findings before folding them into a Plan Update; two simplify sub-agents recommended the exact CI breaker.
+7. Tech Lead preflight: verify every runtime the acceptance criteria exercise, including plugin parity with CI.
+8. Codex checkpoints: inline all context (no network in the sandbox); run long reviews in background mode and poll `status`/`result`.
+9. Follow-up candidates: consolidated in the iteration-2 LGTM comment on PR #47.
