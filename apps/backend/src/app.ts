@@ -31,9 +31,11 @@ export function buildApp({
       request.log.warn({ err: redis.error }, 'redis check failed');
     }
     const healthy = postgres.status === 'ok' && redis.status === 'ok';
-    return reply
-      .code(healthy ? 200 : 503)
-      .send({ status: healthy ? 'ok' : 'degraded', postgres: postgres.status, redis: redis.status });
+    return reply.code(healthy ? 200 : 503).send({
+      status: healthy ? 'ok' : 'degraded',
+      postgres: postgres.status,
+      redis: redis.status,
+    });
   });
 
   return app;

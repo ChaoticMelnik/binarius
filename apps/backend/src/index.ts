@@ -6,13 +6,16 @@ import { closeAll } from './shutdown';
 
 const env = parseEnv(process.env);
 
-// drivers give up before the app-level race in /health, so the logged reason is the driver's
+// drivers are set to give up first so the logged reason is usually theirs; the /health race
+// remains the outer bound (pg's connect and query timeouts are sequential)
 const driverTimeoutMs = env.healthTimeoutMs - 200;
 
 const pool = new Pool({
   connectionString: env.databaseUrl,
   connectionTimeoutMillis: driverTimeoutMs,
   query_timeout: driverTimeoutMs,
+  // longer than the probe interval, otherwise most probes pay a fresh connect
+  idleTimeoutMillis: 30_000,
 });
 
 // no lazyConnect: with the offline queue disabled, a lazy client rejects the very command

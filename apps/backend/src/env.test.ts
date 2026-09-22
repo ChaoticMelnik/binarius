@@ -69,6 +69,12 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ ...valid, REDIS_URL: url })).toThrow(message);
   });
 
+  it('accepts an IPv6 literal host for REDIS_URL (ioredis strips the brackets itself)', () => {
+    expect(parseEnv({ ...valid, REDIS_URL: 'redis://[::1]:6379' }).redisUrl).toBe(
+      'redis://[::1]:6379',
+    );
+  });
+
   it.each([
     ['0', 'Env PORT must be between 1 and 65535'],
     ['70000', 'Env PORT must be between 1 and 65535'],
@@ -86,8 +92,14 @@ describe('parseEnv', () => {
 
   it.each([
     ['abc', 'Env HEALTH_TIMEOUT_MS must be an integer'],
-    ['100', 'Env HEALTH_TIMEOUT_MS must be at least 500'],
+    ['100', 'Env HEALTH_TIMEOUT_MS must be between 500 and 2500'],
+    ['2501', 'Env HEALTH_TIMEOUT_MS must be between 500 and 2500'],
+    ['2147483648', 'Env HEALTH_TIMEOUT_MS must be between 500 and 2500'],
   ])('rejects HEALTH_TIMEOUT_MS=%s', (value, message) => {
     expect(() => parseEnv({ ...valid, HEALTH_TIMEOUT_MS: value })).toThrow(message);
+  });
+
+  it.each(['500', '2500'])('accepts the HEALTH_TIMEOUT_MS boundary %s', (value) => {
+    expect(parseEnv({ ...valid, HEALTH_TIMEOUT_MS: value }).healthTimeoutMs).toBe(Number(value));
   });
 });
