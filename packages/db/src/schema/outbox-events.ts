@@ -10,7 +10,7 @@ import {
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { createdAt, id, inList } from './columns';
+import { createdAt, id, inList, literal } from './columns';
 import { tradeIntents } from './trade-intents';
 
 export const OutboxTopic = {
@@ -71,6 +71,6 @@ export const outboxEvents = pgTable(
     ),
     index('outbox_events_pending_idx')
       .on(t.availableAt)
-      .where(sql`${t.status} = 'pending'`),
+      .where(sql`${t.status} = ${literal(OutboxStatus.Pending)}`),
   ],
 );
