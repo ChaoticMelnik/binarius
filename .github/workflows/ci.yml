@@ -8,14 +8,54 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: binarius
+          POSTGRES_PASSWORD: binarius
+          POSTGRES_DB: binarius
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U binarius -d binarius"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://binarius:binarius@localhost:5432/binarius
     steps:
       - uses: actions/checkout@v4
+        with:
+          # the migration immutability check diffs against the PR base branch
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Schema changes carry a committed migration
+        run: |
+          pnpm db:generate
+          if [ -n "$(git status --porcelain packages/db/drizzle)" ]; then
+            git status --short packages/db/drizzle
+            echo "::error::packages/db schema changed without a committed migration (run pnpm db:generate)"
+            exit 1
+          fi
+      - run: pnpm db:check
+      - name: Committed migrations are immutable
+        if: github.event_name == 'pull_request'
+        run: |
+          changed="$(git diff --name-status "origin/${{ github.base_ref }}...HEAD" -- 'packages/db/drizzle/*.sql' 'packages/db/drizzle/meta/*_snapshot.json' | grep -vE '^A' || true)"
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            echo "::error::committed migrations are immutable (forward-only): add a new migration instead"
+            exit 1
+          fi
+      - run: pnpm db:migrate
+      # a second run must be a no-op
+      - run: pnpm db:migrate
       # test runs before typecheck: typecheck emits dist/, which would mask a broken exports map
       - run: pnpm test
       - run: pnpm typecheck
@@ -25,7 +65,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # a crashing service would otherwise be restarted forever and --wait would burn the whole timeout
-      COMPOSE_RESTART: "no"
+      COMPOSE_RESTART: 'no'
     steps:
       - uses: actions/checkout@v4
       - name: Dockerfile Node version matches .node-version

@@ -9,7 +9,10 @@
   "scripts": {
     "typecheck": "tsc -b",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:generate": "pnpm --filter @binarius/db run db:generate",
+    "db:migrate": "pnpm --filter @binarius/db run db:migrate",
+    "db:check": "pnpm --filter @binarius/db run db:check"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
