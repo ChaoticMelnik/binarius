@@ -22,7 +22,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 pnpm install             # install all workspace dependencies
 pnpm typecheck           # tsc -b across the project-reference graph
 pnpm lint                # eslint .
-pnpm test                # vitest run
+pnpm test                # vitest run — needs a migrated Postgres, see Database below
 pnpm test apps/backend   # one package's tests (path filter)
 ```
 

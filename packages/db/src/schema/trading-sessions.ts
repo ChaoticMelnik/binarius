@@ -34,8 +34,9 @@ export const tradingSessions = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    // target of the composite FK from trade_intents
-    unique('trading_sessions_id_account_key').on(t.id, t.brokerAccountId),
+    // FK target for trade_intents: mode is part of the key so a demo session cannot
+    // parent a real intent
+    unique('trading_sessions_id_account_mode_key').on(t.id, t.brokerAccountId, t.mode),
     index('trading_sessions_account_status_idx').on(t.brokerAccountId, t.status),
     inList('trading_sessions_mode_check', t.mode, TradeMode),
     inList('trading_sessions_status_check', t.status, TradingSessionStatus),

@@ -14,7 +14,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { TradeAction, TradeMode, type DecimalString, type UnixMs } from '@binarius/shared';
-import { createdAt, id, inList, updatedAt } from './columns';
+import { createdAt, finitePrice, id, inList, positiveMoney, updatedAt } from './columns';
 import { brokerAccounts } from './broker-accounts';
 import { tradeIntents } from './trade-intents';
 
@@ -57,20 +57,33 @@ export const brokerTrades = pgTable(
     unique('broker_trades_account_trade_key').on(t.brokerAccountId, t.brokerTradeId),
     // ARCH-04: a trade found by reconciliation links to an intent exactly once
     unique('broker_trades_intent_id_key').on(t.intentId),
-    // ...and only to an intent of the same account
+    // ...and only to an intent of the same account running in the same mode
     foreignKey({
       name: 'broker_trades_intent_account_fk',
-      columns: [t.intentId, t.brokerAccountId],
-      foreignColumns: [tradeIntents.id, tradeIntents.brokerAccountId],
+      columns: [t.intentId, t.brokerAccountId, t.mode],
+      foreignColumns: [tradeIntents.id, tradeIntents.brokerAccountId, tradeIntents.mode],
     }),
     inList('broker_trades_mode_check', t.mode, TradeMode),
     inList('broker_trades_action_check', t.action, TradeAction),
     inList('broker_trades_status_check', t.status, BrokerTradeStatus),
     check('broker_trades_asset_id_check', sql`${t.assetId} > 0`),
-    check('broker_trades_amount_check', sql`${t.amount} > 0`),
+    positiveMoney('broker_trades_amount_check', t.amount),
+    positiveMoney('broker_trades_potential_profit_check', t.potentialProfit, true),
+    // profit may legitimately be negative (a lost trade), so only NaN is excluded
+    check('broker_trades_profit_check', sql`${t.profit} is null or ${t.profit} <> 'NaN'::numeric`),
+    check('broker_trades_payout_check', sql`${t.payout} >= 0 and ${t.payout} <> 'NaN'::numeric`),
+    finitePrice('broker_trades_open_price_check', t.openPrice),
+    finitePrice('broker_trades_close_price_check', t.closePrice, true),
+    check('broker_trades_open_timestamp_check', sql`${t.openTimestampMs} > 0`),
     check(
-      'broker_trades_closed_check',
-      sql`(${t.status} = 'closed') = (${t.closeTimestampMs} is not null)`,
+      'broker_trades_close_timestamp_check',
+      sql`${t.closeTimestampMs} is null or ${t.closeTimestampMs} > 0`,
+    ),
+    // the settlement group moves as a unit: a biconditional against the timestamp alone
+    // would accept an open trade that already carries a close price or a profit
+    check(
+      'broker_trades_settlement_check',
+      sql`num_nonnulls(${t.closeTimestampMs}, ${t.closePrice}, ${t.profit}) = case when ${t.status} = 'closed' then 3 else 0 end`,
     ),
     index('broker_trades_account_status_idx').on(t.brokerAccountId, t.status),
   ],

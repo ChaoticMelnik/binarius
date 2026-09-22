@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -45,16 +48,44 @@ jobs:
           fi
       - run: pnpm db:check
       - name: Committed migrations are immutable
-        if: github.event_name == 'pull_request'
+        env:
+          # a pull request compares against its base branch, a push against its own previous
+          # commit; github.base_ref is empty on push, and falling back to main there would
+          # compare HEAD with itself and pass vacuously
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
-          changed="$(git diff --name-status "origin/${{ github.base_ref }}...HEAD" -- 'packages/db/drizzle/*.sql' 'packages/db/drizzle/meta/*_snapshot.json' | grep -vE '^A' || true)"
+          set -euo pipefail
+          if [ -n "$BASE_REF" ]; then
+            git fetch --quiet origin "$BASE_REF"
+            base="$(git merge-base "origin/$BASE_REF" HEAD)"
+          elif [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            base="$BEFORE_SHA"
+          else
+            echo "no base revision (first commit) - nothing to compare"
+            exit 0
+          fi
+          # separate statements: an unresolvable base must fail the step, not silently pass
+          diff="$(git diff --name-status "$base" HEAD -- 'packages/db/drizzle/*.sql' 'packages/db/drizzle/meta/*_snapshot.json')"
+          changed="$(printf '%s\n' "$diff" | grep -vE '^(A|$)' || true)"
           if [ -n "$changed" ]; then
             echo "$changed"
             echo "::error::committed migrations are immutable (forward-only): add a new migration instead"
             exit 1
           fi
-      - run: pnpm db:migrate
-      # a second run must be a no-op
+          # the journal legitimately grows, so it is compared as a prefix: existing entries
+          # must be untouched (the migrator keys on their `when`, and never re-reads the hash)
+          old_journal="$(git show "$base:packages/db/drizzle/meta/_journal.json" 2>/dev/null || echo '{"entries":[]}')"
+          printf '%s' "$old_journal" > /tmp/base_journal.json
+          python3 - <<'PY'
+          import json, sys
+          base = json.load(open('/tmp/base_journal.json'))['entries']
+          head = json.load(open('packages/db/drizzle/meta/_journal.json'))['entries']
+          if head[:len(base)] != base:
+              print('::error::an already-committed migration journal entry was modified')
+              sys.exit(1)
+          print(f'journal: {len(base)} existing entries unchanged, {len(head) - len(base)} appended')
+          PY
       - run: pnpm db:migrate
       # test runs before typecheck: typecheck emits dist/, which would mask a broken exports map
       - run: pnpm test

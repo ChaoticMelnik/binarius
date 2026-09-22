@@ -12,4 +12,12 @@ BEFORE UPDATE OR DELETE ON "token_ledger"
 FOR EACH ROW EXECUTE FUNCTION raise_append_only();--> statement-breakpoint
 CREATE TRIGGER audit_log_append_only
 BEFORE UPDATE OR DELETE ON "audit_log"
-FOR EACH ROW EXECUTE FUNCTION raise_append_only();
+FOR EACH ROW EXECUTE FUNCTION raise_append_only();--> statement-breakpoint
+-- Row-level triggers never fire for TRUNCATE, which would otherwise empty both tables
+-- silently; a statement-level trigger is the only way to cover it.
+CREATE TRIGGER token_ledger_no_truncate
+BEFORE TRUNCATE ON "token_ledger"
+FOR EACH STATEMENT EXECUTE FUNCTION raise_append_only();--> statement-breakpoint
+CREATE TRIGGER audit_log_no_truncate
+BEFORE TRUNCATE ON "audit_log"
+FOR EACH STATEMENT EXECUTE FUNCTION raise_append_only();
