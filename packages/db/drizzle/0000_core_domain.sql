@@ -49,17 +49,23 @@ CREATE TABLE "token_ledger" (
 	"balance_delta" bigint DEFAULT 0 NOT NULL,
 	"reserved_delta" bigint DEFAULT 0 NOT NULL,
 	"intent_id" uuid,
+	"deposit_event_id" uuid,
 	"ref_type" text,
 	"ref_id" uuid,
 	"note" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "token_ledger_kind_check" CHECK ("token_ledger"."kind" in ('purchase', 'bonus', 'reserve', 'release', 'settle', 'adjustment')),
-	CONSTRAINT "token_ledger_ref_type_check" CHECK ("token_ledger"."ref_type" in ('deposit_event', 'manual')),
+	CONSTRAINT "token_ledger_ref_type_check" CHECK ("token_ledger"."ref_type" in ('manual')),
 	CONSTRAINT "token_ledger_delta_check" CHECK ("token_ledger"."balance_delta" <> 0 or "token_ledger"."reserved_delta" <> 0),
 	CONSTRAINT "token_ledger_ref_pair_check" CHECK (("token_ledger"."ref_type" is null) = ("token_ledger"."ref_id" is null)),
-	CONSTRAINT "token_ledger_reference_check" CHECK (case when "token_ledger"."kind" in ('reserve', 'release', 'settle')
-            then "token_ledger"."intent_id" is not null and "token_ledger"."ref_type" is null and "token_ledger"."ref_id" is null
-            else "token_ledger"."intent_id" is null
+	CONSTRAINT "token_ledger_reference_check" CHECK (case
+            when "token_ledger"."kind" in ('reserve', 'release', 'settle')
+              then "token_ledger"."intent_id" is not null and "token_ledger"."deposit_event_id" is null and "token_ledger"."ref_id" is null
+            when "token_ledger"."kind" = 'purchase'
+              then "token_ledger"."deposit_event_id" is not null and "token_ledger"."intent_id" is null and "token_ledger"."ref_id" is null
+            when "token_ledger"."kind" = 'bonus'
+              then "token_ledger"."intent_id" is null and "token_ledger"."ref_id" is null
+            else "token_ledger"."intent_id" is null and "token_ledger"."deposit_event_id" is null
           end),
 	CONSTRAINT "token_ledger_delta_shape_check" CHECK (case "token_ledger"."kind"
             when 'reserve' then "token_ledger"."reserved_delta" > 0 and "token_ledger"."balance_delta" = 0
@@ -134,7 +140,7 @@ CREATE TABLE "outbox_events" (
 	CONSTRAINT "outbox_events_payload_check" CHECK (jsonb_typeof("outbox_events"."payload") = 'object'
           and "outbox_events"."payload" ? 'intent_id'
           and jsonb_typeof("outbox_events"."payload" -> 'intent_id') = 'string'
-          and lower("outbox_events"."payload" ->> 'intent_id') = "outbox_events"."intent_id"::text)
+          and "outbox_events"."payload" ->> 'intent_id' = "outbox_events"."intent_id"::text)
 );
 --> statement-breakpoint
 CREATE TABLE "broker_trades" (
@@ -188,6 +194,8 @@ CREATE TABLE "deposit_events" (
 	"payload" jsonb NOT NULL,
 	"processed_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "deposit_events_id_user_key" UNIQUE("id","user_id"),
+	CONSTRAINT "deposit_events_owner_pair_check" CHECK ("deposit_events"."user_id" is null or "deposit_events"."broker_account_id" is not null),
 	CONSTRAINT "deposit_events_amount_check" CHECK ("deposit_events"."amount" is null or ("deposit_events"."amount" > 0 and "deposit_events"."amount" <> 'NaN'::numeric)),
 	CONSTRAINT "deposit_events_status_check" CHECK ("deposit_events"."status" in ('received', 'credited', 'ignored', 'failed'))
 );
@@ -238,6 +246,7 @@ ALTER TABLE "broker_accounts" ADD CONSTRAINT "broker_accounts_user_id_users_id_f
 ALTER TABLE "auth_sessions" ADD CONSTRAINT "auth_sessions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "token_ledger" ADD CONSTRAINT "token_ledger_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "token_ledger" ADD CONSTRAINT "token_ledger_intent_owner_fk" FOREIGN KEY ("intent_id","user_id") REFERENCES "public"."trade_intents"("id","user_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "token_ledger" ADD CONSTRAINT "token_ledger_deposit_owner_fk" FOREIGN KEY ("deposit_event_id","user_id") REFERENCES "public"."deposit_events"("id","user_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "trading_sessions" ADD CONSTRAINT "trading_sessions_broker_account_id_broker_accounts_id_fk" FOREIGN KEY ("broker_account_id") REFERENCES "public"."broker_accounts"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "trade_intents" ADD CONSTRAINT "trade_intents_broker_account_id_broker_accounts_id_fk" FOREIGN KEY ("broker_account_id") REFERENCES "public"."broker_accounts"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "trade_intents" ADD CONSTRAINT "trade_intents_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
@@ -260,13 +269,12 @@ CREATE INDEX "auth_sessions_user_id_idx" ON "auth_sessions" USING btree ("user_i
 CREATE INDEX "auth_sessions_expires_at_idx" ON "auth_sessions" USING btree ("expires_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "token_ledger_reserve_intent_idx" ON "token_ledger" USING btree ("intent_id") WHERE "token_ledger"."kind" = 'reserve';--> statement-breakpoint
 CREATE UNIQUE INDEX "token_ledger_terminal_intent_idx" ON "token_ledger" USING btree ("intent_id") WHERE "token_ledger"."kind" in ('release', 'settle');--> statement-breakpoint
-CREATE UNIQUE INDEX "token_ledger_deposit_ref_idx" ON "token_ledger" USING btree ("ref_id") WHERE "token_ledger"."ref_type" = 'deposit_event';--> statement-breakpoint
+CREATE UNIQUE INDEX "token_ledger_deposit_event_idx" ON "token_ledger" USING btree ("deposit_event_id") WHERE "token_ledger"."deposit_event_id" is not null;--> statement-breakpoint
 CREATE INDEX "token_ledger_user_created_idx" ON "token_ledger" USING btree ("user_id","created_at");--> statement-breakpoint
 CREATE INDEX "token_ledger_intent_id_idx" ON "token_ledger" USING btree ("intent_id");--> statement-breakpoint
-CREATE INDEX "token_ledger_ref_id_idx" ON "token_ledger" USING btree ("ref_id");--> statement-breakpoint
 CREATE INDEX "trading_sessions_account_status_idx" ON "trading_sessions" USING btree ("broker_account_id","status");--> statement-breakpoint
 CREATE UNIQUE INDEX "trade_intents_account_request_idx" ON "trade_intents" USING btree ("broker_account_id","client_request_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "trade_intents_active_account_idx" ON "trade_intents" USING btree ("broker_account_id") WHERE "trade_intents"."status" not in ('settled', 'rejected', 'manual_review');--> statement-breakpoint
+CREATE UNIQUE INDEX "trade_intents_active_account_idx" ON "trade_intents" USING btree ("broker_account_id") WHERE "trade_intents"."status" not in ('settled', 'rejected');--> statement-breakpoint
 CREATE INDEX "trade_intents_account_status_idx" ON "trade_intents" USING btree ("broker_account_id","status");--> statement-breakpoint
 CREATE INDEX "trade_intents_status_updated_idx" ON "trade_intents" USING btree ("status","updated_at");--> statement-breakpoint
 CREATE INDEX "trade_intents_user_id_idx" ON "trade_intents" USING btree ("user_id");--> statement-breakpoint

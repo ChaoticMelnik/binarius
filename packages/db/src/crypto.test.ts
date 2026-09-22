@@ -64,13 +64,26 @@ describe('createTokenCipher', () => {
   it.each([
     ['a short key', { keyId: 'k1', key: randomBytes(16) }],
     ['an empty key id', { keyId: '', key }],
+    ['a key id containing the AAD separator', { keyId: 'k|1', key }],
   ])('refuses %s at construction', (_label, options) => {
     expect(() => createTokenCipher(options)).toThrow(TokenCipherError);
   });
 
-  it('refuses an empty account id', () => {
-    expect(() => cipher.encrypt('secret', { accountId: '', field: 'access' })).toThrow(
-      TokenCipherError,
-    );
+  it.each([
+    ['an empty account id', ''],
+    ['an account id containing the AAD separator', 'acct|other'],
+  ])('refuses %s in both directions', (_label, accountId) => {
+    const bad = { accountId, field: 'access' } as TokenContext;
+    expect(() => cipher.encrypt('secret', bad)).toThrow(TokenCipherError);
+    expect(() => cipher.decrypt(cipher.encrypt('secret', ctx), bad)).toThrow(TokenCipherError);
+  });
+
+  // without the separator guard these two contexts would build identical AAD, so a ciphertext
+  // bound to one would authenticate under the other
+  it('cannot be tricked by moving the separator between components', () => {
+    expect(() => createTokenCipher({ keyId: `k|${ACCOUNT_A}`, key })).toThrow(TokenCipherError);
+    expect(() =>
+      cipher.encrypt('secret', { accountId: `${ACCOUNT_A}|${ACCOUNT_B}`, field: 'access' }),
+    ).toThrow(TokenCipherError);
   });
 });

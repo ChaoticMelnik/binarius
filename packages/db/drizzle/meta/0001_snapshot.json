@@ -1,6 +1,6 @@
 {
-  "id": "b6b27c2a-e9bc-4a89-b413-efbce1bb6c3c",
-  "prevId": "fd3b8a18-721b-40c3-97ed-74c5a98679fb",
+  "id": "5a63685c-1e27-4793-a57f-c32264049140",
+  "prevId": "35da079e-646c-4f74-82e2-cab156f094c2",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -418,6 +418,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "deposit_event_id": {
+          "name": "deposit_event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "ref_type": {
           "name": "ref_type",
           "type": "text",
@@ -477,11 +483,11 @@
           "where": "\"token_ledger\".\"kind\" in ('release', 'settle')",
           "concurrently": false
         },
-        "token_ledger_deposit_ref_idx": {
-          "name": "token_ledger_deposit_ref_idx",
+        "token_ledger_deposit_event_idx": {
+          "name": "token_ledger_deposit_event_idx",
           "columns": [
             {
-              "expression": "ref_id",
+              "expression": "deposit_event_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -490,7 +496,7 @@
           "isUnique": true,
           "with": {},
           "method": "btree",
-          "where": "\"token_ledger\".\"ref_type\" = 'deposit_event'",
+          "where": "\"token_ledger\".\"deposit_event_id\" is not null",
           "concurrently": false
         },
         "token_ledger_user_created_idx": {
@@ -528,21 +534,6 @@
           "with": {},
           "method": "btree",
           "concurrently": false
-        },
-        "token_ledger_ref_id_idx": {
-          "name": "token_ledger_ref_id_idx",
-          "columns": [
-            {
-              "expression": "ref_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "with": {},
-          "method": "btree",
-          "concurrently": false
         }
       },
       "foreignKeys": {
@@ -563,6 +554,15 @@
           "columnsTo": ["id", "user_id"],
           "onUpdate": "no action",
           "onDelete": "no action"
+        },
+        "token_ledger_deposit_owner_fk": {
+          "name": "token_ledger_deposit_owner_fk",
+          "tableFrom": "token_ledger",
+          "columnsFrom": ["deposit_event_id", "user_id"],
+          "tableTo": "deposit_events",
+          "columnsTo": ["id", "user_id"],
+          "onUpdate": "no action",
+          "onDelete": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -575,7 +575,7 @@
         },
         "token_ledger_ref_type_check": {
           "name": "token_ledger_ref_type_check",
-          "value": "\"token_ledger\".\"ref_type\" in ('deposit_event', 'manual')"
+          "value": "\"token_ledger\".\"ref_type\" in ('manual')"
         },
         "token_ledger_delta_check": {
           "name": "token_ledger_delta_check",
@@ -587,7 +587,7 @@
         },
         "token_ledger_reference_check": {
           "name": "token_ledger_reference_check",
-          "value": "case when \"token_ledger\".\"kind\" in ('reserve', 'release', 'settle')\n            then \"token_ledger\".\"intent_id\" is not null and \"token_ledger\".\"ref_type\" is null and \"token_ledger\".\"ref_id\" is null\n            else \"token_ledger\".\"intent_id\" is null\n          end"
+          "value": "case\n            when \"token_ledger\".\"kind\" in ('reserve', 'release', 'settle')\n              then \"token_ledger\".\"intent_id\" is not null and \"token_ledger\".\"deposit_event_id\" is null and \"token_ledger\".\"ref_id\" is null\n            when \"token_ledger\".\"kind\" = 'purchase'\n              then \"token_ledger\".\"deposit_event_id\" is not null and \"token_ledger\".\"intent_id\" is null and \"token_ledger\".\"ref_id\" is null\n            when \"token_ledger\".\"kind\" = 'bonus'\n              then \"token_ledger\".\"intent_id\" is null and \"token_ledger\".\"ref_id\" is null\n            else \"token_ledger\".\"intent_id\" is null and \"token_ledger\".\"deposit_event_id\" is null\n          end"
         },
         "token_ledger_delta_shape_check": {
           "name": "token_ledger_delta_shape_check",
@@ -870,7 +870,7 @@
           "isUnique": true,
           "with": {},
           "method": "btree",
-          "where": "\"trade_intents\".\"status\" not in ('settled', 'rejected', 'manual_review')",
+          "where": "\"trade_intents\".\"status\" not in ('settled', 'rejected')",
           "concurrently": false
         },
         "trade_intents_account_status_idx": {
@@ -1163,7 +1163,7 @@
         },
         "outbox_events_payload_check": {
           "name": "outbox_events_payload_check",
-          "value": "jsonb_typeof(\"outbox_events\".\"payload\") = 'object'\n          and \"outbox_events\".\"payload\" ? 'intent_id'\n          and jsonb_typeof(\"outbox_events\".\"payload\" -> 'intent_id') = 'string'\n          and lower(\"outbox_events\".\"payload\" ->> 'intent_id') = \"outbox_events\".\"intent_id\"::text"
+          "value": "jsonb_typeof(\"outbox_events\".\"payload\") = 'object'\n          and \"outbox_events\".\"payload\" ? 'intent_id'\n          and jsonb_typeof(\"outbox_events\".\"payload\" -> 'intent_id') = 'string'\n          and \"outbox_events\".\"payload\" ->> 'intent_id' = \"outbox_events\".\"intent_id\"::text"
         }
       },
       "isRLSEnabled": false
@@ -1591,9 +1591,19 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "deposit_events_id_user_key": {
+          "name": "deposit_events_id_user_key",
+          "columns": ["id", "user_id"],
+          "nullsNotDistinct": false
+        }
+      },
       "policies": {},
       "checkConstraints": {
+        "deposit_events_owner_pair_check": {
+          "name": "deposit_events_owner_pair_check",
+          "value": "\"deposit_events\".\"user_id\" is null or \"deposit_events\".\"broker_account_id\" is not null"
+        },
         "deposit_events_amount_check": {
           "name": "deposit_events_amount_check",
           "value": "\"deposit_events\".\"amount\" is null or (\"deposit_events\".\"amount\" > 0 and \"deposit_events\".\"amount\" <> 'NaN'::numeric)"

@@ -23,7 +23,7 @@ import {
   createdAt,
   id,
   inList,
-  positiveMoney,
+  positiveNumeric,
   sqlLiteralList,
   tokenAmount,
   updatedAt,
@@ -36,6 +36,9 @@ import { users } from './users';
 export const TradeTransport = { Socket: 'socket', RestFallback: 'rest_fallback' } as const;
 export type TradeTransport = (typeof TradeTransport)[keyof typeof TradeTransport];
 
+// A status with no outgoing transition is finished, and only a finished intent stops blocking
+// the account. manual_review deliberately has outgoing edges (see packages/shared/src/trading.ts)
+// precisely so that it keeps blocking while remaining resolvable.
 export const TERMINAL_TRADE_INTENT_STATUSES = Object.entries(TRADE_INTENT_TRANSITIONS)
   .filter(([, targets]) => targets.length === 0)
   .map(([status]) => status as TradeIntentStatus);
@@ -101,7 +104,7 @@ export const tradeIntents = pgTable(
     inList('trade_intents_status_check', t.status, TradeIntentStatus),
     inList('trade_intents_transport_check', t.transport, TradeTransport),
     check('trade_intents_asset_id_check', sql`${t.assetId} > 0`),
-    positiveMoney('trade_intents_amount_check', t.amount),
+    positiveNumeric('trade_intents_amount_check', t.amount),
     check('trade_intents_duration_sec_check', sql`${t.durationSec} > 0`),
     check('trade_intents_tokens_reserved_check', sql`${t.tokensReserved} >= 0`),
     index('trade_intents_account_status_idx').on(t.brokerAccountId, t.status),
