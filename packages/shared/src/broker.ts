@@ -1,17 +1,13 @@
 import * as z from 'zod';
-import { decimalStringSchema, type DecimalString } from './money';
+import { idWireSchema, toId } from './ids';
+import { decimalStringSchema, positiveDecimalStringSchema, type DecimalString } from './money';
 import { unixMsSchema, type UnixMs } from './time';
 import { tradeActionSchema, type TradeAction } from './trading';
-
-// Binodex does not state whether ids are numeric or strings; both are accepted on the wire and
-// normalized to strings losslessly. BinaryPair.id is confirmed numeric (#8).
-const idWireSchema = z.union([z.int(), z.string().min(1)]);
-
-const toId = (id: number | string): string => String(id);
 
 // --- BinaryPair -------------------------------------------------------------------------------
 
 export const binaryPairWireSchema = z.object({
+  // confirmed numeric (#8), unlike the other Binodex ids (see ids.ts)
   id: z.int(),
   symbol: z.string(),
   is_otc: z.boolean().optional(),
@@ -25,6 +21,7 @@ export const binaryPairWireSchema = z.object({
   scheduled_until: z.number().nonnegative(),
 });
 export type BinaryPairWire = z.infer<typeof binaryPairWireSchema>;
+export const binaryPairsWireSchema = z.array(binaryPairWireSchema);
 
 export interface BinaryPair {
   id: number;
@@ -145,7 +142,8 @@ const tradeBaseWireShape = {
   open_price: z.number(),
   open_timestamp: unixMsSchema,
   is_demo: z.boolean(),
-  source: z.enum(BrokerTradeSource).optional(),
+  // an unknown label must not make a settled trade unparseable (#18 confirms the full set)
+  source: z.string().optional(),
   broker_client_id: z.string().nullable().optional(),
 };
 
@@ -172,7 +170,7 @@ interface TradeBase {
   openPrice: number;
   openTimestamp: UnixMs;
   isDemo: boolean;
-  source?: BrokerTradeSource;
+  source?: BrokerTradeSource | (string & {});
   brokerClientId?: string | null;
 }
 
@@ -226,7 +224,7 @@ export interface OpenTradeRequest {
 
 export const openTradeRequestWireSchema = z.object({
   asset_id: z.int(),
-  amount: decimalStringSchema,
+  amount: positiveDecimalStringSchema,
   action: tradeActionSchema,
   duration: z.int().positive(),
   is_demo: z.boolean(),
@@ -240,6 +238,33 @@ export function toOpenTradeRequestWire(request: OpenTradeRequest): OpenTradeRequ
     action: request.action,
     duration: request.durationSec,
     is_demo: request.isDemo,
+  };
+}
+
+// --- Chart request (REST: GET /broker/chart) --------------------------------------------------
+
+export interface ChartRequest {
+  assetId: number;
+  interval: number | string;
+  limit: number;
+  startTime?: UnixMs;
+}
+
+// #6 names the parameters but not interval's wire type; both are accepted until #18 sees a call
+export const chartRequestWireSchema = z.object({
+  asset_id: z.int(),
+  interval: z.union([z.int().positive(), z.string().min(1)]),
+  limit: z.int().positive(),
+  start_time: unixMsSchema.optional(),
+});
+export type ChartRequestWire = z.infer<typeof chartRequestWireSchema>;
+
+export function toChartRequestWire(request: ChartRequest): ChartRequestWire {
+  return {
+    asset_id: request.assetId,
+    interval: request.interval,
+    limit: request.limit,
+    ...(request.startTime === undefined ? {} : { start_time: request.startTime }),
   };
 }
 
@@ -269,7 +294,8 @@ export const parseBinaryPair = (input: unknown): BinaryPair =>
 export const safeParseBinaryPair = (input: unknown) => binaryPairWireSchema.safeParse(input);
 
 export const parseBinaryPairs = (input: unknown): BinaryPair[] =>
-  z.array(binaryPairWireSchema).parse(input).map(toBinaryPair);
+  binaryPairsWireSchema.parse(input).map(toBinaryPair);
+export const safeParseBinaryPairs = (input: unknown) => binaryPairsWireSchema.safeParse(input);
 
 export const parseBrokerUser = (input: unknown): BrokerUser =>
   toBrokerUser(brokerUserWireSchema.parse(input));
@@ -277,6 +303,7 @@ export const safeParseBrokerUser = (input: unknown) => brokerUserWireSchema.safe
 
 export const parseBrokerBalance = (input: unknown): BrokerBalance =>
   toBrokerBalance(brokerBalanceWireSchema.parse(input));
+export const safeParseBrokerBalance = (input: unknown) => brokerBalanceWireSchema.safeParse(input);
 
 export const parseCandles = (input: unknown): Candle[] =>
   candlesWireSchema.parse(input).map(toCandle);

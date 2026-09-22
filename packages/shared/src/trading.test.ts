@@ -45,8 +45,11 @@ describe('TradeIntentStatus', () => {
 
   it.each([
     ['planned', 'reserved'],
+    ['planned', 'rejected'],
     ['reserved', 'queued'],
+    ['reserved', 'rejected'],
     ['queued', 'submitting'],
+    ['queued', 'rejected'],
     ['submitting', 'accepted'],
     ['submitting', 'rejected'],
     ['submitting', 'unknown'],
@@ -69,6 +72,17 @@ describe('TradeIntentStatus', () => {
     ['accepted', 'accepted'],
   ] as const)('forbids %s -> %s', (from, to) => {
     expect(canTransition(from, to)).toBe(false);
+  });
+
+  it('makes rejected reachable from every non-terminal state except accepted and unknown', () => {
+    const sources = Object.entries(TRADE_INTENT_TRANSITIONS)
+      .filter(([, targets]) => targets.includes(TradeIntentStatus.Rejected))
+      .map(([from]) => from);
+    expect(sources).toEqual(['planned', 'reserved', 'queued', 'submitting', 'reconciling']);
+  });
+
+  it('answers false for a status outside the enum instead of throwing', () => {
+    expect(canTransition('bogus' as never, 'rejected')).toBe(false);
   });
 
   it('marks settled, rejected and manual_review as terminal', () => {
@@ -101,6 +115,8 @@ describe('parseTradeIntent', () => {
     ['assetId', 1.5],
     ['amount', 10],
     ['amount', '10,00'],
+    ['amount', '0'],
+    ['amount', '-1'],
     ['action', 'UP'],
     ['durationSec', 0],
     ['clientRequestId', ''],

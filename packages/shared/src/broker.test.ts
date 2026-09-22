@@ -1,15 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chartRequestWireSchema,
+  openTradeRequestWireSchema,
   parseBinaryPair,
+  parseBinaryPairs,
   parseBrokerError,
   parseBrokerUser,
   parseCandles,
   parseClosedTrade,
   parseOpenTrade,
   safeParseBinaryPair,
+  safeParseBinaryPairs,
+  safeParseBrokerBalance,
   safeParseBrokerUser,
   safeParseCandles,
   safeParseOpenTrade,
+  toChartRequestWire,
   toOpenTradeRequestWire,
 } from './broker';
 import type { DecimalString } from './money';
@@ -84,6 +90,11 @@ describe('BinaryPair', () => {
     expect(parseBinaryPair(pairWire)).not.toHaveProperty('isOtc');
   });
 
+  it('parses a list', () => {
+    expect(parseBinaryPairs([pairWire, pairWire])).toHaveLength(2);
+    expect(safeParseBinaryPairs([pairWire, { ...pairWire, id: 'x' }]).success).toBe(false);
+  });
+
   it.each([
     ['id', '91'],
     ['digits', 5.5],
@@ -107,6 +118,11 @@ describe('BrokerUser', () => {
 
   it('accepts a string id', () => {
     expect(parseBrokerUser({ ...userWire, id: 'u-1' }).id).toBe('u-1');
+  });
+
+  it('exposes a safe balance parser', () => {
+    expect(safeParseBrokerBalance(balanceWire).success).toBe(true);
+    expect(safeParseBrokerBalance({ ...balanceWire, held: 10 }).success).toBe(false);
   });
 
   it.each([
@@ -173,10 +189,14 @@ describe('Trades', () => {
     ['amount', 10],
     ['potential_profit', 8.5],
     ['action', 'UP'],
-    ['source', 'manual'],
+    ['source', 5],
     ['open_timestamp', 1790028496.6],
   ])('rejects %s=%j on an open trade', (field, value) => {
     expect(safeParseOpenTrade({ ...openTradeWire, [field]: value }).success).toBe(false);
+  });
+
+  it('keeps an unknown source label instead of dropping the trade', () => {
+    expect(parseOpenTrade({ ...openTradeWire, source: 'manual' }).source).toBe('manual');
   });
 
   it('encodes an open-trade request for REST with is_demo', () => {
@@ -189,6 +209,35 @@ describe('Trades', () => {
         isDemo: true,
       }),
     ).toEqual({ asset_id: 91, amount: '10.00', action: 'up', duration: 60, is_demo: true });
+  });
+
+  it.each(['0', '0.00', '-1'])('rejects the request amount %j', (amount) => {
+    const wire = { asset_id: 91, amount: '10.00', action: 'up', duration: 60, is_demo: true };
+    expect(openTradeRequestWireSchema.safeParse(wire).success).toBe(true);
+    expect(openTradeRequestWireSchema.safeParse({ ...wire, amount }).success).toBe(false);
+  });
+});
+
+describe('ChartRequest', () => {
+  it('encodes the query with an optional start_time', () => {
+    expect(toChartRequestWire({ assetId: 91, interval: 60, limit: 100 })).toEqual({
+      asset_id: 91,
+      interval: 60,
+      limit: 100,
+    });
+    expect(
+      toChartRequestWire({ assetId: 91, interval: '1m', limit: 100, startTime: 1790028496624 }),
+    ).toEqual({ asset_id: 91, interval: '1m', limit: 100, start_time: 1790028496624 });
+  });
+
+  it.each([
+    ['limit', 0],
+    ['interval', ''],
+    ['interval', 0],
+    ['start_time', -1],
+  ])('rejects %s=%j', (field, value) => {
+    const wire = { asset_id: 91, interval: 60, limit: 100 };
+    expect(chartRequestWireSchema.safeParse({ ...wire, [field]: value }).success).toBe(false);
   });
 });
 

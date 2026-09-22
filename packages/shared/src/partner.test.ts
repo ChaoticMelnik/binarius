@@ -83,6 +83,18 @@ describe('Partner trader stats', () => {
       false,
     );
   });
+
+  it('normalizes a numeric uid to a string and rejects an empty one', () => {
+    expect(parsePartnerTraderStats(envelope({ ...traderWire, uid: 42 })).uid).toBe('42');
+    expect(safeParsePartnerTraderStats(envelope({ ...traderWire, uid: '' })).success).toBe(false);
+  });
+
+  it('tolerates absent deposit counters', () => {
+    const stats = parsePartnerTraderStats(
+      envelope({ uid: 'tr-1', balance: '125.40', firstDeposit: null }),
+    );
+    expect(stats).toEqual({ uid: 'tr-1', balance: '125.40', firstDeposit: null });
+  });
 });
 
 describe('Partner ref links and positions', () => {

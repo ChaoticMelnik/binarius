@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { decimalStringSchema } from './money';
+import { positiveDecimalStringSchema } from './money';
 
 export const TradeMode = { Demo: 'demo', Real: 'real' } as const;
 export type TradeMode = (typeof TradeMode)[keyof typeof TradeMode];
@@ -25,13 +25,15 @@ export type TradeIntentStatus = (typeof TradeIntentStatus)[keyof typeof TradeInt
 export const tradeIntentStatusSchema = z.enum(TradeIntentStatus);
 
 // ARCH-03: planned → reserved → queued → submitting → accepted | rejected | unknown;
-// accepted → settled; unknown → reconciling → accepted | rejected | manual_review
+// accepted → settled; unknown → reconciling → accepted | rejected | manual_review.
+// A failure before the order reaches the broker (planned/reserved/queued) is a terminal rejected;
+// unknown is reachable only from submitting because only a sent order can have an unknown outcome.
 export const TRADE_INTENT_TRANSITIONS: Readonly<
   Record<TradeIntentStatus, readonly TradeIntentStatus[]>
 > = {
-  planned: ['reserved'],
-  reserved: ['queued'],
-  queued: ['submitting'],
+  planned: ['reserved', 'rejected'],
+  reserved: ['queued', 'rejected'],
+  queued: ['submitting', 'rejected'],
   submitting: ['accepted', 'rejected', 'unknown'],
   accepted: ['settled'],
   settled: [],
@@ -41,8 +43,9 @@ export const TRADE_INTENT_TRANSITIONS: Readonly<
   manual_review: [],
 };
 
+// `from` is usually a DB column at runtime, so an out-of-enum value answers false, not TypeError
 export function canTransition(from: TradeIntentStatus, to: TradeIntentStatus): boolean {
-  return TRADE_INTENT_TRANSITIONS[from].includes(to);
+  return TRADE_INTENT_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
 export const tradeIntentSchema = z.object({
@@ -51,7 +54,7 @@ export const tradeIntentSchema = z.object({
   telegramUserId: z.string().min(1),
   mode: tradeModeSchema,
   assetId: z.int().positive(),
-  amount: decimalStringSchema,
+  amount: positiveDecimalStringSchema,
   action: tradeActionSchema,
   durationSec: z.int().positive(),
   clientRequestId: z.string().min(1),

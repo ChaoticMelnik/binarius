@@ -5,19 +5,27 @@ import {
   SocketPayloadDecodeError,
   decodeSocketPayload,
   modeEvent,
+  parseAssetsList,
   parseAssetsUpdate,
   parseCloseTradeSuccess,
   parseOpenTradeFail,
   parsePriceUpdate,
+  parseSocketOpenTradeSuccess,
+  parseUpdateBalance,
   parseUserData,
   priceSubscribeWireSchema,
   safeDecodeSocketPayload,
   safeParseAssetsUpdate,
+  safeParseCloseTradeSuccess,
+  safeParseOpenTradeFail,
   safeParsePriceUpdate,
+  safeParseUserAuthError,
   socketOpenTradeRequestWireSchema,
+  toAssetsUpdate,
   toSocketOpenTradeRequestWire,
   userAuthWireSchema,
 } from './socket';
+import { parseBinaryPairs, parseBrokerBalance, parseBrokerUser, parseOpenTrade } from './broker';
 import type { DecimalString } from './money';
 
 describe('event names', () => {
@@ -59,10 +67,12 @@ describe('client → server payloads', () => {
       durationSec: 60,
     });
     expect(wire).toEqual({ asset_id: 91, amount: '10.00', action: 'down', duration: 60 });
-    expect(socketOpenTradeRequestWireSchema.safeParse({ ...wire, is_demo: true }).success).toBe(
-      true,
+    expect(socketOpenTradeRequestWireSchema.parse({ ...wire, is_demo: true })).not.toHaveProperty(
+      'is_demo',
     );
-    expect(Object.keys(wire)).not.toContain('is_demo');
+    expect(socketOpenTradeRequestWireSchema.safeParse({ ...wire, amount: '0' }).success).toBe(
+      false,
+    );
   });
 
   it('validates the auth handshake', () => {
@@ -98,6 +108,24 @@ describe('server → client payloads', () => {
 
   it.each([{ payout: 80 }, { asset_id: 91, id: 92 }])('rejects assets_update %j', (wire) => {
     expect(safeParseAssetsUpdate(wire).success).toBe(false);
+  });
+
+  it('guards toAssetsUpdate against a hand-built wire without a key', () => {
+    expect(() => toAssetsUpdate({})).toThrow('assets_update without asset_id or id');
+  });
+
+  it('exposes safe parsers for the socket-only payloads', () => {
+    expect(safeParseUserAuthError({ message: 'bad token' }).success).toBe(true);
+    expect(safeParseOpenTradeFail([{ message: 'x' }]).success).toBe(true);
+    expect(safeParseOpenTradeFail({ message: 'x' }).success).toBe(false);
+    expect(safeParseCloseTradeSuccess({ trades: 'no' }).success).toBe(false);
+  });
+
+  it('reuses the broker parsers for the REST-shaped payloads', () => {
+    expect(parseUserData).toBe(parseBrokerUser);
+    expect(parseUpdateBalance).toBe(parseBrokerBalance);
+    expect(parseAssetsList).toBe(parseBinaryPairs);
+    expect(parseSocketOpenTradeSuccess).toBe(parseOpenTrade);
   });
 
   it('parses open_trade.fail as an array, including empty', () => {
@@ -156,19 +184,31 @@ describe('decodeSocketPayload', () => {
     expect(decodeSocketPayload(view)).toEqual({ a: 1 });
   });
 
-  it('passes arrays and primitives through', () => {
-    expect(decodeSocketPayload([1, 2])).toEqual([1, 2]);
-    expect(decodeSocketPayload(5)).toBe(5);
+  it.each([
+    ['arrays', [1, 2]],
+    ['primitives', 5],
+    ['objects whose data is not all bytes', { data: [300, -1] }],
+    ['objects with an empty data array', { data: [] }],
+    ['objects with a non-array data', { data: 'x' }],
+  ])('passes %s through untouched', (_label, raw) => {
+    expect(decodeSocketPayload(raw)).toBe(raw);
   });
 
   it.each([
     ['malformed JSON', '{"a":'],
-    ['non-byte envelope values', { data: [300, -1] }],
     ['invalid UTF-8', new Uint8Array([0xff, 0xfe])],
+    ['an invalid UTF-8 envelope', { data: [0xff, 0xfe] }],
   ])('throws SocketPayloadDecodeError on %s', (_label, raw) => {
     expect(() => decodeSocketPayload(raw)).toThrow(SocketPayloadDecodeError);
-    const result = safeDecodeSocketPayload(raw);
-    expect(result.ok).toBe(false);
+    expect(safeDecodeSocketPayload(raw).ok).toBe(false);
+  });
+
+  it('throws SocketPayloadDecodeError on a detached ArrayBuffer', () => {
+    const detached = new ArrayBuffer(4);
+    structuredClone(detached, { transfer: [detached] });
+    expect(detached.byteLength).toBe(0);
+    expect(() => decodeSocketPayload(detached)).toThrow(SocketPayloadDecodeError);
+    expect(safeDecodeSocketPayload(detached).ok).toBe(false);
   });
 
   it('safe variant returns the value', () => {

@@ -1,7 +1,6 @@
 import * as z from 'zod';
+import { idWireSchema, toId } from './ids';
 import { tradeModeSchema, type TradeMode } from './trading';
-
-const idWireSchema = z.union([z.int(), z.string().min(1)]);
 
 // --- Token response (POST /v1/broker/oauth/token) ---------------------------------------------
 
@@ -33,7 +32,7 @@ export function toOAuthTokens(wire: OAuthTokenResponseWire): OAuthTokens {
     tokenType: wire.token_type,
     expiresInSec: wire.expires_in,
     user: {
-      id: String(wire.user.id),
+      id: toId(wire.user.id),
       email: wire.user.email,
       isPartnerClient: wire.user.is_partner_client,
     },

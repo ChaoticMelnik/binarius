@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { idWireSchema, toId } from './ids';
 import { decimalStringSchema, type DecimalString } from './money';
 
 // Partner API (api.binopartner.com/v1). Only the fields issue #6 names are typed; responses are
@@ -60,14 +61,15 @@ export const partnerDepositMarkWireSchema = z.looseObject({ type: z.string(), at
 export type PartnerDepositMarkWire = z.infer<typeof partnerDepositMarkWireSchema>;
 
 export const partnerTraderStatsWireSchema = z.looseObject({
-  uid: z.string(),
+  uid: idWireSchema,
   balance: decimalStringSchema,
   firstDeposit: partnerDepositMarkWireSchema.nullable().optional(),
   lastDeposit: partnerDepositMarkWireSchema.nullable().optional(),
-  depositsCount: z.int(),
-  depositsCryptoCount: z.int(),
-  depositsCardCount: z.int(),
-  depositsCardRuCount: z.int(),
+  // counter names are taken from /stats/overall, not confirmed for the trader endpoint (#14)
+  depositsCount: z.int().optional(),
+  depositsCryptoCount: z.int().optional(),
+  depositsCardCount: z.int().optional(),
+  depositsCardRuCount: z.int().optional(),
   regRate: z.unknown().optional(),
   lastActive: z.unknown().optional(),
   deals: z.unknown().optional(),
@@ -86,10 +88,10 @@ export interface PartnerTraderStats {
   balance: DecimalString;
   firstDeposit?: PartnerDepositMark | null;
   lastDeposit?: PartnerDepositMark | null;
-  depositsCount: number;
-  depositsCryptoCount: number;
-  depositsCardCount: number;
-  depositsCardRuCount: number;
+  depositsCount?: number;
+  depositsCryptoCount?: number;
+  depositsCardCount?: number;
+  depositsCardRuCount?: number;
   regRate?: unknown;
   lastActive?: unknown;
   deals?: unknown;
@@ -103,14 +105,18 @@ function toDepositMark(wire: PartnerDepositMarkWire | null): PartnerDepositMark 
 
 export function toPartnerTraderStats(wire: PartnerTraderStatsWire): PartnerTraderStats {
   return {
-    uid: wire.uid,
+    uid: toId(wire.uid),
     balance: wire.balance,
     ...(wire.firstDeposit === undefined ? {} : { firstDeposit: toDepositMark(wire.firstDeposit) }),
     ...(wire.lastDeposit === undefined ? {} : { lastDeposit: toDepositMark(wire.lastDeposit) }),
-    depositsCount: wire.depositsCount,
-    depositsCryptoCount: wire.depositsCryptoCount,
-    depositsCardCount: wire.depositsCardCount,
-    depositsCardRuCount: wire.depositsCardRuCount,
+    ...(wire.depositsCount === undefined ? {} : { depositsCount: wire.depositsCount }),
+    ...(wire.depositsCryptoCount === undefined
+      ? {}
+      : { depositsCryptoCount: wire.depositsCryptoCount }),
+    ...(wire.depositsCardCount === undefined ? {} : { depositsCardCount: wire.depositsCardCount }),
+    ...(wire.depositsCardRuCount === undefined
+      ? {}
+      : { depositsCardRuCount: wire.depositsCardRuCount }),
     ...(wire.regRate === undefined ? {} : { regRate: wire.regRate }),
     ...(wire.lastActive === undefined ? {} : { lastActive: wire.lastActive }),
     ...(wire.deals === undefined ? {} : { deals: wire.deals }),
@@ -174,27 +180,37 @@ export function toPartnerPositions(wire: PartnerPositionsWire): PartnerPositions
   };
 }
 
-// --- Parsers (each takes the full envelope) ---------------------------------------------------
+// --- Envelopes and parsers (each parser takes the full envelope) ------------------------------
+
+export const partnerStatsEnvelopeWireSchema = partnerEnvelopeWireSchema(partnerStatsWireSchema);
+export const partnerTraderStatsEnvelopeWireSchema = partnerEnvelopeWireSchema(
+  partnerTraderStatsWireSchema,
+);
+export const partnerRefLinksEnvelopeWireSchema =
+  partnerEnvelopeWireSchema(partnerRefLinksWireSchema);
+export const partnerPositionsEnvelopeWireSchema = partnerEnvelopeWireSchema(
+  partnerPositionsWireSchema,
+);
 
 export const parsePartnerStats = (input: unknown): PartnerStats =>
-  toPartnerStats(partnerEnvelopeWireSchema(partnerStatsWireSchema).parse(input).data);
+  toPartnerStats(partnerStatsEnvelopeWireSchema.parse(input).data);
 export const safeParsePartnerStats = (input: unknown) =>
-  partnerEnvelopeWireSchema(partnerStatsWireSchema).safeParse(input);
+  partnerStatsEnvelopeWireSchema.safeParse(input);
 
 export const parsePartnerTraderStats = (input: unknown): PartnerTraderStats =>
-  toPartnerTraderStats(partnerEnvelopeWireSchema(partnerTraderStatsWireSchema).parse(input).data);
+  toPartnerTraderStats(partnerTraderStatsEnvelopeWireSchema.parse(input).data);
 export const safeParsePartnerTraderStats = (input: unknown) =>
-  partnerEnvelopeWireSchema(partnerTraderStatsWireSchema).safeParse(input);
+  partnerTraderStatsEnvelopeWireSchema.safeParse(input);
 
 export const parsePartnerRefLinks = (input: unknown): PartnerRefLink[] =>
-  partnerEnvelopeWireSchema(partnerRefLinksWireSchema).parse(input).data.map(toPartnerRefLink);
+  partnerRefLinksEnvelopeWireSchema.parse(input).data.map(toPartnerRefLink);
 export const safeParsePartnerRefLinks = (input: unknown) =>
-  partnerEnvelopeWireSchema(partnerRefLinksWireSchema).safeParse(input);
+  partnerRefLinksEnvelopeWireSchema.safeParse(input);
 
 export const parsePartnerPositions = (input: unknown): PartnerPositions =>
-  toPartnerPositions(partnerEnvelopeWireSchema(partnerPositionsWireSchema).parse(input).data);
+  toPartnerPositions(partnerPositionsEnvelopeWireSchema.parse(input).data);
 export const safeParsePartnerPositions = (input: unknown) =>
-  partnerEnvelopeWireSchema(partnerPositionsWireSchema).safeParse(input);
+  partnerPositionsEnvelopeWireSchema.safeParse(input);
 
 export const parsePartnerError = (input: unknown): PartnerErrorWire =>
   partnerErrorWireSchema.parse(input);
