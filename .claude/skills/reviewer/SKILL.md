@@ -1,6 +1,7 @@
 ---
 name: reviewer
 description: Reviews PRs of issues in In Review status. Posts findings as PR comments immediately without additional approval. If issues found, returns the issue to Todo. If clean, reports to the user and waits for merge confirmation (or, if this repo's CLAUDE.md has opted into agent-executed merges, asks via AskUserQuestion immediately before merging) — moves the issue to Done only after the merge is confirmed. Also supports full project review mode.
+model: opus
 ---
 
 # Reviewer Role
@@ -12,6 +13,8 @@ Two modes:
 2. **Project Review** — full codebase, no specific issue named.
 
 Post findings immediately, no additional approval needed. Codex (via the `codex` plugin's `rescue` skill — see Step 3a) is a required independent reviewer in both modes.
+
+Runs on Opus (`model: opus` in this skill's frontmatter). Every review sub-agent gets an explicit `model` at spawn (Steps 3b-3d) — never inherit — so review spend stays predictable regardless of the session model (`.claude/CLAUDE.md` → Модели по ролям pipeline).
 
 ## Mode Detection
 
@@ -38,16 +41,16 @@ Check diff size first: `gh pr diff <N> | wc -l`.
 
 **3a. Codex review** *(always)* — Codex integration here is the official `codex` Claude Code plugin (`openai-codex` marketplace), not MCP (`codex mcp-server` was removed upstream in codex-cli 0.153.0+, and no Codex binary on this machine still has it). Its `review`/`adversarial-review` commands are user-only (`disable-model-invocation: true`) and cannot be invoked by a skill; its `rescue` skill has no such restriction and is what this step uses:
   1. Build the request from `.claude/codex-review-prompt.md`: the issue, the plan's "Accepted risks / trade-offs" section with the instruction not to re-raise them, the PR diff (`gh pr diff <N>`), the check-command output. State explicitly that this is **review only — read-only, do not write or edit any files**.
-  2. Invoke `Skill(skill: "codex:rescue", args: "--wait --fresh <the request text>")`.
+  2. Invoke `Skill(skill: "codex:rescue", args: "--wait --fresh --model gpt-5.6-sol --effort high <the request text>")` — model and effort pinned per `.claude/CLAUDE.md` → Модели по ролям pipeline, independent of the Codex app default in `~/.codex/config.toml`.
   3. If Codex is missing/unauthenticated, invoke `Skill(skill: "codex:setup")` once, then retry. Timeout/failure policy: 2 attempts total, then stop and ask.
 
-**3b. Security review agent** *(skip on small diff)* — spawn `Agent` with the full `/security-review` prompt.
+**3b. Security review agent** *(skip on small diff)* — spawn `Agent` with `model: "opus"` and the full `/security-review` prompt.
 
-**3c. Code review agent** *(always)* — spawn `Agent` with the full `/code-review high` prompt.
+**3c. Code review agent** *(always)* — spawn `Agent` with `model: "opus"` and the full `/code-review high` prompt.
 
-**3d. Simplification agent** *(skip on small diff)* — spawn `Agent` with the full `/simplify` prompt.
+**3d. Simplification agent** *(skip on small diff)* — spawn `Agent` with `model: "sonnet"` and the full `/simplify` prompt, report-only (no file edits — `~/.claude/CLAUDE.md` → Reviewer sub-tools → File-mutation coordination).
 
-Launch 3a-3d **in a single message** via the Agent tool (parallel spawns) — never via sequential Skill calls, which pause after each invocation.
+Launch 3a-3d **in a single message** via the Agent tool (parallel spawns) — never via sequential Skill calls, which pause after each invocation. Set `model` on every spawn explicitly. If a spawn dies on an API error for its model, relaunch it once with the same explicit model, then stop and ask.
 
 ### Step 4: Consolidate findings
 
@@ -100,7 +103,7 @@ Either way: before moving to Done, confirm the merge actually happened — `gh p
 
 ### Steps B-D: Codex, security, code, simplification review
 
-Same as Task Review's 3a/3b/3c/3d, scoped to the whole codebase instead of one diff. Single message, Agent tool, parallel — never sequential Skill calls.
+Same as Task Review's 3a/3b/3c/3d, scoped to the whole codebase instead of one diff. Single message, Agent tool, parallel — never sequential Skill calls. Same explicit `model` per spawn as in 3b-3d.
 
 ### Step E: Architecture audit
 

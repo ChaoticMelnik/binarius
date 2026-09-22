@@ -1,6 +1,7 @@
 ---
 name: implementer
 description: Implements code based on the architect's plan on the GitHub issue. Writes code, and per this repo's CLAUDE.md commit/PR stop-point settings, commits, pushes, creates the PR, and moves the issue to In Review. Fixes review findings and updates the PR the same way.
+model: opus
 ---
 
 # Implementer Role
@@ -8,6 +9,8 @@ description: Implements code based on the architect's plan on the GitHub issue. 
 ## Overview
 
 Writes code per the Architect's plan. The plan is the spec — flag any deviation explicitly. After implementation, opens a PR and moves the issue to In Review.
+
+Runs on Opus (`model: opus` in this skill's frontmatter): the plan already carries the design decisions, and implementation is the largest token consumer, so it goes to the cheaper model (`.claude/CLAUDE.md` → Модели по ролям pipeline). The override lasts for the current turn only and reverts to the session model on the owner's next prompt.
 
 ## When to Invoke
 
