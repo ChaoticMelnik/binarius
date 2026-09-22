@@ -10,7 +10,9 @@ const LOG_LEVELS = [
   'silent',
 ] as const satisfies readonly LogLevel[];
 
-export const MIN_HEALTH_TIMEOUT_MS = 500;
+// the compose probe timeout (3s) is sized above this ceiling
+const MIN_HEALTH_TIMEOUT_MS = 500;
+const MAX_HEALTH_TIMEOUT_MS = 2500;
 
 export interface Env {
   databaseUrl: string;
@@ -22,10 +24,22 @@ export interface Env {
 
 type Source = Record<string, string | undefined>;
 
+interface UrlRules {
+  protocols: readonly string[];
+  allowIpv6Literal: boolean;
+}
+
+// pg-connection-string passes bracketed IPv6 hosts through to the socket; ioredis strips them
+const DATABASE_URL_RULES: UrlRules = {
+  protocols: ['postgres:', 'postgresql:'],
+  allowIpv6Literal: false,
+};
+const REDIS_URL_RULES: UrlRules = { protocols: ['redis:', 'rediss:'], allowIpv6Literal: true };
+
 export function parseEnv(source: Source): Env {
   return {
-    databaseUrl: parseUrl(read(source, 'DATABASE_URL'), 'DATABASE_URL', ['postgres:', 'postgresql:']),
-    redisUrl: parseUrl(read(source, 'REDIS_URL'), 'REDIS_URL', ['redis:', 'rediss:']),
+    databaseUrl: parseUrl(read(source, 'DATABASE_URL'), 'DATABASE_URL', DATABASE_URL_RULES),
+    redisUrl: parseUrl(read(source, 'REDIS_URL'), 'REDIS_URL', REDIS_URL_RULES),
     port: parsePort(read(source, 'PORT', '3000'), 'PORT'),
     logLevel: parseLogLevel(read(source, 'LOG_LEVEL', 'info'), 'LOG_LEVEL'),
     healthTimeoutMs: parseTimeout(read(source, 'HEALTH_TIMEOUT_MS', '2000'), 'HEALTH_TIMEOUT_MS'),
@@ -40,19 +54,18 @@ function read(source: Source, name: string, fallback?: string): string {
   return value;
 }
 
-function parseUrl(raw: string, name: string, protocols: readonly string[]): string {
+function parseUrl(raw: string, name: string, rules: UrlRules): string {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
     throw new Error(`Env ${name} is not a valid URL`);
   }
-  if (!protocols.includes(url.protocol)) {
-    throw new Error(`Env ${name} must use one of: ${protocols.join(' ')}`);
+  if (!rules.protocols.includes(url.protocol)) {
+    throw new Error(`Env ${name} must use one of: ${rules.protocols.join(' ')}`);
   }
   if (url.hostname === '') throw new Error(`Env ${name} must include a host`);
-  // pg-connection-string passes the brackets through to the socket, so [::1] never connects
-  if (url.hostname.startsWith('[')) {
+  if (!rules.allowIpv6Literal && url.hostname.startsWith('[')) {
     throw new Error(`Env ${name}: IPv6 literal hosts are not supported, use a hostname`);
   }
   try {
@@ -77,8 +90,10 @@ function parsePort(raw: string, name: string): number {
 
 function parseTimeout(raw: string, name: string): number {
   const ms = parseInteger(raw, name);
-  if (ms < MIN_HEALTH_TIMEOUT_MS) {
-    throw new Error(`Env ${name} must be at least ${MIN_HEALTH_TIMEOUT_MS}`);
+  if (ms < MIN_HEALTH_TIMEOUT_MS || ms > MAX_HEALTH_TIMEOUT_MS) {
+    throw new Error(
+      `Env ${name} must be between ${MIN_HEALTH_TIMEOUT_MS} and ${MAX_HEALTH_TIMEOUT_MS}`,
+    );
   }
   return ms;
 }

@@ -3,14 +3,15 @@ x-app-environment: &app-environment
   REDIS_URL: redis://redis:6379
   LOG_LEVEL: ${LOG_LEVEL:-info}
   HEALTH_TIMEOUT_MS: ${HEALTH_TIMEOUT_MS:-2000}
-  # valueless entries pass through only when set (shell or .env); ${VAR:-} would inject ""
+
+# valueless entries pass through only when set (shell or .env); ${VAR:-} would inject ""
+x-broker-environment: &broker-environment
   BROKER_CLIENT_ID:
   BROKER_CLIENT_SECRET:
   BROKER_WS_URL:
 
 x-app: &app
   build: .
-  image: binarius-dev
   init: true
   restart: ${COMPOSE_RESTART:-unless-stopped}
   depends_on:
@@ -60,7 +61,7 @@ services:
     <<: *app
     command: pnpm --filter @binarius/backend dev
     environment:
-      <<: *app-environment
+      <<: [*app-environment, *broker-environment]
       PORT: "3000"
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
@@ -68,7 +69,7 @@ services:
       # 127.0.0.1, not localhost: Alpine resolves localhost to ::1 and the server binds 0.0.0.0
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
       interval: 10s
-      # must exceed HEALTH_TIMEOUT_MS, or a slow dependency flips the container to unhealthy instead of a 503
+      # above the HEALTH_TIMEOUT_MS ceiling (2500): the probe sees the app's verdict, not a killed check
       timeout: 3s
       retries: 5
       start_period: 20s
@@ -133,7 +134,7 @@ services:
     <<: *app
     command: pnpm --filter @binarius/trading-worker dev
     environment:
-      <<: *app-environment
+      <<: [*app-environment, *broker-environment]
     develop:
       watch:
         - path: ./apps/trading-worker/src
