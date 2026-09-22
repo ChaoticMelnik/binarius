@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, index, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { createdAt, id, inList, sqlLiteralList, tokenAmount } from './columns';
+import { createdAt, id, inList, literal, sqlLiteralList, tokenAmount } from './columns';
 import { depositEvents } from './deposit-events';
 import { tradeIntents } from './trade-intents';
 import { users } from './users';
@@ -30,10 +30,8 @@ export const INTENT_LEDGER_KINDS = [
 
 export const TERMINAL_LEDGER_KINDS = [TokenLedgerKind.Release, TokenLedgerKind.Settle] as const;
 
-// every kind comparison below goes through this: a bare 'purchase' in a CASE arm keeps
-// compiling after the constant is renamed while silently matching nothing, which would drop
-// the row into `else` and invert the rule the arm exists to state
-const kind = (value: TokenLedgerKind) => sqlLiteralList([value]);
+// every kind comparison below goes through columns.ts's `literal` (see the reason there)
+const kind = (value: TokenLedgerKind) => literal(value);
 
 // Append-only (trigger in drizzle/0001_append_only.sql). Invariants:
 // sum(balance_delta) = users.token_balance, sum(reserved_delta) = users.token_reserved.
@@ -115,6 +113,14 @@ export const tokenLedger = pgTable(
     // One row per deposit PER KIND: a deposit admits one purchase and one deposit-linked
     // bonus. Keying on deposit alone would let whichever came first take the only slot and
     // block the other permanently, on a table nothing can delete from.
+    // Two consequences a reader arriving from #12 or #13 should not have to rediscover:
+    //  - exactly ONE bonus per deposit. If #13 lets two rules award on the same deposit, the
+    //    second row is a permanent 23505 here; widening the key (a bonus_rule_id, say) is
+    //    #13's call, since it owns what a bonus is keyed by.
+    //  - `kind` is a self-declared label, which the header above warns against relying on.
+    //    It is safe as a key *component* only because the discriminator already pins which
+    //    kinds may carry a deposit at all. Binding a credit's AMOUNT to its deposit is not
+    //    enforced here and is #12's to do at credit time.
     // The predicate is index scoping, not semantics — a unique index treats NULLs as
     // distinct, so rows without a deposit never conflict either way.
     uniqueIndex('token_ledger_deposit_event_idx')

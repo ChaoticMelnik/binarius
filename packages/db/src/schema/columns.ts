@@ -65,3 +65,9 @@ export const inList = (
   column: AnyPgColumn,
   values: Readonly<Record<string, string>>,
 ) => check(name, sql`${column} in (${sqlLiteralList(Object.values(values))})`);
+
+// Every comparison against an `as const` member goes through this. A bare 'pending' in an
+// index predicate or a CASE arm keeps compiling after the constant is renamed while silently
+// matching nothing — which turns a partial index into one that indexes no rows, with no error
+// and nothing to fail a test.
+export const literal = (value: string) => sqlLiteralList([value]);

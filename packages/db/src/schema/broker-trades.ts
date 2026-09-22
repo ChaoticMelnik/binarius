@@ -19,6 +19,7 @@ import {
   finiteFloat,
   id,
   inList,
+  literal,
   nullableFiniteFloat,
   nullablePositiveNumeric,
   positiveNumeric,
@@ -94,7 +95,7 @@ export const brokerTrades = pgTable(
     // would accept an open trade that already carries a close price or a profit
     check(
       'broker_trades_settlement_check',
-      sql`num_nonnulls(${t.closeTimestampMs}, ${t.closePrice}, ${t.profit}) = case when ${t.status} = 'closed' then 3 else 0 end`,
+      sql`num_nonnulls(${t.closeTimestampMs}, ${t.closePrice}, ${t.profit}) = case when ${t.status} = ${literal(BrokerTradeStatus.Closed)} then 3 else 0 end`,
     ),
     index('broker_trades_account_status_idx').on(t.brokerAccountId, t.status),
   ],
