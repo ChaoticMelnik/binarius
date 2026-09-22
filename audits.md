@@ -131,3 +131,39 @@ PR #47, rebase-merged as `c073c19` + `27b63ad` + `c0ccbd3`.
 2. Reviewer: verify tooling-level claims with the tool before labeling a Major; severity re-verification applies to own findings.
 3. Architect: back every type-inference claim with a `tsc` probe; enumerate every parser and request shape in the domain coverage table.
 4. Implementer self-review: when relaxing or tightening a constraint, grep the domain for the same construct before committing.
+
+---
+
+## #7 — Drizzle-схема ядра домена (2026-09-22)
+
+### Process audit
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Plan + Codex review | План до In Progress; Codex дал 8 Major, все учтены до реализации |
+| Architect | Plan Updates ×3 | Каждый до начала правок, каждый с Codex-перепроверкой. Итерация 3: Codex нашёл 1 Blocker + 1 Major + 2 Minor **в самом плане**; итерация 4: 5 Minor, два из них предотвратили ухудшение тестов |
+| Implementer | Branch / commits / PR | `feat/7-drizzle-schema`, 8 коммитов `#7:`, PR #49 с `Closes #7`; кросс-пакетная правка вынесена отдельным коммитом |
+| Implementer | Check command | Зелёный на каждой итерации; 68 → 359 тестов |
+| Reviewer | Итерации 1–4 | Codex + security + code-review high (+ simplify на первой). Возвраты: 8 Major → 2 Major → 1 Major → 0 |
+| Reviewer | Финал | Blocker/Major нет у всех троих, Codex чист два круга подряд; 43 конверсии сверены парсером |
+| Tech-lead | Merge / Done | Rebase `686aa2b` после подтверждения владельца; Done только после `state == MERGED` |
+
+### Review iterations: 4
+
+### Findings
+| Finding | Severity | Root cause | Missed at step |
+|---------|----------|------------|-----------------|
+| MATCH SIMPLE в композитном FK `deposit_events` | Major | Семантика match не была указана в плане | Architect |
+| `manual_review` как терминальный статус | Major | Один предикат использован для двух разных вопросов | Architect (перенесено из итерации 1) |
+| `bonus` занимает единственный слот депозита | Major | Разрешение и ограничение из одного плана не проверены на совместимость | Architect |
+| CHECK, проходящий на NULL (дважды: в коде и в плане, который его чинил) | Major | Предикат описан прозой, а не выполнен | Architect |
+| TRUNCATE мимо row-level триггеров | Major | Область действия механизма не проверена | Architect |
+| Литералы статусов вне одного файла (дважды) | Minor | Правило применено к сущности, а не к домену | Implementer |
+| 23 констрейнта без тестов | Major (скрытый) | Чеклист утверждал покрытие, которое никто не проверял | Architect + Implementer |
+| Комментарий обещает больше, чем DDL (×4) | Minor | Комментарий не считался предметом проверки | Reviewer |
+
+### Process improvement proposals
+1. Таблица охвата перечисляет инварианты со статусом enforced / partially enforced / stated — «N из M» четырежды маскировало неполноту.
+2. Каждый CHECK выполняется на NULL/boundary-случаях до попадания в план (введено после итерации 1, сработало на итерации 2 — поймало ошибку в самом Plan Update).
+3. Разрешение и ограничение из одного плана проверяются на совместимость.
+4. Перенос правила — `grep` по домену, а не по названному файлу.
+5. Покрытие проверок обеспечивается исполняемым гейтом, а не утверждением в чеклисте: поведенческая версия при добавлении нашла 23 непокрытых констрейнта.
