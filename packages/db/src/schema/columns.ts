@@ -24,23 +24,25 @@ export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => 'bytea',
 });
 
-// PostgreSQL orders NaN above every finite value, so a bare `> 0` accepts 'NaN'::numeric, and
-// double precision additionally accepts Infinity. Broker and postback numbers are external input,
-// so every money and price column states the guard explicitly.
-export const positiveMoney = (name: string, column: AnyPgColumn, nullable = false) =>
-  check(
-    name,
-    nullable
-      ? sql`${column} is null or (${column} > 0 and ${column} <> 'NaN'::numeric)`
-      : sql`${column} > 0 and ${column} <> 'NaN'::numeric`,
-  );
+// PostgreSQL orders NaN above every finite value, so a bare `> 0` accepts 'NaN'::numeric.
+// A `numeric` column with a typmod rejects Infinity at the type level, so NaN is the only
+// escape there; `double precision` has no typmod and admits both, hence the separate helper.
+// The helpers are named by column type and split by nullability rather than taking a flag,
+// so a wrong choice is a type error at the call site rather than a silent runtime rejection.
+export const positiveNumeric = (name: string, column: AnyPgColumn) =>
+  check(name, sql`${column} > 0 and ${column} <> 'NaN'::numeric`);
 
-export const finitePrice = (name: string, column: AnyPgColumn, nullable = false) =>
+export const nullablePositiveNumeric = (name: string, column: AnyPgColumn) =>
+  check(name, sql`${column} is null or (${column} > 0 and ${column} <> 'NaN'::numeric)`);
+
+// `NaN < Infinity` is false in PostgreSQL's float ordering, so the upper bound excludes both
+export const finiteFloat = (name: string, column: AnyPgColumn) =>
+  check(name, sql`${column} > 0 and ${column} < 'Infinity'::double precision`);
+
+export const nullableFiniteFloat = (name: string, column: AnyPgColumn) =>
   check(
     name,
-    nullable
-      ? sql`${column} is null or (${column} > 0 and ${column} < 'Infinity'::double precision)`
-      : sql`${column} > 0 and ${column} < 'Infinity'::double precision`,
+    sql`${column} is null or (${column} > 0 and ${column} < 'Infinity'::double precision)`,
   );
 
 // text + CHECK instead of pgEnum: adding or removing a value is one forward migration.

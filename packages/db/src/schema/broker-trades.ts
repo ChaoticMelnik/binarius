@@ -14,7 +14,16 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { TradeAction, TradeMode, type DecimalString, type UnixMs } from '@binarius/shared';
-import { createdAt, finitePrice, id, inList, positiveMoney, updatedAt } from './columns';
+import {
+  createdAt,
+  finiteFloat,
+  id,
+  inList,
+  nullableFiniteFloat,
+  nullablePositiveNumeric,
+  positiveNumeric,
+  updatedAt,
+} from './columns';
 import { brokerAccounts } from './broker-accounts';
 import { tradeIntents } from './trade-intents';
 
@@ -67,13 +76,15 @@ export const brokerTrades = pgTable(
     inList('broker_trades_action_check', t.action, TradeAction),
     inList('broker_trades_status_check', t.status, BrokerTradeStatus),
     check('broker_trades_asset_id_check', sql`${t.assetId} > 0`),
-    positiveMoney('broker_trades_amount_check', t.amount),
-    positiveMoney('broker_trades_potential_profit_check', t.potentialProfit, true),
-    // profit may legitimately be negative (a lost trade), so only NaN is excluded
+    positiveNumeric('broker_trades_amount_check', t.amount),
+    nullablePositiveNumeric('broker_trades_potential_profit_check', t.potentialProfit),
+    // profit is the one signed money column: a losing trade settles negative, so only NaN is
+    // excluded. A test asserts a negative profit is accepted, to keep this from being
+    // "tightened" back to > 0 without the suite noticing.
     check('broker_trades_profit_check', sql`${t.profit} is null or ${t.profit} <> 'NaN'::numeric`),
     check('broker_trades_payout_check', sql`${t.payout} >= 0 and ${t.payout} <> 'NaN'::numeric`),
-    finitePrice('broker_trades_open_price_check', t.openPrice),
-    finitePrice('broker_trades_close_price_check', t.closePrice, true),
+    finiteFloat('broker_trades_open_price_check', t.openPrice),
+    nullableFiniteFloat('broker_trades_close_price_check', t.closePrice),
     check('broker_trades_open_timestamp_check', sql`${t.openTimestampMs} > 0`),
     check(
       'broker_trades_close_timestamp_check',

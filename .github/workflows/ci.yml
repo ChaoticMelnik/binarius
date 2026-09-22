@@ -75,16 +75,29 @@ jobs:
           fi
           # the journal legitimately grows, so it is compared as a prefix: existing entries
           # must be untouched (the migrator keys on their `when`, and never re-reads the hash)
-          old_journal="$(git show "$base:packages/db/drizzle/meta/_journal.json" 2>/dev/null || echo '{"entries":[]}')"
-          printf '%s' "$old_journal" > /tmp/base_journal.json
-          python3 - <<'PY'
-          import json, sys
-          base = json.load(open('/tmp/base_journal.json'))['entries']
-          head = json.load(open('packages/db/drizzle/meta/_journal.json'))['entries']
-          if head[:len(base)] != base:
+          if git show "$base:packages/db/drizzle/meta/_journal.json" > /tmp/base_journal.json 2>/dev/null; then
+            base_has_journal=1
+          else
+            # the base predates packages/db entirely: nothing to hold immutable yet
+            base_has_journal=0
+            echo '{"entries":[]}' > /tmp/base_journal.json
+          fi
+          BASE_HAS_JOURNAL="$base_has_journal" python3 - <<'PY'
+          import json, os, sys
+          base = json.load(open('/tmp/base_journal.json'))
+          head = json.load(open('packages/db/drizzle/meta/_journal.json'))
+          if head['entries'][:len(base['entries'])] != base['entries']:
               print('::error::an already-committed migration journal entry was modified')
               sys.exit(1)
-          print(f'journal: {len(base)} existing entries unchanged, {len(head) - len(base)} appended')
+          # only meaningful once the base actually has a journal; comparing against the
+          # empty fallback would fail every PR that introduces packages/db
+          if os.environ['BASE_HAS_JOURNAL'] == '1':
+              for field in ('version', 'dialect'):
+                  if base.get(field) != head.get(field):
+                      print(f'::error::journal {field} changed: {base.get(field)} -> {head.get(field)}')
+                      sys.exit(1)
+          appended = len(head['entries']) - len(base['entries'])
+          print(f"journal: {len(base['entries'])} existing entries unchanged, {appended} appended")
           PY
       - run: pnpm db:migrate
       # test runs before typecheck: typecheck emits dist/, which would mask a broken exports map

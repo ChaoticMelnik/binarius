@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, index, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, id, inList, sqlLiteralList, tokenAmount } from './columns';
+import { depositEvents } from './deposit-events';
 import { tradeIntents } from './trade-intents';
 import { users } from './users';
 
@@ -14,13 +15,11 @@ export const TokenLedgerKind = {
 } as const;
 export type TokenLedgerKind = (typeof TokenLedgerKind)[keyof typeof TokenLedgerKind];
 
-// Intent references live in intent_id, which is FK-checked; ref_type must not offer
-// trade_intent, or a purchase row could carry an unchecked intent reference and bypass both
-// the composite FK and the deposit uniqueness by mislabelling itself.
-export const TokenLedgerRefType = {
-  DepositEvent: 'deposit_event',
-  Manual: 'manual',
-} as const;
+// Intents and deposits each have their own FK-checked column, so the polymorphic channel is
+// left with exactly one member. A reference whose target the database can check is never
+// expressed as a label here: a self-declared `ref_type` is not a control, which is how a
+// relabelled row once credited one deposit twice.
+export const TokenLedgerRefType = { Manual: 'manual' } as const;
 export type TokenLedgerRefType = (typeof TokenLedgerRefType)[keyof typeof TokenLedgerRefType];
 
 export const INTENT_LEDGER_KINDS = [
@@ -28,6 +27,8 @@ export const INTENT_LEDGER_KINDS = [
   TokenLedgerKind.Release,
   TokenLedgerKind.Settle,
 ] as const;
+
+export const TERMINAL_LEDGER_KINDS = [TokenLedgerKind.Release, TokenLedgerKind.Settle] as const;
 
 // Append-only (trigger in drizzle/0001_append_only.sql). Invariants:
 // sum(balance_delta) = users.token_balance, sum(reserved_delta) = users.token_reserved.
@@ -45,27 +46,40 @@ export const tokenLedger = pgTable(
     balanceDelta: tokenAmount('balance_delta'),
     reservedDelta: tokenAmount('reserved_delta'),
     intentId: uuid('intent_id'),
+    depositEventId: uuid('deposit_event_id'),
     refType: text('ref_type').$type<TokenLedgerRefType>(),
     refId: uuid('ref_id'),
     note: text('note'),
     createdAt: createdAt(),
   },
   (t) => [
-    // the ledger row and the intent it settles must belong to the same user
+    // both references are composite: proving the target exists is not enough, it must belong
+    // to the same user, or one user's ledger row could move another user's money
     foreignKey({
       name: 'token_ledger_intent_owner_fk',
       columns: [t.intentId, t.userId],
       foreignColumns: [tradeIntents.id, tradeIntents.userId],
     }),
+    foreignKey({
+      name: 'token_ledger_deposit_owner_fk',
+      columns: [t.depositEventId, t.userId],
+      foreignColumns: [depositEvents.id, depositEvents.userId],
+    }),
     inList('token_ledger_kind_check', t.kind, TokenLedgerKind),
     inList('token_ledger_ref_type_check', t.refType, TokenLedgerRefType),
     check('token_ledger_delta_check', sql`${t.balanceDelta} <> 0 or ${t.reservedDelta} <> 0`),
     check('token_ledger_ref_pair_check', sql`(${t.refType} is null) = (${t.refId} is null)`),
+    // exactly which reference each kind may carry, and no kind may carry two
     check(
       'token_ledger_reference_check',
-      sql`case when ${t.kind} in (${sqlLiteralList(INTENT_LEDGER_KINDS)})
-            then ${t.intentId} is not null and ${t.refType} is null and ${t.refId} is null
-            else ${t.intentId} is null
+      sql`case
+            when ${t.kind} in (${sqlLiteralList(INTENT_LEDGER_KINDS)})
+              then ${t.intentId} is not null and ${t.depositEventId} is null and ${t.refId} is null
+            when ${t.kind} = 'purchase'
+              then ${t.depositEventId} is not null and ${t.intentId} is null and ${t.refId} is null
+            when ${t.kind} = 'bonus'
+              then ${t.intentId} is null and ${t.refId} is null
+            else ${t.intentId} is null and ${t.depositEventId} is null
           end`,
     ),
     // each kind moves its deltas in the direction its name promises; settle leaves
@@ -86,13 +100,12 @@ export const tokenLedger = pgTable(
       .where(sql`${t.kind} = 'reserve'`),
     uniqueIndex('token_ledger_terminal_intent_idx')
       .on(t.intentId)
-      .where(sql`${t.kind} in ('release', 'settle')`),
-    // one credit per deposit event; the deposit's existence and ownership stay with #12
-    uniqueIndex('token_ledger_deposit_ref_idx')
-      .on(t.refId)
-      .where(sql`${t.refType} = 'deposit_event'`),
+      .where(sql`${t.kind} in (${sqlLiteralList(TERMINAL_LEDGER_KINDS)})`),
+    // one credit per deposit, keyed on the FK-checked column rather than on a label
+    uniqueIndex('token_ledger_deposit_event_idx')
+      .on(t.depositEventId)
+      .where(sql`${t.depositEventId} is not null`),
     index('token_ledger_user_created_idx').on(t.userId, t.createdAt),
     index('token_ledger_intent_id_idx').on(t.intentId),
-    index('token_ledger_ref_id_idx').on(t.refId),
   ],
 );

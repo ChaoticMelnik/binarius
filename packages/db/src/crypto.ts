@@ -27,9 +27,22 @@ export interface TokenCipher {
   decrypt(ciphertext: Uint8Array, context: TokenContext): string;
 }
 
-// `|` cannot occur in a UUID or in either field name, so the concatenation is unambiguous
+const AAD_SEPARATOR = '|';
+
+// The concatenation is only injective if no component can contain the separator: otherwise
+// keyId='k|a' + accountId='b' and keyId='k' + accountId='a|b' produce identical AAD, and a
+// ciphertext bound to one context would authenticate under another. `field` is a closed set,
+// so only the two caller-supplied components need checking — and they are checked rather
+// than assumed, because the assumption is what a comment can get wrong.
+function assertAadComponent(value: string, name: string): void {
+  if (value.length === 0) throw new TokenCipherError(`${name} must not be empty`);
+  if (value.includes(AAD_SEPARATOR)) {
+    throw new TokenCipherError(`${name} must not contain ${AAD_SEPARATOR}`);
+  }
+}
+
 const aadFor = (keyId: string, { accountId, field }: TokenContext): Buffer =>
-  Buffer.from(`${keyId}|${accountId}|${field}`, 'utf8');
+  Buffer.from([keyId, accountId, field].join(AAD_SEPARATOR), 'utf8');
 
 // Ciphertext layout: iv(12) | tag(16) | data. Key id, account and column are bound as AAD, so a
 // ciphertext cannot be replayed under another key after rotation, moved to another account's
@@ -39,14 +52,12 @@ export function createTokenCipher(options: { keyId: string; key: Uint8Array }): 
   if (key.byteLength !== KEY_LENGTH) {
     throw new TokenCipherError(`key must be ${KEY_LENGTH} bytes, got ${key.byteLength}`);
   }
-  if (keyId.length === 0) throw new TokenCipherError('keyId must not be empty');
+  assertAadComponent(keyId, 'keyId');
 
   return {
     keyId,
     encrypt(plaintext, context) {
-      if (context.accountId.length === 0) {
-        throw new TokenCipherError('context.accountId must not be empty');
-      }
+      assertAadComponent(context.accountId, 'context.accountId');
       // a fresh random IV per call is what makes GCM safe under one key
       const iv = randomBytes(IV_LENGTH);
       const cipher = createCipheriv(ALGORITHM, key, iv);
@@ -55,6 +66,9 @@ export function createTokenCipher(options: { keyId: string; key: Uint8Array }): 
       return Buffer.concat([iv, cipher.getAuthTag(), data]);
     },
     decrypt(ciphertext, context) {
+      // checked on this side too: a malformed context should say so, not surface as a
+      // generic authentication failure the caller cannot distinguish from tampering
+      assertAadComponent(context.accountId, 'context.accountId');
       const bytes = Buffer.from(ciphertext.buffer, ciphertext.byteOffset, ciphertext.byteLength);
       if (bytes.length < IV_LENGTH + TAG_LENGTH) {
         throw new TokenCipherError('ciphertext is too short');

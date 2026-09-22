@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  check,
   foreignKey,
   index,
   jsonb,
@@ -7,11 +8,12 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import type { DecimalString } from '@binarius/shared';
-import { createdAt, id, inList, positiveMoney } from './columns';
+import { createdAt, id, inList, nullablePositiveNumeric } from './columns';
 import { brokerAccounts } from './broker-accounts';
 import { users } from './users';
 
@@ -47,13 +49,22 @@ export const depositEvents = pgTable(
   },
   (t) => [
     // when both are present the account must belong to the named user, or a postback
-    // credits someone who did not pay; MATCH SIMPLE leaves the skeleton's nullable rows alone
+    // credits someone who did not pay
     foreignKey({
       name: 'deposit_events_account_owner_fk',
       columns: [t.brokerAccountId, t.userId],
       foreignColumns: [brokerAccounts.id, brokerAccounts.userId],
     }),
-    positiveMoney('deposit_events_amount_check', t.amount, true),
+    // ...and the FK alone is not enough: it is MATCH SIMPLE, so it is satisfied whenever either
+    // column is NULL. A claimed user must always name the account it was claimed through;
+    // the unattributed postback (both NULL) and the account-without-user row stay legal.
+    check(
+      'deposit_events_owner_pair_check',
+      sql`${t.userId} is null or ${t.brokerAccountId} is not null`,
+    ),
+    // FK target for token_ledger.deposit_event_id
+    unique('deposit_events_id_user_key').on(t.id, t.userId),
+    nullablePositiveNumeric('deposit_events_amount_check', t.amount),
     uniqueIndex('deposit_events_postback_id_idx').on(t.postbackId),
     uniqueIndex('deposit_events_payment_id_idx')
       .on(t.paymentId)

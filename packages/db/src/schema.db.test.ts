@@ -1,6 +1,8 @@
+import { readFile } from 'node:fs/promises';
 import { TransactionRollbackError, eq, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { canTransition } from '@binarius/shared';
 import { createDb, type Db } from './client';
 import {
   brokerAccounts,
@@ -76,6 +78,19 @@ async function seedAccount(tx: Tx) {
   return { userId: user!.id, accountId: account!.id };
 }
 
+async function seedDeposit(tx: Tx, seed: { accountId: string; userId: string }): Promise<string> {
+  const [row] = await tx
+    .insert(depositEvents)
+    .values({
+      userId: seed.userId,
+      brokerAccountId: seed.accountId,
+      postbackId: `pb-${++seq}`,
+      payload: {},
+    })
+    .returning({ id: depositEvents.id });
+  return row!.id;
+}
+
 const intent = (
   seed: { accountId: string; userId: string },
   clientRequestId: string,
@@ -105,6 +120,262 @@ const trade = (seed: { accountId: string }, patch: Record<string, unknown> = {})
   status: 'open' as const,
   raw: {},
   ...patch,
+});
+
+// Twice now a constraint shipped without a test and the suite stayed green, so the coverage
+// claim is checked by the suite instead of by eye: every CHECK and unique index in the schema
+// must be named somewhere in this file. A new constraint without a case fails here.
+describe('constraint coverage', () => {
+  it('names every CHECK and unique index in a test', async () => {
+    const source = await readFile(new URL(import.meta.url), 'utf8');
+    const { rows } = await pool.query<{ conname: string }>(`
+      select conname from pg_constraint
+        where contype in ('c', 'u') and connamespace = 'public'::regnamespace
+      union
+      select indexname as conname from pg_indexes
+        where schemaname = 'public' and indexdef like 'CREATE UNIQUE%'
+    `);
+    const names = rows.map((r) => r.conname).filter((n) => !n.endsWith('_pkey'));
+    expect(names.length).toBeGreaterThan(30);
+    expect(names.filter((name) => !source.includes(name)).sort()).toEqual([]);
+  });
+});
+
+// The enum CHECKs and the plain uniques are mechanical, but they are what keeps a typo in a
+// status list or a missing dedupe from reaching production, and the coverage test above will
+// not accept a constraint that nothing exercises.
+describe('enum and uniqueness constraints', () => {
+  it.each([
+    [
+      'users_status_check',
+      async (tx: Tx) =>
+        tx.insert(users).values({ telegramUserId: 970_001n, status: 'bogus' as never }),
+    ],
+    [
+      'audit_log_actor_type_check',
+      (tx: Tx) => tx.execute(sql`insert into audit_log (actor_type, action) values ('bogus', 'a')`),
+    ],
+    [
+      'token_ledger_kind_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into token_ledger (user_id, kind, balance_delta) values (gen_random_uuid(), 'bogus', 1)`,
+        ),
+    ],
+    [
+      'token_ledger_ref_type_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into token_ledger (user_id, kind, balance_delta, ref_type, ref_id) values (gen_random_uuid(), 'adjustment', 1, 'bogus', gen_random_uuid())`,
+        ),
+    ],
+    [
+      'token_ledger_ref_pair_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into token_ledger (user_id, kind, balance_delta, ref_type) values (gen_random_uuid(), 'adjustment', 1, 'manual')`,
+        ),
+    ],
+    [
+      'token_ledger_delta_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into token_ledger (user_id, kind) values (gen_random_uuid(), 'adjustment')`,
+        ),
+    ],
+    [
+      'deposit_events_status_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into deposit_events (postback_id, payload, status) values ('x', '{}'::jsonb, 'bogus')`,
+        ),
+    ],
+    [
+      'bonus_rules_validity_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into bonus_rules (code, kind, valid_from, valid_to) values ('c', 'k', now(), now() - interval '1 day')`,
+        ),
+    ],
+    [
+      'notification_jobs_status_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into notification_jobs (user_id, kind, status) values (gen_random_uuid(), 'k', 'bogus')`,
+        ),
+    ],
+    [
+      'broker_accounts_status_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into broker_accounts (user_id, broker_user_id, access_token_enc, refresh_token_enc, token_key_id, access_token_expires_at, status) values (gen_random_uuid(), 'b', '\\x00', '\\x00', 'k', now(), 'bogus')`,
+        ),
+    ],
+    [
+      'trading_sessions_mode_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into trading_sessions (broker_account_id, mode) values (gen_random_uuid(), 'bogus')`,
+        ),
+    ],
+    [
+      'trading_sessions_status_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into trading_sessions (broker_account_id, mode, status) values (gen_random_uuid(), 'demo', 'bogus')`,
+        ),
+    ],
+  ])('rejects a value outside %s', async (constraint, insert) => {
+    await rolledBack(async (tx) => {
+      await expect(insert(tx)).rejects.toEqual(pgError('23514', constraint));
+    });
+  });
+
+  it.each([
+    ['trade_intents_mode_check', { mode: 'bogus' }],
+    ['trade_intents_action_check', { action: 'bogus' }],
+    ['trade_intents_transport_check', { transport: 'bogus' }],
+    ['trade_intents_tokens_reserved_check', { tokensReserved: -1n }],
+  ])('rejects a value outside %s', async (constraint, patch) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await expect(tx.insert(tradeIntents).values(intent(seed, 'r1', patch))).rejects.toEqual(
+        pgError('23514', constraint),
+      );
+    });
+  });
+
+  it.each([
+    ['broker_trades_mode_check', { mode: 'bogus' }],
+    ['broker_trades_action_check', { action: 'bogus' }],
+    ['broker_trades_status_check', { status: 'bogus' }],
+    ['broker_trades_asset_id_check', { assetId: 0 }],
+  ])('rejects a value outside %s', async (constraint, patch) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await expect(tx.insert(brokerTrades).values(trade(seed, patch))).rejects.toEqual(
+        pgError('23514', constraint),
+      );
+    });
+  });
+
+  // these two need a real intent and a well-formed payload, or the FK and the payload CHECK
+  // would fire first and the test would pass for the wrong reason
+  it.each([
+    ['outbox_events_status_check', { status: 'bogus' as never }],
+    ['outbox_events_topic_check', { topic: 'bogus' as never }],
+  ])('rejects a value outside %s', async (constraint, patch) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx.insert(tradeIntents).values(intent(seed, 'r1')).returning();
+      await expect(
+        tx
+          .insert(outboxEvents)
+          .values({ intentId: row!.id, payload: { intent_id: row!.id }, ...patch }),
+      ).rejects.toEqual(pgError('23514', constraint));
+    });
+  });
+
+  it('enforces users_telegram_user_id_idx', async () => {
+    await rolledBack(async (tx) => {
+      await tx.insert(users).values({ telegramUserId: 971_001n });
+      await expect(tx.insert(users).values({ telegramUserId: 971_001n })).rejects.toEqual(
+        pgError('23505', 'users_telegram_user_id_idx'),
+      );
+    });
+  });
+
+  // a broker account is bound to one Binarius user: a second user cannot claim the same
+  // broker_user_id
+  it('enforces broker_accounts_broker_user_id_idx', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [claimed] = await tx
+        .select({ brokerUserId: brokerAccounts.brokerUserId })
+        .from(brokerAccounts)
+        .where(eq(brokerAccounts.id, seed.accountId));
+      const [other] = await tx
+        .insert(users)
+        .values({ telegramUserId: 972_001n })
+        .returning({ id: users.id });
+      await expect(
+        tx.insert(brokerAccounts).values({
+          userId: other!.id,
+          brokerUserId: claimed!.brokerUserId,
+          accessTokenEnc: Buffer.from('enc'),
+          refreshTokenEnc: Buffer.from('enc'),
+          tokenKeyId: 'k1',
+          accessTokenExpiresAt: new Date(),
+        }),
+      ).rejects.toEqual(pgError('23505', 'broker_accounts_broker_user_id_idx'));
+    });
+  });
+
+  it.each([
+    [
+      'auth_sessions_token_hash_idx',
+      (tx: Tx, userId: string) =>
+        tx.execute(
+          sql`insert into auth_sessions (user_id, token_hash, expires_at) values (${userId}, 'same', now())`,
+        ),
+    ],
+    [
+      'notification_jobs_dedupe_key_idx',
+      (tx: Tx, userId: string) =>
+        tx.execute(
+          sql`insert into notification_jobs (user_id, kind, dedupe_key) values (${userId}, 'k', 'same')`,
+        ),
+    ],
+  ])('enforces %s', async (constraint, insert) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await insert(tx, seed.userId);
+      await expect(insert(tx, seed.userId)).rejects.toEqual(pgError('23505', constraint));
+    });
+  });
+
+  it.each([
+    ['bonus_rules_code_idx', sql`insert into bonus_rules (code, kind) values ('dup', 'k')`],
+    [
+      'deposit_events_payment_id_idx',
+      sql`insert into deposit_events (postback_id, payment_id, payload) values (gen_random_uuid()::text, 'pay-1', '{}'::jsonb)`,
+    ],
+  ])('enforces %s', async (constraint, statement) => {
+    await rolledBack(async (tx) => {
+      await tx.execute(statement);
+      await expect(tx.execute(statement)).rejects.toEqual(pgError('23505', constraint));
+    });
+  });
+
+  it('enforces broker_trades_account_trade_key', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const first = trade(seed);
+      await tx.insert(brokerTrades).values(first);
+      await expect(
+        tx.insert(brokerTrades).values({ ...trade(seed), brokerTradeId: first.brokerTradeId }),
+      ).rejects.toEqual(pgError('23505', 'broker_trades_account_trade_key'));
+    });
+  });
+
+  // these four exist only as FK targets, so they are asserted structurally rather than by a
+  // duplicate insert: a composite unique on (id, ...) cannot be violated while id is the PK
+  it('keeps the composite FK targets in place', async () => {
+    const { rows } = await pool.query<{ conname: string }>(`
+      select conname from pg_constraint
+        where contype = 'u' and connamespace = 'public'::regnamespace
+          and conname in ('broker_accounts_id_user_id_key', 'deposit_events_id_user_key',
+                          'trade_intents_id_user_key', 'trade_intents_id_account_mode_key',
+                          'trading_sessions_id_account_mode_key')
+    `);
+    expect(rows.map((r) => r.conname).sort()).toEqual([
+      'broker_accounts_id_user_id_key',
+      'deposit_events_id_user_key',
+      'trade_intents_id_account_mode_key',
+      'trade_intents_id_user_key',
+      'trading_sessions_id_account_mode_key',
+    ]);
+  });
 });
 
 describe('trade_intents', () => {
@@ -304,32 +575,71 @@ describe('users and token_ledger', () => {
   it('rejects a negative purchase', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
+      const deposit = await seedDeposit(tx, seed);
       await expect(
         tx.insert(tokenLedger).values({
           userId: seed.userId,
           kind: 'purchase',
           balanceDelta: -10n,
-          refType: 'deposit_event',
-          refId: '44444444-4444-4444-4444-444444444444',
+          depositEventId: deposit,
         }),
       ).rejects.toEqual(pgError('23514', 'token_ledger_delta_shape_check'));
     });
   });
 
-  it('credits one deposit event only once', async () => {
+  it('credits one deposit event only once, whatever the kind', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
-      const credit = {
+      const deposit = await seedDeposit(tx, seed);
+      await tx.insert(tokenLedger).values({
         userId: seed.userId,
-        kind: 'purchase' as const,
+        kind: 'purchase',
         balanceDelta: 1000n,
-        refType: 'deposit_event' as const,
-        refId: '44444444-4444-4444-4444-444444444444',
-      };
-      await tx.insert(tokenLedger).values(credit);
-      await expect(tx.insert(tokenLedger).values(credit)).rejects.toEqual(
-        pgError('23505', 'token_ledger_deposit_ref_idx'),
-      );
+        depositEventId: deposit,
+      });
+      // the second credit arrives as a bonus rather than a purchase: keying the uniqueness on
+      // the FK column instead of on a self-declared label is what closes this
+      await expect(
+        tx.insert(tokenLedger).values({
+          userId: seed.userId,
+          kind: 'bonus',
+          balanceDelta: 50n,
+          depositEventId: deposit,
+        }),
+      ).rejects.toEqual(pgError('23505', 'token_ledger_deposit_event_idx'));
+    });
+  });
+
+  it('rejects a credit for another user’s deposit', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const other = await seedAccount(tx);
+      const deposit = await seedDeposit(tx, seed);
+      await expect(
+        tx.insert(tokenLedger).values({
+          userId: other.userId,
+          kind: 'purchase',
+          balanceDelta: 1000n,
+          depositEventId: deposit,
+        }),
+      ).rejects.toEqual(pgError('23503', 'token_ledger_deposit_owner_fk'));
+    });
+  });
+
+  it.each([
+    ['a purchase without a deposit reference', { kind: 'purchase' as const, balanceDelta: 10n }],
+    [
+      'an adjustment occupying a deposit slot',
+      { kind: 'adjustment' as const, balanceDelta: 10n, useDeposit: true },
+    ],
+  ])('rejects %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const { useDeposit, ...values } = patch as typeof patch & { useDeposit?: boolean };
+      const depositEventId = useDeposit ? await seedDeposit(tx, seed) : undefined;
+      await expect(
+        tx.insert(tokenLedger).values({ userId: seed.userId, ...values, depositEventId }),
+      ).rejects.toEqual(pgError('23514', 'token_ledger_reference_check'));
     });
   });
 
@@ -387,6 +697,7 @@ describe('outbox_events', () => {
     ['a numeric intent_id', { intent_id: 123 }],
     ['a non-uuid string', { intent_id: 'not-a-uuid' }],
     ['a different intent_id', { intent_id: '22222222-2222-2222-2222-222222222222' }],
+    ['a non-object payload', [1, 2]],
   ])('rejects %s', async (_label, payload) => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -395,6 +706,20 @@ describe('outbox_events', () => {
         tx
           .insert(outboxEvents)
           .values({ intentId: row!.id, payload: payload as { intent_id: string } }),
+      ).rejects.toEqual(pgError('23514', 'outbox_events_payload_check'));
+    });
+  });
+
+  // the publisher builds jobId from the payload, so a case-shifted id would enqueue the same
+  // intent under a second job id — the equality is byte-for-byte, not case-insensitive
+  it('rejects a case-shifted intent_id', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx.insert(tradeIntents).values(intent(seed, 'r1')).returning();
+      await expect(
+        tx
+          .insert(outboxEvents)
+          .values({ intentId: row!.id, payload: { intent_id: row!.id.toUpperCase() } }),
       ).rejects.toEqual(pgError('23514', 'outbox_events_payload_check'));
     });
   });
@@ -448,11 +773,23 @@ describe('broker_trades', () => {
     });
   });
 
-  it('keeps settlement columns NULL while the trade is open', async () => {
+  // profit is the one signed money column: this case exists so that re-tightening the
+  // constraint to `> 0` cannot pass a suite made only of rejections
+  it('accepts a settled trade with a negative profit', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
-      const [row] = await tx.insert(brokerTrades).values(trade(seed)).returning();
-      expect(row).toMatchObject({ closePrice: null, closeTimestampMs: null, profit: null });
+      const [row] = await tx
+        .insert(brokerTrades)
+        .values(
+          trade(seed, {
+            status: 'closed' as const,
+            closeTimestampMs: 1790028556624,
+            closePrice: 1.07,
+            profit: '-10.00',
+          }),
+        )
+        .returning();
+      expect(row!.profit).toBe('-10.00000000');
     });
   });
 
@@ -502,7 +839,34 @@ describe('broker_trades', () => {
     ['a NaN open price', { openPrice: Number.NaN }, 'broker_trades_open_price_check'],
     ['a zero open price', { openPrice: 0 }, 'broker_trades_open_price_check'],
     ['a negative payout', { payout: -5 }, 'broker_trades_payout_check'],
+    ['a NaN payout', { payout: Number.NaN }, 'broker_trades_payout_check'],
     ['a non-positive open timestamp', { openTimestampMs: 0 }, 'broker_trades_open_timestamp_check'],
+    ['a NaN potential profit', { potentialProfit: 'NaN' }, 'broker_trades_potential_profit_check'],
+    [
+      'a non-positive close price on a settled trade',
+      {
+        status: 'closed' as const,
+        closeTimestampMs: 1790028556624,
+        closePrice: 0,
+        profit: '8.50',
+      },
+      'broker_trades_close_price_check',
+    ],
+    [
+      'a NaN profit on a settled trade',
+      {
+        status: 'closed' as const,
+        closeTimestampMs: 1790028556624,
+        closePrice: 1.09,
+        profit: 'NaN',
+      },
+      'broker_trades_profit_check',
+    ],
+    [
+      'a non-positive close timestamp on a settled trade',
+      { status: 'closed' as const, closeTimestampMs: -1, closePrice: 1.09, profit: '8.50' },
+      'broker_trades_close_timestamp_check',
+    ],
   ])('rejects %s', async (_label, patch, constraint) => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -510,6 +874,28 @@ describe('broker_trades', () => {
         pgError('23514', constraint),
       );
     });
+  });
+});
+
+describe('trade_intents blocking', () => {
+  // ARCH-04 parks an intent in manual_review when reconciliation could not determine whether
+  // the order reached the broker: tokens are still reserved and a position may be open, so the
+  // account must not start another trade until an operator resolves it
+  it('blocks a new intent while one sits in manual_review', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await tx
+        .insert(tradeIntents)
+        .values(intent(seed, 'r1', { status: 'manual_review', tokensReserved: 5n }));
+      await expect(tx.insert(tradeIntents).values(intent(seed, 'r2'))).rejects.toEqual(
+        pgError('23505', 'trade_intents_active_account_idx'),
+      );
+    });
+  });
+
+  it('lets an operator resolve manual_review, which unblocks the account', async () => {
+    expect(canTransition('manual_review', 'settled')).toBe(true);
+    expect(canTransition('manual_review', 'rejected')).toBe(true);
   });
 });
 
@@ -537,6 +923,51 @@ describe('deposit_events', () => {
           amount: '-500.00' as DecimalString,
           payload: {},
         }),
+      ).rejects.toEqual(pgError('23514', 'deposit_events_amount_check'));
+    });
+  });
+
+  // the composite FK is MATCH SIMPLE, so it is satisfied whenever either column is NULL;
+  // this CHECK is what stops a credit claimed for a user with no account behind it
+  it('rejects a user without an account', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await expect(
+        tx.insert(depositEvents).values({
+          userId: seed.userId,
+          postbackId: 'p-pair',
+          payload: {},
+          status: 'credited',
+        }),
+      ).rejects.toEqual(pgError('23514', 'deposit_events_owner_pair_check'));
+    });
+  });
+
+  it.each([
+    ['an unattributed postback', {}],
+    ['an account without a user yet', { withAccount: true }],
+  ])('accepts %s', async (_label, shape) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const withAccount = (shape as { withAccount?: boolean }).withAccount === true;
+      const [row] = await tx
+        .insert(depositEvents)
+        .values({
+          postbackId: `p-ok-${++seq}`,
+          payload: {},
+          ...(withAccount ? { brokerAccountId: seed.accountId } : {}),
+        })
+        .returning();
+      expect(row!.status).toBe('received');
+    });
+  });
+
+  it('rejects a NaN amount', async () => {
+    await rolledBack(async (tx) => {
+      await expect(
+        tx
+          .insert(depositEvents)
+          .values({ postbackId: 'p-nan', amount: 'NaN' as DecimalString, payload: {} }),
       ).rejects.toEqual(pgError('23514', 'deposit_events_amount_check'));
     });
   });
