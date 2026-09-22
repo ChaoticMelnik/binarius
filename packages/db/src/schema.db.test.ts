@@ -584,14 +584,12 @@ describe('users and token_ledger', () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       const deposit = await seedDeposit(tx, seed);
-      await tx
-        .insert(tokenLedger)
-        .values({
-          userId: seed.userId,
-          kind: 'purchase',
-          balanceDelta: 1000n,
-          depositEventId: deposit,
-        });
+      await tx.insert(tokenLedger).values({
+        userId: seed.userId,
+        kind: 'purchase',
+        balanceDelta: 1000n,
+        depositEventId: deposit,
+      });
       const [bonus] = await tx
         .insert(tokenLedger)
         .values({ userId: seed.userId, kind: 'bonus', balanceDelta: 100n, depositEventId: deposit })
