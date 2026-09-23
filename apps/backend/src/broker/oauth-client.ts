@@ -76,7 +76,18 @@ export function createBrokerOAuthClient(options: BrokerOAuthClientOptions): Brok
       );
     }
 
-    const body: unknown = await response.json().catch(() => undefined);
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch (error) {
+      // A body that never finished arriving is a transport failure: the broker answered 2xx,
+      // so it has consumed the grant and the outcome is unknown. A body that did arrive and
+      // is not JSON is the broker breaking its contract, which retrying would not fix.
+      if (!(error instanceof SyntaxError)) {
+        throw new BrokerOAuthError(BrokerOAuthErrorCode.Unavailable, response.status);
+      }
+      throw new BrokerOAuthError(BrokerOAuthErrorCode.ContractViolation, response.status);
+    }
     const parsed = safeParseOAuthTokenResponse(body);
     if (!parsed.success) throw new BrokerOAuthError(BrokerOAuthErrorCode.ContractViolation);
     const tokens = toOAuthTokens(parsed.data);

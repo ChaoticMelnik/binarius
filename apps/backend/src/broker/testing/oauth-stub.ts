@@ -112,9 +112,14 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
       const presented = form.get('refresh_token') ?? '';
       const family = familyOfToken.get(presented);
       const user = family === undefined ? undefined : users.get(family);
-      // only the newest member of a family is accepted; an older one means the pair was
-      // already rotated, which is what a replayed refresh token looks like
-      if (family === undefined || user === undefined || families.get(family) !== presented) {
+      if (family === undefined || user === undefined) {
+        return reply.code(400).send({ error: 'invalid_grant' });
+      }
+      // Only the newest member of a family is accepted, and presenting an older one kills the
+      // whole family: the broker cannot tell our retry from someone replaying a stolen token,
+      // so it stops trusting the chain rather than the single token.
+      if (families.get(family) !== presented) {
+        families.delete(family);
         return reply.code(400).send({ error: 'invalid_grant' });
       }
       return reply.send(issueTokens(family, user));
