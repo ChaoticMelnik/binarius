@@ -1,0 +1,4 @@
+DROP INDEX "trade_intents_account_request_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX "trade_intents_user_request_idx" ON "trade_intents" USING btree ("user_id","client_request_id");--> statement-breakpoint
+ALTER TABLE "trade_intents" ADD CONSTRAINT "trade_intents_last_error_check" CHECK ("trade_intents"."last_error" in ('expired', 'executor_not_configured', 'executor_timeout', 'executor_error', 'broker_rejected', 'publish_failed', 'stale_submitting', 'invalid_job', 'processing_failed'));--> statement-breakpoint
+ALTER TABLE "outbox_events" ADD CONSTRAINT "outbox_events_last_error_check" CHECK ("outbox_events"."last_error" in ('expired', 'executor_not_configured', 'executor_timeout', 'executor_error', 'broker_rejected', 'publish_failed', 'stale_submitting', 'invalid_job', 'processing_failed'));

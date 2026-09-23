@@ -10,6 +10,7 @@ import {
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { TradeIntentFailureReason } from '@binarius/shared';
 import { createdAt, id, inList, literal } from './columns';
 import { tradeIntents } from './trade-intents';
 
@@ -49,13 +50,14 @@ export const outboxEvents = pgTable(
     attempts: integer('attempts').notNull().default(0),
     availableAt: timestamp('available_at', { withTimezone: true }).notNull().defaultNow(),
     publishedAt: timestamp('published_at', { withTimezone: true }),
-    lastError: text('last_error'),
+    lastError: text('last_error').$type<TradeIntentFailureReason>(),
     createdAt: createdAt(),
   },
   (t) => [
     unique('outbox_events_topic_intent_key').on(t.topic, t.intentId),
     inList('outbox_events_topic_check', t.topic, OutboxTopic),
     inList('outbox_events_status_check', t.status, OutboxStatus),
+    inList('outbox_events_last_error_check', t.lastError, TradeIntentFailureReason),
     // The column is the FK/uniqueness key, the payload is the publisher's contract: keep them
     // byte-equal. The key-existence test is what makes this false rather than NULL for a payload
     // that omits intent_id (a CHECK passes on NULL), and comparing text to text keeps the

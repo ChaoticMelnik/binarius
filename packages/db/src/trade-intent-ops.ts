@@ -25,7 +25,7 @@ export const TOKENS_PER_INTENT = 1n;
 // Only these two mean "someone else won the race for this account"; a violation of any other
 // unique constraint is a bug and must surface as an error, not as a 409.
 const REPLAY_CONSTRAINTS: ReadonlySet<string> = new Set([
-  'trade_intents_account_request_idx',
+  'trade_intents_user_request_idx',
   'trade_intents_active_account_idx',
 ]);
 
