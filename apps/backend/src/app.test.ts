@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildApp, type AppDeps } from './app';
+import type { TradingRoutesDeps } from './trading/routes';
 
 const ok = () => Promise.resolve();
 const down = () => Promise.reject(new Error('down'));
@@ -8,8 +9,15 @@ const throwsSync = () => {
   throw new Error('sync failure');
 };
 
+// the health route never touches the trading plugin's dependencies
+const unusedTrading: TradingRoutesDeps = {
+  db: {} as TradingRoutesDeps['db'],
+  internalApiToken: 'internal-token-for-tests',
+  onIntentQueued: () => {},
+};
+
 async function health(deps: Pick<AppDeps, 'checkPostgres' | 'checkRedis'>) {
-  const app = buildApp({ ...deps, logLevel: 'silent', checkTimeoutMs: 20 });
+  const app = buildApp({ ...deps, logLevel: 'silent', checkTimeoutMs: 20, trading: unusedTrading });
   try {
     const response = await app.inject({ method: 'GET', url: '/health' });
     return { statusCode: response.statusCode, body: response.json() };

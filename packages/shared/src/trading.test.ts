@@ -224,6 +224,8 @@ describe('createTradeIntentRequestSchema', () => {
     ['telegramUserId', '0', false],
     ['telegramUserId', '-1', false],
     ['telegramUserId', '', false],
+    ['telegramUserId', 'abc', false],
+    ['telegramUserId', '12abc', false],
     ['assetId', 2_147_483_647, true],
     ['assetId', 2_147_483_648, false],
     ['durationSec', 2_147_483_647, true],

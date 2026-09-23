@@ -122,11 +122,14 @@ export const tradeAmountSchema = positiveDecimalStringSchema.refine(
   { error: 'expected at most 12 integer and 8 fractional digits' },
 );
 
-// users.telegram_user_id is bigint; Telegram ids are positive and fit int8
+// users.telegram_user_id is bigint; Telegram ids are positive and fit int8. Zod 4 runs every
+// check even after the regex failed, so the refine must not hand BigInt() a non-numeric string.
 export const telegramUserIdSchema = z
   .string()
   .regex(/^[1-9]\d{0,18}$/, { error: 'expected a positive integer string' })
-  .refine((value) => BigInt(value) <= INT8_MAX, { error: 'exceeds the bigint range' });
+  .refine((value) => /^\d+$/.test(value) && BigInt(value) <= INT8_MAX, {
+    error: 'exceeds the bigint range',
+  });
 
 export const createTradeIntentRequestSchema = z.object({
   telegramUserId: telegramUserIdSchema,
