@@ -12,7 +12,8 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 - `packages/shared` — shared types/contracts, consumed by all 4 apps
 
 How a trade order travels from the bot to the worker (PostgreSQL outbox + BullMQ) is described in
-[docs/trade-intent-transport.md](docs/trade-intent-transport.md).
+[docs/trade-intent-transport.md](docs/trade-intent-transport.md); how a user links a Binodex
+account and how those tokens stay fresh is in [docs/binodex-oauth.md](docs/binodex-oauth.md).
 
 ## Requirements
 
