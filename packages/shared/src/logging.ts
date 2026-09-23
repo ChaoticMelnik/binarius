@@ -54,5 +54,7 @@ export interface ErrorLogFields {
 export function errorLogFields(error: unknown): ErrorLogFields {
   const cause = (error as { cause?: unknown } | null)?.cause;
   const fields: ErrorLogFields = { err: errorIdentity(error) };
-  return cause === undefined || cause === null ? fields : { ...fields, cause: errorIdentity(cause) };
+  return cause === undefined || cause === null
+    ? fields
+    : { ...fields, cause: errorIdentity(cause) };
 }

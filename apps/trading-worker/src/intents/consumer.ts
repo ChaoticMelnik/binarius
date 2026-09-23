@@ -62,10 +62,7 @@ export async function deadLetter(
   try {
     await sink.add('dead', entry);
   } catch (sinkError) {
-    logger.error(
-      { ...errorLogFields(sinkError), intentId: entry.intentId },
-      'dlq_publish_failed',
-    );
+    logger.error({ ...errorLogFields(sinkError), intentId: entry.intentId }, 'dlq_publish_failed');
   }
 }
 
@@ -93,11 +90,7 @@ export function startIntentConsumer({
     const write = deadLetter(dlq, logger, job, error).finally(() => inFlight.delete(write));
     inFlight.add(write);
   });
-  // a BullMQ worker error is often message-only, so the log says what failed rather than
-  // relying on the error to say it
-  worker.on('error', (error) =>
-    logger.error({ ...errorLogFields(error), failure: 'worker_error' }, 'intent worker error'),
-  );
+  worker.on('error', (error) => logger.error(errorLogFields(error), 'intent worker error'));
   return {
     worker,
     dlq,

@@ -1,5 +1,5 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { AuthRevokedReason, errorIdentity } from '@binarius/shared';
+import { AuthRevokedReason, errorLogFields } from '@binarius/shared';
 import {
   applyRotatedTokens,
   backfillRefreshTokenHash,
@@ -114,7 +114,7 @@ async function refreshUnderLock(
     // the key id matches, so this is not a rollout: the ciphertext itself is unusable
     if (!(error instanceof TokenCipherError)) throw error;
     logger.warn(
-      { accountId: account.id, err: errorIdentity(error) },
+      { accountId: account.id, ...errorLogFields(error) },
       'stored ciphertext failed to decrypt under its own key, revoking the account',
     );
     return revoked(tx, account.id, AuthRevokedReason.StorageInconsistent);
@@ -138,7 +138,7 @@ async function refreshUnderLock(
     } catch (error) {
       if (!(error instanceof TokenCipherError)) throw error;
       logger.warn(
-        { accountId: account.id, err: errorIdentity(error) },
+        { accountId: account.id, ...errorLogFields(error) },
         'stored access ciphertext failed to decrypt under its own key, revoking the account',
       );
       return revoked(tx, account.id, AuthRevokedReason.StorageInconsistent);
@@ -168,7 +168,7 @@ async function refreshUnderLock(
     const reason = revocationReasonFor(error);
     if (pairMayBeSpent(reason)) onExchanged(heldPair);
     logger.warn(
-      { accountId: account.id, reason, err: errorIdentity(error) },
+      { accountId: account.id, reason, ...errorLogFields(error) },
       'broker refresh failed, revoking the account',
     );
     return revoked(tx, account.id, reason);
@@ -199,7 +199,7 @@ async function abandonLostPair(
 ): Promise<AccessTokenResult> {
   const reason = AuthRevokedReason.RefreshOutcomeUnknown;
   deps.logger.error(
-    { accountId: lost.accountId, err: errorIdentity(failure) },
+    { accountId: lost.accountId, ...errorLogFields(failure) },
     'storing the rotated pair failed, revoking the account in a second transaction',
   );
   let result;
@@ -215,7 +215,7 @@ async function abandonLostPair(
     // the account stays active holding a token the broker will refuse: the next refresh gets
     // invalid_grant and revokes it there
     deps.logger.error(
-      { accountId: lost.accountId, err: errorIdentity(error) },
+      { accountId: lost.accountId, ...errorLogFields(error) },
       'the account could not be revoked after the rotated pair was lost',
     );
     throw failure;

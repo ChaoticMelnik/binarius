@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { errorIdentity, LOG_REDACT_PATHS } from './logging';
+import { errorIdentity, errorLogFields, LOG_REDACT_PATHS } from './logging';
 
 // structural only: whether pino honours these paths is proven by
 // apps/trading-worker/src/logging.test.ts against the real logger
@@ -50,5 +50,46 @@ describe('errorIdentity', () => {
     expect(errorIdentity(Object.assign(new Error('x'), { code: 42 }))).toEqual({ name: 'Error' });
     expect(errorIdentity('boom')).toEqual({ name: 'string' });
     expect(errorIdentity(null)).toEqual({ name: 'object' });
+  });
+});
+
+describe('errorLogFields', () => {
+  it('carries one level of cause, by identity', () => {
+    const cause = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      detail: 'Key (email)=(victim@example.test) already exists.',
+    });
+    const error = Object.assign(new Error('Failed query: select $1'), {
+      cause,
+      params: ['secret'],
+    });
+    expect(errorLogFields(error)).toEqual({
+      err: { name: 'Error' },
+      cause: { name: 'Error', code: '23505' },
+    });
+  });
+
+  it('omits the cause entirely when there is none, rather than naming undefined', () => {
+    expect(errorLogFields(new Error('plain'))).toEqual({ err: { name: 'Error' } });
+    expect(errorLogFields(new Error('explicit', { cause: undefined }))).toEqual({
+      err: { name: 'Error' },
+    });
+    expect(errorLogFields(new Error('null cause', { cause: null }))).toEqual({
+      err: { name: 'Error' },
+    });
+  });
+
+  it('names a cause that is not an error by its type', () => {
+    expect(errorLogFields(new Error('x', { cause: 'a string' }))).toEqual({
+      err: { name: 'Error' },
+      cause: { name: 'string' },
+    });
+  });
+
+  it('does not walk past the first cause', () => {
+    const deep = Object.assign(new Error('deep'), { code: 'DEEP' });
+    const middle = new Error('middle', { cause: deep });
+    const outer = new Error('outer', { cause: middle });
+    expect(errorLogFields(outer)).toEqual({ err: { name: 'Error' }, cause: { name: 'Error' } });
   });
 });
