@@ -45,21 +45,23 @@ export function buildApp({
   void app.register(tradingRoutes, trading);
 
   // Fastify's default handler echoes error.message; for a DrizzleQueryError that is the SQL
-  // text plus bound parameters. 4xx errors (validation, body parsing, thrown http errors) keep
-  // their shape and headers; anything else becomes an opaque 500 and a log line.
-  app.setErrorHandler(
-    (error: FastifyError & { headers?: Record<string, string> }, request, reply) => {
-      const statusCode = error.statusCode ?? 500;
-      if (statusCode < 500) {
-        return reply
-          .code(statusCode)
-          .headers(error.headers ?? {})
-          .send(error);
-      }
-      request.log.error({ err: error }, 'unhandled request error');
-      return reply.code(500).send({ error: 'internal' });
-    },
-  );
+  // text plus bound parameters. A 4xx error (validation, body parsing, a thrown http error)
+  // keeps its shape: reply.send(error) re-enters Fastify's own chain, whose default handler
+  // applies error.headers and the status. Anything else — including an error whose only status
+  // is a `status` field, or a nonsensical sub-400 statusCode — becomes an opaque 500 and a log line.
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    const { statusCode } = error;
+    if (
+      typeof statusCode === 'number' &&
+      Number.isInteger(statusCode) &&
+      statusCode >= 400 &&
+      statusCode < 500
+    ) {
+      return reply.send(error);
+    }
+    request.log.error({ err: error }, 'unhandled request error');
+    return reply.code(500).send({ error: 'internal' });
+  });
 
   return app;
 }
