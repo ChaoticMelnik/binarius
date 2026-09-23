@@ -3,9 +3,8 @@ import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { CreateTradeIntentRequest, DecimalString } from '@binarius/shared';
-import { brokerAccounts, createTradeIntent, findTradeIntent, users } from '@binarius/db';
-import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
+import { findTradeIntent } from '@binarius/db';
+import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import { deadLetter, startIntentConsumer, type DeadLetter, type IntentConsumer } from './consumer';
 import { InvalidJobError, processIntentJob } from './processor';
 
@@ -40,34 +39,7 @@ afterAll(async () => {
   await tmp.drop();
 });
 
-let seq = 0;
-async function newIntent() {
-  const n = ++seq;
-  const telegramUserId = BigInt(300_000 + n);
-  const [user] = await tmp.db
-    .insert(users)
-    .values({ telegramUserId, tokenBalance: 5n })
-    .returning({ id: users.id });
-  await tmp.db.insert(brokerAccounts).values({
-    userId: user!.id,
-    brokerUserId: `broker-${n}`,
-    accessTokenEnc: Buffer.from('enc'),
-    refreshTokenEnc: Buffer.from('enc'),
-    tokenKeyId: 'k1',
-    accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-  });
-  const request: CreateTradeIntentRequest = {
-    telegramUserId: telegramUserId.toString(),
-    mode: 'demo',
-    assetId: 91,
-    amount: '10.00' as DecimalString,
-    action: 'up',
-    durationSec: 60,
-    clientRequestId: `req-${n}`,
-  };
-  const { intent } = await createTradeIntent(tmp.db, request);
-  return intent.id;
-}
+const newIntent = async () => (await seedQueuedIntent(tmp.db)).intent.id;
 
 // resolves with the job's terminal event so the test can look at the database afterwards
 function settled(consumer: IntentConsumer, jobId: string): Promise<'completed' | 'failed'> {
@@ -190,6 +162,33 @@ describe('startIntentConsumer', () => {
     const entries = (await dlqEntries()).filter((entry) => entry.reason === 'invalid_job');
     expect(entries.length).toBeGreaterThanOrEqual(1);
     expect(entries.every((entry) => entry.intentId === null)).toBe(true);
+  });
+});
+
+describe('drainDeadLetters', () => {
+  it('lets shutdown wait for a dead-letter write started by a job that failed during close', async () => {
+    const intentId = await newIntent();
+    const consumer = startIntentConsumer({
+      connection: redis,
+      // fails only once the drain is under way, so the failed event fires inside close()
+      processor: () =>
+        new Promise((_resolve, reject) => setTimeout(() => reject(new Error('late')), 150)),
+      logger,
+      concurrency: 1,
+      prefix,
+    });
+    await consumer.worker.waitUntilReady();
+    await intents.add('intent', { intentId }, { jobId: intentId, attempts: 1, removeOnFail: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await consumer.worker.close();
+    await consumer.drainDeadLetters();
+    try {
+      const entries = (await dlqEntries()).filter((entry) => entry.intentId === intentId);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ reason: 'processing_failed' });
+    } finally {
+      await consumer.dlq.close();
+    }
   });
 });
 
