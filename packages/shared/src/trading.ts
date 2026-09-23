@@ -87,6 +87,8 @@ export const TradeIntentFailureReason = {
   PublishFailed: 'publish_failed',
   StaleSubmitting: 'stale_submitting',
   InvalidJob: 'invalid_job',
+  // the job itself failed (database unreachable while persisting an outcome); DLQ only
+  ProcessingFailed: 'processing_failed',
 } as const;
 export type TradeIntentFailureReason =
   (typeof TradeIntentFailureReason)[keyof typeof TradeIntentFailureReason];
