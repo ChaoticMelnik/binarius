@@ -349,3 +349,85 @@ describe('OutboxPublisher loop', () => {
     expect(await p.sweep()).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe('OutboxPublisher shutdown semantics', () => {
+  it('stop waits out an add that hangs until its deadline and leaves the row pending', async () => {
+    let entered: () => void = () => {};
+    const enteredAdd = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const hanging = fakeJobs(() => {
+      entered();
+      return new Promise(() => {});
+    });
+    const { intentId } = await newIntent();
+    const p = publisher(hanging, { pollMs: 60_000, publishTimeoutMs: 200 });
+    p.start();
+    await enteredAdd;
+    const started = Date.now();
+    await p.stop();
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(150);
+    expect(elapsed).toBeLessThan(1_000);
+    expect(await outboxOf(intentId)).toMatchObject({ status: 'pending', attempts: 1 });
+
+    // stopping was cleared: a direct tick handles the row again once it is due
+    await makeDue(intentId);
+    expect(await p.tick()).toBeGreaterThanOrEqual(1);
+    expect((await outboxOf(intentId)).attempts).toBe(2);
+    await park(intentId);
+  });
+
+  it('ignores start() while a stop() is still draining', async () => {
+    const slow = fakeJobs(async () => {
+      await sleep(100);
+    });
+    const first = await newIntent();
+    const p = publisher(slow, { pollMs: 60_000 });
+    p.start();
+    await sleep(20);
+    const stopping = p.stop();
+    p.start();
+    await stopping;
+    expect((await outboxOf(first.intentId)).status).toBe('published');
+
+    // no loop is alive after the stop: a wake publishes nothing
+    const second = await newIntent();
+    p.wake();
+    await sleep(200);
+    expect((await outboxOf(second.intentId)).status).toBe('pending');
+    expect(await p.tick()).toBeGreaterThanOrEqual(1);
+    expect((await outboxOf(second.intentId)).status).toBe('published');
+  });
+
+  it('logs reconciliation delivery failures at info until the fifth attempt', async () => {
+    const lines: { level: number; msg: string; attempts?: number; topic?: string }[] = [];
+    const capturing = Fastify({
+      logger: {
+        level: 'info',
+        stream: {
+          write: (line: string) => {
+            lines.push(JSON.parse(line) as (typeof lines)[number]);
+          },
+        },
+      },
+    }).log;
+    const failing = fakeJobs(() => Promise.reject(new Error('redis down')));
+    const intentId = await unknownIntent();
+    const p = new OutboxPublisher({ db: tmp.db, jobs: failing, logger: capturing });
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      await makeDue(intentId, OutboxTopic.TradingReconciliation);
+      expect(await p.tick()).toBe(1);
+    }
+    const failures = lines.filter((l) => l.msg === 'outbox publish failed');
+    expect(failures.map((l) => [l.attempts, l.level])).toEqual([
+      [1, 30],
+      [2, 30],
+      [3, 30],
+      [4, 30],
+      [5, 40],
+    ]);
+    expect(lines.filter((l) => l.msg.includes('keeps failing'))).toHaveLength(0);
+    await park(intentId);
+  });
+});
