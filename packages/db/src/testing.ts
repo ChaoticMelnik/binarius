@@ -2,6 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { Pool } from 'pg';
 import { createDb, type Db } from './client';
 import { runMigrations } from './migrate';
+import type { CreateTradeIntentRequest, DecimalString } from '@binarius/shared';
+import { brokerAccounts, users, type BrokerAccountStatus, type UserStatus } from './schema/index';
+import { createTradeIntent, type TradeIntentRow } from './trade-intent-ops';
 
 export interface TempDatabase {
   url: string;
@@ -76,4 +79,88 @@ function withDatabase(baseUrl: string, name: string): string {
   const url = new URL(baseUrl);
   url.pathname = `/${name}`;
   return url.toString();
+}
+
+// --- Fixtures ---------------------------------------------------------------------------------
+// Shared by the integration suites of every package; each temporary database starts empty, so
+// the counter only has to be unique within one test file.
+
+let seq = 0;
+
+export interface SeededUser {
+  userId: string;
+  telegramUserId: string;
+}
+
+export interface SeededAccount extends SeededUser {
+  brokerAccountId: string;
+}
+
+export async function seedUser(
+  db: Db,
+  { balance = 5n, status = 'active' }: { balance?: bigint; status?: UserStatus } = {},
+): Promise<SeededUser> {
+  const telegramUserId = BigInt(100_000 + ++seq);
+  const [user] = await db
+    .insert(users)
+    .values({ telegramUserId, tokenBalance: balance, status })
+    .returning({ id: users.id });
+  if (user === undefined) throw new Error('seedUser: insert returned no row');
+  return { userId: user.id, telegramUserId: telegramUserId.toString() };
+}
+
+export async function seedBrokerAccount(
+  db: Db,
+  userId: string,
+  patch: { status?: BrokerAccountStatus; tradingHalted?: boolean } = {},
+): Promise<string> {
+  const [account] = await db
+    .insert(brokerAccounts)
+    .values({
+      userId,
+      brokerUserId: `broker-${++seq}`,
+      accessTokenEnc: Buffer.from('enc'),
+      refreshTokenEnc: Buffer.from('enc'),
+      tokenKeyId: 'k1',
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      ...patch,
+    })
+    .returning({ id: brokerAccounts.id });
+  if (account === undefined) throw new Error('seedBrokerAccount: insert returned no row');
+  return account.id;
+}
+
+export async function seedUserWithAccount(
+  db: Db,
+  options: { balance?: bigint; status?: UserStatus } = {},
+): Promise<SeededAccount> {
+  const user = await seedUser(db, options);
+  const brokerAccountId = await seedBrokerAccount(db, user.userId);
+  return { ...user, brokerAccountId };
+}
+
+export function intentRequest(
+  telegramUserId: string,
+  patch: Partial<CreateTradeIntentRequest> = {},
+): CreateTradeIntentRequest {
+  return {
+    telegramUserId,
+    mode: 'demo',
+    assetId: 91,
+    amount: '10.00' as DecimalString,
+    action: 'up',
+    durationSec: 60,
+    clientRequestId: `req-${++seq}`,
+    ...patch,
+  };
+}
+
+// a queued intent for a fresh user + account: the starting point of every worker/publisher case
+export async function seedQueuedIntent(
+  db: Db,
+  patch: Partial<CreateTradeIntentRequest> = {},
+): Promise<SeededAccount & { intent: TradeIntentRow }> {
+  const seed = await seedUserWithAccount(db);
+  const { intent } = await createTradeIntent(db, intentRequest(seed.telegramUserId, patch));
+  return { ...seed, intent };
 }
