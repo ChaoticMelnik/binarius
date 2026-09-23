@@ -1,9 +1,11 @@
 import { randomBytes } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { createDb, type Db } from './client';
 import { runMigrations } from './migrate';
 import type { CreateTradeIntentRequest, DecimalString } from '@binarius/shared';
 import { brokerAccounts, users, type BrokerAccountStatus, type UserStatus } from './schema/index';
+import type { BrokerAccountRow } from './oauth-ops';
 import { createTradeIntent, type TradeIntentRow } from './trade-intent-ops';
 
 export interface TempDatabase {
@@ -94,6 +96,14 @@ export interface SeededUser {
 
 export interface SeededAccount extends SeededUser {
   brokerAccountId: string;
+}
+
+// the whole row, ciphertexts included: the OAuth suites assert on columns the public view
+// deliberately hides
+export async function brokerAccountRow(db: Db, id: string): Promise<BrokerAccountRow> {
+  const [row] = await db.select().from(brokerAccounts).where(eq(brokerAccounts.id, id));
+  if (row === undefined) throw new Error(`brokerAccountRow: no broker_accounts row ${id}`);
+  return row;
 }
 
 export async function seedUser(

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, isNull, lt, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { AuthRevokedReason, type BrokerAccountView, type OAuthTokens } from '@binarius/shared';
 import type { Db } from './client';
 import type { TokenCipher } from './crypto';
@@ -235,6 +235,20 @@ export async function applyRotatedTokens(
     .where(eq(brokerAccounts.id, account.id));
 }
 
+// Fills in the hash of a refresh token already stored, for a row linked before the column
+// existed. Deliberately narrow: token_rotated_at dates the refresh token itself and starts the
+// ninety-day clock, so writing it here would hand an old token a fresh expiry.
+export async function backfillRefreshTokenHash(
+  tx: Tx,
+  accountId: string,
+  refreshTokenHash: string,
+): Promise<void> {
+  await tx
+    .update(brokerAccounts)
+    .set({ refreshTokenHash })
+    .where(and(eq(brokerAccounts.id, accountId), isNull(brokerAccounts.refreshTokenHash)));
+}
+
 // Only `status` and `auth_revoked_reason`: trading_halted and halted_reason belong to ARCH-04.
 export async function revokeAccount(
   tx: Tx,
@@ -247,26 +261,14 @@ export async function revokeAccount(
     .where(eq(brokerAccounts.id, accountId));
 }
 
-// NULL token_rotated_at means the account has not rotated since it was linked, so the age of
-// the refresh token is the age of the row
-export async function isRefreshTokenExpired(
-  exec: Db | Tx,
-  accountId: string,
-  maxAgeMs: number,
-): Promise<boolean> {
-  const [row] = await exec
-    .select({ id: brokerAccounts.id })
-    .from(brokerAccounts)
-    .where(
-      and(
-        eq(brokerAccounts.id, accountId),
-        lt(
-          sql`coalesce(${brokerAccounts.tokenRotatedAt}, ${brokerAccounts.createdAt})`,
-          sql`now() - (${maxAgeMs}::bigint * interval '1 millisecond')`,
-        ),
-      ),
-    );
-  return row !== undefined;
+// A blocked user must not even reach the broker: a login they cannot finish would still burn
+// a state row and, once they authorize, an authorization code.
+export async function isUserBlocked(db: Db, telegramUserId: bigint): Promise<boolean> {
+  const [row] = await db
+    .select({ status: users.status })
+    .from(users)
+    .where(eq(users.telegramUserId, telegramUserId));
+  return row?.status === UserStatus.Blocked;
 }
 
 export function toBrokerAccountView(row: BrokerAccountRow): BrokerAccountView {
@@ -279,5 +281,3 @@ export function toBrokerAccountView(row: BrokerAccountRow): BrokerAccountView {
     createdAt: row.createdAt.toISOString(),
   };
 }
-
-export { AuthRevokedReason };

@@ -2,14 +2,15 @@ import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AuthRevokedReason, type OAuthTokens } from '@binarius/shared';
-import { createTempDatabase, seedUser, type TempDatabase } from './testing';
+import { brokerAccountRow, createTempDatabase, seedUser, type TempDatabase } from './testing';
 import { createTokenCipher, TokenField } from './crypto';
 import {
   applyRotatedTokens,
+  backfillRefreshTokenHash,
   consumeOAuthState,
   createOAuthState,
   hashToken,
-  isRefreshTokenExpired,
+  isUserBlocked,
   linkBrokerAccount,
   lockAccountForRefresh,
   revokeAccount,
@@ -25,7 +26,6 @@ if (baseUrl === undefined || baseUrl === '') {
 const cipher = createTokenCipher({ keyId: 'test-key', key: randomBytes(32) });
 const REDIRECT_URI = 'https://example.test/oauth/callback';
 const STATE_TTL_MS = 600_000;
-const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 
 let tmp: TempDatabase;
 beforeAll(async () => {
@@ -45,9 +45,6 @@ const brokerTokens = (patch: Partial<OAuthTokens> = {}): OAuthTokens => {
     ...patch,
   };
 };
-
-const accountRow = async (id: string) =>
-  (await tmp.db.select().from(brokerAccounts).where(eq(brokerAccounts.id, id)))[0]!;
 
 const startState = (telegramUserId: bigint) =>
   createOAuthState(tmp.db, { telegramUserId, redirectUri: REDIRECT_URI, ttlMs: STATE_TTL_MS });
@@ -134,7 +131,7 @@ describe('linkBrokerAccount', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const row = await accountRow(result.account.id);
+    const row = await brokerAccountRow(tmp.db, result.account.id);
     expect(row).toMatchObject({
       brokerUserId: tokens.user.id,
       email: tokens.user.email,
@@ -173,7 +170,7 @@ describe('linkBrokerAccount', () => {
     if (!again.ok) return;
     expect(again.account.id).toBe(created.account.id);
 
-    const row = await accountRow(again.account.id);
+    const row = await brokerAccountRow(tmp.db, again.account.id);
     expect(
       cipher.decrypt(row.accessTokenEnc, { accountId: row.id, field: TokenField.Access }),
     ).toBe(second.accessToken);
@@ -207,7 +204,7 @@ describe('linkBrokerAccount', () => {
       cipher,
     });
     expect(again.ok).toBe(true);
-    const row = await accountRow(created.account.id);
+    const row = await brokerAccountRow(tmp.db, created.account.id);
     expect(row).toMatchObject({
       status: 'active',
       authRevokedReason: null,
@@ -300,7 +297,7 @@ describe('refresh helpers', () => {
       await applyRotatedTokens(tx, { account: locked!, tokens: rotated, cipher });
     });
 
-    const row = await accountRow(created.account.id);
+    const row = await brokerAccountRow(tmp.db, created.account.id);
     expect(
       cipher.decrypt(row.refreshTokenEnc, { accountId: row.id, field: TokenField.Refresh }),
     ).toBe(rotated.refreshToken);
@@ -318,7 +315,7 @@ describe('refresh helpers', () => {
     await tmp.db.transaction((tx) =>
       revokeAccount(tx, created.account.id, AuthRevokedReason.RefreshOutcomeUnknown),
     );
-    expect(await accountRow(created.account.id)).toMatchObject({
+    expect(await brokerAccountRow(tmp.db, created.account.id)).toMatchObject({
       status: 'revoked',
       authRevokedReason: 'refresh_outcome_unknown',
       tradingHalted: false,
@@ -326,7 +323,7 @@ describe('refresh helpers', () => {
     });
   });
 
-  it('measures the refresh age from the rotation, or from the row when it never rotated', async () => {
+  it('backfills the refresh hash without touching the rotation timestamp', async () => {
     const created = await linkBrokerAccount(tmp.db, {
       telegramUserId: 700_032n,
       tokens: brokerTokens(),
@@ -334,20 +331,38 @@ describe('refresh helpers', () => {
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
-    expect(await isRefreshTokenExpired(tmp.db, created.account.id, NINETY_DAYS_MS)).toBe(false);
-
+    // a row from before the hash column existed: neither the hash nor a rotation is recorded
     await tmp.db
       .update(brokerAccounts)
-      .set({ tokenRotatedAt: sql`now() - interval '91 days'` })
+      .set({ refreshTokenHash: null, tokenRotatedAt: null })
       .where(eq(brokerAccounts.id, created.account.id));
-    expect(await isRefreshTokenExpired(tmp.db, created.account.id, NINETY_DAYS_MS)).toBe(true);
 
-    // a legacy row that never rotated falls back to created_at
-    await tmp.db
-      .update(brokerAccounts)
-      .set({ tokenRotatedAt: null, createdAt: sql`now() - interval '91 days'` })
-      .where(eq(brokerAccounts.id, created.account.id));
-    expect(await isRefreshTokenExpired(tmp.db, created.account.id, NINETY_DAYS_MS)).toBe(true);
+    await tmp.db.transaction((tx) =>
+      backfillRefreshTokenHash(tx, created.account.id, hashToken('stored-refresh')),
+    );
+    const filled = await brokerAccountRow(tmp.db, created.account.id);
+    expect(filled.refreshTokenHash).toBe(hashToken('stored-refresh'));
+    // the ninety-day clock dates the refresh token, so a backfill must not restart it
+    expect(filled.tokenRotatedAt).toBeNull();
+    expect(filled.accessTokenExpiresAt).toEqual(created.account.accessTokenExpiresAt);
+
+    // a second call cannot overwrite a hash that is already there
+    await tmp.db.transaction((tx) =>
+      backfillRefreshTokenHash(tx, created.account.id, hashToken('something-else')),
+    );
+    expect((await brokerAccountRow(tmp.db, created.account.id)).refreshTokenHash).toBe(
+      hashToken('stored-refresh'),
+    );
+  });
+});
+
+describe('isUserBlocked', () => {
+  it('answers for a blocked user, an active one and one that does not exist yet', async () => {
+    const blocked = await seedUser(tmp.db, { status: 'blocked' });
+    const active = await seedUser(tmp.db);
+    expect(await isUserBlocked(tmp.db, BigInt(blocked.telegramUserId))).toBe(true);
+    expect(await isUserBlocked(tmp.db, BigInt(active.telegramUserId))).toBe(false);
+    expect(await isUserBlocked(tmp.db, 999_999_999n)).toBe(false);
   });
 });
 
