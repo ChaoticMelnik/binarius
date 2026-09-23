@@ -1,7 +1,15 @@
 import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { brokerAccounts, createTokenCipher, hashToken, oauthStates, users } from '@binarius/db';
+import { Pool } from 'pg';
+import {
+  brokerAccounts,
+  createDb,
+  createTokenCipher,
+  hashToken,
+  oauthStates,
+  users,
+} from '@binarius/db';
 import { createTempDatabase, seedUser, type TempDatabase } from '@binarius/db/testing';
 import { buildApp } from '../app';
 import { createBrokerOAuthClient } from '../broker/oauth-client';
@@ -48,14 +56,7 @@ beforeAll(async () => {
     redirectUri: REDIRECT_URI,
     partnerRef: PARTNER_REF,
   };
-  app = buildApp({
-    checkPostgres: () => Promise.resolve(),
-    checkRedis: () => Promise.resolve(),
-    logLevel: 'silent',
-    checkTimeoutMs: 20,
-    trading: { db: tmp.db, internalApiToken: TOKEN, onIntentQueued: () => {} },
-    auth: authDeps,
-  });
+  app = testApp(authDeps);
   await app.ready();
 });
 afterAll(async () => {
@@ -67,16 +68,26 @@ afterAll(async () => {
 let seq = 0;
 const telegramId = () => String(800_000 + ++seq);
 
-const start = (telegramUserId: string, authorization = `Bearer ${TOKEN}`) =>
-  app.inject({
+const testApp = (auth: AuthRoutesDeps) =>
+  buildApp({
+    checkPostgres: () => Promise.resolve(),
+    checkRedis: () => Promise.resolve(),
+    logLevel: 'silent',
+    checkTimeoutMs: 20,
+    trading: { db: tmp.db, internalApiToken: TOKEN, onIntentQueued: () => {} },
+    auth,
+  });
+
+const start = (telegramUserId: string, authorization = `Bearer ${TOKEN}`, instance = app) =>
+  instance.inject({
     method: 'POST',
     url: '/auth/binodex/start',
     headers: { authorization, 'content-type': 'application/json' },
     payload: JSON.stringify({ telegramUserId }),
   });
 
-const callback = (payload: unknown) =>
-  app.inject({
+const callback = (payload: unknown, instance = app) =>
+  instance.inject({
     method: 'POST',
     url: '/auth/binodex/callback',
     headers: { 'content-type': 'application/json' },
@@ -168,7 +179,7 @@ describe('POST /auth/binodex/callback', () => {
       'isPartnerClient',
       'status',
     ]);
-    expect(account).toMatchObject({ brokerUserId: `broker-${telegram}`, status: 'active' });
+    expect(account).toMatchObject({ brokerUserId: `broker-${telegram}`, status: 'pending' });
 
     const [row] = await tmp.db
       .select()
@@ -308,29 +319,20 @@ describe('POST /auth/binodex/callback', () => {
   it('reports a broker rejection as 502, not 400', async () => {
     const telegram = telegramId();
     const { state } = (await start(telegram)).json() as { state: string };
-    const wrongSecret = buildApp({
-      checkPostgres: () => Promise.resolve(),
-      checkRedis: () => Promise.resolve(),
-      logLevel: 'silent',
-      checkTimeoutMs: 20,
-      trading: { db: tmp.db, internalApiToken: TOKEN, onIntentQueued: () => {} },
-      auth: {
-        ...authDeps,
-        broker: createBrokerOAuthClient({
-          baseUrl: stub.url,
-          clientId: CLIENT_ID,
-          clientSecret: 'not-the-secret',
-        }),
-      },
+    const wrongSecret = testApp({
+      ...authDeps,
+      broker: createBrokerOAuthClient({
+        baseUrl: stub.url,
+        clientId: CLIENT_ID,
+        clientSecret: 'not-the-secret',
+      }),
     });
     await wrongSecret.ready();
     try {
-      const response = await wrongSecret.inject({
-        method: 'POST',
-        url: '/auth/binodex/callback',
-        headers: { 'content-type': 'application/json' },
-        payload: JSON.stringify({ state, code: stub.issueCode({ brokerUserId: 'broker-x' }) }),
-      });
+      const response = await callback(
+        { state, code: stub.issueCode({ brokerUserId: 'broker-x' }) },
+        wrongSecret,
+      );
       expect(response.statusCode).toBe(502);
       expect(response.json()).toEqual({ error: 'broker_contract_violation' });
     } finally {
@@ -351,25 +353,13 @@ describe('POST /auth/binodex/callback', () => {
 describe('the callback rate limits', () => {
   // its own app, so the windows it exhausts are not the ones every other case shares
   const limited = async (over: Partial<AuthRoutesDeps>) => {
-    const instance = buildApp({
-      checkPostgres: () => Promise.resolve(),
-      checkRedis: () => Promise.resolve(),
-      logLevel: 'silent',
-      checkTimeoutMs: 20,
-      trading: { db: tmp.db, internalApiToken: TOKEN, onIntentQueued: () => {} },
-      auth: { ...authDeps, ...over },
-    });
+    const instance = testApp({ ...authDeps, ...over });
     await instance.ready();
     return instance;
   };
 
-  const post = (instance: Awaited<ReturnType<typeof limited>>, payload: unknown) =>
-    instance.inject({
-      method: 'POST',
-      url: '/auth/binodex/callback',
-      headers: { 'content-type': 'application/json' },
-      payload: JSON.stringify(payload),
-    });
+  const post = (instance: ReturnType<typeof testApp>, payload: unknown) =>
+    callback(payload, instance);
 
   it('stops a flood before it reaches the database', async () => {
     const instance = await limited({ callbackMaxPerMinute: 2 });
@@ -394,12 +384,7 @@ describe('the callback rate limits', () => {
       // two real logins first: neither may count towards the failure window
       for (let i = 0; i < 2; i += 1) {
         const telegram = telegramId();
-        const started = await instance.inject({
-          method: 'POST',
-          url: '/auth/binodex/start',
-          headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
-          payload: JSON.stringify({ telegramUserId: telegram }),
-        });
+        const started = await start(telegram, `Bearer ${TOKEN}`, instance);
         const { state } = started.json() as { state: string };
         const response = await post(instance, {
           state,
@@ -414,6 +399,131 @@ describe('the callback rate limits', () => {
     } finally {
       await instance.close();
     }
+  });
+
+  // the reservation is what makes the limit hold: a counter incremented after the lookup lets
+  // a whole burst through while every request in it is still waiting on the database
+  it('holds the limit when the bad states arrive together', async () => {
+    const instance = await limited({ callbackMaxFailuresPerMinute: 2 });
+    try {
+      const responses = await Promise.all(
+        [1, 2, 3, 4, 5, 6].map((n) => post(instance, { state: `burst-${n}`, code: 'c' })),
+      );
+      const statuses = responses.map((r) => r.statusCode).sort();
+      expect(statuses).toEqual([400, 400, 429, 429, 429, 429]);
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it('refuses before it reaches the state row at all', async () => {
+    const telegram = telegramId();
+    const { state } = (await start(telegram)).json() as { state: string };
+    const instance = await limited({ callbackMaxPerMinute: 0 });
+    try {
+      const response = await post(instance, {
+        state,
+        code: stub.issueCode({ brokerUserId: `broker-${telegram}` }),
+      });
+      expect(response.statusCode).toBe(429);
+      // the state was never consumed, which it would have been had the limiter run later
+      const [row] = await tmp.db
+        .select({ usedAt: oauthStates.usedAt })
+        .from(oauthStates)
+        .where(eq(oauthStates.stateHash, hashToken(state)));
+      expect(row?.usedAt).toBeNull();
+    } finally {
+      await instance.close();
+    }
+  });
+
+  // an outage is not a guessing client: keeping its reservations would close the callback for a
+  // minute after the database comes back
+  it('gives the reservation back when the lookup itself fails', async () => {
+    const dead = new Pool({ connectionString: tmp.url });
+    const instance = testApp({ ...authDeps, db: createDb(dead), callbackMaxFailuresPerMinute: 1 });
+    await instance.ready();
+    await dead.end();
+    try {
+      for (let i = 0; i < 4; i += 1) {
+        const response = await post(instance, { state: `outage-${i}`, code: 'c' });
+        expect(response.statusCode).toBe(500);
+      }
+    } finally {
+      await instance.close();
+    }
+  });
+});
+
+describe('POST /auth/binodex/confirm', () => {
+  const confirm = (payload: unknown, authorization = `Bearer ${TOKEN}`) =>
+    app.inject({
+      method: 'POST',
+      url: '/auth/binodex/confirm',
+      headers: { authorization, 'content-type': 'application/json' },
+      payload: JSON.stringify(payload),
+    });
+
+  const linked = async () => {
+    const telegram = telegramId();
+    const { response } = await login(telegram, `broker-${telegram}`);
+    const { account } = response.json() as { account: { id: string; status: string } };
+    return { telegram, account };
+  };
+
+  it('requires the internal token', async () => {
+    const { telegram, account } = await linked();
+    expect(
+      (await confirm({ telegramUserId: telegram, accountId: account.id }, 'Bearer nope'))
+        .statusCode,
+    ).toBe(401);
+  });
+
+  it('turns the pending account the login created into a usable one', async () => {
+    const { telegram, account } = await linked();
+    expect(account.status).toBe('pending');
+
+    const response = await confirm({ telegramUserId: telegram, accountId: account.id });
+    expect(response.statusCode).toBe(200);
+    expect((response.json() as { account: { status: string } }).account.status).toBe('active');
+    expect((await tmp.db
+      .select({ status: brokerAccounts.status })
+      .from(brokerAccounts)
+      .where(eq(brokerAccounts.id, account.id)))[0]?.status).toBe('active');
+  });
+
+  it('refuses an account that belongs to someone else', async () => {
+    const { account } = await linked();
+    const stranger = telegramId();
+    const response = await confirm({ telegramUserId: stranger, accountId: account.id });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'broker_account_not_found' });
+  });
+
+  it('refuses a second confirmation', async () => {
+    const { telegram, account } = await linked();
+    expect((await confirm({ telegramUserId: telegram, accountId: account.id })).statusCode).toBe(
+      200,
+    );
+    const again = await confirm({ telegramUserId: telegram, accountId: account.id });
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toEqual({ error: 'account_not_pending' });
+  });
+
+  it('refuses a blocked user', async () => {
+    const { telegram, account } = await linked();
+    await tmp.db
+      .update(users)
+      .set({ status: 'blocked' })
+      .where(eq(users.telegramUserId, BigInt(telegram)));
+    const response = await confirm({ telegramUserId: telegram, accountId: account.id });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'user_blocked' });
+  });
+
+  it('rejects a malformed body with 400', async () => {
+    expect((await confirm({ telegramUserId: '1' })).statusCode).toBe(400);
+    expect((await confirm({ telegramUserId: '1', accountId: 'not-a-uuid' })).statusCode).toBe(400);
   });
 });
 
