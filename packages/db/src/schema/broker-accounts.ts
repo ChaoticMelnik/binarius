@@ -12,7 +12,14 @@ import { AuthRevokedReason } from '@binarius/shared';
 import { bytea, createdAt, id, inList, updatedAt } from './columns';
 import { users } from './users';
 
-export const BrokerAccountStatus = { Active: 'active', Revoked: 'revoked' } as const;
+// A freshly linked account starts pending: the OAuth callback proves someone authorized at the
+// broker, not that the Telegram user who started the login is that someone. Confirming in the
+// bot is what makes it usable.
+export const BrokerAccountStatus = {
+  Pending: 'pending',
+  Active: 'active',
+  Revoked: 'revoked',
+} as const;
 export type BrokerAccountStatus = (typeof BrokerAccountStatus)[keyof typeof BrokerAccountStatus];
 
 // tokens are AES-256-GCM ciphertexts (see ../crypto.ts); token_key_id names the key for rotation

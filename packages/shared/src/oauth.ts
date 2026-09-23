@@ -107,6 +107,8 @@ export const OAuthErrorCode = {
   BrokerUnavailable: 'broker_unavailable',
   BrokerContractViolation: 'broker_contract_violation',
   BrokerAccountTaken: 'broker_account_taken',
+  BrokerAccountNotFound: 'broker_account_not_found',
+  AccountNotPending: 'account_not_pending',
   UserBlocked: 'user_blocked',
   TooManyRequests: 'too_many_requests',
 } as const;
@@ -137,7 +139,7 @@ export const brokerAccountViewSchema = z.object({
   brokerUserId: z.string().min(1),
   email: z.string().nullable(),
   isPartnerClient: z.boolean(),
-  status: z.enum(['active', 'revoked']),
+  status: z.enum(['pending', 'active', 'revoked']),
   createdAt: z.iso.datetime({ offset: true }),
 });
 export type BrokerAccountView = z.infer<typeof brokerAccountViewSchema>;
@@ -145,7 +147,17 @@ export type BrokerAccountView = z.infer<typeof brokerAccountViewSchema>;
 export const oauthCallbackResponseSchema = z.object({ account: brokerAccountViewSchema });
 export type OAuthCallbackResponse = z.infer<typeof oauthCallbackResponseSchema>;
 
+// The bot confirms on behalf of the Telegram user who started the login, so both identities
+// travel: the account alone would let any caller activate any pending row it can name.
+export const confirmLoginRequestSchema = z.object({
+  telegramUserId: telegramUserIdSchema,
+  accountId: z.uuid(),
+});
+export type ConfirmLoginRequest = z.infer<typeof confirmLoginRequestSchema>;
+
 export const safeParseStartLoginRequest = (input: unknown) =>
   startLoginRequestSchema.safeParse(input);
 export const safeParseOAuthCallbackRequest = (input: unknown) =>
   oauthCallbackRequestSchema.safeParse(input);
+export const safeParseConfirmLoginRequest = (input: unknown) =>
+  confirmLoginRequestSchema.safeParse(input);
