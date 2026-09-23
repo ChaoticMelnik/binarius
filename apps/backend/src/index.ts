@@ -2,7 +2,7 @@ import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import { buildApp } from './app';
 import { parseEnv } from './env';
-import { closeAll } from './shutdown';
+import { closeAll } from '@binarius/shared';
 
 const env = parseEnv(process.env);
 

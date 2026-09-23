@@ -4,7 +4,11 @@ import {
   TradeIntentStatus,
   canTransition,
   parseTradeIntent,
+  parseTradeIntentView,
+  safeParseCreateTradeIntentRequest,
   safeParseTradeIntent,
+  safeParseTradeIntentView,
+  tradeIntentJobPayloadSchema,
   tradeIntentStatusSchema,
 } from './trading';
 
@@ -178,5 +182,107 @@ describe('parseTradeIntent', () => {
     ['createdAt', '1790028496624'],
   ])('rejects %s=%j', (field, value) => {
     expect(safeParseTradeIntent({ ...intent, [field]: value }).success).toBe(false);
+  });
+});
+
+describe('createTradeIntentRequestSchema', () => {
+  const request = {
+    telegramUserId: '42',
+    mode: 'demo',
+    assetId: 7,
+    amount: '10.00',
+    action: 'up',
+    durationSec: 60,
+    clientRequestId: 'req-1',
+  };
+
+  it('accepts a request without brokerAccountId', () => {
+    expect(safeParseCreateTradeIntentRequest(request).success).toBe(true);
+  });
+
+  it('accepts a uuid brokerAccountId', () => {
+    expect(
+      safeParseCreateTradeIntentRequest({
+        ...request,
+        brokerAccountId: '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01',
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ['123456789012.12345678', true],
+    ['1234567890123.1', false],
+    ['1.123456789', false],
+    ['9223372036854775807', false],
+  ])('bounds amount %s to numeric(20,8): %s', (amount, ok) => {
+    expect(safeParseCreateTradeIntentRequest({ ...request, amount }).success).toBe(ok);
+  });
+
+  it.each([
+    ['telegramUserId', '9223372036854775807', true],
+    ['telegramUserId', '9223372036854775808', false],
+    ['telegramUserId', '0', false],
+    ['telegramUserId', '-1', false],
+    ['telegramUserId', '', false],
+    ['assetId', 2_147_483_647, true],
+    ['assetId', 2_147_483_648, false],
+    ['durationSec', 2_147_483_647, true],
+    ['durationSec', 2_147_483_648, false],
+    ['brokerAccountId', null, false],
+    ['brokerAccountId', '', false],
+    ['brokerAccountId', 'not-a-uuid', false],
+    ['clientRequestId', 'x'.repeat(128), true],
+    ['clientRequestId', 'x'.repeat(129), false],
+  ])('validates %s=%j → %s', (field, value, ok) => {
+    expect(safeParseCreateTradeIntentRequest({ ...request, [field]: value }).success).toBe(ok);
+  });
+});
+
+describe('tradeIntentViewSchema', () => {
+  const view = {
+    ...intent,
+    status: 'queued',
+    version: 3,
+    tokensReserved: '1',
+    transport: null,
+    submittedAt: null,
+    lastError: null,
+    updatedAt: '2026-09-22T09:21:52.000Z',
+  };
+
+  it('accepts a queued view with null transport, submittedAt and lastError', () => {
+    expect(parseTradeIntentView(view)).toEqual(view);
+  });
+
+  it('accepts a rejected view with an allowlisted reason', () => {
+    expect(
+      safeParseTradeIntentView({
+        ...view,
+        status: 'rejected',
+        lastError: 'expired',
+        submittedAt: '2026-09-22T09:22:52.000Z',
+        transport: 'socket',
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ['lastError', 'ECONNREFUSED 127.0.0.1:6379'],
+    ['lastError', undefined],
+    ['transport', 'carrier-pigeon'],
+    ['tokensReserved', 1],
+    ['version', 0],
+  ])('rejects %s=%j', (field, value) => {
+    expect(safeParseTradeIntentView({ ...view, [field]: value }).success).toBe(false);
+  });
+});
+
+describe('tradeIntentJobPayloadSchema', () => {
+  it('accepts only a uuid intentId', () => {
+    expect(tradeIntentJobPayloadSchema.safeParse({ intentId: intent.id }).success).toBe(true);
+    expect(tradeIntentJobPayloadSchema.safeParse({ intentId: 'x' }).success).toBe(false);
+    expect(tradeIntentJobPayloadSchema.safeParse({ intentId: intent.id, token: 't' }).success).toBe(
+      true,
+    );
   });
 });
