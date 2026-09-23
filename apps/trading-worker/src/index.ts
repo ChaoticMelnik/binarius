@@ -5,7 +5,8 @@ import { LOG_REDACT_PATHS, closeAll } from '@binarius/shared';
 import { createDb } from '@binarius/db';
 import { parseEnv } from './env';
 import {
-  SHUTDOWN_BUDGET_MS,
+  SHUTDOWN_PHASE1_BUDGET_MS,
+  SHUTDOWN_PHASE2_BUDGET_MS,
   STALE_SUBMITTING_MS,
   SWEEP_BATCH_SIZE,
   SWEEP_INTERVAL_MS,
@@ -73,17 +74,16 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   sweeper.stop();
   const drained = await closeAll(
     [() => consumer.worker.close().then(() => consumer.drainDeadLetters())],
-    SHUTDOWN_BUDGET_MS,
+    SHUTDOWN_PHASE1_BUDGET_MS,
   );
   if (!drained) {
     logger.error('shutdown: active jobs did not finish within the budget, exiting without cleanup');
     process.exit(1);
   }
-  const cleaned = await closeAll([
-    () => consumer.dlq.close(),
-    () => redis.quit(),
-    () => pool.end(),
-  ]);
+  const cleaned = await closeAll(
+    [() => consumer.dlq.close(), () => redis.quit(), () => pool.end()],
+    SHUTDOWN_PHASE2_BUDGET_MS,
+  );
   if (!cleaned) logger.error('shutdown: a connection did not close cleanly');
   process.exit(cleaned ? 0 : 1);
 }

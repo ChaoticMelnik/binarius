@@ -60,6 +60,9 @@ services:
   backend:
     <<: *app
     command: pnpm --filter @binarius/backend dev
+    # above both shutdown phases (10 s + 4 s, apps/backend/src/timing.ts): a SIGTERM during a
+    # publish waits for the row in flight instead of killing it mid-transaction
+    stop_grace_period: 20s
     environment:
       <<: [*app-environment, *broker-environment]
       PORT: "3000"

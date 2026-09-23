@@ -52,6 +52,10 @@
     "./logging": {
       "types": "./src/logging.ts",
       "default": "./src/logging.ts"
+    },
+    "./testing": {
+      "types": "./src/testing.ts",
+      "default": "./src/testing.ts"
     }
   },
   "dependencies": {
