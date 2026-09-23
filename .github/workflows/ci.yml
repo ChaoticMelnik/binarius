@@ -120,8 +120,8 @@ jobs:
     env:
       # a crashing service would otherwise be restarted forever and --wait would burn the whole timeout
       COMPOSE_RESTART: 'no'
-      # compose refuses to start without these, so CI supplies its own throwaway values rather
-      # than the file carrying defaults a deployment could inherit by accident
+      # compose refuses to start without these, and neither compose.yaml nor .env.example
+      # carries a value, so CI supplies its own throwaway ones
       INTERNAL_API_TOKEN: ci-internal-token-value
       BROKER_CLIENT_SECRET: ci-broker-client-secret
       TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
@@ -131,6 +131,14 @@ jobs:
       - name: Dockerfile Node version matches .node-version
         run: test "$(sed -n 's/^ARG NODE_VERSION=//p' Dockerfile)" = "$(cat .node-version)"
       - run: docker compose config -q
+      # the guard itself: with the secrets unset, compose must refuse rather than substitute
+      - name: compose refuses to start without the required secrets
+        run: |
+          if env -u INTERNAL_API_TOKEN -u BROKER_CLIENT_SECRET -u TOKEN_ENCRYPTION_KEY \
+             -u TOKEN_ENCRYPTION_KEY_ID docker compose config -q 2>/dev/null; then
+            echo 'compose accepted a configuration with no secrets set' >&2
+            exit 1
+          fi
       - run: docker compose up -d --build --wait --wait-timeout 120
       - run: curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'
       - if: failure()

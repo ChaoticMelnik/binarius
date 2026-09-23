@@ -18,7 +18,7 @@ const MAX_HEALTH_TIMEOUT_MS = 2500;
 const MIN_INTERNAL_TOKEN_LENGTH = 16;
 // AES-256-GCM: the cipher refuses anything else, and a short key would fail at the first login
 const TOKEN_ENCRYPTION_KEY_BYTES = 32;
-// the key id compose pairs with the all-zero development key it substitutes by default
+// the key id the all-zero development key is only usable with
 const DEV_TOKEN_ENCRYPTION_KEY_ID = 'dev';
 // the broker is reached over the public internet, and an authorize page served over http would
 // hand the authorization code to anyone on the path
@@ -88,11 +88,10 @@ function parseRedirectUri(raw: string, name: string): string {
   return value;
 }
 
-// The two are validated together because the pair is what matters: the published development
-// key is usable, and the stack ships with it, so refusing it outright would stop `docker
-// compose up`. It is refused under any other key id instead — that combination is what a
-// half-finished key rotation looks like, and it would silently encrypt production tokens
-// under a key anyone can read.
+// The two are validated together because the pair is what matters. The all-zero key is
+// published in this repository, so it is accepted only alongside the key id that marks it as
+// development. Any other id with that key is refused: that combination is what a half-finished
+// rotation looks like, and it would silently encrypt real tokens under a key anyone can read.
 function parseTokenEncryption(
   source: EnvSource,
 ): Pick<Env, 'tokenEncryptionKey' | 'tokenEncryptionKeyId'> {
