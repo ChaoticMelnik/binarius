@@ -30,6 +30,10 @@ export interface ConsumerDeps {
 export interface IntentConsumer {
   worker: Worker;
   dlq: Queue<DeadLetter>;
+  // resolves once every dead-letter write started so far has settled; call it after
+  // worker.close() (which lets active jobs finish and fire their `failed` events) and before
+  // closing the queue underneath those writes
+  drainDeadLetters(): Promise<void>;
 }
 
 // Records a failed job for an operator: codes only, never the exception text (it could carry
@@ -74,8 +78,20 @@ export function startIntentConsumer({
     stalledInterval: STALLED_INTERVAL_MS,
     maxStalledCount: MAX_STALLED_COUNT,
   });
+  // BullMQ does not await listeners: the writes are tracked so shutdown can wait for them
+  const inFlight = new Set<Promise<void>>();
   // job is undefined when a job that stalled too often was removed by removeOnFail
-  worker.on('failed', (job, error) => void deadLetter(dlq, logger, job, error));
+  worker.on('failed', (job, error) => {
+    const write = deadLetter(dlq, logger, job, error).finally(() => inFlight.delete(write));
+    inFlight.add(write);
+  });
   worker.on('error', (error) => logger.error({ err: error }, 'intent worker error'));
-  return { worker, dlq };
+  return {
+    worker,
+    dlq,
+    // deadLetter never rejects, so this cannot either
+    drainDeadLetters: async () => {
+      await Promise.all([...inFlight]);
+    },
+  };
 }

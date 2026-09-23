@@ -1,14 +1,8 @@
 import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { TradeIntentFailureReason } from '@binarius/shared';
 import {
-  TradeIntentFailureReason,
-  type CreateTradeIntentRequest,
-  type DecimalString,
-} from '@binarius/shared';
-import {
-  brokerAccounts,
-  createTradeIntent,
   findTradeIntent,
   markIntentUnknown,
   outboxEvents,
@@ -17,7 +11,7 @@ import {
   tradeIntents,
   users,
 } from '@binarius/db';
-import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
+import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import type { SubmitResult, TradeExecutor } from './executor';
 import { notConfiguredExecutor } from './executor';
 import { InvalidJobError, processIntentJob, type ProcessorDeps } from './processor';
@@ -36,33 +30,9 @@ beforeAll(async () => {
 });
 afterAll(() => tmp.drop());
 
-let seq = 0;
 async function newIntent() {
-  const n = ++seq;
-  const telegramUserId = BigInt(500_000 + n);
-  const [user] = await tmp.db
-    .insert(users)
-    .values({ telegramUserId, tokenBalance: 5n })
-    .returning({ id: users.id });
-  await tmp.db.insert(brokerAccounts).values({
-    userId: user!.id,
-    brokerUserId: `broker-${n}`,
-    accessTokenEnc: Buffer.from('enc'),
-    refreshTokenEnc: Buffer.from('enc'),
-    tokenKeyId: 'k1',
-    accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-  });
-  const request: CreateTradeIntentRequest = {
-    telegramUserId: telegramUserId.toString(),
-    mode: 'demo',
-    assetId: 91,
-    amount: '10.00' as DecimalString,
-    action: 'up',
-    durationSec: 60,
-    clientRequestId: `req-${n}`,
-  };
-  const { intent } = await createTradeIntent(tmp.db, request);
-  return { intentId: intent.id, userId: user!.id, version: intent.version };
+  const seed = await seedQueuedIntent(tmp.db);
+  return { intentId: seed.intent.id, userId: seed.userId, version: seed.intent.version };
 }
 
 const executorOf = (
@@ -173,14 +143,27 @@ describe('processIntentJob', () => {
     expect(await topicsOf(intentId)).toEqual(['trading-intents', 'trading-reconciliation']);
   });
 
-  it('treats an executor throw as unknown', async () => {
+  it('treats an executor throw as unknown and logs only its name and code', async () => {
     const { intentId } = await newIntent();
-    const executor = executorOf(() => Promise.reject(new Error('socket exploded')));
-    expect(await processIntentJob(deps(executor), { intentId })).toBe('unknown');
+    const lines: string[] = [];
+    const capturing = pino({ level: 'error' }, { write: (line: string) => void lines.push(line) });
+    const thrown = Object.assign(new Error('401 from https://broker/api?token=SECRET-TOKEN'), {
+      code: 'EAUTH',
+    });
+    const executor = executorOf(() => Promise.reject(thrown));
+    expect(await processIntentJob({ ...deps(executor), logger: capturing }, { intentId })).toBe(
+      'unknown',
+    );
     expect(await statusOf(intentId)).toMatchObject({
       status: 'unknown',
       lastError: 'executor_error',
     });
+    const line = lines.find((l) => l.includes('trade executor threw'));
+    expect(line).toBeDefined();
+    expect(line).toContain('"code":"EAUTH"');
+    expect(line).toContain('"name":"Error"');
+    expect(line).not.toContain('SECRET-TOKEN');
+    expect(line).not.toContain('stack');
   });
 
   it('times out a cooperative executor through the signal', async () => {

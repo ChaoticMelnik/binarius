@@ -135,6 +135,9 @@ services:
   trading-worker:
     <<: *app
     command: pnpm --filter @binarius/trading-worker dev
+    # above the worker's shutdown budget (35 s), which itself covers the longest submit ack
+    # timeout (30 s): a deploy waits for a job in flight instead of killing it mid-write
+    stop_grace_period: 40s
     environment:
       <<: [*app-environment, *broker-environment]
       # optional tunables, forwarded only when set (code defaults otherwise)

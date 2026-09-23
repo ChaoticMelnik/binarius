@@ -1,16 +1,8 @@
 import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { CreateTradeIntentRequest, DecimalString } from '@binarius/shared';
-import {
-  brokerAccounts,
-  createTradeIntent,
-  findTradeIntent,
-  takeIntent,
-  tradeIntents,
-  users,
-} from '@binarius/db';
-import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
+import { findTradeIntent, takeIntent, tradeIntents } from '@binarius/db';
+import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import { startSweeper, sweepStaleSubmitting } from './sweeper';
 
 const baseUrl = process.env.DATABASE_URL;
@@ -26,32 +18,8 @@ beforeAll(async () => {
 });
 afterAll(() => tmp.drop());
 
-let seq = 0;
 async function submittingIntent(ageMs: number) {
-  const n = ++seq;
-  const telegramUserId = BigInt(400_000 + n);
-  const [user] = await tmp.db
-    .insert(users)
-    .values({ telegramUserId, tokenBalance: 5n })
-    .returning({ id: users.id });
-  await tmp.db.insert(brokerAccounts).values({
-    userId: user!.id,
-    brokerUserId: `broker-${n}`,
-    accessTokenEnc: Buffer.from('enc'),
-    refreshTokenEnc: Buffer.from('enc'),
-    tokenKeyId: 'k1',
-    accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-  });
-  const request: CreateTradeIntentRequest = {
-    telegramUserId: telegramUserId.toString(),
-    mode: 'demo',
-    assetId: 91,
-    amount: '10.00' as DecimalString,
-    action: 'up',
-    durationSec: 60,
-    clientRequestId: `req-${n}`,
-  };
-  const { intent } = await createTradeIntent(tmp.db, request);
+  const { intent } = await seedQueuedIntent(tmp.db);
   await takeIntent(tmp.db, { id: intent.id, expectedVersion: intent.version, maxAgeMs: 60_000 });
   await tmp.db
     .update(tradeIntents)

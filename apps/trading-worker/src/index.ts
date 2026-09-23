@@ -60,22 +60,32 @@ const sweeper = startSweeper({
 
 let shuttingDown = false;
 
-// Phase 1 drains the worker (active jobs finish, new ones are not taken); phase 2 closes the
-// connections and runs only if the drain finished — closing them under a job's outcome write
-// would abort it. A drain that overruns exits hard: the intent stays submitting and the
-// sweeper resolves it after the restart.
+// Phase 1 drains the worker (active jobs finish, new ones are not taken) and then the
+// dead-letter writes those jobs may have started — in that order, or a `failed` event fired
+// by the drain would register its write after the wait. Phase 2 closes the connections and
+// runs only if phase 1 finished cleanly: closing them under a job's outcome write would abort
+// it. A drain that overruns or fails exits hard; the intent stays submitting and the sweeper
+// resolves it after the restart.
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info({ signal }, 'shutting down');
   sweeper.stop();
-  const drained = await closeAll([() => consumer.worker.close()], SHUTDOWN_BUDGET_MS);
+  const drained = await closeAll(
+    [() => consumer.worker.close().then(() => consumer.drainDeadLetters())],
+    SHUTDOWN_BUDGET_MS,
+  );
   if (!drained) {
     logger.error('shutdown: active jobs did not finish within the budget, exiting without cleanup');
     process.exit(1);
   }
-  await closeAll([() => consumer.dlq.close(), () => redis.quit(), () => pool.end()]);
-  process.exit(0);
+  const cleaned = await closeAll([
+    () => consumer.dlq.close(),
+    () => redis.quit(),
+    () => pool.end(),
+  ]);
+  if (!cleaned) logger.error('shutdown: a connection did not close cleanly');
+  process.exit(cleaned ? 0 : 1);
 }
 
 process.once('SIGTERM', (signal) => void shutdown(signal));

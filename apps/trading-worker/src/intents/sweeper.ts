@@ -1,6 +1,5 @@
-import { and, eq, sql } from 'drizzle-orm';
-import { TradeIntentFailureReason, TradeIntentStatus } from '@binarius/shared';
-import { markIntentUnknown, tradeIntents, type Db } from '@binarius/db';
+import { TradeIntentFailureReason } from '@binarius/shared';
+import { listStaleSubmittingIntents, markIntentUnknown, type Db } from '@binarius/db';
 import type { Logger } from './processor';
 
 export interface SweepOptions {
@@ -15,17 +14,7 @@ export async function sweepStaleSubmitting(
   db: Db,
   { olderThanMs, limit }: SweepOptions,
 ): Promise<number> {
-  const stale = await db
-    .select({ id: tradeIntents.id })
-    .from(tradeIntents)
-    .where(
-      and(
-        eq(tradeIntents.status, TradeIntentStatus.Submitting),
-        sql`${tradeIntents.submittedAt} < now() - (${olderThanMs}::int * interval '1 millisecond')`,
-      ),
-    )
-    .orderBy(tradeIntents.submittedAt)
-    .limit(limit);
+  const stale = await listStaleSubmittingIntents(db, { olderThanMs, limit });
   let moved = 0;
   for (const { id } of stale) {
     const row = await db.transaction((tx) =>

@@ -144,7 +144,9 @@ function submitWithDeadline(deps: ProcessorDeps, intent: TradeIntentRow): Promis
   const attempt = Promise.resolve()
     .then(() => deps.executor.submit(intent, controller.signal))
     .catch((error: unknown): SubmitResult => {
-      deps.logger.error({ err: error, intentId: intent.id }, 'trade executor threw');
+      // name and code only: the message of a client-library error may carry a token or a
+      // raw broker response, and key-based redaction cannot scrub a string
+      deps.logger.error({ err: errorIdentity(error), intentId: intent.id }, 'trade executor threw');
       return { outcome: 'unknown', reason: TradeIntentFailureReason.ExecutorError };
     });
   return Promise.race([attempt, deadline]).finally(() => clearTimeout(timer));
@@ -184,4 +186,10 @@ async function persistOutcome(
     'intent outcome recorded',
   );
   return result.outcome;
+}
+
+function errorIdentity(error: unknown): { name: string; code?: string } {
+  const name = error instanceof Error ? error.name : typeof error;
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? { name, code } : { name };
 }

@@ -11,7 +11,10 @@ export type SubmitResult =
 //   `unknown` whenever it may have (sent, then no answer);
 // - stop waiting when `signal` aborts (the processor enforces its own deadline regardless);
 // - `detail` is for logs only: no tokens, no raw broker payloads.
-// A throw is treated as `unknown`: the processor cannot know whether the order went out.
+// A throw is treated as `unknown`: the processor cannot know whether the order went out. Only
+// the error's name and code reach the log, never its message or stack — a client library's
+// error can embed headers or a response body — so a throw carries no diagnostic detail; put
+// that in `detail` of an explicit `unknown` result instead.
 export interface TradeExecutor {
   submit(intent: TradeIntentRow, signal: AbortSignal): Promise<SubmitResult>;
 }
