@@ -40,3 +40,19 @@ export function errorIdentity(error: unknown): { name: string; code?: string } {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === 'string' ? { name, code } : { name };
 }
+
+export interface ErrorLogFields {
+  err: { name: string; code?: string };
+  cause?: { name: string; code?: string };
+}
+
+// What to spread into a log call instead of the error itself. The cause is carried because a
+// wrapper often has nothing useful of its own: drizzle's query error sets neither `name` nor
+// `code`, and the SQLSTATE that makes a database failure actionable sits on the pg error
+// underneath. One level only, and by identity — a pg error's `detail` holds the offending
+// value, and `message` holds whatever the driver put there.
+export function errorLogFields(error: unknown): ErrorLogFields {
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  const fields: ErrorLogFields = { err: errorIdentity(error) };
+  return cause === undefined || cause === null ? fields : { ...fields, cause: errorIdentity(cause) };
+}

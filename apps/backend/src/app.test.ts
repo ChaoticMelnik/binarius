@@ -85,12 +85,26 @@ describe('GET /health', () => {
 // what this app keeps out of its logs is only provable by reading them
 function captureLogs() {
   const lines: string[] = [];
-  return { lines, text: () => lines.join('\n'), write: (line: string) => void lines.push(line) };
+  return {
+    lines,
+    text: () => lines.join('\n'),
+    // the line a case is about, parsed: asserting the exact shape of `err` is what pins
+    // errorLogFields, since a raw error would serialize with message, stack and its own fields
+    entry(msg: string): Record<string, unknown> {
+      const found = lines
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((parsed) => parsed.msg === msg);
+      if (found === undefined) throw new Error(`no log line said ${msg}`);
+      return found;
+    },
+    write: (line: string) => void lines.push(line),
+  };
 }
 
 describe('what reaches the log', () => {
   async function withLogs(
     run: (app: ReturnType<typeof buildApp>, logs: ReturnType<typeof captureLogs>) => Promise<void>,
+    overrides: Partial<AppDeps> = {},
   ) {
     const logs = captureLogs();
     const app = buildApp({
@@ -101,6 +115,7 @@ describe('what reaches the log', () => {
       trading: unusedTrading,
       auth: unusedAuth,
       logDestination: logs,
+      ...overrides,
     });
     app.get('/drizzle', async () => {
       throw new DrizzleQueryError(
@@ -122,12 +137,16 @@ describe('what reaches the log', () => {
   it('logs a database failure by its SQLSTATE, not by its parameters or its message', async () => {
     await withLogs(async (app, logs) => {
       expect((await app.inject({ method: 'GET', url: '/drizzle' })).statusCode).toBe(500);
+      const entry = logs.entry('unhandled request error');
+      // exact shapes, not just absences: a raw error would bring message, stack and its own
+      // fields along, and this is what says it did not
+      expect(entry.err).toEqual({ name: 'Error' });
+      // the diagnostic that makes a 500 actionable, and the only thing kept from the cause
+      expect(entry.cause).toEqual({ name: 'Error', code: '23505' });
+      expect(entry.query).toBe('select secret_column from users where id = $1');
+      // nothing that carries a value: drizzle puts the parameters on a field AND inside the
+      // message, and pg puts the offending row in `detail`
       const text = logs.text();
-      expect(text).toContain('unhandled request error');
-      // the diagnostic that makes a 500 actionable
-      expect(text).toContain('23505');
-      // and nothing that carries a value: drizzle puts the parameters on a field AND inside
-      // the message, and pg puts the offending row in `detail`
       expect(text).not.toContain('BOUND-VALUE');
       expect(text).not.toContain('params:');
       expect(text).not.toContain('duplicate key value');
@@ -152,26 +171,23 @@ describe('what reaches the log', () => {
   });
 
   it('reports a failed dependency check by name and code only', async () => {
-    const logs = captureLogs();
-    const app = buildApp({
-      checkPostgres: () =>
-        Promise.reject(Object.assign(new Error('connection to LEAKY-DSN failed'), { code: 'ECONNREFUSED' })),
-      checkRedis: ok,
-      logLevel: 'info',
-      checkTimeoutMs: 20,
-      trading: unusedTrading,
-      auth: unusedAuth,
-      logDestination: logs,
-    });
-    try {
-      expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(503);
-      const text = logs.text();
-      expect(text).toContain('postgres check failed');
-      expect(text).toContain('ECONNREFUSED');
-      expect(text).not.toContain('LEAKY-DSN');
-    } finally {
-      await app.close();
-    }
+    await withLogs(
+      async (app, logs) => {
+        expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(503);
+        // the whole shape, so a raw error's message and stack cannot slip back in
+        expect(logs.entry('postgres check failed').err).toEqual({
+          name: 'Error',
+          code: 'ECONNREFUSED',
+        });
+        expect(logs.text()).not.toContain('LEAKY-DSN');
+      },
+      {
+        checkPostgres: () =>
+          Promise.reject(
+            Object.assign(new Error('connection to LEAKY-DSN failed'), { code: 'ECONNREFUSED' }),
+          ),
+      },
+    );
   });
 });
 

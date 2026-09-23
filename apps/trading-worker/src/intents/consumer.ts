@@ -1,6 +1,7 @@
 import { Queue, Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 import {
+  errorLogFields,
   TRADING_INTENTS_DEAD_LETTER_QUEUE,
   TradeIntentFailureReason,
   tradeIntentJobPayloadSchema,
@@ -36,8 +37,9 @@ export interface IntentConsumer {
   drainDeadLetters(): Promise<void>;
 }
 
-// Records a failed job for an operator: codes only, never the exception text (it could carry
-// connection details). Event listeners are not awaited by BullMQ, so this must never reject.
+// Records a failed job for an operator. Both the DLQ row and the log line carry codes only,
+// never the exception text — it could hold connection details. Event listeners are not awaited
+// by BullMQ, so this must never reject.
 export async function deadLetter(
   sink: DeadLetterSink,
   logger: Logger,
@@ -53,11 +55,17 @@ export async function deadLetter(
         : TradeIntentFailureReason.ProcessingFailed,
     failedAt: new Date().toISOString(),
   };
-  logger.error({ err: error, intentId: entry.intentId, reason: entry.reason }, 'intent job failed');
+  logger.error(
+    { ...errorLogFields(error), intentId: entry.intentId, reason: entry.reason },
+    'intent job failed',
+  );
   try {
     await sink.add('dead', entry);
   } catch (sinkError) {
-    logger.error({ err: sinkError, intentId: entry.intentId }, 'dlq_publish_failed');
+    logger.error(
+      { ...errorLogFields(sinkError), intentId: entry.intentId },
+      'dlq_publish_failed',
+    );
   }
 }
 
@@ -85,7 +93,11 @@ export function startIntentConsumer({
     const write = deadLetter(dlq, logger, job, error).finally(() => inFlight.delete(write));
     inFlight.add(write);
   });
-  worker.on('error', (error) => logger.error({ err: error }, 'intent worker error'));
+  // a BullMQ worker error is often message-only, so the log says what failed rather than
+  // relying on the error to say it
+  worker.on('error', (error) =>
+    logger.error({ ...errorLogFields(error), failure: 'worker_error' }, 'intent worker error'),
+  );
   return {
     worker,
     dlq,

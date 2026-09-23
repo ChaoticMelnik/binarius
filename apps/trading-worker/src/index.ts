@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import pino from 'pino';
-import { LOG_REDACT_PATHS, closeAll } from '@binarius/shared';
+import { errorLogFields, LOG_REDACT_PATHS, closeAll } from '@binarius/shared';
 import { createDb } from '@binarius/db';
 import { parseEnv } from './env';
 import {
@@ -25,8 +25,8 @@ const db = createDb(pool);
 // BullMQ's blocking connection must not cap retries per command
 const redis = new Redis(env.redisUrl, { maxRetriesPerRequest: null });
 
-pool.on('error', (error) => logger.error({ err: error }, 'postgres pool error'));
-redis.on('error', (error) => logger.warn({ err: error }, 'redis connection error'));
+pool.on('error', (error) => logger.error(errorLogFields(error), 'postgres pool error'));
+redis.on('error', (error) => logger.warn(errorLogFields(error), 'redis connection error'));
 
 // ARCH-01 replaces this with the broker socket client
 const executor = notConfiguredExecutor;

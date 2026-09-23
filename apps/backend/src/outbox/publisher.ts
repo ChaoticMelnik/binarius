@@ -1,5 +1,5 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { TradeIntentFailureReason, TradeIntentStatus } from '@binarius/shared';
+import { errorLogFields, TradeIntentFailureReason, TradeIntentStatus } from '@binarius/shared';
 import { OutboxStatus, OutboxTopic, rejectIntent, type Db } from '@binarius/db';
 import type { JobPublisher } from './bullmq';
 import {
@@ -53,7 +53,7 @@ export interface PublisherDeps {
   config?: Partial<PublisherConfig>;
 }
 
-type Outcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
+type Outcome<T> = { ok: true; value: T } | { ok: false; error: unknown; timedOut?: boolean };
 
 // Publishes pending outbox rows as BullMQ jobs. Each row is handled in its own short transaction
 // (FOR UPDATE SKIP LOCKED → add → published/failed → commit), so several backend replicas can
@@ -150,7 +150,7 @@ export class OutboxPublisher {
           await this.sweep();
         }
       } catch (error) {
-        this.deps.logger.error({ err: error }, 'outbox publisher pass failed');
+        this.deps.logger.error(errorLogFields(error), 'outbox publisher pass failed');
       }
       if (this.running) await this.pause();
     }
@@ -187,7 +187,15 @@ export class OutboxPublisher {
           ? 'info'
           : 'warn';
       this.deps.logger[level](
-        { err: outcome.error, intentId: row.intentId, topic: row.topic, attempts, exhausted },
+        {
+          ...errorLogFields(outcome.error),
+          // the timeout this class raises itself carries neither a code nor a telling name
+          failure: outcome.timedOut === true ? 'publish_timeout' : 'publish_error',
+          intentId: row.intentId,
+          topic: row.topic,
+          attempts,
+          exhausted,
+        },
         'outbox publish failed',
       );
       return true;
@@ -221,7 +229,7 @@ export class OutboxPublisher {
   private withDeadline<T>(operation: Promise<T>): Promise<Outcome<T>> {
     return new Promise((resolve) => {
       const timer = setTimeout(
-        () => resolve({ ok: false, error: new Error('publish timed out') }),
+        () => resolve({ ok: false, error: new Error('publish timed out'), timedOut: true }),
         this.config.publishTimeoutMs,
       );
       operation.then(

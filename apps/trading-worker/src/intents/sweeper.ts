@@ -1,4 +1,4 @@
-import { TradeIntentFailureReason } from '@binarius/shared';
+import { errorLogFields, TradeIntentFailureReason } from '@binarius/shared';
 import { listStaleSubmittingIntents, markIntentUnknown, type Db } from '@binarius/db';
 import type { Logger } from './processor';
 
@@ -42,7 +42,9 @@ export function startSweeper({ db, logger, intervalMs, olderThanMs, limit }: Swe
       .then((moved) => {
         if (moved > 0) logger.warn({ moved }, 'stale submitting intents marked unknown');
       })
-      .catch((error: unknown) => logger.error({ err: error }, 'stale submitting sweep failed'))
+      .catch((error: unknown) =>
+        logger.error(errorLogFields(error), 'stale submitting sweep failed'),
+      )
       .finally(() => {
         running = false;
       });
