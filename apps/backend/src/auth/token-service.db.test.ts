@@ -171,8 +171,9 @@ const dropTestGuard = (name: string) =>
     sql.raw(`drop trigger if exists ${name} on broker_accounts; drop function if exists ${name}();`),
   );
 
-const allowCommit = () => dropTestGuard('binarius_test_block_commit');
 
+
+// two call sites; the others are dropped by name where they are installed
 const allowRotation = () => dropTestGuard('binarius_test_block_rotation');
 
 // blocks every update of the marked row, so the second transaction's revocation fails too
@@ -191,7 +192,27 @@ const failAnyUpdate = (email: string) =>
     `),
   );
 
-const allowAnyUpdate = () => dropTestGuard('binarius_test_block_any');
+
+
+// a broker that never answers inside the client's patience: the shape both unknown-outcome
+// cases need
+async function slowBroker() {
+  const slow = await startOAuthStub({
+    clientId: CLIENT_ID,
+    clientSecret: CLIENT_SECRET,
+    redirectUri: REDIRECT_URI,
+    delayMs: 2_000,
+  });
+  return {
+    impatient: createBrokerOAuthClient({
+      baseUrl: slow.url,
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      timeoutMs: 50,
+    }),
+    close: () => slow.close(),
+  };
+}
 
 const expireAccessToken = (id: string) =>
   tmp.db
@@ -284,20 +305,9 @@ describe('ensureFreshAccessToken', () => {
   it('treats an unknown outcome as a consumed token and revokes', async () => {
     const account = await linkedAccount();
     await expireAccessToken(account.id);
-    const slow = await startOAuthStub({
-      clientId: CLIENT_ID,
-      clientSecret: CLIENT_SECRET,
-      redirectUri: REDIRECT_URI,
-      delayMs: 2_000,
-    });
+    const slow = await slowBroker();
     try {
-      const impatient = createBrokerOAuthClient({
-        baseUrl: slow.url,
-        clientId: CLIENT_ID,
-        clientSecret: CLIENT_SECRET,
-        timeoutMs: 50,
-      });
-      expect(await ensureFreshAccessToken(deps({ broker: impatient }), account.id)).toEqual({
+      expect(await ensureFreshAccessToken(deps({ broker: slow.impatient }), account.id)).toEqual({
         ok: false,
         reason: 'account_revoked',
         revokedReason: 'refresh_outcome_unknown',
@@ -498,7 +508,7 @@ describe('ensureFreshAccessToken', () => {
       // the rotation was rolled back with the transaction, so the stored pair is the old one
       expect(row.refreshTokenEnc).toEqual(account.refreshTokenEnc);
     } finally {
-      await allowCommit();
+      await dropTestGuard('binarius_test_block_commit');
     }
   });
 
@@ -512,7 +522,7 @@ describe('ensureFreshAccessToken', () => {
       await expect(ensureFreshAccessToken(deps(), account.id)).rejects.toThrow();
       expect((await rowOf(account.id)).status).toBe('active');
     } finally {
-      await allowAnyUpdate();
+      await dropTestGuard('binarius_test_block_any');
       await allowRotation();
     }
   });
@@ -522,23 +532,15 @@ describe('ensureFreshAccessToken', () => {
   it('recovers when an unknown outcome is revoked and that commit fails', async () => {
     const account = await linkedAccount(UNKNOWN_BLOCKED_EMAIL);
     await expireAccessToken(account.id);
-    const slow = await startOAuthStub({
-      clientId: CLIENT_ID,
-      clientSecret: CLIENT_SECRET,
-      redirectUri: REDIRECT_URI,
-      delayMs: 2_000,
-    });
+    const slow = await slowBroker();
     const captured = capturingLogger();
     try {
       await failRevokeCommit();
-      const impatient = createBrokerOAuthClient({
-        baseUrl: slow.url,
-        clientId: CLIENT_ID,
-        clientSecret: CLIENT_SECRET,
-        timeoutMs: 50,
-      });
       await expect(
-        ensureFreshAccessToken(deps({ broker: impatient, logger: captured.logger }), account.id),
+        ensureFreshAccessToken(
+          deps({ broker: slow.impatient, logger: captured.logger }),
+          account.id,
+        ),
       ).rejects.toThrow();
 
       // both transactions die on the same trigger, so the row is unchanged either way: what
