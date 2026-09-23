@@ -57,26 +57,34 @@ queueRedis.on('error', (error) => app.log.warn({ err: error }, 'queue redis conn
 
 let shuttingDown = false;
 
+// each phase gets this long; below compose's default stop_grace_period (10 s) for the pair
+const SHUTDOWN_BUDGET_MS = 4_000;
+
 // Phase 1 stops intake (HTTP and the publisher loop, which finishes its current row); phase 2
 // closes connections and runs only if phase 1 finished — closing the pool under the publisher's
-// open transaction would abort it, so a stuck phase 1 exits hard and lets the outbox recover.
+// open transaction would abort it, so a stuck or failed phase 1 exits hard and lets the outbox
+// recover. A phase-2 failure is reported through the exit code too.
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   app.log.info({ signal }, 'shutting down');
-  const drained = await closeAll([() => app.close(), () => publisher.stop()], 5000);
+  const drained = await closeAll([() => app.close(), () => publisher.stop()], SHUTDOWN_BUDGET_MS);
   if (!drained) {
     app.log.error('shutdown: intake did not stop within the budget, exiting without cleanup');
     process.exit(1);
   }
-  await closeAll([
-    () => jobs.close(),
-    () => pool.end(),
-    // quit() rejects while disconnected because the offline queue is disabled
-    () => redis.quit().catch(() => redis.disconnect()),
-    () => queueRedis.quit().catch(() => queueRedis.disconnect()),
-  ]);
-  process.exit(0);
+  const cleaned = await closeAll(
+    [
+      () => jobs.close(),
+      () => pool.end(),
+      // quit() rejects while disconnected because the offline queue is disabled
+      () => redis.quit().catch(() => redis.disconnect()),
+      () => queueRedis.quit().catch(() => queueRedis.disconnect()),
+    ],
+    SHUTDOWN_BUDGET_MS,
+  );
+  if (!cleaned) app.log.error('shutdown: a connection did not close cleanly');
+  process.exit(cleaned ? 0 : 1);
 }
 
 process.once('SIGTERM', (signal) => void shutdown(signal));

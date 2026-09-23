@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
+import { createTempDatabase, seedUserWithAccount, type TempDatabase } from '@binarius/db/testing';
 import { brokerAccounts, findTradeIntent, users } from '@binarius/db';
 import { buildApp } from '../app';
 
@@ -46,25 +46,7 @@ afterAll(async () => {
 });
 
 let seq = 0;
-async function seed(balance = 5n) {
-  const telegramUserId = BigInt(800_000 + ++seq);
-  const [user] = await tmp.db
-    .insert(users)
-    .values({ telegramUserId, tokenBalance: balance })
-    .returning({ id: users.id });
-  const [account] = await tmp.db
-    .insert(brokerAccounts)
-    .values({
-      userId: user!.id,
-      brokerUserId: `broker-${seq}`,
-      accessTokenEnc: Buffer.from('enc'),
-      refreshTokenEnc: Buffer.from('enc'),
-      tokenKeyId: 'k1',
-      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-    })
-    .returning({ id: brokerAccounts.id });
-  return { userId: user!.id, telegramUserId: telegramUserId.toString(), accountId: account!.id };
-}
+const seed = (balance = 5n) => seedUserWithAccount(tmp.db, { balance });
 
 const body = (telegramUserId: string, patch: Record<string, unknown> = {}) => ({
   telegramUserId,
@@ -127,7 +109,7 @@ describe('POST /trading/intents', () => {
     const view = created.json().intent;
     expect(Object.keys(view).sort()).toEqual(VIEW_KEYS);
     expect(view).toMatchObject({
-      brokerAccountId: s.accountId,
+      brokerAccountId: s.brokerAccountId,
       telegramUserId: s.telegramUserId,
       status: 'queued',
       version: 3,
@@ -205,7 +187,7 @@ describe('POST /trading/intents', () => {
     expect(insufficient.json()).toEqual({ error: 'insufficient_tokens' });
 
     const other = await seed();
-    const foreign = await post(body(s.telegramUserId, { brokerAccountId: other.accountId }));
+    const foreign = await post(body(s.telegramUserId, { brokerAccountId: other.brokerAccountId }));
     expect(foreign.statusCode).toBe(404);
     expect(foreign.json()).toEqual({ error: 'broker_account_not_found' });
 
@@ -222,7 +204,7 @@ describe('POST /trading/intents', () => {
     await tmp.db
       .update(brokerAccounts)
       .set({ tradingHalted: true })
-      .where(eq(brokerAccounts.id, other.accountId));
+      .where(eq(brokerAccounts.id, other.brokerAccountId));
     const halted = await post(body(other.telegramUserId));
     expect(halted.statusCode).toBe(409);
     expect(halted.json()).toEqual({ error: 'account_halted' });
@@ -230,8 +212,10 @@ describe('POST /trading/intents', () => {
     await tmp.db
       .update(brokerAccounts)
       .set({ tradingHalted: false, status: 'revoked' })
-      .where(eq(brokerAccounts.id, other.accountId));
-    const revoked = await post(body(other.telegramUserId, { brokerAccountId: other.accountId }));
+      .where(eq(brokerAccounts.id, other.brokerAccountId));
+    const revoked = await post(
+      body(other.telegramUserId, { brokerAccountId: other.brokerAccountId }),
+    );
     expect(revoked.statusCode).toBe(409);
     expect(revoked.json()).toEqual({ error: 'account_revoked' });
 

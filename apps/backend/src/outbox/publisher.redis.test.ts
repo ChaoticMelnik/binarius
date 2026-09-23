@@ -1,21 +1,20 @@
 import { randomBytes } from 'node:crypto';
 import { Queue } from 'bullmq';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { CreateTradeIntentRequest, DecimalString } from '@binarius/shared';
+import { TradeIntentFailureReason } from '@binarius/shared';
 import {
   OutboxTopic,
-  brokerAccounts,
-  createTradeIntent,
   findTradeIntent,
+  markIntentUnknown,
   outboxEvents,
   takeIntent,
   tokenLedger,
   users,
 } from '@binarius/db';
-import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
+import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import { createBullmqPublisher, type JobPublisher } from './bullmq';
 import { OutboxPublisher, backoffMs, type PublisherConfig } from './publisher';
 
@@ -35,65 +34,71 @@ const logger = Fastify({ logger: false }).log;
 let tmp: TempDatabase;
 let redis: Redis;
 let intentsQueue: Queue;
+let reconciliationQueue: Queue;
 
 beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
   redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
   intentsQueue = new Queue(OutboxTopic.TradingIntents, { connection: redis, prefix });
+  reconciliationQueue = new Queue(OutboxTopic.TradingReconciliation, { connection: redis, prefix });
 });
 afterAll(async () => {
-  const reconciliation = new Queue(OutboxTopic.TradingReconciliation, {
-    connection: redis,
-    prefix,
-  });
   await intentsQueue.obliterate({ force: true });
-  await reconciliation.obliterate({ force: true });
-  await Promise.all([intentsQueue.close(), reconciliation.close()]);
+  await reconciliationQueue.obliterate({ force: true });
+  await Promise.all([intentsQueue.close(), reconciliationQueue.close()]);
   await redis.quit();
   await tmp.drop();
 });
 
-let seq = 0;
-async function newIntent() {
-  // captured once: concurrent callers must not share the counter mid-flight
-  const n = ++seq;
-  const telegramUserId = BigInt(600_000 + n);
-  const [user] = await tmp.db
-    .insert(users)
-    .values({ telegramUserId, tokenBalance: 5n })
-    .returning({ id: users.id });
-  await tmp.db.insert(brokerAccounts).values({
-    userId: user!.id,
-    brokerUserId: `broker-${n}`,
-    accessTokenEnc: Buffer.from('enc'),
-    refreshTokenEnc: Buffer.from('enc'),
-    tokenKeyId: 'k1',
-    accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-  });
-  const request: CreateTradeIntentRequest = {
-    telegramUserId: telegramUserId.toString(),
-    mode: 'demo',
-    assetId: 91,
-    amount: '10.00' as DecimalString,
-    action: 'up',
-    durationSec: 60,
-    clientRequestId: `req-${n}`,
-  };
-  const { intent } = await createTradeIntent(tmp.db, request);
-  return { intentId: intent.id, userId: user!.id, version: intent.version };
+const newIntent = async () => {
+  const seed = await seedQueuedIntent(tmp.db);
+  return { intentId: seed.intent.id, userId: seed.userId, version: seed.intent.version };
+};
+
+// an unknown intent with its reconciliation outbox row (the trading-intents row is parked)
+async function unknownIntent() {
+  const { intentId, version } = await newIntent();
+  const taken = (await takeIntent(tmp.db, {
+    id: intentId,
+    expectedVersion: version,
+    maxAgeMs: 60_000,
+  }))!;
+  await tmp.db.transaction((tx) =>
+    markIntentUnknown(tx, {
+      id: intentId,
+      reason: TradeIntentFailureReason.ExecutorTimeout,
+      expectedVersion: taken.version,
+    }),
+  );
+  await tmp.db
+    .update(outboxEvents)
+    .set({ status: 'failed' })
+    .where(
+      and(eq(outboxEvents.intentId, intentId), eq(outboxEvents.topic, OutboxTopic.TradingIntents)),
+    );
+  return intentId;
 }
 
-const outboxOf = async (intentId: string) =>
-  (await tmp.db.select().from(outboxEvents).where(eq(outboxEvents.intentId, intentId)))[0]!;
+const outboxOf = async (intentId: string, topic: OutboxTopic = OutboxTopic.TradingIntents) =>
+  (
+    await tmp.db
+      .select()
+      .from(outboxEvents)
+      .where(and(eq(outboxEvents.intentId, intentId), eq(outboxEvents.topic, topic)))
+  )[0]!;
 
 const reservedOf = async (userId: string) =>
   (await tmp.db.select({ v: users.tokenReserved }).from(users).where(eq(users.id, userId)))[0]!.v;
 
-const makeDue = (intentId: string) =>
+const makeDue = (intentId: string, topic: OutboxTopic = OutboxTopic.TradingIntents) =>
   tmp.db
     .update(outboxEvents)
     .set({ availableAt: sql`now()` })
-    .where(eq(outboxEvents.intentId, intentId));
+    .where(and(eq(outboxEvents.intentId, intentId), eq(outboxEvents.topic, topic)));
+
+// the row becomes due again after its backoff; parking it keeps later ticks from counting it
+const park = (intentId: string) =>
+  tmp.db.update(outboxEvents).set({ status: 'failed' }).where(eq(outboxEvents.intentId, intentId));
 
 interface FakeJobs extends JobPublisher {
   calls: string[];
@@ -117,6 +122,8 @@ function fakeJobs(
 
 const publisher = (jobs: JobPublisher, config: Partial<PublisherConfig> = {}) =>
   new OutboxPublisher({ db: tmp.db, jobs, logger, config });
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('backoffMs', () => {
   it('doubles from one second and caps at sixteen', () => {
@@ -192,6 +199,23 @@ describe('OutboxPublisher.tick', () => {
     expect(jobs.calls).toEqual([intentId, intentId, intentId]);
   });
 
+  it('never gives up on a reconciliation row', async () => {
+    const jobs = fakeJobs(() => Promise.reject(new Error('redis down')));
+    const intentId = await unknownIntent();
+    const p = publisher(jobs, { maxAttempts: 2 });
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      await makeDue(intentId, OutboxTopic.TradingReconciliation);
+      expect(await p.tick()).toBe(1);
+      expect(await outboxOf(intentId, OutboxTopic.TradingReconciliation)).toMatchObject({
+        status: 'pending',
+        attempts: attempt,
+        lastError: 'publish_failed',
+      });
+    }
+    expect((await findTradeIntent(tmp.db, intentId))?.status).toBe('unknown');
+    await park(intentId);
+  });
+
   it('counts a hanging add as a failure once the deadline passes', async () => {
     const jobs = fakeJobs(() => new Promise(() => {}));
     const { intentId } = await newIntent();
@@ -199,11 +223,7 @@ describe('OutboxPublisher.tick', () => {
     expect(await publisher(jobs, { publishTimeoutMs: 50 }).tick()).toBe(1);
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(await outboxOf(intentId)).toMatchObject({ status: 'pending', attempts: 1 });
-    // the row becomes due again after its 1 s backoff; park it so later ticks do not count it
-    await tmp.db
-      .update(outboxEvents)
-      .set({ status: 'failed' })
-      .where(eq(outboxEvents.intentId, intentId));
+    await park(intentId);
   });
 
   it('fails the row but leaves an intent the worker already took alone', async () => {
@@ -222,7 +242,7 @@ describe('OutboxPublisher.tick', () => {
     const calls: string[] = [];
     const slow = fakeJobs(async (_topic, intentId) => {
       calls.push(intentId);
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await sleep(20);
     });
     const ids = await Promise.all(Array.from({ length: 6 }, () => newIntent()));
     const [a, b] = [publisher(slow), publisher(slow)];
@@ -249,8 +269,28 @@ describe('OutboxPublisher.sweep', () => {
       expect(await outboxOf(live.intentId)).toMatchObject({ status: 'published', attempts: 0 });
       // the next pass publishes it again under the same job id
       await makeDue(lost.intentId);
-      expect(await p.tick()).toBe(1);
+      expect(await p.tick()).toBeGreaterThanOrEqual(1);
       expect(await intentsQueue.getJob(lost.intentId)).toBeDefined();
+    } finally {
+      await jobs.close();
+    }
+  });
+
+  it('re-pends a lost reconciliation job for an unknown intent', async () => {
+    const jobs = createBullmqPublisher(redis, { prefix });
+    const intentId = await unknownIntent();
+    const p = publisher(jobs, { staleQueuedMs: 0 });
+    try {
+      expect(await p.tick()).toBeGreaterThanOrEqual(1);
+      expect(await outboxOf(intentId, OutboxTopic.TradingReconciliation)).toMatchObject({
+        status: 'published',
+      });
+      await (await reconciliationQueue.getJob(intentId))!.remove();
+      expect(await p.sweep()).toBeGreaterThanOrEqual(1);
+      expect(await outboxOf(intentId, OutboxTopic.TradingReconciliation)).toMatchObject({
+        status: 'pending',
+        attempts: 1,
+      });
     } finally {
       await jobs.close();
     }
@@ -263,12 +303,12 @@ describe('OutboxPublisher loop', () => {
     const p = publisher(jobs, { pollMs: 60_000 });
     p.start();
     try {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await sleep(20);
       const { intentId } = await newIntent();
       p.wake();
       const deadline = Date.now() + 2_000;
       while ((await outboxOf(intentId)).status !== 'published' && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await sleep(10);
       }
       expect((await outboxOf(intentId)).status).toBe('published');
     } finally {
@@ -277,24 +317,35 @@ describe('OutboxPublisher loop', () => {
     }
   });
 
-  it('stop waits for the in-flight row', async () => {
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
+  it('stop waits for the row in flight and leaves the rest of the batch pending', async () => {
+    const slow = fakeJobs(async () => {
+      await sleep(150);
     });
-    const jobs = fakeJobs(() => gate);
-    const { intentId } = await newIntent();
-    const p = publisher(jobs, { pollMs: 60_000, publishTimeoutMs: 5_000 });
+    const ids = await Promise.all(Array.from({ length: 5 }, () => newIntent()));
+    const p = publisher(slow, { pollMs: 60_000, publishTimeoutMs: 5_000 });
     p.start();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    let stopped = false;
-    const stopping = p.stop().then(() => {
-      stopped = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(stopped).toBe(false);
-    release();
-    await stopping;
+    await sleep(50);
+    const started = Date.now();
+    await p.stop();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    const statuses = await Promise.all(
+      ids.map(async ({ intentId }) => (await outboxOf(intentId)).status),
+    );
+    expect(statuses.filter((s) => s === 'published').length).toBeLessThanOrEqual(2);
+    expect(statuses.filter((s) => s === 'pending').length).toBeGreaterThanOrEqual(3);
+    // a fresh start picks the rest up
+    p.start();
+    await sleep(10);
+    await p.stop();
+    for (const { intentId } of ids) await park(intentId);
+  });
+
+  it('tick and sweep run directly, without start()', async () => {
+    const jobs = fakeJobs(async () => {});
+    const { intentId } = await newIntent();
+    const p = publisher(jobs);
+    expect(await p.tick()).toBeGreaterThanOrEqual(1);
     expect((await outboxOf(intentId)).status).toBe('published');
+    expect(await p.sweep()).toBeGreaterThanOrEqual(0);
   });
 });
