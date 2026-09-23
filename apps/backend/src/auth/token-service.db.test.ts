@@ -10,7 +10,7 @@ import {
   TokenField,
   type BrokerAccountRow,
 } from '@binarius/db';
-import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
+import { brokerAccountRow, createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import { createBrokerOAuthClient, type BrokerOAuthClient } from '../broker/oauth-client';
 import { startOAuthStub, type OAuthStub } from '../broker/testing/oauth-stub';
 import { ensureFreshAccessToken, type TokenServiceDeps } from './token-service';
@@ -59,9 +59,9 @@ const deps = (override: Partial<TokenServiceDeps> = {}): TokenServiceDeps => ({
 let seq = 0;
 
 // a linked account whose tokens came from the stub, so the refresh family is real
-async function linkedAccount(): Promise<BrokerAccountRow> {
+async function linkedAccount(email?: string): Promise<BrokerAccountRow> {
   const n = ++seq;
-  const code = stub.issueCode({ brokerUserId: `svc-broker-${n}` });
+  const code = stub.issueCode({ brokerUserId: `svc-broker-${n}`, email });
   const tokens = await broker.exchangeCode({ code, redirectUri: REDIRECT_URI });
   const linked = await linkBrokerAccount(tmp.db, {
     telegramUserId: BigInt(900_000 + n),
@@ -72,8 +72,37 @@ async function linkedAccount(): Promise<BrokerAccountRow> {
   return linked.account;
 }
 
-const rowOf = async (id: string) =>
-  (await tmp.db.select().from(brokerAccounts).where(eq(brokerAccounts.id, id)))[0]!;
+const rowOf = (id: string) => brokerAccountRow(tmp.db, id);
+
+// the trigger below refuses exactly this account's rotation, which is how a write that fails
+// after the broker already rotated the pair is reproduced without stubbing the database
+const BLOCKED_EMAIL = 'rotation-blocked@example.test';
+
+// BEFORE UPDATE OF access_token_enc: a revocation does not touch that column, so the second
+// transaction still gets through. Raw, unparameterised SQL: several statements can only be
+// sent in one call over the simple query protocol.
+const failRotation = () =>
+  tmp.db.execute(
+    sql.raw(`
+      create or replace function binarius_test_block_rotation() returns trigger
+        language plpgsql as $$
+        begin
+          if new.email = '${BLOCKED_EMAIL}' then raise exception 'rotation blocked by test'; end if;
+          return new;
+        end $$;
+      create trigger binarius_test_block_rotation
+        before update of access_token_enc on broker_accounts
+        for each row execute function binarius_test_block_rotation();
+    `),
+  );
+
+const allowRotation = () =>
+  tmp.db.execute(
+    sql.raw(`
+      drop trigger if exists binarius_test_block_rotation on broker_accounts;
+      drop function if exists binarius_test_block_rotation();
+    `),
+  );
 
 const expireAccessToken = (id: string) =>
   tmp.db
@@ -240,6 +269,24 @@ describe('ensureFreshAccessToken', () => {
       ),
     );
     expect(row.status).toBe('active');
+    // no rotation happened, so the ninety-day clock must not have moved
+    expect(row.tokenRotatedAt).toEqual(account.tokenRotatedAt);
+  });
+
+  // the pre-#9 shape: a row that never rotated and has no hash. Filling the hash must not
+  // hand its refresh token another ninety days by dating it today.
+  it('backfills a legacy row without starting its refresh clock over', async () => {
+    const account = await linkedAccount();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ refreshTokenHash: null, tokenRotatedAt: null })
+      .where(eq(brokerAccounts.id, account.id));
+
+    expect((await ensureFreshAccessToken(deps(), account.id)).ok).toBe(true);
+    const row = await rowOf(account.id);
+    expect(row.refreshTokenHash).not.toBeNull();
+    expect(row.tokenRotatedAt).toBeNull();
+    expect(row.accessTokenExpiresAt).toEqual(account.accessTokenExpiresAt);
   });
 
   it('revokes when the stored hash disagrees with the stored ciphertext', async () => {
@@ -254,6 +301,84 @@ describe('ensureFreshAccessToken', () => {
       reason: 'account_revoked',
       revokedReason: 'storage_inconsistent',
     });
+  });
+
+  it('leaves a row encrypted under another key untouched', async () => {
+    const account = await linkedAccount();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ tokenKeyId: 'rotated-key' })
+      .where(eq(brokerAccounts.id, account.id));
+    await expireAccessToken(account.id);
+
+    const before = stub.tokenRequests;
+    expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
+      ok: false,
+      reason: 'key_unavailable',
+    });
+    // the process that does hold that key must still find the account usable
+    expect(await rowOf(account.id)).toMatchObject({
+      status: 'active',
+      authRevokedReason: null,
+      tokenKeyId: 'rotated-key',
+    });
+    expect(stub.tokenRequests).toBe(before);
+  });
+
+  it('revokes when the ciphertext cannot be decrypted under its own key id', async () => {
+    const account = await linkedAccount();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ refreshTokenEnc: randomBytes(64) })
+      .where(eq(brokerAccounts.id, account.id));
+
+    expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
+      ok: false,
+      reason: 'account_revoked',
+      revokedReason: 'storage_inconsistent',
+    });
+    expect(await rowOf(account.id)).toMatchObject({ status: 'revoked' });
+  });
+
+  it('refuses a rotated pair issued for another broker user', async () => {
+    const account = await linkedAccount();
+    const foreign = `foreign-${account.brokerUserId}`;
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ brokerUserId: foreign })
+      .where(eq(brokerAccounts.id, account.id));
+    await expireAccessToken(account.id);
+
+    expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
+      ok: false,
+      reason: 'account_revoked',
+      revokedReason: 'storage_inconsistent',
+    });
+    const row = await rowOf(account.id);
+    expect(row.status).toBe('revoked');
+    // the foreign pair was not applied: the stored ciphertext is the one we started with
+    expect(row.refreshTokenEnc).toEqual(account.refreshTokenEnc);
+    expect(row.brokerUserId).toBe(foreign);
+  });
+
+  // the broker has consumed the old token by then, so the account cannot be left holding it
+  it('revokes in a second transaction when storing the rotated pair fails', async () => {
+    const account = await linkedAccount(BLOCKED_EMAIL);
+    await expireAccessToken(account.id);
+    await failRotation();
+    try {
+      expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
+        ok: false,
+        reason: 'account_revoked',
+        revokedReason: 'refresh_outcome_unknown',
+      });
+      const row = await rowOf(account.id);
+      // the revocation is committed even though the transaction that exchanged was rolled back
+      expect(row).toMatchObject({ status: 'revoked', authRevokedReason: 'refresh_outcome_unknown' });
+      expect(row.refreshTokenEnc).toEqual(account.refreshTokenEnc);
+    } finally {
+      await allowRotation();
+    }
   });
 
   it('exchanges once when two callers race on the same account', async () => {
