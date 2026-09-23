@@ -6,7 +6,20 @@
 // survives, which is why the worker logs executor errors by name and code only (see
 // apps/trading-worker/src/intents/processor.ts errorIdentity). Thirty-one paths cost a
 // traversal per log line — accepted for the loggers' volume.
-const SECRET_KEYS = ['authorization', 'token', 'accessToken', 'refreshToken', 'password'] as const;
+const SECRET_KEYS = [
+  'authorization',
+  'token',
+  'accessToken',
+  'refreshToken',
+  'password',
+  // OAuth wire names: the broker speaks snake_case, and an authorization code or a state is
+  // as good as a token for the window it is alive
+  'access_token',
+  'refresh_token',
+  'client_secret',
+  'code',
+  'state',
+] as const;
 const MAX_DEPTH = 5;
 
 const atEveryDepth = (key: string): string[] =>

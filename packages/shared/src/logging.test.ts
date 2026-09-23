@@ -6,12 +6,23 @@ import { LOG_REDACT_PATHS } from './logging';
 describe('LOG_REDACT_PATHS', () => {
   it('lists every secret key at depths 0 through 5, plus the request header', () => {
     expect(LOG_REDACT_PATHS).toContain('req.headers.authorization');
-    for (const key of ['authorization', 'token', 'accessToken', 'refreshToken', 'password']) {
+    for (const key of [
+      'authorization',
+      'token',
+      'accessToken',
+      'refreshToken',
+      'password',
+      'access_token',
+      'refresh_token',
+      'client_secret',
+      'code',
+      'state',
+    ]) {
       expect(LOG_REDACT_PATHS).toContain(key);
       expect(LOG_REDACT_PATHS).toContain(`*.${key}`);
       expect(LOG_REDACT_PATHS).toContain(`*.*.*.*.*.${key}`);
       expect(LOG_REDACT_PATHS).not.toContain(`*.*.*.*.*.*.${key}`);
     }
-    expect(LOG_REDACT_PATHS).toHaveLength(1 + 5 * 6);
+    expect(LOG_REDACT_PATHS).toHaveLength(1 + 10 * 6);
   });
 });
