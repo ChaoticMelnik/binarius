@@ -100,6 +100,8 @@ export const TradeIntentErrorCode = {
   BrokerAccountNotFound: 'broker_account_not_found',
   AmbiguousBrokerAccount: 'ambiguous_broker_account',
   AccountRevoked: 'account_revoked',
+  // linked but not yet confirmed in the bot, so it may not trade
+  AccountNotConfirmed: 'account_not_confirmed',
   AccountHalted: 'account_halted',
   InsufficientTokens: 'insufficient_tokens',
   ActiveIntentExists: 'active_intent_exists',

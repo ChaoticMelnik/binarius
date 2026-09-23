@@ -1,0 +1,2 @@
+ALTER TABLE "broker_accounts" DROP CONSTRAINT "broker_accounts_status_check";--> statement-breakpoint
+ALTER TABLE "broker_accounts" ADD CONSTRAINT "broker_accounts_status_check" CHECK ("broker_accounts"."status" in ('pending', 'active', 'revoked'));
