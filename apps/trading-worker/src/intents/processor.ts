@@ -1,5 +1,6 @@
 import type pino from 'pino';
 import {
+  errorIdentity,
   TradeIntentFailureReason,
   TradeIntentStatus,
   tradeIntentJobPayloadSchema,
@@ -186,10 +187,4 @@ async function persistOutcome(
     'intent outcome recorded',
   );
   return result.outcome;
-}
-
-function errorIdentity(error: unknown): { name: string; code?: string } {
-  const name = error instanceof Error ? error.name : typeof error;
-  const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === 'string' ? { name, code } : { name };
 }
