@@ -1,6 +1,7 @@
 import { DrizzleQueryError } from 'drizzle-orm/errors';
 import { describe, expect, it } from 'vitest';
 import { buildApp, type AppDeps } from './app';
+import type { AuthRoutesDeps } from './auth/routes';
 import type { TradingRoutesDeps } from './trading/routes';
 
 const ok = () => Promise.resolve();
@@ -10,15 +11,32 @@ const throwsSync = () => {
   throw new Error('sync failure');
 };
 
-// the health route never touches the trading plugin's dependencies
+// the health and error-handler routes never touch the plugins' dependencies
 const unusedTrading: TradingRoutesDeps = {
   db: {} as TradingRoutesDeps['db'],
   internalApiToken: 'internal-token-for-tests',
   onIntentQueued: () => {},
 };
 
+const unusedAuth: AuthRoutesDeps = {
+  db: {} as AuthRoutesDeps['db'],
+  cipher: {} as AuthRoutesDeps['cipher'],
+  broker: {} as AuthRoutesDeps['broker'],
+  internalApiToken: 'internal-token-for-tests',
+  authorizeUrl: 'https://binodex.app/oauth/authorize',
+  clientId: 'client-id',
+  redirectUri: 'https://bot.example/oauth/callback',
+  partnerRef: 'partner-ref',
+};
+
 async function health(deps: Pick<AppDeps, 'checkPostgres' | 'checkRedis'>) {
-  const app = buildApp({ ...deps, logLevel: 'silent', checkTimeoutMs: 20, trading: unusedTrading });
+  const app = buildApp({
+    ...deps,
+    logLevel: 'silent',
+    checkTimeoutMs: 20,
+    trading: unusedTrading,
+    auth: unusedAuth,
+  });
   try {
     const response = await app.inject({ method: 'GET', url: '/health' });
     return { statusCode: response.statusCode, body: response.json() };
@@ -72,6 +90,7 @@ describe('error handler', () => {
       logLevel: 'silent',
       checkTimeoutMs: 20,
       trading: unusedTrading,
+      auth: unusedAuth,
     });
     app.get('/drizzle', async () => {
       throw new DrizzleQueryError(
