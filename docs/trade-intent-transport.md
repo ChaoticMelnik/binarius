@@ -129,8 +129,9 @@ nesting and string contents are not covered.
 
 ## Configuration
 
-Backend: `INTERNAL_API_TOKEN` (required, ≥ 16 characters, no whitespace; compose supplies a
-dev-only fallback that a deployment must override). Publisher constants live in
+Backend: `INTERNAL_API_TOKEN` (required, ≥ 16 characters, no whitespace). No file in this
+repository assigns it: compose refuses to start until it is set, so there is no default for a
+deployment to inherit — see `.env.example` and docs/binodex-oauth.md → Configuration. Publisher constants live in
 `apps/backend/src/outbox/publisher.ts` (`DEFAULT_PUBLISHER_CONFIG`).
 
 Worker (optional, code defaults in `apps/trading-worker/src/env.ts`):
@@ -164,9 +165,11 @@ Fixed constants and why they relate the way they do: `apps/trading-worker/src/in
 
 ```bash
 docker compose up --build --wait
-TOKEN=binarius-dev-internal-token
+# the same value the stack was started with; compose reads .env for interpolation but does not
+# export it, so the shell has to read it too
+set -a; . ./.env; set +a
 curl -s -X POST 127.0.0.1:3000/trading/intents \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $INTERNAL_API_TOKEN" -H 'Content-Type: application/json' \
   -d '{"telegramUserId":"1","mode":"demo","assetId":1,"amount":"10.00","action":"up","durationSec":60,"clientRequestId":"demo-1"}'
 # 404 user_not_found until a user and broker account exist (OAuth, #9); with them: 201 queued,
 # then GET /trading/intents/<id> shows rejected / executor_not_configured within a second

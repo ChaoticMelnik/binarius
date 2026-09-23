@@ -120,8 +120,9 @@ jobs:
     env:
       # a crashing service would otherwise be restarted forever and --wait would burn the whole timeout
       COMPOSE_RESTART: 'no'
-      # compose refuses to start without these, and neither compose.yaml nor .env.example
-      # carries a value, so CI supplies its own throwaway ones
+      # compose refuses to start without these, and no file in the repository assigns them,
+      # so CI supplies its own throwaway ones. TOKEN_ENCRYPTION_KEY_ID is not a secret; it is
+      # here because it is required, and because the all-zero key is only valid paired with it.
       INTERNAL_API_TOKEN: ci-internal-token-value
       BROKER_CLIENT_SECRET: ci-broker-client-secret
       TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
@@ -131,14 +132,47 @@ jobs:
       - name: Dockerfile Node version matches .node-version
         run: test "$(sed -n 's/^ARG NODE_VERSION=//p' Dockerfile)" = "$(cat .node-version)"
       - run: docker compose config -q
-      # the guard itself: with the secrets unset, compose must refuse rather than substitute
-      - name: compose refuses to start without the required secrets
+      # The guard: each required variable must be required on its own, and an empty value has
+      # to be refused as well as a missing one — `cp .env.example .env` produces empty ones, and
+      # ${VAR?} would accept them while ${VAR:?} does not. One variable at a time, with the other
+      # three supplied, so a default creeping back onto three of the four cannot hide behind the
+      # fourth. --env-file /dev/null keeps a developer's own .env out of it when run locally.
+      - name: every required variable is required on its own
         run: |
-          if env -u INTERNAL_API_TOKEN -u BROKER_CLIENT_SECRET -u TOKEN_ENCRYPTION_KEY \
-             -u TOKEN_ENCRYPTION_KEY_ID docker compose config -q 2>/dev/null; then
-            echo 'compose accepted a configuration with no secrets set' >&2
-            exit 1
-          fi
+          set -u
+          key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          for name in INTERNAL_API_TOKEN BROKER_CLIENT_SECRET TOKEN_ENCRYPTION_KEY \
+                      TOKEN_ENCRYPTION_KEY_ID; do
+            set --
+            for other in INTERNAL_API_TOKEN BROKER_CLIENT_SECRET TOKEN_ENCRYPTION_KEY \
+                         TOKEN_ENCRYPTION_KEY_ID; do
+              if [ "$other" = "$name" ]; then continue; fi
+              case "$other" in
+                TOKEN_ENCRYPTION_KEY) set -- "$@" "TOKEN_ENCRYPTION_KEY=$key" ;;
+                TOKEN_ENCRYPTION_KEY_ID) set -- "$@" 'TOKEN_ENCRYPTION_KEY_ID=dev' ;;
+                *) set -- "$@" "$other=guard-value" ;;
+              esac
+            done
+            for form in unset empty; do
+              if [ "$form" = unset ]; then
+                out="$(env -u "$name" "$@" docker compose --env-file /dev/null config -q 2>&1)" \
+                  && status=0 || status=$?
+              else
+                out="$(env "$@" "$name=" docker compose --env-file /dev/null config -q 2>&1)" \
+                  && status=0 || status=$?
+              fi
+              if [ "$status" -eq 0 ]; then
+                echo "compose accepted an $form $name" >&2
+                exit 1
+              fi
+              # the wording belongs to compose and changes between versions; what this asserts
+              # is that the refusal is attributed to this variable and not to something else
+              case "$out" in
+                *"$name"*) ;;
+                *) echo "an $form $name was refused for another reason: $out" >&2; exit 1 ;;
+              esac
+            done
+          done
       - run: docker compose up -d --build --wait --wait-timeout 120
       - run: curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'
       - if: failure()
