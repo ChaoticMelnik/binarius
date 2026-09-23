@@ -10,7 +10,10 @@ export const DATABASE_URL_RULES: UrlEnvRules = {
   protocols: ['postgres:', 'postgresql:'],
   allowIpv6Literal: false,
 };
-export const REDIS_URL_RULES: UrlEnvRules = { protocols: ['redis:', 'rediss:'], allowIpv6Literal: true };
+export const REDIS_URL_RULES: UrlEnvRules = {
+  protocols: ['redis:', 'rediss:'],
+  allowIpv6Literal: true,
+};
 
 // pino levels; fastify's LogLevel is the same union
 export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;

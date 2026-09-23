@@ -19,6 +19,7 @@ import {
   TradeMode,
   TradeTransport,
   type DecimalString,
+  type TradeIntentFailureReason,
 } from '@binarius/shared';
 import {
   createdAt,
@@ -67,7 +68,7 @@ export const tradeIntents = pgTable(
     tokensReserved: tokenAmount('tokens_reserved'),
     transport: text('transport').$type<TradeTransport>(),
     submittedAt: timestamp('submitted_at', { withTimezone: true }),
-    lastError: text('last_error'),
+    lastError: text('last_error').$type<TradeIntentFailureReason>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
