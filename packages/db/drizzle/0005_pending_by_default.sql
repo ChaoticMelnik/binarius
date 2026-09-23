@@ -1,0 +1,1 @@
+ALTER TABLE "broker_accounts" ALTER COLUMN "status" SET DEFAULT 'pending';

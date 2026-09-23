@@ -36,6 +36,13 @@
       "when": 1790168259330,
       "tag": "0004_broker_account_pending",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790171248692,
+      "tag": "0005_pending_by_default",
+      "breakpoints": true
     }
   ]
 }
