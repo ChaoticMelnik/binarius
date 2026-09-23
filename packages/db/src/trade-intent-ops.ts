@@ -247,15 +247,15 @@ async function resolveAccount(
       throw new TradeIntentError(TradeIntentErrorCode.BrokerAccountNotFound);
     return account.id;
   }
-  const accounts = await exec
+  const [only, ...more] = await exec
     .select({ id: brokerAccounts.id })
     .from(brokerAccounts)
     .where(
       and(eq(brokerAccounts.userId, userId), eq(brokerAccounts.status, BrokerAccountStatus.Active)),
     );
-  if (accounts.length === 0) throw new TradeIntentError(TradeIntentErrorCode.BrokerAccountNotFound);
-  if (accounts.length > 1) throw new TradeIntentError(TradeIntentErrorCode.AmbiguousBrokerAccount);
-  return accounts[0]!.id;
+  if (only === undefined) throw new TradeIntentError(TradeIntentErrorCode.BrokerAccountNotFound);
+  if (more.length > 0) throw new TradeIntentError(TradeIntentErrorCode.AmbiguousBrokerAccount);
+  return only.id;
 }
 
 // --- Transitions --------------------------------------------------------------------------------

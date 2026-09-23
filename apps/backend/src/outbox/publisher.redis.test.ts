@@ -199,6 +199,11 @@ describe('OutboxPublisher.tick', () => {
     expect(await publisher(jobs, { publishTimeoutMs: 50 }).tick()).toBe(1);
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(await outboxOf(intentId)).toMatchObject({ status: 'pending', attempts: 1 });
+    // the row becomes due again after its 1 s backoff; park it so later ticks do not count it
+    await tmp.db
+      .update(outboxEvents)
+      .set({ status: 'failed' })
+      .where(eq(outboxEvents.intentId, intentId));
   });
 
   it('fails the row but leaves an intent the worker already took alone', async () => {
