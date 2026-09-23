@@ -30,25 +30,28 @@ bot ──GET /trading/intents/:id──▶ backend ──▶ { intent }   (stat
 
 1. Resolve the user by `telegramUserId` (404 `user_not_found`).
 2. **Idempotent replay first**: a row with the same `(user, clientRequestId)` is returned as-is
-   (200) whatever the user's or account's flags are now; the same id with different parameters
-   is 409 `client_request_id_conflict`. `clientRequestId` is unique per user by contract.
-3. Resolve the broker account: the given `brokerAccountId` must belong to the user (404), or the
-   user's single active account (0 → 404, more than one → 409 `ambiguous_broker_account`).
-4. Reserve one token with a guarded update on `users` (`status = active`,
-   `token_balance - token_reserved >= 1`); zero rows → 409 `user_blocked` or `insufficient_tokens`.
-5. Lock the account with `FOR NO KEY UPDATE` and the predicates `status = active`,
-   `trading_halted = false`; zero rows → 409 `account_revoked` / `account_halted`.
-6. Insert the intent (`planned`, `tokens_reserved = 1`), the ledger `reserve` row, move it to
-   `reserved`, insert the outbox row, move it to `queued`, commit.
-7. After the commit the publisher is woken; a failed wake only logs (the poll picks the row up).
+   (200) whatever the user's or account's flags are now; the same id with different parameters —
+   including a different explicit `brokerAccountId` — is 409 `client_request_id_conflict`.
+   `clientRequestId` is unique per user, enforced by the unique index
+   `trade_intents_user_request_idx (user_id, client_request_id)` (migration 0002 replaced the
+   per-account key: an account belongs to one user, so this is strictly stronger).
 
-A unique violation on `trade_intents_account_request_idx` or `trade_intents_active_account_idx`
-(two identical or two competing requests) rolls back and re-runs step 2: found → replay, not found
-→ 409 `active_intent_exists`. That 409 is a snapshot — the competing intent may already be
-terminal when the bot reads it; retrying with the same `clientRequestId` is the intended reaction.
+A unique violation on `trade_intents_user_request_idx` or `trade_intents_active_account_idx`
+(two identical or two competing requests) rolls back and re-runs step 2: found → replay or
+conflict, not found → 409 `active_intent_exists`. That 409 is a snapshot — the competing intent
+may already be terminal when the bot reads it; retrying with the same `clientRequestId` is the
+intended reaction.
 
-**Lock order is `users` → `broker_accounts`.** Any other writer that touches both tables in one
-transaction (OAuth linking, revocation, reconciliation) must lock in that order.
+**Lock order is `users` → `broker_accounts` → `trade_intents`, for every writer.** Creation
+takes the user row (reserve `UPDATE`), then the account (`FOR NO KEY UPDATE`), then inserts the
+intent; a rejection takes the user row (`FOR NO KEY UPDATE`) before it locks the intent it
+releases. The intent-first order deadlocked against a creation whose `INSERT` was waiting on
+the active-intent index while holding the user row. OAuth linking, revocation and ARCH-04 must
+keep the same order.
+
+Unexpected errors (a database failure, a bug) are answered with `500 { "error": "internal" }`
+and a log line; the response never carries the error message, because a query error's message
+contains the SQL text and its parameters.
 
 ## Statuses and who sets them
 
@@ -66,19 +69,24 @@ Every transition bumps `version`; every transition is a compare-and-set on `stat
 
 ## Delivery, ACK and timeout semantics
 
-| Stage                                                                  | Retry policy                                                        | Timeout                                                                                                                    | On failure                                                                                                                                |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Publisher `queue.add`                                                  | outbox `attempts` with backoff 1 s, 2 s, 4 s, 8 s (cap 16 s), max 5 | 5 s per add (`Promise.race`; a late success is harmless, the job id dedupes)                                               | 5th failure: outbox `failed` **and**, in the same transaction, a still-`queued` intent → `rejected` (`publish_failed`) with token release |
-| Lost job (published row, intent still `queued` after 30 s, job absent) | counted as a failed delivery, same cap                              | sweep every 15 s                                                                                                           | row back to `pending`, republished                                                                                                        |
-| BullMQ job                                                             | `attempts: 1` — the trade command is never retried by the queue     | `lockDuration` 60 s, `stalledInterval` 30 s, `maxStalledCount` 1                                                           | a job that throws is dead-lettered; a stalled job is redelivered once                                                                     |
-| `takeIntent`                                                           | —                                                                   | `INTENT_MAX_AGE_MS` (60 s) in the CAS predicate, database clock                                                            | too old → `rejected` (`expired`), executor never called                                                                                   |
-| `executor.submit`                                                      | none                                                                | `SUBMIT_ACK_TIMEOUT_MS` (10 s), enforced by the processor with `Promise.race`; the executor also receives an `AbortSignal` | timeout → `unknown` (`executor_timeout`); throw → `unknown` (`executor_error`)                                                            |
-| Outcome write                                                          | none                                                                | —                                                                                                                          | a database failure here fails the job (dead letter); the intent stays `submitting` until the sweeper                                      |
-| Stale `submitting` (redelivery or sweeper, every 15 s)                 | —                                                                   | `STALE_SUBMITTING_MS` 60 s ≥ `lockDuration` > max ack timeout                                                              | → `unknown` (`stale_submitting`) + reconciliation row                                                                                     |
+| Stage                                                                                                                                             | Retry policy                                                                                                                                           | Timeout                                                                                                                    | On failure                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Publisher `queue.add`, topic `trading-intents`                                                                                                    | outbox `attempts` with backoff 1 s, 2 s, 4 s, 8 s (cap 16 s), max 5                                                                                    | 5 s per add (`Promise.race`; a late success is harmless, the job id dedupes)                                               | 5th failure: outbox `failed` **and**, in the same transaction, a still-`queued` intent → `rejected` (`publish_failed`) with token release                            |
+| Publisher `queue.add`, topic `trading-reconciliation`                                                                                             | same backoff, **no cap** — the row stays `pending` for as long as it takes; `attempts` keeps counting and every attempt from the 5th on logs a warning | 5 s per add                                                                                                                | never `failed`: giving up would strand an `unknown` intent with its reserve and no reconciliation                                                                    |
+| Lost job (published row, job absent after 30 s while the intent is still `queued` for `trading-intents` / `unknown` for `trading-reconciliation`) | counted as a failed delivery under the topic's policy                                                                                                  | sweep every 15 s                                                                                                           | row back to `pending`, republished                                                                                                                                   |
+| BullMQ job                                                                                                                                        | `attempts: 1` — the trade command is never retried by the queue                                                                                        | `lockDuration` 60 s, `stalledInterval` 30 s, `maxStalledCount` 1                                                           | a job that throws is dead-lettered; a stalled job is redelivered once                                                                                                |
+| Worker shutdown                                                                                                                                   | —                                                                                                                                                      | phase 1 budget 35 s (`SHUTDOWN_BUDGET_MS`) > longest ack timeout 30 s; compose `stop_grace_period` 40 s                    | a job in flight finishes and its dead-letter write is awaited before any connection closes; an overrun exits 1 and the sweeper resolves the intent after the restart |
+| Publisher `stop()`                                                                                                                                | —                                                                                                                                                      | finishes the row in flight, leaves the rest of the batch `pending`                                                         | backend phase budget 4 s                                                                                                                                             |
+| `takeIntent`                                                                                                                                      | —                                                                                                                                                      | `INTENT_MAX_AGE_MS` (60 s) in the CAS predicate, database clock                                                            | too old → `rejected` (`expired`), executor never called                                                                                                              |
+| `executor.submit`                                                                                                                                 | none                                                                                                                                                   | `SUBMIT_ACK_TIMEOUT_MS` (10 s), enforced by the processor with `Promise.race`; the executor also receives an `AbortSignal` | timeout → `unknown` (`executor_timeout`); throw → `unknown` (`executor_error`)                                                                                       |
+| Outcome write                                                                                                                                     | none                                                                                                                                                   | —                                                                                                                          | a database failure here fails the job (dead letter); the intent stays `submitting` until the sweeper                                                                 |
+| Stale `submitting` (redelivery or sweeper, every 15 s)                                                                                            | —                                                                                                                                                      | `STALE_SUBMITTING_MS` 60 s ≥ `lockDuration` > max ack timeout                                                              | → `unknown` (`stale_submitting`) + reconciliation row                                                                                                                |
 
-Invariants these numbers encode: no live worker can still be inside its ack deadline when a
-redelivery or the sweeper calls its intent unknown, and the broker command is never sent twice —
-a redelivered job only checks state, it does not resubmit.
+Invariants these numbers encode (asserted at import in `apps/trading-worker/src/intents/config.ts`):
+`SUBMIT_ACK_TIMEOUT_MS ≤ 30 s < SHUTDOWN_BUDGET_MS 35 s < stop_grace_period 40 s < lockDuration
+60 s ≤ STALE_SUBMITTING_MS 60 s`. No live worker can still be inside its ack deadline when a
+redelivery or the sweeper calls its intent unknown; a routine deploy never kills a submit
+mid-flight; and the broker command is never sent twice — a redelivered job only checks state.
 
 The sweeper can win a race against a slow executor: the late `accepted` is then dropped (the CAS
 sees `unknown`, not `submitting`) and reconciliation recovers the real result.
@@ -89,16 +97,20 @@ sees `unknown`, not `submitting`) and reconciliation recovers the real result.
 failedAt }` with `reason` from the allowlist (`invalid_job` for a malformed payload or a missing
 intent, `processing_failed` otherwise). No exception text is stored — it can carry connection
 details — the log line next to it has the error. A failure to write the entry is logged as
-`dlq_publish_failed`; the worker keeps running. Nothing consumes the queue automatically; inspect
-it with the BullMQ tooling of your choice.
+`dlq_publish_failed`; the worker keeps running. Writes started by jobs that fail during a
+shutdown drain are awaited before the queue connection closes. Nothing consumes the queue
+automatically; inspect it with the BullMQ tooling of your choice.
 
 ## Persisted reasons and secrets
 
 `trade_intents.last_error`, `outbox_events.last_error` and dead-letter entries only ever hold
-`TradeIntentFailureReason` codes. The executor may return a free-text `detail`; it is truncated
-to 200 characters and logged, never stored. Queue payloads carry the intent id only. Neither the
-publisher nor the worker loads broker tokens. Both loggers redact `authorization` and token-like
-keys.
+`TradeIntentFailureReason` codes — a database CHECK on both columns refuses anything else. The
+executor may return a free-text `detail`; it is truncated to 200 characters and logged, never
+stored. An executor that throws is logged by the error's name and code only: a client library's
+message can embed a header or a response body, and key-based redaction cannot scrub a string.
+Queue payloads carry the intent id only. Neither the publisher nor the worker loads broker
+tokens. Both loggers redact `authorization` and token-like keys at depth one and two
+(`LOG_REDACT_PATHS` in `packages/shared`).
 
 ## Configuration
 
@@ -108,11 +120,11 @@ dev-only fallback that a deployment must override). Publisher constants live in
 
 Worker (optional, code defaults in `apps/trading-worker/src/env.ts`):
 
-| Variable                | Default | Bounds                                                             |
-| ----------------------- | ------- | ------------------------------------------------------------------ |
-| `INTENT_MAX_AGE_MS`     | 60000   | 1000–600000                                                        |
-| `SUBMIT_ACK_TIMEOUT_MS` | 10000   | 500–30000 (`MAX_SUBMIT_ACK_TIMEOUT_MS`, below the stale threshold) |
-| `WORKER_CONCURRENCY`    | 5       | 1–100                                                              |
+| Variable                | Default | Bounds                                                                                     |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------ |
+| `INTENT_MAX_AGE_MS`     | 60000   | 1000–600000                                                                                |
+| `SUBMIT_ACK_TIMEOUT_MS` | 10000   | 500–30000 (`MAX_SUBMIT_ACK_TIMEOUT_MS`, below the shutdown budget and the stale threshold) |
+| `WORKER_CONCURRENCY`    | 5       | 1–100                                                                                      |
 
 Fixed constants and why they relate the way they do: `apps/trading-worker/src/intents/config.ts`.
 
@@ -128,6 +140,9 @@ Fixed constants and why they relate the way they do: `apps/trading-worker/src/in
   (the creation transaction only checks the user and account flags that exist today).
 - **#25 / #29**: the bot tracks and notifies by `intent.id`. `GET /trading/intents/:id` is the
   status source; a notification dedupe key should be derived from the intent id and status.
+  The internal API is fully trusted: the read is not scoped to a user, because the only caller
+  is the bot holding the shared secret and ids are `gen_random_uuid()`. Once #25 forwards ids
+  that came from an end user, the read must take `telegramUserId` and add it to the `where`.
 - `trading_session_id` stays `NULL` until #20 links intents to sessions.
 
 ## Running it locally
