@@ -142,7 +142,7 @@ describe('POST /auth/binodex/start', () => {
   });
 
   it('stores only the hash of the state', async () => {
-    const { state } = (await start(telegramId())).json() as { state: string };
+    const state = await stateFor(telegramId());
     const byHash = await tmp.db
       .select({ id: oauthStates.id })
       .from(oauthStates)
@@ -252,11 +252,11 @@ describe('POST /auth/binodex/callback', () => {
   it('maps a replayed or expired code to invalid_code', async () => {
     const telegram = telegramId();
     const code = stub.issueCode({ brokerUserId: `broker-${telegram}` });
-    const first = (await start(telegram)).json() as { state: string };
-    expect((await callback({ state: first.state, code })).statusCode).toBe(200);
+    const first = await stateFor(telegram);
+    expect((await callback({ state: first, code })).statusCode).toBe(200);
 
-    const second = (await start(telegram)).json() as { state: string };
-    const response = await callback({ state: second.state, code });
+    const second = await stateFor(telegram);
+    const response = await callback({ state: second, code });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: 'invalid_code' });
   });
@@ -276,7 +276,7 @@ describe('POST /auth/binodex/callback', () => {
   // user is on the broker's page, and then the callback is the last thing standing
   it('refuses a user blocked after their state was issued', async () => {
     const seeded = await seedUser(tmp.db);
-    const { state } = (await start(seeded.telegramUserId)).json() as { state: string };
+    const state = await stateFor(seeded.telegramUserId);
     await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, seeded.userId));
 
     const response = await callback({
@@ -387,8 +387,7 @@ describe('the callback rate limits', () => {
       // two real logins first: neither may count towards the failure window
       for (let i = 0; i < 2; i += 1) {
         const telegram = telegramId();
-        const started = await start(telegram, `Bearer ${TOKEN}`, instance);
-        const { state } = started.json() as { state: string };
+        const state = await stateFor(telegram, instance);
         const response = await callback(
           {
             state,

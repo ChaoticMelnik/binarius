@@ -180,9 +180,13 @@ describe('what reaches the log', () => {
         });
       });
       const response = await app.inject({ method: 'GET', url: '/four' });
-      // the response is unchanged: a 4xx still tells the caller what was wrong
+      // the response is unchanged: a 4xx still tells the caller what was wrong, message included
       expect(response.statusCode).toBe(400);
-      expect(response.json()).toMatchObject({ statusCode: 400, code: 'FST_ERR_PROBE' });
+      expect(response.json()).toMatchObject({
+        statusCode: 400,
+        code: 'FST_ERR_PROBE',
+        message: '4xx message with MARKER-SECRET inside',
+      });
 
       const entry = logs.entry('request refused');
       expect(entry.err).toEqual({ name: 'Error', code: 'FST_ERR_PROBE' });

@@ -37,9 +37,9 @@ type CheckResult = { status: 'ok' } | { status: 'error'; error: unknown };
 // — and replace only the error itself and the free-text message.
 //
 // This does not make the log free of raw errors: Fastify also logs client errors, hook errors,
-// rejected promises after send, trailer errors and a raw url in its duplicate-reply warning
-// without going through this class, and the lint rule cannot see inside a dependency either.
-// docs/binodex-oauth.md says which of those remain.
+// rejected promises after send, trailer errors, a stream error on an auto-generated HEAD route,
+// and a raw url in its duplicate-reply warning without going through this class — and the lint
+// rule cannot see inside a dependency either. docs/binodex-oauth.md says which of those remain.
 class SafeLogController extends LogController {
   override requestCompleted(
     error: Error | null | undefined,
@@ -123,7 +123,10 @@ export function buildApp({
   logDestination,
 }: AppDeps): FastifyInstance {
   const app = Fastify({
-    // an instance, not the class: Fastify validates `userController instanceof LogController`
+    // An instance, not the class: Fastify validates `userController instanceof LogController`.
+    // Its options go here rather than to Fastify — a supplied controller is returned as-is, so
+    // `disableRequestLogging` and `requestIdLogLabel` passed below would never reach it. The
+    // empty object takes the same defaults Fastify would have applied.
     logController: new SafeLogController({}),
     logger: {
       level: logLevel,
