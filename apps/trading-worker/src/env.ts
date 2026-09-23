@@ -1,7 +1,7 @@
 import {
   DATABASE_URL_RULES,
   REDIS_URL_RULES,
-  parseIntegerEnv,
+  parseBoundedIntegerEnv,
   parseLogLevelEnv,
   parseUrlEnv,
   readEnv,
@@ -29,7 +29,7 @@ export function parseEnv(source: EnvSource): Env {
     databaseUrl: parseUrlEnv(readEnv(source, 'DATABASE_URL'), 'DATABASE_URL', DATABASE_URL_RULES),
     redisUrl: parseUrlEnv(readEnv(source, 'REDIS_URL'), 'REDIS_URL', REDIS_URL_RULES),
     logLevel: parseLogLevelEnv(readEnv(source, 'LOG_LEVEL', 'info'), 'LOG_LEVEL'),
-    intentMaxAgeMs: parseBounded(
+    intentMaxAgeMs: parseBoundedIntegerEnv(
       readEnv(source, 'INTENT_MAX_AGE_MS', '60000'),
       'INTENT_MAX_AGE_MS',
       MIN_INTENT_MAX_AGE_MS,
@@ -37,23 +37,17 @@ export function parseEnv(source: EnvSource): Env {
     ),
     // capped below the stale-submitting threshold: a redelivered job must never declare an
     // intent unknown while its first worker could still be waiting for the broker
-    submitAckTimeoutMs: parseBounded(
+    submitAckTimeoutMs: parseBoundedIntegerEnv(
       readEnv(source, 'SUBMIT_ACK_TIMEOUT_MS', '10000'),
       'SUBMIT_ACK_TIMEOUT_MS',
       MIN_SUBMIT_ACK_TIMEOUT_MS,
       MAX_SUBMIT_ACK_TIMEOUT_MS,
     ),
-    workerConcurrency: parseBounded(
+    workerConcurrency: parseBoundedIntegerEnv(
       readEnv(source, 'WORKER_CONCURRENCY', '5'),
       'WORKER_CONCURRENCY',
       1,
       MAX_WORKER_CONCURRENCY,
     ),
   };
-}
-
-function parseBounded(raw: string, name: string, min: number, max: number): number {
-  const value = parseIntegerEnv(raw, name);
-  if (value < min || value > max) throw new Error(`Env ${name} must be between ${min} and ${max}`);
-  return value;
 }

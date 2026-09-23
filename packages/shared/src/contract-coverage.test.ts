@@ -23,6 +23,7 @@ import type { TradeIntent, TradeIntentView } from './trading';
 import * as broker from './broker';
 import * as env from './env';
 import * as ids from './ids';
+import * as logging from './logging';
 import * as shared from './index';
 import * as money from './money';
 import * as oauth from './oauth';
@@ -234,6 +235,7 @@ describe('contract coverage (issue #6)', () => {
       socket,
       env,
       process: processModule,
+      logging,
     };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {

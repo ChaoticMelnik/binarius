@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DATABASE_URL_RULES,
   REDIS_URL_RULES,
+  parseBoundedIntegerEnv,
   parseEnumEnv,
   parseIntegerEnv,
   parseLogLevelEnv,
@@ -74,5 +75,21 @@ describe('parseEnumEnv', () => {
     expect(() => parseLogLevelEnv('verbose', 'LOG_LEVEL')).toThrow(
       'Env LOG_LEVEL must be one of: fatal error warn info debug trace silent',
     );
+  });
+});
+
+describe('parseBoundedIntegerEnv', () => {
+  it.each(['499', '2501'])('rejects %s outside 500-2500', (raw) => {
+    expect(() => parseBoundedIntegerEnv(raw, 'X', 500, 2500)).toThrow(
+      'Env X must be between 500 and 2500',
+    );
+  });
+
+  it.each(['500', '2500'])('accepts the boundary %s', (raw) => {
+    expect(parseBoundedIntegerEnv(raw, 'X', 500, 2500)).toBe(Number(raw));
+  });
+
+  it('rejects a non-integer before checking the bounds', () => {
+    expect(() => parseBoundedIntegerEnv('1e3', 'X', 0, 10_000)).toThrow('Env X must be an integer');
   });
 });

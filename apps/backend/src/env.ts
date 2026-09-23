@@ -2,7 +2,7 @@ import type { LogLevel } from 'fastify';
 import {
   DATABASE_URL_RULES,
   REDIS_URL_RULES,
-  parseIntegerEnv,
+  parseBoundedIntegerEnv,
   parseLogLevelEnv,
   parseUrlEnv,
   readEnv,
@@ -50,18 +50,8 @@ function parseInternalToken(raw: string, name: string): string {
   return raw;
 }
 
-function parsePort(raw: string, name: string): number {
-  const port = parseIntegerEnv(raw, name);
-  if (port < 1 || port > 65535) throw new Error(`Env ${name} must be between 1 and 65535`);
-  return port;
-}
+const parsePort = (raw: string, name: string): number =>
+  parseBoundedIntegerEnv(raw, name, 1, 65535);
 
-function parseTimeout(raw: string, name: string): number {
-  const ms = parseIntegerEnv(raw, name);
-  if (ms < MIN_HEALTH_TIMEOUT_MS || ms > MAX_HEALTH_TIMEOUT_MS) {
-    throw new Error(
-      `Env ${name} must be between ${MIN_HEALTH_TIMEOUT_MS} and ${MAX_HEALTH_TIMEOUT_MS}`,
-    );
-  }
-  return ms;
-}
+const parseTimeout = (raw: string, name: string): number =>
+  parseBoundedIntegerEnv(raw, name, MIN_HEALTH_TIMEOUT_MS, MAX_HEALTH_TIMEOUT_MS);
