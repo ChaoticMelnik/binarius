@@ -216,9 +216,12 @@ rather than a path anything logs today, since Fastify's `req` serializer never e
 The bare key `code` is
 deliberately **not** redacted: SQLSTATE, libuv errno and Fastify's `FST_ERR_*` all travel under
 that name, and blanking them would cost the diagnostics this project logs errors by — errors are
-logged as `{ name, code }` and nothing else (`errorIdentity`, `packages/shared/src/logging.ts`).
+logged as `{ name, code }`, plus the same two fields for one level of `cause` where there is one
+(`errorIdentity` and `errorLogFields`, `packages/shared/src/logging.ts`). The cause is carried
+because a wrapper often has nothing of its own: drizzle's query error sets neither `name` nor
+`code`, and the SQLSTATE that makes a database failure actionable is on the pg error underneath.
 No key path can reach a string, so two places are handled by shaping what is logged rather than
-by redaction: unhandled 500s log `errorIdentity(error)` and the SQL template instead of the error
+by redaction: unhandled 500s log `errorLogFields(error)` and the SQL template instead of the error
 object, because a `DrizzleQueryError` carries the bound parameters as a field **and** inside its
 message; and both the request serializer and a custom not-found handler strip `code` and `state`
 from the logged URL, for the case where the broker delivers them as query parameters.
@@ -241,13 +244,16 @@ Backend only, never the worker (the worker neither exchanges grants nor decrypts
 | `TOKEN_ENCRYPTION_KEY_ID`                  | names the key for rotation; no `\|`, no whitespace (the cipher binds with it)                              |
 
 `INTERNAL_API_TOKEN`, `BROKER_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY` and
-`TOKEN_ENCRYPTION_KEY_ID` have **no value anywhere in this repository** — not in `compose.yaml`,
-which uses the `${VAR:?message}` form, and not in `.env.example`, which lists them with empty
-assignments. `${VAR:?}` refuses an empty value as well as a missing one, so `cp .env.example .env`
+`TOKEN_ENCRYPTION_KEY_ID` have **no deployable default anywhere in this repository**. Neither
+`compose.yaml`, which uses the `${VAR:?message}` form, nor `.env.example`, which lists them with
+empty assignments, supplies a value that a deployment could inherit by following the setup
+instructions. `${VAR:?}` refuses an empty value as well as a missing one, so `cp .env.example .env`
 leaves the stack still refusing to start, and a developer has to put something there deliberately.
-That is the whole point: a secret with a value in the tree is one a deployment inherits by
-following the setup instructions. CI passes its own throwaway values, and a CI step asserts that
-compose still refuses when they are unset.
+
+Two values do appear in the tree, and both are deliberate: CI's compose job sets its own throwaway
+ones, and `.env.example` names the all-zero development key in a comment, which is useless outside
+the `dev` key id. A CI step asserts the refusal, one variable at a time and for an empty value as
+well as a missing one — the check exists because the last two attempts at this each left a way in.
 
 The development encryption key is thirty-two zero bytes, and `.env.example` names it in a comment
 rather than assigning it. It is published here and is therefore no protection at all, so the
