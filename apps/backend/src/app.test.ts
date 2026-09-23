@@ -86,7 +86,6 @@ describe('GET /health', () => {
 function captureLogs() {
   const lines: string[] = [];
   return {
-    lines,
     text: () => lines.join('\n'),
     // the line a case is about, parsed: asserting the exact shape of `err` is what pins
     // errorLogFields, since a raw error would serialize with message, stack and its own fields
@@ -167,6 +166,31 @@ describe('what reaches the log', () => {
       expect(text).not.toContain('STATE-SECRET');
       // Fastify's own not-found line would have carried the whole url
       expect(text).not.toContain('Route GET:/oauth/callback');
+    });
+  });
+
+  // the path our own error handler delegates to: `reply.send(error)` re-enters Fastify, whose
+  // own logger would write the error whole, message and stack included
+  it('logs a refused request by identity, keeping its status and code', async () => {
+    await withLogs(async (app, logs) => {
+      app.get('/four', async () => {
+        throw Object.assign(new Error('4xx message with MARKER-SECRET inside'), {
+          statusCode: 400,
+          code: 'FST_ERR_PROBE',
+        });
+      });
+      const response = await app.inject({ method: 'GET', url: '/four' });
+      // the response is unchanged: a 4xx still tells the caller what was wrong
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ statusCode: 400, code: 'FST_ERR_PROBE' });
+
+      const entry = logs.entry('request refused');
+      expect(entry.err).toEqual({ name: 'Error', code: 'FST_ERR_PROBE' });
+      // the operational field the original line carried
+      expect(entry.res).toMatchObject({ statusCode: 400 });
+      const text = logs.text();
+      expect(text).not.toContain('MARKER-SECRET');
+      expect(text).not.toContain('    at ');
     });
   });
 

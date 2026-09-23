@@ -1,6 +1,8 @@
 import Fastify, {
+  LogController,
   type FastifyError,
   type FastifyInstance,
+  type FastifyReply,
   type FastifyRequest,
   type LogLevel,
 } from 'fastify';
@@ -27,6 +29,90 @@ export interface AppDeps {
 
 type CheckResult = { status: 'ok' } | { status: 'error'; error: unknown };
 
+// Fastify logs a handful of events itself, and it logs the error object whole: `{ err: error }`
+// plus `error.message` as the log message, which is the message, the stack and whatever fields
+// the error carries. Our own 4xx path reaches it, because the error handler delegates through
+// `reply.send(error)`. These overrides keep every operational field and level the originals
+// have — dropping `res`, `responseTime` or `statusCode` would cost the reason those lines exist
+// — and replace only the error itself and the free-text message.
+//
+// This does not make the log free of raw errors: Fastify also logs client errors, hook errors,
+// rejected promises after send, trailer errors and a raw url in its duplicate-reply warning
+// without going through this class, and the lint rule cannot see inside a dependency either.
+// docs/binodex-oauth.md says which of those remain.
+class SafeLogController extends LogController {
+  override requestCompleted(
+    error: Error | null | undefined,
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): void {
+    if (this.isLogDisabled(request)) return;
+    if (error) {
+      reply.log.error(
+        { res: reply, ...errorLogFields(error), responseTime: reply.elapsedTime },
+        'request errored',
+      );
+      return;
+    }
+    reply.log.info({ res: reply, responseTime: reply.elapsedTime }, 'request completed');
+  }
+
+  override defaultErrorLog(error: Error, request: FastifyRequest, reply: FastifyReply): void {
+    if (this.isLogDisabled(request)) return;
+    if (reply.statusCode >= 500) {
+      reply.log.error(
+        { req: request, res: reply, ...errorLogFields(error) },
+        'request failed with an unhandled error',
+      );
+      return;
+    }
+    reply.log.info({ res: reply, ...errorLogFields(error) }, 'request refused');
+  }
+
+  override streamError(error: Error, request: FastifyRequest, reply: FastifyReply): void {
+    if (this.isLogDisabled(request)) return;
+    if ((error as { code?: unknown }).code === 'ERR_STREAM_PREMATURE_CLOSE') {
+      reply.log.info({ res: reply }, 'stream closed prematurely');
+      return;
+    }
+    reply.log.warn(
+      errorLogFields(error),
+      'response terminated with an error with headers already sent',
+    );
+  }
+
+  override writeHeadError(error: Error, request: FastifyRequest, reply: FastifyReply): void {
+    if (this.isLogDisabled(request)) return;
+    reply.log.warn(
+      { req: request, res: reply, ...errorLogFields(error) },
+      'writing the response head failed',
+    );
+  }
+
+  override serializerError(
+    error: Error,
+    request: FastifyRequest,
+    reply: FastifyReply,
+    metadata: { statusCode: number },
+  ): void {
+    if (this.isLogDisabled(request)) return;
+    reply.log.error(
+      { ...errorLogFields(error), statusCode: metadata.statusCode },
+      'the serializer for the given status code failed',
+    );
+  }
+
+  // unreachable while setNotFoundHandler below is installed, and overridden so that removing it
+  // cannot quietly put the raw url back in the log
+  override routeNotFound(request: FastifyRequest): void {
+    if (this.isLogDisabled(request)) return;
+    request.log.info(
+      { method: request.method, url: withoutSecrets(request.url) },
+      'route not found',
+    );
+  }
+}
+
 export function buildApp({
   checkPostgres,
   checkRedis,
@@ -37,6 +123,8 @@ export function buildApp({
   logDestination,
 }: AppDeps): FastifyInstance {
   const app = Fastify({
+    // an instance, not the class: Fastify validates `userController instanceof LogController`
+    logController: new SafeLogController({}),
     logger: {
       level: logLevel,
       redact: [...LOG_REDACT_PATHS],
@@ -144,7 +232,6 @@ function queryOf(error: unknown): string | undefined {
   const query = (error as { query?: unknown } | null)?.query;
   return typeof query === 'string' ? query : undefined;
 }
-
 
 async function runCheck(check: DependencyCheck, timeoutMs: number): Promise<CheckResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
