@@ -26,8 +26,6 @@ export interface OAuthStub {
   url: string;
   tokenRequests: number;
   issueCode(input: Partial<IssuedCode> & { brokerUserId: string }): string;
-  // the refresh token the stub currently considers valid for a family
-  currentRefreshToken(family: string): string | undefined;
   close(): Promise<void>;
 }
 
@@ -62,7 +60,6 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
       });
       return value;
     },
-    currentRefreshToken: (family) => families.get(family),
     close: () => app.close(),
   };
 

@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   brokerAccounts,
+  confirmBrokerAccount,
   createTokenCipher,
   hashToken,
   linkBrokerAccount,
@@ -58,17 +59,33 @@ const deps = (override: Partial<TokenServiceDeps> = {}): TokenServiceDeps => ({
 
 let seq = 0;
 
-// a linked account whose tokens came from the stub, so the refresh family is real
+// a linked and confirmed account whose tokens came from the stub, so the refresh family is
+// real: an unconfirmed one never reaches the refresh logic at all
 async function linkedAccount(email?: string): Promise<BrokerAccountRow> {
+  const account = await pendingAccount(email);
+  const confirmed = await confirmBrokerAccount(tmp.db, {
+    telegramUserId: telegramIdOf(account.id),
+    accountId: account.id,
+  });
+  if (!confirmed.ok) throw new Error(`confirm failed: ${confirmed.reason}`);
+  return confirmed.account;
+}
+
+const telegramIds = new Map<string, bigint>();
+const telegramIdOf = (accountId: string): bigint => {
+  const id = telegramIds.get(accountId);
+  if (id === undefined) throw new Error(`no telegram id recorded for ${accountId}`);
+  return id;
+};
+
+async function pendingAccount(email?: string): Promise<BrokerAccountRow> {
   const n = ++seq;
   const code = stub.issueCode({ brokerUserId: `svc-broker-${n}`, email });
   const tokens = await broker.exchangeCode({ code, redirectUri: REDIRECT_URI });
-  const linked = await linkBrokerAccount(tmp.db, {
-    telegramUserId: BigInt(900_000 + n),
-    tokens,
-    cipher,
-  });
+  const telegramUserId = BigInt(900_000 + n);
+  const linked = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
   if (!linked.ok) throw new Error(`link failed: ${linked.reason}`);
+  telegramIds.set(linked.account.id, telegramUserId);
   return linked.account;
 }
 
@@ -77,6 +94,7 @@ const rowOf = (id: string) => brokerAccountRow(tmp.db, id);
 // the trigger below refuses exactly this account's rotation, which is how a write that fails
 // after the broker already rotated the pair is reproduced without stubbing the database
 const BLOCKED_EMAIL = 'rotation-blocked@example.test';
+const COMMIT_BLOCKED_EMAIL = 'commit-blocked@example.test';
 
 // BEFORE UPDATE OF access_token_enc: a revocation does not touch that column, so the second
 // transaction still gets through. Raw, unparameterised SQL: several statements can only be
@@ -96,11 +114,64 @@ const failRotation = () =>
     `),
   );
 
+// AFTER … DEFERRABLE INITIALLY DEFERRED fires at COMMIT, so the rotation statement succeeds and
+// the transaction dies on the commit itself — the one failure the callback can never observe.
+// The WHEN clause keeps it off the revocation, which changes neither ciphertext.
+const failCommit = () =>
+  tmp.db.execute(
+    sql.raw(`
+      create or replace function binarius_test_block_commit() returns trigger
+        language plpgsql as $$
+        begin
+          raise exception 'commit blocked by test';
+        end $$;
+      create constraint trigger binarius_test_block_commit
+        after update on broker_accounts
+        deferrable initially deferred
+        for each row
+        when (new.email = '${COMMIT_BLOCKED_EMAIL}'
+              and new.access_token_enc is distinct from old.access_token_enc)
+        execute function binarius_test_block_commit();
+    `),
+  );
+
+const allowCommit = () =>
+  tmp.db.execute(
+    sql.raw(`
+      drop trigger if exists binarius_test_block_commit on broker_accounts;
+      drop function if exists binarius_test_block_commit();
+    `),
+  );
+
 const allowRotation = () =>
   tmp.db.execute(
     sql.raw(`
       drop trigger if exists binarius_test_block_rotation on broker_accounts;
       drop function if exists binarius_test_block_rotation();
+    `),
+  );
+
+// blocks every update of the marked row, so the second transaction's revocation fails too
+const failAnyUpdate = (email: string) =>
+  tmp.db.execute(
+    sql.raw(`
+      create or replace function binarius_test_block_any() returns trigger
+        language plpgsql as $$
+        begin
+          raise exception 'update blocked by test';
+        end $$;
+      create trigger binarius_test_block_any
+        before update on broker_accounts
+        for each row when (new.email = '${email}')
+        execute function binarius_test_block_any();
+    `),
+  );
+
+const allowAnyUpdate = () =>
+  tmp.db.execute(
+    sql.raw(`
+      drop trigger if exists binarius_test_block_any on broker_accounts;
+      drop function if exists binarius_test_block_any();
     `),
   );
 
@@ -377,6 +448,53 @@ describe('ensureFreshAccessToken', () => {
       expect(row).toMatchObject({ status: 'revoked', authRevokedReason: 'refresh_outcome_unknown' });
       expect(row.refreshTokenEnc).toEqual(account.refreshTokenEnc);
     } finally {
+      await allowRotation();
+    }
+  });
+
+  it('refuses an account nobody has confirmed, without touching the broker', async () => {
+    const account = await pendingAccount();
+    const before = stub.tokenRequests;
+    expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
+      ok: false,
+      reason: 'account_pending',
+    });
+    expect(stub.tokenRequests).toBe(before);
+    expect((await rowOf(account.id)).status).toBe('pending');
+  });
+
+  // the transaction commits the rotation and then dies on the COMMIT: nothing inside the
+  // callback ever sees that error, so only the flag set after the exchange can catch it
+  it('revokes when the commit itself fails after the pair was stored', async () => {
+    const account = await linkedAccount(COMMIT_BLOCKED_EMAIL);
+    await expireAccessToken(account.id);
+    await failCommit();
+    try {
+      expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
+        ok: false,
+        reason: 'account_revoked',
+        revokedReason: 'refresh_outcome_unknown',
+      });
+      const row = await rowOf(account.id);
+      expect(row).toMatchObject({ status: 'revoked', authRevokedReason: 'refresh_outcome_unknown' });
+      // the rotation was rolled back with the transaction, so the stored pair is the old one
+      expect(row.refreshTokenEnc).toEqual(account.refreshTokenEnc);
+    } finally {
+      await allowCommit();
+    }
+  });
+
+  // both transactions fail: nothing can be recorded, so the caller has to hear about it
+  it('throws when the account cannot be revoked after the pair was lost', async () => {
+    const account = await linkedAccount(BLOCKED_EMAIL);
+    await expireAccessToken(account.id);
+    await failRotation();
+    await failAnyUpdate(BLOCKED_EMAIL);
+    try {
+      await expect(ensureFreshAccessToken(deps(), account.id)).rejects.toThrow();
+      expect((await rowOf(account.id)).status).toBe('active');
+    } finally {
+      await allowAnyUpdate();
       await allowRotation();
     }
   });
