@@ -219,6 +219,8 @@ describe('createTradeIntent', () => {
   it.each([
     ['revoked', { status: 'revoked' as const }, 'account_revoked'],
     ['halted', { tradingHalted: true }, 'account_halted'],
+    // linked but not confirmed in the bot: a distinct answer, because the user can fix it
+    ['pending', { status: 'pending' as const }, 'account_not_confirmed'],
   ])('refuses a %s account', async (_label, patch, code) => {
     const user = await seedUser(tmp.db);
     const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId, patch);
@@ -227,6 +229,31 @@ describe('createTradeIntent', () => {
       code,
     );
     expect(await tokenReservedOf(user.userId)).toBe(0n);
+  });
+
+  // the worker never reads the account's status, so nothing may reach the queue for an
+  // unconfirmed account in the first place
+  it('creates neither an intent nor an outbox row for an unconfirmed account', async () => {
+    const user = await seedUser(tmp.db);
+    const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId, { status: 'pending' });
+    const outboxBefore = await tmp.db.select({ id: outboxEvents.id }).from(outboxEvents);
+
+    // named explicitly, and picked automatically: both paths have to answer the same way
+    await failsWith(
+      createTradeIntent(tmp.db, intentRequest(user.telegramUserId, { brokerAccountId })),
+      'account_not_confirmed',
+    );
+    await failsWith(
+      createTradeIntent(tmp.db, intentRequest(user.telegramUserId)),
+      'account_not_confirmed',
+    );
+
+    expect(
+      await tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, user.userId)),
+    ).toEqual([]);
+    expect(await tmp.db.select({ id: outboxEvents.id }).from(outboxEvents)).toHaveLength(
+      outboxBefore.length,
+    );
   });
 
   it('classifies lookups: unknown user, no account, foreign account, ambiguous account', async () => {
