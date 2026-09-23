@@ -157,25 +157,23 @@ async function refreshUnderLock(
     return revoked(tx, account.id, AuthRevokedReason.RefreshExpired);
   }
 
+  const heldPair: ExchangedPair = {
+    accountId: account.id,
+    refreshTokenHash: account.refreshTokenHash,
+  };
   let tokens;
   try {
     tokens = await broker.refresh({ refreshToken });
   } catch (error) {
     const reason = revocationReasonFor(error);
-    // An unknown outcome is already treated as a consumed token, so from here the stored pair
-    // may be spent and the revocation below has to survive this transaction failing too.
-    // `invalid_grant` is excluded on purpose: the broker refused, nothing was rotated, and a
-    // lost revocation there costs only a retry that gets the same refusal with the exact reason.
-    if (reason === AuthRevokedReason.RefreshOutcomeUnknown) {
-      onExchanged({ accountId: account.id, refreshTokenHash: account.refreshTokenHash });
-    }
+    if (pairMayBeSpent(reason)) onExchanged(heldPair);
     logger.warn(
       { accountId: account.id, reason, err: errorIdentity(error) },
       'broker refresh failed, revoking the account',
     );
     return revoked(tx, account.id, reason);
   }
-  onExchanged({ accountId: account.id, refreshTokenHash: account.refreshTokenHash });
+  onExchanged(heldPair);
 
   // the pair must belong to the account that asked for it: applying a foreign one would let
   // this account act as another broker user
@@ -258,4 +256,30 @@ function revocationReasonFor(error: unknown): AuthRevokedReason {
     return AuthRevokedReason.RefreshInvalidGrant;
   }
   return AuthRevokedReason.RefreshOutcomeUnknown;
+}
+
+// Whether the stored pair may already have been consumed, which is what decides if a failure
+// after this point has to survive the transaction dying. Exhaustive on purpose: a new reason
+// has to break the build rather than fall silently to either side. Neither `=== unknown` nor
+// `!== invalid_grant` would do — the first drops a new reason out of the recovery, the second
+// drags in one that may prove the token never left.
+function pairMayBeSpent(reason: AuthRevokedReason): boolean {
+  switch (reason) {
+    // the broker answered, refusing the grant: nothing was rotated
+    case AuthRevokedReason.RefreshInvalidGrant:
+      return false;
+    // storage was already wrong, or the token aged out unused: the broker never saw it
+    case AuthRevokedReason.StorageInconsistent:
+    case AuthRevokedReason.RefreshExpired:
+      return false;
+    // no answer at all: the broker may have rotated the pair before the connection died
+    case AuthRevokedReason.RefreshOutcomeUnknown:
+      return true;
+    default:
+      return assertExhausted(reason);
+  }
+}
+
+function assertExhausted(reason: never): never {
+  throw new Error(`unhandled revocation reason: ${String(reason)}`);
 }

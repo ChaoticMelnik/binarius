@@ -422,10 +422,10 @@ describe('the confirmation gate', () => {
   });
 
   it.each([
-    [0, 'an account of another user', 'not_found' as const],
-    [1, 'an account that is already active', 'not_pending' as const],
-    [2, 'a blocked user', 'user_blocked' as const],
-  ])('refuses to confirm %s', async (index, _label, expected) => {
+    ['an account of another user', 0, 'not_found' as const],
+    ['an account that is already active', 1, 'not_pending' as const],
+    ['a blocked user', 2, 'user_blocked' as const],
+  ])('refuses to confirm %s', async (_label, index, expected) => {
     const telegramUserId = 700_110n + BigInt(index);
     const created = await linkBrokerAccount(tmp.db, {
       telegramUserId,
