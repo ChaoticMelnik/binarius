@@ -85,6 +85,7 @@ describe('contract coverage (issue #6)', () => {
         | 'publish_failed'
         | 'stale_submitting'
         | 'invalid_job'
+        | 'processing_failed'
         | null;
       updatedAt: string;
     }>();
