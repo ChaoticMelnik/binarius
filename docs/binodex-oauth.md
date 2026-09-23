@@ -12,7 +12,7 @@ refresh grant follows RFC 6749 and is an assumption until a real call confirms i
 | Contract  | `packages/shared/src/oauth.ts`            | wire schemas, the login request/response shapes, the error codes and the four revocation reasons |
 | Storage   | `packages/db/src/oauth-ops.ts`            | state rows, the linking transaction, rotation and revocation                                     |
 | Client    | `apps/backend/src/broker/oauth-client.ts` | the two exchanges, one attempt each, under a real abort                                          |
-| Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/start`, `POST /auth/binodex/callback`                                        |
+| Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/start`, `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`          |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
 
 ## Sequence
@@ -24,8 +24,9 @@ bot ──POST /auth/binodex/start (internal token)──▶ backend
 user ──opens authorizeUrl──▶ binodex.app  (client_id, redirect_uri, state, ref, response_mode)
 broker ──code + state──▶ page/popup (#32)
 page ──POST /auth/binodex/callback (public)──▶ backend
-        │  CAS on the state row  ──▶ exchange code ──▶ link user + broker account
+        │  CAS on the state row  ──▶ exchange code ──▶ link user + broker account (pending)
         ◀── { account }
+bot ──POST /auth/binodex/confirm (internal token)──▶ backend   pending ──▶ active
 later: ensureFreshAccessToken(accountId) ──▶ stored token, or one exchange, or a revocation
 ```
 
@@ -45,13 +46,54 @@ would let a caller choose its own.
 | Counter | Limit | Spent by | What it bounds |
 | --- | --- | --- | --- |
 | all requests | 3000/min | every request, before the body is parsed and before any query | how much work an anonymous caller can trigger at all |
-| failed state lookups | 60/min | only a state that resolved to no row | guessing, without letting real logins close the door |
+| failed state lookups | 600/min | only a state that resolved to no row | junk, without letting real logins close the door |
+
+Both counters **reserve** their slot before the work they limit and give it back if the work
+turns out not to be the thing being limited: the callback takes a failure slot before the state
+lookup and releases it when the state resolves, or when the lookup itself throws. A counter
+incremented after the lookup would let a whole concurrent burst through, because none of them
+has counted yet while the others are being admitted. A database outage does not spend the
+budget either — it is not a guess.
 
 A successful login spends only the ceiling, so a burst of real users cannot exhaust the narrow
-counter — that was the flaw of a single global window. Once sixty misses land in a minute the
-callback answers 429 to everyone until the window rolls, which is the accepted cost: sixty
-consecutive misses mean a guessing client or a broken one, not sixty users. A per-IP limit
-belongs with the proxy configuration (#4); a distributed one is a follow-up.
+counter. The narrow limit is deliberately high: a 32-byte state cannot be guessed, so the window
+only has to bound junk, and a low threshold would have meant one request per second could close
+the callback for everyone. A per-IP limit belongs with the proxy configuration (#4); a
+distributed one is a follow-up.
+
+## Why a new account starts pending
+
+The callback proves that **someone** authorized at the broker. It does not prove that the person
+who finished the login is the Telegram user who started it: the authorize URL is an ordinary
+link, and a link can be handed to somebody else. Without a second step, an attacker who passes
+their own link to a victim ends up with the victim's brokerage account attached to the
+attacker's Telegram account.
+
+So `linkBrokerAccount` writes a new account as `pending`, and only `POST /auth/binodex/confirm`
+— called by the bot, carrying the internal token and the Telegram id — turns it into `active`.
+Three rules make that gate hold:
+
+- a second login **does not** stand in for the confirmation: a `pending` row stays `pending`,
+  though its tokens are still rotated. Only a row that was `active` or `revoked` returns to
+  `active` on a re-login, because its owner confirmed it once already;
+- confirmation is scoped by ownership. The account is looked up by id **and** user, so an
+  account that belongs to somebody else is indistinguishable from one that does not exist;
+- the user row is read under lock inside the same transaction, so a block landing at the same
+  moment cannot slip past.
+
+A `pending` account cannot trade: both account-selection paths in `packages/db/src/trade-intent-ops.ts`
+filter on `active`, and the trading API answers `account_not_confirmed` rather than the
+misleading `account_halted`. That matters because `apps/trading-worker` never reads the account
+status at all — it trusts that nothing reached the queue for an account that may not act. The
+invariant it depends on: no intent is created for a non-active account, and there is no
+`active → pending` transition.
+
+**Residual risk.** The confirmation makes an unexpected link visible and costs the attacker an
+extra step, but in the scenario above the person confirming is the attacker, who sees the
+victim's email and agrees. Closing the vector completely needs proof of who finished the flow —
+signed Telegram `initData` forwarded by the login page (#32) and compared with
+`oauth_states.telegram_user_id`. Until then the gap is documented rather than closed, which is
+acceptable only while no bot or web client calls these routes.
 
 ## The state row
 
@@ -95,7 +137,8 @@ account row, which makes it single-flight per account:
 | Step                                                        | Outcome                                                                                                           |
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | account missing                                             | `account_not_found`                                                                                               |
-| `status ≠ active`                                           | `account_revoked` — checked **before** the expiry, so a revoked account never hands out the token it still stores |
+| `status = pending`                                          | `account_pending` — nobody has confirmed it, so it may not act on the user's behalf                               |
+| `status = revoked`                                          | `account_revoked` — checked **before** the expiry, so a revoked account never hands out the token it still stores |
 | `token_key_id ≠ the process's key id`                       | `key_unavailable`, and **nothing is written** (see below)                                                         |
 | ciphertext fails to decrypt under its own key id            | revoke `storage_inconsistent`                                                                                     |
 | stored hash ≠ hash of the stored ciphertext                 | revoke `storage_inconsistent`                                                                                     |
@@ -110,10 +153,10 @@ freshly re-authorized account as inconsistent and revoke it — undoing a login 
 completed. Declining to serve the row costs an error for one process and nothing else; the
 process that holds the matching key serves it normally.
 
-The backfill of a missing `refresh_token_hash` writes that column and nothing else. In
-particular it leaves `token_rotated_at` alone: that column dates the refresh token and starts
-the ninety-day clock, so moving it would hand a token that is already months old another ninety
-days of life.
+The backfill of a missing `refresh_token_hash` writes that column and `updated_at`, which every
+write here bumps. In particular it leaves `token_rotated_at` alone: that column dates the refresh
+token and starts the ninety-day clock, so moving it would hand a token that is already months old
+another ninety days of life.
 
 Exchange failures map to revocations, never to retries:
 
@@ -125,23 +168,49 @@ Exchange failures map to revocations, never to retries:
 Every branch commits its revocation and reports afterwards; throwing inside the transaction
 would roll the revocation back.
 
-One case cannot be handled inside that transaction: the exchange succeeded and storing the new
-pair failed. PostgreSQL rejects every statement after a failed one in the same transaction, so
-the revocation would be rejected too. The service therefore lets the transaction roll back and
-revokes the account `refresh_outcome_unknown` in a **second** transaction — the broker has
-consumed the stored token, and a rolled-back write means our only copy of its replacement is
-gone. If that second transaction also fails, the account stays active holding a token the
-broker will refuse, and the next refresh revokes it on `invalid_grant`.
+One class of failure cannot be handled inside that transaction: the exchange succeeded and
+something afterwards did not. The trigger is **the exchange itself**, not any particular call
+after it — a failed write usually poisons the transaction so the revocation would be rejected
+too, and a failure raised by the COMMIT is never visible to code running inside it at all. So
+the service records what it was holding as soon as the broker answers, lets the transaction roll
+back, and revokes in a **second** transaction. That covers a failed rotation write, a failed
+revocation on the foreign-user branch, and a failed COMMIT alike.
+
+The second transaction cannot revoke unconditionally. Its row lock is gone, so the user may have
+logged in again in the gap, and revoking by id alone would destroy that new session — the same
+mistake the key-id rule above exists to prevent. `revokeAccountIfUnchanged` therefore matches on
+the refresh hash the caller was holding (`is not distinct from`, because a legacy row carries
+NULL) and reports which of four things happened:
+
+| Outcome | Meaning | What the service does |
+| --- | --- | --- |
+| `revoked` | the row still held the lost pair | reports `account_revoked` / `refresh_outcome_unknown` |
+| `already_revoked` | someone else got there first | reports `account_revoked` with their reason |
+| `changed` | the user logged in again; the lost pair is nobody's dependency now | logs and rethrows the original failure |
+| `missing` | the account is gone | logs and rethrows |
+
+If the second transaction itself fails, the account stays active holding a token the broker will
+refuse, the failure is logged, and `ensureFreshAccessToken` **throws** rather than returning a
+result — callers such as ARCH-01 (#40) see an exception, not an `AccessTokenResult`. The next
+refresh gets `invalid_grant` and revokes it there.
 
 ## Secrets
 
 Broker errors carry a code and a status, never the response body, the request form or a cause.
 `trade_intents`-style allowlists apply here too: `auth_revoked_reason` holds one of four values,
 CHECKed in the schema. `LOG_REDACT_PATHS` covers the broker's snake_case names, `state` and
-`authorizationCode` at every depth, plus the single path `req.body.code`. The bare key `code` is
+`authorizationCode` at every depth, plus `req.body.code` — insurance for a future serializer
+rather than a path anything logs today, since Fastify's `req` serializer never emits the body.
+The bare key `code` is
 deliberately **not** redacted: SQLSTATE, libuv errno and Fastify's `FST_ERR_*` all travel under
 that name, and blanking them would cost the diagnostics this project logs errors by — errors are
 logged as `{ name, code }` and nothing else (`errorIdentity`, `packages/shared/src/logging.ts`).
+No key path can reach a string, so two places are handled by shaping what is logged rather than
+by redaction: unhandled 500s log `errorIdentity(error)` and the SQL template instead of the error
+object, because a `DrizzleQueryError` carries the bound parameters as a field **and** inside its
+message; and both the request serializer and a custom not-found handler strip `code` and `state`
+from the logged URL, for the case where the broker delivers them as query parameters.
+
 The one place a state legitimately appears is the authorize URL that `start` returns — it is
 absent from callback responses, from errors and from logs.
 
@@ -159,11 +228,16 @@ Backend only, never the worker (the worker neither exchanges grants nor decrypts
 | `TOKEN_ENCRYPTION_KEY`                     | 32 bytes, base64; `openssl rand -base64 32`                                                                |
 | `TOKEN_ENCRYPTION_KEY_ID`                  | names the key for rotation; no `\|`, no whitespace (the cipher binds with it)                              |
 
-compose supplies dev values so the stack starts without secrets, including an all-zero
-encryption key. That key is published in this repository and is therefore no protection at all,
-so the backend accepts it **only** paired with `TOKEN_ENCRYPTION_KEY_ID=dev`, which is what
-compose sets. Any other key id with that key fails at startup: the combination means a rotation
-where the id was changed and the key was not. A deployment (#4) overrides every one of them.
+`INTERNAL_API_TOKEN`, `BROKER_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY` and
+`TOKEN_ENCRYPTION_KEY_ID` have **no defaults in compose**: they use the `${VAR:?message}` form,
+so the stack refuses to start without them rather than substituting a value from this repository
+that a deployment could inherit by forgetting to set its own. Development values live in the
+gitignored `.env` (copy `.env.example`), and CI passes its own throwaway values.
+
+The development encryption key is thirty-two zero bytes. It is published here and is therefore no
+protection at all, so the backend accepts it **only** paired with `TOKEN_ENCRYPTION_KEY_ID=dev`.
+Any other key id with that key fails at startup: the combination means a rotation where the id was
+changed and the key was not.
 
 ## Boundaries
 

@@ -36,7 +36,7 @@ Postgres, Redis, and the four apps run in containers; the apps hot-reload from y
 The apps are not meant to run outside Docker in this repo state.
 
 ```bash
-cp .env.example .env                # optional: every value is also the compose default
+cp .env.example .env                # required: compose refuses to start without the secrets in it
 docker compose up --build --watch   # build, start, sync src/ edits into the containers
 curl 127.0.0.1:3000/health          # {"status":"ok","postgres":"ok","redis":"ok"}
 docker compose down -v              # stop and drop the Postgres volume

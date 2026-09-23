@@ -67,20 +67,20 @@ services:
       <<: [*app-environment, *broker-environment]
       PORT: "3000"
       # dev-only fallback; a deployment sets its own secret (the backend refuses to start without one)
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-binarius-dev-internal-token}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set it in .env; see .env.example}
       # OAuth login (#9). These stay on `backend` rather than the shared broker anchor: the
       # worker never exchanges grants and must not receive the client secret or the key that
       # decrypts stored tokens. The dev values let `docker compose up` and CI start; a
       # deployment overrides every one of them.
       BROKER_CLIENT_ID: ${BROKER_CLIENT_ID:-binarius-dev-client}
-      BROKER_CLIENT_SECRET: ${BROKER_CLIENT_SECRET:-binarius-dev-secret}
+      BROKER_CLIENT_SECRET: ${BROKER_CLIENT_SECRET:?set it in .env; see .env.example}
       BROKER_OAUTH_AUTHORIZE_URL: ${BROKER_OAUTH_AUTHORIZE_URL:-https://binodex.app/oauth/authorize}
       BROKER_API_BASE_URL: ${BROKER_API_BASE_URL:-https://binodex.app}
       BROKER_OAUTH_REDIRECT_URI: ${BROKER_OAUTH_REDIRECT_URI:-http://127.0.0.1:3000/oauth/callback}
       BROKER_PARTNER_REF: ${BROKER_PARTNER_REF:-binarius-dev}
       # dev-only key: 32 zero bytes, base64. Never use it anywhere data matters.
-      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
-      TOKEN_ENCRYPTION_KEY_ID: ${TOKEN_ENCRYPTION_KEY_ID:-dev}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?set it in .env; see .env.example}
+      TOKEN_ENCRYPTION_KEY_ID: ${TOKEN_ENCRYPTION_KEY_ID:?set it in .env; see .env.example}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
     healthcheck:
