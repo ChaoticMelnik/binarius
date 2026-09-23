@@ -42,8 +42,9 @@ export interface TokenServiceDeps {
   logger: FastifyBaseLogger;
 }
 
-// What the caller was holding when the broker rotated the pair. Everything that fails from that
-// moment on — including the COMMIT — means the stored token is spent and its replacement is gone.
+// What the caller was holding once the stored pair stopped being reliably ours: either the broker
+// rotated it, or the outcome is unknown and it may have. Everything that fails from that moment
+// on — including the COMMIT — has to leave the account revoked rather than holding a spent token.
 interface ExchangedPair {
   accountId: string;
   refreshTokenHash: string | null;
@@ -161,6 +162,13 @@ async function refreshUnderLock(
     tokens = await broker.refresh({ refreshToken });
   } catch (error) {
     const reason = revocationReasonFor(error);
+    // An unknown outcome is already treated as a consumed token, so from here the stored pair
+    // may be spent and the revocation below has to survive this transaction failing too.
+    // `invalid_grant` is excluded on purpose: the broker refused, nothing was rotated, and a
+    // lost revocation there costs only a retry that gets the same refusal with the exact reason.
+    if (reason === AuthRevokedReason.RefreshOutcomeUnknown) {
+      onExchanged({ accountId: account.id, refreshTokenHash: account.refreshTokenHash });
+    }
     logger.warn(
       { accountId: account.id, reason, err: errorIdentity(error) },
       'broker refresh failed, revoking the account',

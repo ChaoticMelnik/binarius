@@ -95,6 +95,36 @@ const rowOf = (id: string) => brokerAccountRow(tmp.db, id);
 // after the broker already rotated the pair is reproduced without stubbing the database
 const BLOCKED_EMAIL = 'rotation-blocked@example.test';
 const COMMIT_BLOCKED_EMAIL = 'commit-blocked@example.test';
+const UNKNOWN_BLOCKED_EMAIL = 'unknown-commit-blocked@example.test';
+
+// fires at COMMIT for the revocation itself, so the transaction that recorded it dies after the
+// statement succeeded — which is what makes the recovery the only thing that can save the account
+const failRevokeCommit = () =>
+  tmp.db.execute(
+    sql.raw(`
+      create or replace function binarius_test_block_revoke() returns trigger
+        language plpgsql as $$
+        begin
+          raise exception 'revoke commit blocked by test';
+        end $$;
+      create constraint trigger binarius_test_block_revoke
+        after update on broker_accounts
+        deferrable initially deferred
+        for each row
+        when (new.email = '${UNKNOWN_BLOCKED_EMAIL}' and new.status = 'revoked')
+        execute function binarius_test_block_revoke();
+    `),
+  );
+
+// its own sink: the cases above already emit the recovery messages, so a file-wide buffer would
+// make the assertion below pass even with the fix reverted
+function capturingLogger() {
+  const lines: string[] = [];
+  const app = Fastify({
+    logger: { level: 'info', stream: { write: (line: string) => void lines.push(line) } },
+  });
+  return { logger: app.log, text: () => lines.join('\n') };
+}
 
 // BEFORE UPDATE OF access_token_enc: a revocation does not touch that column, so the second
 // transaction still gets through. Raw, unparameterised SQL: several statements can only be
@@ -135,21 +165,15 @@ const failCommit = () =>
     `),
   );
 
-const allowCommit = () =>
+// every guard below is a trigger plus its function under one name
+const dropTestGuard = (name: string) =>
   tmp.db.execute(
-    sql.raw(`
-      drop trigger if exists binarius_test_block_commit on broker_accounts;
-      drop function if exists binarius_test_block_commit();
-    `),
+    sql.raw(`drop trigger if exists ${name} on broker_accounts; drop function if exists ${name}();`),
   );
 
-const allowRotation = () =>
-  tmp.db.execute(
-    sql.raw(`
-      drop trigger if exists binarius_test_block_rotation on broker_accounts;
-      drop function if exists binarius_test_block_rotation();
-    `),
-  );
+const allowCommit = () => dropTestGuard('binarius_test_block_commit');
+
+const allowRotation = () => dropTestGuard('binarius_test_block_rotation');
 
 // blocks every update of the marked row, so the second transaction's revocation fails too
 const failAnyUpdate = (email: string) =>
@@ -167,13 +191,7 @@ const failAnyUpdate = (email: string) =>
     `),
   );
 
-const allowAnyUpdate = () =>
-  tmp.db.execute(
-    sql.raw(`
-      drop trigger if exists binarius_test_block_any on broker_accounts;
-      drop function if exists binarius_test_block_any();
-    `),
-  );
+const allowAnyUpdate = () => dropTestGuard('binarius_test_block_any');
 
 const expireAccessToken = (id: string) =>
   tmp.db
@@ -468,8 +486,8 @@ describe('ensureFreshAccessToken', () => {
   it('revokes when the commit itself fails after the pair was stored', async () => {
     const account = await linkedAccount(COMMIT_BLOCKED_EMAIL);
     await expireAccessToken(account.id);
-    await failCommit();
     try {
+      await failCommit();
       expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
         ok: false,
         reason: 'account_revoked',
@@ -488,14 +506,50 @@ describe('ensureFreshAccessToken', () => {
   it('throws when the account cannot be revoked after the pair was lost', async () => {
     const account = await linkedAccount(BLOCKED_EMAIL);
     await expireAccessToken(account.id);
-    await failRotation();
-    await failAnyUpdate(BLOCKED_EMAIL);
     try {
+      await failRotation();
+      await failAnyUpdate(BLOCKED_EMAIL);
       await expect(ensureFreshAccessToken(deps(), account.id)).rejects.toThrow();
       expect((await rowOf(account.id)).status).toBe('active');
     } finally {
       await allowAnyUpdate();
       await allowRotation();
+    }
+  });
+
+  // the branch the previous round left uncovered: the broker never answered, so the pair may
+  // already be spent, and the revocation that says so is lost when the transaction cannot commit
+  it('recovers when an unknown outcome is revoked and that commit fails', async () => {
+    const account = await linkedAccount(UNKNOWN_BLOCKED_EMAIL);
+    await expireAccessToken(account.id);
+    const slow = await startOAuthStub({
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      redirectUri: REDIRECT_URI,
+      delayMs: 2_000,
+    });
+    const captured = capturingLogger();
+    try {
+      await failRevokeCommit();
+      const impatient = createBrokerOAuthClient({
+        baseUrl: slow.url,
+        clientId: CLIENT_ID,
+        clientSecret: CLIENT_SECRET,
+        timeoutMs: 50,
+      });
+      await expect(
+        ensureFreshAccessToken(deps({ broker: impatient, logger: captured.logger }), account.id),
+      ).rejects.toThrow();
+
+      // both transactions die on the same trigger, so the row is unchanged either way: what
+      // distinguishes a working recovery from none is that it was attempted at all
+      const text = captured.text();
+      expect(text).toContain('revoking the account in a second transaction');
+      expect(text).toContain('could not be revoked');
+      expect((await rowOf(account.id)).status).toBe('active');
+    } finally {
+      await dropTestGuard('binarius_test_block_revoke');
+      await slow.close();
     }
   });
 
