@@ -78,21 +78,24 @@ const testApp = (auth: AuthRoutesDeps) =>
     auth,
   });
 
-const start = (telegramUserId: string, authorization = `Bearer ${TOKEN}`, instance = app) =>
+const post = (
+  instance: ReturnType<typeof testApp>,
+  url: string,
+  payload: unknown,
+  headers: Record<string, string> = {},
+) =>
   instance.inject({
     method: 'POST',
-    url: '/auth/binodex/start',
-    headers: { authorization, 'content-type': 'application/json' },
-    payload: JSON.stringify({ telegramUserId }),
-  });
-
-const callback = (payload: unknown, instance = app) =>
-  instance.inject({
-    method: 'POST',
-    url: '/auth/binodex/callback',
-    headers: { 'content-type': 'application/json' },
+    url,
+    headers: { 'content-type': 'application/json', ...headers },
     payload: JSON.stringify(payload),
   });
+
+const start = (telegramUserId: string, authorization = `Bearer ${TOKEN}`, instance = app) =>
+  post(instance, '/auth/binodex/start', { telegramUserId }, { authorization });
+
+const callback = (payload: unknown, instance = app) =>
+  post(instance, '/auth/binodex/callback', payload);
 
 async function login(telegramUserId: string, brokerUserId: string) {
   const started = await start(telegramUserId);
@@ -457,12 +460,7 @@ describe('the callback rate limits', () => {
 
 describe('POST /auth/binodex/confirm', () => {
   const confirm = (payload: unknown, authorization = `Bearer ${TOKEN}`) =>
-    app.inject({
-      method: 'POST',
-      url: '/auth/binodex/confirm',
-      headers: { authorization, 'content-type': 'application/json' },
-      payload: JSON.stringify(payload),
-    });
+    post(app, '/auth/binodex/confirm', payload, { authorization });
 
   const linked = async () => {
     const telegram = telegramId();
@@ -494,8 +492,13 @@ describe('POST /auth/binodex/confirm', () => {
 
   it('refuses an account that belongs to someone else', async () => {
     const { account } = await linked();
-    const stranger = telegramId();
-    const response = await confirm({ telegramUserId: stranger, accountId: account.id });
+    // a real user row, so the lookup gets past "no such user" and actually exercises the
+    // ownership predicate on broker_accounts
+    const stranger = await seedUser(tmp.db);
+    const response = await confirm({
+      telegramUserId: stranger.telegramUserId,
+      accountId: account.id,
+    });
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: 'broker_account_not_found' });
   });

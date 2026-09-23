@@ -48,9 +48,10 @@ would let a caller choose its own.
 | all requests | 3000/min | every request, before the body is parsed and before any query | how much work an anonymous caller can trigger at all |
 | failed state lookups | 600/min | only a state that resolved to no row | junk, without letting real logins close the door |
 
-Both counters **reserve** their slot before the work they limit and give it back if the work
-turns out not to be the thing being limited: the callback takes a failure slot before the state
-lookup and releases it when the state resolves, or when the lookup itself throws. A counter
+Both counters **reserve** their slot before the work they limit, and the failure counter gives
+its slot back when the work turns out not to be a failure: the callback takes a failure slot
+before the state lookup and releases it when the state resolves, or when the lookup itself
+throws. The ceiling never releases — every request counts against it, which is the point. A counter
 incremented after the lookup would let a whole concurrent burst through, because none of them
 has counted yet while the others are being admitted. A database outage does not spend the
 budget either — it is not a guess.
@@ -125,9 +126,12 @@ logging in, and an account that belongs to another Telegram user answers 409
 
 ## What a re-login does and does not touch
 
-It refreshes the tokens, sets `status = active` and clears `auth_revoked_reason`. It does not
-touch `trading_halted` or `halted_reason`: those belong to reconciliation (ARCH-04), and an
-account halted for an ambiguous match stays halted through a re-login.
+It refreshes the tokens and clears `auth_revoked_reason`. What it does to `status` depends on
+where the account was: an account that was `active` or `revoked` becomes `active` again, because
+its owner confirmed it once already; one that is still `pending` stays `pending`, because a
+second login is not the confirmation nobody gave. It does not touch `trading_halted` or
+`halted_reason`: those belong to reconciliation (ARCH-04), and an account halted for an
+ambiguous match stays halted through a re-login.
 
 ## Refresh
 
@@ -168,13 +172,21 @@ Exchange failures map to revocations, never to retries:
 Every branch commits its revocation and reports afterwards; throwing inside the transaction
 would roll the revocation back.
 
-One class of failure cannot be handled inside that transaction: the exchange succeeded and
-something afterwards did not. The trigger is **the exchange itself**, not any particular call
-after it — a failed write usually poisons the transaction so the revocation would be rejected
-too, and a failure raised by the COMMIT is never visible to code running inside it at all. So
-the service records what it was holding as soon as the broker answers, lets the transaction roll
-back, and revokes in a **second** transaction. That covers a failed rotation write, a failed
-revocation on the foreign-user branch, and a failed COMMIT alike.
+One class of failure cannot be handled inside that transaction: the stored pair stopped being
+reliably ours and something afterwards failed. The trigger is not any particular call — a failed
+write usually poisons the transaction so the revocation would be rejected too, and a failure
+raised by the COMMIT is never visible to code running inside it at all. So the service records
+what it was holding at the two points where the pair becomes unreliable, lets the transaction
+roll back, and revokes in a **second** transaction:
+
+- the broker answered and rotated the pair;
+- the broker's answer never arrived (timeout, network failure, 5xx), which this flow already
+  treats as a consumed token.
+
+An `invalid_grant` refusal is deliberately not one of them: the broker refused, nothing rotated,
+and if that transaction's COMMIT fails the next call gets the same refusal and revokes with the
+exact reason. The recording covers a failed rotation write, a failed revocation on either branch,
+and a failed COMMIT alike.
 
 The second transaction cannot revoke unconditionally. Its row lock is gone, so the user may have
 logged in again in the gap, and revoking by id alone would destroy that new session — the same
@@ -229,15 +241,19 @@ Backend only, never the worker (the worker neither exchanges grants nor decrypts
 | `TOKEN_ENCRYPTION_KEY_ID`                  | names the key for rotation; no `\|`, no whitespace (the cipher binds with it)                              |
 
 `INTERNAL_API_TOKEN`, `BROKER_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY` and
-`TOKEN_ENCRYPTION_KEY_ID` have **no defaults in compose**: they use the `${VAR:?message}` form,
-so the stack refuses to start without them rather than substituting a value from this repository
-that a deployment could inherit by forgetting to set its own. Development values live in the
-gitignored `.env` (copy `.env.example`), and CI passes its own throwaway values.
+`TOKEN_ENCRYPTION_KEY_ID` have **no value anywhere in this repository** — not in `compose.yaml`,
+which uses the `${VAR:?message}` form, and not in `.env.example`, which lists them with empty
+assignments. `${VAR:?}` refuses an empty value as well as a missing one, so `cp .env.example .env`
+leaves the stack still refusing to start, and a developer has to put something there deliberately.
+That is the whole point: a secret with a value in the tree is one a deployment inherits by
+following the setup instructions. CI passes its own throwaway values, and a CI step asserts that
+compose still refuses when they are unset.
 
-The development encryption key is thirty-two zero bytes. It is published here and is therefore no
-protection at all, so the backend accepts it **only** paired with `TOKEN_ENCRYPTION_KEY_ID=dev`.
-Any other key id with that key fails at startup: the combination means a rotation where the id was
-changed and the key was not.
+The development encryption key is thirty-two zero bytes, and `.env.example` names it in a comment
+rather than assigning it. It is published here and is therefore no protection at all, so the
+backend accepts it **only** paired with `TOKEN_ENCRYPTION_KEY_ID=dev`. Any other key id with that
+key fails at startup: the combination means a rotation where the id was changed and the key was
+not.
 
 ## Boundaries
 
