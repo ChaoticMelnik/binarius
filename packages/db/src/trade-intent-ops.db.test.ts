@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TradeIntentFailureReason, type DecimalString } from '@binarius/shared';
 import {
@@ -17,6 +17,7 @@ import {
   getTradeIntentView,
   listStaleSubmittingIntents,
   markIntentAccepted,
+  millisecondsAgo,
   markIntentUnknown,
   rejectExpiredIntent,
   rejectIntent,
@@ -70,13 +71,13 @@ const take = (intent: { id: string; version: number }) =>
 const ageIntent = (id: string, ms: number) =>
   tmp.db
     .update(tradeIntents)
-    .set({ createdAt: sql`now() - (${ms}::int * interval '1 millisecond')` })
+    .set({ createdAt: millisecondsAgo(ms) })
     .where(eq(tradeIntents.id, id));
 
 const ageSubmission = (id: string, ms: number) =>
   tmp.db
     .update(tradeIntents)
-    .set({ submittedAt: sql`now() - (${ms}::int * interval '1 millisecond')` })
+    .set({ submittedAt: millisecondsAgo(ms) })
     .where(eq(tradeIntents.id, id));
 
 describe('createTradeIntent', () => {
