@@ -4,7 +4,7 @@ import Fastify, {
   type FastifyRequest,
   type LogLevel,
 } from 'fastify';
-import { errorIdentity, LOG_REDACT_PATHS } from '@binarius/shared';
+import { errorIdentity, errorLogFields, LOG_REDACT_PATHS } from '@binarius/shared';
 import { authRoutes, type AuthRoutesDeps } from './auth/routes';
 import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
 
@@ -100,7 +100,7 @@ export function buildApp({
     // carries the SQLSTATE, which is the whole diagnostic value of a database failure and is
     // absent from the wrapper: drizzle sets neither `name` nor `code` on it.
     request.log.error(
-      { err: errorIdentity(error), query: queryOf(error), ...causeIdentity(error) },
+      { ...errorLogFields(error), query: queryOf(error) },
       'unhandled request error',
     );
     return reply.code(500).send({ error: 'internal' });
@@ -145,13 +145,6 @@ function queryOf(error: unknown): string | undefined {
   return typeof query === 'string' ? query : undefined;
 }
 
-// One level only, and by identity: a pg DatabaseError carries the SQLSTATE on `code` and the
-// offending value on `detail`, so the whole object must not be logged. Omitted entirely when
-// there is no cause, rather than logged as the name of `undefined`.
-function causeIdentity(error: unknown): { cause?: { name: string; code?: string } } {
-  const cause = (error as { cause?: unknown } | null)?.cause;
-  return cause === undefined || cause === null ? {} : { cause: errorIdentity(cause) };
-}
 
 async function runCheck(check: DependencyCheck, timeoutMs: number): Promise<CheckResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
