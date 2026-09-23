@@ -15,6 +15,13 @@
       "when": 1790110696228,
       "tag": "0001_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790127078967,
+      "tag": "0002_client_request_per_user",
+      "breakpoints": true
     }
   ]
 }

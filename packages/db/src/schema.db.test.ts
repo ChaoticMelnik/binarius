@@ -235,6 +235,7 @@ describe('enum and uniqueness constraints', () => {
     ['trade_intents_mode_check', { mode: 'bogus' }],
     ['trade_intents_action_check', { action: 'bogus' }],
     ['trade_intents_transport_check', { transport: 'bogus' }],
+    ['trade_intents_last_error_check', { lastError: 'bogus' }],
     ['trade_intents_tokens_reserved_check', { tokensReserved: -1n }],
   ])('rejects a value outside %s', async (constraint, patch) => {
     await rolledBack(async (tx) => {
@@ -264,6 +265,7 @@ describe('enum and uniqueness constraints', () => {
   it.each([
     ['outbox_events_status_check', { status: 'bogus' as never }],
     ['outbox_events_topic_check', { topic: 'bogus' as never }],
+    ['outbox_events_last_error_check', { lastError: 'bogus' as never }],
   ])('rejects a value outside %s', async (constraint, patch) => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
@@ -417,14 +419,39 @@ describe('trade_intents', () => {
     });
   });
 
-  it('rejects a second intent with the same client_request_id for the account', async () => {
+  it('rejects a second intent with the same client_request_id for the user', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       await tx.insert(tradeIntents).values(intent(seed, 'r1', { status: 'settled' }));
       await rejectsWith(
         tx.insert(tradeIntents).values(intent(seed, 'r1')),
         '23505',
-        'trade_intents_account_request_idx',
+        'trade_intents_user_request_idx',
+      );
+    });
+  });
+
+  // per user, not per account (0002): a retry that names the user's other account must not
+  // slip past the key and reserve a second token
+  it('rejects the same client_request_id on another account of the same user', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [second] = await tx
+        .insert(brokerAccounts)
+        .values({
+          userId: seed.userId,
+          brokerUserId: `broker-second-${++seq}`,
+          accessTokenEnc: Buffer.from('enc'),
+          refreshTokenEnc: Buffer.from('enc'),
+          tokenKeyId: 'k1',
+          accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+        })
+        .returning({ id: brokerAccounts.id });
+      await tx.insert(tradeIntents).values(intent(seed, 'r1', { status: 'settled' }));
+      await rejectsWith(
+        tx.insert(tradeIntents).values(intent({ ...seed, accountId: second!.id }, 'r1')),
+        '23505',
+        'trade_intents_user_request_idx',
       );
     });
   });

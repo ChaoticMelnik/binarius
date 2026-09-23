@@ -15,11 +15,11 @@ import {
 import {
   TRADE_INTENT_TRANSITIONS,
   TradeAction,
+  TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
   TradeTransport,
   type DecimalString,
-  type TradeIntentFailureReason,
 } from '@binarius/shared';
 import {
   createdAt,
@@ -73,8 +73,11 @@ export const tradeIntents = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    // ARCH-03: a repeated Telegram update returns the existing intent
-    uniqueIndex('trade_intents_account_request_idx').on(t.brokerAccountId, t.clientRequestId),
+    // ARCH-03: a repeated Telegram update returns the existing intent. Keyed per user, not per
+    // account: the bot issues one client_request_id per user action, and an account belongs to
+    // exactly one user, so this is strictly stronger than the per-account key it replaced (0002)
+    // and keeps a retry that names a different account from reserving a second token.
+    uniqueIndex('trade_intents_user_request_idx').on(t.userId, t.clientRequestId),
     // one non-terminal intent per account: the backend's "no conflicting active intent"
     // check holds under concurrent transactions, and an unknown/reconciling intent blocks new ones
     uniqueIndex('trade_intents_active_account_idx')
@@ -101,6 +104,9 @@ export const tradeIntents = pgTable(
     inList('trade_intents_action_check', t.action, TradeAction),
     inList('trade_intents_status_check', t.status, TradeIntentStatus),
     inList('trade_intents_transport_check', t.transport, TradeTransport),
+    // the wire view asserts last_error into the allowlist; a writer outside trade-intent-ops
+    // (ARCH-04, an operator UPDATE) must be refused here rather than break every reader
+    inList('trade_intents_last_error_check', t.lastError, TradeIntentFailureReason),
     check('trade_intents_asset_id_check', sql`${t.assetId} > 0`),
     positiveNumeric('trade_intents_amount_check', t.amount),
     check('trade_intents_duration_sec_check', sql`${t.durationSec} > 0`),
