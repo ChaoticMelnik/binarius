@@ -172,7 +172,9 @@ jobs:
               # TOKEN_ENCRYPTION_KEY is a prefix of TOKEN_ENCRYPTION_KEY_ID and a plain substring
               # would accept the wrong one's refusal as evidence. If compose ever stops printing
               # the name the step fails, which is the safe direction.
-              if ! printf '%s' "$out" | grep -qE "(^|[^A-Za-z0-9_])$name([^A-Za-z0-9_]|\$)"; then
+              # -w is a word boundary, which is exactly what distinguishes TOKEN_ENCRYPTION_KEY
+              # from TOKEN_ENCRYPTION_KEY_ID
+              if ! printf '%s' "$out" | grep -qw "$name"; then
                 echo "an $form $name was refused for another reason: $out" >&2
                 exit 1
               fi
