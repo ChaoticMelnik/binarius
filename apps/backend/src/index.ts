@@ -1,5 +1,6 @@
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
+import { createDb } from '@binarius/db';
 import { buildApp } from './app';
 import { parseEnv } from './env';
 import { closeAll } from '@binarius/shared';
@@ -26,11 +27,14 @@ const redis = new Redis(env.redisUrl, {
   maxRetriesPerRequest: 1,
 });
 
+const db = createDb(pool);
+
 const app = buildApp({
   checkPostgres: () => pool.query('SELECT 1'),
   checkRedis: () => redis.ping(),
   logLevel: env.logLevel,
   checkTimeoutMs: env.healthTimeoutMs,
+  trading: { db, internalApiToken: env.internalApiToken, onIntentQueued: () => {} },
 });
 
 // an unhandled 'error' on either client would crash the process instead of degrading /health

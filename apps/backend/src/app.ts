@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance, type LogLevel } from 'fastify';
+import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
 
 type DependencyCheck = () => Promise<unknown>;
 
@@ -7,17 +8,30 @@ export interface AppDeps {
   checkRedis: DependencyCheck;
   logLevel: LogLevel;
   checkTimeoutMs: number;
+  trading: TradingRoutesDeps;
 }
 
 type CheckResult = { status: 'ok' } | { status: 'error'; error: unknown };
+
+// belt and braces: fastify's request serializer logs no headers, and nothing here logs a token
+// object, but a future `request.log.info({ req })` must not print the shared secret either
+const LOG_REDACT_PATHS = [
+  'req.headers.authorization',
+  '*.authorization',
+  '*.token',
+  '*.accessToken',
+  '*.refreshToken',
+  '*.password',
+];
 
 export function buildApp({
   checkPostgres,
   checkRedis,
   logLevel,
   checkTimeoutMs,
+  trading,
 }: AppDeps): FastifyInstance {
-  const app = Fastify({ logger: { level: logLevel } });
+  const app = Fastify({ logger: { level: logLevel, redact: LOG_REDACT_PATHS } });
 
   app.get('/health', async (request, reply) => {
     const [postgres, redis] = await Promise.all([
@@ -37,6 +51,8 @@ export function buildApp({
       redis: redis.status,
     });
   });
+
+  void app.register(tradingRoutes, trading);
 
   return app;
 }

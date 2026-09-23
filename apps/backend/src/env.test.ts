@@ -4,6 +4,7 @@ import { parseEnv } from './env';
 const valid = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
   REDIS_URL: 'redis://localhost:6379',
+  INTERNAL_API_TOKEN: 'internal-token-for-tests',
 };
 
 describe('parseEnv', () => {
@@ -14,6 +15,7 @@ describe('parseEnv', () => {
       port: 3000,
       logLevel: 'info',
       healthTimeoutMs: 2000,
+      internalApiToken: valid.INTERNAL_API_TOKEN,
     });
   });
 
@@ -30,22 +32,30 @@ describe('parseEnv', () => {
   });
 
   it('accepts the postgresql and rediss schemes', () => {
-    const env = parseEnv({ DATABASE_URL: 'postgresql://h/db', REDIS_URL: 'rediss://h:6380' });
+    const env = parseEnv({
+      ...valid,
+      DATABASE_URL: 'postgresql://h/db',
+      REDIS_URL: 'rediss://h:6380',
+    });
     expect(env.databaseUrl).toBe('postgresql://h/db');
     expect(env.redisUrl).toBe('rediss://h:6380');
   });
 
-  it.each(['DATABASE_URL', 'REDIS_URL'])('rejects missing %s', (name) => {
+  it.each(['DATABASE_URL', 'REDIS_URL', 'INTERNAL_API_TOKEN'])('rejects missing %s', (name) => {
     const source: Record<string, string | undefined> = { ...valid, [name]: undefined };
     expect(() => parseEnv(source)).toThrow(`Missing required env ${name}`);
   });
 
-  it.each(['DATABASE_URL', 'REDIS_URL', 'PORT', 'LOG_LEVEL', 'HEALTH_TIMEOUT_MS'])(
-    'rejects empty %s instead of defaulting it',
-    (name) => {
-      expect(() => parseEnv({ ...valid, [name]: '' })).toThrow(`Env ${name} must not be empty`);
-    },
-  );
+  it.each([
+    'DATABASE_URL',
+    'REDIS_URL',
+    'PORT',
+    'LOG_LEVEL',
+    'HEALTH_TIMEOUT_MS',
+    'INTERNAL_API_TOKEN',
+  ])('rejects empty %s instead of defaulting it', (name) => {
+    expect(() => parseEnv({ ...valid, [name]: '' })).toThrow(`Env ${name} must not be empty`);
+  });
 
   it.each([
     ['not a url', 'Env DATABASE_URL is not a valid URL'],
@@ -101,5 +111,21 @@ describe('parseEnv', () => {
 
   it.each(['500', '2500'])('accepts the HEALTH_TIMEOUT_MS boundary %s', (value) => {
     expect(parseEnv({ ...valid, HEALTH_TIMEOUT_MS: value }).healthTimeoutMs).toBe(Number(value));
+  });
+});
+
+describe('INTERNAL_API_TOKEN', () => {
+  it.each([
+    ['short-token', 'Env INTERNAL_API_TOKEN must be at least 16 characters'],
+    ['has a space in it!', 'Env INTERNAL_API_TOKEN must not contain whitespace'],
+    ['trailing-newline-token\n', 'Env INTERNAL_API_TOKEN must not contain whitespace'],
+  ])('rejects %j', (token, message) => {
+    expect(() => parseEnv({ ...valid, INTERNAL_API_TOKEN: token })).toThrow(message);
+  });
+
+  it('accepts the 16-character boundary', () => {
+    expect(parseEnv({ ...valid, INTERNAL_API_TOKEN: 'x'.repeat(16) }).internalApiToken).toBe(
+      'x'.repeat(16),
+    );
   });
 });
