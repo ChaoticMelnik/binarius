@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import * as z from 'zod';
 import {
+  errorIdentity,
   TradeIntentErrorCode,
   safeParseCreateTradeIntentRequest,
   type TradeIntentErrorCode as ErrorCode,
@@ -55,7 +56,10 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
       try {
         onIntentQueued();
       } catch (error) {
-        request.log.warn({ err: error }, 'publisher wake failed, the poll will pick the row up');
+        request.log.warn(
+          { err: errorIdentity(error) },
+          'publisher wake failed, the poll will pick the row up',
+        );
       }
     }
     return reply

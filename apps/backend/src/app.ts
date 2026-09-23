@@ -17,6 +17,12 @@ export interface AppDeps {
   checkTimeoutMs: number;
   trading: TradingRoutesDeps;
   auth: AuthRoutesDeps;
+  // Where the logger writes. Production omits it and pino uses its own destination; the tests
+  // pass a sink, because what this app keeps out of its log lines is only provable by reading
+  // them, and pino writes to a file descriptor that stubbing `process.stdout` does not reach.
+  // Typed structurally rather than as pino's DestinationStream: this package does not depend
+  // on pino directly.
+  logDestination?: { write(line: string): void };
 }
 
 type CheckResult = { status: 'ok' } | { status: 'error'; error: unknown };
@@ -28,6 +34,7 @@ export function buildApp({
   checkTimeoutMs,
   trading,
   auth,
+  logDestination,
 }: AppDeps): FastifyInstance {
   const app = Fastify({
     logger: {
@@ -36,6 +43,7 @@ export function buildApp({
       // the default serializer logs the raw url, and an OAuth provider that ignores
       // response_mode=web_message delivers the authorization code as a query parameter
       serializers: { req: serializeRequest },
+      ...(logDestination === undefined ? {} : { stream: logDestination }),
     },
   });
 
@@ -55,10 +63,10 @@ export function buildApp({
       runCheck(checkRedis, checkTimeoutMs),
     ]);
     if (postgres.status === 'error') {
-      request.log.warn({ err: postgres.error }, 'postgres check failed');
+      request.log.warn({ err: errorIdentity(postgres.error) }, 'postgres check failed');
     }
     if (redis.status === 'error') {
-      request.log.warn({ err: redis.error }, 'redis check failed');
+      request.log.warn({ err: errorIdentity(redis.error) }, 'redis check failed');
     }
     const healthy = postgres.status === 'ok' && redis.status === 'ok';
     return reply.code(healthy ? 200 : 503).send({
@@ -88,9 +96,11 @@ export function buildApp({
     }
     // name and code only: a DrizzleQueryError carries the bound parameters as a field and
     // interpolates them into its message, and no key-based redact path scrubs a string. The
-    // query template is safe on its own — it holds $1 placeholders, never values.
+    // query template is safe on its own — it holds $1 placeholders, never values. The cause
+    // carries the SQLSTATE, which is the whole diagnostic value of a database failure and is
+    // absent from the wrapper: drizzle sets neither `name` nor `code` on it.
     request.log.error(
-      { err: errorIdentity(error), query: queryOf(error) },
+      { err: errorIdentity(error), query: queryOf(error), ...causeIdentity(error) },
       'unhandled request error',
     );
     return reply.code(500).send({ error: 'internal' });
@@ -133,6 +143,14 @@ function serializeRequest(request: FastifyRequest) {
 function queryOf(error: unknown): string | undefined {
   const query = (error as { query?: unknown } | null)?.query;
   return typeof query === 'string' ? query : undefined;
+}
+
+// One level only, and by identity: a pg DatabaseError carries the SQLSTATE on `code` and the
+// offending value on `detail`, so the whole object must not be logged. Omitted entirely when
+// there is no cause, rather than logged as the name of `undefined`.
+function causeIdentity(error: unknown): { cause?: { name: string; code?: string } } {
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  return cause === undefined || cause === null ? {} : { cause: errorIdentity(cause) };
 }
 
 async function runCheck(check: DependencyCheck, timeoutMs: number): Promise<CheckResult> {

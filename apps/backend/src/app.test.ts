@@ -82,6 +82,99 @@ describe('GET /health', () => {
   });
 });
 
+// what this app keeps out of its logs is only provable by reading them
+function captureLogs() {
+  const lines: string[] = [];
+  return { lines, text: () => lines.join('\n'), write: (line: string) => void lines.push(line) };
+}
+
+describe('what reaches the log', () => {
+  async function withLogs(
+    run: (app: ReturnType<typeof buildApp>, logs: ReturnType<typeof captureLogs>) => Promise<void>,
+  ) {
+    const logs = captureLogs();
+    const app = buildApp({
+      checkPostgres: ok,
+      checkRedis: ok,
+      logLevel: 'info',
+      checkTimeoutMs: 20,
+      trading: unusedTrading,
+      auth: unusedAuth,
+      logDestination: logs,
+    });
+    app.get('/drizzle', async () => {
+      throw new DrizzleQueryError(
+        'select secret_column from users where id = $1',
+        ['BOUND-VALUE'],
+        Object.assign(new Error('duplicate key value violates unique constraint'), {
+          code: '23505',
+          detail: 'Key (email)=(victim@example.test) already exists.',
+        }),
+      );
+    });
+    try {
+      await run(app, logs);
+    } finally {
+      await app.close();
+    }
+  }
+
+  it('logs a database failure by its SQLSTATE, not by its parameters or its message', async () => {
+    await withLogs(async (app, logs) => {
+      expect((await app.inject({ method: 'GET', url: '/drizzle' })).statusCode).toBe(500);
+      const text = logs.text();
+      expect(text).toContain('unhandled request error');
+      // the diagnostic that makes a 500 actionable
+      expect(text).toContain('23505');
+      // and nothing that carries a value: drizzle puts the parameters on a field AND inside
+      // the message, and pg puts the offending row in `detail`
+      expect(text).not.toContain('BOUND-VALUE');
+      expect(text).not.toContain('params:');
+      expect(text).not.toContain('duplicate key value');
+      expect(text).not.toContain('victim@example.test');
+    });
+  });
+
+  it('keeps an authorization code and a state out of the access log and the 404 log', async () => {
+    await withLogs(async (app, logs) => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oauth/callback?code=CODE-SECRET&state=STATE-SECRET',
+      });
+      expect(response.statusCode).toBe(404);
+      const text = logs.text();
+      expect(text).toContain('route not found');
+      expect(text).not.toContain('CODE-SECRET');
+      expect(text).not.toContain('STATE-SECRET');
+      // Fastify's own not-found line would have carried the whole url
+      expect(text).not.toContain('Route GET:/oauth/callback');
+    });
+  });
+
+  it('reports a failed dependency check by name and code only', async () => {
+    const logs = captureLogs();
+    const app = buildApp({
+      checkPostgres: () =>
+        Promise.reject(Object.assign(new Error('connection to LEAKY-DSN failed'), { code: 'ECONNREFUSED' })),
+      checkRedis: ok,
+      logLevel: 'info',
+      checkTimeoutMs: 20,
+      trading: unusedTrading,
+      auth: unusedAuth,
+      logDestination: logs,
+    });
+    try {
+      expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(503);
+      const text = logs.text();
+      expect(text).toContain('postgres check failed');
+      expect(text).toContain('ECONNREFUSED');
+      expect(text).not.toContain('LEAKY-DSN');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe('request logging', () => {
   // the broker chooses how it delivers the code; if it ever ignores response_mode=web_message
   // the code arrives as a query parameter, and an unexpected delivery lands on a 404

@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
-import { closeAll } from '@binarius/shared';
+import { closeAll, errorIdentity } from '@binarius/shared';
 import { createDb, createTokenCipher } from '@binarius/db';
 import { buildApp } from './app';
 import { createBrokerOAuthClient } from './broker/oauth-client';
@@ -72,9 +72,11 @@ const app = buildApp({
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
 
 // an unhandled 'error' on either client would crash the process instead of degrading /health
-pool.on('error', (error) => app.log.error({ err: error }, 'postgres pool error'));
-redis.on('error', (error) => app.log.warn({ err: error }, 'redis connection error'));
-queueRedis.on('error', (error) => app.log.warn({ err: error }, 'queue redis connection error'));
+pool.on('error', (error) => app.log.error({ err: errorIdentity(error) }, 'postgres pool error'));
+redis.on('error', (error) => app.log.warn({ err: errorIdentity(error) }, 'redis connection error'));
+queueRedis.on('error', (error) =>
+  app.log.warn({ err: errorIdentity(error) }, 'queue redis connection error'),
+);
 
 let shuttingDown = false;
 
