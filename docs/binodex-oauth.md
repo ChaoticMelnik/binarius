@@ -217,13 +217,16 @@ The bare key `code` is
 deliberately **not** redacted: SQLSTATE, libuv errno and Fastify's `FST_ERR_*` all travel under
 that name, and blanking them would cost the diagnostics this project logs errors by — errors are
 logged as `{ name, code }`. Sites that use `errorLogFields` add the same two fields for one level
-of `cause`; sites that use `errorIdentity` do not, because the error there cannot carry one
+of `cause`; sites that use `errorIdentity` deliberately do not — in some the error is one this
+code constructs and has no cause, and in others, such as the worker's executor port, the contract
+is that nothing beyond the thrown error's own name and code is logged
 (`packages/shared/src/logging.ts`). The cause matters where a wrapper has nothing of its own:
 drizzle's query error sets neither `name` nor `code`, and the SQLSTATE that makes a database
 failure actionable is on the pg error underneath.
 No key path can reach a string, so what is logged is shaped rather than redacted. Every line this
 application writes passes the error through `errorIdentity` or `errorLogFields`, a rule in
-`eslint.config.js` refuses an `err`/`cause` field that does not, and a subclass of Fastify's
+`eslint.config.js` refuses an `err`/`cause` field that does not — within the shapes it can see,
+which its own comment lists — and a subclass of Fastify's
 `LogController` does the same for the lines the framework writes on our behalf — including the
 4xx path, which our error handler reaches by delegating through `reply.send(error)`. The request
 serializer and a custom not-found handler strip `code` and `state` from the logged URL, for the
@@ -231,13 +234,17 @@ case where the broker delivers them as query parameters.
 
 That is not the same as "the log contains no raw error". Fastify logs a few of its own events
 without going through `LogController`, and neither the subclass nor the lint rule reaches them:
-client errors, errors thrown by hooks, a promise rejected after the reply was sent, trailer
-errors, and the raw URL inside its duplicate-reply warning. Each needs a bug of its own to fire.
+errors thrown by hooks, a promise rejected after the reply was sent, trailer errors, a stream
+error on an auto-generated HEAD route, the raw URL inside its duplicate-reply warning — and
+client errors. All but the last need a bug of this project's own to fire; a client error is
+triggered by a malformed request from outside, and Node attaches the raw request bytes to the
+parser errors it raises, which is one reason the default level is `info` rather than `trace`.
 The claim this project makes is the narrower one, because the last four rounds of review were
 spent on claims that were wider than the code.
 
-The one place a state legitimately appears is the authorize URL that `start` returns — it is
-absent from callback responses, from errors and from logs.
+A state legitimately appears in what `start` returns — inside the authorize URL and as a field of
+its own, which is what the bot passes on. It is absent from callback responses, from errors, and
+from every line this application or `SafeLogController` writes.
 
 ## Configuration
 

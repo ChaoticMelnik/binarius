@@ -2,8 +2,10 @@
 **/dist
 coverage
 .git
-.env
-.env.*
+# every .env variant at any depth: Docker matches a slash-less pattern only at the context root,
+# so `.env` alone would let apps/backend/.env and .envrc into the image
+**/.env*
+!**/.env.example
 .playwright-mcp
 .codegraph
 .claude
