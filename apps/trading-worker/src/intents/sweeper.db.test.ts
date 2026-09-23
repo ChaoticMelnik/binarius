@@ -1,7 +1,7 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { findTradeIntent, takeIntent, tradeIntents } from '@binarius/db';
+import { findTradeIntent, millisecondsAgo, takeIntent, tradeIntents } from '@binarius/db';
 import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import { startSweeper, sweepStaleSubmitting } from './sweeper';
 
@@ -23,7 +23,7 @@ async function submittingIntent(ageMs: number) {
   await takeIntent(tmp.db, { id: intent.id, expectedVersion: intent.version, maxAgeMs: 60_000 });
   await tmp.db
     .update(tradeIntents)
-    .set({ submittedAt: sql`now() - (${ageMs}::int * interval '1 millisecond')` })
+    .set({ submittedAt: millisecondsAgo(ageMs) })
     .where(eq(tradeIntents.id, intent.id));
   return intent.id;
 }

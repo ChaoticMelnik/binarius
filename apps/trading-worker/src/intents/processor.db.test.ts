@@ -24,6 +24,7 @@ if (baseUrl === undefined || baseUrl === '') {
 }
 
 const logger = pino({ level: 'silent' });
+const MAX_AGE_MS = 60_000;
 let tmp: TempDatabase;
 beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
@@ -234,7 +235,7 @@ describe('processIntentJob', () => {
     const taken = (await takeIntent(tmp.db, {
       id: intentId,
       expectedVersion: version,
-      maxAgeMs: 60_000,
+      maxAgeMs: MAX_AGE_MS,
     }))!;
     const executor = executorOf({ outcome: 'accepted' });
     expect(await processIntentJob(deps(executor), { intentId })).toBe('noop');
