@@ -41,7 +41,7 @@ bot ──GET /trading/intents/:id──▶ backend ──▶ { intent }   (stat
 4. Reserve one token with a guarded update on `users` (`status = active`,
    `token_balance - token_reserved >= 1`); zero rows → 409 `user_blocked` or `insufficient_tokens`.
 5. Lock the account with `FOR NO KEY UPDATE` and the predicates `status = active`,
-   `trading_halted = false`; zero rows → 409 `account_revoked` / `account_halted`.
+   `trading_halted = false`; zero rows → 409 `account_revoked`, `account_not_confirmed` (linked but not confirmed in the bot, see docs/binodex-oauth.md) or `account_halted`.
 6. Insert the intent (`planned`, `tokens_reserved = 1`), the ledger `reserve` row, move it to
    `reserved`, insert the outbox row, move it to `queued`, commit.
 7. After the commit the publisher is woken; a failed wake only logs (the poll picks the row up).

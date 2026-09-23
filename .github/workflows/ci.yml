@@ -120,6 +120,12 @@ jobs:
     env:
       # a crashing service would otherwise be restarted forever and --wait would burn the whole timeout
       COMPOSE_RESTART: 'no'
+      # compose refuses to start without these, so CI supplies its own throwaway values rather
+      # than the file carrying defaults a deployment could inherit by accident
+      INTERNAL_API_TOKEN: ci-internal-token-value
+      BROKER_CLIENT_SECRET: ci-broker-client-secret
+      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      TOKEN_ENCRYPTION_KEY_ID: dev
     steps:
       - uses: actions/checkout@v4
       - name: Dockerfile Node version matches .node-version
