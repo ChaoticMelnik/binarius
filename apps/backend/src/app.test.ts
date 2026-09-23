@@ -1,3 +1,4 @@
+import { DrizzleQueryError } from 'drizzle-orm/errors';
 import { describe, expect, it } from 'vitest';
 import { buildApp, type AppDeps } from './app';
 import type { TradingRoutesDeps } from './trading/routes';
@@ -59,6 +60,69 @@ describe('GET /health', () => {
     expect(await health({ checkPostgres: ok, checkRedis: hang })).toEqual({
       statusCode: 503,
       body: { status: 'degraded', postgres: 'ok', redis: 'error' },
+    });
+  });
+});
+
+describe('error handler', () => {
+  async function withApp(run: (app: ReturnType<typeof buildApp>) => Promise<void>) {
+    const app = buildApp({
+      checkPostgres: ok,
+      checkRedis: ok,
+      logLevel: 'silent',
+      checkTimeoutMs: 20,
+      trading: unusedTrading,
+    });
+    app.get('/drizzle', async () => {
+      throw new DrizzleQueryError(
+        'select secret_column from users where id = $1',
+        ['p1'],
+        new Error('relation missing'),
+      );
+    });
+    app.get('/throttled', async () => {
+      throw Object.assign(new Error('slow down'), {
+        statusCode: 429,
+        headers: { 'retry-after': '1' },
+      });
+    });
+    app.post('/echo', async (request) => request.body);
+    try {
+      await run(app);
+    } finally {
+      await app.close();
+    }
+  }
+
+  it('hides the query text and parameters of a database error behind an opaque 500', async () => {
+    await withApp(async (app) => {
+      const response = await app.inject({ method: 'GET', url: '/drizzle' });
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toEqual({ error: 'internal' });
+      expect(response.body).not.toContain('secret_column');
+      expect(response.body).not.toContain('p1');
+    });
+  });
+
+  it('keeps status, headers and message of a thrown 4xx error', async () => {
+    await withApp(async (app) => {
+      const response = await app.inject({ method: 'GET', url: '/throttled' });
+      expect(response.statusCode).toBe(429);
+      expect(response.headers['retry-after']).toBe('1');
+      expect(response.json()).toMatchObject({ statusCode: 429, message: 'slow down' });
+    });
+  });
+
+  it('leaves body-parsing failures as 400 with their default shape', async () => {
+    await withApp(async (app) => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/echo',
+        headers: { 'content-type': 'application/json' },
+        payload: '{not json',
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ statusCode: 400, error: 'Bad Request' });
     });
   });
 });

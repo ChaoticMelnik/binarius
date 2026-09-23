@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance, type LogLevel } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance, type LogLevel } from 'fastify';
 import { LOG_REDACT_PATHS } from '@binarius/shared';
 import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
 
@@ -43,6 +43,23 @@ export function buildApp({
   });
 
   void app.register(tradingRoutes, trading);
+
+  // Fastify's default handler echoes error.message; for a DrizzleQueryError that is the SQL
+  // text plus bound parameters. 4xx errors (validation, body parsing, thrown http errors) keep
+  // their shape and headers; anything else becomes an opaque 500 and a log line.
+  app.setErrorHandler(
+    (error: FastifyError & { headers?: Record<string, string> }, request, reply) => {
+      const statusCode = error.statusCode ?? 500;
+      if (statusCode < 500) {
+        return reply
+          .code(statusCode)
+          .headers(error.headers ?? {})
+          .send(error);
+      }
+      request.log.error({ err: error }, 'unhandled request error');
+      return reply.code(500).send({ error: 'internal' });
+    },
+  );
 
   return app;
 }
