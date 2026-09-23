@@ -69,12 +69,14 @@ describe('errorLogFields', () => {
     });
   });
 
+  // toStrictEqual, not toEqual: the latter ignores a key whose value is undefined, so an
+  // implementation returning { err, cause: undefined } would pass while logging that key
   it('omits the cause entirely when there is none, rather than naming undefined', () => {
-    expect(errorLogFields(new Error('plain'))).toEqual({ err: { name: 'Error' } });
-    expect(errorLogFields(new Error('explicit', { cause: undefined }))).toEqual({
+    expect(errorLogFields(new Error('plain'))).toStrictEqual({ err: { name: 'Error' } });
+    expect(errorLogFields(new Error('explicit', { cause: undefined }))).toStrictEqual({
       err: { name: 'Error' },
     });
-    expect(errorLogFields(new Error('null cause', { cause: null }))).toEqual({
+    expect(errorLogFields(new Error('null cause', { cause: null }))).toStrictEqual({
       err: { name: 'Error' },
     });
   });
