@@ -167,7 +167,7 @@ Exchange failures map to revocations, never to retries:
 | Failure                        | Reason                                                                                                                                               |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | broker answers `invalid_grant` | `refresh_invalid_grant` — the token was already consumed, which is what a replayed refresh token looks like from our side                            |
-| timeout, network error, 5xx    | `refresh_outcome_unknown` — the broker may have rotated the pair before the connection died, and presenting the old token again would be that replay |
+| anything else                  | `refresh_outcome_unknown` — a timeout, a network error or a 5xx, but also a 4xx that is not `invalid_grant` (a rotated client secret answers `invalid_client`) and a 2xx whose body breaks the contract. In each the broker may have rotated the pair, and presenting the old token again would be that replay |
 
 Every branch commits its revocation and reports afterwards; throwing inside the transaction
 would roll the revocation back.
@@ -217,9 +217,10 @@ The bare key `code` is
 deliberately **not** redacted: SQLSTATE, libuv errno and Fastify's `FST_ERR_*` all travel under
 that name, and blanking them would cost the diagnostics this project logs errors by — errors are
 logged as `{ name, code }`. Sites that use `errorLogFields` add the same two fields for one level
-of `cause`; sites that use `errorIdentity` deliberately do not — in some the error is one this
-code constructs and has no cause, and in others, such as the worker's executor port, the contract
-is that nothing beyond the thrown error's own name and code is logged
+of `cause`; sites that use `errorIdentity` deliberately do not. In some the error is one this
+code constructs and has no cause; in others, such as the worker's executor port, the contract is
+that nothing beyond the thrown error's own name and code is logged; and in the dependency checks
+the driver puts the whole diagnostic on the error's own `code` (a SQLSTATE, an `ECONNREFUSED`)
 (`packages/shared/src/logging.ts`). The cause matters where a wrapper has nothing of its own:
 drizzle's query error sets neither `name` nor `code`, and the SQLSTATE that makes a database
 failure actionable is on the pg error underneath.

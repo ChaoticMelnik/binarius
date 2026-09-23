@@ -180,7 +180,9 @@ describe('what reaches the log', () => {
         });
       });
       const response = await app.inject({ method: 'GET', url: '/four' });
-      // the response is unchanged: a 4xx still tells the caller what was wrong, message included
+      // The response is unchanged: a 4xx still tells the caller what was wrong, message
+      // included. Fastify builds that body either way, so this does not pin the subclass — it
+      // pins a handler that stripped the message from the body to "fix" the leak instead.
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({
         statusCode: 400,

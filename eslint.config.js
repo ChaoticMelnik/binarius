@@ -2,6 +2,9 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import eslintConfigPrettier from 'eslint-config-prettier';
 
+// a variable named like an error, in the position pino would serialize whole
+const ERROR_LIKE_NAME = '(e|err|error|ex|exception|cause|failure)';
+
 // the object a logger is called with, and the field inside it that would carry an error
 const LOG_ERROR_FIELD =
   "CallExpression[callee.property.name=/^(fatal|error|warn|info|debug|trace)$/] > ObjectExpression:first-child > :matches(Property[key.name=/^(err|error|cause|exception)$/], Property[key.value=/^(err|error|cause|exception)$/])";
@@ -30,10 +33,10 @@ export default tseslint.config(
           //
           // What it does not see, all deliberate: a nested object (`{ ctx: { err } }`), an object
           // passed as the second argument, a computed key, `logger[level](error)`, a logger
-          // reached through a variable, a spread. It also flags a cast around the helper
+          // method held in a variable, a spread. A logger reached through a variable IS seen
+          // (`const l = request.log; l.error({ err })`). It also flags a cast around the helper
           // (`{ err: errorIdentity(e) as T }`), which fails safe. The rule narrows the class of
-          // mistake; it does not close it. It runs only under apps/**/src and packages/**/src,
-          // and not on **/*.test.ts.
+          // mistake; it does not close it.
           selector: `${LOG_ERROR_FIELD}:matches([value.type!='CallExpression'], [value.type='CallExpression'][value.callee.name!='errorIdentity'][value.callee.name!='errorLogFields'])`,
           message:
             'log errors through errorIdentity() or errorLogFields(): a whole error carries its message, stack and its own fields, and no redact path can scrub a string',
@@ -41,15 +44,14 @@ export default tseslint.config(
         {
           // pino's own error-first form, which the property rule cannot see. Matched by the
           // argument's name rather than its type, because the type alone also catches
-          // `logger.info(messageVar)` and `console.error(msg)`, which are not errors.
+          // `logger.info(messageVar)`, which is not an error.
           //
           // The trade runs both ways and neither side is free: an error held in a variable named
           // something else (`problem`, `thrown`) is missed, and a string in a variable named like
           // an error would be flagged. `reason` is deliberately absent from the list — in this
-          // repository that name holds a revocation reason, which is a string. `new Error(x)`
-          // passed positionally is not matched either.
-          selector:
-            "CallExpression[callee.object.name!='console'][callee.property.name=/^(fatal|error|warn|info|debug|trace)$/]:matches([arguments.0.type='Identifier'][arguments.0.name=/^(e|err|error|ex|exception|cause|failure)$/i], [arguments.0.type='MemberExpression'][arguments.0.property.name=/^(e|err|error|ex|exception|cause|failure)$/i])",
+          // repository that name holds a revocation reason, which is a string. Also missed:
+          // `new Error(x)` passed positionally, and `logger[level](error)`.
+          selector: `CallExpression[callee.property.name=/^(fatal|error|warn|info|debug|trace)$/]:matches([arguments.0.type='Identifier'][arguments.0.name=/^${ERROR_LIKE_NAME}$/i], [arguments.0.type='MemberExpression'][arguments.0.property.name=/^${ERROR_LIKE_NAME}$/i])`,
           message:
             'do not log an error positionally: pass errorIdentity() or errorLogFields() in the log object instead',
         },

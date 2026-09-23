@@ -124,9 +124,9 @@ export function buildApp({
 }: AppDeps): FastifyInstance {
   const app = Fastify({
     // An instance, not the class: Fastify validates `userController instanceof LogController`.
-    // Its options go here rather than to Fastify — a supplied controller is returned as-is, so
-    // `disableRequestLogging` and `requestIdLogLabel` passed below would never reach it. The
-    // empty object takes the same defaults Fastify would have applied.
+    // Its options belong here rather than in the Fastify options — a supplied controller is
+    // returned as-is, so `disableRequestLogging` or `requestIdLogLabel` given to Fastify would
+    // never reach it. The empty object takes the same defaults Fastify would have applied.
     logController: new SafeLogController({}),
     logger: {
       level: logLevel,

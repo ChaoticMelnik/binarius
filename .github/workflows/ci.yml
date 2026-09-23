@@ -168,12 +168,10 @@ jobs:
                 exit 1
               fi
               # The wording belongs to compose and changes between versions; what this asserts is
-              # that the refusal names this variable. On a token boundary, because
-              # TOKEN_ENCRYPTION_KEY is a prefix of TOKEN_ENCRYPTION_KEY_ID and a plain substring
-              # would accept the wrong one's refusal as evidence. If compose ever stops printing
-              # the name the step fails, which is the safe direction.
-              # -w is a word boundary, which is exactly what distinguishes TOKEN_ENCRYPTION_KEY
-              # from TOKEN_ENCRYPTION_KEY_ID
+              # that the refusal names this variable. `grep -w` matches on a word boundary, which
+              # is what keeps a TOKEN_ENCRYPTION_KEY_ID refusal from counting as evidence for
+              # TOKEN_ENCRYPTION_KEY. If compose ever stops printing the name the step fails,
+              # which is the safe direction.
               if ! printf '%s' "$out" | grep -qw "$name"; then
                 echo "an $form $name was refused for another reason: $out" >&2
                 exit 1
