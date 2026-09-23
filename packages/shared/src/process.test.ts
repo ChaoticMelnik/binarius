@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { closeAll } from './shutdown';
+import { closeAll } from './process';
 
 describe('closeAll', () => {
-  it('runs every step even when an earlier one rejects', async () => {
+  it('runs every step even when an earlier one rejects, and reports settled', async () => {
     const calls: string[] = [];
-    await closeAll([
+    const settled = await closeAll([
       () => {
         calls.push('first');
         return Promise.reject(new Error('first failed'));
@@ -18,9 +18,10 @@ describe('closeAll', () => {
       },
     ]);
     expect(calls).toEqual(['first', 'second', 'third']);
+    expect(settled).toBe(true);
   });
 
-  it('resolves after the timeout when a step never settles', async () => {
-    await expect(closeAll([() => new Promise(() => {})], 20)).resolves.toBeUndefined();
+  it('reports false after the timeout when a step never settles', async () => {
+    await expect(closeAll([() => new Promise(() => {})], 20)).resolves.toBe(false);
   });
 });

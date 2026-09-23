@@ -17,6 +17,7 @@ import {
   TradeAction,
   TradeIntentStatus,
   TradeMode,
+  TradeTransport,
   type DecimalString,
 } from '@binarius/shared';
 import {
@@ -31,10 +32,6 @@ import {
 import { brokerAccounts } from './broker-accounts';
 import { tradingSessions } from './trading-sessions';
 import { users } from './users';
-
-// ARCH-04: how the order reached the broker
-export const TradeTransport = { Socket: 'socket', RestFallback: 'rest_fallback' } as const;
-export type TradeTransport = (typeof TradeTransport)[keyof typeof TradeTransport];
 
 // A status with no outgoing transition is finished, and only a finished intent stops blocking
 // the account. manual_review deliberately has outgoing edges (see packages/shared/src/trading.ts)

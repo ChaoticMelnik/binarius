@@ -40,6 +40,14 @@
     "./socket": {
       "types": "./src/socket.ts",
       "default": "./src/socket.ts"
+    },
+    "./env": {
+      "types": "./src/env.ts",
+      "default": "./src/env.ts"
+    },
+    "./process": {
+      "types": "./src/process.ts",
+      "default": "./src/process.ts"
     }
   },
   "dependencies": {

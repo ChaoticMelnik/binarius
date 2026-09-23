@@ -19,13 +19,15 @@ import type {
   PartnerTraderStats,
 } from './partner';
 import type { AssetsUpdate, PriceUpdate, SocketOpenTradeRequest } from './socket';
-import type { TradeIntent } from './trading';
+import type { TradeIntent, TradeIntentView } from './trading';
 import * as broker from './broker';
+import * as env from './env';
 import * as ids from './ids';
 import * as shared from './index';
 import * as money from './money';
 import * as oauth from './oauth';
 import * as partner from './partner';
+import * as processModule from './process';
 import * as socket from './socket';
 import * as time from './time';
 import * as trading from './trading';
@@ -44,6 +46,47 @@ describe('contract coverage (issue #6)', () => {
       durationSec: number;
       clientRequestId: string;
       createdAt: string;
+    }>();
+  });
+
+  it('TradeIntentView (issue #42)', () => {
+    expectTypeOf<TradeIntentView>().toEqualTypeOf<{
+      id: string;
+      brokerAccountId: string;
+      telegramUserId: string;
+      mode: 'demo' | 'real';
+      assetId: number;
+      amount: DecimalString;
+      action: 'up' | 'down';
+      durationSec: number;
+      clientRequestId: string;
+      createdAt: string;
+      status:
+        | 'planned'
+        | 'reserved'
+        | 'queued'
+        | 'submitting'
+        | 'accepted'
+        | 'settled'
+        | 'rejected'
+        | 'unknown'
+        | 'reconciling'
+        | 'manual_review';
+      version: number;
+      tokensReserved: string;
+      transport: 'socket' | 'rest_fallback' | null;
+      submittedAt: string | null;
+      lastError:
+        | 'expired'
+        | 'executor_not_configured'
+        | 'executor_timeout'
+        | 'executor_error'
+        | 'broker_rejected'
+        | 'publish_failed'
+        | 'stale_submitting'
+        | 'invalid_job'
+        | null;
+      updatedAt: string;
     }>();
   });
 
@@ -179,7 +222,18 @@ describe('contract coverage (issue #6)', () => {
   });
 
   it('root index re-exports every module', () => {
-    const modules = { money, time, ids, trading, broker, oauth, partner, socket };
+    const modules = {
+      money,
+      time,
+      ids,
+      trading,
+      broker,
+      oauth,
+      partner,
+      socket,
+      env,
+      process: processModule,
+    };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {
         expect(shared, `${moduleName}.${key}`).toHaveProperty(key, value);
