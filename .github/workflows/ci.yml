@@ -120,9 +120,11 @@ jobs:
     env:
       # a crashing service would otherwise be restarted forever and --wait would burn the whole timeout
       COMPOSE_RESTART: 'no'
-      # compose refuses to start without these, and no file in the repository assigns them,
-      # so CI supplies its own throwaway ones. TOKEN_ENCRYPTION_KEY_ID is not a secret; it is
-      # here because it is required, and because the all-zero key is only valid paired with it.
+      # compose refuses to start without these, and none of them has a default a deployment
+      # could inherit, so CI supplies its own throwaway values — these four assignments are
+      # fixtures for this job, not configuration anyone ships. TOKEN_ENCRYPTION_KEY_ID is not a
+      # secret; it is here because it is required, and because the all-zero key is only valid
+      # paired with it.
       INTERNAL_API_TOKEN: ci-internal-token-value
       BROKER_CLIENT_SECRET: ci-broker-client-secret
       TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
@@ -165,12 +167,15 @@ jobs:
                 echo "compose accepted an $form $name" >&2
                 exit 1
               fi
-              # the wording belongs to compose and changes between versions; what this asserts
-              # is that the refusal is attributed to this variable and not to something else
-              case "$out" in
-                *"$name"*) ;;
-                *) echo "an $form $name was refused for another reason: $out" >&2; exit 1 ;;
-              esac
+              # The wording belongs to compose and changes between versions; what this asserts is
+              # that the refusal names this variable. On a token boundary, because
+              # TOKEN_ENCRYPTION_KEY is a prefix of TOKEN_ENCRYPTION_KEY_ID and a plain substring
+              # would accept the wrong one's refusal as evidence. If compose ever stops printing
+              # the name the step fails, which is the safe direction.
+              if ! printf '%s' "$out" | grep -qE "(^|[^A-Za-z0-9_])$name([^A-Za-z0-9_]|\$)"; then
+                echo "an $form $name was refused for another reason: $out" >&2
+                exit 1
+              fi
             done
           done
       - run: docker compose up -d --build --wait --wait-timeout 120

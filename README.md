@@ -52,10 +52,9 @@ backend (`3000`) are published on `127.0.0.1` only.
 
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
 The integration tests run against a real Postgres named by `DATABASE_URL` and a real Redis named
-by `REDIS_URL`, and fail without them — `pnpm test` therefore needs the compose services:
-
-Even this partial start needs the four REQUIRED values in `.env`: Compose interpolates the whole
-file before it picks which services to run.
+by `REDIS_URL`, and fail without them — `pnpm test` therefore needs the compose services. Even
+this partial start needs the four REQUIRED values in `.env`, because Compose interpolates the
+whole file before it picks which services to run:
 
 ```bash
 docker compose up -d postgres redis

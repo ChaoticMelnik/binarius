@@ -2,8 +2,9 @@ node_modules
 dist
 *.tsbuildinfo
 coverage
-.env
-.env.local
+# every .env variant: the one that is safe to track is the example
+.env*
+!.env.example
 
 # Playwright MCP session artifacts
 .playwright-mcp/

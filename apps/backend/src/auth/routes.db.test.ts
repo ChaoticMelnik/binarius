@@ -97,6 +97,9 @@ const start = (telegramUserId: string, authorization = `Bearer ${TOKEN}`, instan
 const callback = (payload: unknown, instance = app) =>
   postJson(instance, '/auth/binodex/callback', payload);
 
+const stateFor = async (telegramUserId: string, instance = app): Promise<string> =>
+  ((await start(telegramUserId, `Bearer ${TOKEN}`, instance)).json() as { state: string }).state;
+
 async function login(telegramUserId: string, brokerUserId: string) {
   const started = await start(telegramUserId);
   const { state } = started.json() as { state: string };
@@ -204,7 +207,7 @@ describe('POST /auth/binodex/callback', () => {
 
   it('refuses a replayed state and never exchanges twice', async () => {
     const telegram = telegramId();
-    const { state } = (await start(telegram)).json() as { state: string };
+    const state = await stateFor(telegram);
     const first = await callback({
       state,
       code: stub.issueCode({ brokerUserId: `broker-${telegram}` }),
@@ -220,7 +223,7 @@ describe('POST /auth/binodex/callback', () => {
 
   it('refuses an expired state without calling the broker', async () => {
     const telegram = telegramId();
-    const { state } = (await start(telegram)).json() as { state: string };
+    const state = await stateFor(telegram);
     await tmp.db
       .update(oauthStates)
       .set({
@@ -237,7 +240,7 @@ describe('POST /auth/binodex/callback', () => {
 
   it('lets exactly one of two parallel callbacks through', async () => {
     const telegram = telegramId();
-    const { state } = (await start(telegram)).json() as { state: string };
+    const state = await stateFor(telegram);
     const code = stub.issueCode({ brokerUserId: `broker-${telegram}` });
     const before = stub.tokenRequests;
     const [a, b] = await Promise.all([callback({ state, code }), callback({ state, code })]);
@@ -321,7 +324,7 @@ describe('POST /auth/binodex/callback', () => {
   // like a bad code, which is the one thing the user could retry
   it('reports a broker rejection as 502, not 400', async () => {
     const telegram = telegramId();
-    const { state } = (await start(telegram)).json() as { state: string };
+    const state = await stateFor(telegram);
     const wrongSecret = testApp({
       ...authDeps,
       broker: createBrokerOAuthClient({
@@ -361,20 +364,17 @@ describe('the callback rate limits', () => {
     return instance;
   };
 
-  const sendCallback = (instance: ReturnType<typeof testApp>, payload: unknown) =>
-    callback(payload, instance);
-
   it('stops a flood before it reaches the database', async () => {
     const instance = await limited({ callbackMaxPerMinute: 2 });
     try {
       const before = stub.tokenRequests;
-      expect((await sendCallback(instance, { state: 'a', code: 'c' })).statusCode).toBe(400);
-      expect((await sendCallback(instance, { state: 'b', code: 'c' })).statusCode).toBe(400);
-      const blocked = await sendCallback(instance, { state: 'c', code: 'c' });
+      expect((await callback({ state: 'a', code: 'c' }, instance)).statusCode).toBe(400);
+      expect((await callback({ state: 'b', code: 'c' }, instance)).statusCode).toBe(400);
+      const blocked = await callback({ state: 'c', code: 'c' }, instance);
       expect(blocked.statusCode).toBe(429);
       expect(blocked.json()).toEqual({ error: 'too_many_requests' });
       // the ceiling applies to a well-formed request too: it is checked before the body is read
-      expect((await sendCallback(instance, 'not-even-an-object')).statusCode).toBe(429);
+      expect((await callback('not-even-an-object', instance)).statusCode).toBe(429);
       expect(stub.tokenRequests).toBe(before);
     } finally {
       await instance.close();
@@ -389,16 +389,19 @@ describe('the callback rate limits', () => {
         const telegram = telegramId();
         const started = await start(telegram, `Bearer ${TOKEN}`, instance);
         const { state } = started.json() as { state: string };
-        const response = await sendCallback(instance, {
-          state,
-          code: stub.issueCode({ brokerUserId: `broker-${telegram}` }),
-        });
+        const response = await callback(
+          {
+            state,
+            code: stub.issueCode({ brokerUserId: `broker-${telegram}` }),
+          },
+          instance,
+        );
         expect(response.statusCode).toBe(200);
       }
 
-      expect((await sendCallback(instance, { state: 'miss-1', code: 'c' })).statusCode).toBe(400);
-      expect((await sendCallback(instance, { state: 'miss-2', code: 'c' })).statusCode).toBe(400);
-      expect((await sendCallback(instance, { state: 'miss-3', code: 'c' })).statusCode).toBe(429);
+      expect((await callback({ state: 'miss-1', code: 'c' }, instance)).statusCode).toBe(400);
+      expect((await callback({ state: 'miss-2', code: 'c' }, instance)).statusCode).toBe(400);
+      expect((await callback({ state: 'miss-3', code: 'c' }, instance)).statusCode).toBe(429);
     } finally {
       await instance.close();
     }
@@ -410,7 +413,7 @@ describe('the callback rate limits', () => {
     const instance = await limited({ callbackMaxFailuresPerMinute: 2 });
     try {
       const responses = await Promise.all(
-        [1, 2, 3, 4, 5, 6].map((n) => sendCallback(instance, { state: `burst-${n}`, code: 'c' })),
+        [1, 2, 3, 4, 5, 6].map((n) => callback({ state: `burst-${n}`, code: 'c' }, instance)),
       );
       const statuses = responses.map((r) => r.statusCode).sort();
       expect(statuses).toEqual([400, 400, 429, 429, 429, 429]);
@@ -421,13 +424,16 @@ describe('the callback rate limits', () => {
 
   it('refuses before it reaches the state row at all', async () => {
     const telegram = telegramId();
-    const { state } = (await start(telegram)).json() as { state: string };
+    const state = await stateFor(telegram);
     const instance = await limited({ callbackMaxPerMinute: 0 });
     try {
-      const response = await sendCallback(instance, {
-        state,
-        code: stub.issueCode({ brokerUserId: `broker-${telegram}` }),
-      });
+      const response = await callback(
+        {
+          state,
+          code: stub.issueCode({ brokerUserId: `broker-${telegram}` }),
+        },
+        instance,
+      );
       expect(response.statusCode).toBe(429);
       // the state was never consumed, which it would have been had the limiter run later
       const [row] = await tmp.db
@@ -449,7 +455,7 @@ describe('the callback rate limits', () => {
     await dead.end();
     try {
       for (let i = 0; i < 4; i += 1) {
-        const response = await sendCallback(instance, { state: `outage-${i}`, code: 'c' });
+        const response = await callback({ state: `outage-${i}`, code: 'c' }, instance);
         expect(response.statusCode).toBe(500);
       }
     } finally {
@@ -484,10 +490,14 @@ describe('POST /auth/binodex/confirm', () => {
     const response = await confirm({ telegramUserId: telegram, accountId: account.id });
     expect(response.statusCode).toBe(200);
     expect((response.json() as { account: { status: string } }).account.status).toBe('active');
-    expect((await tmp.db
-      .select({ status: brokerAccounts.status })
-      .from(brokerAccounts)
-      .where(eq(brokerAccounts.id, account.id)))[0]?.status).toBe('active');
+    expect(
+      (
+        await tmp.db
+          .select({ status: brokerAccounts.status })
+          .from(brokerAccounts)
+          .where(eq(brokerAccounts.id, account.id))
+      )[0]?.status,
+    ).toBe('active');
   });
 
   it('refuses an account that belongs to someone else', async () => {
@@ -533,7 +543,7 @@ describe('POST /auth/binodex/confirm', () => {
 describe('secrecy', () => {
   it('keeps the state out of the callback response and out of errors', async () => {
     const telegram = telegramId();
-    const { state } = (await start(telegram)).json() as { state: string };
+    const state = await stateFor(telegram);
     const ok = await callback({
       state,
       code: stub.issueCode({ brokerUserId: `broker-${telegram}` }),

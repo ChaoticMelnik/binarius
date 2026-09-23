@@ -91,6 +91,13 @@ async function pendingAccount(email?: string): Promise<BrokerAccountRow> {
 
 const rowOf = (id: string) => brokerAccountRow(tmp.db, id);
 
+// the starting point of every case that exercises the refresh path
+async function expiredAccount(email?: string): Promise<BrokerAccountRow> {
+  const account = await linkedAccount(email);
+  await expireAccessToken(account.id);
+  return account;
+}
+
 // the trigger below refuses exactly this account's rotation, which is how a write that fails
 // after the broker already rotated the pair is reproduced without stubbing the database
 const BLOCKED_EMAIL = 'rotation-blocked@example.test';
@@ -168,10 +175,10 @@ const failCommit = () =>
 // every guard below is a trigger plus its function under one name
 const dropTestGuard = (name: string) =>
   tmp.db.execute(
-    sql.raw(`drop trigger if exists ${name} on broker_accounts; drop function if exists ${name}();`),
+    sql.raw(
+      `drop trigger if exists ${name} on broker_accounts; drop function if exists ${name}();`,
+    ),
   );
-
-
 
 // two call sites; the others are dropped by name where they are installed
 const allowRotation = () => dropTestGuard('binarius_test_block_rotation');
@@ -191,8 +198,6 @@ const failAnyUpdate = (email: string) =>
         execute function binarius_test_block_any();
     `),
   );
-
-
 
 // a broker that never answers inside the client's patience: the shape both unknown-outcome
 // cases need
@@ -236,8 +241,7 @@ describe('ensureFreshAccessToken', () => {
   });
 
   it('rotates an expired token and stores the new pair', async () => {
-    const account = await linkedAccount();
-    await expireAccessToken(account.id);
+    const account = await expiredAccount();
     const result = await ensureFreshAccessToken(deps(), account.id);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -303,8 +307,7 @@ describe('ensureFreshAccessToken', () => {
   });
 
   it('treats an unknown outcome as a consumed token and revokes', async () => {
-    const account = await linkedAccount();
-    await expireAccessToken(account.id);
+    const account = await expiredAccount();
     const slow = await slowBroker();
     try {
       expect(await ensureFreshAccessToken(deps({ broker: slow.impatient }), account.id)).toEqual({
@@ -322,8 +325,7 @@ describe('ensureFreshAccessToken', () => {
   });
 
   it('revokes a refresh token older than ninety days without asking the broker', async () => {
-    const account = await linkedAccount();
-    await expireAccessToken(account.id);
+    const account = await expiredAccount();
     await tmp.db
       .update(brokerAccounts)
       .set({ tokenRotatedAt: sql`now() - interval '91 days'` })
@@ -339,8 +341,7 @@ describe('ensureFreshAccessToken', () => {
   });
 
   it('falls back to the row age when the account never rotated', async () => {
-    const account = await linkedAccount();
-    await expireAccessToken(account.id);
+    const account = await expiredAccount();
     await tmp.db
       .update(brokerAccounts)
       .set({ tokenRotatedAt: null, createdAt: sql`now() - interval '91 days'` })
@@ -462,8 +463,7 @@ describe('ensureFreshAccessToken', () => {
 
   // the broker has consumed the old token by then, so the account cannot be left holding it
   it('revokes in a second transaction when storing the rotated pair fails', async () => {
-    const account = await linkedAccount(BLOCKED_EMAIL);
-    await expireAccessToken(account.id);
+    const account = await expiredAccount(BLOCKED_EMAIL);
     await failRotation();
     try {
       expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
@@ -473,7 +473,10 @@ describe('ensureFreshAccessToken', () => {
       });
       const row = await rowOf(account.id);
       // the revocation is committed even though the transaction that exchanged was rolled back
-      expect(row).toMatchObject({ status: 'revoked', authRevokedReason: 'refresh_outcome_unknown' });
+      expect(row).toMatchObject({
+        status: 'revoked',
+        authRevokedReason: 'refresh_outcome_unknown',
+      });
       expect(row.refreshTokenEnc).toEqual(account.refreshTokenEnc);
     } finally {
       await allowRotation();
@@ -494,8 +497,7 @@ describe('ensureFreshAccessToken', () => {
   // the transaction commits the rotation and then dies on the COMMIT: nothing inside the
   // callback ever sees that error, so only the flag set after the exchange can catch it
   it('revokes when the commit itself fails after the pair was stored', async () => {
-    const account = await linkedAccount(COMMIT_BLOCKED_EMAIL);
-    await expireAccessToken(account.id);
+    const account = await expiredAccount(COMMIT_BLOCKED_EMAIL);
     try {
       await failCommit();
       expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
@@ -504,7 +506,10 @@ describe('ensureFreshAccessToken', () => {
         revokedReason: 'refresh_outcome_unknown',
       });
       const row = await rowOf(account.id);
-      expect(row).toMatchObject({ status: 'revoked', authRevokedReason: 'refresh_outcome_unknown' });
+      expect(row).toMatchObject({
+        status: 'revoked',
+        authRevokedReason: 'refresh_outcome_unknown',
+      });
       // the rotation was rolled back with the transaction, so the stored pair is the old one
       expect(row.refreshTokenEnc).toEqual(account.refreshTokenEnc);
     } finally {
@@ -514,8 +519,7 @@ describe('ensureFreshAccessToken', () => {
 
   // both transactions fail: nothing can be recorded, so the caller has to hear about it
   it('throws when the account cannot be revoked after the pair was lost', async () => {
-    const account = await linkedAccount(BLOCKED_EMAIL);
-    await expireAccessToken(account.id);
+    const account = await expiredAccount(BLOCKED_EMAIL);
     try {
       await failRotation();
       await failAnyUpdate(BLOCKED_EMAIL);
@@ -530,8 +534,7 @@ describe('ensureFreshAccessToken', () => {
   // the branch the previous round left uncovered: the broker never answered, so the pair may
   // already be spent, and the revocation that says so is lost when the transaction cannot commit
   it('recovers when an unknown outcome is revoked and that commit fails', async () => {
-    const account = await linkedAccount(UNKNOWN_BLOCKED_EMAIL);
-    await expireAccessToken(account.id);
+    const account = await expiredAccount(UNKNOWN_BLOCKED_EMAIL);
     const slow = await slowBroker();
     const captured = capturingLogger();
     try {
@@ -556,8 +559,7 @@ describe('ensureFreshAccessToken', () => {
   });
 
   it('exchanges once when two callers race on the same account', async () => {
-    const account = await linkedAccount();
-    await expireAccessToken(account.id);
+    const account = await expiredAccount();
     const before = stub.tokenRequests;
     const [first, second] = await Promise.all([
       ensureFreshAccessToken(deps(), account.id),
