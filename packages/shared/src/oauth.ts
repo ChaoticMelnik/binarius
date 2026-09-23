@@ -108,7 +108,6 @@ export const OAuthErrorCode = {
   BrokerContractViolation: 'broker_contract_violation',
   BrokerAccountTaken: 'broker_account_taken',
   UserBlocked: 'user_blocked',
-  AccountRevoked: 'account_revoked',
   TooManyRequests: 'too_many_requests',
 } as const;
 export type OAuthErrorCode = (typeof OAuthErrorCode)[keyof typeof OAuthErrorCode];
