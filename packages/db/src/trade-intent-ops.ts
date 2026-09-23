@@ -127,11 +127,7 @@ async function createInTransaction(
       .select({ status: brokerAccounts.status })
       .from(brokerAccounts)
       .where(eq(brokerAccounts.id, brokerAccountId));
-    throw new TradeIntentError(
-      fresh?.status === BrokerAccountStatus.Revoked
-        ? TradeIntentErrorCode.AccountRevoked
-        : TradeIntentErrorCode.AccountHalted,
-    );
+    throw new TradeIntentError(accountErrorFor(fresh?.status));
   }
 
   const [planned] = await tx
@@ -240,15 +236,28 @@ async function resolveAccount(
       throw new TradeIntentError(TradeIntentErrorCode.BrokerAccountNotFound);
     return account.id;
   }
-  const [only, ...more] = await exec
-    .select({ id: brokerAccounts.id })
+  const accounts = await exec
+    .select({ id: brokerAccounts.id, status: brokerAccounts.status })
     .from(brokerAccounts)
-    .where(
-      and(eq(brokerAccounts.userId, userId), eq(brokerAccounts.status, BrokerAccountStatus.Active)),
+    .where(eq(brokerAccounts.userId, userId));
+  const [only, ...more] = accounts.filter((a) => a.status === BrokerAccountStatus.Active);
+  if (only === undefined) {
+    // "no account" and "an account nobody confirmed yet" need different answers: the second one
+    // tells the user to finish the login they already started
+    throw new TradeIntentError(
+      accounts.some((a) => a.status === BrokerAccountStatus.Pending)
+        ? TradeIntentErrorCode.AccountNotConfirmed
+        : TradeIntentErrorCode.BrokerAccountNotFound,
     );
-  if (only === undefined) throw new TradeIntentError(TradeIntentErrorCode.BrokerAccountNotFound);
+  }
   if (more.length > 0) throw new TradeIntentError(TradeIntentErrorCode.AmbiguousBrokerAccount);
   return only.id;
+}
+
+function accountErrorFor(status: BrokerAccountStatus | undefined): TradeIntentErrorCode {
+  if (status === BrokerAccountStatus.Revoked) return TradeIntentErrorCode.AccountRevoked;
+  if (status === BrokerAccountStatus.Pending) return TradeIntentErrorCode.AccountNotConfirmed;
+  return TradeIntentErrorCode.AccountHalted;
 }
 
 // --- Transitions --------------------------------------------------------------------------------

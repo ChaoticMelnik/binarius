@@ -7,6 +7,7 @@ import { createTokenCipher, TokenField } from './crypto';
 import {
   applyRotatedTokens,
   backfillRefreshTokenHash,
+  confirmBrokerAccount,
   consumeOAuthState,
   createOAuthState,
   hashToken,
@@ -14,6 +15,7 @@ import {
   linkBrokerAccount,
   lockAccountForRefresh,
   revokeAccount,
+  revokeAccountIfUnchanged,
   toBrokerAccountView,
 } from './oauth-ops';
 import { brokerAccounts, oauthStates, users } from './schema/index';
@@ -136,7 +138,7 @@ describe('linkBrokerAccount', () => {
       brokerUserId: tokens.user.id,
       email: tokens.user.email,
       isPartnerClient: false,
-      status: 'active',
+      status: 'pending',
       authRevokedReason: null,
       refreshTokenHash: hashToken(tokens.refreshToken),
     });
@@ -353,6 +355,206 @@ describe('refresh helpers', () => {
     expect((await brokerAccountRow(tmp.db, created.account.id)).refreshTokenHash).toBe(
       hashToken('stored-refresh'),
     );
+  });
+});
+
+describe('the confirmation gate', () => {
+  // the whole point of the status: the callback proves someone authorized at the broker, not
+  // that the Telegram user who started the login is that someone
+  it('links a new account as pending and activates it only on confirmation', async () => {
+    const telegramUserId = 700_100n;
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: brokerTokens(),
+      cipher,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(created.account.status).toBe('pending');
+
+    const confirmed = await confirmBrokerAccount(tmp.db, {
+      telegramUserId,
+      accountId: created.account.id,
+    });
+    expect(confirmed.ok).toBe(true);
+    if (!confirmed.ok) return;
+    expect(confirmed.account.status).toBe('active');
+    expect((await brokerAccountRow(tmp.db, created.account.id)).status).toBe('active');
+  });
+
+  // a second login must not stand in for the confirmation nobody gave
+  it('leaves a pending account pending when the user logs in again', async () => {
+    const telegramUserId = 700_101n;
+    const tokens = brokerTokens();
+    const first = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const again = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: { ...tokens, accessToken: 'access-second', refreshToken: 'refresh-second' },
+      cipher,
+    });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.account.status).toBe('pending');
+    // the tokens were still rotated: only the status is held back
+    expect(
+      cipher.decrypt(again.account.refreshTokenEnc, {
+        accountId: again.account.id,
+        field: TokenField.Refresh,
+      }),
+    ).toBe('refresh-second');
+  });
+
+  it('keeps a confirmed account active through a re-login', async () => {
+    const telegramUserId = 700_102n;
+    const tokens = brokerTokens();
+    const created = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await confirmBrokerAccount(tmp.db, { telegramUserId, accountId: created.account.id });
+
+    const again = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.account.status).toBe('active');
+  });
+
+  it.each([
+    ['an account of another user', 'not_found' as const],
+    ['an account that is already active', 'not_pending' as const],
+    ['a blocked user', 'user_blocked' as const],
+  ])('refuses to confirm %s', async (label, expected) => {
+    const telegramUserId = 700_110n + BigInt(label.length);
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: brokerTokens(),
+      cipher,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    if (expected === 'not_found') {
+      const stranger = await seedUser(tmp.db);
+      expect(
+        await confirmBrokerAccount(tmp.db, {
+          telegramUserId: BigInt(stranger.telegramUserId),
+          accountId: created.account.id,
+        }),
+      ).toEqual({ ok: false, reason: 'not_found' });
+      return;
+    }
+    if (expected === 'not_pending') {
+      await confirmBrokerAccount(tmp.db, { telegramUserId, accountId: created.account.id });
+      expect(
+        await confirmBrokerAccount(tmp.db, { telegramUserId, accountId: created.account.id }),
+      ).toEqual({ ok: false, reason: 'not_pending' });
+      return;
+    }
+    await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.telegramUserId, telegramUserId));
+    expect(
+      await confirmBrokerAccount(tmp.db, { telegramUserId, accountId: created.account.id }),
+    ).toEqual({ ok: false, reason: 'user_blocked' });
+    expect((await brokerAccountRow(tmp.db, created.account.id)).status).toBe('pending');
+  });
+});
+
+describe('revokeAccountIfUnchanged', () => {
+  // the caller is a transaction that has already rolled back, so its row lock is gone: every
+  // outcome below is a different thing that may have happened in that gap
+  const linkedActive = async (telegramUserId: bigint) => {
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: brokerTokens(),
+      cipher,
+    });
+    if (!created.ok) throw new Error(`link failed: ${created.reason}`);
+    await confirmBrokerAccount(tmp.db, { telegramUserId, accountId: created.account.id });
+    return await brokerAccountRow(tmp.db, created.account.id);
+  };
+
+  it('revokes while the row still carries the pair the caller was holding', async () => {
+    const account = await linkedActive(700_120n);
+    expect(
+      await tmp.db.transaction((tx) =>
+        revokeAccountIfUnchanged(tx, {
+          accountId: account.id,
+          refreshTokenHash: account.refreshTokenHash,
+          reason: AuthRevokedReason.RefreshOutcomeUnknown,
+        }),
+      ),
+    ).toEqual({ outcome: 'revoked' });
+    expect(await brokerAccountRow(tmp.db, account.id)).toMatchObject({
+      status: 'revoked',
+      authRevokedReason: 'refresh_outcome_unknown',
+    });
+  });
+
+  it('leaves a row that was re-linked in the meantime alone', async () => {
+    const account = await linkedActive(700_121n);
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ refreshTokenHash: hashToken('a-pair-we-never-saw') })
+      .where(eq(brokerAccounts.id, account.id));
+
+    expect(
+      await tmp.db.transaction((tx) =>
+        revokeAccountIfUnchanged(tx, {
+          accountId: account.id,
+          refreshTokenHash: account.refreshTokenHash,
+          reason: AuthRevokedReason.RefreshOutcomeUnknown,
+        }),
+      ),
+    ).toEqual({ outcome: 'changed' });
+    expect((await brokerAccountRow(tmp.db, account.id)).status).toBe('active');
+  });
+
+  it('reports an account someone else already revoked, with their reason', async () => {
+    const account = await linkedActive(700_122n);
+    await tmp.db.transaction((tx) =>
+      revokeAccount(tx, account.id, AuthRevokedReason.RefreshInvalidGrant),
+    );
+    expect(
+      await tmp.db.transaction((tx) =>
+        revokeAccountIfUnchanged(tx, {
+          accountId: account.id,
+          refreshTokenHash: account.refreshTokenHash,
+          reason: AuthRevokedReason.RefreshOutcomeUnknown,
+        }),
+      ),
+    ).toEqual({ outcome: 'already_revoked', reason: 'refresh_invalid_grant' });
+  });
+
+  // a row linked before the hash column existed carries NULL, and NULL = NULL is not true
+  it('matches a legacy row whose hash is null', async () => {
+    const account = await linkedActive(700_123n);
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ refreshTokenHash: null })
+      .where(eq(brokerAccounts.id, account.id));
+
+    expect(
+      await tmp.db.transaction((tx) =>
+        revokeAccountIfUnchanged(tx, {
+          accountId: account.id,
+          refreshTokenHash: null,
+          reason: AuthRevokedReason.RefreshExpired,
+        }),
+      ),
+    ).toEqual({ outcome: 'revoked' });
+  });
+
+  it('reports an account that is gone', async () => {
+    expect(
+      await tmp.db.transaction((tx) =>
+        revokeAccountIfUnchanged(tx, {
+          accountId: '00000000-0000-0000-0000-000000000000',
+          refreshTokenHash: null,
+          reason: AuthRevokedReason.RefreshExpired,
+        }),
+      ),
+    ).toEqual({ outcome: 'missing' });
   });
 });
 

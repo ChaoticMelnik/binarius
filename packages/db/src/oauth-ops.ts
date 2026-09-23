@@ -125,6 +125,7 @@ export async function linkBrokerAccount(
         accessTokenExpiresAt: expiresAt,
         refreshTokenHash: hashToken(tokens.refreshToken),
         tokenRotatedAt: sql`now()`,
+        status: BrokerAccountStatus.Pending,
       })
       .onConflictDoNothing({ target: brokerAccounts.brokerUserId })
       .returning();
@@ -134,7 +135,11 @@ export async function linkBrokerAccount(
     // FOR NO KEY UPDATE (not FOR UPDATE) stays compatible with the KEY SHARE locks the
     // trade_intents foreign keys take on this row.
     const [existing] = await tx
-      .select({ id: brokerAccounts.id, userId: brokerAccounts.userId })
+      .select({
+        id: brokerAccounts.id,
+        userId: brokerAccounts.userId,
+        status: brokerAccounts.status,
+      })
       .from(brokerAccounts)
       .where(eq(brokerAccounts.brokerUserId, tokens.user.id))
       .for('no key update');
@@ -160,7 +165,13 @@ export async function linkBrokerAccount(
         accessTokenExpiresAt: expiresAt,
         refreshTokenHash: hashToken(tokens.refreshToken),
         tokenRotatedAt: sql`now()`,
-        status: BrokerAccountStatus.Active,
+        // A second login must not activate what nobody confirmed: an account still waiting for
+        // its confirmation stays waiting. One that was active or revoked has been confirmed
+        // before, so logging in again is enough to make it usable.
+        status:
+          existing.status === BrokerAccountStatus.Pending
+            ? BrokerAccountStatus.Pending
+            : BrokerAccountStatus.Active,
         authRevokedReason: null,
       })
       .where(eq(brokerAccounts.id, existing.id))
@@ -247,6 +258,90 @@ export async function backfillRefreshTokenHash(
     .update(brokerAccounts)
     .set({ refreshTokenHash })
     .where(and(eq(brokerAccounts.id, accountId), isNull(brokerAccounts.refreshTokenHash)));
+}
+
+export type ConditionalRevokeOutcome =
+  | { outcome: 'revoked' }
+  | { outcome: 'already_revoked'; reason: AuthRevokedReason | null }
+  | { outcome: 'changed' }
+  | { outcome: 'missing' };
+
+// Revokes only while the row still carries the refresh token the caller was holding. The caller
+// for this is a transaction that has already rolled back, so its row lock is gone and the user
+// may have logged in again in the meantime; revoking by id alone would destroy that new session.
+// `is not distinct from` rather than `=` because a row linked before the hash column existed
+// carries NULL, and NULL = NULL is not true.
+export async function revokeAccountIfUnchanged(
+  tx: Tx,
+  {
+    accountId,
+    refreshTokenHash,
+    reason,
+  }: { accountId: string; refreshTokenHash: string | null; reason: AuthRevokedReason },
+): Promise<ConditionalRevokeOutcome> {
+  const [updated] = await tx
+    .update(brokerAccounts)
+    .set({ status: BrokerAccountStatus.Revoked, authRevokedReason: reason })
+    .where(
+      and(
+        eq(brokerAccounts.id, accountId),
+        eq(brokerAccounts.status, BrokerAccountStatus.Active),
+        sql`${brokerAccounts.refreshTokenHash} is not distinct from ${refreshTokenHash}::text`,
+      ),
+    )
+    .returning({ id: brokerAccounts.id });
+  if (updated !== undefined) return { outcome: 'revoked' };
+
+  // zero rows means three different things, and the caller acts differently on each
+  const [row] = await tx
+    .select({ status: brokerAccounts.status, reason: brokerAccounts.authRevokedReason })
+    .from(brokerAccounts)
+    .where(eq(brokerAccounts.id, accountId));
+  if (row === undefined) return { outcome: 'missing' };
+  if (row.status === BrokerAccountStatus.Revoked) {
+    return { outcome: 'already_revoked', reason: row.reason };
+  }
+  return { outcome: 'changed' };
+}
+
+export type ConfirmBrokerAccountResult =
+  | { ok: true; account: BrokerAccountRow }
+  | { ok: false; reason: 'user_blocked' | 'not_found' | 'not_pending' };
+
+// The step that turns "someone authorized at the broker" into "this Telegram user owns that
+// account". The user row is read under the same transaction as the account, in the lock order
+// every other writer here uses, so a block landing concurrently cannot slip past.
+export async function confirmBrokerAccount(
+  db: Db,
+  { telegramUserId, accountId }: { telegramUserId: bigint; accountId: string },
+): Promise<ConfirmBrokerAccountResult> {
+  return db.transaction(async (tx) => {
+    const [user] = await tx
+      .select({ id: users.id, status: users.status })
+      .from(users)
+      .where(eq(users.telegramUserId, telegramUserId))
+      .for('no key update');
+    if (user === undefined) return { ok: false, reason: 'not_found' };
+    if (user.status === UserStatus.Blocked) return { ok: false, reason: 'user_blocked' };
+
+    // the account id comes from the caller, so ownership is part of the lookup rather than a
+    // check afterwards: a row that is not theirs must be indistinguishable from one that is gone
+    const [account] = await tx
+      .select({ id: brokerAccounts.id, status: brokerAccounts.status })
+      .from(brokerAccounts)
+      .where(and(eq(brokerAccounts.id, accountId), eq(brokerAccounts.userId, user.id)))
+      .for('no key update');
+    if (account === undefined) return { ok: false, reason: 'not_found' };
+    if (account.status !== BrokerAccountStatus.Pending) return { ok: false, reason: 'not_pending' };
+
+    const [confirmed] = await tx
+      .update(brokerAccounts)
+      .set({ status: BrokerAccountStatus.Active })
+      .where(eq(brokerAccounts.id, account.id))
+      .returning();
+    if (confirmed === undefined) throw new Error('broker account confirm returned no row');
+    return { ok: true, account: confirmed };
+  });
 }
 
 // Only `status` and `auth_revoked_reason`: trading_halted and halted_reason belong to ARCH-04.
