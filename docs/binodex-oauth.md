@@ -37,11 +37,21 @@ consumed by one `UPDATE … WHERE used_at IS NULL AND expires_at > now() RETURNI
 callbacks with one state therefore produce exactly one exchange, and a forged, expired or
 replayed state never reaches the broker at all.
 
-The route also carries a 4 KB body limit and a global window of 300 requests per minute per
-process. The window is not keyed by IP on purpose: `trustProxy` is not configured, so behind a
-reverse proxy every request would arrive from one address, and trusting the forwarded header
-without a proxy list would let a caller choose its own. A per-IP limit belongs with the proxy
-configuration (#4); a distributed one is a follow-up.
+The route also carries a 4 KB body limit and two counters per process, both on a one-minute
+window and neither keyed by IP: `trustProxy` is not configured, so behind a reverse proxy every
+request would arrive from one address, and trusting the forwarded header without a proxy list
+would let a caller choose its own.
+
+| Counter | Limit | Spent by | What it bounds |
+| --- | --- | --- | --- |
+| all requests | 3000/min | every request, before the body is parsed and before any query | how much work an anonymous caller can trigger at all |
+| failed state lookups | 60/min | only a state that resolved to no row | guessing, without letting real logins close the door |
+
+A successful login spends only the ceiling, so a burst of real users cannot exhaust the narrow
+counter — that was the flaw of a single global window. Once sixty misses land in a minute the
+callback answers 429 to everyone until the window rolls, which is the accepted cost: sixty
+consecutive misses mean a guessing client or a broken one, not sixty users. A per-IP limit
+belongs with the proxy configuration (#4); a distributed one is a follow-up.
 
 ## The state row
 
@@ -86,10 +96,24 @@ account row, which makes it single-flight per account:
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | account missing                                             | `account_not_found`                                                                                               |
 | `status ≠ active`                                           | `account_revoked` — checked **before** the expiry, so a revoked account never hands out the token it still stores |
+| `token_key_id ≠ the process's key id`                       | `key_unavailable`, and **nothing is written** (see below)                                                         |
+| ciphertext fails to decrypt under its own key id            | revoke `storage_inconsistent`                                                                                     |
 | stored hash ≠ hash of the stored ciphertext                 | revoke `storage_inconsistent`                                                                                     |
-| access token still valid (60 s skew)                        | return it; a legacy row missing its hash gets one here                                                            |
+| access token still valid (60 s skew)                        | return it; a legacy row missing its hash gets one here, and only the hash                                         |
 | `coalesce(token_rotated_at, created_at)` older than 90 days | revoke `refresh_expired`, without asking the broker                                                               |
+| rotated pair names another `broker_user_id`                 | revoke `storage_inconsistent`, the pair is not applied                                                            |
 | otherwise                                                   | exactly one refresh exchange                                                                                      |
+
+A row encrypted under another key id is left strictly alone. During a key rollout both the old
+and the new process are running, and a process holding the old key would otherwise see every
+freshly re-authorized account as inconsistent and revoke it — undoing a login the user has just
+completed. Declining to serve the row costs an error for one process and nothing else; the
+process that holds the matching key serves it normally.
+
+The backfill of a missing `refresh_token_hash` writes that column and nothing else. In
+particular it leaves `token_rotated_at` alone: that column dates the refresh token and starts
+the ninety-day clock, so moving it would hand a token that is already months old another ninety
+days of life.
 
 Exchange failures map to revocations, never to retries:
 
@@ -101,13 +125,25 @@ Exchange failures map to revocations, never to retries:
 Every branch commits its revocation and reports afterwards; throwing inside the transaction
 would roll the revocation back.
 
+One case cannot be handled inside that transaction: the exchange succeeded and storing the new
+pair failed. PostgreSQL rejects every statement after a failed one in the same transaction, so
+the revocation would be rejected too. The service therefore lets the transaction roll back and
+revokes the account `refresh_outcome_unknown` in a **second** transaction — the broker has
+consumed the stored token, and a rolled-back write means our only copy of its replacement is
+gone. If that second transaction also fails, the account stays active holding a token the
+broker will refuse, and the next refresh revokes it on `invalid_grant`.
+
 ## Secrets
 
 Broker errors carry a code and a status, never the response body, the request form or a cause.
 `trade_intents`-style allowlists apply here too: `auth_revoked_reason` holds one of four values,
-CHECKed in the schema. `LOG_REDACT_PATHS` covers the broker's snake_case names plus `code` and
-`state`. The one place a state legitimately appears is the authorize URL that `start` returns —
-it is absent from callback responses, from errors and from logs.
+CHECKed in the schema. `LOG_REDACT_PATHS` covers the broker's snake_case names, `state` and
+`authorizationCode` at every depth, plus the single path `req.body.code`. The bare key `code` is
+deliberately **not** redacted: SQLSTATE, libuv errno and Fastify's `FST_ERR_*` all travel under
+that name, and blanking them would cost the diagnostics this project logs errors by — errors are
+logged as `{ name, code }` and nothing else (`errorIdentity`, `packages/shared/src/logging.ts`).
+The one place a state legitimately appears is the authorize URL that `start` returns — it is
+absent from callback responses, from errors and from logs.
 
 ## Configuration
 
@@ -116,15 +152,18 @@ Backend only, never the worker (the worker neither exchanges grants nor decrypts
 | Variable                                   | Meaning                                                                                                    |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `BROKER_CLIENT_ID`, `BROKER_CLIENT_SECRET` | the OAuth client registered in the broker's cabinet (#8)                                                   |
-| `BROKER_OAUTH_AUTHORIZE_URL`               | the page the bot links to                                                                                  |
-| `BROKER_API_BASE_URL`                      | where `POST /v1/broker/oauth/token` lives                                                                  |
-| `BROKER_OAUTH_REDIRECT_URI`                | must match the value registered with the client                                                            |
+| `BROKER_OAUTH_AUTHORIZE_URL`               | the page the bot links to; `https:` only                                                                   |
+| `BROKER_API_BASE_URL`                      | where `POST /v1/broker/oauth/token` lives; `https:` only                                                   |
+| `BROKER_OAUTH_REDIRECT_URI`                | must match the value registered with the client; `http:` only for `127.0.0.1` or `localhost`               |
 | `BROKER_PARTNER_REF`                       | attached to every authorization request, so a new user registers under this installation's partner account |
 | `TOKEN_ENCRYPTION_KEY`                     | 32 bytes, base64; `openssl rand -base64 32`                                                                |
 | `TOKEN_ENCRYPTION_KEY_ID`                  | names the key for rotation; no `\|`, no whitespace (the cipher binds with it)                              |
 
 compose supplies dev values so the stack starts without secrets, including an all-zero
-encryption key. A deployment (#4) overrides every one of them.
+encryption key. That key is published in this repository and is therefore no protection at all,
+so the backend accepts it **only** paired with `TOKEN_ENCRYPTION_KEY_ID=dev`, which is what
+compose sets. Any other key id with that key fails at startup: the combination means a rotation
+where the id was changed and the key was not. A deployment (#4) overrides every one of them.
 
 ## Boundaries
 
