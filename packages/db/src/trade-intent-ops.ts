@@ -84,7 +84,7 @@ async function createInTransaction(
   const replay = await findReplay(tx, user.id, input);
   if (replay !== undefined) return replay;
 
-  const accountId = await resolveAccount(tx, user.id, input.brokerAccountId);
+  const brokerAccountId = await resolveAccount(tx, user.id, input.brokerAccountId);
 
   const reserved = await tx
     .update(users)
@@ -116,7 +116,7 @@ async function createInTransaction(
     .from(brokerAccounts)
     .where(
       and(
-        eq(brokerAccounts.id, accountId),
+        eq(brokerAccounts.id, brokerAccountId),
         eq(brokerAccounts.status, BrokerAccountStatus.Active),
         eq(brokerAccounts.tradingHalted, false),
       ),
@@ -126,7 +126,7 @@ async function createInTransaction(
     const [fresh] = await tx
       .select({ status: brokerAccounts.status })
       .from(brokerAccounts)
-      .where(eq(brokerAccounts.id, accountId));
+      .where(eq(brokerAccounts.id, brokerAccountId));
     throw new TradeIntentError(
       fresh?.status === BrokerAccountStatus.Revoked
         ? TradeIntentErrorCode.AccountRevoked
@@ -137,7 +137,7 @@ async function createInTransaction(
   const [planned] = await tx
     .insert(tradeIntents)
     .values({
-      brokerAccountId: accountId,
+      brokerAccountId,
       userId: user.id,
       mode: input.mode,
       assetId: input.assetId,
@@ -191,30 +191,23 @@ async function findUser(
   return user;
 }
 
+// keyed by (user, clientRequestId) — the unique index trade_intents_user_request_idx — so a
+// retry finds its intent whatever account it names now; naming a different account is "same
+// id, different parameters", not a replay
 async function findReplay(
   exec: DbExecutor,
   userId: string,
   input: CreateTradeIntentRequest,
 ): Promise<CreateTradeIntentResult | undefined> {
-  const rows = await exec
+  const [row] = await exec
     .select()
     .from(tradeIntents)
     .where(
-      and(
-        eq(tradeIntents.userId, userId),
-        eq(tradeIntents.clientRequestId, input.clientRequestId),
-        input.brokerAccountId === undefined
-          ? undefined
-          : eq(tradeIntents.brokerAccountId, input.brokerAccountId),
-      ),
+      and(eq(tradeIntents.userId, userId), eq(tradeIntents.clientRequestId, input.clientRequestId)),
     );
-  if (rows.length === 0) return undefined;
-  // the contract makes clientRequestId unique per user; two rows means the caller reused it
-  // across accounts and we cannot tell which one it is replaying
-  if (rows.length > 1) throw new TradeIntentError(TradeIntentErrorCode.AmbiguousBrokerAccount);
-  const [row] = rows;
   if (row === undefined) return undefined;
   const same =
+    (input.brokerAccountId === undefined || input.brokerAccountId === row.brokerAccountId) &&
     row.mode === input.mode &&
     row.assetId === input.assetId &&
     row.action === input.action &&
@@ -300,7 +293,10 @@ export async function transitionIntent(
   return row;
 }
 
-const millisecondsAgo = (ms: number): SQL => sql`now() - (${ms}::int * interval '1 millisecond')`;
+// database-clock arithmetic shared by every age predicate (worker, publisher, sweeper): the
+// app clock never enters a CAS
+export const millisecondsAgo = (ms: number): SQL =>
+  sql`now() - (${ms}::int * interval '1 millisecond')`;
 
 export interface TakeIntentOptions {
   id: string;
@@ -333,10 +329,23 @@ export interface RejectIntentOptions {
 
 // Rejection releases the reserve in the same transaction: ledger release row, users cache,
 // intent.tokens_reserved back to 0. Needs a transaction because it is three statements.
+// Lock order is users → trade_intents, the same as creation (users → broker_accounts →
+// trade_intents): taking the intent first and the user second deadlocked against a creation
+// that held the user row while its INSERT waited on this intent's index entry.
 export async function rejectIntent(
   tx: Tx,
   { id, from, expectedVersion, reason, where }: RejectIntentOptions,
 ): Promise<TradeIntentRow | undefined> {
+  await tx
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      eq(
+        users.id,
+        sql`(select ${tradeIntents.userId} from ${tradeIntents} where ${tradeIntents.id} = ${id})`,
+      ),
+    )
+    .for('no key update');
   const [current] = await tx
     .select({
       userId: tradeIntents.userId,
@@ -459,6 +468,25 @@ export function markIntentAccepted(
 }
 
 // --- Reads --------------------------------------------------------------------------------------
+
+// the one place the "stuck in submitting" predicate is spelled out; markIntentUnknown re-checks
+// it inside its CAS with the same olderThanMs
+export async function listStaleSubmittingIntents(
+  exec: DbExecutor,
+  { olderThanMs, limit }: { olderThanMs: number; limit: number },
+): Promise<{ id: string }[]> {
+  return exec
+    .select({ id: tradeIntents.id })
+    .from(tradeIntents)
+    .where(
+      and(
+        eq(tradeIntents.status, TradeIntentStatus.Submitting),
+        sql`${tradeIntents.submittedAt} < ${millisecondsAgo(olderThanMs)}`,
+      ),
+    )
+    .orderBy(tradeIntents.submittedAt)
+    .limit(limit);
+}
 
 export async function findTradeIntent(
   exec: DbExecutor,
