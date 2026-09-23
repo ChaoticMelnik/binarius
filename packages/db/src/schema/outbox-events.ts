@@ -32,10 +32,10 @@ export interface OutboxPayload {
 
 // ARCH-03: written in the same transaction as the intent; the publisher turns pending rows
 // into BullMQ jobs. The payload carries only the intent id, never tokens.
-// The uniqueness key is (topic, intent_id), so one intent legitimately has a row per topic —
-// the job id must therefore be `topic:intent_id`, not the intent id alone, or the second
-// topic's job would collide with the first and be dropped while its row still flips to
-// published.
+// The uniqueness key is (topic, intent_id), so one intent legitimately has a row per topic.
+// Each topic is its own BullMQ queue and the job id is the intent id alone: BullMQ dedupes job
+// ids per queue and rejects a custom id containing ':' (job.js "Custom Id cannot contain :"),
+// so a `topic:intent_id` id is neither needed nor allowed.
 export const outboxEvents = pgTable(
   'outbox_events',
   {

@@ -63,6 +63,8 @@ services:
     environment:
       <<: [*app-environment, *broker-environment]
       PORT: "3000"
+      # dev-only fallback; a deployment sets its own secret (the backend refuses to start without one)
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-binarius-dev-internal-token}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
     healthcheck:
@@ -135,6 +137,10 @@ services:
     command: pnpm --filter @binarius/trading-worker dev
     environment:
       <<: [*app-environment, *broker-environment]
+      # optional tunables, forwarded only when set (code defaults otherwise)
+      INTENT_MAX_AGE_MS:
+      SUBMIT_ACK_TIMEOUT_MS:
+      WORKER_CONCURRENCY:
     develop:
       watch:
         - path: ./apps/trading-worker/src

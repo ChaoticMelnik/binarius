@@ -8,8 +8,11 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 - `apps/backend` — API (Fastify): OAuth, postbacks, auth
 - `apps/web` — web pages (Next.js): login, checkout, admin
 - `apps/trading-worker` — trading loop worker (Socket.IO client)
-- `packages/db` — Drizzle schema, shared by `apps/backend` and `apps/trading-worker`
+- `packages/db` — Drizzle schema and transactional operations, shared by `apps/backend` and `apps/trading-worker`
 - `packages/shared` — shared types/contracts, consumed by all 4 apps
+
+How a trade order travels from the bot to the worker (PostgreSQL outbox + BullMQ) is described in
+[docs/trade-intent-transport.md](docs/trade-intent-transport.md).
 
 ## Requirements
 
@@ -47,15 +50,21 @@ backend (`3000`) are published on `127.0.0.1` only.
 ## Database
 
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
-The `packages/db` tests run against a real, migrated Postgres named by `DATABASE_URL` and fail
-without one — `pnpm test` therefore needs the compose Postgres:
+The integration tests run against a real Postgres named by `DATABASE_URL` and a real Redis named
+by `REDIS_URL`, and fail without them — `pnpm test` therefore needs the compose services:
 
 ```bash
-docker compose up -d postgres
-export DATABASE_URL=postgres://binarius:binarius@localhost:5432/binarius   # the .env.example value
+docker compose up -d postgres redis
+export DATABASE_URL=postgres://binarius:binarius@localhost:5432/binarius   # the .env.example values
+export REDIS_URL=redis://localhost:6379
 pnpm db:migrate          # apply pending migrations (idempotent)
 pnpm test
 ```
+
+`packages/db/src/schema.db.test.ts` uses the migrated database itself; every other integration
+test creates its own `binarius_test_<timestamp>_<hex>` database (migrated on the fly, dropped
+afterwards, orphans older than an hour reaped on the next run) and a random BullMQ key prefix, so
+the role in `DATABASE_URL` needs `CREATEDB` — the compose role is a superuser.
 
 If another Postgres already owns host port 5432, set `POSTGRES_PORT=5433` in `.env` and use that
 port in `DATABASE_URL`.
