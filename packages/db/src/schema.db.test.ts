@@ -7,6 +7,7 @@ import {
   brokerAccounts,
   brokerTrades,
   depositEvents,
+  oauthStates,
   outboxEvents,
   tokenLedger,
   tradeIntents,
@@ -416,6 +417,62 @@ describe('trade_intents', () => {
       const [row] = await tx.insert(tradeIntents).values(intent(seed, 'r1')).returning();
       expect(row).toMatchObject({ status: 'planned', version: 1, tokensReserved: 0n });
       expect(row!.amount).toBe('10.00000000');
+    });
+  });
+
+  it('rejects a second oauth state with the same hash and refuses impossible timestamps', async () => {
+    await rolledBack(async (tx) => {
+      const values = {
+        stateHash: `state-${++seq}`,
+        telegramUserId: 990_001n,
+        redirectUri: 'https://example.test/callback',
+        expiresAt: sql`now() + interval '10 minutes'`,
+      };
+      await tx.insert(oauthStates).values(values);
+      await rejectsWith(
+        tx.insert(oauthStates).values(values),
+        '23505',
+        'oauth_states_state_hash_idx',
+      );
+    });
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(oauthStates).values({
+          stateHash: `state-${++seq}`,
+          telegramUserId: 990_002n,
+          redirectUri: 'https://example.test/callback',
+          expiresAt: sql`now() - interval '1 second'`,
+        }),
+        '23514',
+        'oauth_states_expires_after_created_check',
+      );
+    });
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(oauthStates).values({
+          stateHash: `state-${++seq}`,
+          telegramUserId: 990_003n,
+          redirectUri: 'https://example.test/callback',
+          expiresAt: sql`now() + interval '10 minutes'`,
+          usedAt: sql`now() - interval '1 minute'`,
+        }),
+        '23514',
+        'oauth_states_used_after_created_check',
+      );
+    });
+  });
+
+  it('rejects an auth revocation reason outside the allowlist', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx
+          .update(brokerAccounts)
+          .set({ authRevokedReason: 'bogus' as never })
+          .where(eq(brokerAccounts.id, seed.accountId)),
+        '23514',
+        'broker_accounts_auth_revoked_reason_check',
+      );
     });
   });
 

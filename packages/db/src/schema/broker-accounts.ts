@@ -8,6 +8,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { AuthRevokedReason } from '@binarius/shared';
 import { bytea, createdAt, id, inList, updatedAt } from './columns';
 import { users } from './users';
 
@@ -29,6 +30,13 @@ export const brokerAccounts = pgTable(
     refreshTokenEnc: bytea('refresh_token_enc').notNull(),
     tokenKeyId: text('token_key_id').notNull(),
     accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }).notNull(),
+    // sha256 of the stored refresh token: the rotation path compares it with the decrypted
+    // ciphertext, so a storage desync is caught before a stale token reaches the broker
+    refreshTokenHash: text('refresh_token_hash'),
+    tokenRotatedAt: timestamp('token_rotated_at', { withTimezone: true }),
+    // why OAuth revoked this account; NULL while it is usable. Distinct from trading_halted,
+    // which reconciliation (ARCH-04) owns and this flow never writes.
+    authRevokedReason: text('auth_revoked_reason').$type<AuthRevokedReason>(),
     status: text('status')
       .$type<BrokerAccountStatus>()
       .notNull()
@@ -45,5 +53,6 @@ export const brokerAccounts = pgTable(
     unique('broker_accounts_id_user_id_key').on(t.id, t.userId),
     index('broker_accounts_user_id_idx').on(t.userId),
     inList('broker_accounts_status_check', t.status, BrokerAccountStatus),
+    inList('broker_accounts_auth_revoked_reason_check', t.authRevokedReason, AuthRevokedReason),
   ],
 );
