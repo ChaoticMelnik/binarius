@@ -1,11 +1,12 @@
+# Every pattern here is `**/`-prefixed: Docker matches a slash-less pattern only at the context
+# root, so a bare `coverage` or `.claude` would let a nested one into the image. That is how
+# apps/backend/.env used to get in while .gitignore hid it from `git status`.
 **/node_modules
 **/dist
-coverage
-.git
-# every .env variant at any depth: Docker matches a slash-less pattern only at the context root,
-# so `.env` alone would let apps/backend/.env and .envrc into the image
+**/coverage
+**/.git
 **/.env*
 !**/.env.example
-.playwright-mcp
-.codegraph
-.claude
+**/.playwright-mcp
+**/.codegraph
+**/.claude
