@@ -71,21 +71,25 @@ export class OutboxPublisher {
     this.config = { ...DEFAULT_PUBLISHER_CONFIG, ...deps.config };
   }
 
+  // a no-op while a loop exists, including one that stop() is still waiting for: two loops
+  // would share `running` and the finishing stop() would drop the newer loop's reference
   start(): void {
-    if (this.running) return;
+    if (this.loop !== undefined) return;
     this.running = true;
     this.stopping = false;
     this.loop = this.run();
   }
 
   // resolves once the row in flight (at most one transaction) has finished; the rest of the
-  // batch is left for the next start
+  // batch is left for the next start. `stopping` is cleared afterwards so direct tick()/sweep()
+  // calls keep working after a stop.
   async stop(): Promise<void> {
     this.stopping = true;
     this.running = false;
     this.wake();
     await this.loop;
     this.loop = undefined;
+    this.stopping = false;
   }
 
   wake(): void {
@@ -117,6 +121,8 @@ export class OutboxPublisher {
         const present = await this.withDeadline(
           this.deps.jobs.has(candidate.topic, candidate.intentId),
         );
+        // has() may have waited out its deadline: no new database work once stop was requested
+        if (this.stopping) return requeued;
         if (!present.ok || present.value) continue;
         await this.deps.db.transaction(async (tx) => {
           const row = await claimOutboxRow(tx, candidate.id, OutboxStatus.Published);
@@ -174,19 +180,16 @@ export class OutboxPublisher {
       }
       const exhausted = await recordDeliveryFailure(tx, row, this.policyFor(row.topic));
       const attempts = row.attempts + 1;
-      this.deps.logger.warn(
+      // a reconciliation row retries forever, so its first failures are routine; only a row that
+      // keeps failing deserves the warning level
+      const level =
+        row.topic === OutboxTopic.TradingReconciliation && attempts < RECONCILIATION_WARN_ATTEMPTS
+          ? 'info'
+          : 'warn';
+      this.deps.logger[level](
         { err: outcome.error, intentId: row.intentId, topic: row.topic, attempts, exhausted },
         'outbox publish failed',
       );
-      if (
-        row.topic === OutboxTopic.TradingReconciliation &&
-        attempts >= RECONCILIATION_WARN_ATTEMPTS
-      ) {
-        this.deps.logger.warn(
-          { intentId: row.intentId, attempts },
-          'reconciliation delivery keeps failing; the intent stays unknown until it goes through',
-        );
-      }
       return true;
     });
   }
