@@ -422,11 +422,11 @@ describe('the confirmation gate', () => {
   });
 
   it.each([
-    ['an account of another user', 'not_found' as const],
-    ['an account that is already active', 'not_pending' as const],
-    ['a blocked user', 'user_blocked' as const],
-  ])('refuses to confirm %s', async (label, expected) => {
-    const telegramUserId = 700_110n + BigInt(label.length);
+    [0, 'an account of another user', 'not_found' as const],
+    [1, 'an account that is already active', 'not_pending' as const],
+    [2, 'a blocked user', 'user_blocked' as const],
+  ])('refuses to confirm %s', async (index, _label, expected) => {
+    const telegramUserId = 700_110n + BigInt(index);
     const created = await linkBrokerAccount(tmp.db, {
       telegramUserId,
       tokens: brokerTokens(),
@@ -457,6 +457,26 @@ describe('the confirmation gate', () => {
       await confirmBrokerAccount(tmp.db, { telegramUserId, accountId: created.account.id }),
     ).toEqual({ ok: false, reason: 'user_blocked' });
     expect((await brokerAccountRow(tmp.db, created.account.id)).status).toBe('pending');
+  });
+});
+
+describe('the broker_accounts default', () => {
+  // the invariant lives in the table, not only in linkBrokerAccount: an insert that forgets the
+  // column has to produce an account that cannot act
+  it('makes an account that omits its status pending', async () => {
+    const user = await seedUser(tmp.db);
+    const [row] = await tmp.db
+      .insert(brokerAccounts)
+      .values({
+        userId: user.userId,
+        brokerUserId: `broker-default-${Date.now()}`,
+        accessTokenEnc: Buffer.from('enc'),
+        refreshTokenEnc: Buffer.from('enc'),
+        tokenKeyId: 'k1',
+        accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      })
+      .returning({ status: brokerAccounts.status });
+    expect(row?.status).toBe('pending');
   });
 });
 

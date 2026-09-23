@@ -47,7 +47,9 @@ export const brokerAccounts = pgTable(
     status: text('status')
       .$type<BrokerAccountStatus>()
       .notNull()
-      .default(BrokerAccountStatus.Active),
+      // the restrictive value: an insert that forgets the column produces an account that
+      // cannot act, rather than one that silently bypassed the confirmation
+      .default(BrokerAccountStatus.Pending),
     // ARCH-04: an ambiguous reconciliation match halts new intents for the account
     tradingHalted: boolean('trading_halted').notNull().default(false),
     haltedReason: text('halted_reason'),

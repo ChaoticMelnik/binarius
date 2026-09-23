@@ -119,6 +119,8 @@ export async function seedUser(
   return { userId: user.id, telegramUserId: telegramUserId.toString() };
 }
 
+// `status` is passed explicitly: the column defaults to pending, and most suites want an
+// account that can already act. `patch` still overrides it.
 export async function seedBrokerAccount(
   db: Db,
   userId: string,
@@ -133,6 +135,7 @@ export async function seedBrokerAccount(
       refreshTokenEnc: Buffer.from('enc'),
       tokenKeyId: 'k1',
       accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      status: 'active',
       ...patch,
     })
     .returning({ id: brokerAccounts.id });
