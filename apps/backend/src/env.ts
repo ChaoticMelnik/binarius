@@ -18,7 +18,14 @@ const MAX_HEALTH_TIMEOUT_MS = 2500;
 const MIN_INTERNAL_TOKEN_LENGTH = 16;
 // AES-256-GCM: the cipher refuses anything else, and a short key would fail at the first login
 const TOKEN_ENCRYPTION_KEY_BYTES = 32;
-const HTTPS_URL_RULES: UrlEnvRules = { protocols: ['https:', 'http:'], allowIpv6Literal: false };
+// the key id compose pairs with the all-zero development key it substitutes by default
+const DEV_TOKEN_ENCRYPTION_KEY_ID = 'dev';
+// the broker is reached over the public internet, and an authorize page served over http would
+// hand the authorization code to anyone on the path
+const HTTPS_ONLY_RULES: UrlEnvRules = { protocols: ['https:'], allowIpv6Literal: false };
+const REDIRECT_URI_RULES: UrlEnvRules = { protocols: ['https:', 'http:'], allowIpv6Literal: false };
+// the redirect target is a local page during development; it never leaves the machine
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost']);
 
 export interface Env {
   databaseUrl: string;
@@ -56,28 +63,56 @@ export function parseEnv(source: EnvSource): Env {
     brokerOauthAuthorizeUrl: parseUrlEnv(
       readEnv(source, 'BROKER_OAUTH_AUTHORIZE_URL'),
       'BROKER_OAUTH_AUTHORIZE_URL',
-      HTTPS_URL_RULES,
+      HTTPS_ONLY_RULES,
     ),
     brokerApiBaseUrl: parseUrlEnv(
       readEnv(source, 'BROKER_API_BASE_URL'),
       'BROKER_API_BASE_URL',
-      HTTPS_URL_RULES,
+      HTTPS_ONLY_RULES,
     ),
-    brokerOauthRedirectUri: parseUrlEnv(
+    brokerOauthRedirectUri: parseRedirectUri(
       readEnv(source, 'BROKER_OAUTH_REDIRECT_URI'),
       'BROKER_OAUTH_REDIRECT_URI',
-      HTTPS_URL_RULES,
     ),
     brokerPartnerRef: readEnv(source, 'BROKER_PARTNER_REF'),
-    tokenEncryptionKey: parseEncryptionKey(
-      readEnv(source, 'TOKEN_ENCRYPTION_KEY'),
-      'TOKEN_ENCRYPTION_KEY',
-    ),
-    tokenEncryptionKeyId: parseKeyId(
-      readEnv(source, 'TOKEN_ENCRYPTION_KEY_ID'),
-      'TOKEN_ENCRYPTION_KEY_ID',
-    ),
+    ...parseTokenEncryption(source),
   };
+}
+
+function parseRedirectUri(raw: string, name: string): string {
+  const value = parseUrlEnv(raw, name, REDIRECT_URI_RULES);
+  const url = new URL(value);
+  if (url.protocol === 'http:' && !LOOPBACK_HOSTS.has(url.hostname)) {
+    throw new Error(`Env ${name} may only use http for ${[...LOOPBACK_HOSTS].join(' or ')}`);
+  }
+  return value;
+}
+
+// The two are validated together because the pair is what matters: the published development
+// key is usable, and the stack ships with it, so refusing it outright would stop `docker
+// compose up`. It is refused under any other key id instead — that combination is what a
+// half-finished key rotation looks like, and it would silently encrypt production tokens
+// under a key anyone can read.
+function parseTokenEncryption(
+  source: EnvSource,
+): Pick<Env, 'tokenEncryptionKey' | 'tokenEncryptionKeyId'> {
+  const tokenEncryptionKey = parseEncryptionKey(
+    readEnv(source, 'TOKEN_ENCRYPTION_KEY'),
+    'TOKEN_ENCRYPTION_KEY',
+  );
+  const tokenEncryptionKeyId = parseKeyId(
+    readEnv(source, 'TOKEN_ENCRYPTION_KEY_ID'),
+    'TOKEN_ENCRYPTION_KEY_ID',
+  );
+  if (
+    tokenEncryptionKey.equals(Buffer.alloc(TOKEN_ENCRYPTION_KEY_BYTES)) &&
+    tokenEncryptionKeyId !== DEV_TOKEN_ENCRYPTION_KEY_ID
+  ) {
+    throw new Error(
+      `Env TOKEN_ENCRYPTION_KEY is the published development key, which is only allowed with TOKEN_ENCRYPTION_KEY_ID=${DEV_TOKEN_ENCRYPTION_KEY_ID}`,
+    );
+  }
+  return { tokenEncryptionKey, tokenEncryptionKeyId };
 }
 
 function parseEncryptionKey(raw: string, name: string): Buffer {

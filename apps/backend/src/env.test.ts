@@ -170,7 +170,23 @@ describe('broker OAuth configuration', () => {
     [
       'BROKER_API_BASE_URL',
       'ftp://binodex.app',
-      'Env BROKER_API_BASE_URL must use one of: https: http:',
+      'Env BROKER_API_BASE_URL must use one of: https:',
+    ],
+    // the broker is reached over the internet: plaintext there would expose the code in flight
+    [
+      'BROKER_API_BASE_URL',
+      'http://binodex.app',
+      'Env BROKER_API_BASE_URL must use one of: https:',
+    ],
+    [
+      'BROKER_OAUTH_AUTHORIZE_URL',
+      'http://binodex.app/oauth/authorize',
+      'Env BROKER_OAUTH_AUTHORIZE_URL must use one of: https:',
+    ],
+    [
+      'BROKER_OAUTH_REDIRECT_URI',
+      'http://bot.example/oauth/callback',
+      'Env BROKER_OAUTH_REDIRECT_URI may only use http for 127.0.0.1 or localhost',
     ],
     [
       'BROKER_OAUTH_REDIRECT_URI',
@@ -179,6 +195,29 @@ describe('broker OAuth configuration', () => {
     ],
   ])('rejects %s=%s', (name, value, message) => {
     expect(() => parseEnv({ ...valid, [name]: value })).toThrow(message);
+  });
+
+  // the redirect target during development is a page on this machine, which no proxy sees
+  it.each(['http://127.0.0.1:3000/oauth/callback', 'http://localhost:3000/oauth/callback'])(
+    'accepts %s as a loopback redirect',
+    (value) => {
+      expect(parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: value }).brokerOauthRedirectUri).toBe(
+        value,
+      );
+    },
+  );
+
+  // compose substitutes this key so the stack starts with no secret management at all; it is
+  // usable only under the key id compose pairs it with
+  it('accepts the published development key only under the dev key id', () => {
+    const devKey = Buffer.alloc(32).toString('base64');
+    expect(
+      parseEnv({ ...valid, TOKEN_ENCRYPTION_KEY: devKey, TOKEN_ENCRYPTION_KEY_ID: 'dev' })
+        .tokenEncryptionKey,
+    ).toEqual(Buffer.alloc(32));
+    expect(() =>
+      parseEnv({ ...valid, TOKEN_ENCRYPTION_KEY: devKey, TOKEN_ENCRYPTION_KEY_ID: 'prod-1' }),
+    ).toThrow('is the published development key');
   });
 
   it.each([
