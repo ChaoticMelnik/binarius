@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { closeAll } from './process';
 
 describe('closeAll', () => {
-  it('runs every step even when an earlier one rejects, and reports settled', async () => {
+  it('runs every step even when an earlier one rejects, and reports the rejection', async () => {
     const calls: string[] = [];
-    const settled = await closeAll([
+    const clean = await closeAll([
       () => {
         calls.push('first');
         return Promise.reject(new Error('first failed'));
@@ -18,7 +18,11 @@ describe('closeAll', () => {
       },
     ]);
     expect(calls).toEqual(['first', 'second', 'third']);
-    expect(settled).toBe(true);
+    expect(clean).toBe(false);
+  });
+
+  it('reports true when every step fulfilled within the budget', async () => {
+    await expect(closeAll([async () => {}, () => Promise.resolve(1)])).resolves.toBe(true);
   });
 
   it('reports false after the timeout when a step never settles', async () => {

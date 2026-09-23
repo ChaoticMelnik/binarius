@@ -64,3 +64,14 @@ export function parseEnumEnv<T extends string>(raw: string, name: string, values
 export function parseLogLevelEnv(raw: string, name: string): LogLevel {
   return parseEnumEnv(raw, name, LOG_LEVELS);
 }
+
+export function parseBoundedIntegerEnv(
+  raw: string,
+  name: string,
+  min: number,
+  max: number,
+): number {
+  const value = parseIntegerEnv(raw, name);
+  if (value < min || value > max) throw new Error(`Env ${name} must be between ${min} and ${max}`);
+  return value;
+}

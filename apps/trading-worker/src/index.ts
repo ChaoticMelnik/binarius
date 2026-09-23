@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import pino from 'pino';
-import { closeAll } from '@binarius/shared';
+import { LOG_REDACT_PATHS, closeAll } from '@binarius/shared';
 import { createDb } from '@binarius/db';
 import { parseEnv } from './env';
 import {
@@ -17,10 +17,7 @@ import { startSweeper } from './intents/sweeper';
 
 const env = parseEnv(process.env);
 
-const logger = pino({
-  level: env.logLevel,
-  redact: ['*.authorization', '*.token', '*.accessToken', '*.refreshToken', '*.password'],
-});
+const logger = pino({ level: env.logLevel, redact: [...LOG_REDACT_PATHS] });
 
 const pool = new Pool({ connectionString: env.databaseUrl });
 const db = createDb(pool);

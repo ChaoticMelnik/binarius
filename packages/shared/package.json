@@ -48,6 +48,10 @@
     "./process": {
       "types": "./src/process.ts",
       "default": "./src/process.ts"
+    },
+    "./logging": {
+      "types": "./src/logging.ts",
+      "default": "./src/logging.ts"
     }
   },
   "dependencies": {

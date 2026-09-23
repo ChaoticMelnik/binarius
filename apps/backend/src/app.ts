@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance, type LogLevel } from 'fastify';
+import { LOG_REDACT_PATHS } from '@binarius/shared';
 import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
 
 type DependencyCheck = () => Promise<unknown>;
@@ -13,17 +14,6 @@ export interface AppDeps {
 
 type CheckResult = { status: 'ok' } | { status: 'error'; error: unknown };
 
-// belt and braces: fastify's request serializer logs no headers, and nothing here logs a token
-// object, but a future `request.log.info({ req })` must not print the shared secret either
-const LOG_REDACT_PATHS = [
-  'req.headers.authorization',
-  '*.authorization',
-  '*.token',
-  '*.accessToken',
-  '*.refreshToken',
-  '*.password',
-];
-
 export function buildApp({
   checkPostgres,
   checkRedis,
@@ -31,7 +21,7 @@ export function buildApp({
   checkTimeoutMs,
   trading,
 }: AppDeps): FastifyInstance {
-  const app = Fastify({ logger: { level: logLevel, redact: LOG_REDACT_PATHS } });
+  const app = Fastify({ logger: { level: logLevel, redact: [...LOG_REDACT_PATHS] } });
 
   app.get('/health', async (request, reply) => {
     const [postgres, redis] = await Promise.all([
