@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { parseEnv } from './env';
 
+const KEY = Buffer.alloc(32, 7).toString('base64');
+
 const valid = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
   REDIS_URL: 'redis://localhost:6379',
   INTERNAL_API_TOKEN: 'internal-token-for-tests',
+  BROKER_CLIENT_ID: 'client-id',
+  BROKER_CLIENT_SECRET: 'client-secret',
+  BROKER_OAUTH_AUTHORIZE_URL: 'https://binodex.app/oauth/authorize',
+  BROKER_API_BASE_URL: 'https://binodex.app',
+  BROKER_OAUTH_REDIRECT_URI: 'https://bot.example/oauth/callback',
+  BROKER_PARTNER_REF: 'partner-ref',
+  TOKEN_ENCRYPTION_KEY: KEY,
+  TOKEN_ENCRYPTION_KEY_ID: 'dev',
 };
 
 describe('parseEnv', () => {
@@ -16,6 +26,14 @@ describe('parseEnv', () => {
       logLevel: 'info',
       healthTimeoutMs: 2000,
       internalApiToken: valid.INTERNAL_API_TOKEN,
+      brokerClientId: valid.BROKER_CLIENT_ID,
+      brokerClientSecret: valid.BROKER_CLIENT_SECRET,
+      brokerOauthAuthorizeUrl: valid.BROKER_OAUTH_AUTHORIZE_URL,
+      brokerApiBaseUrl: valid.BROKER_API_BASE_URL,
+      brokerOauthRedirectUri: valid.BROKER_OAUTH_REDIRECT_URI,
+      brokerPartnerRef: valid.BROKER_PARTNER_REF,
+      tokenEncryptionKey: Buffer.from(KEY, 'base64'),
+      tokenEncryptionKeyId: valid.TOKEN_ENCRYPTION_KEY_ID,
     });
   });
 
@@ -41,7 +59,19 @@ describe('parseEnv', () => {
     expect(env.redisUrl).toBe('rediss://h:6380');
   });
 
-  it.each(['DATABASE_URL', 'REDIS_URL', 'INTERNAL_API_TOKEN'])('rejects missing %s', (name) => {
+  it.each([
+    'DATABASE_URL',
+    'REDIS_URL',
+    'INTERNAL_API_TOKEN',
+    'BROKER_CLIENT_ID',
+    'BROKER_CLIENT_SECRET',
+    'BROKER_OAUTH_AUTHORIZE_URL',
+    'BROKER_API_BASE_URL',
+    'BROKER_OAUTH_REDIRECT_URI',
+    'BROKER_PARTNER_REF',
+    'TOKEN_ENCRYPTION_KEY',
+    'TOKEN_ENCRYPTION_KEY_ID',
+  ])('rejects missing %s', (name) => {
     const source: Record<string, string | undefined> = { ...valid, [name]: undefined };
     expect(() => parseEnv(source)).toThrow(`Missing required env ${name}`);
   });
@@ -127,5 +157,42 @@ describe('INTERNAL_API_TOKEN', () => {
     expect(parseEnv({ ...valid, INTERNAL_API_TOKEN: 'x'.repeat(16) }).internalApiToken).toBe(
       'x'.repeat(16),
     );
+  });
+});
+
+describe('broker OAuth configuration', () => {
+  it.each([
+    [
+      'BROKER_OAUTH_AUTHORIZE_URL',
+      'not-a-url',
+      'Env BROKER_OAUTH_AUTHORIZE_URL is not a valid URL',
+    ],
+    [
+      'BROKER_API_BASE_URL',
+      'ftp://binodex.app',
+      'Env BROKER_API_BASE_URL must use one of: https: http:',
+    ],
+    [
+      'BROKER_OAUTH_REDIRECT_URI',
+      'https://[::1]/cb',
+      'Env BROKER_OAUTH_REDIRECT_URI: IPv6 literal hosts are not supported, use a hostname',
+    ],
+  ])('rejects %s=%s', (name, value, message) => {
+    expect(() => parseEnv({ ...valid, [name]: value })).toThrow(message);
+  });
+
+  it.each([
+    [Buffer.alloc(31, 1).toString('base64'), 'must decode to 32 bytes'],
+    [Buffer.alloc(33, 1).toString('base64'), 'must decode to 32 bytes'],
+    ['not base64 at all!!', 'must decode to 32 bytes'],
+  ])('rejects a token encryption key of the wrong size (%s)', (key, message) => {
+    expect(() => parseEnv({ ...valid, TOKEN_ENCRYPTION_KEY: key })).toThrow(message);
+  });
+
+  it.each([
+    ['dev|rotated', 'Env TOKEN_ENCRYPTION_KEY_ID must not contain |'],
+    ['dev key', 'Env TOKEN_ENCRYPTION_KEY_ID must not contain whitespace'],
+  ])('rejects a key id the cipher cannot bind (%s)', (keyId, message) => {
+    expect(() => parseEnv({ ...valid, TOKEN_ENCRYPTION_KEY_ID: keyId })).toThrow(message);
   });
 });

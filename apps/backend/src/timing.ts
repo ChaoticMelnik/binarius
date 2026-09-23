@@ -1,3 +1,4 @@
+import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
 
 // Phase 1 waits for app.close() (requests in flight) and publisher.stop() (the row in flight:
@@ -10,8 +11,11 @@ export const SHUTDOWN_PHASE1_BUDGET_MS = 10_000;
 export const SHUTDOWN_PHASE2_BUDGET_MS = 4_000;
 export const COMPOSE_STOP_GRACE_PERIOD_MS = 20_000;
 
+// the broker call is the other bounded operation phase 1 can be waiting on: a login handler
+// holds no lock, but a refresh does, and its transaction must fit in the budget
 export const TIMING_CHAIN_HOLDS =
   DEFAULT_PUBLISHER_CONFIG.publishTimeoutMs < SHUTDOWN_PHASE1_BUDGET_MS &&
+  BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
