@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startOAuthStub, type OAuthStub } from './testing/oauth-stub';
@@ -114,6 +115,12 @@ describe('refresh', () => {
     expect(await codeOf(client.refresh({ refreshToken: first.refreshToken }))).toBe(
       BrokerOAuthErrorCode.InvalidGrant,
     );
+
+    // and the replay costs the whole chain, not just the token that was replayed: the current
+    // member stops working too, which is why an unknown outcome has to revoke the account
+    expect(await codeOf(client.refresh({ refreshToken: rotated.refreshToken }))).toBe(
+      BrokerOAuthErrorCode.InvalidGrant,
+    );
   });
 });
 
@@ -161,6 +168,31 @@ describe('transport failures', () => {
     expect(await codeOf(orphan.exchangeCode({ code: 'x', redirectUri: REDIRECT_URI }))).toBe(
       BrokerOAuthErrorCode.Unavailable,
     );
+  });
+
+  // the body decides: one that never finished arriving leaves the outcome unknown, so it must
+  // not be filed as the broker breaking its contract
+  it('reports a body cut short mid-flight as unavailable', async () => {
+    const truncating = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json', 'content-length': '64' });
+      response.write('{"access_token":');
+      response.socket?.destroy();
+    });
+    await new Promise<void>((resolve) => truncating.listen(0, '127.0.0.1', resolve));
+    const address = truncating.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    try {
+      const probe = createBrokerOAuthClient({
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        clientId: CLIENT_ID,
+        clientSecret: CLIENT_SECRET,
+      });
+      expect(await codeOf(probe.exchangeCode({ code: 'c', redirectUri: REDIRECT_URI }))).toBe(
+        BrokerOAuthErrorCode.Unavailable,
+      );
+    } finally {
+      await new Promise<void>((resolve) => truncating.close(() => resolve()));
+    }
   });
 
   it.each([
