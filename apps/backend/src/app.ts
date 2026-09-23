@@ -1,5 +1,10 @@
-import Fastify, { type FastifyError, type FastifyInstance, type LogLevel } from 'fastify';
-import { LOG_REDACT_PATHS } from '@binarius/shared';
+import Fastify, {
+  type FastifyError,
+  type FastifyInstance,
+  type FastifyRequest,
+  type LogLevel,
+} from 'fastify';
+import { errorIdentity, LOG_REDACT_PATHS } from '@binarius/shared';
 import { authRoutes, type AuthRoutesDeps } from './auth/routes';
 import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
 
@@ -24,7 +29,25 @@ export function buildApp({
   trading,
   auth,
 }: AppDeps): FastifyInstance {
-  const app = Fastify({ logger: { level: logLevel, redact: [...LOG_REDACT_PATHS] } });
+  const app = Fastify({
+    logger: {
+      level: logLevel,
+      redact: [...LOG_REDACT_PATHS],
+      // the default serializer logs the raw url, and an OAuth provider that ignores
+      // response_mode=web_message delivers the authorization code as a query parameter
+      serializers: { req: serializeRequest },
+    },
+  });
+
+  // Fastify's own not-found log builds its message from the raw url, where no redact path and
+  // no serializer can reach it
+  app.setNotFoundHandler((request, reply) => {
+    request.log.info(
+      { method: request.method, url: withoutSecrets(request.url) },
+      'route not found',
+    );
+    return reply.code(404).send({ error: 'not_found' });
+  });
 
   app.get('/health', async (request, reply) => {
     const [postgres, redis] = await Promise.all([
@@ -63,11 +86,53 @@ export function buildApp({
     ) {
       return reply.send(error);
     }
-    request.log.error({ err: error }, 'unhandled request error');
+    // name and code only: a DrizzleQueryError carries the bound parameters as a field and
+    // interpolates them into its message, and no key-based redact path scrubs a string. The
+    // query template is safe on its own — it holds $1 placeholders, never values.
+    request.log.error(
+      { err: errorIdentity(error), query: queryOf(error) },
+      'unhandled request error',
+    );
     return reply.code(500).send({ error: 'internal' });
   });
 
   return app;
+}
+
+// `code` and `state` are secrets for the window they are alive, and both can arrive in a query
+// string: the broker chooses how it delivers them, and a 404 is exactly where an unexpected
+// delivery lands.
+const SECRET_QUERY_KEYS = ['code', 'state'];
+
+export function withoutSecrets(url: string): string {
+  const separator = url.indexOf('?');
+  if (separator === -1) return url;
+  const params = new URLSearchParams(url.slice(separator + 1));
+  let redacted = false;
+  for (const key of SECRET_QUERY_KEYS) {
+    if (!params.has(key)) continue;
+    // a bare word, not pino's '[Redacted]': URLSearchParams would percent-encode the brackets
+    // and the marker would stop being greppable
+    params.set(key, 'redacted');
+    redacted = true;
+  }
+  return redacted ? `${url.slice(0, separator)}?${params.toString()}` : url;
+}
+
+function serializeRequest(request: FastifyRequest) {
+  return {
+    method: request.method,
+    url: withoutSecrets(request.url),
+    host: request.host,
+    remoteAddress: request.ip,
+    remotePort: request.socket.remotePort,
+  };
+}
+
+// drizzle puts the SQL text on the error; anything else has no query to report
+function queryOf(error: unknown): string | undefined {
+  const query = (error as { query?: unknown } | null)?.query;
+  return typeof query === 'string' ? query : undefined;
 }
 
 async function runCheck(check: DependencyCheck, timeoutMs: number): Promise<CheckResult> {

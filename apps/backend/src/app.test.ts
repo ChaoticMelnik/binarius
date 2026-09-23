@@ -1,6 +1,6 @@
 import { DrizzleQueryError } from 'drizzle-orm/errors';
 import { describe, expect, it } from 'vitest';
-import { buildApp, type AppDeps } from './app';
+import { buildApp, withoutSecrets, type AppDeps } from './app';
 import type { AuthRoutesDeps } from './auth/routes';
 import type { TradingRoutesDeps } from './trading/routes';
 
@@ -79,6 +79,47 @@ describe('GET /health', () => {
       statusCode: 503,
       body: { status: 'degraded', postgres: 'ok', redis: 'error' },
     });
+  });
+});
+
+describe('request logging', () => {
+  // the broker chooses how it delivers the code; if it ever ignores response_mode=web_message
+  // the code arrives as a query parameter, and an unexpected delivery lands on a 404
+  it.each([
+    ['/oauth/callback?code=SECRET&state=ALSO-SECRET', ['SECRET', 'ALSO-SECRET']],
+    ['/oauth/callback?code=SECRET', ['SECRET']],
+    ['/oauth/callback?state=ALSO-SECRET&next=%2Fhome', ['ALSO-SECRET']],
+  ])('strips the secrets from %s', (url, secrets) => {
+    const stripped = withoutSecrets(url);
+    for (const secret of secrets) expect(stripped).not.toContain(secret);
+    expect(stripped).toContain('redacted');
+  });
+
+  it('leaves a url that carries no secret exactly as it was', () => {
+    expect(withoutSecrets('/health')).toBe('/health');
+    expect(withoutSecrets('/trading/intents?limit=10')).toBe('/trading/intents?limit=10');
+  });
+
+  it('answers an unknown route without echoing what it carried', async () => {
+    const app = buildApp({
+      checkPostgres: ok,
+      checkRedis: ok,
+      logLevel: 'silent',
+      checkTimeoutMs: 20,
+      trading: unusedTrading,
+      auth: unusedAuth,
+    });
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/oauth/callback?code=SECRET&state=ALSO-SECRET',
+      });
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({ error: 'not_found' });
+      expect(response.body).not.toContain('SECRET');
+    } finally {
+      await app.close();
+    }
   });
 });
 
