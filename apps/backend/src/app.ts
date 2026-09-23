@@ -1,5 +1,6 @@
 import Fastify, { type FastifyError, type FastifyInstance, type LogLevel } from 'fastify';
 import { LOG_REDACT_PATHS } from '@binarius/shared';
+import { authRoutes, type AuthRoutesDeps } from './auth/routes';
 import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
 
 type DependencyCheck = () => Promise<unknown>;
@@ -10,6 +11,7 @@ export interface AppDeps {
   logLevel: LogLevel;
   checkTimeoutMs: number;
   trading: TradingRoutesDeps;
+  auth: AuthRoutesDeps;
 }
 
 type CheckResult = { status: 'ok' } | { status: 'error'; error: unknown };
@@ -20,6 +22,7 @@ export function buildApp({
   logLevel,
   checkTimeoutMs,
   trading,
+  auth,
 }: AppDeps): FastifyInstance {
   const app = Fastify({ logger: { level: logLevel, redact: [...LOG_REDACT_PATHS] } });
 
@@ -43,6 +46,7 @@ export function buildApp({
   });
 
   void app.register(tradingRoutes, trading);
+  void app.register(authRoutes, auth);
 
   // Fastify's default handler echoes error.message; for a DrizzleQueryError that is the SQL
   // text plus bound parameters. A 4xx error (validation, body parsing, a thrown http error)

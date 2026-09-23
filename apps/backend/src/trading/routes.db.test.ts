@@ -24,6 +24,16 @@ beforeAll(async () => {
     checkRedis: () => Promise.resolve(),
     logLevel: 'silent',
     checkTimeoutMs: 20,
+    auth: {
+      db: tmp.db,
+      cipher: {} as never,
+      broker: {} as never,
+      internalApiToken: token,
+      authorizeUrl: 'https://binodex.app/oauth/authorize',
+      clientId: 'client-id',
+      redirectUri: 'https://bot.example/oauth/callback',
+      partnerRef: 'partner-ref',
+    },
     trading: {
       db: tmp.db,
       internalApiToken: token,

@@ -1,8 +1,9 @@
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import { closeAll } from '@binarius/shared';
-import { createDb } from '@binarius/db';
+import { createDb, createTokenCipher } from '@binarius/db';
 import { buildApp } from './app';
+import { createBrokerOAuthClient } from './broker/oauth-client';
 import { parseEnv } from './env';
 import { createBullmqPublisher } from './outbox/bullmq';
 import { OutboxPublisher } from './outbox/publisher';
@@ -36,6 +37,15 @@ const queueRedis = new Redis(env.redisUrl, { maxRetriesPerRequest: null });
 
 const db = createDb(pool);
 const jobs = createBullmqPublisher(queueRedis);
+const cipher = createTokenCipher({
+  keyId: env.tokenEncryptionKeyId,
+  key: env.tokenEncryptionKey,
+});
+const broker = createBrokerOAuthClient({
+  baseUrl: env.brokerApiBaseUrl,
+  clientId: env.brokerClientId,
+  clientSecret: env.brokerClientSecret,
+});
 
 const app = buildApp({
   checkPostgres: () => pool.query('SELECT 1'),
@@ -46,6 +56,16 @@ const app = buildApp({
     db,
     internalApiToken: env.internalApiToken,
     onIntentQueued: () => publisher.wake(),
+  },
+  auth: {
+    db,
+    cipher,
+    broker,
+    internalApiToken: env.internalApiToken,
+    authorizeUrl: env.brokerOauthAuthorizeUrl,
+    clientId: env.brokerClientId,
+    redirectUri: env.brokerOauthRedirectUri,
+    partnerRef: env.brokerPartnerRef,
   },
 });
 
