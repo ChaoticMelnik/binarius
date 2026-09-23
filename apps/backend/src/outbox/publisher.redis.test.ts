@@ -356,11 +356,14 @@ describe('OutboxPublisher shutdown semantics', () => {
     const enteredAdd = new Promise<void>((resolve) => {
       entered = resolve;
     });
-    const hanging = fakeJobs(() => {
-      entered();
-      return new Promise(() => {});
-    });
     const { intentId } = await newIntent();
+    // rows left due by earlier cases ride along in the same loop: only this row hangs, and the
+    // latch fires for it alone, so stop() is requested while this row is the one in flight
+    const hanging = fakeJobs(async (_topic, id) => {
+      if (id !== intentId) return;
+      entered();
+      await new Promise(() => {});
+    });
     const p = publisher(hanging, { pollMs: 60_000, publishTimeoutMs: 200 });
     p.start();
     await enteredAdd;
@@ -379,13 +382,20 @@ describe('OutboxPublisher shutdown semantics', () => {
   });
 
   it('ignores start() while a stop() is still draining', async () => {
-    const slow = fakeJobs(async () => {
-      await sleep(100);
+    let entered: () => void = () => {};
+    const enteredAdd = new Promise<void>((resolve) => {
+      entered = resolve;
     });
     const first = await newIntent();
+    // same reason as above: the latch must fire for this row, not for a leftover one
+    const slow = fakeJobs(async (_topic, id) => {
+      if (id === first.intentId) entered();
+      await sleep(100);
+    });
     const p = publisher(slow, { pollMs: 60_000 });
     p.start();
-    await sleep(20);
+    // the row is in flight before stop is requested, so stop() has something to wait for
+    await enteredAdd;
     const stopping = p.stop();
     p.start();
     await stopping;
@@ -401,7 +411,7 @@ describe('OutboxPublisher shutdown semantics', () => {
   });
 
   it('logs reconciliation delivery failures at info until the fifth attempt', async () => {
-    const lines: { level: number; msg: string; attempts?: number; topic?: string }[] = [];
+    const lines: { level: number; msg: string; attempts?: number; intentId?: string }[] = [];
     const capturing = Fastify({
       logger: {
         level: 'info',
@@ -417,9 +427,12 @@ describe('OutboxPublisher shutdown semantics', () => {
     const p = new OutboxPublisher({ db: tmp.db, jobs: failing, logger: capturing });
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       await makeDue(intentId, OutboxTopic.TradingReconciliation);
-      expect(await p.tick()).toBe(1);
+      // rows left due by earlier cases in this file ride along; only this intent's lines count
+      expect(await p.tick()).toBeGreaterThanOrEqual(1);
     }
-    const failures = lines.filter((l) => l.msg === 'outbox publish failed');
+    const failures = lines.filter(
+      (l) => l.msg === 'outbox publish failed' && l.intentId === intentId,
+    );
     expect(failures.map((l) => [l.attempts, l.level])).toEqual([
       [1, 30],
       [2, 30],
