@@ -1,9 +1,18 @@
-// pino redact paths shared by every app logger. `*` matches one key level, so each name is
-// listed at depth one and two: an error thrown by an HTTP/socket client (ARCH-01) commonly
-// carries `err.config.headers.authorization` or `err.response.request.headers.*`.
+// pino redact paths shared by every app logger. `*` matches exactly one key level and pino has
+// no recursive wildcard, so each secret key is listed at depths 0–5: that reaches the shapes an
+// HTTP/socket client error carries (`err.config.headers.authorization`,
+// `err.response.request.headers.authorization`) and a bare top-level key. Deeper nesting is
+// not covered, and no key path scrubs a string: a secret inside `err.message` or `err.stack`
+// survives, which is why the worker logs executor errors by name and code only (see
+// apps/trading-worker/src/intents/processor.ts errorIdentity). Thirty-one paths cost a
+// traversal per log line — accepted for the loggers' volume.
 const SECRET_KEYS = ['authorization', 'token', 'accessToken', 'refreshToken', 'password'] as const;
+const MAX_DEPTH = 5;
+
+const atEveryDepth = (key: string): string[] =>
+  Array.from({ length: MAX_DEPTH + 1 }, (_, depth) => `${'*.'.repeat(depth)}${key}`);
 
 export const LOG_REDACT_PATHS: readonly string[] = [
   'req.headers.authorization',
-  ...SECRET_KEYS.flatMap((key) => [`*.${key}`, `*.*.${key}`]),
+  ...SECRET_KEYS.flatMap(atEveryDepth),
 ];

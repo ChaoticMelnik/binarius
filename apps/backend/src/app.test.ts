@@ -87,6 +87,16 @@ describe('error handler', () => {
       });
     });
     app.post('/echo', async (request) => request.body);
+    app.get('/status-only', async () => {
+      // not a Fastify error: only `status`, no `statusCode`
+      throw Object.assign(new Error('gone'), { status: 404 });
+    });
+    app.get('/redirectish', async () => {
+      throw Object.assign(new Error('nope'), { statusCode: 302 });
+    });
+    app.get('/fractional', async () => {
+      throw Object.assign(new Error('nope'), { statusCode: 4.5 });
+    });
     try {
       await run(app);
     } finally {
@@ -112,6 +122,17 @@ describe('error handler', () => {
       expect(response.json()).toMatchObject({ statusCode: 429, message: 'slow down' });
     });
   });
+
+  it.each(['/status-only', '/redirectish', '/fractional'])(
+    'treats %s as an internal error rather than a client error',
+    async (url) => {
+      await withApp(async (app) => {
+        const response = await app.inject({ method: 'GET', url });
+        expect(response.statusCode).toBe(500);
+        expect(response.json()).toEqual({ error: 'internal' });
+      });
+    },
+  );
 
   it('leaves body-parsing failures as 400 with their default shape', async () => {
     await withApp(async (app) => {
