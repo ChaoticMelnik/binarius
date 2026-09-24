@@ -76,6 +76,7 @@ const testApp = (auth: AuthRoutesDeps) =>
     checkTimeoutMs: 20,
     trading: { db: tmp.db, internalApiToken: TOKEN, onIntentQueued: () => {} },
     auth,
+    users: { db: tmp.db, internalApiToken: TOKEN },
   });
 
 const postJson = (

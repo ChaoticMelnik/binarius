@@ -67,6 +67,10 @@ const app = buildApp({
     redirectUri: env.brokerOauthRedirectUri,
     partnerRef: env.brokerPartnerRef,
   },
+  users: {
+    db,
+    internalApiToken: env.internalApiToken,
+  },
 });
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
