@@ -34,6 +34,10 @@ beforeAll(async () => {
       redirectUri: 'https://bot.example/oauth/callback',
       partnerRef: 'partner-ref',
     },
+    users: {
+      db: tmp.db,
+      internalApiToken: token,
+    },
     trading: {
       db: tmp.db,
       internalApiToken: token,

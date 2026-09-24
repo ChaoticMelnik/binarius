@@ -2,6 +2,7 @@ import { and, eq, sql, type SQL } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
   TradeIntentErrorCode,
+  UserStatus,
   TradeIntentFailureReason,
   TradeIntentStatus,
   canTransition,
@@ -14,7 +15,7 @@ import { brokerAccounts } from './schema/broker-accounts';
 import { OutboxTopic, outboxEvents } from './schema/outbox-events';
 import { TokenLedgerKind, tokenLedger } from './schema/token-ledger';
 import { tradeIntents } from './schema/trade-intents';
-import { UserStatus, users } from './schema/users';
+import { users } from './schema/users';
 
 export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 export type DbExecutor = Db | Tx;

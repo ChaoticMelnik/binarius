@@ -13,7 +13,9 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 
 How a trade order travels from the bot to the worker (PostgreSQL outbox + BullMQ) is described in
 [docs/trade-intent-transport.md](docs/trade-intent-transport.md); how a user links a Binodex
-account and how those tokens stay fresh is in [docs/binodex-oauth.md](docs/binodex-oauth.md).
+account and how those tokens stay fresh is in [docs/binodex-oauth.md](docs/binodex-oauth.md);
+what `/start` does and where the acquisition source is kept is in
+[docs/bot-start.md](docs/bot-start.md).
 
 ## Requirements
 
@@ -47,7 +49,7 @@ Postgres, Redis, and the four apps run in containers; the apps hot-reload from y
 The apps are not meant to run outside Docker in this repo state.
 
 ```bash
-cp .env.example .env                # then fill in the four REQUIRED values; compose stops while any is empty
+cp .env.example .env                # then fill in the five REQUIRED values; compose stops while any is empty
 docker compose up --build --watch   # build, start, sync src/ edits into the containers
 curl 127.0.0.1:3000/health          # {"status":"ok","postgres":"ok","redis":"ok"}
 docker compose down -v              # stop and drop the Postgres volume
@@ -64,8 +66,9 @@ backend (`3000`) are published on `127.0.0.1` only.
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
 The integration tests run against a real Postgres named by `DATABASE_URL` and a real Redis named
 by `REDIS_URL`, and fail without them — `pnpm test` therefore needs the compose services. Even
-this partial start needs the four REQUIRED values in `.env`, because Compose interpolates the
-whole file before it picks which services to run:
+this partial start needs all five REQUIRED values in `.env`, because Compose interpolates the
+whole file before it picks which services to run: that includes `TELEGRAM_BOT_TOKEN`, which only
+the `bot` service reads, so `docker compose up -d postgres redis` refuses to run without it:
 
 ```bash
 docker compose up -d postgres redis

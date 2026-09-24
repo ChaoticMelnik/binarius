@@ -22,6 +22,21 @@ export function composeServiceValue(
   return undefined;
 }
 
+// The start-payload corpus, run twice: against startPayloadSchema (packages/shared) and against
+// the live users_acquisition_source_check (packages/db). One list, so the two verdicts are
+// compared row by row instead of two lists drifting apart.
+export const START_PAYLOAD_CORPUS: readonly { label: string; value: string; valid: boolean }[] = [
+  { label: '1 char', value: 'a', valid: true },
+  { label: '64 chars', value: 'a'.repeat(64), valid: true },
+  { label: 'dash underscore', value: 'src_ab-CD9', valid: true },
+  { label: '65 chars', value: 'a'.repeat(65), valid: false },
+  { label: 'empty', value: '', valid: false },
+  { label: 'plus sign', value: 'a+b', valid: false },
+  { label: 'space', value: 'a b', valid: false },
+  { label: 'newline', value: 'a\nb', valid: false },
+  { label: 'cyrillic', value: 'исток', valid: false },
+];
+
 // `40s` → 40000; compose accepts h/m/s/ms suffixes, this project only writes seconds
 export function composeDurationMs(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;

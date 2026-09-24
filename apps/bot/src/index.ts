@@ -1,11 +1,21 @@
-// signal listeners alone do not keep Node alive; the timer does, until shutdown clears it
-const keepAlive = setInterval(() => {}, 60_000);
+import pino from 'pino';
+import { LOG_REDACT_PATHS } from '@binarius/shared';
+import { createBackendClient } from './backend-client';
+import { createBot } from './bot';
+import { parseEnv } from './env';
+import { runBot } from './lifecycle';
 
-function stop(): void {
-  clearInterval(keepAlive);
-}
+const env = parseEnv(process.env);
 
-process.once('SIGTERM', stop);
-process.once('SIGINT', stop);
+const logger = pino({ level: env.logLevel, redact: [...LOG_REDACT_PATHS] });
 
-console.log('bot placeholder started');
+const backend = createBackendClient({ baseUrl: env.backendUrl, token: env.internalApiToken });
+
+const bot = createBot({
+  token: env.telegramBotToken,
+  backend,
+  logger,
+  welcomeVideoFileId: env.welcomeVideoFileId,
+});
+
+runBot({ bot, logger, exit: (code) => process.exit(code) });
