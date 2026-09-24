@@ -101,6 +101,16 @@ export const AuthRevokedReason = {
 export type AuthRevokedReason = (typeof AuthRevokedReason)[keyof typeof AuthRevokedReason];
 export const authRevokedReasonSchema = z.enum(AuthRevokedReason);
 
+// A freshly linked account starts pending: the OAuth callback proves someone authorized at the
+// broker, not that the Telegram user who started the login is that someone. Confirming in the
+// bot is what makes it usable.
+export const BrokerAccountStatus = {
+  Pending: 'pending',
+  Active: 'active',
+  Revoked: 'revoked',
+} as const;
+export type BrokerAccountStatus = (typeof BrokerAccountStatus)[keyof typeof BrokerAccountStatus];
+
 export const OAuthErrorCode = {
   InvalidState: 'invalid_state',
   InvalidCode: 'invalid_code',
@@ -139,7 +149,7 @@ export const brokerAccountViewSchema = z.object({
   brokerUserId: z.string().min(1),
   email: z.string().nullable(),
   isPartnerClient: z.boolean(),
-  status: z.enum(['pending', 'active', 'revoked']),
+  status: z.enum(BrokerAccountStatus),
   createdAt: z.iso.datetime({ offset: true }),
 });
 export type BrokerAccountView = z.infer<typeof brokerAccountViewSchema>;

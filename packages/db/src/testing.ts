@@ -3,8 +3,14 @@ import { eq } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { createDb, type Db } from './client';
 import { runMigrations } from './migrate';
-import type { CreateTradeIntentRequest, DecimalString } from '@binarius/shared';
-import { brokerAccounts, users, type BrokerAccountStatus, type UserStatus } from './schema/index';
+import {
+  BrokerAccountStatus,
+  TradeAction,
+  TradeMode,
+  type CreateTradeIntentRequest,
+  type DecimalString,
+} from '@binarius/shared';
+import { brokerAccounts, users, UserStatus } from './schema/index';
 import type { BrokerAccountRow } from './oauth-ops';
 import { createTradeIntent, type TradeIntentRow } from './trade-intent-ops';
 
@@ -108,7 +114,7 @@ export async function brokerAccountRow(db: Db, id: string): Promise<BrokerAccoun
 
 export async function seedUser(
   db: Db,
-  { balance = 5n, status = 'active' }: { balance?: bigint; status?: UserStatus } = {},
+  { balance = 5n, status = UserStatus.Active }: { balance?: bigint; status?: UserStatus } = {},
 ): Promise<SeededUser> {
   const telegramUserId = BigInt(100_000 + ++seq);
   const [user] = await db
@@ -135,7 +141,7 @@ export async function seedBrokerAccount(
       refreshTokenEnc: Buffer.from('enc'),
       tokenKeyId: 'k1',
       accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      status: 'active',
+      status: BrokerAccountStatus.Active,
       ...patch,
     })
     .returning({ id: brokerAccounts.id });
@@ -158,10 +164,10 @@ export function intentRequest(
 ): CreateTradeIntentRequest {
   return {
     telegramUserId,
-    mode: 'demo',
+    mode: TradeMode.Demo,
     assetId: 91,
     amount: '10.00' as DecimalString,
-    action: 'up',
+    action: TradeAction.Up,
     durationSec: 60,
     clientRequestId: `req-${++seq}`,
     ...patch,

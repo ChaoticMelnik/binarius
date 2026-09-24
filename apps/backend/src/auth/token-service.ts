@@ -1,9 +1,8 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { AuthRevokedReason, errorLogFields } from '@binarius/shared';
+import { AuthRevokedReason, BrokerAccountStatus, errorLogFields } from '@binarius/shared';
 import {
   applyRotatedTokens,
   backfillRefreshTokenHash,
-  BrokerAccountStatus,
   hashToken,
   lockAccountForRefresh,
   revokeAccount,
