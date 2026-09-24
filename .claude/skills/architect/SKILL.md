@@ -195,7 +195,7 @@ Implementer picks it up only once this comment exists.
 12. **OAuth.** State хранится только хешем и одноразов через CAS по `used_at` (`oauth-states.ts`, `oauth-ops.ts`); привязанный аккаунт начинает с `pending` и активируется только подтверждением в боте (default колонки, миграция 0005); заблокированный пользователь не доходит до брокера (`oauth-ops.ts` → `user_blocked`); refresh: `revoked` проверяется до истечения, ровно одна попытка обмена, сбой → revocation, не retry (`apps/backend/src/auth/token-service.ts`, `docs/binodex-oauth.md` → Refresh).
 13. **bot → backend:** общий bearer, сравнение за постоянное время (`timingSafeEqual` в `apps/backend/src/auth/internal.ts`); внутренний API полностью доверенный, чтения не скоупятся по пользователю (`docs/trade-intent-transport.md` → Boundaries).
 14. **Env:** отсутствующее и пустое значение — ошибка (`readEnv`, `packages/shared/src/env.ts`); в compose — `${VAR:?}`, CI-guard в `.github/workflows/ci.yml` (job `compose`).
-15. **Executor:** `rejected` — только когда ордер точно не открылся; throw → `unknown`; `detail` только в лог, не длиннее `MAX_DETAIL_LENGTH` (`apps/trading-worker/src/intents/executor.ts`, `config.ts`).
+15. **Executor:** `rejected` — только когда ордер точно не открылся; throw → `unknown`; `detail` только в лог, обрезается до `MAX_DETAIL_LENGTH` при логировании (`apps/trading-worker/src/intents/processor.ts:177`; константа — `config.ts:25`; контракт — `executor.ts`).
 16. **Миграции forward-only**, каждое изменение схемы — с миграцией: CI (`ci.yml`, шаги «Schema changes carry a committed migration» и «Committed migrations are immutable»).
 17. **Валидация на границах** (zod) — в роутах `apps/backend/src/*/routes.ts`; внутренний код доверяет провалидированным данным.
 

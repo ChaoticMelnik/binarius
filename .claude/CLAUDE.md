@@ -59,7 +59,7 @@
 
 ### CI
 
-Единая проверочная команда — `pnpm check` (`tsc -b --clean && vitest run && tsc -b && eslint .`, порядок и причина — `README.md` → Commands). Её запускают CI (`.github/workflows/ci.yml`, на `push` в `main` и на `pull_request`), implementer перед коммитом и reviewer в Runtime check; вердикт — код выхода, вывод не пропускается через `grep`. Скрипты `typecheck`/`lint`/`test` — для точечных запусков. Все проверки — под Node из `.node-version` (`eval "$(fnm env)" && fnm use`; ESLint загружает правило из `.ts` и под Node < 22.18 не стартует).
+Единая проверочная команда — `pnpm check` (состав — `package.json` → `scripts.check`, порядок и причина — `README.md` → Commands). Её запускают CI (`.github/workflows/ci.yml`, на `push` в `main` и на `pull_request`), implementer перед коммитом и reviewer в Runtime check; вердикт — код выхода, вывод не пропускается через `grep`. Скрипты `typecheck`/`lint`/`test` — для точечных запусков. Все проверки — под Node из `.node-version` (`eval "$(fnm env)" && fnm use`; ESLint загружает правило из `.ts` и под Node < 22.18 не стартует).
 
 CI дополнительно проверяет, что изменения схемы `packages/db` сопровождаются сгенерированной миграцией (`pnpm db:generate` + чистый `git status` на `packages/db/drizzle`), что закоммиченные миграции не менялись, и накатывает их на тестовую БД (`pnpm db:migrate`) до `pnpm check`.
 

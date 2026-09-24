@@ -29,7 +29,7 @@ Stable for the life of the project. Filled in once during bootstrap (Step 2). Ne
 
 ### Why the status templates use GraphQL, not `gh project item-list`
 
-`gh project item-list` returns 30 items unless given `--limit`, in no particular order and without saying it truncated (verified 2026-09-24: 30 of 47 items by default, highest issue number 31). A status lookup through it reports "not on the board" for any issue past the cut, which is how #54 and #56 went missing. The templates below ask GraphQL for one issue's own project item, or page through the whole project with a cursor, so neither depends on a page size.
+`gh project item-list` returns 30 items unless given `--limit`, in no particular order and without saying it truncated (verified 2026-09-24: 30 of 47 items by default, highest issue number 31). A status lookup through it reports "not on the board" for any issue past the cut, which is how #54 and #56 went missing. The templates below ask GraphQL for one issue's own project items (the first 20 projects the issue is on — more is not expected, and the template prints a warning if there are), or page through the whole project with a cursor.
 
 ---
 
@@ -65,6 +65,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     issue(number: $number) {
       projectItems(first: 20) {
+        pageInfo { hasNextPage }
         nodes {
           id
           project { id }
@@ -75,7 +76,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
       }
     }
   }
-}' --jq '.data.repository.issue.projectItems.nodes[] | select(.project.id == "PVT_kwHOAuWLpM4BkLYI") | {itemId: .id, status: .fieldValueByName.name, optionId: .fieldValueByName.optionId}'
+}' --jq '.data.repository.issue.projectItems | (if .pageInfo.hasNextPage then "WARNING: the issue is on more than 20 projects; Project #2 may be on a later page" else empty end), (.nodes[] | select(.project.id == "PVT_kwHOAuWLpM4BkLYI") | {itemId: .id, status: .fieldValueByName.name, optionId: .fieldValueByName.optionId})'
 ```
 
 `itemId` (the Project item id, not the issue number) is required for the next operation. No output means the issue is not on Project #2 — add it (below), do not conclude anything about its status. `status: null` means it is on the board with no Pipeline Status set.
