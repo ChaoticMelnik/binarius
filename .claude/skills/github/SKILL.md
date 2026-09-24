@@ -1,6 +1,6 @@
 ---
 name: github
-description: Token-efficient GitHub Issues + Projects operations for the agent pipeline. Reads use `gh issue`/`gh project item-list` with --jq filtering to return only the needed fields — no isolated Agent subagent needed by default, since gh (unlike the Linear MCP tool) lets you filter server-side before the result reaches context. Writes (status changes, comments) use the same templates. Use this skill whenever another skill needs to read or write a GitHub issue or its Project board status.
+description: Token-efficient GitHub Issues + Projects operations for the agent pipeline. Reads use `gh issue` and `gh api graphql` with --jq filtering to return only the needed fields — no isolated Agent subagent needed by default, since gh (unlike the Linear MCP tool) lets you filter server-side before the result reaches context. Writes (status changes, comments) use the same templates. Use this skill whenever another skill needs to read or write a GitHub issue or its Project board status.
 ---
 
 # GitHub Skill
@@ -27,20 +27,15 @@ Status option ids:
 
 Stable for the life of the project. Filled in once during bootstrap (Step 2). Never call `gh project field-list`/`item-list` again just to look these up.
 
-### Reading the Pipeline Status field in `--jq`
+### Why the status templates use GraphQL, not `gh project item-list`
 
-`gh project item-list --format json` lowercases the first letter of every custom field name, so the key is **`.["pipeline Status"]`**, not `.["Pipeline Status"]`. Verified against gh 2.96.0. Both wrong spellings fail silently:
-
-- `.["Pipeline Status"]` yields `null` for every item, which looks exactly like "no issue is in that status."
-- `.status` is the board's **built-in** Status field, which this project does not keep in sync with Pipeline Status — as of 2026-09-23 it reports `Todo` for 26 issues whose Pipeline Status is `Backlog`. Never substitute it.
-
-The templates below use `(.["pipeline Status"] // .["Pipeline Status"])` so a future gh change to either spelling keeps working. If a status query ever returns `null` or an empty list, verify the key against `gh project item-list 2 --owner ChaoticMelnik --format json --jq '.items[0] | keys'` before concluding the board is empty.
+`gh project item-list` returns 30 items unless given `--limit`, in no particular order and without saying it truncated (verified 2026-09-24: 30 of 47 items by default, highest issue number 31). A status lookup through it reports "not on the board" for any issue past the cut, which is how #54 and #56 went missing. The templates below ask GraphQL for one issue's own project item, or page through the whole project with a cursor, so neither depends on a page size.
 
 ---
 
 ## Core rule: filter before it reaches context
 
-`gh issue`/`gh pr`/`gh project` all support `--json <fields>` plus `-q/--jq <expr>`. Always request only the fields a template needs and shape them with `--jq` — the unfiltered JSON never has to enter the main context, so (unlike Linear's MCP tool, which always returns the full object regardless of what you ask for) there is no structural need to wrap these calls in an isolated Agent subagent. Run them directly.
+`gh issue`/`gh pr`/`gh project` all support `--json <fields>` plus `-q/--jq <expr>`, and `gh api graphql` takes `--jq`. Always request only the fields a template needs and shape them with `--jq` — the unfiltered JSON never has to enter the main context, so (unlike Linear's MCP tool, which always returns the full object regardless of what you ask for) there is no structural need to wrap these calls in an isolated Agent subagent. Run them directly.
 
 **Exception:** a call whose `--jq` output is still bulky (a wide `gh issue list` with no `--limit`, or batch-processing many issues in one pass) — route that one through an isolated `Agent`, same principle as elsewhere in the pipeline: nothing bulky lands in the main context. The mechanism (inline `--jq` vs. isolation) is whichever is cheaper for that specific call shape.
 
@@ -65,11 +60,25 @@ gh issue view <N> --repo ChaoticMelnik/binarius --json number,title,state,url,la
 ## Operation: Find issue's current Pipeline Status
 
 ```bash
-gh project item-list 2 --owner ChaoticMelnik --format json \
-  --jq '.items[] | select(.content.number == <N>) | {status: (.["pipeline Status"] // .["Pipeline Status"]), itemId: .id}'
+gh api graphql -F owner=ChaoticMelnik -F repo=binarius -F number=<N> -f query='
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      projectItems(first: 20) {
+        nodes {
+          id
+          project { id }
+          fieldValueByName(name: "Pipeline Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name optionId }
+          }
+        }
+      }
+    }
+  }
+}' --jq '.data.repository.issue.projectItems.nodes[] | select(.project.id == "PVT_kwHOAuWLpM4BkLYI") | {itemId: .id, status: .fieldValueByName.name, optionId: .fieldValueByName.optionId}'
 ```
 
-`itemId` (the Project item id, not the issue number) is required for the next operation.
+`itemId` (the Project item id, not the issue number) is required for the next operation. No output means the issue is not on Project #2 — add it (below), do not conclude anything about its status. `status: null` means it is on the board with no Pipeline Status set.
 
 ## Operation: Update Pipeline Status
 
@@ -83,9 +92,25 @@ Substitute the target status's option id from the Project Constants block above.
 ## Operation: List issues by status
 
 ```bash
-gh project item-list 2 --owner ChaoticMelnik --format json \
-  --jq '[.items[] | select((.["pipeline Status"] // .["Pipeline Status"]) == "In Review") | {number: .content.number, title: .content.title, url: .content.url}]'
+gh api graphql --paginate -f query='
+query($endCursor: String) {
+  node(id: "PVT_kwHOAuWLpM4BkLYI") {
+    ... on ProjectV2 {
+      items(first: 100, after: $endCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          fieldValueByName(name: "Pipeline Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+          content { ... on Issue { number title url } }
+        }
+      }
+    }
+  }
+}' --jq '.data.node.items.nodes[] | select(.fieldValueByName.name == "In Review") | {number: .content.number, title: .content.title, url: .content.url}'
 ```
+
+`--paginate` follows `pageInfo.endCursor` until the last page, so the result does not depend on how many items the board holds. Substitute the status name (`Backlog`, `Todo`, `In Progress`, `In Review`, `Done`, `Canceled`).
 
 ## Operation: Post a comment
 
@@ -99,10 +124,20 @@ EOF
 ## Operation: Create an issue
 
 ```bash
-gh issue create --repo ChaoticMelnik/binarius --title "<title>" --body "<body>" --label "<label1>,<label2>"
+gh issue create --repo ChaoticMelnik/binarius --title "<title>" --body-file <file>
 ```
 
-Returns the issue URL directly — already short, no extra formatting needed.
+Returns the issue URL. `gh issue create` does **not** add the issue to Project #2 — without the next operation the issue has no Pipeline Status and no status query will ever find it.
+
+## Operation: Add issue to Project #2 (and set its status)
+
+```bash
+item=$(gh project item-add 2 --owner ChaoticMelnik --url https://github.com/ChaoticMelnik/binarius/issues/<N> --format json --jq .id)
+gh project item-edit --id "$item" --project-id PVT_kwHOAuWLpM4BkLYI \
+  --field-id PVTSSF_lAHOAuWLpM4BkLYIzhi841o --single-select-option-id <TARGET_OPTION_ID> --format json --jq .id
+```
+
+`item-add` is idempotent: for an issue already on the board it returns the existing item id. Then confirm with "Find issue's current Pipeline Status".
 
 ---
 
@@ -112,10 +147,10 @@ Returns the issue URL directly — already short, no extra formatting needed.
 |---|---|
 | Read issue (no comments) | `gh issue view` + `--jq` template above |
 | Read issue + comments | `gh issue view --json ...,comments` + `--jq` template above |
-| Find current status | `gh project item-list` + `select(.content.number == N)` |
+| Find current status | `gh api graphql` → `issue.projectItems` template above |
 | Update status | `gh project item-edit --single-select-option-id ...` |
-| List issues by status | `gh project item-list` + `select(.["pipeline Status"] == ...)` |
+| List issues by status | `gh api graphql --paginate` → `ProjectV2.items` template above |
 | Post comment | `gh issue comment` |
-| Create issue | `gh issue create` |
+| Create issue | `gh issue create`, then "Add issue to Project #2" |
 
-**Rule of thumb:** every `gh issue`/`gh project` call carries an explicit `--json`/`--jq` (or `--format json --jq`) that trims the result to only what the caller needs — never call these with no filter "to see what's there."
+**Rule of thumb:** every `gh issue`/`gh project`/`gh api graphql` call carries an explicit `--json`/`--jq` (or `--format json --jq`) that trims the result to only what the caller needs — never call these with no filter "to see what's there."
