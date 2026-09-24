@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { TransactionRollbackError, eq, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -18,6 +19,8 @@ import type { DecimalString } from '@binarius/shared';
 // Integration tests: a migrated Postgres named by DATABASE_URL (README → Database).
 // Each case runs in one transaction that is rolled back at the end; Postgres aborts a
 // transaction after its first error, so every case expects exactly one error code.
+// This file shares that database with a locally running compose stack, so no case runs DDL:
+// its locks would sit in front of the stack's own writers, in an order they do not expect.
 const url = process.env.DATABASE_URL;
 if (url === undefined || url === '') {
   throw new Error('DATABASE_URL is required for packages/db integration tests (see README)');
@@ -66,15 +69,20 @@ async function rejectsWith(query: Promise<unknown>, code: string, constraint: st
 }
 
 // raise_append_only() is a trigger, and PostgreSQL populates no `constraint` field for it,
-// so those cases assert the code and the message instead
-async function rejectsAsAppendOnly(query: Promise<unknown>, table: string) {
+// so those cases assert the code and the message instead, and register the trigger that the
+// statement kind reaches: the row trigger for UPDATE/DELETE, the statement one for TRUNCATE
+async function rejectsAsAppendOnly(
+  query: Promise<unknown>,
+  table: string,
+  trigger: 'append_only' | 'no_truncate',
+) {
   const error = await query.then(
     () => undefined,
     (thrown: unknown) => thrown,
   );
   expect(error, `expected ${table} to be append-only but nothing was thrown`).toBeDefined();
   expect(caught(error)).toMatchObject({ code: 'P0001', message: `${table} is append-only` });
-  observed.add(`${table}_append_only`);
+  observed.add(`${table}_${trigger}`);
 }
 
 let seq = 0;
@@ -143,8 +151,8 @@ const trade = (seed: { accountId: string }, patch: Record<string, unknown> = {})
 });
 
 // The enum CHECKs and the plain uniques are mechanical, but they are what keeps a typo in a
-// status list or a missing dedupe from reaching production, and the coverage test above will
-// not accept a constraint that nothing exercises.
+// status list or a missing dedupe from reaching production, and the coverage gate at the end of
+// this file will not accept a constraint that nothing exercises.
 describe('enum and uniqueness constraints', () => {
   it.each([
     [
@@ -816,13 +824,13 @@ describe('users and token_ledger', () => {
         .insert(tokenLedger)
         .values({ userId: seed.userId, kind: 'adjustment', balanceDelta: 10n })
         .returning({ id: tokenLedger.id });
-      await rejectsAsAppendOnly(mutate(tx, row!.id), 'token_ledger');
+      await rejectsAsAppendOnly(mutate(tx, row!.id), 'token_ledger', 'append_only');
     });
   });
 
   it.each(['token_ledger', 'audit_log'])('is append-only against TRUNCATE on %s', async (table) => {
     await rolledBack(async (tx) => {
-      await rejectsAsAppendOnly(tx.execute(sql.raw(`truncate ${table}`)), table);
+      await rejectsAsAppendOnly(tx.execute(sql.raw(`truncate ${table}`)), table, 'no_truncate');
     });
   });
 
@@ -832,6 +840,7 @@ describe('users and token_ledger', () => {
       await rejectsAsAppendOnly(
         tx.execute(sql`update audit_log set action = 'changed' where action = 'probe'`),
         'audit_log',
+        'append_only',
       );
     });
   });
@@ -1180,27 +1189,186 @@ describe('deposit_events', () => {
   });
 });
 
+// Every simple FK the migrations declare. The ones below can be violated on their own: the
+// composite FK sharing the table is either absent or skipped under MATCH SIMPLE because one of
+// its columns is NULL, so a dangling id reaches exactly the constraint named.
+describe('foreign keys', () => {
+  const dangling = randomUUID();
+  it.each<[string, (tx: Tx) => Promise<unknown>]>([
+    [
+      'auth_sessions_user_id_users_id_fk',
+      (tx) =>
+        tx.execute(
+          sql`insert into auth_sessions (user_id, token_hash, expires_at) values (${dangling}, ${`fk-${++seq}`}, now())`,
+        ),
+    ],
+    [
+      'broker_accounts_user_id_users_id_fk',
+      (tx) =>
+        tx.insert(brokerAccounts).values({
+          userId: dangling,
+          brokerUserId: `broker-fk-${++seq}`,
+          accessTokenEnc: Buffer.from('enc'),
+          refreshTokenEnc: Buffer.from('enc'),
+          tokenKeyId: 'k1',
+          accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+        }),
+    ],
+    [
+      // no user_id: the ownership composite is skipped, and the owner-pair CHECK allows it
+      'deposit_events_broker_account_id_broker_accounts_id_fk',
+      (tx) =>
+        tx
+          .insert(depositEvents)
+          .values({ brokerAccountId: dangling, postbackId: `pb-fk-${++seq}`, payload: {} }),
+    ],
+    [
+      'notification_jobs_user_id_users_id_fk',
+      (tx) =>
+        tx.execute(sql`insert into notification_jobs (user_id, kind) values (${dangling}, 'k')`),
+    ],
+    [
+      'outbox_events_intent_id_trade_intents_id_fk',
+      (tx) =>
+        tx.insert(outboxEvents).values({ intentId: dangling, payload: { intent_id: dangling } }),
+    ],
+    [
+      // no intent or deposit: both ownership composites are skipped
+      'token_ledger_user_id_users_id_fk',
+      (tx) =>
+        tx.insert(tokenLedger).values({ userId: dangling, kind: 'adjustment', balanceDelta: 1n }),
+    ],
+    [
+      'trading_sessions_broker_account_id_broker_accounts_id_fk',
+      (tx) => tx.insert(tradingSessions).values({ brokerAccountId: dangling, mode: 'demo' }),
+    ],
+    [
+      // no intent_id: the intent composite is skipped
+      'broker_trades_broker_account_id_broker_accounts_id_fk',
+      (tx) => tx.insert(brokerTrades).values(trade({ accountId: dangling })),
+    ],
+  ])('rejects a dangling reference through %s', async (constraint, insert) => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(insert(tx), '23503', constraint);
+    });
+  });
+
+  // These five cannot be violated by an insert while their composite is in place: the composite
+  // covers the same columns, so any dangling value fails it too, and which of the two fires is
+  // an undocumented trigger order. Dropping the composite to isolate them would be DDL against a
+  // shared database (see the top of this file). So, as with the composite FK targets above, the
+  // catalog is asserted instead — and only once every premise of the implication has been seen
+  // enforced by a test earlier in this file. `confdeltype = 'r'` pins the one property the
+  // composite does not share (these are ON DELETE RESTRICT, the composites NO ACTION).
+  it('keeps the simple FKs implied by a composite in place', async () => {
+    const implied = [
+      {
+        name: 'trade_intents_broker_account_id_broker_accounts_id_fk',
+        from: 'trade_intents(broker_account_id)',
+        to: 'broker_accounts(id)',
+        premises: ['trade_intents_account_owner_fk'],
+      },
+      {
+        name: 'trade_intents_user_id_users_id_fk',
+        from: 'trade_intents(user_id)',
+        to: 'users(id)',
+        premises: ['trade_intents_account_owner_fk', 'broker_accounts_user_id_users_id_fk'],
+      },
+      {
+        name: 'trade_intents_trading_session_id_trading_sessions_id_fk',
+        from: 'trade_intents(trading_session_id)',
+        to: 'trading_sessions(id)',
+        premises: ['trade_intents_session_account_fk'],
+      },
+      {
+        name: 'broker_trades_intent_id_trade_intents_id_fk',
+        from: 'broker_trades(intent_id)',
+        to: 'trade_intents(id)',
+        premises: ['broker_trades_intent_account_fk'],
+      },
+      {
+        // a user without an account would slip past the composite under MATCH SIMPLE; the
+        // owner-pair CHECK is what rejects that shape first
+        name: 'deposit_events_user_id_users_id_fk',
+        from: 'deposit_events(user_id)',
+        to: 'users(id)',
+        premises: [
+          'deposit_events_account_owner_fk',
+          'deposit_events_owner_pair_check',
+          'broker_accounts_user_id_users_id_fk',
+        ],
+      },
+    ];
+    const missingPremises = implied
+      .flatMap((fk) => fk.premises.filter((premise) => !observed.has(premise)))
+      .sort();
+    expect(missingPremises, 'premises no earlier test observed').toEqual([]);
+
+    const { rows } = await pool.query<{
+      conname: string;
+      from: string;
+      to: string;
+      convalidated: boolean;
+      confdeltype: string;
+      confmatchtype: string;
+    }>(
+      `select c.conname,
+              c.conrelid::regclass::text || '(' || (
+                select string_agg(a.attname, ',' order by k.ord) from unnest(c.conkey) with ordinality k(attnum, ord)
+                  join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum
+              ) || ')' as "from",
+              c.confrelid::regclass::text || '(' || (
+                select string_agg(a.attname, ',' order by k.ord) from unnest(c.confkey) with ordinality k(attnum, ord)
+                  join pg_attribute a on a.attrelid = c.confrelid and a.attnum = k.attnum
+              ) || ')' as "to",
+              c.convalidated, c.confdeltype::text, c.confmatchtype::text
+         from pg_constraint c
+        where c.contype = 'f' and c.connamespace = 'public'::regnamespace and c.conname = any($1)
+        order by c.conname`,
+      [implied.map((fk) => fk.name)],
+    );
+    expect(rows).toEqual(
+      implied
+        .map(({ name, from, to }) => ({
+          conname: name,
+          from,
+          to,
+          convalidated: true,
+          confdeltype: 'r',
+          confmatchtype: 's',
+        }))
+        .sort((a, b) => a.conname.localeCompare(b.conname)),
+    );
+    for (const fk of implied) observed.add(fk.name);
+  });
+});
+
 // The gate is the last test in the file, not an afterAll: as a test it is excluded by a
 // name filter along with everything else, so debugging one case does not produce a red file
 // about the constraints that run did not touch. It must run last, which
 // `sequence.shuffle: false` in vitest.config.ts pins for the default run; passing
 // `--sequence.shuffle` explicitly overrides that and fails this gate — the safe direction.
 // A constraint counts as covered only when a test actually observed the database enforcing
-// it — the helpers register after their assertion passes, and the structural test registers
-// its FK targets after its own. Textual matching was the previous bar and it accepted a name
+// it — the helpers register after their assertion passes, and the two catalog tests (composite
+// FK targets, simple FKs implied by a composite) register only after their own assertions. Textual matching was the previous bar and it accepted a name
 // in a comment, in a skipped test, or spelled as part of another name.
 describe('constraint coverage', () => {
-  it('has seen the database enforce every CHECK and unique index', async () => {
+  it('has seen the database enforce every CHECK, unique index, foreign key and trigger', async () => {
     const { rows } = await pool.query<{ conname: string }>(`
       select conname from pg_constraint
-        where contype in ('c', 'u') and connamespace = 'public'::regnamespace
+        where contype in ('c', 'u', 'f') and connamespace = 'public'::regnamespace
       union
       select indexname as conname from pg_indexes
         where schemaname = 'public' and indexdef like 'CREATE UNIQUE%'
+      union
+      select t.tgname as conname from pg_trigger t
+        join pg_class c on c.oid = t.tgrelid
+        join pg_namespace n on n.oid = c.relnamespace
+        where not t.tgisinternal and n.nspname = 'public'
     `);
     const declared = rows.map((r) => r.conname).filter((n) => !n.endsWith('_pkey'));
     const uncovered = declared.filter((name) => !observed.has(name)).sort();
-    expect(declared.length).toBeGreaterThan(30);
+    expect(declared.length).toBeGreaterThan(60);
     expect(uncovered, 'constraints no test observed the database enforcing').toEqual([]);
   });
 });
