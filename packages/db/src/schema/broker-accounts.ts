@@ -8,19 +8,9 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { AuthRevokedReason } from '@binarius/shared';
+import { AuthRevokedReason, BrokerAccountStatus } from '@binarius/shared';
 import { bytea, createdAt, id, inList, updatedAt } from './columns';
 import { users } from './users';
-
-// A freshly linked account starts pending: the OAuth callback proves someone authorized at the
-// broker, not that the Telegram user who started the login is that someone. Confirming in the
-// bot is what makes it usable.
-export const BrokerAccountStatus = {
-  Pending: 'pending',
-  Active: 'active',
-  Revoked: 'revoked',
-} as const;
-export type BrokerAccountStatus = (typeof BrokerAccountStatus)[keyof typeof BrokerAccountStatus];
 
 // tokens are AES-256-GCM ciphertexts (see ../crypto.ts); token_key_id names the key for rotation
 export const brokerAccounts = pgTable(
@@ -44,6 +34,7 @@ export const brokerAccounts = pgTable(
     // why OAuth revoked this account; NULL while it is usable. Distinct from trading_halted,
     // which reconciliation (ARCH-04) owns and this flow never writes.
     authRevokedReason: text('auth_revoked_reason').$type<AuthRevokedReason>(),
+    // pending until the bot confirms the link (BrokerAccountStatus in @binarius/shared says why)
     status: text('status')
       .$type<BrokerAccountStatus>()
       .notNull()

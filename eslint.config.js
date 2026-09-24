@@ -1,13 +1,14 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import eslintConfigPrettier from 'eslint-config-prettier';
+import noStatusLiteral from './tooling/eslint-rules/no-status-literal.ts';
 
 // a variable named like an error, in the position pino would serialize whole
 const ERROR_LIKE_NAME = '(e|err|error|ex|exception|cause|failure)';
 
 // the object a logger is called with, and the field inside it that would carry an error
 const LOG_ERROR_FIELD =
-  "CallExpression[callee.property.name=/^(fatal|error|warn|info|debug|trace)$/] > ObjectExpression:first-child > :matches(Property[key.name=/^(err|error|cause|exception)$/], Property[key.value=/^(err|error|cause|exception)$/])";
+  'CallExpression[callee.property.name=/^(fatal|error|warn|info|debug|trace)$/] > ObjectExpression:first-child > :matches(Property[key.name=/^(err|error|cause|exception)$/], Property[key.value=/^(err|error|cause|exception)$/])';
 
 export default tseslint.config(
   {
@@ -23,7 +24,15 @@ export default tseslint.config(
     // shapes that stay safe, so the rule asks for one of them rather than for care.
     files: ['apps/**/src/**/*.ts', 'packages/**/src/**/*.ts'],
     ignores: ['**/*.test.ts'],
+    // typed: no-status-literal reads contextual types and the status constants from the program
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    plugins: { local: { rules: { 'no-status-literal': noStatusLiteral } } },
     rules: {
+      // tests stay out of this block on purpose: they must be able to spell a raw value to
+      // prove the CHECK constraint rejects or accepts it
+      'local/no-status-literal': 'error',
       'no-restricted-syntax': [
         'error',
         {

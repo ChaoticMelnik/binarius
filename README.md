@@ -17,7 +17,11 @@ account and how those tokens stay fresh is in [docs/binodex-oauth.md](docs/binod
 
 ## Requirements
 
-- Node.js ^22.13.0 || ^24.0.0 || >=26.0.0 (pinned in `.node-version`)
+- Node.js ^22.18.0 || ^24.0.0 || >=26.0.0 (pinned in `.node-version`). The floor is Node's native
+  TypeScript stripping: `eslint.config.js` imports its status-literal rule straight from
+  `tooling/eslint-rules/*.ts`. From a shell that skipped `fnm use`, `pnpm lint` fails with
+  `ERR_UNKNOWN_FILE_EXTENSION` — the same signal as `.node-version`. An editor's ESLint server
+  runs on the extension's own Node, which also has to be 22.18 or newer.
 - pnpm 10.34.1 (managed via Corepack, see `packageManager` in `package.json`)
 
 ## Commands

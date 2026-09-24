@@ -1,5 +1,6 @@
 import { and, eq, sql, type SQL } from 'drizzle-orm';
 import {
+  BrokerAccountStatus,
   TradeIntentErrorCode,
   TradeIntentFailureReason,
   TradeIntentStatus,
@@ -9,7 +10,7 @@ import {
   type TradeTransport,
 } from '@binarius/shared';
 import type { Db } from './client';
-import { BrokerAccountStatus, brokerAccounts } from './schema/broker-accounts';
+import { brokerAccounts } from './schema/broker-accounts';
 import { OutboxTopic, outboxEvents } from './schema/outbox-events';
 import { TokenLedgerKind, tokenLedger } from './schema/token-ledger';
 import { tradeIntents } from './schema/trade-intents';

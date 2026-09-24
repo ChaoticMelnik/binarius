@@ -1,10 +1,15 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import { AuthRevokedReason, type BrokerAccountView, type OAuthTokens } from '@binarius/shared';
+import {
+  AuthRevokedReason,
+  BrokerAccountStatus,
+  type BrokerAccountView,
+  type OAuthTokens,
+} from '@binarius/shared';
 import type { Db } from './client';
 import type { TokenCipher } from './crypto';
 import { TokenField } from './crypto';
-import { BrokerAccountStatus, brokerAccounts } from './schema/broker-accounts';
+import { brokerAccounts } from './schema/broker-accounts';
 import { oauthStates } from './schema/oauth-states';
 import { UserStatus, users } from './schema/users';
 import type { Tx } from './trade-intent-ops';
