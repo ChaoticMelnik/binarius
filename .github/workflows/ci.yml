@@ -110,10 +110,7 @@ jobs:
           print(f"journal: {len(base['entries'])} existing entries unchanged, {appended} appended")
           PY
       - run: pnpm db:migrate
-      # test runs before typecheck: typecheck emits dist/, which would mask a broken exports map
-      - run: pnpm test
-      - run: pnpm typecheck
-      - run: pnpm lint
+      - run: pnpm check
 
   compose:
     runs-on: ubuntu-latest

@@ -56,9 +56,9 @@
 
 ### CI
 
-Настроено (решение зафиксировано 2026-09-21). Единая проверочная команда: `pnpm typecheck && pnpm lint && pnpm test`. GitHub Actions workflow (`.github/workflows/ci.yml`) запускается на `push`/`pull_request` и должен быть добавлен вместе с первым реальным кодом проекта (pnpm workspace, `package.json` с этими скриптами) — до появления кода workflow нечего проверять, поэтому файл добавляется тем PR, который заводит monorepo-скелет, а не бутстрапом pipeline.
+Единая проверочная команда — `pnpm check` (`tsc -b --clean && vitest run && tsc -b && eslint .`, порядок и причина — `README.md` → Commands). Её запускают CI (`.github/workflows/ci.yml`, на `push` в `main` и на `pull_request`), implementer перед коммитом и reviewer в Runtime check; вердикт — код выхода, вывод не пропускается через `grep`. Скрипты `typecheck`/`lint`/`test` — для точечных запусков. Все проверки — под Node из `.node-version` (`eval "$(fnm env)" && fnm use`).
 
-Как только появится `packages/db` со схемой Drizzle: CI дополнительно проверяет, что изменения схемы сопровождаются сгенерированной миграцией (`drizzle-kit generate` + чистый `git status` на каталоге миграций внутри `packages/db` — незакоммиченного diff в миграциях после генерации быть не должно) и что тестовая БД поднимается и накатывает их (`drizzle-kit migrate` / эквивалентный скрипт) без ошибок. Эта проверка добавляется в `ci.yml` тем же PR, что вводит первую реальную таблицу — аналогично тому, как сам `ci.yml` добавляется с первым реальным кодом, а не бутстрапом pipeline.
+CI дополнительно проверяет, что изменения схемы `packages/db` сопровождаются сгенерированной миграцией (`pnpm db:generate` + чистый `git status` на `packages/db/drizzle`), что закоммиченные миграции не менялись, и накатывает их на тестовую БД (`pnpm db:migrate`) до `pnpm check`.
 
 ### База данных
 
