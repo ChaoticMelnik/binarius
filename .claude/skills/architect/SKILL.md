@@ -56,14 +56,14 @@ Files to create/modify; schema changes (`packages/db` Drizzle schema); API/Socke
 
 If a project-specific schema/design skill is installed (`drizzle-orm-patterns` for this project), invoke it before drafting schema changes.
 
-### Step 5: Clarifying questions (logic-affecting issues only)
+### Step 5: Clarifying questions (every issue)
 
-Trigger: the issue changes business logic, data flow, state transitions, or user-visible behavior — not a purely mechanical fix. Prepare **at least 3** targeted questions: intent ambiguity in unaddressed edge cases, explicit scope boundary, integration constraints if an external system is involved (Binodex Broker/Partner API in particular — its contract is still partially unconfirmed). Each question has 2-4 concrete options, the recommended one first, worded in Russian.
+Always, for every issue — the `/clarify` floor has no exception here, a mechanical fix included. Prepare **at least 3** targeted questions: intent ambiguity in unaddressed edge cases, explicit scope boundary, integration constraints if an external system is involved (Binodex Broker/Partner API in particular — its contract is still partially unconfirmed). Each question has 2-4 concrete options, the recommended one first, worded in Russian.
 
 - **Spawned by tech-lead (the pipeline):** return the questions as the agent's final message and stop — no plan is written in this round. Tech-lead asks them through `AskUserQuestion` and continues this agent (or spawns a fresh one) with the answers.
 - **Invoked directly by the owner:** ask through `AskUserQuestion`.
 
-Do not proceed to Step 6 until answered. Skip only for a pure mechanical fix (typo, wrong variable, missing return type) with no logic ambiguity.
+Do not proceed to Step 6 until answered.
 
 ### Step 6: Draft the plan
 
