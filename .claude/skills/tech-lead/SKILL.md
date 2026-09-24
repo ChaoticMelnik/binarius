@@ -91,34 +91,44 @@ gh pr view $PR --repo ChaoticMelnik/binarius --json headRefOid --jq .headRefOid 
 
 ### Model policy — check
 
-Each phase's spawn requested its policy model and got it. The transcript links each `Agent` call to its result, and the result names the model the harness actually assigned (`resolvedModel`) and the agent's own transcript file:
+Each phase's spawn requested its policy model and ran on it. Every spawn, at any depth, leaves `subagents/agent-<agentId>.meta.json` (`model` = requested alias, `description`, `spawnDepth`, `toolUseId`, `parentAgentId`). The model the harness assigned (`resolvedModel`) is stored only in the root transcript, on the spawn's `tool_result`, and only for depth 1 once a result came back (`completed` or `async_launched`). The agent's own transcript names the model it actually ran on:
 
 ```bash
 S=~/.claude/projects/-Users-user-Documents-Binarius/<session-id>
-jq -rs '
-  [.[] | .message.content[]? | select(.type? == "tool_use" and .name == "Agent")
-    | {id, model: .input.model, description: .input.description}] as $spawns
-  | [.[] | select(.toolUseResult.agentId? != null)
-    | {id: (.message.content[] | select(.type == "tool_result") | .tool_use_id),
-       agentId: .toolUseResult.agentId, resolved: .toolUseResult.resolvedModel}] as $results
-  | $spawns[] | . as $s | ([$results[] | select(.id == $s.id)] | first) as $r
-  | [$s.description, ($s.model // "(none)"), ($r.resolved // "not finished"),
-     (if $r then "subagents/agent-\($r.agentId).jsonl" else "-" end)] | join(" | ")
-' "$S.jsonl"
-grep -o '"model":"claude-[^"]*"' "$S/subagents/agent-<agentId>.jsonl" | sort -u
+resolved=$(jq -c 'select(.toolUseResult.resolvedModel? != null)
+  | {id: (.message.content[] | select(.type == "tool_result") | .tool_use_id), m: .toolUseResult.resolvedModel}' "$S.jsonl")
+ran() { grep -o '"model":"claude-[^"]*"' "$S/subagents/agent-$1.jsonl" | cut -d'"' -f4 | sort -u | tr '\n' ' '; }
+for m in "$S"/subagents/*.meta.json; do
+  id=$(basename "$m" .meta.json); id=${id#agent-}
+  depth=$(jq -r .spawnDepth "$m"); req=$(jq -r '.model // empty' "$m")
+  tu=$(jq -r '.toolUseId // empty' "$m"); parent=$(jq -r '.parentAgentId // empty' "$m")
+  if [ "$depth" -ge 2 ]; then res="not recorded at depth >= 2"
+  else
+    res=$(printf '%s\n' "$resolved" | jq -r --arg tu "$tu" 'select(.id == $tu) | .m' | head -1)
+    [ -n "$res" ] || res="no result record (continued via SendMessage or still running)"
+  fi
+  [ -n "$req" ] || req="inherited from parent $parent (parent ran $(ran "$parent"))"
+  printf '%s | depth %s | requested %s | resolved %s | ran %s\n' \
+    "$(jq -r '.description // "-"' "$m")" "$depth" "$req" "$res" "$(ran "$id")"
+done
 ```
 
-Per phase: (a) the requested `model` is the policy's; (b) `resolvedModel` is that alias's id in the table of `.claude/CLAUDE.md` → Модели по ролям pipeline; (c) the agent's own transcript names exactly one model, the same as `resolvedModel`. (a) and (b) are conclusive whatever the session model is — `resolvedModel` is what the harness assigned to that spawn. A spawn with no result yet is "not finished", not "failed".
+Output of #56's own run (abridged):
 
-Nested spawns (reviewer 3b-3d, depth 2) have no `resolvedModel` anywhere — a spawned agent's transcript does not store tool results' metadata. Every spawn, at any depth, leaves `subagents/agent-<agentId>.meta.json` with the requested `model`, `description`, `spawnDepth` and `parentAgentId`; pair it with (c) on the agent's own file:
-
-```bash
-for m in "$S"/subagents/*.meta.json; do a=${m%.meta.json}; printf '%s | depth %s | requested %s | ran %s\n' \
-  "$(jq -r .description "$m")" "$(jq -r .spawnDepth "$m")" "$(jq -r '.model // "(none)"' "$m")" \
-  "$(grep -o '"model":"claude-[^"]*"' "$a.jsonl" | sort -u | cut -d'"' -f4 | tr '\n' ' ')"; done
+```
+Architect #56 research + questions | depth 1 | requested fable | resolved claude-fable-5-1 | ran claude-fable-5-1
+Reviewer #56 PR #61 | depth 1 | requested opus | resolved claude-opus-5-5[1m] | ran claude-opus-5-5
+Implementer #56 clarify round | depth 1 | requested opus | resolved no result record (continued via SendMessage or still running) | ran claude-opus-5-5
+Simplify review PR 61 | depth 2 | requested sonnet | resolved not recorded at depth >= 2 | ran claude-sonnet-5
+- | depth 3 | requested inherited from parent a04adae24974857c8 (parent ran claude-opus-5-5 ) | resolved not recorded at depth >= 2 | ran claude-opus-5-5
 ```
 
-Severity: Major if Architect did not run on Fable; Minor if another phase ran above its policy model (cost only).
+Per row, comparing ids up to the first `[` (`[1m]` names the context-window variant, not a different model):
+- (a) `requested` is the policy alias for that phase or sub-tool;
+- (b) when `resolved` is an id, it is that alias's id in `.claude/CLAUDE.md` → Модели по ролям pipeline;
+- (c) `ran` is exactly one id, and it is the table's id for the requested alias.
+
+Depth 1 gets all three when a result came back; a phase continued through `SendMessage` has no result record and is judged by (a) + (c). Depth ≥ 2 (the reviewer's 3b-3d) is judged by (a) + (c). A depth-3 row with no requested model is a sub-tool's own fork: it is judged only by (c) against its parent's `ran`. Severity: Major if the architect did not run on Fable; Minor if another phase ran above its policy model (cost only).
 
 ### Report format
 
