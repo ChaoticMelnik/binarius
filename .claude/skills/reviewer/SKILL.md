@@ -12,7 +12,7 @@ Two modes:
 1. **Task Review** — a specific PR for an issue In Review.
 2. **Project Review** — full codebase, no specific issue named.
 
-Post findings immediately, no additional approval needed. Codex (Step 3a, and the whole-feature pass in Step 6-pre) is a required independent reviewer in both modes.
+Post findings immediately, no additional approval needed. Codex (Step 3a; repeated in Step 6-pre only when 3a no longer matches the head) is a required independent reviewer in both modes.
 
 **How this role runs.** In the pipeline, `/tech-lead` starts it as an `Agent` spawn (`subagent_type: "general-purpose"`, `model: "opus"`), and the spawned agent's first action is `Skill(skill: "reviewer")`. The spawn's `model` decides the model (`.claude/CLAUDE.md` → Модели по ролям pipeline); the `model: opus` frontmatter above only matters when the owner invokes `/reviewer` directly. The review sub-agents of Steps 3b-3d are this agent's own nested spawns, each with an explicit `model` — never inherited. A spawned reviewer has no `AskUserQuestion`: the merge question goes back to tech-lead (Step 6b).
 
@@ -45,7 +45,7 @@ Check diff size first: `gh pr diff <N> | wc -l`.
   1. Fill `.claude/codex-review-prompt.md` into a file (issue, goal, the plan's "Accepted risks" with the instruction not to re-raise them). For a diff that touches `.claude/**` or `audits.md`, inline `~/.claude/CLAUDE.md` into its Process-docs block — the Codex sandbox cannot read it.
   2. Build the prompt file and start the job with the marker `Iteration review`:
      ```bash
-     PR=<N>; KIND="Iteration review"   # Step 6-pre uses "Whole-feature pass"
+     PR=<N>; KIND="Iteration review"   # a Step 6-pre rerun uses "Whole-feature pass"
      TEMPLATE=<scratchpad>/codex-review-$PR.md   # the filled template from 1.
      COMPANION="$(jq -r '.plugins["codex@openai-codex"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/codex-companion.mjs"
      git fetch origin main "$(gh pr view $PR --repo ChaoticMelnik/binarius --json headRefName --jq .headRefName)"
@@ -97,9 +97,9 @@ Merge Codex + agent results, collapse duplicates. Discard findings that just res
 
 **Runtime check** — after every spawned agent has finished: `pnpm check` on the PR branch under the project's Node (`eval "$(fnm env)" && fnm use`), exit code as the verdict. State explicitly if Playwright E2E could not be run locally.
 
-### Step 6-pre: Whole-feature Codex pass (before any LGTM)
+### Step 6-pre: Whole-feature condition (before any LGTM)
 
-Only when Steps 3-5 found no Blocker/Major. Run the Step 3a command again with `KIND="Whole-feature pass"` at the PR's current head, poll it to completion, and consolidate its result as in Step 4. A Blocker/Major from it goes to Step 6a like any other finding. No LGTM without a completed whole-feature pass whose marker names the head being approved — tech-lead's audit re-hashes the diff from that marker (`tech-lead` → Mode 1).
+Only when Steps 3-5 found no Blocker/Major. A condition, not a second run: this round's 3a already reviewed the full diff at a recorded head, and it counts as the whole-feature pass when its marker's `head` equals the PR's current `headRefOid` (`gh pr view <N> --json headRefOid`). Rerun the Step 3a command with `KIND="Whole-feature pass"` only if commits landed after 3a, or if 3a was not a full-diff run with a marker; consolidate that result as in Step 4, and a Blocker/Major from it goes to Step 6a. No LGTM without a completed full-diff run (either marker) at the approved head — tech-lead's audit re-hashes the diff from that marker (`tech-lead` → Mode 1).
 
 ### Step 6a: Issues found — post comments, return to Todo
 
@@ -119,7 +119,7 @@ gh pr comment <N> --repo ChaoticMelnik/binarius --body "Review passed. LGTM — 
 
 **Never attempt to approve the PR review yourself** (GitHub blocks self-approval regardless). Merging is a separate action from approving. Whether an agent may run the merge at all is recorded only in this repo's CLAUDE.md → Git-процесс; when it may, it is always after a per-merge `AskUserQuestion`:
 
-- **Spawned by tech-lead:** do not merge. Return to tech-lead: the verdict, the PR number, the head SHA approved, the whole-feature job id, `gh pr checks` state and the allowed merge methods (`gh api repos/ChaoticMelnik/binarius --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`). Tech-lead asks the owner and runs `gh pr merge`.
+- **Spawned by tech-lead:** do not merge. Return to tech-lead: the verdict, the PR number, the head SHA approved, the id and marker of the Codex job that counts as the whole-feature pass (3a or a 6-pre rerun), `gh pr checks` state and the allowed merge methods (`gh api repos/ChaoticMelnik/binarius --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`). Tech-lead asks the owner and runs `gh pr merge`.
 - **Invoked directly by the owner:** ask via `AskUserQuestion` immediately before this specific merge — a yes on an earlier PR never carries over. On an explicit yes: `gh pr merge <N>` with the chosen allowed method — never `--admin` or any other bypass flag. If it fails (conflicts, red checks, branch protection): report the failure and stop.
 
 Either way: before moving to Done, confirm the merge actually happened — `gh pr view <N> --json state,mergedAt`, proceed only once `state` is `"MERGED"`. Then move the issue to **Done** via `/github` skill.
@@ -172,7 +172,7 @@ Return an issue to Todo (task mode) or flag as Blocker/Major (project mode) if t
 - Never merge a PR without asking via `AskUserQuestion` immediately before that specific merge — a prior yes never carries over to the next merge.
 - Never wait for permission to post review comments — post immediately.
 - Never move an issue directly to In Progress — Todo only, the Architect updates the plan first.
-- Never approve a PR with outstanding Blocker or Major findings, or without a completed whole-feature pass at the approved head.
+- Never approve a PR with outstanding Blocker or Major findings, or without a completed full-diff Codex run at the approved head.
 - Never review an iteration's delta instead of the whole PR diff.
 - Never skip reading the Architect's plan before reviewing an issue.
 - Never open GitHub issues during project review — present recommendations only.
