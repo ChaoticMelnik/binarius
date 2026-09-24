@@ -93,8 +93,24 @@ invariant it depends on: no intent is created for a non-active account, and ther
 extra step, but in the scenario above the person confirming is the attacker, who sees the
 victim's email and agrees. Closing the vector completely needs proof of who finished the flow —
 signed Telegram `initData` forwarded by the login page (#32) and compared with
-`oauth_states.telegram_user_id`. Until then the gap is documented rather than closed, which is
-acceptable only while no bot or web client calls these routes.
+`oauth_states.telegram_user_id`.
+
+Since #22 the bot calls `POST /auth/binodex/start`, so an authorize URL is available to any
+Telegram user who taps the button, and "no client calls these routes" no longer describes the
+deployment. What that changes, and what it does not:
+
+- the handing-over scenario becomes executable as soon as #32 delivers an authorization code to
+  `POST /auth/binodex/callback`. Before that page exists, no code reaches the backend at all:
+  the authorize request carries `response_mode=web_message`, and a plain redirect with `?code=`
+  lands on the backend's 404, where the code is stripped from the log;
+- once it does, the first thing a handed-over link costs the victim is not a takeover but their
+  own account: the callback writes a `pending` row carrying the victim's `broker_user_id` under
+  the attacker's Telegram account, and `broker_accounts_broker_user_id_idx` then answers the
+  victim's own attempt with `broker_account_taken`. A takeover needs the attacker to confirm as
+  well, which is the step the section above describes;
+- nothing in the bot or the backend can close this. The proof has to come from the page that
+  finishes the flow, which is why the `initData` check belongs to #32 as a condition of shipping
+  the page rather than as work that follows it.
 
 ## The state row
 
@@ -283,7 +299,12 @@ not.
 
 ## Boundaries
 
-- **#32** owns the login page and the `web_message` popup; it calls these two routes.
+- **#22** owns `/start` and the button that calls `POST /auth/binodex/start`; it hands the user
+  an authorize URL and nothing else (docs/bot-start.md).
+- **#23** owns the bot's side of the return: the call to `POST /auth/binodex/confirm` and the
+  message that reports the outcome.
+- **#32** owns the login page and the `web_message` popup; it calls the callback route, and it
+  is where the `initData` check above closes the handoff gap.
 - **#10** owns the linking UI and re-linking an account that belongs to someone else.
 - **#39** owns the email + code login, a separate grant entirely.
 - **ARCH-01 (#40)** will call `ensureFreshAccessToken` before talking to the broker socket.
