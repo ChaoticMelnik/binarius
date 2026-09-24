@@ -7,10 +7,11 @@ import {
   BrokerAccountStatus,
   TradeAction,
   TradeMode,
+  UserStatus,
   type CreateTradeIntentRequest,
   type DecimalString,
 } from '@binarius/shared';
-import { brokerAccounts, users, UserStatus } from './schema/index';
+import { brokerAccounts, users } from './schema/index';
 import type { BrokerAccountRow } from './oauth-ops';
 import { createTradeIntent, type TradeIntentRow } from './trade-intent-ops';
 

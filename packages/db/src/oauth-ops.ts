@@ -3,6 +3,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import {
   AuthRevokedReason,
   BrokerAccountStatus,
+  UserStatus,
   type BrokerAccountView,
   type OAuthTokens,
 } from '@binarius/shared';
@@ -11,7 +12,7 @@ import type { TokenCipher } from './crypto';
 import { TokenField } from './crypto';
 import { brokerAccounts } from './schema/broker-accounts';
 import { oauthStates } from './schema/oauth-states';
-import { UserStatus, users } from './schema/users';
+import { users } from './schema/users';
 import type { Tx } from './trade-intent-ops';
 
 export type BrokerAccountRow = typeof brokerAccounts.$inferSelect;
