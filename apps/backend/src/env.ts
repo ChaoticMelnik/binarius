@@ -3,6 +3,7 @@ import {
   DATABASE_URL_RULES,
   REDIS_URL_RULES,
   parseBoundedIntegerEnv,
+  parseInternalTokenEnv,
   parseLogLevelEnv,
   parseUrlEnv,
   readEnv,
@@ -14,8 +15,6 @@ import {
 const MIN_HEALTH_TIMEOUT_MS = 500;
 const MAX_HEALTH_TIMEOUT_MS = 2500;
 
-// shared with the bot; short or whitespace-padded values are misconfigurations, not secrets
-const MIN_INTERNAL_TOKEN_LENGTH = 16;
 // AES-256-GCM: the cipher refuses anything else, and a short key would fail at the first login
 const TOKEN_ENCRYPTION_KEY_BYTES = 32;
 // the key id the all-zero development key is only usable with
@@ -54,7 +53,7 @@ export function parseEnv(source: EnvSource): Env {
       readEnv(source, 'HEALTH_TIMEOUT_MS', '2000'),
       'HEALTH_TIMEOUT_MS',
     ),
-    internalApiToken: parseInternalToken(
+    internalApiToken: parseInternalTokenEnv(
       readEnv(source, 'INTERNAL_API_TOKEN'),
       'INTERNAL_API_TOKEN',
     ),
@@ -127,14 +126,6 @@ function parseEncryptionKey(raw: string, name: string): Buffer {
 function parseKeyId(raw: string, name: string): string {
   if (raw.includes('|')) throw new Error(`Env ${name} must not contain |`);
   if (/\s/.test(raw)) throw new Error(`Env ${name} must not contain whitespace`);
-  return raw;
-}
-
-function parseInternalToken(raw: string, name: string): string {
-  if (/\s/.test(raw)) throw new Error(`Env ${name} must not contain whitespace`);
-  if (raw.length < MIN_INTERNAL_TOKEN_LENGTH) {
-    throw new Error(`Env ${name} must be at least ${MIN_INTERNAL_TOKEN_LENGTH} characters`);
-  }
   return raw;
 }
 

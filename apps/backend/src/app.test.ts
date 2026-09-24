@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { buildApp, withoutSecrets, type AppDeps } from './app';
 import type { AuthRoutesDeps } from './auth/routes';
 import type { TradingRoutesDeps } from './trading/routes';
+import type { UsersRoutesDeps } from './users/routes';
 
 const ok = () => Promise.resolve();
 const down = () => Promise.reject(new Error('down'));
@@ -29,6 +30,11 @@ const unusedAuth: AuthRoutesDeps = {
   partnerRef: 'partner-ref',
 };
 
+const unusedUsers: UsersRoutesDeps = {
+  db: {} as UsersRoutesDeps['db'],
+  internalApiToken: 'internal-token-for-tests',
+};
+
 async function health(deps: Pick<AppDeps, 'checkPostgres' | 'checkRedis'>) {
   const app = buildApp({
     ...deps,
@@ -36,6 +42,7 @@ async function health(deps: Pick<AppDeps, 'checkPostgres' | 'checkRedis'>) {
     checkTimeoutMs: 20,
     trading: unusedTrading,
     auth: unusedAuth,
+    users: unusedUsers,
   });
   try {
     const response = await app.inject({ method: 'GET', url: '/health' });
@@ -113,6 +120,7 @@ describe('what reaches the log', () => {
       checkTimeoutMs: 20,
       trading: unusedTrading,
       auth: unusedAuth,
+      users: unusedUsers,
       logDestination: logs,
       ...overrides,
     });
@@ -247,6 +255,7 @@ describe('request logging', () => {
       checkTimeoutMs: 20,
       trading: unusedTrading,
       auth: unusedAuth,
+      users: unusedUsers,
     });
     try {
       const response = await app.inject({
@@ -271,6 +280,7 @@ describe('error handler', () => {
       checkTimeoutMs: 20,
       trading: unusedTrading,
       auth: unusedAuth,
+      users: unusedUsers,
     });
     app.get('/drizzle', async () => {
       throw new DrizzleQueryError(
