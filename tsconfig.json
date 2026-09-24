@@ -6,6 +6,7 @@
     { "path": "apps/web" },
     { "path": "apps/trading-worker" },
     { "path": "packages/db" },
-    { "path": "packages/shared" }
+    { "path": "packages/shared" },
+    { "path": "tooling" }
   ]
 }

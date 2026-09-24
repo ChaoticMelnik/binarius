@@ -24,11 +24,17 @@ account and how those tokens stay fresh is in [docs/binodex-oauth.md](docs/binod
 
 ```bash
 pnpm install             # install all workspace dependencies
+pnpm check               # the one check command: what CI runs, and what "green" means
 pnpm typecheck           # tsc -b across the project-reference graph
 pnpm lint                # eslint .
 pnpm test                # vitest run — needs a migrated Postgres, see Database below
 pnpm test apps/backend   # one package's tests (path filter)
 ```
+
+`pnpm check` runs `tsc -b --clean`, then the tests, then `tsc -b`, then `eslint .`. The order is
+the point: `--clean` removes every `dist/`, so the tests run against a tree without build output,
+the way a fresh clone does, and a manifest or import that only resolves after a build fails there
+instead of passing on a stale `dist/`. The other scripts are for running one step on its own.
 
 ## Docker dev environment
 
