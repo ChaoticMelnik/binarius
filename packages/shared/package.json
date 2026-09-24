@@ -7,7 +7,7 @@
   "exports": {
     ".": {
       "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "default": "./dist/index.js"
     },
     "./money": {
       "types": "./src/money.ts",
