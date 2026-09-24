@@ -50,7 +50,7 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 
 - [ ] Branch name matches convention: `feat/<N>-*` / `fix/<N>-*`
 - [ ] Commits reference the issue: `#<N>: description`
-- [ ] PR body has: what changed, `Closes #<N>`, a test plan
+- [ ] PR body has: what changed, `Closes #<N>` (`Refs #<N>` for a Phase 5 audit docs PR), a test plan
 - [ ] Issue moved to In Review only after the PR was created
 - [ ] PR contains only relevant files (no `git add .` artifacts)
 - [ ] No new type/build errors in the diff
@@ -297,7 +297,7 @@ Run once the merge is confirmed and the issue is Done.
    - `отклонено: <причина>` — only after the owner's explicit yes via `AskUserQuestion` (one call for all proposals up for rejection); a date of the decision goes inside the reason;
    - `вынесено в #<N>` — the issue is created and added to the board now (`/github`), not "later";
    - `открыто (<YYYY-MM-DD>, <владелец>)` — allowed, and Phase 0 of the next issue warns about it.
-5. **Docs PR** — branch `process/<N>-audit` from `main`, the audit entry and the skill edits, PR with `Closes`-free body (the issue is already Done). It gets no reviewer phase and no 3b-3d sub-agents — process text, not code — but it does get Codex (owner's rule, 2026-09-24):
+5. **Docs PR** — branch `docs/<N>-audit` from `main`, the audit entry and the skill edits, PR body with `Refs #<N>` instead of `Closes` (the issue is already Done; `.claude/CLAUDE.md` → Git-процесс). It gets no reviewer phase and no 3b-3d sub-agents — process text, not code — but it does get Codex (owner's rule, 2026-09-24):
    - Run: the reviewer's Step 3a command with `KIND="Whole-feature pass"`, the diff of `.claude/**` + `audits.md` against `origin/main`, and `.claude/codex-review-prompt.md` with its Process-docs block filled (global `~/.claude/CLAUDE.md` inlined). Same criterion as "Whole-feature pass — check": the newest completed run's `head` must be the docs PR's current head before the merge question.
    - **Attempts** (execution failures) and **iterations** (findings → fixes) are counted separately. Attempts: 2 per run; after the second failure do not ask about the merge — ask the owner what to do with the run (retry later / explicitly accept merging without it). There is no silent skip here.
    - Iterations: a Blocker/Major is fixed in the same docs PR, and after the last such fix the run is repeated on the final diff, so the merge question is only ever about a diff Codex has seen. At most 2 fix iterations; a third Blocker/Major goes to the owner. A Minor is fixed or left at discretion, recorded in the PR body.
