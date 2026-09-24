@@ -306,8 +306,8 @@ PR #61, rebase-merged as `34c7b2c` (20 commits), branch deleted. Первый п
 
 ### Process improvement proposals
 
-1. **Упавшая или зависшая фаза: сначала проверить её побочные эффекты на GitHub (комментарии, статус, пуш) и только потом решать о повторном спавне.** Иначе повторный спавн задублирует Plan Update. — **внедрено в #63: `.claude/skills/tech-lead/SKILL.md` → Phases run as spawned agents, «Failed or stalled phase»**
-2. **Architect проверяет запуском каждый вариант, который предлагает владельцу в clarify-вопросе (флаги, API, возможности инструмента).** Q8 пришлось пересматривать. — **внедрено в #63: `.claude/skills/architect/SKILL.md` → Step 5**
+1. **Упавшая или зависшая фаза: сначала убедиться, что агент завершён (иначе остановить или продолжить его), затем проверить её побочные эффекты на GitHub (комментарии, статус, пуш) и только потом решать о повторном спавне.** Иначе повторный спавн задублирует Plan Update. — **внедрено в #63: `.claude/skills/tech-lead/SKILL.md` → Phases run as spawned agents, «Failed or stalled phase»**
+2. **Каждая фаза проверяет запуском каждый вариант, который предлагает владельцу в clarify-вопросе (флаги, API, возможности инструмента).** Q8 пришлось пересматривать. — **внедрено в #63: `.claude/skills/architect/SKILL.md` → Step 5; `.claude/skills/implementer/SKILL.md` → Step 0**
 3. **Проверка модели учитывает фазу, продолженную через SendMessage, и спавны глубины ≥ 2.** — **внедрено в #61: `.claude/skills/tech-lead/SKILL.md` → Model policy — check**
 4. **Правка глобального `~/.claude/CLAUDE.md` под новую схему** (clarify-relay, спавны вместо Skill, Codex без MCP, модели на спавнах, Todo после ревью, merge relay, последовательность фаз). Текст правки tech-lead передаёт владельцу. — **открыто (2026-09-24, владелец)**
 5. **12 Minor из ревью итерации 2.** — **вынесено в #62**
