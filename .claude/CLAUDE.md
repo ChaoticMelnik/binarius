@@ -3,6 +3,7 @@
 ### Взаимодействие с владельцем
 
 - **Любой вопрос владельцу — через AskUserQuestion**, не обычным текстом. Относится ко всем уточняющим вопросам в этом репозитории, включая checkpoint'ы pipeline (`/tech-lead`, `/architect`, `/implementer`, `/reviewer`).
+- Фазы pipeline работают спавн-агентами без `AskUserQuestion`: вопросы (в том числе ≥3 вопроса `/clarify`) и запрос на мерж они возвращают tech-lead'у, и tech-lead задаёт их владельцу через `AskUserQuestion` (`.claude/skills/tech-lead/SKILL.md` → Phases run as spawned agents).
 
 ### GitHub Issues + Projects — таск-трекер
 
@@ -10,13 +11,13 @@
 
 Константы (владелец истины — `.claude/skills/github/SKILL.md`, не вызывай `field-list`/`item-list` заново ради их поиска — они уже там).
 
-Читать issue и менять статус — командами `gh issue`/`gh project item-edit` с `--json`/`--jq`-фильтром по шаблонам из `/github` скилла. В отличие от Linear MCP (который всегда возвращает объект целиком), `gh` фильтрует на своей стороне до того, как результат попадёт в контекст — поэтому изолированный Agent для чтения/записи тут не обязателен по умолчанию (см. `/github` → Core Rule).
+Читать issue и менять статус — командами `gh issue`, `gh api graphql` и `gh project item-edit` с `--json`/`--jq`-фильтром по шаблонам из `/github` скилла. Статус ищется только GraphQL-шаблонами: `gh project item-list` без `--limit` молча отдаёт 30 элементов, и issue за этой границей «нет на доске». `gh issue create` не добавляет issue в Project #2 — для этого отдельная операция `/github`. В отличие от Linear MCP (который всегда возвращает объект целиком), `gh` фильтрует на своей стороне до того, как результат попадёт в контекст — поэтому изолированный Agent для чтения/записи тут не обязателен по умолчанию (см. `/github` → Core Rule).
 
 ### GitHub — статусы задач
 
 - **При начале работы** — сразу `Pipeline Status → In Progress` (через `/github` скилл). Не ждать напоминания.
 - **При готовности к ревью** — сразу `→ In Review` и PR с `Closes #<N>` в описании.
-- **После ревью с замечаниями** — сразу обратно `→ In Progress`. Задача не может оставаться в In Review при незакрытых замечаниях.
+- **После ревью с замечаниями** — reviewer сразу переводит `→ Todo`; `→ In Progress` возвращает архитектор после Plan Update. Задача не может оставаться в In Review при незакрытых замечаниях.
 - **Done** — только после подтверждённого мержа (`gh pr view <N> --json state,mergedAt`, `state == "MERGED"`), никогда по одному вердикту ревью.
 - Статус в Project board должен отражать реальное состояние работы в любой момент времени.
 
@@ -33,26 +34,28 @@
 
 ### Модели по ролям pipeline
 
-Решение зафиксировано 2026-09-22. Требование владельца: самая мощная модель — на архитектуре; остальные роли распределены по стоимости, потому что связывающее ограничение темпа — недельный кап Fable, а не Opus.
+Решение 2026-09-22, механизм переписан 2026-09-24 (#56). Требование владельца: самая мощная модель — на архитектуре; остальные роли распределены по стоимости, потому что связывающее ограничение темпа — недельный кап Fable, а не Opus.
 
-| Роль / агент | Модель | Где задано |
+| Роль / агент | Модель (алиас → id) | Где задано |
 |---|---|---|
-| `/tech-lead` | `inherit` (модель сессии) | frontmatter `model:` в `.claude/skills/tech-lead/SKILL.md` |
-| `/clarify` | не задаёт модель — идёт на активной в момент вызова | глобальный скилл, не трогаем |
-| `/architect` (план, Plan Update) | `fable` — Claude Fable 5.1, самая мощная | frontmatter `.claude/skills/architect/SKILL.md` |
-| `/implementer` | `opus` — Claude Opus 5 | frontmatter `.claude/skills/implementer/SKILL.md` |
-| `/reviewer` (оркестрация, консолидация, ручной чеклист, мерж) | `opus` | frontmatter `.claude/skills/reviewer/SKILL.md` |
-| субагент `/code-review high` | `opus` | параметр `model` Agent-спавна, reviewer Step 3c |
-| субагент `/security-review` | `opus` | параметр `model` Agent-спавна, reviewer Step 3b |
-| субагент `/simplify` (report-only) | `sonnet` — Claude Sonnet 5 | параметр `model` Agent-спавна, reviewer Step 3d |
-| Codex plan review / code review | `gpt-5.6-sol`, reasoning `high` (решение 2026-09-22: ступень ниже `gpt-6-astra`) | `~/.codex/config.toml` (default для приложения Codex) + явные `--model gpt-5.6-sol --effort high` в вызовах `codex:rescue` (architect Step 7, reviewer Step 3a) |
+| `/tech-lead` (оркестрация, clarify- и merge-relay) | модель сессии (сейчас `claude-opus-5-5`) | главный контекст; frontmatter `model: inherit` |
+| `/clarify` | вопросы готовит фаза на своей модели, задаёт tech-lead | implementer Step 0, architect Step 5 |
+| `/architect` (план, Plan Update) | `fable` → `claude-fable-5-1` (Claude Fable 5.1), самая мощная | параметр `model` Agent-спавна tech-lead'а |
+| `/implementer` | `opus` → `claude-opus-5-5` (Claude Opus 5.5) | параметр `model` Agent-спавна tech-lead'а |
+| `/reviewer` (оркестрация, консолидация, ручной чеклист) | `opus` → `claude-opus-5-5` | параметр `model` Agent-спавна tech-lead'а |
+| субагенты `/code-review high`, `/security-review` | `opus` → `claude-opus-5-5` | параметр `model` вложенного спавна, reviewer Step 3c / 3b |
+| субагент `/simplify` (report-only, без вложенных агентов) | `sonnet` → `claude-sonnet-5` | параметр `model` вложенного спавна, reviewer Step 3d |
+| Codex plan review / code review / whole-feature pass | `gpt-5.6-sol`, reasoning `high` | явные `--model gpt-5.6-sol --effort high` в каждом `task`-вызове companion-скрипта (architect Step 7, reviewer 3a и 6-pre, tech-lead Phase 5); `~/.codex/config.toml` — только fallback для ручных запусков владельца; `review`/`adversarial-review` в pipeline не используются (нет `--effort`, не читают шаблон промпта); `codex:rescue` не используется |
 
-Механика и ограничения (по документации Claude Code — custom-skills, sub-agents, model-config; сверено 2026-09-22):
-- `model:` во frontmatter скилла действует до конца текущего хода и откатывается к модели сессии при следующем промпте владельца. Внутри одного `/tech-lead`-хода каждая фаза переключает модель своим `Skill(...)`-вызовом. Допущение, не проверенное прогоном: последний вызванный скилл задаёт модель до следующего вызова. После первого прогона с этой политикой tech-lead сверяет фактические модели по транскрипту (Mode 1 → Model policy — check) и правит эту секцию, если семантика иная.
-- Модель сессии (`~/.claude/settings.json` → `model`) — fallback: на неё уходит всё, что выполняется после вмешательства владельца промптом посреди фазы. Поэтому сессия остаётся на Fable: при откате требование «архитектура на самой мощной» всё равно выполняется, теряется только экономия. Переводить сессию на Opus ради экономии нельзя без правки этой секции.
-- Агент не может сам сменить модель сессии (`/model` — только владелец). Менять карту моделей = править frontmatter скиллов и параметры спавнов, а не просить владельца переключаться руками между фазами.
-- `effort` у скиллов не задаётся — везде действует `effortLevel` сессии (`xhigh`). У субагентов поле `effort` есть, но здесь не используется.
-- Если организация запретила модель через `availableModels`, Claude Code молча оставляет модель сессии — ещё одна причина проверять фактическую модель по транскрипту, а не по frontmatter.
+Механика (сверено по транскрипту этого прогона, 2026-09-24):
+- Модель фазы задаёт параметр `model` Agent-спавна. Проверено: спавн `"model":"fable"` → `resolvedModel` `claude-fable-5-1` и тот же id во всём транскрипте агента (`47157f55-….jsonl` → `subagents/agent-a3f76eea1b96c9bd1.jsonl`); спавн `"model":"opus"` → `claude-opus-5-5` (`agent-afdfb5ef2a3c9d098`); вложенный спавн глубины 2 `"model":"sonnet"` → `claude-sonnet-5` (`agent-aab833c7d10232220`).
+- `model:` во frontmatter скилла действует только при прямом вызове скилла владельцем: при `Skill()` внутри хода tech-lead'а модель не переключается (опровергнуто транскриптом #42). Поэтому фазы — спавны, а не `Skill()`-вызовы в главном контексте.
+- Модель сессии фазы не задаёт: требование «сессия остаётся на Fable» снято. Промпт владельца посреди фазы попадает в главный контекст, а не в уже работающий спавн, и модель архитектора не понижает.
+- Агент не может сам сменить модель сессии (`/model` — только владелец). Менять карту моделей = править параметры спавнов в скиллах и эту таблицу.
+- `effort` у спавнов не задаётся — действует `effortLevel` сессии (`xhigh`).
+- Если организация запретила модель через `availableModels`, Claude Code может молча оставить другую — поэтому фактическая модель проверяется по транскрипту: `.claude/skills/tech-lead/SKILL.md` → Mode 1 → Model policy — check (`resolvedModel` спавна для глубины 1, `subagents/*.meta.json` + транскрипт агента для любой глубины).
+
+При расхождении этого файла с глобальным `~/.claude/CLAUDE.md` (например, `/clarify` через `AskUserQuestion` самой фазы, Codex MCP, модель сессии) правит проектная секция; текст правок глобального файла tech-lead предлагает владельцу отдельно.
 
 ### CI
 
@@ -79,13 +82,23 @@ PostgreSQL + Drizzle ORM (решение зафиксировано 2026-09-21, 
 В проекте могут параллельно работать несколько разработчиков/агентов. Это значит:
 - Не редактировать файлы, над которыми работает другой агент/разработчик — конфликт-детект и merge-order ведёт `/tech-lead` (Mode 1, "Conflict detection and merge order").
 - Если задача затрагивает общий файл — обсудить с владельцем до начала работы.
-- Ориентировочная доменная разбивка (по плану Binodex, финализируется архитектором на волне 0): `apps/bot` (Telegram/grammY), `apps/backend` (Fastify: OAuth, постбэки, API), `apps/web` (Next.js: вход, касса, админка), `apps/trading-worker` (торговый цикл, Socket.IO), `packages/db` (Drizzle-схема, общая для backend и worker), `packages/shared` (общие типы/контракты). Владелец схемы БД и общих контрактов — один агент за волну, см. план работы агентов в исходном implementation-plan.
+- Доменная разбивка: `apps/bot` (Telegram/grammY), `apps/backend` (Fastify: OAuth, постбэки, API), `apps/web` (Next.js: вход, касса, админка), `apps/trading-worker` (торговый цикл, Socket.IO), `packages/db` (Drizzle-схема, общая для backend и worker), `packages/shared` (общие типы/контракты). Владелец схемы БД и общих контрактов — один агент за волну.
 
 ### Планирование задач
 
 - Если ограничение применяется к одной сущности домена — проверь, применяется ли оно ко всем сущностям этого домена. Частичное покрытие ловится на ревью — дорого.
 - Тикет описывает точку входа; исполнитель отвечает за весь охваченный домен.
-- [ЗАПОЛНИТЬ архитектурные инварианты по мере появления — порядок middleware, режимы demo/real, source of truth для внешних интеграций и т.п. `binodex-bot-implementation-plan.md` существует как черновой справочный план по продукту (сам документ отмечает, что его допущения не проверены вызовами API) — архитектор верифицирует каждое нужное допущение перед тем, как закладывать его в план конкретной задачи, а не переносит его в CLAUDE.md заранее.]
+- Доменные инварианты, подтверждённые кодом (полный список с местами, где они enforced, — `.claude/skills/architect/SKILL.md` → Architecture Rules; здесь — только короткая памятка):
+  1. Статусы — `text` + CHECK из одной `as const`-константы; литералы значений вне её файла ловит ESLint `local/no-status-literal`.
+  2. Деньги/токены — `bigint`/`numeric` string-mode + `DecimalString`, никогда JS `number`.
+  3. `token_ledger` и `audit_log` — append-only, включая TRUNCATE (триггеры).
+  4. Владение строк — композитными FK, не проверками в коде.
+  5. Порядок блокировок `users → broker_accounts → trade_intents`, `broker_accounts` — `FOR NO KEY UPDATE`.
+  6. Переходы `trade_intents` — только CAS внутри UPDATE, возраст — по часам БД.
+  7. Идемпотентность — unique-индексы `(user_id, client_request_id)`, один нетерминальный intent на аккаунт, outbox `(topic, intent_id)`.
+  8. Ошибки в логах — только имя и код; redact-пути не чистят строки.
+  9. OAuth: state — хеш и одноразовый CAS, новый аккаунт — `pending` до подтверждения, заблокированный пользователь не доходит до брокера, refresh — одна попытка, сбой → revocation.
+  10. bot → backend — общий bearer, сравнение за постоянное время; внутренний API доверенный.
 
 ### Конвенции кода
 
