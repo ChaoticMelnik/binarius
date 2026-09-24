@@ -27,24 +27,24 @@ PR #45, rebase-merged as `722d288` + `513dfb9`.
 
 ### Findings
 
-| Finding                                                                                                                                                                             | Severity                             | Root cause                                                                                                                                                                                 | Missed at step                         |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
-| `packages/shared`/`packages/db` entry points at `./dist/index.*`, built only by `tsc -b` under `typecheck`; real cross-package imports fail on standalone `pnpm test` / fresh clone | Major                                | Entry points added on Codex suggestion without a build guarantee; placeholder tests cannot observe resolution; plan's verification ran typecheck before test, masking the order dependency | Architect Step 6/7, Implementer Step 5 |
-| `engines.node >=22.12.0` below ESLint 10's Node-22 floor (`22.13.0`) and admitting Node 23/25 (excluded by Vitest 5)                                                                | Minor                                | Floor derived from one tool's `engines`, not the toolchain intersection                                                                                                                    | Architect Step 6                       |
-| CI ran twice per PR commit; `node-version` hardcoded beside `.node-version`; `engines` copied into 7 manifests                                                                      | Minor                                | First-draft defaults, no "single source per fact" pass                                                                                                                                     | Architect Step 6                       |
-| `tsBuildInfoFile` default beside `tsconfig.json`; composite `tsc -b` trusts the cache and never stats outputs → TS6305 after `rm -rf */dist`                                        | Deviation (caught in implementation) | TypeScript composite semantics; Plan Update named only the fresh-clone scenario                                                                                                            | Architect Plan Update                  |
-| `gh` OAuth token lacked `workflow` scope for `.github/workflows/ci.yml`                                                                                                             | Process                              | Preflight checks auth validity, not required scopes                                                                                                                                        | Tech Lead Phase 0                      |
+| Finding                                                                                                                                                                             | Severity                             | Класс | Root cause                                                                                                                                                                                 | Missed at step                         |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| `packages/shared`/`packages/db` entry points at `./dist/index.*`, built only by `tsc -b` under `typecheck`; real cross-package imports fail on standalone `pnpm test` / fresh clone | Major                                | unverified-claim | Entry points added on Codex suggestion without a build guarantee; placeholder tests cannot observe resolution; plan's verification ran typecheck before test, masking the order dependency | Architect Step 6/7, Implementer Step 5 |
+| `engines.node >=22.12.0` below ESLint 10's Node-22 floor (`22.13.0`) and admitting Node 23/25 (excluded by Vitest 5)                                                                | Minor                                | unverified-claim | Floor derived from one tool's `engines`, not the toolchain intersection                                                                                                                    | Architect Step 6                       |
+| CI ran twice per PR commit; `node-version` hardcoded beside `.node-version`; `engines` copied into 7 manifests                                                                      | Minor                                | single-source | First-draft defaults, no "single source per fact" pass                                                                                                                                     | Architect Step 6                       |
+| `tsBuildInfoFile` default beside `tsconfig.json`; composite `tsc -b` trusts the cache and never stats outputs → TS6305 after `rm -rf */dist`                                        | Deviation (caught in implementation) | unverified-claim | TypeScript composite semantics; Plan Update named only the fresh-clone scenario                                                                                                            | Architect Plan Update                  |
+| `gh` OAuth token lacked `workflow` scope for `.github/workflows/ci.yml`                                                                                                             | Process                              | preflight | Preflight checks auth validity, not required scopes                                                                                                                                        | Tech Lead Phase 0                      |
 
 ### Process improvement proposals
 
-1. Architect validation checklist: every `package.json` entry point must resolve to committed source or to output produced by a step the check command itself runs.
-2. Implementer self-review: run the check command once from a build-output-free state (`rm -rf **/dist` first) before committing.
-3. Architect: when setting `engines`, record `npm view <tool> engines` for every root devDependency and state the intersection in the plan.
-4. Architect, tooling/build plans: enumerate fresh-clone, stale-cache, and incremental scenarios explicitly.
-5. Architect checklist for config issues: "single source per fact" (workflow triggers, Node version, engines).
-6. Tech Lead preflight: if the plan's file list includes `.github/workflows/*`, verify the `workflow` scope or an SSH remote before implementation.
-7. Reviewer: do not run the check command concurrently with a spawned `/code-review` agent on the same tree; its recipe runs `pnpm typecheck` regardless of the prompt.
-8. Hardening follow-ups surfaced (owner decides whether to file): `emitDeclarationOnly` in `tsconfig.base.json`; CI `concurrency` group; `.npmrc` `engine-strict=true`; replace deprecated `tseslint.config()` with `defineConfig`; cosmetic cleanups (dead top-level `types`, `*.tsbuildinfo` gitignore line, README/CI comment wording).
+1. Architect validation checklist: every `package.json` entry point must resolve to committed source or to output produced by a step the check command itself runs. — **внедрено в #61: `tooling/manifest-targets.test.ts` → гейт в `pnpm check`**
+2. Implementer self-review: run the check command once from a build-output-free state (`rm -rf **/dist` first) before committing. — **внедрено в #61: `package.json` → скрипт `check` (`tsc -b --clean` первым); `.claude/skills/implementer/SKILL.md` → Step 5**
+3. Architect: when setting `engines`, record `npm view <tool> engines` for every root devDependency and state the intersection in the plan. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 6, таблица классов задач, строка «Toolchain / engines / Node version»; `.claude/codex-plan-review-prompt.md` → check 13**
+4. Architect, tooling/build plans: enumerate fresh-clone, stale-cache, and incremental scenarios explicitly. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 6, таблица классов задач, строка «Toolchain / engines / Node version»; `.claude/codex-plan-review-prompt.md` → check 13**
+5. Architect checklist for config issues: "single source per fact" (workflow triggers, Node version, engines). — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 6, Validation checklist «Single source per fact»; `.claude/codex-plan-review-prompt.md` → check 12 (объединено с #3 п.3)**
+6. Tech Lead preflight: if the plan's file list includes `.github/workflows/*`, verify the `workflow` scope or an SSH remote before implementation. — **внедрено в #61: `.claude/skills/tech-lead/SKILL.md` → Phase 0, п.2 (GitHub)**
+7. Reviewer: do not run the check command concurrently with a spawned `/code-review` agent on the same tree; its recipe runs `pnpm typecheck` regardless of the prompt. — **внедрено в #61: `.claude/skills/reviewer/SKILL.md` → Step 3 «Order of launch», Step 5 → Runtime check**
+8. Hardening follow-ups surfaced (owner decides whether to file): `emitDeclarationOnly` in `tsconfig.base.json`; CI `concurrency` group; `.npmrc` `engine-strict=true`; replace deprecated `tseslint.config()` with `defineConfig`; cosmetic cleanups (dead top-level `types`, `*.tsbuildinfo` gitignore line, README/CI comment wording). — **вынесено в #57**
 
 ---
 
@@ -73,28 +73,28 @@ PR #47, rebase-merged as `c073c19` + `27b63ad` + `c0ccbd3`.
 
 ### Findings
 
-| Finding                                                            | Severity           | Root cause                                                        | Missed at step                       |
-| ------------------------------------------------------------------ | ------------------ | ----------------------------------------------------------------- | ------------------------------------ |
-| `initial_sync` rejected by the CI runner's Compose                 | Major              | Compose features verified only against Homebrew's version         | Architect Step 7, Implementer Step 5 |
-| CI failure-path steps died on the same validation                  | Major              | Diagnostics assumed compose itself cannot fail pre-build          | Architect Step 6                     |
-| `env_file` on the shared anchor leaked `.env` into every container | Minor              | Two injection paths for one contract                              | Architect Step 6                     |
-| `${VAR:-}` injected `""` for secrets                               | Minor              | Interpolation semantics assumed                                   | Architect Step 6                     |
-| `lazyConnect` first-probe failure; `localhost` → `::1`             | Minor (pre-review) | Client/probe details not exercised until the real stack ran       | Architect Step 6                     |
-| `HEALTH_TIMEOUT_MS` env vs fixed probe timeout                     | Minor              | Clarify-driven change altered an invariant held only in prose     | Implementer clarify                  |
-| Shared `image:` tag collided under the classic builder             | Minor              | Optional suggestion accepted without local reproduction           | Reviewer Step 4                      |
-| Docker / buildx absent locally                                     | Process            | Preflight did not check the runtimes the acceptance criteria need | Tech Lead Phase 0                    |
+| Finding                                                            | Severity           | Класс | Root cause                                                        | Missed at step                       |
+| ------------------------------------------------------------------ | ------------------ | ----- | ----------------------------------------------------------------- | ------------------------------------ |
+| `initial_sync` rejected by the CI runner's Compose                 | Major              | env-parity | Compose features verified only against Homebrew's version         | Architect Step 7, Implementer Step 5 |
+| CI failure-path steps died on the same validation                  | Major              | unverified-claim | Diagnostics assumed compose itself cannot fail pre-build          | Architect Step 6                     |
+| `env_file` on the shared anchor leaked `.env` into every container | Minor              | single-source | Two injection paths for one contract                              | Architect Step 6                     |
+| `${VAR:-}` injected `""` for secrets                               | Minor              | unverified-claim | Interpolation semantics assumed                                   | Architect Step 6                     |
+| `lazyConnect` first-probe failure; `localhost` → `::1`             | Minor (pre-review) | unverified-claim | Client/probe details not exercised until the real stack ran       | Architect Step 6                     |
+| `HEALTH_TIMEOUT_MS` env vs fixed probe timeout                     | Minor              | unverified-claim | Clarify-driven change altered an invariant held only in prose     | Implementer clarify                  |
+| Shared `image:` tag collided under the classic builder             | Minor              | unverified-claim | Optional suggestion accepted without local reproduction           | Reviewer Step 4                      |
+| Docker / buildx absent locally                                     | Process            | preflight | Preflight did not check the runtimes the acceptance criteria need | Tech Lead Phase 0                    |
 
 ### Process improvement proposals
 
-1. Architect: for CI-executed tooling, verify every feature against the runner image's version, not the local one.
-2. Architect: diagnostic/cleanup CI steps must tolerate the failure they exist to diagnose.
-3. Architect: apply "single source per fact" to env delivery and secrets scoping, not only versions.
-4. Architect: verify Compose interpolation/env semantics with `docker compose config` before planning; probes target `127.0.0.1`; lazily-connecting clients cannot pass their own first check.
-5. Implementer: when a clarify answer changes a plan constraint, state the affected invariant in the PR body.
-6. Reviewer: re-verify "optional improvement" suggestions like findings before folding them into a Plan Update; two simplify sub-agents recommended the exact CI breaker.
-7. Tech Lead preflight: verify every runtime the acceptance criteria exercise, including plugin parity with CI.
-8. Codex checkpoints: inline all context (no network in the sandbox); run long reviews in background mode and poll `status`/`result`.
-9. Follow-up candidates: consolidated in the iteration-2 LGTM comment on PR #47.
+1. Architect: for CI-executed tooling, verify every feature against the runner image's version, not the local one. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 6, Validation checklist «CI-executed tooling» и строка «CI workflow»; `.claude/codex-plan-review-prompt.md` → check 11**
+2. Architect: diagnostic/cleanup CI steps must tolerate the failure they exist to diagnose. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 6, таблица классов задач, строка «CI workflow»**
+3. Architect: apply "single source per fact" to env delivery and secrets scoping, not only versions. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 6, Validation checklist «Single source per fact» (объединено с #2 п.5)**
+4. Architect: verify Compose interpolation/env semantics with `docker compose config` before planning; probes target `127.0.0.1`; lazily-connecting clients cannot pass their own first check. — **отклонено: факты конфигурации (probes на 127.0.0.1, lazy-клиент не проходит свой первый probe), уже закреплены в compose.yaml и коде (решение владельца 2026-09-24); правило про `docker compose config` внедрено в #56: architect Step 6 → таблица классов задач, строка «Compose / env»**
+5. Implementer: when a clarify answer changes a plan constraint, state the affected invariant in the PR body. — **внедрено в #61: `.claude/skills/implementer/SKILL.md` → Step 7, шаблон PR «Deviations / clarify-driven invariant changes»; Step 5.5**
+6. Reviewer: re-verify "optional improvement" suggestions like findings before folding them into a Plan Update; two simplify sub-agents recommended the exact CI breaker. — **внедрено в #61: `.claude/skills/reviewer/SKILL.md` → Step 4; `.claude/skills/architect/SKILL.md` → Workflow — Issue Returned from Review, Step 2**
+7. Tech Lead preflight: verify every runtime the acceptance criteria exercise, including plugin parity with CI. — **внедрено в #61: `.claude/skills/tech-lead/SKILL.md` → Phase 0, п.4 (Runtimes)**
+8. Codex checkpoints: inline all context (no network in the sandbox); run long reviews in background mode and poll `status`/`result`. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 7; `.claude/skills/reviewer/SKILL.md` → Step 3, 3a (объединено с #42 п.7)**
+9. Follow-up candidates: consolidated in the iteration-2 LGTM comment on PR #47. — **вынесено в #58**
 
 ---
 
@@ -117,23 +117,23 @@ PR #47, rebase-merged as `c073c19` + `27b63ad` + `c0ccbd3`.
 
 ### Findings
 
-| Finding                                                                                                                                    | Severity               | Root cause                                                                           | Missed at step                          |
-| ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------- | ------------------------------------------------------------------------------------ | --------------------------------------- |
-| Partner `uid` string-only vs `int \| string` id policy                                                                                     | Major                  | Id policy stated in prose, no shared primitive                                       | Architect plan (entity list)            |
-| No pre-submit failure edge in the transition table                                                                                         | Major                  | Table transcribed from the plan's reading of ARCH-03, not derived from the diagram   | Architect clarify                       |
-| d.ts "collides with auto-included `@types/node`"                                                                                           | Major (false positive) | Reviewer assumed TS ≤5 defaults; TS 6 defaults `types` to `[]`                       | Reviewer Step 4 (verify tooling claims) |
-| `assets_update` union proposal does not narrow                                                                                             | Minor                  | Narrowing asserted without a probe                                                   | Architect plan (tsc probe)              |
-| Nine missing `safeParseX`, untyped chart params                                                                                            | Minor                  | Parsers/params not enumerated in the coverage table                                  | Architect plan                          |
-| Rerun Minors: `canTransition` prototype keys, Partner `source` strict, `asset_id` positivity, decoder comment, weak tests, envelope marker | Minor                  | Constraint changes applied to the named entity only; comment written from assumption | Implementer self-review                 |
-| Autonomy waiver only in unmerged PR #1                                                                                                     | Process                | CLAUDE.md change never merged; harness loads the checked-out branch's copy           | Tech-lead Phase 0                       |
-| Codex usage limit mid-pipeline                                                                                                             | Process                | Shared quota, reset 15:18                                                            | Tech-lead Phase 0                       |
+| Finding                                                                                                                                    | Severity               | Класс | Root cause                                                                           | Missed at step                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------- | ----- | ------------------------------------------------------------------------------------ | --------------------------------------- |
+| Partner `uid` string-only vs `int \| string` id policy                                                                                     | Major                  | single-source | Id policy stated in prose, no shared primitive                                       | Architect plan (entity list)            |
+| No pre-submit failure edge in the transition table                                                                                         | Major                  | unverified-claim | Table transcribed from the plan's reading of ARCH-03, not derived from the diagram   | Architect clarify                       |
+| d.ts "collides with auto-included `@types/node`"                                                                                           | Major (false positive) | unverified-claim | Reviewer assumed TS ≤5 defaults; TS 6 defaults `types` to `[]`                       | Reviewer Step 4 (verify tooling claims) |
+| `assets_update` union proposal does not narrow                                                                                             | Minor                  | unverified-claim | Narrowing asserted without a probe                                                   | Architect plan (tsc probe)              |
+| Nine missing `safeParseX`, untyped chart params                                                                                            | Minor                  | instance-vs-class | Parsers/params not enumerated in the coverage table                                  | Architect plan                          |
+| Rerun Minors: `canTransition` prototype keys, Partner `source` strict, `asset_id` positivity, decoder comment, weak tests, envelope marker | Minor                  | instance-vs-class | Constraint changes applied to the named entity only; comment written from assumption | Implementer self-review                 |
+| Autonomy waiver only in unmerged PR #1                                                                                                     | Process                | preflight | CLAUDE.md change never merged; harness loads the checked-out branch's copy           | Tech-lead Phase 0                       |
+| Codex usage limit mid-pipeline                                                                                                             | Process                | codex-ops | Shared quota, reset 15:18                                                            | Tech-lead Phase 0                       |
 
 ### Process improvement proposals
 
-1. Phase 0 preflight: `git diff origin/main -- .claude/CLAUDE.md` must be empty; check Codex quota/reset time with availability.
-2. Reviewer: verify tooling-level claims with the tool before labeling a Major; severity re-verification applies to own findings.
-3. Architect: back every type-inference claim with a `tsc` probe; enumerate every parser and request shape in the domain coverage table.
-4. Implementer self-review: when relaxing or tightening a constraint, grep the domain for the same construct before committing.
+1. Phase 0 preflight: `git diff origin/main -- .claude/CLAUDE.md` must be empty; check Codex quota/reset time with availability. — **внедрено в #61: `.claude/skills/tech-lead/SKILL.md` → Phase 0, п.1 (Codex, бюджет) и п.3 (Project CLAUDE.md on main) (объединено с #9 п.6)**
+2. Reviewer: verify tooling-level claims with the tool before labeling a Major; severity re-verification applies to own findings. — **внедрено в #61: `.claude/skills/reviewer/SKILL.md` → Step 4**
+3. Architect: back every type-inference claim with a `tsc` probe; enumerate every parser and request shape in the domain coverage table. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 3 (строки парсеров и request shapes), Step 6 → Validation checklist «type-inference claim»; `.claude/codex-plan-review-prompt.md` → check 14**
+4. Implementer self-review: when relaxing or tightening a constraint, grep the domain for the same construct before committing. — **внедрено в #61: `.claude/skills/implementer/SKILL.md` → Step 5.5 «Class, not instance» (объединено с #7 п.4, #9 п.4)**
 
 ---
 
@@ -155,24 +155,24 @@ PR #47, rebase-merged as `c073c19` + `27b63ad` + `c0ccbd3`.
 
 ### Findings
 
-| Finding                                                                 | Severity        | Root cause                                                             | Missed at step                       |
-| ----------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------- | ------------------------------------ |
-| MATCH SIMPLE в композитном FK `deposit_events`                          | Major           | Семантика match не была указана в плане                                | Architect                            |
-| `manual_review` как терминальный статус                                 | Major           | Один предикат использован для двух разных вопросов                     | Architect (перенесено из итерации 1) |
-| `bonus` занимает единственный слот депозита                             | Major           | Разрешение и ограничение из одного плана не проверены на совместимость | Architect                            |
-| CHECK, проходящий на NULL (дважды: в коде и в плане, который его чинил) | Major           | Предикат описан прозой, а не выполнен                                  | Architect                            |
-| TRUNCATE мимо row-level триггеров                                       | Major           | Область действия механизма не проверена                                | Architect                            |
-| Литералы статусов вне одного файла (дважды)                             | Minor           | Правило применено к сущности, а не к домену                            | Implementer                          |
-| 23 констрейнта без тестов                                               | Major (скрытый) | Чеклист утверждал покрытие, которое никто не проверял                  | Architect + Implementer              |
-| Комментарий обещает больше, чем DDL (×4)                                | Minor           | Комментарий не считался предметом проверки                             | Reviewer                             |
+| Finding                                                                 | Severity        | Класс | Root cause                                                             | Missed at step                       |
+| ----------------------------------------------------------------------- | --------------- | ----- | ---------------------------------------------------------------------- | ------------------------------------ |
+| MATCH SIMPLE в композитном FK `deposit_events`                          | Major           | unverified-claim | Семантика match не была указана в плане                                | Architect                            |
+| `manual_review` как терминальный статус                                 | Major           | other | Один предикат использован для двух разных вопросов                     | Architect (перенесено из итерации 1) |
+| `bonus` занимает единственный слот депозита                             | Major           | unverified-claim | Разрешение и ограничение из одного плана не проверены на совместимость | Architect                            |
+| CHECK, проходящий на NULL (дважды: в коде и в плане, который его чинил) | Major           | unverified-claim | Предикат описан прозой, а не выполнен                                  | Architect                            |
+| TRUNCATE мимо row-level триггеров                                       | Major           | instance-vs-class | Область действия механизма не проверена                                | Architect                            |
+| Литералы статусов вне одного файла (дважды)                             | Minor           | instance-vs-class | Правило применено к сущности, а не к домену                            | Implementer                          |
+| 23 констрейнта без тестов                                               | Major (скрытый) | unverified-claim | Чеклист утверждал покрытие, которое никто не проверял                  | Architect + Implementer              |
+| Комментарий обещает больше, чем DDL (×4)                                | Minor           | unverified-claim | Комментарий не считался предметом проверки                             | Reviewer                             |
 
 ### Process improvement proposals
 
-1. Таблица охвата перечисляет инварианты со статусом enforced / partially enforced / stated — «N из M» четырежды маскировало неполноту.
-2. Каждый CHECK выполняется на NULL/boundary-случаях до попадания в план (введено после итерации 1, сработало на итерации 2 — поймало ошибку в самом Plan Update).
-3. Разрешение и ограничение из одного плана проверяются на совместимость.
-4. Перенос правила — `grep` по домену, а не по названному файлу.
-5. Покрытие проверок обеспечивается исполняемым гейтом, а не утверждением в чеклисте: поведенческая версия при добавлении нашла 23 непокрытых констрейнта.
+1. Таблица охвата перечисляет инварианты со статусом enforced / partially enforced / stated — «N из M» четырежды маскировало неполноту. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 3, колонка «Enforcement»**
+2. Каждый CHECK выполняется на NULL/boundary-случаях до попадания в план (введено после итерации 1, сработало на итерации 2 — поймало ошибку в самом Plan Update). — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 6, Validation checklist и строка «Schema / constraints»; `.claude/codex-plan-review-prompt.md` → check 8**
+3. Разрешение и ограничение из одного плана проверяются на совместимость. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 6, Validation checklist «permission × restriction»; `.claude/codex-plan-review-prompt.md` → check 9**
+4. Перенос правила — `grep` по домену, а не по названному файлу. — **внедрено в #61: `.claude/skills/implementer/SKILL.md` → Step 5.5 «Class, not instance» (объединено с #6 п.4)**
+5. Покрытие проверок обеспечивается исполняемым гейтом, а не утверждением в чеклисте: поведенческая версия при добавлении нашла 23 непокрытых констрейнта. — **внедрено в #61: `packages/db/src/schema.db.test.ts` → describe «constraint coverage» (CHECK, unique, FK, триггеры)**
 
 ---
 
@@ -203,31 +203,31 @@ PR #51, rebase-merged as `109ab57` (18 commits), branch deleted. Migration 0002 
 
 ### Findings
 
-| Finding                                                                                             | Severity | Root cause                                                                        | Missed at step             |
-| --------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------- | -------------------------- |
-| Тело 500 раскрывает SQL и параметры (`DrizzleQueryError.message`)                                   | Major    | План утверждал «default 500 без тела ошибки БД», не проверив исполнением          | Architect Step 6           |
-| `clientRequestId` уникален per user только контрактом; повтор с другим аккаунтом даёт второй резерв | Major    | Ограничение применено к одной сущности (account), а не к домену (user)            | Architect (таблица охвата) |
-| Reconciliation-строки outbox исчерпывались в `failed` навсегда                                      | Major    | Политика exhaustion описана для одного топика, реализована topic-agnostic         | Architect                  |
-| Deadlock rejection (intent→users) vs creation (users→intent index)                                  | Major    | Порядок блокировок задан только для пути создания                                 | Architect                  |
-| `tick()`/`sweep()` не проверяли остановку                                                           | Major    | Контракт `stop()` заявлен в комментарии, не в коде                                | Implementer                |
-| Бюджет shutdown worker'а < дедлайн executor'а                                                       | Major    | Бюджет выбран относительно grace, а не операции                                   | Architect                  |
-| Бюджет shutdown backend < дедлайн `add` (внесён итерацией 1)                                        | Major    | Та же ошибка на втором процессе; Plan Update 1 описал цепочку только для worker'а | Architect Plan Update 1    |
-| Redact-пути покрывали глубину 3, комментарий обещал 4–5                                             | Minor    | Покрытие заявлено прозой, не проверено на pino                                    | Implementer                |
-| Publisher-тесты флакали в полном прогоне                                                            | Process  | Фиксированные `sleep` и общая temp-БД файла: latch срабатывал на чужой строке     | Implementer                |
-| Коммит при красном прогоне                                                                          | Process  | `pnpm test \| grep` маскирует код выхода                                          | Implementer Step 5         |
-| Codex re-check убит при блокировке машины                                                           | Process  | Companion-процесс привязан к сессии субагента                                     | Tech Lead                  |
-| Модели по ролям не переключились                                                                    | Minor    | `model:` frontmatter не действует при `Skill()` внутри хода                       | Tech Lead Phase 0          |
+| Finding                                                                                             | Severity | Класс | Root cause                                                                        | Missed at step             |
+| --------------------------------------------------------------------------------------------------- | -------- | ----- | --------------------------------------------------------------------------------- | -------------------------- |
+| Тело 500 раскрывает SQL и параметры (`DrizzleQueryError.message`)                                   | Major    | unverified-claim | План утверждал «default 500 без тела ошибки БД», не проверив исполнением          | Architect Step 6           |
+| `clientRequestId` уникален per user только контрактом; повтор с другим аккаунтом даёт второй резерв | Major    | instance-vs-class | Ограничение применено к одной сущности (account), а не к домену (user)            | Architect (таблица охвата) |
+| Reconciliation-строки outbox исчерпывались в `failed` навсегда                                      | Major    | instance-vs-class | Политика exhaustion описана для одного топика, реализована topic-agnostic         | Architect                  |
+| Deadlock rejection (intent→users) vs creation (users→intent index)                                  | Major    | instance-vs-class | Порядок блокировок задан только для пути создания                                 | Architect                  |
+| `tick()`/`sweep()` не проверяли остановку                                                           | Major    | unverified-claim | Контракт `stop()` заявлен в комментарии, не в коде                                | Implementer                |
+| Бюджет shutdown worker'а < дедлайн executor'а                                                       | Major    | unverified-claim | Бюджет выбран относительно grace, а не операции                                   | Architect                  |
+| Бюджет shutdown backend < дедлайн `add` (внесён итерацией 1)                                        | Major    | instance-vs-class | Та же ошибка на втором процессе; Plan Update 1 описал цепочку только для worker'а | Architect Plan Update 1    |
+| Redact-пути покрывали глубину 3, комментарий обещал 4–5                                             | Minor    | unverified-claim | Покрытие заявлено прозой, не проверено на pino                                    | Implementer                |
+| Publisher-тесты флакали в полном прогоне                                                            | Process  | other | Фиксированные `sleep` и общая temp-БД файла: latch срабатывал на чужой строке     | Implementer                |
+| Коммит при красном прогоне                                                                          | Process  | other | `pnpm test \| grep` маскирует код выхода                                          | Implementer Step 5         |
+| Codex re-check убит при блокировке машины                                                           | Process  | codex-ops | Companion-процесс привязан к сессии субагента                                     | Tech Lead                  |
+| Модели по ролям не переключились                                                                    | Minor    | unverified-claim | `model:` frontmatter не действует при `Skill()` внутри хода                       | Tech Lead Phase 0          |
 
 ### Process improvement proposals
 
-1. Architect: для каждой константы-бюджета/таймаута план называет операцию, которую она ограничивает, и цепочка проверяется кодом при импорте и тестом — для **каждого** процесса, а не только для того, где ошибка найдена.
-2. Architect/Implementer: поведение фреймворка по умолчанию (тело 500 у Fastify, redact у pino) проверяется исполнением до того, как попадёт в план или комментарий.
-3. Implementer Step 5: check-команда не пропускается через `grep` перед `&& git commit`; либо `set -o pipefail`, либо отдельный запуск с проверкой кода выхода.
-4. Implementer: интеграционные тесты в общей temp-БД файла привязывают latch'и и счётчики к своим строкам (`intentId`), а не к порядку обработки.
-5. Tech Lead: секция «Модели по ролям pipeline» в CLAUDE.md — допущение про переключение модели `Skill()`-вызовом опровергнуто транскриптом; владельцу решить: отдельные промпты на фазы, субагенты с явной `model`, или оставить всё на Fable. Отдельный docs-PR.
-6. Reviewer: инструкция simplify-агенту — «без вложенных агентов»; иначе он разложится и будет прерван.
-7. Codex: только background mode с поллингом `status`/`result`; `--resume` треда после сбоя ненадёжен — `--fresh` с полным контекстом.
-8. Follow-up-кандидаты (владелец решает, заводить ли issue): 6 Minor из LGTM итерации 3 (`stop()` cleanup guard, `sweeper.stop()` ждёт проход, комментарий в compose, `err.command.args` в redact, pino-тест с реальным `Error`, latch-хелпер); m8 параллельная обработка батча; upgrade-тест 0001→0002 на заполненной базе; interleaving-тесты; whitelist-сериализатор `err` перед ARCH-01.
+1. Architect: для каждой константы-бюджета/таймаута план называет операцию, которую она ограничивает, и цепочка проверяется кодом при импорте и тестом — для **каждого** процесса, а не только для того, где ошибка найдена. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 6 (Validation checklist, строка «Timeouts / budgets»), Architecture Rules п.10, Plan Update «Every process affected»; `.claude/codex-plan-review-prompt.md` → check 10**
+2. Architect/Implementer: поведение фреймворка по умолчанию (тело 500 у Fastify, redact у pino) проверяется исполнением до того, как попадёт в план или комментарий. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 6, Validation checklist «Framework defaults»; `.claude/skills/implementer/SKILL.md` → Step 5.5; `.claude/codex-plan-review-prompt.md` → check 15**
+3. Implementer Step 5: check-команда не пропускается через `grep` перед `&& git commit`; либо `set -o pipefail`, либо отдельный запуск с проверкой кода выхода. — **внедрено в #61: `.claude/skills/implementer/SKILL.md` → Step 5; `.claude/CLAUDE.md` → CI**
+4. Implementer: интеграционные тесты в общей temp-БД файла привязывают latch'и и счётчики к своим строкам (`intentId`), а не к порядку обработки. — **внедрено в #61: `.claude/skills/implementer/SKILL.md` → Step 5.5**
+5. Tech Lead: секция «Модели по ролям pipeline» в CLAUDE.md — допущение про переключение модели `Skill()`-вызовом опровергнуто транскриптом; владельцу решить: отдельные промпты на фазы, субагенты с явной `model`, или оставить всё на Fable. Отдельный docs-PR. — **внедрено в #61: `.claude/CLAUDE.md` → «Модели по ролям pipeline»; `.claude/skills/tech-lead/SKILL.md` → «Phases run as spawned agents», Mode 1 → Model policy — check**
+6. Reviewer: инструкция simplify-агенту — «без вложенных агентов»; иначе он разложится и будет прерван. — **внедрено в #61: `.claude/skills/reviewer/SKILL.md` → Step 3, 3d**
+7. Codex: только background mode с поллингом `status`/`result`; `--resume` треда после сбоя ненадёжен — `--fresh` с полным контекстом. — **внедрено в #61: `.claude/skills/architect/SKILL.md` → Step 7; `.claude/skills/reviewer/SKILL.md` → Step 3, 3a (объединено с #3 п.8)**
+8. Follow-up-кандидаты (владелец решает, заводить ли issue): 6 Minor из LGTM итерации 3 (`stop()` cleanup guard, `sweeper.stop()` ждёт проход, комментарий в compose, `err.command.args` в redact, pino-тест с реальным `Error`, latch-хелпер); m8 параллельная обработка батча; upgrade-тест 0001→0002 на заполненной базе; interleaving-тесты; whitelist-сериализатор `err` перед ARCH-01. — **вынесено в #59**
 
 ---
 
@@ -248,21 +248,21 @@ PR #51, rebase-merged as `109ab57` (18 commits), branch deleted. Migration 0002 
 ### Review iterations: 8
 
 ### Findings
-| Finding | Severity | Root cause | Missed at step |
-|---------|----------|------------|-----------------|
-| Ревью получало дифф итерации, а не фичу | Major (процесс) | Формулировка запроса к Codex во всех кругах, кроме последнего | Reviewer, семь кругов подряд |
-| Отказ привязки после обмена оставляет мёртвый токен | Major | Следствие предыдущего: обе половины последовательности лежат в разных коммитах | Найдено только прогоном по всей задаче |
-| Фикс закрывает механизм, но не всю поверхность | Major, трижды | Правился экземпляр, а не класс: ключ вместо всех причин, одна запись `.dockerignore` из шести, один список утверждений из четырёх | Implementer |
-| Утверждение сильнее кода | Minor, шесть кругов подряд | Текст писался от намерения, а не от проверенного | Implementer |
-| Тест на исправление логов проверял тело ответа | Major | Логи проверяемы только чтением логов; шва не было | Implementer + Reviewer |
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------| ----- |------------|-----------------|
+| Ревью получало дифф итерации, а не фичу | Major (процесс) | other | Формулировка запроса к Codex во всех кругах, кроме последнего | Reviewer, семь кругов подряд |
+| Отказ привязки после обмена оставляет мёртвый токен | Major | other | Следствие предыдущего: обе половины последовательности лежат в разных коммитах | Найдено только прогоном по всей задаче |
+| Фикс закрывает механизм, но не всю поверхность | Major, трижды | instance-vs-class | Правился экземпляр, а не класс: ключ вместо всех причин, одна запись `.dockerignore` из шести, один список утверждений из четырёх | Implementer |
+| Утверждение сильнее кода | Minor, шесть кругов подряд | unverified-claim | Текст писался от намерения, а не от проверенного | Implementer |
+| Тест на исправление логов проверял тело ответа | Major | unverified-claim | Логи проверяемы только чтением логов; шва не было | Implementer + Reviewer |
 
 ### Process improvement proposals
-1. **Последний прогон Codex перед мержем идёт по всей задаче, а не по диффу.** Семь диффовых ревью не нашли дефект, который прогон по фиче нашёл сразу. Записать в `.claude/skills/reviewer/SKILL.md` как отдельный шаг перед вердиктом о готовности к мержу.
-2. **Правка текста перечитывается абзацем, а не диффом.** Три круга подряд в `.env.example` уцелевал обрывок предыдущей фразы, и комментарий противоречил себе через две строки.
-3. **Команда, попадающая в документацию, выполняется до коммита.** Нарушение дало неработающий рецепт, который заменил работающий.
-4. **Исправляя дефект, перечислить все места этого класса.** Формулировать шаг плана как «перечислить и закрыть все вхождения», а не «закрыть найденное».
-5. **Правка того, что попадает в лог, покрывается тестом, читающим лог.** Потребовало шва `logDestination` в `buildApp`; шов оправдан, потому что pino пишет в файловый дескриптор мимо `process.stdout`.
-6. **Лимит Codex — планируемый ресурс.** Два прогона потеряны, один отменён после получаса. Для длинных задач стоит смотреть остаток до начала круга.
+1. **Последний прогон Codex перед мержем идёт по всей задаче, а не по диффу.** Семь диффовых ревью не нашли дефект, который прогон по фиче нашёл сразу. Записать в `.claude/skills/reviewer/SKILL.md` как отдельный шаг перед вердиктом о готовности к мержу. — **внедрено в #61: `.claude/skills/reviewer/SKILL.md` → Step 2 и Step 6-pre; `.claude/codex-review-prompt.md` → Scope; `.claude/skills/tech-lead/SKILL.md` → Mode 1 → Whole-feature pass — check**
+2. **Правка текста перечитывается абзацем, а не диффом.** Три круга подряд в `.env.example` уцелевал обрывок предыдущей фразы, и комментарий противоречил себе через две строки. — **внедрено в #61: `.claude/skills/implementer/SKILL.md` → Step 5.5; `.claude/skills/architect/SKILL.md` → Step 6, строка «Text / docs edits»**
+3. **Команда, попадающая в документацию, выполняется до коммита.** Нарушение дало неработающий рецепт, который заменил работающий. — **внедрено в #61: `.claude/skills/implementer/SKILL.md` → Step 5.5; `.claude/skills/architect/SKILL.md` → Step 6, строка «Text / docs edits»; `.claude/codex-review-prompt.md` → Check only for**
+4. **Исправляя дефект, перечислить все места этого класса.** Формулировать шаг плана как «перечислить и закрыть все вхождения», а не «закрыть найденное». — **внедрено в #61: `.claude/skills/implementer/SKILL.md` → Step 5.5 и Fixing Review Findings → Step 3; `.claude/skills/architect/SKILL.md` → Plan Update «All occurrences of the class»; `.claude/codex-review-prompt.md` → Check only for (объединено с #6 п.4)**
+5. **Правка того, что попадает в лог, покрывается тестом, читающим лог.** Потребовало шва `logDestination` в `buildApp`; шов оправдан, потому что pino пишет в файловый дескриптор мимо `process.stdout`. — **внедрено в #61: `.claude/skills/implementer/SKILL.md` → Step 5.5; `.claude/skills/reviewer/SKILL.md` → Step 5 (Code quality); `.claude/skills/architect/SKILL.md` → Step 6, строка «Logging changes»; `.claude/codex-review-prompt.md` → Check only for**
+6. **Лимит Codex — планируемый ресурс.** Два прогона потеряны, один отменён после получаса. Для длинных задач стоит смотреть остаток до начала круга. — **внедрено в #61: `.claude/skills/tech-lead/SKILL.md` → Phase 0, п.1; `.claude/skills/reviewer/SKILL.md` → Step 3, 3a п.4 (объединено с #6 п.1)**
 
 ### Вынесено
 - #54 — отказ привязки после успешного обмена оставляет аккаунт с мёртвым токеном, вместе с четырьмя Major из ревью плана исправления.
