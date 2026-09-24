@@ -3,18 +3,20 @@ import type { Rule } from 'eslint';
 import ts from 'typescript';
 
 // A status column is text + CHECK built from one `as const` object (packages/db/src/schema/
-// columns.ts). A bare 'pending' elsewhere keeps compiling after the constant is renamed and then
-// silently matches nothing — #7 found such literals outside their one file. The constants are
-// discovered from the TypeScript program rather than listed here, so a new one is covered the
-// moment it exists.
+// columns.ts), and codes and field names follow the same pattern. A bare 'pending' elsewhere
+// keeps compiling after the constant is renamed and then silently matches nothing — #7 found
+// such literals outside their one file. The constants are discovered from the TypeScript
+// program rather than listed here: any exported `as const` object of strings with a type alias
+// of the same name, in a non-test source file under apps/*/src or packages/*/src that the linted
+// file's program includes.
 //
-// A literal is flagged when the full set of string members of its contextual type equals the
-// value set of one constant. Comparing whole sets rather than the type's alias is deliberate:
+// A literal (or a template literal without substitutions) is flagged when the full set of string
+// members of its expected type equals the value set of one constant. Comparing whole sets rather than the type's alias is deliberate:
 // contextual types such as `UserStatus | undefined` or `SQL | BrokerAccountStatus | Placeholder`
 // carry no alias, while their string members still spell the constant exactly. A partial union
 // (an outcome tag, a subset of statuses) matches no constant and is left alone.
 
-const DEFINING_FILE = /[\\/]packages[\\/](shared[\\/]src|db[\\/]src[\\/]schema)[\\/].*\.ts$/;
+const DEFINING_FILE = /[\\/](apps|packages)[\\/][^\\/]+[\\/]src[\\/].*\.ts$/;
 const SQL_WORD = /'([a-z0-9_-]+)'/g;
 const EQUALITY = new Set([
   ts.SyntaxKind.EqualsEqualsEqualsToken,
@@ -98,7 +100,8 @@ function definitionsOf(program: ts.Program): Definitions {
   const definitions: Definitions = { bySet: new Map(), byValue: new Map(), definingFilesSeen: 0 };
   for (const file of program.getSourceFiles()) {
     if (file.isDeclarationFile || !DEFINING_FILE.test(file.fileName)) continue;
-    if (file.fileName.endsWith('.test.ts')) continue;
+    if (file.fileName.endsWith('.test.ts') || /[\\/]node_modules[\\/]/.test(file.fileName))
+      continue;
     definitions.definingFilesSeen++;
     for (const constant of constantsIn(file)) {
       push(definitions.bySet, setKey(constant.members.keys()), constant);
@@ -126,31 +129,33 @@ function stringMembers(type: ts.Type): string[] | undefined {
 const rule: Rule.RuleModule = {
   meta: {
     type: 'problem',
-    docs: { description: 'status values are spelled through their `as const` object' },
+    docs: {
+      description:
+        'values of an `as const` object of strings (statuses, codes, field names) are spelled through that object',
+    },
     schema: [],
     messages: {
       literal:
         "use {{suggestion}}; a bare '{{value}}' keeps compiling after a rename and silently matches nothing",
       noConstants:
-        'no-status-literal found the defining files in this program but no `as const` status objects in them; the rule would pass vacuously',
+        'no-status-literal found source files in this program but no `as const` string objects in them; the rule would pass vacuously',
     },
   },
   create(context) {
     const services = context.sourceCode.parserServices as unknown as ParserServices;
     const program = services.program;
-    const nodeMap = services.esTreeNodeToTSNodeMap;
-    if (program === undefined || nodeMap === undefined) {
+    const maybeNodeMap = services.esTreeNodeToTSNodeMap;
+    if (program === undefined || maybeNodeMap === undefined) {
       throw new Error('no-status-literal needs typed linting (parserOptions.projectService)');
     }
+    const nodeMap = maybeNodeMap;
     const definitions = definitionsOf(program);
     const checker = program.getTypeChecker();
-    const here = context.filename;
+    const here = path.resolve(context.filename);
     const cwd = context.cwd;
 
     const outside = (constants: Constant[]): Constant[] =>
-      constants.some((constant) => path.resolve(constant.file) === path.resolve(here))
-        ? []
-        : constants;
+      constants.some((constant) => path.resolve(constant.file) === here) ? [] : constants;
 
     const suggest = (constants: Constant[], value: string): string =>
       constants
@@ -160,19 +165,56 @@ const rule: Rule.RuleModule = {
         )
         .join(' or ');
 
+    // The type a comparison partner was declared with, not the flow-narrowed one: after
+    // `if (s === 'pending') return`, `s` is narrowed to the remaining members and the next
+    // comparison would no longer see the whole set. A computed key (`row[key]`) has no property
+    // symbol and falls back to the narrowed type.
+    function declaredType(other: ts.Expression): ts.Type {
+      let target: ts.Node = other;
+      if (ts.isPropertyAccessExpression(other)) target = other.name;
+      else if (
+        ts.isElementAccessExpression(other) &&
+        ts.isStringLiteralLike(other.argumentExpression)
+      ) {
+        target = other.argumentExpression;
+      }
+      let symbol = checker.getSymbolAtLocation(target);
+      if (symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+        symbol = checker.getAliasedSymbol(symbol);
+      }
+      return symbol === undefined
+        ? checker.getTypeAtLocation(other)
+        : checker.getTypeOfSymbol(symbol);
+    }
+
     // TypeScript gives no contextual type to an operand of `===` or to a `case` label, and a
-    // comparison is where a stale status literal does its damage, so both take the type of what
-    // they are compared with
+    // comparison is where a stale status literal does its damage, so both take the declared type
+    // of what they are compared with
     function expectedType(expression: ts.Expression): ts.Type | undefined {
       const parent = expression.parent;
       if (ts.isBinaryExpression(parent) && EQUALITY.has(parent.operatorToken.kind)) {
-        const other = parent.left === expression ? parent.right : parent.left;
-        return checker.getTypeAtLocation(other);
+        return declaredType(parent.left === expression ? parent.right : parent.left);
       }
       if (ts.isCaseClause(parent) && parent.expression === expression) {
-        return checker.getTypeAtLocation(parent.parent.parent.expression);
+        return declaredType(parent.parent.parent.expression);
       }
       return checker.getContextualType(expression);
+    }
+
+    function checkValue(node: Rule.Node, value: string): void {
+      const tsNode = nodeMap.get(node);
+      if (tsNode === undefined || !ts.isExpression(tsNode)) return;
+      const expected = expectedType(tsNode);
+      if (expected === undefined) return;
+      const members = stringMembers(expected);
+      if (members === undefined || !members.includes(value)) return;
+      const owners = outside(definitions.bySet.get(setKey(members)) ?? []);
+      if (owners.length === 0) return;
+      context.report({
+        node,
+        messageId: 'literal',
+        data: { value, suggestion: suggest(owners, value) },
+      });
     }
 
     function checkSqlText(node: Rule.Node, text: string): void {
@@ -208,19 +250,13 @@ const rule: Rule.RuleModule = {
         ) {
           return;
         }
-        const tsNode = nodeMap.get(node);
-        if (tsNode === undefined || !ts.isExpression(tsNode)) return;
-        const expected = expectedType(tsNode);
-        if (expected === undefined) return;
-        const members = stringMembers(expected);
-        if (members === undefined || !members.includes(node.value)) return;
-        const owners = outside(definitions.bySet.get(setKey(members)) ?? []);
-        if (owners.length === 0) return;
-        context.report({
-          node,
-          messageId: 'literal',
-          data: { value: node.value, suggestion: suggest(owners, node.value) },
-        });
+        checkValue(node, node.value);
+      },
+      TemplateLiteral(node) {
+        // a tagged template's text is SQL or similar, checked by the visitor below, not a value
+        if (node.expressions.length > 0 || node.parent.type === 'TaggedTemplateExpression') return;
+        const cooked = node.quasis[0]?.value.cooked;
+        if (typeof cooked === 'string') checkValue(node, cooked);
       },
       TaggedTemplateExpression(node) {
         if (node.tag.type !== 'Identifier' || node.tag.name !== 'sql') return;
