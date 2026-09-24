@@ -23,7 +23,7 @@ Writes code per the Architect's plan. The plan is the spec — flag any deviatio
 
 ### Step 0: Clarify (relay)
 
-After reading the plan (Step 1) and before creating a branch or editing anything: at least 3 questions about the forks the plan leaves open — commit granularity, order of work, anything ambiguous, anything you believe is wrong in the plan (say so, with the evidence). Each question has 2-4 concrete options, the recommended one first, worded in Russian. A plan defect that the owner should not have to decide goes back to the architect: list it separately.
+After reading the plan (Step 1) and before creating a branch or editing anything: at least 3 questions about the forks the plan leaves open — commit granularity, order of work, anything ambiguous, anything you believe is wrong in the plan (say so, with the evidence). Each question has 2-4 concrete options, the recommended one first, worded in Russian. Before offering an option, verify it can actually be carried out — by running it — the same rule as architect Step 5. A plan defect that the owner should not have to decide goes back to the architect: list it separately.
 
 - **Spawned by tech-lead:** return the questions as the final message and stop. Work starts only in the next round, which carries the answers.
 - **Invoked directly by the owner:** ask through `AskUserQuestion`.
