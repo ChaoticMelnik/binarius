@@ -29,7 +29,7 @@ Spawn prompt — every phase gets these, in this order:
 
 **Clarify relay.** Architect and implementer start with a clarify round: the agent returns its questions and stops. Tech-lead asks them in one `AskUserQuestion` call, passing every option through unchanged, then continues the same agent with `SendMessage` carrying the answers (a fresh spawn with the answers in its prompt if the agent is gone). A question the agent marks as a plan defect goes to the architect for a Plan Update, not to the owner.
 
-**Merge relay.** The reviewer never merges when spawned; it returns its verdict and a merge request (PR, approved head, whole-feature job id, checks, allowed methods). Tech-lead asks via `AskUserQuestion` immediately before this specific merge, runs `gh pr merge <N>` with the chosen allowed method only on an explicit yes — never `--admin` or another bypass — and then confirms `gh pr view <N> --json state,mergedAt` shows `MERGED`.
+**Merge relay.** The reviewer never merges when spawned; it returns its verdict and a merge request (PR, approved head, the id of the Codex job counted as the whole-feature pass, checks, allowed methods). Tech-lead asks via `AskUserQuestion` immediately before this specific merge, runs `gh pr merge <N>` with the chosen allowed method only on an explicit yes — never `--admin` or another bypass — and then confirms `gh pr view <N> --json state,mergedAt` shows `MERGED`.
 
 ---
 
@@ -67,15 +67,16 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 
 ### Whole-feature pass — check
 
-The last Codex run before LGTM covered exactly the approved diff. Find the job by its marker and re-hash:
+The Codex run that counted as the whole-feature pass covered exactly the approved diff. That is the reviewer's 3a (`Iteration review` marker) when nothing landed after it, otherwise a 6-pre rerun (`Whole-feature pass` marker). Find the newest completed job with either marker and re-hash:
 
 ```bash
 PR=<N>
 COMPANION="$(jq -r '.plugins["codex@openai-codex"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/codex-companion.mjs"
-node "$COMPANION" status --all --json | jq -r --arg m "Whole-feature pass #$PR:" \
-  '[.running[]?, .latestFinished, .recent[]?] | map(select(. != null and ((.request.prompt // "") | startswith($m))))
-   | .[] | "\(.id) \(.status) \(.request.prompt | split("\n")[0])"'
-# for the newest completed line: base=<b> head=<h> diff-sha256=<x>
+node "$COMPANION" status --all --json | jq -r --arg pr "$PR" \
+  '[.latestFinished, .recent[]?] | map(select(. != null and .status == "completed"
+      and ((.request.prompt // "") | test("^(Iteration review|Whole-feature pass) #" + $pr + ":"))))
+   | sort_by(.completedAt) | reverse | .[] | "\(.id) \(.completedAt) \(.request.prompt | split("\n")[0])"'
+# first line = the newest completed full-diff run: base=<b> head=<h> diff-sha256=<x>
 git fetch origin main
 git merge-base --is-ancestor <b> <h> && git merge-base --is-ancestor <b> origin/main && echo base-ok
 git diff --no-color --no-ext-diff <b> <h> | shasum -a 256        # must equal <x>
@@ -253,7 +254,7 @@ Track the iteration count (starts at 1 for the first review).
 
 **If the reviewer finds issues:**
 1. Iteration ≥ 2 → stop. Ask the owner via `AskUserQuestion` for a **change of approach** — the same loop again is not among the options:
-   - (a) a whole-feature Codex pass (`reviewer` → Step 6-pre command, run now) and a Plan Update built from its findings, not from the last round's;
+   - (a) a whole-feature Codex pass (the reviewer's Step 3a command with `KIND="Whole-feature pass"`, run now) and a Plan Update built from its findings, not from the last round's;
    - (b) split part of the issue into a separate issue (created and added to the board via `/github`), and narrow this PR;
    - (c) re-plan from scratch: the architect writes a new plan against the current branch.
    Do not spawn the implementer until the owner picked one.
@@ -297,7 +298,7 @@ Run once the merge is confirmed and the issue is Done.
    - `вынесено в #<N>` — the issue is created and added to the board now (`/github`), not "later";
    - `открыто (<YYYY-MM-DD>, <владелец>)` — allowed, and Phase 0 of the next issue warns about it.
 5. **Docs PR** — branch `process/<N>-audit` from `main`, the audit entry and the skill edits, PR with `Closes`-free body (the issue is already Done). It gets no reviewer phase and no 3b-3d sub-agents — process text, not code — but it does get Codex (owner's rule, 2026-09-24):
-   - Run: the reviewer's Step 3a command with `KIND="Whole-feature pass"`, the diff of `.claude/**` + `audits.md` against `origin/main`, and `.claude/codex-review-prompt.md` with its Process-docs block filled (global `~/.claude/CLAUDE.md` inlined).
+   - Run: the reviewer's Step 3a command with `KIND="Whole-feature pass"`, the diff of `.claude/**` + `audits.md` against `origin/main`, and `.claude/codex-review-prompt.md` with its Process-docs block filled (global `~/.claude/CLAUDE.md` inlined). Same criterion as "Whole-feature pass — check": the newest completed run's `head` must be the docs PR's current head before the merge question.
    - **Attempts** (execution failures) and **iterations** (findings → fixes) are counted separately. Attempts: 2 per run; after the second failure do not ask about the merge — ask the owner what to do with the run (retry later / explicitly accept merging without it). There is no silent skip here.
    - Iterations: a Blocker/Major is fixed in the same docs PR, and after the last such fix the run is repeated on the final diff, so the merge question is only ever about a diff Codex has seen. At most 2 fix iterations; a third Blocker/Major goes to the owner. A Minor is fixed or left at discretion, recorded in the PR body.
    - The merge question (merge relay) carries the last run's result: counts by severity, what was fixed, what was left.
