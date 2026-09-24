@@ -90,7 +90,7 @@ Run before committing. Every item traces to a review finding (`audits.md`):
 
 ### Step 6: Commit
 
-**Check this repo's CLAUDE.md → Git-процесс first.** It currently waives the commit and PR stop points (confirmed 2026-09-21), so proceed directly. Were the waiver ever withdrawn: invoked directly, ask via `AskUserQuestion`; spawned by tech-lead, return to tech-lead instead of asking.
+**Check this repo's CLAUDE.md → Git-процесс first** — it is the only record of whether the commit and PR stop points are waived. Waived: proceed directly. Not waived: invoked directly, ask via `AskUserQuestion`; spawned by tech-lead, return to tech-lead instead of asking.
 
 ```bash
 git status                     # verify current branch

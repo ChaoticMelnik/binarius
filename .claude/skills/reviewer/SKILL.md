@@ -117,7 +117,7 @@ Before posting LGTM, check `gh pr checks <N>` — if still running, wait; if red
 gh pr comment <N> --repo ChaoticMelnik/binarius --body "Review passed. LGTM — ready to merge."
 ```
 
-**Never attempt to approve the PR review yourself** (GitHub blocks self-approval regardless). Merging is a separate action from approving. This repo's CLAUDE.md opts into agent-executed merges with a per-merge `AskUserQuestion` (confirmed 2026-09-21):
+**Never attempt to approve the PR review yourself** (GitHub blocks self-approval regardless). Merging is a separate action from approving. Whether an agent may run the merge at all is recorded only in this repo's CLAUDE.md → Git-процесс; when it may, it is always after a per-merge `AskUserQuestion`:
 
 - **Spawned by tech-lead:** do not merge. Return to tech-lead: the verdict, the PR number, the head SHA approved, the whole-feature job id, `gh pr checks` state and the allowed merge methods (`gh api repos/ChaoticMelnik/binarius --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`). Tech-lead asks the owner and runs `gh pr merge`.
 - **Invoked directly by the owner:** ask via `AskUserQuestion` immediately before this specific merge — a yes on an earlier PR never carries over. On an explicit yes: `gh pr merge <N>` with the chosen allowed method — never `--admin` or any other bypass flag. If it fails (conflicts, red checks, branch protection): report the failure and stop.
