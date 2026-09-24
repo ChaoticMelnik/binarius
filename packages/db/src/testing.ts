@@ -141,7 +141,7 @@ export async function seedBrokerAccount(
       refreshTokenEnc: Buffer.from('enc'),
       tokenKeyId: 'k1',
       accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
-      status: BrokerAccountStatus.Active,
+      status: 'active',
       ...patch,
     })
     .returning({ id: brokerAccounts.id });

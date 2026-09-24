@@ -1223,6 +1223,11 @@ describe('foreign keys', () => {
           .values({ brokerAccountId: dangling, postbackId: `pb-fk-${++seq}`, payload: {} }),
     ],
     [
+      'notification_jobs_user_id_users_id_fk',
+      (tx) =>
+        tx.execute(sql`insert into notification_jobs (user_id, kind) values (${dangling}, 'k')`),
+    ],
+    [
       'outbox_events_intent_id_trade_intents_id_fk',
       (tx) =>
         tx.insert(outboxEvents).values({ intentId: dangling, payload: { intent_id: dangling } }),
