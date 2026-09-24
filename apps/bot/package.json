@@ -7,6 +7,8 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@binarius/shared": "workspace:*"
+    "@binarius/shared": "workspace:*",
+    "grammy": "^1.46.0",
+    "pino": "^10.3.1"
   }
 }
