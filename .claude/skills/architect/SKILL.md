@@ -121,17 +121,16 @@ Task classes with a mandatory plan section — each row traces to a real review 
 
 ### Step 7: Run Codex plan review
 
-Codex runs through the `codex` plugin's companion script, called from Bash — not through `Skill(codex:rescue)`, which needs `AskUserQuestion` and a main-context `Agent` that a spawned architect does not have. The script's path changes with the plugin version, so it is read, never hardcoded:
+Codex runs through the `codex` plugin's companion script, called from Bash — not through `Skill(codex:rescue)`, which needs `AskUserQuestion` and a main-context `Agent` that a spawned architect does not have. The script's path changes with the plugin version; set `COMPANION` exactly as `.claude/skills/tech-lead/SKILL.md` → "Whole-feature pass — check" does (the one place that line lives), then:
 
 ```bash
-COMPANION="$(jq -r '.plugins["codex@openai-codex"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/codex-companion.mjs"
 node "$COMPANION" task --background --fresh --model gpt-5.6-sol --effort high --prompt-file <file>
 node "$COMPANION" status <job-id> --wait --timeout-ms 540000   # repeat until the job leaves running
 node "$COMPANION" result <job-id>
 ```
 
 1. Write the request to a file from `.claude/codex-plan-review-prompt.md`: the issue and acceptance criteria, the draft plan, the domain coverage table, the affected files/schema/API list, and the invariants (Architecture Rules below). The Codex sandbox has no network, so **everything goes into the file inline** — never a URL or "see the issue". `task` without `--write` runs in a read-only sandbox; say "review only" in the request anyway.
-2. Before a long run, look at `node "$COMPANION" status --all --json`: a recent job that failed with "You've hit your usage limit … try again at HH:MM" means waiting for that reset, not starting.
+2. Before a long run, apply the usage-limit rule of tech-lead → Phase 0, item 1.
 3. Always `--background` + `status --wait` polling (a foreground call dies at the 10-minute tool cap) and always `--fresh` with the full context — never `--resume` after a failure.
 4. Timeout/failure policy: 2 attempts, then stop. Spawned by tech-lead: return the failure to tech-lead. Direct invocation: ask the owner.
 

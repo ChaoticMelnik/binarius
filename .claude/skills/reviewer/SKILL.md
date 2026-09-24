@@ -47,7 +47,7 @@ Check diff size first: `gh pr diff <N> | wc -l`.
      ```bash
      PR=<N>; KIND="Iteration review"   # a Step 6-pre rerun uses "Whole-feature pass"
      TEMPLATE=<scratchpad>/codex-review-$PR.md   # the filled template from 1.
-     COMPANION="$(jq -r '.plugins["codex@openai-codex"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/codex-companion.mjs"
+     # COMPANION: set exactly as in .claude/skills/tech-lead/SKILL.md → "Whole-feature pass — check"
      git fetch origin main "$(gh pr view $PR --repo ChaoticMelnik/binarius --json headRefName --jq .headRefName)"
      head=$(gh pr view $PR --repo ChaoticMelnik/binarius --json headRefOid --jq .headRefOid)
      base=$(git merge-base origin/main "$head")
@@ -64,7 +64,7 @@ Check diff size first: `gh pr diff <N> | wc -l`.
      ```
      The first line is what tech-lead's audit finds and re-hashes; the diff after it is the same one `gh pr diff` shows (merge base to head). `task` without `--write` runs read-only.
   3. After 3b-3d: `node "$COMPANION" status <job-id> --wait --timeout-ms 540000` (repeat until the job leaves `running`), then `node "$COMPANION" result <job-id>`.
-  4. Before a long round, look at `node "$COMPANION" status --all --json` for a recent job that failed on "You've hit your usage limit … try again at HH:MM" — wait for that reset rather than start. Policy: 2 attempts, then stop and return to tech-lead (direct invocation: ask the owner). Model and effort are pinned in the command, not taken from `~/.codex/config.toml`.
+  4. Before a long round, apply the usage-limit rule of tech-lead → Phase 0, item 1. Policy: 2 attempts, then stop and return to tech-lead (direct invocation: ask the owner). Model and effort are pinned in the command, not taken from `~/.codex/config.toml`.
 
 **3b. Security review agent** *(skip on small diff)* — spawn `Agent` with `model: "opus"` and the full `/security-review` prompt.
 
