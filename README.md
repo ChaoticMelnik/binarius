@@ -36,9 +36,10 @@ pnpm test apps/backend   # one package's tests (path filter)
 ```
 
 `pnpm check` runs `tsc -b --clean`, then the tests, then `tsc -b`, then `eslint .`. The order is
-the point: `--clean` removes every `dist/`, so the tests run against a tree without build output,
-the way a fresh clone does, and a manifest or import that only resolves after a build fails there
-instead of passing on a stale `dist/`. The other scripts are for running one step on its own.
+the point: `tsc -b --clean` deletes each project's outputs for its current sources (the output of
+a source that no longer exists stays behind), so the tests run before anything is built again;
+and `tooling/manifest-targets.test.ts` checks that every manifest entry point names a file in the
+tree, never an ignored build output. The other scripts are for running one step on its own.
 
 ## Docker dev environment
 

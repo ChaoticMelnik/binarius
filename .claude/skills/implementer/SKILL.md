@@ -67,7 +67,7 @@ Follow the plan's steps in order. When the plan says to create issues (follow-up
 pnpm check
 ```
 
-The one check command (`.claude/CLAUDE.md` → CI): `tsc -b --clean` first, so the tests run on a tree without `dist/`, then the tests, the build and lint. Its **exit code is the verdict**: never pipe it through `grep`/`tail` in front of `&& git commit` — a pipeline exits with the last command's status, and a commit once landed on a red suite that way. Fix all new errors before proceeding.
+The one check command (`.claude/CLAUDE.md` → CI): `tsc -b --clean` first, so the tests run on a tree without `dist/`, then the tests, the build and lint. It can run before `git add`: the manifest test counts files that are not staged yet, only not ignored ones. Its **exit code is the verdict**: never pipe it through `grep`/`tail` in front of `&& git commit` — a pipeline exits with the last command's status, and a commit once landed on a red suite that way. Fix all new errors before proceeding.
 
 ### Step 5.5: Self-review checklist
 
