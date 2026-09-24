@@ -15,6 +15,11 @@ export const REDIS_URL_RULES: UrlEnvRules = {
   allowIpv6Literal: true,
 };
 
+// The bearer the bot presents to the backend's internal API. Both processes parse it here, so
+// one of them cannot start with a value the other would have refused; short or whitespace-padded
+// values are misconfigurations, not secrets.
+export const MIN_INTERNAL_TOKEN_LENGTH = 16;
+
 // pino levels; fastify's LogLevel is the same union
 export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -63,6 +68,14 @@ export function parseEnumEnv<T extends string>(raw: string, name: string, values
 
 export function parseLogLevelEnv(raw: string, name: string): LogLevel {
   return parseEnumEnv(raw, name, LOG_LEVELS);
+}
+
+export function parseInternalTokenEnv(raw: string, name: string): string {
+  if (/\s/.test(raw)) throw new Error(`Env ${name} must not contain whitespace`);
+  if (raw.length < MIN_INTERNAL_TOKEN_LENGTH) {
+    throw new Error(`Env ${name} must be at least ${MIN_INTERNAL_TOKEN_LENGTH} characters`);
+  }
+  return raw;
 }
 
 export function parseBoundedIntegerEnv(

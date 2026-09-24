@@ -33,6 +33,10 @@
       "types": "./src/oauth.ts",
       "default": "./src/oauth.ts"
     },
+    "./users": {
+      "types": "./src/users.ts",
+      "default": "./src/users.ts"
+    },
     "./partner": {
       "types": "./src/partner.ts",
       "default": "./src/partner.ts"

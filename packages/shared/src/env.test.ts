@@ -5,6 +5,7 @@ import {
   parseBoundedIntegerEnv,
   parseEnumEnv,
   parseIntegerEnv,
+  parseInternalTokenEnv,
   parseLogLevelEnv,
   parseUrlEnv,
   readEnv,
@@ -75,6 +76,27 @@ describe('parseEnumEnv', () => {
     expect(() => parseLogLevelEnv('verbose', 'LOG_LEVEL')).toThrow(
       'Env LOG_LEVEL must be one of: fatal error warn info debug trace silent',
     );
+  });
+});
+
+describe('parseInternalTokenEnv', () => {
+  it('rejects a token shorter than the floor', () => {
+    expect(() => parseInternalTokenEnv('a'.repeat(15), 'INTERNAL_API_TOKEN')).toThrow(
+      'Env INTERNAL_API_TOKEN must be at least 16 characters',
+    );
+  });
+
+  it.each([' abcdefghijklmnop', 'abcdefgh ijklmnop', 'abcdefghijklmnop\n'])(
+    'rejects whitespace in %j',
+    (raw) => {
+      expect(() => parseInternalTokenEnv(raw, 'INTERNAL_API_TOKEN')).toThrow(
+        'Env INTERNAL_API_TOKEN must not contain whitespace',
+      );
+    },
+  );
+
+  it('accepts the shortest allowed token unchanged', () => {
+    expect(parseInternalTokenEnv('a'.repeat(16), 'INTERNAL_API_TOKEN')).toBe('a'.repeat(16));
   });
 });
 
