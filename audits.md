@@ -266,3 +266,48 @@ PR #51, rebase-merged as `109ab57` (18 commits), branch deleted. Migration 0002 
 
 ### Вынесено
 - #54 — отказ привязки после успешного обмена оставляет аккаунт с мёртвым токеном, вместе с четырьмя Major из ревью плана исправления.
+
+---
+
+## #56 — Process: внедрить предложения аудитов в pipeline (2026-09-24)
+
+PR #61, rebase-merged as `34c7b2c` (20 commits), branch deleted. Первый прогон, в котором фазы работали спавн-агентами с явной `model`.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Preflight | Codex `setup --json` ready, `gh` valid, `main` current. Сессия на `claude-opus-5-5` — по решению владельца (Q10) это теперь норма. Перед стартом по отдельному `AskUserQuestion` смёржен PR #55 (audit #9), чтобы не было конфликта в `audits.md`. |
+| Tech Lead | `/clarify` | 7 вопросов (режим pipeline, гейты без allowlist, порядок с #55, clarify-relay, пилот схемы, ретро-разметка, follow-up). |
+| Architect | Clarify relay + план | Спавн `fable` → `claude-fable-5-1`. 11 вопросов и 3 после Codex-проверки задал tech-lead. План, Addendum и Plan Update 2 — каждый с Codex-проверкой: 8M+1m, 3M+3m, 2M+1m; все Major проверены и учтены. |
+| Implementer | Clarify relay | Спавн `opus` → `claude-opus-5-5`. 7 вопросов; 4 из них оказались дефектами плана и ушли архитектору (Plan Update 2), а не владельцу. |
+| Implementer | Build / verify | 9 коммитов, `pnpm check` зелёный перед каждым; draft-PR-зонд #60 показал красный CI на каждом из трёх гейтов (3 пуша вместо 2) и закрыт без мержа; follow-up #57, #58, #59 в Backlog. |
+| Reviewer | Iteration 1 | Спавн `opus`; сам запустил security/code-review (`opus`) и simplify (`sonnet` → `claude-sonnet-5`) на глубине 2. Codex 3a по полному диффу с marker/hash. 6 Major (1 по запросу владельца) + 13 Minor → Todo. |
+| Architect | Plan Update 1 | Clarify relay: 5 вопросов. Codex re-check: 8 находок учтены. Агент завис по watchdog (600 с) уже после публикации комментария и смены статуса; tech-lead проверил состояние на GitHub, повторного спавна не было. |
+| Implementer | Iteration 1 | Clarify relay: 5 вопросов, 2 из них — дефекты шага 9, решены ответами владельца и записаны на issue. 10 коммитов, по одному на шаг Plan Update. |
+| Reviewer | Iteration 2 | Blocker/Major нет. Три Codex-Major reviewer проверил и понизил до Minor, владелец подтвердил. 12 Minor → #62. 3a по неизменному head засчитан как whole-feature pass (правило M1). |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase, ветка удалена, `state == MERGED`, Done. |
+
+### Review iterations: 1 (возврат ревьюера; итерация 2 чистая)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Waiver мержа называл `/reviewer`, а мержит tech-lead | Major | single-source | Схема мержа изменена в скиллах, а в CLAUDE.md осталась прежняя | Implementer Step 5.5 |
+| Ветка и `Closes` docs-PR аудита не разрешены CLAUDE.md | Major | single-source | Новое правило Phase 5 не сверено с Git-процессом | Architect plan |
+| У architect остался пропуск clarify, противоречащий tech-lead и глобальному правилу | Major | single-source | Правка одного скилла без сверки с соседними | Architect plan |
+| Lint-правило не видело второе сравнение в if/else и template literal | Major | unverified-claim | Покрытие заявлено по probe-формам, а не по narrowing | Architect Addendum |
+| Инварианты 1 и 8 шире, чем их enforcement | Major | unverified-claim | Формулировка от намерения, а не от правила | Architect plan |
+| 3a и 6-pre дублировали один и тот же Codex-прогон | Major (по запросу владельца) | other | Правило #9 п.1 перенесено без учёта того, что 3a уже идёт по полному диффу | Architect Plan Update 2 |
+| Ответ Q8 дан на вариант, который нельзя выполнить (`review` без `--effort`, без шаблона) | Process | unverified-claim | Варианты для владельца не проверены запуском до вопроса | Architect clarify |
+| `resolvedModel` отсутствует на глубине ≥ 2 и после продолжения через SendMessage | Minor | unverified-claim | Механизм проверки модели выведен из одного спавна глубины 1 | Architect Plan Update 2 |
+| Architect-агент завис после публикации | Process | other | Stream watchdog; побочные эффекты уже были выполнены | — |
+
+### Process improvement proposals
+
+1. **Упавшая или зависшая фаза: сначала проверить её побочные эффекты на GitHub (комментарии, статус, пуш) и только потом решать о повторном спавне.** Иначе повторный спавн задублирует Plan Update. — **внедрено в #63: `.claude/skills/tech-lead/SKILL.md` → Phases run as spawned agents, «Failed or stalled phase»**
+2. **Architect проверяет запуском каждый вариант, который предлагает владельцу в clarify-вопросе (флаги, API, возможности инструмента).** Q8 пришлось пересматривать. — **внедрено в #63: `.claude/skills/architect/SKILL.md` → Step 5**
+3. **Проверка модели учитывает фазу, продолженную через SendMessage, и спавны глубины ≥ 2.** — **внедрено в #61: `.claude/skills/tech-lead/SKILL.md` → Model policy — check**
+4. **Правка глобального `~/.claude/CLAUDE.md` под новую схему** (clarify-relay, спавны вместо Skill, Codex без MCP, модели на спавнах, Todo после ревью, merge relay, последовательность фаз). Текст правки tech-lead передаёт владельцу. — **открыто (2026-09-24, владелец)**
+5. **12 Minor из ревью итерации 2.** — **вынесено в #62**
