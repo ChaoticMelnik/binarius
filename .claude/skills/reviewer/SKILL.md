@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Reviews PRs of issues in In Review status. Posts findings as PR comments immediately without additional approval. If issues found, returns the issue to Todo. If clean, reports to the user and waits for merge confirmation (or, if this repo's CLAUDE.md has opted into agent-executed merges, asks via AskUserQuestion immediately before merging) — moves the issue to Done only after the merge is confirmed. Also supports full project review mode.
+description: Reviews PRs of issues in In Review status. Posts findings as PR comments immediately without additional approval. If issues found, returns the issue to Todo. If clean, reports the verdict: spawned by tech-lead, it returns a merge request and tech-lead asks and merges; invoked directly, it asks via AskUserQuestion immediately before merging (when this repo's CLAUDE.md allows agent merges). The issue moves to Done only after the merge is confirmed. Also supports full project review mode.
 model: opus
 ---
 
@@ -37,7 +37,7 @@ Issue/PR named → Task Review. "Review the project" / "review the codebase" wit
 
 Check diff size first: `gh pr diff <N> | wc -l`.
 
-**Small-diff rule:** < 50 lines (initial review) or < 20 lines (re-review) → run only Codex + code-review agent (3a + 3c), skip security/simplify.
+**Small-diff rule:** full PR diff < 50 lines → run only Codex + code-review agent (3a + 3c), skip security/simplify.
 
 **Order of launch.** One message carries the Bash call that starts 3a in the background **and** the `Agent` spawns 3b-3d, so they run in parallel. Then wait for 3b-3d to finish. Then poll 3a to completion. Only then Step 4. Never run the check command while the spawned agents are working — the `/code-review` recipe runs `pnpm typecheck` on the same tree regardless of the brief.
 

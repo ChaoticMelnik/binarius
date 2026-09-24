@@ -162,6 +162,10 @@ git push
 
 PR updates automatically — no new PR needed.
 
+### Step 6: Move issue to In Review
+
+Via `/github` skill ("Update Pipeline Status" → In Review), then a PR comment naming the iteration and the commits that address each finding. The reviewer picks issues up by `In Review` (reviewer Step 1).
+
 ---
 
 ## Forbidden Actions
