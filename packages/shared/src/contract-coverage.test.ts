@@ -32,6 +32,7 @@ import * as processModule from './process';
 import * as socket from './socket';
 import * as time from './time';
 import * as trading from './trading';
+import * as users from './users';
 
 // every field issue #6 lists, on the domain type it belongs to
 describe('contract coverage (issue #6)', () => {
@@ -231,6 +232,7 @@ describe('contract coverage (issue #6)', () => {
       trading,
       broker,
       oauth,
+      users,
       partner,
       socket,
       env,
