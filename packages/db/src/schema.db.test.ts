@@ -289,6 +289,32 @@ describe('enum and uniqueness constraints', () => {
     });
   });
 
+  // the corpus that proves this CHECK and startPayloadSchema agree row by row lives in
+  // user-ops.db.test.ts; here one observation of each, for the coverage gate
+  it('rejects an acquisition source outside the start-payload pattern', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(users).values({
+          telegramUserId: 973_001n,
+          acquisitionSource: 'a'.repeat(65),
+          acquiredAt: sql`now()`,
+        }),
+        '23514',
+        'users_acquisition_source_check',
+      );
+    });
+  });
+
+  it('rejects an acquisition source without the time it was recorded', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(users).values({ telegramUserId: 973_002n, acquisitionSource: 'src_ab-CD9' }),
+        '23514',
+        'users_acquisition_pair_check',
+      );
+    });
+  });
+
   it('enforces users_telegram_user_id_idx', async () => {
     await rolledBack(async (tx) => {
       await tx.insert(users).values({ telegramUserId: 971_001n });
