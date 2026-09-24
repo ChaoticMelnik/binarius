@@ -122,9 +122,22 @@ services:
   bot:
     <<: *app
     command: pnpm --filter @binarius/bot dev
+    # replaces the anchor's list: the bot talks to the backend and to nothing else, and the
+    # backend already waits for postgres and redis itself
+    depends_on:
+      backend:
+        condition: service_healthy
+    # above the bot's shutdown budget (20 s, apps/bot/src/timing.ts): a SIGTERM lets the update
+    # in flight finish instead of killing it mid-handler
+    stop_grace_period: 25s
     environment:
       <<: *app-environment
-      TELEGRAM_BOT_TOKEN:
+      # no default on purpose: a value here is one a deployment inherits by accident
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set it in .env; see .env.example}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set it in .env; see .env.example}
+      BACKEND_URL: http://backend:3000
+      # valueless: the welcome video is optional and passes through only when set
+      WELCOME_VIDEO_FILE_ID:
     develop:
       watch:
         - path: ./apps/bot/src
