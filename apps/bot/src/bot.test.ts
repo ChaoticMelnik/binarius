@@ -1,16 +1,12 @@
 import { createServer, type Server } from 'node:http';
 import { BotError, HttpError } from 'grammy';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  OAuthErrorCode,
-  UserStatus,
-  type StartLoginResponse,
-  type UserStartView,
-} from '@binarius/shared';
+import { OAuthErrorCode, UserStatus, type UserStartView } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { CONNECT_CALLBACK_DATA, createBot } from './bot';
 import {
   BOT_INFO,
+  LOGIN,
   USER,
   captureApi,
   closeServer,
@@ -18,25 +14,12 @@ import {
   fakeLogger,
   inlineButtons,
   listen,
+  rejectionOf,
   sentPayload,
   startUpdate,
+  userView,
 } from './testing';
 import { TEXTS } from './texts';
-
-const view = (patch: Partial<UserStartView> = {}): UserStartView => ({
-  telegramUserId: String(USER.id),
-  status: UserStatus.Active,
-  acquisitionSource: null,
-  acquiredAt: null,
-  hasActiveBrokerAccount: false,
-  ...patch,
-});
-
-const LOGIN: StartLoginResponse = {
-  authorizeUrl: 'https://binodex.app/oauth/authorize?state=abc',
-  state: 'abc',
-  expiresAt: '2026-09-24T10:10:00.000Z',
-};
 
 function setup(
   options: {
@@ -47,7 +30,7 @@ function setup(
   } = {},
 ) {
   const backend: BackendClient = {
-    recordStart: options.recordStart ?? vi.fn(() => Promise.resolve(options.user ?? view())),
+    recordStart: options.recordStart ?? vi.fn(() => Promise.resolve(options.user ?? userView())),
     startLogin: options.startLogin ?? vi.fn(() => Promise.resolve(LOGIN)),
   };
   const logger = fakeLogger();
@@ -162,7 +145,7 @@ describe('/start', () => {
   });
 
   it('shows a blocked user no CTA', async () => {
-    const { bot, calls } = setup({ user: view({ status: UserStatus.Blocked }) });
+    const { bot, calls } = setup({ user: userView({ status: UserStatus.Blocked }) });
     await bot.handleUpdate(startUpdate('/start'));
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.blocked);
@@ -170,7 +153,7 @@ describe('/start', () => {
   });
 
   it('greets a user who already has an active account without the CTA', async () => {
-    const { bot, calls } = setup({ user: view({ hasActiveBrokerAccount: true }) });
+    const { bot, calls } = setup({ user: userView({ hasActiveBrokerAccount: true }) });
     await bot.handleUpdate(startUpdate('/start'));
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.welcomeBack);
@@ -254,10 +237,7 @@ describe('the welcome video', () => {
       throw new TypeError('sentinel');
     });
 
-    const thrown = await bot.handleUpdate(startUpdate('/start')).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const thrown = await rejectionOf(bot.handleUpdate(startUpdate('/start')));
     expect(thrown).toBeInstanceOf(BotError);
     expect(sentPayload(calls, 'sendMessage')).toBeUndefined();
     expect(logger.warn).not.toHaveBeenCalled();
@@ -346,7 +326,11 @@ describe('the Bot API timeout', () => {
 
     const bot = createBot({
       token: '123456:AA-bot-token',
-      backend: { recordStart: vi.fn(), startLogin: vi.fn() } as unknown as BackendClient,
+      // no handler runs in this test: the call under test is bot.api.sendMessage itself
+      backend: {
+        recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
+        startLogin: vi.fn(() => Promise.reject(new Error('unused'))),
+      },
       logger: fakeLogger(),
       botInfo: BOT_INFO,
       apiRoot,
@@ -354,10 +338,7 @@ describe('the Bot API timeout', () => {
     });
 
     const at = Date.now();
-    const error = await bot.api.sendMessage(1, 'x').then(
-      () => undefined,
-      (thrown: unknown) => thrown,
-    );
+    const error = await rejectionOf(bot.api.sendMessage(1, 'x'));
     expect(error).toBeInstanceOf(HttpError);
     // the lower bound is what says the configured 300 ms ended the call; the upper bound
     // rules out grammY's 500 second default

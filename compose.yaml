@@ -130,8 +130,10 @@ services:
     # above the bot's shutdown budget (25 s, apps/bot/src/timing.ts): a SIGTERM lets the update
     # in flight finish instead of killing it mid-handler
     stop_grace_period: 30s
+    # not the shared anchor: env.ts reads exactly these five names, and the Postgres password
+    # and the Redis URL have no business inside a process that never opens either connection
     environment:
-      <<: *app-environment
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       # no default on purpose: a value here is one a deployment inherits by accident
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set it in .env; see .env.example}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set it in .env; see .env.example}

@@ -115,6 +115,12 @@ plugin — and is rethrown into `bot.catch` unchanged rather than reported as on
 | `LOG_LEVEL`             | no (`info`) | pino level                                                            |
 | `WELCOME_VIDEO_FILE_ID` | no          | `file_id` of the welcome video, no whitespace; absent means text only |
 
+Under compose the `bot` service is given only these five names, not the shared environment
+anchor the other services take: the Postgres password and the Redis URL have no business in a
+process that opens neither, and `WELCOME_VIDEO_FILE_ID` is passed only when it is set.
+`apps/bot/src/env.test.ts` reads the names out of `compose.yaml` and compares them with the ones
+`parseEnv` reads, so the anchor cannot drift back in unnoticed.
+
 An empty value is a misconfiguration, not a default: the process refuses to start, and so does a
 value carrying whitespace — a `file_id` with a trailing newline is one Telegram refuses on every
 `/start`. Because Compose interpolates the whole file before it picks services,

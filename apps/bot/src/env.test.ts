@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { composeServiceEnvironmentKeys } from '@binarius/shared/testing';
 import { parseEnv } from './env';
 
 const base = {
@@ -6,6 +9,11 @@ const base = {
   INTERNAL_API_TOKEN: 'internal-token-for-tests',
   BACKEND_URL: 'http://backend:3000',
 };
+
+const composeYaml = readFileSync(
+  fileURLToPath(new URL('../../../compose.yaml', import.meta.url)),
+  'utf8',
+);
 
 describe('parseEnv', () => {
   it('returns every value, with the log level defaulted and no video', () => {
@@ -70,6 +78,16 @@ describe('parseEnv', () => {
     );
     expect(() => parseEnv({ ...base, WELCOME_VIDEO_FILE_ID: '' })).toThrow(
       'Env WELCOME_VIDEO_FILE_ID must not be empty',
+    );
+  });
+
+  // The names above are the whole set parseEnv reads. The bot container used to be handed the
+  // shared anchor as well — the Postgres password, the Redis URL, a health timeout — none of
+  // which this file mentions. A merge key reads as a name here, so the anchor coming back makes
+  // this red rather than quietly widening what the process is given.
+  it('is given exactly the names it reads, and no shared anchor', () => {
+    expect(new Set(composeServiceEnvironmentKeys(composeYaml, 'bot'))).toEqual(
+      new Set([...Object.keys(base), 'LOG_LEVEL', 'WELCOME_VIDEO_FILE_ID']),
     );
   });
 

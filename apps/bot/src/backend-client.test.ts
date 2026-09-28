@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { afterEach, describe, expect, it } from 'vitest';
 import { OAuthErrorCode, UserStatus, type UserStartRequest } from '@binarius/shared';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
-import { closeServer, listen } from './testing';
+import { closeServer, listen, rejectionOf } from './testing';
 
 const TOKEN = 'internal-token-for-tests';
 
@@ -56,12 +56,6 @@ const userView = {
   hasActiveBrokerAccount: false,
 };
 
-const rejection = async (promise: Promise<unknown>): Promise<unknown> =>
-  promise.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-
 describe('recordStart', () => {
   it('posts the request under the internal bearer and returns the view', async () => {
     const { baseUrl, capture } = await serve((_request, response) => {
@@ -87,7 +81,7 @@ describe('recordStart', () => {
     const { baseUrl } = await serve((_request, response) => {
       json(response, 200, { user: { telegramUserId: '4242' } });
     });
-    const error = await rejection(
+    const error = await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN }).recordStart(request),
     );
     expect(error).toBeInstanceOf(BackendError);
@@ -99,7 +93,7 @@ describe('recordStart', () => {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end('<html>proxy error</html>');
     });
-    const error = await rejection(
+    const error = await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN }).recordStart(request),
     );
     expect((error as BackendError).code).toBe(BackendErrorCode.ContractViolation);
@@ -109,7 +103,7 @@ describe('recordStart', () => {
     const { baseUrl } = await serve((_request, response) => {
       json(response, status, { error: 'internal' });
     });
-    const error = await rejection(
+    const error = await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN }).recordStart(request),
     );
     expect(error).toBeInstanceOf(BackendError);
@@ -119,7 +113,7 @@ describe('recordStart', () => {
   it('gives up on a server that never answers', async () => {
     const { baseUrl } = await serve(() => {});
     const started = Date.now();
-    const error = await rejection(
+    const error = await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN, timeoutMs: 150 }).recordStart(request),
     );
     expect((error as BackendError).code).toBe(BackendErrorCode.Unreachable);
@@ -136,7 +130,7 @@ describe('recordStart', () => {
         response.write('{"user":');
       });
       const started = Date.now();
-      const error = await rejection(
+      const error = await rejectionOf(
         createBackendClient({ baseUrl, token: TOKEN, timeoutMs: 150 }).recordStart(request),
       );
       expect(error).toMatchObject({ code: BackendErrorCode.Unreachable, status });
@@ -150,7 +144,7 @@ describe('recordStart', () => {
     const running = server;
     server = undefined;
     await closeServer(running);
-    const error = await rejection(
+    const error = await rejectionOf(
       createBackendClient({ baseUrl: dead, token: TOKEN }).recordStart(request),
     );
     expect((error as BackendError).code).toBe(BackendErrorCode.Unreachable);
@@ -178,7 +172,7 @@ describe('startLogin', () => {
     const { baseUrl } = await serve((_request, reply) => {
       json(reply, 409, { error: OAuthErrorCode.UserBlocked });
     });
-    const error = await rejection(
+    const error = await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN }).startLogin('4242'),
     );
     expect(error).toMatchObject({ status: 409, reason: OAuthErrorCode.UserBlocked });
@@ -188,7 +182,7 @@ describe('startLogin', () => {
     const { baseUrl } = await serve((_request, reply) => {
       json(reply, 409, { error: 'Sorry Ada, your account 4242 is blocked' });
     });
-    const error = await rejection(
+    const error = await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN }).startLogin('4242'),
     );
     expect((error as BackendError).reason).toBeUndefined();
@@ -204,7 +198,7 @@ describe('BackendError carries no response body', () => {
         issues: [{ path: ['displayName'], message: 'SECRET-BODY' }],
       });
     });
-    const error = (await rejection(
+    const error = (await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN }).recordStart(request),
     )) as BackendError;
 
