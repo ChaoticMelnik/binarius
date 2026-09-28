@@ -22,7 +22,10 @@ export interface Env {
 
 export function parseEnv(source: EnvSource): Env {
   return {
-    telegramBotToken: parseBotToken(readEnv(source, 'TELEGRAM_BOT_TOKEN'), 'TELEGRAM_BOT_TOKEN'),
+    telegramBotToken: withoutWhitespace(
+      readEnv(source, 'TELEGRAM_BOT_TOKEN'),
+      'TELEGRAM_BOT_TOKEN',
+    ),
     internalApiToken: parseInternalTokenEnv(
       readEnv(source, 'INTERNAL_API_TOKEN'),
       'INTERNAL_API_TOKEN',
@@ -34,14 +37,19 @@ export function parseEnv(source: EnvSource): Env {
     welcomeVideoFileId:
       source.WELCOME_VIDEO_FILE_ID === undefined
         ? undefined
-        : readEnv(source, 'WELCOME_VIDEO_FILE_ID'),
+        : withoutWhitespace(
+            readEnv(source, 'WELCOME_VIDEO_FILE_ID'),
+            'WELCOME_VIDEO_FILE_ID',
+          ),
   };
 }
 
-// The token goes into the Bot API URL, where a stray space or newline would produce a 404 from
-// api.telegram.org rather than anything that names the real problem. The format itself is
-// Telegram's to change, so only whitespace is refused here.
-function parseBotToken(raw: string, name: string): string {
+// Both of these are pasted from .env straight into a Bot API URL or payload, where a stray
+// space or newline produces a 404 or a refused file id rather than anything that names the
+// real problem — and a file id Telegram always refuses makes every /start pay for a doomed
+// sendVideo before it falls back. The formats themselves are Telegram's to change, so only
+// whitespace is refused here.
+function withoutWhitespace(raw: string, name: string): string {
   if (/\s/.test(raw)) throw new Error(`Env ${name} must not contain whitespace`);
   return raw;
 }
