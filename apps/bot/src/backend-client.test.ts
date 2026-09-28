@@ -126,6 +126,24 @@ describe('recordStart', () => {
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
+  it.each([200, 500])(
+    'reports a %s whose body then stalls as unreachable, with the status',
+    async (status) => {
+      // AbortSignal.timeout stays attached through the body, so this rejects response.json()
+      // with the abort — a slow backend, not a contract the route broke
+      const { baseUrl } = await serve((_request, response) => {
+        response.writeHead(status, { 'content-type': 'application/json' });
+        response.write('{"user":');
+      });
+      const started = Date.now();
+      const error = await rejection(
+        createBackendClient({ baseUrl, token: TOKEN, timeoutMs: 150 }).recordStart(request),
+      );
+      expect(error).toMatchObject({ code: BackendErrorCode.Unreachable, status });
+      expect(Date.now() - started).toBeLessThan(2_000);
+    },
+  );
+
   it('reports a backend that is not listening', async () => {
     const { baseUrl } = await serve(() => {});
     const dead = baseUrl;
