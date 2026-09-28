@@ -166,8 +166,10 @@ stay installed (`on`, not `once`), so Node never falls back to the default actio
 kill the drain instead. Because the batch is one update, the drain waits for at most one
 handler, and `bot.stop()` confirms the offset of exactly the update in flight — with grammY's
 default batch of 100 it would confirm only the current one and leave the rest of the batch to be
-redelivered. The one case the drain
-cannot shorten is grammY's 3 s sleep after a failed `getUpdates` (`retry_after` after a 429,
+redelivered. Both of those are premises of the budget rather than preferences, so
+`POLLING_BATCH_LIMIT === 1` is a conjunct of the import-time chain in `timing.ts`: another limit
+stops the process at import instead of at the next shutdown. The one case the drain cannot
+shorten is grammY's 3 s sleep after a failed `getUpdates` (`retry_after` after a 429,
 which has no ceiling): `bot.stop()` does not interrupt it, so the drain waits it out — but no
 update is in flight during that sleep, so an overrun there costs the exit code and nothing else.
 

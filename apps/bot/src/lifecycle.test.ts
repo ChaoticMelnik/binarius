@@ -4,7 +4,7 @@ import type { ApiError, Update } from 'grammy/types';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { BackendClient } from './backend-client';
 import { createBot } from './bot';
-import { ALLOWED_UPDATES, runBot, type PollingLoop } from './lifecycle';
+import { runBot, type PollingLoop } from './lifecycle';
 import {
   BOT_INFO,
   USER_VIEW,
@@ -13,7 +13,6 @@ import {
   startUpdate,
   type FakeLogger,
 } from './testing';
-import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S } from './timing';
 
 // `bot.start()` resolves only once the polling loop has ended, which is what makes the drain
 // interesting: the fake reproduces that rather than resolving straight away.
@@ -65,12 +64,14 @@ describe('runBot', () => {
     const signalSource = signals();
     runBot({ bot: fake.bot, logger: fakeLogger(), exit: vi.fn(), signalSource });
 
+    // Literals on purpose. These constants are what runBot passes, so an assertion written
+    // against them proves the keys are there and nothing at all about the values — one update
+    // per getUpdates is what makes the drain wait for at most one handler and bot.stop()
+    // confirm exactly the update in flight, and timing.ts pins the constant to 1 at import.
     expect(fake.options[0]).toMatchObject({
-      timeout: POLLING_TIMEOUT_S,
-      // one update per getUpdates, so the drain waits for at most one handler and bot.stop()
-      // confirms exactly the update in flight
-      limit: POLLING_BATCH_LIMIT,
-      allowed_updates: ALLOWED_UPDATES,
+      timeout: 5,
+      limit: 1,
+      allowed_updates: ['message', 'callback_query'],
     });
     expect(signalSource.listenerCount('SIGTERM')).toBe(1);
     expect(signalSource.listenerCount('SIGINT')).toBe(1);
@@ -397,11 +398,19 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     expect(s.longPolls()).toHaveLength(0);
   });
 
-  it('logs that the bot started, after the webhook is dropped and before the first poll', async () => {
+  it('logs that the bot started, after the webhook is dropped and before a first poll for one update on this project’s terms', async () => {
     const s = scene();
     await s.firstPoll();
 
     expect(s.events).toEqual(['deleteWebhook', 'info:bot started', 'getUpdates#1']);
+    // The premise the fake above stands on: the options object runBot hands start() is what
+    // grammY puts in getUpdates. Only the first poll — after one succeeds grammY stops sending
+    // allowed_updates, because Telegram keeps the last setting (out/bot.js, loop()).
+    expect(s.longPolls()[0]?.payload).toMatchObject({
+      limit: 1,
+      timeout: 5,
+      allowed_updates: ['message', 'callback_query'],
+    });
   });
 
   it('hands a handler that throws to bot.catch and goes on polling', async () => {
