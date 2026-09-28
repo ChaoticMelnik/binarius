@@ -10,7 +10,9 @@ export const POLLING_TIMEOUT_S = 5;
 // runs a batch through the middleware sequentially and bot.stop() neither interrupts the batch
 // nor confirms the updates behind the current one: with a batch of one, the drain waits for at
 // most one handler and the confirmed offset is exactly the update in flight. The cost is one
-// round trip per update, accepted at this bot's volume.
+// round trip per update, accepted at this bot's volume. Both of those are premises of the
+// shutdown budget rather than preferences, which is why this is not a tuning knob: the chain
+// below pins it to 1, and any other value stops the process at import.
 export const POLLING_BATCH_LIMIT = 1;
 // Each Bot API call (grammY's ApiClientOptions.timeoutSeconds, default 500), including the
 // confirming getUpdates that bot.stop() issues.
@@ -53,11 +55,14 @@ export const GRAMMY_POLLING_BACKOFF_MS = 3_000;
 export const COMPOSE_STOP_GRACE_PERIOD_MS = 30_000;
 
 export const TIMING_CHAIN_HOLDS =
+  POLLING_BATCH_LIMIT === 1 &&
   POLLING_TIMEOUT_S * 1000 < TELEGRAM_API_TIMEOUT_MS &&
   HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
   TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
   GRAMMY_POLLING_BACKOFF_MS < SHUTDOWN_BUDGET_MS &&
   SHUTDOWN_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS;
 if (!TIMING_CHAIN_HOLDS) {
-  throw new Error('bot timing constants are out of order (see timing.ts)');
+  throw new Error(
+    'bot timing constants are out of order, or POLLING_BATCH_LIMIT is not 1 (see timing.ts)',
+  );
 }
