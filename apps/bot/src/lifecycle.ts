@@ -1,7 +1,7 @@
 import type { PollingOptions } from 'grammy';
 import { closeAll, errorLogFields } from '@binarius/shared';
 import type { Logger } from './logging';
-import { POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './timing';
+import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './timing';
 
 // Only the update kinds this bot handles: Telegram then stops delivering the rest, and a new
 // kind has to be enabled deliberately rather than arrive unhandled.
@@ -37,26 +37,53 @@ export function runBot({
   signals = ['SIGTERM', 'SIGINT'],
   signalSource = process,
 }: RunBotOptions): void {
+  let stopping = false;
+
   const started = bot.start({
     timeout: POLLING_TIMEOUT_S,
+    limit: POLLING_BATCH_LIMIT,
     allowed_updates: ALLOWED_UPDATES,
     onStart: () => logger.info('bot started'),
   });
   // an invalid token fails here: getMe answers 401, which grammY does not retry
   started.catch((error: unknown) => {
+    // once a drain owns this promise, only closeAll decides the exit code — exiting here would
+    // kill the middleware the drain is deliberately waiting for
+    if (stopping) return;
     logger.error(errorLogFields(error), 'long polling stopped with an error');
     exit(1);
   });
 
-  let stopping = false;
   const shutdown = (signal: NodeJS.Signals) => {
     // a second signal is not a reason to tear down a shutdown already under way
     if (stopping) return;
     stopping = true;
     logger.info({ signal }, 'shutting down');
-    void closeAll([() => bot.stop(), () => started], shutdownBudgetMs).then((drained) => {
+
+    // Each step reports its own failure as it happens, because closeAll answers with one
+    // boolean for both an overrun and a rejected step. A SIGTERM during grammY's backoff
+    // between getUpdates waits the sleep out (bot.stop() does not interrupt it), with no
+    // update in flight.
+    let settled = 0;
+    const step =
+      (name: string, run: () => Promise<unknown>) => (): Promise<unknown> =>
+        run()
+          .catch((error: unknown) => {
+            logger.error(errorLogFields(error), `shutdown: ${name} failed`);
+            throw error;
+          })
+          .finally(() => {
+            settled += 1;
+          });
+    const steps = [step('bot.stop()', () => bot.stop()), step('polling loop', () => started)];
+
+    void closeAll(steps, shutdownBudgetMs).then((drained) => {
       if (!drained) {
-        logger.error('shutdown: polling did not stop within the budget, exiting anyway');
+        logger.error(
+          settled < steps.length
+            ? 'shutdown: polling did not stop within the budget, exiting anyway'
+            : 'shutdown: a drain step failed, exiting anyway',
+        );
       }
       exit(drained ? 0 : 1);
     });
