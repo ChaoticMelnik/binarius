@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ALLOWED_UPDATES, runBot, type PollingLoop } from './lifecycle';
+import { fakeLogger } from './testing';
 import { POLLING_TIMEOUT_S } from './timing';
-
-const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() });
 
 // `bot.start()` resolves only once the polling loop has ended, which is what makes the drain
 // interesting: the fake reproduces that rather than resolving straight away.
@@ -52,7 +51,7 @@ describe('runBot', () => {
   it('starts long polling with this project’s own timeout and update filter', () => {
     const fake = fakeBot();
     const signalSource = new FakeSignals();
-    runBot({ bot: fake.bot, logger: logger(), exit: vi.fn(), signalSource });
+    runBot({ bot: fake.bot, logger: fakeLogger(), exit: vi.fn(), signalSource });
 
     expect(fake.options[0]).toMatchObject({
       timeout: POLLING_TIMEOUT_S,
@@ -65,7 +64,7 @@ describe('runBot', () => {
 
   it('exits non-zero when polling never starts', async () => {
     const fake = fakeBot();
-    const log = logger();
+    const log = fakeLogger();
     const exit = vi.fn();
     runBot({ bot: fake.bot, logger: log, exit, signalSource: new FakeSignals() });
 
@@ -79,7 +78,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const exit = vi.fn();
     const signalSource = new FakeSignals();
-    runBot({ bot: fake.bot, logger: logger(), exit, signalSource });
+    runBot({ bot: fake.bot, logger: fakeLogger(), exit, signalSource });
 
     signalSource.emit('SIGTERM');
     signalSource.emit('SIGTERM');
@@ -97,7 +96,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const exit = vi.fn();
     const signalSource = new FakeSignals();
-    runBot({ bot: fake.bot, logger: logger(), exit, signalSource });
+    runBot({ bot: fake.bot, logger: fakeLogger(), exit, signalSource });
 
     signalSource.emit('SIGTERM');
     fake.resolveStop();
@@ -112,7 +111,7 @@ describe('runBot', () => {
 
   it('exits non-zero when the drain overruns its budget', async () => {
     const fake = fakeBot();
-    const log = logger();
+    const log = fakeLogger();
     const exit = vi.fn();
     const signalSource = new FakeSignals();
     runBot({
