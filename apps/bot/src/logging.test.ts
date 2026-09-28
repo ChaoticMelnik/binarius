@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import pino from 'pino';
 import { BotError, HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
@@ -253,7 +254,7 @@ describe('what the bot writes about the welcome video', () => {
 describe('what the bot writes when a drain step fails', () => {
   it('names the step and the error, and keeps the token out of the line', async () => {
     const { lines, logger } = sink();
-    let fire: (() => void) | undefined;
+    const signalSource = new EventEmitter();
     const bot: PollingLoop = {
       start: () => Promise.resolve(),
       stop: () =>
@@ -266,14 +267,9 @@ describe('what the bot writes when a drain step fails', () => {
       logger,
       exit: vi.fn(),
       signals: ['SIGTERM'],
-      signalSource: {
-        once(_signal, handler) {
-          fire ??= handler;
-          return this;
-        },
-      },
+      signalSource,
     });
-    fire?.();
+    signalSource.emit('SIGTERM');
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const logged = lineWith(lines, 'shutdown: bot.stop() failed');

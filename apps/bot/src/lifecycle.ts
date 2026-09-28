@@ -23,7 +23,7 @@ export interface RunBotOptions {
   shutdownBudgetMs?: number;
   signals?: readonly NodeJS.Signals[];
   // `process` by default; the tests drive their own emitter rather than the real signals
-  signalSource?: { once(signal: NodeJS.Signals, handler: () => void): unknown };
+  signalSource?: { on(signal: NodeJS.Signals, handler: () => void): unknown };
 }
 
 // The process around the bot: start long polling, and on the first termination signal stop
@@ -55,7 +55,10 @@ export function runBot({
   });
 
   const shutdown = (signal: NodeJS.Signals) => {
-    // a second signal is not a reason to tear down a shutdown already under way
+    // A second signal is not a reason to tear down a shutdown already under way. The listener
+    // has to stay installed for that to be true: a signal with no listener left gets Node's
+    // default action, and the second SIGTERM would kill the drain mid-handler — so this is
+    // registered with `on`, not `once`, and runBot is not meant to be called twice per process.
     if (stopping) return;
     stopping = true;
     logger.info({ signal }, 'shutting down');
@@ -89,5 +92,5 @@ export function runBot({
     });
   };
 
-  for (const signal of signals) signalSource.once(signal, () => shutdown(signal));
+  for (const signal of signals) signalSource.on(signal, () => shutdown(signal));
 }

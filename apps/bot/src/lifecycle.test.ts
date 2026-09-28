@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { ALLOWED_UPDATES, runBot, type PollingLoop } from './lifecycle';
 import { fakeLogger, type FakeLogger } from './testing';
@@ -33,19 +34,10 @@ function fakeBot() {
   return { bot, options, stopCalls, resolveStart, rejectStart, resolveStop, rejectStop };
 }
 
-class FakeSignals {
-  private handlers = new Map<NodeJS.Signals, () => void>();
-  once(signal: NodeJS.Signals, handler: () => void): unknown {
-    this.handlers.set(signal, handler);
-    return this;
-  }
-  emit(signal: NodeJS.Signals): void {
-    this.handlers.get(signal)?.();
-  }
-  has(signal: NodeJS.Signals): boolean {
-    return this.handlers.has(signal);
-  }
-}
+// The signal source is a real EventEmitter rather than a hand-written double: `process` is one,
+// so `on`/`once`/`emit`/`listenerCount` here are the very implementations production runs, and a
+// double cannot quietly model `once` as `on` again.
+const signals = () => new EventEmitter();
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -59,7 +51,7 @@ const STEP_LINE = 'shutdown: a drain step failed, exiting anyway';
 describe('runBot', () => {
   it('starts long polling with this project’s own timeout, batch size and update filter', () => {
     const fake = fakeBot();
-    const signalSource = new FakeSignals();
+    const signalSource = signals();
     runBot({ bot: fake.bot, logger: fakeLogger(), exit: vi.fn(), signalSource });
 
     expect(fake.options[0]).toMatchObject({
@@ -69,8 +61,8 @@ describe('runBot', () => {
       limit: POLLING_BATCH_LIMIT,
       allowed_updates: ALLOWED_UPDATES,
     });
-    expect(signalSource.has('SIGTERM')).toBe(true);
-    expect(signalSource.has('SIGINT')).toBe(true);
+    expect(signalSource.listenerCount('SIGTERM')).toBe(1);
+    expect(signalSource.listenerCount('SIGINT')).toBe(1);
     fake.resolveStart();
   });
 
@@ -78,7 +70,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const log = fakeLogger();
     const exit = vi.fn();
-    runBot({ bot: fake.bot, logger: log, exit, signalSource: new FakeSignals() });
+    runBot({ bot: fake.bot, logger: log, exit, signalSource: signals() });
 
     fake.rejectStart(Object.assign(new Error('Unauthorized'), { name: 'GrammyError' }));
     await settle();
@@ -89,10 +81,19 @@ describe('runBot', () => {
   it('stops once however many signals arrive, and exits 0 when the drain finishes', async () => {
     const fake = fakeBot();
     const exit = vi.fn();
-    const signalSource = new FakeSignals();
+    const signalSource = signals();
     runBot({ bot: fake.bot, logger: fakeLogger(), exit, signalSource });
 
     signalSource.emit('SIGTERM');
+    // Half of "a second signal is ignored" is that there still is a listener to ignore it with:
+    // registered with `once`, the handler is gone by now, and in production Node would answer
+    // the second SIGTERM with its default action and kill the drain. An EventEmitter cannot
+    // model that half — it has no default action — so the premise itself is what is asserted.
+    expect(
+      signalSource.listenerCount('SIGTERM'),
+      'the SIGTERM handler must survive the first signal (`on`, not `once`), or the second one ' +
+        'kills the drain instead of being ignored',
+    ).toBe(1);
     signalSource.emit('SIGTERM');
     signalSource.emit('SIGINT');
     expect(fake.stopCalls).toHaveLength(1);
@@ -107,7 +108,7 @@ describe('runBot', () => {
   it('waits for the polling loop itself, not only for stop()', async () => {
     const fake = fakeBot();
     const exit = vi.fn();
-    const signalSource = new FakeSignals();
+    const signalSource = signals();
     runBot({ bot: fake.bot, logger: fakeLogger(), exit, signalSource });
 
     signalSource.emit('SIGTERM');
@@ -125,7 +126,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const log = fakeLogger();
     const exit = vi.fn();
-    const signalSource = new FakeSignals();
+    const signalSource = signals();
     runBot({ bot: fake.bot, logger: log, exit, shutdownBudgetMs: 20, signalSource });
 
     signalSource.emit('SIGTERM');
@@ -143,7 +144,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const log = fakeLogger();
     const exit = vi.fn();
-    const signalSource = new FakeSignals();
+    const signalSource = signals();
     runBot({ bot: fake.bot, logger: log, exit, signalSource });
 
     signalSource.emit('SIGTERM');
@@ -163,7 +164,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const log = fakeLogger();
     const exit = vi.fn();
-    const signalSource = new FakeSignals();
+    const signalSource = signals();
     runBot({ bot: fake.bot, logger: log, exit, signalSource });
 
     signalSource.emit('SIGTERM');
@@ -180,7 +181,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const log = fakeLogger();
     const exit = vi.fn();
-    const signalSource = new FakeSignals();
+    const signalSource = signals();
     runBot({ bot: fake.bot, logger: log, exit, shutdownBudgetMs: 20, signalSource });
 
     signalSource.emit('SIGTERM');
