@@ -1,10 +1,10 @@
-import { Bot, InlineKeyboard, type Context } from 'grammy';
+import { Bot, GrammyError, InlineKeyboard, type Context } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import {
   errorLogFields,
-  LANGUAGE_CODE_PATTERN,
+  languageCodeSchema,
   OAuthErrorCode,
-  START_PAYLOAD_PATTERN,
+  startPayloadSchema,
   UserStatus,
   type UserStartRequest,
 } from '@binarius/shared';
@@ -95,7 +95,10 @@ export function createBot({
     ]);
     if (answered.status === 'rejected') {
       logger.warn(
-        { ...errorLogFields(answered.reason), ...telegramErrorFields(answered.reason) },
+        {
+          ...errorLogFields(answered.reason),
+          ...telegramErrorFields(answered.reason, 'answerCallbackQuery'),
+        },
         'answering the callback query failed',
       );
     }
@@ -132,9 +135,14 @@ export function createBot({
         await ctx.replyWithVideo(welcomeVideoFileId, { caption: TEXTS.welcome, reply_markup });
         return;
       } catch (error) {
-        // a file id that Telegram refuses must not cost the user the whole first screen
+        // Telegram answering `ok: false` means nothing was sent, so the text replaces the
+        // video rather than repeating it — a file id the API refuses must not cost the user
+        // the whole first screen. A transport failure (HttpError: our own 8 s abort, a
+        // dropped socket) leaves delivery unknown, and a second welcome is worse than none,
+        // so it goes to bot.catch and the user repeats /start.
+        if (!(error instanceof GrammyError)) throw error;
         logger.warn(
-          { ...errorLogFields(error), ...telegramErrorFields(error) },
+          { ...errorLogFields(error), ...telegramErrorFields(error, 'sendVideo') },
           'the welcome video was refused, sending the text instead',
         );
       }
@@ -145,18 +153,18 @@ export function createBot({
   return bot;
 }
 
-// only what a /start may legitimately carry; anything else is treated as no payload at all,
-// without telling the user off for a link they did not compose
+// Both boundaries apply the schema of the request itself, not a pattern that is half of one:
+// a value the bot lets through and /users/start then refuses turns the whole /start into
+// "service unavailable", where dropping the value costs nothing the user would notice. A link
+// the user did not compose is not their mistake either, so neither is reported back.
 function payloadOf(match: unknown): Pick<UserStartRequest, 'startPayload'> {
-  return typeof match === 'string' && START_PAYLOAD_PATTERN.test(match)
-    ? { startPayload: match }
-    : {};
+  const parsed = startPayloadSchema.safeParse(match);
+  return parsed.success ? { startPayload: parsed.data } : {};
 }
 
 function languageOf(languageCode: string | undefined): Pick<UserStartRequest, 'languageCode'> {
-  return languageCode !== undefined && LANGUAGE_CODE_PATTERN.test(languageCode)
-    ? { languageCode }
-    : {};
+  const parsed = languageCodeSchema.safeParse(languageCode);
+  return parsed.success ? { languageCode: parsed.data } : {};
 }
 
 function backendErrorFields(error: unknown): { backendStatus?: number; backendReason?: string } {
