@@ -88,13 +88,16 @@ The welcome has to fit in 1024 UTF-16 code units because it travels as a video c
 `WELCOME_VIDEO_FILE_ID` is set — `apps/bot/src/texts.test.ts` holds that limit in the unit the
 Bot API counts in, so configuring a video cannot break sending.
 
-The text fallback answers a **refusal**, not any failure. When Telegram replies `ok: false`
-(`GrammyError`) nothing was sent, so the welcome goes out as plain text with the same button and
-the refusal is logged: a wrong file id costs the video, not the screen. When the call fails in
-transport instead — our own 8 s client timeout, a dropped socket, anything that arrives as
-`HttpError` — Telegram may already have delivered the video, so nothing further is sent; the
-failure reaches `bot.catch`, which logs it by identity, and the user repeats `/start`. A second
-welcome is worse than a missing one.
+The text fallback answers a **refusal**, not any failure, and the video call has three outcomes
+rather than two. When Telegram replies `ok: false` (`GrammyError`) nothing was sent, so the
+welcome goes out as plain text with the same button and the refusal is logged: a wrong file id
+costs the video, not the screen. When the call fails in transport instead — our own 8 s client
+timeout, a dropped socket, anything that arrives as `HttpError` — Telegram may already have
+delivered the video, so nothing further is sent; it is logged on the spot, by identity and with
+the `sendVideo` it was, because `HttpError` carries no method and `bot.catch` could not tell
+that line from a timeout on any other call. The user repeats `/start`: a second welcome is worse
+than a missing one. Anything else is neither a refusal nor a delivery problem — a bug, a broken
+plugin — and is rethrown into `bot.catch` unchanged rather than reported as one.
 
 ## Configuration
 

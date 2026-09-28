@@ -1,4 +1,4 @@
-import { Bot, GrammyError, InlineKeyboard, type Context } from 'grammy';
+import { Bot, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import {
   errorLogFields,
@@ -137,14 +137,31 @@ export function createBot({
       } catch (error) {
         // Telegram answering `ok: false` means nothing was sent, so the text replaces the
         // video rather than repeating it — a file id the API refuses must not cost the user
-        // the whole first screen. A transport failure (HttpError: our own 8 s abort, a
-        // dropped socket) leaves delivery unknown, and a second welcome is worse than none,
-        // so it goes to bot.catch and the user repeats /start.
-        if (!(error instanceof GrammyError)) throw error;
-        logger.warn(
-          { ...errorLogFields(error), ...telegramErrorFields(error, 'sendVideo') },
-          'the welcome video was refused, sending the text instead',
-        );
+        // the whole first screen.
+        if (error instanceof GrammyError) {
+          logger.warn(
+            { ...errorLogFields(error), ...telegramErrorFields(error) },
+            'the welcome video was refused, sending the text instead',
+          );
+        } else if (error instanceof HttpError) {
+          // A transport failure (our own 8 s abort, a dropped socket) leaves delivery unknown,
+          // and a second welcome is worse than none. It is logged here rather than in
+          // bot.catch because this is the only place that still knows the method: HttpError
+          // carries none, so from there the line reads like a timeout on any other call.
+          logger.error(
+            {
+              ...errorLogFields(error),
+              ...telegramErrorFields(error, 'sendVideo'),
+              updateId: ctx.update.update_id,
+            },
+            'the welcome video call failed in transport, sending nothing more',
+          );
+          return;
+        } else {
+          // neither a refusal nor the transport: a bug or a broken plugin, which must not be
+          // dressed up as a delivery problem
+          throw error;
+        }
       }
     }
     await ctx.reply(TEXTS.welcome, { reply_markup });
