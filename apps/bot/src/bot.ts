@@ -1,10 +1,11 @@
 import { Bot, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
-import type { UserFromGetMe } from 'grammy/types';
+import type { User, UserFromGetMe } from 'grammy/types';
 import {
   errorLogFields,
   languageCodeSchema,
   OAuthErrorCode,
   startPayloadSchema,
+  userStartRequestSchema,
   UserStatus,
   type UserStartRequest,
 } from '@binarius/shared';
@@ -58,7 +59,7 @@ export function createBot({
     if (from === undefined) return;
     const request: UserStartRequest = {
       telegramUserId: String(from.id),
-      displayName: [from.first_name, from.last_name].filter(Boolean).join(' ').trim(),
+      displayName: displayNameOf(from),
       ...languageOf(from.language_code),
       ...payloadOf(ctx.match),
     };
@@ -170,10 +171,21 @@ export function createBot({
   return bot;
 }
 
-// Both boundaries apply the schema of the request itself, not a pattern that is half of one:
-// a value the bot lets through and /users/start then refuses turns the whole /start into
-// "service unavailable", where dropping the value costs nothing the user would notice. A link
-// the user did not compose is not their mistake either, so neither is reported back.
+// All three derived fields go through the schema of the request itself, not through a pattern
+// that is half of one: a value the bot lets through and /users/start then refuses turns the
+// whole /start into "service unavailable", where dropping it costs nothing the user would
+// notice. A link the user did not compose is not their mistake either, so nothing is reported
+// back. The name is the one field that cannot simply be dropped — it is required — so it falls
+// back to the Telegram id instead: the only identity the bot is certain to have. Bot API says
+// first_name is non-empty, but not that it survives a trim, so this is depth rather than dead
+// code.
+function displayNameOf(from: User): string {
+  const parsed = userStartRequestSchema.shape.displayName.safeParse(
+    [from.first_name, from.last_name].filter(Boolean).join(' '),
+  );
+  return parsed.success ? parsed.data : String(from.id);
+}
+
 function payloadOf(match: unknown): Pick<UserStartRequest, 'startPayload'> {
   const parsed = startPayloadSchema.safeParse(match);
   return parsed.success ? { startPayload: parsed.data } : {};
