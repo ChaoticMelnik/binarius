@@ -118,8 +118,11 @@ plugin — and is rethrown into `bot.catch` unchanged rather than reported as on
 Under compose the `bot` service is given only these five names, not the shared environment
 anchor the other services take: the Postgres password and the Redis URL have no business in a
 process that opens neither, and `WELCOME_VIDEO_FILE_ID` is passed only when it is set.
-`apps/bot/src/env.test.ts` reads the names out of `compose.yaml` and compares them with the ones
-`parseEnv` reads, so the anchor cannot drift back in unnoticed.
+Nothing in this repository guards that today. `env.test.ts` used to scan `compose.yaml` line by
+line for the names, and it stayed green while Compose handed the container more than the scan
+could see — a `<<:` merge of the anchor, or an `env_file:`, is resolved by Compose and not by the
+text — so the scanner was removed rather than left vouching for what it could not read. A check
+that takes the set from `docker compose config --format json` in CI is tracked by #70.
 
 An empty value is a misconfiguration, not a default: the process refuses to start, and so does a
 value carrying whitespace — a `file_id` with a trailing newline is one Telegram refuses on every
