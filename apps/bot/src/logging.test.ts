@@ -12,7 +12,14 @@ import {
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { CONNECT_CALLBACK_DATA, createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
-import { BOT_INFO, captureApi, connectUpdate, startUpdate, type ApiCall } from './testing';
+import {
+  BOT_INFO,
+  captureApi,
+  connectUpdate,
+  startUpdate,
+  type ApiAnswer,
+  type ApiCall,
+} from './testing';
 import { TEXTS } from './texts';
 
 // What reaches the log is only provable by reading the log, so this suite runs the real pino
@@ -55,6 +62,7 @@ interface Scenario {
   startLogin?: BackendClient['startLogin'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
+  answers?: readonly (readonly [string, ApiAnswer])[];
 }
 
 async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: ApiCall[] }> {
@@ -74,6 +82,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
   });
   const api = captureApi(bot);
   for (const [method, failure] of scenario.apiErrors ?? []) api.apiErrors.set(method, failure);
+  for (const [method, answer] of scenario.answers ?? []) api.answers.set(method, answer);
 
   // handleUpdate rethrows the BotError instead of routing it: grammY only hands it to the
   // installed handler on the polling path (bot.js → handleUpdates). The handler under test is
@@ -227,9 +236,10 @@ describe('what the bot writes about the welcome video', () => {
     expect(calls.map((call) => call.method)).toEqual(['sendVideo', 'sendMessage']);
   });
 
-  it('reports a transport failure by identity, sends nothing more, and drops the token', async () => {
+  it('reports a transport failure by identity and method, sends nothing more, drops the token', async () => {
+    const update = startUpdate('/start');
     const { lines, calls } = await linesFrom({
-      update: startUpdate('/start'),
+      update,
       welcomeVideoFileId: 'BAACAgIAAxkB',
       apiErrors: [
         [
@@ -243,18 +253,50 @@ describe('what the bot writes about the welcome video', () => {
         ],
       ],
     });
-    const logged = lineWith(lines, 'update handler failed');
+    const logged = lineWith(
+      lines,
+      'the welcome video call failed in transport, sending nothing more',
+    );
 
     expect(logged).toMatchObject({
       err: { name: 'HttpError' },
+      method: 'sendVideo',
       transportError: { name: 'Error' },
+      updateId: update.update_id,
     });
     expect(logged).not.toHaveProperty('telegramErrorCode');
     expect(logged?.err).not.toHaveProperty('message');
+    // it is answered where the method is known, so it never reaches bot.catch
+    expect(lineWith(lines, 'update handler failed')).toBeUndefined();
     // delivery is unknown, so the text welcome is not sent after it
     expect(calls.map((call) => call.method)).toEqual(['sendVideo']);
     expect(lines.join('')).not.toContain(TOKEN);
     expect(lines.join('')).not.toContain('SECRET-TOKEN');
+  });
+
+  it('still sends anything else to bot.catch, without a method it does not know', async () => {
+    const update = startUpdate('/start');
+    const { lines, calls } = await linesFrom({
+      update,
+      welcomeVideoFileId: 'BAACAgIAAxkB',
+      answers: [
+        [
+          'sendVideo',
+          () => {
+            throw new TypeError('sentinel');
+          },
+        ],
+      ],
+    });
+    const logged = lineWith(lines, 'update handler failed');
+
+    expect(logged).toMatchObject({ err: { name: 'TypeError' }, updateId: update.update_id });
+    expect(logged).not.toHaveProperty('method');
+    expect(logged).not.toHaveProperty('transportError');
+    expect(
+      lineWith(lines, 'the welcome video call failed in transport, sending nothing more'),
+    ).toBeUndefined();
+    expect(calls.map((call) => call.method)).toEqual(['sendVideo']);
   });
 });
 

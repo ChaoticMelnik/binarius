@@ -60,8 +60,8 @@ function setup(
       ? {}
       : { welcomeVideoFileId: options.welcomeVideoFileId }),
   });
-  const { calls, apiErrors } = captureApi(bot);
-  return { bot, backend, calls, logger, apiErrors };
+  const { calls, apiErrors, answers } = captureApi(bot);
+  return { bot, backend, calls, logger, apiErrors, answers };
 }
 
 describe('/start', () => {
@@ -224,6 +224,25 @@ describe('the welcome video', () => {
       ),
     );
 
+    await bot.handleUpdate(startUpdate('/start'));
+    expect(sentPayload(calls, 'sendMessage')).toBeUndefined();
+    expect(logger.warn).not.toHaveBeenCalled();
+    // the method is only known here, so this is where the line is written
+    expect(logger.error.mock.calls[0]?.[0]).toMatchObject({
+      err: { name: 'HttpError' },
+      method: 'sendVideo',
+      transportError: { name: 'Error' },
+    });
+  });
+
+  it('lets anything that is neither a refusal nor the transport reach bot.catch', async () => {
+    const { bot, calls, logger, answers } = setup({ welcomeVideoFileId: 'BAACAgIAAxkB' });
+    // not through apiErrors: its type no longer admits a failure the transport cannot produce,
+    // and this branch exists precisely for the ones it cannot
+    answers.set('sendVideo', () => {
+      throw new TypeError('sentinel');
+    });
+
     const thrown = await bot.handleUpdate(startUpdate('/start')).then(
       () => undefined,
       (error: unknown) => error,
@@ -231,6 +250,7 @@ describe('the welcome video', () => {
     expect(thrown).toBeInstanceOf(BotError);
     expect(sentPayload(calls, 'sendMessage')).toBeUndefined();
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });
 

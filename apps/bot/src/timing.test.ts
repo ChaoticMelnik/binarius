@@ -12,7 +12,14 @@ import {
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { CONNECT_CALLBACK_DATA, createBot } from './bot';
-import { BOT_INFO, captureApi, connectUpdate, fakeLogger, startUpdate } from './testing';
+import {
+  BOT_INFO,
+  captureApi,
+  connectUpdate,
+  fakeLogger,
+  startUpdate,
+  type ApiAnswer,
+} from './testing';
 import { COMPOSE_STOP_GRACE_PERIOD_MS, GRAMMY_POLLING_BACKOFF_MS, HANDLER_CALLS } from './timing';
 
 // HANDLER_BUDGET_MS is computed from HANDLER_CALLS, so nothing here recomputes it: what this
@@ -39,6 +46,7 @@ interface Branch {
   startLogin?: BackendClient['startLogin'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
+  answers?: readonly (readonly [string, ApiAnswer])[];
 }
 
 const VIEW: UserStartView = {
@@ -101,6 +109,7 @@ async function observe(branch: Branch): Promise<Calls> {
   });
   const api = captureApi(bot);
   for (const [method, failure] of branch.apiErrors ?? []) api.apiErrors.set(method, failure);
+  for (const [method, answer] of branch.answers ?? []) api.answers.set(method, answer);
   // a branch that rethrows reaches the polling loop as a rejection; the calls it made before
   // that still have to fit in the budget
   await bot.handleUpdate(branch.update).catch(() => undefined);
@@ -184,11 +193,27 @@ const START_BRANCHES: readonly Branch[] = [
     expected: { backend: 1, telegram: 2 },
   },
   {
-    // delivery is unknown, so nothing is sent after it: the branch rethrows
+    // delivery is unknown, so nothing is sent after it
     label: 'the video call fails in transport',
     update: startUpdate('/start'),
     welcomeVideoFileId: 'BAACAgIAAxkB',
     apiErrors: [['sendVideo', videoTimedOut()]],
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    // neither a refusal nor the transport: the branch rethrows into bot.catch, and whatever it
+    // sent before that still has to fit the budget
+    label: 'the video call fails for a reason the transport cannot produce',
+    update: startUpdate('/start'),
+    welcomeVideoFileId: 'BAACAgIAAxkB',
+    answers: [
+      [
+        'sendVideo',
+        () => {
+          throw new TypeError('sentinel');
+        },
+      ],
+    ],
     expected: { backend: 1, telegram: 1 },
   },
 ];
