@@ -42,18 +42,28 @@ describe('startPayloadSchema', () => {
   });
 });
 
+// The three odd rows below pin the wording in users.ts, not a preference and not conformance:
+// this pattern is an approximation of an IETF tag, so x- and i- tags are dropped and a lone
+// singleton is kept. Narrowing it later has to change that comment, the docs and these rows.
 describe('languageCodeSchema', () => {
-  it.each(['ru', 'en-US', 'zh-Hant-TW', 'ast'])('accepts %s', (value) => {
+  it.each(['ru', 'en-US', 'zh-Hant-TW', 'ast', 'en-a'])('accepts %s', (value) => {
     expect(languageCodeSchema.safeParse(value).success).toBe(true);
     expect(LANGUAGE_CODE_PATTERN.test(value)).toBe(true);
   });
 
-  it.each(['r', 'engl', 'en_US', 'русский', '', 'en-', `en-${'a'.repeat(34)}`])(
-    'rejects %j',
-    (value) => {
-      expect(languageCodeSchema.safeParse(value).success).toBe(false);
-    },
-  );
+  it.each([
+    'r',
+    'engl',
+    'en_US',
+    'русский',
+    '',
+    'en-',
+    'x-private',
+    'i-klingon',
+    `en-${'a'.repeat(34)}`,
+  ])('rejects %j', (value) => {
+    expect(languageCodeSchema.safeParse(value).success).toBe(false);
+  });
 });
 
 describe('userStartRequestSchema', () => {

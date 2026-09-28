@@ -226,7 +226,8 @@ describe('what the bot writes about the welcome video', () => {
         [
           'sendVideo',
           // what grammY throws when its own timeoutSeconds aborts the call or the socket
-          // dies: no method of its own, and a message quoting the URL the token sits in
+          // dies: no method of its own, and a wrapped error whose message quotes the URL the
+          // token sits in
           new HttpError(
             "Network request for 'sendVideo' failed!",
             new Error(`request to https://api.telegram.org/bot${TOKEN}/sendVideo failed`),

@@ -15,9 +15,12 @@ export interface TelegramErrorFields {
 // no pino redact path can scrub either — they are strings and free-form objects.
 //
 // grammY throws GrammyError only when Telegram answered `ok: false`; a transport failure or
-// our own timeoutSeconds abort throws HttpError, which carries no method and whose message
-// quotes the URL the token sits in. So the method is passed in where the call site knows it,
-// and the wrapped failure is reduced to its identity, never its message.
+// our own timeoutSeconds abort throws HttpError, which has no `method` field. Its own message
+// names the method and, when the transport supplied one, the HTTP status — grammY appends the
+// wrapped error's message only under `sensitiveLogs`, off by default and not set in createBot
+// — but the wrapped error is whatever the transport threw, and its message can quote the URL
+// the token sits in. So the method is passed in where the call site knows it, and the wrapped
+// failure is reduced to its identity, never its message.
 export function telegramErrorFields(error: unknown, method?: string): TelegramErrorFields {
   if (error instanceof GrammyError) {
     return { method: error.method, telegramErrorCode: error.error_code };

@@ -69,8 +69,12 @@ routes. Request and response are validated by `@binarius/shared/users`.
 | ---------------- | --------------------------------------------------------------------- |
 | `telegramUserId` | decimal string, the shared `telegramUserIdSchema`                     |
 | `displayName`    | trimmed, 1-256 characters; the bot joins `first_name` and `last_name` |
-| `languageCode`   | optional, BCP 47 (`LANGUAGE_CODE_PATTERN`, at most 35 characters)     |
+| `languageCode`   | optional, `LANGUAGE_CODE_PATTERN`, at most 35 characters              |
 | `startPayload`   | optional, `START_PAYLOAD_PATTERN`                                     |
+
+`LANGUAGE_CODE_PATTERN` is a deliberately narrow approximation of an IETF tag, not a BCP 47
+validator: a 2-3 letter primary subtag, then `-` subtags of 1-8 letters or digits. Private-use
+(`x-…`) and grandfathered (`i-…`) tags are refused, and a lone singleton such as `en-a` passes.
 
 Answers: `200 { user }`, `400 { error: 'validation', issues }`, `401 { error: 'unauthorized' }`.
 
