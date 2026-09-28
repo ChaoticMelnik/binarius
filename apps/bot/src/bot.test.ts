@@ -150,6 +150,17 @@ describe('/start', () => {
     );
   });
 
+  it('sends the Telegram id as the name when nothing survives the schema', async () => {
+    const { bot, backend } = setup();
+    // Bot API promises first_name is non-empty, not that it is non-empty after a trim
+    await bot.handleUpdate(
+      startUpdate('/start', 'private', { id: 7, is_bot: false, first_name: '   ' }),
+    );
+    expect(backend.recordStart).toHaveBeenCalledWith(
+      expect.objectContaining({ telegramUserId: '7', displayName: '7' }),
+    );
+  });
+
   it('shows a blocked user no CTA', async () => {
     const { bot, calls } = setup({ user: view({ status: UserStatus.Blocked }) });
     await bot.handleUpdate(startUpdate('/start'));

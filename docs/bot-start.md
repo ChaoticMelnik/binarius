@@ -74,6 +74,12 @@ routes. Request and response are validated by `@binarius/shared/users`.
 
 Answers: `200 { user }`, `400 { error: 'validation', issues }`, `401 { error: 'unauthorized' }`.
 
+Every field the bot derives is checked against this same schema before it is sent, `displayName`
+included: the joined name goes through `userStartRequestSchema.shape.displayName`, and when it
+does not pass — a `first_name` of nothing but spaces is what Bot API still calls non-empty — the
+Telegram user id is sent as the name instead. The optional fields are simply dropped when they
+do not pass; the name cannot be, because the route requires it.
+
 The write is a single `INSERT ... ON CONFLICT (telegram_user_id) DO UPDATE`, so two `/start`
 updates racing on a new user produce one row. It refreshes `display_name` and, when one arrived,
 `language_code`; it does **not** write `status`, so a blocked user stays blocked — the route

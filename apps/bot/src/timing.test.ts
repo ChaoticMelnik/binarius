@@ -119,17 +119,25 @@ async function observe(branch: Branch): Promise<Calls> {
 async function checkHandler(
   handler: string,
   branches: readonly Branch[],
-  worstCaseLabel: string,
+  worstCase: Branch,
   declared: Calls,
 ): Promise<void> {
-  const observed = new Map<string, Calls>();
-  for (const branch of branches) observed.set(branch.label, await observe(branch));
+  // A label only names its branch in the assertion messages below; the observations are keyed
+  // by position, and the worst case is the branch object itself. Two branches sharing a label
+  // used to collapse into one observation, leaving a listed branch checked twice and another
+  // not at all — so the duplicate is caught here instead.
+  expect(
+    new Set(branches.map((branch) => branch.label)).size,
+    `${handler}: branch labels must be unique`,
+  ).toBe(branches.length);
 
-  for (const branch of branches) {
-    expect(observed.get(branch.label), `${handler}: ${branch.label}`).toEqual(branch.expected);
-  }
+  const seen: Calls[] = [];
+  for (const branch of branches) seen.push(await observe(branch));
 
-  const seen = branches.map((branch) => observed.get(branch.label) as Calls);
+  branches.forEach((branch, index) => {
+    expect(seen[index], `${handler}: ${branch.label}`).toEqual(branch.expected);
+  });
+
   expect(
     {
       backend: Math.max(...seen.map((calls) => calls.backend)),
@@ -137,14 +145,22 @@ async function checkHandler(
     },
     `${handler}: HANDLER_CALLS no longer describes the worst of the branches above`,
   ).toEqual(declared);
-  expect(observed.get(worstCaseLabel), `${handler}: worst case is "${worstCaseLabel}"`).toEqual(
-    declared,
-  );
+
+  const worst = branches.indexOf(worstCase);
+  expect(worst, `${handler}: the worst case must be one of the branches above`).not.toBe(-1);
+  expect(seen[worst], `${handler}: worst case is "${worstCase.label}"`).toEqual(declared);
 }
 
 // Every terminal branch of /start. A branch missing from this list is the one thing the
 // budget cannot be checked against — see the note in timing.ts.
-const START_WORST_CASE = 'the video is refused and the text replaces it';
+const START_WORST_CASE: Branch = {
+  label: 'the video is refused and the text replaces it',
+  update: startUpdate('/start'),
+  welcomeVideoFileId: 'not-a-file-id',
+  apiErrors: [['sendVideo', VIDEO_REFUSED]],
+  expected: { backend: 1, telegram: 2 },
+};
+
 const START_BRANCHES: readonly Branch[] = [
   {
     label: 'the update carries no sender',
@@ -185,13 +201,7 @@ const START_BRANCHES: readonly Branch[] = [
     welcomeVideoFileId: 'BAACAgIAAxkB',
     expected: { backend: 1, telegram: 1 },
   },
-  {
-    label: START_WORST_CASE,
-    update: startUpdate('/start'),
-    welcomeVideoFileId: 'not-a-file-id',
-    apiErrors: [['sendVideo', VIDEO_REFUSED]],
-    expected: { backend: 1, telegram: 2 },
-  },
+  START_WORST_CASE,
   {
     // delivery is unknown, so nothing is sent after it
     label: 'the video call fails in transport',
@@ -218,18 +228,19 @@ const START_BRANCHES: readonly Branch[] = [
   },
 ];
 
-const CONNECT_WORST_CASE = 'the query is answered and the link is sent';
+const CONNECT_WORST_CASE: Branch = {
+  label: 'the query is answered and the link is sent',
+  update: connectUpdate(CONNECT_CALLBACK_DATA),
+  expected: { backend: 1, telegram: 2 },
+};
+
 const CONNECT_BRANCHES: readonly Branch[] = [
   {
     label: 'the chat is not private',
     update: connectUpdate(CONNECT_CALLBACK_DATA, 'group'),
     expected: { backend: 0, telegram: 0 },
   },
-  {
-    label: CONNECT_WORST_CASE,
-    update: connectUpdate(CONNECT_CALLBACK_DATA),
-    expected: { backend: 1, telegram: 2 },
-  },
+  CONNECT_WORST_CASE,
   {
     label: 'answering the query is refused and the link still goes',
     update: connectUpdate(CONNECT_CALLBACK_DATA),
