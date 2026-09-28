@@ -36,6 +36,9 @@ Mandatory checks (answer each explicitly — this list grows over time; add a ne
 14. Are every parser and every request/response shape in the domain listed individually in the coverage table?
 15. Does the plan rely on a framework default (error body, redaction, retry, timeout, lock mode)? If yes: was it verified by execution, and is the evidence quoted?
 16. Is every invariant the plan documents worded no wider than the place that enforces it (cited file/constraint/test)?
+17. Does every test double, fake, stub or scanner the plan keeps or introduces either use the real implementation, or carry a load-bearing premise that is verified against the real API by a test that can go red? A premise asserted only by a comment does not count.
+18. For every oracle the plan adds, is a concrete mutation named that makes it fail — and is that mutation *discriminating* rather than *neighbouring*, i.e. does it redden the new check alone and not one that already existed?
+19. Does the plan delete or replace anything? If yes: does any comment, doc sentence, test name or PR claim survive the deletion that it makes false?
 
 Output format:
 - findings only

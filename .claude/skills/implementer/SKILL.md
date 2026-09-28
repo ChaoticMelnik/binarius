@@ -87,6 +87,9 @@ Run before committing. Every item traces to a review finding (`audits.md`):
 - [ ] A change to what reaches the logs is covered by a test that reads the log itself, not the HTTP response
 - [ ] Integration tests in a shared temp database key their latches and counters to their own rows (`intentId`), not to processing order
 - [ ] A clarify answer that changed a plan constraint is named, with the affected invariant, in the PR's "Deviations" section
+- [ ] **Every test added or changed was shown to fail**, by breaking the code it guards, reading the failure and reverting it; the printed failure is quoted in the PR. A passing test is not evidence it can fail — #22 shipped three Majors past suites that were green by construction
+- [ ] The mutation used as that evidence is **discriminating, not neighbouring**: it must redden the new check alone. If an assertion that already existed also goes red, the experiment proves nothing about the new one and a narrower mutation is needed
+- [ ] A check written *this round to close a review finding* is held to the two items above as well — that is the oracle the previous round's rule always misses
 
 ### Step 6: Commit
 
