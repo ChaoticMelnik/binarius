@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import type { Bot, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
+import { UserStatus, type StartLoginResponse, type UserStartView } from '@binarius/shared';
 
 export const BOT_INFO: UserFromGetMe = {
   id: 1,
@@ -24,6 +25,33 @@ export const BOT_INFO: UserFromGetMe = {
 };
 
 export const USER: User = { id: 4242, is_bot: false, first_name: 'Ada', last_name: 'Lovelace' };
+
+export const USER_VIEW: UserStartView = {
+  telegramUserId: String(USER.id),
+  status: UserStatus.Active,
+  acquisitionSource: null,
+  acquiredAt: null,
+  hasActiveBrokerAccount: false,
+};
+
+export const userView = (patch: Partial<UserStartView> = {}): UserStartView => ({
+  ...USER_VIEW,
+  ...patch,
+});
+
+export const LOGIN: StartLoginResponse = {
+  authorizeUrl: 'https://binodex.app/oauth/authorize?state=abc',
+  state: 'abc',
+  expiresAt: '2026-09-24T10:10:00.000Z',
+};
+
+// the reason a promise rejected with, or undefined when it resolved: what a test needs when the
+// assertion is about the error's identity rather than its message
+export const rejectionOf = async (promise: Promise<unknown>): Promise<unknown> =>
+  promise.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
 
 export interface FakeLogger {
   info: Mock;

@@ -3,19 +3,17 @@ import pino from 'pino';
 import { BotError, HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  LOG_REDACT_PATHS,
-  UserStatus,
-  type StartLoginResponse,
-  type UserStartView,
-} from '@binarius/shared';
+import { LOG_REDACT_PATHS } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { CONNECT_CALLBACK_DATA, createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
 import {
   BOT_INFO,
+  LOGIN,
+  USER_VIEW,
   captureApi,
   connectUpdate,
+  rejectionOf,
   startUpdate,
   type ApiAnswer,
   type ApiCall,
@@ -27,20 +25,6 @@ import { TEXTS } from './texts';
 
 const TOKEN = '123456:AA-SECRET-TOKEN-0000000000000000';
 const INTERNAL_TOKEN = 'SECRET-INTERNAL-BEARER-0000';
-
-const VIEW: UserStartView = {
-  telegramUserId: '4242',
-  status: UserStatus.Active,
-  acquisitionSource: null,
-  acquiredAt: null,
-  hasActiveBrokerAccount: false,
-};
-
-const LOGIN: StartLoginResponse = {
-  authorizeUrl: 'https://binodex.app/oauth/authorize?state=abc',
-  state: 'abc',
-  expiresAt: '2026-09-24T10:10:00.000Z',
-};
 
 const sink = () => {
   const lines: string[] = [];
@@ -68,7 +52,7 @@ interface Scenario {
 async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: ApiCall[] }> {
   const { lines, logger } = sink();
   const backend: BackendClient = {
-    recordStart: scenario.recordStart ?? (() => Promise.resolve(VIEW)),
+    recordStart: scenario.recordStart ?? (() => Promise.resolve(USER_VIEW)),
     startLogin: scenario.startLogin ?? (() => Promise.resolve(LOGIN)),
   };
   const bot = createBot({
@@ -87,10 +71,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
   // handleUpdate rethrows the BotError instead of routing it: grammY only hands it to the
   // installed handler on the polling path (bot.js → handleUpdates). The handler under test is
   // the one createBot installed, reached the same way the loop reaches it, with the real error.
-  const thrown = await bot.handleUpdate(scenario.update).then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  const thrown = await rejectionOf(bot.handleUpdate(scenario.update));
   if (thrown !== undefined) {
     expect(thrown).toBeInstanceOf(BotError);
     await (bot as unknown as { errorHandler(error: BotError): Promise<void> }).errorHandler(

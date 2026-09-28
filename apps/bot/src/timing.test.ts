@@ -3,17 +3,14 @@ import { fileURLToPath } from 'node:url';
 import { HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
-import {
-  OAuthErrorCode,
-  UserStatus,
-  type StartLoginResponse,
-  type UserStartView,
-} from '@binarius/shared';
+import { OAuthErrorCode, UserStatus } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { CONNECT_CALLBACK_DATA, createBot } from './bot';
 import {
   BOT_INFO,
+  LOGIN,
+  USER_VIEW,
   captureApi,
   connectUpdate,
   fakeLogger,
@@ -49,20 +46,6 @@ interface Branch {
   answers?: readonly (readonly [string, ApiAnswer])[];
 }
 
-const VIEW: UserStartView = {
-  telegramUserId: '4242',
-  status: UserStatus.Active,
-  acquisitionSource: null,
-  acquiredAt: null,
-  hasActiveBrokerAccount: false,
-};
-
-const LOGIN: StartLoginResponse = {
-  authorizeUrl: 'https://binodex.app/oauth/authorize?state=abc',
-  state: 'abc',
-  expiresAt: '2026-09-24T10:10:00.000Z',
-};
-
 const VIDEO_REFUSED: ApiError = {
   ok: false,
   error_code: 400,
@@ -91,7 +74,7 @@ async function observe(branch: Branch): Promise<Calls> {
   const client: BackendClient = {
     recordStart: (request) => {
       backend += 1;
-      return (branch.recordStart ?? (() => Promise.resolve(VIEW)))(request);
+      return (branch.recordStart ?? (() => Promise.resolve(USER_VIEW)))(request);
     },
     startLogin: (telegramUserId) => {
       backend += 1;
@@ -181,13 +164,13 @@ const START_BRANCHES: readonly Branch[] = [
   {
     label: 'the user is blocked',
     update: startUpdate('/start'),
-    recordStart: () => Promise.resolve({ ...VIEW, status: UserStatus.Blocked }),
+    recordStart: () => Promise.resolve({ ...USER_VIEW, status: UserStatus.Blocked }),
     expected: { backend: 1, telegram: 1 },
   },
   {
     label: 'the user already has an account',
     update: startUpdate('/start'),
-    recordStart: () => Promise.resolve({ ...VIEW, hasActiveBrokerAccount: true }),
+    recordStart: () => Promise.resolve({ ...USER_VIEW, hasActiveBrokerAccount: true }),
     expected: { backend: 1, telegram: 1 },
   },
   {

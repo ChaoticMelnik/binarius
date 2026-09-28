@@ -2,11 +2,17 @@ import { EventEmitter } from 'node:events';
 import { HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { UserStatus, type UserStartView } from '@binarius/shared';
 import type { BackendClient } from './backend-client';
 import { createBot } from './bot';
 import { ALLOWED_UPDATES, runBot, type PollingLoop } from './lifecycle';
-import { BOT_INFO, captureApi, fakeLogger, startUpdate, type FakeLogger } from './testing';
+import {
+  BOT_INFO,
+  USER_VIEW,
+  captureApi,
+  fakeLogger,
+  startUpdate,
+  type FakeLogger,
+} from './testing';
 import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S } from './timing';
 
 // `bot.start()` resolves only once the polling loop has ended, which is what makes the drain
@@ -211,14 +217,6 @@ describe('runBot', () => {
 
 const TOKEN = '123456:AA-bot-token';
 
-const VIEW: UserStartView = {
-  telegramUserId: '4242',
-  status: UserStatus.Active,
-  acquisitionSource: null,
-  acquiredAt: null,
-  hasActiveBrokerAccount: false,
-};
-
 // bot.stop() confirms the offset with getUpdates({ offset, limit: 1 }) — neither a timeout nor
 // the polling AbortSignal, which is what tells it apart from a long poll (grammY bot.js)
 const isLongPoll = (payload: Record<string, unknown>): boolean => payload.timeout !== undefined;
@@ -274,7 +272,7 @@ function scene(options: SceneOptions = {}) {
   });
 
   const backend: BackendClient = {
-    recordStart: options.recordStart ?? (() => Promise.resolve(VIEW)),
+    recordStart: options.recordStart ?? (() => Promise.resolve(USER_VIEW)),
     startLogin: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({
@@ -336,7 +334,7 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     const s = scene({
       recordStart: () => {
         calls += 1;
-        return held.then(() => VIEW);
+        return held.then(() => USER_VIEW);
       },
     });
     await s.firstPoll();
