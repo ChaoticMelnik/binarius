@@ -180,11 +180,26 @@ jobs:
               fi
             done
           done
-      # an explicit list, because `bot` is deliberately left out: CI has no Telegram token, and
-      # the bot refuses a fake one at getMe (401, which grammY does not retry) and exits — the
-      # fail-fast the token rules exist for, but not something --wait can wait for. Every service
-      # builds from the same image, so --build still compiles the bot's code.
-      - run: docker compose up -d --build --wait --wait-timeout 120 postgres redis backend trading-worker web
+      # `bot` is the one service CI never starts, and --wait could not tell us if we did: with
+      # the fake token above the bot fails at getMe (401, which grammY does not retry) and the
+      # process exits 1, but `dev` is `tsx watch`, whose supervisor survives that and keeps the
+      # container running, and `bot` has no healthcheck — so --wait would report success over a
+      # dead bot. That supervisor gap is the same in all four app services and is issue #65.
+      # The list is derived rather than written out, so a service added to compose.yaml later
+      # is started here instead of being silently left behind.
+      - name: start every service except bot
+        run: |
+          services="$(docker compose config --services | grep -v '^bot$' || true)"
+          if [ -z "$services" ]; then
+            echo "docker compose config --services resolved nothing to start" >&2
+            exit 1
+          fi
+          if printf '%s\n' "$services" | grep -qx bot; then
+            echo "the bot service must not be started here (see the comment above)" >&2
+            exit 1
+          fi
+          printf 'starting:%s\n' "$(printf ' %s' $services)"
+          docker compose up -d --build --wait --wait-timeout 120 $services
       - run: curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'
       - if: failure()
         continue-on-error: true

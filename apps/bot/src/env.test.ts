@@ -72,4 +72,15 @@ describe('parseEnv', () => {
       'Env WELCOME_VIDEO_FILE_ID must not be empty',
     );
   });
+
+  it.each(['BAACAgIAAxkB\n', ' BAAC', 'BAAC AgIA'])(
+    'refuses whitespace in the welcome video file id %j',
+    (raw) => {
+      // a trailing \r from the .env would otherwise make every /start pay for a sendVideo
+      // Telegram always refuses, with no configuration error to point at
+      expect(() => parseEnv({ ...base, WELCOME_VIDEO_FILE_ID: raw })).toThrow(
+        'Env WELCOME_VIDEO_FILE_ID must not contain whitespace',
+      );
+    },
+  );
 });
