@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OAuthErrorCode, UserStatus, type UserStartRequest } from '@binarius/shared';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
+import { closeServer, listen } from './testing';
 
 const TOKEN = 'internal-token-for-tests';
 
@@ -16,7 +16,7 @@ let server: Server | undefined;
 afterEach(async () => {
   const running = server;
   server = undefined;
-  if (running !== undefined) await new Promise<void>((resolve) => running.close(() => resolve()));
+  await closeServer(running);
 });
 
 async function serve(
@@ -34,9 +34,7 @@ async function serve(
     });
   });
   server = started;
-  await new Promise<void>((resolve) => started.listen(0, '127.0.0.1', resolve));
-  const { port } = started.address() as AddressInfo;
-  return { baseUrl: `http://127.0.0.1:${port}`, capture };
+  return { baseUrl: await listen(started), capture };
 }
 
 const json = (response: ServerResponse, status: number, body: unknown): void => {
@@ -133,7 +131,7 @@ describe('recordStart', () => {
     const dead = baseUrl;
     const running = server;
     server = undefined;
-    await new Promise<void>((resolve) => running?.close(() => resolve()));
+    await closeServer(running);
     const error = await rejection(
       createBackendClient({ baseUrl: dead, token: TOKEN }).recordStart(request),
     );

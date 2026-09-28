@@ -1,32 +1,17 @@
 import pino from 'pino';
 import { BotError } from 'grammy';
-import type { ApiError, Update, UserFromGetMe } from 'grammy/types';
+import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import { LOG_REDACT_PATHS, UserStatus } from '@binarius/shared';
 import type { BackendClient } from './backend-client';
 import { createBot } from './bot';
+import { BOT_INFO } from './testing';
 import { TEXTS } from './texts';
 
 // What reaches the log is only provable by reading the log, so this suite runs the real pino
 // configuration from index.ts into a sink and asserts on the lines themselves.
 
 const TOKEN = '123456:AA-SECRET-TOKEN-0000000000000000';
-
-const BOT_INFO: UserFromGetMe = {
-  id: 1,
-  is_bot: true,
-  first_name: 'Binarius',
-  username: 'binarius_bot',
-  can_join_groups: false,
-  can_read_all_group_messages: false,
-  supports_inline_queries: false,
-  can_connect_to_business: false,
-  has_main_web_app: false,
-  has_topics_enabled: false,
-  allows_users_to_create_topics: false,
-  can_manage_bots: false,
-  supports_join_request_queries: false,
-};
 
 const UPDATE_ID = 90_210;
 const update: Update = {
