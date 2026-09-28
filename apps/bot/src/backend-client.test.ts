@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { OAuthErrorCode, UserStatus, type UserStartRequest } from '@binarius/shared';
+import { OAuthErrorCode, type UserStartRequest } from '@binarius/shared';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
-import { closeServer, listen, rejectionOf } from './testing';
+import { LOGIN, closeServer, listen, rejectionOf, userView } from './testing';
 
 const TOKEN = 'internal-token-for-tests';
 
@@ -48,22 +48,19 @@ const request: UserStartRequest = {
   startPayload: 'src_ab-CD9',
 };
 
-const userView = {
-  telegramUserId: '4242',
-  status: UserStatus.Active,
+const view = userView({
   acquisitionSource: 'src_ab-CD9',
   acquiredAt: '2026-09-24T10:00:00.000Z',
-  hasActiveBrokerAccount: false,
-};
+});
 
 describe('recordStart', () => {
   it('posts the request under the internal bearer and returns the view', async () => {
     const { baseUrl, capture } = await serve((_request, response) => {
-      json(response, 200, { user: userView });
+      json(response, 200, { user: view });
     });
     const client = createBackendClient({ baseUrl, token: TOKEN });
 
-    expect(await client.recordStart(request)).toEqual(userView);
+    expect(await client.recordStart(request)).toEqual(view);
     expect(capture.url).toBe('/users/start');
     expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
     expect(JSON.parse(capture.body ?? '')).toEqual(request);
@@ -71,7 +68,7 @@ describe('recordStart', () => {
 
   it('keeps a path prefix on the base URL', async () => {
     const { baseUrl, capture } = await serve((_request, response) => {
-      json(response, 200, { user: userView });
+      json(response, 200, { user: view });
     });
     await createBackendClient({ baseUrl: `${baseUrl}/api`, token: TOKEN }).recordStart(request);
     expect(capture.url).toBe('/api/users/start');
@@ -153,17 +150,10 @@ describe('recordStart', () => {
 
 describe('startLogin', () => {
   it('sends the telegram id and returns the parsed response', async () => {
-    const response = {
-      authorizeUrl: 'https://binodex.app/oauth/authorize?state=abc',
-      state: 'abc',
-      expiresAt: '2026-09-24T10:10:00.000Z',
-    };
     const { baseUrl, capture } = await serve((_request, reply) => {
-      json(reply, 200, response);
+      json(reply, 200, LOGIN);
     });
-    expect(await createBackendClient({ baseUrl, token: TOKEN }).startLogin('4242')).toEqual(
-      response,
-    );
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).startLogin('4242')).toEqual(LOGIN);
     expect(capture.url).toBe('/auth/binodex/start');
     expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
   });

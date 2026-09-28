@@ -116,7 +116,11 @@ export interface CapturedApi {
   calls: ApiCall[];
   // an entry makes that method answer the way Telegram would when it refuses (ApiError, which
   // grammY turns into a GrammyError), or fail the way the transport does — HttpError, the only
-  // thing grammY's transport throws (core/client.js, toHttpError)
+  // thing grammY's transport throws (core/client.js, toHttpError). Either member beats an
+  // answer programmed for the same method, and beats it on every call until the entry is
+  // deleted: the precedence is fixed, not one refusal followed by recovery. A scene where
+  // getUpdates is refused once and polling then goes on is built by deleting the entry after
+  // that call, or by an answer that throws the first time — not by this precedence.
   apiErrors: Map<string, ApiError | HttpError>;
   answers: Map<string, ApiAnswer>;
 }
@@ -134,12 +138,15 @@ export function captureApi(bot: Bot): CapturedApi {
   ) => {
     captured.calls.push({ method, payload });
     const failure = captured.apiErrors.get(method);
-    if (failure instanceof Error) throw failure;
+    if (failure !== undefined) {
+      if (failure instanceof Error) throw failure;
+      return Promise.resolve(failure);
+    }
     const answer = captured.answers.get(method);
     if (answer !== undefined) {
       return Promise.resolve(answer(payload, signal)).then((result) => ({ ok: true, result }));
     }
-    return Promise.resolve(failure ?? { ok: true, result: true });
+    return Promise.resolve({ ok: true, result: true });
   }) as Parameters<typeof bot.api.config.use>[0]);
   return captured;
 }

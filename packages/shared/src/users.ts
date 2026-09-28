@@ -15,13 +15,15 @@ export const startPayloadSchema = z.string().regex(START_PAYLOAD_PATTERN, {
   error: 'expected 1-64 base64url characters',
 });
 
-// Telegram sends an "IETF language tag of the user's language": a BCP 47 primary subtag plus
-// optional subtags. The length cap is what keeps an oversized tag out of the column.
+// Telegram sends an "IETF language tag of the user's language". This pattern is a deliberately
+// narrow approximation of one, not a BCP 47 validator: a 2-3 letter primary subtag, then any
+// number of `-` subtags of 1-8 letters or digits, at most 35 characters. Private-use (`x-…`)
+// and grandfathered (`i-…`) tags are dropped and a lone singleton such as `en-a` passes; the
+// field is optional, so the bot simply omits a tag the schema refuses.
 export const LANGUAGE_CODE_PATTERN = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/;
-export const languageCodeSchema = z
-  .string()
-  .max(35)
-  .regex(LANGUAGE_CODE_PATTERN, { error: 'expected a BCP 47 language tag' });
+export const languageCodeSchema = z.string().max(35).regex(LANGUAGE_CODE_PATTERN, {
+  error: 'expected a language tag: 2-3 letters, then optional -subtags of 1-8 letters or digits',
+});
 
 // POST /users/start — the bot's first call on every /start
 export const userStartRequestSchema = z.object({
