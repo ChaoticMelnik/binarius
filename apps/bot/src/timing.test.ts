@@ -38,7 +38,7 @@ interface Branch {
   recordStart?: BackendClient['recordStart'];
   startLogin?: BackendClient['startLogin'];
   welcomeVideoFileId?: string;
-  apiErrors?: readonly (readonly [string, ApiError | Error])[];
+  apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
 }
 
 const VIEW: UserStartView = {
