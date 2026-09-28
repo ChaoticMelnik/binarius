@@ -62,28 +62,45 @@ export function createBackendClient({
   const root = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
 
   const post = async (path: string, body: unknown): Promise<unknown> => {
+    const signal = AbortSignal.timeout(timeoutMs);
     let response: Response;
     try {
       response = await fetch(new URL(path, root), {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
       });
     } catch (error) {
       throw new BackendError(BackendErrorCode.Unreachable, { cause: error });
     }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      // the timeout stays attached through body streaming, so a backend that flushed its
+      // headers and then stalled rejects here with the abort rather than a parse failure:
+      // a slow backend, not a route that broke the contract. The status is carried so the
+      // operator can see the headers did arrive.
+      if (signal.aborted) {
+        throw new BackendError(BackendErrorCode.Unreachable, {
+          status: response.status,
+          cause: error,
+        });
+      }
+      if (response.ok) throw new BackendError(BackendErrorCode.ContractViolation, { cause: error });
+      // an error response whose body is not JSON still has its status to report
+      payload = undefined;
+    }
+
     if (!response.ok) {
       throw new BackendError(BackendErrorCode.HttpStatus, {
         status: response.status,
-        reason: await errorCodeOf(response),
+        reason: errorCodeOf(payload),
       });
     }
-    try {
-      return await response.json();
-    } catch (error) {
-      throw new BackendError(BackendErrorCode.ContractViolation, { cause: error });
-    }
+    return payload;
   };
 
   return {
@@ -102,8 +119,7 @@ export function createBackendClient({
   };
 }
 
-async function errorCodeOf(response: Response): Promise<string | undefined> {
-  const body: unknown = await response.json().catch(() => undefined);
-  const code = (body as { error?: unknown } | undefined)?.error;
+function errorCodeOf(body: unknown): string | undefined {
+  const code = (body as { error?: unknown } | null | undefined)?.error;
   return typeof code === 'string' && ERROR_CODE_PATTERN.test(code) ? code : undefined;
 }
