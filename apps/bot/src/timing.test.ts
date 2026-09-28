@@ -184,11 +184,12 @@ const START_BRANCHES: readonly Branch[] = [
     expected: { backend: 1, telegram: 2 },
   },
   {
-    label: 'the video call fails in transport and the text replaces it',
+    // delivery is unknown, so nothing is sent after it: the branch rethrows
+    label: 'the video call fails in transport',
     update: startUpdate('/start'),
     welcomeVideoFileId: 'BAACAgIAAxkB',
     apiErrors: [['sendVideo', videoTimedOut()]],
-    expected: { backend: 1, telegram: 2 },
+    expected: { backend: 1, telegram: 1 },
   },
 ];
 

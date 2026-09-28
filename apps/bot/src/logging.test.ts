@@ -1,104 +1,285 @@
 import pino from 'pino';
-import { BotError } from 'grammy';
+import { BotError, HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
-import { LOG_REDACT_PATHS, UserStatus } from '@binarius/shared';
-import type { BackendClient } from './backend-client';
-import { createBot } from './bot';
-import { BOT_INFO } from './testing';
+import {
+  LOG_REDACT_PATHS,
+  UserStatus,
+  type StartLoginResponse,
+  type UserStartView,
+} from '@binarius/shared';
+import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
+import { CONNECT_CALLBACK_DATA, createBot } from './bot';
+import { runBot, type PollingLoop } from './lifecycle';
+import { BOT_INFO, captureApi, connectUpdate, startUpdate, type ApiCall } from './testing';
 import { TEXTS } from './texts';
 
 // What reaches the log is only provable by reading the log, so this suite runs the real pino
 // configuration from index.ts into a sink and asserts on the lines themselves.
 
 const TOKEN = '123456:AA-SECRET-TOKEN-0000000000000000';
+const INTERNAL_TOKEN = 'SECRET-INTERNAL-BEARER-0000';
 
-const UPDATE_ID = 90_210;
-const update: Update = {
-  update_id: UPDATE_ID,
-  message: {
-    message_id: 1,
-    date: 1,
-    chat: { id: 4242, type: 'private', first_name: 'Ada' },
-    from: { id: 4242, is_bot: false, first_name: 'Ada' },
-    text: '/start',
-    entities: [{ type: 'bot_command', offset: 0, length: 6 }],
-  },
-} as unknown as Update;
-
-const backend: BackendClient = {
-  recordStart: () =>
-    Promise.resolve({
-      telegramUserId: '4242',
-      status: UserStatus.Active,
-      acquisitionSource: null,
-      acquiredAt: null,
-      hasActiveBrokerAccount: false,
-    }),
-  startLogin: vi.fn(),
+const VIEW: UserStartView = {
+  telegramUserId: '4242',
+  status: UserStatus.Active,
+  acquisitionSource: null,
+  acquiredAt: null,
+  hasActiveBrokerAccount: false,
 };
 
-async function linesFrom(sendMessage: ApiError | Error): Promise<string[]> {
+const LOGIN: StartLoginResponse = {
+  authorizeUrl: 'https://binodex.app/oauth/authorize?state=abc',
+  state: 'abc',
+  expiresAt: '2026-09-24T10:10:00.000Z',
+};
+
+const sink = () => {
   const lines: string[] = [];
   const logger = pino(
     { level: 'info', redact: [...LOG_REDACT_PATHS] },
     { write: (line: string) => void lines.push(line) },
   );
-  const bot = createBot({ token: TOKEN, backend, logger, botInfo: BOT_INFO });
-  bot.api.config.use((() => {
-    if (sendMessage instanceof Error) throw sendMessage;
-    return Promise.resolve(sendMessage);
-  }) as Parameters<typeof bot.api.config.use>[0]);
+  return { lines, logger };
+};
+
+const parsed = (line = ''): Record<string, unknown> => JSON.parse(line) as Record<string, unknown>;
+
+const lineWith = (lines: readonly string[], msg: string): Record<string, unknown> | undefined =>
+  lines.map(parsed).find((entry) => entry.msg === msg);
+
+interface Scenario {
+  update: Update;
+  recordStart?: BackendClient['recordStart'];
+  startLogin?: BackendClient['startLogin'];
+  welcomeVideoFileId?: string;
+  apiErrors?: readonly (readonly [string, ApiError | Error])[];
+}
+
+async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: ApiCall[] }> {
+  const { lines, logger } = sink();
+  const backend: BackendClient = {
+    recordStart: scenario.recordStart ?? (() => Promise.resolve(VIEW)),
+    startLogin: scenario.startLogin ?? (() => Promise.resolve(LOGIN)),
+  };
+  const bot = createBot({
+    token: TOKEN,
+    backend,
+    logger,
+    botInfo: BOT_INFO,
+    ...(scenario.welcomeVideoFileId === undefined
+      ? {}
+      : { welcomeVideoFileId: scenario.welcomeVideoFileId }),
+  });
+  const api = captureApi(bot);
+  for (const [method, failure] of scenario.apiErrors ?? []) api.apiErrors.set(method, failure);
 
   // handleUpdate rethrows the BotError instead of routing it: grammY only hands it to the
   // installed handler on the polling path (bot.js → handleUpdates). The handler under test is
   // the one createBot installed, reached the same way the loop reaches it, with the real error.
-  const thrown = await bot.handleUpdate(update).then(
+  const thrown = await bot.handleUpdate(scenario.update).then(
     () => undefined,
     (error: unknown) => error,
   );
-  expect(thrown).toBeInstanceOf(BotError);
-  await (bot as unknown as { errorHandler(error: BotError): Promise<void> }).errorHandler(
-    thrown as BotError,
-  );
-  return lines;
+  if (thrown !== undefined) {
+    expect(thrown).toBeInstanceOf(BotError);
+    await (bot as unknown as { errorHandler(error: BotError): Promise<void> }).errorHandler(
+      thrown as BotError,
+    );
+  }
+  return { lines, calls: api.calls };
 }
 
 describe('what the bot writes about a failed update', () => {
   it('names the error and the method, and carries nothing from the payload or the description', async () => {
-    const [line = ''] = await linesFrom({
-      ok: false,
-      error_code: 403,
-      description: 'Forbidden: SECRET-DESC bot was blocked by the user',
+    const update = startUpdate('/start');
+    const { lines } = await linesFrom({
+      update,
+      apiErrors: [
+        [
+          'sendMessage',
+          {
+            ok: false,
+            error_code: 403,
+            description: 'Forbidden: SECRET-DESC bot was blocked by the user',
+          },
+        ],
+      ],
     });
-    const logged = JSON.parse(line) as Record<string, unknown>;
+    const logged = parsed(lines[0]);
 
     expect(logged).toMatchObject({
       err: { name: 'GrammyError' },
       method: 'sendMessage',
       telegramErrorCode: 403,
-      updateId: UPDATE_ID,
+      updateId: update.update_id,
       msg: 'update handler failed',
     });
     expect(logged.err).not.toHaveProperty('message');
     expect(logged.err).not.toHaveProperty('stack');
-    expect(line).not.toContain('SECRET-DESC');
+    expect(lines[0]).not.toContain('SECRET-DESC');
     // the payload of the refused call is the message we were sending
-    expect(line).not.toContain(TEXTS.welcome.slice(0, 30));
-    expect(line).not.toContain(TOKEN);
+    expect(lines[0]).not.toContain(TEXTS.welcome.slice(0, 30));
+    expect(lines[0]).not.toContain(TOKEN);
   });
 
   // the bot token sits in every Bot API URL, so a transport error that quotes the URL carries it
   it('keeps the token out of the line when the error message contains it', async () => {
-    const [line = ''] = await linesFrom(
-      new Error(`request to https://api.telegram.org/bot${TOKEN}/sendMessage failed`),
-    );
-    const logged = JSON.parse(line) as Record<string, unknown>;
+    const update = startUpdate('/start');
+    const { lines } = await linesFrom({
+      update,
+      apiErrors: [
+        [
+          'sendMessage',
+          new Error(`request to https://api.telegram.org/bot${TOKEN}/sendMessage failed`),
+        ],
+      ],
+    });
+    const logged = parsed(lines[0]);
 
-    expect(logged).toMatchObject({ err: { name: 'Error' }, updateId: UPDATE_ID });
+    expect(logged).toMatchObject({ err: { name: 'Error' }, updateId: update.update_id });
     expect(logged.err).not.toHaveProperty('message');
     expect(logged.err).not.toHaveProperty('stack');
-    expect(line).not.toContain(TOKEN);
-    expect(line).not.toContain('SECRET-TOKEN');
+    expect(lines[0]).not.toContain(TOKEN);
+    expect(lines[0]).not.toContain('SECRET-TOKEN');
+  });
+});
+
+// The two branches that hold the internal bearer while they fail. The property was argued at
+// the source before; these read it off the emitted line instead.
+describe('what the bot writes about a failed backend call', () => {
+  it('names the BackendError and its code without the cause’s message', async () => {
+    const { lines } = await linesFrom({
+      update: startUpdate('/start'),
+      recordStart: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.Unreachable, {
+            cause: new Error(
+              `fetch to http://backend:3000/users/start with Bearer ${INTERNAL_TOKEN} failed`,
+            ),
+          }),
+        ),
+    });
+    const logged = lineWith(lines, '/start not recorded');
+
+    expect(logged).toMatchObject({
+      err: { name: 'BackendError', code: BackendErrorCode.Unreachable },
+      cause: { name: 'Error' },
+    });
+    expect(logged?.err).not.toHaveProperty('message');
+    expect(logged?.cause).not.toHaveProperty('message');
+    expect(lines.join('')).not.toContain(INTERNAL_TOKEN);
+  });
+
+  it('carries the backend status when the login cannot be started', async () => {
+    const { lines } = await linesFrom({
+      update: connectUpdate(CONNECT_CALLBACK_DATA),
+      startLogin: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, {
+            status: 500,
+            cause: new Error(`Bearer ${INTERNAL_TOKEN}`),
+          }),
+        ),
+    });
+    const logged = lineWith(lines, 'login not started');
+
+    expect(logged).toMatchObject({
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 500,
+    });
+    expect(lines.join('')).not.toContain(INTERNAL_TOKEN);
+  });
+});
+
+describe('what the bot writes about the welcome video', () => {
+  it('names the method and the code of a refusal, and nothing of the description', async () => {
+    const { lines, calls } = await linesFrom({
+      update: startUpdate('/start'),
+      welcomeVideoFileId: 'not-a-file-id',
+      apiErrors: [
+        [
+          'sendVideo',
+          {
+            ok: false,
+            error_code: 400,
+            description: 'Bad Request: SECRET-DESC wrong file identifier',
+          },
+        ],
+      ],
+    });
+    const logged = lineWith(lines, 'the welcome video was refused, sending the text instead');
+
+    expect(logged).toMatchObject({
+      err: { name: 'GrammyError' },
+      method: 'sendVideo',
+      telegramErrorCode: 400,
+    });
+    expect(lines.join('')).not.toContain('SECRET-DESC');
+    expect(calls.map((call) => call.method)).toEqual(['sendVideo', 'sendMessage']);
+  });
+
+  it('reports a transport failure by identity, sends nothing more, and drops the token', async () => {
+    const { lines, calls } = await linesFrom({
+      update: startUpdate('/start'),
+      welcomeVideoFileId: 'BAACAgIAAxkB',
+      apiErrors: [
+        [
+          'sendVideo',
+          // what grammY throws when its own timeoutSeconds aborts the call or the socket
+          // dies: no method of its own, and a message quoting the URL the token sits in
+          new HttpError(
+            "Network request for 'sendVideo' failed!",
+            new Error(`request to https://api.telegram.org/bot${TOKEN}/sendVideo failed`),
+          ),
+        ],
+      ],
+    });
+    const logged = lineWith(lines, 'update handler failed');
+
+    expect(logged).toMatchObject({
+      err: { name: 'HttpError' },
+      transportError: { name: 'Error' },
+    });
+    expect(logged).not.toHaveProperty('telegramErrorCode');
+    expect(logged?.err).not.toHaveProperty('message');
+    // delivery is unknown, so the text welcome is not sent after it
+    expect(calls.map((call) => call.method)).toEqual(['sendVideo']);
+    expect(lines.join('')).not.toContain(TOKEN);
+    expect(lines.join('')).not.toContain('SECRET-TOKEN');
+  });
+});
+
+describe('what the bot writes when a drain step fails', () => {
+  it('names the step and the error, and keeps the token out of the line', async () => {
+    const { lines, logger } = sink();
+    let fire: (() => void) | undefined;
+    const bot: PollingLoop = {
+      start: () => Promise.resolve(),
+      stop: () =>
+        Promise.reject(
+          new Error(`request to https://api.telegram.org/bot${TOKEN}/getUpdates failed`),
+        ),
+    };
+    runBot({
+      bot,
+      logger,
+      exit: vi.fn(),
+      signals: ['SIGTERM'],
+      signalSource: {
+        once(_signal, handler) {
+          fire ??= handler;
+          return this;
+        },
+      },
+    });
+    fire?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const logged = lineWith(lines, 'shutdown: bot.stop() failed');
+    expect(logged).toMatchObject({ err: { name: 'Error' } });
+    expect(logged?.err).not.toHaveProperty('message');
+    expect(lines.join('')).not.toContain(TOKEN);
+    expect(lines.join('')).not.toContain('SECRET-TOKEN');
   });
 });

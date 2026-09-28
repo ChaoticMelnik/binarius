@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { HttpError } from 'grammy';
+import { BotError, HttpError } from 'grammy';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   OAuthErrorCode,
@@ -127,6 +127,19 @@ describe('/start', () => {
     });
   });
 
+  it('drops a language tag the request schema would refuse', async () => {
+    const { bot, backend } = setup();
+    // matches LANGUAGE_CODE_PATTERN but is 38 characters, past the schema's max of 35: letting
+    // it through would make /users/start answer 400 and the whole /start read as an outage
+    const tag = 'en-aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa';
+    expect(tag).toHaveLength(38);
+    await bot.handleUpdate(startUpdate('/start', 'private', { ...USER, language_code: tag }));
+    expect(backend.recordStart).toHaveBeenCalledWith({
+      telegramUserId: '4242',
+      displayName: 'Ada Lovelace',
+    });
+  });
+
   it('joins the name from what Telegram supplies', async () => {
     const { bot, backend } = setup();
     await bot.handleUpdate(
@@ -197,6 +210,27 @@ describe('the welcome video', () => {
       method: 'sendVideo',
       telegramErrorCode: 400,
     });
+  });
+
+  it('sends no second welcome when the video call fails in transport', async () => {
+    const { bot, calls, logger, apiErrors } = setup({ welcomeVideoFileId: 'BAACAgIAAxkB' });
+    // grammY's own timeoutSeconds abort and a dropped socket both arrive as HttpError, and
+    // Telegram may well have delivered the video: a text welcome here would be the second one
+    apiErrors.set(
+      'sendVideo',
+      new HttpError(
+        "Network request for 'sendVideo' failed!",
+        new Error('The operation was aborted due to timeout'),
+      ),
+    );
+
+    const thrown = await bot.handleUpdate(startUpdate('/start')).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(BotError);
+    expect(sentPayload(calls, 'sendMessage')).toBeUndefined();
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 
@@ -294,6 +328,10 @@ describe('the Bot API timeout', () => {
       (thrown: unknown) => thrown,
     );
     expect(error).toBeInstanceOf(HttpError);
-    expect(Date.now() - at).toBeLessThan(5_000);
+    // the lower bound is what says the configured 300 ms ended the call; the upper bound
+    // rules out grammY's 500 second default
+    const elapsed = Date.now() - at;
+    expect(elapsed).toBeGreaterThanOrEqual(250);
+    expect(elapsed).toBeLessThan(2_000);
   });
 });
