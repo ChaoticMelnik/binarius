@@ -143,10 +143,12 @@ What that test cannot see, and no test here can: a handler or a terminal branch 
 the enumeration. Adding either is a manual step, because grammY keeps no registry of handlers.
 
 On SIGTERM or SIGINT `runBot` stops taking updates and waits for both `bot.stop()` and the
-polling loop itself within the budget, then exits 0. A second signal is ignored. Because the
-batch is one update, the drain waits for at most one handler, and `bot.stop()` confirms the
-offset of exactly the update in flight — with grammY's default batch of 100 it would confirm
-only the current one and leave the rest of the batch to be redelivered. The one case the drain
+polling loop itself within the budget, then exits 0. A second signal is ignored: the listeners
+stay installed (`on`, not `once`), so Node never falls back to the default action, which would
+kill the drain instead. Because the batch is one update, the drain waits for at most one
+handler, and `bot.stop()` confirms the offset of exactly the update in flight — with grammY's
+default batch of 100 it would confirm only the current one and leave the rest of the batch to be
+redelivered. The one case the drain
 cannot shorten is grammY's 3 s sleep after a failed `getUpdates` (`retry_after` after a 429,
 which has no ceiling): `bot.stop()` does not interrupt it, so the drain waits it out — but no
 update is in flight during that sleep, so an overrun there costs the exit code and nothing else.
