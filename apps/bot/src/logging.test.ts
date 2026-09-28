@@ -54,7 +54,7 @@ interface Scenario {
   recordStart?: BackendClient['recordStart'];
   startLogin?: BackendClient['startLogin'];
   welcomeVideoFileId?: string;
-  apiErrors?: readonly (readonly [string, ApiError | Error])[];
+  apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
 }
 
 async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: ApiCall[] }> {
@@ -132,13 +132,20 @@ describe('what the bot writes about a failed update', () => {
       apiErrors: [
         [
           'sendMessage',
-          new Error(`request to https://api.telegram.org/bot${TOKEN}/sendMessage failed`),
+          new HttpError(
+            "Network request for 'sendMessage' failed!",
+            new Error(`request to https://api.telegram.org/bot${TOKEN}/sendMessage failed`),
+          ),
         ],
       ],
     });
     const logged = parsed(lines[0]);
 
-    expect(logged).toMatchObject({ err: { name: 'Error' }, updateId: update.update_id });
+    expect(logged).toMatchObject({
+      err: { name: 'HttpError' },
+      transportError: { name: 'Error' },
+      updateId: update.update_id,
+    });
     expect(logged.err).not.toHaveProperty('message');
     expect(logged.err).not.toHaveProperty('stack');
     expect(lines[0]).not.toContain(TOKEN);

@@ -3,7 +3,7 @@
 
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Bot } from 'grammy';
+import type { Bot, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
 
@@ -76,20 +76,41 @@ export interface ApiCall {
   payload: Record<string, unknown>;
 }
 
+// A programmed answer: the value becomes the `result` of an `ok: true` response, and throwing
+// leaves the call the way the transport leaves it. This is also the only way to inject a failure
+// the real transport never produces — apiErrors deliberately cannot, see below.
+export type ApiAnswer = (
+  payload: Record<string, unknown>,
+  signal?: AbortSignal,
+) => unknown | Promise<unknown>;
+
 export interface CapturedApi {
   calls: ApiCall[];
-  // an entry makes that method answer the way Telegram would when it refuses (ApiError), or
-  // fail the way the transport does (Error, which grammY hands on unwrapped)
-  apiErrors: Map<string, ApiError | Error>;
+  // an entry makes that method answer the way Telegram would when it refuses (ApiError, which
+  // grammY turns into a GrammyError), or fail the way the transport does — HttpError, the only
+  // thing grammY's transport throws (core/client.js, toHttpError)
+  apiErrors: Map<string, ApiError | HttpError>;
+  answers: Map<string, ApiAnswer>;
 }
 
-// Every outgoing Bot API call is recorded here instead of reaching Telegram.
+// Every outgoing Bot API call is recorded here instead of reaching Telegram. Unprogrammed
+// methods answer `result: true`, which no handler reads today; the first handler that reads
+// what a Bot API call returned has to be given a typed answer here instead.
 export function captureApi(bot: Bot): CapturedApi {
-  const captured: CapturedApi = { calls: [], apiErrors: new Map() };
-  bot.api.config.use(((_prev, method: string, payload: Record<string, unknown>) => {
+  const captured: CapturedApi = { calls: [], apiErrors: new Map(), answers: new Map() };
+  bot.api.config.use(((
+    _prev,
+    method: string,
+    payload: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => {
     captured.calls.push({ method, payload });
     const failure = captured.apiErrors.get(method);
     if (failure instanceof Error) throw failure;
+    const answer = captured.answers.get(method);
+    if (answer !== undefined) {
+      return Promise.resolve(answer(payload, signal)).then((result) => ({ ok: true, result }));
+    }
     return Promise.resolve(failure ?? { ok: true, result: true });
   }) as Parameters<typeof bot.api.config.use>[0]);
   return captured;

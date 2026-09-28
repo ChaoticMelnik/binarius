@@ -1,7 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it, vi } from 'vitest';
+import { HttpError } from 'grammy';
+import type { ApiError, Update } from 'grammy/types';
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { UserStatus, type UserStartView } from '@binarius/shared';
+import type { BackendClient } from './backend-client';
+import { createBot } from './bot';
 import { ALLOWED_UPDATES, runBot, type PollingLoop } from './lifecycle';
-import { fakeLogger, type FakeLogger } from './testing';
+import { BOT_INFO, captureApi, fakeLogger, startUpdate, type FakeLogger } from './testing';
 import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S } from './timing';
 
 // `bot.start()` resolves only once the polling loop has ended, which is what makes the drain
@@ -195,5 +200,228 @@ describe('runBot', () => {
     expect(errorMessages(log)).toEqual(['shutdown: bot.stop() failed', BUDGET_LINE]);
 
     fake.resolveStart();
+  });
+});
+
+// The premises fakeBot encodes — start() resolving only when the loop ends, stop() cutting an
+// idle getUpdates short, a stop() that rejects, an init that fails without a retry, onStart,
+// and a throwing handler reaching bot.catch — are assertions about grammY, and a fake cannot
+// check any of them. These scenes run runBot over a real Bot whose only replacement is the
+// transport, so each premise is read off the library instead of off our model of it.
+
+const TOKEN = '123456:AA-bot-token';
+
+const VIEW: UserStartView = {
+  telegramUserId: '4242',
+  status: UserStatus.Active,
+  acquisitionSource: null,
+  acquiredAt: null,
+  hasActiveBrokerAccount: false,
+};
+
+// bot.stop() confirms the offset with getUpdates({ offset, limit: 1 }) — neither a timeout nor
+// the polling AbortSignal, which is what tells it apart from a long poll (grammY bot.js)
+const isLongPoll = (payload: Record<string, unknown>): boolean => payload.timeout !== undefined;
+
+const transportFailure = (method: string): HttpError =>
+  new HttpError(`Network request for '${method}' failed!`, new Error('The operation was aborted'));
+
+// Half of grammY's 3 s sleep after a failed getUpdates. A scene that has to wait this long is
+// one where a sleep entered the drain, not one where the runner was busy: the fixed 40 ms this
+// used to be would have made a loaded CI runner look like the same failure.
+const WAIT_CEILING_MS = 1_500;
+
+async function waitFor(what: string, done: () => boolean): Promise<void> {
+  const until = Date.now() + WAIT_CEILING_MS;
+  while (!done()) {
+    if (Date.now() > until) {
+      throw new Error(
+        `${what} did not happen within ${WAIT_CEILING_MS} ms — half of the 3 s grammY sleeps ` +
+          'after a failed getUpdates. Read this as a sleep that entered the path, not as a ' +
+          'slow runner.',
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+interface SceneOptions {
+  recordStart?: BackendClient['recordStart'];
+  withBotInfo?: boolean;
+  confirmFails?: boolean;
+  // registered before runBot on purpose: bot.start() issues getMe and deleteWebhook
+  // synchronously, so a failure programmed after the call returns arrives too late
+  apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
+}
+
+const running: { signalSource: EventEmitter; exit: Mock }[] = [];
+
+afterEach(async () => {
+  // a scene left polling holds a promise that never settles; the drain is how it is put down
+  for (const scene of running.splice(0)) {
+    if (scene.exit.mock.calls.length === 0) scene.signalSource.emit('SIGTERM');
+  }
+  await settle();
+});
+
+function scene(options: SceneOptions = {}) {
+  const log = fakeLogger();
+  const exit = vi.fn();
+  const signalSource = new EventEmitter();
+  const events: string[] = [];
+  log.info.mockImplementation((...args: unknown[]) => {
+    events.push(`info:${String(args[args.length - 1])}`);
+  });
+
+  const backend: BackendClient = {
+    recordStart: options.recordStart ?? (() => Promise.resolve(VIEW)),
+    startLogin: () => Promise.reject(new Error('not used by these scenes')),
+  };
+  const bot = createBot({
+    token: TOKEN,
+    backend,
+    logger: log,
+    ...(options.withBotInfo === false ? {} : { botInfo: BOT_INFO }),
+  });
+  const api = captureApi(bot);
+  for (const [method, failure] of options.apiErrors ?? []) api.apiErrors.set(method, failure);
+
+  const getUpdates = (long: boolean) =>
+    api.calls.filter((call) => call.method === 'getUpdates' && isLongPoll(call.payload) === long);
+  const longPolls = () => getUpdates(true);
+
+  let pending: { resolve: (updates: Update[]) => void } | undefined;
+  api.answers.set('deleteWebhook', () => {
+    events.push('deleteWebhook');
+    return true;
+  });
+  api.answers.set('getUpdates', (payload, signal) => {
+    if (!isLongPoll(payload)) {
+      if (options.confirmFails === true) throw transportFailure('getUpdates');
+      return [];
+    }
+    events.push(`getUpdates#${longPolls().length}`);
+    return new Promise<Update[]>((resolve, reject) => {
+      pending = { resolve };
+      // what the real transport does with an aborted request
+      signal?.addEventListener('abort', () => reject(transportFailure('getUpdates')));
+    });
+  });
+
+  runBot({ bot, logger: log, exit, signalSource });
+  running.push({ signalSource, exit });
+
+  return {
+    api,
+    log,
+    exit,
+    events,
+    signalSource,
+    longPolls,
+    confirmations: () => getUpdates(false),
+    methods: () => api.calls.map((call) => call.method),
+    deliver: (updates: Update[]) => pending?.resolve(updates),
+    firstPoll: () => waitFor('the first long poll', () => longPolls().length >= 1),
+    drained: () => waitFor('the drain to finish', () => exit.mock.calls.length >= 1),
+  };
+}
+
+describe('runBot over the real grammY Bot the fake above stands in for', () => {
+  it('waits for the handler in flight, and a second signal does not cut it short', async () => {
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const s = scene({
+      recordStart: () => {
+        calls += 1;
+        return held.then(() => VIEW);
+      },
+    });
+    await s.firstPoll();
+
+    const update = startUpdate('/start');
+    s.deliver([update]);
+    await waitFor('the handler to reach the backend', () => calls === 1);
+
+    s.signalSource.emit('SIGTERM');
+    await waitFor('bot.stop() to confirm the offset', () => s.confirmations().length === 1);
+    expect(s.confirmations()[0]?.payload).toEqual({ offset: update.update_id + 1, limit: 1 });
+    expect(s.exit).not.toHaveBeenCalled();
+
+    s.signalSource.emit('SIGTERM');
+    await settle();
+    expect(s.exit).not.toHaveBeenCalled();
+
+    release();
+    await s.drained();
+    expect(s.exit.mock.calls).toEqual([[0]]);
+    expect(s.methods()).toContain('sendMessage');
+  });
+
+  it('ends an idle long poll at once rather than sleeping through the backoff', async () => {
+    const s = scene();
+    await s.firstPoll();
+
+    s.signalSource.emit('SIGTERM');
+    // the ceiling inside waitFor is the assertion: grammY skips its 3 s sleep because the poll
+    // was cancelled by a stop(), and a drain that waited it out would not finish in half of it
+    await s.drained();
+    expect(s.exit.mock.calls).toEqual([[0]]);
+    expect(errorMessages(s.log)).toEqual([]);
+  });
+
+  it('blames bot.stop() when the confirming getUpdates fails, and still settles the loop', async () => {
+    const s = scene({ confirmFails: true });
+    await s.firstPoll();
+
+    s.signalSource.emit('SIGTERM');
+    await s.drained();
+    expect(s.exit.mock.calls).toEqual([[1]]);
+    // the step line rather than the budget line is what says the polling loop itself settled
+    expect(errorMessages(s.log)).toEqual(['shutdown: bot.stop() failed', STEP_LINE]);
+    expect(s.log.error.mock.calls[0]?.[0]).toMatchObject({ err: { name: 'HttpError' } });
+  });
+
+  it('exits non-zero when the token is refused, and asks getMe exactly once', async () => {
+    const s = scene({
+      withBotInfo: false,
+      apiErrors: [['getMe', { ok: false, error_code: 401, description: 'Unauthorized' }]],
+    });
+    await waitFor('the process to give up', () => s.exit.mock.calls.length >= 1);
+
+    expect(s.exit.mock.calls).toEqual([[1]]);
+    expect(errorMessages(s.log)).toEqual(['long polling stopped with an error']);
+    expect(s.log.error.mock.calls[0]?.[0]).toMatchObject({ err: { name: 'GrammyError' } });
+    // grammY retries neither getMe nor a 401 on the way in, so the exit is immediate
+    expect(s.methods().filter((method) => method === 'getMe')).toHaveLength(1);
+    expect(s.longPolls()).toHaveLength(0);
+  });
+
+  it('logs that the bot started, after the webhook is dropped and before the first poll', async () => {
+    const s = scene();
+    await s.firstPoll();
+
+    expect(s.events).toEqual(['deleteWebhook', 'info:bot started', 'getUpdates#1']);
+  });
+
+  it('hands a handler that throws to bot.catch and goes on polling', async () => {
+    const s = scene({ apiErrors: [['sendMessage', transportFailure('sendMessage')]] });
+    await s.firstPoll();
+
+    const update = startUpdate('/start');
+    s.deliver([update]);
+    await waitFor('the loop to ask for the next update', () => s.longPolls().length >= 2);
+
+    expect(errorMessages(s.log)).toEqual(['update handler failed']);
+    expect(s.log.error.mock.calls[0]?.[0]).toMatchObject({
+      err: { name: 'HttpError' },
+      updateId: update.update_id,
+    });
+
+    s.signalSource.emit('SIGTERM');
+    await s.drained();
+    expect(s.exit.mock.calls).toEqual([[0]]);
   });
 });
