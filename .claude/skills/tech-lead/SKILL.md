@@ -325,7 +325,7 @@ Run once the merge is confirmed and the issue is Done.
 |---|---|---|
 | Telegram-бот | Node.js + grammY (TypeScript) | `apps/bot` |
 | Backend API | TypeScript + Fastify (OAuth, постбэки, авторизация, состояния) | `apps/backend` |
-| Веб-страницы | Next.js (вход, касса, минимальная админка) | `apps/web` |
+| Веб-страницы | Fastify + серверный HTML (вход сотрудников, касса, минимальная админка); решение владельца 2026-09-29 (#68, #34) | `apps/web` |
 | Торговый worker | Отдельный Node.js-процесс + Socket.IO-клиент | `apps/trading-worker` |
 | БД | PostgreSQL + Drizzle ORM, forward-only миграции (`drizzle-kit`) | `packages/db` |
 | Фоновые задачи | Redis + BullMQ (уведомления, сверка, обработка событий) | использует `packages/db` |
