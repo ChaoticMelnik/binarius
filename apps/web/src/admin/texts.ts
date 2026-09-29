@@ -1,0 +1,47 @@
+// Everything the admin pages say. Russian, per the project's language convention.
+
+export const TEXTS = {
+  loginTitle: 'Вход в админку',
+  loginHeading: 'Вход сотрудника',
+  loginField: 'Логин',
+  passwordField: 'Пароль',
+  loginSubmit: 'Войти',
+
+  confirmTitle: 'Подтверждение входа',
+  confirmHeading: 'Подтвердите вход',
+  confirmHint: 'Нажмите «Подтвердить вход» в Telegram и введите код из сообщения.',
+  codeField: 'Код из Telegram',
+  confirmSubmit: 'Продолжить',
+
+  sessionsTitle: 'Активные сессии',
+  sessionsHeading: 'Активные сессии сотрудников',
+  sessionsEmpty: 'Активных сессий нет.',
+  columnLogin: 'Логин',
+  columnName: 'Имя',
+  columnIp: 'Адрес',
+  columnUserAgent: 'Браузер',
+  columnCreatedAt: 'Вход',
+  columnLastSeenAt: 'Активность',
+  columnExpiresAt: 'Истекает',
+  columnAction: '',
+  currentSession: 'текущая',
+  revokeSubmit: 'Завершить',
+  logoutSubmit: 'Выйти',
+  noDisplayName: '—',
+
+  invalidCredentials: 'Неверный логин или пароль',
+  tooManyAttempts: 'Слишком много попыток. Подождите и попробуйте снова',
+  tooManyCodeAttempts: 'Слишком много попыток. Подождите минуту',
+  telegramUnavailable: 'Подтверждение через Telegram сейчас недоступно, вход невозможен',
+  invalidCode: 'Неверный код',
+  awaitingTelegram: 'Сначала нажмите кнопку в Telegram',
+  expiredChallenge: 'Подтверждение истекло, войдите снова',
+  badRequest: 'Проверьте введённые данные',
+
+  forbiddenTitle: 'Запрос отклонён',
+  forbiddenBody: 'Запрос пришёл не с этой страницы.',
+  notFoundTitle: 'Страница не найдена',
+  notFoundBody: 'Такой страницы нет.',
+  errorTitle: 'Внутренняя ошибка',
+  errorBody: 'Что-то пошло не так. Попробуйте позже.',
+} as const;

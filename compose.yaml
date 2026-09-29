@@ -81,6 +81,12 @@ services:
       BROKER_PARTNER_REF: ${BROKER_PARTNER_REF:-binarius-dev}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?set it in .env; see .env.example}
       TOKEN_ENCRYPTION_KEY_ID: ${TOKEN_ENCRYPTION_KEY_ID:?set it in .env; see .env.example}
+      # Staff login (#68). The bot is a second grammY instance inside this process, on its own
+      # token: two pollers on one token fight over getUpdates. The web token is a narrow
+      # bearer that opens /admin/* and nothing else. Neither has a default — a value here is
+      # one a deployment inherits by accident.
+      ADMIN_BOT_TOKEN: ${ADMIN_BOT_TOKEN:?set it in .env; see .env.example}
+      ADMIN_WEB_TOKEN: ${ADMIN_WEB_TOKEN:?set it in .env; see .env.example}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
     healthcheck:
@@ -206,8 +212,28 @@ services:
   web:
     <<: *app
     command: pnpm --filter @binarius/web dev
+    # replaces the anchor's list: these pages hold no database or queue connection, and the
+    # backend already waits for postgres and redis itself
+    depends_on:
+      backend:
+        condition: service_healthy
+    # above the web shutdown budget (9 s, apps/web/src/timing.ts): a SIGTERM lets the request
+    # in flight finish its one backend call instead of cutting a login in half
+    stop_grace_period: 12s
+    # Not the shared anchor: env.ts reads exactly these five names, and DATABASE_URL and
+    # REDIS_URL have no business in a process that never opens either connection — everything
+    # it may read is decided by a staff session the backend checks (docs/staff-login.md).
     environment:
-      <<: *app-environment
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PORT: "3000"
+      BACKEND_URL: http://backend:3000
+      ADMIN_WEB_TOKEN: ${ADMIN_WEB_TOKEN:?set it in .env; see .env.example}
+      # the origin a POST's Origin header must equal. Change it together with WEB_PORT below:
+      # the two defaults are tied by apps/web/src/timing.test.ts, because a mismatch makes
+      # every form submission a 403.
+      ADMIN_PUBLIC_URL: ${ADMIN_PUBLIC_URL:-http://127.0.0.1:3001}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3001}:3000"
     develop:
       watch:
         - path: ./apps/web/src
