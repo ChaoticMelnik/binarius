@@ -6,6 +6,7 @@ import {
   safeParseAdminConfirmRequest,
   safeParseAdminLoginRequest,
   STAFF_SESSION_TOKEN_PATTERN,
+  UUID_PATTERN,
   type StaffSessionView,
 } from '@binarius/shared';
 import {
@@ -50,9 +51,6 @@ const UNKNOWN_LOGIN_MAX = 5;
 const UNKNOWN_LOGIN_WINDOW_MS = 15 * 60_000;
 // bounded on purpose: the keys come from request bodies
 const UNKNOWN_LOGIN_MAX_KEYS = 10_000;
-
-/** A UUID as PostgreSQL prints one; anything else is answered 404 rather than 400. */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface AdminRoutesDeps {
   db: Db;
@@ -127,7 +125,8 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
       }
 
-      if (staff.lockedUntil !== null && staff.lockedUntil.getTime() > Date.now()) {
+      // null unless a lockout is running right now, by the database's clock (findStaffForLogin)
+      if (staff.lockedUntil !== null) {
         await recordLoginLockout(deps.db, { staffId: staff.id, ip, lockedUntil: staff.lockedUntil });
         return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
       }
@@ -137,7 +136,11 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
       }
       if (!correct) {
-        await registerPasswordFailure(deps.db, { staffId: staff.id, ip });
+        await registerPasswordFailure(deps.db, {
+          staffId: staff.id,
+          passwordHash: staff.passwordHash,
+          ip,
+        });
         return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
       }
 
@@ -155,7 +158,10 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
 
       if (started.sendPrompt) {
         const delivered = await deliverPrompt(started.challengeId, staff, { ip, userAgent });
-        if (!delivered) {
+        // 'closed' means the challenge is gone and nobody can be waiting on it. 'moved on' means
+        // the button was pressed while the message was in flight: the code is already on its way
+        // to the same person, so answering 503 would be a lie about a challenge that is alive.
+        if (delivered === 'closed') {
           return reply.code(503).send({ error: AdminErrorCode.TelegramUnavailable });
         }
       }
@@ -173,23 +179,24 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     challengeId: string,
     staff: { id: string; login: string; telegramUserId: bigint },
     client: { ip: string; userAgent: string },
-  ): Promise<boolean> {
-    const close = (reason: 'polling_down' | 'prompt_send_failed', error: unknown) =>
-      failChallengeDelivery(deps.db, {
+  ): Promise<'sent' | 'closed' | 'moved on'> {
+    const close = async (reason: 'polling_down' | 'prompt_send_failed', error: unknown) =>
+      (await failChallengeDelivery(deps.db, {
         challengeId,
         staffId: staff.id,
         from: StaffLoginChallengeStatus.Pending,
         reason,
         err: errorIdentity(error),
         telegram: { ...telegramErrorFields(error, 'sendMessage') },
-      });
+      }))
+        ? ('closed' as const)
+        : ('moved on' as const);
 
     if (!deps.telegram.isPolling()) {
       // fail closed: with polling down the button cannot arrive, so leaving the challenge open
       // would be five minutes of a staff member waiting for a message nobody will send
       app.log.error({ challengeId }, 'a staff login arrived while the bot was not polling');
-      await close('polling_down', new Error('the staff login bot is not polling'));
-      return false;
+      return close('polling_down', new Error('the staff login bot is not polling'));
     }
     try {
       await deps.telegram.sendLoginPrompt({
@@ -204,11 +211,10 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         { ...errorLogFields(error), ...telegramErrorFields(error, 'sendMessage'), challengeId },
         'the staff login invitation could not be delivered',
       );
-      await close('prompt_send_failed', error);
-      return false;
+      return close('prompt_send_failed', error);
     }
     await markChallengePromptSent(deps.db, challengeId);
-    return true;
+    return 'sent';
   }
 
   app.post(
@@ -230,7 +236,9 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
           expiresAt: completed.expiresAt.toISOString(),
         });
       }
-      if (completed.reason === 'wrong_code') {
+      // 401 while attempts remain, 410 on the last one: telling someone to retry a challenge
+      // that the same call just exhausted costs them one more round trip to find out
+      if (completed.reason === 'wrong_code' && completed.exhausted !== true) {
         return reply.code(401).send({ error: AdminErrorCode.InvalidCode });
       }
       if (completed.reason === 'awaiting_telegram') {
@@ -284,14 +292,23 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
       return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
     }
     const targetSessionId = (request.params as { id?: unknown }).id;
-    // an id that is not a uuid is indistinguishable from one nobody was issued
-    if (typeof targetSessionId !== 'string' || !UUID_PATTERN.test(targetSessionId)) {
-      return reply.code(404).send({ error: AdminErrorCode.NotFound });
-    }
     const answer = await runAsStaff(
       deps.db,
       { token, idleMs, path: '/admin/sessions/revoke' },
       async (tx, ctx) => {
+        // Inside the session check, not in front of it: an id that is not a uuid is
+        // indistinguishable from one nobody was issued, and both deserve the same row. The id
+        // itself stays out of the payload here — it is arbitrary input, the same reason the
+        // login someone typed for an account that does not exist is never recorded.
+        if (typeof targetSessionId !== 'string' || !UUID_PATTERN.test(targetSessionId)) {
+          return {
+            result: { revoked: false, current: false },
+            audit: {
+              action: AuditAction.StaffSessionRevoked,
+              payload: { result: 'not_found', current: false },
+            },
+          };
+        }
         const revoked = await revokeStaffSession(tx, {
           sessionId: targetSessionId,
           byStaffId: ctx.staffId,

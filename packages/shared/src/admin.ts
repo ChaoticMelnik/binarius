@@ -40,6 +40,10 @@ export const staffLoginCodeSchema = z.string().regex(STAFF_LOGIN_CODE_PATTERN, {
 // the wrong shape costs no query.
 export const STAFF_SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
+// A UUID as PostgreSQL prints one. Both processes check it: `web` before it forwards a
+// challenge cookie, `backend` before it looks a session id up.
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // A password is bounded before it reaches the KDF: scrypt's cost is in its parameters, not in
 // the input length, but an unbounded body is still work an unauthenticated caller can ask for.
 export const STAFF_PASSWORD_MAX_LENGTH = 256;

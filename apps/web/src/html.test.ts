@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { escapeHtml, html, layout, SafeHtml } from './html';
+import { escapeHtml, html, layout } from './html';
 
 describe('escapeHtml', () => {
   it.each([
@@ -50,11 +50,12 @@ describe('html', () => {
     expect(html`${value}`.value).toBe(expected);
   });
 
-  // a string is not SafeHtml just because a caller believes it is: the only way in is the tag
+  // a string is not SafeHtml just because a caller believes it is: the only way in without a
+  // cast is the tag, and `new SafeHtml('…')` no longer compiles (the class is module-local)
   it('treats a plain string as text even when it is markup', () => {
     const notSafe = '<b>bold</b>';
     expect(html`${notSafe}`.value).not.toContain('<b>');
-    expect(html`${new SafeHtml('<b>bold</b>')}`.value).toBe('<b>bold</b>');
+    expect(html`${html`<b>bold</b>`}`.value).toBe('<b>bold</b>');
   });
 });
 

@@ -5,7 +5,9 @@ import {
   errorLogFields,
   STAFF_LOGIN_CODE_PATTERN,
   STAFF_PASSWORD_MAX_LENGTH,
+  STAFF_SESSION_TOKEN_PATTERN,
   staffLoginSchema,
+  UUID_PATTERN,
 } from '@binarius/shared';
 import { sendHtml } from '../html';
 import { BackendError, BackendErrorCode, type BackendClient } from '../backend-client';
@@ -57,6 +59,20 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
     reply.clearCookie(SESSION_COOKIE, cookieOptions(SESSION_COOKIE_PATH));
   const clearChallenge = (reply: FastifyReply): FastifyReply =>
     reply.clearCookie(CHALLENGE_COOKIE, cookieOptions(CHALLENGE_COOKIE_PATH));
+
+  /**
+   * A cookie of the wrong shape counts as no cookie. Forwarded as-is it would reach undici as
+   * a header value it can refuse, and every /admin/* page would then be an opaque 500 that
+   * never clears the thing causing it — the one loop a staff member cannot get out of.
+   */
+  const cookieMatching = (
+    request: FastifyRequest,
+    name: string,
+    pattern: RegExp,
+  ): string | undefined => {
+    const value = request.cookies[name];
+    return value !== undefined && pattern.test(value) ? value : undefined;
+  };
 
   // A backend answer this process cannot act on is a misconfiguration of ours, not something
   // the staff member did: a rejected bearer, a body the contract forbids, an unreachable
@@ -110,13 +126,15 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
   });
 
   app.get('/admin/login/confirm', async (request, reply) => {
-    if (request.cookies[CHALLENGE_COOKIE] === undefined) return reply.redirect('/admin/login', 302);
+    if (cookieMatching(request, CHALLENGE_COOKIE, UUID_PATTERN) === undefined) {
+      return clearChallenge(reply).redirect('/admin/login', 302);
+    }
     return sendHtml(reply, 200, confirmPage());
   });
 
   app.post('/admin/login/confirm', async (request, reply) => {
-    const challengeId = request.cookies[CHALLENGE_COOKIE];
-    if (challengeId === undefined) return reply.redirect('/admin/login', 302);
+    const challengeId = cookieMatching(request, CHALLENGE_COOKIE, UUID_PATTERN);
+    if (challengeId === undefined) return clearChallenge(reply).redirect('/admin/login', 302);
     const form = confirmForm.safeParse(request.body);
     if (!form.success) return sendHtml(reply, 400, confirmPage(TEXTS.invalidCode));
 
@@ -152,8 +170,8 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
   });
 
   app.get('/admin/sessions', async (request, reply) => {
-    const token = request.cookies[SESSION_COOKIE];
-    if (token === undefined) return reply.redirect('/admin/login', 302);
+    const token = cookieMatching(request, SESSION_COOKIE, STAFF_SESSION_TOKEN_PATTERN);
+    if (token === undefined) return clearSession(reply).redirect('/admin/login', 302);
     try {
       const { me, sessions } = await backend.sessions(token);
       return sendHtml(reply, 200, sessionsPage(sessions, me.login));
@@ -164,8 +182,8 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
   });
 
   app.post('/admin/sessions/:id/revoke', async (request, reply) => {
-    const token = request.cookies[SESSION_COOKIE];
-    if (token === undefined) return reply.redirect('/admin/login', 302);
+    const token = cookieMatching(request, SESSION_COOKIE, STAFF_SESSION_TOKEN_PATTERN);
+    if (token === undefined) return clearSession(reply).redirect('/admin/login', 302);
     const { id } = request.params as { id: string };
     try {
       const { current } = await backend.revoke(token, id);
@@ -180,8 +198,8 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
   });
 
   app.post('/admin/logout', async (request, reply) => {
-    const token = request.cookies[SESSION_COOKIE];
-    if (token === undefined) return reply.redirect('/admin/login', 303);
+    const token = cookieMatching(request, SESSION_COOKIE, STAFF_SESSION_TOKEN_PATTERN);
+    if (token === undefined) return clearSession(reply).redirect('/admin/login', 303);
     try {
       await backend.logout(token);
       return clearSession(reply).redirect('/admin/login', 303);

@@ -141,6 +141,7 @@ export const codeFrom = (text: unknown): string => {
 export const stubTelegram = (polling = true) => {
   const prompts: { challengeId: string; telegramUserId: bigint; login: string; ip: string }[] = [];
   let fail: Error | undefined;
+  let before: ((challengeId: string) => Promise<void>) | undefined;
   return {
     prompts,
     setPolling: (value: boolean) => {
@@ -148,6 +149,12 @@ export const stubTelegram = (polling = true) => {
     },
     failWith: (error: Error | undefined) => {
       fail = error;
+    },
+    // Runs inside sendLoginPrompt, which is the window the route leaves open on purpose: the
+    // Bot API call is outside the transaction that created the challenge, so the button can
+    // arrive while the message is in flight. Nothing else can place an event there.
+    beforeSend: (hook: ((challengeId: string) => Promise<void>) | undefined) => {
+      before = hook;
     },
     isPolling: () => polling,
     sendLoginPrompt: async (prompt: {
@@ -157,6 +164,7 @@ export const stubTelegram = (polling = true) => {
       ip: string;
       userAgent: string;
     }) => {
+      if (before !== undefined) await before(prompt.challengeId);
       if (fail !== undefined) throw fail;
       prompts.push(prompt);
       await Promise.resolve();
