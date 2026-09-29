@@ -55,6 +55,41 @@ export function parseUrlEnv(raw: string, name: string, rules: UrlEnvRules): stri
   return raw;
 }
 
+// A URL that is either https, or http pointed at this machine. Two variables need exactly
+// this rule — the OAuth redirect the broker delivers to, and the origin the admin pages are
+// served from — and the wording of the refusal is quoted by both suites.
+const LOOPBACK_OR_HTTPS_RULES: UrlEnvRules = {
+  protocols: ['https:', 'http:'],
+  allowIpv6Literal: false,
+};
+const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost'];
+
+export function parseLoopbackOrHttpsUrlEnv(raw: string, name: string): string {
+  const value = parseUrlEnv(raw, name, LOOPBACK_OR_HTTPS_RULES);
+  const url = new URL(value);
+  if (url.protocol === 'http:' && !LOOPBACK_HOSTS.includes(url.hostname)) {
+    throw new Error(`Env ${name} may only use http for ${LOOPBACK_HOSTS.join(' or ')}`);
+  }
+  return value;
+}
+
+// An origin, for comparing against a browser's `Origin` header and for deciding whether a
+// cookie may be marked Secure. The value is normalised through `URL.origin` — the header is
+// normalised too, so `https://Admin.Example/` and `https://admin.example` are one origin — and
+// anything an origin cannot carry is refused rather than silently dropped: a path, a query, a
+// fragment or credentials in the variable means it was meant to be something else.
+export function parseOriginEnv(raw: string, name: string): string {
+  const value = parseLoopbackOrHttpsUrlEnv(raw, name);
+  const url = new URL(value);
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+    throw new Error(`Env ${name} must be an origin without a path, query or fragment`);
+  }
+  if (url.username !== '' || url.password !== '') {
+    throw new Error(`Env ${name} must not carry credentials`);
+  }
+  return url.origin;
+}
+
 export function parseIntegerEnv(raw: string, name: string): number {
   if (!/^\d+$/.test(raw)) throw new Error(`Env ${name} must be an integer`);
   return Number(raw);

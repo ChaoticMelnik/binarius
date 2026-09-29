@@ -11,3 +11,6 @@ export * from './deposit-events';
 export * from './bonus-rules';
 export * from './notification-jobs';
 export * from './audit-log';
+export * from './staff';
+export * from './staff-login-challenges';
+export * from './staff-sessions';

@@ -4,7 +4,7 @@
 // `err.response.request.headers.authorization`) and a bare top-level key. Deeper nesting is
 // not covered, and no key path scrubs a string: a secret inside `err.message` or `err.stack`
 // survives, which is why error objects are logged by name and code only (see errorIdentity
-// below). Sixty-two paths cost a traversal per log line — accepted for the loggers' volume.
+// below). Seventy-four paths cost a traversal per log line — accepted for the loggers' volume.
 const SECRET_KEYS = [
   'authorization',
   'token',
@@ -18,6 +18,9 @@ const SECRET_KEYS = [
   'client_secret',
   'state',
   'authorizationCode',
+  // the staff session: the value the admin cookie carries, and the header it arrives in
+  'sessionToken',
+  'cookie',
 ] as const;
 const MAX_DEPTH = 5;
 

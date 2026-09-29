@@ -7,6 +7,10 @@ declare class URL {
   hostname: string;
   username: string;
   password: string;
+  pathname: string;
+  search: string;
+  hash: string;
+  readonly origin: string;
 }
 
 declare function setTimeout(callback: () => void, ms?: number): unknown;

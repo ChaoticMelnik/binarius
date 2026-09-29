@@ -11,7 +11,9 @@ import {
   type CreateTradeIntentRequest,
   type DecimalString,
 } from '@binarius/shared';
-import { brokerAccounts, users } from './schema/index';
+import { brokerAccounts, staff, users } from './schema/index';
+import { StaffStatus } from './schema/staff';
+import { hashPassword, type ScryptParams } from './staff-password';
 import type { BrokerAccountRow } from './oauth-ops';
 import { createTradeIntent, type TradeIntentRow } from './trade-intent-ops';
 
@@ -183,4 +185,48 @@ export async function seedQueuedIntent(
   const seed = await seedUserWithAccount(db);
   const { intent } = await createTradeIntent(db, intentRequest(seed.telegramUserId, patch));
   return { ...seed, intent };
+}
+
+// --- Staff fixtures ---------------------------------------------------------------------------
+
+// Cheap scrypt parameters for fixtures. verifyPassword reads the cost out of the stored string,
+// so a 2 ms fixture hash exercises exactly the code path a 250 ms production hash does — and
+// seeding at production cost would add a quarter of a second to every case that needs a staff
+// member. ln=10 is the floor verifyPassword accepts; staff-password.test.ts pins both ends.
+export const TEST_SCRYPT_PARAMS: ScryptParams = { ln: 10, r: 8, p: 1 };
+
+export const TEST_STAFF_PASSWORD = 'correct horse battery staple';
+
+export interface SeededStaff {
+  staffId: string;
+  login: string;
+  telegramUserId: bigint;
+  password: string;
+  passwordHash: string;
+}
+
+export async function seedStaff(
+  db: Db,
+  {
+    password = TEST_STAFF_PASSWORD,
+    status = StaffStatus.Active,
+    displayName = null,
+    params = TEST_SCRYPT_PARAMS,
+  }: {
+    password?: string;
+    status?: StaffStatus;
+    displayName?: string | null;
+    params?: ScryptParams;
+  } = {},
+): Promise<SeededStaff> {
+  const n = ++seq;
+  const login = `staff-${n}`;
+  const telegramUserId = BigInt(900_000 + n);
+  const passwordHash = await hashPassword(password, params);
+  const [row] = await db
+    .insert(staff)
+    .values({ login, passwordHash, telegramUserId, displayName, status })
+    .returning({ id: staff.id });
+  if (row === undefined) throw new Error('seedStaff: insert returned no row');
+  return { staffId: row.id, login, telegramUserId, password, passwordHash };
 }

@@ -2,20 +2,26 @@ import { randomUUID } from 'node:crypto';
 import { TransactionRollbackError, eq, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { canTransition } from '@binarius/shared';
+import { canTransition, staffLoginSchema } from '@binarius/shared';
 import { createDb, type Db } from './client';
 import {
+  AuditAction,
+  auditLog,
   brokerAccounts,
   brokerTrades,
   depositEvents,
   oauthStates,
   outboxEvents,
+  staff,
+  staffLoginChallenges,
+  staffSessions,
   tokenLedger,
   tradeIntents,
   tradingSessions,
   users,
 } from './schema/index';
 import type { DecimalString } from '@binarius/shared';
+import { STAFF_LOGIN_CORPUS } from '@binarius/shared/testing';
 // Integration tests: a migrated Postgres named by DATABASE_URL (README → Database).
 // Each case runs in one transaction that is rolled back at the end; Postgres aborts a
 // transaction after its first error, so every case expects exactly one error code.
@@ -162,7 +168,10 @@ describe('enum and uniqueness constraints', () => {
     ],
     [
       'audit_log_actor_type_check',
-      (tx: Tx) => tx.execute(sql`insert into audit_log (actor_type, action) values ('bogus', 'a')`),
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into audit_log (actor_type, action) values ('bogus', 'staff_logout')`,
+        ),
     ],
     [
       'token_ledger_kind_check',
@@ -862,9 +871,13 @@ describe('users and token_ledger', () => {
 
   it('protects audit_log against UPDATE', async () => {
     await rolledBack(async (tx) => {
-      await tx.execute(sql`insert into audit_log (actor_type, action) values ('system', 'probe')`);
+      await tx.execute(
+        sql`insert into audit_log (actor_type, action) values ('system', 'staff_logout')`,
+      );
       await rejectsAsAppendOnly(
-        tx.execute(sql`update audit_log set action = 'changed' where action = 'probe'`),
+        tx.execute(
+          sql`update audit_log set action = 'staff_login_completed' where action = 'staff_logout'`,
+        ),
         'audit_log',
         'append_only',
       );
@@ -1366,6 +1379,446 @@ describe('foreign keys', () => {
         .sort((a, b) => a.conname.localeCompare(b.conname)),
     );
     for (const fk of implied) observed.add(fk.name);
+  });
+});
+
+// --- Staff authentication (#68) ---------------------------------------------------------------
+// Every constraint the three new tables declare, plus the audit action list. The coverage gate
+// at the end of this file will not accept one that no case here saw the database enforce.
+
+const STAFF_HASH = '$scrypt$ln=10,r=8,p=1$c2FsdA$aGFzaA';
+
+async function seedStaffRow(tx: Tx, patch: Record<string, unknown> = {}): Promise<string> {
+  const n = ++seq;
+  const [row] = await tx
+    .insert(staff)
+    .values({
+      login: `ada-${n}`,
+      passwordHash: STAFF_HASH,
+      telegramUserId: BigInt(980_000 + n),
+      ...patch,
+    })
+    .returning({ id: staff.id });
+  return row!.id;
+}
+
+const challenge = (staffId: string, patch: Record<string, unknown> = {}) => ({
+  staffId,
+  ip: '203.0.113.7',
+  userAgent: 'Mozilla/5.0',
+  expiresAt: sql`now() + interval '5 minutes'`,
+  ...patch,
+});
+
+const session = (staffId: string, patch: Record<string, unknown> = {}) => ({
+  staffId,
+  tokenHash: `token-${++seq}`,
+  ip: '203.0.113.7',
+  userAgent: 'Mozilla/5.0',
+  expiresAt: sql`now() + interval '24 hours'`,
+  ...patch,
+});
+
+describe('staff', () => {
+  it.each([
+    ['too short', { login: 'ab' }],
+    ['too long', { login: 'a'.repeat(65) }],
+    ['with a space', { login: 'ada l' }],
+    ['cyrillic', { login: 'ада' }],
+  ])('refuses a login %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(seedStaffRow(tx, patch), '23514', 'staff_login_check');
+    });
+  });
+
+  it.each([3, 64])('accepts a login of %i characters', async (length) => {
+    await rolledBack(async (tx) => {
+      await expect(seedStaffRow(tx, { login: 'a'.repeat(length) })).resolves.toBeTypeOf('string');
+    });
+  });
+
+  // zod and the CHECK are built from one regex, but PostgreSQL's POSIX engine and JavaScript's
+  // are not the same engine, so the two verdicts are compared row by row over one corpus
+  it.each(STAFF_LOGIN_CORPUS)('$label: zod and the CHECK agree (valid=$valid)', async (row) => {
+    expect(staffLoginSchema.safeParse(row.value).success).toBe(row.valid);
+    await rolledBack(async (tx) => {
+      const insert = seedStaffRow(tx, { login: row.value });
+      if (row.valid) await expect(insert).resolves.toBeTypeOf('string');
+      else await rejectsWith(insert, '23514', 'staff_login_check');
+    });
+  });
+
+  it('refuses a hash from another KDF', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        seedStaffRow(tx, { passwordHash: '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA' }),
+        '23514',
+        'staff_password_hash_check',
+      );
+    });
+  });
+
+  it('refuses a status outside the list', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        seedStaffRow(tx, { status: 'locked' as never }),
+        '23514',
+        'staff_status_check',
+      );
+    });
+  });
+
+  it('refuses a negative attempt count', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        seedStaffRow(tx, { failedPasswordAttempts: -1 }),
+        '23514',
+        'staff_failed_attempts_check',
+      );
+    });
+  });
+
+  // a lockout with the counter already back at zero is the shape reset-password leaves
+  it('accepts a lockout alongside a zero counter', async () => {
+    await rolledBack(async (tx) => {
+      await expect(
+        seedStaffRow(tx, { failedPasswordAttempts: 0, lockedUntil: sql`now()` }),
+      ).resolves.toBeTypeOf('string');
+    });
+  });
+
+  it('refuses a non-positive Telegram id', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        seedStaffRow(tx, { telegramUserId: 0n }),
+        '23514',
+        'staff_telegram_user_id_check',
+      );
+    });
+  });
+
+  // two rows differing only in case would be two accounts one password prompt cannot tell apart
+  it('refuses a second login differing only in case', async () => {
+    await rolledBack(async (tx) => {
+      await seedStaffRow(tx, { login: 'Ada' });
+      await rejectsWith(seedStaffRow(tx, { login: 'ada' }), '23505', 'staff_login_lower_idx');
+    });
+  });
+
+  it('refuses a second row on one Telegram account', async () => {
+    await rolledBack(async (tx) => {
+      await seedStaffRow(tx, { telegramUserId: 991_001n });
+      await rejectsWith(
+        seedStaffRow(tx, { telegramUserId: 991_001n }),
+        '23505',
+        'staff_telegram_user_id_idx',
+      );
+    });
+  });
+});
+
+describe('staff_login_challenges', () => {
+  it('refuses a challenge for a staff member that does not exist', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(staffLoginChallenges).values(challenge(randomUUID())),
+        '23503',
+        'staff_login_challenges_staff_id_staff_id_fk',
+      );
+    });
+  });
+
+  it('refuses a status outside the list', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx.insert(staffLoginChallenges).values(challenge(staffId, { status: 'open' as never })),
+        '23514',
+        'staff_login_challenges_status_check',
+      );
+    });
+  });
+
+  it('refuses a negative attempt count', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx.insert(staffLoginChallenges).values(challenge(staffId, { codeAttempts: -1 })),
+        '23514',
+        'staff_login_challenges_code_attempts_check',
+      );
+    });
+  });
+
+  it('refuses a window that closes the moment it opens', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx.insert(staffLoginChallenges).values(challenge(staffId, { expiresAt: sql`now()` })),
+        '23514',
+        'staff_login_challenges_expires_after_created_check',
+      );
+    });
+  });
+
+  // `denied` is used for the pair cases: the code/status CHECK lets it hold a code or not, so
+  // the row violates exactly the constraint each case is about
+  it('refuses a code with no moment it was issued', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx
+          .insert(staffLoginChallenges)
+          .values(challenge(staffId, { status: 'denied', codeHash: 'h', confirmedAt: null })),
+        '23514',
+        'staff_login_challenges_confirmed_pair_check',
+      );
+    });
+  });
+
+  it('refuses a confirmation older than the challenge', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx.insert(staffLoginChallenges).values(
+          challenge(staffId, {
+            status: 'denied',
+            codeHash: 'h',
+            confirmedAt: sql`now() - interval '1 second'`,
+          }),
+        ),
+        '23514',
+        'staff_login_challenges_confirmed_after_created_check',
+      );
+    });
+  });
+
+  it.each([
+    [
+      'pending with a code',
+      { status: 'pending', codeHash: 'h', confirmedAt: sql`now()` },
+    ],
+    ['confirmed without one', { status: 'confirmed' }],
+    ['completed without one', { status: 'completed' }],
+    ['exhausted without one', { status: 'exhausted' }],
+  ])('refuses %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx.insert(staffLoginChallenges).values(challenge(staffId, patch)),
+        '23514',
+        'staff_login_challenges_code_status_check',
+      );
+    });
+  });
+
+  it.each([
+    ['denied with no code', { status: 'denied' }],
+    ['expired holding a code', { status: 'expired', codeHash: 'h', confirmedAt: sql`now()` }],
+    ['failed holding a code', { status: 'failed', codeHash: 'h', confirmedAt: sql`now()` }],
+  ])('accepts %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await expect(
+        tx.insert(staffLoginChallenges).values(challenge(staffId, patch)),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  it('refuses an invitation delivered before the challenge existed', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx
+          .insert(staffLoginChallenges)
+          .values(challenge(staffId, { promptSentAt: sql`now() - interval '1 second'` })),
+        '23514',
+        'staff_login_challenges_prompt_sent_check',
+      );
+    });
+  });
+
+  it('accepts an invitation delivered the moment the challenge was created', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await expect(
+        tx.insert(staffLoginChallenges).values(challenge(staffId, { promptSentAt: sql`now()` })),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  it('refuses a delivered code that does not exist', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx
+          .insert(staffLoginChallenges)
+          .values(challenge(staffId, { status: 'denied', codeSentAt: sql`now()` })),
+        '23514',
+        'staff_login_challenges_code_sent_check',
+      );
+    });
+  });
+
+  // the window between issuing a code and Telegram taking it: this is what the second button
+  // press reads
+  it('accepts a code that exists but has not been delivered', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await expect(
+        tx
+          .insert(staffLoginChallenges)
+          .values(challenge(staffId, { status: 'confirmed', codeHash: 'h', confirmedAt: sql`now()` })),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  it('refuses a second open challenge for one staff member', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await tx.insert(staffLoginChallenges).values(challenge(staffId));
+      await rejectsWith(
+        tx
+          .insert(staffLoginChallenges)
+          .values(challenge(staffId, { status: 'confirmed', codeHash: 'h', confirmedAt: sql`now()` })),
+        '23505',
+        'staff_login_challenges_open_idx',
+      );
+    });
+  });
+
+  it('accepts a new challenge once the previous one is closed', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await tx.insert(staffLoginChallenges).values(challenge(staffId, { status: 'denied' }));
+      await expect(
+        tx.insert(staffLoginChallenges).values(challenge(staffId)),
+      ).resolves.toBeDefined();
+    });
+  });
+});
+
+describe('staff_sessions', () => {
+  it('refuses a session for a staff member that does not exist', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(staffSessions).values(session(randomUUID())),
+        '23503',
+        'staff_sessions_staff_id_staff_id_fk',
+      );
+    });
+  });
+
+  it('refuses a revoker that does not exist', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx
+          .insert(staffSessions)
+          .values(
+            session(staffId, { revokedAt: sql`now()`, revokedByStaffId: randomUUID() }),
+          ),
+        '23503',
+        'staff_sessions_revoked_by_staff_id_staff_id_fk',
+      );
+    });
+  });
+
+  it('refuses a second session on one token', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await tx.insert(staffSessions).values(session(staffId, { tokenHash: 'same' }));
+      await rejectsWith(
+        tx.insert(staffSessions).values(session(staffId, { tokenHash: 'same' })),
+        '23505',
+        'staff_sessions_token_hash_idx',
+      );
+    });
+  });
+
+  it('refuses a session that expires the moment it starts', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx.insert(staffSessions).values(session(staffId, { expiresAt: sql`now()` })),
+        '23514',
+        'staff_sessions_expires_after_created_check',
+      );
+    });
+  });
+
+  it('refuses activity older than the session', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx
+          .insert(staffSessions)
+          .values(session(staffId, { lastSeenAt: sql`now() - interval '1 second'` })),
+        '23514',
+        'staff_sessions_last_seen_after_created_check',
+      );
+    });
+  });
+
+  it('refuses a revocation older than the session', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx
+          .insert(staffSessions)
+          .values(session(staffId, { revokedAt: sql`now() - interval '1 second'` })),
+        '23514',
+        'staff_sessions_revoked_after_created_check',
+      );
+    });
+  });
+
+  it('refuses a revoker with no revocation', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx.insert(staffSessions).values(session(staffId, { revokedByStaffId: staffId })),
+        '23514',
+        'staff_sessions_revoked_by_pair_check',
+      );
+    });
+  });
+
+  // the CLI revokes with no staff member behind it, and a session may be revoked the instant
+  // it is created (disable racing a login)
+  it.each([
+    ['the CLI, with no revoker', { revokedAt: sql`now()`, revokedByStaffId: null }],
+    ['a revocation at the moment of creation', { revokedAt: sql`now()` }],
+    ['activity at the moment of creation', { lastSeenAt: sql`now()` }],
+  ])('accepts %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await expect(tx.insert(staffSessions).values(session(staffId, patch))).resolves.toBeDefined();
+    });
+  });
+});
+
+describe('audit_log actions', () => {
+  it('refuses an action outside the list', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.execute(
+          sql`insert into audit_log (actor_type, action) values ('system', 'staff_login_maybe')`,
+        ),
+        '23514',
+        'audit_log_action_check',
+      );
+    });
+  });
+
+  it('accepts every action the constant declares', async () => {
+    await rolledBack(async (tx) => {
+      for (const action of Object.values(AuditAction)) {
+        await expect(
+          tx.insert(auditLog).values({ actorType: 'system', action }),
+        ).resolves.toBeDefined();
+      }
+    });
   });
 });
 
