@@ -7,6 +7,7 @@ import Fastify, {
   type LogLevel,
 } from 'fastify';
 import { errorIdentity, errorLogFields, LOG_REDACT_PATHS } from '@binarius/shared';
+import { adminRoutes, type AdminRoutesDeps } from './admin/routes';
 import { authRoutes, type AuthRoutesDeps } from './auth/routes';
 import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
 import { usersRoutes, type UsersRoutesDeps } from './users/routes';
@@ -21,6 +22,7 @@ export interface AppDeps {
   trading: TradingRoutesDeps;
   auth: AuthRoutesDeps;
   users: UsersRoutesDeps;
+  admin: AdminRoutesDeps;
   // Where the logger writes. Production omits it and pino uses its own destination; the tests
   // pass a sink, because what this app keeps out of its log lines is only provable by reading
   // them, and pino writes to a file descriptor that stubbing `process.stdout` does not reach.
@@ -123,6 +125,7 @@ export function buildApp({
   trading,
   auth,
   users,
+  admin,
   logDestination,
 }: AppDeps): FastifyInstance {
   const app = Fastify({
@@ -173,6 +176,7 @@ export function buildApp({
   void app.register(tradingRoutes, trading);
   void app.register(authRoutes, auth);
   void app.register(usersRoutes, users);
+  void app.register(adminRoutes, admin);
 
   // Fastify's default handler echoes error.message; for a DrizzleQueryError that is the SQL
   // text plus bound parameters. A 4xx error (validation, body parsing, a thrown http error)

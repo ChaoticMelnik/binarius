@@ -186,6 +186,41 @@ export async function registerPasswordFailure(
   });
 }
 
+/** Why a login was refused before the password was even worth checking. */
+export type LoginRefusalReason = 'unknown_login' | 'disabled';
+
+/**
+ * A login attempt that ended before a challenge existed. `staffId` is NULL for a login nobody
+ * holds — the entered login is deliberately not recorded, because an entry keyed on it would
+ * be a log of near-misses against real accounts.
+ */
+export async function recordLoginRefusal(
+  db: Db,
+  input: { staffId: string | null; reason: LoginRefusalReason; ip: string },
+): Promise<void> {
+  await writeAuditEntry(
+    db,
+    staffEvent(AuditAction.StaffLoginFailed, input.staffId, {
+      reason: input.reason,
+      ip: input.ip,
+    }),
+  );
+}
+
+/** A locked account, refused without spending a KDF on it. */
+export async function recordLoginLockout(
+  db: Db,
+  input: { staffId: string; ip: string; lockedUntil: Date },
+): Promise<void> {
+  await writeAuditEntry(
+    db,
+    staffEvent(AuditAction.StaffLoginLocked, input.staffId, {
+      ip: input.ip,
+      lockedUntil: input.lockedUntil.toISOString(),
+    }),
+  );
+}
+
 export type StartLoginChallengeResult =
   | {
       ok: true;

@@ -5,6 +5,7 @@ import {
   parseBoundedIntegerEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
+  parseLoopbackOrHttpsUrlEnv,
   parseUrlEnv,
   readEnv,
   type EnvSource,
@@ -22,9 +23,6 @@ const DEV_TOKEN_ENCRYPTION_KEY_ID = 'dev';
 // the broker is reached over the public internet, and an authorize page served over http would
 // hand the authorization code to anyone on the path
 const HTTPS_ONLY_RULES: UrlEnvRules = { protocols: ['https:'], allowIpv6Literal: false };
-const REDIRECT_URI_RULES: UrlEnvRules = { protocols: ['https:', 'http:'], allowIpv6Literal: false };
-// the redirect target is a local page during development; it never leaves the machine
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost']);
 
 export interface Env {
   databaseUrl: string;
@@ -41,6 +39,8 @@ export interface Env {
   brokerPartnerRef: string;
   tokenEncryptionKey: Buffer;
   tokenEncryptionKeyId: string;
+  adminBotToken: string;
+  adminWebToken: string;
 }
 
 export function parseEnv(source: EnvSource): Env {
@@ -69,22 +69,20 @@ export function parseEnv(source: EnvSource): Env {
       'BROKER_API_BASE_URL',
       HTTPS_ONLY_RULES,
     ),
-    brokerOauthRedirectUri: parseRedirectUri(
+    // the redirect target is a local page during development; it never leaves the machine
+    brokerOauthRedirectUri: parseLoopbackOrHttpsUrlEnv(
       readEnv(source, 'BROKER_OAUTH_REDIRECT_URI'),
       'BROKER_OAUTH_REDIRECT_URI',
     ),
     brokerPartnerRef: readEnv(source, 'BROKER_PARTNER_REF'),
+    // Its own bot, not the one apps/bot runs: two pollers on one token would fight over
+    // getUpdates (409), and the staff bot must not be reachable from the public bot's chats.
+    adminBotToken: parseBotTokenEnv(readEnv(source, 'ADMIN_BOT_TOKEN'), 'ADMIN_BOT_TOKEN'),
+    // A second, narrow shared secret: it opens /admin/* and nothing else, and the reads and
+    // the revoke behind it additionally require a staff session.
+    adminWebToken: parseInternalTokenEnv(readEnv(source, 'ADMIN_WEB_TOKEN'), 'ADMIN_WEB_TOKEN'),
     ...parseTokenEncryption(source),
   };
-}
-
-function parseRedirectUri(raw: string, name: string): string {
-  const value = parseUrlEnv(raw, name, REDIRECT_URI_RULES);
-  const url = new URL(value);
-  if (url.protocol === 'http:' && !LOOPBACK_HOSTS.has(url.hostname)) {
-    throw new Error(`Env ${name} may only use http for ${[...LOOPBACK_HOSTS].join(' or ')}`);
-  }
-  return value;
 }
 
 // The two are validated together because the pair is what matters. The all-zero key is
@@ -120,6 +118,14 @@ function parseEncryptionKey(raw: string, name: string): Buffer {
   }
   return key;
 }
+
+// a token with whitespace is what a copied line from BotFather looks like, and it fails on
+// every Bot API call rather than at startup
+function parseBotTokenEnv(raw: string, name: string): string {
+  if (/\s/.test(raw)) throw new Error(`Env ${name} must not contain whitespace`);
+  return raw;
+}
+
 
 // the cipher joins key id, account id and field with '|' to bind a ciphertext to its place,
 // so a key id containing the separator would make that binding ambiguous

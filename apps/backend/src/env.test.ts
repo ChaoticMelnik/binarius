@@ -15,6 +15,8 @@ const valid = {
   BROKER_PARTNER_REF: 'partner-ref',
   TOKEN_ENCRYPTION_KEY: KEY,
   TOKEN_ENCRYPTION_KEY_ID: 'dev',
+  ADMIN_BOT_TOKEN: '1234:admin-bot-token',
+  ADMIN_WEB_TOKEN: 'admin-web-token-for-tests',
 };
 
 describe('parseEnv', () => {
@@ -34,6 +36,8 @@ describe('parseEnv', () => {
       brokerPartnerRef: valid.BROKER_PARTNER_REF,
       tokenEncryptionKey: Buffer.from(KEY, 'base64'),
       tokenEncryptionKeyId: valid.TOKEN_ENCRYPTION_KEY_ID,
+      adminBotToken: valid.ADMIN_BOT_TOKEN,
+      adminWebToken: valid.ADMIN_WEB_TOKEN,
     });
   });
 
@@ -233,5 +237,41 @@ describe('broker OAuth configuration', () => {
     ['dev key', 'Env TOKEN_ENCRYPTION_KEY_ID must not contain whitespace'],
   ])('rejects a key id the cipher cannot bind (%s)', (keyId, message) => {
     expect(() => parseEnv({ ...valid, TOKEN_ENCRYPTION_KEY_ID: keyId })).toThrow(message);
+  });
+});
+
+describe('the staff-login variables', () => {
+  it.each(['ADMIN_BOT_TOKEN', 'ADMIN_WEB_TOKEN'] as const)('requires %s', (name) => {
+    const without: Record<string, string> = { ...valid };
+    delete without[name];
+    expect(() => parseEnv(without)).toThrow(`Missing required env ${name}`);
+  });
+
+  // a token pasted out of BotFather's message, or out of a password manager, with the newline
+  it.each(['1234:token\n', '1234: token', ' 1234:token'])(
+    'refuses a bot token carrying whitespace (%j)',
+    (ADMIN_BOT_TOKEN) => {
+      expect(() => parseEnv({ ...valid, ADMIN_BOT_TOKEN })).toThrow(
+        'Env ADMIN_BOT_TOKEN must not contain whitespace',
+      );
+    },
+  );
+
+  it('refuses an empty bot token', () => {
+    expect(() => parseEnv({ ...valid, ADMIN_BOT_TOKEN: '' })).toThrow(
+      'Env ADMIN_BOT_TOKEN must not be empty',
+    );
+  });
+
+  // the same rules the internal token is held to: it is a shared secret, just a narrower one
+  it.each(['short', 'has whitespace in it '])('refuses a weak web token (%j)', (ADMIN_WEB_TOKEN) => {
+    expect(() => parseEnv({ ...valid, ADMIN_WEB_TOKEN })).toThrow('Env ADMIN_WEB_TOKEN');
+  });
+
+  // the admin bot must not be the public bot: one token cannot carry two pollers
+  it('keeps the two bot tokens apart', () => {
+    const env = parseEnv({ ...valid, ADMIN_BOT_TOKEN: '1234:admin' });
+    expect(env.adminBotToken).toBe('1234:admin');
+    expect(env.adminWebToken).not.toBe(env.internalApiToken);
   });
 });

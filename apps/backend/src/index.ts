@@ -2,6 +2,7 @@ import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import { closeAll, errorLogFields } from '@binarius/shared';
 import { createDb, createTokenCipher } from '@binarius/db';
+import { createAdminBot } from './admin/telegram';
 import { buildApp } from './app';
 import { createBrokerOAuthClient } from './broker/oauth-client';
 import { parseEnv } from './env';
@@ -47,6 +48,18 @@ const broker = createBrokerOAuthClient({
   clientSecret: env.brokerClientSecret,
 });
 
+// created before the app so the routes can hold it; polling starts after listen()
+const adminBot = createAdminBot({
+  token: env.adminBotToken,
+  db,
+  // the app's logger does not exist yet, and this one is only used once polling is running
+  logger: {
+    info: (object, message) => app.log.info(object, message),
+    warn: (object, message) => app.log.warn(object, message),
+    error: (object, message) => app.log.error(object, message),
+  },
+});
+
 const app = buildApp({
   checkPostgres: () => pool.query('SELECT 1'),
   checkRedis: () => redis.ping(),
@@ -71,6 +84,11 @@ const app = buildApp({
     db,
     internalApiToken: env.internalApiToken,
   },
+  admin: {
+    db,
+    adminWebToken: env.adminWebToken,
+    telegram: adminBot,
+  },
 });
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
@@ -93,7 +111,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   shuttingDown = true;
   app.log.info({ signal }, 'shutting down');
   const drained = await closeAll(
-    [() => app.close(), () => publisher.stop()],
+    [() => app.close(), () => publisher.stop(), () => adminBot.stop()],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
   if (!drained) {
@@ -119,3 +137,6 @@ process.once('SIGINT', (signal) => void shutdown(signal));
 
 await app.listen({ port: env.port, host: '0.0.0.0' });
 publisher.start();
+// A failed start is logged and leaves isPolling() false; it does not stop the process, and
+// every staff login then answers 503 with a row in audit_log saying why.
+adminBot.start();
