@@ -7,6 +7,20 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@binarius/shared": "workspace:*"
+    "@binarius/shared": "workspace:*",
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/formbody": "^9.0.0",
+    "fastify": "^5.12.5",
+    "zod": "^4.6.5"
+  },
+  "exports": {
+    "./app": {
+      "types": "./src/app.ts",
+      "default": "./src/app.ts"
+    },
+    "./backend-client": {
+      "types": "./src/backend-client.ts",
+      "default": "./src/backend-client.ts"
+    }
   }
 }

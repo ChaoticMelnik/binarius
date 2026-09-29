@@ -19,6 +19,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@binarius/web": "workspace:*",
     "@types/pg": "^8.23.1"
   }
 }
