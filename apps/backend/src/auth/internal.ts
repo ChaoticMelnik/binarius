@@ -5,8 +5,10 @@ const SCHEME = 'Bearer ';
 
 const digest = (value: string): Buffer => createHash('sha256').update(value).digest();
 
-// Server-to-server auth for the bot: one shared secret. Hashing both sides first keeps the
-// comparison constant-time whatever the length of the presented token.
+// Server-to-server auth: one shared secret per caller class — the bot's fully trusted internal
+// token, and the web process's narrow admin token, which opens /admin/* and nothing else.
+// Hashing both sides first keeps the comparison constant-time whatever the length of the
+// presented token.
 export function internalBearerAuth(token: string) {
   const expected = digest(token);
   return async (request: FastifyRequest, reply: FastifyReply) => {

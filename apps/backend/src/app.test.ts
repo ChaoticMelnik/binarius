@@ -4,6 +4,7 @@ import { buildApp, withoutSecrets, type AppDeps } from './app';
 import type { AuthRoutesDeps } from './auth/routes';
 import type { TradingRoutesDeps } from './trading/routes';
 import type { UsersRoutesDeps } from './users/routes';
+import { unusedAdminDeps } from './admin/testing';
 
 const ok = () => Promise.resolve();
 const down = () => Promise.reject(new Error('down'));
@@ -37,6 +38,7 @@ const unusedUsers: UsersRoutesDeps = {
 
 async function health(deps: Pick<AppDeps, 'checkPostgres' | 'checkRedis'>) {
   const app = buildApp({
+    admin: unusedAdminDeps(),
     ...deps,
     logLevel: 'silent',
     checkTimeoutMs: 20,
@@ -114,6 +116,7 @@ describe('what reaches the log', () => {
   ) {
     const logs = captureLogs();
     const app = buildApp({
+    admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,
       logLevel: 'info',
@@ -249,6 +252,7 @@ describe('request logging', () => {
 
   it('answers an unknown route without echoing what it carried', async () => {
     const app = buildApp({
+    admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,
       logLevel: 'silent',
@@ -274,6 +278,7 @@ describe('request logging', () => {
 describe('error handler', () => {
   async function withApp(run: (app: ReturnType<typeof buildApp>) => Promise<void>) {
     const app = buildApp({
+    admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,
       logLevel: 'silent',

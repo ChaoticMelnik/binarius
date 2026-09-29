@@ -4,6 +4,7 @@ import { BrokerAccountStatus, UserStatus } from '@binarius/shared';
 import { createTempDatabase, seedBrokerAccount, type TempDatabase } from '@binarius/db/testing';
 import { users } from '@binarius/db';
 import { buildApp } from '../app';
+import { unusedAdminDeps } from '../admin/testing';
 
 const baseUrl = process.env.DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -17,6 +18,7 @@ let app: ReturnType<typeof buildApp>;
 beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
   app = buildApp({
+    admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'silent',

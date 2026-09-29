@@ -22,10 +22,10 @@ import {
   type BrokerOAuthClient,
 } from '../broker/oauth-client';
 import { internalBearerAuth } from './internal';
+import { createWindow } from './rate-window';
 
 // a state has to outlive the user typing their credentials, unlike the 120 s code it leads to
 const OAUTH_STATE_TTL_MS = 600_000;
-const CALLBACK_RATE_WINDOW_MS = 60_000;
 // The ceiling on everything the public callback accepts, taken before the body is parsed and
 // before any query runs: it is what bounds how much work an anonymous request can trigger.
 // Real logins are orders of magnitude rarer than this, so it only ever catches a flood.
@@ -48,44 +48,6 @@ export interface AuthRoutesDeps {
   // lowered by tests; production runs on the constants above
   callbackMaxPerMinute?: number;
   callbackMaxFailuresPerMinute?: number;
-}
-
-interface Ticket {
-  over: boolean;
-  generation: number;
-}
-
-// One fixed window per process, rolled forward lazily. A distributed limit would need Redis and
-// is follow-up work; this one bounds a single backend, which is what the deployment runs.
-function createWindow(limit: number) {
-  let startedAt = Date.now();
-  let count = 0;
-  let generation = 0;
-  const roll = (): void => {
-    if (Date.now() - startedAt < CALLBACK_RATE_WINDOW_MS) return;
-    startedAt = Date.now();
-    count = 0;
-    generation += 1;
-  };
-  return {
-    // Reserves the slot before the work it limits, not after: a counter incremented once the
-    // work has finished lets a concurrent burst through while every request is still in flight.
-    take: (): Ticket => {
-      roll();
-      count += 1;
-      return { over: count > limit, generation };
-    },
-    // returns a reservation that turned out not to be the thing being limited; a window that
-    // has rolled since is a different window, and its count is not ours to touch
-    release: (generation_: number): void => {
-      roll();
-      if (generation_ === generation && count > 0) count -= 1;
-    },
-    isOver: (): boolean => {
-      roll();
-      return count > limit;
-    },
-  };
 }
 
 export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) => {

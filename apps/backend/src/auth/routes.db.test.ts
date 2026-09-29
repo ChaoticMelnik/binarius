@@ -15,6 +15,7 @@ import { buildApp } from '../app';
 import { createBrokerOAuthClient } from '../broker/oauth-client';
 import { startOAuthStub, type OAuthStub } from '../broker/testing/oauth-stub';
 import type { AuthRoutesDeps } from './routes';
+import { unusedAdminDeps } from '../admin/testing';
 
 const baseUrl = process.env.DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -70,6 +71,7 @@ const telegramId = () => String(800_000 + ++seq);
 
 const testApp = (auth: AuthRoutesDeps) =>
   buildApp({
+    admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'silent',
