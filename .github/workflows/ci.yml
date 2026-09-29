@@ -212,10 +212,24 @@ jobs:
           printf 'starting:%s\n' "$(printf ' %s' $services)"
           docker compose up -d --build --wait --wait-timeout 120 $services
       - run: curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'
-      # `web` has no healthcheck, and `dev` is `tsx watch`, whose supervisor survives the app
-      # exiting (#65) — so --wait reports success over a dead `web`. This is the step that does
-      # not: it asks for a page the process has to be alive and listening to serve.
-      - run: curl -fsS http://127.0.0.1:3001/admin/login | grep -q '<form'
+      # `web` has no healthcheck (#70), so --wait treats it as ready the moment the container
+      # runs — 0.5 s after `docker compose up`, while `tsx watch` is still compiling. And `dev`
+      # is `tsx watch`, whose supervisor survives the app exiting (#65), so --wait would report
+      # success over a dead `web` too. This step is what makes the difference: it asks for a
+      # page only a listening process can serve, and retries to a deadline rather than racing
+      # the compiler. A `web` that never comes up still fails it, which is the whole point.
+      - name: the admin pages answer
+        run: |
+          set -u
+          deadline=$((SECONDS + 90))
+          until curl -fsS http://127.0.0.1:3001/admin/login | grep -q '<form'; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::the web service never served /admin/login"
+              docker compose logs web
+              exit 1
+            fi
+            sleep 2
+          done
       - if: failure()
         continue-on-error: true
         run: docker compose logs
