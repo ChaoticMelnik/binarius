@@ -44,8 +44,8 @@ query from there would be a read with no audit row behind it. `no-db-access.test
 
 | Variable | Where | What it is |
 |---|---|---|
-| `ADMIN_BOT_TOKEN` | `backend` | **A second bot**, from @BotFather. Not `TELEGRAM_BOT_TOKEN`: two pollers on one token fight over `getUpdates` (409). |
-| `ADMIN_WEB_TOKEN` | `backend`, `web` | The narrow shared secret between them. Different from `INTERNAL_API_TOKEN`. |
+| `ADMIN_BOT_TOKEN` | `backend` | **A second bot**, from @BotFather. Not `TELEGRAM_BOT_TOKEN`: the two live in different processes, so no check can compare them — Telegram answers the second poller 409, the backend logs it at startup, and login stays closed. |
+| `ADMIN_WEB_TOKEN` | `backend`, `web` | The narrow shared secret between them. The backend refuses to start when it equals `INTERNAL_API_TOKEN`: the bearer comparator is the same on both sides, so one value in both would open the whole internal API to `web`. |
 | `ADMIN_PUBLIC_URL` | `web` | The origin the pages are served from. Checked against the `Origin` header on every POST, and decides whether the cookie may be `Secure`. Default `http://127.0.0.1:3001`. |
 | `WEB_PORT` | compose | Host port for the pages, `127.0.0.1` only. Change it together with `ADMIN_PUBLIC_URL` — a test ties the two defaults, because a mismatch makes every form submission a 403. |
 

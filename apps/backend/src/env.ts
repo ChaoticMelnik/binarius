@@ -53,10 +53,7 @@ export function parseEnv(source: EnvSource): Env {
       readEnv(source, 'HEALTH_TIMEOUT_MS', '2000'),
       'HEALTH_TIMEOUT_MS',
     ),
-    internalApiToken: parseInternalTokenEnv(
-      readEnv(source, 'INTERNAL_API_TOKEN'),
-      'INTERNAL_API_TOKEN',
-    ),
+    ...parseSharedSecrets(source),
     brokerClientId: readEnv(source, 'BROKER_CLIENT_ID'),
     brokerClientSecret: readEnv(source, 'BROKER_CLIENT_SECRET'),
     brokerOauthAuthorizeUrl: parseUrlEnv(
@@ -78,11 +75,28 @@ export function parseEnv(source: EnvSource): Env {
     // Its own bot, not the one apps/bot runs: two pollers on one token would fight over
     // getUpdates (409), and the staff bot must not be reachable from the public bot's chats.
     adminBotToken: parseBotTokenEnv(readEnv(source, 'ADMIN_BOT_TOKEN'), 'ADMIN_BOT_TOKEN'),
-    // A second, narrow shared secret: it opens /admin/* and nothing else, and the reads and
-    // the revoke behind it additionally require a staff session.
-    adminWebToken: parseInternalTokenEnv(readEnv(source, 'ADMIN_WEB_TOKEN'), 'ADMIN_WEB_TOKEN'),
     ...parseTokenEncryption(source),
   };
+}
+
+// Both bearers this process accepts, validated together because what matters is the pair.
+// internalBearerAuth is the same comparator on both sides, so one value in both variables makes
+// the web process's narrow secret open POST /trading/intents, GET /trading/intents/:id,
+// POST /users/start and the auth scope as well — the one boundary in this feature that a single
+// .env typo removes. ADMIN_WEB_TOKEN opens /admin/* and nothing else, and the reads and the
+// revoke behind it additionally require a staff session.
+function parseSharedSecrets(source: EnvSource): Pick<Env, 'internalApiToken' | 'adminWebToken'> {
+  const internalApiToken = parseInternalTokenEnv(
+    readEnv(source, 'INTERNAL_API_TOKEN'),
+    'INTERNAL_API_TOKEN',
+  );
+  const adminWebToken = parseInternalTokenEnv(readEnv(source, 'ADMIN_WEB_TOKEN'), 'ADMIN_WEB_TOKEN');
+  if (adminWebToken === internalApiToken) {
+    throw new Error(
+      'Env ADMIN_WEB_TOKEN must differ from INTERNAL_API_TOKEN: the same value would open the whole internal API to the web process',
+    );
+  }
+  return { internalApiToken, adminWebToken };
 }
 
 // The two are validated together because the pair is what matters. The all-zero key is
@@ -125,7 +139,6 @@ function parseBotTokenEnv(raw: string, name: string): string {
   if (/\s/.test(raw)) throw new Error(`Env ${name} must not contain whitespace`);
   return raw;
 }
-
 
 // the cipher joins key id, account id and field with '|' to bind a ciphertext to its place,
 // so a key id containing the separator would make that binding ambiguous
