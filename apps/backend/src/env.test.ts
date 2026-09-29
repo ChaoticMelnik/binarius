@@ -268,10 +268,17 @@ describe('the staff-login variables', () => {
     expect(() => parseEnv({ ...valid, ADMIN_WEB_TOKEN })).toThrow('Env ADMIN_WEB_TOKEN');
   });
 
-  // the admin bot must not be the public bot: one token cannot carry two pollers
-  it('keeps the two bot tokens apart', () => {
-    const env = parseEnv({ ...valid, ADMIN_BOT_TOKEN: '1234:admin' });
-    expect(env.adminBotToken).toBe('1234:admin');
-    expect(env.adminWebToken).not.toBe(env.internalApiToken);
+  // internalBearerAuth is the same comparator on both sides, so one value in both variables
+  // would let the web process's narrow secret open the whole internal API. The pair the fixture
+  // declares is already asserted by `applies defaults for optional variables`; this is the
+  // refusal, which is the half nothing enforced before.
+  it('refuses ADMIN_WEB_TOKEN equal to INTERNAL_API_TOKEN', () => {
+    expect(() => parseEnv({ ...valid, ADMIN_WEB_TOKEN: valid.INTERNAL_API_TOKEN })).toThrow(
+      'Env ADMIN_WEB_TOKEN must differ from INTERNAL_API_TOKEN',
+    );
   });
+
+  // The admin bot must not be the public bot either, but backend never reads TELEGRAM_BOT_TOKEN,
+  // so there is nothing here to compare it against: that pair is enforced by Telegram answering
+  // 409 to the second poller, which the backend logs at startup and which leaves login closed.
 });
