@@ -37,6 +37,25 @@ export const START_PAYLOAD_CORPUS: readonly { label: string; value: string; vali
   { label: 'cyrillic', value: 'исток', valid: false },
 ];
 
+// The staff-login corpus, run twice: against staffLoginSchema (packages/shared) and against
+// the live staff_login_check (packages/db). One list, for the same reason as the one above.
+export const STAFF_LOGIN_CORPUS: readonly { label: string; value: string; valid: boolean }[] = [
+  { label: '3 chars', value: 'ada', valid: true },
+  { label: '64 chars', value: 'a'.repeat(64), valid: true },
+  { label: 'dot underscore dash', value: 'ada.lovelace_1-A', valid: true },
+  { label: 'digits only', value: '007', valid: true },
+  { label: '2 chars', value: 'ab', valid: false },
+  { label: '65 chars', value: 'a'.repeat(65), valid: false },
+  { label: 'empty', value: '', valid: false },
+  { label: 'space', value: 'ada l', valid: false },
+  { label: 'at sign', value: 'ada@host', valid: false },
+  { label: 'newline', value: 'ada\nb', valid: false },
+  // JavaScript's `$` without `m` and PostgreSQL's `~` both anchor at the very end, so this row
+  // is the one that would show them disagreeing if either ever stopped doing so
+  { label: 'trailing newline', value: 'ada\n', valid: false },
+  { label: 'cyrillic', value: 'ада', valid: false },
+];
+
 // `40s` → 40000; compose accepts h/m/s/ms suffixes, this project only writes seconds
 export function composeDurationMs(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;

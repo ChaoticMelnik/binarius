@@ -5,6 +5,7 @@ export * from './trading';
 export * from './broker';
 export * from './oauth';
 export * from './users';
+export * from './admin';
 export * from './partner';
 export * from './socket';
 export * from './env';

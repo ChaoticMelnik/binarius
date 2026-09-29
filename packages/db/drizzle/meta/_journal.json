@@ -50,6 +50,13 @@
       "when": 1790253130628,
       "tag": "0006_user_acquisition",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790672049652,
+      "tag": "0007_staff_auth",
+      "breakpoints": true
     }
   ]
 }

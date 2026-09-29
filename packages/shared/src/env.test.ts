@@ -7,6 +7,8 @@ import {
   parseIntegerEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
+  parseLoopbackOrHttpsUrlEnv,
+  parseOriginEnv,
   parseUrlEnv,
   readEnv,
 } from './env';
@@ -113,5 +115,58 @@ describe('parseBoundedIntegerEnv', () => {
 
   it('rejects a non-integer before checking the bounds', () => {
     expect(() => parseBoundedIntegerEnv('1e3', 'X', 0, 10_000)).toThrow('Env X must be an integer');
+  });
+});
+
+describe('parseLoopbackOrHttpsUrlEnv', () => {
+  it.each(['https://binodex.app/oauth/callback', 'http://127.0.0.1:3000/oauth/callback'])(
+    'returns %s unchanged',
+    (raw) => {
+      expect(parseLoopbackOrHttpsUrlEnv(raw, 'BROKER_OAUTH_REDIRECT_URI')).toBe(raw);
+    },
+  );
+
+  // quoted verbatim: apps/backend/src/env.test.ts asserts this exact sentence
+  it('refuses http for anything but this machine', () => {
+    expect(() =>
+      parseLoopbackOrHttpsUrlEnv('http://binodex.app/oauth/callback', 'BROKER_OAUTH_REDIRECT_URI'),
+    ).toThrow('Env BROKER_OAUTH_REDIRECT_URI may only use http for 127.0.0.1 or localhost');
+  });
+
+  it.each(['ftp://binodex.app', 'not-a-url'])('refuses %j', (raw) => {
+    expect(() => parseLoopbackOrHttpsUrlEnv(raw, 'X')).toThrow('Env X');
+  });
+});
+
+describe('parseOriginEnv', () => {
+  it.each([
+    ['https://Admin.Example/', 'https://admin.example'],
+    ['https://admin.example', 'https://admin.example'],
+    ['http://127.0.0.1:3001', 'http://127.0.0.1:3001'],
+    ['http://localhost:3001/', 'http://localhost:3001'],
+    ['https://admin.example:443/', 'https://admin.example'],
+  ])('normalises %s to %s', (raw, origin) => {
+    expect(parseOriginEnv(raw, 'ADMIN_PUBLIC_URL')).toBe(origin);
+  });
+
+  it('refuses http for a host that is not this machine', () => {
+    expect(() => parseOriginEnv('http://admin.example', 'ADMIN_PUBLIC_URL')).toThrow(
+      'Env ADMIN_PUBLIC_URL may only use http for 127.0.0.1 or localhost',
+    );
+  });
+
+  it.each(['https://admin.example/path', 'https://admin.example/?a=1', 'https://admin.example/#x'])(
+    'refuses %s rather than dropping what it carries',
+    (raw) => {
+      expect(() => parseOriginEnv(raw, 'ADMIN_PUBLIC_URL')).toThrow(
+        'Env ADMIN_PUBLIC_URL must be an origin without a path, query or fragment',
+      );
+    },
+  );
+
+  it('refuses credentials', () => {
+    expect(() => parseOriginEnv('https://user:pass@admin.example', 'ADMIN_PUBLIC_URL')).toThrow(
+      'Env ADMIN_PUBLIC_URL must not carry credentials',
+    );
   });
 });

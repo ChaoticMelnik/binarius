@@ -37,6 +37,10 @@
       "types": "./src/users.ts",
       "default": "./src/users.ts"
     },
+    "./admin": {
+      "types": "./src/admin.ts",
+      "default": "./src/admin.ts"
+    },
     "./partner": {
       "types": "./src/partner.ts",
       "default": "./src/partner.ts"
