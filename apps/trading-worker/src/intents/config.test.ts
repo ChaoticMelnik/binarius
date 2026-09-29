@@ -9,7 +9,6 @@ import {
   SHUTDOWN_PHASE1_BUDGET_MS,
   SHUTDOWN_PHASE2_BUDGET_MS,
   STALE_SUBMITTING_MS,
-  TIMING_CHAIN_HOLDS,
 } from './config';
 
 const composeYaml = readFileSync(
@@ -17,9 +16,10 @@ const composeYaml = readFileSync(
   'utf8',
 );
 
+// The chain is enforced at import: timing.ts throws when it does not hold, so a violation
+// takes this file down before the first test runs. An expectation here could only ever see true.
 describe('timing constants', () => {
   it('keep the ack timeout, both shutdown phases, stop grace, lock and stale threshold in order', () => {
-    expect(TIMING_CHAIN_HOLDS).toBe(true);
     expect(MAX_SUBMIT_ACK_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS).toBeLessThan(
       COMPOSE_STOP_GRACE_PERIOD_MS,

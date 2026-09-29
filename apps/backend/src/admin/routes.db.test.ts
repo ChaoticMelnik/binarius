@@ -321,10 +321,18 @@ describe('POST /admin/auth/login', () => {
     });
     // the error's own message names the chat; a durable row must not carry it
     expect(JSON.stringify(entry?.payload)).not.toContain('chat not found');
-    // and the challenge is closed, so the next attempt starts a new one immediately
-    expect((await login({ login: seeded.login, password: seeded.password, ...CLIENT })).statusCode).toBe(
-      503,
-    );
+    // and the challenge is closed, so the next attempt starts a new one. The sim has to be
+    // healthy again for this to say anything: while it still fails, a reused challenge and a
+    // fresh one both answer 503 and the two worlds are indistinguishable.
+    const [closed] = await tmp.db
+      .select({ id: staffLoginChallenges.id })
+      .from(staffLoginChallenges)
+      .where(eq(staffLoginChallenges.staffId, seeded.staffId));
+    telegram.failWith(undefined);
+    const next = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+    expect(next.statusCode).toBe(200);
+    expect(next.json().challengeId).not.toBe(closed?.id);
+    expect(telegram.prompts).toHaveLength(1);
   });
 
   it('reuses the open challenge and does not send a second invitation', async () => {

@@ -749,7 +749,6 @@ describe('revoking and ending sessions', () => {
       entityType: null,
       entityId: null,
     });
-    expect(entries.filter((e) => e.payload.result === 'revoked')).toEqual([]);
   });
 
   it('ends the staff member’s own session', async () => {

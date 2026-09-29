@@ -7,7 +7,6 @@ import {
   BACKEND_REQUEST_TIMEOUT_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   SHUTDOWN_BUDGET_MS,
-  TIMING_CHAIN_HOLDS,
 } from './timing';
 
 const composeYaml = readFileSync(
@@ -15,9 +14,10 @@ const composeYaml = readFileSync(
   'utf8',
 );
 
+// The chain is enforced at import: timing.ts throws when it does not hold, so a violation
+// takes this file down before the first test runs. An expectation here could only ever see true.
 describe('web timing', () => {
   it('waits longer than the backend may spend, and shuts down inside the grace period', () => {
-    expect(TIMING_CHAIN_HOLDS).toBe(true);
     // the cross-process link: the backend's own chain fits inside this same number
     expect(ADMIN_LOGIN_BUDGET_MS).toBeLessThan(BACKEND_REQUEST_TIMEOUT_MS);
     expect(BACKEND_REQUEST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);

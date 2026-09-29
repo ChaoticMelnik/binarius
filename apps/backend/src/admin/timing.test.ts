@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared';
 import {
   ADMIN_HANDLER_BUDGET_MS,
-  ADMIN_HANDLER_CALLS,
   ADMIN_POLLING_BATCH_LIMIT,
   ADMIN_POLLING_TIMEOUT_S,
   ADMIN_TELEGRAM_API_TIMEOUT_MS,
@@ -12,22 +11,21 @@ import {
   PASSWORD_VERIFY_COST_CEILING_MS,
   PASSWORD_VERIFY_MAX_WAIT_MS,
   SHUTDOWN_PHASE1_BUDGET_MS,
-  TIMING_CHAIN_HOLDS,
 } from '../timing';
 
-// ADMIN_HANDLER_BUDGET_MS is computed from ADMIN_HANDLER_CALLS, so nothing here recomputes it.
-// That the declared call counts still describe the handlers is asserted in telegram.db.test.ts,
-// which counts the calls each terminal branch actually makes.
+// ADMIN_HANDLER_BUDGET_MS is computed from ADMIN_HANDLER_CALLS, so this file pins the number
+// rather than recomputing it: an expectation that repeats the definition tracks any edit to
+// either input and can never disagree with it. That the declared call counts still describe the
+// handlers is asserted in telegram.db.test.ts, which counts the calls each terminal branch
+// actually makes.
 
 const grammyBotJs = fileURLToPath(
   new URL('../../node_modules/grammy/out/bot.js', import.meta.url),
 );
 
+// The chain is enforced at import: timing.ts throws when it does not hold, so a violation
+// takes this file down before the first test runs. An expectation here could only ever see true.
 describe('the staff-login timing chain', () => {
-  it('holds', () => {
-    expect(TIMING_CHAIN_HOLDS).toBe(true);
-  });
-
   // the one bound that crosses a process: apps/web waits longer than this, apps/backend fits
   // inside it, and neither knows the other's numbers
   it('fits the login route inside the budget both processes size against', () => {
@@ -47,9 +45,10 @@ describe('the staff-login timing chain', () => {
   it('keeps the longest handler and the polling backoff inside the drain', () => {
     expect(ADMIN_HANDLER_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(GRAMMY_POLLING_BACKOFF_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
-    expect(ADMIN_HANDLER_BUDGET_MS).toBe(
-      Math.max(...Object.values(ADMIN_HANDLER_CALLS)) * ADMIN_TELEGRAM_API_TIMEOUT_MS,
-    );
+    expect(
+      ADMIN_HANDLER_BUDGET_MS,
+      'the handler budget moved: re-check it against SHUTDOWN_PHASE1_BUDGET_MS and compose stop_grace_period before updating this literal',
+    ).toBe(6_000);
   });
 
   // a number this project does not own, read back out of the dependency rather than trusted
