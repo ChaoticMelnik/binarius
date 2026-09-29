@@ -6,7 +6,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 
 - `apps/bot` — Telegram bot (grammY)
 - `apps/backend` — API (Fastify): OAuth, postbacks, auth
-- `apps/web` — web pages (Next.js): login, checkout, admin
+- `apps/web` — web pages (Fastify, server-rendered HTML): staff login and admin (#34), checkout later
 - `apps/trading-worker` — trading loop worker (Socket.IO client)
 - `packages/db` — Drizzle schema and transactional operations, shared by `apps/backend` and `apps/trading-worker`
 - `packages/shared` — shared types/contracts, consumed by all 4 apps
@@ -15,7 +15,8 @@ How a trade order travels from the bot to the worker (PostgreSQL outbox + BullMQ
 [docs/trade-intent-transport.md](docs/trade-intent-transport.md); how a user links a Binodex
 account and how those tokens stay fresh is in [docs/binodex-oauth.md](docs/binodex-oauth.md);
 what `/start` does and where the acquisition source is kept is in
-[docs/bot-start.md](docs/bot-start.md).
+[docs/bot-start.md](docs/bot-start.md); how a staff member gets into the admin pages, and how
+those sessions are revoked, is in [docs/staff-login.md](docs/staff-login.md).
 
 ## Requirements
 
@@ -49,9 +50,10 @@ Postgres, Redis, and the four apps run in containers; the apps hot-reload from y
 The apps are not meant to run outside Docker in this repo state.
 
 ```bash
-cp .env.example .env                # then fill in the five REQUIRED values; compose stops while any is empty
+cp .env.example .env                # then fill in the seven REQUIRED values; compose stops while any is empty
 docker compose up --build --watch   # build, start, sync src/ edits into the containers
 curl 127.0.0.1:3000/health          # {"status":"ok","postgres":"ok","redis":"ok"}
+curl -I 127.0.0.1:3001/admin/login  # HTTP/1.1 200 OK — the staff login page
 docker compose down -v              # stop and drop the Postgres volume
 ```
 
@@ -59,14 +61,14 @@ Plain `docker compose up` starts everything without file sync. `--build` matters
 `--watch` starts from the last built image and only picks up edits made after it started.
 Under `--watch`, edits to `src/` restart the affected app; edits to a `package.json`,
 `pnpm-lock.yaml`, or a tsconfig rebuild the image. Postgres (`5432`), Redis (`6379`), and the
-backend (`3000`) are published on `127.0.0.1` only.
+backend (`3000`) and the admin pages (`3001`) are published on `127.0.0.1` only.
 
 ## Database
 
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
 The integration tests run against a real Postgres named by `DATABASE_URL` and a real Redis named
 by `REDIS_URL`, and fail without them — `pnpm test` therefore needs the compose services. Even
-this partial start needs all five REQUIRED values in `.env`, because Compose interpolates the
+this partial start needs all seven REQUIRED values in `.env`, because Compose interpolates the
 whole file before it picks which services to run: that includes `TELEGRAM_BOT_TOKEN`, which only
 the `bot` service reads, so `docker compose up -d postgres redis` refuses to run without it:
 
@@ -91,3 +93,21 @@ Changing the schema: edit `packages/db/src/schema/*`, run `pnpm db:generate`, re
 (`.claude/CLAUDE.md` → База данных). Committed migrations are never edited — CI rejects that; add a
 new one. `pnpm db:check` validates the migration journal. Triggers and other objects drizzle-kit does
 not model go into a custom migration (`drizzle-kit generate --custom`).
+
+## Staff accounts
+
+Admin pages are behind a staff login: a password plus a confirmation in Telegram, with sessions
+that any staff member can revoke. Accounts are created from a CLI, never from the environment,
+and the generated password is printed once:
+
+```bash
+docker compose exec backend pnpm --filter @binarius/backend staff create \
+  --login ada --telegram-id 123456789 --name "Ада"
+docker compose exec backend pnpm --filter @binarius/backend staff reset-password --login ada
+docker compose exec backend pnpm --filter @binarius/backend staff disable --login ada
+```
+
+The Telegram ID is the one the staff bot answers with when the person sends it `/start`; the bot
+runs on `ADMIN_BOT_TOKEN`, which is a **second** bot from @BotFather, not `TELEGRAM_BOT_TOKEN`.
+The whole flow, the trust boundaries and the audit trail are in
+[docs/staff-login.md](docs/staff-login.md).
