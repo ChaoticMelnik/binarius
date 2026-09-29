@@ -175,8 +175,12 @@ describe('wire views', () => {
 });
 
 describe('ADMIN_LOGIN_BUDGET_MS', () => {
-  it('is a positive whole number of milliseconds', () => {
-    expect(Number.isInteger(ADMIN_LOGIN_BUDGET_MS)).toBe(true);
-    expect(ADMIN_LOGIN_BUDGET_MS).toBeGreaterThan(0);
+  // `> 0` let 1 through, which nothing in either chain would survive. Both processes size
+  // against this number from opposite sides, and neither imports the other's constants.
+  it('is the number both timing chains are sized against', () => {
+    expect(
+      ADMIN_LOGIN_BUDGET_MS,
+      'both chains compare against this number — the backend fits inside it (admin/timing.test.ts), apps/web waits longer than it (apps/web/src/timing.test.ts). Change it together with them.',
+    ).toBe(6_000);
   });
 });

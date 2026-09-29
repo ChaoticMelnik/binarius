@@ -271,14 +271,24 @@ describe('the confirm step', () => {
   });
 
   it('marks the cookie Secure only when the pages are served over https', async () => {
-    await app.close();
-    app = build({}, true);
-    const response = await post(
+    // the "only" half first: the documented local origin is http://127.0.0.1:3001, where a
+    // browser drops a Secure cookie and the login silently never sticks
+    const plain = await post(
       '/admin/login/confirm',
       { code: '123456' },
       { [CHALLENGE_COOKIE]: CHALLENGE_ID },
     );
-    expect(cookieOf(response, SESSION_COOKIE)?.secure).toBe(true);
+    expect(cookieOf(plain, SESSION_COOKIE)?.secure).toBeFalsy();
+    expect(cookieOf(plain, CHALLENGE_COOKIE)?.secure).toBeFalsy();
+
+    await app.close();
+    app = build({}, true);
+    const secured = await post(
+      '/admin/login/confirm',
+      { code: '123456' },
+      { [CHALLENGE_COOKIE]: CHALLENGE_ID },
+    );
+    expect(cookieOf(secured, SESSION_COOKIE)?.secure).toBe(true);
   });
 
   it('sends anyone with no challenge cookie back to the form', async () => {
