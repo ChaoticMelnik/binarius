@@ -296,6 +296,17 @@ describe('the confirm step', () => {
     expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
   });
 
+  // Forwarded as-is, a value undici refuses turns every page into an opaque 500 that never
+  // clears the cookie causing it — a loop the staff member cannot leave. A cookie of the wrong
+  // shape is treated as no cookie, and dropped.
+  it('treats a malformed challenge cookie as none, and clears it', async () => {
+    const response = await get('/admin/login/confirm', { [CHALLENGE_COOKIE]: 'not a uuid\u0000' });
+
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(response, CHALLENGE_COOKIE)?.value).toBe('');
+    expect(calls.confirm).toEqual([]);
+  });
+
   it.each([
     [401, AdminErrorCode.InvalidCode, TEXTS.invalidCode],
     [409, AdminErrorCode.AwaitingTelegram, TEXTS.awaitingTelegram],
@@ -354,6 +365,16 @@ describe('the sessions page', () => {
     expect(calls.sessions).toEqual([TOKEN]);
     expect(response.body).toContain('203.0.113.7');
     expect(response.body).toContain(TEXTS.currentSession);
+  });
+
+  // the other half of the shape check: a session cookie undici would refuse never reaches the
+  // backend, and the browser is told to drop it instead of retrying it on every page
+  it('treats a malformed session cookie as none, and clears it', async () => {
+    const response = await get('/admin/sessions', { [SESSION_COOKIE]: 'not-a-session-token' });
+
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(response, SESSION_COOKIE)?.value).toBe('');
+    expect(calls.sessions).toEqual([]);
   });
 
   // the cell a staff member does not control, filled by whoever logged in

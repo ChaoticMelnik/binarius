@@ -1,12 +1,14 @@
 import type { FastifyReply } from 'fastify';
 
 /**
- * A fragment that is already HTML. Nothing becomes one by being a string: the only way to get
- * one is through `html`, which escapes everything it interpolates. That is what makes
- * `html`'s own output nestable without a second escaping pass, and a staff member's user
- * agent — which goes into a table cell — impossible to interpolate raw by mistake.
+ * A fragment that is already HTML. The class is not exported, only the type is, so outside this
+ * module the only way in without a cast is `html`, which escapes everything it interpolates. (A
+ * cast defeats any mechanism, and saying otherwise would be the kind of promise this file is
+ * here to avoid.) That is what makes `html`'s own output nestable without a second escaping
+ * pass, and a staff member's user agent — which goes into a table cell — impossible to
+ * interpolate raw by mistake.
  */
-export class SafeHtml {
+class SafeHtmlValue {
   readonly value: string;
 
   constructor(value: string) {
@@ -17,6 +19,8 @@ export class SafeHtml {
     return this.value;
   }
 }
+
+export type SafeHtml = SafeHtmlValue;
 
 const ESCAPES: Record<string, string> = {
   '&': '&amp;',
@@ -34,11 +38,11 @@ export function html(strings: TemplateStringsArray, ...values: unknown[]): SafeH
   for (let index = 0; index < values.length; index += 1) {
     out += render(values[index]) + (strings[index + 1] ?? '');
   }
-  return new SafeHtml(out);
+  return new SafeHtmlValue(out);
 }
 
 function render(value: unknown): string {
-  if (value instanceof SafeHtml) return value.value;
+  if (value instanceof SafeHtmlValue) return value.value;
   if (Array.isArray(value)) return value.map(render).join('');
   if (value === null || value === undefined || value === false) return '';
   return escapeHtml(String(value));

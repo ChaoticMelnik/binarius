@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminErrorCode, staffSessionsResponseSchema } from '@binarius/shared';
@@ -12,6 +12,8 @@ import {
   StaffLoginChallengeStatus,
   staffSessions,
   StaffStatus,
+  hashPassword,
+  resetStaffPassword,
   verifyPassword,
 } from '@binarius/db';
 import {
@@ -241,6 +243,52 @@ describe('POST /admin/auth/login', () => {
     expect(actions.at(-1)).toBe(AuditAction.StaffLoginLocked);
   });
 
+  // The other side of the lockout flag: an expired one is not a lockout. The database decides
+  // that, so a process whose clock drifts cannot refuse a login the CAS would have accepted.
+  it('lets the login through once the lockout has expired', async () => {
+    const seeded = await seedStaff(tmp.db);
+    await tmp.db
+      .update(staff)
+      .set({ failedPasswordAttempts: 5, lockedUntil: sql`now() - interval '1 second'` })
+      .where(eq(staff.id, seeded.staffId));
+
+    const response = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  // The failure path takes the same CAS the success path does: ~250 ms of KDF happened, and a
+  // reset in that window means the counter would otherwise be charged to credentials this
+  // attempt was never judged against.
+  it('counts nothing when the password was reset while the KDF was running', async () => {
+    await app.close();
+    const seeded = await seedStaff(tmp.db);
+    app = build({
+      verify: async (stored: string, password: string) => {
+        const answer = await verifyPassword(stored, password);
+        await resetStaffPassword(tmp.db, {
+          login: seeded.login,
+          passwordHash: await hashPassword('something else', { ln: 10, r: 8, p: 1 }),
+        });
+        return answer;
+      },
+    });
+
+    const response = await login({ login: seeded.login, password: 'wrong', ...CLIENT });
+
+    expect([response.statusCode, response.json()]).toEqual([
+      401,
+      { error: AdminErrorCode.InvalidCredentials },
+    ]);
+    const [row] = await tmp.db
+      .select({ attempts: staff.failedPasswordAttempts, lockedUntil: staff.lockedUntil })
+      .from(staff)
+      .where(eq(staff.id, seeded.staffId));
+    expect([row?.attempts, row?.lockedUntil]).toEqual([0, null]);
+    const entry = (await entriesFor(seeded.staffId)).at(-1);
+    expect(entry?.payload).toMatchObject({ reason: 'state_changed' });
+  });
+
   // the derivation is held open, so the second request really is concurrent with the first
   it('refuses while the scrypt queue is full, before it derives anything', async () => {
     await app.close();
@@ -335,6 +383,76 @@ describe('POST /admin/auth/login', () => {
     expect(telegram.prompts).toHaveLength(1);
   });
 
+  // prompt_sent_at is NULL because the process died after sendMessage, and the button has been
+  // pressed since. Re-sending would invite someone already holding the code; worse, a send that
+  // then fails closes a challenge that has moved on.
+  it('does not re-invite a challenge whose button was already pressed', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const first = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+    const { challengeId } = first.json<{ challengeId: string }>();
+    // the crash: the message went out, the row never recorded it
+    await tmp.db
+      .update(staffLoginChallenges)
+      .set({ promptSentAt: null })
+      .where(eq(staffLoginChallenges.id, challengeId));
+    await confirmChallengeFromTelegram(tmp.db, {
+      challengeId,
+      telegramUserId: seeded.telegramUserId,
+    });
+    // the sim stays healthy on purpose: with it failing, a re-send and no send at all both end
+    // in an empty `prompts`, and the two worlds would be indistinguishable
+    telegram.prompts.length = 0;
+
+    const again = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+
+    expect([again.statusCode, again.json<{ challengeId: string }>().challengeId]).toEqual([
+      200,
+      challengeId,
+    ]);
+    expect(telegram.prompts).toEqual([]);
+    const [row] = await tmp.db
+      .select({ status: staffLoginChallenges.status })
+      .from(staffLoginChallenges)
+      .where(eq(staffLoginChallenges.id, challengeId));
+    expect(row?.status).toBe(StaffLoginChallengeStatus.Confirmed);
+  });
+
+  // The residual race the fix above cannot close: the invitation is in flight when the button
+  // is pressed. The send then fails, the CAS pending -> failed matches nothing, and the
+  // challenge is alive with the code already on its way — so 503 would be a lie.
+  it('answers 200 when the send failed but the challenge moved on by itself', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const first = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+    const { challengeId } = first.json<{ challengeId: string }>();
+    // the same crash, but this time the button is pressed while the re-send is in flight
+    await tmp.db
+      .update(staffLoginChallenges)
+      .set({ promptSentAt: null })
+      .where(eq(staffLoginChallenges.id, challengeId));
+    telegram.prompts.length = 0;
+    telegram.failWith(Object.assign(new Error('chat not found'), { name: 'GrammyError' }));
+    telegram.beforeSend(async (id) => {
+      await confirmChallengeFromTelegram(tmp.db, {
+        challengeId: id,
+        telegramUserId: seeded.telegramUserId,
+      });
+    });
+
+    const again = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+
+    expect([again.statusCode, again.json<{ challengeId: string }>().challengeId]).toEqual([
+      200,
+      challengeId,
+    ]);
+    const [row] = await tmp.db
+      .select({ status: staffLoginChallenges.status })
+      .from(staffLoginChallenges)
+      .where(eq(staffLoginChallenges.id, challengeId));
+    expect(row?.status).toBe(StaffLoginChallengeStatus.Confirmed);
+    const entry = (await entriesFor(seeded.staffId)).at(-1);
+    expect(entry?.payload).toMatchObject({ reason: 'prompt_send_failed', closed: false });
+  });
+
   it('reuses the open challenge and does not send a second invitation', async () => {
     const seeded = await seedStaff(tmp.db);
     const first = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
@@ -387,6 +505,24 @@ describe('POST /admin/auth/confirm', () => {
     const response = await confirm({ challengeId, code: sent, ...CLIENT });
 
     expect([response.statusCode, response.json()]).toEqual([status, { error }]);
+  });
+
+  // The fifth wrong code is the one that exhausts the challenge, and completeLogin already
+  // computed that. Answering 401 there sends the staff member back to a form that can only
+  // fail, and they learn it one round trip later.
+  it('answers 410 on the attempt that exhausts the challenge, not 401', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const { challengeId, code } = await reachCodeEntry(seeded);
+    const wrong = code === '000000' ? '111111' : '000000';
+
+    const statuses = [];
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      statuses.push((await confirm({ challengeId, code: wrong, ...CLIENT })).statusCode);
+    }
+
+    expect(statuses).toEqual([401, 401, 401, 401, 410]);
+    // and the one after it, which was already 410 before this change
+    expect((await confirm({ challengeId, code, ...CLIENT })).statusCode).toBe(410);
   });
 
   it('answers 409 while the button has not been pressed', async () => {
@@ -531,6 +667,34 @@ describe('POST /admin/sessions/:id/revoke', () => {
     const response = await withSession('POST', `/admin/sessions/${target}/revoke`, token);
 
     expect([response.statusCode, response.json()]).toEqual([404, { error: AdminErrorCode.NotFound }]);
+  });
+
+  // The shape of the id says nothing about whether the caller may ask: with the check in front
+  // of runAsStaff, anyone holding the bearer learned "no such session" without a live session.
+  it('answers 401, not 404, for a malformed id with no live session', async () => {
+    const response = await withSession('POST', '/admin/sessions/not-a-uuid/revoke', 'x'.repeat(43));
+
+    expect([response.statusCode, response.json()]).toEqual([
+      401,
+      { error: AdminErrorCode.SessionInvalid },
+    ]);
+  });
+
+  // the matrix names a row for "a revoke that found nothing", and a malformed id is one of
+  // those; what it must not carry is the id itself, which is arbitrary input
+  it('records a malformed id as a miss, without repeating it', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+
+    const response = await withSession('POST', '/admin/sessions/not-a-uuid/revoke', token);
+
+    expect(response.statusCode).toBe(404);
+    const entries = await entriesFor(seeded.staffId);
+    const revokes = entries.filter((entry) => entry.action === AuditAction.StaffSessionRevoked);
+    expect(revokes).toEqual([
+      expect.objectContaining({ payload: { result: 'not_found', current: false } }),
+    ]);
+    expect(JSON.stringify(revokes)).not.toContain('not-a-uuid');
   });
 
   // the entry is about what happened, not about what was asked for

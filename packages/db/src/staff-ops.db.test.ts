@@ -137,7 +137,11 @@ describe('registerPasswordFailure', () => {
     const seeded = await seedStaff(tmp.db);
     const outcomes = [];
     for (let attempt = 0; attempt < STAFF_MAX_PASSWORD_ATTEMPTS; attempt += 1) {
-      outcomes.push(await registerPasswordFailure(tmp.db, { staffId: seeded.staffId, ip: IP }));
+      outcomes.push(await registerPasswordFailure(tmp.db, {
+        staffId: seeded.staffId,
+        passwordHash: seeded.passwordHash,
+        ip: IP,
+      }));
     }
     expect(outcomes.map((o) => o.attempts)).toEqual([1, 2, 3, 4, 5]);
     expect(outcomes.map((o) => o.locked)).toEqual([false, false, false, false, true]);
@@ -150,14 +154,22 @@ describe('registerPasswordFailure', () => {
       .update(staff)
       .set({ failedPasswordAttempts: 5, lockedUntil: sql`now() - interval '1 second'` })
       .where(eq(staff.id, seeded.staffId));
-    const outcome = await registerPasswordFailure(tmp.db, { staffId: seeded.staffId, ip: IP });
+    const outcome = await registerPasswordFailure(tmp.db, {
+      staffId: seeded.staffId,
+      passwordHash: seeded.passwordHash,
+      ip: IP,
+    });
     expect(outcome).toEqual({ attempts: 1, locked: false });
     expect((await staffRow(seeded.staffId)).lockedUntil).toBeNull();
   });
 
   it('records the attempt without the password', async () => {
     const seeded = await seedStaff(tmp.db);
-    await registerPasswordFailure(tmp.db, { staffId: seeded.staffId, ip: IP });
+    await registerPasswordFailure(tmp.db, {
+      staffId: seeded.staffId,
+      passwordHash: seeded.passwordHash,
+      ip: IP,
+    });
     const [entry] = await entriesFor(seeded.staffId);
     expect(entry).toMatchObject({
       action: AuditAction.StaffLoginFailed,
@@ -177,7 +189,11 @@ describe('startLoginChallenge', () => {
 
   it('clears the failure counter and the lockout the password survived', async () => {
     const seeded = await seedStaff(tmp.db);
-    await registerPasswordFailure(tmp.db, { staffId: seeded.staffId, ip: IP });
+    await registerPasswordFailure(tmp.db, {
+      staffId: seeded.staffId,
+      passwordHash: seeded.passwordHash,
+      ip: IP,
+    });
     await start(seeded);
     expect((await staffRow(seeded.staffId)).failedPasswordAttempts).toBe(0);
   });
@@ -218,6 +234,34 @@ describe('startLoginChallenge', () => {
     expect(second).toMatchObject({ ok: true, challengeId: first.challengeId, reused: true, sendPrompt: false });
     const [, entry] = await entriesFor(seeded.staffId);
     expect(entry?.payload).toMatchObject({ reused: true, resent: false });
+  });
+
+  // The other reason prompt_sent_at can be NULL: the process died between a successful
+  // sendMessage and markChallengePromptSent, and the button has since been pressed. Re-sending
+  // there invites someone who is already holding the code, and a send that then fails would
+  // close a challenge that has moved on.
+  it('does not re-invite when the button was already pressed', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const first = await start(seeded);
+    if (!first.ok) throw new Error('unreachable');
+    const confirmed = await confirmChallengeFromTelegram(tmp.db, {
+      challengeId: first.challengeId,
+      telegramUserId: seeded.telegramUserId,
+    });
+    expect(confirmed).toBeDefined();
+    expect((await challengeRow(first.challengeId)).promptSentAt).toBeNull();
+
+    const second = await start(seeded);
+
+    expect(second).toMatchObject({
+      ok: true,
+      challengeId: first.challengeId,
+      reused: true,
+      sendPrompt: false,
+    });
+    expect((await challengeRow(first.challengeId)).status).toBe(
+      StaffLoginChallengeStatus.Confirmed,
+    );
   });
 
   // the process died between the commit and the Bot API call: nothing is in Telegram, and the
@@ -854,7 +898,11 @@ describe('the CLI operations', () => {
     const { challengeId, code } = await reachCodeEntry(seeded);
     await completeLogin(tmp.db, { challengeId, code, ip: IP, userAgent: UA });
     for (let attempt = 0; attempt < STAFF_MAX_PASSWORD_ATTEMPTS; attempt += 1) {
-      await registerPasswordFailure(tmp.db, { staffId: seeded.staffId, ip: IP });
+      await registerPasswordFailure(tmp.db, {
+        staffId: seeded.staffId,
+        passwordHash: seeded.passwordHash,
+        ip: IP,
+      });
     }
 
     const counts = await resetStaffPassword(tmp.db, {

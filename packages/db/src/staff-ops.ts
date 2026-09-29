@@ -114,6 +114,13 @@ export interface StaffLoginRow {
   passwordHash: string;
   status: StaffStatus;
   telegramUserId: bigint;
+  /**
+   * The lockout deadline if one is running, by the database's clock — not the raw column. Every
+   * other deadline in this feature is evaluated by the database, and a process comparing
+   * `locked_until` against its own `Date.now()` would disagree with the CAS in
+   * startLoginChallenge under clock skew. An expired lockout reads as `null`, which is exactly
+   * what the caller means by "not locked".
+   */
   lockedUntil: Date | null;
 }
 
@@ -130,7 +137,11 @@ export async function findStaffForLogin(
       passwordHash: staff.passwordHash,
       status: staff.status,
       telegramUserId: staff.telegramUserId,
-      lockedUntil: staff.lockedUntil,
+      // mapWith is not decoration: `sql<T>` is a type assertion, and without the column's own
+      // driver mapping this comes back as the raw `2026-09-29 19:08:40.817068+00` string
+      lockedUntil: sql<Date | null>`case when ${staff.lockedUntil} > now() then ${staff.lockedUntil} end`.mapWith(
+        staff.lockedUntil,
+      ),
     })
     .from(staff)
     .where(sql`lower(${staff.login}) = lower(${login})`);
@@ -140,16 +151,23 @@ export async function findStaffForLogin(
 export interface PasswordFailure {
   attempts: number;
   locked: boolean;
+  /** the row the KDF ran against is no longer there: nothing was counted */
+  stateChanged?: true;
 }
 
 /**
  * One UPDATE, so two wrong passwords racing cannot both read 4 and both write 5. A failure
  * arriving after a lockout has expired restarts the count at 1 rather than continuing from
  * the count that produced the lockout.
+ *
+ * The same CAS the success path takes, for the same reason: ~250 ms passed inside the KDF, and
+ * a reset, a disable or a lockout in that window has to win. Zero rows means the credentials
+ * this attempt was judged against are gone — there is nothing left to count against, so the
+ * counter and the lockout are left alone and the entry says so.
  */
 export async function registerPasswordFailure(
   db: Db,
-  { staffId, ip }: { staffId: string; ip: string },
+  { staffId, passwordHash, ip }: { staffId: string; passwordHash: string; ip: string },
 ): Promise<PasswordFailure> {
   const attempts = sql`case
       when ${staff.lockedUntil} is not null and ${staff.lockedUntil} <= now() then 1
@@ -166,12 +184,25 @@ export async function registerPasswordFailure(
           end`,
         updatedAt: sql`now()`,
       })
-      .where(eq(staff.id, staffId))
+      .where(
+        and(
+          eq(staff.id, staffId),
+          eq(staff.passwordHash, passwordHash),
+          eq(staff.status, StaffStatus.Active),
+          sql`(${staff.lockedUntil} is null or ${staff.lockedUntil} <= now())`,
+        ),
+      )
       .returning({
         attempts: staff.failedPasswordAttempts,
         lockedUntil: staff.lockedUntil,
       });
-    if (row === undefined) throw new Error(`registerPasswordFailure: no staff row ${staffId}`);
+    if (row === undefined) {
+      await writeAuditEntry(
+        tx,
+        staffEvent(AuditAction.StaffLoginFailed, staffId, { reason: 'state_changed', ip }),
+      );
+      return { attempts: 0, locked: false, stateChanged: true };
+    }
     const failure = { attempts: row.attempts, locked: row.lockedUntil !== null };
     await writeAuditEntry(
       tx,
@@ -314,6 +345,7 @@ export async function startLoginChallenge(
         id: staffLoginChallenges.id,
         expiresAt: staffLoginChallenges.expiresAt,
         promptSentAt: staffLoginChallenges.promptSentAt,
+        status: staffLoginChallenges.status,
       })
       .from(staffLoginChallenges)
       .where(
@@ -323,7 +355,12 @@ export async function startLoginChallenge(
         ),
       );
     if (open !== undefined) {
-      const resent = open.promptSentAt === null;
+      // prompt_sent_at is NULL either because the invitation never left, or because the process
+      // died between sendMessage and markChallengePromptSent. In the second case the button may
+      // already have been pressed, and re-inviting someone who is holding the code is noise —
+      // worse, it would be a send whose failure closes a challenge that has moved on.
+      const resent =
+        open.promptSentAt === null && open.status === StaffLoginChallengeStatus.Pending;
       await writeAuditEntry(
         tx,
         challengeEvent(AuditAction.StaffLoginPasswordOk, input.staffId, open.id, {
@@ -397,8 +434,8 @@ export async function failChallengeDelivery(
     err: Record<string, unknown>;
     telegram: Record<string, unknown>;
   },
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
     const [closed] = await tx
       .update(staffLoginChallenges)
       .set({ status: StaffLoginChallengeStatus.Failed })
@@ -409,16 +446,20 @@ export async function failChallengeDelivery(
         ),
       )
       .returning({ id: staffLoginChallenges.id });
-    if (closed === undefined) return;
+    // Zero rows is not nothing happening: the send really did fail, and the challenge moved on
+    // under us (the button was pressed while the message was in flight). The row says which of
+    // the two it was, so the caller can answer for the challenge that exists rather than the
+    // one it tried to close.
     await writeAuditEntry(
       tx,
-      challengeEvent(
-        AuditAction.StaffLoginTelegramFailed,
-        input.staffId,
-        input.challengeId,
-        { reason: input.reason, err: input.err, telegram: input.telegram },
-      ),
+      challengeEvent(AuditAction.StaffLoginTelegramFailed, input.staffId, input.challengeId, {
+        reason: input.reason,
+        err: input.err,
+        telegram: input.telegram,
+        closed: closed !== undefined,
+      }),
     );
+    return closed !== undefined;
   });
 }
 
