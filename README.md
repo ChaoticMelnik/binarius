@@ -88,6 +88,11 @@ the role in `DATABASE_URL` needs `CREATEDB` — the compose role is a superuser.
 If another Postgres already owns host port 5432, set `POSTGRES_PORT=5433` in `.env` and use that
 port in `DATABASE_URL`.
 
+Inside the stack the same migration runs as `docker compose exec backend pnpm db:migrate`, which
+is what a deployment that never had a host-side checkout uses. Nothing applies migrations when a
+container starts yet (#75), so one of the two forms has to be run by hand before anything reads a
+table.
+
 Changing the schema: edit `packages/db/src/schema/*`, run `pnpm db:generate`, read the generated SQL
 (no DROP without a decision), `pnpm db:migrate`, and commit the migration with its `meta/` files
 (`.claude/CLAUDE.md` → База данных). Committed migrations are never edited — CI rejects that; add a
@@ -98,7 +103,9 @@ not model go into a custom migration (`drizzle-kit generate --custom`).
 
 Admin pages are behind a staff login: a password plus a confirmation in Telegram, with sessions
 that any staff member can revoke. Accounts are created from a CLI, never from the environment,
-and the generated password is printed once:
+and the generated password is printed once. The CLI needs a migrated database: `pnpm db:migrate`
+from the host ([Database](#database) above) or `docker compose exec backend pnpm db:migrate`
+inside the stack.
 
 ```bash
 docker compose exec backend pnpm --filter @binarius/backend staff create \

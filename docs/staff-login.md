@@ -55,7 +55,10 @@ that each is required on its own.
 ## Accounts
 
 Created from a CLI in the backend container, never from the environment — who did what is only
-answerable while every login belongs to someone. The generated password is printed once.
+answerable while every login belongs to someone. The generated password is printed once. On a
+migrated database: nothing in the stack applies migrations on start yet (#75), so a volume that
+has never been migrated answers `relation "staff" does not exist` (see «Bringing it up the first
+time» below, or `pnpm db:migrate` from the host).
 
 ```bash
 docker compose exec backend pnpm --filter @binarius/backend staff create \
@@ -72,8 +75,12 @@ There is no way to change a password from the UI yet — that is a follow-up iss
 
 ## What is written down
 
-Every login event and every admin request writes a row in `audit_log`, in the same transaction
-as the thing it records: no row, no data. The actions are a closed list (`AuditAction`, enforced
+Every login attempt that reached the password check, every button press that matched a challenge,
+and every admin request performed under a live session writes a row in `audit_log`, in the same
+transaction as the thing it records: no row, no data (`runAsStaff`, `startLoginChallenge`,
+`completeLogin`, the Telegram CASes). Refusals before that point leave no row: a route ceiling
+(429), a malformed body (400), a full scrypt queue (429), a session token of the wrong shape or a
+session that is not live (401). The actions are a closed list (`AuditAction`, enforced
 by `audit_log_action_check`), and the payloads hold only named keys — never a password, a code,
 a token, a raw error object, or the login someone typed for an account that does not exist.
 
@@ -104,6 +111,11 @@ and lives in the database.
 - At most 2 scrypt derivations at once, at most 8 waiting, at most 2 s of waiting. Over any of
   those the request is refused with 429 and no derivation runs.
 
+Accepted, not fixed: while a challenge is open and its invitation delivered, a second login with
+the correct password from another device reuses it silently — there is no second message, so
+«Это не я» is available only from the first one. The attacker gets a `challengeId`, which is
+useless without the code, and the code is only ever delivered to the account's own Telegram.
+
 ## When Telegram is not reachable
 
 Fail closed. If long polling is not running, or the Bot API refuses the message, the challenge is
@@ -127,19 +139,28 @@ real Telegram. The first person to deploy it should walk this through once.
    Leave `ADMIN_PUBLIC_URL` and `WEB_PORT` at their defaults for a local run.
 3. **Start.** `docker compose up --build --wait`. Then `curl -I 127.0.0.1:3001/admin/login`
    should answer `200`, and the backend log should **not** contain
-   `the staff login bot stopped polling`.
-4. **Learn your Telegram ID.** Send `/start` to the new bot. It answers with your own id.
-5. **Create an account**, with that id:
+   `the staff login bot stopped polling`. `--wait` says nothing about the schema: the backend is
+   healthy on an empty database, which is what the next step is for.
+4. **Apply the migrations.**
+   ```bash
+   docker compose exec backend pnpm db:migrate
+   ```
+   It prints `migrations applied successfully!`. Nothing in the stack applies them on start yet
+   (#75), so on a volume that has never been migrated — a fresh clone, a new deployment — step 6
+   would otherwise fail with `relation "staff" does not exist`. The command is idempotent, so
+   running it on an already-migrated volume is a no-op.
+5. **Learn your Telegram ID.** Send `/start` to the new bot. It answers with your own id.
+6. **Create an account**, with that id:
    ```bash
    docker compose exec backend pnpm --filter @binarius/backend staff create \
-     --login ada --telegram-id <the id from step 4> --name "Ада"
+     --login ada --telegram-id <the id from step 5> --name "Ада"
    ```
    Copy the password it prints.
-6. **Log in.** Open `http://127.0.0.1:3001/admin/login`, enter the login and that password. The
+7. **Log in.** Open `http://127.0.0.1:3001/admin/login`, enter the login and that password. The
    bot should send the invitation naming your login and address.
-7. **Press «Подтвердить вход».** The bot sends a six-digit code; enter it. The sessions page
+8. **Press «Подтвердить вход».** The bot sends a six-digit code; enter it. The sessions page
    should open and list your own session as «текущая».
-8. **Check the refusal path.** Log out, start a login again, and this time press **«Это не я»**.
+9. **Check the refusal path.** Log out, start a login again, and this time press **«Это не я»**.
    The code page should send you back to the login form saying the confirmation expired, and
    `audit_log` should hold a `staff_login_denied` row:
    ```bash
@@ -147,5 +168,5 @@ real Telegram. The first person to deploy it should walk this through once.
      -c "select action, payload from audit_log order by created_at desc limit 5"
    ```
 
-If step 6 or 7 fails while step 3 was clean, the shape of our Bot API calls is what to look at:
-it is the one thing the test suite cannot check.
+If step 7 or 8 fails while steps 3 and 4 were clean, the shape of our Bot API calls is what to
+look at: it is the one thing the test suite cannot check.

@@ -230,6 +230,25 @@ jobs:
             fi
             sleep 2
           done
+      # Without this the document and this job would be independent copies of the same procedure,
+      # and the step below would keep passing after an edit dropped the migration from the
+      # document — which is exactly how the procedure came to stop at "create an account" on a
+      # volume nothing had migrated. Deleting the step from the document reddens this line.
+      - name: the document still carries the migration step this job runs
+        run: |
+          grep -qF 'docker compose exec backend pnpm db:migrate' docs/staff-login.md || {
+            echo '::error::docs/staff-login.md lost the migration step that this job runs'
+            exit 1
+          }
+      # Steps 3-6 of docs/staff-login.md → "Bringing it up the first time", on the fresh volume
+      # this job always starts from: --wait reports the backend healthy on an empty database, so
+      # without the migration `staff create` fails with `relation "staff" does not exist`.
+      # Applying them on container start with fail-fast is #75.
+      - name: the first-run procedure creates a staff account on a fresh volume
+        run: |
+          docker compose exec -T backend pnpm db:migrate
+          docker compose exec -T backend pnpm --filter @binarius/backend staff create \
+            --login ci-staff --telegram-id 1 | grep -q 'Пароль:'
       - if: failure()
         continue-on-error: true
         run: docker compose logs
