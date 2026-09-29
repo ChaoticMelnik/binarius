@@ -84,7 +84,7 @@ PostgreSQL + Drizzle ORM (решение зафиксировано 2026-09-21, 
 В проекте могут параллельно работать несколько разработчиков/агентов. Это значит:
 - Не редактировать файлы, над которыми работает другой агент/разработчик — конфликт-детект и merge-order ведёт `/tech-lead` (Mode 1, "Conflict detection and merge order").
 - Если задача затрагивает общий файл — обсудить с владельцем до начала работы.
-- Доменная разбивка: `apps/bot` (Telegram/grammY), `apps/backend` (Fastify: OAuth, постбэки, API), `apps/web` (Next.js: вход, касса, админка), `apps/trading-worker` (торговый цикл, Socket.IO), `packages/db` (Drizzle-схема, общая для backend и worker), `packages/shared` (общие типы/контракты). Владелец схемы БД и общих контрактов — один агент за волну.
+- Доменная разбивка: `apps/bot` (Telegram/grammY), `apps/backend` (Fastify: OAuth, постбэки, API), `apps/web` (Fastify + серверный HTML: вход сотрудников, касса, админка), `apps/trading-worker` (торговый цикл, Socket.IO), `packages/db` (Drizzle-схема, общая для backend и worker), `packages/shared` (общие типы/контракты). Владелец схемы БД и общих контрактов — один агент за волну.
 
 ### Планирование задач
 
