@@ -13,7 +13,7 @@ do, and what is written down. Issue #68.
 2. **The button.** The backend's staff bot sends that person a message naming the account, the
    address, the browser and the time, with **«Подтвердить вход»** and **«Это не я»**. Pressing
    the first issues a six-digit code and sends it; pressing the second closes the attempt and
-   records it.
+   records it — and nothing else: the password stays valid (Limits).
 3. **The code.** `POST /admin/login/confirm` sends the code to `POST /admin/auth/confirm`. On a
    match the backend creates a row in `staff_sessions` and answers with a token, which the web
    process puts in an `HttpOnly` cookie. The token itself is stored nowhere: the row holds its
@@ -44,7 +44,7 @@ query from there would be a read with no audit row behind it. `no-db-access.test
 
 | Variable | Where | What it is |
 |---|---|---|
-| `ADMIN_BOT_TOKEN` | `backend` | **A second bot**, from @BotFather. Not `TELEGRAM_BOT_TOKEN`: the two live in different processes, so no check can compare them — Telegram answers the second poller 409, the backend logs it at startup, and login stays closed. |
+| `ADMIN_BOT_TOKEN` | `backend` | **A second bot**, from @BotFather. Not `TELEGRAM_BOT_TOKEN`: the two live in different processes, so no check can compare them, and one value in both does not fail closed. It is two pollers on one bot — Telegram answers `getUpdates` with 409 to the one it terminates, grammY rethrows 409 instead of retrying it (`grammy/out/bot.js`), and that poller stays dead; which of the two it is, is Telegram's to decide. If the survivor is the backend's staff poller, `isPolling()` stays true and admin login goes on working, on the public bot's token and out of the public bot's chats. The loser logs and calls `exit(1)`, which under compose's `tsx watch` leaves the container running anyway (#65), so a 409 line in one of the two logs is the whole symptom. |
 | `ADMIN_WEB_TOKEN` | `backend`, `web` | The narrow shared secret between them. The backend refuses to start when it equals `INTERNAL_API_TOKEN`: the bearer comparator is the same on both sides, so one value in both would open the whole internal API to `web`. |
 | `ADMIN_PUBLIC_URL` | `web` | The origin the pages are served from. Checked against the `Origin` header on every POST, and decides whether the cookie may be `Secure`. Default `http://127.0.0.1:3001`. |
 | `WEB_PORT` | compose | Host port for the pages, `127.0.0.1` only. Change it together with `ADMIN_PUBLIC_URL` — a test ties the two defaults, because a mismatch makes every form submission a 403. |
@@ -106,10 +106,22 @@ and lives in the database.
 
 - 120 login requests and 300 confirm requests per minute, taken before the body is read.
 - 5 attempts per unknown login name per 15 minutes.
-- 5 wrong passwords lock the account for 15 minutes.
+- 5 wrong passwords lock the account for 15 minutes. The counter is written after the derivation,
+  not before it: `PASSWORD_VERIFY_CONCURRENCY + PASSWORD_VERIFY_QUEUE_MAX` (2 + 8, `timing.ts`)
+  derivations can be in flight and queued against one account at once, and the queue hands a slot
+  back in its `finally` — before `registerPasswordFailure` runs, which the route calls only after
+  `queue.run` has returned — so arrivals that keep coming can start more. The lock lands when the
+  fifth recorded failure commits; how many guesses were *tried* by then is bounded by the queue's
+  throughput, not by five. A correct password arriving under the lock is still refused.
 - 5 wrong codes exhaust the challenge.
 - At most 2 scrypt derivations at once, at most 8 waiting, at most 2 s of waiting. Over any of
   those the request is refused with 429 and no derivation runs.
+
+«Это не я» closes that challenge and records the press; it changes nothing on the account — the
+password hash, the status, the failure counter and the lockout stay as they were
+(`denyChallengeFromTelegram`). The same password therefore opens a new challenge on the next
+attempt, until an operator runs `staff reset-password` or `staff disable`; a login is still
+protected by the second factor, which only ever reaches the account's own Telegram.
 
 Accepted, not fixed: while a challenge is open and its invitation delivered, a second login with
 the correct password from another device reuses it silently — there is no second message, so
@@ -145,8 +157,9 @@ real Telegram. The first person to deploy it should walk this through once.
    ADMIN_WEB_TOKEN=<openssl rand -hex 32>
    ```
    Leave `ADMIN_PUBLIC_URL` and `WEB_PORT` at their defaults for a local run.
-3. **Start.** `docker compose up --build --wait`. Then `curl -I 127.0.0.1:3001/admin/login`
-   should answer `200`, and the backend log should **not** contain
+3. **Start.** `docker compose up --build --wait`. Then
+   `curl -fsS http://127.0.0.1:3001/admin/login | grep -q '<form'` should succeed — the same
+   command CI uses, so the two do not drift — and the backend log should **not** contain
    `the staff login bot stopped polling`. `--wait` says nothing about the schema: the backend is
    healthy on an empty database, which is what the next step is for.
 4. **Apply the migrations.**

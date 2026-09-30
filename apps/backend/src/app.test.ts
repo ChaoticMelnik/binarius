@@ -116,7 +116,7 @@ describe('what reaches the log', () => {
   ) {
     const logs = captureLogs();
     const app = buildApp({
-    admin: unusedAdminDeps(),
+      admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,
       logLevel: 'info',
@@ -252,7 +252,7 @@ describe('request logging', () => {
 
   it('answers an unknown route without echoing what it carried', async () => {
     const app = buildApp({
-    admin: unusedAdminDeps(),
+      admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,
       logLevel: 'silent',
@@ -278,7 +278,7 @@ describe('request logging', () => {
 describe('error handler', () => {
   async function withApp(run: (app: ReturnType<typeof buildApp>) => Promise<void>) {
     const app = buildApp({
-    admin: unusedAdminDeps(),
+      admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,
       logLevel: 'silent',

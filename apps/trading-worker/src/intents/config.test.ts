@@ -16,8 +16,9 @@ const composeYaml = readFileSync(
   'utf8',
 );
 
-// The chain is enforced at import: timing.ts throws when it does not hold, so a violation
-// takes this file down before the first test runs. An expectation here could only ever see true.
+// The chain is enforced at import: `intents/config.ts` throws when it does not hold, so a
+// violation takes this file down before the first test runs. An expectation here could only ever
+// see true.
 describe('timing constants', () => {
   it('keep the ack timeout, both shutdown phases, stop grace, lock and stale threshold in order', () => {
     expect(MAX_SUBMIT_ACK_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
