@@ -31,7 +31,7 @@ export const staffLoginSchema = z.string().regex(STAFF_LOGIN_PATTERN, {
 });
 
 // The six digits the staff member reads out of Telegram.
-export const STAFF_LOGIN_CODE_PATTERN = /^\d{6}$/;
+const STAFF_LOGIN_CODE_PATTERN = /^\d{6}$/;
 export const staffLoginCodeSchema = z.string().regex(STAFF_LOGIN_CODE_PATTERN, {
   error: 'expected six digits',
 });
@@ -69,7 +69,7 @@ export const adminConfirmRequestSchema = z.object({
 });
 export type AdminConfirmRequest = z.infer<typeof adminConfirmRequestSchema>;
 
-export const adminLoginResponseSchema = z.object({
+const adminLoginResponseSchema = z.object({
   challengeId: z.uuid(),
   expiresAt: z.iso.datetime({ offset: true }),
 });

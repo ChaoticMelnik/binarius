@@ -6,6 +6,7 @@ import {
   parseInternalTokenEnv,
   parseLogLevelEnv,
   parseLoopbackOrHttpsUrlEnv,
+  parseNoWhitespaceEnv,
   parseUrlEnv,
   readEnv,
   type EnvSource,
@@ -74,7 +75,7 @@ export function parseEnv(source: EnvSource): Env {
     brokerPartnerRef: readEnv(source, 'BROKER_PARTNER_REF'),
     // Its own bot, not the one apps/bot runs: two pollers on one token would fight over
     // getUpdates (409), and the staff bot must not be reachable from the public bot's chats.
-    adminBotToken: parseBotTokenEnv(readEnv(source, 'ADMIN_BOT_TOKEN'), 'ADMIN_BOT_TOKEN'),
+    adminBotToken: parseNoWhitespaceEnv(readEnv(source, 'ADMIN_BOT_TOKEN'), 'ADMIN_BOT_TOKEN'),
     ...parseTokenEncryption(source),
   };
 }
@@ -133,19 +134,11 @@ function parseEncryptionKey(raw: string, name: string): Buffer {
   return key;
 }
 
-// a token with whitespace is what a copied line from BotFather looks like, and it fails on
-// every Bot API call rather than at startup
-function parseBotTokenEnv(raw: string, name: string): string {
-  if (/\s/.test(raw)) throw new Error(`Env ${name} must not contain whitespace`);
-  return raw;
-}
-
 // the cipher joins key id, account id and field with '|' to bind a ciphertext to its place,
 // so a key id containing the separator would make that binding ambiguous
 function parseKeyId(raw: string, name: string): string {
   if (raw.includes('|')) throw new Error(`Env ${name} must not contain |`);
-  if (/\s/.test(raw)) throw new Error(`Env ${name} must not contain whitespace`);
-  return raw;
+  return parseNoWhitespaceEnv(raw, name);
 }
 
 const parsePort = (raw: string, name: string): number =>

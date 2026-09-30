@@ -105,8 +105,16 @@ export function parseLogLevelEnv(raw: string, name: string): LogLevel {
   return parseEnumEnv(raw, name, LOG_LEVELS);
 }
 
-export function parseInternalTokenEnv(raw: string, name: string): string {
+// These values are pasted from .env straight into a URL, a header or a payload, where a stray
+// space or newline fails far from here and names nothing: a Bot API 404, a refused file id, a
+// bearer that never matches.
+export function parseNoWhitespaceEnv(raw: string, name: string): string {
   if (/\s/.test(raw)) throw new Error(`Env ${name} must not contain whitespace`);
+  return raw;
+}
+
+export function parseInternalTokenEnv(raw: string, name: string): string {
+  parseNoWhitespaceEnv(raw, name);
   if (raw.length < MIN_INTERNAL_TOKEN_LENGTH) {
     throw new Error(`Env ${name} must be at least ${MIN_INTERNAL_TOKEN_LENGTH} characters`);
   }

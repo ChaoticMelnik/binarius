@@ -18,12 +18,12 @@ import { telegramErrorFields } from './telegram-logging';
 import { ADMIN_TEXTS } from './texts';
 
 // Only the kinds this bot handles; Telegram then stops delivering the rest.
-export const ADMIN_ALLOWED_UPDATES = ['message', 'callback_query'] as const;
+const ADMIN_ALLOWED_UPDATES = ['message', 'callback_query'] as const;
 
 // The id in the button carries no authority: every transition joins `staff` on the Telegram
 // account the update arrived from, so a callback replayed from elsewhere matches no row.
-export const CONFIRM_CALLBACK_PATTERN = /^sl:c:([0-9a-f-]{36})$/;
-export const DENY_CALLBACK_PATTERN = /^sl:d:([0-9a-f-]{36})$/;
+const CONFIRM_CALLBACK_PATTERN = /^sl:c:([0-9a-f-]{36})$/;
+const DENY_CALLBACK_PATTERN = /^sl:d:([0-9a-f-]{36})$/;
 export const confirmCallbackData = (challengeId: string): string => `sl:c:${challengeId}`;
 export const denyCallbackData = (challengeId: string): string => `sl:d:${challengeId}`;
 

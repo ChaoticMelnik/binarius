@@ -17,7 +17,7 @@ export type StaffStatus = (typeof StaffStatus)[keyof typeof StaffStatus];
 // Every hash this schema accepts is one staff-password.ts wrote. The CHECK is not a format
 // validator — it is the line that stops a row carrying a hash from some other KDF, which
 // verifyPassword would refuse at login time and nowhere earlier.
-export const STAFF_PASSWORD_HASH_PREFIX = '$scrypt$';
+const STAFF_PASSWORD_HASH_PREFIX = '$scrypt$';
 
 // One row per person who can open the admin pages. There is no shared account and no account
 // created from the environment: who did what is only answerable while every login belongs to

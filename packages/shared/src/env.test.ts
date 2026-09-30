@@ -8,6 +8,7 @@ import {
   parseInternalTokenEnv,
   parseLogLevelEnv,
   parseLoopbackOrHttpsUrlEnv,
+  parseNoWhitespaceEnv,
   parseOriginEnv,
   parseUrlEnv,
   readEnv,
@@ -168,5 +169,21 @@ describe('parseOriginEnv', () => {
     expect(() => parseOriginEnv('https://user:pass@admin.example', 'ADMIN_PUBLIC_URL')).toThrow(
       'Env ADMIN_PUBLIC_URL must not carry credentials',
     );
+  });
+});
+
+// The helper's contract, stated next to it. The oracles that carry weight are the callers' own
+// tests in apps/backend, apps/bot and parseInternalTokenEnv above: this describe has no isolating
+// mutation by construction, because every caller checks the same behaviour through the same
+// function and the same message.
+describe('parseNoWhitespaceEnv', () => {
+  it.each([' x', 'x y', 'x\n', 'x\t'])('rejects %j', (raw) => {
+    expect(() => parseNoWhitespaceEnv(raw, 'SOME_TOKEN')).toThrow(
+      'Env SOME_TOKEN must not contain whitespace',
+    );
+  });
+
+  it('returns a clean value unchanged', () => {
+    expect(parseNoWhitespaceEnv('123:abc-DEF_ghi', 'SOME_TOKEN')).toBe('123:abc-DEF_ghi');
   });
 });
