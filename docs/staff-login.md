@@ -44,7 +44,7 @@ query from there would be a read with no audit row behind it. `no-db-access.test
 
 | Variable | Where | What it is |
 |---|---|---|
-| `ADMIN_BOT_TOKEN` | `backend` | **A second bot**, from @BotFather. Not `TELEGRAM_BOT_TOKEN`: the two live in different processes, so no check can compare them, and one value in both does not fail closed. It is two pollers on one bot — Telegram answers `getUpdates` with 409 to the one it terminates, grammY rethrows 409 instead of retrying it (`grammy/out/bot.js`), and that poller stays dead; which of the two it is, is Telegram's to decide. If the survivor is the backend's staff poller, `isPolling()` stays true and admin login goes on working, on the public bot's token and out of the public bot's chats. The loser logs and calls `exit(1)`, which under compose's `tsx watch` leaves the container running anyway (#65), so a 409 line in one of the two logs is the whole symptom. |
+| `ADMIN_BOT_TOKEN` | `backend` | **A second bot**, from @BotFather. Not `TELEGRAM_BOT_TOKEN`: the two live in different processes, so no check can compare them. One value in both is two pollers on one bot — Telegram answers `getUpdates` with 409 to the one it terminates, grammY rethrows 409 instead of retrying it (`grammy/out/bot.js`), and that poller stays dead; which of the two it is, is Telegram's to decide, and the two outcomes differ. If the loser is the public bot, its process logs the failure — the error's name, not its 409, is what `errorLogFields` carries there — and calls `exit(1)` (`apps/bot/src/lifecycle.ts`; under compose's `tsx watch` the container stays up anyway, #65), while the staff poller goes on working on the public bot's token and out of the public bot's chats: that branch does not fail closed. If the loser is the staff poller, the backend logs `the staff login bot stopped polling` with the 409, stays healthy with `isPolling()` false, and every admin login answers `503 telegram_unavailable` with a `polling_down` row — closed, and indistinguishable from a bad token (see «When Telegram is not reachable»). Either way the whole symptom is one line in one of the two logs. |
 | `ADMIN_WEB_TOKEN` | `backend`, `web` | The narrow shared secret between them. The backend refuses to start when it equals `INTERNAL_API_TOKEN`: the bearer comparator is the same on both sides, so one value in both would open the whole internal API to `web`. |
 | `ADMIN_PUBLIC_URL` | `web` | The origin the pages are served from. Checked against the `Origin` header on every POST, and decides whether the cookie may be `Secure`. Default `http://127.0.0.1:3001`. |
 | `WEB_PORT` | compose | Host port for the pages, `127.0.0.1` only. Change it together with `ADMIN_PUBLIC_URL` — a test ties the two defaults, because a mismatch makes every form submission a 403. |
@@ -126,8 +126,13 @@ protected by the second factor, which only ever reaches the account's own Telegr
 
 Accepted, not fixed: while a challenge is open and its invitation delivered, a second login with
 the correct password from another device reuses it silently — there is no second message, so
-«Это не я» is available only from the first one. The attacker gets a `challengeId`, which is
-useless without the code, and the code is only ever delivered to the account's own Telegram.
+«Это не я» is available only from the first one. If the second login arrives while the first
+invitation is still in flight — before `prompt_sent_at` is written, which happens after the
+commit that created the challenge — it sends a second, identical invitation; and if that second
+send fails while the first succeeded, the challenge is closed as `failed` although a message was
+delivered: the button in it then answers «stale», and the next login opens a new challenge.
+Either way the attacker gets a `challengeId`, which is useless without the code, and the code is
+only ever delivered to the account's own Telegram.
 
 ## When Telegram is not reachable
 

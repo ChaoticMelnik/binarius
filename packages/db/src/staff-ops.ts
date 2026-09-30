@@ -355,10 +355,13 @@ export async function startLoginChallenge(
         ),
       );
     if (open !== undefined) {
-      // prompt_sent_at is NULL either because the invitation never left, or because the process
-      // died between sendMessage and markChallengePromptSent. In the second case the button may
-      // already have been pressed, and re-inviting someone who is holding the code is noise —
-      // worse, it would be a send whose failure closes a challenge that has moved on.
+      // prompt_sent_at is NULL for three reasons: the invitation never left; the process died
+      // between sendMessage and markChallengePromptSent (the button may already have been
+      // pressed, and re-inviting someone who is holding the code is noise — worse, it would be
+      // a send whose failure closes a challenge that has moved on); or another login for the
+      // same person is inside its own send right now — the `staff` lock is released at commit
+      // and the send runs after it (apps/backend deliverPrompt), so two logins one round-trip
+      // apart both see NULL and both send. The third is accepted (docs/staff-login.md → Limits).
       const resent =
         open.promptSentAt === null && open.status === StaffLoginChallengeStatus.Pending;
       await writeAuditEntry(
