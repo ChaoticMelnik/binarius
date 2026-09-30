@@ -462,6 +462,17 @@ describe('revoking', () => {
     expect(cookieOf(response, SESSION_COOKIE)?.value).toBe('');
   });
 
+  it('refuses a session id that is not a uuid before the backend is asked', async () => {
+    const response = await post(
+      '/admin/sessions/not-a-uuid/revoke',
+      {},
+      { [SESSION_COOKIE]: TOKEN },
+    );
+
+    expect([response.statusCode, response.headers.location]).toEqual([303, '/admin/sessions']);
+    expect(calls.revoke).toEqual([]);
+  });
+
   it('treats a session that was already gone as nothing to report', async () => {
     await app.close();
     app = build({ revoke: () => Promise.reject(httpFailure(404, AdminErrorCode.NotFound)) });
