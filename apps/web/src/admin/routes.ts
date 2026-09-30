@@ -198,6 +198,11 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
     const token = cookieMatching(request, SESSION_COOKIE, STAFF_SESSION_TOKEN_PATTERN);
     if (token === undefined) return clearSession(reply).redirect('/admin/login', 302);
     const { id } = request.params as { id: string };
+    // find-my-way hands `..` through as a param and encodeURIComponent leaves it alone, so the
+    // client's URL join would leave /admin/sessions/ — the backend would answer for a route the
+    // staff member never named, and write no row. A shape it cannot be is refused here, like a
+    // cookie of the wrong shape: before the backend is asked, with no row.
+    if (!UUID_PATTERN.test(id)) return reply.redirect('/admin/sessions', 303);
     try {
       const { current } = await backend.revoke(token, id);
       if (current) return clearSession(reply).redirect('/admin/login', 303);
