@@ -56,6 +56,16 @@ Files to create/modify; schema changes (`packages/db` Drizzle schema); API/Socke
 
 If a project-specific schema/design skill is installed (`drizzle-orm-patterns` for this project), invoke it before drafting schema changes.
 
+### Step 4a: Size gate (owner's rule, 2026-09-30)
+
+One issue = one PR of **≤ ~2000 added lines, tests and docs included; 3000 is the ceiling**. Review rounds grow with diff size: PRs of 6-12k lines took 4-8 rounds (#7, #9, #22, #68), PRs under ~2k took 1-2.
+
+Estimate from Step 4's file list, calibrated on this repo's actuals rather than intuition — tests here are typically 1-2x the code: #6 contracts 2.1k, #7 schema 7.5k, #42 transport 7.2k, #22 bot /start 6.1k, #9 OAuth 11.5k, #68 staff login 11.8k.
+
+- ≤ 2000 → proceed.
+- 2000-3000 → proceed only if no split yields parts that are each mergeable on their own; say why in the plan.
+- \> 3000 → split before the plan: each part is an independently mergeable issue that leaves `main` working, every acceptance criterion of the original lands in exactly one part. Create the parts with `/github` ("Create an issue" + "Add issue to Project #2"), rewrite this issue's body to the first part with links to the rest and their order, and plan only that first part. Report the split in the hand-off. The owner pre-authorized creating split issues without a separate confirmation (2026-09-30).
+
 ### Step 5: Clarifying questions (every issue)
 
 Always, for every issue — the `/clarify` floor has no exception here, a mechanical fix included. Prepare **at least 3** targeted questions: intent ambiguity in unaddressed edge cases, explicit scope boundary, integration constraints if an external system is involved (Binodex Broker/Partner API in particular — its contract is still partially unconfirmed). Each question has 2-4 concrete options, the recommended one first, worded in Russian. Before offering an option, verify it can actually be carried out — only with a safe read-only probe (the flag appears in `--help`, the API returns the field, a dry run, a scratch file outside the repo); the proposed state-changing action itself — a merge, an issue, a commit, a push, a status change — is never performed before the owner's answer; an option the owner picks and the plan later drops costs a reversal question (#56: `review --scope branch` had no `--effort` and ignored the prompt template).
@@ -72,6 +82,9 @@ Do not proceed to Step 6 until answered.
 
 ### Scope
 [What IS and IS NOT covered]
+
+### Size estimate
+[Added lines: code / tests / docs, total — Step 4a]
 
 ### Architecture decisions
 [Key constraints to honor]
@@ -148,7 +161,9 @@ Post the final plan as an issue comment (`/github` skill), then move the issue t
 
 `gh pr view <N> --json comments` and/or `gh pr diff <N>` — understand what was rejected and why.
 
-### Step 2: Re-check the revised plan with Codex
+### Step 2: Re-check the revised plan with Codex — new cycle only
+
+Only when this Plan Update opens a new cycle — after the second unsuccessful review round (`.claude/skills/tech-lead/SKILL.md` → Phase 4, iteration 2; the spawn prompt says "Codex re-check: yes"). After the first round the Plan Update goes without Codex: skip to Step 3 and write "Codex re-check: not required (round 1)" in it (owner's rule, 2026-09-30). Invoked directly by the owner: ask which round this is if the PR comments do not show it.
 
 Same mechanism as Step 7 (companion `task`, full context inline). Send: original plan, review findings, proposed revised steps. Ask whether the revision fully covers the gap. A reviewer's "optional improvement" is checked like a finding before it goes into the Plan Update — two simplify agents once recommended the exact change that broke CI.
 
@@ -206,5 +221,6 @@ Implementer picks it up only once this comment exists.
 - Never write code — the Architect's output is the plan only.
 - Never move an issue to In Review — that's the Implementer's job.
 - Never skip domain scope analysis.
-- Never skip the Codex plan-review checkpoint. If Codex is unavailable, say so explicitly in the plan handoff.
+- Never skip the Codex plan-review checkpoint (Step 7, and Returned from Review Step 2 when it opens a new cycle). If Codex is unavailable, say so explicitly in the plan handoff.
+- Never post a plan whose size estimate exceeds 3000 added lines — split first (Step 4a).
 - Never call `AskUserQuestion` when running as a spawned agent — return the questions to tech-lead.
