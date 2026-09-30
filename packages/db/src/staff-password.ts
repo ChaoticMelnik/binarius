@@ -67,10 +67,12 @@ export async function hashPassword(
 const inRange = (value: number, { min, max }: { min: number; max: number }): boolean =>
   Number.isInteger(value) && value >= min && value <= max;
 
-// Answers only true or false: the caller must not be able to tell a malformed row, an
-// out-of-range row and a wrong password apart, and neither must its timing at the resolutions
-// a network exposes. A string that does not parse costs no derivation at all — that is the
-// point of the ranges, not an optimisation.
+// Answers only true or false: the return value does not say whether the row was malformed, out
+// of range, or the password wrong. Timing does — a string that does not parse, or one that asks
+// for parameters outside the ranges above, returns without a derivation, ~250 ms before a wrong
+// password would. The ranges are there so a row cannot spend the process, not to hide which
+// branch ran; nothing in this repository writes the column except through `hashPassword`
+// (`createStaffAccount`, `resetStaffPassword`), so those branches are for a row edited by hand.
 export async function verifyPassword(stored: string, password: string): Promise<boolean> {
   const match = PHC_PATTERN.exec(stored);
   if (match === null) return false;
