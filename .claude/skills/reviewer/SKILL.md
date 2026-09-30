@@ -78,7 +78,7 @@ If a spawn dies on an API error for its model, relaunch it once with the same ex
 
 Merge Codex + agent results, collapse duplicates. Discard findings that just restate an accepted trade-off from the plan — note "accepted at plan stage" instead of returning the issue for them.
 
-- Re-verify every severity label — the tools' and your own — against the actual mechanism before accepting or dismissing a finding. A tooling-level claim ("this config makes X fail", "the compiler infers Y") is verified with the tool itself before it is labelled Major.
+- Re-verify every severity label — the tools' and your own — against the actual mechanism and the Severity Guide below (evidence quality is Minor by default) before accepting or dismissing a finding. A tooling-level claim ("this config makes X fail", "the compiler infers Y") is verified with the tool itself before it is labelled Major.
 - A sub-agent's "optional improvement" is checked like a finding before it is passed on to the Plan Update: two simplify agents once recommended the exact change that broke CI.
 
 ### Step 5: Manual checklist
@@ -108,6 +108,8 @@ gh pr review <N> --repo ChaoticMelnik/binarius --comment --body "..."
 ```
 
 Each comment: quote the exact problematic code/line, explain what's wrong and why, suggest the fix. Then move the issue to **Todo** via `/github` skill immediately — no additional approval needed. Stays in Todo until the Architect posts a Plan Update, and the Architect moves it back to In Progress.
+
+The same on round 3, the last one (`.claude/skills/tech-lead/SKILL.md` → Phase 4): post the findings and return the verdict with every finding's severity and comment link. There is no Plan Update after it — tech-lead proposes the remaining findings as a new issue and, if no Blocker is left, relays the merge question.
 
 ### Step 6b: PR is clean — notify, merge only after an explicit yes
 
@@ -158,8 +160,10 @@ Check against `.claude/skills/architect/SKILL.md` → Architecture Rules to Enfo
 ## Severity Guide (both modes)
 
 - **Blocker** — security issue, data corruption risk, broken authorization. Must fix before merge/release.
-- **Major** — logic bug, unhandled edge case, uncovered domain entity, build/type errors. Must fix.
+- **Major** — a defect in behaviour: logic bug, unhandled edge case, uncovered domain entity, build/type errors, red CI. Must fix.
 - **Minor** — style issue, non-critical naming, cosmetic duplication. Note it, don't block for it alone.
+
+**Evidence quality is Minor by default** (owner's rule, 2026-09-30): a test or oracle that could not fail, a proof that is neighbouring rather than isolating, a comment/doc/PR sentence worded stronger than the code, missing mutation evidence — while the code itself behaves correctly. It becomes Major only when that test or check is the **sole** enforcement of an invariant from `.claude/skills/architect/SKILL.md` → Architecture Rules, or of a Blocker-class property (security, authorization, money, data integrity). State which one when labelling it Major.
 
 Return an issue to Todo (task mode) or flag as Blocker/Major (project mode) if there is at least one Blocker or Major finding.
 

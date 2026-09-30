@@ -26,6 +26,7 @@ Spawn prompt — every phase gets these, in this order:
 3. "You have no `AskUserQuestion`. Return every question for the owner in your final message: ≥3 for a clarify round, each with 2-4 options, the recommended one first, in Russian. Make no edits in a clarify round."
 4. Node: `eval "$(fnm env)" && fnm use`.
 5. What to return: the role's own hand-off (plan comment URL / PR URL and commit list / review verdict with merge request) plus deviations and anything unfinished.
+6. For an architect Plan Update: the review round it follows and "Codex re-check: yes" (new cycle, Phase 4 iteration 2) or "Codex re-check: no" (iteration 1).
 
 **Clarify relay.** Architect and implementer start with a clarify round: the agent returns its questions and stops. Tech-lead asks them in one `AskUserQuestion` call, passing every option through unchanged, then continues the same agent with `SendMessage` carrying the answers (a fresh spawn with the answers in its prompt if the agent is gone). A question the agent marks as a plan defect goes to the architect for a Plan Update, not to the owner. Tech-lead's own clarify questions (Phase 0, merge, change of approach) follow the phases' rule: an option that depends on a tool or API capability is verified by a safe read-only probe before it is asked, and the action it proposes (a merge above all) is never performed before the answer (architect Step 5, implementer Step 0).
 
@@ -46,7 +47,8 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 - [ ] Issue has an implementation plan comment posted **before** it moves to In Progress
 - [ ] Plan covers the full domain scope, not just explicitly mentioned entities
 - [ ] Codex plan review happened before the plan was finalized
-- [ ] If returned from review: a "Plan Update" comment exists before re-implementation started
+- [ ] If returned from review: a "Plan Update" comment exists before re-implementation started; Codex re-checked it only when it opened a new cycle (Phase 4, iteration 2)
+- [ ] The plan states the size estimate; an estimate above 3000 added lines was split before the plan was posted
 
 ### Implementer step — check
 
@@ -262,15 +264,19 @@ Once the PR exists and the issue is In Review:
 
 #### Phase 4 — Review findings loop
 
-Track the iteration count (starts at 1 for the first review).
+Track the iteration count (starts at 1 for the first review). **Hard limit: 3 review rounds per issue** (owner's rule, 2026-09-30) — there is no round 4.
 
 **If the reviewer finds issues:**
-1. Iteration ≥ 2 → stop. Ask the owner via `AskUserQuestion` for a **change of approach** — the same loop again is not among the options:
+1. Iteration 1 → the architect first (Plan Update **without** Codex re-check; the issue returns to In Progress), then the implementer, then the reviewer again for this issue.
+2. Iteration 2 → stop: this starts a **new cycle**. Ask the owner via `AskUserQuestion` for a **change of approach** — the same loop again is not among the options:
    - (a) a whole-feature Codex pass (the reviewer's Step 3a command with `KIND="Whole-feature pass"`, run now) and a Plan Update built from its findings, not from the last round's;
    - (b) split part of the issue into a separate issue (created and added to the board via `/github`), and narrow this PR;
    - (c) re-plan from scratch: the architect writes a new plan against the current branch.
-   Do not spawn the implementer until the owner picked one.
-2. Iteration < 2 → the architect first (Plan Update; the issue returns to In Progress), then the implementer, then the reviewer again for this issue.
+   The new cycle's Plan Update or plan **gets** the Codex re-check (architect → Returned from Review, Step 2). Do not spawn the implementer until the owner picked one. Round 3 is the last one; say so in the question.
+3. Iteration 3 → no further round. The remaining findings do not go into a follow-up list — they go into **one new separate issue**:
+   - Any **Blocker** left → the merge is held; ask the owner via `AskUserQuestion` what to do (fix it in this PR outside the round count / close the PR / other). Nothing is merged without that answer.
+   - Only Major/Minor left → ask the owner via `AskUserQuestion` to confirm the new issue: its draft title and the full list of findings it carries (each with severity and the PR comment link). Only on a yes: create it with `/github` ("Create an issue" + "Add issue to Project #2"), body with `Refs #<N>` and the PR link. Then the merge relay below, as for a clean PR — the merge question names the findings left open and the new issue. A no → ask what the owner wants instead; do not merge before that.
+   The reviewer does not post LGTM for such a PR; the audit records it as "merged at the round limit, findings in #<new>".
 
 **If the reviewer reports the PR is clean:**
 It posted the ready-to-merge comment and returned a merge request. Merge relay: `AskUserQuestion` immediately before this merge, `gh pr merge` only on an explicit yes, then confirm `state == "MERGED"`. **Do not move the issue to Done before that** — a clean review isn't merged work. Then move the issue to **Done** via `/github` skill, then run Phase 5.
@@ -347,4 +353,5 @@ Run once the merge is confirmed and the issue is Done.
 - Never write text output between pipeline phases where this repo's CLAUDE.md has waived stop points — an inter-phase recap forces the user to say "continue" unnecessarily.
 - Never waive a missing Codex checkpoint silently — report it as a process deviation.
 - Any question to the owner goes through `AskUserQuestion`, never plain text — including the questions a spawned phase returns.
-- Never offer "one more iteration of the same loop" at the Iteration ≥ 2 stop.
+- Never offer "one more iteration of the same loop" at the Iteration 2 stop, and never start a 4th review round.
+- Never create the round-limit issue (Phase 4, iteration 3) without the owner's yes on its title and findings.

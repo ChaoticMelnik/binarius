@@ -36,7 +36,7 @@ Example of the class this must catch: `.claude/CLAUDE.md` said a returned issue 
 
 Output format:
 - findings only
-- blocker/major/minor
+- blocker/major/minor — major is a defect in behaviour; evidence quality (a test that could not fail, a claim worded stronger than the code) is minor unless that test is the only enforcement of an invariant from the list above or of security/authorization/money/data integrity — then name which
 - do not implement
 
 <the diff>
