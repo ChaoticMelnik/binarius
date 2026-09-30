@@ -672,7 +672,6 @@ async function refuseCode(tx: Tx, challengeId: string, ip: string): Promise<Comp
     .select({
       status: staffLoginChallenges.status,
       staffId: staffLoginChallenges.staffId,
-      codeSentAt: staffLoginChallenges.codeSentAt,
       expired: sql<boolean>`${staffLoginChallenges.expiresAt} <= now()`,
       staffStatus: staff.status,
     })
@@ -702,15 +701,19 @@ async function refuseCode(tx: Tx, challengeId: string, ip: string): Promise<Comp
 // still looks usable, and an expired window outranks the status the row is still carrying.
 function refusalReason(row: {
   status: StaffLoginChallengeStatus;
-  codeSentAt: Date | null;
   expired: boolean;
   staffStatus: StaffStatus;
 }): CodeRefusalReason {
   if (row.staffStatus !== StaffStatus.Active) return 'disabled';
   if (row.expired) return 'expired';
+  // `confirmed` does not ask whether the code was sent. A confirmed challenge with the code
+  // already sent cannot miss the CAS on the same snapshot; if the re-read sees one,
+  // markChallengeCodeSent committed between the two statements (READ COMMITTED gives each its
+  // own snapshot), and the truthful answer is still "wait": the code is live and this
+  // submission came first.
   if (
     row.status === StaffLoginChallengeStatus.Pending ||
-    (row.status === StaffLoginChallengeStatus.Confirmed && row.codeSentAt === null)
+    row.status === StaffLoginChallengeStatus.Confirmed
   ) {
     return 'awaiting_telegram';
   }
@@ -844,10 +847,14 @@ export async function revokeStaffSession(
 }
 
 /** The staff member's own session, ended by them; unlike revoke, it cannot miss. */
-export async function endStaffSession(tx: Tx, sessionId: string): Promise<void> {
+export async function endStaffSession(
+  tx: Tx,
+  sessionId: string,
+  byStaffId: string,
+): Promise<void> {
   await tx
     .update(staffSessions)
-    .set({ revokedAt: sql`now()` })
+    .set({ revokedAt: sql`now()`, revokedByStaffId: byStaffId })
     .where(and(eq(staffSessions.id, sessionId), sql`${staffSessions.revokedAt} is null`));
 }
 
@@ -899,6 +906,13 @@ export interface StaffInvalidation {
 // written in everywhere. Changing the credentials or the status has to invalidate everything
 // issued under the old ones in the same transaction, or a challenge created a moment earlier
 // would still walk through to a session.
+//
+// That order is about the locks a statement takes on purpose. FK KEY SHARE locks on `staff` are
+// taken after a session or challenge lock by design — `endStaffSession` and `revokeStaffSession`
+// write `revoked_by_staff_id` under a session lock, `completeLogin` inserts a session under a
+// challenge lock — and that is safe only while no writer takes `FOR UPDATE` on `staff`: KEY SHARE
+// conflicts with that mode and with nothing else any writer here uses. Take `FOR NO KEY UPDATE`,
+// as `startLoginChallenge` does.
 async function invalidateIssued(tx: Tx, staffId: string): Promise<StaffInvalidation> {
   const closed = await tx
     .update(staffLoginChallenges)
