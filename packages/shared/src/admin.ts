@@ -49,10 +49,14 @@ export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 export const STAFF_PASSWORD_MAX_LENGTH = 256;
 
 // `ip` and `userAgent` are what the web process saw and the backend records as given
-// (docs/staff-login.md → Trust boundaries); the lengths are the columns' own bound.
+// (docs/staff-login.md → Trust boundaries). Both columns are bare `text` (0007_staff_auth.sql):
+// these lengths are the only bound. `web` truncates the user agent to this same constant before
+// sending, so a long header is a shortened row, never a failed login; `ip` is a socket address
+// and is not truncated — 64 covers IPv6 with a zone id.
+export const CLIENT_USER_AGENT_MAX_LENGTH = 512;
 const clientFacts = {
   ip: z.string().min(1).max(64),
-  userAgent: z.string().max(512),
+  userAgent: z.string().max(CLIENT_USER_AGENT_MAX_LENGTH),
 };
 
 export const adminLoginRequestSchema = z.object({

@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import * as z from 'zod';
 import {
   AdminErrorCode,
+  CLIENT_USER_AGENT_MAX_LENGTH,
   errorLogFields,
   STAFF_PASSWORD_MAX_LENGTH,
   STAFF_SESSION_TOKEN_PATTERN,
@@ -19,9 +20,6 @@ export const SESSION_COOKIE = 'admin_session';
 export const CHALLENGE_COOKIE = 'admin_login';
 const SESSION_COOKIE_PATH = '/admin';
 const CHALLENGE_COOKIE_PATH = '/admin/login';
-// a user agent longer than this is not one the column accepts, and truncating here keeps the
-// backend's validation from turning a long header into a failed login
-const USER_AGENT_MAX = 512;
 const CSS_MAX_AGE_S = 3600;
 
 // a remaining lifetime of zero or less is either a challenge that just expired by the backend's
@@ -45,7 +43,9 @@ const confirmForm = z.object({ code: staffLoginCodeSchema });
 /** What the backend records as the client's own facts; it trusts this process for them. */
 const clientFacts = (request: FastifyRequest) => ({
   ip: request.ip,
-  userAgent: (request.headers['user-agent'] ?? '').slice(0, USER_AGENT_MAX),
+  // truncated to the bound the backend's schema enforces — the same constant — so a long
+  // header is not a failed login
+  userAgent: (request.headers['user-agent'] ?? '').slice(0, CLIENT_USER_AGENT_MAX_LENGTH),
 });
 
 export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backend, secureCookies }) => {
