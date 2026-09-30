@@ -50,8 +50,8 @@ describe('html', () => {
     expect(html`${value}`.value).toBe(expected);
   });
 
-  // a string is not SafeHtml just because a caller believes it is: the only way in without a
-  // cast is the tag, and `new SafeHtml('…')` no longer compiles (the class is module-local)
+  // a string is not SafeHtml just because a caller believes it is; that the type has no other
+  // way in is a compile-time claim, and its oracle is html.typecheck.ts
   it('treats a plain string as text even when it is markup', () => {
     const notSafe = '<b>bold</b>';
     expect(html`${notSafe}`.value).not.toContain('<b>');
