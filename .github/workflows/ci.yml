@@ -231,19 +231,28 @@ jobs:
             sleep 2
           done
       # Without this the document and this job would be independent copies of the same procedure,
-      # and the step below would keep passing after an edit dropped the migration from the
-      # document — which is exactly how the procedure came to stop at "create an account" on a
-      # volume nothing had migrated. Deleting the step from the document reddens this line.
-      - name: the document still carries the migration step this job runs
+      # and the step below would keep passing after an edit dropped a command from the document —
+      # which is exactly how the procedure came to stop at "create an account" on a volume nothing
+      # had migrated. Both greps read only the procedure section, not the whole file: the Accounts
+      # section carries the same `staff create` line, so a whole-file grep stayed green when step 6
+      # was deleted. The section is the last one in the document, which is what `,$p` relies on —
+      # a new section added below it would be read as part of it.
+      - name: the document still carries the two commands this job runs
         run: |
-          grep -qF 'docker compose exec backend pnpm db:migrate' docs/staff-login.md || {
-            echo '::error::docs/staff-login.md lost the migration step that this job runs'
+          section="$(sed -n '/^## Bringing it up the first time/,$p' docs/staff-login.md)"
+          printf '%s' "$section" | grep -qF 'docker compose exec backend pnpm db:migrate' || {
+            echo '::error::docs/staff-login.md → Bringing it up lost the migration step this job runs'
             exit 1
           }
-      # Steps 3-6 of docs/staff-login.md → "Bringing it up the first time", on the fresh volume
+          printf '%s' "$section" | grep -qF 'docker compose exec backend pnpm --filter @binarius/backend staff create' || {
+            echo '::error::docs/staff-login.md → Bringing it up lost the staff create step this job runs'
+            exit 1
+          }
+      # Steps 4 and 6 of docs/staff-login.md → "Bringing it up the first time", on the fresh volume
       # this job always starts from: --wait reports the backend healthy on an empty database, so
-      # without the migration `staff create` fails with `relation "staff" does not exist`.
-      # Applying them on container start with fail-fast is #75.
+      # without the migration `staff create` fails with `relation "staff" does not exist`. Step 3's
+      # log check needs a real token — with the fake one this job uses, the line *is* in the log —
+      # and step 5 needs a person. Applying the migrations on container start with fail-fast is #75.
       - name: the first-run procedure creates a staff account on a fresh volume
         run: |
           docker compose exec -T backend pnpm db:migrate

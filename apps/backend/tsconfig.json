@@ -5,22 +5,12 @@
     "outDir": "dist",
     "rootDir": "src",
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
-    "types": [
-      "node"
-    ]
+    "types": ["node"]
   },
-  "include": [
-    "src"
-  ],
+  "include": ["src"],
   "references": [
-    {
-      "path": "../../packages/shared"
-    },
-    {
-      "path": "../../packages/db"
-    },
-    {
-      "path": "../web"
-    }
+    { "path": "../../packages/shared" },
+    { "path": "../../packages/db" },
+    { "path": "../web" }
   ]
 }
