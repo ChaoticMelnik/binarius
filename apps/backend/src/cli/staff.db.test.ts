@@ -108,6 +108,15 @@ describe('staff create', () => {
 
     expect([code, lines]).toEqual([1, ['Такой логин или Telegram ID уже занят']]);
   });
+
+  // the boundary is the receive path's, not bigint's: ctx.from.id arrives as a JSON-parsed
+  // number, so an account past it would get its invitation and never match on confirmation
+  it('accepts the largest id the receive path can match', async () => {
+    const { code } = await run('create', '--login', 'edge', '--telegram-id', '9007199254740991');
+
+    expect(code).toBe(0);
+    expect((await staffRow('edge'))?.telegramUserId).toBe(9007199254740991n);
+  });
 });
 
 describe('staff reset-password', () => {
@@ -159,6 +168,14 @@ describe('a command that was not understood', () => {
     ['a login the column would refuse', ['create', '--login', 'ab', '--telegram-id', '1']],
     ['a create with no telegram id', ['create', '--login', 'ada']],
     ['a flag create does not take', ['disable', '--login', 'ada', '--telegram-id', '1']],
+    [
+      'a telegram id the receive path could not match',
+      ['create', '--login', 'ada', '--telegram-id', '9007199254740992'],
+    ],
+    [
+      'a telegram id bigint would overflow',
+      ['create', '--login', 'ada', '--telegram-id', '9999999999999999999'],
+    ],
   ])('%s exits 2 with the usage', async (_label, argv) => {
     const { code, lines } = await run(...argv);
 
