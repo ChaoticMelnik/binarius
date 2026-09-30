@@ -1,14 +1,17 @@
 import type { FastifyReply } from 'fastify';
 
 /**
- * A fragment that is already HTML. The class is not exported, only the type is, so outside this
- * module the only way in without a cast is `html`, which escapes everything it interpolates. (A
- * cast defeats any mechanism, and saying otherwise would be the kind of promise this file is
- * here to avoid.) That is what makes `html`'s own output nestable without a second escaping
- * pass, and a staff member's user agent — which goes into a table cell — impossible to
- * interpolate raw by mistake.
+ * A fragment that is already HTML. The class is not exported and it carries a private member, so
+ * the type is nominal: an object literal does not satisfy it (TS2741) and the class cannot be
+ * named outside this module — the only way in without a cast is `html`, which escapes everything
+ * it interpolates. (A cast defeats any mechanism, and saying otherwise would be the kind of
+ * promise this file is here to avoid.) `sendHtml` sends `.value` raw on the strength of exactly
+ * that. It is also what makes `html`'s own output nestable without a second escaping pass, and a
+ * staff member's user agent — which goes into a table cell — impossible to interpolate raw by
+ * mistake. `html.typecheck.ts` is the oracle for all three ways in.
  */
 class SafeHtmlValue {
+  declare private readonly brand: void;
   readonly value: string;
 
   constructor(value: string) {
