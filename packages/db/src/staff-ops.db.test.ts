@@ -800,9 +800,16 @@ describe('revoking and ending sessions', () => {
     const token = await session(seeded);
 
     await runAsStaff(tmp.db, { token }, async (tx, ctx) => {
-      await endStaffSession(tx, ctx.sessionId);
+      await endStaffSession(tx, ctx.sessionId, ctx.staffId);
       return { result: true, audit: { action: AuditAction.StaffLogout, payload: {} } };
     });
+
+    // the column's comment says NULL means the CLI did it, so a self-logout has to name the owner
+    const [ended] = await tmp.db
+      .select({ revokedByStaffId: staffSessions.revokedByStaffId })
+      .from(staffSessions)
+      .where(eq(staffSessions.tokenHash, hashToken(token)));
+    expect(ended?.revokedByStaffId).toBe(seeded.staffId);
 
     expect(
       await runAsStaff(tmp.db, { token }, async () => ({
@@ -866,6 +873,12 @@ describe('the CLI operations', () => {
 
     expect(counts).toEqual({ closedChallenges: 1, revokedSessions: 1 });
     expect((await staffRow(seeded.staffId)).status).toBe(StaffStatus.Disabled);
+    // the other side of the same column: no staff member is behind a CLI revocation
+    const revokedByCli = await tmp.db
+      .select({ by: staffSessions.revokedByStaffId, at: staffSessions.revokedAt })
+      .from(staffSessions)
+      .where(eq(staffSessions.staffId, seeded.staffId));
+    expect(revokedByCli).toEqual([{ by: null, at: expect.any(Date) }]);
     expect((await challengeRow(reopened.challengeId)).status).toBe(
       StaffLoginChallengeStatus.Expired,
     );
@@ -927,5 +940,54 @@ describe('the CLI operations', () => {
     ],
   ])('answers nothing when %s names a login that does not exist', async (_label, run) => {
     expect(await run('nobody-here')).toBeUndefined();
+  });
+});
+
+describe('completeLogin under the code-sent race', () => {
+  // The CAS needs code_sent_at, and markChallengeCodeSent can commit between that statement and
+  // the re-read (READ COMMITTED: one snapshot per statement). The seam runs it exactly there.
+  it('treats a code that arrived while the CAS was running as early, not as over', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const started = await start(seeded);
+    if (!started.ok) throw new Error('unreachable');
+    const confirmed = await confirmChallengeFromTelegram(tmp.db, {
+      challengeId: started.challengeId,
+      telegramUserId: seeded.telegramUserId,
+    });
+    if (confirmed === undefined) throw new Error('unreachable');
+    const raced: typeof tmp.db = Object.create(tmp.db, {
+      transaction: {
+        value: (fn: (tx: unknown) => Promise<unknown>) =>
+          tmp.db.transaction(async (tx) => {
+            const spied = Object.create(tx) as {
+              execute: (...args: unknown[]) => Promise<unknown>;
+            };
+            spied.execute = async (...args: unknown[]) => {
+              const result = await (tx.execute as (...a: unknown[]) => Promise<unknown>)(...args);
+              await markChallengeCodeSent(tmp.db, started.challengeId);
+              return result;
+            };
+            return fn(spied);
+          }),
+      },
+    });
+
+    const early = await completeLogin(raced, {
+      challengeId: started.challengeId,
+      code: confirmed.code,
+      ip: IP,
+      userAgent: UA,
+    });
+
+    expect(early).toEqual({ ok: false, reason: 'awaiting_telegram' });
+    const row = await challengeRow(started.challengeId);
+    expect([row.status, row.codeAttempts]).toEqual([StaffLoginChallengeStatus.Confirmed, 0]);
+    const late = await completeLogin(tmp.db, {
+      challengeId: started.challengeId,
+      code: confirmed.code,
+      ip: IP,
+      userAgent: UA,
+    });
+    expect(late.ok).toBe(true);
   });
 });

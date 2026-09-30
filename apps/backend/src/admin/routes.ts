@@ -360,7 +360,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
       deps.db,
       { token, idleMs },
       async (tx, ctx) => {
-        await endStaffSession(tx, ctx.sessionId);
+        await endStaffSession(tx, ctx.sessionId, ctx.staffId);
         return {
           result: { loggedOut: true as const },
           audit: {
