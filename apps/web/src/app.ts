@@ -66,6 +66,9 @@ export function buildWebApp({
     void reply.header('x-content-type-options', 'nosniff');
     void reply.header('x-frame-options', 'DENY');
     void reply.header('referrer-policy', 'no-referrer');
+    // only where the cookie is Secure: the header is ignored over http anyway, and sending it
+    // there would state a policy the deployment has not made
+    if (secureCookies) void reply.header('strict-transport-security', 'max-age=31536000');
     // the stylesheet says its own; everything else is a page about one person's session
     if (reply.getHeader('cache-control') === undefined) {
       void reply.header('cache-control', 'no-store');
