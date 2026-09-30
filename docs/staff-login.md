@@ -118,11 +118,19 @@ useless without the code, and the code is only ever delivered to the account's o
 
 ## When Telegram is not reachable
 
-Fail closed. If long polling is not running, or the Bot API refuses the message, the challenge is
-closed and the login answers `503 telegram_unavailable` with a row saying which of the two it
-was. There is no fallback second factor. A bad `ADMIN_BOT_TOKEN` therefore leaves the backend
-running and healthy while nobody can log in to the admin pages — deliberately, and visible in the
-log as one `error` line at startup.
+Fail closed. The gate is asked on every login — including one that reuses a challenge already
+open, and including one whose invitation has already gone out, where nothing is owed to Telegram
+at all. If long polling is not running, or the Bot API refuses the message, the challenge is
+closed and the login answers `503 telegram_unavailable` with a row saying which of the two it was.
+
+There is one exception, and it is not a hole: a challenge whose button has already been pressed is
+not closed. The code is in Telegram already and typing it back needs no poller, so the login
+answers `200` with the same `challengeId`, and the `staff_login_telegram_failed` row carries
+`closed: false` to say the gate ran and found the challenge had moved on.
+
+There is no fallback second factor. A bad `ADMIN_BOT_TOKEN` therefore leaves the backend running
+and healthy while nobody can open a new login to the admin pages — deliberately, and visible in
+the log as one `error` line at startup.
 
 ## Bringing it up the first time
 

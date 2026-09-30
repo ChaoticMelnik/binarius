@@ -154,7 +154,10 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
       }
 
-      if (started.sendPrompt) {
+      // `deliverPrompt` runs for two reasons: an invitation is owed, or polling is down and the
+      // fail-closed gate inside it has to run even though nothing is owed — a reused challenge is
+      // otherwise five minutes of waiting for a button that cannot arrive.
+      if (started.sendPrompt || !deps.telegram.isPolling()) {
         const delivered = await deliverPrompt(started.challengeId, staff, { ip, userAgent });
         // 'closed' means the challenge is gone and nobody can be waiting on it. 'moved on' means
         // the button was pressed while the message was in flight: the code is already on its way

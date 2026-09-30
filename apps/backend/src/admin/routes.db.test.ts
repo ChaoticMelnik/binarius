@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminErrorCode, staffSessionsResponseSchema } from '@binarius/shared';
@@ -118,7 +118,8 @@ const entriesFor = async (staffId: string) =>
   tmp.db
     .select({ action: auditLog.action, payload: auditLog.payload })
     .from(auditLog)
-    .where(eq(auditLog.actorId, staffId));
+    .where(eq(auditLog.actorId, staffId))
+    .orderBy(asc(auditLog.createdAt), asc(auditLog.id));
 
 describe('the narrow bearer', () => {
   it.each([
@@ -463,6 +464,62 @@ describe('POST /admin/auth/login', () => {
       first.json<{ challengeId: string }>().challengeId,
     );
     expect(telegram.prompts).toHaveLength(1);
+  });
+
+  // path (c): the challenge is reused and its invitation was already delivered, so nothing is
+  // owed — the gate still has to be asked, or the login answers 200 for a factor that cannot come
+  it('refuses a reused challenge while the bot is not polling', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const first = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+    expect(first.statusCode).toBe(200);
+    expect(telegram.prompts).toHaveLength(1);
+    telegram.setPolling(false);
+
+    const again = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+
+    expect([again.statusCode, again.json()]).toEqual([
+      503,
+      { error: AdminErrorCode.TelegramUnavailable },
+    ]);
+    const [row] = await tmp.db
+      .select({ status: staffLoginChallenges.status })
+      .from(staffLoginChallenges)
+      .where(eq(staffLoginChallenges.id, first.json<{ challengeId: string }>().challengeId));
+    expect(row?.status).toBe(StaffLoginChallengeStatus.Failed);
+    const entry = (await entriesFor(seeded.staffId)).at(-1);
+    expect(entry?.payload).toMatchObject({ reason: 'polling_down', closed: true });
+    expect(telegram.prompts).toHaveLength(1);
+  });
+
+  // path (d): the code is already in Telegram, so completeLogin needs no poller — the gate is
+  // asked, records what it saw, and the CAS pending -> failed matches nothing
+  it('keeps a challenge whose button was already pressed, even while the bot is not polling', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const first = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+    const { challengeId } = first.json<{ challengeId: string }>();
+    const confirmed = await confirmChallengeFromTelegram(tmp.db, {
+      challengeId,
+      telegramUserId: seeded.telegramUserId,
+    });
+    if (confirmed === undefined) throw new Error('the button press matched no challenge');
+    await markChallengeCodeSent(tmp.db, challengeId);
+    telegram.setPolling(false);
+
+    const again = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+
+    expect([again.statusCode, again.json<{ challengeId: string }>().challengeId]).toEqual([
+      200,
+      challengeId,
+    ]);
+    const [row] = await tmp.db
+      .select({ status: staffLoginChallenges.status })
+      .from(staffLoginChallenges)
+      .where(eq(staffLoginChallenges.id, challengeId));
+    expect(row?.status).toBe(StaffLoginChallengeStatus.Confirmed);
+    const entry = (await entriesFor(seeded.staffId)).at(-1);
+    expect(entry?.payload).toMatchObject({ reason: 'polling_down', closed: false });
+    const done = await confirm({ challengeId, code: confirmed.code, ...CLIENT });
+    expect(done.statusCode).toBe(200);
   });
 
   it.each([
