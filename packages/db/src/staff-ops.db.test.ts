@@ -62,7 +62,7 @@ async function reachCodeEntry(seeded: SeededStaff): Promise<{ challengeId: strin
     telegramUserId: seeded.telegramUserId,
   });
   if (confirmed === undefined) throw new Error('confirmChallengeFromTelegram refused the press');
-  await markChallengeCodeSent(tmp.db, started.challengeId);
+  await markChallengeCodeSent(tmp.db, started.challengeId, confirmed.code);
   return { challengeId: started.challengeId, code: confirmed.code };
 }
 
@@ -453,6 +453,70 @@ describe('the Telegram side', () => {
     });
     // a failed challenge is closed, so the next login starts a new one immediately
     expect(await start(seeded)).toMatchObject({ ok: true, reused: false });
+  });
+
+  it('closes nothing when the code that failed to send is no longer the current one', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const started = await start(seeded);
+    if (!started.ok) throw new Error('unreachable');
+    const press = () =>
+      confirmChallengeFromTelegram(tmp.db, {
+        challengeId: started.challengeId,
+        telegramUserId: seeded.telegramUserId,
+      });
+    const first = await press();
+    const second = await press();
+    if (first === undefined || second === undefined) throw new Error('unreachable');
+
+    const stale = await failChallengeDelivery(tmp.db, {
+      challengeId: started.challengeId,
+      staffId: seeded.staffId,
+      from: StaffLoginChallengeStatus.Confirmed,
+      reason: 'code_send_failed',
+      code: first.code,
+      ...TELEGRAM_FAILURE,
+    });
+
+    expect(stale).toBe(false);
+    expect((await challengeRow(started.challengeId)).status).toBe(
+      StaffLoginChallengeStatus.Confirmed,
+    );
+    expect((await entriesFor(seeded.staffId)).at(-1)).toMatchObject({
+      action: AuditAction.StaffLoginTelegramFailed,
+      payload: { reason: 'code_send_failed', closed: false },
+    });
+
+    const current = await failChallengeDelivery(tmp.db, {
+      challengeId: started.challengeId,
+      staffId: seeded.staffId,
+      from: StaffLoginChallengeStatus.Confirmed,
+      reason: 'code_send_failed',
+      code: second.code,
+      ...TELEGRAM_FAILURE,
+    });
+
+    expect(current).toBe(true);
+    expect((await challengeRow(started.challengeId)).status).toBe(StaffLoginChallengeStatus.Failed);
+  });
+
+  it('marks only the current code as sent', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const started = await start(seeded);
+    if (!started.ok) throw new Error('unreachable');
+    const press = () =>
+      confirmChallengeFromTelegram(tmp.db, {
+        challengeId: started.challengeId,
+        telegramUserId: seeded.telegramUserId,
+      });
+    const first = await press();
+    const second = await press();
+    if (first === undefined || second === undefined) throw new Error('unreachable');
+
+    await markChallengeCodeSent(tmp.db, started.challengeId, first.code);
+    expect((await challengeRow(started.challengeId)).codeSentAt).toBeNull();
+
+    await markChallengeCodeSent(tmp.db, started.challengeId, second.code);
+    expect((await challengeRow(started.challengeId)).codeSentAt).not.toBeNull();
   });
 });
 
@@ -964,7 +1028,7 @@ describe('completeLogin under the code-sent race', () => {
             };
             spied.execute = async (...args: unknown[]) => {
               const result = await (tx.execute as (...a: unknown[]) => Promise<unknown>)(...args);
-              await markChallengeCodeSent(tmp.db, started.challengeId);
+              await markChallengeCodeSent(tmp.db, started.challengeId, confirmed.code);
               return result;
             };
             return fn(spied);

@@ -53,7 +53,7 @@ async function issueUnder(login: string, telegramUserId: bigint): Promise<void> 
       telegramUserId,
     });
     if (confirmed === undefined) throw new Error('unreachable');
-    await markChallengeCodeSent(tmp.db, started.challengeId);
+    await markChallengeCodeSent(tmp.db, started.challengeId, confirmed.code);
     const done = await completeLogin(tmp.db, {
       challengeId: started.challengeId,
       code: confirmed.code,

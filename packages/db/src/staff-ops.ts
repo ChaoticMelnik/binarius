@@ -419,22 +419,36 @@ export async function markChallengePromptSent(db: Db, challengeId: string): Prom
     );
 }
 
+interface DeliveryFailureFacts {
+  challengeId: string;
+  staffId: string;
+  /** already reduced to identity by the caller; a raw error must never reach the payload */
+  err: Record<string, unknown>;
+  telegram: Record<string, unknown>;
+}
+
+/**
+ * A `confirmed` challenge has to say *which* code failed: a second press can issue a new one
+ * between this send's CAS and its failure, and that one may well have arrived. An invitation
+ * has no identity — one challenge has one invitation — so `pending` carries none. The shape is
+ * a union rather than an optional field so the code cannot be left out where it decides.
+ */
+type DeliveryFailure =
+  | (DeliveryFailureFacts & {
+      from: typeof StaffLoginChallengeStatus.Pending;
+      reason: 'polling_down' | 'prompt_send_failed';
+    })
+  | (DeliveryFailureFacts & {
+      from: typeof StaffLoginChallengeStatus.Confirmed;
+      reason: 'code_send_failed';
+      code: string;
+    });
+
 /**
  * Telegram would not take the message, so nothing can arrive and the staff member should not
  * wait out the window. Closing the challenge is what lets them start again immediately.
  */
-export async function failChallengeDelivery(
-  db: Db,
-  input: {
-    challengeId: string;
-    staffId: string;
-    from: StaffLoginChallengeStatus;
-    reason: 'polling_down' | 'prompt_send_failed' | 'code_send_failed';
-    /** already reduced to identity by the caller; a raw error must never reach the payload */
-    err: Record<string, unknown>;
-    telegram: Record<string, unknown>;
-  },
-): Promise<boolean> {
+export async function failChallengeDelivery(db: Db, input: DeliveryFailure): Promise<boolean> {
   return db.transaction(async (tx) => {
     const [closed] = await tx
       .update(staffLoginChallenges)
@@ -443,12 +457,16 @@ export async function failChallengeDelivery(
         and(
           eq(staffLoginChallenges.id, input.challengeId),
           eq(staffLoginChallenges.status, input.from),
+          input.from === StaffLoginChallengeStatus.Confirmed
+            ? eq(staffLoginChallenges.codeHash, hashToken(input.code))
+            : undefined,
         ),
       )
       .returning({ id: staffLoginChallenges.id });
     // Zero rows is not nothing happening: the send really did fail, and the challenge moved on
-    // under us (the button was pressed while the message was in flight). The row says which of
-    // the two it was, so the caller can answer for the challenge that exists rather than the
+    // under us — the button was pressed while the message was in flight, or the code that did
+    // not arrive has already been replaced by a later press whose code did. The row says which
+    // of the two it was, so the caller can answer for the challenge that exists rather than the
     // one it tried to close.
     await writeAuditEntry(
       tx,
@@ -523,13 +541,25 @@ export async function confirmChallengeFromTelegram(
   });
 }
 
-/** Records that the code reached Telegram; after this a further button press does nothing. */
-export async function markChallengeCodeSent(db: Db, challengeId: string): Promise<void> {
+/**
+ * Records that the code reached Telegram; after this a further button press does nothing. Only
+ * for the code that actually arrived: a later press can replace it while this send is in
+ * flight, and marking then would close the window on a code nobody was given.
+ */
+export async function markChallengeCodeSent(
+  db: Db,
+  challengeId: string,
+  code: string,
+): Promise<void> {
   await db
     .update(staffLoginChallenges)
     .set({ codeSentAt: sql`now()` })
     .where(
-      and(eq(staffLoginChallenges.id, challengeId), sql`${staffLoginChallenges.codeSentAt} is null`),
+      and(
+        eq(staffLoginChallenges.id, challengeId),
+        sql`${staffLoginChallenges.codeSentAt} is null`,
+        eq(staffLoginChallenges.codeHash, hashToken(code)),
+      ),
     );
 }
 
