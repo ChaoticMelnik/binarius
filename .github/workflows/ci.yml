@@ -233,11 +233,11 @@ jobs:
       # Without this the document and this job would be independent copies of the same procedure,
       # and the step below would keep passing after an edit dropped a command from the document —
       # which is exactly how the procedure came to stop at "create an account" on a volume nothing
-      # had migrated. Both greps read only the procedure section, not the whole file: the Accounts
+      # had migrated. All three greps read only the procedure section, not the whole file: the Accounts
       # section carries the same `staff create` line, so a whole-file grep stayed green when step 6
       # was deleted. The section is the last one in the document, which is what `,$p` relies on —
       # a new section added below it would be read as part of it.
-      - name: the document still carries the two commands this job runs
+      - name: the document still carries the three commands this job runs
         run: |
           section="$(sed -n '/^## Bringing it up the first time/,$p' docs/staff-login.md)"
           printf '%s' "$section" | grep -qF 'docker compose exec backend pnpm db:migrate' || {
@@ -246,6 +246,10 @@ jobs:
           }
           printf '%s' "$section" | grep -qF 'docker compose exec backend pnpm --filter @binarius/backend staff create' || {
             echo '::error::docs/staff-login.md → Bringing it up lost the staff create step this job runs'
+            exit 1
+          }
+          printf '%s' "$section" | grep -qF "curl -fsS http://127.0.0.1:3001/admin/login | grep -q '<form'" || {
+            echo '::error::docs/staff-login.md → Bringing it up lost the page probe this job polls with'
             exit 1
           }
       # Steps 4 and 6 of docs/staff-login.md → "Bringing it up the first time", on the fresh volume
