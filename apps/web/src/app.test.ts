@@ -585,6 +585,29 @@ describe('an expiry the backend reports as already past', () => {
     ).toEqual({ name: 'ExpiryInThePast' });
   });
 
+  // The fixture is computed inside the stub, not before the request: taken a few milliseconds
+  // earlier it would already be negative by the time secondsUntil reads it, and a negative
+  // remainder cannot tell `> 0` from `>= 0` — the boundary this case exists for.
+  it('is our own failure inside the last second too: a remainder that rounds down to zero is not a cookie with Max-Age=0', async () => {
+    await app.close();
+    app = build({
+      login: () =>
+        Promise.resolve({
+          challengeId: CHALLENGE_ID,
+          expiresAt: new Date(Date.now() + 999).toISOString(),
+        }),
+    });
+
+    const response = await post('/admin/login', { login: 'ada', password: 'secret' });
+
+    expect(response.statusCode).toBe(500);
+    expect(cookieOf(response, CHALLENGE_COOKIE)).toBeUndefined();
+    const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(
+      logged.find((line) => line.msg === 'the admin backend call could not be used')?.err,
+    ).toEqual({ name: 'ExpiryInThePast' });
+  });
+
   it('is our own failure on the confirm step too, and leaves both cookies alone', async () => {
     await app.close();
     app = build({ confirm: () => Promise.resolve({ sessionToken: TOKEN, expiresAt: past() }) });
