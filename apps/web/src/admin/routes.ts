@@ -24,6 +24,13 @@ const CHALLENGE_COOKIE_PATH = '/admin/login';
 const USER_AGENT_MAX = 512;
 const CSS_MAX_AGE_S = 3600;
 
+// a remaining lifetime of zero or less is either a challenge that just expired by the backend's
+// clock or two clocks that disagree; Max-Age=0 would delete the cookie and turn either into a
+// silent bounce through a form that cannot work
+class ExpiryInThePast extends Error {
+  override readonly name = 'ExpiryInThePast';
+}
+
 export interface AdminWebDeps {
   backend: BackendClient;
   secureCookies: boolean;
@@ -52,8 +59,10 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
 
   // The only source of a cookie's lifetime is the expiry the backend reported for the thing
   // the cookie carries: a hardcoded duration would outlive a revoked session in the browser.
-  const secondsUntil = (isoExpiry: string): number =>
-    Math.max(0, Math.floor((Date.parse(isoExpiry) - Date.now()) / 1000));
+  const secondsUntil = (isoExpiry: string): number | undefined => {
+    const seconds = Math.floor((Date.parse(isoExpiry) - Date.now()) / 1000);
+    return seconds > 0 ? seconds : undefined;
+  };
 
   const clearSession = (reply: FastifyReply): FastifyReply =>
     reply.clearCookie(SESSION_COOKIE, cookieOptions(SESSION_COOKIE_PATH));
@@ -103,11 +112,13 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
 
     try {
       const started = await backend.login({ ...form.data, ...clientFacts(request) });
+      const lifetime = secondsUntil(started.expiresAt);
+      if (lifetime === undefined) return internalFailure(request, reply, new ExpiryInThePast());
       return reply
         .setCookie(
           CHALLENGE_COOKIE,
           started.challengeId,
-          cookieOptions(CHALLENGE_COOKIE_PATH, secondsUntil(started.expiresAt)),
+          cookieOptions(CHALLENGE_COOKIE_PATH, lifetime),
         )
         .redirect('/admin/login/confirm', 303);
     } catch (error) {
@@ -144,11 +155,13 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         code: form.data.code,
         ...clientFacts(request),
       });
+      const lifetime = secondsUntil(session.expiresAt);
+      if (lifetime === undefined) return internalFailure(request, reply, new ExpiryInThePast());
       return clearChallenge(reply)
         .setCookie(
           SESSION_COOKIE,
           session.sessionToken,
-          cookieOptions(SESSION_COOKIE_PATH, secondsUntil(session.expiresAt)),
+          cookieOptions(SESSION_COOKIE_PATH, lifetime),
         )
         .redirect('/admin/sessions', 303);
     } catch (error) {

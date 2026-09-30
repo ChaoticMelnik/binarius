@@ -144,6 +144,16 @@ describe('the response headers', () => {
     expect(String((await get('/admin/login')).headers[header])).toContain(expected);
   });
 
+  // the http half is the point: without the gate there would be nothing to express it with
+  it('sends HSTS only when the pages are served over https', async () => {
+    expect((await get('/admin/login')).headers['strict-transport-security']).toBeUndefined();
+    await app.close();
+    app = build({}, true);
+    expect((await get('/admin/login')).headers['strict-transport-security']).toBe(
+      'max-age=31536000',
+    );
+  });
+
   // the one exception: a stylesheet that is never personal may be cached
   it('lets the stylesheet be cached', async () => {
     expect((await get('/admin/static/app.css')).headers['cache-control']).toBe(
@@ -544,5 +554,38 @@ describe('the pages that are not routes', () => {
     ]);
     expect(response.body).toContain(TEXTS.notFoundTitle);
     expect(lines.join('')).not.toContain('secret');
+  });
+});
+
+describe('an expiry the backend reports as already past', () => {
+  const past = () => new Date(Date.now() - 1_000).toISOString();
+
+  it('is our own failure on the login step: 500, no cookie, the error named in the log', async () => {
+    await app.close();
+    app = build({ login: () => Promise.resolve({ challengeId: CHALLENGE_ID, expiresAt: past() }) });
+
+    const response = await post('/admin/login', { login: 'ada', password: 'secret' });
+
+    expect(response.statusCode).toBe(500);
+    expect(cookieOf(response, CHALLENGE_COOKIE)).toBeUndefined();
+    const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(
+      logged.find((line) => line.msg === 'the admin backend call could not be used')?.err,
+    ).toEqual({ name: 'ExpiryInThePast' });
+  });
+
+  it('is our own failure on the confirm step too, and leaves both cookies alone', async () => {
+    await app.close();
+    app = build({ confirm: () => Promise.resolve({ sessionToken: TOKEN, expiresAt: past() }) });
+
+    const response = await post(
+      '/admin/login/confirm',
+      { code: '123456' },
+      { [CHALLENGE_COOKIE]: CHALLENGE_ID },
+    );
+
+    expect(response.statusCode).toBe(500);
+    expect(cookieOf(response, SESSION_COOKIE)).toBeUndefined();
+    expect(cookieOf(response, CHALLENGE_COOKIE)).toBeUndefined();
   });
 });
