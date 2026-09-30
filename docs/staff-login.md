@@ -159,9 +159,9 @@ real Telegram. The first person to deploy it should walk this through once.
    ```
    Leave `ADMIN_PUBLIC_URL` and `WEB_PORT` at their defaults for a local run.
 3. **Start.** `docker compose up --build --wait`. Then
-   `curl -fsS http://127.0.0.1:3001/admin/login | grep -q '<form'` should succeed — the same
-   command CI uses, so the two do not drift — and the backend log should **not** contain
-   `the staff login bot stopped polling`. `--wait` says nothing about the schema: the backend is
+   `curl -fsS http://127.0.0.1:3001/admin/login | grep -q '<form'` should succeed — the command
+   CI's *the admin pages answer* step polls with, and a CI step checks this section still carries
+   it — and the backend log should **not** contain `the staff login bot stopped polling`. `--wait` says nothing about the schema: the backend is
    healthy on an empty database, which is what the next step is for.
 4. **Apply the migrations.**
    ```bash
