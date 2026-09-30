@@ -23,13 +23,13 @@ import { staffSessions } from './schema/staff-sessions';
 // bounds on calls, these hold how long a thing stays valid.
 
 /** How long a staff member has to press the Telegram button and type the code back. */
-export const STAFF_LOGIN_CHALLENGE_TTL_MS = 5 * 60_000;
+const STAFF_LOGIN_CHALLENGE_TTL_MS = 5 * 60_000;
 /** Absolute lifetime of a session, regardless of activity (owner's decision, 2026-09-29). */
-export const STAFF_SESSION_TTL_MS = 24 * 60 * 60_000;
+const STAFF_SESSION_TTL_MS = 24 * 60 * 60_000;
 /** A session dies this long after its last admin request. */
 export const STAFF_SESSION_IDLE_MS = 60 * 60_000;
 export const STAFF_MAX_PASSWORD_ATTEMPTS = 5;
-export const STAFF_LOCKOUT_MS = 15 * 60_000;
+const STAFF_LOCKOUT_MS = 15 * 60_000;
 export const STAFF_MAX_CODE_ATTEMPTS = 5;
 
 // 32 bytes as base64url is the cookie's whole content and the only thing standing between a
@@ -51,7 +51,7 @@ const afterMs = (ms: number): SQL => sql`now() + (${ms}::int * interval '1 milli
  * to agree on what "live" means — a list that showed a session the next request would refuse
  * is a revoke button that lies.
  */
-export const liveStaffSession = (idleMs: number): SQL =>
+const liveStaffSession = (idleMs: number): SQL =>
   sql`${staffSessions.revokedAt} is null
       and ${staffSessions.expiresAt} > now()
       and ${staffSessions.lastSeenAt} > now() - (${idleMs}::int * interval '1 millisecond')`;
@@ -69,7 +69,7 @@ export interface AuditEntry {
   payload?: Record<string, unknown>;
 }
 
-export async function writeAuditEntry(executor: DbExecutor, entry: AuditEntry): Promise<void> {
+async function writeAuditEntry(executor: DbExecutor, entry: AuditEntry): Promise<void> {
   await executor.insert(auditLog).values({
     actorType: entry.actorType,
     actorId: entry.actorId ?? null,
@@ -466,7 +466,7 @@ export async function failChallengeDelivery(
 // --- The Telegram side -------------------------------------------------------------------------
 
 /** Six digits with their leading zeros; the string is what is hashed and what is sent. */
-export const generateLoginCode = (): string =>
+const generateLoginCode = (): string =>
   String(randomInt(CODE_CEILING)).padStart(CODE_DIGITS, '0');
 
 export interface ConfirmedChallenge {

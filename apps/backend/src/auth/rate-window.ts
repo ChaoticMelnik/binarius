@@ -1,4 +1,4 @@
-export const RATE_WINDOW_MS = 60_000;
+const RATE_WINDOW_MS = 60_000;
 
 export interface Ticket {
   over: boolean;
@@ -69,6 +69,5 @@ export function createKeyedWindow(limit: number, windowMs: number, maxKeys: numb
       entry.count += 1;
       return entry.count > limit;
     },
-    size: (): number => seen.size,
   };
 }

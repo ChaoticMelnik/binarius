@@ -3,9 +3,9 @@ import * as z from 'zod';
 import {
   AdminErrorCode,
   errorLogFields,
-  STAFF_LOGIN_CODE_PATTERN,
   STAFF_PASSWORD_MAX_LENGTH,
   STAFF_SESSION_TOKEN_PATTERN,
+  staffLoginCodeSchema,
   staffLoginSchema,
   UUID_PATTERN,
 } from '@binarius/shared';
@@ -40,7 +40,7 @@ const loginForm = z.object({
   login: staffLoginSchema,
   password: z.string().min(1).max(STAFF_PASSWORD_MAX_LENGTH),
 });
-const confirmForm = z.object({ code: z.string().regex(STAFF_LOGIN_CODE_PATTERN) });
+const confirmForm = z.object({ code: staffLoginCodeSchema });
 
 /** What the backend records as the client's own facts; it trusts this process for them. */
 const clientFacts = (request: FastifyRequest) => ({
