@@ -611,7 +611,7 @@ describe('runAsStaff', () => {
   };
 
   const viewSessions = (token: string) =>
-    runAsStaff(tmp.db, { token, path: '/admin/sessions' }, async (tx, ctx) => ({
+    runAsStaff(tmp.db, { token }, async (tx, ctx) => ({
       result: await listLiveStaffSessions(tx),
       audit: {
         action: AuditAction.StaffSessionsViewed,
@@ -644,7 +644,7 @@ describe('runAsStaff', () => {
     const token = await session(seeded);
     const own = await sessionIdFor(token);
 
-    await runAsStaff(tmp.db, { token, path: '/admin/sessions/revoke' }, async (tx, ctx) => ({
+    await runAsStaff(tmp.db, { token }, async (tx, ctx) => ({
       result: await revokeStaffSession(tx, { sessionId: own, byStaffId: ctx.staffId }),
       audit: { action: AuditAction.StaffSessionRevoked, payload: {} },
     }));
@@ -707,7 +707,7 @@ describe('runAsStaff', () => {
         .where(eq(staffSessions.id, own))
     )[0]!.lastSeenAt;
 
-    const failed = await runAsStaff(tmp.db, { token, path: '/admin/sessions' }, async (tx, ctx) => {
+    const failed = await runAsStaff(tmp.db, { token }, async (tx, ctx) => {
       await revokeStaffSession(tx, { sessionId: own, byStaffId: ctx.staffId });
       return {
         result: 'never delivered',
@@ -747,7 +747,7 @@ describe('revoking and ending sessions', () => {
       .from(staffSessions)
       .where(eq(staffSessions.staffId, owner.staffId));
 
-    const revoked = await runAsStaff(tmp.db, { token: actorToken, path: '/r' }, async (tx, ctx) => ({
+    const revoked = await runAsStaff(tmp.db, { token: actorToken }, async (tx, ctx) => ({
       result: await revokeStaffSession(tx, { sessionId: target!.id, byStaffId: ctx.staffId }),
       audit: { action: AuditAction.StaffSessionRevoked, payload: {} },
     }));
@@ -777,7 +777,7 @@ describe('revoking and ending sessions', () => {
         .where(eq(staffSessions.id, target));
     }
 
-    const result = await runAsStaff(tmp.db, { token: actorToken, path: '/r' }, async (tx, ctx) => ({
+    const result = await runAsStaff(tmp.db, { token: actorToken }, async (tx, ctx) => ({
       result: await revokeStaffSession(tx, { sessionId: target, byStaffId: ctx.staffId }),
       audit: { action: AuditAction.StaffSessionRevoked, payload: { result: 'not_found' } },
     }));
@@ -799,13 +799,13 @@ describe('revoking and ending sessions', () => {
     const seeded = await seedStaff(tmp.db);
     const token = await session(seeded);
 
-    await runAsStaff(tmp.db, { token, path: '/admin/logout' }, async (tx, ctx) => {
+    await runAsStaff(tmp.db, { token }, async (tx, ctx) => {
       await endStaffSession(tx, ctx.sessionId);
       return { result: true, audit: { action: AuditAction.StaffLogout, payload: {} } };
     });
 
     expect(
-      await runAsStaff(tmp.db, { token, path: '/admin/sessions' }, async () => ({
+      await runAsStaff(tmp.db, { token }, async () => ({
         result: true,
         audit: { action: AuditAction.StaffSessionsViewed, payload: {} },
       })),
@@ -825,7 +825,7 @@ describe('revoking and ending sessions', () => {
       .set({ revokedAt: sql`now()` })
       .where(eq(staffSessions.id, staleRow!.id));
 
-    const listed = await runAsStaff(tmp.db, { token, path: '/admin/sessions' }, async (tx) => ({
+    const listed = await runAsStaff(tmp.db, { token }, async (tx) => ({
       result: await listLiveStaffSessions(tx, STAFF_SESSION_IDLE_MS),
       audit: { action: AuditAction.StaffSessionsViewed, payload: {} },
     }));

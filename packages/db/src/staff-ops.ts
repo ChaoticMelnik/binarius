@@ -746,7 +746,7 @@ export interface StaffActionResult<T> {
  */
 export async function runAsStaff<T>(
   db: Db,
-  options: { token: string; idleMs?: number; path: string },
+  options: { token: string; idleMs?: number },
   fn: (tx: Tx, ctx: StaffContext) => Promise<StaffActionResult<T>>,
 ): Promise<T | undefined> {
   const idleMs = options.idleMs ?? STAFF_SESSION_IDLE_MS;

@@ -71,3 +71,14 @@ export const inList = (
 // matching nothing — which turns a partial index into one that indexes no rows, with no error
 // and nothing to fail a test.
 export const literal = (value: string) => sqlLiteralList([value]);
+
+// A value inlined into DDL, because a bound parameter would not survive drizzle-kit's
+// serialization. `what` names the source, so the refusal says which constant to look at rather
+// than only what it contained. Unlike `literal` above, the value is arbitrary text (a regex
+// source, a hash prefix), so the guard is the narrower one: no quote, no backslash.
+export const sqlTextLiteral = (value: string, what: string): ReturnType<typeof sql.raw> => {
+  if (/['\\]/.test(value)) {
+    throw new Error(`${what} is not inlinable as a SQL literal: ${value}`);
+  }
+  return sql.raw(`'${value}'`);
+};

@@ -17,6 +17,7 @@ import {
 } from '@binarius/db/testing';
 import { ADMIN_HANDLER_CALLS } from '../timing';
 import {
+  ADMIN_BOT_INFO,
   callsTo,
   callbackUpdate,
   captureApi,
@@ -53,24 +54,8 @@ let logger: FakeLogger;
 
 beforeEach(() => {
   logger = fakeLogger();
-  admin = createAdminBot({ token: '1:token', db: tmp.db, logger, botInfo: BOT_INFO() });
+  admin = createAdminBot({ token: '1:token', db: tmp.db, logger, botInfo: ADMIN_BOT_INFO });
   api = captureApi(admin.bot);
-});
-
-const BOT_INFO = () => ({
-  id: 7,
-  is_bot: true as const,
-  first_name: 'Binarius Staff',
-  username: 'binarius_staff_bot',
-  can_join_groups: false,
-  can_read_all_group_messages: false,
-  supports_inline_queries: false,
-  can_connect_to_business: false,
-  has_main_web_app: false,
-  has_topics_enabled: false,
-  allows_users_to_create_topics: false,
-  can_manage_bots: false,
-  supports_join_request_queries: false,
 });
 
 const openChallenge = async (staff: SeededStaff): Promise<string> => {
@@ -296,7 +281,7 @@ describe('polling', () => {
       token: '1:token',
       db: tmp.db,
       logger: fakeLogger(),
-      botInfo: BOT_INFO(),
+      botInfo: ADMIN_BOT_INFO,
     });
     const captured = captureApi(running.bot);
     // the real transport waits ADMIN_POLLING_TIMEOUT_S for updates; a long poll that answered
