@@ -1,9 +1,10 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { GrammyError } from 'grammy';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   AuditAction,
   auditLog,
+  failChallengeDelivery,
   hashToken,
   staffLoginChallenges,
   StaffLoginChallengeStatus,
@@ -110,6 +111,7 @@ describe('the confirm button', () => {
 
     const code = codeFrom(sentPayload(api.calls, 'sendMessage')?.text);
     const row = await challengeRow(challengeId);
+    expect(String(sentPayload(api.calls, 'sendMessage')?.text)).toContain('Никому не сообщайте');
     expect(row.status).toBe(StaffLoginChallengeStatus.Confirmed);
     expect(row.codeHash).toBe(hashToken(code));
     expect(row.codeSentAt).not.toBeNull();
@@ -150,6 +152,17 @@ describe('the confirm button', () => {
   it('closes the challenge when the code cannot be delivered', async () => {
     const staff = await seedStaff(tmp.db);
     const challengeId = await openChallenge(staff);
+    // somebody else's failure of the same action, so the read below has to be filtered by actor
+    // rather than by action alone
+    const other = await seedStaff(tmp.db);
+    await failChallengeDelivery(tmp.db, {
+      challengeId: await openChallenge(other),
+      staffId: other.staffId,
+      from: StaffLoginChallengeStatus.Pending,
+      reason: 'polling_down',
+      err: { name: 'Error' },
+      telegram: {},
+    });
     api.apiErrors.set(
       'sendMessage',
       new GrammyError(
@@ -166,10 +179,17 @@ describe('the confirm button', () => {
 
     const row = await challengeRow(challengeId);
     expect([row.status, row.codeSentAt]).toEqual([StaffLoginChallengeStatus.Failed, null]);
-    const [entry] = await tmp.db
+    const failures = await tmp.db
       .select({ payload: auditLog.payload })
       .from(auditLog)
-      .where(eq(auditLog.action, AuditAction.StaffLoginTelegramFailed));
+      .where(
+        and(
+          eq(auditLog.action, AuditAction.StaffLoginTelegramFailed),
+          eq(auditLog.actorId, staff.staffId),
+        ),
+      );
+    expect(failures).toHaveLength(1);
+    const [entry] = failures;
     expect(entry?.payload).toMatchObject({
       reason: 'code_send_failed',
       err: { name: 'GrammyError' },
@@ -236,14 +256,15 @@ describe('sendLoginPrompt', () => {
   it('sends the facts the person needs and the two buttons', async () => {
     await admin.sendLoginPrompt({
       challengeId: '00000000-0000-4000-8000-0000000000bb',
-      telegramUserId: 4242n,
+      // 2^53 + 1: as a number this is 9007199254740992, which is someone else's chat
+      telegramUserId: 9007199254740993n,
       login: 'ada',
       ip: '203.0.113.7',
       userAgent: 'Mozilla/5.0',
     });
 
     const payload = sentPayload(api.calls, 'sendMessage');
-    expect(payload?.chat_id).toBe(4242);
+    expect(payload?.chat_id).toBe('9007199254740993');
     expect(String(payload?.text)).toContain('ada');
     expect(String(payload?.text)).toContain('203.0.113.7');
     expect(

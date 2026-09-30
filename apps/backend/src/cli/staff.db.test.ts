@@ -1,6 +1,15 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, AuditAction, staff, verifyPassword } from '@binarius/db';
+import {
+  auditLog,
+  AuditAction,
+  completeLogin,
+  confirmChallengeFromTelegram,
+  markChallengeCodeSent,
+  staff,
+  startLoginChallenge,
+  verifyPassword,
+} from '@binarius/db';
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import { runStaffCli } from './staff';
 
@@ -28,6 +37,32 @@ const staffRow = async (login: string) => {
   const [row] = await tmp.db.select().from(staff).where(eq(staff.login, login));
   return row;
 };
+
+/** One open challenge and two live sessions: the two numbers the summary lines print differ. */
+async function issueUnder(login: string, telegramUserId: bigint): Promise<void> {
+  const row = await staffRow(login);
+  if (row === undefined) throw new Error(`no staff ${login}`);
+  const client = { ip: '203.0.113.7', userAgent: 'ua' };
+  const open = () =>
+    startLoginChallenge(tmp.db, { staffId: row.id, passwordHash: row.passwordHash, ...client });
+  for (let session = 0; session < 2; session += 1) {
+    const started = await open();
+    if (!started.ok) throw new Error('unreachable');
+    const confirmed = await confirmChallengeFromTelegram(tmp.db, {
+      challengeId: started.challengeId,
+      telegramUserId,
+    });
+    if (confirmed === undefined) throw new Error('unreachable');
+    await markChallengeCodeSent(tmp.db, started.challengeId);
+    const done = await completeLogin(tmp.db, {
+      challengeId: started.challengeId,
+      code: confirmed.code,
+      ...client,
+    });
+    if (!done.ok) throw new Error('unreachable');
+  }
+  if (!(await open()).ok) throw new Error('unreachable');
+}
 
 describe('staff create', () => {
   it('prints the account and the password once, and records the creation', async () => {
@@ -79,11 +114,13 @@ describe('staff reset-password', () => {
   it('prints a new password the old one no longer opens', async () => {
     const created = await run('create', '--login', 'rotate-me', '--telegram-id', '91');
     const before = created.lines[1]?.slice('Пароль: '.length) ?? '';
+    await issueUnder('rotate-me', 91n);
 
     const { code, lines } = await run('reset-password', '--login', 'rotate-me');
 
     expect(code).toBe(0);
     expect(lines.at(-1)).toMatch(PASSWORD_LINE);
+    expect(lines[0]).toBe('Пароль rotate-me сброшен: закрыто запросов на вход 1, отозвано сессий 2');
     const after = lines.at(-1)?.slice('Пароль: '.length) ?? '';
     expect(after).not.toBe(before);
     const row = await staffRow('rotate-me');
@@ -103,12 +140,13 @@ describe('an account that is not there', () => {
 describe('staff disable', () => {
   it('reports what it closed and leaves the account disabled', async () => {
     await run('create', '--login', 'retiring', '--telegram-id', '55');
+    await issueUnder('retiring', 55n);
 
     const { code, lines } = await run('disable', '--login', 'retiring');
 
     expect(code).toBe(0);
     expect(lines).toEqual([
-      'Отключена retiring: закрыто запросов на вход 0, отозвано сессий 0',
+      'Отключена retiring: закрыто запросов на вход 1, отозвано сессий 2',
     ]);
     expect((await staffRow('retiring'))?.status).toBe('disabled');
   });

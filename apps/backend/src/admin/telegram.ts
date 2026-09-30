@@ -211,7 +211,9 @@ export function createAdminBot({
 
     async sendLoginPrompt({ challengeId, telegramUserId, login, ip, userAgent }) {
       await bot.api.sendMessage(
-        Number(telegramUserId),
+        // chat_id is `number | string` in the Bot API: a Telegram id above 2^53 survives the trip
+        // from the CLI's bigint as a string and gets rounded into someone else's chat as a number
+        String(telegramUserId),
         ADMIN_TEXTS.prompt({ login, ip, userAgent, at: new Date().toISOString() }),
         {
           reply_markup: new InlineKeyboard()
