@@ -1,6 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AdminErrorCode, type StaffSessionView } from '@binarius/shared';
+import {
+  AdminErrorCode,
+  adminLoginRequestSchema,
+  CLIENT_USER_AGENT_MAX_LENGTH,
+  type StaffSessionView,
+} from '@binarius/shared';
 import { buildWebApp } from './app';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { SESSION_COOKIE, CHALLENGE_COOKIE } from './admin/routes';
@@ -175,7 +180,7 @@ describe('POST /admin/login', () => {
     expect(cookie?.sameSite?.toLowerCase()).toBe('lax');
   });
 
-  it('truncates a user agent the column would refuse', async () => {
+  it('truncates a user agent to the bound the backend’s schema enforces', async () => {
     await app.inject({
       method: 'POST',
       url: '/admin/login',
@@ -186,7 +191,11 @@ describe('POST /admin/login', () => {
       },
       payload: 'login=ada&password=x',
     });
-    expect((calls.login[0] as { userAgent: string }).userAgent).toHaveLength(512);
+    expect((calls.login[0] as { userAgent: string }).userAgent).toHaveLength(
+      CLIENT_USER_AGENT_MAX_LENGTH,
+    );
+    // the forwarded value against the real schema, not against a number copied into this file
+    expect(adminLoginRequestSchema.safeParse(calls.login[0]).success).toBe(true);
   });
 
   it.each([
