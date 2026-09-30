@@ -1,19 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { bigint, check, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { START_PAYLOAD_PATTERN, UserStatus } from '@binarius/shared';
-import { createdAt, id, inList, tokenAmount, updatedAt } from './columns';
-
-// The CHECK spells the same rule as startPayloadSchema, from the same regex source rather than
-// from a copy of it: PostgreSQL's POSIX engine and JavaScript's are not the same engine, so the
-// two verdicts are compared row by row over one corpus in user-ops.db.test.ts. Inlined because a
-// bound parameter would not survive drizzle-kit's DDL serialization; the guard keeps that safe.
-const startPayloadCheckSql = (): ReturnType<typeof sql.raw> => {
-  const pattern = START_PAYLOAD_PATTERN.source;
-  if (/['\\]/.test(pattern)) {
-    throw new Error(`START_PAYLOAD_PATTERN is not inlinable as a SQL literal: ${pattern}`);
-  }
-  return sql.raw(`'${pattern}'`);
-};
+import { createdAt, id, inList, sqlTextLiteral, tokenAmount, updatedAt } from './columns';
 
 // token_balance / token_reserved are caches of token_ledger sums, updated in the same
 // transaction as the ledger row; available tokens = token_balance - token_reserved.
@@ -40,10 +28,14 @@ export const users = pgTable(
   (t) => [
     uniqueIndex('users_telegram_user_id_idx').on(t.telegramUserId),
     inList('users_status_check', t.status, UserStatus),
+    // The CHECK spells the same rule as startPayloadSchema, from the same regex source rather
+    // than from a copy of it: PostgreSQL's POSIX engine and JavaScript's are not the same
+    // engine, so the two verdicts are compared row by row over one corpus in
+    // user-ops.db.test.ts.
     check(
       'users_acquisition_source_check',
       // `null ~ 'x'` is NULL, which a CHECK accepts, so the NULL case is spelled out
-      sql`${t.acquisitionSource} is null or ${t.acquisitionSource} ~ ${startPayloadCheckSql()}`,
+      sql`${t.acquisitionSource} is null or ${t.acquisitionSource} ~ ${sqlTextLiteral(START_PAYLOAD_PATTERN.source, 'START_PAYLOAD_PATTERN')}`,
     ),
     // the pair is one fact: a source with no time, or a time with no source, is a half-written row
     check(

@@ -64,8 +64,6 @@ export interface AdminRoutesDeps {
   sessionIdleMs?: number;
 }
 
-export const ADMIN_ROUTE_PREFIX = '/admin';
-
 export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps) => {
   const queue = deps.passwordQueue ?? createPasswordQueue();
   const verify = deps.verify ?? verifyPassword;
@@ -264,7 +262,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     }
     const answer = await runAsStaff(
       deps.db,
-      { token, idleMs, path: '/admin/sessions' },
+      { token, idleMs },
       async (tx, ctx) => {
         const rows = await listLiveStaffSessions(tx, idleMs);
         return {
@@ -294,7 +292,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     const targetSessionId = (request.params as { id?: unknown }).id;
     const answer = await runAsStaff(
       deps.db,
-      { token, idleMs, path: '/admin/sessions/revoke' },
+      { token, idleMs },
       async (tx, ctx) => {
         // Inside the session check, not in front of it: an id that is not a uuid is
         // indistinguishable from one nobody was issued, and both deserve the same row. The id
@@ -357,7 +355,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     }
     const answer = await runAsStaff(
       deps.db,
-      { token, idleMs, path: '/admin/auth/logout' },
+      { token, idleMs },
       async (tx, ctx) => {
         await endStaffSession(tx, ctx.sessionId);
         return {

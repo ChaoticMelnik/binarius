@@ -9,7 +9,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { STAFF_LOGIN_PATTERN } from '@binarius/shared';
-import { createdAt, id, inList, updatedAt } from './columns';
+import { createdAt, id, inList, sqlTextLiteral, updatedAt } from './columns';
 
 export const StaffStatus = { Active: 'active', Disabled: 'disabled' } as const;
 export type StaffStatus = (typeof StaffStatus)[keyof typeof StaffStatus];
@@ -18,15 +18,6 @@ export type StaffStatus = (typeof StaffStatus)[keyof typeof StaffStatus];
 // validator — it is the line that stops a row carrying a hash from some other KDF, which
 // verifyPassword would refuse at login time and nowhere earlier.
 export const STAFF_PASSWORD_HASH_PREFIX = '$scrypt$';
-
-// Inlined rather than bound: a parameter would not survive drizzle-kit's DDL serialization.
-// Same technique and same guard as startPayloadCheckSql in users.ts.
-const sqlText = (value: string): ReturnType<typeof sql.raw> => {
-  if (/['\\]/.test(value)) {
-    throw new Error(`not inlinable as a SQL literal: ${value}`);
-  }
-  return sql.raw(`'${value}'`);
-};
 
 // One row per person who can open the admin pages. There is no shared account and no account
 // created from the environment: who did what is only answerable while every login belongs to
@@ -52,10 +43,13 @@ export const staff = pgTable(
     // would be two accounts one password prompt cannot tell apart
     uniqueIndex('staff_login_lower_idx').on(sql`lower(${t.login})`),
     uniqueIndex('staff_telegram_user_id_idx').on(t.telegramUserId),
-    check('staff_login_check', sql`${t.login} ~ ${sqlText(STAFF_LOGIN_PATTERN.source)}`),
+    check(
+      'staff_login_check',
+      sql`${t.login} ~ ${sqlTextLiteral(STAFF_LOGIN_PATTERN.source, 'STAFF_LOGIN_PATTERN')}`,
+    ),
     check(
       'staff_password_hash_check',
-      sql`left(${t.passwordHash}, ${sql.raw(String(STAFF_PASSWORD_HASH_PREFIX.length))}) = ${sqlText(STAFF_PASSWORD_HASH_PREFIX)}`,
+      sql`left(${t.passwordHash}, ${sql.raw(String(STAFF_PASSWORD_HASH_PREFIX.length))}) = ${sqlTextLiteral(STAFF_PASSWORD_HASH_PREFIX, 'STAFF_PASSWORD_HASH_PREFIX')}`,
     ),
     inList('staff_status_check', t.status, StaffStatus),
     check('staff_failed_attempts_check', sql`${t.failedPasswordAttempts} >= 0`),
