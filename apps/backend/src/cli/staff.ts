@@ -9,6 +9,7 @@ import {
   generatePassword,
   hashPassword,
   resetStaffPassword,
+  uniqueViolation,
 } from '@binarius/db';
 
 // 0 done, 1 the command could not be carried out, 2 the command was not understood
@@ -24,8 +25,6 @@ const USAGE = `Управление учётными записями сотру
 
 Пароль генерируется и печатается один раз — сохраните его сразу.
 Telegram ID сотрудник узнаёт, отправив /start служебному боту.`;
-
-const UNIQUE_VIOLATION = '23505';
 
 interface Parsed {
   command: string;
@@ -150,7 +149,7 @@ export async function runStaffCli(
     print(`Пароль: ${password}`);
     return EXIT_OK;
   } catch (error) {
-    if (sqlStateOf(error) === UNIQUE_VIOLATION) {
+    if (uniqueViolation(error) !== undefined) {
       print('Такой логин или Telegram ID уже занят');
       return EXIT_FAILED;
     }
@@ -158,14 +157,6 @@ export async function runStaffCli(
   } finally {
     await pool.end();
   }
-}
-
-// drizzle wraps the driver error; the SQLSTATE is on the cause
-function sqlStateOf(error: unknown): string | undefined {
-  const code = (error as { cause?: { code?: unknown }; code?: unknown } | null)?.cause?.code;
-  const direct = (error as { code?: unknown } | null)?.code;
-  if (typeof code === 'string') return code;
-  return typeof direct === 'string' ? direct : undefined;
 }
 
 // The module is imported by its test, so the command only runs when this file is what node was
