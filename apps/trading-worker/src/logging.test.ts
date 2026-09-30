@@ -13,7 +13,16 @@ describe('LOG_REDACT_PATHS with pino', () => {
     logger.info(
       {
         token: 'ROOT-SECRET',
-        req: { headers: { authorization: 'Bearer HEADER-SECRET' } },
+        sessionToken: 'SESSION-SECRET',
+        req: {
+          headers: {
+            authorization: 'Bearer HEADER-SECRET',
+            // the only listed key with a hyphen: whether fast-redact applies it at all is a
+            // property of the engine, not of the list, so it is asked here
+            'x-staff-session': 'HYPHEN-SECRET',
+            cookie: 'admin_session=COOKIE-SECRET',
+          },
+        },
         err: {
           message: 'request failed',
           config: { headers: { authorization: 'Bearer DEPTH3-SECRET' } },
@@ -24,10 +33,19 @@ describe('LOG_REDACT_PATHS with pino', () => {
       'probe',
     );
     const line = lines[0] ?? '';
-    for (const secret of ['ROOT', 'HEADER', 'DEPTH3', 'DEPTH4', 'DEPTH5']) {
+    for (const secret of [
+      'ROOT',
+      'SESSION',
+      'HEADER',
+      'HYPHEN',
+      'COOKIE',
+      'DEPTH3',
+      'DEPTH4',
+      'DEPTH5',
+    ]) {
       expect(line).not.toContain(`${secret}-SECRET`);
     }
-    expect(line.match(/\[Redacted\]/g)).toHaveLength(5);
+    expect(line.match(/\[Redacted\]/g)).toHaveLength(8);
     expect(line).toContain('request failed');
   });
 });
