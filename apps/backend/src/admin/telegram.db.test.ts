@@ -312,15 +312,15 @@ describe('sendLoginPrompt', () => {
   it('sends the facts the person needs and the two buttons', async () => {
     await admin.sendLoginPrompt({
       challengeId: '00000000-0000-4000-8000-0000000000bb',
-      // 2^53 + 1: as a number this is 9007199254740992, which is someone else's chat
-      telegramUserId: 9007199254740993n,
+      // 2^53 - 1, the largest id the CLI accepts: the wire form is a string at the boundary too
+      telegramUserId: 9007199254740991n,
       login: 'ada',
       ip: '203.0.113.7',
       userAgent: 'Mozilla/5.0',
     });
 
     const payload = sentPayload(api.calls, 'sendMessage');
-    expect(payload?.chat_id).toBe('9007199254740993');
+    expect(payload?.chat_id).toBe('9007199254740991');
     expect(String(payload?.text)).toContain('ada');
     expect(String(payload?.text)).toContain('203.0.113.7');
     expect(

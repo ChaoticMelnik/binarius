@@ -212,8 +212,10 @@ export function createAdminBot({
 
     async sendLoginPrompt({ challengeId, telegramUserId, login, ip, userAgent }) {
       await bot.api.sendMessage(
-        // chat_id is `number | string` in the Bot API: a Telegram id above 2^53 survives the trip
-        // from the CLI's bigint as a string and gets rounded into someone else's chat as a number
+        // chat_id is `number | string` in the Bot API; the column is bigint, and a string is the
+        // conversion that cannot round. Ids the CLI accepts are at most 2^53 - 1 (cli/staff.ts),
+        // because this handler reads ctx.from.id as a JSON-parsed number and could match nothing
+        // larger.
         String(telegramUserId),
         ADMIN_TEXTS.prompt({ login, ip, userAgent, at: new Date().toISOString() }),
         {

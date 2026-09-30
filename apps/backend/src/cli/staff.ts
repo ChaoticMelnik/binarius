@@ -74,7 +74,13 @@ export function parseStaffArgs(argv: readonly string[]): Parsed {
 
   const rawId = values['telegram-id'];
   if (rawId === undefined) throw new UsageError('нужен --telegram-id');
-  if (!/^[1-9]\d{0,18}$/.test(rawId)) throw new UsageError('--telegram-id: целое число больше 0');
+  // What the receive path can match: grammY hands ctx.from.id over as a JSON-parsed number,
+  // exact up to 2^53 - 1 (admin/telegram.ts). Telegram's ids fit in 52 bits, so nothing real is
+  // refused; an id past this would be an account that gets its invitation and can never confirm.
+  const TELEGRAM_USER_ID_MAX = BigInt(Number.MAX_SAFE_INTEGER);
+  if (!/^[1-9]\d*$/.test(rawId) || BigInt(rawId) > TELEGRAM_USER_ID_MAX) {
+    throw new UsageError(`--telegram-id: целое число от 1 до ${TELEGRAM_USER_ID_MAX}`);
+  }
   return {
     command,
     login,
