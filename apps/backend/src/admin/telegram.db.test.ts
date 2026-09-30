@@ -4,8 +4,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   AuditAction,
   auditLog,
+  completeLogin,
+  confirmChallengeFromTelegram,
   failChallengeDelivery,
   hashToken,
+  markChallengeCodeSent,
   staffLoginChallenges,
   StaffLoginChallengeStatus,
   startLoginChallenge,
@@ -197,6 +200,59 @@ describe('the confirm button', () => {
     });
     // the description names what the bot was sending; it must not survive into a durable row
     expect(JSON.stringify(entry?.payload)).not.toContain('blocked');
+  });
+
+  // The second press lands inside the flight of the first press's reply: the code the first
+  // reply is carrying has already been replaced by one that arrives, so the first reply's
+  // failure must close nothing — someone is holding a code that works.
+  it('keeps a challenge whose newer code was delivered when the older reply fails', async () => {
+    const staff = await seedStaff(tmp.db);
+    const challengeId = await openChallenge(staff);
+    let secondCode = '';
+    api.answers.set('sendMessage', async () => {
+      api.answers.delete('sendMessage');
+      const second = await confirmChallengeFromTelegram(tmp.db, {
+        challengeId,
+        telegramUserId: staff.telegramUserId,
+      });
+      if (second === undefined) throw new Error('the second press matched no challenge');
+      await markChallengeCodeSent(tmp.db, challengeId, second.code);
+      secondCode = second.code;
+      throw new GrammyError(
+        'Call to sendMessage failed!',
+        { ok: false, error_code: 403, description: 'bot was blocked by the user' },
+        'sendMessage',
+        {},
+      );
+    });
+
+    await admin.bot.handleUpdate(
+      callbackUpdate(confirmCallbackData(challengeId), staffUser(staff.telegramUserId)),
+    );
+
+    const row = await challengeRow(challengeId);
+    expect(row.status).toBe(StaffLoginChallengeStatus.Confirmed);
+    expect(row.codeSentAt).not.toBeNull();
+    expect(row.codeHash).toBe(hashToken(secondCode));
+    expect(
+      await completeLogin(tmp.db, {
+        challengeId,
+        code: secondCode,
+        ip: '203.0.113.7',
+        userAgent: 'Mozilla/5.0',
+      }),
+    ).toMatchObject({ ok: true });
+    const failures = await tmp.db
+      .select({ payload: auditLog.payload })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.action, AuditAction.StaffLoginTelegramFailed),
+          eq(auditLog.actorId, staff.staffId),
+        ),
+      );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.payload).toMatchObject({ reason: 'code_send_failed', closed: false });
   });
 
   it('keeps delivering the code when only the button spinner fails', async () => {

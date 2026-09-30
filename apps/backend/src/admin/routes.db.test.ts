@@ -108,7 +108,7 @@ async function reachCodeEntry(seeded: SeededStaff): Promise<{ challengeId: strin
     telegramUserId: seeded.telegramUserId,
   });
   if (confirmed === undefined) throw new Error('the button press matched no challenge');
-  await markChallengeCodeSent(tmp.db, challengeId);
+  await markChallengeCodeSent(tmp.db, challengeId, confirmed.code);
   return { challengeId, code: confirmed.code };
 }
 
@@ -506,7 +506,7 @@ describe('POST /admin/auth/login', () => {
       telegramUserId: seeded.telegramUserId,
     });
     if (confirmed === undefined) throw new Error('the button press matched no challenge');
-    await markChallengeCodeSent(tmp.db, challengeId);
+    await markChallengeCodeSent(tmp.db, challengeId, confirmed.code);
     telegram.setPolling(false);
 
     const again = await login({ login: seeded.login, password: seeded.password, ...CLIENT });

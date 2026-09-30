@@ -138,12 +138,13 @@ export function createAdminBot({
         staffId: confirmed.staffId,
         from: StaffLoginChallengeStatus.Confirmed,
         reason: 'code_send_failed',
+        code: confirmed.code,
         err: errorIdentity(error),
         telegram: { ...telegramErrorFields(error, 'sendMessage') },
       });
       return;
     }
-    await markChallengeCodeSent(db, challengeId);
+    await markChallengeCodeSent(db, challengeId, confirmed.code);
   });
 
   privateChats.callbackQuery(DENY_CALLBACK_PATTERN, async (ctx) => {
