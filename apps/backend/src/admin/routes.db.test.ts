@@ -47,13 +47,17 @@ let telegram: ReturnType<typeof stubTelegram>;
 // counts derivations and still runs the real one: the oracles below are about how many happen
 let derivations: number;
 
-const build = (patch: Record<string, unknown> = {}): FastifyInstance => {
+const build = (
+  patch: Record<string, unknown> = {},
+  logs?: { write(line: string): void },
+): FastifyInstance => {
   telegram = stubTelegram(true);
   derivations = 0;
   return buildApp({
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
-    logLevel: 'silent',
+    logLevel: logs === undefined ? 'silent' : 'error',
+    ...(logs === undefined ? {} : { logDestination: logs }),
     checkTimeoutMs: 50,
     trading: { db: tmp.db, internalApiToken: 'internal', onIntentQueued: () => undefined },
     auth: {
@@ -841,3 +845,54 @@ const challengeRow = async (id: string) => {
   if (row === undefined) throw new Error(`no challenge ${id}`);
   return row;
 };
+
+// what the login route puts in the log is only provable by reading the log; the HTTP response
+// says nothing about it either way
+describe('what reaches the backend log', () => {
+  const capture = () => {
+    const lines: string[] = [];
+    return { lines, write: (line: string) => void lines.push(line) };
+  };
+  const lineWith = (lines: readonly string[], msg: string) =>
+    lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((line) => line.msg === msg);
+
+  it('names the challenge when a login arrives while the bot is not polling', async () => {
+    await app.close();
+    const logs = capture();
+    app = build({}, logs);
+    const seeded = await seedStaff(tmp.db);
+    telegram.setPolling(false);
+
+    const response = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+
+    expect(response.statusCode).toBe(503);
+    const [row] = await tmp.db
+      .select({ id: staffLoginChallenges.id })
+      .from(staffLoginChallenges)
+      .where(eq(staffLoginChallenges.staffId, seeded.staffId));
+    expect(
+      lineWith(logs.lines, 'a staff login arrived while the bot was not polling'),
+    ).toMatchObject({ challengeId: row?.id });
+  });
+
+  it('names a refused invitation by identity, never by its message', async () => {
+    await app.close();
+    const logs = capture();
+    app = build({}, logs);
+    const seeded = await seedStaff(tmp.db);
+    telegram.failWith(Object.assign(new Error('chat not found'), { name: 'GrammyError' }));
+
+    const response = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+
+    expect(response.statusCode).toBe(503);
+    expect(lineWith(logs.lines, 'the staff login invitation could not be delivered')).toMatchObject(
+      { err: { name: 'GrammyError' }, method: 'sendMessage' },
+    );
+    // redact paths scrub keys, not strings: a message interpolated into the text of a log line
+    // is the one shape nothing downstream can clean
+    expect(logs.lines.join('')).not.toContain('chat not found');
+    expect(logs.lines.join('')).not.toContain(seeded.password);
+  });
+});
