@@ -1,4 +1,5 @@
 import {
+  safeParseBrokerEmailSendCodeResponse,
   safeParseOAuthTokenResponse,
   safeParseRefreshTokenResponse,
   toOAuthTokens,
@@ -16,7 +17,8 @@ export const BROKER_HTTP_TIMEOUT_MS = 5_000;
 // parsed and never logged.
 export const BrokerOAuthErrorCode = {
   // the broker refused the grant itself: 400 on the code exchange (an expired, reused or foreign
-  // code), 401 on the refresh (an unknown or already consumed refresh token)
+  // code), 401 on the refresh (an unknown or already consumed refresh token), 400 on the email
+  // endpoints (an address it does not accept, a wrong or expired email code)
   InvalidGrant: 'invalid_grant',
   // any other 4xx: our request or configuration is wrong
   Rejected: 'rejected',
@@ -42,6 +44,8 @@ export class BrokerOAuthError extends Error {
 export interface BrokerOAuthClient {
   exchangeCode(input: { code: string; redirectUri: string }): Promise<OAuthTokens>;
   refresh(input: { refreshToken: string }): Promise<RefreshedTokens>;
+  sendEmailCode(input: { email: string }): Promise<void>;
+  emailLogin(input: { email: string; code: string; partnerCode: string }): Promise<OAuthTokens>;
 }
 
 export interface BrokerOAuthClientOptions {
@@ -51,34 +55,43 @@ export interface BrokerOAuthClientOptions {
   timeoutMs?: number;
 }
 
-// The status each endpoint answers when it refuses the grant; the two differ, so one map cannot
-// serve both. Observed against the live broker (docs/binodex-oauth.md -> Broker contract).
-const INVALID_GRANT_STATUS = {
-  token: 400,
-  refresh: 401,
+// One row per broker endpoint: where it lives and the status it answers when it refuses the
+// grant. They differ per endpoint, so one map cannot serve all; and the path and its status
+// travel together, so a call cannot reach one endpoint while being classified as another.
+// Observed against the live broker (docs/binodex-oauth.md -> Broker contract).
+export const BROKER_ENDPOINTS = {
+  token: { path: '/v1/broker/oauth/token', invalidGrantStatus: 400 },
+  refresh: { path: '/v1/broker/user-auth/refresh', invalidGrantStatus: 401 },
+  // 400 `Validation failed: "email" is required` for an address the broker does not accept
+  sendCode: { path: '/v1/broker/user-auth/email/send-code', invalidGrantStatus: 400 },
+  // 400 `Invalid or expired code`
+  emailLogin: { path: '/v1/broker/user-auth/email/login', invalidGrantStatus: 400 },
 } as const;
-type BrokerEndpoint = keyof typeof INVALID_GRANT_STATUS;
+export type BrokerEndpoint = keyof typeof BROKER_ENDPOINTS;
 
 function classify(endpoint: BrokerEndpoint, status: number): BrokerOAuthErrorCode {
   if (status >= 500) return BrokerOAuthErrorCode.Unavailable;
-  return status === INVALID_GRANT_STATUS[endpoint]
+  return status === BROKER_ENDPOINTS[endpoint].invalidGrantStatus
     ? BrokerOAuthErrorCode.InvalidGrant
     : BrokerOAuthErrorCode.Rejected;
 }
 
 export function createBrokerOAuthClient(options: BrokerOAuthClientOptions): BrokerOAuthClient {
   const timeoutMs = options.timeoutMs ?? BROKER_HTTP_TIMEOUT_MS;
-  const tokenUrl = new URL('/v1/broker/oauth/token', options.baseUrl).toString();
-  const refreshUrl = new URL('/v1/broker/user-auth/refresh', options.baseUrl).toString();
+  const urls = Object.fromEntries(
+    Object.entries(BROKER_ENDPOINTS).map(([name, { path }]) => [
+      name,
+      new URL(path, options.baseUrl).toString(),
+    ]),
+  ) as Record<BrokerEndpoint, string>;
 
   async function post(
     endpoint: BrokerEndpoint,
-    url: string,
     request: { contentType: string; body: string },
   ): Promise<unknown> {
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await fetch(urls[endpoint], {
         method: 'POST',
         headers: { 'content-type': request.contentType },
         body: request.body,
@@ -111,7 +124,7 @@ export function createBrokerOAuthClient(options: BrokerOAuthClientOptions): Brok
 
   return {
     exchangeCode: async ({ code, redirectUri }) => {
-      const body = await post('token', tokenUrl, {
+      const body = await post('token', {
         contentType: 'application/x-www-form-urlencoded',
         body: new URLSearchParams({
           grant_type: 'authorization_code',
@@ -128,13 +141,42 @@ export function createBrokerOAuthClient(options: BrokerOAuthClientOptions): Brok
     // no client credentials: the refresh token alone identifies the session
     // (docs/binodex-oauth.md -> Broker contract)
     refresh: async ({ refreshToken }) => {
-      const body = await post('refresh', refreshUrl, {
+      const body = await post('refresh', {
         contentType: 'application/json',
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       const parsed = safeParseRefreshTokenResponse(body);
       if (!parsed.success) throw new BrokerOAuthError(BrokerOAuthErrorCode.ContractViolation);
       return withSaneExpiry(toRefreshedTokens(parsed.data));
+    },
+    sendEmailCode: async ({ email }) => {
+      const body = await post('sendCode', {
+        contentType: 'application/json',
+        body: JSON.stringify({
+          client_id: options.clientId,
+          client_secret: options.clientSecret,
+          email,
+        }),
+      });
+      if (!safeParseBrokerEmailSendCodeResponse(body).success) {
+        throw new BrokerOAuthError(BrokerOAuthErrorCode.ContractViolation);
+      }
+    },
+    // sent on every login, new account or existing: the broker registers a new one under it
+    emailLogin: async ({ email, code, partnerCode }) => {
+      const body = await post('emailLogin', {
+        contentType: 'application/json',
+        body: JSON.stringify({
+          client_id: options.clientId,
+          client_secret: options.clientSecret,
+          email,
+          code,
+          partner_code: partnerCode,
+        }),
+      });
+      const parsed = safeParseOAuthTokenResponse(body);
+      if (!parsed.success) throw new BrokerOAuthError(BrokerOAuthErrorCode.ContractViolation);
+      return withSaneExpiry(toOAuthTokens(parsed.data));
     },
   };
 }

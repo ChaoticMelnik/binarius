@@ -3,6 +3,7 @@ import Fastify, { type FastifyReply } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startOAuthStub, type OAuthStub } from './testing/oauth-stub';
 import {
+  BROKER_ENDPOINTS,
   BrokerOAuthError,
   BrokerOAuthErrorCode,
   createBrokerOAuthClient,
@@ -12,6 +13,7 @@ import {
 const CLIENT_ID = 'client-id';
 const CLIENT_SECRET = 'client-secret-value';
 const REDIRECT_URI = 'https://example.test/oauth/callback';
+const PARTNER_CODE = 'zr7IA7';
 
 let stub: OAuthStub;
 let client: BrokerOAuthClient;
@@ -21,6 +23,7 @@ beforeAll(async () => {
     clientId: CLIENT_ID,
     clientSecret: CLIENT_SECRET,
     redirectUri: REDIRECT_URI,
+    partnerCode: PARTNER_CODE,
   });
   client = createBrokerOAuthClient({
     baseUrl: stub.url,
@@ -57,6 +60,8 @@ async function withBroker(
 
 const TOKEN_PATH = '/v1/broker/oauth/token';
 const REFRESH_PATH = '/v1/broker/user-auth/refresh';
+const SEND_CODE_PATH = '/v1/broker/user-auth/email/send-code';
+const EMAIL_LOGIN_PATH = '/v1/broker/user-auth/email/login';
 
 async function codeOf(error: Promise<unknown>): Promise<string> {
   const thrown = await error.then(
@@ -175,6 +180,15 @@ describe('status map', () => {
       path: REFRESH_PATH,
       call: (probe: BrokerOAuthClient) => probe.refresh({ refreshToken: 'r' }),
     },
+    'email/send-code': {
+      path: SEND_CODE_PATH,
+      call: (probe: BrokerOAuthClient) => probe.sendEmailCode({ email: 'ada@example.test' }),
+    },
+    'email/login': {
+      path: EMAIL_LOGIN_PATH,
+      call: (probe: BrokerOAuthClient) =>
+        probe.emailLogin({ email: 'ada@example.test', code: '1', partnerCode: PARTNER_CODE }),
+    },
   };
 
   it.each([
@@ -191,6 +205,14 @@ describe('status map', () => {
     ['user-auth/refresh', 400, { error: 'invalid_grant' }, 'rejected'],
     ['user-auth/refresh', 403, live('Forbidden'), 'rejected'],
     ['user-auth/refresh', 503, live('Service unavailable'), 'unavailable'],
+    ['email/send-code', 400, live('Validation failed: "email" is required'), 'invalid_grant'],
+    ['email/send-code', 401, live('Authentication failed: Invalid client credentials'), 'rejected'],
+    ['email/send-code', 503, live('Service unavailable'), 'unavailable'],
+    ['email/login', 400, live('Invalid or expired code'), 'invalid_grant'],
+    // a partner code that is not ours reads as a bad code: the accepted cost of not reading the body
+    ['email/login', 400, live('partner_code does not belong to your partner account'), 'invalid_grant'],
+    ['email/login', 401, live('Authentication failed: Invalid client credentials'), 'rejected'],
+    ['email/login', 502, '', 'unavailable'],
   ] as const)('%s %i with %j is %s', async (name, status, body, expected) => {
     const { path, call } = endpoints[name];
     await withBroker(
@@ -204,6 +226,146 @@ describe('status map', () => {
         expect(thrown).toBeInstanceOf(BrokerOAuthError);
         expect((thrown as BrokerOAuthError).code).toBe(expected);
         expect((thrown as BrokerOAuthError).status).toBe(status);
+      },
+    );
+  });
+});
+
+describe('endpoint table', () => {
+  it('names the four documented paths', () => {
+    expect(Object.values(BROKER_ENDPOINTS).map(({ path }) => path)).toEqual([
+      TOKEN_PATH,
+      REFRESH_PATH,
+      SEND_CODE_PATH,
+      EMAIL_LOGIN_PATH,
+    ]);
+  });
+
+  it('sends each call to its own row of the table', async () => {
+    const calls: Record<keyof typeof BROKER_ENDPOINTS, () => Promise<unknown>> = {
+      token: () => client.exchangeCode({ code: 'never-issued', redirectUri: REDIRECT_URI }),
+      refresh: () => client.refresh({ refreshToken: 'never-issued' }),
+      sendCode: () => client.sendEmailCode({ email: 'table@example.test' }),
+      emailLogin: () =>
+        client.emailLogin({ email: 'table@example.test', code: 'x', partnerCode: PARTNER_CODE }),
+    };
+    for (const [name, call] of Object.entries(calls)) {
+      const before = stub.paths.length;
+      await call().catch(() => undefined);
+      expect(stub.paths.slice(before)).toEqual([
+        BROKER_ENDPOINTS[name as keyof typeof BROKER_ENDPOINTS].path,
+      ]);
+    }
+  });
+});
+
+describe('sendEmailCode', () => {
+  it('sends the credentials and the address as JSON and resolves on { status: true }', async () => {
+    await expect(client.sendEmailCode({ email: 'Ada@Example.test' })).resolves.toBeUndefined();
+    expect(stub.lastSendCodeBodyKeys).toEqual(['client_id', 'client_secret', 'email']);
+    expect(stub.codeFor('ada@example.test')).toBeDefined();
+  });
+
+  it.each([
+    ['{ status: false }', { status: false }],
+    ['an empty object', {}],
+  ])('treats %s as a contract violation', async (_label, body) => {
+    await withBroker(
+      SEND_CODE_PATH,
+      (reply) => reply.send(body),
+      async (probe) => {
+        expect(await codeOf(probe.sendEmailCode({ email: 'ada@example.test' }))).toBe(
+          BrokerOAuthErrorCode.ContractViolation,
+        );
+      },
+    );
+  });
+
+  it('accepts extra fields beside status: true', async () => {
+    await withBroker(
+      SEND_CODE_PATH,
+      (reply) => reply.send({ status: true, message: 'sent' }),
+      async (probe) => {
+        await expect(probe.sendEmailCode({ email: 'ada@example.test' })).resolves.toBeUndefined();
+      },
+    );
+  });
+});
+
+describe('emailLogin', () => {
+  it('registers a new partner account with the partner code and returns domain tokens', async () => {
+    await client.sendEmailCode({ email: 'new@example.test' });
+    const code = stub.codeFor('new@example.test') ?? '';
+    const tokens = await client.emailLogin({
+      email: 'new@example.test',
+      code,
+      partnerCode: PARTNER_CODE,
+    });
+    expect(stub.lastEmailLoginBodyKeys).toEqual([
+      'client_id',
+      'client_secret',
+      'code',
+      'email',
+      'partner_code',
+    ]);
+    expect(tokens).toMatchObject({
+      tokenType: 'Bearer',
+      user: { email: 'new@example.test', isPartnerClient: true },
+    });
+    expect(tokens.refreshToken).not.toBe('');
+    // the code is single-use
+    expect(
+      await codeOf(
+        client.emailLogin({ email: 'new@example.test', code, partnerCode: PARTNER_CODE }),
+      ),
+    ).toBe(BrokerOAuthErrorCode.InvalidGrant);
+  });
+
+  it('signs an existing account in, and its refresh token rotates on user-auth/refresh', async () => {
+    stub.registerEmailUser({
+      email: 'old@example.test',
+      brokerUserId: 'broker-old',
+      isPartnerClient: false,
+    });
+    await client.sendEmailCode({ email: 'old@example.test' });
+    const tokens = await client.emailLogin({
+      email: 'old@example.test',
+      code: stub.codeFor('old@example.test') ?? '',
+      partnerCode: PARTNER_CODE,
+    });
+    expect(tokens.user).toEqual({
+      id: 'broker-old',
+      email: 'old@example.test',
+      isPartnerClient: false,
+    });
+    const rotated = await client.refresh({ refreshToken: tokens.refreshToken });
+    expect(rotated.refreshToken).not.toBe(tokens.refreshToken);
+  });
+
+  it('reports a foreign partner code as a refused grant and leaves the code usable', async () => {
+    await client.sendEmailCode({ email: 'partner@example.test' });
+    const code = stub.codeFor('partner@example.test') ?? '';
+    expect(
+      await codeOf(
+        client.emailLogin({ email: 'partner@example.test', code, partnerCode: 'not-ours' }),
+      ),
+    ).toBe(BrokerOAuthErrorCode.InvalidGrant);
+    await expect(
+      client.emailLogin({ email: 'partner@example.test', code, partnerCode: PARTNER_CODE }),
+    ).resolves.toMatchObject({ user: { email: 'partner@example.test' } });
+  });
+
+  it('treats a 2xx body without a user as a contract violation', async () => {
+    await withBroker(
+      EMAIL_LOGIN_PATH,
+      (reply) =>
+        reply.send({ access_token: 'a', refresh_token: 'r', token_type: 'Bearer', expires_in: 60 }),
+      async (probe) => {
+        expect(
+          await codeOf(
+            probe.emailLogin({ email: 'a@example.test', code: '1', partnerCode: PARTNER_CODE }),
+          ),
+        ).toBe(BrokerOAuthErrorCode.ContractViolation);
       },
     );
   });
@@ -380,4 +542,41 @@ describe('secrecy', () => {
       },
     );
   });
+
+  it.each([
+    [
+      'email/send-code',
+      SEND_CODE_PATH,
+      (probe: BrokerOAuthClient) => probe.sendEmailCode({ email: 'MARKER-EMAIL@example.test' }),
+    ],
+    [
+      'email/login',
+      EMAIL_LOGIN_PATH,
+      (probe: BrokerOAuthClient) =>
+        probe.emailLogin({
+          email: 'MARKER-EMAIL@example.test',
+          code: 'MARKER-CODE',
+          partnerCode: 'MARKER-PARTNER',
+        }),
+    ],
+  ])(
+    'never carries the address, the code, the partner code or the body on an %s error',
+    async (_name, path, call) => {
+      await withBroker(
+        path,
+        (reply) => reply.code(400).send({ error: { message: 'MARKER-BODY', details: {} } }),
+        async (probe) => {
+          const thrown = await call(probe).then(
+            () => undefined,
+            (e: unknown) => e as BrokerOAuthError,
+          );
+          expect(thrown).toBeInstanceOf(BrokerOAuthError);
+          const serialized = `${String(thrown?.message)}${String(thrown?.stack)}${JSON.stringify(thrown)}`;
+          for (const marker of ['MARKER-EMAIL', 'MARKER-CODE', 'MARKER-PARTNER', 'MARKER-BODY']) {
+            expect(serialized).not.toContain(marker);
+          }
+        },
+      );
+    },
+  );
 });
