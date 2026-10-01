@@ -15,8 +15,9 @@ routes, the confirmation and the starter pack are described in
 - `apps/backend/src/users/routes.ts` — `POST /users/start`, behind the internal bearer.
 - `apps/bot/src/` — `env.ts`, `timing.ts`, `backend-client.ts`, `texts.ts`, `logging.ts`,
   `login-dialog.ts` (the email dialog's state, [Email dialog](#email-dialog)), `bot.ts` (the
-  handlers), `lifecycle.ts` (start, signals, drain), `index.ts` (wiring), and `testing.ts`, the
-  fixtures the suites share.
+  handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
+  `lifecycle.ts` (start, the menu registration, signals, drain), `index.ts` (wiring), and
+  `testing.ts`, the fixtures the suites share.
 
 The bot never opens a database connection: everything it knows comes from the backend's internal
 API over a shared bearer.
@@ -258,6 +259,41 @@ that line from a timeout on any other call. The user repeats `/start`: a second 
 than a missing one. Anything else is neither a refusal nor a delivery problem — a bug, a broken
 plugin — and is rethrown into `bot.catch` unchanged rather than reported as one.
 
+## Command menu
+
+Telegram's «Меню» button and the hints shown when the user types `/` list one command: `/start` —
+«Начать». The list is `BOT_COMMANDS` in `apps/bot/src/commands.ts`, the only place it is written;
+the description is `TEXTS.startCommand`. The next command is one more element there and one more
+literal in the `setMyCommands` assertions of `lifecycle.test.ts`, which name the values on purpose.
+`commands.test.ts` holds the Bot API limits (a command of 1-32 lowercase letters, digits and
+underscores, a description of 1-256 UTF-16 code units, at most 100 commands, each once) and sends
+every listed command through the real handlers to check that it is answered — grammY keeps no
+registry of handlers to ask instead. A handler with no menu entry is invisible to that check.
+
+The scope is `all_private_chats`: the bot ignores every other chat type (`bot.chatType('private')`
+in `bot.ts`), so a menu there would offer commands nothing answers. For a user in a private chat
+Telegram consults this scope before `default`, so a list set earlier through @BotFather (which
+sets `default`) is shadowed where the bot talks and would still show in groups. No
+`language_code` is sent: one list for every interface language.
+
+`runBot` (`apps/bot/src/lifecycle.ts`) registers the list on every start, inside grammY's
+`onStart` — after `getMe` and `deleteWebhook` have succeeded and before the first `getUpdates` —
+so an invalid token fails once, at `getMe`, and the list is on Telegram's side before the first
+update is taken. `setMyCommands` replaces the whole list of the scope, so a command removed from
+`BOT_COMMANDS` disappears on the next successful registration.
+
+A failed registration does not stop the bot. One attempt is made; whatever it throws — Telegram's
+refusal, a transport failure or the 8 s client timeout, anything else — is caught and logged at
+`warn` as `bot commands not registered`, by the error's identity and `method: 'setMyCommands'`,
+and polling begins as usual. The only cost is the menu: Telegram keeps the last list that did
+register, and the next start repeats the call. There is no retry within one process life.
+
+There is no `setChatMenuButton` call. The Bot API: «If a menu button other than MenuButtonDefault
+is set for a private chat, then it is applied in the chat. Otherwise the default menu button is
+applied. By default, the menu button opens the list of bot commands.» Choosing `/start` from the
+menu sends the same `/start` message, with the `bot_command` entity and no payload, as typing it,
+so the handler is unchanged.
+
 ## Configuration
 
 | Variable                | Required    | Meaning                                                               |
@@ -328,6 +364,13 @@ stops the process at import instead of at the next shutdown. The one case the dr
 shorten is grammY's 3 s sleep after a failed `getUpdates` (`retry_after` after a 429,
 which has no ceiling): `bot.stop()` does not interrupt it, so the drain waits it out — but no
 update is in flight during that sleep, so an overrun there costs the exit code and nothing else.
+
+The command-menu registration ([Command menu](#command-menu)) is one Bot API call at startup,
+bounded by the same 8 s client timeout, and is not part of `HANDLER_CALLS`: no update is in
+flight while it runs. A SIGTERM during it runs `bot.stop()`'s offset confirmation (≤ 8 s)
+alongside the registration (≤ 8 s), so the drain takes at most 8 s, inside the 25 s budget, and
+grammY then returns from `start()` without a first `getUpdates`. In that case `bot started` is
+still written, after `shutting down`, because `onStart` finishes before grammY sees the stop.
 
 An overrun exits 1, losing the update in flight rather than the whole container's shutdown. The
 closing line distinguishes the two ways a drain ends badly: a step that rejected logs itself as

@@ -1,6 +1,7 @@
-import type { PollingOptions } from 'grammy';
+import type { Api, PollingOptions } from 'grammy';
 import { closeAll, errorLogFields } from '@binarius/shared';
-import type { Logger } from './logging';
+import { BOT_COMMANDS, BOT_COMMAND_SCOPE } from './commands';
+import { telegramErrorFields, type Logger } from './logging';
 import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './timing';
 
 // Only the update kinds this bot handles: Telegram then stops delivering the rest, and a new
@@ -9,11 +10,12 @@ export const ALLOWED_UPDATES = ['message', 'callback_query'] as const satisfies 
   PollingOptions['allowed_updates']
 >;
 
-// the two methods of a grammY Bot this module drives; a fake with the same shape is what the
-// tests run, so the drain is provable without a Telegram server
+// the parts of a grammY Bot this module drives: start, stop and the command-menu call; a fake
+// with the same shape is what the tests run, so the drain is provable without a Telegram server
 export interface PollingLoop {
   start(options: PollingOptions): Promise<void>;
   stop(): Promise<void>;
+  api: Pick<Api, 'setMyCommands'>;
 }
 
 export interface RunBotOptions {
@@ -39,11 +41,30 @@ export function runBot({
 }: RunBotOptions): void {
   let stopping = false;
 
+  // Everything is caught, one attempt: a failed registration costs the menu and nothing else —
+  // no update is lost and Telegram keeps the last list that did register — while a throw out of
+  // onStart would reject start() and exit 1. The next start registers again.
+  const registerCommands = async (): Promise<void> => {
+    try {
+      await bot.api.setMyCommands(BOT_COMMANDS, { scope: BOT_COMMAND_SCOPE });
+    } catch (error: unknown) {
+      logger.warn(
+        { ...errorLogFields(error), ...telegramErrorFields(error, 'setMyCommands') },
+        'bot commands not registered',
+      );
+    }
+  };
+
   const started = bot.start({
     timeout: POLLING_TIMEOUT_S,
     limit: POLLING_BATCH_LIMIT,
     allowed_updates: ALLOWED_UPDATES,
-    onStart: () => logger.info('bot started'),
+    // grammY awaits this after getMe and deleteWebhook and before the first getUpdates, so
+    // `bot started` still means polling begins now
+    onStart: async () => {
+      await registerCommands();
+      logger.info('bot started');
+    },
   });
   // an invalid token fails here: getMe answers 401, which grammY does not retry
   started.catch((error: unknown) => {
