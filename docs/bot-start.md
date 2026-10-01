@@ -1,8 +1,9 @@
 # /start and the welcome screen
 
-The bot's first screen (#22): who the user is, where they came from, and the one action the
-screen offers — connecting a Binodex account — or, when a link is waiting, confirming it (#10).
-Linking itself, the confirmation and the starter pack are described in
+The bot's first screen (#22): who the user is, where they came from, and the action the screen
+offers — connecting a Binodex account, by email first (#171) and through the broker's site second
+— or, when a link is waiting, confirming it (#10). Linking itself, the email login's backend
+routes, the confirmation and the starter pack are described in
 [binodex-oauth.md](binodex-oauth.md); this document covers what the bot sends and calls.
 
 ## Components
@@ -13,8 +14,9 @@ Linking itself, the confirmation and the starter pack are described in
   the list of links waiting for confirmation) and `toUserStartView` (the allowlisted projection).
 - `apps/backend/src/users/routes.ts` — `POST /users/start`, behind the internal bearer.
 - `apps/bot/src/` — `env.ts`, `timing.ts`, `backend-client.ts`, `texts.ts`, `logging.ts`,
-  `bot.ts` (the handlers), `lifecycle.ts` (start, signals, drain), `index.ts` (wiring), and
-  `testing.ts`, the fixtures the suites share.
+  `login-dialog.ts` (the email dialog's state, [Email dialog](#email-dialog)), `bot.ts` (the
+  handlers), `lifecycle.ts` (start, signals, drain), `index.ts` (wiring), and `testing.ts`, the
+  fixtures the suites share.
 
 The bot never opens a database connection: everything it knows comes from the backend's internal
 API over a shared bearer.
@@ -29,9 +31,31 @@ API over a shared bearer.
   bot  → blocked                  → "Доступ ограничен", no button
          pendingBrokerAccounts    → "Найдена новая привязка…" + one "Подтвердить" button per link
          hasActiveBrokerAccount   → "С возвращением", no button
-         otherwise                → welcome (video caption when configured) + "Подключить аккаунт"
+         otherwise                → welcome (video caption when configured) + two buttons:
+                                    "Подключить аккаунт Binodex" (connect),
+                                    "Войти через сайт Binodex" (oauth)
 
-tap "Подключить аккаунт"
+tap "Подключить аккаунт Binodex" (callback data connect)
+  bot  → answerCallbackQuery, dialog → address step, "Пришлите адрес…"
+
+text on the address step
+  bot  → not an address (emailAddressSchema) → "Это не похоже на адрес…", no backend call
+         POST /auth/binodex/email/send-code { telegramUserId, email }
+  back → { codeSent: true }
+  bot  → dialog → code step, "Код отправлен на <address>…" + "Запросить код ещё раз" (resend)
+         and "Изменить адрес" (connect)
+
+text on the code step
+  bot  → longer than 64 characters (emailLoginCodeSchema) → "Код не подошёл…", no backend call
+         POST /auth/binodex/email/login { telegramUserId, email, code }
+  back → { account, grant }
+  bot  → dialog ends, the outcome with the pack, as after "Подтвердить"
+         a failure that is not a definite refusal → POST /users/start, the recheck below
+
+tap "Запросить код ещё раз" (callback data resend)
+  bot  → answerCallbackQuery ∥ POST /auth/binodex/email/send-code with the dialog's address
+
+tap "Войти через сайт Binodex" (callback data oauth)
   bot  → answerCallbackQuery ∥ POST /auth/binodex/start { telegramUserId }
   back → { authorizeUrl, state, expiresAt }
   bot  → message with a url button pointing at authorizeUrl
@@ -51,9 +75,76 @@ The refusals the user can act on have their own text — `broker_account_not_fou
 `account_not_pending` (already confirmed), `user_blocked` — and anything else is "Сервис временно
 недоступен" with a warn line carrying the backend status.
 
+Buttons sent before #171 carry `connect` under the same label, so they now open the email
+dialog — the label still says what happens.
+
 What happens after the user opens the authorize URL belongs to #32 (the login page that receives
 the authorization code); a message from the backend right after the callback, without waiting
 for the user's next `/start`, is #128.
+
+## Email dialog
+
+The dialog is two steps, the address and then the code, and its state is one entry per Telegram
+user in `login-dialog.ts`: `{ step: 'email' }` or `{ step: 'code', email }`. It lives in the bot
+process's memory (the owner's decision in #162), with no new dependency:
+
+- an entry lives 10 minutes (`LOGIN_DIALOG_TTL_MS`) from its last change — a new code gives it
+  another 10 — and an expired one is dropped when it is next read;
+- at most 10 000 entries (`LOGIN_DIALOG_MAX_ENTRIES`): a new user at the cap evicts the entry
+  changed longest ago, which may be a live dialog — that user presses the button again;
+- a restart or a deploy drops every dialog, and the user presses the button again.
+
+The address is kept only in that entry, because the login call needs it beside the code; it is
+not stored anywhere else and is not written to the log. `logging.test.ts` reads the lines at
+`trace` for an unreachable send-code, a failed login, a failed recheck and a reply that fails on
+the code step, and finds neither the address nor the code in any of them.
+
+No lock guards the entry: grammY runs updates one after another and the bot polls one update at
+a time (`POLLING_BATCH_LIMIT`), so a read, an awaited backend call and a write never interleave
+with another update's.
+
+What each step does with what the user types:
+
+- **address step** — the text goes through `emailAddressSchema` from `@binarius/shared` first; a
+  text it refuses is answered at once, without a backend call. A sent code moves the dialog to
+  the code step, and the reply shows the address back so a typo is visible next to «Изменить
+  адрес».
+- **code step** — anything typed is a code, an address included (the owner's answer 4b);
+  `emailLoginCodeSchema` only refuses a text longer than 64 characters.
+
+What ends the dialog, and what does not:
+
+| Event | Dialog |
+| --- | --- |
+| `connect` («Подключить аккаунт Binodex», «Изменить адрес») | back to the address step |
+| login succeeded | ends |
+| send-code `invalid_email` | stays on the address step |
+| send-code `too_many_attempts` / `too_many_requests` / `user_blocked` | ends |
+| login `too_many_attempts` / `too_many_requests` / `user_blocked` / `broker_account_taken` | ends |
+| login `invalid_code`, recheck finds no active account | stays on the code step |
+| recheck finds an active account, or a blocked user | ends |
+| any other failure (backend unreachable, 5xx, a failed recheck) | unchanged — the user retries |
+| `/start` or any other command | unchanged |
+| text outside a dialog | ignored, nothing is sent |
+
+`/start` answers as it always does and leaves the dialog alone (the owner's answer 3c): the
+`/start` handler is registered before the text handler and does not pass the update on, and the
+text handler ignores every text that starts with `/`. A user who wants a different address uses
+«Изменить адрес», or the connect button of the welcome that `/start` shows a user without an
+active account.
+
+**The recheck.** The login activates the account and pays the pack in one transaction, and its
+outcome is only in its answer. When that answer is lost after the commit — the bot's own 5 s
+timeout — the account is active, and the same code typed again is refused as `invalid_code`
+because the broker's code is single-use. So a login failure that is not one of the four definite
+refusals above is followed by `POST /users/start` with the user's name and language, the request
+`/start` sends without a payload; it refreshes the name as any `/start` does. An active account
+is reported as «Аккаунт Binodex подключён.», without a number — the recheck knows the account is
+active, not what was paid; a blocked user gets the blocked text; otherwise the original failure
+is answered. When the recheck itself fails, the answer is «Сервис временно недоступен», not
+«Код не подошёл»: without the state that would be a guess. A user who already had an active
+account and types a wrong code is told the account is connected, which is true (the owner's
+answer 1a).
 
 ## First touch
 
@@ -121,7 +212,9 @@ uses.
 
 ## Texts
 
-All user-facing strings live in `apps/bot/src/texts.ts`, in Russian, sent without `parse_mode`.
+All user-facing strings live in `apps/bot/src/texts.ts`, in Russian, sent without `parse_mode` —
+which is also why «Код отправлен на <address>» can carry what the user typed: plain text cannot be
+turned into markup by it.
 The welcome has to fit in 1024 UTF-16 code units because it travels as a video caption whenever
 `WELCOME_VIDEO_FILE_ID` is set — `apps/bot/src/texts.test.ts` holds that limit in the unit the
 Bot API counts in, so configuring a video cannot break sending.
@@ -180,9 +273,12 @@ call is capped at 5 s.
 
 The handler budget is not a sentence about the handlers, it is computed from `HANDLER_CALLS`,
 which declares what each handler does on its longest path: `/start` is one backend call and up
-to two Bot API calls (the video refused, then the text), the connect and confirm buttons are one
-backend call and two Bot API calls each. That makes 5 000 + 8 000 + 8 000 = **21 s**, inside the **25 s** shutdown
-budget, inside the **30 s** `stop_grace_period` of the compose service. `timing.test.ts` runs
+to two Bot API calls (the video refused, then the text); the oauth, confirm and resend buttons
+are one backend call and two Bot API calls each; the connect button is no backend call and two
+Bot API calls; a text on the address step is one backend call and one Bot API call, and a text
+on the code step two backend calls (the login and the recheck) and one Bot API call, 18 s. The
+longest is 5 000 + 8 000 + 8 000 = **21 s**, inside the **25 s** shutdown budget, inside the
+**30 s** `stop_grace_period` of the compose service. `timing.test.ts` runs
 every terminal branch of each handler through the real handlers and asserts that each makes the
 calls it is declared to make and that the worst of them is what `HANDLER_CALLS` says — so a
 handler that grows a call turns the suite red instead of quietly outgrowing the budget. It reads
@@ -211,6 +307,11 @@ it fails (`shutdown: bot.stop() failed`, `shutdown: polling loop failed`), and t
 written only when a step really did run out of time.
 
 ## Boundaries
+
+- **#162** — the backend half of the email login: the two routes, their limits, the activation
+  and the pack ([binodex-oauth.md → Email login](binodex-oauth.md#email-login-issue-162)). The
+  bot shows the limits' refusals without repeating their numbers.
+- **#173** — the Minor findings of the email login's limits from the review of PR #172.
 
 - **#128** — the backend's message right after a successful callback, sent to the Telegram id
   restored from the state; it can reuse the confirm button and texts from #10.
