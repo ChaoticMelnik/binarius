@@ -946,6 +946,13 @@ export interface StaffInvalidation {
 // challenge lock — and that is safe only while no writer takes `FOR UPDATE` on `staff`: KEY SHARE
 // conflicts with that mode and with nothing else any writer here uses. Take `FOR NO KEY UPDATE`,
 // as `startLoginChallenge` does.
+//
+// Those locks serialize a concurrent `completeLogin` against this tail, but they do not keep its
+// session out of it: the login holds its own challenge row until it commits, so either this
+// transaction closes the challenge first and the login, once it stops waiting, finds it closed
+// under it, or this one waits there and afterwards sees the session already committed. A session
+// committed by a transaction that began after this one is therefore ordinary here, and that is
+// what the revocation timestamp below has to survive (#149).
 async function invalidateIssued(tx: Tx, staffId: string): Promise<StaffInvalidation> {
   const closed = await tx
     .update(staffLoginChallenges)
@@ -957,9 +964,16 @@ async function invalidateIssued(tx: Tx, staffId: string): Promise<StaffInvalidat
       ),
     )
     .returning({ id: staffLoginChallenges.id });
+  // clock_timestamp(), not now(): now() is the transaction's start, and under READ COMMITTED this
+  // UPDATE still matches a session committed by a completeLogin that began later. That row's
+  // created_at is after our now(), and staff_sessions_revoked_after_created_check then aborts the
+  // whole disable or reset (#149); the statement clock is read after the statement's snapshot, so
+  // it is later than anything the statement can see. The predicate keeps now() on purpose: it is
+  // the same reading of "live" as everywhere else, and stamping one that expired in between is
+  // harmless.
   const revoked = await tx
     .update(staffSessions)
-    .set({ revokedAt: sql`now()` })
+    .set({ revokedAt: sql`clock_timestamp()` })
     .where(
       and(
         eq(staffSessions.staffId, staffId),
