@@ -2,13 +2,20 @@ import * as z from 'zod';
 import { idWireSchema, toId } from './ids';
 import { telegramUserIdSchema, tradeModeSchema, type TradeMode } from './trading';
 
-// --- Token response (POST /v1/broker/oauth/token) ---------------------------------------------
+// --- Token responses ---------------------------------------------------------------------------
+// POST /v1/broker/user-auth/refresh answers with the pair alone; POST /v1/broker/oauth/token adds
+// the user the code was issued to. Contract verified against the live broker (docs/binodex-oauth.md
+// -> Broker contract).
 
-export const oauthTokenResponseWireSchema = z.looseObject({
+export const refreshTokenResponseWireSchema = z.looseObject({
   access_token: z.string().min(1),
   refresh_token: z.string().min(1),
   token_type: z.string(),
   expires_in: z.int().nonnegative(),
+});
+export type RefreshTokenResponseWire = z.infer<typeof refreshTokenResponseWireSchema>;
+
+export const oauthTokenResponseWireSchema = refreshTokenResponseWireSchema.extend({
   user: z.looseObject({
     id: idWireSchema,
     email: z.string(),
@@ -17,20 +24,29 @@ export const oauthTokenResponseWireSchema = z.looseObject({
 });
 export type OAuthTokenResponseWire = z.infer<typeof oauthTokenResponseWireSchema>;
 
-export interface OAuthTokens {
+export interface RefreshedTokens {
   accessToken: string;
   refreshToken: string;
   tokenType: string;
   expiresInSec: number;
+}
+
+export interface OAuthTokens extends RefreshedTokens {
   user: { id: string; email: string; isPartnerClient: boolean };
 }
 
-export function toOAuthTokens(wire: OAuthTokenResponseWire): OAuthTokens {
+export function toRefreshedTokens(wire: RefreshTokenResponseWire): RefreshedTokens {
   return {
     accessToken: wire.access_token,
     refreshToken: wire.refresh_token,
     tokenType: wire.token_type,
     expiresInSec: wire.expires_in,
+  };
+}
+
+export function toOAuthTokens(wire: OAuthTokenResponseWire): OAuthTokens {
+  return {
+    ...toRefreshedTokens(wire),
     user: {
       id: toId(wire.user.id),
       email: wire.user.email,
@@ -38,6 +54,11 @@ export function toOAuthTokens(wire: OAuthTokenResponseWire): OAuthTokens {
     },
   };
 }
+
+export const parseRefreshTokenResponse = (input: unknown): RefreshedTokens =>
+  toRefreshedTokens(refreshTokenResponseWireSchema.parse(input));
+export const safeParseRefreshTokenResponse = (input: unknown) =>
+  refreshTokenResponseWireSchema.safeParse(input);
 
 export const parseOAuthTokenResponse = (input: unknown): OAuthTokens =>
   toOAuthTokens(oauthTokenResponseWireSchema.parse(input));
