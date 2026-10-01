@@ -248,7 +248,7 @@ describe('what the bot writes during the email dialog', () => {
   };
 
   it('names an unreachable send-code by identity, without the address', async () => {
-    const { lines } = await linesFrom({
+    const { lines, calls } = await linesFrom({
       level: 'trace',
       update: textUpdate(ADDRESS),
       dialog: { step: 'email' },
@@ -262,6 +262,10 @@ describe('what the bot writes during the email dialog', () => {
       cause: { name: 'Error' },
     });
     expectNoSecrets(lines);
+    // the reply does carry the address back to the user; the log, read above, does not
+    expect(calls.find((call) => call.method === 'sendMessage')?.payload.text).toBe(
+      TEXTS.codeSentUnknown(ADDRESS),
+    );
   });
 
   it('names a failed login by status and reason, without the address or the code', async () => {

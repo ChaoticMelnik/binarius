@@ -500,7 +500,8 @@ const CODE_STEP_BRANCHES: readonly Branch[] = [
     OAuthErrorCode.UserBlocked,
     OAuthErrorCode.BrokerAccountTaken,
   ].map((reason): Branch => ({
-    label: `the login is refused for good with ${reason}`,
+    // a definite refusal: no recheck, whether it ends the dialog or keeps the step
+    label: `the login is refused with ${reason}`,
     update: textUpdate(CODE),
     dialog: ON_CODE_STEP,
     emailLogin: refusedWith(409, reason),
@@ -574,13 +575,13 @@ const RESEND_BRANCHES: readonly Branch[] = [
     expected: { backend: 0, telegram: 2 },
   },
   RESEND_WORST_CASE,
-  {
-    label: 'the backend limits the codes',
+  ...[OAuthErrorCode.TooManyAttempts, OAuthErrorCode.TooManyRequests].map((reason): Branch => ({
+    label: `a new code is refused with ${reason}`,
     update: callbackUpdate(RESEND_CALLBACK_DATA),
     dialog: ON_CODE_STEP,
-    sendEmailCode: refusedWith(429, OAuthErrorCode.TooManyAttempts),
+    sendEmailCode: refusedWith(429, reason),
     expected: { backend: 1, telegram: 2 },
-  },
+  })),
   {
     label: 'the backend fails for any other reason',
     update: callbackUpdate(RESEND_CALLBACK_DATA),
