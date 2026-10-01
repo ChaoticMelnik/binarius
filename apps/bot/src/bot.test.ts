@@ -10,7 +10,7 @@ import {
   confirmCallbackData,
   createBot,
 } from './bot';
-import { createLoginDialog, type LoginDialogState } from './login-dialog';
+import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   BOT_INFO,
   CODE,
@@ -44,6 +44,7 @@ function setup(
     emailLogin?: BackendClient['emailLogin'];
     welcomeVideoFileId?: string;
     dialog?: LoginDialogState;
+    now?: () => number;
   } = {},
 ) {
   const backend: BackendClient = {
@@ -54,7 +55,7 @@ function setup(
     emailLogin: options.emailLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
   };
   const logger = fakeLogger();
-  const dialog = createLoginDialog();
+  const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
   if (options.dialog !== undefined) dialog.set(USER.id, options.dialog);
   const bot = createBot({
     token: '123456:AA-bot-token',
@@ -72,6 +73,13 @@ function setup(
 
 const refused = (status: number, reason?: string) =>
   vi.fn(() => Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status, reason })));
+
+// the first call answers with the refusal, every later one succeeds: what a test needs to show
+// that the step the refusal left behind takes the next message
+const refusedOnce = <T>(status: number, reason: string | undefined, then: T) =>
+  vi
+    .fn(() => Promise.resolve(then))
+    .mockRejectedValueOnce(new BackendError(BackendErrorCode.HttpStatus, { status, reason }));
 
 const unreachable = () =>
   vi.fn(() => Promise.reject(new BackendError(BackendErrorCode.Unreachable)));
@@ -564,28 +572,69 @@ describe('the address step', () => {
 
   it.each([
     [429, OAuthErrorCode.TooManyAttempts, TEXTS.tooManyCodeRequests],
-    [429, OAuthErrorCode.TooManyRequests, TEXTS.tooManyCodeRequests],
     [409, OAuthErrorCode.UserBlocked, TEXTS.blocked],
   ])('ends the dialog on a %i %s', async (status, reason, text) => {
-    const { bot, calls, dialog, logger } = setup({
-      dialog: ON_EMAIL_STEP,
-      sendEmailCode: refused(status, reason),
-    });
+    const sendEmailCode = refusedOnce(status, reason, CODE_SENT);
+    const { bot, calls, dialog, logger } = setup({ dialog: ON_EMAIL_STEP, sendEmailCode });
     await bot.handleUpdate(textUpdate(EMAIL));
     expect(sentTexts(calls)).toEqual([text]);
     expect(dialog.get(USER.id)).toBeUndefined();
     expect(logger.warn).not.toHaveBeenCalled();
+
+    await bot.handleUpdate(textUpdate(EMAIL));
+    expect(sendEmailCode).toHaveBeenCalledOnce();
   });
 
+  // the route's ceiling across all users: nothing of this user's was spent
+  it('keeps the address step on the route ceiling, and takes the address again', async () => {
+    const sendEmailCode = refusedOnce(429, OAuthErrorCode.TooManyRequests, CODE_SENT);
+    const { bot, calls, dialog, logger } = setup({ dialog: ON_EMAIL_STEP, sendEmailCode });
+    await bot.handleUpdate(textUpdate(EMAIL));
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.sendCodeBusy);
+    expect(message?.reply_markup).toBeUndefined();
+    expect(dialog.get(USER.id)).toEqual(ON_EMAIL_STEP);
+    expect(logger.warn).not.toHaveBeenCalled();
+
+    await bot.handleUpdate(textUpdate(EMAIL));
+    expect(sendEmailCode).toHaveBeenCalledTimes(2);
+    expect(sentTexts(calls)).toEqual([TEXTS.sendCodeBusy, TEXTS.codeSent(EMAIL)]);
+  });
+
+  // the owner's answer 2a of the round 1 fixes: a kept step keeps its clock
+  it('does not give a step kept after a refusal a new lifetime', async () => {
+    let at = 0;
+    const { bot, dialog } = setup({
+      dialog: ON_EMAIL_STEP,
+      now: () => at,
+      sendEmailCode: refused(429, OAuthErrorCode.TooManyRequests),
+    });
+    at = LOGIN_DIALOG_TTL_MS - 1;
+    await bot.handleUpdate(textUpdate(EMAIL));
+    at = LOGIN_DIALOG_TTL_MS;
+    expect(dialog.get(USER.id)).toBeUndefined();
+  });
+
+  // the letter may have gone out although its answer did not come back
   it.each([
     ['unreachable', unreachable()],
     ['a 500', refused(500)],
-  ])('keeps the step and warns when the backend is %s', async (_label, sendEmailCode) => {
-    const { bot, calls, dialog, logger } = setup({ dialog: ON_EMAIL_STEP, sendEmailCode });
+    ['a 502 broker_unavailable', refused(502, OAuthErrorCode.BrokerUnavailable)],
+    ['a 502 broker_contract_violation', refused(502, OAuthErrorCode.BrokerContractViolation)],
+  ])('moves to the code step and warns when the backend is %s', async (_label, sendEmailCode) => {
+    const { bot, backend, calls, dialog, logger } = setup({
+      dialog: ON_EMAIL_STEP,
+      sendEmailCode,
+    });
     await bot.handleUpdate(textUpdate(EMAIL));
-    expect(sentTexts(calls)).toEqual([TEXTS.unavailable]);
-    expect(dialog.get(USER.id)).toEqual(ON_EMAIL_STEP);
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.codeSentUnknown(EMAIL));
+    expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
+    expect(dialog.get(USER.id)).toEqual({ step: 'code', email: EMAIL });
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ err: { name: 'BackendError' } });
+
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
   });
 });
 
@@ -628,19 +677,36 @@ describe('the code step', () => {
 
   it.each([
     [429, OAuthErrorCode.TooManyAttempts, TEXTS.tooManyCodeAttempts],
-    [429, OAuthErrorCode.TooManyRequests, TEXTS.tooManyCodeRequests],
     [409, OAuthErrorCode.UserBlocked, TEXTS.blocked],
     [409, OAuthErrorCode.BrokerAccountTaken, TEXTS.accountTaken],
   ])('ends the dialog on a definite %i %s without a recheck', async (status, reason, text) => {
-    const { bot, backend, calls, dialog, logger } = setup({
-      dialog: ON_CODE_STEP,
-      emailLogin: refused(status, reason),
-    });
+    const emailLogin = refusedOnce(status, reason, CONFIRMED);
+    const { bot, backend, calls, dialog, logger } = setup({ dialog: ON_CODE_STEP, emailLogin });
     await bot.handleUpdate(textUpdate(CODE));
     expect(sentTexts(calls)).toEqual([text]);
     expect(dialog.get(USER.id)).toBeUndefined();
     expect(backend.recordStart).not.toHaveBeenCalled();
     expect(logger.warn).not.toHaveBeenCalled();
+
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(emailLogin).toHaveBeenCalledOnce();
+  });
+
+  // refused by the route's ceiling before the broker saw the code, so the code is still good
+  it('keeps the code step on the route ceiling, without a recheck, and takes the code again', async () => {
+    const emailLogin = refusedOnce(429, OAuthErrorCode.TooManyRequests, CONFIRMED);
+    const { bot, backend, calls, dialog, logger } = setup({ dialog: ON_CODE_STEP, emailLogin });
+    await bot.handleUpdate(textUpdate(CODE));
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.loginBusy);
+    expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+    expect(backend.recordStart).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(emailLogin).toHaveBeenLastCalledWith('4242', EMAIL, CODE);
+    expect(sentTexts(calls)).toEqual([TEXTS.loginBusy, TEXTS.linkedWithBonus('7')]);
   });
 
   it('rechecks an invalid code and keeps the step when no account is active', async () => {
@@ -780,14 +846,37 @@ describe('the resend button', () => {
     expect(sentTexts(calls)).toEqual([TEXTS.emailPrompt]);
   });
 
-  it('ends the dialog when the backend limits the codes', async () => {
-    const { bot, calls, dialog } = setup({
+  // the code already sent stays good whichever limit refused a new one
+  it.each([OAuthErrorCode.TooManyAttempts, OAuthErrorCode.TooManyRequests])(
+    'keeps the code step when a new code is refused with %s, and takes the old code',
+    async (reason) => {
+      const { bot, backend, calls, dialog, logger } = setup({
+        dialog: ON_CODE_STEP,
+        sendEmailCode: refused(429, reason),
+      });
+      await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
+      const message = sentPayload(calls, 'sendMessage');
+      expect(message?.text).toBe(TEXTS.resendRefused);
+      expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
+      expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+      expect(logger.warn).not.toHaveBeenCalled();
+
+      await bot.handleUpdate(textUpdate(CODE));
+      expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
+    },
+  );
+
+  it('says the outcome is unknown and stays on the code step when the backend fails', async () => {
+    const { bot, calls, dialog, logger } = setup({
       dialog: ON_CODE_STEP,
-      sendEmailCode: refused(429, OAuthErrorCode.TooManyAttempts),
+      sendEmailCode: unreachable(),
     });
     await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
-    expect(sentTexts(calls)).toEqual([TEXTS.tooManyCodeRequests]);
-    expect(dialog.get(USER.id)).toBeUndefined();
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.codeSentUnknown(EMAIL));
+    expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+    expect(logger.warn.mock.calls[0]?.[1]).toBe('email code not sent');
   });
 
   it('still sends the code when answering the query fails', async () => {

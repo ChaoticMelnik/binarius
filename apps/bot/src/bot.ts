@@ -206,7 +206,7 @@ export function createBot({
       backend.sendEmailCode(String(id), state.email),
     ]);
     if (answered.status === 'rejected') logAnswerFailure(answered.reason);
-    await replyToSendCode(ctx, id, state.email, sent);
+    await replyToSendCode(ctx, id, state.email, 'code', sent);
   });
 
   // Registered after command('start'), which does not call next(): /start never reaches this
@@ -226,7 +226,7 @@ export function createBot({
         return;
       }
       const [sent] = await Promise.allSettled([backend.sendEmailCode(String(from.id), email.data)]);
-      await replyToSendCode(ctx, from.id, email.data, sent);
+      await replyToSendCode(ctx, from.id, email.data, 'email', sent);
       return;
     }
 
@@ -248,10 +248,13 @@ export function createBot({
     await ctx.reply(grantText(login.grant));
   });
 
+  // `step` is the step the code was asked from: the address, or «Запросить код ещё раз» on the
+  // code step. The same refusal means a different thing for the dialog on each (SEND_CODE_REFUSALS).
   async function replyToSendCode(
     ctx: Context,
     id: number,
     email: string,
+    step: LoginDialogState['step'],
     sent: PromiseSettledResult<EmailSendCodeResponse>,
   ): Promise<void> {
     if (sent.status === 'fulfilled') {
@@ -261,16 +264,26 @@ export function createBot({
     }
     const error: unknown = sent.reason;
     const refusal =
-      error instanceof BackendError ? SEND_CODE_REFUSALS[error.reason ?? ''] : undefined;
+      error instanceof BackendError ? SEND_CODE_REFUSALS[step][error.reason ?? ''] : undefined;
     if (refusal !== undefined) {
-      if (refusal.next === undefined) loginDialog.delete(id);
-      else loginDialog.set(id, refusal.next);
-      await ctx.reply(refusal.text);
+      await replyWithRefusal(ctx, id, refusal);
       return;
     }
-    // the step stays where it was: an outage is not the user's mistake to start over from
+    // The letter may have gone out although the answer did not come back (a timeout, a broker
+    // that failed after sending, any 5xx), so the user is let type the code from it; the buttons
+    // cover the case where nothing arrived.
     logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, 'email code not sent');
-    await ctx.reply(TEXTS.unavailable);
+    loginDialog.set(id, { step: 'code', email });
+    await ctx.reply(TEXTS.codeSentUnknown(email), { reply_markup: codeKeyboard() });
+  }
+
+  async function replyWithRefusal(ctx: Context, id: number, refusal: Refusal): Promise<void> {
+    if (refusal.dialog === 'end') loginDialog.delete(id);
+    else if (refusal.dialog !== 'keep') loginDialog.set(id, refusal.dialog);
+    await ctx.reply(
+      refusal.text,
+      refusal.codeKeyboard === true ? { reply_markup: codeKeyboard() } : {},
+    );
   }
 
   // The login is irreversible and its outcome is only in its answer. An answer lost after the
@@ -280,8 +293,7 @@ export function createBot({
   async function replyToFailedLogin(ctx: Context, from: User, error: unknown): Promise<void> {
     const refusal = error instanceof BackendError ? LOGIN_REFUSALS[error.reason ?? ''] : undefined;
     if (refusal !== undefined) {
-      loginDialog.delete(from.id);
-      await ctx.reply(refusal);
+      await replyWithRefusal(ctx, from.id, refusal);
       return;
     }
     const invalidCode =
@@ -436,22 +448,51 @@ const CONFIRM_REFUSALS: Partial<Record<string, string>> = {
   [OAuthErrorCode.UserBlocked]: TEXTS.blocked,
 };
 
-// What a send-code refusal says and where it leaves the dialog: `next` is the step to stay on,
-// none ends the dialog. Anything not listed is an outage and keeps the step.
-const SEND_CODE_REFUSALS: Partial<Record<string, { text: string; next?: LoginDialogState }>> = {
-  [OAuthErrorCode.InvalidEmail]: { text: TEXTS.emailRefused, next: { step: 'email' } },
-  [OAuthErrorCode.TooManyAttempts]: { text: TEXTS.tooManyCodeRequests },
-  [OAuthErrorCode.TooManyRequests]: { text: TEXTS.tooManyCodeRequests },
-  [OAuthErrorCode.UserBlocked]: { text: TEXTS.blocked },
+// What a refusal says and what it does to the dialog: end it, keep it as it is (its TTL too), or
+// move it to the given state. `codeKeyboard` puts the code step's buttons under the text.
+interface Refusal {
+  text: string;
+  dialog: 'end' | 'keep' | LoginDialogState;
+  codeKeyboard?: true;
+}
+
+// The two 429s are different limits (apps/backend/src/auth/routes.ts). too_many_requests is the
+// route's ceiling across all users, checked before anything else: no letter, no slot of this
+// user's, no code spent, so the step stays. too_many_attempts is this user's or this address's
+// own allowance for the next minutes, so asking for an address again is pointless — but a code
+// already sent stays good, which is why a refused «Запросить код ещё раз» keeps the code step.
+// Anything not listed is an unknown outcome (replyToSendCode).
+const SEND_CODE_REFUSALS: Record<LoginDialogState['step'], Partial<Record<string, Refusal>>> = {
+  email: {
+    [OAuthErrorCode.InvalidEmail]: { text: TEXTS.emailRefused, dialog: { step: 'email' } },
+    [OAuthErrorCode.TooManyRequests]: { text: TEXTS.sendCodeBusy, dialog: 'keep' },
+    [OAuthErrorCode.TooManyAttempts]: { text: TEXTS.tooManyCodeRequests, dialog: 'end' },
+    [OAuthErrorCode.UserBlocked]: { text: TEXTS.blocked, dialog: 'end' },
+  },
+  code: {
+    [OAuthErrorCode.InvalidEmail]: { text: TEXTS.emailRefused, dialog: { step: 'email' } },
+    [OAuthErrorCode.TooManyRequests]: {
+      text: TEXTS.resendRefused,
+      dialog: 'keep',
+      codeKeyboard: true,
+    },
+    [OAuthErrorCode.TooManyAttempts]: {
+      text: TEXTS.resendRefused,
+      dialog: 'keep',
+      codeKeyboard: true,
+    },
+    [OAuthErrorCode.UserBlocked]: { text: TEXTS.blocked, dialog: 'end' },
+  },
 };
 
-// The login refusals that are definite, so no recheck: each ends the dialog. invalid_code is not
-// one of them — a lost answer turns into it on the retry.
-const LOGIN_REFUSALS: Partial<Record<string, string>> = {
-  [OAuthErrorCode.TooManyAttempts]: TEXTS.tooManyCodeAttempts,
-  [OAuthErrorCode.TooManyRequests]: TEXTS.tooManyCodeRequests,
-  [OAuthErrorCode.UserBlocked]: TEXTS.blocked,
-  [OAuthErrorCode.BrokerAccountTaken]: TEXTS.accountTaken,
+// The login refusals that are definite, so no recheck. invalid_code is not one of them — a lost
+// answer turns into it on the retry. too_many_requests is the route's ceiling, refused before
+// the broker saw the code, so the code is still good and the step stays.
+const LOGIN_REFUSALS: Partial<Record<string, Refusal>> = {
+  [OAuthErrorCode.TooManyAttempts]: { text: TEXTS.tooManyCodeAttempts, dialog: 'end' },
+  [OAuthErrorCode.TooManyRequests]: { text: TEXTS.loginBusy, dialog: 'keep', codeKeyboard: true },
+  [OAuthErrorCode.UserBlocked]: { text: TEXTS.blocked, dialog: 'end' },
+  [OAuthErrorCode.BrokerAccountTaken]: { text: TEXTS.accountTaken, dialog: 'end' },
 };
 
 function backendErrorFields(error: unknown): { backendStatus?: number; backendReason?: string } {

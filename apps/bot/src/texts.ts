@@ -52,6 +52,16 @@ export const TEXTS = {
   changeEmailButton: 'Изменить адрес',
   tooManyCodeRequests:
     'Слишком много запросов кода. Подождите несколько минут и начните заново через /start.',
+  // the route's ceiling across all users (too_many_requests): nothing of this user's was spent,
+  // so the step stays and the same message is asked for again
+  sendCodeBusy: 'Сейчас слишком много запросов. Подождите немного и пришлите адрес ещё раз.',
+  loginBusy: 'Сейчас слишком много запросов. Подождите немного и пришлите код ещё раз.',
+  // a new code refused either way: the one already sent is still good
+  resendRefused:
+    'Новый код сейчас запросить нельзя: слишком много запросов. Если письмо с кодом уже пришло — пришлите код из него.',
+  // the send-code answer was lost or broken, and the letter may still have gone out
+  codeSentUnknown: (email: string) =>
+    `Не удалось подтвердить отправку кода на ${email}. Если письмо пришло — пришлите код из него. Если нет — нажмите «Запросить код ещё раз».`,
   tooManyCodeAttempts:
     'Слишком много попыток ввести код. Подождите несколько минут и начните заново через /start.',
   accountTaken:
