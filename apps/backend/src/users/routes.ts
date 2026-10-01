@@ -22,12 +22,14 @@ export const usersRoutes: FastifyPluginAsync<UsersRoutesDeps> = async (
     if (!parsed.success) {
       return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
     }
-    const { row, hasActiveBrokerAccount } = await recordUserStart(db, {
+    const { row, hasActiveBrokerAccount, pendingBrokerAccounts } = await recordUserStart(db, {
       telegramUserId: BigInt(parsed.data.telegramUserId),
       displayName: parsed.data.displayName,
       languageCode: parsed.data.languageCode,
       startPayload: parsed.data.startPayload,
     });
-    return reply.send({ user: toUserStartView(row, hasActiveBrokerAccount) });
+    return reply.send({
+      user: toUserStartView(row, hasActiveBrokerAccount, pendingBrokerAccounts),
+    });
   });
 };

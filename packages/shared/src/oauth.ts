@@ -193,9 +193,25 @@ export const confirmLoginRequestSchema = z.object({
 });
 export type ConfirmLoginRequest = z.infer<typeof confirmLoginRequestSchema>;
 
+// What the confirm did about the starter pack. `tokens` is a decimal string, never a number:
+// the amount is a bigint in the backend, and the bot prints it rather than knowing it.
+export const linkBonusGrantViewSchema = z.discriminatedUnion('granted', [
+  z.object({ granted: z.literal(true), tokens: z.string().regex(/^[1-9]\d*$/) }),
+  z.object({ granted: z.literal(false), reason: z.enum(LinkBonusSkipReason) }),
+]);
+export type LinkBonusGrantView = z.infer<typeof linkBonusGrantViewSchema>;
+
+export const confirmLoginResponseSchema = z.object({
+  account: brokerAccountViewSchema,
+  grant: linkBonusGrantViewSchema,
+});
+export type ConfirmLoginResponse = z.infer<typeof confirmLoginResponseSchema>;
+
 export const safeParseStartLoginRequest = (input: unknown) =>
   startLoginRequestSchema.safeParse(input);
 export const safeParseOAuthCallbackRequest = (input: unknown) =>
   oauthCallbackRequestSchema.safeParse(input);
 export const safeParseConfirmLoginRequest = (input: unknown) =>
   confirmLoginRequestSchema.safeParse(input);
+export const safeParseConfirmLoginResponse = (input: unknown) =>
+  confirmLoginResponseSchema.safeParse(input);

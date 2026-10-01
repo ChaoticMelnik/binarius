@@ -1,5 +1,9 @@
-import { and, eq, sql } from 'drizzle-orm';
-import { BrokerAccountStatus, type UserStartView } from '@binarius/shared';
+import { and, desc, eq, sql } from 'drizzle-orm';
+import {
+  BrokerAccountStatus,
+  type PendingBrokerAccountView,
+  type UserStartView,
+} from '@binarius/shared';
 import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
 import { users } from './schema/users';
@@ -19,6 +23,7 @@ export interface RecordUserStartInput {
 export interface RecordedUserStart {
   row: UserStartRow;
   hasActiveBrokerAccount: boolean;
+  pendingBrokerAccounts: PendingBrokerAccountView[];
 }
 
 // What /start writes: one upsert, no read-before-write, so two /start updates racing on a new
@@ -74,18 +79,38 @@ export async function recordUserStart(
         ),
       )
       .limit(1);
-    return { row, hasActiveBrokerAccount: account !== undefined };
+    // what the bot offers to confirm; built key by key, like the view below
+    const pending = await tx
+      .select({ id: brokerAccounts.id, email: brokerAccounts.email })
+      .from(brokerAccounts)
+      .where(
+        and(
+          eq(brokerAccounts.userId, row.id),
+          eq(brokerAccounts.status, BrokerAccountStatus.Pending),
+        ),
+      )
+      .orderBy(desc(brokerAccounts.createdAt), desc(brokerAccounts.id));
+    return {
+      row,
+      hasActiveBrokerAccount: account !== undefined,
+      pendingBrokerAccounts: pending.map(({ id, email }) => ({ id, email })),
+    };
   });
 }
 
 // Allowlisted projection, built key by key: the row also carries the token balance and the
 // internal id, and spreading it would put them on the wire the day a column is added.
-export function toUserStartView(row: UserStartRow, hasActiveBrokerAccount: boolean): UserStartView {
+export function toUserStartView(
+  row: UserStartRow,
+  hasActiveBrokerAccount: boolean,
+  pendingBrokerAccounts: readonly PendingBrokerAccountView[],
+): UserStartView {
   return {
     telegramUserId: row.telegramUserId.toString(),
     status: row.status,
     acquisitionSource: row.acquisitionSource,
     acquiredAt: row.acquiredAt === null ? null : row.acquiredAt.toISOString(),
     hasActiveBrokerAccount,
+    pendingBrokerAccounts: pendingBrokerAccounts.map(({ id, email }) => ({ id, email })),
   };
 }

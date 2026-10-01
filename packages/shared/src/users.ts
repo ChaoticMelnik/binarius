@@ -34,7 +34,15 @@ export const userStartRequestSchema = z.object({
 });
 export type UserStartRequest = z.infer<typeof userStartRequestSchema>;
 
-// Allowlisted projection of the users row plus one fact about the account: the token balance,
+// A link waiting for the Telegram user to confirm it: only what the bot shows on the button.
+// The broker user id, the status and the ciphertexts stay in the backend.
+export const pendingBrokerAccountViewSchema = z.object({
+  id: z.uuid(),
+  email: z.string().nullable(),
+});
+export type PendingBrokerAccountView = z.infer<typeof pendingBrokerAccountViewSchema>;
+
+// Allowlisted projection of the users row plus two facts about its accounts: the token balance,
 // the internal id and the timestamps never leave the process.
 export const userStartViewSchema = z.object({
   telegramUserId: z.string(),
@@ -42,6 +50,8 @@ export const userStartViewSchema = z.object({
   acquisitionSource: z.string().nullable(),
   acquiredAt: z.iso.datetime({ offset: true }).nullable(),
   hasActiveBrokerAccount: z.boolean(),
+  // newest first
+  pendingBrokerAccounts: z.array(pendingBrokerAccountViewSchema),
 });
 export type UserStartView = z.infer<typeof userStartViewSchema>;
 

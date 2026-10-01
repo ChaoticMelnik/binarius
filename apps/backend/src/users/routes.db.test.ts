@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BrokerAccountStatus, UserStatus } from '@binarius/shared';
 import { createTempDatabase, seedBrokerAccount, type TempDatabase } from '@binarius/db/testing';
-import { users } from '@binarius/db';
+import { brokerAccounts, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
 
@@ -119,6 +119,7 @@ describe('POST /users/start', () => {
         acquisitionSource: null,
         acquiredAt: null,
         hasActiveBrokerAccount: false,
+        pendingBrokerAccounts: [],
       },
     });
   });
@@ -168,5 +169,33 @@ describe('POST /users/start', () => {
 
     const after = await post(body(telegramUserId));
     expect(after.json().user.hasActiveBrokerAccount).toBe(true);
+  });
+
+  it('lists a link waiting for confirmation, and stops once it is confirmed', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await post(body(telegramUserId));
+    const [row] = await tmp.db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.telegramUserId, BigInt(telegramUserId)));
+    const accountId = await seedBrokerAccount(tmp.db, row!.id, {
+      status: BrokerAccountStatus.Pending,
+    });
+
+    const pending = await post(body(telegramUserId));
+    expect(pending.json().user).toMatchObject({
+      hasActiveBrokerAccount: false,
+      pendingBrokerAccounts: [{ id: accountId, email: null }],
+    });
+
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ status: BrokerAccountStatus.Active })
+      .where(eq(brokerAccounts.id, accountId));
+    const after = await post(body(telegramUserId));
+    expect(after.json().user).toMatchObject({
+      hasActiveBrokerAccount: true,
+      pendingBrokerAccounts: [],
+    });
   });
 });

@@ -32,6 +32,7 @@ export const USER_VIEW: UserStartView = {
   acquisitionSource: null,
   acquiredAt: null,
   hasActiveBrokerAccount: false,
+  pendingBrokerAccounts: [],
 };
 
 export const userView = (patch: Partial<UserStartView> = {}): UserStartView => ({
