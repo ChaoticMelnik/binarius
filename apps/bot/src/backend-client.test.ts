@@ -2,7 +2,15 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { afterEach, describe, expect, it } from 'vitest';
 import { OAuthErrorCode, type UserStartRequest } from '@binarius/shared';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
-import { LOGIN, closeServer, listen, rejectionOf, userView } from './testing';
+import {
+  CONFIRMED,
+  LOGIN,
+  PENDING_ACCOUNT_ID,
+  closeServer,
+  listen,
+  rejectionOf,
+  userView,
+} from './testing';
 
 const TOKEN = 'internal-token-for-tests';
 
@@ -176,6 +184,44 @@ describe('startLogin', () => {
       createBackendClient({ baseUrl, token: TOKEN }).startLogin('4242'),
     );
     expect((error as BackendError).reason).toBeUndefined();
+  });
+});
+
+describe('confirmLogin', () => {
+  it('sends both identities and returns the parsed response', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, CONFIRMED);
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).confirmLogin('4242', PENDING_ACCOUNT_ID),
+    ).toEqual(CONFIRMED);
+    expect(capture.url).toBe('/auth/binodex/confirm');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({
+      telegramUserId: '4242',
+      accountId: PENDING_ACCOUNT_ID,
+    });
+  });
+
+  // the grant is what the bot prints, so a confirm answer without one is not a success
+  it('reports an answer that carries no grant as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { account: CONFIRMED.account });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).confirmLogin('4242', PENDING_ACCOUNT_ID),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('carries the backend error code as the reason', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 409, { error: OAuthErrorCode.AccountNotPending });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).confirmLogin('4242', PENDING_ACCOUNT_ID),
+    );
+    expect(error).toMatchObject({ status: 409, reason: OAuthErrorCode.AccountNotPending });
   });
 });
 

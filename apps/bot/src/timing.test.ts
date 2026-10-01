@@ -6,13 +6,15 @@ import { describe, expect, it } from 'vitest';
 import { OAuthErrorCode, UserStatus } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { CONNECT_CALLBACK_DATA, createBot } from './bot';
+import { CONNECT_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
 import {
   BOT_INFO,
+  CONFIRMED,
   LOGIN,
+  PENDING_ACCOUNT_ID,
   USER_VIEW,
   captureApi,
-  connectUpdate,
+  callbackUpdate,
   fakeLogger,
   startUpdate,
   type ApiAnswer,
@@ -41,6 +43,7 @@ interface Branch {
   expected: Calls;
   recordStart?: BackendClient['recordStart'];
   startLogin?: BackendClient['startLogin'];
+  confirmLogin?: BackendClient['confirmLogin'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -79,6 +82,10 @@ async function observe(branch: Branch): Promise<Calls> {
     startLogin: (telegramUserId) => {
       backend += 1;
       return (branch.startLogin ?? (() => Promise.resolve(LOGIN)))(telegramUserId);
+    },
+    confirmLogin: (telegramUserId, accountId) => {
+      backend += 1;
+      return (branch.confirmLogin ?? (() => Promise.resolve(CONFIRMED)))(telegramUserId, accountId);
     },
   };
   const bot = createBot({
@@ -168,6 +175,27 @@ const START_BRANCHES: readonly Branch[] = [
     expected: { backend: 1, telegram: 1 },
   },
   {
+    label: 'a link waits for confirmation',
+    update: startUpdate('/start'),
+    recordStart: () =>
+      Promise.resolve({
+        ...USER_VIEW,
+        pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: 'ada@example.test' }],
+      }),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'a link without an email waits for confirmation beside an active account',
+    update: startUpdate('/start'),
+    recordStart: () =>
+      Promise.resolve({
+        ...USER_VIEW,
+        hasActiveBrokerAccount: true,
+        pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: null }],
+      }),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
     label: 'the user already has an account',
     update: startUpdate('/start'),
     recordStart: () => Promise.resolve({ ...USER_VIEW, hasActiveBrokerAccount: true }),
@@ -213,26 +241,26 @@ const START_BRANCHES: readonly Branch[] = [
 
 const CONNECT_WORST_CASE: Branch = {
   label: 'the query is answered and the link is sent',
-  update: connectUpdate(CONNECT_CALLBACK_DATA),
+  update: callbackUpdate(CONNECT_CALLBACK_DATA),
   expected: { backend: 1, telegram: 2 },
 };
 
 const CONNECT_BRANCHES: readonly Branch[] = [
   {
     label: 'the chat is not private',
-    update: connectUpdate(CONNECT_CALLBACK_DATA, 'group'),
+    update: callbackUpdate(CONNECT_CALLBACK_DATA, 'group'),
     expected: { backend: 0, telegram: 0 },
   },
   CONNECT_WORST_CASE,
   {
     label: 'answering the query is refused and the link still goes',
-    update: connectUpdate(CONNECT_CALLBACK_DATA),
+    update: callbackUpdate(CONNECT_CALLBACK_DATA),
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
     expected: { backend: 1, telegram: 2 },
   },
   {
     label: 'the backend reports a blocked user',
-    update: connectUpdate(CONNECT_CALLBACK_DATA),
+    update: callbackUpdate(CONNECT_CALLBACK_DATA),
     startLogin: () =>
       Promise.reject(
         new BackendError(BackendErrorCode.HttpStatus, {
@@ -244,9 +272,79 @@ const CONNECT_BRANCHES: readonly Branch[] = [
   },
   {
     label: 'the backend fails for any other reason',
-    update: connectUpdate(CONNECT_CALLBACK_DATA),
+    update: callbackUpdate(CONNECT_CALLBACK_DATA),
     startLogin: () =>
       Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
+    expected: { backend: 1, telegram: 2 },
+  },
+];
+
+const confirmRefused = (status: number, reason?: string) => () =>
+  Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status, reason }));
+
+const CONFIRM_UPDATE = callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID));
+
+const CONFIRM_WORST_CASE: Branch = {
+  label: 'the query is answered and the pack is reported',
+  update: CONFIRM_UPDATE,
+  expected: { backend: 1, telegram: 2 },
+};
+
+const CONFIRM_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID), 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    // matches the trigger, fails the uuid schema: the spinner is stopped and nothing else
+    label: 'the callback data does not carry a uuid',
+    update: callbackUpdate(`confirm:${'-'.repeat(36)}`),
+    expected: { backend: 0, telegram: 1 },
+  },
+  CONFIRM_WORST_CASE,
+  {
+    label: 'the link is confirmed without a pack for a non-partner account',
+    update: CONFIRM_UPDATE,
+    confirmLogin: () =>
+      Promise.resolve({ ...CONFIRMED, grant: { granted: false, reason: 'not_partner_client' } }),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the link is confirmed without a pack already paid',
+    update: CONFIRM_UPDATE,
+    confirmLogin: () =>
+      Promise.resolve({ ...CONFIRMED, grant: { granted: false, reason: 'already_granted' } }),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'answering the query is refused and the outcome still goes',
+    update: CONFIRM_UPDATE,
+    apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the backend no longer finds the link',
+    update: CONFIRM_UPDATE,
+    confirmLogin: confirmRefused(404, OAuthErrorCode.BrokerAccountNotFound),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the link is no longer pending',
+    update: CONFIRM_UPDATE,
+    confirmLogin: confirmRefused(409, OAuthErrorCode.AccountNotPending),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the backend reports a blocked user',
+    update: CONFIRM_UPDATE,
+    confirmLogin: confirmRefused(409, OAuthErrorCode.UserBlocked),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the backend fails for any other reason',
+    update: CONFIRM_UPDATE,
+    confirmLogin: confirmRefused(500),
     expected: { backend: 1, telegram: 2 },
   },
 ];
@@ -258,6 +356,10 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('the connect button', async () => {
     await checkHandler('connect', CONNECT_BRANCHES, CONNECT_WORST_CASE, HANDLER_CALLS.connect);
+  });
+
+  it('the confirm button', async () => {
+    await checkHandler('confirm', CONFIRM_BRANCHES, CONFIRM_WORST_CASE, HANDLER_CALLS.confirm);
   });
 });
 

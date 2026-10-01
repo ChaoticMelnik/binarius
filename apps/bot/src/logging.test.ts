@@ -5,14 +5,16 @@ import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import { LOG_REDACT_PATHS } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { CONNECT_CALLBACK_DATA, createBot } from './bot';
+import { CONNECT_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
 import {
   BOT_INFO,
+  CONFIRMED,
   LOGIN,
+  PENDING_ACCOUNT_ID,
   USER_VIEW,
   captureApi,
-  connectUpdate,
+  callbackUpdate,
   rejectionOf,
   startUpdate,
   type ApiAnswer,
@@ -44,6 +46,7 @@ interface Scenario {
   update: Update;
   recordStart?: BackendClient['recordStart'];
   startLogin?: BackendClient['startLogin'];
+  confirmLogin?: BackendClient['confirmLogin'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -54,6 +57,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
   const backend: BackendClient = {
     recordStart: scenario.recordStart ?? (() => Promise.resolve(USER_VIEW)),
     startLogin: scenario.startLogin ?? (() => Promise.resolve(LOGIN)),
+    confirmLogin: scenario.confirmLogin ?? (() => Promise.resolve(CONFIRMED)),
   };
   const bot = createBot({
     token: TOKEN,
@@ -171,7 +175,7 @@ describe('what the bot writes about a failed backend call', () => {
 
   it('carries the backend status when the login cannot be started', async () => {
     const { lines } = await linesFrom({
-      update: connectUpdate(CONNECT_CALLBACK_DATA),
+      update: callbackUpdate(CONNECT_CALLBACK_DATA),
       startLogin: () =>
         Promise.reject(
           new BackendError(BackendErrorCode.HttpStatus, {
@@ -181,6 +185,26 @@ describe('what the bot writes about a failed backend call', () => {
         ),
     });
     const logged = lineWith(lines, 'login not started');
+
+    expect(logged).toMatchObject({
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 500,
+    });
+    expect(lines.join('')).not.toContain(INTERNAL_TOKEN);
+  });
+
+  it('carries the backend status when the login cannot be confirmed', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID)),
+      confirmLogin: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, {
+            status: 500,
+            cause: new Error(`Bearer ${INTERNAL_TOKEN}`),
+          }),
+        ),
+    });
+    const logged = lineWith(lines, 'login not confirmed');
 
     expect(logged).toMatchObject({
       err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },

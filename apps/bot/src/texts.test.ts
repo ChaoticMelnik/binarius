@@ -11,11 +11,20 @@ describe('texts', () => {
     expect(TEXTS.welcome.length).toBeLessThanOrEqual(CAPTION_LIMIT);
   });
 
+  // A function is measured with a 254-character argument, RFC 5321's limit for an address. The
+  // wire schema does not bound the email, so this is a margin check, not a guarantee.
+  const LONGEST_ARGUMENT = 'x'.repeat(254);
   it.each(Object.entries(TEXTS))(
     'keeps %s inside the message limit and non-empty',
-    (_key, text) => {
+    (_key, entry) => {
+      const text = typeof entry === 'function' ? entry(LONGEST_ARGUMENT) : entry;
       expect(text.trim().length).toBeGreaterThan(0);
       expect(text.length).toBeLessThanOrEqual(MESSAGE_LIMIT);
     },
   );
+
+  it('labels the confirm button with the email, or without one when the broker sent none', () => {
+    expect(TEXTS.confirmButton('ada@example.test')).toBe('Подтвердить: ada@example.test');
+    expect(TEXTS.confirmButton(null)).toBe('Подтвердить привязку');
+  });
 });

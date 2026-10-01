@@ -3,8 +3,9 @@
 export const CAPTION_LIMIT = 1024;
 export const MESSAGE_LIMIT = 4096;
 
-// Sent without parse_mode: nothing here is composed from user input, and plain text cannot be
-// broken by a stray underscore in a name.
+// Sent without parse_mode: the confirm button carries the email the broker reported, which is
+// someone else's data, and plain text can neither be broken by a stray underscore in it nor
+// turned into markup by it.
 export const TEXTS = {
   welcome: [
     'Binarius — торговля на Binodex прямо в Telegram.',
@@ -23,4 +24,15 @@ export const TEXTS = {
   loginButton: 'Войти в Binodex',
   blocked: 'Доступ ограничен. Если это ошибка, напишите в поддержку.',
   unavailable: 'Сервис временно недоступен. Попробуйте позже.',
+  confirmPrompt: 'Найдена новая привязка аккаунта Binodex. Если вход выполняли вы — подтвердите.',
+  confirmButton: (email: string | null) =>
+    email === null ? 'Подтвердить привязку' : `Подтвердить: ${email}`,
+  // the number is the backend's (LINK_BONUS_TOKENS), printed as it arrives
+  linkedWithBonus: (tokens: string) =>
+    `Аккаунт Binodex подключён. Начислено токенов автоторговли: ${tokens}.`,
+  linkedNoBonusNotPartner:
+    'Аккаунт Binodex подключён. Стартовые токены начисляются только аккаунтам, зарегистрированным через Binarius.',
+  linkedNoBonusAlready: 'Аккаунт Binodex подключён. Стартовые токены уже были начислены ранее.',
+  confirmNotFound: 'Привязка не найдена. Начните подключение заново через /start.',
+  confirmAlreadyDone: 'Эта привязка уже подтверждена или больше не ожидает подтверждения.',
 } as const;
