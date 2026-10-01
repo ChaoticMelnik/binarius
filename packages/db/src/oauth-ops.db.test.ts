@@ -18,7 +18,7 @@ import {
   revokeAccountIfUnchanged,
   toBrokerAccountView,
 } from './oauth-ops';
-import { brokerAccounts, oauthStates, users } from './schema/index';
+import { brokerAccounts, oauthStates, tokenLedger, users } from './schema/index';
 
 const baseUrl = process.env.DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -379,6 +379,8 @@ describe('the confirmation gate', () => {
     expect(confirmed.ok).toBe(true);
     if (!confirmed.ok) return;
     expect(confirmed.account.status).toBe('active');
+    // brokerTokens() links a non-partner account; the pack itself is link-bonus-ops.db.test.ts's
+    expect(confirmed.grant).toEqual({ granted: false, reason: 'not_partner_client' });
     expect((await brokerAccountRow(tmp.db, created.account.id)).status).toBe('active');
   });
 
@@ -421,6 +423,36 @@ describe('the confirmation gate', () => {
     expect(again.account.status).toBe('active');
   });
 
+  // a re-login is not a first activation: only confirmBrokerAccount pays the starter pack. The
+  // account was confirmed as a non-partner one, so its user's slot is still free — a grant on
+  // the way back from revoked would land.
+  it('pays no starter pack when a revoked account comes back as a partner one', async () => {
+    const telegramUserId = 700_103n;
+    const tokens = brokerTokens();
+    const created = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const confirmed = await confirmBrokerAccount(tmp.db, {
+      telegramUserId,
+      accountId: created.account.id,
+    });
+    expect(confirmed).toMatchObject({ ok: true, grant: { granted: false } });
+    await tmp.db.transaction((tx) =>
+      revokeAccount(tx, created.account.id, AuthRevokedReason.RefreshInvalidGrant),
+    );
+
+    const partner = { ...tokens, user: { ...tokens.user, isPartnerClient: true } };
+    const again = await linkBrokerAccount(tmp.db, { telegramUserId, tokens: partner, cipher });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.account).toMatchObject({ status: 'active', isPartnerClient: true });
+    const ledger = await tmp.db
+      .select({ id: tokenLedger.id })
+      .from(tokenLedger)
+      .where(eq(tokenLedger.userId, again.account.userId));
+    expect(ledger).toEqual([]);
+  });
+
   it.each([
     ['an account of another user', 0, 'not_found' as const],
     ['an account that is already active', 1, 'not_pending' as const],
@@ -452,7 +484,10 @@ describe('the confirmation gate', () => {
       ).toEqual({ ok: false, reason: 'not_pending' });
       return;
     }
-    await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.telegramUserId, telegramUserId));
+    await tmp.db
+      .update(users)
+      .set({ status: 'blocked' })
+      .where(eq(users.telegramUserId, telegramUserId));
     expect(
       await confirmBrokerAccount(tmp.db, { telegramUserId, accountId: created.account.id }),
     ).toEqual({ ok: false, reason: 'user_blocked' });

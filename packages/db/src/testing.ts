@@ -133,7 +133,7 @@ export async function seedUser(
 export async function seedBrokerAccount(
   db: Db,
   userId: string,
-  patch: { status?: BrokerAccountStatus; tradingHalted?: boolean } = {},
+  patch: { status?: BrokerAccountStatus; tradingHalted?: boolean; isPartnerClient?: boolean } = {},
 ): Promise<string> {
   const [account] = await db
     .insert(brokerAccounts)
