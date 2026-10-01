@@ -44,6 +44,9 @@ text on the address step
   back → { codeSent: true }
   bot  → dialog → code step, "Код отправлен на <address>…" + "Запросить код ещё раз" (resend)
          and "Изменить адрес" (connect)
+         no answer, 5xx or a broken body → dialog → code step all the same, "Не удалось
+         подтвердить отправку кода на <address>…" + the same two buttons: the letter may have
+         gone out
 
 text on the code step
   bot  → longer than 64 characters (emailLoginCodeSchema) → "Код не подошёл…", no backend call
@@ -54,6 +57,8 @@ text on the code step
 
 tap "Запросить код ещё раз" (callback data resend)
   bot  → answerCallbackQuery ∥ POST /auth/binodex/email/send-code with the dialog's address
+         a 429 → "Новый код сейчас запросить нельзя…", the code step stays: the code already
+         sent is still good
 
 tap "Войти через сайт Binodex" (callback data oauth)
   bot  → answerCallbackQuery ∥ POST /auth/binodex/start { telegramUserId }
@@ -89,7 +94,8 @@ user in `login-dialog.ts`: `{ step: 'email' }` or `{ step: 'code', email }`. It 
 process's memory (the owner's decision in #162), with no new dependency:
 
 - an entry lives 10 minutes (`LOGIN_DIALOG_TTL_MS`) from its last change — a new code gives it
-  another 10 — and an expired one is dropped when it is next read;
+  another 10, a step kept after a refusal does not — and an expired one is dropped when it is
+  next read;
 - at most 10 000 entries (`LOGIN_DIALOG_MAX_ENTRIES`): a new user at the cap evicts the entry
   changed longest ago, which may be a live dialog — that user presses the button again;
 - a restart or a deploy drops every dialog, and the user presses the button again.
@@ -112,20 +118,41 @@ What each step does with what the user types:
 - **code step** — anything typed is a code, an address included (the owner's answer 4b);
   `emailLoginCodeSchema` only refuses a text longer than 64 characters.
 
+The backend answers 429 for two different limits ([binodex-oauth.md →
+Limits](binodex-oauth.md#limits); `ceiling` and `keyedWindows` in
+`apps/backend/src/auth/routes.ts`), and the dialog treats them differently.
+`too_many_requests` is the route's ceiling across all users, checked before anything else: no
+letter goes out, no code is spent and none of this user's own allowance is used, so the step
+stays and the same message can be sent again a little later. `too_many_attempts` is this
+Telegram user's or this address's own allowance for the next minutes: asking for an address or
+typing a code again would be refused the same way, so the dialog ends — except on «Запросить код
+ещё раз», where the code already sent is still good and the code step stays.
+
 What ends the dialog, and what does not:
 
 | Event | Dialog |
 | --- | --- |
 | `connect` («Подключить аккаунт Binodex», «Изменить адрес») | back to the address step |
+| code sent | to the code step |
+| send-code with no answer, a 5xx (502 included) or a broken body | to the code step: the letter may have gone out |
+| send-code `invalid_email` | back to the address step |
+| send-code `too_many_requests` on the address step | stays on the address step |
+| send-code `too_many_attempts` on the address step | ends |
+| send-code `too_many_requests` / `too_many_attempts` on «Запросить код ещё раз» | stays on the code step |
+| send-code `user_blocked` | ends |
 | login succeeded | ends |
-| send-code `invalid_email` | stays on the address step |
-| send-code `too_many_attempts` / `too_many_requests` / `user_blocked` | ends |
-| login `too_many_attempts` / `too_many_requests` / `user_blocked` / `broker_account_taken` | ends |
+| login `too_many_requests` | stays on the code step, no recheck |
+| login `too_many_attempts` / `user_blocked` / `broker_account_taken` | ends, no recheck |
 | login `invalid_code`, recheck finds no active account | stays on the code step |
 | recheck finds an active account, or a blocked user | ends |
-| any other failure (backend unreachable, 5xx, a failed recheck) | unchanged — the user retries |
+| any other login failure (backend unreachable, 5xx, a failed recheck) | unchanged — the user retries |
 | `/start` or any other command | unchanged |
 | text outside a dialog | ignored, nothing is sent |
+
+A step kept after a refusal ("stays" in the table) keeps the clock it had; every row that moves
+the dialog to a step, the unknown send-code included, restarts the 10 minutes. «Запросить код ещё раз» pressed when there is no dialog — it expired, a login
+already finished it, or the bot restarted — answers «Этот запрос кода уже не действует…», which
+holds in each of those cases.
 
 `/start` answers as it always does and leaves the dialog alone (the owner's answer 3c): the
 `/start` handler is registered before the text handler and does not pass the update on, and the
@@ -136,8 +163,9 @@ active account.
 **The recheck.** The login activates the account and pays the pack in one transaction, and its
 outcome is only in its answer. When that answer is lost after the commit — the bot's own 5 s
 timeout — the account is active, and the same code typed again is refused as `invalid_code`
-because the broker's code is single-use. So a login failure that is not one of the four definite
-refusals above is followed by `POST /users/start` with the user's name and language, the request
+because the broker's code is single-use. So a login failure that is not one of the definite
+refusals in the table (`too_many_requests`, `too_many_attempts`, `user_blocked`,
+`broker_account_taken`) is followed by `POST /users/start` with the user's name and language, the request
 `/start` sends without a payload; it refreshes the name as any `/start` does. An active account
 is reported as «Аккаунт Binodex подключён.», without a number — the recheck knows the account is
 active, not what was paid; a blocked user gets the blocked text; otherwise the original failure
