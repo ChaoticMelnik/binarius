@@ -5,7 +5,7 @@ import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import { LOG_REDACT_PATHS } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { CONNECT_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
+import { OAUTH_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
 import {
   BOT_INFO,
@@ -180,7 +180,7 @@ describe('what the bot writes about a failed backend call', () => {
 
   it('carries the backend status when the login cannot be started', async () => {
     const { lines } = await linesFrom({
-      update: callbackUpdate(CONNECT_CALLBACK_DATA),
+      update: callbackUpdate(OAUTH_CALLBACK_DATA),
       startLogin: () =>
         Promise.reject(
           new BackendError(BackendErrorCode.HttpStatus, {

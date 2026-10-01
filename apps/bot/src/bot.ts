@@ -2,6 +2,8 @@ import { Bot, GrammyError, HttpError, InlineKeyboard, type Context } from 'gramm
 import type { User, UserFromGetMe } from 'grammy/types';
 import {
   confirmLoginRequestSchema,
+  emailAddressSchema,
+  emailLoginCodeSchema,
   errorLogFields,
   LinkBonusSkipReason,
   languageCodeSchema,
@@ -9,17 +11,24 @@ import {
   startPayloadSchema,
   userStartRequestSchema,
   UserStatus,
+  type EmailSendCodeResponse,
   type LinkBonusGrantView,
   type PendingBrokerAccountView,
   type UserStartRequest,
 } from '@binarius/shared';
 import { BackendError, type BackendClient } from './backend-client';
+import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
 import { TEXTS } from './texts';
 import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 
-// the callback data of the CTA button; Bot API allows 1-64 bytes
+// Callback data of the buttons; Bot API allows 1-64 bytes. `connect` is the main button of the
+// welcome and asks for the address: buttons sent by earlier versions carry the same data and the
+// same label, so they lead where the new ones do. `Изменить адрес` carries it too — changing the
+// address is pressing the button again.
 export const CONNECT_CALLBACK_DATA = 'connect';
+export const OAUTH_CALLBACK_DATA = 'oauth';
+export const RESEND_CALLBACK_DATA = 'resend';
 // 'confirm:' + a 36-character uuid is 44 bytes
 export const CONFIRM_CALLBACK_PREFIX = 'confirm:';
 export const confirmCallbackData = (accountId: string): string =>
@@ -36,6 +45,8 @@ export interface CreateBotOptions {
   botInfo?: UserFromGetMe;
   apiRoot?: string;
   telegramApiTimeoutMs?: number;
+  // a seam for the tests that start in the middle of the dialog
+  loginDialog?: LoginDialog;
 }
 
 export function createBot({
@@ -46,6 +57,7 @@ export function createBot({
   botInfo,
   apiRoot,
   telegramApiTimeoutMs = TELEGRAM_API_TIMEOUT_MS,
+  loginDialog = createLoginDialog(),
 }: CreateBotOptions): Bot {
   const bot = new Bot(token, {
     ...(botInfo === undefined ? {} : { botInfo }),
@@ -56,8 +68,17 @@ export function createBot({
     },
   });
 
-  const connectKeyboard = () =>
-    new InlineKeyboard().text(TEXTS.connectButton, CONNECT_CALLBACK_DATA);
+  const welcomeKeyboard = () =>
+    new InlineKeyboard()
+      .text(TEXTS.connectButton, CONNECT_CALLBACK_DATA)
+      .row()
+      .text(TEXTS.oauthButton, OAUTH_CALLBACK_DATA);
+
+  const codeKeyboard = () =>
+    new InlineKeyboard()
+      .text(TEXTS.resendButton, RESEND_CALLBACK_DATA)
+      .row()
+      .text(TEXTS.changeEmailButton, CONNECT_CALLBACK_DATA);
 
   // Groups and channels are ignored entirely: this bot only ever talks to one person, and a
   // /start in a group would attribute a whole chat to one member's payload.
@@ -66,12 +87,7 @@ export function createBot({
   privateChats.command('start', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) return;
-    const request: UserStartRequest = {
-      telegramUserId: String(from.id),
-      displayName: displayNameOf(from),
-      ...languageOf(from.language_code),
-      ...payloadOf(ctx.match),
-    };
+    const request: UserStartRequest = { ...startRequestOf(from), ...payloadOf(ctx.match) };
 
     let user;
     try {
@@ -105,6 +121,14 @@ export function createBot({
   });
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
+    loginDialog.set(ctx.from.id, { step: 'email' });
+    await ctx.answerCallbackQuery().catch((error: unknown) => {
+      logAnswerFailure(error);
+    });
+    await ctx.reply(TEXTS.emailPrompt);
+  });
+
+  privateChats.callbackQuery(OAUTH_CALLBACK_DATA, async (ctx) => {
     // the two calls are independent: the spinner on the button is worth less than the link, so
     // a rejected answerCallbackQuery ("query is too old" is the usual one) must not skip it
     const [answered, login] = await Promise.allSettled([
@@ -165,6 +189,136 @@ export function createBot({
     await ctx.reply(TEXTS.unavailable);
   });
 
+  privateChats.callbackQuery(RESEND_CALLBACK_DATA, async (ctx) => {
+    const id = ctx.from.id;
+    const state = loginDialog.get(id);
+    if (state?.step !== 'code') {
+      await ctx.answerCallbackQuery().catch((error: unknown) => {
+        logAnswerFailure(error);
+      });
+      // no address yet, or no dialog at all: there is nothing to send a code to
+      await ctx.reply(state === undefined ? TEXTS.dialogExpired : TEXTS.emailPrompt);
+      return;
+    }
+    // independent, as in confirm
+    const [answered, sent] = await Promise.allSettled([
+      ctx.answerCallbackQuery(),
+      backend.sendEmailCode(String(id), state.email),
+    ]);
+    if (answered.status === 'rejected') logAnswerFailure(answered.reason);
+    await replyToSendCode(ctx, id, state.email, sent);
+  });
+
+  // Registered after command('start'), which does not call next(): /start never reaches this
+  // handler, so it neither feeds the dialog nor resets it. Any other command is ignored here for
+  // the same reason. Text outside a dialog is ignored altogether (the owner's decision, #162).
+  privateChats.on('message:text', async (ctx) => {
+    const from = ctx.from;
+    const text = ctx.message.text;
+    if (from === undefined || text.startsWith('/')) return;
+    const state = loginDialog.get(from.id);
+    if (state === undefined) return;
+
+    if (state.step === 'email') {
+      const email = emailAddressSchema.safeParse(text);
+      if (!email.success) {
+        await ctx.reply(TEXTS.emailInvalid);
+        return;
+      }
+      const [sent] = await Promise.allSettled([backend.sendEmailCode(String(from.id), email.data)]);
+      await replyToSendCode(ctx, from.id, email.data, sent);
+      return;
+    }
+
+    // whatever is typed on this step is a code, an address included: the button changes the
+    // address (the owner's decision, #171)
+    const code = emailLoginCodeSchema.safeParse(text);
+    if (!code.success) {
+      await ctx.reply(TEXTS.codeInvalid, { reply_markup: codeKeyboard() });
+      return;
+    }
+    let login;
+    try {
+      login = await backend.emailLogin(String(from.id), state.email, code.data);
+    } catch (error) {
+      await replyToFailedLogin(ctx, from, error);
+      return;
+    }
+    loginDialog.delete(from.id);
+    await ctx.reply(grantText(login.grant));
+  });
+
+  async function replyToSendCode(
+    ctx: Context,
+    id: number,
+    email: string,
+    sent: PromiseSettledResult<EmailSendCodeResponse>,
+  ): Promise<void> {
+    if (sent.status === 'fulfilled') {
+      loginDialog.set(id, { step: 'code', email });
+      await ctx.reply(TEXTS.codeSent(email), { reply_markup: codeKeyboard() });
+      return;
+    }
+    const error: unknown = sent.reason;
+    const refusal =
+      error instanceof BackendError ? SEND_CODE_REFUSALS[error.reason ?? ''] : undefined;
+    if (refusal !== undefined) {
+      if (refusal.next === undefined) loginDialog.delete(id);
+      else loginDialog.set(id, refusal.next);
+      await ctx.reply(refusal.text);
+      return;
+    }
+    // the step stays where it was: an outage is not the user's mistake to start over from
+    logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, 'email code not sent');
+    await ctx.reply(TEXTS.unavailable);
+  }
+
+  // The login is irreversible and its outcome is only in its answer. An answer lost after the
+  // commit (the bot's own timeout) leaves an active account behind, and the same code typed
+  // again is then refused as invalid_code. So every failure but a definite refusal is checked
+  // against the user's state before the user is told it failed.
+  async function replyToFailedLogin(ctx: Context, from: User, error: unknown): Promise<void> {
+    const refusal = error instanceof BackendError ? LOGIN_REFUSALS[error.reason ?? ''] : undefined;
+    if (refusal !== undefined) {
+      loginDialog.delete(from.id);
+      await ctx.reply(refusal);
+      return;
+    }
+    const invalidCode =
+      error instanceof BackendError && error.reason === OAuthErrorCode.InvalidCode;
+    if (!invalidCode) {
+      logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, 'email login failed');
+    }
+
+    let user;
+    try {
+      user = await backend.recordStart(startRequestOf(from));
+    } catch (recheckError) {
+      // without the state, "wrong code" would be a guess
+      logger.warn(
+        { ...errorLogFields(recheckError), ...backendErrorFields(recheckError) },
+        'email login outcome not rechecked',
+      );
+      await ctx.reply(TEXTS.unavailable);
+      return;
+    }
+    if (user.status === UserStatus.Blocked) {
+      loginDialog.delete(from.id);
+      await ctx.reply(TEXTS.blocked);
+      return;
+    }
+    if (user.hasActiveBrokerAccount) {
+      loginDialog.delete(from.id);
+      await ctx.reply(TEXTS.linkedActive);
+      return;
+    }
+    if (invalidCode) {
+      await ctx.reply(TEXTS.codeInvalid, { reply_markup: codeKeyboard() });
+      return;
+    }
+    await ctx.reply(TEXTS.unavailable);
+  }
+
   function logAnswerFailure(error: unknown): void {
     logger.warn(
       { ...errorLogFields(error), ...telegramErrorFields(error, 'answerCallbackQuery') },
@@ -184,7 +338,7 @@ export function createBot({
   });
 
   async function sendWelcome(ctx: Context): Promise<void> {
-    const reply_markup = connectKeyboard();
+    const reply_markup = welcomeKeyboard();
     if (welcomeVideoFileId !== undefined) {
       try {
         await ctx.replyWithVideo(welcomeVideoFileId, { caption: TEXTS.welcome, reply_markup });
@@ -233,6 +387,16 @@ export function createBot({
 // back to the Telegram id instead: the only identity the bot is certain to have. Bot API says
 // first_name is non-empty, but not that it survives a trim, so this is depth rather than dead
 // code.
+// What every /users/start carries apart from the payload: /start adds that one, and the recheck
+// after an email login sends none.
+function startRequestOf(from: User): UserStartRequest {
+  return {
+    telegramUserId: String(from.id),
+    displayName: displayNameOf(from),
+    ...languageOf(from.language_code),
+  };
+}
+
 function displayNameOf(from: User): string {
   const parsed = userStartRequestSchema.shape.displayName.safeParse(
     [from.first_name, from.last_name].filter(Boolean).join(' '),
@@ -270,6 +434,24 @@ const CONFIRM_REFUSALS: Partial<Record<string, string>> = {
   [OAuthErrorCode.BrokerAccountNotFound]: TEXTS.confirmNotFound,
   [OAuthErrorCode.AccountNotPending]: TEXTS.confirmAlreadyDone,
   [OAuthErrorCode.UserBlocked]: TEXTS.blocked,
+};
+
+// What a send-code refusal says and where it leaves the dialog: `next` is the step to stay on,
+// none ends the dialog. Anything not listed is an outage and keeps the step.
+const SEND_CODE_REFUSALS: Partial<Record<string, { text: string; next?: LoginDialogState }>> = {
+  [OAuthErrorCode.InvalidEmail]: { text: TEXTS.emailRefused, next: { step: 'email' } },
+  [OAuthErrorCode.TooManyAttempts]: { text: TEXTS.tooManyCodeRequests },
+  [OAuthErrorCode.TooManyRequests]: { text: TEXTS.tooManyCodeRequests },
+  [OAuthErrorCode.UserBlocked]: { text: TEXTS.blocked },
+};
+
+// The login refusals that are definite, so no recheck: each ends the dialog. invalid_code is not
+// one of them — a lost answer turns into it on the retry.
+const LOGIN_REFUSALS: Partial<Record<string, string>> = {
+  [OAuthErrorCode.TooManyAttempts]: TEXTS.tooManyCodeAttempts,
+  [OAuthErrorCode.TooManyRequests]: TEXTS.tooManyCodeRequests,
+  [OAuthErrorCode.UserBlocked]: TEXTS.blocked,
+  [OAuthErrorCode.BrokerAccountTaken]: TEXTS.accountTaken,
 };
 
 function backendErrorFields(error: unknown): { backendStatus?: number; backendReason?: string } {

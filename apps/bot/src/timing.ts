@@ -27,11 +27,20 @@ export const BACKEND_REQUEST_TIMEOUT_MS = 5_000;
 export const HANDLER_CALLS = {
   // recordStart, then sendVideo refused by Telegram (GrammyError) → sendMessage
   start: { backend: 1, telegram: 2 },
+  // answerCallbackQuery, then sendMessage asking for the address
+  connect: { backend: 0, telegram: 2 },
   // answerCallbackQuery ∥ startLogin, then sendMessage — the parallel pair is counted as
   // sequential, so this bound is loose by BACKEND_REQUEST_TIMEOUT_MS (accepted)
-  connect: { backend: 1, telegram: 2 },
-  // answerCallbackQuery ∥ confirmLogin, then sendMessage — counted the same way as connect
+  oauth: { backend: 1, telegram: 2 },
+  // answerCallbackQuery ∥ confirmLogin, then sendMessage — counted the same way as oauth
   confirm: { backend: 1, telegram: 2 },
+  // a text on the address step: sendEmailCode, then sendMessage
+  emailStep: { backend: 1, telegram: 1 },
+  // a text on the code step: emailLogin, the recheck through recordStart when its outcome is
+  // not a definite refusal, then sendMessage
+  codeStep: { backend: 2, telegram: 1 },
+  // answerCallbackQuery ∥ sendEmailCode, then sendMessage — counted the same way as oauth
+  resend: { backend: 1, telegram: 2 },
 } as const;
 
 export const handlerBudgetMs = ({
