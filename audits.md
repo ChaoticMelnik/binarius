@@ -597,3 +597,46 @@ PR #172, rebase-merged (5 коммитов, голова `f306aa9`, в `main` д
 ### Что сработало
 
 - Правка #170 (субагенты ревьюера в foreground) сняла преждевременную сдачу отчёта с первого же прогона.
+
+---
+
+## #171 — Вход по email, часть 2: диалог почта → код в боте (2026-10-01)
+
+PR #176, rebase-merged (9 коммитов, голова `2294495`, в `main` до `0cd13d9`), ветка удалена. Часть 2 серии #162 → #171. **Два круга ревью: в первом Blocker/Major нет, но владелец решил не мержить, а исправить Minor 1-2 в этом PR.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Preflight | Чисто: `main` = `origin/main`, Codex `ready` (вейвер), `gh` по SSH, `.claude/CLAUDE.md` = `origin/main`, Node 22.23.2, Postgres/Redis подняты; открытое предложение 3 аудита #162 — с датой и владельцем. |
+| Architect | Clarify + план | Спавн `fable` → `claude-fable-5-1`. 5 вопросов; владелец выбрал 3c (`/start` не сбрасывает диалог) вопреки рекомендации, архитектор записал цену в плане. Кнопка «Изменить адрес» добавлена сверх ответа 4b — вынесена владельцу implementer'ом, не принята молча. Оценка ~1470 строк. Step 7 Codex — пропуск по вейверу, записан. |
+| Implementer | Clarify + код | Спавн `opus` → `claude-opus-5-5`. 5 вопросов (разбивку коммитов tech-lead вписал в текст вопроса, а не отдельным вопросом — владелец не возразил). 6 коммитов, `pnpm check` exit 0 на каждом; проверка поломкой убрала защиту вытеснения, которую не ловил ни один тест. |
+| Reviewer | Iteration 1 | Спавн `opus`. 0 Blocker, 0 Major, 8 Minor; `/code-review high` назвал R1-1 Major, ревьюер понизил (совпадает с буквой критерия) и вынес владельцу. Владелец: не мержить, чинить 1-2. |
+| Architect | Plan Update | Без Codex (итерация 1). Взял 1, 2, 3, 5, 6, 7; находку 3 (уточнение ответа 2a) вынес владельцу — принята. |
+| Implementer | Fixes | 4 вопроса, 3 коммита, `pnpm check` exit 0 на каждом, 12 поломок в Gate verification. Отклонение: любой 4xx на send-code → неизвестный исход. |
+| Reviewer | Iteration 2 | Весь `gh pr diff`. 0 Blocker, 0 Major, 4 Minor; отклонение implementer'а — Minor 1. |
+| Tech Lead | Merge / Done | `AskUserQuestion` перед мержем → rebase + удаление ветки, `--match-head-commit 2294495`. `MERGED` 14:33:32Z, Done после подтверждения. Follow-up #177 (Todo) — после «да» владельца на заголовок и список. |
+| Model policy | Check | Все спавны на своих алиасах: architect `claude-fable-5-1`; implementer/reviewer/3b/3c `claude-opus-5-5`; 3d `claude-sonnet-5`. Таблица `.claude/CLAUDE.md` писала `claude-opus-5` — обновлена в этом PR. |
+
+### Review iterations: 1 (один возврат после круга 1)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| R1-1: `too_many_requests` (общий потолок маршрута) сбрасывал диалог | Minor | other | Действие выведено из имени кода, источник отказа не разобран | Architect plan |
+| R1-2: 429 на «Запросить код ещё раз» удалял диалог с действующим кодом | Minor | other | То же | Architect plan |
+| R1-3: неизвестный исход send-code оставлял на шаге «адрес» | Minor | instance-vs-class | Правило #175 применено к login, не к send-code | Architect plan |
+| R1-4: гонка таймаутов бота и брокера (5 с / 5 с) | Minor | other | — | Владелец не заводит |
+| R1-5..8, R2-4: тексты, комментарии, housekeeping | Minor | other | Косметика | — |
+| R2-1: любой 4xx на send-code → неизвестный исход | Minor | other | catch-all вместо явной строки | Implementer Step 5 → #177 |
+| R2-2, R2-3: документация и тесты ветки 4xx, описание схемы кода | Minor | other | — | → #177 |
+| Алиас `opus` → `claude-opus-5-5`, таблица писала `claude-opus-5` | Process | single-source | Таблица — запись последней сверки, не обновлялась с #22 | Model policy check |
+| Codex не читал ни план, ни код, ни этот docs-PR | Process | codex-ops | Вейвер владельца до 2026-10-05 | — |
+
+### Process improvement proposals
+
+1. **Источник кода отказа — в таблице кодов плана.** Пункт Validation checklist: для каждого кода ошибки, который клиент превращает в действие, план называет источник (свой лимит / общий потолок / отказ до побочного эффекта / неизвестный исход), действие выводится из источника, код вне таблицы — отдельная строка, не catch-all. — **внедрено в #<DOCS_PR>: `.claude/skills/architect/SKILL.md` → Validation checklist**
+2. **Таблица моделей.** `opus` → `claude-opus-5-5` по наблюдаемому в #163, #10, #171. — **внедрено в #<DOCS_PR>: `.claude/CLAUDE.md` → Модели по ролям pipeline**
+3. **Minor R2-1..3.** — **вынесено в #177**
+4. **Пост-фактум Codex по `2294495`** — присоединяется к предложению 4 аудита #163. — **открыто (2026-10-01, владелец): после сброса лимита 2026-10-05**
