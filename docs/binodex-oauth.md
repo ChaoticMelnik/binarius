@@ -540,7 +540,8 @@ not.
   final, and moving an account is a separate support task.
 - **#162** is the backend half of the email + code login ([Email login](#email-login-issue-162)):
   the client calls, the two routes, the activation and the starter pack. **#171** owns the bot's
-  side: the address → code dialog, its state, the buttons and texts.
+  side: the address → code dialog, its state, the buttons and texts
+  ([bot-start.md → Email dialog](bot-start.md#email-dialog)).
 - **ARCH-01 (#40)** will call `ensureFreshAccessToken` before talking to the broker socket.
 - **#35** owns the reusable mock broker; the stub next to the client
   (`apps/backend/src/broker/testing/oauth-stub.ts`) exists so this suite can prove code expiry,
