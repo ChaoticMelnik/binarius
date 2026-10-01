@@ -174,16 +174,9 @@ async function refreshUnderLock(
   }
   onExchanged(heldPair);
 
-  // the pair must belong to the account that asked for it: applying a foreign one would let
-  // this account act as another broker user
-  if (tokens.user.id !== account.brokerUserId) {
-    logger.error(
-      { accountId: account.id, expected: account.brokerUserId, received: tokens.user.id },
-      'broker returned a pair for another user, revoking the account',
-    );
-    return revoked(tx, account.id, AuthRevokedReason.StorageInconsistent);
-  }
-
+  // The refresh answer names no user. The pair is ours because the token we presented is: it was
+  // decrypted from this account's row (the row id is in the AAD) and matched the stored hash, and
+  // the answer goes back into the same locked row.
   await applyRotatedTokens(tx, { account, tokens, cipher });
   return { ok: true, accessToken: tokens.accessToken };
 }

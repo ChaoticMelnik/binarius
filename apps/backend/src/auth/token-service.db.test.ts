@@ -440,27 +440,6 @@ describe('ensureFreshAccessToken', () => {
     expect(await rowOf(account.id)).toMatchObject({ status: 'revoked' });
   });
 
-  it('refuses a rotated pair issued for another broker user', async () => {
-    const account = await linkedAccount();
-    const foreign = `foreign-${account.brokerUserId}`;
-    await tmp.db
-      .update(brokerAccounts)
-      .set({ brokerUserId: foreign })
-      .where(eq(brokerAccounts.id, account.id));
-    await expireAccessToken(account.id);
-
-    expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
-      ok: false,
-      reason: 'account_revoked',
-      revokedReason: 'storage_inconsistent',
-    });
-    const row = await rowOf(account.id);
-    expect(row.status).toBe('revoked');
-    // the foreign pair was not applied: the stored ciphertext is the one we started with
-    expect(row.refreshTokenEnc).toEqual(account.refreshTokenEnc);
-    expect(row.brokerUserId).toBe(foreign);
-  });
-
   // the broker has consumed the old token by then, so the account cannot be left holding it
   it('revokes in a second transaction when storing the rotated pair fails', async () => {
     const account = await expiredAccount(BLOCKED_EMAIL);
