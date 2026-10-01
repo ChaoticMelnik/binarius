@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   authRevokedReasonSchema,
+  emailAddressSchema,
+  emailLoginCodeSchema,
+  OAuthErrorCode,
+  safeParseBrokerEmailSendCodeResponse,
+  safeParseEmailLoginRequest,
+  safeParseEmailLoginResponse,
+  safeParseEmailSendCodeRequest,
+  safeParseEmailSendCodeResponse,
   brokerAccountViewSchema,
   safeParseConfirmLoginResponse,
   parseOAuthTokenResponse,
@@ -185,5 +193,88 @@ describe('confirm response (issue #10)', () => {
 
   it('rejects a confirm response that carries no grant', () => {
     expect(safeParseConfirmLoginResponse({ account }).success).toBe(false);
+  });
+});
+
+describe('email login contract (issue #162)', () => {
+  it('trims the address before checking it and keeps its case', () => {
+    expect(emailAddressSchema.parse('  Ada@Example.COM  ')).toBe('Ada@Example.COM');
+  });
+
+  it.each([
+    ['a space inside', 'ada @example.com'],
+    ['no domain dot', 'a@b'],
+    ['no at sign', 'ada.example.com'],
+    ['an empty string', '   '],
+    ['255 characters', `${'a'.repeat(243)}@example.com`],
+  ])('rejects an address with %s', (_label, value) => {
+    expect(emailAddressSchema.safeParse(value).success).toBe(false);
+  });
+
+  it('accepts an address of exactly 254 characters', () => {
+    const address = `${'a'.repeat(64)}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(57)}.com`;
+    expect(address).toHaveLength(254);
+    expect(emailAddressSchema.safeParse(address).success).toBe(true);
+  });
+
+  it('bounds the code to 1-64 characters after trimming, in any shape', () => {
+    expect(emailLoginCodeSchema.parse(' 123456 ')).toBe('123456');
+    expect(emailLoginCodeSchema.parse('abcdef')).toBe('abcdef');
+    expect(emailLoginCodeSchema.safeParse('   ').success).toBe(false);
+    expect(emailLoginCodeSchema.safeParse('c'.repeat(65)).success).toBe(false);
+  });
+
+  it('keeps the address out of a validation issue', () => {
+    const parsed = safeParseEmailSendCodeRequest({
+      telegramUserId: '42',
+      email: 'MARKER-ADDRESS',
+    });
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).not.toContain('MARKER-ADDRESS');
+  });
+
+  it('requires both identities on the requests', () => {
+    expect(safeParseEmailSendCodeRequest({ telegramUserId: '42', email: 'a@b.co' }).success).toBe(
+      true,
+    );
+    expect(safeParseEmailSendCodeRequest({ email: 'a@b.co' }).success).toBe(false);
+    expect(
+      safeParseEmailLoginRequest({ telegramUserId: '42', email: 'a@b.co', code: '1' }).success,
+    ).toBe(true);
+    expect(safeParseEmailLoginRequest({ telegramUserId: '42', email: 'a@b.co' }).success).toBe(
+      false,
+    );
+  });
+
+  it('answers send-code with a literal flag and login with an account and a grant', () => {
+    expect(safeParseEmailSendCodeResponse({ codeSent: true }).success).toBe(true);
+    expect(safeParseEmailSendCodeResponse({ codeSent: false }).success).toBe(false);
+    expect(
+      safeParseEmailLoginResponse({
+        account: {
+          id: '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01',
+          brokerUserId: 'broker-1',
+          email: 'a@b.co',
+          isPartnerClient: true,
+          status: 'active',
+          createdAt: '2026-10-01T09:21:52.000Z',
+        },
+        grant: { granted: true, tokens: '100' },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    [{ status: true }, true],
+    [{ status: true, extra: 1 }, true],
+    [{ status: false }, false],
+    [{}, false],
+  ])('reads the broker send-code body %j as success=%s', (body, ok) => {
+    expect(safeParseBrokerEmailSendCodeResponse(body).success).toBe(ok);
+  });
+
+  it('adds the two route codes', () => {
+    expect(OAuthErrorCode.TooManyAttempts).toBe('too_many_attempts');
+    expect(OAuthErrorCode.InvalidEmail).toBe('invalid_email');
   });
 });
