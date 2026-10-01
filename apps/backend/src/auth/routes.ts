@@ -13,6 +13,7 @@ import {
   isUserBlocked,
   linkBrokerAccount,
   toBrokerAccountView,
+  toLinkBonusGrantView,
   type Db,
   type TokenCipher,
 } from '@binarius/db';
@@ -107,7 +108,10 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
               : OAuthErrorCode.AccountNotPending,
         });
       }
-      return reply.send({ account: toBrokerAccountView(confirmed.account) });
+      return reply.send({
+        account: toBrokerAccountView(confirmed.account),
+        grant: toLinkBonusGrantView(confirmed.grant),
+      });
     });
   });
 
