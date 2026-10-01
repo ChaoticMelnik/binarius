@@ -17,6 +17,7 @@ the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contra
 | Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/start`, `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`, `POST /auth/binodex/email/send-code`, `POST /auth/binodex/email/login` |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
 | Push      | `apps/backend/src/auth/link-notifier.ts`  | the one `sendMessage` after the callback (#128), on the public bot's token, without polling it   |
+| Telegram proof | `apps/backend/src/auth/telegram-init-data.ts` | the signature and age check of the Mini App's `initData` the callback carries (#113); its limits live in `apps/backend/src/auth/oauth-timing.ts` |
 | Link texts | `packages/shared/src/link-confirmation.ts` | the texts and the confirm button's callback data the bot and the push both send               |
 
 ## Sequence
@@ -26,9 +27,11 @@ bot ──POST /auth/binodex/start (internal token)──▶ backend
         │                                   creates oauth_states row (hash only, 10 min TTL)
         ◀── { authorizeUrl, state, expiresAt }
 user ──opens authorizeUrl──▶ binodex.app  (client_id, redirect_uri, state, ref, response_mode)
-broker ──code + state──▶ page/popup (#32)
-page ──POST /auth/binodex/callback (public)──▶ backend
-        │  CAS on the state row  ──▶ exchange code ──▶ link user + broker account (pending)
+broker ──code + state──▶ callback page in the Mini App (#114)
+page ──POST /auth/binodex/callback (public) {code, state, initData}──▶ backend
+        │  initData signature + age (no query) ──▶ CAS on the state row
+        │  ──▶ initData user == state's Telegram id ──▶ exchange code
+        │  ──▶ link user + broker account (pending)
         │  after the commit: sendMessage to the state's Telegram id ──▶ "Подтвердить" button (#128)
         ◀── { account }
 user ──/start──▶ bot: pendingBrokerAccounts is not empty ──▶ "Подтвердить" button (#10)
@@ -55,7 +58,35 @@ consumed by one `UPDATE … WHERE used_at IS NULL AND expires_at > now() RETURNI
 callbacks with one state therefore produce exactly one exchange, and a forged, expired or
 replayed state never reaches the broker at all.
 
-The route also carries a 4 KB body limit and two counters per process, both on a one-minute
+The state names the login; it does not say who finished it. That is what `initData` is for
+(#113): the page runs as a Telegram Mini App of the public bot and sends `Telegram.WebApp.initData`
+unchanged — re-encoding it changes the signed values (`+` reads as a space). The backend checks it
+as core.telegram.org/bots/webapps → *Validating data received via the Mini App* describes: the
+key is HMAC-SHA256 of `TELEGRAM_BOT_TOKEN` under `WebAppData`, the hash covers every other field
+sorted by key, and every field Telegram sent stays in the check. The route runs its steps in
+this order (`apps/backend/src/auth/routes.ts`):
+
+1. the ceiling below, before the body is read;
+2. the body schema: `state`, `code` and `initData` (at most 4096 characters, `INIT_DATA_MAX_LENGTH`
+   in `packages/shared/src/oauth.ts`) — 400 `validation`;
+3. the `initData` signature, then its age, then its `user` field, without a single query — 401
+   `invalid_telegram_auth`. The state is not touched and nobody is told: its owner is not known
+   yet. `auth_date` may be at most `INIT_DATA_MAX_AGE_MS` old — the state's ten-minute TTL plus
+   60 s for the two clocks, all three in `apps/backend/src/auth/oauth-timing.ts` — because the
+   Mini App opens on a button the bot shows after the state exists, and the callback has to
+   arrive before the state expires. An `auth_date` ahead of this host's clock is accepted: only
+   Telegram can sign one. A `user.id` that is not a positive safe integer is refused, because
+   `JSON.parse` would already have rounded it;
+4. the state CAS — 400 `invalid_state`;
+5. the Telegram id the `initData` names against `oauth_states.telegram_user_id` from the row the
+   CAS returned. A mismatch is 403 `telegram_user_mismatch`: the state stays spent, the code never
+   reaches the broker, nothing is written to `broker_accounts`, and the state's owner gets the
+   «Не удалось завершить вход…» push. The response says nothing about the owner to the browser
+   that sent it;
+6. the code exchange and the link, as before.
+
+The route also carries an 8 KB body limit (every field at its schema maximum, plus the JSON
+around them) and two counters per process, both on a one-minute
 window and neither keyed by IP: `trustProxy` is not configured, so behind a reverse proxy every
 request would arrive from one address, and trusting the forwarded header without a proxy list
 would let a caller choose its own.
@@ -64,6 +95,9 @@ would let a caller choose its own.
 | --- | --- | --- | --- |
 | all requests | 3000/min | every request, before the body is parsed and before any query | how much work an anonymous caller can trigger at all |
 | failed state lookups | 600/min | only a state that resolved to no row | junk, without letting real logins close the door |
+
+A refused `initData` spends only the ceiling: checking it is a hash, not a query. A mismatch
+spends only the ceiling as well, because its state did resolve to a row.
 
 Both counters **reserve** their slot before the work they limit, and the failure counter gives
 its slot back when the work turns out not to be a failure: the callback takes a failure slot
@@ -110,26 +144,22 @@ invariant it depends on: no intent is created for a non-active account, and ther
 
 **Residual risk.** The confirmation makes an unexpected link visible and costs the attacker an
 extra step, but in the scenario above the person confirming is the attacker, who sees the
-victim's email and agrees. Closing the vector completely needs proof of who finished the flow —
-signed Telegram `initData` forwarded by the login page (#32) and compared with
-`oauth_states.telegram_user_id`.
+victim's email and agrees. Since #113 the callback also needs proof of who finished the flow:
+`initData` signed for the Telegram user the state belongs to ([Why the callback is
+public](#why-the-callback-is-public), steps 3 and 5). A handed-over link that the victim
+finishes in their own Telegram ends in 403 `telegram_user_mismatch`; one finished in a plain
+browser carries no `initData` and never reaches the state. Neither writes a row, so the victim's
+own later login is not answered with `broker_account_taken`.
 
-Since #22 the bot calls `POST /auth/binodex/start`, so an authorize URL is available to any
-Telegram user who taps the button, and "no client calls these routes" no longer describes the
-deployment. What that changes, and what it does not:
+What is left:
 
-- the handing-over scenario becomes executable as soon as #32 delivers an authorization code to
-  `POST /auth/binodex/callback`. Before that page exists, no code reaches the backend at all:
-  the authorize request carries `response_mode=web_message`, and a plain redirect with `?code=`
-  lands on the backend's 404, where the code is stripped from the log;
-- once it does, the first thing a handed-over link costs the victim is not a takeover but their
-  own account: the callback writes a `pending` row carrying the victim's `broker_user_id` under
-  the attacker's Telegram account, and `broker_accounts_broker_user_id_idx` then answers the
-  victim's own attempt with `broker_account_taken`. A takeover needs the attacker to confirm as
-  well, which is the step the section above describes;
-- nothing in the bot or the backend can close this. The proof has to come from the page that
-  finishes the flow, which is why the `initData` check belongs to #32 as a condition of shipping
-  the page rather than as work that follows it.
+- a victim who sends the attacker the address the broker redirected them to — code and state —
+  within the code's 120 seconds. The attacker then finishes the login with their own `initData`,
+  which matches their own state; the confirmation does not help either, because the attacker is
+  the one confirming;
+- a captured `initData` replayed within its window links an account only to the Telegram user it
+  names, never to anyone else;
+- the compromise of the user's Telegram account itself, which is outside this model.
 
 ## The state row
 
@@ -182,6 +212,8 @@ to the chat.
 | `user_blocked` | 409 | «Доступ ограничен…» |
 | `broker_account_taken` | 409 | «Этот аккаунт Binodex уже подключён к другому пользователю Telegram…», to the user who started the login, never to the account's owner |
 | `invalid_code`, `broker_unavailable`, `broker_contract_violation` | 400 / 502 | «Не удалось завершить вход через сайт Binodex. Попробуйте ещё раз через /start.» — the state is spent, so a retry needs a new one |
+| `telegram_user_mismatch` | 403 | the same «Не удалось завершить вход…», to the state's owner only, never to the Telegram user the `initData` names; the state is spent and the code was never exchanged |
+| `validation`, `invalid_telegram_auth` | 400 / 401 | none: the state has not been read, so there is no addressee |
 | `invalid_state` | 400 | none: the state is what names the addressee |
 | a database failure | 500 | none: the outcome is unknown |
 
@@ -202,11 +234,35 @@ transport error's identity, and the outcome's kind (`push`) — no state, code, 
 grammY's transport error wraps a URL with the token in it, and the request payload holds the
 email on the button.
 
-Until the callback page (#114) exists, nothing in a browser calls the route. To see the push,
-start a login with `POST /auth/binodex/start` for your own Telegram id, log in at the
-`authorizeUrl`, take the code from the address bar (as in the live check below) and post it with
-the state to `POST /auth/binodex/callback` within 120 seconds: the chat gets the message for that
-outcome.
+Until the callback page (#114) exists, nothing in a browser calls the route, and the route needs
+`initData` signed with `TELEGRAM_BOT_TOKEN`. `apps/backend/src/auth/testing/init-data.ts` signs one
+for any Telegram id, the way Telegram builds it. From the repository root, with the backend
+running and Node from `.node-version`:
+
+```sh
+set -a; . ./.env; set +a   # INTERNAL_API_TOKEN and TELEGRAM_BOT_TOKEN
+BACKEND=http://127.0.0.1:3000
+MY_ID=<your Telegram id>
+sign() {
+  TELEGRAM_USER_ID="$1" pnpm --silent --filter @binarius/backend exec tsx -e "import { signInitData } from './src/auth/testing/init-data.ts'; console.log(signInitData({ botToken: process.env.TELEGRAM_BOT_TOKEN, telegramUserId: BigInt(process.env.TELEGRAM_USER_ID) }))"
+}
+start() {
+  curl -s -X POST "$BACKEND/auth/binodex/start" -H "authorization: Bearer $INTERNAL_API_TOKEN" \
+    -H 'content-type: application/json' -d "{\"telegramUserId\":\"$MY_ID\"}"
+}
+callback() {   # state, code, Telegram id the initData names
+  curl -s -w ' %{http_code}\n' -X POST "$BACKEND/auth/binodex/callback" \
+    -H 'content-type: application/json' \
+    -d "$(jq -n --arg state "$1" --arg code "$2" --arg initData "$(sign "$3")" \
+      '{state: $state, code: $code, initData: $initData}')"
+}
+```
+
+- Without the broker: `callback "$(start | jq -r .state)" any-code 1` answers
+  `{"error":"telegram_user_mismatch"} 403`, and your chat gets «Не удалось завершить вход…».
+- With the broker: `start`, log in at its `authorizeUrl`, take the code from the address bar (as
+  in the live check below) and run `callback <state> <code> "$MY_ID"` within 120 seconds: the
+  chat gets the message for that outcome.
 
 ## The starter pack
 
@@ -548,7 +604,7 @@ Backend only, never the worker (the worker neither exchanges grants nor decrypts
 | `BROKER_PARTNER_REF`                       | the short partner code, `<code>` from `https://bdclick.app/smart/<code>` — never the link: `[A-Za-z0-9_-]`, 1-64 chars, checked at backend startup (`parsePartnerCode` in `apps/backend/src/env.ts`). Sent as `ref` on every authorization request and as `partner_code` on every email login, so a new user registers under this installation's partner account |
 | `TOKEN_ENCRYPTION_KEY`                     | 32 bytes, base64; `openssl rand -base64 32`                                                                |
 | `TOKEN_ENCRYPTION_KEY_ID`                  | names the key for rotation; no `\|`, no whitespace (the cipher binds with it)                              |
-| `TELEGRAM_BOT_TOKEN`                       | the public bot's token, which `bot` polls; the backend only sends the push after the callback on it. No whitespace; the backend refuses to start when it equals `ADMIN_BOT_TOKEN` |
+| `TELEGRAM_BOT_TOKEN`                       | the public bot's token, which `bot` polls; the backend only sends the push after the callback on it and checks the Mini App's `initData` with it. No whitespace; the backend refuses to start when it equals `ADMIN_BOT_TOKEN` |
 
 `INTERNAL_API_TOKEN`, `BROKER_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY`,
 `TOKEN_ENCRYPTION_KEY_ID` and `BROKER_PARTNER_REF` have **no deployable default anywhere in this
@@ -578,9 +634,11 @@ not.
   an authorize URL and nothing else (docs/bot-start.md).
 - **#128** is the backend's push after the callback ([The push after the callback](#the-push-after-the-callback-128)):
   a `sendMessage` to the Telegram id restored from the state, on every outcome after the state.
-  **#114** owns the callback page that calls the route from the browser.
-- **#32** owns the login page and the `web_message` popup; it calls the callback route, and it
-  is where the `initData` check above closes the handoff gap.
+- **#113** is the backend's `initData` check on the callback ([Why the callback is
+  public](#why-the-callback-is-public)): the signature, the age and the comparison with the
+  state's owner.
+- **#114** owns the bot's `web_app` button and the Mini App login and callback pages; the
+  callback page sends `Telegram.WebApp.initData` unchanged with the code and the state.
 - **#10** owns the starter pack, the confirm button and the outcome message in the bot. Re-linking
   an account that belongs to another Telegram user is out of scope: `broker_account_taken` is
   final, and moving an account is a separate support task.

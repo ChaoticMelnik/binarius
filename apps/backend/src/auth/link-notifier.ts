@@ -13,6 +13,8 @@ export const LinkPushKind = {
   Blocked: 'blocked',
   Taken: 'taken',
   ExchangeFailed: 'exchange_failed',
+  // someone else's Telegram account finished this user's login; the state is spent
+  Mismatch: 'telegram_user_mismatch',
 } as const;
 export type LinkPushKind = (typeof LinkPushKind)[keyof typeof LinkPushKind];
 
@@ -44,6 +46,7 @@ export function linkPushMessage(outcome: LinkPushOutcome): LinkPushMessage {
     case LinkPushKind.Taken:
       return { text: LINK_TEXTS.accountTaken };
     case LinkPushKind.ExchangeFailed:
+    case LinkPushKind.Mismatch:
       return { text: AUTH_TEXTS.oauthLoginFailed };
   }
 }

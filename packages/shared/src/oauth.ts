@@ -153,6 +153,10 @@ export const OAuthErrorCode = {
   TooManyAttempts: 'too_many_attempts',
   // the broker refused the address the code was asked for
   InvalidEmail: 'invalid_email',
+  // the callback's Telegram initData is missing a valid signature or is too old; nothing was spent
+  InvalidTelegramAuth: 'invalid_telegram_auth',
+  // the initData is valid but belongs to someone other than the state's owner; the state is spent
+  TelegramUserMismatch: 'telegram_user_mismatch',
 } as const;
 export type OAuthErrorCode = (typeof OAuthErrorCode)[keyof typeof OAuthErrorCode];
 
@@ -173,11 +177,16 @@ export const startLoginResponseSchema = z.object({
 });
 export type StartLoginResponse = z.infer<typeof startLoginResponseSchema>;
 
-// the callback carries no user identity: it is public, and everything about the login lives in
-// the state row the backend issued
+// a measured initData with photo_url is ~300 bytes; the bound only stops an unbounded field
+export const INIT_DATA_MAX_LENGTH = 4096;
+
+// The callback is public. Everything the login acts on lives in the state row the backend issued;
+// `initData` is the Mini App's signed Telegram launch data, raw as `Telegram.WebApp.initData`
+// gives it, and proves which Telegram user finished the login.
 export const oauthCallbackRequestSchema = z.object({
   state: z.string().min(1).max(256),
   code: z.string().min(1).max(512),
+  initData: z.string().min(1).max(INIT_DATA_MAX_LENGTH),
 });
 export type OAuthCallbackRequest = z.infer<typeof oauthCallbackRequestSchema>;
 

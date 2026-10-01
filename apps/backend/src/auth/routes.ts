@@ -30,10 +30,10 @@ import {
 import { telegramErrorFields } from '../telegram-logging';
 import { internalBearerAuth } from './internal';
 import { LinkPushKind, type LinkNotifier, type LinkPushOutcome } from './link-notifier';
+import { OAUTH_STATE_TTL_MS } from './oauth-timing';
 import { createKeyedWindow, createWindow, type RateWindow } from './rate-window';
+import type { InitDataVerifier } from './telegram-init-data';
 
-// a state has to outlive the user typing their credentials, unlike the 120 s code it leads to
-const OAUTH_STATE_TTL_MS = 600_000;
 // The ceiling on everything the public callback accepts, taken before the body is parsed and
 // before any query runs: it is what bounds how much work an anonymous request can trigger.
 // Real logins are orders of magnitude rarer than this, so it only ever catches a flood.
@@ -42,7 +42,8 @@ const CALLBACK_MAX_PER_MINUTE = 3000;
 // minute costs a real flood rather than one request per second: a 32-byte state cannot be
 // guessed, so this window only has to bound junk, and the ceiling above already bounds the work.
 const CALLBACK_MAX_FAILURES_PER_MINUTE = 600;
-const CALLBACK_BODY_LIMIT_BYTES = 4 * 1024;
+// every field of the callback at its schema maximum (256 + 512 + 4096) plus the JSON around them
+const CALLBACK_BODY_LIMIT_BYTES = 8 * 1024;
 
 // Route ceilings, taken before the body is parsed. Every send-code is a real letter, so it is
 // held far lower than the login.
@@ -68,6 +69,8 @@ export interface AuthRoutesDeps {
   partnerRef: string;
   // the push after the callback; required, so no caller gets a callback that tells nobody
   linkNotifier: LinkNotifier;
+  // proves which Telegram user finished the login on the callback
+  initDataVerifier: InitDataVerifier;
   // lowered by tests; production runs on the constants above
   callbackMaxPerMinute?: number;
   callbackMaxFailuresPerMinute?: number;
@@ -294,6 +297,17 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
           return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
         }
 
+        // Before any query: a forged or stale proof costs a hash, not a row lookup, and spends
+        // neither the state nor the failures window. Nobody is pushed — the owner is not known yet.
+        const proof = deps.initDataVerifier.verify(parsed.data.initData, Date.now());
+        if (!proof.ok) {
+          request.log.warn(
+            { reason: proof.reason },
+            'the callback carried no valid Telegram proof',
+          );
+          return reply.code(401).send({ error: OAuthErrorCode.InvalidTelegramAuth });
+        }
+
         // reserved before the lookup and given back unless the state turned out to be junk:
         // checking in the hook alone lets a concurrent burst through, because none of them has
         // counted yet when the others are admitted
@@ -316,6 +330,18 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
           return reply.code(400).send({ error: OAuthErrorCode.InvalidState });
         }
         failures.release(ticket.generation);
+
+        // The state is spent either way: a link that reached another Telegram account is not
+        // handed back. The code never reaches the broker, and the state's owner learns it from
+        // the push, not from this response, which tells the other browser nothing about them.
+        if (proof.telegramUserId !== consumed.telegramUserId) {
+          request.log.warn(
+            { outcome: OAuthErrorCode.TelegramUserMismatch },
+            "the callback came from a Telegram user other than the state's owner",
+          );
+          await push(request.log, consumed.telegramUserId, { kind: LinkPushKind.Mismatch });
+          return reply.code(403).send({ error: OAuthErrorCode.TelegramUserMismatch });
+        }
 
         let tokens;
         try {

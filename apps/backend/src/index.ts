@@ -5,6 +5,8 @@ import { createDb, createTokenCipher } from '@binarius/db';
 import { createAdminBot } from './admin/telegram';
 import { buildApp } from './app';
 import { createLinkNotifier } from './auth/link-notifier';
+import { INIT_DATA_MAX_AGE_MS } from './auth/oauth-timing';
+import { createInitDataVerifier } from './auth/telegram-init-data';
 import { createBrokerOAuthClient } from './broker/oauth-client';
 import { parseEnv } from './env';
 import { createBullmqPublisher } from './outbox/bullmq';
@@ -81,6 +83,10 @@ const app = buildApp({
     redirectUri: env.brokerOauthRedirectUri,
     partnerRef: env.brokerPartnerRef,
     linkNotifier: createLinkNotifier({ token: env.telegramBotToken }),
+    initDataVerifier: createInitDataVerifier({
+      botToken: env.telegramBotToken,
+      maxAgeMs: INIT_DATA_MAX_AGE_MS,
+    }),
   },
   users: {
     db,

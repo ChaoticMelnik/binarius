@@ -68,6 +68,7 @@ beforeAll(async () => {
       redirectUri: 'https://bot.example/oauth/callback',
       partnerRef: 'partner-ref',
       linkNotifier: {} as never,
+      initDataVerifier: {} as never,
     },
     users: { db: tmp.db, internalApiToken: 'internal' },
     admin: {

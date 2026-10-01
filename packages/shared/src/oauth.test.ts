@@ -3,6 +3,7 @@ import {
   authRevokedReasonSchema,
   emailAddressSchema,
   emailLoginCodeSchema,
+  INIT_DATA_MAX_LENGTH,
   OAuthErrorCode,
   safeParseBrokerEmailSendCodeResponse,
   safeParseEmailLoginRequest,
@@ -116,13 +117,28 @@ describe('login flow contract (issue #9)', () => {
     expect(safeParseStartLoginRequest({}).success).toBe(false);
   });
 
-  it('bounds the callback fields to what the broker can send', () => {
-    const valid = { state: 'a'.repeat(43), code: 'c'.repeat(64) };
+  it('bounds the callback fields to what the broker and Telegram can send', () => {
+    const valid = { state: 'a'.repeat(43), code: 'c'.repeat(64), initData: 'i'.repeat(300) };
     expect(safeParseOAuthCallbackRequest(valid).success).toBe(true);
     expect(safeParseOAuthCallbackRequest({ ...valid, state: '' }).success).toBe(false);
     expect(safeParseOAuthCallbackRequest({ ...valid, state: 'a'.repeat(257) }).success).toBe(false);
     expect(safeParseOAuthCallbackRequest({ ...valid, code: 'c'.repeat(513) }).success).toBe(false);
     expect(safeParseOAuthCallbackRequest({ state: valid.state }).success).toBe(false);
+  });
+
+  it('requires the Mini App initData on the callback, up to INIT_DATA_MAX_LENGTH', () => {
+    const valid = { state: 'a'.repeat(43), code: 'c'.repeat(64) };
+    expect(safeParseOAuthCallbackRequest(valid).success).toBe(false);
+    expect(safeParseOAuthCallbackRequest({ ...valid, initData: '' }).success).toBe(false);
+    expect(
+      safeParseOAuthCallbackRequest({ ...valid, initData: 'i'.repeat(INIT_DATA_MAX_LENGTH) })
+        .success,
+    ).toBe(true);
+    expect(
+      safeParseOAuthCallbackRequest({ ...valid, initData: 'i'.repeat(INIT_DATA_MAX_LENGTH + 1) })
+        .success,
+    ).toBe(false);
+    expect(INIT_DATA_MAX_LENGTH).toBe(4096);
   });
 
   it('lists exactly the four revocation reasons this flow may write', () => {
