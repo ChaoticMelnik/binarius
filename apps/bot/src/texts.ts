@@ -11,13 +11,16 @@ export const TEXTS = {
     'Binarius — торговля на Binodex прямо в Telegram.',
     '',
     'Что дальше:',
-    '1. Подключите аккаунт Binodex — кнопка ниже.',
-    '2. Войдите на стороне брокера и вернитесь в этот чат.',
+    '1. Нажмите «Подключить аккаунт Binodex» и пришлите адрес электронной почты.',
+    '2. Пришлите код из письма — аккаунт подключится, а если его ещё нет, Binodex его создаст.',
     '3. После подключения бот откроет меню.',
+    '',
+    'Удобнее через браузер? Кнопка «Войти через сайт Binodex» подключит аккаунт на сайте брокера.',
     '',
     'Торговля сопряжена с риском потери вложенных средств. Решения о сделках вы принимаете самостоятельно.',
   ].join('\n'),
   connectButton: 'Подключить аккаунт Binodex',
+  oauthButton: 'Войти через сайт Binodex',
   welcomeBack: 'С возвращением! Аккаунт Binodex уже подключён.',
   // the link's lifetime is the backend's (OAUTH_STATE_TTL_MS) and is deliberately not repeated here
   loginLink: 'Откройте вход в Binodex по кнопке ниже, а затем вернитесь в этот чат.',
@@ -35,4 +38,25 @@ export const TEXTS = {
   linkedNoBonusAlready: 'Аккаунт Binodex подключён. Стартовые токены уже были начислены ранее.',
   confirmNotFound: 'Привязка не найдена. Начните подключение заново через /start.',
   confirmAlreadyDone: 'Эта привязка уже подтверждена или больше не ожидает подтверждения.',
+  // the email dialog; the backend's limits and the dialog's lifetime are not repeated here,
+  // for the same reason as loginLink
+  emailPrompt:
+    'Пришлите адрес электронной почты аккаунта Binodex. Если аккаунта ещё нет, Binodex создаст его на этот адрес.',
+  emailInvalid: 'Это не похоже на адрес электронной почты. Пришлите адрес вида name@example.com.',
+  emailRefused: 'Binodex не принял этот адрес. Проверьте его и пришлите ещё раз.',
+  // the address is the one the user just typed, shown back so a typo is visible next to the
+  // button that fixes it
+  codeSent: (email: string) => `Код отправлен на ${email}. Пришлите его сюда одним сообщением.`,
+  codeInvalid: 'Код не подошёл: он неверный или устарел. Пришлите код ещё раз или запросите новый.',
+  resendButton: 'Запросить код ещё раз',
+  changeEmailButton: 'Изменить адрес',
+  tooManyCodeRequests:
+    'Слишком много запросов кода. Подождите несколько минут и начните заново через /start.',
+  tooManyCodeAttempts:
+    'Слишком много попыток ввести код. Подождите несколько минут и начните заново через /start.',
+  accountTaken:
+    'Этот аккаунт Binodex уже подключён к другому пользователю Telegram. Если это ошибка, напишите в поддержку.',
+  // the recheck after an unknown outcome knows the account is active, not what was paid
+  linkedActive: 'Аккаунт Binodex подключён.',
+  dialogExpired: 'Время ожидания кода истекло. Начните заново через /start.',
 } as const;

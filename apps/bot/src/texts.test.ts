@@ -23,6 +23,11 @@ describe('texts', () => {
     },
   );
 
+  it('names both buttons of the welcome by their labels', () => {
+    expect(TEXTS.welcome).toContain(`«${TEXTS.connectButton}»`);
+    expect(TEXTS.welcome).toContain(`«${TEXTS.oauthButton}»`);
+  });
+
   it('labels the confirm button with the email, or without one when the broker sent none', () => {
     expect(TEXTS.confirmButton('ada@example.test')).toBe('Подтвердить: ada@example.test');
     expect(TEXTS.confirmButton(null)).toBe('Подтвердить привязку');
