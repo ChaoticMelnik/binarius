@@ -553,6 +553,6 @@ PR #168, rebase-merged (6 коммитов, голова `9ece6f3`, в `main` д
 ### Process improvement proposals
 
 1. **Minor m1–m5.** — **вынесено в #169**
-2. **3b-3d — в foreground.** Спавнить субагенты ревьюера с `run_in_background: false`: они всё равно идут параллельно, а ход не кончается до их отчётов. — **внедрено в #<PR>: `.claude/skills/reviewer/SKILL.md` → Step 3 → Order of launch**
+2. **3b-3d — в foreground.** Спавнить субагенты ревьюера с `run_in_background: false`: они всё равно идут параллельно, а ход не кончается до их отчётов. — **внедрено в #170: `.claude/skills/reviewer/SKILL.md` → Step 3 → Order of launch**
 3. **Сгенерированные файлы в правиле размера.** Явно исключить `packages/db/drizzle/meta/*_snapshot.json` из счёта строк в `.claude/CLAUDE.md` → Планирование задач и architect Step 4a. Правка правила владельца — только с его решения. — **открыто (2026-10-01, владелец)**
 4. **Пост-фактум Codex по `9ece6f3`** — присоединяется к предложению 4 аудита #163. — **открыто (2026-10-01, владелец): после сброса лимита 2026-10-05**
