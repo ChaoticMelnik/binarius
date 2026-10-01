@@ -23,8 +23,11 @@ const view = (patch: Record<string, unknown> = {}) => ({
   acquisitionSource: null,
   acquiredAt: null,
   hasActiveBrokerAccount: false,
+  pendingBrokerAccounts: [],
   ...patch,
 });
+
+const PENDING_ID = '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01';
 
 describe('userStatusSchema', () => {
   it('accepts the two members and nothing else', () => {
@@ -123,6 +126,17 @@ describe('userStartResponseSchema', () => {
     ).toBe(true);
   });
 
+  it('accepts pending accounts with and without an email', () => {
+    const pendingBrokerAccounts = [
+      { id: PENDING_ID, email: 'ada@example.test' },
+      { id: PENDING_ID, email: null },
+    ];
+    expect(safeParseUserStartResponse({ user: view({ pendingBrokerAccounts }) })).toMatchObject({
+      success: true,
+      data: { user: { pendingBrokerAccounts } },
+    });
+  });
+
   it.each([
     ['the envelope is missing', { ...view() }],
     ['the status is unknown', { user: view({ status: 'pending' }) }],
@@ -130,6 +144,15 @@ describe('userStartResponseSchema', () => {
     [
       'hasActiveBrokerAccount is absent',
       { user: { ...view(), hasActiveBrokerAccount: undefined } },
+    ],
+    ['pendingBrokerAccounts is absent', { user: { ...view(), pendingBrokerAccounts: undefined } }],
+    [
+      'a pending account id is not a uuid',
+      { user: view({ pendingBrokerAccounts: [{ id: 'broker-1', email: null }] }) },
+    ],
+    [
+      'a pending account has no email key',
+      { user: view({ pendingBrokerAccounts: [{ id: PENDING_ID }] }) },
     ],
   ])('rejects a body where %s', (_label, body) => {
     expect(safeParseUserStartResponse(body).success).toBe(false);

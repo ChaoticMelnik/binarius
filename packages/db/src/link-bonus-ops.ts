@@ -1,5 +1,5 @@
 import { eq, sql } from 'drizzle-orm';
-import { LinkBonusSkipReason } from '@binarius/shared';
+import { LinkBonusSkipReason, type LinkBonusGrantView } from '@binarius/shared';
 import { literal } from './schema/columns';
 import { TokenLedgerKind, tokenLedger } from './schema/token-ledger';
 import { users } from './schema/users';
@@ -50,4 +50,11 @@ export async function grantLinkBonus(
     .set({ tokenBalance: sql`${users.tokenBalance} + ${tokens}` })
     .where(eq(users.id, userId));
   return { granted: true, tokens };
+}
+
+// bigint → decimal string, the only form the amount travels in
+export function toLinkBonusGrantView(grant: LinkBonusGrant): LinkBonusGrantView {
+  return grant.granted
+    ? { granted: true, tokens: grant.tokens.toString() }
+    : { granted: false, reason: grant.reason };
 }

@@ -1,8 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BrokerAccountStatus, UserStatus } from '@binarius/shared';
+import { BrokerAccountStatus, UserStatus, linkBonusGrantViewSchema } from '@binarius/shared';
 import { createTempDatabase, seedBrokerAccount, seedUser, type TempDatabase } from './testing';
-import { LINK_BONUS_RULE_CODE, LINK_BONUS_TOKENS } from './link-bonus-ops';
+import { LINK_BONUS_RULE_CODE, LINK_BONUS_TOKENS, toLinkBonusGrantView } from './link-bonus-ops';
 import { confirmBrokerAccount } from './oauth-ops';
 import { brokerAccounts, tokenLedger, users } from './schema/index';
 
@@ -144,5 +144,19 @@ describe('the starter pack', () => {
     const ledger = await ledgerOf(user.userId);
     expect(ledger.rows).toEqual([]);
     expect(ledger.balance).toBe(0n);
+  });
+});
+
+describe('toLinkBonusGrantView', () => {
+  it.each([
+    [{ granted: true, tokens: 7n } as const, { granted: true, tokens: '7' }],
+    [
+      { granted: false, reason: 'already_granted' } as const,
+      { granted: false, reason: 'already_granted' },
+    ],
+  ])('puts %o on the wire as %o', (grant, wire) => {
+    const view = toLinkBonusGrantView(grant);
+    expect(view).toStrictEqual(wire);
+    expect(linkBonusGrantViewSchema.parse(view)).toStrictEqual(wire);
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   authRevokedReasonSchema,
   brokerAccountViewSchema,
+  safeParseConfirmLoginResponse,
   parseOAuthTokenResponse,
   parseRefreshTokenResponse,
   parseWidgetSessionResponse,
@@ -147,5 +148,42 @@ describe('login flow contract (issue #9)', () => {
     expect(brokerAccountViewSchema.parse({ ...view, isPartnerClient: false }).isPartnerClient).toBe(
       false,
     );
+  });
+});
+
+describe('confirm response (issue #10)', () => {
+  const account = {
+    id: '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01',
+    brokerUserId: 'broker-1',
+    email: null,
+    isPartnerClient: true,
+    status: 'active',
+    createdAt: '2026-09-23T09:21:52.000Z',
+  };
+
+  it.each([
+    { granted: true, tokens: '7' },
+    { granted: false, reason: 'not_partner_client' },
+    { granted: false, reason: 'already_granted' },
+  ])('accepts the grant %o', (grant) => {
+    expect(safeParseConfirmLoginResponse({ account, grant })).toMatchObject({
+      success: true,
+      data: { account, grant },
+    });
+  });
+
+  it.each([
+    ['tokens of zero', { granted: true, tokens: '0' }],
+    ['tokens with a leading zero', { granted: true, tokens: '007' }],
+    ['tokens as a number', { granted: true, tokens: 7 }],
+    ['a grant without tokens', { granted: true }],
+    ['an unknown reason', { granted: false, reason: 'maybe_later' }],
+    ['a refusal without a reason', { granted: false }],
+  ])('rejects %s', (_label, grant) => {
+    expect(safeParseConfirmLoginResponse({ account, grant }).success).toBe(false);
+  });
+
+  it('rejects a confirm response that carries no grant', () => {
+    expect(safeParseConfirmLoginResponse({ account }).success).toBe(false);
   });
 });

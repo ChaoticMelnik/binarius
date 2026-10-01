@@ -185,6 +185,36 @@ describe('recordUserStart: hasActiveBrokerAccount', () => {
   });
 });
 
+describe('recordUserStart: pendingBrokerAccounts', () => {
+  it('lists only the pending accounts, newest first, as id and email', async () => {
+    const telegramUserId = nextTelegramUserId();
+    const { row } = await start(telegramUserId);
+    expect((await start(telegramUserId)).pendingBrokerAccounts).toEqual([]);
+
+    const older = await seedBrokerAccount(tmp.db, row.id, { status: BrokerAccountStatus.Pending });
+    await seedBrokerAccount(tmp.db, row.id, { status: BrokerAccountStatus.Active });
+    await seedBrokerAccount(tmp.db, row.id, { status: BrokerAccountStatus.Revoked });
+    const newer = await seedBrokerAccount(tmp.db, row.id, { status: BrokerAccountStatus.Pending });
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ email: 'older@example.test', createdAt: sql`now() - interval '1 hour'` })
+      .where(eq(brokerAccounts.id, older));
+
+    expect((await start(telegramUserId)).pendingBrokerAccounts).toEqual([
+      { id: newer, email: null },
+      { id: older, email: 'older@example.test' },
+    ]);
+  });
+
+  it('does not list another user’s pending account', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId);
+    const other = await start(nextTelegramUserId());
+    await seedBrokerAccount(tmp.db, other.row.id, { status: BrokerAccountStatus.Pending });
+    expect((await start(telegramUserId)).pendingBrokerAccounts).toEqual([]);
+  });
+});
+
 describe('the source survives linking a broker account', () => {
   it('keeps the first touch across link and confirm, and only then reports an active account', async () => {
     const cipher = createTokenCipher({ keyId: 'test-key', key: randomBytes(32) });
@@ -208,6 +238,9 @@ describe('the source survives linking a broker account', () => {
 
     const pending = await start(telegramUserId);
     expect(pending.hasActiveBrokerAccount).toBe(false);
+    expect(pending.pendingBrokerAccounts).toEqual([
+      { id: linked.account.id, email: 'a@example.test' },
+    ]);
 
     const confirmed = await confirmBrokerAccount(tmp.db, {
       telegramUserId,
@@ -217,6 +250,7 @@ describe('the source survives linking a broker account', () => {
 
     const after = await start(telegramUserId);
     expect(after.hasActiveBrokerAccount).toBe(true);
+    expect(after.pendingBrokerAccounts).toEqual([]);
     expect(after.row.acquisitionSource).toBe('src_survives');
     expect(after.row.acquiredAt?.getTime()).toBe(first.row.acquiredAt?.getTime());
   });
@@ -266,15 +300,16 @@ describe('startPayloadSchema and users_acquisition_source_check agree', () => {
 describe('toUserStartView', () => {
   it('projects exactly the wire keys', async () => {
     const telegramUserId = nextTelegramUserId();
-    const { row, hasActiveBrokerAccount } = await start(telegramUserId, {
+    const { row, hasActiveBrokerAccount, pendingBrokerAccounts } = await start(telegramUserId, {
       startPayload: 'src_view',
       languageCode: 'ru',
     });
-    const view = toUserStartView(row, hasActiveBrokerAccount);
+    const view = toUserStartView(row, hasActiveBrokerAccount, pendingBrokerAccounts);
     expect(Object.keys(view).sort()).toEqual([
       'acquiredAt',
       'acquisitionSource',
       'hasActiveBrokerAccount',
+      'pendingBrokerAccounts',
       'status',
       'telegramUserId',
     ]);
@@ -283,14 +318,24 @@ describe('toUserStartView', () => {
       status: UserStatus.Active,
       acquisitionSource: 'src_view',
       hasActiveBrokerAccount: false,
+      pendingBrokerAccounts: [],
     });
     expect(userStartViewSchema.safeParse(view).success).toBe(true);
+  });
+
+  // the list arrives typed, but a caller holding a wider row must not widen the wire
+  it('copies only id and email of each pending account', async () => {
+    const { row } = await start(nextTelegramUserId());
+    const wide = { id: '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01', email: null, brokerUserId: 'b-1' };
+    const view = toUserStartView(row, false, [wide]);
+    expect(view.pendingBrokerAccounts).toEqual([{ id: wide.id, email: null }]);
+    expect(Object.keys(view.pendingBrokerAccounts[0]!)).toEqual(['id', 'email']);
   });
 
   it('carries a null acquisition through as null', async () => {
     const telegramUserId = nextTelegramUserId();
     const { row } = await start(telegramUserId);
-    const view = toUserStartView(row, false);
+    const view = toUserStartView(row, false, []);
     expect(view).toMatchObject({ acquisitionSource: null, acquiredAt: null });
     expect(userStartViewSchema.safeParse(view).success).toBe(true);
   });
@@ -304,6 +349,6 @@ describe('toUserStartView', () => {
       .from(brokerAccounts)
       .where(eq(brokerAccounts.userId, row.id));
     expect(account).toBeDefined();
-    expect(JSON.stringify(toUserStartView(row, true))).not.toContain(account!.id);
+    expect(JSON.stringify(toUserStartView(row, true, []))).not.toContain(account!.id);
   });
 });
