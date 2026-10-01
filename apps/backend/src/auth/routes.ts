@@ -1,8 +1,10 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import {
   errorIdentity,
   OAuthErrorCode,
   safeParseConfirmLoginRequest,
+  safeParseEmailLoginRequest,
+  safeParseEmailSendCodeRequest,
   safeParseOAuthCallbackRequest,
   safeParseStartLoginRequest,
 } from '@binarius/shared';
@@ -10,6 +12,7 @@ import {
   confirmBrokerAccount,
   consumeOAuthState,
   createOAuthState,
+  hashToken,
   isUserBlocked,
   linkBrokerAccount,
   toBrokerAccountView,
@@ -23,7 +26,7 @@ import {
   type BrokerOAuthClient,
 } from '../broker/oauth-client';
 import { internalBearerAuth } from './internal';
-import { createWindow } from './rate-window';
+import { createKeyedWindow, createWindow, type RateWindow } from './rate-window';
 
 // a state has to outlive the user typing their credentials, unlike the 120 s code it leads to
 const OAUTH_STATE_TTL_MS = 600_000;
@@ -37,6 +40,19 @@ const CALLBACK_MAX_PER_MINUTE = 3000;
 const CALLBACK_MAX_FAILURES_PER_MINUTE = 600;
 const CALLBACK_BODY_LIMIT_BYTES = 4 * 1024;
 
+// Route ceilings, taken before the body is parsed. Every send-code is a real letter, so it is
+// held far lower than the login.
+const EMAIL_SEND_CODE_MAX_PER_MINUTE = 60;
+const EMAIL_LOGIN_MAX_PER_MINUTE = 300;
+// Per Telegram user and per address. The address window is what stops a brute force of one
+// address's code spread across several Telegram accounts. Neither depends on the broker's own
+// code TTL or lockout, which are unknown: whoever runs out waits and asks for a new code, and
+// every send-code is a new code.
+const EMAIL_KEY_WINDOW_MS = 10 * 60_000;
+const EMAIL_KEY_MAX_KEYS = 10_000;
+const EMAIL_SEND_CODE_PER_KEY = 3;
+const EMAIL_LOGIN_ATTEMPTS_PER_KEY = 5;
+
 export interface AuthRoutesDeps {
   db: Db;
   cipher: TokenCipher;
@@ -49,6 +65,8 @@ export interface AuthRoutesDeps {
   // lowered by tests; production runs on the constants above
   callbackMaxPerMinute?: number;
   callbackMaxFailuresPerMinute?: number;
+  emailSendCodeMaxPerMinute?: number;
+  emailLoginMaxPerMinute?: number;
 }
 
 export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) => {
@@ -113,6 +131,113 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
         grant: toLinkBonusGrantView(confirmed.grant),
       });
     });
+
+    // A route-level hook runs after the scope's bearer check, so a caller without the internal
+    // token cannot spend the ceiling.
+    const ceiling = (window: RateWindow) => async (_request: unknown, reply: FastifyReply) => {
+      if (window.take().over) {
+        return reply.code(429).send({ error: OAuthErrorCode.TooManyRequests });
+      }
+      return undefined;
+    };
+    const keyedWindows = (perKey: number) => {
+      const byUser = createKeyedWindow(perKey, EMAIL_KEY_WINDOW_MS, EMAIL_KEY_MAX_KEYS);
+      const byAddress = createKeyedWindow(perKey, EMAIL_KEY_WINDOW_MS, EMAIL_KEY_MAX_KEYS);
+      // Reserved before the broker is called and never given back, even when the broker fails:
+      // a sixth attempt is refused even with the right code. The user is taken first, so one
+      // already over their own allowance does not spend the address's. The map keeps a hash,
+      // not the address.
+      return (telegramUserId: string, email: string): boolean =>
+        byUser.take(telegramUserId) || byAddress.take(hashToken(email.toLowerCase()));
+    };
+    const sendCodeOver = keyedWindows(EMAIL_SEND_CODE_PER_KEY);
+    const loginOver = keyedWindows(EMAIL_LOGIN_ATTEMPTS_PER_KEY);
+
+    scope.post(
+      '/auth/binodex/email/send-code',
+      {
+        onRequest: ceiling(
+          createWindow(deps.emailSendCodeMaxPerMinute ?? EMAIL_SEND_CODE_MAX_PER_MINUTE),
+        ),
+      },
+      async (request, reply) => {
+        const parsed = safeParseEmailSendCodeRequest(request.body);
+        if (!parsed.success) {
+          return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
+        }
+        const { telegramUserId, email } = parsed.data;
+        if (await isUserBlocked(deps.db, BigInt(telegramUserId))) {
+          return reply.code(409).send({ error: OAuthErrorCode.UserBlocked });
+        }
+        if (sendCodeOver(telegramUserId, email)) {
+          return reply.code(429).send({ error: OAuthErrorCode.TooManyAttempts });
+        }
+        try {
+          await deps.broker.sendEmailCode({ email });
+        } catch (error) {
+          const { status, code } = brokerOutcome(error, OAuthErrorCode.InvalidEmail);
+          request.log.warn(
+            { status, outcome: code, err: errorIdentity(error) },
+            'the email code could not be sent',
+          );
+          return reply.code(status).send({ error: code });
+        }
+        return reply.send({ codeSent: true });
+      },
+    );
+
+    scope.post(
+      '/auth/binodex/email/login',
+      {
+        onRequest: ceiling(createWindow(deps.emailLoginMaxPerMinute ?? EMAIL_LOGIN_MAX_PER_MINUTE)),
+      },
+      async (request, reply) => {
+        const parsed = safeParseEmailLoginRequest(request.body);
+        if (!parsed.success) {
+          return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
+        }
+        const { telegramUserId, email, code } = parsed.data;
+        if (await isUserBlocked(deps.db, BigInt(telegramUserId))) {
+          return reply.code(409).send({ error: OAuthErrorCode.UserBlocked });
+        }
+        if (loginOver(telegramUserId, email)) {
+          return reply.code(429).send({ error: OAuthErrorCode.TooManyAttempts });
+        }
+        let tokens;
+        try {
+          tokens = await deps.broker.emailLogin({ email, code, partnerCode: deps.partnerRef });
+        } catch (error) {
+          const outcome = brokerOutcome(error, OAuthErrorCode.InvalidCode);
+          request.log.warn(
+            { status: outcome.status, outcome: outcome.code, err: errorIdentity(error) },
+            'the email code could not be redeemed',
+          );
+          return reply.code(outcome.status).send({ error: outcome.code });
+        }
+
+        // The Telegram user typing the code is the one who gets the account, so there is no
+        // confirmation step: the link is active and the starter pack is paid in this transaction.
+        const linked = await linkBrokerAccount(deps.db, {
+          telegramUserId: BigInt(telegramUserId),
+          tokens,
+          cipher: deps.cipher,
+          activate: true,
+        });
+        if (!linked.ok) {
+          return reply.code(409).send({
+            error:
+              linked.reason === 'user_blocked'
+                ? OAuthErrorCode.UserBlocked
+                : OAuthErrorCode.BrokerAccountTaken,
+          });
+        }
+        if (linked.grant === null) throw new Error('an activating link returned no grant');
+        return reply.send({
+          account: toBrokerAccountView(linked.account),
+          grant: toLinkBonusGrantView(linked.grant),
+        });
+      },
+    );
   });
 
   // the browser finishes the login, and it cannot hold the internal token: the single-use
@@ -169,7 +294,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
             redirectUri: consumed.redirectUri,
           });
         } catch (error) {
-          const { status, code } = exchangeOutcome(error);
+          const { status, code } = brokerOutcome(error, OAuthErrorCode.InvalidCode);
           // the only place the broker's own verdict is visible: the response carries a code,
           // not a reason
           request.log.warn(
@@ -199,16 +324,20 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
   });
 };
 
-// 400 belongs to the caller's own mistake, and only a bad code is one. A rejection or a
-// malformed body means our client id, secret or contract is wrong, which is a 502: the browser
-// did nothing it could do differently. One function, so the status and the code cannot drift.
-function exchangeOutcome(error: unknown): { status: number; code: string } {
+// 400 belongs to the caller's own mistake, and only a refused grant is one: a bad code, or an
+// address the broker will not take. A rejection or a malformed body means our client id, secret
+// or contract is wrong, which is a 502: the caller did nothing it could do differently. One
+// function for every route, so the status and the code cannot drift.
+function brokerOutcome(
+  error: unknown,
+  invalidGrantCode: OAuthErrorCode,
+): { status: number; code: string } {
   if (!(error instanceof BrokerOAuthError)) {
     return { status: 502, code: OAuthErrorCode.BrokerUnavailable };
   }
   switch (error.code) {
     case BrokerOAuthErrorCode.InvalidGrant:
-      return { status: 400, code: OAuthErrorCode.InvalidCode };
+      return { status: 400, code: invalidGrantCode };
     case BrokerOAuthErrorCode.ContractViolation:
     case BrokerOAuthErrorCode.Rejected:
       return { status: 502, code: OAuthErrorCode.BrokerContractViolation };
