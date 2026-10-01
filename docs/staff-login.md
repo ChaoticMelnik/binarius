@@ -71,6 +71,15 @@ docker compose exec backend pnpm --filter @binarius/backend staff disable --logi
 transaction, in the order `staff → challenges → sessions`: open challenges are closed and live
 sessions revoked, so a challenge created a moment earlier cannot still walk through to a session.
 
+A login already in flight neither slips past that nor breaks it. The two serialize on the
+challenge row `completeLogin` holds until it commits: either the CLI closes that challenge first
+and the login, once it stops waiting, finds it closed under it, or the CLI waits there and
+afterwards sees the session the login committed. The revocation is stamped with
+`clock_timestamp()` rather than `now()` for that second case: `now()` is the transaction's start,
+a session committed by a login that began later carries a `created_at` after it, and
+`staff_sessions_revoked_after_created_check` would reject that, aborting the whole operation and
+leaving the account exactly as it was (#149).
+
 There is no way to change a password from the UI yet — that is a follow-up issue.
 
 ## What is written down
