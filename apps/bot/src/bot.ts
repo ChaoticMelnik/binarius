@@ -1,12 +1,16 @@
 import { Bot, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import type { User, UserFromGetMe } from 'grammy/types';
 import {
+  confirmLoginRequestSchema,
   errorLogFields,
+  LinkBonusSkipReason,
   languageCodeSchema,
   OAuthErrorCode,
   startPayloadSchema,
   userStartRequestSchema,
   UserStatus,
+  type LinkBonusGrantView,
+  type PendingBrokerAccountView,
   type UserStartRequest,
 } from '@binarius/shared';
 import { BackendError, type BackendClient } from './backend-client';
@@ -16,6 +20,11 @@ import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 
 // the callback data of the CTA button; Bot API allows 1-64 bytes
 export const CONNECT_CALLBACK_DATA = 'connect';
+// 'confirm:' + a 36-character uuid is 44 bytes
+export const CONFIRM_CALLBACK_PREFIX = 'confirm:';
+export const confirmCallbackData = (accountId: string): string =>
+  `${CONFIRM_CALLBACK_PREFIX}${accountId}`;
+const CONFIRM_CALLBACK_PATTERN = new RegExp(`^${CONFIRM_CALLBACK_PREFIX}([0-9a-f-]{36})$`);
 
 export interface CreateBotOptions {
   token: string;
@@ -80,6 +89,14 @@ export function createBot({
       await ctx.reply(TEXTS.blocked);
       return;
     }
+    // before the active check on purpose: a link the owner of this Telegram account did not
+    // make must be in front of them, not behind a "welcome back"
+    if (user.pendingBrokerAccounts.length > 0) {
+      await ctx.reply(TEXTS.confirmPrompt, {
+        reply_markup: confirmKeyboard(user.pendingBrokerAccounts),
+      });
+      return;
+    }
     if (user.hasActiveBrokerAccount) {
       await ctx.reply(TEXTS.welcomeBack);
       return;
@@ -117,6 +134,43 @@ export function createBot({
       reply_markup: new InlineKeyboard().url(TEXTS.loginButton, login.value.authorizeUrl),
     });
   });
+
+  privateChats.callbackQuery(CONFIRM_CALLBACK_PATTERN, async (ctx) => {
+    const accountId = confirmLoginRequestSchema.shape.accountId.safeParse(ctx.match[1]);
+    if (!accountId.success) {
+      // the button is ours, so this is a forged or stale query: stop the spinner, say nothing
+      await ctx.answerCallbackQuery().catch((error: unknown) => {
+        logAnswerFailure(error);
+      });
+      return;
+    }
+    // independent, as in connect: the outcome message matters more than the spinner
+    const [answered, confirmed] = await Promise.allSettled([
+      ctx.answerCallbackQuery(),
+      backend.confirmLogin(String(ctx.from.id), accountId.data),
+    ]);
+    if (answered.status === 'rejected') logAnswerFailure(answered.reason);
+    if (confirmed.status === 'fulfilled') {
+      await ctx.reply(grantText(confirmed.value.grant));
+      return;
+    }
+    const error: unknown = confirmed.reason;
+    const refusal =
+      error instanceof BackendError ? CONFIRM_REFUSALS[error.reason ?? ''] : undefined;
+    if (refusal !== undefined) {
+      await ctx.reply(refusal);
+      return;
+    }
+    logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, 'login not confirmed');
+    await ctx.reply(TEXTS.unavailable);
+  });
+
+  function logAnswerFailure(error: unknown): void {
+    logger.warn(
+      { ...errorLogFields(error), ...telegramErrorFields(error, 'answerCallbackQuery') },
+      'answering the callback query failed',
+    );
+  }
 
   bot.catch((error) => {
     logger.error(
@@ -195,6 +249,28 @@ function languageOf(languageCode: string | undefined): Pick<UserStartRequest, 'l
   const parsed = languageCodeSchema.safeParse(languageCode);
   return parsed.success ? { languageCode: parsed.data } : {};
 }
+
+function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  for (const account of accounts) {
+    keyboard.text(TEXTS.confirmButton(account.email), confirmCallbackData(account.id)).row();
+  }
+  return keyboard;
+}
+
+function grantText(grant: LinkBonusGrantView): string {
+  if (grant.granted) return TEXTS.linkedWithBonus(grant.tokens);
+  return grant.reason === LinkBonusSkipReason.NotPartnerClient
+    ? TEXTS.linkedNoBonusNotPartner
+    : TEXTS.linkedNoBonusAlready;
+}
+
+// the refusals the user can act on; anything else is an outage to them
+const CONFIRM_REFUSALS: Partial<Record<string, string>> = {
+  [OAuthErrorCode.BrokerAccountNotFound]: TEXTS.confirmNotFound,
+  [OAuthErrorCode.AccountNotPending]: TEXTS.confirmAlreadyDone,
+  [OAuthErrorCode.UserBlocked]: TEXTS.blocked,
+};
 
 function backendErrorFields(error: unknown): { backendStatus?: number; backendReason?: string } {
   if (!(error instanceof BackendError)) return {};

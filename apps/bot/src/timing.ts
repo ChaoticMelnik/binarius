@@ -30,6 +30,8 @@ export const HANDLER_CALLS = {
   // answerCallbackQuery ∥ startLogin, then sendMessage — the parallel pair is counted as
   // sequential, so this bound is loose by BACKEND_REQUEST_TIMEOUT_MS (accepted)
   connect: { backend: 1, telegram: 2 },
+  // answerCallbackQuery ∥ confirmLogin, then sendMessage — counted the same way as connect
+  confirm: { backend: 1, telegram: 2 },
 } as const;
 
 export const handlerBudgetMs = ({

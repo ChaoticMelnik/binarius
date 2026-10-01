@@ -6,7 +6,13 @@ import type { AddressInfo } from 'node:net';
 import type { Bot, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
-import { UserStatus, type StartLoginResponse, type UserStartView } from '@binarius/shared';
+import {
+  BrokerAccountStatus,
+  UserStatus,
+  type ConfirmLoginResponse,
+  type StartLoginResponse,
+  type UserStartView,
+} from '@binarius/shared';
 
 export const BOT_INFO: UserFromGetMe = {
   id: 1,
@@ -46,6 +52,22 @@ export const LOGIN: StartLoginResponse = {
   expiresAt: '2026-09-24T10:10:00.000Z',
 };
 
+export const PENDING_ACCOUNT_ID = '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01';
+
+// Seven, not the real pack size: a bot that printed its own number instead of the backend's
+// would show up as a mismatch.
+export const CONFIRMED: ConfirmLoginResponse = {
+  account: {
+    id: PENDING_ACCOUNT_ID,
+    brokerUserId: '101962',
+    email: 'ada@example.test',
+    isPartnerClient: true,
+    status: BrokerAccountStatus.Active,
+    createdAt: '2026-10-01T09:28:00.000Z',
+  },
+  grant: { granted: true, tokens: '7' },
+};
+
 // the reason a promise rejected with, or undefined when it resolved: what a test needs when the
 // assertion is about the error's identity rather than its message
 export const rejectionOf = async (promise: Promise<unknown>): Promise<unknown> =>
@@ -83,7 +105,7 @@ export const startUpdate = (text: string, chatType = 'private', from: User = USE
     },
   }) as unknown as Update;
 
-export const connectUpdate = (data: string, chatType = 'private'): Update =>
+export const callbackUpdate = (data: string, chatType = 'private'): Update =>
   ({
     update_id: ++updateId,
     callback_query: {

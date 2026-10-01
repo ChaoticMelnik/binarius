@@ -3,14 +3,16 @@ import { BotError, HttpError } from 'grammy';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OAuthErrorCode, UserStatus, type UserStartView } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { CONNECT_CALLBACK_DATA, createBot } from './bot';
+import { CONNECT_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
 import {
   BOT_INFO,
+  CONFIRMED,
   LOGIN,
+  PENDING_ACCOUNT_ID,
   USER,
   captureApi,
   closeServer,
-  connectUpdate,
+  callbackUpdate,
   fakeLogger,
   inlineButtons,
   listen,
@@ -26,12 +28,14 @@ function setup(
     user?: UserStartView;
     recordStart?: BackendClient['recordStart'];
     startLogin?: BackendClient['startLogin'];
+    confirmLogin?: BackendClient['confirmLogin'];
     welcomeVideoFileId?: string;
   } = {},
 ) {
   const backend: BackendClient = {
     recordStart: options.recordStart ?? vi.fn(() => Promise.resolve(options.user ?? userView())),
     startLogin: options.startLogin ?? vi.fn(() => Promise.resolve(LOGIN)),
+    confirmLogin: options.confirmLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
   };
   const logger = fakeLogger();
   const bot = createBot({
@@ -160,6 +164,56 @@ describe('/start', () => {
     expect(message?.reply_markup).toBeUndefined();
   });
 
+  it('offers to confirm a link that waits for it, one button per link', async () => {
+    const other = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+    const { bot, calls } = setup({
+      user: userView({
+        pendingBrokerAccounts: [
+          { id: PENDING_ACCOUNT_ID, email: 'ada@example.test' },
+          { id: other, email: null },
+        ],
+      }),
+    });
+    await bot.handleUpdate(startUpdate('/start'));
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.confirmPrompt);
+    expect(message?.parse_mode).toBeUndefined();
+    expect(inlineButtons(message)).toEqual([
+      { text: 'Подтвердить: ada@example.test', callback_data: `confirm:${PENDING_ACCOUNT_ID}` },
+      { text: 'Подтвердить привязку', callback_data: `confirm:${other}` },
+    ]);
+    // Bot API: callback_data is 1-64 bytes
+    expect(Buffer.byteLength(confirmCallbackData(PENDING_ACCOUNT_ID), 'utf8')).toBeLessThanOrEqual(
+      64,
+    );
+  });
+
+  // a link the owner of this Telegram account did not make must not hide behind "welcome back"
+  it('puts a waiting link before the welcome back', async () => {
+    const { bot, calls } = setup({
+      user: userView({
+        hasActiveBrokerAccount: true,
+        pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: null }],
+      }),
+    });
+    await bot.handleUpdate(startUpdate('/start'));
+    expect(calls.filter((call) => call.method === 'sendMessage')).toHaveLength(1);
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.confirmPrompt);
+  });
+
+  it('shows a blocked user no confirm button either', async () => {
+    const { bot, calls } = setup({
+      user: userView({
+        status: UserStatus.Blocked,
+        pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: null }],
+      }),
+    });
+    await bot.handleUpdate(startUpdate('/start'));
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.blocked);
+    expect(message?.reply_markup).toBeUndefined();
+  });
+
   it('tells the user to come back later when the backend is unreachable', async () => {
     const { bot, calls, logger } = setup({
       recordStart: vi.fn(() => Promise.reject(new BackendError(BackendErrorCode.Unreachable))),
@@ -248,7 +302,7 @@ describe('the welcome video', () => {
 describe('the connect button', () => {
   it('answers the query and sends the authorize link as a url button', async () => {
     const { bot, backend, calls } = setup();
-    await bot.handleUpdate(connectUpdate(CONNECT_CALLBACK_DATA));
+    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
 
     expect(backend.startLogin).toHaveBeenCalledWith('4242');
     expect(calls.map((call) => call.method)).toContain('answerCallbackQuery');
@@ -268,7 +322,7 @@ describe('the connect button', () => {
       description: 'Bad Request: query is too old',
     });
 
-    await bot.handleUpdate(connectUpdate(CONNECT_CALLBACK_DATA));
+    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
     expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.loginLink);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
   });
@@ -284,7 +338,7 @@ describe('the connect button', () => {
         ),
       ),
     });
-    await bot.handleUpdate(connectUpdate(CONNECT_CALLBACK_DATA));
+    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.blocked);
     expect(message?.reply_markup).toBeUndefined();
@@ -296,15 +350,100 @@ describe('the connect button', () => {
         Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
       ),
     });
-    await bot.handleUpdate(connectUpdate(CONNECT_CALLBACK_DATA));
+    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
     expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ backendStatus: 500 });
   });
 
   it('ignores the callback outside a private chat', async () => {
     const { bot, backend, calls } = setup();
-    await bot.handleUpdate(connectUpdate(CONNECT_CALLBACK_DATA, 'group'));
+    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA, 'group'));
     expect(backend.startLogin).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('the confirm button', () => {
+  const update = () => callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID));
+
+  // CONFIRMED carries 7 tokens, not the real pack: the text must be the backend's number
+  it('confirms as the user who pressed it and reports the pack the backend paid', async () => {
+    const { bot, backend, calls, logger } = setup();
+    await bot.handleUpdate(update());
+
+    expect(backend.confirmLogin).toHaveBeenCalledWith('4242', PENDING_ACCOUNT_ID);
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.linkedWithBonus('7'));
+    expect(message?.text).toContain(': 7.');
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['not_partner_client' as const, TEXTS.linkedNoBonusNotPartner],
+    ['already_granted' as const, TEXTS.linkedNoBonusAlready],
+  ])('says why no pack was paid (%s)', async (reason, text) => {
+    const { bot, calls } = setup({
+      confirmLogin: vi.fn(() =>
+        Promise.resolve({ ...CONFIRMED, grant: { granted: false as const, reason } }),
+      ),
+    });
+    await bot.handleUpdate(update());
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(text);
+  });
+
+  it.each([
+    [404, OAuthErrorCode.BrokerAccountNotFound, TEXTS.confirmNotFound],
+    [409, OAuthErrorCode.AccountNotPending, TEXTS.confirmAlreadyDone],
+    [409, OAuthErrorCode.UserBlocked, TEXTS.blocked],
+  ])('answers a %i %s with its own text and no warning', async (status, reason, text) => {
+    const { bot, calls, logger } = setup({
+      confirmLogin: vi.fn(() =>
+        Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status, reason })),
+      ),
+    });
+    await bot.handleUpdate(update());
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(text);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('shows the generic text and warns for any other backend failure', async () => {
+    const { bot, calls, logger } = setup({
+      confirmLogin: vi.fn(() =>
+        Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
+      ),
+    });
+    await bot.handleUpdate(update());
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable);
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
+      err: { name: 'BackendError' },
+      backendStatus: 500,
+    });
+  });
+
+  it('still reports the outcome when answering the query fails', async () => {
+    const { bot, calls, logger, apiErrors } = setup();
+    apiErrors.set('answerCallbackQuery', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: query is too old',
+    });
+    await bot.handleUpdate(update());
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.linkedWithBonus('7'));
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
+  });
+
+  it('stops the spinner and calls nothing for data that is not a uuid', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(callbackUpdate(`confirm:${'-'.repeat(36)}`));
+    expect(backend.confirmLogin).not.toHaveBeenCalled();
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery']);
+  });
+
+  it('ignores the callback outside a private chat', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID), 'group'));
+    expect(backend.confirmLogin).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
   });
 });
@@ -330,6 +469,7 @@ describe('the Bot API timeout', () => {
       backend: {
         recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
         startLogin: vi.fn(() => Promise.reject(new Error('unused'))),
+        confirmLogin: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,
