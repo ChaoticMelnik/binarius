@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
-import { confirmLoginResponseSchema } from '@binarius/shared';
+import { confirmLoginResponseSchema, emailLoginResponseSchema } from '@binarius/shared';
 import {
   LINK_BONUS_TOKENS,
   brokerAccounts,
@@ -10,11 +10,17 @@ import {
   createTokenCipher,
   hashToken,
   oauthStates,
+  tokenLedger,
   users,
 } from '@binarius/db';
 import { createTempDatabase, seedUser, type TempDatabase } from '@binarius/db/testing';
 import { buildApp } from '../app';
-import { createBrokerOAuthClient } from '../broker/oauth-client';
+import {
+  BrokerOAuthError,
+  BrokerOAuthErrorCode,
+  createBrokerOAuthClient,
+  type BrokerOAuthClient,
+} from '../broker/oauth-client';
 import { startOAuthStub, type OAuthStub } from '../broker/testing/oauth-stub';
 import type { AuthRoutesDeps } from './routes';
 import { unusedAdminDeps } from '../admin/testing';
@@ -44,6 +50,7 @@ beforeAll(async () => {
     clientId: CLIENT_ID,
     clientSecret: CLIENT_SECRET,
     redirectUri: REDIRECT_URI,
+    partnerCode: PARTNER_REF,
   });
   authDeps = {
     db: tmp.db,
@@ -71,12 +78,14 @@ afterAll(async () => {
 let seq = 0;
 const telegramId = () => String(800_000 + ++seq);
 
-const testApp = (auth: AuthRoutesDeps) =>
+const testApp = (auth: AuthRoutesDeps, logs?: { write(line: string): void }) =>
   buildApp({
     admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
-    logLevel: 'silent',
+    // trace, so a level below production's info cannot hide a line from the log tests
+    logLevel: logs === undefined ? 'silent' : 'trace',
+    ...(logs === undefined ? {} : { logDestination: logs }),
     checkTimeoutMs: 20,
     trading: { db: tmp.db, internalApiToken: TOKEN, onIntentQueued: () => {} },
     auth,
@@ -599,5 +608,423 @@ describe('secrecy', () => {
     expect(response.body).not.toContain('access-');
     expect(response.body).not.toContain('refresh-');
     expect(response.body).not.toContain(CLIENT_SECRET);
+  });
+});
+
+// --- Email login (issue #162) ------------------------------------------------------------------
+
+const bearer = { authorization: `Bearer ${TOKEN}` };
+let mailSeq = 0;
+const address = (label = 'user') => `${label}-${++mailSeq}@example.test`;
+
+const sendCode = (payload: unknown, instance = app, headers = bearer) =>
+  postJson(instance, '/auth/binodex/email/send-code', payload, headers);
+const emailLogin = (payload: unknown, instance = app, headers = bearer) =>
+  postJson(instance, '/auth/binodex/email/login', payload, headers);
+
+// asks the stub for a code and redeems it; the stub answers the newest code per address
+async function loginByEmail(telegramUserId: string, email: string, instance = app) {
+  expect((await sendCode({ telegramUserId, email }, instance)).statusCode).toBe(200);
+  const code = stub.codeFor(email);
+  if (code === undefined) throw new Error('the stub sent no code');
+  return emailLogin({ telegramUserId, email, code }, instance);
+}
+
+const accountOf = async (brokerUserId: string) => {
+  const [row] = await tmp.db
+    .select()
+    .from(brokerAccounts)
+    .where(eq(brokerAccounts.brokerUserId, brokerUserId));
+  return row;
+};
+const userIdOf = async (telegramUserId: string) => {
+  const [row] = await tmp.db
+    .select({ id: users.id, balance: users.tokenBalance })
+    .from(users)
+    .where(eq(users.telegramUserId, BigInt(telegramUserId)));
+  return row;
+};
+
+// a broker whose email calls fail the way `fail` says, for the outcomes the stub cannot produce
+const failingBroker = (fail: () => never): BrokerOAuthClient => ({
+  ...authDeps.broker,
+  sendEmailCode: async () => fail(),
+  emailLogin: async () => fail(),
+});
+
+const own = async (over: Partial<AuthRoutesDeps>, logs?: { write(line: string): void }) => {
+  const instance = testApp({ ...authDeps, ...over }, logs);
+  await instance.ready();
+  return instance;
+};
+
+describe('POST /auth/binodex/email/send-code', () => {
+  it('requires the internal token', async () => {
+    const payload = { telegramUserId: telegramId(), email: address() };
+    expect((await sendCode(payload, app, { authorization: 'Bearer nope' })).statusCode).toBe(401);
+    expect(
+      (await emailLogin({ ...payload, code: '1' }, app, { authorization: '' })).statusCode,
+    ).toBe(401);
+  });
+
+  it('asks the broker for a code and answers codeSent', async () => {
+    const email = address();
+    const response = await sendCode({ telegramUserId: telegramId(), email });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ codeSent: true });
+    expect(stub.codeFor(email)).toBeDefined();
+  });
+
+  it('trims the address before sending it', async () => {
+    const email = address();
+    const response = await sendCode({ telegramUserId: telegramId(), email: `  ${email}  ` });
+    expect(response.statusCode).toBe(200);
+    expect(stub.codeFor(email)).toBeDefined();
+  });
+
+  it.each([
+    ['no address', {}],
+    ['an address without @', { email: 'ada.example.test' }],
+    ['an address with a space inside', { email: 'ada @example.test' }],
+  ])('rejects %s with 400 validation, before the broker', async (_label, patch) => {
+    const before = stub.tokenRequests;
+    const response = await sendCode({ telegramUserId: telegramId(), ...patch });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe('validation');
+    expect(stub.tokenRequests).toBe(before);
+  });
+
+  it('refuses a blocked user before the broker', async () => {
+    const blocked = await seedUser(tmp.db, { status: 'blocked' });
+    const before = stub.tokenRequests;
+    const response = await sendCode({ telegramUserId: blocked.telegramUserId, email: address() });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'user_blocked' });
+    expect(stub.tokenRequests).toBe(before);
+  });
+
+  it('refuses the fourth code for one Telegram user within the window', async () => {
+    const telegramUserId = telegramId();
+    for (let i = 0; i < 3; i += 1) {
+      expect((await sendCode({ telegramUserId, email: address() })).statusCode).toBe(200);
+    }
+    const before = stub.tokenRequests;
+    const fourth = await sendCode({ telegramUserId, email: address() });
+    expect(fourth.statusCode).toBe(429);
+    expect(fourth.json()).toEqual({ error: 'too_many_attempts' });
+    expect(stub.tokenRequests).toBe(before);
+  });
+
+  it('refuses the fourth code for one address, whatever its case and whoever asks', async () => {
+    const email = address('shared');
+    for (const variant of [email, email.toUpperCase(), email]) {
+      expect((await sendCode({ telegramUserId: telegramId(), email: variant })).statusCode).toBe(
+        200,
+      );
+    }
+    const fourth = await sendCode({ telegramUserId: telegramId(), email });
+    expect(fourth.statusCode).toBe(429);
+    expect(fourth.json()).toEqual({ error: 'too_many_attempts' });
+  });
+
+  it('holds a route ceiling that a caller without the token cannot spend', async () => {
+    const instance = await own({ emailSendCodeMaxPerMinute: 1 });
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        const anonymous = await sendCode(
+          { telegramUserId: telegramId(), email: address() },
+          instance,
+          {
+            authorization: 'Bearer nope',
+          },
+        );
+        expect(anonymous.statusCode).toBe(401);
+      }
+      expect(
+        (await sendCode({ telegramUserId: telegramId(), email: address() }, instance)).statusCode,
+      ).toBe(200);
+      const over = await sendCode({ telegramUserId: telegramId(), email: address() }, instance);
+      expect(over.statusCode).toBe(429);
+      expect(over.json()).toEqual({ error: 'too_many_requests' });
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it.each([
+    [BrokerOAuthErrorCode.InvalidGrant, 400, 'invalid_email'],
+    [BrokerOAuthErrorCode.Rejected, 502, 'broker_contract_violation'],
+    [BrokerOAuthErrorCode.ContractViolation, 502, 'broker_contract_violation'],
+    [BrokerOAuthErrorCode.Unavailable, 502, 'broker_unavailable'],
+  ] as const)('maps a broker %s to %i %s', async (brokerCode, status, error) => {
+    const instance = await own({
+      broker: failingBroker(() => {
+        throw new BrokerOAuthError(brokerCode, 400);
+      }),
+    });
+    try {
+      const response = await sendCode({ telegramUserId: telegramId(), email: address() }, instance);
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toEqual({ error });
+    } finally {
+      await instance.close();
+    }
+  });
+});
+
+describe('POST /auth/binodex/email/login', () => {
+  it('registers a new partner account, activates it and pays the starter pack', async () => {
+    const telegramUserId = telegramId();
+    const email = address('new');
+    const response = await loginByEmail(telegramUserId, email);
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(Object.keys(body).sort()).toEqual(['account', 'grant']);
+    expect(emailLoginResponseSchema.parse(body)).toMatchObject({
+      account: { status: 'active', isPartnerClient: true, email },
+      grant: { granted: true, tokens: LINK_BONUS_TOKENS.toString() },
+    });
+    expect(stub.lastEmailLoginBodyKeys).toContain('partner_code');
+
+    const row = await accountOf(body.account.brokerUserId);
+    expect(row).toMatchObject({ status: 'active', authRevokedReason: null });
+    expect(row?.refreshTokenHash).toMatch(/^[0-9a-f]{64}$/);
+    const user = await userIdOf(telegramUserId);
+    expect(user?.balance).toBe(LINK_BONUS_TOKENS);
+    const ledger = await tmp.db
+      .select({ delta: tokenLedger.balanceDelta })
+      .from(tokenLedger)
+      .where(eq(tokenLedger.userId, user!.id));
+    expect(ledger).toEqual([{ delta: LINK_BONUS_TOKENS }]);
+  });
+
+  it('signs an existing broker user in to the same account', async () => {
+    const email = address('old');
+    stub.registerEmailUser({ email, brokerUserId: 'broker-email-old', isPartnerClient: false });
+    const response = await loginByEmail(telegramId(), email);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      account: { brokerUserId: 'broker-email-old', status: 'active' },
+      grant: { granted: false, reason: 'not_partner_client' },
+    });
+  });
+
+  it('activates the pending account an unfinished OAuth login left, and pays', async () => {
+    const telegramUserId = telegramId();
+    const email = address('pending');
+    stub.registerEmailUser({ email, brokerUserId: 'broker-email-pending', isPartnerClient: true });
+    const { response: linked } = await login(telegramUserId, 'broker-email-pending', true);
+    expect(linked.json().account.status).toBe('pending');
+
+    const response = await loginByEmail(telegramUserId, email);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      account: { id: linked.json().account.id, status: 'active' },
+      grant: { granted: true },
+    });
+  });
+
+  it('brings a revoked account back to active', async () => {
+    const telegramUserId = telegramId();
+    const email = address('revoked');
+    const first = await loginByEmail(telegramUserId, email);
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ status: 'revoked', authRevokedReason: 'refresh_invalid_grant' })
+      .where(eq(brokerAccounts.id, first.json().account.id));
+
+    const again = await loginByEmail(telegramUserId, email);
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({
+      account: { id: first.json().account.id, status: 'active' },
+      grant: { granted: false, reason: 'already_granted' },
+    });
+    expect((await accountOf(first.json().account.brokerUserId))?.authRevokedReason).toBeNull();
+  });
+
+  it('refuses an account that already belongs to another Telegram user', async () => {
+    const email = address('taken');
+    const first = await loginByEmail(telegramId(), email);
+    const before = await accountOf(first.json().account.brokerUserId);
+
+    const response = await loginByEmail(telegramId(), email);
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'broker_account_taken' });
+    expect(await accountOf(first.json().account.brokerUserId)).toEqual(before);
+  });
+
+  it('pays nothing for the same user’s second partner account', async () => {
+    const telegramUserId = telegramId();
+    expect((await loginByEmail(telegramUserId, address('first'))).json().grant.granted).toBe(true);
+    const second = await loginByEmail(telegramUserId, address('second'));
+    expect(second.statusCode).toBe(200);
+    expect(second.json().grant).toEqual({ granted: false, reason: 'already_granted' });
+    expect((await userIdOf(telegramUserId))?.balance).toBe(LINK_BONUS_TOKENS);
+  });
+
+  it('maps a wrong code to 400 invalid_code and writes nothing', async () => {
+    const telegramUserId = telegramId();
+    const email = address('wrong');
+    await sendCode({ telegramUserId, email });
+    const response = await emailLogin({ telegramUserId, email, code: 'not-the-code' });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'invalid_code' });
+    expect(await userIdOf(telegramUserId)).toBeUndefined();
+  });
+
+  it('refuses the sixth attempt within the window even with the right code', async () => {
+    const telegramUserId = telegramId();
+    const email = address('sixth');
+    await sendCode({ telegramUserId, email });
+    for (let i = 0; i < 5; i += 1) {
+      expect((await emailLogin({ telegramUserId, email, code: `wrong-${i}` })).statusCode).toBe(
+        400,
+      );
+    }
+    const before = stub.tokenRequests;
+    const sixth = await emailLogin({ telegramUserId, email, code: stub.codeFor(email) });
+    expect(sixth.statusCode).toBe(429);
+    expect(sixth.json()).toEqual({ error: 'too_many_attempts' });
+    expect(stub.tokenRequests).toBe(before);
+  });
+
+  it('counts attempts per address across Telegram users', async () => {
+    const email = address('spread');
+    await sendCode({ telegramUserId: telegramId(), email });
+    for (let i = 0; i < 5; i += 1) {
+      const attempt = await emailLogin({ telegramUserId: telegramId(), email, code: `wrong-${i}` });
+      expect(attempt.statusCode).toBe(400);
+    }
+    const sixth = await emailLogin({ telegramUserId: telegramId(), email, code: 'wrong-6' });
+    expect(sixth.statusCode).toBe(429);
+    expect(sixth.json()).toEqual({ error: 'too_many_attempts' });
+  });
+
+  it('holds a route ceiling', async () => {
+    const instance = await own({ emailLoginMaxPerMinute: 1 });
+    try {
+      const payload = () => ({ telegramUserId: telegramId(), email: address(), code: 'x' });
+      expect((await emailLogin(payload(), instance)).statusCode).toBe(400);
+      const over = await emailLogin(payload(), instance);
+      expect(over.statusCode).toBe(429);
+      expect(over.json()).toEqual({ error: 'too_many_requests' });
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it.each([
+    ['an empty code', { code: '   ' }],
+    ['no code', { code: undefined }],
+    ['an address without @', { email: 'ada.example.test' }],
+  ])('rejects %s with 400 validation', async (_label, patch) => {
+    const response = await emailLogin({
+      telegramUserId: telegramId(),
+      email: address(),
+      code: '123456',
+      ...patch,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe('validation');
+  });
+
+  it('refuses a blocked user before the broker', async () => {
+    const blocked = await seedUser(tmp.db, { status: 'blocked' });
+    const before = stub.tokenRequests;
+    const response = await emailLogin({
+      telegramUserId: blocked.telegramUserId,
+      email: address(),
+      code: '123456',
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'user_blocked' });
+    expect(stub.tokenRequests).toBe(before);
+  });
+
+  it('reports a wrong client secret as 502, not as a bad code', async () => {
+    const instance = await own({
+      broker: createBrokerOAuthClient({
+        baseUrl: stub.url,
+        clientId: CLIENT_ID,
+        clientSecret: 'not-the-secret',
+      }),
+    });
+    try {
+      const response = await emailLogin(
+        { telegramUserId: telegramId(), email: address(), code: '1' },
+        instance,
+      );
+      expect(response.statusCode).toBe(502);
+      expect(response.json()).toEqual({ error: 'broker_contract_violation' });
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it('makes the account visible to /users/start as active', async () => {
+    const telegramUserId = telegramId();
+    expect((await loginByEmail(telegramUserId, address('start'))).statusCode).toBe(200);
+    const started = await postJson(
+      app,
+      '/users/start',
+      { telegramUserId, displayName: 'Ada' },
+      bearer,
+    );
+    expect(started.json().user.hasActiveBrokerAccount).toBe(true);
+  });
+
+  it('leaves the OAuth callback linking as pending', async () => {
+    const { response } = await login(telegramId(), 'broker-oauth-regression', true);
+    expect(response.json().account.status).toBe('pending');
+  });
+});
+
+describe('the email login logs', () => {
+  it('writes neither the address nor the code on its failure paths', async () => {
+    const lines: string[] = [];
+    const sink = { write: (line: string) => void lines.push(line) };
+    const outcomes = [
+      new BrokerOAuthError(BrokerOAuthErrorCode.InvalidGrant, 400),
+      new BrokerOAuthError(BrokerOAuthErrorCode.Unavailable),
+    ];
+    // the success path as well, through the stub
+    const working = await own({}, sink);
+    try {
+      const telegramUserId = telegramId();
+      const email = `MARKER-ADDRESS-${++mailSeq}@example.test`;
+      await sendCode({ telegramUserId, email }, working);
+      const ok = await emailLogin({ telegramUserId, email, code: stub.codeFor(email) }, working);
+      expect(ok.statusCode).toBe(200);
+    } finally {
+      await working.close();
+    }
+    for (const outcome of outcomes) {
+      const instance = await own(
+        {
+          broker: failingBroker(() => {
+            throw outcome;
+          }),
+        },
+        sink,
+      );
+      try {
+        const telegramUserId = telegramId();
+        const email = `MARKER-ADDRESS-${++mailSeq}@example.test`;
+        await sendCode({ telegramUserId, email }, instance);
+        await emailLogin({ telegramUserId, email, code: 'MARKER-CODE' }, instance);
+      } finally {
+        await instance.close();
+      }
+    }
+    // the warn lines are there, so the absence below is about their content
+    expect(lines.filter((line) => line.includes('the email code could not be sent'))).toHaveLength(
+      2,
+    );
+    expect(
+      lines.filter((line) => line.includes('the email code could not be redeemed')),
+    ).toHaveLength(2);
+    const all = lines.join('\n');
+    expect(all).not.toContain('MARKER-ADDRESS');
+    expect(all).not.toContain('MARKER-CODE');
   });
 });
