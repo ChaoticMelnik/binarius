@@ -50,7 +50,7 @@ Postgres, Redis, and the four apps run in containers; the apps hot-reload from y
 The apps are not meant to run outside Docker in this repo state.
 
 ```bash
-cp .env.example .env                # then fill in the seven REQUIRED values; compose stops while any is empty
+cp .env.example .env                # then fill in the eight REQUIRED values; compose stops while any is empty
 docker compose up --build --watch   # build, start, sync src/ edits into the containers
 curl 127.0.0.1:3000/health          # {"status":"ok","postgres":"ok","redis":"ok"}
 curl -I 127.0.0.1:3001/admin/login  # HTTP/1.1 200 OK — the staff login page
@@ -68,7 +68,7 @@ backend (`3000`) and the admin pages (`3001`) are published on `127.0.0.1` only.
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
 The integration tests run against a real Postgres named by `DATABASE_URL` and a real Redis named
 by `REDIS_URL`, and fail without them — `pnpm test` therefore needs the compose services. Even
-this partial start needs all seven REQUIRED values in `.env`, because Compose interpolates the
+this partial start needs all eight REQUIRED values in `.env`, because Compose interpolates the
 whole file before it picks which services to run: that includes `TELEGRAM_BOT_TOKEN`, which only
 the `bot` service reads, so `docker compose up -d postgres redis` refuses to run without it:
 

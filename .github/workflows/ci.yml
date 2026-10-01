@@ -118,10 +118,11 @@ jobs:
       # a crashing service would otherwise be restarted forever and --wait would burn the whole timeout
       COMPOSE_RESTART: 'no'
       # compose refuses to start without these, and none of them has a default a deployment
-      # could inherit, so CI supplies its own throwaway values — these seven assignments are
-      # fixtures for this job, not configuration anyone ships. TOKEN_ENCRYPTION_KEY_ID is not a
-      # secret; it is here because it is required, and because the all-zero key is only valid
-      # paired with it. TELEGRAM_BOT_TOKEN is here for the same reason — the whole file is
+      # could inherit, so CI supplies its own throwaway values — these eight assignments are
+      # fixtures for this job, not configuration anyone ships. TOKEN_ENCRYPTION_KEY_ID and
+      # BROKER_PARTNER_REF are not secrets; they are here because they are required, the key id
+      # also because the all-zero key is only valid paired with it, and the partner code is one
+      # the backend's startup check accepts. TELEGRAM_BOT_TOKEN is here for the same reason — the whole file is
       # interpolated before any service is picked — and the `bot` service is never started.
       # ADMIN_BOT_TOKEN is a fake the staff bot's getMe is refused for: the backend logs that,
       # leaves isPolling() false and keeps serving, which is what this job then checks.
@@ -132,6 +133,7 @@ jobs:
       TOKEN_ENCRYPTION_KEY_ID: dev
       ADMIN_BOT_TOKEN: ci-admin-bot-token
       ADMIN_WEB_TOKEN: ci-admin-web-token-value
+      BROKER_PARTNER_REF: ci-partner-ref
     steps:
       - uses: actions/checkout@v4
       - name: Dockerfile Node version matches .node-version
@@ -143,24 +145,24 @@ jobs:
       # The guard: each required variable must be required on its own, and an empty value has
       # to be refused as well as a missing one — `cp .env.example .env` produces empty ones, and
       # ${VAR?} would accept them while ${VAR:?} does not. One variable at a time, with the other
-      # six supplied, so a default creeping back onto six of the seven cannot hide behind the
-      # seventh. The outer list decides what is tested — a name missing there is simply never
+      # seven supplied, so a default creeping back onto seven of the eight cannot hide behind the
+      # eighth. The outer list decides what is tested — a name missing there is simply never
       # checked — and the inner one is what supplies the rest, so a name missing there makes
       # every iteration refuse partly for that reason instead of isolating one variable.
       # (Measured: compose names every missing variable, so the grep below still finds the one
       # under test; the isolation is the point, not the verdict.) Both lists therefore have to
-      # name all seven. --env-file /dev/null keeps a developer's own .env out of it locally.
+      # name all eight. --env-file /dev/null keeps a developer's own .env out of it locally.
       - name: every required variable is required on its own
         run: |
           set -u
           key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
           for name in INTERNAL_API_TOKEN BROKER_CLIENT_SECRET TOKEN_ENCRYPTION_KEY \
                       TOKEN_ENCRYPTION_KEY_ID TELEGRAM_BOT_TOKEN ADMIN_BOT_TOKEN \
-                      ADMIN_WEB_TOKEN; do
+                      ADMIN_WEB_TOKEN BROKER_PARTNER_REF; do
             set --
             for other in INTERNAL_API_TOKEN BROKER_CLIENT_SECRET TOKEN_ENCRYPTION_KEY \
                          TOKEN_ENCRYPTION_KEY_ID TELEGRAM_BOT_TOKEN ADMIN_BOT_TOKEN \
-                         ADMIN_WEB_TOKEN; do
+                         ADMIN_WEB_TOKEN BROKER_PARTNER_REF; do
               if [ "$other" = "$name" ]; then continue; fi
               case "$other" in
                 TOKEN_ENCRYPTION_KEY) set -- "$@" "TOKEN_ENCRYPTION_KEY=$key" ;;

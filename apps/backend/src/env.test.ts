@@ -10,7 +10,7 @@ const valid = {
   BROKER_CLIENT_ID: 'client-id',
   BROKER_CLIENT_SECRET: 'client-secret',
   BROKER_OAUTH_AUTHORIZE_URL: 'https://binodex.app/oauth/authorize',
-  BROKER_API_BASE_URL: 'https://binodex.app',
+  BROKER_API_BASE_URL: 'https://api.binodex.app',
   BROKER_OAUTH_REDIRECT_URI: 'https://bot.example/oauth/callback',
   BROKER_PARTNER_REF: 'partner-ref',
   TOKEN_ENCRYPTION_KEY: KEY,
@@ -173,13 +173,13 @@ describe('broker OAuth configuration', () => {
     ],
     [
       'BROKER_API_BASE_URL',
-      'ftp://binodex.app',
+      'ftp://api.binodex.app',
       'Env BROKER_API_BASE_URL must use one of: https:',
     ],
     // the broker is reached over the internet: plaintext there would expose the code in flight
     [
       'BROKER_API_BASE_URL',
-      'http://binodex.app',
+      'http://api.binodex.app',
       'Env BROKER_API_BASE_URL must use one of: https:',
     ],
     [
@@ -200,6 +200,23 @@ describe('broker OAuth configuration', () => {
   ])('rejects %s=%s', (name, value, message) => {
     expect(() => parseEnv({ ...valid, [name]: value })).toThrow(message);
   });
+
+  // the link is what the partner cabinet hands out, so it is the likeliest wrong value
+  it.each(['https://bdclick.app/smart/zr7IA7', 'zr7IA7/', 'zr7 IA7', 'zr7IA7\n', 'a'.repeat(65)])(
+    'rejects %j as a partner code',
+    (value) => {
+      expect(() => parseEnv({ ...valid, BROKER_PARTNER_REF: value })).toThrow(
+        'Env BROKER_PARTNER_REF must be the short partner code ([A-Za-z0-9_-], 1-64 chars), not the partner link',
+      );
+    },
+  );
+
+  it.each(['zr7IA7', 'a', '_-', 'a'.repeat(64), 'ci-partner-ref', 'partner-ref'])(
+    'accepts %j as a partner code',
+    (value) => {
+      expect(parseEnv({ ...valid, BROKER_PARTNER_REF: value }).brokerPartnerRef).toBe(value);
+    },
+  );
 
   // the redirect target during development is a page on this machine, which no proxy sees
   it.each(['http://127.0.0.1:3000/oauth/callback', 'http://localhost:3000/oauth/callback'])(
@@ -264,9 +281,12 @@ describe('the staff-login variables', () => {
   });
 
   // the same rules the internal token is held to: it is a shared secret, just a narrower one
-  it.each(['short', 'has whitespace in it '])('refuses a weak web token (%j)', (ADMIN_WEB_TOKEN) => {
-    expect(() => parseEnv({ ...valid, ADMIN_WEB_TOKEN })).toThrow('Env ADMIN_WEB_TOKEN');
-  });
+  it.each(['short', 'has whitespace in it '])(
+    'refuses a weak web token (%j)',
+    (ADMIN_WEB_TOKEN) => {
+      expect(() => parseEnv({ ...valid, ADMIN_WEB_TOKEN })).toThrow('Env ADMIN_WEB_TOKEN');
+    },
+  );
 
   // internalBearerAuth is the same comparator on both sides, so one value in both variables
   // would let the web process's narrow secret open the whole internal API. The pair the fixture
