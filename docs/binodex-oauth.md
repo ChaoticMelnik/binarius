@@ -11,6 +11,7 @@ the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contra
 | --------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | Contract  | `packages/shared/src/oauth.ts`            | wire schemas, the login request/response shapes, the error codes and the four revocation reasons |
 | Storage   | `packages/db/src/oauth-ops.ts`            | state rows, the linking transaction, rotation and revocation                                     |
+| Starter pack | `packages/db/src/link-bonus-ops.ts`    | `LINK_BONUS_TOKENS` and `grantLinkBonus`, called by the confirmation (#10)                       |
 | Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token` and the refresh on `POST /v1/broker/user-auth/refresh`, one attempt each, under a real abort |
 | Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/start`, `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`          |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
@@ -26,7 +27,9 @@ broker ──code + state──▶ page/popup (#32)
 page ──POST /auth/binodex/callback (public)──▶ backend
         │  CAS on the state row  ──▶ exchange code ──▶ link user + broker account (pending)
         ◀── { account }
-bot ──POST /auth/binodex/confirm (internal token)──▶ backend   pending ──▶ active
+user ──/start──▶ bot: pendingBrokerAccounts is not empty ──▶ "Подтвердить" button (#10)
+bot ──POST /auth/binodex/confirm (internal token)──▶ backend   pending ──▶ active, starter pack
+        ◀── { account, grant }
 later: ensureFreshAccessToken(accountId) ──▶ stored token, or one exchange, or a revocation
 ```
 
@@ -148,6 +151,38 @@ its owner confirmed it once already; one that is still `pending` stays `pending`
 second login is not the confirmation nobody gave. It does not touch `trading_halted` or
 `halted_reason`: those belong to reconciliation (ARCH-04), and an account halted for an
 ambiguous match stays halted through a re-login.
+
+## The starter pack
+
+Confirming a partner account (#10) pays its user `LINK_BONUS_TOKENS`, once per user — 100
+autotrading tokens, defined once in `packages/db/src/link-bonus-ops.ts` and nowhere else; the bot prints the
+number the backend sends. The demo balance is not part of it: the broker sets it when the account
+is created, and nothing here stores or credits one.
+
+- **Where.** `grantLinkBonus` runs inside the `confirmBrokerAccount` transaction, after the
+  `UPDATE … SET status = 'active'`. The users row is already held `FOR NO KEY UPDATE`, so the
+  lock order stays `users → broker_accounts`; the ledger row and `users.token_balance` change
+  together, or not at all. The callback and a `pending` account pay nothing, and neither does a
+  re-login that brings a `revoked` account back to `active` — that is not a first activation.
+- **Once per user.** The ledger row is a `bonus` that names the account it was earned by
+  (`token_ledger.broker_account_id`, a composite FK on `(id, user_id)`, so it can only name one
+  of the user's own accounts), with `note = 'link_bonus'` for #13. The partial unique index
+  `token_ledger_link_bonus_user_idx` on `user_id`, over bonuses that name an account, holds one
+  such row per user; the insert is `ON CONFLICT … DO NOTHING`, and a second account answers
+  `already_granted` with the balance untouched. The key is the user, not the account: linking a
+  second account does not pay again.
+- **Partner accounts only.** `is_partner_client`, as the broker reported it on the latest login
+  and read from the locked row, decides. `false` links the account as usual — `active`, able to
+  trade — pays nothing and answers `not_partner_client`. That rule lives in `grantLinkBonus`,
+  not in the database, and it spends no slot: the same user confirming a partner account later
+  still gets the pack.
+- **The answer.** `POST /auth/binodex/confirm` returns `{ account, grant }`, where `grant` is
+  `{ granted: true, tokens: "100" }` (a decimal string) or `{ granted: false, reason }` with
+  `reason` one of `not_partner_client`, `already_granted`.
+- **#162.** The email login's activation transaction is to call the same `grantLinkBonus`, with
+  the same preconditions: the users row held, the account made `active` by that transaction.
+
+Accounts confirmed before migration `0008` received nothing; there was no production data then.
 
 ## Refresh
 
@@ -301,6 +336,27 @@ revokes the newest pair too (see [A 401 means the chain is dead](#a-401-means-th
 The new account came back with `is_partner_client=true`: the short code passed as `ref` attaches
 an account registered during the OAuth login to the partner account.
 
+### Live check: an account registered without the partner link
+
+Checked on 2026-10-01 at about 09:28 UTC for the starter pack's partner rule. The owner registered
+a new account directly on binodex.app, with a different email and no partner link, then logged
+into it on our authorize page with `client_id` and `ref=<short code>`, redirect
+`http://localhost:3000/auth/callback`. The `oauth/token` exchange answered 200 with
+`user.id=101962`, `is_verified=false`, `is_partner_client=true`.
+
+`false` was **not** observed. Two readings fit, and nothing on our side tells them apart:
+
+- (a) the broker attaches an existing, unattached account to the partner when it logs in
+  through the partner's authorize page with `ref` — the broker's page probably sends
+  `partnerCode` with its own login, since #163 showed that `POST /v1/broker/oauth/authorize`
+  itself does not carry `ref`;
+- (b) the account was a partner one already.
+
+Neither is claimed as confirmed. The code branches on the stored boolean, and the `false` branch
+is tested against the stub only. An earlier attempt in the same run returned the #163 account
+(`user.id=97266`, `true`) because the browser profile still held its session; it is not an
+observation.
+
 ## Secrets
 
 Broker errors carry a code and a status, never the response body, the request form or a cause.
@@ -382,11 +438,13 @@ not.
 
 - **#22** owns `/start` and the button that calls `POST /auth/binodex/start`; it hands the user
   an authorize URL and nothing else (docs/bot-start.md).
-- **#23** owns the bot's side of the return: the call to `POST /auth/binodex/confirm` and the
-  message that reports the outcome.
+- **#128** owns the backend's push right after a successful callback: a `sendMessage` to the
+  Telegram id restored from the state, without waiting for the user to come back to the chat.
 - **#32** owns the login page and the `web_message` popup; it calls the callback route, and it
   is where the `initData` check above closes the handoff gap.
-- **#10** owns the linking UI and re-linking an account that belongs to someone else.
+- **#10** owns the starter pack, the confirm button and the outcome message in the bot. Re-linking
+  an account that belongs to another Telegram user is out of scope: `broker_account_taken` is
+  final, and moving an account is a separate support task.
 - **#162** owns the email + code login; it reuses `refresh`, the transport and the status map in
   `oauth-client.ts`.
 - **ARCH-01 (#40)** will call `ensureFreshAccessToken` before talking to the broker socket.
