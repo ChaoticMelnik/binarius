@@ -129,6 +129,7 @@ describe('linkBrokerAccount', () => {
       telegramUserId: 700_020n,
       tokens,
       cipher,
+      activate: false,
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -158,6 +159,7 @@ describe('linkBrokerAccount', () => {
       telegramUserId: 700_021n,
       tokens: first,
       cipher,
+      activate: false,
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -167,6 +169,7 @@ describe('linkBrokerAccount', () => {
       telegramUserId: 700_021n,
       tokens: second,
       cipher,
+      activate: false,
     });
     expect(again.ok).toBe(true);
     if (!again.ok) return;
@@ -187,7 +190,12 @@ describe('linkBrokerAccount', () => {
 
   it('clears an OAuth revocation but never the trading halt', async () => {
     const tokens = brokerTokens();
-    const created = await linkBrokerAccount(tmp.db, { telegramUserId: 700_022n, tokens, cipher });
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_022n,
+      tokens,
+      cipher,
+      activate: false,
+    });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
     await tmp.db
@@ -204,6 +212,7 @@ describe('linkBrokerAccount', () => {
       telegramUserId: 700_022n,
       tokens: brokerTokens({ user: tokens.user }),
       cipher,
+      activate: false,
     });
     expect(again.ok).toBe(true);
     const row = await brokerAccountRow(tmp.db, created.account.id);
@@ -217,13 +226,21 @@ describe('linkBrokerAccount', () => {
 
   it('refuses an account that belongs to another telegram user', async () => {
     const tokens = brokerTokens();
-    expect((await linkBrokerAccount(tmp.db, { telegramUserId: 700_023n, tokens, cipher })).ok).toBe(
-      true,
-    );
+    expect(
+      (
+        await linkBrokerAccount(tmp.db, {
+          telegramUserId: 700_023n,
+          tokens,
+          cipher,
+          activate: false,
+        })
+      ).ok,
+    ).toBe(true);
     const stolen = await linkBrokerAccount(tmp.db, {
       telegramUserId: 700_024n,
       tokens: brokerTokens({ user: tokens.user }),
       cipher,
+      activate: false,
     });
     expect(stolen).toEqual({ ok: false, reason: 'broker_account_taken' });
   });
@@ -234,6 +251,7 @@ describe('linkBrokerAccount', () => {
       telegramUserId: BigInt(blocked.telegramUserId),
       tokens: brokerTokens(),
       cipher,
+      activate: false,
     });
     expect(result).toEqual({ ok: false, reason: 'user_blocked' });
     const [row] = await tmp.db
@@ -253,11 +271,13 @@ describe('linkBrokerAccount', () => {
         telegramUserId: 700_025n,
         tokens: brokerTokens({ user: shared }),
         cipher,
+        activate: false,
       }),
       linkBrokerAccount(tmp.db, {
         telegramUserId: 700_026n,
         tokens: brokerTokens({ user: shared }),
         cipher,
+        activate: false,
       }),
     ]);
     expect(results.filter((r) => r.ok)).toHaveLength(1);
@@ -269,11 +289,13 @@ describe('linkBrokerAccount', () => {
       telegramUserId: 700_027n,
       tokens: brokerTokens(),
       cipher,
+      activate: false,
     });
     const second = await linkBrokerAccount(tmp.db, {
       telegramUserId: 700_027n,
       tokens: brokerTokens(),
       cipher,
+      activate: false,
     });
     expect(first.ok && second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
@@ -288,6 +310,7 @@ describe('refresh helpers', () => {
       telegramUserId: 700_030n,
       tokens: brokerTokens(),
       cipher,
+      activate: false,
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -311,6 +334,7 @@ describe('refresh helpers', () => {
       telegramUserId: 700_031n,
       tokens: brokerTokens(),
       cipher,
+      activate: false,
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -330,6 +354,7 @@ describe('refresh helpers', () => {
       telegramUserId: 700_032n,
       tokens: brokerTokens(),
       cipher,
+      activate: false,
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -367,6 +392,7 @@ describe('the confirmation gate', () => {
       telegramUserId,
       tokens: brokerTokens(),
       cipher,
+      activate: false,
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -388,7 +414,12 @@ describe('the confirmation gate', () => {
   it('leaves a pending account pending when the user logs in again', async () => {
     const telegramUserId = 700_101n;
     const tokens = brokerTokens();
-    const first = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
+    const first = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: false,
+    });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
 
@@ -396,6 +427,7 @@ describe('the confirmation gate', () => {
       telegramUserId,
       tokens: { ...tokens, accessToken: 'access-second', refreshToken: 'refresh-second' },
       cipher,
+      activate: false,
     });
     expect(again.ok).toBe(true);
     if (!again.ok) return;
@@ -412,12 +444,22 @@ describe('the confirmation gate', () => {
   it('keeps a confirmed account active through a re-login', async () => {
     const telegramUserId = 700_102n;
     const tokens = brokerTokens();
-    const created = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: false,
+    });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
     await confirmBrokerAccount(tmp.db, { telegramUserId, accountId: created.account.id });
 
-    const again = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
+    const again = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: false,
+    });
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.account.status).toBe('active');
@@ -429,7 +471,12 @@ describe('the confirmation gate', () => {
   it('pays no starter pack when a revoked account comes back as a partner one', async () => {
     const telegramUserId = 700_103n;
     const tokens = brokerTokens();
-    const created = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: false,
+    });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
     const confirmed = await confirmBrokerAccount(tmp.db, {
@@ -442,7 +489,12 @@ describe('the confirmation gate', () => {
     );
 
     const partner = { ...tokens, user: { ...tokens.user, isPartnerClient: true } };
-    const again = await linkBrokerAccount(tmp.db, { telegramUserId, tokens: partner, cipher });
+    const again = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: partner,
+      cipher,
+      activate: false,
+    });
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.account).toMatchObject({ status: 'active', isPartnerClient: true });
@@ -463,6 +515,7 @@ describe('the confirmation gate', () => {
       telegramUserId,
       tokens: brokerTokens(),
       cipher,
+      activate: false,
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -495,6 +548,205 @@ describe('the confirmation gate', () => {
   });
 });
 
+describe('linkBrokerAccount with activate (the email login, issue #162)', () => {
+  const partnerTokens = () => {
+    const tokens = brokerTokens();
+    return { ...tokens, user: { ...tokens.user, isPartnerClient: true } };
+  };
+  const balanceOf = async (userId: string) => {
+    const [row] = await tmp.db
+      .select({ balance: users.tokenBalance })
+      .from(users)
+      .where(eq(users.id, userId));
+    return row?.balance;
+  };
+  const ledgerOf = (userId: string) =>
+    tmp.db
+      .select({ delta: tokenLedger.balanceDelta, account: tokenLedger.brokerAccountId })
+      .from(tokenLedger)
+      .where(eq(tokenLedger.userId, userId));
+
+  it('inserts a new partner account as active and pays the starter pack in the same step', async () => {
+    const linked = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_200n,
+      tokens: partnerTokens(),
+      cipher,
+      activate: true,
+    });
+    expect(linked.ok).toBe(true);
+    if (!linked.ok) return;
+    expect(linked.account.status).toBe('active');
+    expect(linked.grant).toEqual({ granted: true, tokens: 100n });
+    expect(await balanceOf(linked.account.userId)).toBe(100n);
+    expect(await ledgerOf(linked.account.userId)).toEqual([
+      { delta: 100n, account: linked.account.id },
+    ]);
+  });
+
+  it('activates a new non-partner account without paying', async () => {
+    const linked = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_201n,
+      tokens: brokerTokens(),
+      cipher,
+      activate: true,
+    });
+    expect(linked).toMatchObject({
+      ok: true,
+      account: { status: 'active' },
+      grant: { granted: false, reason: 'not_partner_client' },
+    });
+    if (!linked.ok) return;
+    expect(await balanceOf(linked.account.userId)).toBe(0n);
+  });
+
+  it("activates the same user's pending account left by an OAuth login and pays", async () => {
+    const telegramUserId = 700_202n;
+    const tokens = partnerTokens();
+    const pending = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: false,
+    });
+    expect(pending).toMatchObject({ ok: true, account: { status: 'pending' }, grant: null });
+
+    const linked = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: { ...tokens, refreshToken: 'refresh-email' },
+      cipher,
+      activate: true,
+    });
+    expect(linked.ok).toBe(true);
+    if (!linked.ok || !pending.ok) return;
+    expect(linked.account.id).toBe(pending.account.id);
+    expect(linked.account.status).toBe('active');
+    expect(linked.account.refreshTokenHash).toBe(hashToken('refresh-email'));
+    expect(linked.grant).toEqual({ granted: true, tokens: 100n });
+  });
+
+  it('rotates an active account and pays nothing a second time', async () => {
+    const telegramUserId = 700_203n;
+    const tokens = partnerTokens();
+    const first = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: true,
+    });
+    expect(first).toMatchObject({ ok: true, grant: { granted: true } });
+    const again = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: { ...tokens, refreshToken: 'refresh-again' },
+      cipher,
+      activate: true,
+    });
+    expect(again).toMatchObject({
+      ok: true,
+      account: { status: 'active' },
+      grant: { granted: false, reason: 'already_granted' },
+    });
+    if (!again.ok) return;
+    expect(again.account.refreshTokenHash).toBe(hashToken('refresh-again'));
+    expect(await balanceOf(again.account.userId)).toBe(100n);
+    expect(await ledgerOf(again.account.userId)).toHaveLength(1);
+  });
+
+  // the rule #10 states: a user confirming a partner account later still gets the pack
+  it('brings a revoked account back, clears the reason and pays a pack never paid', async () => {
+    const telegramUserId = 700_204n;
+    const tokens = brokerTokens();
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: true,
+    });
+    expect(created).toMatchObject({ ok: true, grant: { granted: false } });
+    if (!created.ok) return;
+    await tmp.db.transaction((tx) =>
+      revokeAccount(tx, created.account.id, AuthRevokedReason.RefreshInvalidGrant),
+    );
+
+    const linked = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: { ...tokens, user: { ...tokens.user, isPartnerClient: true } },
+      cipher,
+      activate: true,
+    });
+    expect(linked).toMatchObject({
+      ok: true,
+      account: { status: 'active', authRevokedReason: null, isPartnerClient: true },
+      grant: { granted: true, tokens: 100n },
+    });
+  });
+
+  it("refuses another user's account and writes nothing", async () => {
+    const tokens = partnerTokens();
+    const owned = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_205n,
+      tokens,
+      cipher,
+      activate: false,
+    });
+    expect(owned.ok).toBe(true);
+    if (!owned.ok) return;
+    const before = await brokerAccountRow(tmp.db, owned.account.id);
+
+    const stolen = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_206n,
+      tokens: { ...tokens, refreshToken: 'refresh-thief' },
+      cipher,
+      activate: true,
+    });
+    expect(stolen).toEqual({ ok: false, reason: 'broker_account_taken' });
+    expect(await brokerAccountRow(tmp.db, owned.account.id)).toEqual(before);
+    const [thief] = await tmp.db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.telegramUserId, 700_206n));
+    expect(thief === undefined ? [] : await ledgerOf(thief.id)).toEqual([]);
+  });
+
+  it('pays nothing and returns no grant when activate is false', async () => {
+    const telegramUserId = 700_207n;
+    const tokens = partnerTokens();
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: false,
+    });
+    expect(created).toMatchObject({ ok: true, account: { status: 'pending' }, grant: null });
+    if (!created.ok) return;
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ status: 'active' })
+      .where(eq(brokerAccounts.id, created.account.id));
+    const again = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: false,
+    });
+    expect(again).toMatchObject({ ok: true, account: { status: 'active' }, grant: null });
+    expect(await ledgerOf(created.account.userId)).toEqual([]);
+  });
+
+  it('refuses a blocked user before writing an account', async () => {
+    const user = await seedUser(tmp.db);
+    await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, user.userId));
+    expect(
+      await linkBrokerAccount(tmp.db, {
+        telegramUserId: BigInt(user.telegramUserId),
+        tokens: partnerTokens(),
+        cipher,
+        activate: true,
+      }),
+    ).toEqual({ ok: false, reason: 'user_blocked' });
+    expect(await ledgerOf(user.userId)).toEqual([]);
+  });
+});
+
 describe('the broker_accounts default', () => {
   // the invariant lives in the table, not only in linkBrokerAccount: an insert that forgets the
   // column has to produce an account that cannot act
@@ -523,6 +775,7 @@ describe('revokeAccountIfUnchanged', () => {
       telegramUserId,
       tokens: brokerTokens(),
       cipher,
+      activate: false,
     });
     if (!created.ok) throw new Error(`link failed: ${created.reason}`);
     await confirmBrokerAccount(tmp.db, { telegramUserId, accountId: created.account.id });
@@ -629,6 +882,7 @@ describe('toBrokerAccountView', () => {
       telegramUserId: 700_040n,
       tokens: brokerTokens(),
       cipher,
+      activate: false,
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;

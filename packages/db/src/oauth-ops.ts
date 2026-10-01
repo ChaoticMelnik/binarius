@@ -89,14 +89,21 @@ export async function consumeOAuthState(
   return row;
 }
 
+// `grant` is null exactly when `activate` was false: only an activating login pays.
 export type LinkBrokerAccountResult =
-  | { ok: true; account: BrokerAccountRow }
+  | { ok: true; account: BrokerAccountRow; grant: LinkBonusGrant | null }
   | { ok: false; reason: 'broker_account_taken' | 'user_blocked' };
 
 export interface LinkBrokerAccountInput {
   telegramUserId: bigint;
   tokens: OAuthTokens;
   cipher: TokenCipher;
+  // false for the OAuth callback: it proves that someone authorized at the broker, so the
+  // account waits for the Telegram user's confirmation. true for the email login: the code
+  // from the letter is typed into the bot by the very Telegram user who gets the account, so a
+  // confirmation would be them confirming to themselves. Required, so no caller gets either
+  // behaviour by omission.
+  activate: boolean;
 }
 
 // Two steps, because the ciphertext is authenticated against the row id (crypto.ts AAD):
@@ -104,7 +111,7 @@ export interface LinkBrokerAccountInput {
 // that already has a different one, and nothing could decrypt it afterwards.
 export async function linkBrokerAccount(
   db: Db,
-  { telegramUserId, tokens, cipher }: LinkBrokerAccountInput,
+  { telegramUserId, tokens, cipher, activate }: LinkBrokerAccountInput,
 ): Promise<LinkBrokerAccountResult> {
   return db.transaction(async (tx) => {
     // lock order users → broker_accounts, as every other writer in this schema does
@@ -133,11 +140,13 @@ export async function linkBrokerAccount(
         accessTokenExpiresAt: expiresAt,
         refreshTokenHash: hashToken(tokens.refreshToken),
         tokenRotatedAt: sql`now()`,
-        status: BrokerAccountStatus.Pending,
+        status: activate ? BrokerAccountStatus.Active : BrokerAccountStatus.Pending,
       })
       .onConflictDoNothing({ target: brokerAccounts.brokerUserId })
       .returning();
-    if (inserted !== undefined) return { ok: true, account: inserted };
+    if (inserted !== undefined) {
+      return { ok: true, account: inserted, grant: await grantIf(tx, activate, user.id, inserted) };
+    }
 
     // the account exists: lock it, check who owns it, then re-encrypt under its real id.
     // FOR NO KEY UPDATE (not FOR UPDATE) stays compatible with the KEY SHARE locks the
@@ -173,11 +182,11 @@ export async function linkBrokerAccount(
         accessTokenExpiresAt: expiresAt,
         refreshTokenHash: hashToken(tokens.refreshToken),
         tokenRotatedAt: sql`now()`,
-        // A second login must not activate what nobody confirmed: an account still waiting for
-        // its confirmation stays waiting. One that was active or revoked has been confirmed
-        // before, so logging in again is enough to make it usable.
+        // A second OAuth login must not activate what nobody confirmed: an account still
+        // waiting for its confirmation stays waiting. One that was active or revoked has been
+        // confirmed before, so logging in again is enough to make it usable.
         status:
-          existing.status === BrokerAccountStatus.Pending
+          !activate && existing.status === BrokerAccountStatus.Pending
             ? BrokerAccountStatus.Pending
             : BrokerAccountStatus.Active,
         authRevokedReason: null,
@@ -185,8 +194,20 @@ export async function linkBrokerAccount(
       .where(eq(brokerAccounts.id, existing.id))
       .returning();
     if (updated === undefined) throw new Error('broker account update returned no row');
-    return { ok: true, account: updated };
+    return { ok: true, account: updated, grant: await grantIf(tx, activate, user.id, updated) };
   });
+}
+
+// Called on every activating login, not only the first: one pack per user is the index's
+// (grantLinkBonus), and the partner flag is the one this login just wrote. The users row is
+// still held by upsertUser, so the lock order is the one confirmBrokerAccount takes.
+async function grantIf(
+  tx: Tx,
+  activate: boolean,
+  userId: string,
+  account: BrokerAccountRow,
+): Promise<LinkBonusGrant | null> {
+  return activate ? grantLinkBonus(tx, { userId, account }) : null;
 }
 
 // A blocked user does not become active by logging in again; undefined means "blocked".
