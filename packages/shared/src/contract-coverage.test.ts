@@ -10,12 +10,7 @@ import type {
   OpenTradeRequest,
 } from './broker';
 import type { DecimalString } from './money';
-import type {
-  OAuthTokens,
-  RefreshedTokens,
-  WidgetSession,
-  WidgetSessionRequest,
-} from './oauth';
+import type { OAuthTokens, RefreshedTokens, WidgetSession, WidgetSessionRequest } from './oauth';
 import type {
   PartnerErrorWire,
   PartnerPositions,

@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startOAuthStub, type OAuthStub } from './testing/oauth-stub';
 import {
@@ -29,6 +29,34 @@ beforeAll(async () => {
   });
 });
 afterAll(() => stub.close());
+
+// a broker that answers every request to `path` the same way
+async function withBroker(
+  path: string,
+  answer: (reply: FastifyReply) => FastifyReply,
+  run: (client: BrokerOAuthClient) => Promise<void>,
+): Promise<void> {
+  const broker = Fastify({ logger: false });
+  // without a parser for the form content type Fastify answers 415 and the case would prove
+  // nothing about the status or the body
+  broker.addContentTypeParser(
+    'application/x-www-form-urlencoded',
+    { parseAs: 'string' },
+    (_request, body, done) => done(null, body),
+  );
+  broker.post(path, async (_request, reply) => answer(reply));
+  const url = await broker.listen({ port: 0, host: '127.0.0.1' });
+  try {
+    await run(
+      createBrokerOAuthClient({ baseUrl: url, clientId: CLIENT_ID, clientSecret: CLIENT_SECRET }),
+    );
+  } finally {
+    await broker.close();
+  }
+}
+
+const TOKEN_PATH = '/v1/broker/oauth/token';
+const REFRESH_PATH = '/v1/broker/user-auth/refresh';
 
 async function codeOf(error: Promise<unknown>): Promise<string> {
   const thrown = await error.then(
@@ -105,6 +133,15 @@ describe('exchangeCode', () => {
 });
 
 describe('refresh', () => {
+  it('sends the refresh token alone, as JSON, without the client credentials', async () => {
+    const code = stub.issueCode({ brokerUserId: 'broker-8' });
+    const first = await client.exchangeCode({ code, redirectUri: REDIRECT_URI });
+    const rotated = await client.refresh({ refreshToken: first.refreshToken });
+    expect(stub.lastRefreshBodyKeys).toEqual(['refresh_token']);
+    expect(rotated).not.toHaveProperty('user');
+    expect(rotated.expiresInSec).toBeGreaterThan(0);
+  });
+
   it('rotates the pair and refuses the token it replaced', async () => {
     const code = stub.issueCode({ brokerUserId: 'broker-6' });
     const first = await client.exchangeCode({ code, redirectUri: REDIRECT_URI });
@@ -120,6 +157,54 @@ describe('refresh', () => {
     // member stops working too, which is why an unknown outcome has to revoke the account
     expect(await codeOf(client.refresh({ refreshToken: rotated.refreshToken }))).toBe(
       BrokerOAuthErrorCode.InvalidGrant,
+    );
+  });
+});
+
+// The status alone decides; the bodies are what the live broker sends, plus an OAuth-style one
+// to show that a body naming a grant error changes nothing.
+describe('status map', () => {
+  const live = (message: string) => ({ error: { message, details: {} } });
+  const endpoints = {
+    'oauth/token': {
+      path: TOKEN_PATH,
+      call: (probe: BrokerOAuthClient) =>
+        probe.exchangeCode({ code: 'c', redirectUri: REDIRECT_URI }),
+    },
+    'user-auth/refresh': {
+      path: REFRESH_PATH,
+      call: (probe: BrokerOAuthClient) => probe.refresh({ refreshToken: 'r' }),
+    },
+  };
+
+  it.each([
+    ['oauth/token', 400, live('Invalid or expired authorization code'), 'invalid_grant'],
+    // our own malformed request lands here too: the accepted cost of not reading the body
+    ['oauth/token', 400, live('Validation failed: "code" is required'), 'invalid_grant'],
+    ['oauth/token', 400, { error: 'invalid_grant' }, 'invalid_grant'],
+    ['oauth/token', 401, live('Authentication failed: Invalid client credentials'), 'rejected'],
+    ['oauth/token', 401, { error: 'invalid_grant' }, 'rejected'],
+    ['oauth/token', 405, '', 'rejected'],
+    ['oauth/token', 502, '', 'unavailable'],
+    ['user-auth/refresh', 401, live('Invalid token'), 'invalid_grant'],
+    ['user-auth/refresh', 400, live('Validation failed: "refresh_token" is required'), 'rejected'],
+    ['user-auth/refresh', 400, { error: 'invalid_grant' }, 'rejected'],
+    ['user-auth/refresh', 403, live('Forbidden'), 'rejected'],
+    ['user-auth/refresh', 503, live('Service unavailable'), 'unavailable'],
+  ] as const)('%s %i with %j is %s', async (name, status, body, expected) => {
+    const { path, call } = endpoints[name];
+    await withBroker(
+      path,
+      (reply) => reply.code(status).send(body),
+      async (probe) => {
+        const thrown = await call(probe).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(thrown).toBeInstanceOf(BrokerOAuthError);
+        expect((thrown as BrokerOAuthError).code).toBe(expected);
+        expect((thrown as BrokerOAuthError).status).toBe(status);
+      },
     );
   });
 });
@@ -238,6 +323,29 @@ describe('transport failures', () => {
   });
 });
 
+describe('refresh contract', () => {
+  it.each([
+    [
+      'a response without a refresh token',
+      { access_token: 'a', token_type: 'Bearer', expires_in: 60 },
+    ],
+    [
+      'an access token that is already expired',
+      { access_token: 'a', refresh_token: 'r', token_type: 'Bearer', expires_in: 0 },
+    ],
+  ])('treats %s as a contract violation', async (_label, body) => {
+    await withBroker(
+      REFRESH_PATH,
+      (reply) => reply.send(body),
+      async (probe) => {
+        expect(await codeOf(probe.refresh({ refreshToken: 'r' }))).toBe(
+          BrokerOAuthErrorCode.ContractViolation,
+        );
+      },
+    );
+  });
+});
+
 describe('secrecy', () => {
   it('never carries the secret, the code or a token on the error', async () => {
     const wrong = createBrokerOAuthClient({
@@ -254,5 +362,22 @@ describe('secrecy', () => {
     const serialized = `${String(thrown?.message)}${String(thrown?.stack)}${JSON.stringify(thrown)}`;
     expect(serialized).not.toContain('MARKER-SECRET');
     expect(serialized).not.toContain('MARKER-CODE');
+  });
+
+  it('never carries the refresh token or the broker error text on a refresh error', async () => {
+    await withBroker(
+      REFRESH_PATH,
+      (reply) => reply.code(401).send({ error: { message: 'MARKER-BODY', details: {} } }),
+      async (probe) => {
+        const thrown = await probe.refresh({ refreshToken: 'MARKER-REFRESH' }).then(
+          () => undefined,
+          (e: unknown) => e as BrokerOAuthError,
+        );
+        expect(thrown).toBeInstanceOf(BrokerOAuthError);
+        const serialized = `${String(thrown?.message)}${String(thrown?.stack)}${JSON.stringify(thrown)}`;
+        expect(serialized).not.toContain('MARKER-REFRESH');
+        expect(serialized).not.toContain('MARKER-BODY');
+      },
+    );
   });
 });
