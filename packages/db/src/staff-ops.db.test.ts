@@ -1,9 +1,11 @@
 import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { type Db } from './client';
 import { createTempDatabase, seedStaff, type SeededStaff, type TempDatabase } from './testing';
 import { hashToken } from './oauth-ops';
 import {
   completeLogin,
+  type CompleteLoginResult,
   confirmChallengeFromTelegram,
   createStaffAccount,
   denyChallengeFromTelegram,
@@ -118,6 +120,39 @@ const backdateSession = (sessionId: string, interval: string) =>
       lastSeenAt: sql.raw(`now() - interval '${interval}'`),
     })
     .where(eq(staffSessions.id, sessionId));
+
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/** `hook` runs once, right after the transaction's first `UPDATE staff` statement completes. */
+function afterStaffUpdate(db: Db, hook: () => Promise<void>): Db {
+  return Object.create(db, {
+    transaction: {
+      value: (fn: (tx: Tx) => Promise<unknown>) =>
+        db.transaction(async (tx) => {
+          let fired = false;
+          const spied: Tx = Object.create(tx);
+          spied.update = ((table: Parameters<Tx['update']>[0]) => {
+            const builder = tx.update(table);
+            if (table !== staff || fired) return builder;
+            fired = true;
+            const set = builder.set.bind(builder);
+            builder.set = (values) => {
+              const base = set(values);
+              const execute = base.execute;
+              base.execute = async (placeholderValues) => {
+                const result = await execute.call(base, placeholderValues);
+                await hook();
+                return result;
+              };
+              return base;
+            };
+            return builder;
+          }) as Tx['update'];
+          return fn(spied);
+        }),
+    },
+  }) as Db;
+}
 
 describe('findStaffForLogin', () => {
   it('matches regardless of case and answers nothing for an unknown login', async () => {
@@ -1005,6 +1040,85 @@ describe('the CLI operations', () => {
   ])('answers nothing when %s names a login that does not exist', async (_label, run) => {
     expect(await run('nobody-here')).toBeUndefined();
   });
+});
+
+describe('the CLI operations racing a completeLogin', () => {
+  // READ COMMITTED gives every statement its own snapshot, so the revoking UPDATE sees the
+  // session a login that began later has already committed — and that row's created_at is after
+  // now(), which is the revoking transaction's start. Stamped with now(), revoked_at trips
+  // staff_sessions_revoked_after_created_check and aborts the whole operation, leaving the
+  // account as it was and the session that was just issued live (#149).
+  const paths = [
+    {
+      label: 'disable',
+      action: AuditAction.StaffDisabled,
+      run: async (db: Db, seeded: SeededStaff) => {
+        const counts = await disableStaffAccount(db, seeded.login);
+        const staffRowCarriesTheOperation = async () =>
+          expect((await staffRow(seeded.staffId)).status).toBe(StaffStatus.Disabled);
+        return { counts, staffRowCarriesTheOperation };
+      },
+    },
+    {
+      label: 'reset-password',
+      action: AuditAction.StaffPasswordReset,
+      run: async (db: Db, seeded: SeededStaff) => {
+        const passwordHash = await hashPassword('new one', { ln: 10, r: 8, p: 1 });
+        const counts = await resetStaffPassword(db, { login: seeded.login, passwordHash });
+        const staffRowCarriesTheOperation = async () =>
+          expect((await staffRow(seeded.staffId)).passwordHash).toBe(passwordHash);
+        return { counts, staffRowCarriesTheOperation };
+      },
+    },
+  ];
+
+  it.each(paths)(
+    'revokes the session $label raced with, instead of aborting on the revoked_at CHECK',
+    async ({ action, run }) => {
+      const seeded = await seedStaff(tmp.db);
+      const { challengeId, code } = await reachCodeEntry(seeded);
+      let login: CompleteLoginResult | undefined;
+      // another connection, committing while the CLI transaction holds the staff row
+      const raced = afterStaffUpdate(tmp.db, async () => {
+        login = await completeLogin(tmp.db, { challengeId, code, ip: IP, userAgent: UA });
+      });
+
+      const { counts, staffRowCarriesTheOperation } = await run(raced, seeded);
+
+      // both of these are the race itself: a seam that stopped firing leaves no session to
+      // revoke, and the case would otherwise pass on no race at all
+      expect(login).toMatchObject({ ok: true });
+      expect(counts).toEqual({ closedChallenges: 0, revokedSessions: 1 });
+      if (login === undefined || !login.ok) throw new Error('unreachable');
+      await staffRowCarriesTheOperation();
+      const [row] = await tmp.db
+        .select({
+          createdAt: staffSessions.createdAt,
+          revokedAt: staffSessions.revokedAt,
+          revokedBy: staffSessions.revokedByStaffId,
+        })
+        .from(staffSessions)
+        .where(eq(staffSessions.staffId, seeded.staffId));
+      if (row === undefined) throw new Error('the raced login left no session');
+      const { createdAt, revokedAt, revokedBy } = row;
+      if (revokedAt === null) throw new Error('the raced session was not revoked');
+      expect(revokedAt.getTime()).toBeGreaterThanOrEqual(createdAt.getTime());
+      expect(revokedBy).toBeNull();
+      expect(
+        await runAsStaff(tmp.db, { token: login.sessionToken }, async () => ({
+          result: 'served',
+          audit: { action: AuditAction.StaffSessionsViewed, payload: {} },
+        })),
+      ).toBeUndefined();
+      // not the last entry: this transaction began before the login's, and created_at is now()
+      const entry = (await entriesFor(seeded.staffId)).find((written) => written.action === action);
+      expect(entry).toMatchObject({
+        actorType: 'system',
+        entityType: 'staff',
+        payload: { via: 'cli', closedChallenges: 0, revokedSessions: 1 },
+      });
+    },
+  );
 });
 
 describe('completeLogin under the code-sent race', () => {
