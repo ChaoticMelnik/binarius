@@ -235,8 +235,8 @@ describe('what reaches the log', () => {
 });
 
 describe('request logging', () => {
-  // the broker chooses how it delivers the code; if it ever ignores response_mode=web_message
-  // the code arrives as a query parameter, and an unexpected delivery lands on a 404
+  // the broker delivers the code as a query parameter of the redirect to apps/web; one that
+  // reaches the backend by mistake lands on a 404
   it.each([
     ['/oauth/callback?code=SECRET&state=ALSO-SECRET', ['SECRET', 'ALSO-SECRET']],
     ['/oauth/callback?code=SECRET', ['SECRET']],

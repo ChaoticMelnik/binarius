@@ -167,6 +167,24 @@ export const LinkBonusSkipReason = {
 } as const;
 export type LinkBonusSkipReason = (typeof LinkBonusSkipReason)[keyof typeof LinkBonusSkipReason];
 
+// The two apps/web pages of the Mini App login (#114). The broker redirects to the callback page,
+// so BROKER_OAUTH_REDIRECT_URI must end with OAUTH_CALLBACK_PATH; the backend derives the login
+// page's URL from that URI's origin.
+export const OAUTH_LOGIN_PATH = '/oauth/login';
+export const OAUTH_CALLBACK_PATH = '/oauth/callback';
+// the login page's query parameter carrying the broker authorize URL
+export const MINI_APP_AUTHORIZE_PARAM = 'authorize';
+
+// Both the backend's callback route and apps/web's forward of it accept bodies up to this size:
+// every field of the callback at its schema maximum (256 + 512 + 4096) plus the JSON around them.
+export const OAUTH_CALLBACK_BODY_LIMIT_BYTES = 8 * 1024;
+
+// How long the backend may hold POST /auth/binodex/callback: the code exchange and the push that
+// follows (database work is ordinary latency). It lives here rather than in either process because
+// both size their own chains against it — apps/backend/src/timing.ts must fit inside it,
+// apps/web/src/timing.ts must wait longer than it.
+export const OAUTH_CALLBACK_BUDGET_MS = 8_000;
+
 export const startLoginRequestSchema = z.object({ telegramUserId: telegramUserIdSchema });
 export type StartLoginRequest = z.infer<typeof startLoginRequestSchema>;
 
@@ -174,6 +192,9 @@ export const startLoginResponseSchema = z.object({
   authorizeUrl: z.url(),
   state: z.string().min(1),
   expiresAt: z.iso.datetime({ offset: true }),
+  // the apps/web login page that opens authorizeUrl inside the Mini App; only for an https
+  // redirect URI, because Telegram accepts only https in a web_app button
+  miniAppUrl: z.url().optional(),
 });
 export type StartLoginResponse = z.infer<typeof startLoginResponseSchema>;
 
@@ -255,6 +276,8 @@ export const safeParseStartLoginRequest = (input: unknown) =>
   startLoginRequestSchema.safeParse(input);
 export const safeParseOAuthCallbackRequest = (input: unknown) =>
   oauthCallbackRequestSchema.safeParse(input);
+export const safeParseOAuthCallbackResponse = (input: unknown) =>
+  oauthCallbackResponseSchema.safeParse(input);
 export const safeParseConfirmLoginRequest = (input: unknown) =>
   confirmLoginRequestSchema.safeParse(input);
 export const safeParseConfirmLoginResponse = (input: unknown) =>

@@ -198,9 +198,35 @@ describe('POST /auth/binodex/start', () => {
       redirect_uri: REDIRECT_URI,
       state: body.state,
       ref: PARTNER_REF,
-      response_mode: 'web_message',
     });
     expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  // the Mini App's login page sits on the redirect URI's origin, next to the callback page
+  it('returns the Mini App login url carrying the authorize url for an https redirect', async () => {
+    const response = await start(telegramId());
+    const body = response.json() as { authorizeUrl: string; miniAppUrl?: string };
+    expect(body.miniAppUrl).toBeDefined();
+    const url = new URL(body.miniAppUrl ?? '');
+    expect(`${url.origin}${url.pathname}`).toBe('https://bot.example/oauth/login');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ authorize: body.authorizeUrl });
+  });
+
+  // Telegram takes only https in a web_app button; the local stack's loopback gets a plain link
+  it('returns no Mini App url for an http loopback redirect', async () => {
+    const loopback = testApp({ ...authDeps, redirectUri: 'http://127.0.0.1:3001/oauth/callback' });
+    await loopback.ready();
+    try {
+      const response = await start(telegramId(), `Bearer ${TOKEN}`, loopback);
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as { authorizeUrl: string; miniAppUrl?: string };
+      expect(new URL(body.authorizeUrl).searchParams.get('redirect_uri')).toBe(
+        'http://127.0.0.1:3001/oauth/callback',
+      );
+      expect(Object.keys(body).sort()).toEqual(['authorizeUrl', 'expiresAt', 'state']);
+    } finally {
+      await loopback.close();
+    }
   });
 
   it('refuses a blocked user before a state or a code is spent', async () => {

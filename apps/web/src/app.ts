@@ -3,15 +3,18 @@ import formbody from '@fastify/formbody';
 import Fastify, { LogController, type FastifyError, type FastifyInstance } from 'fastify';
 import { errorLogFields, LOG_REDACT_PATHS, type LogLevel } from '@binarius/shared';
 import { adminRoutes } from './admin/routes';
-import { noticePage } from './admin/pages';
 import { TEXTS } from './admin/texts';
 import { sendHtml } from './html';
+import { noticePage } from './pages';
 import type { BackendClient } from './backend-client';
+import { oauthRoutes } from './oauth/routes';
 
 export interface WebAppDeps {
   backend: BackendClient;
   /** the origin a POST's `Origin` header must equal */
   publicOrigin: string;
+  /** the broker's authorize page, the only place the Mini App login page navigates to */
+  brokerAuthorizeUrl: string;
   secureCookies: boolean;
   logLevel: LogLevel;
   // where the logger writes; production omits it. What these pages keep out of their log
@@ -31,6 +34,7 @@ const CSP = [
 export function buildWebApp({
   backend,
   publicOrigin,
+  brokerAuthorizeUrl,
   secureCookies,
   logLevel,
   logDestination,
@@ -61,10 +65,14 @@ export function buildWebApp({
     return sendHtml(reply, 403, noticePage(TEXTS.forbiddenTitle, TEXTS.forbiddenBody));
   });
 
+  // The Mini App pages set a policy of their own (oauth/routes.ts), one that lets Telegram Web
+  // frame them; every other reply gets the admin pages' policy and may not be framed at all.
   app.addHook('onSend', async (_request, reply, payload) => {
-    void reply.header('content-security-policy', CSP);
+    if (reply.getHeader('content-security-policy') === undefined) {
+      void reply.header('content-security-policy', CSP);
+      void reply.header('x-frame-options', 'DENY');
+    }
     void reply.header('x-content-type-options', 'nosniff');
-    void reply.header('x-frame-options', 'DENY');
     void reply.header('referrer-policy', 'no-referrer');
     // only where the cookie is Secure: the header is ignored over http anyway, and sending it
     // there would state a policy the deployment has not made
@@ -77,6 +85,7 @@ export function buildWebApp({
   });
 
   void app.register(adminRoutes, { backend, secureCookies });
+  void app.register(oauthRoutes, { backend, publicOrigin, brokerAuthorizeUrl });
 
   app.setNotFoundHandler(async (_request, reply) =>
     sendHtml(reply, 404, noticePage(TEXTS.notFoundTitle, TEXTS.notFoundBody)),

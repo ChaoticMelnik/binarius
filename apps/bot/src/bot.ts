@@ -151,8 +151,15 @@ export function createBot({
       await ctx.reply(TEXTS.unavailable);
       return;
     }
+    const { authorizeUrl, miniAppUrl } = login.value;
+    // The Mini App carries the signed launch data the callback needs (#113). Telegram takes only
+    // https in a web_app button, so the backend sends no Mini App URL for the local stack's
+    // http loopback redirect, and the plain link is what is left there.
     await ctx.reply(TEXTS.loginLink, {
-      reply_markup: new InlineKeyboard().url(TEXTS.loginButton, login.value.authorizeUrl),
+      reply_markup:
+        miniAppUrl === undefined
+          ? new InlineKeyboard().url(TEXTS.loginButton, authorizeUrl)
+          : new InlineKeyboard().webApp(TEXTS.loginButton, miniAppUrl),
     });
   });
 

@@ -137,8 +137,8 @@ export function buildApp({
     logger: {
       level: logLevel,
       redact: [...LOG_REDACT_PATHS],
-      // the default serializer logs the raw url, and an OAuth provider that ignores
-      // response_mode=web_message delivers the authorization code as a query parameter
+      // the default serializer logs the raw url, and the broker delivers the authorization
+      // code as a query parameter of the redirect
       serializers: { req: serializeRequest },
       ...(logDestination === undefined ? {} : { stream: logDestination }),
     },

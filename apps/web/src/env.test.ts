@@ -4,7 +4,8 @@ import { parseEnv } from './env';
 const valid = {
   BACKEND_URL: 'http://backend:3000',
   ADMIN_WEB_TOKEN: 'admin-web-token-for-tests',
-  ADMIN_PUBLIC_URL: 'http://127.0.0.1:3001',
+  WEB_PUBLIC_URL: 'http://127.0.0.1:3001',
+  BROKER_OAUTH_AUTHORIZE_URL: 'https://binodex.app/oauth/authorize',
 };
 
 describe('parseEnv', () => {
@@ -15,6 +16,7 @@ describe('parseEnv', () => {
       backendUrl: valid.BACKEND_URL,
       adminWebToken: valid.ADMIN_WEB_TOKEN,
       publicOrigin: 'http://127.0.0.1:3001',
+      brokerAuthorizeUrl: 'https://binodex.app/oauth/authorize',
       secureCookies: false,
     });
   });
@@ -24,7 +26,7 @@ describe('parseEnv', () => {
     expect([env.port, env.logLevel]).toEqual([8080, 'debug']);
   });
 
-  it.each(['BACKEND_URL', 'ADMIN_WEB_TOKEN', 'ADMIN_PUBLIC_URL'] as const)(
+  it.each(['BACKEND_URL', 'ADMIN_WEB_TOKEN', 'WEB_PUBLIC_URL', 'BROKER_OAUTH_AUTHORIZE_URL'] as const)(
     'requires %s',
     (name) => {
       const without: Record<string, string> = { ...valid };
@@ -39,15 +41,15 @@ describe('parseEnv', () => {
     ['https://admin.example', true],
     ['http://127.0.0.1:3001', false],
     ['http://localhost:3001', false],
-  ])('marks the cookie Secure for %s: %s', (ADMIN_PUBLIC_URL, secure) => {
-    expect(parseEnv({ ...valid, ADMIN_PUBLIC_URL }).secureCookies).toBe(secure);
+  ])('marks the cookie Secure for %s: %s', (WEB_PUBLIC_URL, secure) => {
+    expect(parseEnv({ ...valid, WEB_PUBLIC_URL }).secureCookies).toBe(secure);
   });
 
   it('normalises the public origin the way a browser does', () => {
-    expect(parseEnv({ ...valid, ADMIN_PUBLIC_URL: 'https://Admin.Example/' }).publicOrigin).toBe(
+    expect(parseEnv({ ...valid, WEB_PUBLIC_URL: 'https://Admin.Example/' }).publicOrigin).toBe(
       'https://admin.example',
     );
-    expect(parseEnv({ ...valid, ADMIN_PUBLIC_URL: 'https://admin.example:443/' }).publicOrigin).toBe(
+    expect(parseEnv({ ...valid, WEB_PUBLIC_URL: 'https://admin.example:443/' }).publicOrigin).toBe(
       'https://admin.example',
     );
   });
@@ -60,8 +62,8 @@ describe('parseEnv', () => {
     'http://admin.example',
     'ftp://admin.example',
     'not-a-url',
-  ])('refuses ADMIN_PUBLIC_URL=%s', (ADMIN_PUBLIC_URL) => {
-    expect(() => parseEnv({ ...valid, ADMIN_PUBLIC_URL })).toThrow('Env ADMIN_PUBLIC_URL');
+  ])('refuses WEB_PUBLIC_URL=%s', (WEB_PUBLIC_URL) => {
+    expect(() => parseEnv({ ...valid, WEB_PUBLIC_URL })).toThrow('Env WEB_PUBLIC_URL');
   });
 
   it.each(['short', 'has whitespace '])('refuses a weak ADMIN_WEB_TOKEN (%j)', (ADMIN_WEB_TOKEN) => {
@@ -70,5 +72,13 @@ describe('parseEnv', () => {
 
   it.each(['postgres://backend/db', 'backend:3000'])('refuses BACKEND_URL=%s', (BACKEND_URL) => {
     expect(() => parseEnv({ ...valid, BACKEND_URL })).toThrow('Env BACKEND_URL');
+  });
+
+  // the login page navigates the Mini App there; http would hand the login to the path
+  it.each([
+    ['http://binodex.app/oauth/authorize', 'Env BROKER_OAUTH_AUTHORIZE_URL must use one of: https:'],
+    ['not-a-url', 'Env BROKER_OAUTH_AUTHORIZE_URL'],
+  ])('refuses BROKER_OAUTH_AUTHORIZE_URL=%s', (BROKER_OAUTH_AUTHORIZE_URL, message) => {
+    expect(() => parseEnv({ ...valid, BROKER_OAUTH_AUTHORIZE_URL })).toThrow(message);
   });
 });

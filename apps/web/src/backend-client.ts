@@ -1,4 +1,5 @@
 import {
+  safeParseOAuthCallbackResponse,
   safeParseAdminConfirmResponse,
   safeParseAdminLoginResponse,
   safeParseLogoutResponse,
@@ -9,10 +10,12 @@ import {
   type AdminLoginRequest,
   type AdminLoginResponse,
   type LogoutResponse,
+  type OAuthCallbackRequest,
+  type OAuthCallbackResponse,
   type RevokeSessionResponse,
   type StaffSessionsResponse,
 } from '@binarius/shared';
-import { BACKEND_REQUEST_TIMEOUT_MS } from './timing';
+import { BACKEND_REQUEST_TIMEOUT_MS, OAUTH_CALLBACK_REQUEST_TIMEOUT_MS } from './timing';
 
 export const BackendErrorCode = {
   /** the request never produced a response: network failure, timeout, or an aborted socket */
@@ -56,12 +59,15 @@ export interface BackendClient {
   sessions(token: string): Promise<StaffSessionsResponse>;
   revoke(token: string, sessionId: string): Promise<RevokeSessionResponse>;
   logout(token: string): Promise<LogoutResponse>;
+  /** the backend's public OAuth callback; carries no bearer */
+  oauthCallback(request: OAuthCallbackRequest): Promise<OAuthCallbackResponse>;
 }
 
 export interface BackendClientOptions {
   baseUrl: string;
   token: string;
   timeoutMs?: number;
+  oauthCallbackTimeoutMs?: number;
 }
 
 type Parse<T> = (input: unknown) => { success: true; data: T } | { success: false };
@@ -70,6 +76,7 @@ export function createBackendClient({
   baseUrl,
   token,
   timeoutMs = BACKEND_REQUEST_TIMEOUT_MS,
+  oauthCallbackTimeoutMs = OAUTH_CALLBACK_REQUEST_TIMEOUT_MS,
 }: BackendClientOptions): BackendClient {
   // a trailing slash, so a base URL with a path prefix keeps it: `new URL('/x', 'http://h/api')`
   // would drop `/api`
@@ -78,15 +85,15 @@ export function createBackendClient({
   const call = async (
     method: 'GET' | 'POST',
     path: string,
-    options: { body?: unknown; session?: string },
+    options: { body?: unknown; session?: string; bearer?: false; timeoutMs?: number },
   ): Promise<unknown> => {
-    const signal = AbortSignal.timeout(timeoutMs);
+    const signal = AbortSignal.timeout(options.timeoutMs ?? timeoutMs);
     let response: Response;
     try {
       response = await fetch(new URL(path, root), {
         method,
         headers: {
-          authorization: `Bearer ${token}`,
+          ...(options.bearer === false ? {} : { authorization: `Bearer ${token}` }),
           ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
           ...(options.session === undefined ? {} : { 'x-staff-session': options.session }),
         },
@@ -149,6 +156,18 @@ export function createBackendClient({
     },
     async logout(session) {
       return parsed(safeParseLogoutResponse, await call('POST', 'admin/auth/logout', { session }));
+    },
+    // The route is public on the backend and checks no bearer; this one opens /admin/*, and a
+    // token sent where nothing needs it is only a place for it to leak from.
+    async oauthCallback(request) {
+      return parsed(
+        safeParseOAuthCallbackResponse,
+        await call('POST', 'auth/binodex/callback', {
+          body: request,
+          bearer: false,
+          timeoutMs: oauthCallbackTimeoutMs,
+        }),
+      );
     },
   };
 }

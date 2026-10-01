@@ -54,17 +54,21 @@ function render(value: unknown): string {
 export interface PageOptions {
   title: string;
   body: SafeHtml;
+  /** extra `<head>` elements, after the stylesheet */
+  head?: SafeHtml;
+  /** `data-page` on `<body>`, for a page script to tell the pages apart */
+  page?: string;
 }
 
-export const layout = ({ title, body }: PageOptions): SafeHtml => html`<!doctype html>
+export const layout = ({ title, body, head, page }: PageOptions): SafeHtml => html`<!doctype html>
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${title}</title>
-    <link rel="stylesheet" href="/admin/static/app.css" />
+    <link rel="stylesheet" href="/admin/static/app.css" />${head}
   </head>
-  <body>
+  <body${page === undefined ? '' : html` data-page="${page}"`}>
     <main>${body}</main>
   </body>
 </html>

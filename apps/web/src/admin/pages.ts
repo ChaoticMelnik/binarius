@@ -93,7 +93,3 @@ export const sessionsPage = (sessions: readonly StaffSessionView[], login: strin
             </tbody>
           </table>`}`,
   });
-
-export const noticePage = (title: string, body: string): SafeHtml =>
-  layout({ title, body: html`<h1>${title}</h1>
-      <p>${body}</p>` });

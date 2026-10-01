@@ -3,6 +3,9 @@ import {
   BrokerAccountStatus,
   errorIdentity,
   errorLogFields,
+  MINI_APP_AUTHORIZE_PARAM,
+  OAUTH_CALLBACK_BODY_LIMIT_BYTES,
+  OAUTH_LOGIN_PATH,
   OAuthErrorCode,
   safeParseConfirmLoginRequest,
   safeParseEmailLoginRequest,
@@ -42,8 +45,16 @@ const CALLBACK_MAX_PER_MINUTE = 3000;
 // minute costs a real flood rather than one request per second: a 32-byte state cannot be
 // guessed, so this window only has to bound junk, and the ceiling above already bounds the work.
 const CALLBACK_MAX_FAILURES_PER_MINUTE = 600;
-// every field of the callback at its schema maximum (256 + 512 + 4096) plus the JSON around them
-const CALLBACK_BODY_LIMIT_BYTES = 8 * 1024;
+
+// The Mini App login page lives next to the callback page on the redirect URI's origin. Telegram
+// takes only an https URL in a web_app button, so an http loopback redirect (the local stack)
+// gets none and the bot falls back to a plain link.
+function miniAppUrlFor(redirectUri: string, authorizeUrl: string): string | undefined {
+  if (!redirectUri.startsWith('https:')) return undefined;
+  const url = new URL(OAUTH_LOGIN_PATH, redirectUri);
+  url.searchParams.set(MINI_APP_AUTHORIZE_PARAM, authorizeUrl);
+  return url.toString();
+}
 
 // Route ceilings, taken before the body is parsed. Every send-code is a real letter, so it is
 // held far lower than the login.
@@ -129,11 +140,12 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
       url.searchParams.set('redirect_uri', deps.redirectUri);
       url.searchParams.set('state', state);
       url.searchParams.set('ref', deps.partnerRef);
-      url.searchParams.set('response_mode', 'web_message');
+      const authorizeUrl = url.toString();
       return reply.send({
-        authorizeUrl: url.toString(),
+        authorizeUrl,
         state,
         expiresAt: expiresAt.toISOString(),
+        miniAppUrl: miniAppUrlFor(deps.redirectUri, authorizeUrl),
       });
     });
 
@@ -290,7 +302,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
 
     scope.post(
       '/auth/binodex/callback',
-      { bodyLimit: CALLBACK_BODY_LIMIT_BYTES },
+      { bodyLimit: OAUTH_CALLBACK_BODY_LIMIT_BYTES },
       async (request, reply) => {
         const parsed = safeParseOAuthCallbackRequest(request.body);
         if (!parsed.success) {

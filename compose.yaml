@@ -77,9 +77,14 @@ services:
       # CI they come from the workflow's env block.
       BROKER_CLIENT_ID: ${BROKER_CLIENT_ID:-binarius-dev-client}
       BROKER_CLIENT_SECRET: ${BROKER_CLIENT_SECRET:?set it in .env; see .env.example}
-      BROKER_OAUTH_AUTHORIZE_URL: ${BROKER_OAUTH_AUTHORIZE_URL:-https://binodex.app/oauth/authorize}
+      # the anchor gives `web` the same default: its login page navigates only to this URL
+      BROKER_OAUTH_AUTHORIZE_URL: &broker-authorize-url ${BROKER_OAUTH_AUTHORIZE_URL:-https://binodex.app/oauth/authorize}
       BROKER_API_BASE_URL: ${BROKER_API_BASE_URL:-https://api.binodex.app}
-      BROKER_OAUTH_REDIRECT_URI: ${BROKER_OAUTH_REDIRECT_URI:-http://127.0.0.1:3000/oauth/callback}
+      # The broker redirects to the callback page `web` serves, so the default is WEB_PUBLIC_URL
+      # plus that page's path (tied by apps/web/src/timing.test.ts). Set it only when the URI
+      # registered with the broker is not on the web origin; it must match that registration
+      # byte for byte.
+      BROKER_OAUTH_REDIRECT_URI: ${BROKER_OAUTH_REDIRECT_URI:-${WEB_PUBLIC_URL:-http://127.0.0.1:3001}/oauth/callback}
       BROKER_PARTNER_REF: ${BROKER_PARTNER_REF:?set it in .env; see .env.example}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?set it in .env; see .env.example}
       TOKEN_ENCRYPTION_KEY_ID: ${TOKEN_ENCRYPTION_KEY_ID:?set it in .env; see .env.example}
@@ -223,10 +228,10 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    # above the web shutdown budget (9 s, apps/web/src/timing.ts): a SIGTERM lets the request
+    # above the web shutdown budget (11 s, apps/web/src/timing.ts): a SIGTERM lets the request
     # in flight finish its one backend call instead of cutting a login in half
-    stop_grace_period: 12s
-    # Not the shared anchor: env.ts reads exactly these five names, and DATABASE_URL and
+    stop_grace_period: 14s
+    # Not the shared anchor: env.ts reads exactly these six names, and DATABASE_URL and
     # REDIS_URL have no business in a process that never opens either connection — everything
     # it may read is decided by a staff session the backend checks (docs/staff-login.md).
     environment:
@@ -234,10 +239,12 @@ services:
       PORT: "3000"
       BACKEND_URL: http://backend:3000
       ADMIN_WEB_TOKEN: ${ADMIN_WEB_TOKEN:?set it in .env; see .env.example}
-      # the origin a POST's Origin header must equal. Change it together with WEB_PORT below:
-      # the two defaults are tied by apps/web/src/timing.test.ts, because a mismatch makes
-      # every form submission a 403.
-      ADMIN_PUBLIC_URL: ${ADMIN_PUBLIC_URL:-http://127.0.0.1:3001}
+      # the origin the pages are served from: a POST's Origin header must equal it, and the
+      # broker redirects back to it. Change it together with WEB_PORT below: the two defaults
+      # are tied by apps/web/src/timing.test.ts, because a mismatch makes every form submission
+      # a 403.
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://127.0.0.1:3001}
+      BROKER_OAUTH_AUTHORIZE_URL: *broker-authorize-url
     ports:
       - "127.0.0.1:${WEB_PORT:-3001}:3000"
     develop:

@@ -12,7 +12,8 @@ import {
 } from '@binarius/shared';
 import { sendHtml } from '../html';
 import { BackendError, BackendErrorCode, type BackendClient } from '../backend-client';
-import { confirmPage, loginPage, noticePage, sessionsPage } from './pages';
+import { noticePage } from '../pages';
+import { confirmPage, loginPage, sessionsPage } from './pages';
 import { APP_CSS } from './static';
 import { TEXTS } from './texts';
 
