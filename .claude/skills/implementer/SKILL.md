@@ -90,6 +90,9 @@ Run before committing. Every item traces to a review finding (`audits.md`):
 - [ ] **Every test added or changed was shown to fail**, by breaking the code it guards, reading the failure and reverting it; the printed failure is quoted in the PR. A passing test is not evidence it can fail — #22 shipped three Majors past suites that were green by construction
 - [ ] The mutation used as that evidence is **discriminating, not neighbouring**: it must redden the new check alone. If an assertion that already existed also goes red, the experiment proves nothing about the new one and a narrower mutation is needed
 - [ ] A check written *this round to close a review finding* is held to the two items above as well — that is the oracle the previous round's rule always misses
+- [ ] **An instrument is not exempt either.** A script, generator or ledger whose output *is* the round's evidence is held to the same rule as a test — #68 rested a whole round on `assertion-ledger.sh`, which silently dropped deletion-only hunks and globbed zero files. A completeness check whose two sides come from the same generator proves nothing
+- [ ] A documented **procedure** (not only each command in it) was executed end to end from the starting state it names — a fresh volume, an empty database. #68's bring-up procedure passed command by command on a working environment and could not create its first account on a fresh one
+- [ ] Every command output quoted as evidence was re-run at the head the comment names. Carried-over output from an earlier tree was a finding twice in #68 (m16, n3), both times with the claim itself intact
 
 ### Step 6: Commit
 

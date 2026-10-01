@@ -101,7 +101,9 @@ Each phase's spawn requested its policy model and ran on it. Every spawn, at any
 S=~/.claude/projects/-Users-user-Documents-Binarius/<session-id>
 resolved=$(jq -c 'select(.toolUseResult.resolvedModel? != null)
   | {id: (.message.content[] | select(.type == "tool_result") | .tool_use_id), m: .toolUseResult.resolvedModel}' "$S.jsonl")
-ran() { grep -o '"model":"claude-[^"]*"' "$S/subagents/agent-$1.jsonl" | cut -d'"' -f4 | sort -u | tr '\n' ' '; }
+# only message.model is the model the agent ran on; a transcript also carries advisorModel
+# and attachment.model, and a plain grep for "model" reports those as extra ids (#68)
+ran() { jq -r 'select(.message.model != null) | .message.model' "$S/subagents/agent-$1.jsonl" | sort -u | tr '\n' ' '; }
 for m in "$S"/subagents/*.meta.json; do
   id=$(basename "$m" .meta.json); id=${id#agent-}
   depth=$(jq -r .spawnDepth "$m"); req=$(jq -r '.model // empty' "$m")
