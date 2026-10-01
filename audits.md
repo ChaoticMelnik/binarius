@@ -743,3 +743,39 @@ PR #189, rebase-merged (1 коммит, голова `f5d24e4`, в `main` `64473
 
 1. **Флейк staff-login.** Завести issue при следующем воспроизведении (решение владельца 2026-10-01: «дождаться повтора»). — **открыто (2026-10-01, владелец): до повтора флейка**
 2. **Пост-фактум Codex по `f5d24e4`** — присоединяется к предложению 4 аудита #163. — **открыто (2026-10-01, владелец): после сброса лимита 2026-10-05**
+
+---
+
+## #114 — OAuth callback-страница в apps/web (2026-10-02)
+
+PR #191, rebase-merged (2 коммита, голова `4bc72f0`, в `main` до `2ab2c11`), ветка удалена. 43 файла, +1494/−104. Часть 2 из 2 задачи #32 (часть 1 — #113, PR #189). Включает перенесённое из #113: страница входа Mini App и `web_app`-кнопка бота. **Один круг ревью, ноль возвратов.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead / Owner | Redirect URI | Владелец зарегистрировал `https://binarius.salescreativesads.com/oauth/callback` у брокера; локальный `.env` по просьбе владельца получил этот URI. Факт записан в #114 до планирования. |
+| Architect | Clarify + план | Спавн `fable`. 6 вопросов, все рекомендованные. Пробы: `docker compose config` для вложенного дефолта и YAML-якоря, исходник `telegram-web-app.js` (sessionStorage, iframe-родитель `web.telegram.org`), DNS и Caddy на VPS (502 — web не запущен). Оценка ~1650 строк; шаги владельца вне репозитория перечислены. Step 7 Codex — пропуск по вейверу. |
+| Implementer | Clarify + код | Спавн `opus`. 5 вопросов; владелец выбрал два коммита (не рекомендованный послойный вариант). 29 поломок в Gate verification; compose проверен только `config` (выбор владельца). Исправил утверждение плана: отклонённый `web_app`-URL не даёт «недоступен» — сообщение не уходит, бот логирует `update handler failed`. |
+| Reviewer | Iteration 1 | Спавн `opus`. **0 Blocker, 0 Major, 4 Minor** + заметка про стиль SDK в Telegram Web; security review без подтверждённых находок; open-redirect, CSP по маршрутам, сырой initData и форвард без bearer проверены руками. |
+| Tech Lead | Merge / Done | `AskUserQuestion` перед мержем (с предупреждением о переименовании env на VPS) → rebase + удаление ветки, `--match-head-commit 4bc72f0`. `MERGED` 21:10:55Z, Done после подтверждения. Follow-up #192 (Todo) — после «да» владельца на заголовок и список. |
+| Owner | Live-test | **Не проведён на момент записи**: нужен деплой на VPS с переименованием `ADMIN_PUBLIC_URL` → `WEB_PUBLIC_URL` и остановленным локальным стеком. Два допущения (sessionStorage через брокера, страница брокера в webview) проверяются только им. |
+
+### Review iterations: 0 (возвратов ревьюера нет)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| `redirect_uri` сравнивается строкой с нормализованным origin | Minor | other | Нормализация с одной стороны сравнения | Architect plan → #192 |
+| Формулировка override `BROKER_OAUTH_REDIRECT_URI` в compose/docs | Minor | other | — | → #192 |
+| Старое `ADMIN_PUBLIC_URL` под compose молча даёт loopback; план утверждал «не стартует» | Minor | unverified-claim | Поведение fail-fast проверено для `env.ts`, не для compose-дефолта | Architect plan → #192 |
+| Дубли и мелкие упрощения | Minor | other | Косметика | → #192 |
+| Утверждение плана про отклонённый `web_app`-URL («недоступен») | Process | unverified-claim | Не исполнено до плана; поймал implementer | Architect plan |
+| Codex не читал ни план, ни код, ни этот docs-PR | Process | codex-ops | Вейвер владельца до 2026-10-05 | — |
+
+### Process improvement proposals
+
+1. **Minor ревью #191.** — **вынесено в #192**
+2. **Живой тест #114 после деплоя** (телефон, затем Telegram Web; сигнатуры отказов — в ревью PR #191). — **открыто (2026-10-02, владелец): после деплоя на VPS**
+3. **Пост-фактум Codex по `4bc72f0`** — присоединяется к предложению 4 аудита #163. — **открыто (2026-10-02, владелец): после сброса лимита 2026-10-05**
