@@ -1,15 +1,16 @@
 # /start and the welcome screen
 
 The bot's first screen (#22): who the user is, where they came from, and the one action the
-screen offers — connecting a Binodex account. Linking itself is described in
-[binodex-oauth.md](binodex-oauth.md); this document stops at the authorize URL.
+screen offers — connecting a Binodex account — or, when a link is waiting, confirming it (#10).
+Linking itself, the confirmation and the starter pack are described in
+[binodex-oauth.md](binodex-oauth.md); this document covers what the bot sends and calls.
 
 ## Components
 
 - `packages/shared/src/users.ts` — the contract: `UserStatus`, the start-payload and language-tag
   patterns, and the request/response schemas of `POST /users/start`.
-- `packages/db/src/user-ops.ts` — `recordUserStart` (one upsert plus the account check) and
-  `toUserStartView` (the allowlisted projection).
+- `packages/db/src/user-ops.ts` — `recordUserStart` (one upsert, the active-account check and
+  the list of links waiting for confirmation) and `toUserStartView` (the allowlisted projection).
 - `apps/backend/src/users/routes.ts` — `POST /users/start`, behind the internal bearer.
 - `apps/bot/src/` — `env.ts`, `timing.ts`, `backend-client.ts`, `texts.ts`, `logging.ts`,
   `bot.ts` (the handlers), `lifecycle.ts` (start, signals, drain), `index.ts` (wiring), and
@@ -23,8 +24,10 @@ API over a shared bearer.
 ```text
 /start [payload]
   bot  → POST /users/start { telegramUserId, displayName, languageCode?, startPayload? }
-  back → { user: { telegramUserId, status, acquisitionSource, acquiredAt, hasActiveBrokerAccount } }
+  back → { user: { telegramUserId, status, acquisitionSource, acquiredAt, hasActiveBrokerAccount,
+                   pendingBrokerAccounts } }
   bot  → blocked                  → "Доступ ограничен", no button
+         pendingBrokerAccounts    → "Найдена новая привязка…" + one "Подтвердить" button per link
          hasActiveBrokerAccount   → "С возвращением", no button
          otherwise                → welcome (video caption when configured) + "Подключить аккаунт"
 
@@ -32,10 +35,25 @@ tap "Подключить аккаунт"
   bot  → answerCallbackQuery ∥ POST /auth/binodex/start { telegramUserId }
   back → { authorizeUrl, state, expiresAt }
   bot  → message with a url button pointing at authorizeUrl
+
+tap "Подтвердить" (callback data confirm:<account id>)
+  bot  → answerCallbackQuery ∥ POST /auth/binodex/confirm { telegramUserId, accountId }
+  back → { account, grant }
+  bot  → the outcome: linked with the pack (the number the backend sent), linked without it
+         (not a partner account, or the pack was already paid), or the refusal
 ```
 
-What happens after the user opens that URL belongs to #32 (the login page that receives the
-authorization code) and #23 (the confirmation and the message that reports its outcome).
+A waiting link comes before "welcome back" on purpose: a user with an active account who finds
+a new link they did not make has to see it, not a greeting (binodex-oauth.md → Why a new account
+starts pending). The button reads `Подтвердить: <email>`, or `Подтвердить привязку` when the broker
+sent no email. Callback data that matches `confirm:` but is not a uuid only stops the spinner.
+The refusals the user can act on have their own text — `broker_account_not_found` (start over),
+`account_not_pending` (already confirmed), `user_blocked` — and anything else is "Сервис временно
+недоступен" with a warn line carrying the backend status.
+
+What happens after the user opens the authorize URL belongs to #32 (the login page that receives
+the authorization code); a message from the backend right after the callback, without waiting
+for the user's next `/start`, is #128.
 
 ## First touch
 
@@ -78,6 +96,15 @@ validator: a 2-3 letter primary subtag, then `-` subtags of 1-8 letters or digit
 
 Answers: `200 { user }`, `400 { error: 'validation', issues }`, `401 { error: 'unauthorized' }`.
 
+| `user` field             | Notes                                                                    |
+| ------------------------ | ------------------------------------------------------------------------ |
+| `telegramUserId`         | decimal string                                                           |
+| `status`                 | `active` or `blocked`                                                    |
+| `acquisitionSource`      | the first usable payload, or `null`                                      |
+| `acquiredAt`             | ISO timestamp with offset, or `null`                                     |
+| `hasActiveBrokerAccount` | any of the user's accounts is `active`                                   |
+| `pendingBrokerAccounts`  | links waiting for confirmation, newest first, each `{ id, email }` only — `email` may be `null` |
+
 Every field the bot derives is checked against this same schema before it is sent, `displayName`
 included: the joined name goes through `userStartRequestSchema.shape.displayName`, and when it
 does not pass — a `first_name` of nothing but spaces is what Bot API still calls non-empty — the
@@ -88,8 +115,9 @@ The write is a single `INSERT ... ON CONFLICT (telegram_user_id) DO UPDATE`, so 
 updates racing on a new user produce one row. It refreshes `display_name` and, when one arrived,
 `language_code`; it does **not** write `status`, so a blocked user stays blocked — the route
 still answers `200`, with `status: 'blocked'`, and the bot shows the restricted text. The reply
-also carries `hasActiveBrokerAccount`, read in the same transaction after the upsert, in the
-lock order `users → broker_accounts` the rest of the schema uses.
+also carries `hasActiveBrokerAccount` and `pendingBrokerAccounts`, both read in the same
+transaction after the upsert, in the lock order `users → broker_accounts` the rest of the schema
+uses.
 
 ## Texts
 
@@ -152,10 +180,10 @@ call is capped at 5 s.
 
 The handler budget is not a sentence about the handlers, it is computed from `HANDLER_CALLS`,
 which declares what each handler does on its longest path: `/start` is one backend call and up
-to two Bot API calls (the video refused, then the text), the connect button is one backend call
-and two Bot API calls. That makes 5 000 + 8 000 + 8 000 = **21 s**, inside the **25 s** shutdown
+to two Bot API calls (the video refused, then the text), the connect and confirm buttons are one
+backend call and two Bot API calls each. That makes 5 000 + 8 000 + 8 000 = **21 s**, inside the **25 s** shutdown
 budget, inside the **30 s** `stop_grace_period` of the compose service. `timing.test.ts` runs
-every terminal branch of both handlers through the real handlers and asserts that each makes the
+every terminal branch of each handler through the real handlers and asserts that each makes the
 calls it is declared to make and that the worst of them is what `HANDLER_CALLS` says — so a
 handler that grows a call turns the suite red instead of quietly outgrowing the budget. It reads
 `stop_grace_period` out of `compose.yaml` rather than trusting it, and grammY's polling backoff
@@ -184,8 +212,10 @@ written only when a step really did run out of time.
 
 ## Boundaries
 
-- **#23** — the bot's side of the return from the login page: `confirm` and the success or
-  failure message.
+- **#128** — the backend's message right after a successful callback, sent to the Telegram id
+  restored from the state; it can reuse the confirm button and texts from #10.
+- **#10** — re-linking an account that belongs to another Telegram user is out of scope:
+  `broker_account_taken` is final, and moving an account is a separate support task.
 - **#24** — the main menu and the demo balance, including what a returning user sees instead of
   a one-line greeting.
 - **#31** — referral start links; they take their own payload prefix, and the format is not
