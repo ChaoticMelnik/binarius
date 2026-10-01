@@ -7,17 +7,20 @@ import { LOG_REDACT_PATHS } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { OAUTH_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
+import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   BOT_INFO,
   CODE_SENT,
   CONFIRMED,
   LOGIN,
   PENDING_ACCOUNT_ID,
+  USER,
   USER_VIEW,
   captureApi,
   callbackUpdate,
   rejectionOf,
   startUpdate,
+  textUpdate,
   type ApiAnswer,
   type ApiCall,
 } from './testing';
@@ -29,10 +32,10 @@ import { TEXTS } from './texts';
 const TOKEN = '123456:AA-SECRET-TOKEN-0000000000000000';
 const INTERNAL_TOKEN = 'SECRET-INTERNAL-BEARER-0000';
 
-const sink = () => {
+const sink = (level = 'info') => {
   const lines: string[] = [];
   const logger = pino(
-    { level: 'info', redact: [...LOG_REDACT_PATHS] },
+    { level, redact: [...LOG_REDACT_PATHS] },
     { write: (line: string) => void lines.push(line) },
   );
   return { lines, logger };
@@ -53,10 +56,12 @@ interface Scenario {
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
+  dialog?: LoginDialogState;
+  level?: string;
 }
 
 async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: ApiCall[] }> {
-  const { lines, logger } = sink();
+  const { lines, logger } = sink(scenario.level);
   const backend: BackendClient = {
     recordStart: scenario.recordStart ?? (() => Promise.resolve(USER_VIEW)),
     startLogin: scenario.startLogin ?? (() => Promise.resolve(LOGIN)),
@@ -64,11 +69,14 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     sendEmailCode: scenario.sendEmailCode ?? (() => Promise.resolve(CODE_SENT)),
     emailLogin: scenario.emailLogin ?? (() => Promise.resolve(CONFIRMED)),
   };
+  const loginDialog = createLoginDialog();
+  if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
   const bot = createBot({
     token: TOKEN,
     backend,
     logger,
     botInfo: BOT_INFO,
+    loginDialog,
     ...(scenario.welcomeVideoFileId === undefined
       ? {}
       : { welcomeVideoFileId: scenario.welcomeVideoFileId }),
@@ -216,6 +224,114 @@ describe('what the bot writes about a failed backend call', () => {
       backendStatus: 500,
     });
     expect(lines.join('')).not.toContain(INTERNAL_TOKEN);
+  });
+});
+
+// Trace, the lowest level: a line production would filter out still must not carry the address
+// or the code, so the level cannot be what hides one.
+describe('what the bot writes during the email dialog', () => {
+  const ADDRESS = 'SECRET-ADDRESS@example.test';
+  const CODE = 'SECRET-CODE-123';
+  const ON_CODE_STEP: LoginDialogState = { step: 'code', email: ADDRESS };
+  // what a transport failure could quote: the request it was making
+  const leakyCause = () =>
+    new Error(
+      `POST /auth/binodex/email/login {"email":"${ADDRESS}","code":"${CODE}"} with Bearer ${INTERNAL_TOKEN}`,
+    );
+
+  const expectNoSecrets = (lines: readonly string[]): void => {
+    const all = lines.join('');
+    expect(all).not.toContain(ADDRESS);
+    expect(all).not.toContain('SECRET-ADDRESS');
+    expect(all).not.toContain(CODE);
+    expect(all).not.toContain(INTERNAL_TOKEN);
+  };
+
+  it('names an unreachable send-code by identity, without the address', async () => {
+    const { lines } = await linesFrom({
+      level: 'trace',
+      update: textUpdate(ADDRESS),
+      dialog: { step: 'email' },
+      sendEmailCode: () =>
+        Promise.reject(new BackendError(BackendErrorCode.Unreachable, { cause: leakyCause() })),
+    });
+
+    expect(lineWith(lines, 'email code not sent')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.Unreachable },
+      cause: { name: 'Error' },
+    });
+    expectNoSecrets(lines);
+  });
+
+  it('names a failed login by status and reason, without the address or the code', async () => {
+    const { lines } = await linesFrom({
+      level: 'trace',
+      update: textUpdate(CODE),
+      dialog: ON_CODE_STEP,
+      emailLogin: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, {
+            status: 502,
+            reason: 'broker_unavailable',
+            cause: leakyCause(),
+          }),
+        ),
+    });
+
+    expect(lineWith(lines, 'email login failed')).toMatchObject({
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 502,
+      backendReason: 'broker_unavailable',
+    });
+    expectNoSecrets(lines);
+  });
+
+  it('names a failed recheck after an invalid code, without the address or the code', async () => {
+    const { lines } = await linesFrom({
+      level: 'trace',
+      update: textUpdate(CODE),
+      dialog: ON_CODE_STEP,
+      emailLogin: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, { status: 400, reason: 'invalid_code' }),
+        ),
+      recordStart: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, { status: 500, cause: leakyCause() }),
+        ),
+    });
+
+    expect(lineWith(lines, 'email login outcome not rechecked')).toMatchObject({
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 500,
+    });
+    // the invalid code itself is the user's mistake, not something to warn about
+    expect(lineWith(lines, 'email login failed')).toBeUndefined();
+    expectNoSecrets(lines);
+  });
+
+  it('sends a failure of the reply on the code step to bot.catch by identity alone', async () => {
+    const update = textUpdate(CODE);
+    const { lines } = await linesFrom({
+      level: 'trace',
+      update,
+      dialog: ON_CODE_STEP,
+      answers: [
+        [
+          'sendMessage',
+          () => {
+            throw new TypeError(`cannot send to ${ADDRESS} after ${CODE}`);
+          },
+        ],
+      ],
+    });
+
+    expect(lineWith(lines, 'update handler failed')).toMatchObject({
+      err: { name: 'TypeError' },
+      updateId: update.update_id,
+    });
+    expectNoSecrets(lines);
   });
 });
 
