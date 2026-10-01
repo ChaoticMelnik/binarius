@@ -441,6 +441,7 @@ describe('what the bot writes when a drain step fails', () => {
         Promise.reject(
           new Error(`request to https://api.telegram.org/bot${TOKEN}/getUpdates failed`),
         ),
+      api: { setMyCommands: () => Promise.resolve(true as const) },
     };
     runBot({
       bot,
@@ -457,5 +458,45 @@ describe('what the bot writes when a drain step fails', () => {
     expect(logged?.err).not.toHaveProperty('message');
     expect(lines.join('')).not.toContain(TOKEN);
     expect(lines.join('')).not.toContain('SECRET-TOKEN');
+  });
+});
+
+// The transport path — grammY surfacing the HttpError out of setMyCommands inside onStart — is
+// read off the library by the lifecycle scenes; what reaches the log does not depend on it, so
+// this runs the same fake PollingLoop as the drain test above.
+describe('what the bot writes when the commands are not registered', () => {
+  it('names the error and the method at warn, and keeps the token out of the line', async () => {
+    const { lines, logger } = sink();
+    const bot: PollingLoop = {
+      start: async (options) => {
+        await options.onStart?.(BOT_INFO);
+      },
+      stop: () => Promise.resolve(),
+      api: {
+        setMyCommands: () =>
+          Promise.reject(
+            new HttpError(
+              "Network request for 'setMyCommands' failed!",
+              new Error(`request to https://api.telegram.org/bot${TOKEN}/setMyCommands failed`),
+            ),
+          ),
+      },
+    };
+    runBot({ bot, logger, exit: vi.fn(), signals: ['SIGTERM'], signalSource: new EventEmitter() });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const logged = lineWith(lines, 'bot commands not registered');
+    expect(logged).toMatchObject({
+      level: 40,
+      err: { name: 'HttpError' },
+      method: 'setMyCommands',
+      transportError: { name: 'Error' },
+    });
+    expect(logged?.err).not.toHaveProperty('message');
+    expect(logged).not.toHaveProperty('description');
+    expect(logged).not.toHaveProperty('payload');
+    expect(lines.join('')).not.toContain(TOKEN);
+    expect(lines.join('')).not.toContain('SECRET-TOKEN');
+    expect(lineWith(lines, 'long polling stopped with an error')).toBeUndefined();
   });
 });

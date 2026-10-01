@@ -10,6 +10,7 @@ import {
   USER_VIEW,
   captureApi,
   fakeLogger,
+  sentPayload,
   startUpdate,
   type FakeLogger,
 } from './testing';
@@ -31,6 +32,9 @@ function fakeBot() {
   });
   const stopCalls: number[] = [];
   const options: Parameters<PollingLoop['start']>[0][] = [];
+  const api = {
+    setMyCommands: vi.fn<PollingLoop['api']['setMyCommands']>(() => Promise.resolve(true as const)),
+  };
   const bot: PollingLoop = {
     start: (startOptions) => {
       options.push(startOptions);
@@ -40,8 +44,9 @@ function fakeBot() {
       stopCalls.push(Date.now());
       return stopped;
     },
+    api,
   };
-  return { bot, options, stopCalls, resolveStart, rejectStart, resolveStop, rejectStop };
+  return { bot, api, options, stopCalls, resolveStart, rejectStart, resolveStop, rejectStop };
 }
 
 // The signal source is a real EventEmitter rather than a hand-written double: `process` is one,
@@ -59,10 +64,11 @@ const BUDGET_LINE = 'shutdown: polling did not stop within the budget, exiting a
 const STEP_LINE = 'shutdown: a drain step failed, exiting anyway';
 
 describe('runBot', () => {
-  it('starts long polling with this project’s own timeout, batch size and update filter', () => {
+  it('starts long polling with this project’s own timeout, batch size and update filter', async () => {
     const fake = fakeBot();
+    const log = fakeLogger();
     const signalSource = signals();
-    runBot({ bot: fake.bot, logger: fakeLogger(), exit: vi.fn(), signalSource });
+    runBot({ bot: fake.bot, logger: log, exit: vi.fn(), signalSource });
 
     // Literals on purpose. These constants are what runBot passes, so an assertion written
     // against them proves the keys are there and nothing at all about the values — one update
@@ -75,6 +81,42 @@ describe('runBot', () => {
     });
     expect(signalSource.listenerCount('SIGTERM')).toBe(1);
     expect(signalSource.listenerCount('SIGINT')).toBe(1);
+
+    // literals for the same reason: the command list and its scope are the values asserted
+    await fake.options[0]?.onStart?.(BOT_INFO);
+    expect(fake.api.setMyCommands).toHaveBeenCalledTimes(1);
+    expect(fake.api.setMyCommands).toHaveBeenCalledWith(
+      [{ command: 'start', description: 'Начать' }],
+      { scope: { type: 'all_private_chats' } },
+    );
+    expect(log.info).toHaveBeenCalledWith('bot started');
+    expect(log.info.mock.invocationCallOrder[0]).toBeGreaterThan(
+      fake.api.setMyCommands.mock.invocationCallOrder[0] ?? Infinity,
+    );
+    fake.resolveStart();
+  });
+
+  // neither a GrammyError nor an HttpError — a throwing transformer, a bug — still costs only
+  // the menu: onStart resolving is what keeps start() from rejecting and the process from exit 1
+  it('goes on when the registration fails for a reason the transport cannot produce', async () => {
+    const fake = fakeBot();
+    const log = fakeLogger();
+    const exit = vi.fn();
+    fake.api.setMyCommands.mockImplementation(() => Promise.reject(new TypeError('sentinel')));
+    runBot({ bot: fake.bot, logger: log, exit, signalSource: signals() });
+
+    await expect(fake.options[0]?.onStart?.(BOT_INFO)).resolves.toBeUndefined();
+    expect(log.warn.mock.calls).toHaveLength(1);
+    expect(log.warn.mock.calls[0]?.[0]).toEqual({
+      err: { name: 'TypeError' },
+      method: 'setMyCommands',
+    });
+    expect(log.warn.mock.calls[0]?.[1]).toBe('bot commands not registered');
+    expect(exit).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith('bot started');
+    expect(log.info.mock.invocationCallOrder[0]).toBeGreaterThan(
+      log.warn.mock.invocationCallOrder[0] ?? Infinity,
+    );
     fake.resolveStart();
   });
 
@@ -251,6 +293,8 @@ interface SceneOptions {
   // registered before runBot on purpose: bot.start() issues getMe and deleteWebhook
   // synchronously, so a failure programmed after the call returns arrives too late
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
+  // what the setMyCommands answer resolves with; a held promise keeps onStart running
+  registration?: Promise<true>;
 }
 
 const running: { signalSource: EventEmitter; exit: Mock }[] = [];
@@ -296,6 +340,10 @@ function scene(options: SceneOptions = {}) {
   api.answers.set('deleteWebhook', () => {
     events.push('deleteWebhook');
     return true;
+  });
+  api.answers.set('setMyCommands', () => {
+    events.push('setMyCommands');
+    return options.registration ?? true;
   });
   api.answers.set('getUpdates', (payload, signal) => {
     if (!isLongPoll(payload)) {
@@ -405,7 +453,16 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     const s = scene();
     await s.firstPoll();
 
-    expect(s.events).toEqual(['deleteWebhook', 'info:bot started', 'getUpdates#1']);
+    expect(s.events).toEqual([
+      'deleteWebhook',
+      'setMyCommands',
+      'info:bot started',
+      'getUpdates#1',
+    ]);
+    expect(sentPayload(s.api.calls, 'setMyCommands')).toEqual({
+      commands: [{ command: 'start', description: 'Начать' }],
+      scope: { type: 'all_private_chats' },
+    });
     // The premise the fake above stands on: the options object runBot hands start() is what
     // grammY puts in getUpdates. Only the first poll — after one succeeds grammY stops sending
     // allowed_updates, because Telegram keeps the last setting (out/bot.js, loop()).
@@ -414,6 +471,72 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
       timeout: 5,
       allowed_updates: ['message', 'callback_query'],
     });
+  });
+
+  it('goes on polling when Telegram refuses the command list', async () => {
+    const s = scene({
+      apiErrors: [
+        ['setMyCommands', { ok: false, error_code: 400, description: 'Bad Request: bad command' }],
+      ],
+    });
+    await s.firstPoll();
+
+    expect(s.exit).not.toHaveBeenCalled();
+    expect(errorMessages(s.log)).toEqual([]);
+    expect(s.log.warn.mock.calls).toEqual([
+      [
+        { err: { name: 'GrammyError' }, method: 'setMyCommands', telegramErrorCode: 400 },
+        'bot commands not registered',
+      ],
+    ]);
+    expect(s.events).toEqual(['deleteWebhook', 'info:bot started', 'getUpdates#1']);
+  });
+
+  it('goes on polling when the registration fails in transport', async () => {
+    const s = scene({ apiErrors: [['setMyCommands', transportFailure('setMyCommands')]] });
+    await s.firstPoll();
+
+    expect(s.exit).not.toHaveBeenCalled();
+    expect(errorMessages(s.log)).toEqual([]);
+    expect(s.log.warn.mock.calls).toEqual([
+      [
+        {
+          err: { name: 'HttpError' },
+          method: 'setMyCommands',
+          transportError: { name: 'Error' },
+        },
+        'bot commands not registered',
+      ],
+    ]);
+    expect(s.events).toEqual(['deleteWebhook', 'info:bot started', 'getUpdates#1']);
+  });
+
+  // grammY's «Bot was stopped during `onStart`» branch, read off the library: stop() confirms
+  // the offset while the registration runs out, and start() then returns without a first poll
+  it('drains a SIGTERM during the registration without a first poll', async () => {
+    let release = (): void => {};
+    const held = new Promise<true>((resolve) => {
+      release = () => resolve(true);
+    });
+    const s = scene({ registration: held });
+    await waitFor('the registration to start', () => s.events.includes('setMyCommands'));
+
+    s.signalSource.emit('SIGTERM');
+    await waitFor('bot.stop() to confirm the offset', () => s.confirmations().length === 1);
+    expect(s.exit).not.toHaveBeenCalled();
+
+    release();
+    await s.drained();
+    expect(s.exit.mock.calls).toEqual([[0]]);
+    expect(s.longPolls()).toEqual([]);
+    expect(errorMessages(s.log)).toEqual([]);
+    // onStart finishes before grammY sees the stop, so its line follows the shutdown's
+    expect(s.events).toEqual([
+      'deleteWebhook',
+      'setMyCommands',
+      'info:shutting down',
+      'info:bot started',
+    ]);
   });
 
   it('hands a handler that throws to bot.catch and goes on polling', async () => {

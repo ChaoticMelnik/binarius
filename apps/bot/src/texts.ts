@@ -70,4 +70,7 @@ export const TEXTS = {
   // a restart — the bot cannot tell which, so the text must hold for all of them
   codeRequestStale:
     'Этот запрос кода уже не действует. Если аккаунт ещё не подключён, начните заново через /start.',
+  // the description of /start in Telegram's command menu; the Bot API bounds it at 256
+  // characters, held by commands.test.ts
+  startCommand: 'Начать',
 } as const;
