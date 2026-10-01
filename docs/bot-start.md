@@ -67,8 +67,10 @@ tap "Запросить код ещё раз" (callback data resend)
 
 tap "Войти через сайт Binodex" (callback data oauth)
   bot  → answerCallbackQuery ∥ POST /auth/binodex/start { telegramUserId }
-  back → { authorizeUrl, state, expiresAt }
-  bot  → message with a url button pointing at authorizeUrl
+  back → { authorizeUrl, state, expiresAt, miniAppUrl? }
+  bot  → message with a web_app button on miniAppUrl, which opens apps/web's login page as a
+         Mini App (#114); without miniAppUrl — an http redirect URI, the local stack — a url
+         button on authorizeUrl, because Telegram opens only https Mini Apps
 
 tap "Подтвердить" (callback data confirm:<account id>) — from /start, or from the backend's
 push after an OAuth login (#128): the same button, handled the same way
@@ -89,8 +91,10 @@ The refusals the user can act on have their own text — `broker_account_not_fou
 Buttons sent before #171 carry `connect` under the same label, so they now open the email
 dialog — the label still says what happens.
 
-What happens after the user opens the authorize URL belongs to #114 (the Mini App login and
-callback pages that receive the authorization code). The backend accepts that code only with the
+What happens after the tap is the Mini App's (#114, [binodex-oauth.md → The Mini App
+pages](binodex-oauth.md#the-mini-app-pages-114)): `apps/web`'s login page navigates to the broker
+inside the Mini App, and its callback page sends the code back. The button belongs to the public
+bot because `TELEGRAM_BOT_TOKEN` is what signs the Mini App's launch data. The backend accepts that code only with the
 Mini App's signed `initData` of the Telegram user the login belongs to (#113,
 [binodex-oauth.md → Why the callback is public](binodex-oauth.md#why-the-callback-is-public)). Right after the callback the backend itself sends the user the outcome
 (#128, [binodex-oauth.md → The push after the callback](binodex-oauth.md#the-push-after-the-callback-128)):
@@ -402,6 +406,6 @@ written only when a step really did run out of time.
   a one-line greeting.
 - **#31** — referral start links; they take their own payload prefix, and the format is not
   fixed here.
-- **#114** — the `web_app` button and the Mini App login and callback pages; the `initData` check
-  they rely on is the backend's (#113, binodex-oauth.md).
+- **#114** — the Mini App login and callback pages in `apps/web` behind the `web_app` button; the
+  `initData` check they rely on is the backend's (#113, binodex-oauth.md).
 - **#35** — end-to-end coverage against the mock broker.
