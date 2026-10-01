@@ -109,6 +109,7 @@ Do not proceed to Step 6 until answered.
 - [ ] Every mutating endpoint has authorization consistent with adjacent code
 - [ ] read→mutate patterns: atomic guard, or race condition explicitly accepted with reason
 - [ ] try/catch blocks: catch behavior explicitly stated
+- [ ] Every irreversible action whose outcome the user learns only from the response (a grant, an activation, a redeemed code): the plan says how the caller learns it after a timeout that fired post-commit — re-read the state before reporting an error, never infer it from the retry's refusal (owner, 2026-10-01: #10 m2 and #172 finding 4)
 - [ ] Nullable parameter type changes: legacy fallback paths verified against existing null/undefined data
 - [ ] Single source per fact: each version, list, env value or secret scope the plan introduces lives in one place; every other place derives from it or is checked against it
 - [ ] Every new or changed CHECK was executed against NULL and boundary values before it went into the plan
