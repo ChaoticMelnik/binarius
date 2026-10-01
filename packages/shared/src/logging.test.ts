@@ -17,6 +17,7 @@ describe('LOG_REDACT_PATHS', () => {
       'client_secret',
       'state',
       'authorizationCode',
+      'initData',
       'sessionToken',
       'x-staff-session',
       'cookie',
@@ -26,7 +27,7 @@ describe('LOG_REDACT_PATHS', () => {
       expect(LOG_REDACT_PATHS).toContain(`*.*.*.*.*.${key}`);
       expect(LOG_REDACT_PATHS).not.toContain(`*.*.*.*.*.*.${key}`);
     }
-    expect(LOG_REDACT_PATHS).toHaveLength(2 + 13 * 6);
+    expect(LOG_REDACT_PATHS).toHaveLength(2 + 14 * 6);
   });
 
   // `code` is the most overloaded key name in the stack: SQLSTATE, libuv errno and Fastify's

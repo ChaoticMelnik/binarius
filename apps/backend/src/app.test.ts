@@ -30,6 +30,7 @@ const unusedAuth: AuthRoutesDeps = {
   redirectUri: 'https://bot.example/oauth/callback',
   partnerRef: 'partner-ref',
   linkNotifier: {} as AuthRoutesDeps['linkNotifier'],
+  initDataVerifier: {} as AuthRoutesDeps['initDataVerifier'],
 };
 
 const unusedUsers: UsersRoutesDeps = {

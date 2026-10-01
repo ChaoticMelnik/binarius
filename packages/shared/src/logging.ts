@@ -4,7 +4,7 @@
 // `err.response.request.headers.authorization`) and a bare top-level key. Deeper nesting is
 // not covered, and no key path scrubs a string: a secret inside `err.message` or `err.stack`
 // survives, which is why error objects are logged by name and code only (see errorIdentity
-// below). Eighty paths cost a traversal per log line — accepted for the loggers' volume.
+// below). Eighty-six paths cost a traversal per log line — accepted for the loggers' volume.
 const SECRET_KEYS = [
   'authorization',
   'token',
@@ -18,6 +18,8 @@ const SECRET_KEYS = [
   'client_secret',
   'state',
   'authorizationCode',
+  // the callback's Telegram initData passes the state owner's identity check while it is fresh
+  'initData',
   // the staff session: the value the admin cookie carries, the header it arrives in, and the
   // cookie jar it travels in
   'sessionToken',

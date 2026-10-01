@@ -89,8 +89,10 @@ The refusals the user can act on have their own text — `broker_account_not_fou
 Buttons sent before #171 carry `connect` under the same label, so they now open the email
 dialog — the label still says what happens.
 
-What happens after the user opens the authorize URL belongs to #32 (the login page that receives
-the authorization code). Right after the callback the backend itself sends the user the outcome
+What happens after the user opens the authorize URL belongs to #114 (the Mini App login and
+callback pages that receive the authorization code). The backend accepts that code only with the
+Mini App's signed `initData` of the Telegram user the login belongs to (#113,
+[binodex-oauth.md → Why the callback is public](binodex-oauth.md#why-the-callback-is-public)). Right after the callback the backend itself sends the user the outcome
 (#128, [binodex-oauth.md → The push after the callback](binodex-oauth.md#the-push-after-the-callback-128)):
 for a waiting link, the same prompt and button `/start` shows; a lost push is made up for by
 `/start`.
@@ -400,6 +402,6 @@ written only when a step really did run out of time.
   a one-line greeting.
 - **#31** — referral start links; they take their own payload prefix, and the format is not
   fixed here.
-- **#32** — the login page, and the `initData` check that closes the handoff gap described in
-  binodex-oauth.md.
+- **#114** — the `web_app` button and the Mini App login and callback pages; the `initData` check
+  they rely on is the backend's (#113, binodex-oauth.md).
 - **#35** — end-to-end coverage against the mock broker.

@@ -62,6 +62,7 @@ describe('the link push message', () => {
     [LinkPushKind.Blocked, LINK_TEXTS.blocked],
     [LinkPushKind.Taken, LINK_TEXTS.accountTaken],
     [LinkPushKind.ExchangeFailed, AUTH_TEXTS.oauthLoginFailed],
+    [LinkPushKind.Mismatch, AUTH_TEXTS.oauthLoginFailed],
   ] as const)('sends %s as text alone, with no button', async (kind, text) => {
     const payload = await sent({ kind });
     expect(payload?.text).toBe(text);

@@ -2,7 +2,12 @@ import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
-import { confirmLoginResponseSchema, emailLoginResponseSchema, LINK_TEXTS } from '@binarius/shared';
+import {
+  confirmLoginResponseSchema,
+  emailLoginResponseSchema,
+  INIT_DATA_MAX_LENGTH,
+  LINK_TEXTS,
+} from '@binarius/shared';
 import {
   LINK_BONUS_TOKENS,
   brokerAccounts,
@@ -31,6 +36,9 @@ import {
   type CapturedApi,
 } from '../admin/testing';
 import { createLinkNotifier } from './link-notifier';
+import { INIT_DATA_MAX_AGE_MS } from './oauth-timing';
+import { createInitDataVerifier } from './telegram-init-data';
+import { signInitData } from './testing/init-data';
 import { AUTH_TEXTS } from './texts';
 
 const baseUrl = process.env.DATABASE_URL;
@@ -77,6 +85,11 @@ beforeAll(async () => {
     redirectUri: REDIRECT_URI,
     partnerRef: PARTNER_REF,
     linkNotifier: createLinkNotifier({ token: PUSH_BOT_TOKEN }),
+    // the one public bot both sends the push and launches the Mini App, as in production
+    initDataVerifier: createInitDataVerifier({
+      botToken: PUSH_BOT_TOKEN,
+      maxAgeMs: INIT_DATA_MAX_AGE_MS,
+    }),
   };
   pushApi = captureApi(authDeps.linkNotifier);
   app = testApp(authDeps);
@@ -118,11 +131,45 @@ const postJson = (
     payload: JSON.stringify(payload),
   });
 
-const start = (telegramUserId: string, authorization = `Bearer ${TOKEN}`, instance = app) =>
-  postJson(instance, '/auth/binodex/start', { telegramUserId }, { authorization });
+// who each issued state belongs to, so a callback can carry that user's initData by default
+const stateOwners = new Map<string, string>();
+// signs the initData of a callback whose state no test issued
+const STRANGER_TELEGRAM_ID = '7999999';
 
-const callback = (payload: unknown, instance = app) =>
-  postJson(instance, '/auth/binodex/callback', payload);
+const initDataFor = (telegramUserId: string | bigint, authDate?: number) =>
+  signInitData({
+    botToken: PUSH_BOT_TOKEN,
+    telegramUserId: BigInt(telegramUserId),
+    ...(authDate === undefined ? {} : { authDate }),
+  });
+
+const start = async (telegramUserId: string, authorization = `Bearer ${TOKEN}`, instance = app) => {
+  const response = await postJson(
+    instance,
+    '/auth/binodex/start',
+    { telegramUserId },
+    { authorization },
+  );
+  if (response.statusCode === 200) {
+    stateOwners.set((response.json() as { state: string }).state, telegramUserId);
+  }
+  return response;
+};
+
+// The state owner's own signed initData is added to every object body that names no initData
+// key of its own, so the cases written before #113 still test what they say. A case about the
+// proof itself passes `initData` explicitly — `undefined` to leave it out of the body.
+const callback = (payload: unknown, instance = app) => {
+  if (typeof payload !== 'object' || payload === null || 'initData' in payload) {
+    return postJson(instance, '/auth/binodex/callback', payload);
+  }
+  const { state } = payload as { state?: unknown };
+  const owner = (typeof state === 'string' && stateOwners.get(state)) || STRANGER_TELEGRAM_ID;
+  return postJson(instance, '/auth/binodex/callback', {
+    ...payload,
+    initData: initDataFor(owner),
+  });
+};
 
 const stateFor = async (telegramUserId: string, instance = app): Promise<string> =>
   ((await start(telegramUserId, `Bearer ${TOKEN}`, instance)).json() as { state: string }).state;
@@ -486,6 +533,221 @@ describe('the callback rate limits', () => {
       }
     } finally {
       await instance.close();
+    }
+  });
+});
+
+// --- The Telegram proof on the callback (issue #113) ---------------------------------------------
+
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+const MAX_AGE_SECONDS = INIT_DATA_MAX_AGE_MS / 1000;
+
+const forged = (initData: string) => {
+  const params = new URLSearchParams(initData);
+  params.set('hash', 'f'.repeat(64));
+  return params.toString();
+};
+
+const stateUsedAt = async (state: string) => {
+  const [row] = await tmp.db
+    .select({ usedAt: oauthStates.usedAt })
+    .from(oauthStates)
+    .where(eq(oauthStates.stateHash, hashToken(state)));
+  return row?.usedAt;
+};
+
+const accountsOf = (brokerUserId: string) =>
+  tmp.db
+    .select({ id: brokerAccounts.id })
+    .from(brokerAccounts)
+    .where(eq(brokerAccounts.brokerUserId, brokerUserId));
+
+describe('the Telegram proof on the callback', () => {
+  it('refuses a callback without initData and leaves the state usable', async () => {
+    const telegram = telegramId();
+    const state = await stateFor(telegram);
+    const before = stub.tokenRequests;
+    const refused = await callback({ state, code: 'c', initData: undefined });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json()).toMatchObject({ error: 'validation' });
+    expect(stub.tokenRequests).toBe(before);
+
+    const ok = await callback({
+      state,
+      code: stub.issueCode({ brokerUserId: `broker-${telegram}` }),
+    });
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it.each([
+    ['a forged signature', (telegram: string) => forged(initDataFor(telegram))],
+    [
+      "another bot's signature",
+      (telegram: string) =>
+        signInitData({ botToken: '9999:ANOTHER-BOT', telegramUserId: BigInt(telegram) }),
+    ],
+    ['free text', () => 'user=1&auth_date=1'],
+  ])('refuses %s with 401 before the state is touched', async (_label, makeInitData) => {
+    const telegram = telegramId();
+    const state = await stateFor(telegram);
+    const before = stub.tokenRequests;
+    const code = stub.issueCode({ brokerUserId: `broker-${telegram}` });
+    const refused = await callback({ state, code, initData: makeInitData(telegram) });
+    expect(refused.statusCode).toBe(401);
+    expect(refused.json()).toEqual({ error: 'invalid_telegram_auth' });
+    expect(stub.tokenRequests).toBe(before);
+    expect(await stateUsedAt(state)).toBeNull();
+    // the owner is not known before the state is read, so nobody is told
+    expect(pushesTo(telegram)).toEqual([]);
+
+    expect((await callback({ state, code })).statusCode).toBe(200);
+  });
+
+  it('refuses initData older than the window and accepts it just inside', async () => {
+    const telegram = telegramId();
+    const state = await stateFor(telegram);
+    const code = stub.issueCode({ brokerUserId: `broker-${telegram}` });
+    const stale = await callback({
+      state,
+      code,
+      initData: initDataFor(telegram, nowSeconds() - MAX_AGE_SECONDS - 2),
+    });
+    expect(stale.statusCode).toBe(401);
+    expect(stale.json()).toEqual({ error: 'invalid_telegram_auth' });
+    expect(await stateUsedAt(state)).toBeNull();
+
+    const fresh = await callback({
+      state,
+      code,
+      initData: initDataFor(telegram, nowSeconds() - MAX_AGE_SECONDS + 2),
+    });
+    expect(fresh.statusCode).toBe(200);
+  });
+
+  it('burns the state of a login another Telegram user finishes, and tells only its owner', async () => {
+    const owner = telegramId();
+    const other = telegramId();
+    const state = await stateFor(owner);
+    const before = stub.tokenRequests;
+    const code = stub.issueCode({ brokerUserId: `broker-${owner}` });
+
+    const refused = await callback({ state, code, initData: initDataFor(other) });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json()).toEqual({ error: 'telegram_user_mismatch' });
+    expect(await stateUsedAt(state)).not.toBeNull();
+
+    // the owner's own proof cannot revive it
+    const retried = await callback({ state, code, initData: initDataFor(owner) });
+    expect(retried.statusCode).toBe(400);
+    expect(retried.json()).toEqual({ error: 'invalid_state' });
+
+    expect(stub.tokenRequests).toBe(before);
+    expect(await accountsOf(`broker-${owner}`)).toEqual([]);
+    expect(pushesTo(owner).map((push) => [push.text, push.reply_markup])).toEqual([
+      [AUTH_TEXTS.oauthLoginFailed, undefined],
+    ]);
+    expect(pushesTo(other)).toEqual([]);
+  });
+
+  it('spends the narrow window on neither a bad proof nor a mismatch', async () => {
+    const instance = await own({ callbackMaxFailuresPerMinute: 2 });
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        const telegram = telegramId();
+        const state = await stateFor(telegram, instance);
+        const response = await callback(
+          { state, code: 'c', initData: forged(initDataFor(telegram)) },
+          instance,
+        );
+        expect(response.statusCode).toBe(401);
+      }
+      for (let i = 0; i < 3; i += 1) {
+        const state = await stateFor(telegramId(), instance);
+        const response = await callback(
+          { state, code: 'c', initData: initDataFor(telegramId()) },
+          instance,
+        );
+        expect(response.statusCode).toBe(403);
+      }
+      const telegram = telegramId();
+      const state = await stateFor(telegram, instance);
+      const response = await callback(
+        { state, code: stub.issueCode({ brokerUserId: `broker-${telegram}` }) },
+        instance,
+      );
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await instance.close();
+    }
+  });
+
+  // the body limit has to admit what the schema admits, or the largest valid initData would be
+  // refused as 413 before it is ever checked
+  it('reads a body with every field at its schema maximum', async () => {
+    const response = await callback({
+      state: 's'.repeat(256),
+      code: 'c'.repeat(512),
+      initData: 'i'.repeat(INIT_DATA_MAX_LENGTH),
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: 'invalid_telegram_auth' });
+
+    const over = await callback({
+      state: 's',
+      code: 'c',
+      initData: 'i'.repeat(INIT_DATA_MAX_LENGTH + 1),
+    });
+    expect(over.statusCode).toBe(400);
+  });
+
+  it('writes neither the initData, its hash, the state nor a Telegram id', async () => {
+    const lines: string[] = [];
+    const instance = await own({}, { write: (line: string) => void lines.push(line) });
+    const owner = telegramId();
+    const other = telegramId();
+    const markers = { user: { first_name: 'MARKER-NAME' }, fields: { query_id: 'MARKER-QUERY' } };
+    const otherProof = signInitData({
+      botToken: PUSH_BOT_TOKEN,
+      telegramUserId: BigInt(other),
+      ...markers,
+    });
+    const badProof = forged(otherProof);
+    const states = [await stateFor(owner, instance), await stateFor(owner, instance)];
+    const bodies: string[] = [];
+    try {
+      const refused = await callback({ state: states[0], code: 'c', initData: badProof }, instance);
+      expect(refused.statusCode).toBe(401);
+      const mismatched = await callback(
+        { state: states[1], code: 'c', initData: otherProof },
+        instance,
+      );
+      expect(mismatched.statusCode).toBe(403);
+      bodies.push(refused.body, mismatched.body);
+    } finally {
+      await instance.close();
+    }
+
+    const warned = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.level === 40);
+    // the warn lines are there, so the absence below is about their content
+    expect(warned.map((line) => line.msg)).toEqual([
+      'the callback carried no valid Telegram proof',
+      "the callback came from a Telegram user other than the state's owner",
+    ]);
+    expect(warned[0]).toMatchObject({ reason: 'bad_signature' });
+    expect(warned[1]).toMatchObject({ outcome: 'telegram_user_mismatch' });
+    for (const line of warned) {
+      expect(JSON.stringify(line)).not.toContain(owner);
+      expect(JSON.stringify(line)).not.toContain(other);
+    }
+    const otherHash = new URLSearchParams(otherProof).get('hash') ?? '';
+    for (const text of [lines.join('\n'), ...bodies]) {
+      expect(text).not.toContain('MARKER-NAME');
+      expect(text).not.toContain('MARKER-QUERY');
+      expect(text).not.toContain(otherHash);
+      expect(text).not.toContain('f'.repeat(64));
+      for (const state of states) expect(text).not.toContain(state);
     }
   });
 });
