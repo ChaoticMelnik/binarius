@@ -10,7 +10,12 @@ import type {
   OpenTradeRequest,
 } from './broker';
 import type { DecimalString } from './money';
-import type { OAuthTokens, WidgetSession, WidgetSessionRequest } from './oauth';
+import type {
+  OAuthTokens,
+  RefreshedTokens,
+  WidgetSession,
+  WidgetSessionRequest,
+} from './oauth';
 import type {
   PartnerErrorWire,
   PartnerPositions,
@@ -104,6 +109,13 @@ describe('contract coverage (issue #6)', () => {
       email: string;
       isPartnerClient: boolean;
     }>();
+    expectTypeOf<RefreshedTokens>().toEqualTypeOf<{
+      accessToken: string;
+      refreshToken: string;
+      tokenType: string;
+      expiresInSec: number;
+    }>();
+    expectTypeOf<RefreshedTokens>().not.toHaveProperty('user');
     expectTypeOf<WidgetSessionRequest>().toEqualTypeOf<{ origin: string; mode: 'demo' | 'real' }>();
     expectTypeOf<WidgetSession>().toEqualTypeOf<{ session: string; expiresInSec: number }>();
   });

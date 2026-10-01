@@ -3,9 +3,11 @@ import {
   authRevokedReasonSchema,
   brokerAccountViewSchema,
   parseOAuthTokenResponse,
+  parseRefreshTokenResponse,
   parseWidgetSessionResponse,
   safeParseOAuthCallbackRequest,
   safeParseOAuthTokenResponse,
+  safeParseRefreshTokenResponse,
   safeParseStartLoginRequest,
   safeParseWidgetSessionResponse,
   toWidgetSessionRequestWire,
@@ -37,6 +39,43 @@ describe('OAuth token response', () => {
     ['user', { id: 7, email: 'x@y' }],
   ])('rejects %s=%j', (field, value) => {
     expect(safeParseOAuthTokenResponse({ ...tokenWire, [field]: value }).success).toBe(false);
+  });
+});
+
+const refreshWire = {
+  access_token: 'a',
+  refresh_token: 'r',
+  token_type: 'Bearer',
+  expires_in: 604800,
+};
+
+describe('refresh token response', () => {
+  it('maps a pair that carries no user', () => {
+    expect(parseRefreshTokenResponse(refreshWire)).toEqual({
+      accessToken: 'a',
+      refreshToken: 'r',
+      tokenType: 'Bearer',
+      expiresInSec: 604800,
+    });
+  });
+
+  it('ignores a user the broker may add, rather than passing it on', () => {
+    expect(parseRefreshTokenResponse({ ...refreshWire, user: tokenWire.user })).not.toHaveProperty(
+      'user',
+    );
+  });
+
+  it.each([
+    ['refresh_token', undefined],
+    ['refresh_token', ''],
+    ['expires_in', -1],
+    ['expires_in', '604800'],
+  ])('rejects %s=%j', (field, value) => {
+    expect(safeParseRefreshTokenResponse({ ...refreshWire, [field]: value }).success).toBe(false);
+  });
+
+  it('still requires the user on the code exchange', () => {
+    expect(safeParseOAuthTokenResponse(refreshWire).success).toBe(false);
   });
 });
 

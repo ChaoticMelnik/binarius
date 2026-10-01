@@ -6,6 +6,7 @@ import {
   UserStatus,
   type BrokerAccountView,
   type OAuthTokens,
+  type RefreshedTokens,
 } from '@binarius/shared';
 import type { Db } from './client';
 import type { TokenCipher } from './crypto';
@@ -231,7 +232,7 @@ export async function applyRotatedTokens(
     account,
     tokens,
     cipher,
-  }: { account: BrokerAccountRow; tokens: OAuthTokens; cipher: TokenCipher },
+  }: { account: BrokerAccountRow; tokens: RefreshedTokens; cipher: TokenCipher },
 ): Promise<void> {
   await tx
     .update(brokerAccounts)
