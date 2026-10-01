@@ -2,8 +2,8 @@
 
 How a Telegram user ends up with a linked broker account, and how that account keeps a usable
 access token afterwards. The broker's own contract — the authorize page, the 120-second
-single-use code, the server-to-server token endpoint — is quoted from its admin docs; the
-refresh grant follows RFC 6749 and is an assumption until a real call confirms it (#8/#35).
+single-use code, the server-to-server code exchange and the token refresh — was checked against
+the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contract-verified-2026-10-01).
 
 ## Components
 
@@ -11,7 +11,7 @@ refresh grant follows RFC 6749 and is an assumption until a real call confirms i
 | --------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | Contract  | `packages/shared/src/oauth.ts`            | wire schemas, the login request/response shapes, the error codes and the four revocation reasons |
 | Storage   | `packages/db/src/oauth-ops.ts`            | state rows, the linking transaction, rotation and revocation                                     |
-| Client    | `apps/backend/src/broker/oauth-client.ts` | the two exchanges, one attempt each, under a real abort                                          |
+| Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token` and the refresh on `POST /v1/broker/user-auth/refresh`, one attempt each, under a real abort |
 | Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/start`, `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`          |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
 
@@ -164,7 +164,6 @@ account row, which makes it single-flight per account:
 | stored hash ≠ hash of the stored ciphertext                 | revoke `storage_inconsistent`                                                                                     |
 | access token still valid (60 s skew)                        | return it; a legacy row missing its hash gets one here, and only the hash                                         |
 | `coalesce(token_rotated_at, created_at)` older than 90 days | revoke `refresh_expired`, without asking the broker                                                               |
-| rotated pair names another `broker_user_id`                 | revoke `storage_inconsistent`, the pair is not applied                                                            |
 | otherwise                                                   | exactly one refresh exchange                                                                                      |
 
 A row encrypted under another key id is left strictly alone. During a key rollout both the old
@@ -180,10 +179,10 @@ another ninety days of life.
 
 Exchange failures map to revocations, never to retries:
 
-| Failure                        | Reason                                                                                                                                               |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| broker answers `invalid_grant` | `refresh_invalid_grant` — the token was already consumed, which is what a replayed refresh token looks like from our side                            |
-| anything else                  | `refresh_outcome_unknown` — a timeout, a network error or a 5xx, but also a 4xx that is not `invalid_grant` (a rotated client secret answers `invalid_client`) and a 2xx whose body breaks the contract. In each the broker may have rotated the pair, and presenting the old token again would be that replay |
+| Failure | Reason |
+| --- | --- |
+| broker answers 401 to `user-auth/refresh` (`Invalid token`: unknown or already consumed) | `refresh_invalid_grant` — the token was already consumed, which is what a replayed refresh token looks like from our side |
+| anything else | `refresh_outcome_unknown` — a timeout, a network error or a 5xx, but also a 4xx other than 401 (a 400 means our request was malformed, and the broker may still have read the token) and a 2xx whose body breaks the contract. In each the broker may have rotated the pair, and presenting the old token again would be that replay |
 
 Every branch commits its revocation and reports afterwards; throwing inside the transaction
 would roll the revocation back.
@@ -220,7 +219,87 @@ NULL) and reports which of four things happened:
 If the second transaction itself fails, the account stays active holding a token the broker will
 refuse, the failure is logged, and `ensureFreshAccessToken` **throws** rather than returning a
 result — callers such as ARCH-01 (#40) see an exception, not an `AccessTokenResult`. The next
-refresh gets `invalid_grant` and revokes it there.
+refresh gets a 401 and revokes it there with `refresh_invalid_grant`.
+
+### Why the refresh does not compare the user
+
+The answer from `user-auth/refresh` carries no `user`, so there is nothing to compare: the code
+exchange is the only place a pair arrives with a `broker_user_id`, and `linkBrokerAccount` keys
+on it there. Ownership of a refreshed pair rests on the token we present instead. It is decrypted
+from this account's own row — the AAD is `keyId|accountId|field`, so a ciphertext copied from
+another row does not decrypt — and matched against `refresh_token_hash` before the exchange, and
+the answer is written back into the same row under the same lock (`applyRotatedTokens`). What is
+left is the broker itself answering a valid token with somebody else's pair, which is a broker
+compromise and outside this flow's threat model.
+
+### A 401 means the chain is dead
+
+The live broker answers a replayed refresh token with 401, and after that it also refuses the
+newest token of the same chain (the last row of the Live check table). A 401 therefore cannot be
+read as "this one token was stale": the whole session is gone, whatever caused it, and revoking
+the account so the user logs in again is the only move left. No stored token would get a
+different answer, which is why `refresh_invalid_grant` is final.
+
+## Broker contract (verified 2026-10-01)
+
+Observed with curl and the live-check script against `https://api.binodex.app` with this
+installation's client id (#102, #163). The `message` texts are what the broker said that day, not
+a contract this code relies on.
+
+| Endpoint | Request | Success | Observed refusals |
+| --- | --- | --- | --- |
+| `POST /v1/broker/oauth/token` | form-urlencoded (JSON is accepted too): `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `client_secret` | 200 `{access_token, refresh_token, token_type, expires_in: 604800, user: {id, email, is_partner_client, …}}` | 400 `Invalid or expired authorization code`; 401 `Authentication failed: Invalid client credentials`; 400 `Validation failed: "code" is required` for `grant_type=refresh_token` — there is no refresh grant here |
+| `POST /v1/broker/user-auth/refresh` | JSON `{refresh_token}`, no client credentials | 200 `{access_token, refresh_token, token_type, expires_in: 604800}`, **no `user`** | 401 `Invalid token` for an unknown or consumed token; 400 `Validation failed: "refresh_token" is required` |
+
+Every error body has the shape `{"error":{"message","details"}}` — an object, not the OAuth string
+`{"error":"invalid_grant"}`. `binodex.app` without `api.` answers every `POST /v1/broker/...` with
+405 and an empty body.
+
+The client tells failures apart by the HTTP status alone, with one map per endpoint
+(`classify` in `oauth-client.ts`); the error body is released unread and is never parsed or
+logged:
+
+| Status | `oauth/token` | `user-auth/refresh` |
+| --- | --- | --- |
+| 400 | `invalid_grant` | `rejected` |
+| 401 | `rejected` | `invalid_grant` |
+| other 4xx | `rejected` | `rejected` |
+| 5xx, timeout, network failure | `unavailable` | `unavailable` |
+| 2xx that breaks the schema, or `expires_in` outside (0, 30 days] | `contract_violation` | `contract_violation` |
+
+A 400 on the code exchange is also what our own malformed request gets (`Validation failed`), so
+such a bug reaches the browser as `invalid_code`, and the callback's warn line cannot tell it from
+an expired code either. That is the accepted cost of not reading the body; the client tests pin
+the map, so a change to what we send is caught there rather than in production.
+
+### Live check: OAuth tokens on `user-auth/refresh`
+
+`user-auth/refresh` was first confirmed with tokens from the email login (#102). Whether it also
+takes a refresh token issued by the OAuth code exchange was checked on 2026-10-01 at about 08:42
+UTC, with a freshly registered account and `ref` set to the short partner code:
+
+1. open `https://binodex.app/oauth/authorize?client_id=<id>&redirect_uri=<registered uri>&state=<any>&ref=<code>`
+   and log in; the browser lands on `<redirect_uri>?code=…&state=…` (a connection error on that
+   page does not matter — the code is in the address bar);
+2. within 120 seconds, exchange the code on `oauth/token` (form, with the client credentials);
+3. post the returned refresh token to `user-auth/refresh` as JSON;
+4. post the **old** refresh token again;
+5. post the refresh token from step 3.
+
+The script printed statuses, field names and the replay's error body, never a token or the
+secret:
+
+| Step | Result |
+| --- | --- |
+| code exchange | 200: `access_token`, `refresh_token`, `token_type`, `expires_in=604800`, `user{id, email, …, is_partner_client=true, …}`; both tokens JWT-shaped |
+| refresh with the OAuth refresh token | 200: `access_token`, `refresh_token`, `token_type`, `expires_in=604800`, no `user` |
+| replay of the old refresh token | 401 `{"error":{"message":"Invalid token","details":{}}}` |
+| the new refresh token, after that replay | 401 — the replay killed the whole chain |
+
+So the OAuth refresh token is refreshable on `user-auth/refresh`, single-use, and a replay
+revokes the newest pair too (see [A 401 means the chain is dead](#a-401-means-the-chain-is-dead)).
+The new account came back with `is_partner_client=true`: the short code passed as `ref` attaches
+an account registered during the OAuth login to the partner account.
 
 ## Secrets
 
@@ -271,14 +350,16 @@ Backend only, never the worker (the worker neither exchanges grants nor decrypts
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `BROKER_CLIENT_ID`, `BROKER_CLIENT_SECRET` | the OAuth client registered in the broker's cabinet (#8)                                                   |
 | `BROKER_OAUTH_AUTHORIZE_URL`               | the page the bot links to; `https:` only                                                                   |
-| `BROKER_API_BASE_URL`                      | where `POST /v1/broker/oauth/token` lives; `https:` only                                                   |
+| `BROKER_API_BASE_URL`                      | the API host both `POST /v1/broker/oauth/token` and `POST /v1/broker/user-auth/refresh` live on: `https://api.binodex.app`; `https:` only. `binodex.app` without `api.` answers 405 to every API call |
 | `BROKER_OAUTH_REDIRECT_URI`                | must match the value registered with the client; `http:` only for `127.0.0.1` or `localhost`               |
-| `BROKER_PARTNER_REF`                       | attached to every authorization request, so a new user registers under this installation's partner account |
+| `BROKER_PARTNER_REF`                       | the short partner code, `<code>` from `https://bdclick.app/smart/<code>` — never the link: `[A-Za-z0-9_-]`, 1-64 chars, checked at backend startup (`parsePartnerCode` in `apps/backend/src/env.ts`). Sent as `ref` on every authorization request, so a new user registers under this installation's partner account; #162 sends it as `partner_code` |
 | `TOKEN_ENCRYPTION_KEY`                     | 32 bytes, base64; `openssl rand -base64 32`                                                                |
 | `TOKEN_ENCRYPTION_KEY_ID`                  | names the key for rotation; no `\|`, no whitespace (the cipher binds with it)                              |
 
-`INTERNAL_API_TOKEN`, `BROKER_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY` and
-`TOKEN_ENCRYPTION_KEY_ID` have **no deployable default anywhere in this repository**. Neither
+`INTERNAL_API_TOKEN`, `BROKER_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY`,
+`TOKEN_ENCRYPTION_KEY_ID` and `BROKER_PARTNER_REF` have **no deployable default anywhere in this
+repository**. The partner code is not a secret, but a made-up one fails silently — every new
+account registers outside the partner account — so it gets the same treatment. Neither
 `compose.yaml`, which uses the `${VAR:?message}` form, nor `.env.example`, which lists them with
 empty assignments, supplies a value that a deployment could inherit by following the setup
 instructions. `${VAR:?}` refuses an empty value as well as a missing one, so `cp .env.example .env`
@@ -306,8 +387,9 @@ not.
 - **#32** owns the login page and the `web_message` popup; it calls the callback route, and it
   is where the `initData` check above closes the handoff gap.
 - **#10** owns the linking UI and re-linking an account that belongs to someone else.
-- **#39** owns the email + code login, a separate grant entirely.
+- **#162** owns the email + code login; it reuses `refresh`, the transport and the status map in
+  `oauth-client.ts`.
 - **ARCH-01 (#40)** will call `ensureFreshAccessToken` before talking to the broker socket.
 - **#35** owns the reusable mock broker; the stub next to the client
   (`apps/backend/src/broker/testing/oauth-stub.ts`) exists so this suite can prove code expiry,
-  single use and refresh-family behaviour.
+  single use and refresh-family behaviour, with the statuses and error bodies of the live broker.
