@@ -39,7 +39,7 @@ Check diff size first: `gh pr diff <N> | wc -l`.
 
 **Small-diff rule:** full PR diff < 50 lines → run only Codex + code-review agent (3a + 3c), skip security/simplify.
 
-**Order of launch.** One message carries the Bash call that starts 3a in the background **and** the `Agent` spawns 3b-3d, so they run in parallel. Then wait for 3b-3d to finish. Then poll 3a to completion. Only then Step 4. Never run the check command while the spawned agents are working — the `/code-review` recipe runs `pnpm typecheck` on the same tree regardless of the brief.
+**Order of launch.** One message carries the Bash call that starts 3a in the background **and** the `Agent` spawns 3b-3d, so they run in parallel. Spawn 3b-3d with `run_in_background: false`: calls in one message still run concurrently, and the message returns only when all three have reported — background spawns let the harness end the reviewer's turn first and force a hand-back without a verdict (#163, #10: twice each). Then wait for 3b-3d to finish. Then poll 3a to completion. Only then Step 4. Never run the check command while the spawned agents are working — the `/code-review` recipe runs `pnpm typecheck` on the same tree regardless of the brief.
 
 **3a. Codex review** *(always)* — the companion script from Bash, not `Skill(codex:rescue)` (that needs `AskUserQuestion` and a main-context `Agent`, which a spawned reviewer does not have):
   1. Fill `.claude/codex-review-prompt.md` into a file (issue, goal, the plan's "Accepted risks" with the instruction not to re-raise them). For a diff that touches `.claude/**` or `audits.md`, inline `~/.claude/CLAUDE.md` into its Process-docs block — the Codex sandbox cannot read it.
