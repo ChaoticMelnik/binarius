@@ -674,3 +674,39 @@ PR #182 смержен через rebase: один коммит, голова `6
 ### Process improvement proposals
 
 1. **Пост-фактум Codex по `15c160c`** присоединяется к предложению 4 аудита #171. — **открыто (2026-10-01, владелец): после сброса лимита 2026-10-05**
+
+---
+
+## #128 — Привязка: сообщение бота об успехе или отказе привязки (2026-10-01)
+
+PR #186 смержен через rebase: один коммит, голова `ddbc0ab`, в `main` стал `7f8c7f3`. Ветка удалена. **Один круг ревью, чистый: 5 Minor вынесены в #187 по решению владельца при мерже.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Preflight | Чисто: `main` = `origin/main`, открытых PR и задач в работе нет, `gh` авторизован, `.claude/CLAUDE.md` = `origin/main`, Node 22.23.2, compose-стек поднят, у предложения аудита #179 есть статус. Codex пропущен по вейверу. Зависимость #114 открыта — вынесена архитектору вопросом. |
+| Architect | Clarify + план | Спавн `fable` → `claude-fable-5-1`. 5 вопросов (транспорт, текст успеха, отказы, #114, await), все ответы — рекомендованные. Предпосылки проверены исполнением: tsc-проба grammY `Api`, runtime-проба (нет `getMe`, токен в `HttpError.message`), `docker compose config`. Оценка ~825 строк. Тело issue переписано. Step 7 Codex пропущен по вейверу, пропуск записан. Задача стартовала из Backlog, а не Todo. |
+| Implementer | Clarify | Спавн `opus` → `claude-opus-5-5`. Дефект плана (устаревшие фразы «только `bot` читает `TELEGRAM_BOT_TOKEN`») ушёл архитектору; владельцу — 4 вопроса: один коммит (против рекомендованных 4), мутации локально, 403 → `warn`, живая проверка — владельцем после мержа. |
+| Architect | Plan Update | Без Codex. Подтверждены 3 места + найдено 4-е (`.env.example:100-101`) поиском по всему классу. |
+| Implementer | Код | 1 коммит, 37 файлов, `pnpm check` exit 0 (1593 теста) с db-тестами на локальном Postgres. 12 мутаций + мутация константы таймаута, каждая роняет тест. |
+| Reviewer | Iteration 1 | Спавн `opus`, 3b–3d параллельно. 0 Blocker, 0 Major, 5 Minor + 2 косметики. Весь diff PR, не дельта. CI зелёный. 3a/6-pre пропущены по вейверу. |
+| Tech Lead | Merge / Done | `AskUserQuestion` перед мержем → rebase и удаление ветки. `MERGED` в 17:35:50Z; Done — после подтверждения мержа. Follow-up #187 создан по ответу владельца, добавлен в Backlog. |
+| Model policy | Check | architect `claude-fable-5-1`; implementer, reviewer, 3b, 3c — `claude-opus-5-5`; 3d — `claude-sonnet-5`. Совпадает с таблицей. |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Устаревшие фразы про `TELEGRAM_BOT_TOKEN` в `.env.example`, `ci.yml`, `telegram-logging.ts` | Plan defect | instance-vs-class | План правил часть упоминаний, без поиска по всему классу | Architect plan, поймано на Implementer Step 0 |
+| Заблокированному между start и callback советуют повторить /start | Minor | other | Маппинг отказов в плане не учёл блокировку после state | Architect plan → #187 |
+| Тест «database fails» не может поймать сбой `linkBrokerAccount` | Minor | unverified-claim | Сбой внедрён до точки, которую тест защищает | Implementer → #187 |
+| Граница `elapsed < 2_000` может флакать; формулировка «после коммита linkBrokerAccount» сильнее кода; затенение `...LINK_TEXTS`; шапка `admin/testing.ts` | Minor | other | — | → #187 |
+| Codex не читал ни план, ни код, ни этот docs-PR | Process | codex-ops | Вейвер владельца до 2026-10-05 | — |
+
+### Process improvement proposals
+
+1. **Пост-фактум Codex по `7f8c7f3`** присоединяется к предложению 4 аудита #171. — **открыто (2026-10-01, владелец): после сброса лимита 2026-10-05**
+2. **Minor ревью #186.** — **вынесено в #187**
