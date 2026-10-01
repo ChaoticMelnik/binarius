@@ -6,6 +6,7 @@ import { BackendError, BackendErrorCode, type BackendClient } from './backend-cl
 import { CONNECT_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
 import {
   BOT_INFO,
+  CODE_SENT,
   CONFIRMED,
   LOGIN,
   PENDING_ACCOUNT_ID,
@@ -29,6 +30,8 @@ function setup(
     recordStart?: BackendClient['recordStart'];
     startLogin?: BackendClient['startLogin'];
     confirmLogin?: BackendClient['confirmLogin'];
+    sendEmailCode?: BackendClient['sendEmailCode'];
+    emailLogin?: BackendClient['emailLogin'];
     welcomeVideoFileId?: string;
   } = {},
 ) {
@@ -36,6 +39,8 @@ function setup(
     recordStart: options.recordStart ?? vi.fn(() => Promise.resolve(options.user ?? userView())),
     startLogin: options.startLogin ?? vi.fn(() => Promise.resolve(LOGIN)),
     confirmLogin: options.confirmLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
+    sendEmailCode: options.sendEmailCode ?? vi.fn(() => Promise.resolve(CODE_SENT)),
+    emailLogin: options.emailLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
   };
   const logger = fakeLogger();
   const bot = createBot({
@@ -470,6 +475,8 @@ describe('the Bot API timeout', () => {
         recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
         startLogin: vi.fn(() => Promise.reject(new Error('unused'))),
         confirmLogin: vi.fn(() => Promise.reject(new Error('unused'))),
+        sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
+        emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

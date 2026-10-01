@@ -10,6 +10,7 @@ import {
   BrokerAccountStatus,
   UserStatus,
   type ConfirmLoginResponse,
+  type EmailSendCodeResponse,
   type StartLoginResponse,
   type UserStartView,
 } from '@binarius/shared';
@@ -68,6 +69,10 @@ export const CONFIRMED: ConfirmLoginResponse = {
   grant: { granted: true, tokens: '7' },
 };
 
+export const EMAIL = 'ada@example.test';
+export const CODE = '123456';
+export const CODE_SENT: EmailSendCodeResponse = { codeSent: true };
+
 // the reason a promise rejected with, or undefined when it resolved: what a test needs when the
 // assertion is about the error's identity rather than its message
 export const rejectionOf = async (promise: Promise<unknown>): Promise<unknown> =>
@@ -102,6 +107,23 @@ export const startUpdate = (text: string, chatType = 'private', from: User = USE
       from,
       text,
       entities: [{ type: 'bot_command', offset: 0, length: '/start'.length }],
+    },
+  }) as unknown as Update;
+
+// A plain message, the way the user sends an address or a code. A text starting with `/` carries
+// the bot_command entity Telegram attaches to it, so a command reads as a command.
+export const textUpdate = (text: string, chatType = 'private', from: User = USER): Update =>
+  ({
+    update_id: ++updateId,
+    message: {
+      message_id: ++updateId,
+      date: 1,
+      chat: { id: from.id, type: chatType, first_name: from.first_name },
+      from,
+      text,
+      ...(text.startsWith('/')
+        ? { entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0]?.length }] }
+        : {}),
     },
   }) as unknown as Update;
 

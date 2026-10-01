@@ -1,8 +1,12 @@
 import {
   safeParseConfirmLoginResponse,
+  safeParseEmailLoginResponse,
+  safeParseEmailSendCodeResponse,
   safeParseUserStartResponse,
   startLoginResponseSchema,
   type ConfirmLoginResponse,
+  type EmailLoginResponse,
+  type EmailSendCodeResponse,
   type StartLoginResponse,
   type UserStartRequest,
   type UserStartView,
@@ -47,6 +51,8 @@ export interface BackendClient {
   recordStart(request: UserStartRequest): Promise<UserStartView>;
   startLogin(telegramUserId: string): Promise<StartLoginResponse>;
   confirmLogin(telegramUserId: string, accountId: string): Promise<ConfirmLoginResponse>;
+  sendEmailCode(telegramUserId: string, email: string): Promise<EmailSendCodeResponse>;
+  emailLogin(telegramUserId: string, email: string, code: string): Promise<EmailLoginResponse>;
 }
 
 export interface BackendClientOptions {
@@ -122,6 +128,20 @@ export function createBackendClient({
     async confirmLogin(telegramUserId, accountId) {
       const parsed = safeParseConfirmLoginResponse(
         await post('auth/binodex/confirm', { telegramUserId, accountId }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
+    },
+    async sendEmailCode(telegramUserId, email) {
+      const parsed = safeParseEmailSendCodeResponse(
+        await post('auth/binodex/email/send-code', { telegramUserId, email }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
+    },
+    async emailLogin(telegramUserId, email, code) {
+      const parsed = safeParseEmailLoginResponse(
+        await post('auth/binodex/email/login', { telegramUserId, email, code }),
       );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;

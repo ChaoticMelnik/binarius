@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { OAuthErrorCode, type UserStartRequest } from '@binarius/shared';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
 import {
+  CODE,
+  CODE_SENT,
   CONFIRMED,
+  EMAIL,
   LOGIN,
   PENDING_ACCOUNT_ID,
   closeServer,
@@ -222,6 +225,107 @@ describe('confirmLogin', () => {
       createBackendClient({ baseUrl, token: TOKEN }).confirmLogin('4242', PENDING_ACCOUNT_ID),
     );
     expect(error).toMatchObject({ status: 409, reason: OAuthErrorCode.AccountNotPending });
+  });
+});
+
+describe('sendEmailCode', () => {
+  it('sends the telegram id and the address under the bearer and returns the answer', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, CODE_SENT);
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).sendEmailCode('4242', EMAIL),
+    ).toEqual(CODE_SENT);
+    expect(capture.url).toBe('/auth/binodex/email/send-code');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', email: EMAIL });
+  });
+
+  // the route answers `codeSent: true` or an error; anything else is not a sent code
+  it('reports an answer that does not say the code was sent as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { codeSent: false });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).sendEmailCode('4242', EMAIL),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it.each([
+    [400, OAuthErrorCode.InvalidEmail],
+    [429, OAuthErrorCode.TooManyAttempts],
+  ])('carries a %i %s as the reason', async (status, reason) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, status, { error: reason });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).sendEmailCode('4242', EMAIL),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status, reason });
+  });
+});
+
+describe('emailLogin', () => {
+  it('sends the telegram id, the address and the code and returns the grant', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, CONFIRMED);
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).emailLogin('4242', EMAIL, CODE),
+    ).toEqual(CONFIRMED);
+    expect(capture.url).toBe('/auth/binodex/email/login');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({
+      telegramUserId: '4242',
+      email: EMAIL,
+      code: CODE,
+    });
+  });
+
+  // the grant is what the bot prints, so a login answer without one is not a success
+  it('reports an answer that carries no grant as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { account: CONFIRMED.account });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).emailLogin('4242', EMAIL, CODE),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it.each([
+    [400, OAuthErrorCode.InvalidCode],
+    [429, OAuthErrorCode.TooManyAttempts],
+    [409, OAuthErrorCode.BrokerAccountTaken],
+  ])('carries a %i %s as the reason', async (status, reason) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, status, { error: reason });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).emailLogin('4242', EMAIL, CODE),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status, reason });
+  });
+
+  // the request body holds the address and the code; a backend that echoed them in a 400 must
+  // not hand them to whatever logs the error
+  it('keeps a body that echoes the code out of the error', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 400, {
+        error: 'validation',
+        detail: 'SECRET-CODE',
+        issues: [{ path: ['code'], message: 'SECRET-CODE' }],
+      });
+    });
+    const error = (await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).emailLogin('4242', EMAIL, 'SECRET-CODE'),
+    )) as BackendError;
+
+    expect(error).toMatchObject({ status: 400, reason: 'validation' });
+    expect(error.message).not.toContain('SECRET-CODE');
+    expect(JSON.stringify({ ...error })).not.toContain('SECRET-CODE');
+    expect(error.stack ?? '').not.toContain('SECRET-CODE');
   });
 });
 
