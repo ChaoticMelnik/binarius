@@ -65,6 +65,12 @@ export const parseOAuthTokenResponse = (input: unknown): OAuthTokens =>
 export const safeParseOAuthTokenResponse = (input: unknown) =>
   oauthTokenResponseWireSchema.safeParse(input);
 
+// POST /v1/broker/user-auth/email/send-code answers `{ status: true }`; email/login answers the
+// same body as the code exchange (oauthTokenResponseWireSchema) — spike #102.
+export const emailSendCodeResponseWireSchema = z.looseObject({ status: z.literal(true) });
+export const safeParseBrokerEmailSendCodeResponse = (input: unknown) =>
+  emailSendCodeResponseWireSchema.safeParse(input);
+
 // --- Widget session (POST /v1/broker/widget-sessions) -----------------------------------------
 
 export interface WidgetSessionRequest {
@@ -141,7 +147,12 @@ export const OAuthErrorCode = {
   BrokerAccountNotFound: 'broker_account_not_found',
   AccountNotPending: 'account_not_pending',
   UserBlocked: 'user_blocked',
+  // a route-wide ceiling
   TooManyRequests: 'too_many_requests',
+  // one Telegram user's or one address's allowance on the email login
+  TooManyAttempts: 'too_many_attempts',
+  // the broker refused the address the code was asked for
+  InvalidEmail: 'invalid_email',
 } as const;
 export type OAuthErrorCode = (typeof OAuthErrorCode)[keyof typeof OAuthErrorCode];
 
@@ -207,6 +218,30 @@ export const confirmLoginResponseSchema = z.object({
 });
 export type ConfirmLoginResponse = z.infer<typeof confirmLoginResponseSchema>;
 
+// --- Email login (issue #162) ------------------------------------------------------------------
+
+// Trimmed before the format check: `z.email().trim()` checks first and rejects surrounding
+// spaces. The case is kept on the wire — the broker normalizes it.
+export const emailAddressSchema = z.string().trim().max(254).pipe(z.email());
+// the broker accepts any shape and answers "Invalid or expired code", so no format is guessed here
+export const emailLoginCodeSchema = z.string().trim().min(1).max(64);
+
+export const emailSendCodeRequestSchema = z.object({
+  telegramUserId: telegramUserIdSchema,
+  email: emailAddressSchema,
+});
+export type EmailSendCodeRequest = z.infer<typeof emailSendCodeRequestSchema>;
+
+export const emailSendCodeResponseSchema = z.object({ codeSent: z.literal(true) });
+export type EmailSendCodeResponse = z.infer<typeof emailSendCodeResponseSchema>;
+
+export const emailLoginRequestSchema = z.object({
+  telegramUserId: telegramUserIdSchema,
+  email: emailAddressSchema,
+  code: emailLoginCodeSchema,
+});
+export type EmailLoginRequest = z.infer<typeof emailLoginRequestSchema>;
+
 export const safeParseStartLoginRequest = (input: unknown) =>
   startLoginRequestSchema.safeParse(input);
 export const safeParseOAuthCallbackRequest = (input: unknown) =>
@@ -215,3 +250,16 @@ export const safeParseConfirmLoginRequest = (input: unknown) =>
   confirmLoginRequestSchema.safeParse(input);
 export const safeParseConfirmLoginResponse = (input: unknown) =>
   confirmLoginResponseSchema.safeParse(input);
+
+// an email login activates the account in the same step, so it answers what a confirm answers
+export const emailLoginResponseSchema = confirmLoginResponseSchema;
+export type EmailLoginResponse = ConfirmLoginResponse;
+
+export const safeParseEmailSendCodeRequest = (input: unknown) =>
+  emailSendCodeRequestSchema.safeParse(input);
+export const safeParseEmailSendCodeResponse = (input: unknown) =>
+  emailSendCodeResponseSchema.safeParse(input);
+export const safeParseEmailLoginRequest = (input: unknown) =>
+  emailLoginRequestSchema.safeParse(input);
+export const safeParseEmailLoginResponse = (input: unknown) =>
+  emailLoginResponseSchema.safeParse(input);
