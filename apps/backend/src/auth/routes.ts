@@ -1,6 +1,8 @@
-import type { FastifyPluginAsync, FastifyReply } from 'fastify';
+import type { FastifyBaseLogger, FastifyPluginAsync, FastifyReply } from 'fastify';
 import {
+  BrokerAccountStatus,
   errorIdentity,
+  errorLogFields,
   OAuthErrorCode,
   safeParseConfirmLoginRequest,
   safeParseEmailLoginRequest,
@@ -25,7 +27,9 @@ import {
   BrokerOAuthErrorCode,
   type BrokerOAuthClient,
 } from '../broker/oauth-client';
+import { telegramErrorFields } from '../telegram-logging';
 import { internalBearerAuth } from './internal';
+import { LinkPushKind, type LinkNotifier, type LinkPushOutcome } from './link-notifier';
 import { createKeyedWindow, createWindow, type RateWindow } from './rate-window';
 
 // a state has to outlive the user typing their credentials, unlike the 120 s code it leads to
@@ -62,6 +66,8 @@ export interface AuthRoutesDeps {
   clientId: string;
   redirectUri: string;
   partnerRef: string;
+  // the push after the callback; required, so no caller gets a callback that tells nobody
+  linkNotifier: LinkNotifier;
   // lowered by tests; production runs on the constants above
   callbackMaxPerMinute?: number;
   callbackMaxFailuresPerMinute?: number;
@@ -70,6 +76,30 @@ export interface AuthRoutesDeps {
 }
 
 export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) => {
+  // One attempt, after the link has committed and outside any transaction. Its outcome changes
+  // nothing — not the response, not a row: a push that never arrives is made up for by the
+  // confirm button on the user's next /start (#10).
+  const push = async (
+    log: FastifyBaseLogger,
+    telegramUserId: bigint,
+    outcome: LinkPushOutcome,
+  ): Promise<void> => {
+    try {
+      await deps.linkNotifier.send(telegramUserId, outcome);
+    } catch (error) {
+      // identity only: grammY's HttpError wraps a message with the token in its URL, and the
+      // payload holds the email on the button
+      log.warn(
+        {
+          ...errorLogFields(error),
+          ...telegramErrorFields(error, 'sendMessage'),
+          push: outcome.kind,
+        },
+        'the link outcome could not be pushed to Telegram',
+      );
+    }
+  };
+
   // the bot starts and confirms a login, so this half keeps the internal-token pattern its
   // neighbours use
   await app.register(async (scope) => {
@@ -301,6 +331,8 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
             { status, outcome: code, err: errorIdentity(error) },
             'the authorization code could not be exchanged',
           );
+          // the state is spent, so the message says to start over rather than to retry
+          await push(request.log, consumed.telegramUserId, { kind: LinkPushKind.ExchangeFailed });
           return reply.code(status).send({ error: code });
         }
 
@@ -311,13 +343,26 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
           activate: false,
         });
         if (!linked.ok) {
+          const blocked = linked.reason === 'user_blocked';
+          // to the Telegram user who started this login, never to the account's owner
+          await push(request.log, consumed.telegramUserId, {
+            kind: blocked ? LinkPushKind.Blocked : LinkPushKind.Taken,
+          });
           return reply.code(409).send({
-            error:
-              linked.reason === 'user_blocked'
-                ? OAuthErrorCode.UserBlocked
-                : OAuthErrorCode.BrokerAccountTaken,
+            error: blocked ? OAuthErrorCode.UserBlocked : OAuthErrorCode.BrokerAccountTaken,
           });
         }
+        // one button, for the account this login linked; any other waiting link is /start's
+        await push(
+          request.log,
+          consumed.telegramUserId,
+          linked.account.status === BrokerAccountStatus.Pending
+            ? {
+                kind: LinkPushKind.Pending,
+                account: { id: linked.account.id, email: linked.account.email },
+              }
+            : { kind: LinkPushKind.Active },
+        );
         return reply.send({ account: toBrokerAccountView(linked.account) });
       },
     );

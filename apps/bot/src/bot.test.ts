@@ -1,15 +1,14 @@
 import { createServer, type Server } from 'node:http';
 import { BotError, HttpError } from 'grammy';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { OAuthErrorCode, UserStatus, type UserStartView } from '@binarius/shared';
-import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
-  CONNECT_CALLBACK_DATA,
-  OAUTH_CALLBACK_DATA,
-  RESEND_CALLBACK_DATA,
   confirmCallbackData,
-  createBot,
-} from './bot';
+  OAuthErrorCode,
+  UserStatus,
+  type UserStartView,
+} from '@binarius/shared';
+import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
+import { CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA, RESEND_CALLBACK_DATA, createBot } from './bot';
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   BOT_INFO,
@@ -227,10 +226,6 @@ describe('/start', () => {
       { text: 'Подтвердить: ada@example.test', callback_data: `confirm:${PENDING_ACCOUNT_ID}` },
       { text: 'Подтвердить привязку', callback_data: `confirm:${other}` },
     ]);
-    // Bot API: callback_data is 1-64 bytes
-    expect(Buffer.byteLength(confirmCallbackData(PENDING_ACCOUNT_ID), 'utf8')).toBeLessThanOrEqual(
-      64,
-    );
   });
 
   // a link the owner of this Telegram account did not make must not hide behind "welcome back"

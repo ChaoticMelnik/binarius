@@ -15,6 +15,7 @@ const valid = {
   BROKER_PARTNER_REF: 'partner-ref',
   TOKEN_ENCRYPTION_KEY: KEY,
   TOKEN_ENCRYPTION_KEY_ID: 'dev',
+  TELEGRAM_BOT_TOKEN: '5678:public-bot-token',
   ADMIN_BOT_TOKEN: '1234:admin-bot-token',
   ADMIN_WEB_TOKEN: 'admin-web-token-for-tests',
 };
@@ -36,6 +37,7 @@ describe('parseEnv', () => {
       brokerPartnerRef: valid.BROKER_PARTNER_REF,
       tokenEncryptionKey: Buffer.from(KEY, 'base64'),
       tokenEncryptionKeyId: valid.TOKEN_ENCRYPTION_KEY_ID,
+      telegramBotToken: valid.TELEGRAM_BOT_TOKEN,
       adminBotToken: valid.ADMIN_BOT_TOKEN,
       adminWebToken: valid.ADMIN_WEB_TOKEN,
     });
@@ -297,8 +299,27 @@ describe('the staff-login variables', () => {
       'Env ADMIN_WEB_TOKEN must differ from INTERNAL_API_TOKEN',
     );
   });
+});
 
-  // The admin bot must not be the public bot either, but backend never reads TELEGRAM_BOT_TOKEN,
-  // so there is nothing here to compare it against: that pair is enforced by Telegram answering
-  // 409 to the second poller, which the backend logs at startup and which leaves login closed.
+describe('the public bot token', () => {
+  // the push after the OAuth callback (#128) sends on it
+  it('requires TELEGRAM_BOT_TOKEN', () => {
+    const without: Record<string, string> = { ...valid };
+    delete without.TELEGRAM_BOT_TOKEN;
+    expect(() => parseEnv(without)).toThrow('Missing required env TELEGRAM_BOT_TOKEN');
+  });
+
+  it.each(['', '5678:token\n', ' 5678:token'])('refuses an unusable value (%j)', (value) => {
+    expect(() => parseEnv({ ...valid, TELEGRAM_BOT_TOKEN: value })).toThrow(
+      'Env TELEGRAM_BOT_TOKEN must not',
+    );
+  });
+
+  // one value in both is two pollers on one bot: Telegram answers 409 to one of them, and the
+  // staff bot would answer in the public bot's chats
+  it('refuses TELEGRAM_BOT_TOKEN equal to ADMIN_BOT_TOKEN', () => {
+    expect(() => parseEnv({ ...valid, TELEGRAM_BOT_TOKEN: valid.ADMIN_BOT_TOKEN })).toThrow(
+      'Env TELEGRAM_BOT_TOKEN must differ from ADMIN_BOT_TOKEN',
+    );
+  });
 });

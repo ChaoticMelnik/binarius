@@ -1,12 +1,14 @@
-// Bot API limits the texts below have to fit in. The welcome is the tight one: with a video it
-// travels as a caption, and sendVideo takes "0-1024 characters after entities parsing".
+import { LINK_TEXTS } from '@binarius/shared';
+
+// The welcome has to fit a caption: with a video it travels as one, and sendVideo takes "0-1024
+// characters after entities parsing". The message limit is TELEGRAM_MESSAGE_LIMIT.
 export const CAPTION_LIMIT = 1024;
-export const MESSAGE_LIMIT = 4096;
 
 // Sent without parse_mode: the confirm button carries the email the broker reported, which is
 // someone else's data, and plain text can neither be broken by a stray underscore in it nor
-// turned into markup by it.
+// turned into markup by it. The texts the backend's push sends too live in LINK_TEXTS.
 export const TEXTS = {
+  ...LINK_TEXTS,
   welcome: [
     'Binarius — торговля на Binodex прямо в Telegram.',
     '',
@@ -23,11 +25,7 @@ export const TEXTS = {
   // the link's lifetime is the backend's (OAUTH_STATE_TTL_MS) and is deliberately not repeated here
   loginLink: 'Откройте вход в Binodex по кнопке ниже, а затем вернитесь в этот чат.',
   loginButton: 'Войти в Binodex',
-  blocked: 'Доступ ограничен. Если это ошибка, напишите в поддержку.',
   unavailable: 'Сервис временно недоступен. Попробуйте позже.',
-  confirmPrompt: 'Найдена новая привязка аккаунта Binodex. Если вход выполняли вы — подтвердите.',
-  confirmButton: (email: string | null) =>
-    email === null ? 'Подтвердить привязку' : `Подтвердить: ${email}`,
   // the number is the backend's (LINK_BONUS_TOKENS), printed as it arrives
   linkedWithBonus: (tokens: string) =>
     `Аккаунт Binodex подключён. Начислено токенов автоторговли: ${tokens}.`,
@@ -62,10 +60,6 @@ export const TEXTS = {
     `Не удалось подтвердить отправку кода на ${email}. Если письмо пришло — пришлите код из него. Если нет — нажмите «Запросить код ещё раз».`,
   tooManyCodeAttempts:
     'Слишком много попыток ввести код. Подождите несколько минут и начните заново через /start.',
-  accountTaken:
-    'Этот аккаунт Binodex уже подключён к другому пользователю Telegram. Если это ошибка, напишите в поддержку.',
-  // the recheck after an unknown outcome knows the account is active, not what was paid
-  linkedActive: 'Аккаунт Binodex подключён.',
   // «Запросить код ещё раз» with no dialog behind it: expired, finished by a login, or dropped by
   // a restart — the bot cannot tell which, so the text must hold for all of them
   codeRequestStale:

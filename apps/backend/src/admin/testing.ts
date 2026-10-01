@@ -1,7 +1,7 @@
 // Test-only fixtures and harness for the staff-login suites. Compiled by `tsc -b` alongside
 // the *.test.ts files next to it and imported by no runtime module.
 
-import type { Bot, HttpError } from 'grammy';
+import type { Api, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
 import type { AdminRoutesDeps } from './routes';
@@ -86,20 +86,17 @@ export interface CapturedApi {
 
 /**
  * Every outgoing Bot API call is recorded here instead of reaching Telegram — including getMe,
- * which is what `bot.start()` issues first. grammY's middleware, its update parsing and
+ * which is what `bot.start()` issues first. Takes the staff bot or the link notifier: both carry
+ * the Api they send through. grammY's middleware, its update parsing and
  * handleUpdate are the real ones; only the transport is replaced.
  *
  * What this cannot show is that Telegram accepts the shape of our calls. Whether a button press
  * is genuine is not decided here either: that is a CAS against a real database, joined to the
  * Telegram account the update arrived from.
  */
-export function captureApi(bot: Bot): CapturedApi {
+export function captureApi({ api }: { api: Api }): CapturedApi {
   const captured: CapturedApi = { calls: [], apiErrors: new Map(), answers: new Map() };
-  bot.api.config.use(((
-    _prev,
-    method: string,
-    payload: Record<string, unknown>,
-  ) => {
+  api.config.use(((_prev, method: string, payload: Record<string, unknown>) => {
     captured.calls.push({ method, payload });
     const failure = captured.apiErrors.get(method);
     if (failure !== undefined) {
@@ -111,7 +108,7 @@ export function captureApi(bot: Bot): CapturedApi {
       return Promise.resolve(answer(payload)).then((result) => ({ ok: true, result }));
     }
     return Promise.resolve({ ok: true, result: true });
-  }) as Parameters<typeof bot.api.config.use>[0]);
+  }) as Parameters<typeof api.config.use>[0]);
   return captured;
 }
 

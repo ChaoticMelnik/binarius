@@ -44,6 +44,12 @@ export const ADMIN_HANDLER_CALLS = {
 export const ADMIN_HANDLER_BUDGET_MS =
   Math.max(...Object.values(ADMIN_HANDLER_CALLS)) * ADMIN_TELEGRAM_API_TIMEOUT_MS;
 
+// --- The link push (#128) --------------------------------------------------------------------
+// The one sendMessage POST /auth/binodex/callback makes after the link commits (grammY's
+// ApiClientOptions.timeoutSeconds). One attempt: a lost push is made up for by the confirm
+// button on the user's next /start.
+export const LINK_PUSH_TELEGRAM_API_TIMEOUT_MS = 3_000;
+
 // --- The scrypt queue --------------------------------------------------------------------------
 // One hash is 128 MiB and about 250 ms of a threadpool thread. Without a limit, a burst of
 // logins would be a way to spend the process's memory, so the concurrency is capped and the
@@ -65,6 +71,8 @@ export const GRAMMY_POLLING_BACKOFF_MS = 3_000;
 export const TIMING_CHAIN_HOLDS =
   DEFAULT_PUBLISHER_CONFIG.publishTimeoutMs < SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the callback's longest path: the code exchange, then the push
+  BROKER_HTTP_TIMEOUT_MS + LINK_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   ADMIN_POLLING_BATCH_LIMIT === 1 &&
   ADMIN_POLLING_TIMEOUT_S * 1000 < ADMIN_TELEGRAM_API_TIMEOUT_MS &&
   // what POST /admin/auth/login may spend: the wait for a scrypt slot, the scrypt, and the one

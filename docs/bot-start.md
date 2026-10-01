@@ -18,6 +18,10 @@ routes, the confirmation and the starter pack are described in
   handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
   `lifecycle.ts` (start, the menu registration, signals, drain), `index.ts` (wiring), and
   `testing.ts`, the fixtures the suites share.
+- `packages/shared/src/link-confirmation.ts` — the texts and the confirm button's callback data
+  the bot shares with the backend's push after an OAuth login (#128): the prompt, the button
+  label, «Аккаунт Binodex подключён.», the blocked and the account-taken texts, and the pattern
+  the bot recognises the button by.
 
 The bot never opens a database connection: everything it knows comes from the backend's internal
 API over a shared bearer.
@@ -66,7 +70,8 @@ tap "Войти через сайт Binodex" (callback data oauth)
   back → { authorizeUrl, state, expiresAt }
   bot  → message with a url button pointing at authorizeUrl
 
-tap "Подтвердить" (callback data confirm:<account id>)
+tap "Подтвердить" (callback data confirm:<account id>) — from /start, or from the backend's
+push after an OAuth login (#128): the same button, handled the same way
   bot  → answerCallbackQuery ∥ POST /auth/binodex/confirm { telegramUserId, accountId }
   back → { account, grant }
   bot  → the outcome: linked with the pack (the number the backend sent), linked without it
@@ -85,8 +90,10 @@ Buttons sent before #171 carry `connect` under the same label, so they now open 
 dialog — the label still says what happens.
 
 What happens after the user opens the authorize URL belongs to #32 (the login page that receives
-the authorization code); a message from the backend right after the callback, without waiting
-for the user's next `/start`, is #128.
+the authorization code). Right after the callback the backend itself sends the user the outcome
+(#128, [binodex-oauth.md → The push after the callback](binodex-oauth.md#the-push-after-the-callback-128)):
+for a waiting link, the same prompt and button `/start` shows; a lost push is made up for by
+`/start`.
 
 ## Email dialog
 
@@ -241,7 +248,8 @@ uses.
 
 ## Texts
 
-All user-facing strings live in `apps/bot/src/texts.ts`, in Russian, sent without `parse_mode` —
+All user-facing strings live in `apps/bot/src/texts.ts`, in Russian, sent without `parse_mode`;
+the ones the backend's push sends too are spread into it from `packages/shared` (`LINK_TEXTS`) —
 which is also why «Код отправлен на <address>» can carry what the user typed: plain text cannot be
 turned into markup by it.
 The welcome has to fit in 1024 UTF-16 code units because it travels as a video caption whenever
@@ -298,7 +306,7 @@ so the handler is unchanged.
 
 | Variable                | Required    | Meaning                                                               |
 | ----------------------- | ----------- | --------------------------------------------------------------------- |
-| `TELEGRAM_BOT_TOKEN`    | yes         | the BotFather token; no whitespace                                    |
+| `TELEGRAM_BOT_TOKEN`    | yes         | the BotFather token; no whitespace. `backend` gets it too, for the push after the OAuth callback (#128), and never polls it |
 | `INTERNAL_API_TOKEN`    | yes         | bearer for the backend's internal API, 16+ characters                 |
 | `BACKEND_URL`           | yes         | `http:`/`https:`, `http://backend:3000` under compose                 |
 | `LOG_LEVEL`             | no (`info`) | pino level                                                            |
@@ -384,8 +392,8 @@ written only when a step really did run out of time.
   bot shows the limits' refusals without repeating their numbers.
 - **#173** — the Minor findings of the email login's limits from the review of PR #172.
 
-- **#128** — the backend's message right after a successful callback, sent to the Telegram id
-  restored from the state; it can reuse the confirm button and texts from #10.
+- **#128** — the backend's message right after the callback, sent to the Telegram id restored
+  from the state, with the confirm button and texts shared with the bot.
 - **#10** — re-linking an account that belongs to another Telegram user is out of scope:
   `broker_account_taken` is final, and moving an account is a separate support task.
 - **#24** — the main menu and the demo balance, including what a returning user sees instead of

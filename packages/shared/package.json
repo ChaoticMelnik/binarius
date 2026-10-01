@@ -61,6 +61,10 @@
       "types": "./src/logging.ts",
       "default": "./src/logging.ts"
     },
+    "./link-confirmation": {
+      "types": "./src/link-confirmation.ts",
+      "default": "./src/link-confirmation.ts"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"

@@ -1,6 +1,8 @@
 import { Bot, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import type { User, UserFromGetMe } from 'grammy/types';
 import {
+  CONFIRM_CALLBACK_PATTERN,
+  confirmCallbackData,
   confirmLoginRequestSchema,
   emailAddressSchema,
   emailLoginCodeSchema,
@@ -29,11 +31,6 @@ import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 export const CONNECT_CALLBACK_DATA = 'connect';
 export const OAUTH_CALLBACK_DATA = 'oauth';
 export const RESEND_CALLBACK_DATA = 'resend';
-// 'confirm:' + a 36-character uuid is 44 bytes
-export const CONFIRM_CALLBACK_PREFIX = 'confirm:';
-export const confirmCallbackData = (accountId: string): string =>
-  `${CONFIRM_CALLBACK_PREFIX}${accountId}`;
-const CONFIRM_CALLBACK_PATTERN = new RegExp(`^${CONFIRM_CALLBACK_PREFIX}([0-9a-f-]{36})$`);
 
 export interface CreateBotOptions {
   token: string;

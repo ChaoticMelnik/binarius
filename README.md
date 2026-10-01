@@ -70,7 +70,8 @@ The integration tests run against a real Postgres named by `DATABASE_URL` and a 
 by `REDIS_URL`, and fail without them — `pnpm test` therefore needs the compose services. Even
 this partial start needs all eight REQUIRED values in `.env`, because Compose interpolates the
 whole file before it picks which services to run: that includes `TELEGRAM_BOT_TOKEN`, which only
-the `bot` service reads, so `docker compose up -d postgres redis` refuses to run without it:
+the `bot` and `backend` services read, so `docker compose up -d postgres redis` refuses to run
+without it:
 
 ```bash
 docker compose up -d postgres redis

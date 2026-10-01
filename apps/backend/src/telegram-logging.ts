@@ -8,9 +8,10 @@ export interface TelegramErrorFields {
 }
 
 // What is safe to record about a failed Bot API call, here and in audit_log. `description` and
-// `payload` are not: the payload holds the message being sent — for this bot, the staff
-// member's login, address and the one-time code — and no pino redact path can scrub either,
-// because they are strings and free-form objects.
+// `payload` are not: the payload holds the message being sent — from the staff bot, the staff
+// member's login, address and the one-time code; from the link push (#128), the email of the
+// Binodex account on the confirm button — and its chat_id is the Telegram id. No pino redact path
+// can scrub either, because they are strings and free-form objects.
 //
 // grammY throws GrammyError only when Telegram answered `ok: false`; a transport failure or our
 // own timeoutSeconds abort throws HttpError, which has no `method` field, so the method is

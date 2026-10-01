@@ -4,6 +4,7 @@ import { closeAll, errorLogFields } from '@binarius/shared';
 import { createDb, createTokenCipher } from '@binarius/db';
 import { createAdminBot } from './admin/telegram';
 import { buildApp } from './app';
+import { createLinkNotifier } from './auth/link-notifier';
 import { createBrokerOAuthClient } from './broker/oauth-client';
 import { parseEnv } from './env';
 import { createBullmqPublisher } from './outbox/bullmq';
@@ -79,6 +80,7 @@ const app = buildApp({
     clientId: env.brokerClientId,
     redirectUri: env.brokerOauthRedirectUri,
     partnerRef: env.brokerPartnerRef,
+    linkNotifier: createLinkNotifier({ token: env.telegramBotToken }),
   },
   users: {
     db,

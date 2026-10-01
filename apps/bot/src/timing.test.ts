@@ -3,16 +3,10 @@ import { fileURLToPath } from 'node:url';
 import { HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
-import { OAuthErrorCode, UserStatus } from '@binarius/shared';
+import { confirmCallbackData, OAuthErrorCode, UserStatus } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import {
-  CONNECT_CALLBACK_DATA,
-  OAUTH_CALLBACK_DATA,
-  RESEND_CALLBACK_DATA,
-  confirmCallbackData,
-  createBot,
-} from './bot';
+import { CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA, RESEND_CALLBACK_DATA, createBot } from './bot';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   BOT_INFO,

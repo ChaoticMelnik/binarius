@@ -43,6 +43,7 @@ export interface Env {
   brokerPartnerRef: string;
   tokenEncryptionKey: Buffer;
   tokenEncryptionKeyId: string;
+  telegramBotToken: string;
   adminBotToken: string;
   adminWebToken: string;
 }
@@ -76,9 +77,7 @@ export function parseEnv(source: EnvSource): Env {
       'BROKER_OAUTH_REDIRECT_URI',
     ),
     brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),
-    // Its own bot, not the one apps/bot runs: two pollers on one token would fight over
-    // getUpdates (409), and the staff bot must not be reachable from the public bot's chats.
-    adminBotToken: parseNoWhitespaceEnv(readEnv(source, 'ADMIN_BOT_TOKEN'), 'ADMIN_BOT_TOKEN'),
+    ...parseBotTokens(source),
     ...parseTokenEncryption(source),
   };
 }
@@ -104,6 +103,25 @@ function parseSharedSecrets(source: EnvSource): Pick<Env, 'internalApiToken' | '
     );
   }
   return { internalApiToken, adminWebToken };
+}
+
+// Both bot tokens, validated together because the pair is what matters. TELEGRAM_BOT_TOKEN is the
+// public bot apps/bot polls; this process only sends on it (the push after the OAuth callback)
+// and never polls it. ADMIN_BOT_TOKEN is the staff bot this process polls: one value in both is
+// two pollers on one bot, which Telegram settles with a 409 to one of them, and the staff bot
+// would be reachable from the public bot's chats.
+function parseBotTokens(source: EnvSource): Pick<Env, 'telegramBotToken' | 'adminBotToken'> {
+  const telegramBotToken = parseNoWhitespaceEnv(
+    readEnv(source, 'TELEGRAM_BOT_TOKEN'),
+    'TELEGRAM_BOT_TOKEN',
+  );
+  const adminBotToken = parseNoWhitespaceEnv(readEnv(source, 'ADMIN_BOT_TOKEN'), 'ADMIN_BOT_TOKEN');
+  if (telegramBotToken === adminBotToken) {
+    throw new Error(
+      'Env TELEGRAM_BOT_TOKEN must differ from ADMIN_BOT_TOKEN: one value in both is two pollers on one bot',
+    );
+  }
+  return { telegramBotToken, adminBotToken };
 }
 
 // The two are validated together because the pair is what matters. The all-zero key is
