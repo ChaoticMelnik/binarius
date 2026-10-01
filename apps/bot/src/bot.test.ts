@@ -3,11 +3,20 @@ import { BotError, HttpError } from 'grammy';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OAuthErrorCode, UserStatus, type UserStartView } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { CONNECT_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
+import {
+  CONNECT_CALLBACK_DATA,
+  OAUTH_CALLBACK_DATA,
+  RESEND_CALLBACK_DATA,
+  confirmCallbackData,
+  createBot,
+} from './bot';
+import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   BOT_INFO,
+  CODE,
   CODE_SENT,
   CONFIRMED,
+  EMAIL,
   LOGIN,
   PENDING_ACCOUNT_ID,
   USER,
@@ -20,6 +29,7 @@ import {
   rejectionOf,
   sentPayload,
   startUpdate,
+  textUpdate,
   userView,
 } from './testing';
 import { TEXTS } from './texts';
@@ -33,6 +43,7 @@ function setup(
     sendEmailCode?: BackendClient['sendEmailCode'];
     emailLogin?: BackendClient['emailLogin'];
     welcomeVideoFileId?: string;
+    dialog?: LoginDialogState;
   } = {},
 ) {
   const backend: BackendClient = {
@@ -43,18 +54,37 @@ function setup(
     emailLogin: options.emailLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
   };
   const logger = fakeLogger();
+  const dialog = createLoginDialog();
+  if (options.dialog !== undefined) dialog.set(USER.id, options.dialog);
   const bot = createBot({
     token: '123456:AA-bot-token',
     backend,
     logger,
     botInfo: BOT_INFO,
+    loginDialog: dialog,
     ...(options.welcomeVideoFileId === undefined
       ? {}
       : { welcomeVideoFileId: options.welcomeVideoFileId }),
   });
   const { calls, apiErrors, answers } = captureApi(bot);
-  return { bot, backend, calls, logger, apiErrors, answers };
+  return { bot, backend, calls, logger, apiErrors, answers, dialog };
 }
+
+const refused = (status: number, reason?: string) =>
+  vi.fn(() => Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status, reason })));
+
+const unreachable = () =>
+  vi.fn(() => Promise.reject(new BackendError(BackendErrorCode.Unreachable)));
+
+const ON_CODE_STEP: LoginDialogState = { step: 'code', email: EMAIL };
+
+const CODE_STEP_BUTTONS = [
+  { text: TEXTS.resendButton, callback_data: RESEND_CALLBACK_DATA },
+  { text: TEXTS.changeEmailButton, callback_data: CONNECT_CALLBACK_DATA },
+];
+
+const sentTexts = (calls: readonly { method: string; payload: Record<string, unknown> }[]) =>
+  calls.filter((call) => call.method === 'sendMessage').map((call) => call.payload.text);
 
 describe('/start', () => {
   it('greets a new user with the CTA and records the start without optional fields', async () => {
@@ -67,13 +97,15 @@ describe('/start', () => {
     });
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.welcome);
-    const [button] = inlineButtons(message);
-    expect(button).toMatchObject({
-      text: TEXTS.connectButton,
-      callback_data: CONNECT_CALLBACK_DATA,
-    });
+    // the email login first, the browser second
+    expect(inlineButtons(message)).toEqual([
+      { text: TEXTS.connectButton, callback_data: CONNECT_CALLBACK_DATA },
+      { text: TEXTS.oauthButton, callback_data: OAUTH_CALLBACK_DATA },
+    ]);
     // Bot API: callback_data is 1-64 bytes
-    expect(Buffer.byteLength(CONNECT_CALLBACK_DATA, 'utf8')).toBeLessThanOrEqual(64);
+    for (const data of [CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA, RESEND_CALLBACK_DATA]) {
+      expect(Buffer.byteLength(data, 'utf8')).toBeLessThanOrEqual(64);
+    }
   });
 
   it('passes a payload that matches the pattern', async () => {
@@ -304,10 +336,10 @@ describe('the welcome video', () => {
   });
 });
 
-describe('the connect button', () => {
+describe('the oauth button', () => {
   it('answers the query and sends the authorize link as a url button', async () => {
     const { bot, backend, calls } = setup();
-    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
+    await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
 
     expect(backend.startLogin).toHaveBeenCalledWith('4242');
     expect(calls.map((call) => call.method)).toContain('answerCallbackQuery');
@@ -327,7 +359,7 @@ describe('the connect button', () => {
       description: 'Bad Request: query is too old',
     });
 
-    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
+    await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
     expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.loginLink);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
   });
@@ -343,7 +375,7 @@ describe('the connect button', () => {
         ),
       ),
     });
-    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
+    await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.blocked);
     expect(message?.reply_markup).toBeUndefined();
@@ -355,14 +387,14 @@ describe('the connect button', () => {
         Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
       ),
     });
-    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
+    await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
     expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ backendStatus: 500 });
   });
 
   it('ignores the callback outside a private chat', async () => {
     const { bot, backend, calls } = setup();
-    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA, 'group'));
+    await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA, 'group'));
     expect(backend.startLogin).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
   });
@@ -450,6 +482,362 @@ describe('the confirm button', () => {
     await bot.handleUpdate(callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID), 'group'));
     expect(backend.confirmLogin).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
+  });
+});
+
+describe('the connect button', () => {
+  it('answers the query and asks for the address without calling the backend', async () => {
+    const { bot, backend, calls, dialog } = setup();
+    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
+
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.emailPrompt);
+    expect(message?.reply_markup).toBeUndefined();
+    expect(dialog.get(USER.id)).toEqual({ step: 'email' });
+    expect(backend.startLogin).not.toHaveBeenCalled();
+    expect(backend.sendEmailCode).not.toHaveBeenCalled();
+  });
+
+  it('still asks when answering the query fails', async () => {
+    const { bot, calls, logger, apiErrors } = setup();
+    apiErrors.set('answerCallbackQuery', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: query is too old',
+    });
+    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.emailPrompt);
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
+  });
+
+  // «Изменить адрес» carries the same data
+  it('takes a user waiting for a code back to the address', async () => {
+    const { bot, dialog } = setup({ dialog: ON_CODE_STEP });
+    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
+    expect(dialog.get(USER.id)).toEqual({ step: 'email' });
+  });
+
+  it('ignores the callback outside a private chat', async () => {
+    const { bot, calls, dialog } = setup();
+    await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA, 'group'));
+    expect(calls).toEqual([]);
+    expect(dialog.get(USER.id)).toBeUndefined();
+  });
+});
+
+describe('the address step', () => {
+  const ON_EMAIL_STEP: LoginDialogState = { step: 'email' };
+
+  it('asks for a code to the trimmed address and shows the address back with the buttons', async () => {
+    const { bot, backend, calls, dialog, logger } = setup({ dialog: ON_EMAIL_STEP });
+    await bot.handleUpdate(textUpdate(`  ${EMAIL} `));
+
+    expect(backend.sendEmailCode).toHaveBeenCalledWith('4242', EMAIL);
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.codeSent(EMAIL));
+    expect(message?.text).toContain(EMAIL);
+    expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
+    expect(dialog.get(USER.id)).toEqual({ step: 'code', email: EMAIL });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('answers text that is not an address at once, without calling the backend', async () => {
+    const { bot, backend, calls, dialog } = setup({ dialog: ON_EMAIL_STEP });
+    await bot.handleUpdate(textUpdate('ada at example'));
+
+    expect(backend.sendEmailCode).not.toHaveBeenCalled();
+    expect(sentTexts(calls)).toEqual([TEXTS.emailInvalid]);
+    expect(dialog.get(USER.id)).toEqual(ON_EMAIL_STEP);
+  });
+
+  it('stays on the address when the broker refuses it', async () => {
+    const { bot, calls, dialog, logger } = setup({
+      dialog: ON_EMAIL_STEP,
+      sendEmailCode: refused(400, OAuthErrorCode.InvalidEmail),
+    });
+    await bot.handleUpdate(textUpdate(EMAIL));
+    expect(sentTexts(calls)).toEqual([TEXTS.emailRefused]);
+    expect(dialog.get(USER.id)).toEqual(ON_EMAIL_STEP);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [429, OAuthErrorCode.TooManyAttempts, TEXTS.tooManyCodeRequests],
+    [429, OAuthErrorCode.TooManyRequests, TEXTS.tooManyCodeRequests],
+    [409, OAuthErrorCode.UserBlocked, TEXTS.blocked],
+  ])('ends the dialog on a %i %s', async (status, reason, text) => {
+    const { bot, calls, dialog, logger } = setup({
+      dialog: ON_EMAIL_STEP,
+      sendEmailCode: refused(status, reason),
+    });
+    await bot.handleUpdate(textUpdate(EMAIL));
+    expect(sentTexts(calls)).toEqual([text]);
+    expect(dialog.get(USER.id)).toBeUndefined();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unreachable', unreachable()],
+    ['a 500', refused(500)],
+  ])('keeps the step and warns when the backend is %s', async (_label, sendEmailCode) => {
+    const { bot, calls, dialog, logger } = setup({ dialog: ON_EMAIL_STEP, sendEmailCode });
+    await bot.handleUpdate(textUpdate(EMAIL));
+    expect(sentTexts(calls)).toEqual([TEXTS.unavailable]);
+    expect(dialog.get(USER.id)).toEqual(ON_EMAIL_STEP);
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ err: { name: 'BackendError' } });
+  });
+});
+
+describe('the code step', () => {
+  it('logs in with the address of the dialog and reports the pack the backend paid', async () => {
+    const { bot, backend, calls, dialog, logger } = setup({ dialog: ON_CODE_STEP });
+    await bot.handleUpdate(textUpdate(` ${CODE} `));
+
+    expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
+    expect(sentTexts(calls)).toEqual([TEXTS.linkedWithBonus('7')]);
+    expect(dialog.get(USER.id)).toBeUndefined();
+    expect(backend.recordStart).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('says why no pack was paid', async () => {
+    const { bot, calls } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin: vi.fn(() =>
+        Promise.resolve({
+          ...CONFIRMED,
+          grant: { granted: false as const, reason: 'not_partner_client' as const },
+        }),
+      ),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(sentTexts(calls)).toEqual([TEXTS.linkedNoBonusNotPartner]);
+  });
+
+  it('answers a code the schema refuses at once, keeping the step', async () => {
+    const { bot, backend, calls, dialog } = setup({ dialog: ON_CODE_STEP });
+    await bot.handleUpdate(textUpdate('c'.repeat(65)));
+
+    expect(backend.emailLogin).not.toHaveBeenCalled();
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.codeInvalid);
+    expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+  });
+
+  it.each([
+    [429, OAuthErrorCode.TooManyAttempts, TEXTS.tooManyCodeAttempts],
+    [429, OAuthErrorCode.TooManyRequests, TEXTS.tooManyCodeRequests],
+    [409, OAuthErrorCode.UserBlocked, TEXTS.blocked],
+    [409, OAuthErrorCode.BrokerAccountTaken, TEXTS.accountTaken],
+  ])('ends the dialog on a definite %i %s without a recheck', async (status, reason, text) => {
+    const { bot, backend, calls, dialog, logger } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin: refused(status, reason),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(sentTexts(calls)).toEqual([text]);
+    expect(dialog.get(USER.id)).toBeUndefined();
+    expect(backend.recordStart).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('rechecks an invalid code and keeps the step when no account is active', async () => {
+    const { bot, backend, calls, dialog, logger } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin: refused(400, OAuthErrorCode.InvalidCode),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+
+    // the same request /start sends, without a payload
+    expect(backend.recordStart).toHaveBeenCalledWith({
+      telegramUserId: '4242',
+      displayName: 'Ada Lovelace',
+    });
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.codeInvalid);
+    expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an invalid code', refused(400, OAuthErrorCode.InvalidCode)],
+    ['an unreachable backend', unreachable()],
+    ['a broker outage', refused(502, OAuthErrorCode.BrokerUnavailable)],
+  ])('reports the account connected after %s when it is active', async (_label, emailLogin) => {
+    const { bot, calls, dialog } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin,
+      user: userView({ hasActiveBrokerAccount: true }),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(sentTexts(calls)).toEqual([TEXTS.linkedActive]);
+    expect(dialog.get(USER.id)).toBeUndefined();
+  });
+
+  it('shows the blocked text when the recheck finds the user blocked', async () => {
+    const { bot, calls, dialog } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin: unreachable(),
+      user: userView({ status: UserStatus.Blocked }),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(sentTexts(calls)).toEqual([TEXTS.blocked]);
+    expect(dialog.get(USER.id)).toBeUndefined();
+  });
+
+  it('keeps the step and warns when the login fails and no account is active', async () => {
+    const { bot, calls, dialog, logger } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin: refused(500),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(sentTexts(calls)).toEqual([TEXTS.unavailable]);
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual(['email login failed']);
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ backendStatus: 500 });
+  });
+
+  // without the state, "wrong code" would be a guess
+  it('says the service is unavailable, not that the code is wrong, when the recheck fails', async () => {
+    const { bot, calls, dialog, logger } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin: refused(400, OAuthErrorCode.InvalidCode),
+      recordStart: unreachable(),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(sentTexts(calls)).toEqual([TEXTS.unavailable]);
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'email login outcome not rechecked',
+    ]);
+  });
+
+  // the owner's answer 4b: on this step everything typed is a code
+  it('sends an address typed on the code step as a code', async () => {
+    const { bot, backend, calls } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin: refused(400, OAuthErrorCode.InvalidCode),
+    });
+    await bot.handleUpdate(textUpdate('other@example.test'));
+    expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, 'other@example.test');
+    expect(sentTexts(calls)).toEqual([TEXTS.codeInvalid]);
+  });
+
+  // the criterion added to #171 after the review of PR #172
+  it('reports the account connected when the answer to a login that went through was lost', async () => {
+    const emailLogin = vi
+      .fn<BackendClient['emailLogin']>()
+      .mockRejectedValueOnce(new BackendError(BackendErrorCode.Unreachable))
+      .mockRejectedValueOnce(
+        new BackendError(BackendErrorCode.HttpStatus, {
+          status: 400,
+          reason: OAuthErrorCode.InvalidCode,
+        }),
+      );
+    const recordStart = vi
+      .fn<BackendClient['recordStart']>()
+      .mockResolvedValueOnce(userView())
+      .mockResolvedValueOnce(userView({ hasActiveBrokerAccount: true }));
+    const { bot, calls, dialog } = setup({ dialog: ON_CODE_STEP, emailLogin, recordStart });
+
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+    await bot.handleUpdate(textUpdate(CODE));
+
+    expect(sentTexts(calls)).toEqual([TEXTS.unavailable, TEXTS.linkedActive]);
+    expect(dialog.get(USER.id)).toBeUndefined();
+  });
+});
+
+describe('the resend button', () => {
+  it('sends a new code to the address of the dialog', async () => {
+    const { bot, backend, calls, dialog } = setup({ dialog: ON_CODE_STEP });
+    await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
+
+    expect(backend.sendEmailCode).toHaveBeenCalledWith('4242', EMAIL);
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.codeSent(EMAIL));
+    expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+  });
+
+  it('says the dialog is over when there is none', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
+    expect(backend.sendEmailCode).not.toHaveBeenCalled();
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(sentTexts(calls)).toEqual([TEXTS.dialogExpired]);
+  });
+
+  it('asks for the address when there is none yet', async () => {
+    const { bot, backend, calls } = setup({ dialog: { step: 'email' } });
+    await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
+    expect(backend.sendEmailCode).not.toHaveBeenCalled();
+    expect(sentTexts(calls)).toEqual([TEXTS.emailPrompt]);
+  });
+
+  it('ends the dialog when the backend limits the codes', async () => {
+    const { bot, calls, dialog } = setup({
+      dialog: ON_CODE_STEP,
+      sendEmailCode: refused(429, OAuthErrorCode.TooManyAttempts),
+    });
+    await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
+    expect(sentTexts(calls)).toEqual([TEXTS.tooManyCodeRequests]);
+    expect(dialog.get(USER.id)).toBeUndefined();
+  });
+
+  it('still sends the code when answering the query fails', async () => {
+    const { bot, backend, calls, logger, apiErrors } = setup({ dialog: ON_CODE_STEP });
+    apiErrors.set('answerCallbackQuery', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: query is too old',
+    });
+    await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
+    expect(backend.sendEmailCode).toHaveBeenCalledOnce();
+    expect(sentTexts(calls)).toEqual([TEXTS.codeSent(EMAIL)]);
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
+  });
+});
+
+describe('text outside the dialog', () => {
+  it('ignores text from a user who is not in a dialog', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(textUpdate(EMAIL));
+    expect(calls).toEqual([]);
+    expect(backend.sendEmailCode).not.toHaveBeenCalled();
+    expect(backend.emailLogin).not.toHaveBeenCalled();
+  });
+
+  it('ignores a command in the middle of the dialog and keeps the step', async () => {
+    const { bot, backend, calls, dialog } = setup({ dialog: ON_CODE_STEP });
+    await bot.handleUpdate(textUpdate('/help'));
+    expect(calls).toEqual([]);
+    expect(backend.emailLogin).not.toHaveBeenCalled();
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+  });
+
+  it('ignores text in a group, even from a user in a dialog', async () => {
+    const { bot, backend, calls } = setup({ dialog: ON_CODE_STEP });
+    await bot.handleUpdate(textUpdate(CODE, 'group'));
+    expect(calls).toEqual([]);
+    expect(backend.emailLogin).not.toHaveBeenCalled();
+  });
+
+  // the owner's answer 3c: /start answers as usual and the dialog lives on
+  it('answers /start in the middle of the dialog without ending it', async () => {
+    const { bot, backend, calls, dialog } = setup({ dialog: ON_CODE_STEP });
+    await bot.handleUpdate(startUpdate('/start'));
+    expect(sentTexts(calls)).toEqual([TEXTS.welcome]);
+    expect(backend.emailLogin).not.toHaveBeenCalled();
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
   });
 });
 

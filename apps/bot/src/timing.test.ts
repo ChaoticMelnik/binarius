@@ -6,18 +6,29 @@ import { describe, expect, it } from 'vitest';
 import { OAuthErrorCode, UserStatus } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { CONNECT_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
+import {
+  CONNECT_CALLBACK_DATA,
+  OAUTH_CALLBACK_DATA,
+  RESEND_CALLBACK_DATA,
+  confirmCallbackData,
+  createBot,
+} from './bot';
+import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   BOT_INFO,
+  CODE,
   CODE_SENT,
   CONFIRMED,
+  EMAIL,
   LOGIN,
   PENDING_ACCOUNT_ID,
+  USER,
   USER_VIEW,
   captureApi,
   callbackUpdate,
   fakeLogger,
   startUpdate,
+  textUpdate,
   type ApiAnswer,
 } from './testing';
 import { COMPOSE_STOP_GRACE_PERIOD_MS, GRAMMY_POLLING_BACKOFF_MS, HANDLER_CALLS } from './timing';
@@ -50,6 +61,8 @@ interface Branch {
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
+  // the step the user is on when the update arrives
+  dialog?: LoginDialogState;
 }
 
 const VIDEO_REFUSED: ApiError = {
@@ -99,11 +112,14 @@ async function observe(branch: Branch): Promise<Calls> {
       return (branch.emailLogin ?? (() => Promise.resolve(CONFIRMED)))(telegramUserId, email, code);
     },
   };
+  const loginDialog = createLoginDialog();
+  if (branch.dialog !== undefined) loginDialog.set(USER.id, branch.dialog);
   const bot = createBot({
     token: '123456:AA-bot-token',
     backend: client,
     logger: fakeLogger(),
     botInfo: BOT_INFO,
+    loginDialog,
     ...(branch.welcomeVideoFileId === undefined
       ? {}
       : { welcomeVideoFileId: branch.welcomeVideoFileId }),
@@ -250,28 +266,28 @@ const START_BRANCHES: readonly Branch[] = [
   },
 ];
 
-const CONNECT_WORST_CASE: Branch = {
+const OAUTH_WORST_CASE: Branch = {
   label: 'the query is answered and the link is sent',
-  update: callbackUpdate(CONNECT_CALLBACK_DATA),
+  update: callbackUpdate(OAUTH_CALLBACK_DATA),
   expected: { backend: 1, telegram: 2 },
 };
 
-const CONNECT_BRANCHES: readonly Branch[] = [
+const OAUTH_BRANCHES: readonly Branch[] = [
   {
     label: 'the chat is not private',
-    update: callbackUpdate(CONNECT_CALLBACK_DATA, 'group'),
+    update: callbackUpdate(OAUTH_CALLBACK_DATA, 'group'),
     expected: { backend: 0, telegram: 0 },
   },
-  CONNECT_WORST_CASE,
+  OAUTH_WORST_CASE,
   {
     label: 'answering the query is refused and the link still goes',
-    update: callbackUpdate(CONNECT_CALLBACK_DATA),
+    update: callbackUpdate(OAUTH_CALLBACK_DATA),
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
     expected: { backend: 1, telegram: 2 },
   },
   {
     label: 'the backend reports a blocked user',
-    update: callbackUpdate(CONNECT_CALLBACK_DATA),
+    update: callbackUpdate(OAUTH_CALLBACK_DATA),
     startLogin: () =>
       Promise.reject(
         new BackendError(BackendErrorCode.HttpStatus, {
@@ -283,7 +299,7 @@ const CONNECT_BRANCHES: readonly Branch[] = [
   },
   {
     label: 'the backend fails for any other reason',
-    update: callbackUpdate(CONNECT_CALLBACK_DATA),
+    update: callbackUpdate(OAUTH_CALLBACK_DATA),
     startLogin: () =>
       Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
     expected: { backend: 1, telegram: 2 },
@@ -360,6 +376,227 @@ const CONFIRM_BRANCHES: readonly Branch[] = [
   },
 ];
 
+const CONNECT_WORST_CASE: Branch = {
+  label: 'the query is answered and the address is asked for',
+  update: callbackUpdate(CONNECT_CALLBACK_DATA),
+  expected: { backend: 0, telegram: 2 },
+};
+
+const CONNECT_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(CONNECT_CALLBACK_DATA, 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  CONNECT_WORST_CASE,
+  {
+    label: 'answering the query is refused and the address is still asked for',
+    update: callbackUpdate(CONNECT_CALLBACK_DATA),
+    apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+    expected: { backend: 0, telegram: 2 },
+  },
+];
+
+const refusedWith = (status: number, reason?: string) => () =>
+  Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status, reason }));
+const unreachable = () => Promise.reject(new BackendError(BackendErrorCode.Unreachable));
+
+const ON_EMAIL_STEP: LoginDialogState = { step: 'email' };
+const ON_CODE_STEP: LoginDialogState = { step: 'code', email: EMAIL };
+
+const EMAIL_STEP_WORST_CASE: Branch = {
+  label: 'the code is sent',
+  update: textUpdate(EMAIL),
+  dialog: ON_EMAIL_STEP,
+  expected: { backend: 1, telegram: 1 },
+};
+
+// The text handler serves both steps; these are the branches of the address step, and the
+// ones that end before any step is looked at.
+const EMAIL_STEP_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the user is not in a dialog',
+    update: textUpdate(EMAIL),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the text is a command',
+    update: textUpdate('/help'),
+    dialog: ON_EMAIL_STEP,
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the chat is not private',
+    update: textUpdate(EMAIL, 'group'),
+    dialog: ON_EMAIL_STEP,
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the update carries no sender',
+    update: withoutSender(textUpdate(EMAIL)),
+    dialog: ON_EMAIL_STEP,
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the text is not an address',
+    update: textUpdate('ada at example'),
+    dialog: ON_EMAIL_STEP,
+    expected: { backend: 0, telegram: 1 },
+  },
+  EMAIL_STEP_WORST_CASE,
+  ...[
+    OAuthErrorCode.InvalidEmail,
+    OAuthErrorCode.TooManyAttempts,
+    OAuthErrorCode.TooManyRequests,
+    OAuthErrorCode.UserBlocked,
+  ].map((reason): Branch => ({
+    label: `the backend refuses with ${reason}`,
+    update: textUpdate(EMAIL),
+    dialog: ON_EMAIL_STEP,
+    sendEmailCode: refusedWith(400, reason),
+    expected: { backend: 1, telegram: 1 },
+  })),
+  {
+    label: 'the backend fails for any other reason',
+    update: textUpdate(EMAIL),
+    dialog: ON_EMAIL_STEP,
+    sendEmailCode: unreachable,
+    expected: { backend: 1, telegram: 1 },
+  },
+];
+
+const CODE_STEP_WORST_CASE: Branch = {
+  label: 'an invalid code is rechecked and no account is active',
+  update: textUpdate(CODE),
+  dialog: ON_CODE_STEP,
+  emailLogin: refusedWith(400, OAuthErrorCode.InvalidCode),
+  expected: { backend: 2, telegram: 1 },
+};
+
+const CODE_STEP_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the text is not a code',
+    update: textUpdate('c'.repeat(65)),
+    dialog: ON_CODE_STEP,
+    expected: { backend: 0, telegram: 1 },
+  },
+  {
+    label: 'the login pays the pack',
+    update: textUpdate(CODE),
+    dialog: ON_CODE_STEP,
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the login pays no pack',
+    update: textUpdate(CODE),
+    dialog: ON_CODE_STEP,
+    emailLogin: () =>
+      Promise.resolve({ ...CONFIRMED, grant: { granted: false, reason: 'already_granted' } }),
+    expected: { backend: 1, telegram: 1 },
+  },
+  ...[
+    OAuthErrorCode.TooManyAttempts,
+    OAuthErrorCode.TooManyRequests,
+    OAuthErrorCode.UserBlocked,
+    OAuthErrorCode.BrokerAccountTaken,
+  ].map((reason): Branch => ({
+    label: `the login is refused for good with ${reason}`,
+    update: textUpdate(CODE),
+    dialog: ON_CODE_STEP,
+    emailLogin: refusedWith(409, reason),
+    expected: { backend: 1, telegram: 1 },
+  })),
+  CODE_STEP_WORST_CASE,
+  {
+    label: 'an invalid code is rechecked and the account is active',
+    update: textUpdate(CODE),
+    dialog: ON_CODE_STEP,
+    emailLogin: refusedWith(400, OAuthErrorCode.InvalidCode),
+    recordStart: () => Promise.resolve({ ...USER_VIEW, hasActiveBrokerAccount: true }),
+    expected: { backend: 2, telegram: 1 },
+  },
+  {
+    label: 'an unreachable login is rechecked and the account is active',
+    update: textUpdate(CODE),
+    dialog: ON_CODE_STEP,
+    emailLogin: unreachable,
+    recordStart: () => Promise.resolve({ ...USER_VIEW, hasActiveBrokerAccount: true }),
+    expected: { backend: 2, telegram: 1 },
+  },
+  {
+    label: 'a failed login is rechecked and no account is active',
+    update: textUpdate(CODE),
+    dialog: ON_CODE_STEP,
+    emailLogin: refusedWith(500),
+    expected: { backend: 2, telegram: 1 },
+  },
+  {
+    label: 'the recheck fails',
+    update: textUpdate(CODE),
+    dialog: ON_CODE_STEP,
+    emailLogin: refusedWith(400, OAuthErrorCode.InvalidCode),
+    recordStart: unreachable,
+    expected: { backend: 2, telegram: 1 },
+  },
+  {
+    label: 'the recheck finds the user blocked',
+    update: textUpdate(CODE),
+    dialog: ON_CODE_STEP,
+    emailLogin: unreachable,
+    recordStart: () => Promise.resolve({ ...USER_VIEW, status: UserStatus.Blocked }),
+    expected: { backend: 2, telegram: 1 },
+  },
+];
+
+const RESEND_WORST_CASE: Branch = {
+  label: 'the query is answered and a new code is sent',
+  update: callbackUpdate(RESEND_CALLBACK_DATA),
+  dialog: ON_CODE_STEP,
+  expected: { backend: 1, telegram: 2 },
+};
+
+const RESEND_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(RESEND_CALLBACK_DATA, 'group'),
+    dialog: ON_CODE_STEP,
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the user is not in a dialog',
+    update: callbackUpdate(RESEND_CALLBACK_DATA),
+    expected: { backend: 0, telegram: 2 },
+  },
+  {
+    label: 'the user has no address yet',
+    update: callbackUpdate(RESEND_CALLBACK_DATA),
+    dialog: ON_EMAIL_STEP,
+    expected: { backend: 0, telegram: 2 },
+  },
+  RESEND_WORST_CASE,
+  {
+    label: 'the backend limits the codes',
+    update: callbackUpdate(RESEND_CALLBACK_DATA),
+    dialog: ON_CODE_STEP,
+    sendEmailCode: refusedWith(429, OAuthErrorCode.TooManyAttempts),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the backend fails for any other reason',
+    update: callbackUpdate(RESEND_CALLBACK_DATA),
+    dialog: ON_CODE_STEP,
+    sendEmailCode: unreachable,
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'answering the query is refused and the code still goes',
+    update: callbackUpdate(RESEND_CALLBACK_DATA),
+    dialog: ON_CODE_STEP,
+    apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+    expected: { backend: 1, telegram: 2 },
+  },
+];
+
 describe('what the handlers do, against what HANDLER_CALLS declares', () => {
   it('/start', async () => {
     await checkHandler('start', START_BRANCHES, START_WORST_CASE, HANDLER_CALLS.start);
@@ -367,6 +604,32 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('the connect button', async () => {
     await checkHandler('connect', CONNECT_BRANCHES, CONNECT_WORST_CASE, HANDLER_CALLS.connect);
+  });
+
+  it('the oauth button', async () => {
+    await checkHandler('oauth', OAUTH_BRANCHES, OAUTH_WORST_CASE, HANDLER_CALLS.oauth);
+  });
+
+  it('a text on the address step', async () => {
+    await checkHandler(
+      'emailStep',
+      EMAIL_STEP_BRANCHES,
+      EMAIL_STEP_WORST_CASE,
+      HANDLER_CALLS.emailStep,
+    );
+  });
+
+  it('a text on the code step', async () => {
+    await checkHandler(
+      'codeStep',
+      CODE_STEP_BRANCHES,
+      CODE_STEP_WORST_CASE,
+      HANDLER_CALLS.codeStep,
+    );
+  });
+
+  it('the resend button', async () => {
+    await checkHandler('resend', RESEND_BRANCHES, RESEND_WORST_CASE, HANDLER_CALLS.resend);
   });
 
   it('the confirm button', async () => {
