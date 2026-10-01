@@ -1,9 +1,9 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 
-// A stand-in for the broker's two token endpoints that keeps the properties the flow depends on:
-// an authorization code is single-use and expires, it is bound to the client and redirect URI
-// it was issued for, and a refresh token belongs to a family where only the newest member is
-// accepted. Statuses and error bodies are the ones the live broker answers with
+// A stand-in for the broker's token and email-login endpoints that keeps the properties the flow
+// depends on: an authorization code is single-use and expires, it is bound to the client and
+// redirect URI it was issued for, a refresh token belongs to a family where only the newest
+// member is accepted, and an email code is single-use, expires and belongs to one address. Statuses and error bodies are the ones the live broker answers with
 // (docs/binodex-oauth.md -> Broker contract). The real mock broker is #35; this one exists so the
 // backend suite can prove its own behaviour.
 export interface OAuthStubOptions {
@@ -12,7 +12,9 @@ export interface OAuthStubOptions {
   redirectUri: string;
   codeTtlMs?: number;
   expiresInSec?: number;
-  // delays the response on both endpoints; used to exercise the client's abort
+  // the only partner_code the email login accepts
+  partnerCode?: string;
+  // delays the response on every endpoint; used to exercise the client's abort
   delayMs?: number;
 }
 
@@ -25,11 +27,19 @@ export interface IssuedCode {
 
 export interface OAuthStub {
   url: string;
-  // every request to either endpoint
+  // every request to any endpoint
   tokenRequests: number;
-  // the body keys of the last refresh request, to prove what the client sends
+  // the path of every request, in order
+  paths: string[];
+  // the body keys of the last request to each JSON endpoint, to prove what the client sends
   lastRefreshBodyKeys: string[] | undefined;
+  lastSendCodeBodyKeys: string[] | undefined;
+  lastEmailLoginBodyKeys: string[] | undefined;
   issueCode(input: Partial<IssuedCode> & { brokerUserId: string }): string;
+  // an account the broker already has, so an email login signs in rather than registers
+  registerEmailUser(input: { email: string; brokerUserId: string; isPartnerClient: boolean }): void;
+  // the newest code sent to the address, as the inbox would show it
+  codeFor(email: string): string | undefined;
   close(): Promise<void>;
 }
 
@@ -45,13 +55,19 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
   // family -> the only refresh token still accepted
   const families = new Map<string, string>();
   const familyOfToken = new Map<string, string>();
+  // lower-cased address -> the newest code sent to it, and the account it signs in to
+  const emailCodes = new Map<string, { code: string; expiresAt: number; used: boolean }>();
+  const emailUsers = new Map<string, { brokerUserId: string; isPartnerClient: boolean }>();
   let issued = 0;
 
   const app: FastifyInstance = Fastify({ logger: false });
   const stub: OAuthStub = {
     url: '',
     tokenRequests: 0,
+    paths: [],
     lastRefreshBodyKeys: undefined,
+    lastSendCodeBodyKeys: undefined,
+    lastEmailLoginBodyKeys: undefined,
     issueCode: ({ brokerUserId, email, isPartnerClient, code }) => {
       const value = code ?? `code-${++issued}`;
       codes.set(value, {
@@ -64,6 +80,10 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
       });
       return value;
     },
+    registerEmailUser: ({ email, brokerUserId, isPartnerClient }) => {
+      emailUsers.set(email.toLowerCase(), { brokerUserId, isPartnerClient });
+    },
+    codeFor: (email) => emailCodes.get(email.toLowerCase())?.code,
     close: () => app.close(),
   };
 
@@ -81,15 +101,16 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
 
   const brokerError = (message: string) => ({ error: { message, details: {} } });
 
-  async function received() {
+  async function received(path: string) {
     stub.tokenRequests += 1;
+    stub.paths.push(path);
     if (options.delayMs !== undefined) {
       await new Promise((resolve) => setTimeout(resolve, options.delayMs));
     }
   }
 
   app.post('/v1/broker/oauth/token', async (request, reply) => {
-    await received();
+    await received(request.url);
     const form = new URLSearchParams(request.body as string);
     if (
       form.get('client_id') !== options.clientId ||
@@ -125,7 +146,7 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
   });
 
   app.post('/v1/broker/user-auth/refresh', async (request, reply) => {
-    await received();
+    await received(request.url);
     const body = request.body as Record<string, unknown> | undefined;
     stub.lastRefreshBodyKeys = body === undefined ? [] : Object.keys(body).sort();
     const presented = body?.refresh_token;
@@ -145,6 +166,68 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
       return reply.code(401).send(brokerError('Invalid token'));
     }
     return reply.send(issuePair(family));
+  });
+
+  const keysOf = (body: Record<string, unknown> | undefined) =>
+    body === undefined ? [] : Object.keys(body).sort();
+  const credentialsMatch = (body: Record<string, unknown> | undefined) =>
+    body?.client_id === options.clientId && body.client_secret === options.clientSecret;
+
+  app.post('/v1/broker/user-auth/email/send-code', async (request, reply) => {
+    await received(request.url);
+    const body = request.body as Record<string, unknown> | undefined;
+    stub.lastSendCodeBodyKeys = keysOf(body);
+    if (!credentialsMatch(body)) {
+      return reply.code(401).send(brokerError('Authentication failed: Invalid client credentials'));
+    }
+    const email = body?.email;
+    // the live broker answers this message for any address it will not take, not only a missing one
+    if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+$/.test(email)) {
+      return reply.code(400).send(brokerError('Validation failed: "email" is required'));
+    }
+    const code = `${100_000 + ++issued}`;
+    emailCodes.set(email.toLowerCase(), { code, expiresAt: Date.now() + codeTtlMs, used: false });
+    return reply.send({ status: true });
+  });
+
+  app.post('/v1/broker/user-auth/email/login', async (request, reply) => {
+    await received(request.url);
+    const body = request.body as Record<string, unknown> | undefined;
+    stub.lastEmailLoginBodyKeys = keysOf(body);
+    if (!credentialsMatch(body)) {
+      return reply.code(401).send(brokerError('Authentication failed: Invalid client credentials'));
+    }
+    const { email, code } = body ?? {};
+    if (typeof email !== 'string' || typeof code !== 'string') {
+      return reply.code(400).send(brokerError('Validation failed: "code" is required'));
+    }
+    // checked before the code, so a wrong partner code leaves the code usable
+    if (options.partnerCode !== undefined && body?.partner_code !== options.partnerCode) {
+      return reply
+        .code(400)
+        .send(brokerError('partner_code does not belong to your partner account'));
+    }
+    const key = email.toLowerCase();
+    const record = emailCodes.get(key);
+    if (
+      record === undefined ||
+      record.used ||
+      record.expiresAt < Date.now() ||
+      record.code !== code
+    ) {
+      return reply.code(400).send(brokerError('Invalid or expired code'));
+    }
+    record.used = true;
+    let account = emailUsers.get(key);
+    if (account === undefined) {
+      // a new account is registered under the partner code, so it is a partner client
+      account = { brokerUserId: `email-user-${++issued}`, isPartnerClient: true };
+      emailUsers.set(key, account);
+    }
+    return reply.send({
+      ...issuePair(account.brokerUserId),
+      user: { id: account.brokerUserId, email: key, is_partner_client: account.isPartnerClient },
+    });
   });
 
   app.addContentTypeParser(
