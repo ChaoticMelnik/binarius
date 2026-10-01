@@ -1,7 +1,8 @@
 # Binodex login (issue #9)
 
 How a Telegram user ends up with a linked broker account, and how that account keeps a usable
-access token afterwards. The broker's own contract — the authorize page, the 120-second
+access token afterwards. There are two ways in: the OAuth login below, and the email login
+(#162, [Email login](#email-login-issue-162)), which the bot offers first. The broker's own contract — the authorize page, the 120-second
 single-use code, the server-to-server code exchange and the token refresh — was checked against
 the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contract-verified-2026-10-01).
 
@@ -11,9 +12,9 @@ the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contra
 | --------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | Contract  | `packages/shared/src/oauth.ts`            | wire schemas, the login request/response shapes, the error codes and the four revocation reasons |
 | Storage   | `packages/db/src/oauth-ops.ts`            | state rows, the linking transaction, rotation and revocation                                     |
-| Starter pack | `packages/db/src/link-bonus-ops.ts`    | `LINK_BONUS_TOKENS` and `grantLinkBonus`, called by the confirmation (#10)                       |
-| Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token` and the refresh on `POST /v1/broker/user-auth/refresh`, one attempt each, under a real abort |
-| Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/start`, `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`          |
+| Starter pack | `packages/db/src/link-bonus-ops.ts`    | `LINK_BONUS_TOKENS` and `grantLinkBonus`, called by the confirmation (#10) and by the email login (#162) |
+| Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token`, the refresh on `POST /v1/broker/user-auth/refresh`, and the email `send-code` and `login`, one attempt each, under a real abort; `BROKER_ENDPOINTS` is the one table of paths and statuses |
+| Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/start`, `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`, `POST /auth/binodex/email/send-code`, `POST /auth/binodex/email/login` |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
 
 ## Sequence
@@ -31,6 +32,16 @@ user ──/start──▶ bot: pendingBrokerAccounts is not empty ──▶ "П
 bot ──POST /auth/binodex/confirm (internal token)──▶ backend   pending ──▶ active, starter pack
         ◀── { account, grant }
 later: ensureFreshAccessToken(accountId) ──▶ stored token, or one exchange, or a revocation
+```
+
+The email login (#162) has no browser leg and no confirmation:
+
+```
+bot ──POST /auth/binodex/email/send-code (internal token)──▶ backend ──▶ broker email/send-code
+        ◀── { codeSent: true }                                   the broker mails a code
+bot ──POST /auth/binodex/email/login (internal token, code)──▶ backend ──▶ broker email/login
+        │                   (partner_code) ──▶ link user + broker account (active), starter pack
+        ◀── { account, grant }
 ```
 
 ## Why the callback is public
@@ -73,11 +84,13 @@ link, and a link can be handed to somebody else. Without a second step, an attac
 their own link to a victim ends up with the victim's brokerage account attached to the
 attacker's Telegram account.
 
-So `linkBrokerAccount` writes a new account as `pending`, and only `POST /auth/binodex/confirm`
-— called by the bot, carrying the internal token and the Telegram id — turns it into `active`.
-Three rules make that gate hold:
+So the callback calls `linkBrokerAccount` with `activate: false`, which writes a new account as
+`pending`, and on this path only `POST /auth/binodex/confirm` — called by the bot, carrying the
+internal token and the Telegram id — turns it into `active`. The email login is the one caller
+that activates directly ([Why it skips pending](#why-it-skips-pending)). Three rules make the
+OAuth gate hold:
 
-- a second login **does not** stand in for the confirmation: a `pending` row stays `pending`,
+- a second OAuth login **does not** stand in for the confirmation: a `pending` row stays `pending`,
   though its tokens are still rotated. Only a row that was `active` or `revoked` returns to
   `active` on a re-login, because its owner confirmed it once already;
 - confirmation is scoped by ownership. The account is looked up by id **and** user, so an
@@ -179,10 +192,79 @@ is created, and nothing here stores or credits one.
 - **The answer.** `POST /auth/binodex/confirm` returns `{ account, grant }`, where `grant` is
   `{ granted: true, tokens: "100" }` (a decimal string) or `{ granted: false, reason }` with
   `reason` one of `not_partner_client`, `already_granted`.
-- **#162.** The email login's activation transaction is to call the same `grantLinkBonus`, with
-  the same preconditions: the users row held, the account made `active` by that transaction.
+- **#162.** The email login calls the same `grantLinkBonus` inside `linkBrokerAccount`
+  (`activate: true`), with the same preconditions: the users row held by `upsertUser`, the
+  account made `active` by that transaction. It calls it on **every** email login, not only the
+  first activation — the index is what holds one pack per user. The one difference from the
+  OAuth path follows: a user whose `active` or `revoked` partner account never earned the pack
+  (it was a non-partner account when it was confirmed) gets it on an email login, while an
+  OAuth re-login pays nothing. That is the rule above — a partner account confirmed later still
+  pays.
 
 Accounts confirmed before migration `0008` received nothing; there was no production data then.
+
+## Email login (issue #162)
+
+The bot asks for an address, the backend asks the broker to mail a code to it, the user types the
+code into the bot, and the backend redeems it. The broker registers a new account under
+`partner_code` (`BROKER_PARTNER_REF`) or signs an existing one in; either way it answers the same
+body as the code exchange, and the account is stored through the same `linkBrokerAccount` — the
+same row, the same encryption, the same refresh through `user-auth/refresh`.
+
+### Why it skips pending
+
+`linkBrokerAccount(…, activate: true)` writes a new account as `active`, and turns the user's own
+`pending`, `active` or `revoked` row into `active` with `auth_revoked_reason` cleared. Another
+user's account is still `broker_account_taken`, with nothing written. The confirmation exists
+because the OAuth callback proves only that *someone* authorized at the broker, and a link can be
+handed to a victim. Here the code from the letter is typed into the bot by the Telegram user who
+gets the account; a confirmation would be that user confirming to themselves. A `pending` row an
+unfinished OAuth login left is activated the same way. The OAuth callback passes
+`activate: false` and is unchanged, and the column default stays `pending`.
+
+### Routes
+
+Both are in the internal-token scope, next to `start` and `confirm`. The address is
+`emailAddressSchema` (trimmed, then checked, at most 254 characters, case kept on the wire), the
+code `emailLoginCodeSchema` (trimmed, 1-64 characters, any shape — the broker answers a wrong
+shape with `Invalid or expired code` too). Neither the address nor the code is stored or written
+to the log by these routes; `broker_accounts.email` holds what the broker reports, as with OAuth.
+
+| Route | Answer | Errors |
+| --- | --- | --- |
+| `POST /auth/binodex/email/send-code` `{ telegramUserId, email }` | 200 `{ codeSent: true }` | 400 `validation`; 400 `invalid_email` (the broker refused the address); 409 `user_blocked`; 429 `too_many_attempts` / `too_many_requests`; 502 `broker_contract_violation` / `broker_unavailable` |
+| `POST /auth/binodex/email/login` `{ telegramUserId, email, code }` | 200 `{ account, grant }`, as `confirm` | 400 `validation`; 400 `invalid_code` (wrong, expired or used code); 409 `user_blocked` / `broker_account_taken`; 429 `too_many_attempts` / `too_many_requests`; 502 `broker_contract_violation` / `broker_unavailable` |
+
+The order inside each route: the route ceiling (an `onRequest` hook on the route, which runs after
+the scope's bearer check, so a caller without the token cannot spend it), the body, the blocked
+check (before the broker), the per-key windows, the broker, and for `login` the transaction.
+
+### Limits
+
+In-process windows (`rate-window.ts`), like the callback's: reset by a restart and per backend
+process, which is what is deployed.
+
+- **Ceilings:** 60 `send-code` and 300 `login` requests a minute for the whole route → 429
+  `too_many_requests`. Every `send-code` is a real letter, so it is held far lower.
+- **Per key, 10 minutes:** 3 `send-code` and 5 `login` attempts per Telegram user **and** per
+  address (the key is the hash of the lower-cased address; the map holds no address) → 429
+  `too_many_attempts`. The address window on `login` stops a brute force of one address's code
+  spread across several Telegram accounts; the cost is that anyone who knows an address can hold
+  its login for up to ten minutes, which `send-code`'s own address window allows already. The
+  Telegram user is counted first, so a user over their own allowance does not spend the
+  address's.
+- The slot is taken **before** the broker call and never given back, even when the broker fails:
+  a sixth attempt is refused even with the right code, and a broker outage spends the user's
+  allowance.
+- None of this depends on the broker's code lifetime or its own lockout, which were not measured.
+  Whoever runs out waits and asks for a new code; every `send-code` is a new code.
+
+### Accepted cost
+
+The status map reads no body (see [Broker contract](#broker-contract-verified-2026-10-01)), so a
+`BROKER_PARTNER_REF` of the right shape that does not belong to this installation's partner
+account looks exactly like a wrong code: `invalid_code` to the user, 400/`invalid_grant` in the
+warn line. The first live email login after a deploy is what checks it.
 
 ## Refresh
 
@@ -285,22 +367,33 @@ a contract this code relies on.
 | --- | --- | --- | --- |
 | `POST /v1/broker/oauth/token` | form-urlencoded (JSON is accepted too): `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`, `client_secret` | 200 `{access_token, refresh_token, token_type, expires_in: 604800, user: {id, email, is_partner_client, …}}` | 400 `Invalid or expired authorization code`; 401 `Authentication failed: Invalid client credentials`; 400 `Validation failed: "code" is required` for `grant_type=refresh_token` — there is no refresh grant here |
 | `POST /v1/broker/user-auth/refresh` | JSON `{refresh_token}`, no client credentials | 200 `{access_token, refresh_token, token_type, expires_in: 604800}`, **no `user`** | 401 `Invalid token` for an unknown or consumed token; 400 `Validation failed: "refresh_token" is required` |
+| `POST /v1/broker/user-auth/email/send-code` | JSON `{client_id, client_secret, email}` | 200 `{status: true}`, and the broker mails a code | 400 `Validation failed: "email" is required` for an address it does not take; 401 for wrong client credentials |
+| `POST /v1/broker/user-auth/email/login` | JSON `{client_id, client_secret, email, code, partner_code}` | 200, the same body as the code exchange, `user` included (#102) | 400 `Invalid or expired code` for a wrong or foreign code; 400 `Validation failed` without `code`; 401 for wrong client credentials |
+
+The two email rows come from #102 and from probes on 2026-10-01 that sent no letter (an invalid
+address, a code that was never issued, a wrong secret). A successful login of an existing user by
+email was checked live by the owner in #102.
 
 Every error body has the shape `{"error":{"message","details"}}` — an object, not the OAuth string
 `{"error":"invalid_grant"}`. `binodex.app` without `api.` answers every `POST /v1/broker/...` with
 405 and an empty body.
 
-The client tells failures apart by the HTTP status alone, with one map per endpoint
-(`classify` in `oauth-client.ts`); the error body is released unread and is never parsed or
-logged:
+The client tells failures apart by the HTTP status alone, through one table that holds each
+endpoint's path and the status it refuses a grant with (`BROKER_ENDPOINTS` and `classify` in
+`oauth-client.ts`; `post()` takes the table's key and nothing else, so a call cannot reach one
+endpoint while being classified as another); the error body is released unread and is never
+parsed or logged:
 
-| Status | `oauth/token` | `user-auth/refresh` |
-| --- | --- | --- |
-| 400 | `invalid_grant` | `rejected` |
-| 401 | `rejected` | `invalid_grant` |
-| other 4xx | `rejected` | `rejected` |
-| 5xx, timeout, network failure | `unavailable` | `unavailable` |
-| 2xx that breaks the schema, or `expires_in` outside (0, 30 days] | `contract_violation` | `contract_violation` |
+| Status | `oauth/token` | `user-auth/refresh` | `email/send-code` | `email/login` |
+| --- | --- | --- | --- | --- |
+| 400 | `invalid_grant` | `rejected` | `invalid_grant` | `invalid_grant` |
+| 401 | `rejected` | `invalid_grant` | `rejected` | `rejected` |
+| other 4xx | `rejected` | `rejected` | `rejected` | `rejected` |
+| 5xx, timeout, network failure | `unavailable` | `unavailable` | `unavailable` | `unavailable` |
+| 2xx that breaks the schema, or `expires_in` outside (0, 30 days] | `contract_violation` | `contract_violation` | `contract_violation` (anything but `status: true`) | `contract_violation` |
+
+The routes turn `invalid_grant` into 400 — `invalid_code` on the callback and the email login,
+`invalid_email` on `send-code` — and everything else into 502 (`brokerOutcome` in `routes.ts`).
 
 A 400 on the code exchange is also what our own malformed request gets (`Validation failed`), so
 such a bug reaches the browser as `invalid_code`, and the callback's warn line cannot tell it from
@@ -406,9 +499,9 @@ Backend only, never the worker (the worker neither exchanges grants nor decrypts
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `BROKER_CLIENT_ID`, `BROKER_CLIENT_SECRET` | the OAuth client registered in the broker's cabinet (#8)                                                   |
 | `BROKER_OAUTH_AUTHORIZE_URL`               | the page the bot links to; `https:` only                                                                   |
-| `BROKER_API_BASE_URL`                      | the API host both `POST /v1/broker/oauth/token` and `POST /v1/broker/user-auth/refresh` live on: `https://api.binodex.app`; `https:` only. `binodex.app` without `api.` answers 405 to every API call |
+| `BROKER_API_BASE_URL`                      | the API host every `POST /v1/broker/...` call in `BROKER_ENDPOINTS` lives on: `https://api.binodex.app`; `https:` only. `binodex.app` without `api.` answers 405 to every API call |
 | `BROKER_OAUTH_REDIRECT_URI`                | must match the value registered with the client; `http:` only for `127.0.0.1` or `localhost`               |
-| `BROKER_PARTNER_REF`                       | the short partner code, `<code>` from `https://bdclick.app/smart/<code>` — never the link: `[A-Za-z0-9_-]`, 1-64 chars, checked at backend startup (`parsePartnerCode` in `apps/backend/src/env.ts`). Sent as `ref` on every authorization request, so a new user registers under this installation's partner account; #162 sends it as `partner_code` |
+| `BROKER_PARTNER_REF`                       | the short partner code, `<code>` from `https://bdclick.app/smart/<code>` — never the link: `[A-Za-z0-9_-]`, 1-64 chars, checked at backend startup (`parsePartnerCode` in `apps/backend/src/env.ts`). Sent as `ref` on every authorization request and as `partner_code` on every email login, so a new user registers under this installation's partner account |
 | `TOKEN_ENCRYPTION_KEY`                     | 32 bytes, base64; `openssl rand -base64 32`                                                                |
 | `TOKEN_ENCRYPTION_KEY_ID`                  | names the key for rotation; no `\|`, no whitespace (the cipher binds with it)                              |
 
@@ -445,9 +538,11 @@ not.
 - **#10** owns the starter pack, the confirm button and the outcome message in the bot. Re-linking
   an account that belongs to another Telegram user is out of scope: `broker_account_taken` is
   final, and moving an account is a separate support task.
-- **#162** owns the email + code login; it reuses `refresh`, the transport and the status map in
-  `oauth-client.ts`.
+- **#162** is the backend half of the email + code login ([Email login](#email-login-issue-162)):
+  the client calls, the two routes, the activation and the starter pack. **#171** owns the bot's
+  side: the address → code dialog, its state, the buttons and texts.
 - **ARCH-01 (#40)** will call `ensureFreshAccessToken` before talking to the broker socket.
 - **#35** owns the reusable mock broker; the stub next to the client
   (`apps/backend/src/broker/testing/oauth-stub.ts`) exists so this suite can prove code expiry,
-  single use and refresh-family behaviour, with the statuses and error bodies of the live broker.
+  single use and refresh-family behaviour, and the email codes' single use and partner check,
+  with the statuses and error bodies of the live broker.
