@@ -11,6 +11,7 @@ import {
 import type { Db } from './client';
 import type { TokenCipher } from './crypto';
 import { TokenField } from './crypto';
+import { grantLinkBonus, type LinkBonusGrant } from './link-bonus-ops';
 import { brokerAccounts } from './schema/broker-accounts';
 import { oauthStates } from './schema/oauth-states';
 import { users } from './schema/users';
@@ -312,12 +313,14 @@ export async function revokeAccountIfUnchanged(
 }
 
 export type ConfirmBrokerAccountResult =
-  | { ok: true; account: BrokerAccountRow }
+  | { ok: true; account: BrokerAccountRow; grant: LinkBonusGrant }
   | { ok: false; reason: 'user_blocked' | 'not_found' | 'not_pending' };
 
 // The step that turns "someone authorized at the broker" into "this Telegram user owns that
 // account". The user row is read under the same transaction as the account, in the lock order
-// every other writer here uses, so a block landing concurrently cannot slip past.
+// every other writer here uses, so a block landing concurrently cannot slip past. The first
+// activation is also what earns the starter pack, in the same transaction: an account that
+// stays pending, or a confirm that rolls back, pays nothing.
 export async function confirmBrokerAccount(
   db: Db,
   { telegramUserId, accountId }: { telegramUserId: bigint; accountId: string },
@@ -334,7 +337,11 @@ export async function confirmBrokerAccount(
     // the account id comes from the caller, so ownership is part of the lookup rather than a
     // check afterwards: a row that is not theirs must be indistinguishable from one that is gone
     const [account] = await tx
-      .select({ id: brokerAccounts.id, status: brokerAccounts.status })
+      .select({
+        id: brokerAccounts.id,
+        status: brokerAccounts.status,
+        isPartnerClient: brokerAccounts.isPartnerClient,
+      })
       .from(brokerAccounts)
       .where(and(eq(brokerAccounts.id, accountId), eq(brokerAccounts.userId, user.id)))
       .for('no key update');
@@ -347,7 +354,8 @@ export async function confirmBrokerAccount(
       .where(eq(brokerAccounts.id, account.id))
       .returning();
     if (confirmed === undefined) throw new Error('broker account confirm returned no row');
-    return { ok: true, account: confirmed };
+    const grant = await grantLinkBonus(tx, { userId: user.id, account });
+    return { ok: true, account: confirmed, grant };
   });
 }
 

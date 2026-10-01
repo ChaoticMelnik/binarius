@@ -145,6 +145,13 @@ export const OAuthErrorCode = {
 } as const;
 export type OAuthErrorCode = (typeof OAuthErrorCode)[keyof typeof OAuthErrorCode];
 
+// Why a confirmed link paid no starter pack. Not an error: the account is linked either way.
+export const LinkBonusSkipReason = {
+  NotPartnerClient: 'not_partner_client',
+  AlreadyGranted: 'already_granted',
+} as const;
+export type LinkBonusSkipReason = (typeof LinkBonusSkipReason)[keyof typeof LinkBonusSkipReason];
+
 export const startLoginRequestSchema = z.object({ telegramUserId: telegramUserIdSchema });
 export type StartLoginRequest = z.infer<typeof startLoginRequestSchema>;
 

@@ -4,6 +4,7 @@ export * from './migrate';
 export * from './crypto';
 export * from './trade-intent-ops';
 export * from './oauth-ops';
+export * from './link-bonus-ops';
 export * from './user-ops';
 export * from './staff-password';
 export * from './staff-ops';
