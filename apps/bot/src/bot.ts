@@ -168,7 +168,7 @@ export function createBot({
       });
       return;
     }
-    // independent, as in connect: the outcome message matters more than the spinner
+    // independent, as in oauth: the outcome message matters more than the spinner
     const [answered, confirmed] = await Promise.allSettled([
       ctx.answerCallbackQuery(),
       backend.confirmLogin(String(ctx.from.id), accountId.data),
@@ -197,7 +197,7 @@ export function createBot({
         logAnswerFailure(error);
       });
       // no address yet, or no dialog at all: there is nothing to send a code to
-      await ctx.reply(state === undefined ? TEXTS.dialogExpired : TEXTS.emailPrompt);
+      await ctx.reply(state === undefined ? TEXTS.codeRequestStale : TEXTS.emailPrompt);
       return;
     }
     // independent, as in confirm
@@ -399,16 +399,6 @@ export function createBot({
 // back to the Telegram id instead: the only identity the bot is certain to have. Bot API says
 // first_name is non-empty, but not that it survives a trim, so this is depth rather than dead
 // code.
-// What every /users/start carries apart from the payload: /start adds that one, and the recheck
-// after an email login sends none.
-function startRequestOf(from: User): UserStartRequest {
-  return {
-    telegramUserId: String(from.id),
-    displayName: displayNameOf(from),
-    ...languageOf(from.language_code),
-  };
-}
-
 function displayNameOf(from: User): string {
   const parsed = userStartRequestSchema.shape.displayName.safeParse(
     [from.first_name, from.last_name].filter(Boolean).join(' '),
@@ -424,6 +414,16 @@ function payloadOf(match: unknown): Pick<UserStartRequest, 'startPayload'> {
 function languageOf(languageCode: string | undefined): Pick<UserStartRequest, 'languageCode'> {
   const parsed = languageCodeSchema.safeParse(languageCode);
   return parsed.success ? { languageCode: parsed.data } : {};
+}
+
+// What every /users/start carries apart from the payload: /start adds that one, and the recheck
+// after an email login sends none.
+function startRequestOf(from: User): UserStartRequest {
+  return {
+    telegramUserId: String(from.id),
+    displayName: displayNameOf(from),
+    ...languageOf(from.language_code),
+  };
 }
 
 function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineKeyboard {

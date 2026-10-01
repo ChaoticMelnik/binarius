@@ -28,6 +28,12 @@ describe('texts', () => {
     expect(TEXTS.welcome).toContain(`«${TEXTS.oauthButton}»`);
   });
 
+  // the same button is pressed after a successful login too, where "expired" would read as a
+  // failure (review of PR #176, finding 5)
+  it('does not tell a user without a dialog that the code expired', () => {
+    expect(TEXTS.codeRequestStale).not.toMatch(/истек/i);
+  });
+
   it('labels the confirm button with the email, or without one when the broker sent none', () => {
     expect(TEXTS.confirmButton('ada@example.test')).toBe('Подтвердить: ada@example.test');
     expect(TEXTS.confirmButton(null)).toBe('Подтвердить привязку');
