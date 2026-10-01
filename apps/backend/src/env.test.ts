@@ -220,6 +220,25 @@ describe('broker OAuth configuration', () => {
     },
   );
 
+  // the broker redirects to apps/web's page, and the Mini App URL is derived from this origin
+  it.each([
+    'https://bot.example/callback',
+    'https://bot.example/oauth/callback/',
+    'https://bot.example/auth/callback',
+    'http://localhost:3000/auth/callback',
+  ])('rejects the redirect %s whose path is not the callback page', (value) => {
+    expect(() => parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: value })).toThrow(
+      'Env BROKER_OAUTH_REDIRECT_URI must end with /oauth/callback, the page apps/web serves',
+    );
+  });
+
+  it('accepts a redirect whose path is exactly the callback page', () => {
+    expect(
+      parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: 'https://bot.example/oauth/callback' })
+        .brokerOauthRedirectUri,
+    ).toBe('https://bot.example/oauth/callback');
+  });
+
   // the redirect target during development is a page on this machine, which no proxy sees
   it.each(['http://127.0.0.1:3000/oauth/callback', 'http://localhost:3000/oauth/callback'])(
     'accepts %s as a loopback redirect',

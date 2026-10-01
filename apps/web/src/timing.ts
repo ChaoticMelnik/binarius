@@ -1,4 +1,5 @@
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
+import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 
 // Every bound this process runs under, and what each one bounds. The chain is checked at
 // import, so a constant edited into an impossible order stops the process rather than
@@ -10,15 +11,20 @@ import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
 // login that is still going to succeed, and the staff member would see an error over a
 // challenge that exists.
 export const BACKEND_REQUEST_TIMEOUT_MS = 8_000;
+// The forward of the Mini App's callback to the backend's public POST /auth/binodex/callback.
+// Above what the backend may spend there — the code exchange and the push — for the same
+// reason: giving up earlier would show the user an unknown outcome over a link that happened.
+export const OAUTH_CALLBACK_REQUEST_TIMEOUT_MS = 10_000;
 // app.close() waits for the request in flight, and the longest thing a request waits on is
 // exactly one backend call.
-export const SHUTDOWN_BUDGET_MS = 9_000;
+export const SHUTDOWN_BUDGET_MS = 11_000;
 // stop_grace_period of the compose service `web`, kept in step by timing.test.ts.
-export const COMPOSE_STOP_GRACE_PERIOD_MS = 12_000;
+export const COMPOSE_STOP_GRACE_PERIOD_MS = 14_000;
 
 export const TIMING_CHAIN_HOLDS =
   ADMIN_LOGIN_BUDGET_MS < BACKEND_REQUEST_TIMEOUT_MS &&
-  BACKEND_REQUEST_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
+  OAUTH_CALLBACK_BUDGET_MS < OAUTH_CALLBACK_REQUEST_TIMEOUT_MS &&
+  Math.max(BACKEND_REQUEST_TIMEOUT_MS, OAUTH_CALLBACK_REQUEST_TIMEOUT_MS) < SHUTDOWN_BUDGET_MS &&
   SHUTDOWN_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('web timing constants are out of order (see timing.ts)');

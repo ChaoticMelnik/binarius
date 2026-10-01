@@ -67,4 +67,22 @@ describe('layout', () => {
     expect(page).not.toContain('<style');
     expect(page).not.toContain('<script');
   });
+
+  it('places the head fragment inside <head>, after the stylesheet', () => {
+    const page = layout({
+      title: 't',
+      body: html`<p>hi</p>`,
+      head: html`<script src="/x.js"></script>`,
+    }).value;
+    const head = page.slice(page.indexOf('<head>'), page.indexOf('</head>'));
+    expect(head).toContain('<script src="/x.js"></script>');
+    expect(head.indexOf('app.css')).toBeLessThan(head.indexOf('/x.js'));
+  });
+
+  it('marks the body with the page name only when one is given', () => {
+    expect(layout({ title: 't', body: html`` }).value).toContain('<body>');
+    expect(layout({ title: 't', body: html``, page: 'login' }).value).toContain(
+      '<body data-page="login">',
+    );
+  });
 });

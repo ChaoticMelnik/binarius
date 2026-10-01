@@ -340,7 +340,7 @@ describe('the welcome video', () => {
 });
 
 describe('the oauth button', () => {
-  it('answers the query and sends the authorize link as a url button', async () => {
+  it('answers the query and opens the Mini App login page in a web_app button', async () => {
     const { bot, backend, calls } = setup();
     await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
 
@@ -348,10 +348,22 @@ describe('the oauth button', () => {
     expect(calls.map((call) => call.method)).toContain('answerCallbackQuery');
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.loginLink);
-    expect(inlineButtons(message)[0]).toMatchObject({
-      text: TEXTS.loginButton,
-      url: LOGIN.authorizeUrl,
+    expect(inlineButtons(message)).toEqual([
+      { text: TEXTS.loginButton, web_app: { url: LOGIN.miniAppUrl } },
+    ]);
+  });
+
+  // the backend sends no Mini App URL for an http redirect: Telegram refuses one in web_app
+  it('falls back to the authorize link as a url button when there is no Mini App url', async () => {
+    const { authorizeUrl, state, expiresAt } = LOGIN;
+    const { bot, calls } = setup({
+      startLogin: vi.fn(() => Promise.resolve({ authorizeUrl, state, expiresAt })),
     });
+    await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
+
+    expect(inlineButtons(sentPayload(calls, 'sendMessage'))).toEqual([
+      { text: TEXTS.loginButton, url: LOGIN.authorizeUrl },
+    ]);
   });
 
   it('still sends the link when answering the query fails', async () => {

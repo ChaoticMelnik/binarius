@@ -9,6 +9,7 @@ const env = parseEnv(process.env);
 const app = buildWebApp({
   backend: createBackendClient({ baseUrl: env.backendUrl, token: env.adminWebToken }),
   publicOrigin: env.publicOrigin,
+  brokerAuthorizeUrl: env.brokerAuthorizeUrl,
   secureCookies: env.secureCookies,
   logLevel: env.logLevel,
 });

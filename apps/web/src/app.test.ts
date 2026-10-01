@@ -73,11 +73,15 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
       calls.logout.push(token);
       return { loggedOut: true };
     },
+    oauthCallback: async () => {
+      throw new Error('the admin pages never forward an OAuth callback');
+    },
     ...backend,
   };
   return buildWebApp({
     backend: client,
     publicOrigin: ORIGIN,
+    brokerAuthorizeUrl: 'https://binodex.app/oauth/authorize',
     secureCookies,
     logLevel: 'info',
     logDestination: { write: (line) => lines.push(line) },

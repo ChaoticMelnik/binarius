@@ -12,6 +12,7 @@ import {
   type EnvSource,
   type UrlEnvRules,
 } from '@binarius/shared';
+import { OAUTH_CALLBACK_PATH } from '@binarius/shared/oauth';
 
 // the compose probe timeout (3s) is sized above this ceiling
 const MIN_HEALTH_TIMEOUT_MS = 500;
@@ -71,15 +72,28 @@ export function parseEnv(source: EnvSource): Env {
       'BROKER_API_BASE_URL',
       HTTPS_ONLY_RULES,
     ),
-    // the redirect target is a local page during development; it never leaves the machine
-    brokerOauthRedirectUri: parseLoopbackOrHttpsUrlEnv(
-      readEnv(source, 'BROKER_OAUTH_REDIRECT_URI'),
-      'BROKER_OAUTH_REDIRECT_URI',
-    ),
+    brokerOauthRedirectUri: parseRedirectUri(source),
     brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),
     ...parseBotTokens(source),
     ...parseTokenEncryption(source),
   };
+}
+
+// The broker redirects to apps/web's callback page, and the backend derives the Mini App's login
+// page from this URI's origin, so a path other than OAUTH_CALLBACK_PATH would send every login to
+// a page nothing serves. The redirect target is a local page during development; it never leaves
+// the machine.
+function parseRedirectUri(source: EnvSource): string {
+  const value = parseLoopbackOrHttpsUrlEnv(
+    readEnv(source, 'BROKER_OAUTH_REDIRECT_URI'),
+    'BROKER_OAUTH_REDIRECT_URI',
+  );
+  if (new URL(value).pathname !== OAUTH_CALLBACK_PATH) {
+    throw new Error(
+      `Env BROKER_OAUTH_REDIRECT_URI must end with ${OAUTH_CALLBACK_PATH}, the page apps/web serves`,
+    );
+  }
+  return value;
 }
 
 // Both bearers this process accepts, validated together because what matters is the pair.

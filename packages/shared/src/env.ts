@@ -56,7 +56,7 @@ export function parseUrlEnv(raw: string, name: string, rules: UrlEnvRules): stri
 }
 
 // A URL that is either https, or http pointed at this machine. Two variables need exactly
-// this rule — the OAuth redirect the broker delivers to, and the origin the admin pages are
+// this rule — the OAuth redirect the broker delivers to, and the origin the apps/web pages are
 // served from — and the wording of the refusal is quoted by both suites.
 const LOOPBACK_OR_HTTPS_RULES: UrlEnvRules = {
   protocols: ['https:', 'http:'],

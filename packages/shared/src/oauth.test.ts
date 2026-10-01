@@ -4,6 +4,7 @@ import {
   emailAddressSchema,
   emailLoginCodeSchema,
   INIT_DATA_MAX_LENGTH,
+  OAUTH_CALLBACK_BUDGET_MS,
   OAuthErrorCode,
   safeParseBrokerEmailSendCodeResponse,
   safeParseEmailLoginRequest,
@@ -11,11 +12,13 @@ import {
   safeParseEmailSendCodeRequest,
   safeParseEmailSendCodeResponse,
   brokerAccountViewSchema,
+  startLoginResponseSchema,
   safeParseConfirmLoginResponse,
   parseOAuthTokenResponse,
   parseRefreshTokenResponse,
   parseWidgetSessionResponse,
   safeParseOAuthCallbackRequest,
+  safeParseOAuthCallbackResponse,
   safeParseOAuthTokenResponse,
   safeParseRefreshTokenResponse,
   safeParseStartLoginRequest,
@@ -117,6 +120,40 @@ describe('login flow contract (issue #9)', () => {
     expect(safeParseStartLoginRequest({}).success).toBe(false);
   });
 
+  it('accepts a start response with or without the Mini App URL', () => {
+    const answer = {
+      authorizeUrl: 'https://binodex.app/oauth/authorize?state=s',
+      state: 's',
+      expiresAt: '2026-10-01T10:00:00.000Z',
+    };
+    expect(startLoginResponseSchema.safeParse(answer)).toMatchObject({ success: true, data: answer });
+    const miniAppUrl = 'https://bot.example/oauth/login?authorize=x';
+    expect(startLoginResponseSchema.safeParse({ ...answer, miniAppUrl })).toMatchObject({
+      success: true,
+      data: { miniAppUrl },
+    });
+    expect(startLoginResponseSchema.safeParse({ ...answer, miniAppUrl: 'not a url' }).success).toBe(false);
+  });
+
+  it('parses the callback answer as the account view alone', () => {
+    const account = {
+      id: '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01',
+      brokerUserId: 'broker-1',
+      email: null,
+      isPartnerClient: true,
+      status: 'pending',
+      createdAt: '2026-09-23T09:21:52.000Z',
+    };
+    expect(safeParseOAuthCallbackResponse({ account })).toMatchObject({
+      success: true,
+      data: { account },
+    });
+    expect(safeParseOAuthCallbackResponse({}).success).toBe(false);
+    expect(safeParseOAuthCallbackResponse({ account: { ...account, id: 'x' } }).success).toBe(
+      false,
+    );
+  });
+
   it('bounds the callback fields to what the broker and Telegram can send', () => {
     const valid = { state: 'a'.repeat(43), code: 'c'.repeat(64), initData: 'i'.repeat(300) };
     expect(safeParseOAuthCallbackRequest(valid).success).toBe(true);
@@ -172,6 +209,15 @@ describe('login flow contract (issue #9)', () => {
     expect(brokerAccountViewSchema.parse({ ...view, isPartnerClient: false }).isPartnerClient).toBe(
       false,
     );
+  });
+});
+
+describe('OAUTH_CALLBACK_BUDGET_MS', () => {
+  it('is the number both timing chains are sized against', () => {
+    expect(
+      OAUTH_CALLBACK_BUDGET_MS,
+      'both chains compare against this number — the backend fits inside it (apps/backend/src/timing.test.ts), apps/web waits longer than it (apps/web/src/timing.test.ts). Change it together with them.',
+    ).toBe(8_000);
   });
 });
 

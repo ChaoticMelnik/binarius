@@ -51,6 +51,8 @@ export const LOGIN: StartLoginResponse = {
   authorizeUrl: 'https://binodex.app/oauth/authorize?state=abc',
   state: 'abc',
   expiresAt: '2026-09-24T10:10:00.000Z',
+  miniAppUrl:
+    'https://bot.example/oauth/login?authorize=https%3A%2F%2Fbinodex.app%2Foauth%2Fauthorize%3Fstate%3Dabc',
 };
 
 export const PENDING_ACCOUNT_ID = '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01';
@@ -204,7 +206,12 @@ export const sentPayload = (
 export const inlineButtons = (payload: Record<string, unknown> | undefined) =>
   (
     payload?.reply_markup as {
-      inline_keyboard?: { text: string; callback_data?: string; url?: string }[][];
+      inline_keyboard?: {
+        text: string;
+        callback_data?: string;
+        url?: string;
+        web_app?: { url: string };
+      }[][];
     }
   )?.inline_keyboard?.flat() ?? [];
 

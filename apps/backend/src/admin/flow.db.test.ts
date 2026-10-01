@@ -86,6 +86,7 @@ beforeAll(async () => {
       token: WEB_TOKEN,
     }),
     publicOrigin: ORIGIN,
+    brokerAuthorizeUrl: 'https://binodex.app/oauth/authorize',
     secureCookies: false,
     logLevel: 'silent',
   });

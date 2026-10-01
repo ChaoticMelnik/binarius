@@ -169,6 +169,17 @@ describe('startLogin', () => {
     expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
   });
 
+  it('accepts a response without the Mini App url, for an http redirect', async () => {
+    const { authorizeUrl, state, expiresAt } = LOGIN;
+    const withoutMiniApp = { authorizeUrl, state, expiresAt };
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, withoutMiniApp);
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).startLogin('4242')).toEqual(
+      withoutMiniApp,
+    );
+  });
+
   it('carries the backend error code as the reason', async () => {
     const { baseUrl } = await serve((_request, reply) => {
       json(reply, 409, { error: OAuthErrorCode.UserBlocked });

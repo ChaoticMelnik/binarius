@@ -1,4 +1,5 @@
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
+import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
 
@@ -71,8 +72,10 @@ export const GRAMMY_POLLING_BACKOFF_MS = 3_000;
 export const TIMING_CHAIN_HOLDS =
   DEFAULT_PUBLISHER_CONFIG.publishTimeoutMs < SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  // the callback's longest path: the code exchange, then the push
-  BROKER_HTTP_TIMEOUT_MS + LINK_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the callback's longest path: the code exchange, then the push. The contract constant lives
+  // in packages/shared because apps/web sizes its forward's timeout above the same number.
+  BROKER_HTTP_TIMEOUT_MS + LINK_PUSH_TELEGRAM_API_TIMEOUT_MS <= OAUTH_CALLBACK_BUDGET_MS &&
+  OAUTH_CALLBACK_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   ADMIN_POLLING_BATCH_LIMIT === 1 &&
   ADMIN_POLLING_TIMEOUT_S * 1000 < ADMIN_TELEGRAM_API_TIMEOUT_MS &&
   // what POST /admin/auth/login may spend: the wait for a scrypt slot, the scrypt, and the one

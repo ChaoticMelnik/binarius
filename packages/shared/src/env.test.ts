@@ -147,27 +147,27 @@ describe('parseOriginEnv', () => {
     ['http://localhost:3001/', 'http://localhost:3001'],
     ['https://admin.example:443/', 'https://admin.example'],
   ])('normalises %s to %s', (raw, origin) => {
-    expect(parseOriginEnv(raw, 'ADMIN_PUBLIC_URL')).toBe(origin);
+    expect(parseOriginEnv(raw, 'WEB_PUBLIC_URL')).toBe(origin);
   });
 
   it('refuses http for a host that is not this machine', () => {
-    expect(() => parseOriginEnv('http://admin.example', 'ADMIN_PUBLIC_URL')).toThrow(
-      'Env ADMIN_PUBLIC_URL may only use http for 127.0.0.1 or localhost',
+    expect(() => parseOriginEnv('http://admin.example', 'WEB_PUBLIC_URL')).toThrow(
+      'Env WEB_PUBLIC_URL may only use http for 127.0.0.1 or localhost',
     );
   });
 
   it.each(['https://admin.example/path', 'https://admin.example/?a=1', 'https://admin.example/#x'])(
     'refuses %s rather than dropping what it carries',
     (raw) => {
-      expect(() => parseOriginEnv(raw, 'ADMIN_PUBLIC_URL')).toThrow(
-        'Env ADMIN_PUBLIC_URL must be an origin without a path, query or fragment',
+      expect(() => parseOriginEnv(raw, 'WEB_PUBLIC_URL')).toThrow(
+        'Env WEB_PUBLIC_URL must be an origin without a path, query or fragment',
       );
     },
   );
 
   it('refuses credentials', () => {
-    expect(() => parseOriginEnv('https://user:pass@admin.example', 'ADMIN_PUBLIC_URL')).toThrow(
-      'Env ADMIN_PUBLIC_URL must not carry credentials',
+    expect(() => parseOriginEnv('https://user:pass@admin.example', 'WEB_PUBLIC_URL')).toThrow(
+      'Env WEB_PUBLIC_URL must not carry credentials',
     );
   });
 });
