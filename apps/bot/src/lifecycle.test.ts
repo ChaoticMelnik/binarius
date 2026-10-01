@@ -276,6 +276,8 @@ function scene(options: SceneOptions = {}) {
     recordStart: options.recordStart ?? (() => Promise.resolve(USER_VIEW)),
     startLogin: () => Promise.reject(new Error('not used by these scenes')),
     confirmLogin: () => Promise.reject(new Error('not used by these scenes')),
+    sendEmailCode: () => Promise.reject(new Error('not used by these scenes')),
+    emailLogin: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({
     token: TOKEN,

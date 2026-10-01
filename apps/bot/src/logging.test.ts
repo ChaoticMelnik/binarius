@@ -9,6 +9,7 @@ import { CONNECT_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
 import {
   BOT_INFO,
+  CODE_SENT,
   CONFIRMED,
   LOGIN,
   PENDING_ACCOUNT_ID,
@@ -47,6 +48,8 @@ interface Scenario {
   recordStart?: BackendClient['recordStart'];
   startLogin?: BackendClient['startLogin'];
   confirmLogin?: BackendClient['confirmLogin'];
+  sendEmailCode?: BackendClient['sendEmailCode'];
+  emailLogin?: BackendClient['emailLogin'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -58,6 +61,8 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     recordStart: scenario.recordStart ?? (() => Promise.resolve(USER_VIEW)),
     startLogin: scenario.startLogin ?? (() => Promise.resolve(LOGIN)),
     confirmLogin: scenario.confirmLogin ?? (() => Promise.resolve(CONFIRMED)),
+    sendEmailCode: scenario.sendEmailCode ?? (() => Promise.resolve(CODE_SENT)),
+    emailLogin: scenario.emailLogin ?? (() => Promise.resolve(CONFIRMED)),
   };
   const bot = createBot({
     token: TOKEN,

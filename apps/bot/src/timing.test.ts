@@ -9,6 +9,7 @@ import { BackendError, BackendErrorCode, type BackendClient } from './backend-cl
 import { CONNECT_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
 import {
   BOT_INFO,
+  CODE_SENT,
   CONFIRMED,
   LOGIN,
   PENDING_ACCOUNT_ID,
@@ -44,6 +45,8 @@ interface Branch {
   recordStart?: BackendClient['recordStart'];
   startLogin?: BackendClient['startLogin'];
   confirmLogin?: BackendClient['confirmLogin'];
+  sendEmailCode?: BackendClient['sendEmailCode'];
+  emailLogin?: BackendClient['emailLogin'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -86,6 +89,14 @@ async function observe(branch: Branch): Promise<Calls> {
     confirmLogin: (telegramUserId, accountId) => {
       backend += 1;
       return (branch.confirmLogin ?? (() => Promise.resolve(CONFIRMED)))(telegramUserId, accountId);
+    },
+    sendEmailCode: (telegramUserId, email) => {
+      backend += 1;
+      return (branch.sendEmailCode ?? (() => Promise.resolve(CODE_SENT)))(telegramUserId, email);
+    },
+    emailLogin: (telegramUserId, email, code) => {
+      backend += 1;
+      return (branch.emailLogin ?? (() => Promise.resolve(CONFIRMED)))(telegramUserId, email, code);
     },
   };
   const bot = createBot({
