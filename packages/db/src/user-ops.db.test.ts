@@ -232,7 +232,12 @@ describe('the source survives linking a broker account', () => {
         isPartnerClient: false,
       },
     };
-    const linked = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
+    const linked = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: false,
+    });
     expect(linked.ok).toBe(true);
     if (!linked.ok) throw new Error('link failed');
 

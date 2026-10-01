@@ -183,6 +183,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
           telegramUserId: consumed.telegramUserId,
           tokens,
           cipher: deps.cipher,
+          activate: false,
         });
         if (!linked.ok) {
           return reply.code(409).send({

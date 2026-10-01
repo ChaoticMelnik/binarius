@@ -83,7 +83,12 @@ async function pendingAccount(email?: string): Promise<BrokerAccountRow> {
   const code = stub.issueCode({ brokerUserId: `svc-broker-${n}`, email });
   const tokens = await broker.exchangeCode({ code, redirectUri: REDIRECT_URI });
   const telegramUserId = BigInt(900_000 + n);
-  const linked = await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher });
+  const linked = await linkBrokerAccount(tmp.db, {
+    telegramUserId,
+    tokens,
+    cipher,
+    activate: false,
+  });
   if (!linked.ok) throw new Error(`link failed: ${linked.reason}`);
   telegramIds.set(linked.account.id, telegramUserId);
   return linked.account;

@@ -210,7 +210,12 @@ describe('status map', () => {
     ['email/send-code', 503, live('Service unavailable'), 'unavailable'],
     ['email/login', 400, live('Invalid or expired code'), 'invalid_grant'],
     // a partner code that is not ours reads as a bad code: the accepted cost of not reading the body
-    ['email/login', 400, live('partner_code does not belong to your partner account'), 'invalid_grant'],
+    [
+      'email/login',
+      400,
+      live('partner_code does not belong to your partner account'),
+      'invalid_grant',
+    ],
     ['email/login', 401, live('Authentication failed: Invalid client credentials'), 'rejected'],
     ['email/login', 502, '', 'unavailable'],
   ] as const)('%s %i with %j is %s', async (name, status, body, expected) => {
