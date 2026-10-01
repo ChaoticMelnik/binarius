@@ -58,7 +58,7 @@ If a project-specific schema/design skill is installed (`drizzle-orm-patterns` f
 
 ### Step 4a: Size gate (owner's rule, 2026-09-30)
 
-One issue = one PR of **≤ ~2000 added lines, tests and docs included; 3000 is the ceiling**. Review rounds grow with diff size: PRs of 6-12k lines took 4-8 rounds (#7, #9, #22, #68), PRs under ~2k took 1-2.
+One issue = one PR of **≤ ~2000 added lines, tests and docs included; 3000 is the ceiling**. Generated files do not count: `packages/db/drizzle/meta/*_snapshot.json` alone is ~2 800 lines for any schema change, lands whole in whichever PR carries the migration, and no split can shrink it (owner, 2026-10-01, #10); the migration SQL and `_journal.json` do count. Review rounds grow with diff size: PRs of 6-12k lines took 4-8 rounds (#7, #9, #22, #68), PRs under ~2k took 1-2.
 
 Estimate from Step 4's file list, calibrated on this repo's actuals rather than intuition — tests here are typically 1-2x the code: #6 contracts 2.1k, #7 schema 7.5k, #42 transport 7.2k, #22 bot /start 6.1k, #9 OAuth 11.5k, #68 staff login 11.8k.
 
