@@ -6,6 +6,7 @@ import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
 import {
   COMPOSE_STOP_GRACE_PERIOD_MS,
+  LINK_PUSH_TELEGRAM_API_TIMEOUT_MS,
   SHUTDOWN_PHASE1_BUDGET_MS,
   SHUTDOWN_PHASE2_BUDGET_MS,
 } from './timing';
@@ -21,6 +22,9 @@ describe('backend shutdown timing', () => {
   it('keeps the publish deadline under phase 1 and both phases under the stop grace period', () => {
     expect(DEFAULT_PUBLISHER_CONFIG.publishTimeoutMs).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(BROKER_HTTP_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(BROKER_HTTP_TIMEOUT_MS + LINK_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(
+      SHUTDOWN_PHASE1_BUDGET_MS,
+    );
     expect(SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS).toBeLessThan(
       COMPOSE_STOP_GRACE_PERIOD_MS,
     );

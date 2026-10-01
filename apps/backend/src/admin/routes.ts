@@ -35,7 +35,7 @@ import {
 import { internalBearerAuth } from '../auth/internal';
 import { createKeyedWindow, createWindow } from '../auth/rate-window';
 import { createPasswordQueue, PasswordQueueOverflow, type PasswordQueue } from './password-queue';
-import { telegramErrorFields } from './telegram-logging';
+import { telegramErrorFields } from '../telegram-logging';
 import type { AdminTelegram } from './telegram';
 
 // Ceilings on the two unauthenticated routes, taken before the body is read: they bound how

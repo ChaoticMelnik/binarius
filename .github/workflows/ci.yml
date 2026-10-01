@@ -122,8 +122,9 @@ jobs:
       # fixtures for this job, not configuration anyone ships. TOKEN_ENCRYPTION_KEY_ID and
       # BROKER_PARTNER_REF are not secrets; they are here because they are required, the key id
       # also because the all-zero key is only valid paired with it, and the partner code is one
-      # the backend's startup check accepts. TELEGRAM_BOT_TOKEN is here for the same reason — the whole file is
-      # interpolated before any service is picked — and the `bot` service is never started.
+      # the backend's startup check accepts. TELEGRAM_BOT_TOKEN is required too: the backend reads it
+      # (the push after the OAuth callback, #128, never called here) and refuses to start when it
+      # equals ADMIN_BOT_TOKEN; the `bot` service is never started.
       # ADMIN_BOT_TOKEN is a fake the staff bot's getMe is refused for: the backend logs that,
       # leaves isPolling() false and keeps serving, which is what this job then checks.
       INTERNAL_API_TOKEN: ci-internal-token-value

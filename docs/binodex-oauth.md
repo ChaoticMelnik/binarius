@@ -16,6 +16,8 @@ the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contra
 | Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token`, the refresh on `POST /v1/broker/user-auth/refresh`, and the email `send-code` and `login`, one attempt each, under a real abort; `BROKER_ENDPOINTS` is the one table of paths and statuses |
 | Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/start`, `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`, `POST /auth/binodex/email/send-code`, `POST /auth/binodex/email/login` |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
+| Push      | `apps/backend/src/auth/link-notifier.ts`  | the one `sendMessage` after the callback (#128), on the public bot's token, without polling it   |
+| Link texts | `packages/shared/src/link-confirmation.ts` | the texts and the confirm button's callback data the bot and the push both send               |
 
 ## Sequence
 
@@ -27,6 +29,7 @@ user ──opens authorizeUrl──▶ binodex.app  (client_id, redirect_uri, st
 broker ──code + state──▶ page/popup (#32)
 page ──POST /auth/binodex/callback (public)──▶ backend
         │  CAS on the state row  ──▶ exchange code ──▶ link user + broker account (pending)
+        │  after the commit: sendMessage to the state's Telegram id ──▶ "Подтвердить" button (#128)
         ◀── { account }
 user ──/start──▶ bot: pendingBrokerAccounts is not empty ──▶ "Подтвердить" button (#10)
 bot ──POST /auth/binodex/confirm (internal token)──▶ backend   pending ──▶ active, starter pack
@@ -164,6 +167,46 @@ its owner confirmed it once already; one that is still `pending` stays `pending`
 second login is not the confirmation nobody gave. It does not touch `trading_halted` or
 `halted_reason`: those belong to reconciliation (ARCH-04), and an account halted for an
 ambiguous match stays halted through a re-login.
+
+## The push after the callback (#128)
+
+The user learns how the login ended from the bot, not from the page the broker sent them to: right
+after `POST /auth/binodex/callback` has an outcome, the backend sends one message to the Telegram
+id the state row names — the user who started the login — without waiting for them to come back
+to the chat.
+
+| Outcome of the callback | Status | Message |
+| --- | --- | --- |
+| a new link, or a re-login of an account still `pending` | 200 | «Найдена новая привязка…» with one «Подтвердить: ‹email›» button for that account — what `/start` shows for it (#10); the bot handles the press as before |
+| a re-login of an account that was `active` or `revoked` (it is `active` again) | 200 | «Аккаунт Binodex подключён.», no button: nothing is paid on this path |
+| `user_blocked` | 409 | «Доступ ограничен…» |
+| `broker_account_taken` | 409 | «Этот аккаунт Binodex уже подключён к другому пользователю Telegram…», to the user who started the login, never to the account's owner |
+| `invalid_code`, `broker_unavailable`, `broker_contract_violation` | 400 / 502 | «Не удалось завершить вход через сайт Binodex. Попробуйте ещё раз через /start.» — the state is spent, so a retry needs a new one |
+| `invalid_state` | 400 | none: the state is what names the addressee |
+| a database failure | 500 | none: the outcome is unknown |
+
+One attempt, after `linkBrokerAccount` has committed and outside any transaction, bounded by
+`LINK_PUSH_TELEGRAM_API_TIMEOUT_MS` (3 s, `apps/backend/src/timing.ts`; the code exchange plus
+the push stay inside shutdown phase 1, which the timing chain checks at import). The route
+awaits it, so the page can wait up to those 3 s longer, but its response does not depend on it:
+the status and body are the ones in the table whatever Telegram answers, and nothing is written
+about the push. A push that does not arrive — Telegram refused it (403 when the user blocked the
+bot), was slow, or was unreachable — is made up for by the button on the user's next `/start`;
+there is no queue and no retry.
+
+The backend holds the public bot's token (`TELEGRAM_BOT_TOKEN`) for this and only sends on it: a
+bare grammY `Api` calls nothing until the push, not even `getMe`, so `apps/bot` stays the one
+poller and there is no 409. A failed push is one `warn` line, `the link outcome could not be
+pushed to Telegram`, carrying the error's name, the method, Telegram's error code or the
+transport error's identity, and the outcome's kind (`push`) — no state, code, token or email:
+grammY's transport error wraps a URL with the token in it, and the request payload holds the
+email on the button.
+
+Until the callback page (#114) exists, nothing in a browser calls the route. To see the push,
+start a login with `POST /auth/binodex/start` for your own Telegram id, log in at the
+`authorizeUrl`, take the code from the address bar (as in the live check below) and post it with
+the state to `POST /auth/binodex/callback` within 120 seconds: the chat gets the message for that
+outcome.
 
 ## The starter pack
 
@@ -493,7 +536,8 @@ from every line this application or `SafeLogController` writes.
 
 ## Configuration
 
-Backend only, never the worker (the worker neither exchanges grants nor decrypts tokens):
+Backend only, never the worker (the worker neither exchanges grants nor decrypts tokens);
+`TELEGRAM_BOT_TOKEN` is the one the `bot` service reads as well:
 
 | Variable                                   | Meaning                                                                                                    |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
@@ -504,6 +548,7 @@ Backend only, never the worker (the worker neither exchanges grants nor decrypts
 | `BROKER_PARTNER_REF`                       | the short partner code, `<code>` from `https://bdclick.app/smart/<code>` — never the link: `[A-Za-z0-9_-]`, 1-64 chars, checked at backend startup (`parsePartnerCode` in `apps/backend/src/env.ts`). Sent as `ref` on every authorization request and as `partner_code` on every email login, so a new user registers under this installation's partner account |
 | `TOKEN_ENCRYPTION_KEY`                     | 32 bytes, base64; `openssl rand -base64 32`                                                                |
 | `TOKEN_ENCRYPTION_KEY_ID`                  | names the key for rotation; no `\|`, no whitespace (the cipher binds with it)                              |
+| `TELEGRAM_BOT_TOKEN`                       | the public bot's token, which `bot` polls; the backend only sends the push after the callback on it. No whitespace; the backend refuses to start when it equals `ADMIN_BOT_TOKEN` |
 
 `INTERNAL_API_TOKEN`, `BROKER_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY`,
 `TOKEN_ENCRYPTION_KEY_ID` and `BROKER_PARTNER_REF` have **no deployable default anywhere in this
@@ -531,8 +576,9 @@ not.
 
 - **#22** owns `/start` and the button that calls `POST /auth/binodex/start`; it hands the user
   an authorize URL and nothing else (docs/bot-start.md).
-- **#128** owns the backend's push right after a successful callback: a `sendMessage` to the
-  Telegram id restored from the state, without waiting for the user to come back to the chat.
+- **#128** is the backend's push after the callback ([The push after the callback](#the-push-after-the-callback-128)):
+  a `sendMessage` to the Telegram id restored from the state, on every outcome after the state.
+  **#114** owns the callback page that calls the route from the browser.
 - **#32** owns the login page and the `web_message` popup; it calls the callback route, and it
   is where the `initData` check above closes the handoff gap.
 - **#10** owns the starter pack, the confirm button and the outcome message in the bot. Re-linking

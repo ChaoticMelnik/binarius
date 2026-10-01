@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
-import { confirmLoginResponseSchema, emailLoginResponseSchema } from '@binarius/shared';
+import { confirmLoginResponseSchema, emailLoginResponseSchema, LINK_TEXTS } from '@binarius/shared';
 import {
   LINK_BONUS_TOKENS,
   brokerAccounts,
@@ -23,7 +23,15 @@ import {
 } from '../broker/oauth-client';
 import { startOAuthStub, type OAuthStub } from '../broker/testing/oauth-stub';
 import type { AuthRoutesDeps } from './routes';
-import { unusedAdminDeps } from '../admin/testing';
+import {
+  callsTo,
+  captureApi,
+  inlineButtons,
+  unusedAdminDeps,
+  type CapturedApi,
+} from '../admin/testing';
+import { createLinkNotifier } from './link-notifier';
+import { AUTH_TEXTS } from './texts';
 
 const baseUrl = process.env.DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -36,6 +44,7 @@ const CLIENT_SECRET = 'client-secret-value';
 const REDIRECT_URI = 'https://bot.example/oauth/callback';
 const AUTHORIZE_URL = 'https://binodex.app/oauth/authorize';
 const PARTNER_REF = 'partner-ref';
+const PUSH_BOT_TOKEN = '5678:MARKER-PUSH-TOKEN';
 
 const cipher = createTokenCipher({ keyId: 'test-key', key: randomBytes(32) });
 
@@ -43,6 +52,8 @@ let tmp: TempDatabase;
 let stub: OAuthStub;
 let app: ReturnType<typeof buildApp>;
 let authDeps: AuthRoutesDeps;
+// every push the shared app sends; a case reads only the ones addressed to its own Telegram id
+let pushApi: CapturedApi;
 
 beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
@@ -65,7 +76,9 @@ beforeAll(async () => {
     clientId: CLIENT_ID,
     redirectUri: REDIRECT_URI,
     partnerRef: PARTNER_REF,
+    linkNotifier: createLinkNotifier({ token: PUSH_BOT_TOKEN }),
   };
+  pushApi = captureApi(authDeps.linkNotifier);
   app = testApp(authDeps);
   await app.ready();
 });
@@ -608,6 +621,210 @@ describe('secrecy', () => {
     expect(response.body).not.toContain('access-');
     expect(response.body).not.toContain('refresh-');
     expect(response.body).not.toContain(CLIENT_SECRET);
+  });
+});
+
+// --- The push after the callback (issue #128) --------------------------------------------------
+
+const pushesTo = (telegramUserId: string, captured = pushApi) =>
+  callsTo(captured.calls, 'sendMessage')
+    .filter((call) => call.payload.chat_id === telegramUserId)
+    .map((call) => call.payload);
+
+describe('the push after the callback', () => {
+  it('offers the confirm button for the account a new login linked', async () => {
+    const telegram = telegramId();
+    const { response } = await login(telegram, `broker-${telegram}`);
+    expect(response.statusCode).toBe(200);
+    const { account } = response.json() as { account: { id: string } };
+
+    const pushes = pushesTo(telegram);
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]?.text).toBe(LINK_TEXTS.confirmPrompt);
+    expect(pushes[0]?.parse_mode).toBeUndefined();
+    expect(inlineButtons(pushes[0])).toEqual([
+      {
+        text: `Подтвердить: broker-${telegram}@example.test`,
+        callback_data: `confirm:${account.id}`,
+      },
+    ]);
+  });
+
+  it('offers the button again when a still pending account logs in again', async () => {
+    const telegram = telegramId();
+    await login(telegram, `broker-${telegram}`);
+    const again = await login(telegram, `broker-${telegram}`);
+    expect(again.response.statusCode).toBe(200);
+
+    const pushes = pushesTo(telegram);
+    expect(pushes).toHaveLength(2);
+    expect(pushes[1]?.text).toBe(LINK_TEXTS.confirmPrompt);
+    expect(inlineButtons(pushes[1])).toHaveLength(1);
+  });
+
+  it.each(['active', 'revoked'] as const)(
+    'says the account is connected, with no button, on a re-login of a %s account',
+    async (status) => {
+      const telegram = telegramId();
+      const first = await login(telegram, `broker-${telegram}`);
+      const accountId = (first.response.json() as { account: { id: string } }).account.id;
+      await tmp.db.update(brokerAccounts).set({ status }).where(eq(brokerAccounts.id, accountId));
+
+      const again = await login(telegram, `broker-${telegram}`);
+      expect(again.response.statusCode).toBe(200);
+      const pushes = pushesTo(telegram);
+      expect(pushes).toHaveLength(2);
+      expect(pushes[1]?.text).toBe(LINK_TEXTS.linkedActive);
+      expect(pushes[1]?.reply_markup).toBeUndefined();
+    },
+  );
+
+  it('tells the user who started the login, not the owner, that the account is taken', async () => {
+    const owner = telegramId();
+    const brokerUserId = `broker-${owner}`;
+    await login(owner, brokerUserId);
+    const intruder = telegramId();
+    const { response } = await login(intruder, brokerUserId);
+    expect(response.statusCode).toBe(409);
+
+    expect(pushesTo(intruder).map((push) => [push.text, push.reply_markup])).toEqual([
+      [LINK_TEXTS.accountTaken, undefined],
+    ]);
+    // the owner heard only about their own login
+    expect(pushesTo(owner)).toHaveLength(1);
+  });
+
+  it('tells a user blocked after their state was issued that access is restricted', async () => {
+    const seeded = await seedUser(tmp.db);
+    const state = await stateFor(seeded.telegramUserId);
+    await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, seeded.userId));
+
+    const response = await callback({
+      state,
+      code: stub.issueCode({ brokerUserId: `broker-${seeded.telegramUserId}` }),
+    });
+    expect(response.statusCode).toBe(409);
+    expect(pushesTo(seeded.telegramUserId).map((push) => push.text)).toEqual([LINK_TEXTS.blocked]);
+  });
+
+  it('tells the user to start over when the code is refused', async () => {
+    const telegram = telegramId();
+    const state = await stateFor(telegram);
+    const response = await callback({ state, code: 'never-issued' });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'invalid_code' });
+    expect(pushesTo(telegram).map((push) => push.text)).toEqual([AUTH_TEXTS.oauthLoginFailed]);
+  });
+
+  it('tells the user to start over when the broker fails', async () => {
+    const telegram = telegramId();
+    const state = await stateFor(telegram);
+    const instance = await own({
+      broker: {
+        ...authDeps.broker,
+        exchangeCode: () => Promise.reject(new BrokerOAuthError(BrokerOAuthErrorCode.Unavailable)),
+      },
+    });
+    try {
+      const response = await callback({ state, code: 'c' }, instance);
+      expect(response.statusCode).toBe(502);
+    } finally {
+      await instance.close();
+    }
+    expect(pushesTo(telegram).map((push) => push.text)).toEqual([AUTH_TEXTS.oauthLoginFailed]);
+  });
+
+  // nobody to address: the state is what names the Telegram user
+  it('pushes nothing for a state that resolves to no row', async () => {
+    const telegram = telegramId();
+    const state = await stateFor(telegram);
+    await callback({ state, code: stub.issueCode({ brokerUserId: `broker-${telegram}` }) });
+    const before = callsTo(pushApi.calls, 'sendMessage').length;
+
+    const replayed = await callback({ state, code: stub.issueCode({ brokerUserId: 'other' }) });
+    expect(replayed.json()).toEqual({ error: 'invalid_state' });
+    expect(callsTo(pushApi.calls, 'sendMessage')).toHaveLength(before);
+  });
+
+  // a 500 leaves the outcome unknown, so nothing is said
+  it('pushes nothing when the database fails', async () => {
+    const dead = new Pool({ connectionString: tmp.url });
+    const instance = await own({ db: createDb(dead) });
+    await dead.end();
+    const before = callsTo(pushApi.calls, 'sendMessage').length;
+    try {
+      const response = await callback({ state: 'any', code: 'c' }, instance);
+      expect(response.statusCode).toBe(500);
+    } finally {
+      await instance.close();
+    }
+    expect(callsTo(pushApi.calls, 'sendMessage')).toHaveLength(before);
+  });
+});
+
+describe('a push that fails', () => {
+  const failing = async (notifier: AuthRoutesDeps['linkNotifier']) => {
+    const lines: string[] = [];
+    const instance = await own(
+      { linkNotifier: notifier },
+      { write: (line: string) => void lines.push(line) },
+    );
+    const telegram = telegramId();
+    const state = await stateFor(telegram, instance);
+    const code = stub.issueCode({ brokerUserId: `MARKER-BROKER-${telegram}` });
+    try {
+      const response = await callback({ state, code }, instance);
+      // the response does not depend on the push
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ account: { status: 'pending' } });
+    } finally {
+      await instance.close();
+    }
+    const warned = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.msg === 'the link outcome could not be pushed to Telegram');
+    expect(warned).toHaveLength(1);
+    const all = lines.join('\n');
+    // neither the state, the code, the token nor the email on the button
+    expect(all).not.toContain(state);
+    expect(all).not.toContain(code);
+    expect(all).not.toContain('MARKER-PUSH-TOKEN');
+    expect(all).not.toContain('MARKER-BROKER');
+    return warned[0];
+  };
+
+  it('logs a refusal by Telegram by its code and still answers the callback', async () => {
+    const notifier = createLinkNotifier({ token: PUSH_BOT_TOKEN });
+    const captured = captureApi(notifier);
+    captured.apiErrors.set('sendMessage', {
+      ok: false,
+      error_code: 403,
+      description: 'Forbidden: bot was blocked by the user',
+    });
+    const warned = await failing(notifier);
+    expect(warned).toMatchObject({
+      level: 40,
+      err: { name: 'GrammyError' },
+      method: 'sendMessage',
+      telegramErrorCode: 403,
+      push: 'pending',
+    });
+    expect(callsTo(captured.calls, 'sendMessage')).toHaveLength(1);
+  });
+
+  // the real transport, so the message grammY builds — with the token in its URL — is the one
+  // that could leak
+  it('logs a transport failure by its identity', async () => {
+    const warned = await failing(
+      createLinkNotifier({ token: PUSH_BOT_TOKEN, apiRoot: 'http://127.0.0.1:1' }),
+    );
+    expect(warned).toMatchObject({
+      level: 40,
+      err: { name: 'HttpError' },
+      method: 'sendMessage',
+      transportError: { name: expect.any(String) as string },
+      push: 'pending',
+    });
   });
 });
 

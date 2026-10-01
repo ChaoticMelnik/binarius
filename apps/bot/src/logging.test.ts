@@ -3,9 +3,9 @@ import pino from 'pino';
 import { BotError, HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
-import { LOG_REDACT_PATHS } from '@binarius/shared';
+import { confirmCallbackData, LOG_REDACT_PATHS } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { OAUTH_CALLBACK_DATA, confirmCallbackData, createBot } from './bot';
+import { OAUTH_CALLBACK_DATA, createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {

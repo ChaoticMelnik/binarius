@@ -35,6 +35,7 @@ beforeAll(async () => {
       clientId: 'client-id',
       redirectUri: 'https://bot.example/oauth/callback',
       partnerRef: 'partner-ref',
+      linkNotifier: {} as never,
     },
     users: {
       db: tmp.db,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CAPTION_LIMIT, MESSAGE_LIMIT, TEXTS } from './texts';
+import { TELEGRAM_MESSAGE_LIMIT } from '@binarius/shared';
+import { CAPTION_LIMIT, TEXTS } from './texts';
 
 // The Bot API counts its 1024/4096 limits in UTF-16 code units, which is what String#length
 // returns; counting code points would let an astral character through here and be refused by
@@ -19,7 +20,7 @@ describe('texts', () => {
     (_key, entry) => {
       const text = typeof entry === 'function' ? entry(LONGEST_ARGUMENT) : entry;
       expect(text.trim().length).toBeGreaterThan(0);
-      expect(text.length).toBeLessThanOrEqual(MESSAGE_LIMIT);
+      expect(text.length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
     },
   );
 
@@ -32,10 +33,5 @@ describe('texts', () => {
   // failure (review of PR #176, finding 5)
   it('does not tell a user without a dialog that the code expired', () => {
     expect(TEXTS.codeRequestStale).not.toMatch(/истек/i);
-  });
-
-  it('labels the confirm button with the email, or without one when the broker sent none', () => {
-    expect(TEXTS.confirmButton('ada@example.test')).toBe('Подтвердить: ada@example.test');
-    expect(TEXTS.confirmButton(null)).toBe('Подтвердить привязку');
   });
 });

@@ -11,3 +11,4 @@ export * from './socket';
 export * from './env';
 export * from './process';
 export * from './logging';
+export * from './link-confirmation';

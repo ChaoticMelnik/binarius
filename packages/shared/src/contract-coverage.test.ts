@@ -24,6 +24,7 @@ import * as admin from './admin';
 import * as broker from './broker';
 import * as env from './env';
 import * as ids from './ids';
+import * as linkConfirmation from './link-confirmation';
 import * as logging from './logging';
 import * as shared from './index';
 import * as money from './money';
@@ -247,6 +248,7 @@ describe('contract coverage (issue #6)', () => {
       env,
       process: processModule,
       logging,
+      linkConfirmation,
     };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {

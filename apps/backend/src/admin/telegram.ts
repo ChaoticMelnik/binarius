@@ -14,7 +14,7 @@ import {
   ADMIN_POLLING_TIMEOUT_S,
   ADMIN_TELEGRAM_API_TIMEOUT_MS,
 } from '../timing';
-import { telegramErrorFields } from './telegram-logging';
+import { telegramErrorFields } from '../telegram-logging';
 import { ADMIN_TEXTS } from './texts';
 
 // Only the kinds this bot handles; Telegram then stops delivering the rest.
