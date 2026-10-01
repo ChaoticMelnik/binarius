@@ -2,7 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
+import { confirmLoginResponseSchema } from '@binarius/shared';
 import {
+  LINK_BONUS_TOKENS,
   brokerAccounts,
   createDb,
   createTokenCipher,
@@ -103,10 +105,10 @@ const callback = (payload: unknown, instance = app) =>
 const stateFor = async (telegramUserId: string, instance = app): Promise<string> =>
   ((await start(telegramUserId, `Bearer ${TOKEN}`, instance)).json() as { state: string }).state;
 
-async function login(telegramUserId: string, brokerUserId: string) {
+async function login(telegramUserId: string, brokerUserId: string, isPartnerClient?: boolean) {
   const started = await start(telegramUserId);
   const { state } = started.json() as { state: string };
-  const code = stub.issueCode({ brokerUserId });
+  const code = stub.issueCode({ brokerUserId, isPartnerClient });
   return { started, response: await callback({ state, code }), state };
 }
 
@@ -470,15 +472,15 @@ describe('POST /auth/binodex/confirm', () => {
   const confirm = (payload: unknown, authorization = `Bearer ${TOKEN}`) =>
     postJson(app, '/auth/binodex/confirm', payload, { authorization });
 
-  const linked = async () => {
-    const telegram = telegramId();
-    const { response } = await login(telegram, `broker-${telegram}`);
+  // partner status is spelled out at every call: the stub's default is not what a test means
+  const linked = async (isPartnerClient: boolean, telegram = telegramId()) => {
+    const { response } = await login(telegram, `broker-${telegram}-${++seq}`, isPartnerClient);
     const { account } = response.json() as { account: { id: string; status: string } };
     return { telegram, account };
   };
 
   it('requires the internal token', async () => {
-    const { telegram, account } = await linked();
+    const { telegram, account } = await linked(false);
     expect(
       (await confirm({ telegramUserId: telegram, accountId: account.id }, 'Bearer nope'))
         .statusCode,
@@ -486,12 +488,15 @@ describe('POST /auth/binodex/confirm', () => {
   });
 
   it('turns the pending account the login created into a usable one', async () => {
-    const { telegram, account } = await linked();
+    const { telegram, account } = await linked(false);
     expect(account.status).toBe('pending');
 
     const response = await confirm({ telegramUserId: telegram, accountId: account.id });
     expect(response.statusCode).toBe(200);
-    expect((response.json() as { account: { status: string } }).account.status).toBe('active');
+    expect(response.json()).toMatchObject({
+      account: { id: account.id, status: 'active' },
+      grant: { granted: false, reason: 'not_partner_client' },
+    });
     expect(
       (
         await tmp.db
@@ -502,8 +507,40 @@ describe('POST /auth/binodex/confirm', () => {
     ).toBe('active');
   });
 
+  it('pays the starter pack for a partner account, and says so', async () => {
+    const { telegram, account } = await linked(true);
+    const response = await confirm({ telegramUserId: telegram, accountId: account.id });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as unknown;
+    expect(confirmLoginResponseSchema.parse(body)).toEqual(body);
+    expect(body).toMatchObject({
+      account: { id: account.id, status: 'active', isPartnerClient: true },
+      grant: { granted: true, tokens: LINK_BONUS_TOKENS.toString() },
+    });
+    const [user] = await tmp.db
+      .select({ balance: users.tokenBalance })
+      .from(users)
+      .where(eq(users.telegramUserId, BigInt(telegram)));
+    expect(user?.balance).toBe(LINK_BONUS_TOKENS);
+  });
+
+  it('pays nothing for the same user’s second partner account', async () => {
+    const first = await linked(true);
+    await confirm({ telegramUserId: first.telegram, accountId: first.account.id });
+    const second = await linked(true, first.telegram);
+    const response = await confirm({
+      telegramUserId: first.telegram,
+      accountId: second.account.id,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      account: { id: second.account.id, status: 'active' },
+      grant: { granted: false, reason: 'already_granted' },
+    });
+  });
+
   it('refuses an account that belongs to someone else', async () => {
-    const { account } = await linked();
+    const { account } = await linked(false);
     // a real user row, so the lookup gets past "no such user" and actually exercises the
     // ownership predicate on broker_accounts
     const stranger = await seedUser(tmp.db);
@@ -516,7 +553,7 @@ describe('POST /auth/binodex/confirm', () => {
   });
 
   it('refuses a second confirmation', async () => {
-    const { telegram, account } = await linked();
+    const { telegram, account } = await linked(false);
     expect((await confirm({ telegramUserId: telegram, accountId: account.id })).statusCode).toBe(
       200,
     );
@@ -526,7 +563,7 @@ describe('POST /auth/binodex/confirm', () => {
   });
 
   it('refuses a blocked user', async () => {
-    const { telegram, account } = await linked();
+    const { telegram, account } = await linked(false);
     await tmp.db
       .update(users)
       .set({ status: 'blocked' })
