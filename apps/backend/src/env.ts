@@ -24,6 +24,9 @@ const DEV_TOKEN_ENCRYPTION_KEY_ID = 'dev';
 // the broker is reached over the public internet, and an authorize page served over http would
 // hand the authorization code to anyone on the path
 const HTTPS_ONLY_RULES: UrlEnvRules = { protocols: ['https:'], allowIpv6Literal: false };
+// The broker's authorize page reduces its `ref` to this shape, and its email login takes
+// `partner_code` only in it: the whole partner link is refused there with a 400.
+const PARTNER_CODE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export interface Env {
   databaseUrl: string;
@@ -72,7 +75,7 @@ export function parseEnv(source: EnvSource): Env {
       readEnv(source, 'BROKER_OAUTH_REDIRECT_URI'),
       'BROKER_OAUTH_REDIRECT_URI',
     ),
-    brokerPartnerRef: readEnv(source, 'BROKER_PARTNER_REF'),
+    brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),
     // Its own bot, not the one apps/bot runs: two pollers on one token would fight over
     // getUpdates (409), and the staff bot must not be reachable from the public bot's chats.
     adminBotToken: parseNoWhitespaceEnv(readEnv(source, 'ADMIN_BOT_TOKEN'), 'ADMIN_BOT_TOKEN'),
@@ -91,7 +94,10 @@ function parseSharedSecrets(source: EnvSource): Pick<Env, 'internalApiToken' | '
     readEnv(source, 'INTERNAL_API_TOKEN'),
     'INTERNAL_API_TOKEN',
   );
-  const adminWebToken = parseInternalTokenEnv(readEnv(source, 'ADMIN_WEB_TOKEN'), 'ADMIN_WEB_TOKEN');
+  const adminWebToken = parseInternalTokenEnv(
+    readEnv(source, 'ADMIN_WEB_TOKEN'),
+    'ADMIN_WEB_TOKEN',
+  );
   if (adminWebToken === internalApiToken) {
     throw new Error(
       'Env ADMIN_WEB_TOKEN must differ from INTERNAL_API_TOKEN: the same value would open the whole internal API to the web process',
@@ -139,6 +145,15 @@ function parseEncryptionKey(raw: string, name: string): Buffer {
 function parseKeyId(raw: string, name: string): string {
   if (raw.includes('|')) throw new Error(`Env ${name} must not contain |`);
   return parseNoWhitespaceEnv(raw, name);
+}
+
+function parsePartnerCode(raw: string, name: string): string {
+  if (!PARTNER_CODE.test(raw)) {
+    throw new Error(
+      `Env ${name} must be the short partner code ([A-Za-z0-9_-], 1-64 chars), not the partner link`,
+    );
+  }
+  return raw;
 }
 
 const parsePort = (raw: string, name: string): number =>
