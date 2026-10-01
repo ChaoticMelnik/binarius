@@ -68,5 +68,8 @@ export const TEXTS = {
     'Этот аккаунт Binodex уже подключён к другому пользователю Telegram. Если это ошибка, напишите в поддержку.',
   // the recheck after an unknown outcome knows the account is active, not what was paid
   linkedActive: 'Аккаунт Binodex подключён.',
-  dialogExpired: 'Время ожидания кода истекло. Начните заново через /start.',
+  // «Запросить код ещё раз» with no dialog behind it: expired, finished by a login, or dropped by
+  // a restart — the bot cannot tell which, so the text must hold for all of them
+  codeRequestStale:
+    'Этот запрос кода уже не действует. Если аккаунт ещё не подключён, начните заново через /start.',
 } as const;

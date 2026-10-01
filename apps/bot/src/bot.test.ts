@@ -831,12 +831,12 @@ describe('the resend button', () => {
     expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
   });
 
-  it('says the dialog is over when there is none', async () => {
+  it('says the request no longer holds when there is no dialog', async () => {
     const { bot, backend, calls } = setup();
     await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
     expect(backend.sendEmailCode).not.toHaveBeenCalled();
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    expect(sentTexts(calls)).toEqual([TEXTS.dialogExpired]);
+    expect(sentTexts(calls)).toEqual([TEXTS.codeRequestStale]);
   });
 
   it('asks for the address when there is none yet', async () => {
