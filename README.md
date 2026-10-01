@@ -61,7 +61,8 @@ Plain `docker compose up` starts everything without file sync. `--build` matters
 `--watch` starts from the last built image and only picks up edits made after it started.
 Under `--watch`, edits to `src/` restart the affected app; edits to a `package.json`,
 `pnpm-lock.yaml`, or a tsconfig rebuild the image. Postgres (`5432`), Redis (`6379`), and the
-backend (`3000`) and the admin pages (`3001`) are published on `127.0.0.1` only.
+backend (`3000`) and `web` (`3001`: the admin pages and the Mini App login pages) are published
+on `127.0.0.1` only.
 
 ## Database
 
