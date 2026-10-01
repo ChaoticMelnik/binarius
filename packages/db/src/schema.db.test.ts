@@ -845,6 +845,85 @@ describe('users and token_ledger', () => {
     });
   });
 
+  // The starter pack (#10): a bonus that names the broker account it was earned by.
+  it.each([
+    ['a reserve', { kind: 'reserve' as const, reservedDelta: 1n }, 'intent'],
+    ['a purchase', { kind: 'purchase' as const, balanceDelta: 10n }, 'deposit'],
+    ['an adjustment', { kind: 'adjustment' as const, balanceDelta: 10n }, 'none'],
+    ['a bonus that also names a deposit', { kind: 'bonus' as const, balanceDelta: 10n }, 'deposit'],
+  ])('rejects %s carrying a broker account reference', async (_label, values, other) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const reference =
+        other === 'intent'
+          ? {
+              intentId: (await tx.insert(tradeIntents).values(intent(seed, 'r1')).returning())[0]!
+                .id,
+            }
+          : other === 'deposit'
+            ? { depositEventId: await seedDeposit(tx, seed) }
+            : {};
+      await rejectsWith(
+        tx
+          .insert(tokenLedger)
+          .values({
+            userId: seed.userId,
+            brokerAccountId: seed.accountId,
+            ...reference,
+            ...values,
+          }),
+        '23514',
+        'token_ledger_reference_check',
+      );
+    });
+  });
+
+  it.each([
+    ['a dangling broker account', () => randomUUID()],
+    ['another user’s broker account', (other: { accountId: string }) => other.accountId],
+  ])('rejects a starter pack naming %s', async (_label, accountOf) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const other = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(tokenLedger).values({
+          userId: seed.userId,
+          kind: 'bonus',
+          balanceDelta: 10n,
+          brokerAccountId: accountOf(other),
+        }),
+        '23503',
+        'token_ledger_account_owner_fk',
+      );
+    });
+  });
+
+  it('pays one starter pack per user, across accounts, beside any deposit bonus', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [second] = await tx
+        .insert(brokerAccounts)
+        .values({
+          userId: seed.userId,
+          brokerUserId: `broker-${++seq}`,
+          accessTokenEnc: Buffer.from('enc'),
+          refreshTokenEnc: Buffer.from('enc'),
+          tokenKeyId: 'k1',
+          accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+        })
+        .returning({ id: brokerAccounts.id });
+      const pack = { userId: seed.userId, kind: 'bonus' as const, balanceDelta: 10n };
+      await tx.insert(tokenLedger).values({ ...pack, brokerAccountId: seed.accountId });
+      await tx.insert(tokenLedger).values({ ...pack, depositEventId: await seedDeposit(tx, seed) });
+      await tx.insert(tokenLedger).values(pack);
+      await rejectsWith(
+        tx.insert(tokenLedger).values({ ...pack, brokerAccountId: second!.id }),
+        '23505',
+        'token_ledger_link_bonus_user_idx',
+      );
+    });
+  });
+
   it.each([
     [
       'UPDATE',
@@ -1594,10 +1673,7 @@ describe('staff_login_challenges', () => {
   });
 
   it.each([
-    [
-      'pending with a code',
-      { status: 'pending', codeHash: 'h', confirmedAt: sql`now()` },
-    ],
+    ['pending with a code', { status: 'pending', codeHash: 'h', confirmedAt: sql`now()` }],
     ['confirmed without one', { status: 'confirmed' }],
     ['completed without one', { status: 'completed' }],
     ['exhausted without one', { status: 'exhausted' }],
@@ -1668,7 +1744,9 @@ describe('staff_login_challenges', () => {
       await expect(
         tx
           .insert(staffLoginChallenges)
-          .values(challenge(staffId, { status: 'confirmed', codeHash: 'h', confirmedAt: sql`now()` })),
+          .values(
+            challenge(staffId, { status: 'confirmed', codeHash: 'h', confirmedAt: sql`now()` }),
+          ),
       ).resolves.toBeDefined();
     });
   });
@@ -1680,7 +1758,9 @@ describe('staff_login_challenges', () => {
       await rejectsWith(
         tx
           .insert(staffLoginChallenges)
-          .values(challenge(staffId, { status: 'confirmed', codeHash: 'h', confirmedAt: sql`now()` })),
+          .values(
+            challenge(staffId, { status: 'confirmed', codeHash: 'h', confirmedAt: sql`now()` }),
+          ),
         '23505',
         'staff_login_challenges_open_idx',
       );
@@ -1715,9 +1795,7 @@ describe('staff_sessions', () => {
       await rejectsWith(
         tx
           .insert(staffSessions)
-          .values(
-            session(staffId, { revokedAt: sql`now()`, revokedByStaffId: randomUUID() }),
-          ),
+          .values(session(staffId, { revokedAt: sql`now()`, revokedByStaffId: randomUUID() })),
         '23503',
         'staff_sessions_revoked_by_staff_id_staff_id_fk',
       );

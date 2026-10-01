@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, index, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { brokerAccounts } from './broker-accounts';
 import { createdAt, id, inList, literal, sqlLiteralList, tokenAmount } from './columns';
 import { depositEvents } from './deposit-events';
 import { tradeIntents } from './trade-intents';
@@ -15,7 +16,7 @@ export const TokenLedgerKind = {
 } as const;
 export type TokenLedgerKind = (typeof TokenLedgerKind)[keyof typeof TokenLedgerKind];
 
-// Intents and deposits each have their own FK-checked column, so the polymorphic channel is
+// Intents, deposits and broker accounts each have their own FK-checked column, so the polymorphic channel is
 // left with exactly one member. A reference whose target the database can check is never
 // expressed as a label here: a self-declared `ref_type` is not a control, which is how a
 // relabelled row once credited one deposit twice.
@@ -40,8 +41,8 @@ const kind = (value: TokenLedgerKind) => literal(value);
 // since the partial uniques give at-most-once, not at-least-once.
 //
 // Dedupe keys by kind: reserve/release/settle are keyed by intent, purchase and a
-// deposit-linked bonus by (deposit, kind). A bonus that names no deposit — a promo — has
-// NO database-level dedupe key, and #13 must bring one when it defines those; an
+// deposit-linked bonus by (deposit, kind), the starter pack (a bonus naming a broker account)
+// by user. A bonus that names neither — a promo — has NO database-level dedupe key, and #13 must bring one when it defines those; an
 // `adjustment` is a deliberate manual act and carries `note` instead. The ledger is not
 // self-protecting for those two.
 export const tokenLedger = pgTable(
@@ -56,13 +57,14 @@ export const tokenLedger = pgTable(
     reservedDelta: tokenAmount('reserved_delta'),
     intentId: uuid('intent_id'),
     depositEventId: uuid('deposit_event_id'),
+    brokerAccountId: uuid('broker_account_id'),
     refType: text('ref_type').$type<TokenLedgerRefType>(),
     refId: uuid('ref_id'),
     note: text('note'),
     createdAt: createdAt(),
   },
   (t) => [
-    // both references are composite: proving the target exists is not enough, it must belong
+    // every reference is composite: proving the target exists is not enough, it must belong
     // to the same user, or one user's ledger row could move another user's money
     foreignKey({
       name: 'token_ledger_intent_owner_fk',
@@ -74,6 +76,11 @@ export const tokenLedger = pgTable(
       columns: [t.depositEventId, t.userId],
       foreignColumns: [depositEvents.id, depositEvents.userId],
     }),
+    foreignKey({
+      name: 'token_ledger_account_owner_fk',
+      columns: [t.brokerAccountId, t.userId],
+      foreignColumns: [brokerAccounts.id, brokerAccounts.userId],
+    }),
     inList('token_ledger_kind_check', t.kind, TokenLedgerKind),
     inList('token_ledger_ref_type_check', t.refType, TokenLedgerRefType),
     check('token_ledger_delta_check', sql`${t.balanceDelta} <> 0 or ${t.reservedDelta} <> 0`),
@@ -83,12 +90,15 @@ export const tokenLedger = pgTable(
       'token_ledger_reference_check',
       sql`case
             when ${t.kind} in (${sqlLiteralList(INTENT_LEDGER_KINDS)})
-              then ${t.intentId} is not null and ${t.depositEventId} is null and ${t.refId} is null
+              then ${t.intentId} is not null and ${t.depositEventId} is null
+                and ${t.brokerAccountId} is null and ${t.refId} is null
             when ${t.kind} = ${kind(TokenLedgerKind.Purchase)}
-              then ${t.depositEventId} is not null and ${t.intentId} is null and ${t.refId} is null
+              then ${t.depositEventId} is not null and ${t.intentId} is null
+                and ${t.brokerAccountId} is null and ${t.refId} is null
             when ${t.kind} = ${kind(TokenLedgerKind.Bonus)}
               then ${t.intentId} is null and ${t.refId} is null
-            else ${t.intentId} is null and ${t.depositEventId} is null
+                and not (${t.depositEventId} is not null and ${t.brokerAccountId} is not null)
+            else ${t.intentId} is null and ${t.depositEventId} is null and ${t.brokerAccountId} is null
           end`,
     ),
     // each kind moves its deltas in the direction its name promises; settle leaves
@@ -126,6 +136,11 @@ export const tokenLedger = pgTable(
     uniqueIndex('token_ledger_deposit_event_idx')
       .on(t.depositEventId, t.kind)
       .where(sql`${t.depositEventId} is not null`),
+    // One starter pack per user, whichever of their accounts earned it: the slot is a user's,
+    // so linking a second account does not pay out again (link-bonus-ops.ts).
+    uniqueIndex('token_ledger_link_bonus_user_idx')
+      .on(t.userId)
+      .where(sql`${t.kind} = ${kind(TokenLedgerKind.Bonus)} and ${t.brokerAccountId} is not null`),
     index('token_ledger_user_created_idx').on(t.userId, t.createdAt),
     index('token_ledger_intent_id_idx').on(t.intentId),
   ],
