@@ -130,7 +130,8 @@ Task classes with a mandatory plan section — each row traces to a real review 
 | Schema / constraints | Enforcement column in Step 3; every CHECK run on NULL/boundary rows; permission × restriction compatibility |
 | Timeouts / budgets | Each constant → the operation it bounds; the ordering chain and where it is asserted (import + test) per process |
 | Logging changes | The test that reads the log itself (a destination seam), not the HTTP response |
-| Text / docs edits | Every command the text gives, run before commit; the edited paragraph re-read whole |
+| Text / docs edits | Every command the text gives, run before commit **from the starting state the text names** (a fresh volume, an empty database — not an environment that already works); the edited paragraph re-read whole |
+| Credential / session lifecycle (disable, reset, revoke) | Every artifact issued under the old credential and every request in flight, with the source of each timestamp written (`now()` is transaction start) and the lock modes checked against a concurrent issue path |
 
 ### Step 7: Run Codex plan review
 

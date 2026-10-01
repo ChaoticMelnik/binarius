@@ -95,6 +95,8 @@ Merge Codex + agent results, collapse duplicates. Discard findings that just res
 
 **Process docs consistency** — when the diff touches `.claude/**` or `audits.md`: (a) the skills (`architect`, `implementer`, `reviewer`, `tech-lead`, `github`) describe the same status transition, step order and check command the same way; (b) they agree with `.claude/CLAUDE.md`; (c) `.claude/CLAUDE.md` against `~/.claude/CLAUDE.md` — where they differ the project section governs, so a (c) finding does not block the merge but goes into the proposed edit of the global file. Done by hand here and by Codex through the prompt's Process-docs block (3a).
 
+**Quoted evidence** — every command output the PR or an evidence comment quotes is re-run at the approved head before it is accepted. #68 carried output from an earlier tree twice (m16, n3); both times the claim held and the quoted numbers did not.
+
 **Runtime check** — after every spawned agent has finished: `pnpm check` on the PR branch under the project's Node (`eval "$(fnm env)" && fnm use`), exit code as the verdict. State explicitly if Playwright E2E could not be run locally.
 
 ### Step 6-pre: Whole-feature condition (before any LGTM)

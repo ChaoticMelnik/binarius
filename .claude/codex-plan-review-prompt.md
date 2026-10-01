@@ -39,6 +39,9 @@ Mandatory checks (answer each explicitly — this list grows over time; add a ne
 17. Does every test double, fake, stub or scanner the plan keeps or introduces either use the real implementation, or carry a load-bearing premise that is verified against the real API by a test that can go red? A premise asserted only by a comment does not count.
 18. For every oracle the plan adds, is a concrete mutation named that makes it fail — and is that mutation *discriminating* rather than *neighbouring*, i.e. does it redden the new check alone and not one that already existed?
 19. Does the plan delete or replace anything? If yes: does any comment, doc sentence, test name or PR claim survive the deletion that it makes false?
+20. Does any durable record (audit row, outbox payload, persisted event) receive a raw error object, an external API object or an unbounded string? If yes: is the projection into stored fields explicit, bounded and named in the plan?
+21. If the plan introduces or changes a password/KDF path: are the salt source and length, the output encoding, every PHC parameter bound and the rotation story stated — and is each bound asserted by a test that can go red, not only by a comment?
+22. If the plan can disable an account, reset a credential or revoke a grant: does it invalidate every artifact already issued under the old credential **and** every request in flight, atomically? Name the constraint each write must satisfy, the source of every timestamp it writes (`now()` is transaction start, not statement time) and the lock modes involved — then name the interleaving with a concurrent issue path that would break it.
 
 Output format:
 - findings only
