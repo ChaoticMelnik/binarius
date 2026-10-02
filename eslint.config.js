@@ -2,13 +2,15 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import eslintConfigPrettier from 'eslint-config-prettier';
 import noStatusLiteral from './tooling/eslint-rules/no-status-literal.ts';
+import { LOG_ERROR_KEYS } from './packages/shared/src/logging.ts';
 
 // a variable named like an error, in the position pino would serialize whole
 const ERROR_LIKE_NAME = '(e|err|error|ex|exception|cause|failure)';
 
-// the object a logger is called with, and the field inside it that would carry an error
-const LOG_ERROR_FIELD =
-  'CallExpression[callee.property.name=/^(fatal|error|warn|info|debug|trace)$/] > ObjectExpression:first-child > :matches(Property[key.name=/^(err|error|cause|exception)$/], Property[key.value=/^(err|error|cause|exception)$/])';
+// the object a logger is called with, and the field inside it that would carry an error: the
+// same keys the loggers' serializers guard (LOG_ERROR_KEYS)
+const ERROR_KEYS = LOG_ERROR_KEYS.join('|');
+const LOG_ERROR_FIELD = `CallExpression[callee.property.name=/^(fatal|error|warn|info|debug|trace)$/] > ObjectExpression:first-child > :matches(Property[key.name=/^(${ERROR_KEYS})$/], Property[key.value=/^(${ERROR_KEYS})$/])`;
 
 // The logging rule's two selectors. Hoisted because a later config block that sets
 // no-restricted-syntax replaces this option list for the files it matches rather than adding to
@@ -24,7 +26,9 @@ const LOG_ERROR_RULES = [
     // method held in a variable, a spread. A logger reached through a variable IS seen
     // (`const l = request.log; l.error({ err })`). It also flags a cast around the helper
     // (`{ err: errorIdentity(e) as T }`), which fails safe. The rule narrows the class of
-    // mistake; it does not close it.
+    // mistake; it does not close it. Since #85 the loggers' own serializers reduce whatever
+    // reaches these keys at the top level to the same whitelist; they share the nested-object
+    // blind spot, and neither sees an error interpolated into the message (`%s`, `%o`).
     selector: `${LOG_ERROR_FIELD}:matches([value.type!='CallExpression'], [value.type='CallExpression'][value.callee.name!='errorIdentity'][value.callee.name!='errorLogFields'])`,
     message:
       'log errors through errorIdentity() or errorLogFields(): a whole error carries its message, stack and its own fields, and no redact path can scrub a string',
