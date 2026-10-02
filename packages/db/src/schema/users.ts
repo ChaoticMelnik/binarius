@@ -20,6 +20,10 @@ export const users = pgTable(
     // both NULL, so an organic first visit does not spend the attribution slot on nothing.
     acquisitionSource: text('acquisition_source'),
     acquiredAt: timestamp('acquired_at', { withTimezone: true }),
+    // When the bot learned it cannot reach this user (#119): a `kicked` chat-member update or a
+    // 403 on a send. NULL = deliverable. Independent of `status`, which is the admin block.
+    // Read only through deliverable() (delivery-ops.ts), so #120 can widen the rule in one place.
+    telegramBlockedAt: timestamp('telegram_blocked_at', { withTimezone: true }),
     tokenBalance: tokenAmount('token_balance'),
     tokenReserved: tokenAmount('token_reserved'),
     createdAt: createdAt(),
