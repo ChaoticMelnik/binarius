@@ -224,8 +224,8 @@ Re-run the conflict check whenever: a new issue enters In Progress, a PR is merg
 Several implementers or reviewers at once (#177, #192, #103, #166 on 2026-10-02) share the host, the dev databases and the session scratchpad. Each spawn prompt states:
 - **Own worktree**, created by the agent itself with `git worktree add .claude/worktrees/impl-<N> -b <branch> origin/main` and `git worktree lock` — an `isolation: "worktree"` spawn's tree is removed when its clarify round ends unchanged. The main checkout belongs to one agent at a time. Tech-lead unlocks and removes the worktree after the merge.
 - **Own scratch subdirectory** (`<scratchpad>/impl-<N>/`, `review-<N>/`): agents overwrote each other's `check.sh` and one `pnpm check` ran in the wrong tree.
-- **Sub-skills pointed explicitly** at `gh pr diff <N>` and the worktree: `/security-review` and `/code-review` load the main checkout's diff by default.
-- **Shared-resource window**: before a full `pnpm check`, a VM/host change or a long series, `pgrep -fl 'vitest|check-stability|db-clock-probe'` must show no foreign run; tech-lead serialises anything that restarts shared services ("GO" only when the others are idle).
+- **Sub-skills pointed explicitly** at `gh pr diff <N>` and the worktree: `/security-review` and `/code-review` load the main checkout's diff by default. A brief alone did not hold (#97, #85: both loaded the main checkout's diff, and one `/code-review` fork checked the PR branch out in the main checkout for two minutes): the spawn prompt hands them the diff saved as a file in the reviewer's scratch dir plus the review worktree path, and forbids `git checkout`/`switch` in the main checkout.
+- **Shared-resource window**: before a full `pnpm check`, a VM/host change or a long series, `pgrep -fl 'vitest|check-stability|db-clock-probe'` must show no foreign run, and the guard stops the command on a hit (non-zero exit or a wait loop) — one that only prints the hit let #97's run overlap #85's on the shared database; tech-lead serialises anything that restarts shared services ("GO" only when the others are idle).
 
 ---
 

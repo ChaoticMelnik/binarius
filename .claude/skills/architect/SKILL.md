@@ -118,7 +118,7 @@ Do not proceed to Step 6 until answered.
 - [ ] Every new or changed CHECK was executed against NULL and boundary values before it went into the plan
 - [ ] Every permission the plan grants was checked against every restriction the same plan adds (a path allowed by one and forbidden by the other)
 - [ ] Framework defaults the plan relies on (error bodies, redaction, retries, timeouts) were verified by running them, not from docs or memory
-- [ ] Every type-inference claim is backed by a `tsc` probe
+- [ ] Every type-inference claim is backed by a `tsc` probe that compiles the exported signature consuming the change, not only the call site (#85: `loggerInstance: pino(...)` compiled at the `Fastify(...)` call and failed on `buildApp`'s return type, TS2322)
 - [ ] Every budget/timeout constant names the operation it bounds; the chain between them is checked at import and by a test, in every process that has one
 - [ ] CI-executed tooling was checked against the runner image's version, not the local one
 - [ ] Every documented invariant is worded no wider than the place that enforces it (cite it)
