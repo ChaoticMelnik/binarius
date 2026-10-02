@@ -301,8 +301,10 @@ defeats the type, as it defeats any.
 `apps/bot/src/send.ts` (`replyHtml`, `replyWithVideoHtml`) and
 `apps/backend/src/auth/link-notifier.ts`; a caller's extra can neither override `parse_mode` nor
 pass `entities`. ESLint (`eslint.config.js`, the Telegram block) forbids grammY's send methods by
-name everywhere else in `apps/bot/src` and `apps/backend/src/auth`; it does not see a method held in
-a variable.
+name everywhere else in `apps/bot/src` and `apps/backend/src/auth`, outside tests; it does not see a
+method held in a variable. The list is `RAW_TELEGRAM_SEND_METHODS` in `eslint.config.js`: every
+Bot API method that takes parsed text and every grammY alias of one, derived from
+`@grammyjs/types` 5.0.0 and grammy 1.46.0 by the two commands in the comment above it.
 
 **Labels are plain.** Button labels and the `/start` description (`LABELS`, `LINK_LABELS`) are not
 parsed by Telegram, so they are plain strings and are never escaped: «✅ Подтвердить: <email>»
