@@ -16,18 +16,20 @@ import {
   type EmailSendCodeResponse,
   type LinkBonusGrantView,
   type PendingBrokerAccountView,
+  type TelegramHtml,
   type UserStartRequest,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
-import { TEXTS } from './texts';
+import { replyHtml, replyWithVideoHtml } from './send';
+import { LABELS, TEXTS } from './texts';
 import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 
 // Callback data of the buttons; Bot API allows 1-64 bytes. `connect` is the main button of the
-// welcome and asks for the address: buttons sent by earlier versions carry the same data and the
-// same label, so they lead where the new ones do. `Изменить адрес` carries it too — changing the
-// address is pressing the button again.
+// welcome and asks for the address: buttons sent by earlier versions carry the same data, so they
+// lead where the new ones do, though an old message may still show an older label. `✏️ Изменить
+// адрес` carries it too — changing the address is pressing the button again.
 export const CONNECT_CALLBACK_DATA = 'connect';
 export const OAUTH_CALLBACK_DATA = 'oauth';
 export const RESEND_CALLBACK_DATA = 'resend';
@@ -67,15 +69,15 @@ export function createBot({
 
   const welcomeKeyboard = () =>
     new InlineKeyboard()
-      .text(TEXTS.connectButton, CONNECT_CALLBACK_DATA)
+      .text(LABELS.connectButton, CONNECT_CALLBACK_DATA)
       .row()
-      .text(TEXTS.oauthButton, OAUTH_CALLBACK_DATA);
+      .text(LABELS.oauthButton, OAUTH_CALLBACK_DATA);
 
   const codeKeyboard = () =>
     new InlineKeyboard()
-      .text(TEXTS.resendButton, RESEND_CALLBACK_DATA)
+      .text(LABELS.resendButton, RESEND_CALLBACK_DATA)
       .row()
-      .text(TEXTS.changeEmailButton, CONNECT_CALLBACK_DATA);
+      .text(LABELS.changeEmailButton, CONNECT_CALLBACK_DATA);
 
   // Groups and channels are ignored entirely: this bot only ever talks to one person, and a
   // /start in a group would attribute a whole chat to one member's payload.
@@ -94,24 +96,24 @@ export function createBot({
         { ...errorLogFields(error), ...backendErrorFields(error) },
         '/start not recorded',
       );
-      await ctx.reply(TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable);
       return;
     }
 
     if (user.status === UserStatus.Blocked) {
-      await ctx.reply(TEXTS.blocked);
+      await replyHtml(ctx, TEXTS.blocked);
       return;
     }
     // before the active check on purpose: a link the owner of this Telegram account did not
     // make must be in front of them, not behind a "welcome back"
     if (user.pendingBrokerAccounts.length > 0) {
-      await ctx.reply(TEXTS.confirmPrompt, {
+      await replyHtml(ctx, TEXTS.confirmPrompt, {
         reply_markup: confirmKeyboard(user.pendingBrokerAccounts),
       });
       return;
     }
     if (user.hasActiveBrokerAccount) {
-      await ctx.reply(TEXTS.welcomeBack);
+      await replyHtml(ctx, TEXTS.welcomeBack);
       return;
     }
     await sendWelcome(ctx);
@@ -122,7 +124,7 @@ export function createBot({
     await ctx.answerCallbackQuery().catch((error: unknown) => {
       logAnswerFailure(error);
     });
-    await ctx.reply(TEXTS.emailPrompt);
+    await replyHtml(ctx, TEXTS.emailPrompt);
   });
 
   privateChats.callbackQuery(OAUTH_CALLBACK_DATA, async (ctx) => {
@@ -144,22 +146,22 @@ export function createBot({
     if (login.status === 'rejected') {
       const error: unknown = login.reason;
       if (error instanceof BackendError && error.reason === OAuthErrorCode.UserBlocked) {
-        await ctx.reply(TEXTS.blocked);
+        await replyHtml(ctx, TEXTS.blocked);
         return;
       }
       logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, 'login not started');
-      await ctx.reply(TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable);
       return;
     }
     const { authorizeUrl, miniAppUrl } = login.value;
     // The Mini App carries the signed launch data the callback needs (#113). Telegram takes only
     // https in a web_app button, so the backend sends no Mini App URL for the local stack's
     // http loopback redirect, and the plain link is what is left there.
-    await ctx.reply(TEXTS.loginLink, {
+    await replyHtml(ctx, TEXTS.loginLink, {
       reply_markup:
         miniAppUrl === undefined
-          ? new InlineKeyboard().url(TEXTS.loginButton, authorizeUrl)
-          : new InlineKeyboard().webApp(TEXTS.loginButton, miniAppUrl),
+          ? new InlineKeyboard().url(LABELS.loginButton, authorizeUrl)
+          : new InlineKeyboard().webApp(LABELS.loginButton, miniAppUrl),
     });
   });
 
@@ -179,18 +181,18 @@ export function createBot({
     ]);
     if (answered.status === 'rejected') logAnswerFailure(answered.reason);
     if (confirmed.status === 'fulfilled') {
-      await ctx.reply(grantText(confirmed.value.grant));
+      await replyHtml(ctx, grantText(confirmed.value.grant));
       return;
     }
     const error: unknown = confirmed.reason;
     const refusal =
       error instanceof BackendError ? CONFIRM_REFUSALS[error.reason ?? ''] : undefined;
     if (refusal !== undefined) {
-      await ctx.reply(refusal);
+      await replyHtml(ctx, refusal);
       return;
     }
     logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, 'login not confirmed');
-    await ctx.reply(TEXTS.unavailable);
+    await replyHtml(ctx, TEXTS.unavailable);
   });
 
   privateChats.callbackQuery(RESEND_CALLBACK_DATA, async (ctx) => {
@@ -201,7 +203,7 @@ export function createBot({
         logAnswerFailure(error);
       });
       // no address yet, or no dialog at all: there is nothing to send a code to
-      await ctx.reply(state === undefined ? TEXTS.codeRequestStale : TEXTS.emailPrompt);
+      await replyHtml(ctx, state === undefined ? TEXTS.codeRequestStale : TEXTS.emailPrompt);
       return;
     }
     // independent, as in confirm
@@ -226,7 +228,7 @@ export function createBot({
     if (state.step === 'email') {
       const email = emailAddressSchema.safeParse(text);
       if (!email.success) {
-        await ctx.reply(TEXTS.emailInvalid);
+        await replyHtml(ctx, TEXTS.emailInvalid);
         return;
       }
       const [sent] = await Promise.allSettled([backend.sendEmailCode(String(from.id), email.data)]);
@@ -238,7 +240,7 @@ export function createBot({
     // address (the owner's decision, #171)
     const code = emailLoginCodeSchema.safeParse(text);
     if (!code.success) {
-      await ctx.reply(TEXTS.codeInvalid, { reply_markup: codeKeyboard() });
+      await replyHtml(ctx, TEXTS.codeInvalid, { reply_markup: codeKeyboard() });
       return;
     }
     let login;
@@ -249,7 +251,7 @@ export function createBot({
       return;
     }
     loginDialog.delete(from.id);
-    await ctx.reply(grantText(login.grant));
+    await replyHtml(ctx, grantText(login.grant));
   });
 
   // `step` is the step the code was asked from: the address, or «Запросить код ещё раз» on the
@@ -263,7 +265,7 @@ export function createBot({
   ): Promise<void> {
     if (sent.status === 'fulfilled') {
       loginDialog.set(id, { step: 'code', email });
-      await ctx.reply(TEXTS.codeSent(email), { reply_markup: codeKeyboard() });
+      await replyHtml(ctx, TEXTS.codeSent(email), { reply_markup: codeKeyboard() });
       return;
     }
     const error: unknown = sent.reason;
@@ -288,13 +290,14 @@ export function createBot({
     // that failed after sending, any 5xx, a broken 2xx body), so the user is let type the code
     // from it; the buttons cover the case where nothing arrived.
     loginDialog.set(id, { step: 'code', email });
-    await ctx.reply(TEXTS.codeSentUnknown(email), { reply_markup: codeKeyboard() });
+    await replyHtml(ctx, TEXTS.codeSentUnknown(email), { reply_markup: codeKeyboard() });
   }
 
   async function replyWithRefusal(ctx: Context, id: number, refusal: Refusal): Promise<void> {
     if (refusal.dialog === 'end') loginDialog.delete(id);
     else if (refusal.dialog !== 'keep') loginDialog.set(id, refusal.dialog);
-    await ctx.reply(
+    await replyHtml(
+      ctx,
       refusal.text,
       refusal.codeKeyboard === true ? { reply_markup: codeKeyboard() } : {},
     );
@@ -325,24 +328,24 @@ export function createBot({
         { ...errorLogFields(recheckError), ...backendErrorFields(recheckError) },
         'email login outcome not rechecked',
       );
-      await ctx.reply(TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable);
       return;
     }
     if (user.status === UserStatus.Blocked) {
       loginDialog.delete(from.id);
-      await ctx.reply(TEXTS.blocked);
+      await replyHtml(ctx, TEXTS.blocked);
       return;
     }
     if (user.hasActiveBrokerAccount) {
       loginDialog.delete(from.id);
-      await ctx.reply(TEXTS.linkedActive);
+      await replyHtml(ctx, TEXTS.linkedActive);
       return;
     }
     if (invalidCode) {
-      await ctx.reply(TEXTS.codeInvalid, { reply_markup: codeKeyboard() });
+      await replyHtml(ctx, TEXTS.codeInvalid, { reply_markup: codeKeyboard() });
       return;
     }
-    await ctx.reply(TEXTS.unavailable);
+    await replyHtml(ctx, TEXTS.unavailable);
   }
 
   function logAnswerFailure(error: unknown): void {
@@ -367,7 +370,7 @@ export function createBot({
     const reply_markup = welcomeKeyboard();
     if (welcomeVideoFileId !== undefined) {
       try {
-        await ctx.replyWithVideo(welcomeVideoFileId, { caption: TEXTS.welcome, reply_markup });
+        await replyWithVideoHtml(ctx, welcomeVideoFileId, TEXTS.welcome, { reply_markup });
         return;
       } catch (error) {
         // Telegram answering `ok: false` means nothing was sent, so the text replaces the
@@ -399,7 +402,7 @@ export function createBot({
         }
       }
     }
-    await ctx.reply(TEXTS.welcome, { reply_markup });
+    await replyHtml(ctx, TEXTS.welcome, { reply_markup });
   }
 
   return bot;
@@ -443,12 +446,12 @@ function startRequestOf(from: User): UserStartRequest {
 function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   for (const account of accounts) {
-    keyboard.text(TEXTS.confirmButton(account.email), confirmCallbackData(account.id)).row();
+    keyboard.text(LABELS.confirmButton(account.email), confirmCallbackData(account.id)).row();
   }
   return keyboard;
 }
 
-function grantText(grant: LinkBonusGrantView): string {
+function grantText(grant: LinkBonusGrantView): TelegramHtml {
   if (grant.granted) return TEXTS.linkedWithBonus(grant.tokens);
   return grant.reason === LinkBonusSkipReason.NotPartnerClient
     ? TEXTS.linkedNoBonusNotPartner
@@ -456,7 +459,7 @@ function grantText(grant: LinkBonusGrantView): string {
 }
 
 // the refusals the user can act on; anything else is an outage to them
-const CONFIRM_REFUSALS: Partial<Record<string, string>> = {
+const CONFIRM_REFUSALS: Partial<Record<string, TelegramHtml>> = {
   [OAuthErrorCode.BrokerAccountNotFound]: TEXTS.confirmNotFound,
   [OAuthErrorCode.AccountNotPending]: TEXTS.confirmAlreadyDone,
   [OAuthErrorCode.UserBlocked]: TEXTS.blocked,
@@ -465,7 +468,7 @@ const CONFIRM_REFUSALS: Partial<Record<string, string>> = {
 // What a refusal says and what it does to the dialog: end it, keep it as it is (its TTL too), or
 // move it to the given state. `codeKeyboard` puts the code step's buttons under the text.
 interface Refusal {
-  text: string;
+  text: TelegramHtml;
   dialog: 'end' | 'keep' | LoginDialogState;
   codeKeyboard?: true;
 }

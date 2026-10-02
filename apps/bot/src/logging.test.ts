@@ -127,7 +127,7 @@ describe('what the bot writes about a failed update', () => {
     expect(logged.err).not.toHaveProperty('stack');
     expect(lines[0]).not.toContain('SECRET-DESC');
     // the payload of the refused call is the message we were sending
-    expect(lines[0]).not.toContain(TEXTS.welcome.slice(0, 30));
+    expect(lines[0]).not.toContain(TEXTS.welcome.value.slice(0, 30));
     expect(lines[0]).not.toContain(TOKEN);
   });
 
@@ -264,7 +264,7 @@ describe('what the bot writes during the email dialog', () => {
     expectNoSecrets(lines);
     // the reply does carry the address back to the user; the log, read above, does not
     expect(calls.find((call) => call.method === 'sendMessage')?.payload.text).toBe(
-      TEXTS.codeSentUnknown(ADDRESS),
+      TEXTS.codeSentUnknown(ADDRESS).value,
     );
   });
 
@@ -293,7 +293,7 @@ describe('what the bot writes during the email dialog', () => {
     // unlike the unreachable case above, the reply carries no address, so the check above is
     // against the cause the error drags along, not against the message sent back
     expect(calls.find((call) => call.method === 'sendMessage')?.payload.text).toBe(
-      TEXTS.unavailable,
+      TEXTS.unavailable.value,
     );
   });
 

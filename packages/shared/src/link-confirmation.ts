@@ -1,10 +1,12 @@
+import { telegramHtml, type TelegramHtml } from './telegram-html';
+
 // What a Telegram user sees about a pending broker-account link, whoever sends it: the bot on
 // /start (#10) and the backend's push after the OAuth callback (#128). One source, so the button
 // the backend sends is one the bot recognises when it is pressed.
 //
-// Sent without parse_mode: the confirm button carries the email the broker reported, which is
-// someone else's data, and plain text can neither be broken by a stray underscore in it nor
-// turned into markup by it.
+// Messages are Telegram HTML (parse_mode HTML at the two send seams): built with telegramHtml,
+// which escapes every hole. Button labels are not parsed by Telegram at all, so they stay plain
+// strings and are never escaped — the broker's email in the confirm button keeps its `&` as is.
 
 // Callback data is 1-64 bytes; 'confirm:' + a 36-character uuid is 44.
 export const CONFIRM_CALLBACK_PREFIX = 'confirm:';
@@ -12,14 +14,18 @@ export const confirmCallbackData = (accountId: string): string =>
   `${CONFIRM_CALLBACK_PREFIX}${accountId}`;
 export const CONFIRM_CALLBACK_PATTERN = new RegExp(`^${CONFIRM_CALLBACK_PREFIX}([0-9a-f-]{36})$`);
 
+// Multi-line values start at column zero: indentation inside a template is part of the message.
 export const LINK_TEXTS = {
-  confirmPrompt: 'Найдена новая привязка аккаунта Binodex. Если вход выполняли вы — подтвердите.',
-  confirmButton: (email: string | null) =>
-    email === null ? 'Подтвердить привязку' : `Подтвердить: ${email}`,
+  confirmPrompt: telegramHtml`🔐 <b>Найдена новая привязка аккаунта Binodex</b>
+Если вход выполнял ты — подтверди.`,
   // also the bot's recheck after an unknown outcome: it knows the account is active, not what
   // was paid
-  linkedActive: 'Аккаунт Binodex подключён.',
-  blocked: 'Доступ ограничен. Если это ошибка, напишите в поддержку.',
-  accountTaken:
-    'Этот аккаунт Binodex уже подключён к другому пользователю Telegram. Если это ошибка, напишите в поддержку.',
-} as const;
+  linkedActive: telegramHtml`✅ <b>Аккаунт Binodex подключён!</b>`,
+  blocked: telegramHtml`🔒 Доступ ограничен. Если это ошибка, напиши в поддержку.`,
+  accountTaken: telegramHtml`❌ Этот аккаунт Binodex уже подключён к другому пользователю Telegram. Если это ошибка, напиши в поддержку.`,
+} as const satisfies Record<string, TelegramHtml>;
+
+export const LINK_LABELS = {
+  confirmButton: (email: string | null) =>
+    email === null ? '✅ Подтвердить привязку' : `✅ Подтвердить: ${email}`,
+} as const satisfies Record<string, (email: string | null) => string>;
