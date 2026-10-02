@@ -1,5 +1,5 @@
 import pino from 'pino';
-import { LOG_REDACT_PATHS } from '@binarius/shared';
+import { logOptions } from '@binarius/shared';
 import { createBackendClient } from './backend-client';
 import { createBot } from './bot';
 import { parseEnv } from './env';
@@ -7,7 +7,7 @@ import { runBot } from './lifecycle';
 
 const env = parseEnv(process.env);
 
-const logger = pino({ level: env.logLevel, redact: [...LOG_REDACT_PATHS] });
+const logger = pino(logOptions(env.logLevel));
 
 const backend = createBackendClient({ baseUrl: env.backendUrl, token: env.internalApiToken });
 
