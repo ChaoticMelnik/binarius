@@ -20,10 +20,12 @@ import { OutboxPublisher, backoffMs, type PublisherConfig } from './publisher';
 
 // Real Postgres and Redis (README → Database): the BullMQ dedupe, job presence and the
 // per-row transaction are what these tests are about, so neither is faked here.
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 const redisUrl = process.env.REDIS_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for apps/backend integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for apps/backend integration tests (see README → Test database)',
+  );
 }
 if (redisUrl === undefined || redisUrl === '') {
   throw new Error('REDIS_URL is required for apps/backend integration tests (see README)');

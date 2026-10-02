@@ -16,9 +16,11 @@ import { createBrokerOAuthClient, type BrokerOAuthClient } from '../broker/oauth
 import { startOAuthStub, type OAuthStub } from '../broker/testing/oauth-stub';
 import { ensureFreshAccessToken, type TokenServiceDeps } from './token-service';
 
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for apps/backend integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for apps/backend integration tests (see README → Test database)',
+  );
 }
 
 const CLIENT_ID = 'client-id';

@@ -28,9 +28,11 @@ import {
 // has its own case and its own isolating mutation next to the code it guards. What this one
 // answers is the question none of them can: that the pieces agree.
 
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for apps/backend integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for apps/backend integration tests (see README → Test database)',
+  );
 }
 
 const WEB_TOKEN = 'admin-web-token-for-the-flow-test';
@@ -311,7 +313,11 @@ describe('a staff member logs in, looks at the sessions and logs out', () => {
   });
 });
 
-async function logIn(staff: { login: string; password: string; telegramUserId: bigint }): Promise<string> {
+async function logIn(staff: {
+  login: string;
+  password: string;
+  telegramUserId: bigint;
+}): Promise<string> {
   const started = await web.inject({
     method: 'POST',
     url: '/admin/login',

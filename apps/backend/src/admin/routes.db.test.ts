@@ -27,9 +27,11 @@ import { buildApp } from '../app';
 import { createPasswordQueue } from './password-queue';
 import { stubTelegram, unusedAdminDeps } from './testing';
 
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for apps/backend integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for apps/backend integration tests (see README → Test database)',
+  );
 }
 
 const WEB_TOKEN = 'admin-web-token-for-tests';
@@ -234,7 +236,9 @@ describe('POST /admin/auth/login', () => {
   it('locks the account after five wrong passwords and stops deriving', async () => {
     const seeded = await seedStaff(tmp.db);
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      expect((await login({ login: seeded.login, password: 'no', ...CLIENT })).statusCode).toBe(401);
+      expect((await login({ login: seeded.login, password: 'no', ...CLIENT })).statusCode).toBe(
+        401,
+      );
     }
     const before = derivations;
 
@@ -333,13 +337,16 @@ describe('POST /admin/auth/login', () => {
     await app.close();
     app = build({ loginMaxPerMinute: 1 });
     const seeded = await seedStaff(tmp.db);
-    expect((await login({ login: seeded.login, password: seeded.password, ...CLIENT })).statusCode).toBe(
-      200,
-    );
+    expect(
+      (await login({ login: seeded.login, password: seeded.password, ...CLIENT })).statusCode,
+    ).toBe(200);
 
     const over = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
 
-    expect([over.statusCode, over.json()]).toEqual([429, { error: AdminErrorCode.TooManyAttempts }]);
+    expect([over.statusCode, over.json()]).toEqual([
+      429,
+      { error: AdminErrorCode.TooManyAttempts },
+    ]);
   });
 
   it('answers 503 and closes the challenge while the bot is not polling', async () => {
@@ -703,7 +710,10 @@ describe('POST /admin/sessions/:id/revoke', () => {
 
     const response = await withSession('POST', `/admin/sessions/${target!.id}/revoke`, actorToken);
 
-    expect([response.statusCode, response.json()]).toEqual([200, { revoked: true, current: false }]);
+    expect([response.statusCode, response.json()]).toEqual([
+      200,
+      { revoked: true, current: false },
+    ]);
     // and the revoked session is refused on its very next request
     expect((await withSession('GET', '/admin/sessions', ownerToken)).statusCode).toBe(401);
   });
@@ -729,7 +739,10 @@ describe('POST /admin/sessions/:id/revoke', () => {
 
     const response = await withSession('POST', `/admin/sessions/${target}/revoke`, token);
 
-    expect([response.statusCode, response.json()]).toEqual([404, { error: AdminErrorCode.NotFound }]);
+    expect([response.statusCode, response.json()]).toEqual([
+      404,
+      { error: AdminErrorCode.NotFound },
+    ]);
   });
 
   // The shape of the id says nothing about whether the caller may ask: with the check in front
@@ -764,11 +777,7 @@ describe('POST /admin/sessions/:id/revoke', () => {
   it('records a miss as a miss, with no session to point at', async () => {
     const seeded = await seedStaff(tmp.db);
     const token = await openSession(seeded);
-    await withSession(
-      'POST',
-      '/admin/sessions/00000000-0000-4000-8000-0000000000fb/revoke',
-      token,
-    );
+    await withSession('POST', '/admin/sessions/00000000-0000-4000-8000-0000000000fb/revoke', token);
 
     // scoped to this test's own actor: the table is shared by every case in the file
     const entries = await tmp.db

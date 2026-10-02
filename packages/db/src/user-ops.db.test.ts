@@ -16,9 +16,11 @@ import { createTempDatabase, seedBrokerAccount, type TempDatabase } from './test
 import { brokerAccounts, users } from './schema/index';
 import { recordUserStart, toUserStartView } from './user-ops';
 
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for packages/db integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for packages/db integration tests (see README → Test database)',
+  );
 }
 
 let tmp: TempDatabase;

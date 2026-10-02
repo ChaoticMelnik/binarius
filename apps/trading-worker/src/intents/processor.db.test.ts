@@ -16,10 +16,10 @@ import type { SubmitResult, TradeExecutor } from './executor';
 import { notConfiguredExecutor } from './executor';
 import { InvalidJobError, processIntentJob, type ProcessorDeps } from './processor';
 
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
   throw new Error(
-    'DATABASE_URL is required for apps/trading-worker integration tests (see README)',
+    'TEST_DATABASE_URL is required for apps/trading-worker integration tests (see README → Test database)',
   );
 }
 

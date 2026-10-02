@@ -20,9 +20,11 @@ import {
 } from './oauth-ops';
 import { brokerAccounts, oauthStates, tokenLedger, users } from './schema/index';
 
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for packages/db integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for packages/db integration tests (see README → Test database)',
+  );
 }
 
 const cipher = createTokenCipher({ keyId: 'test-key', key: randomBytes(32) });

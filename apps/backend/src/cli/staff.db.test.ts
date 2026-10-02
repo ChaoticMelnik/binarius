@@ -13,9 +13,11 @@ import {
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import { runStaffCli } from './staff';
 
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for apps/backend integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for apps/backend integration tests (see README → Test database)',
+  );
 }
 
 let tmp: TempDatabase;
@@ -78,9 +80,9 @@ describe('staff create', () => {
     expect(row?.telegramUserId).toBe(42n);
     // the password is printed, never stored: the row holds a hash it verifies against
     expect(row?.passwordHash).not.toContain(lines[1]?.slice('Пароль: '.length) ?? '');
-    expect(await verifyPassword(row?.passwordHash ?? '', lines[1]?.slice('Пароль: '.length) ?? '')).toBe(
-      true,
-    );
+    expect(
+      await verifyPassword(row?.passwordHash ?? '', lines[1]?.slice('Пароль: '.length) ?? ''),
+    ).toBe(true);
 
     const entries = await tmp.db
       .select({ action: auditLog.action, payload: auditLog.payload })
@@ -129,7 +131,9 @@ describe('staff reset-password', () => {
 
     expect(code).toBe(0);
     expect(lines.at(-1)).toMatch(PASSWORD_LINE);
-    expect(lines[0]).toBe('Пароль rotate-me сброшен: закрыто запросов на вход 1, отозвано сессий 2');
+    expect(lines[0]).toBe(
+      'Пароль rotate-me сброшен: закрыто запросов на вход 1, отозвано сессий 2',
+    );
     const after = lines.at(-1)?.slice('Пароль: '.length) ?? '';
     expect(after).not.toBe(before);
     const row = await staffRow('rotate-me');
@@ -154,9 +158,7 @@ describe('staff disable', () => {
     const { code, lines } = await run('disable', '--login', 'retiring');
 
     expect(code).toBe(0);
-    expect(lines).toEqual([
-      'Отключена retiring: закрыто запросов на вход 1, отозвано сессий 2',
-    ]);
+    expect(lines).toEqual(['Отключена retiring: закрыто запросов на вход 1, отозвано сессий 2']);
     expect((await staffRow('retiring'))?.status).toBe('disabled');
   });
 });
