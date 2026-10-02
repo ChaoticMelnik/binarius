@@ -480,9 +480,9 @@ describe('failNext', () => {
     const response = await call('/v1/broker/user', { token: null });
     expect(Date.now() - started).toBeGreaterThanOrEqual(140);
     expectError(response, 401, 'Authentication failed: Missing bearer token');
-    const fast = Date.now();
+    // one-shot: the next request is not scripted (proved by the journal, not a time ceiling)
     expect((await call('/v1/broker/user')).status).toBe(200);
-    expect(Date.now() - fast).toBeLessThan(140);
+    expect(broker.rest.journal.map((record) => record.scripted)).toEqual([true, false]);
   });
 
   it('checks a token revoked during the delay as revoked', async () => {
