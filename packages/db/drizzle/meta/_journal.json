@@ -64,6 +64,13 @@
       "when": 1790847892090,
       "tag": "0008_link_bonus",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790978416997,
+      "tag": "0009_telegram_blocked_at",
+      "breakpoints": true
     }
   ]
 }

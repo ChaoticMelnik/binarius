@@ -56,6 +56,8 @@ export async function recordUserStart(
           // first touch wins: once a source is recorded, no later /start replaces it
           acquisitionSource: sql`coalesce(${users.acquisitionSource}, excluded.acquisition_source)`,
           acquiredAt: sql`coalesce(${users.acquiredAt}, excluded.acquired_at)`,
+          // the user has just written to the bot, which a blocked bot cannot receive (#119)
+          telegramBlockedAt: null,
           // spelled out: $onUpdate does not reach the on-conflict path
           updatedAt: sql`now()`,
         },

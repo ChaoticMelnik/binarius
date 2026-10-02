@@ -148,6 +148,28 @@ describe('recordUserStart: the rest of the row', () => {
     expect(row.acquisitionSource).toBe('src_blocked');
   });
 
+  it('clears the Telegram block mark on a repeat /start and leaves it NULL on a first one', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId);
+    const blockedAt = async () => {
+      const [row] = await tmp.db
+        .select({ at: users.telegramBlockedAt })
+        .from(users)
+        .where(eq(users.telegramUserId, telegramUserId));
+      return row?.at;
+    };
+    expect(await blockedAt()).toBeNull();
+
+    await tmp.db
+      .update(users)
+      .set({ telegramBlockedAt: sql`now()` })
+      .where(eq(users.telegramUserId, telegramUserId));
+    expect(await blockedAt()).toBeInstanceOf(Date);
+
+    await start(telegramUserId);
+    expect(await blockedAt()).toBeNull();
+  });
+
   it('creates exactly one row when two first /start updates race', async () => {
     const telegramUserId = nextTelegramUserId();
     const [a, b] = await Promise.all([
