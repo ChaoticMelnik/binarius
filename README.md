@@ -68,98 +68,108 @@ Under `--watch`, edits to `src/` restart the affected app; edits to a `package.j
 backend (`3000`) and `web` (`3001`: the admin pages and the Mini App login pages) are published
 on `127.0.0.1` only.
 
-### The VM clock (Colima)
-
-On a Mac the containers run in a Colima VM. Its `lima-guestagent` compares the VM's clock with the
-host's every 10 s and, past a 100 ms drift, sets the VM's time in one jump (Lima issue #5543).
-`systemd-timesyncd` in the VM pulls the same clock towards NTP at the same time, so the jump
-lands _backwards_, by 80-125 ms, as often as every 20 s under load. Postgres's `now()` then reads
-earlier in a later transaction, and the time-order CHECKs (`*_after_created`,
-`staff_login_challenges_code_sent_check` and the like) reject rows the code wrote correctly
-(#166). Production and CI run Postgres on the host's own kernel clock, where an NTP daemon slews
-small offsets instead of stepping.
-
-The fix takes the right to set the time away from the agent, leaving the VM's clock to
-`systemd-timesyncd` alone, which slews it:
-
-```bash
-colima ssh -- sudo mkdir -p /etc/systemd/system/lima-guestagent.service.d
-printf '[Service]\nCapabilityBoundingSet=~CAP_SYS_TIME\n' \
-  | colima ssh -- sudo tee /etc/systemd/system/lima-guestagent.service.d/no-sys-time.conf
-colima ssh -- sudo systemctl daemon-reload
-colima ssh -- sudo systemctl restart lima-guestagent
-```
-
-Restarting the agent drops and re-announces the port forwards; check that `docker ps` and
-`curl 127.0.0.1:3000/health` answer afterwards. To verify the fix:
-
-```bash
-colima ssh -- systemctl show lima-guestagent -p ActiveState -p NRestarts -p DropInPaths
-colima ssh -- systemctl is-active systemd-timesyncd   # active: it is now the only clock keeper
-colima ssh -- sudo journalctl -u lima-guestagent --since -10min | grep -i synctime
-```
-
-`DropInPaths` names `no-sys-time.conf`, and every 10 s the journal shows `SyncTime: failed to set
-system time` with `operation not permitted` instead of `system time synchronized with host`. The drop-in lives in the VM's
-disk: after `colima delete` repeat it; after `colima restart` check `DropInPaths`.
-
-`tooling/db-clock-probe.ts` is the detector: it reads Postgres's `clock_timestamp()` every 5 ms
-and logs each step back (exit 1 if there was one, 2 if it never got a sample):
-
-```bash
-node tooling/db-clock-probe.ts --seconds 900   # DATABASE_URL as for the tests
-```
-
-After the fix the VM's clock follows NTP and the Mac's does not quite, so the database reads
-ahead of `Date.now()` by the Mac's own NTP error (157 ms when this was written; `sntp
-time.apple.com` on the Mac shows it). Database-against-database comparisons do not see that;
-tests that compare `Date.now()` with a database column expect the column to be the later one, with
-margins of 500 ms or more.
-
 ## Database
 
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
-The integration tests run against a real Postgres named by `DATABASE_URL` and a real Redis named
-by `REDIS_URL`, and fail without them — `pnpm test` therefore needs the compose services. Even
-this partial start needs all eight REQUIRED values in `.env`, because Compose interpolates the
-whole file before it picks which services to run: that includes `TELEGRAM_BOT_TOKEN`, which only
-the `bot` and `backend` services read, so `docker compose up -d postgres redis` refuses to run
-without it:
+`DATABASE_URL` names the dev stack's Postgres for the host-side drizzle-kit commands
+(`pnpm db:migrate`, `db:generate`, `db:check`). Even this partial start needs all eight REQUIRED
+values in `.env`, because Compose interpolates the whole file before it picks which services to
+run: that includes `TELEGRAM_BOT_TOKEN`, which only the `bot` and `backend` services read, so
+`docker compose up -d postgres redis` refuses to run without it:
 
 ```bash
 docker compose up -d postgres redis
 export DATABASE_URL=postgres://binarius:binarius@localhost:5432/binarius   # the .env.example values
-export REDIS_URL=redis://localhost:6379
 pnpm db:migrate          # apply pending migrations (idempotent)
+```
+
+The integration tests never read `DATABASE_URL`. They run against the Postgres named by
+`TEST_DATABASE_URL`, a native PostgreSQL 18 on the host ([Test database](#test-database-native-postgresql-18)
+below), and the Redis named by `REDIS_URL` (the compose one), and fail without either:
+
+```bash
+export TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius   # the .env.example value
+export REDIS_URL=redis://localhost:6379
+DATABASE_URL=$TEST_DATABASE_URL pnpm db:migrate   # the test database's own migrations
 pnpm test
 ```
 
 The tests are two vitest projects (`vitest.config.ts`). `integration` is every
 `*.db.test.ts` and `*.redis.test.ts` under `apps/*/src` and `packages/*/src`: a test that reads
-`DATABASE_URL` or `REDIS_URL`, imports `pg`, `ioredis`, `bullmq` or `@binarius/db/testing`, or
-calls `createTempDatabase` must be named that way, and only such a test may be —
+`TEST_DATABASE_URL` or `REDIS_URL`, imports `pg`, `ioredis`, `bullmq` or `@binarius/db/testing`,
+or calls `createTempDatabase` must be named that way, and only such a test may be —
 `tooling/vitest-projects.test.ts` fails otherwise. The project's budgets are wider than vitest's
-defaults, because a busy host starves the VM Postgres runs in: 60 s for a hook (a temporary
-database is created and migrated in `beforeAll`) and 20 s for a test. `unit` is everything else,
-on the defaults. `pnpm test --project integration` runs only the first.
+defaults, because a busy host starves the database: 60 s for a hook (a temporary database is
+created and migrated in `beforeAll`) and 20 s for a test. Before its first test file the project
+runs `tooling/integration-preflight.ts` ([Test database](#test-database-native-postgresql-18)).
+`unit` is everything else, on the defaults, and needs no services: `pnpm test --project unit`.
+`pnpm test --project integration` runs only the first.
+
+### Test database: native PostgreSQL 18
+
+The tests compare the database's clock with their own (a column against `Date.now()`) and one
+transaction's `now()` with a later one's (the time-order CHECKs). Both hold when Postgres and the
+tests share one clock: on the production host, in CI (a service container on the runner's kernel)
+and with a native Postgres on a Mac. They did not hold with the compose Postgres, which on a Mac
+runs in the Colima VM (#166):
+
+- the Lima guest agent sets the VM's clock from the host's whenever they drift 100 ms apart, which
+  happened every 10-20 s, and each time the clock stepped back by 80-180 ms;
+- after the Mac sleeps the VM's clock is behind by the length of the sleep until something sets
+  it: the agent within about 10 s, `systemd-timesyncd` alone only at its next poll, up to 34
+  minutes later (with the agent's right to set the time taken away, the VM stayed 84 minutes
+  behind for at least 14 minutes);
+- the VM's 2 vCPUs starve when the host is busy.
+
+Setting it up once on a Mac (Homebrew; port 5434, because 5432 may be another local Postgres and
+5433 is the `POSTGRES_PORT` this README suggests for the compose one):
+
+```bash
+brew install postgresql@18   # keg-only; creates the cluster in /opt/homebrew/var/postgresql@18
+sed -i '' -E 's/^#?port = 5432/port = 5434/' /opt/homebrew/var/postgresql@18/postgresql.conf
+brew services start postgresql@18   # and at every login
+/opt/homebrew/opt/postgresql@18/bin/pg_isready -h 127.0.0.1 -p 5434
+/opt/homebrew/opt/postgresql@18/bin/createuser -h 127.0.0.1 -p 5434 -s binarius
+/opt/homebrew/opt/postgresql@18/bin/createdb -h 127.0.0.1 -p 5434 -O binarius binarius
+```
+
+The role is a superuser because `createTempDatabase` creates and force-drops databases. Homebrew's
+cluster trusts local connections, so the URL carries no password. Then migrate it as above.
+
+`tooling/integration-preflight.ts` refuses to start the integration tests, with one message naming
+this section, when the database in `TEST_DATABASE_URL`:
+
+- is older than PostgreSQL 18 (`old.status` in RETURNING needs 18);
+- has a clock more than 1 s off the host's;
+- is, on a Mac, a containerised Postgres (`data_directory` under `/var/lib/postgresql`, where the
+  `postgres` image keeps it), that is, the compose one in the VM.
+
+`tooling/db-clock-probe.ts` watches the same clock continuously: it reads `clock_timestamp()` every
+5 ms and logs each step back and each stretch more than 1 s off the host. Exit codes: 0 clean, 1 a
+step back or a skew, 2 no sample at all, 64 bad usage, 70 the probe itself failed.
+
+```bash
+node tooling/db-clock-probe.ts --seconds 900   # TEST_DATABASE_URL as above
+```
 
 `tooling/check-stability.sh` repeats the suite and tabulates timeouts, time-order CHECK
-violations and steps back of the database clock (`tooling/db-clock-probe.ts` runs throughout), with
-`DATABASE_URL` and `REDIS_URL` set as above and from a shell that ran `fnm use`:
+violations, and the probe's steps back and skew, which runs throughout. It needs
+`TEST_DATABASE_URL` and `REDIS_URL` set as above and a shell that ran `fnm use`:
 
 ```bash
 tooling/check-stability.sh quiet 10   # ten `pnpm check` in a row
 tooling/check-stability.sh load 3     # three rounds of two parallel suites beside 4 CPU hogs
 ```
 
-`load` refuses to start a round below 512 MB of free swap (`MIN_FREE_SWAP_MB`): it adds CPU pressure only,
-and a host that is swapping measures the swap. Logs and `summary.txt` go to `$STABILITY_OUT`, a
-fresh temporary directory by default.
+`load` refuses to start a round below 512 MB of free swap (`MIN_FREE_SWAP_MB`), and when
+`vm.swapusage` cannot be read; with no swap in use at all (macOS creates it on demand) the guard is
+skipped and the summary says so. It adds CPU pressure only, and a host that is swapping measures
+the swap. Logs and `summary.txt` go to `$STABILITY_OUT`, a fresh temporary directory by default.
 
-`packages/db/src/schema.db.test.ts` uses the migrated database itself; every other integration
-test creates its own `binarius_test_<timestamp>_<hex>` database (migrated on the fly, dropped
-afterwards, orphans older than an hour reaped on the next run) and a random BullMQ key prefix, so
-the role in `DATABASE_URL` needs `CREATEDB` — the compose role is a superuser.
+`packages/db/src/schema.db.test.ts` uses the migrated test database itself; every other
+integration test creates its own `binarius_test_<timestamp>_<hex>` database (migrated on the fly,
+dropped afterwards, orphans older than an hour reaped on the next run) and a random BullMQ key
+prefix, so the role in `TEST_DATABASE_URL` needs `CREATEDB`.
 
 If another Postgres already owns host port 5432, set `POSTGRES_PORT=5433` in `.env` and use that
 port in `DATABASE_URL`.
