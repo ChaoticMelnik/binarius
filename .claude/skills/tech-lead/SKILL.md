@@ -219,6 +219,14 @@ If a PR is about to be merged out of the declared order: comment on the PR that 
 
 Re-run the conflict check whenever: a new issue enters In Progress, a PR is merged, or an issue's file scope changes (the Architect updates the plan).
 
+### Step 7: Parallel implementers on one machine
+
+Several implementers or reviewers at once (#177, #192, #103, #166 on 2026-10-02) share the host, the dev databases and the session scratchpad. Each spawn prompt states:
+- **Own worktree**, created by the agent itself with `git worktree add .claude/worktrees/impl-<N> -b <branch> origin/main` and `git worktree lock` — an `isolation: "worktree"` spawn's tree is removed when its clarify round ends unchanged. The main checkout belongs to one agent at a time. Tech-lead unlocks and removes the worktree after the merge.
+- **Own scratch subdirectory** (`<scratchpad>/impl-<N>/`, `review-<N>/`): agents overwrote each other's `check.sh` and one `pnpm check` ran in the wrong tree.
+- **Sub-skills pointed explicitly** at `gh pr diff <N>` and the worktree: `/security-review` and `/code-review` load the main checkout's diff by default.
+- **Shared-resource window**: before a full `pnpm check`, a VM/host change or a long series, `pgrep -fl 'vitest|check-stability|db-clock-probe'` must show no foreign run; tech-lead serialises anything that restarts shared services ("GO" only when the others are idle).
+
 ---
 
 ## Mode 2: Pipeline (issue given directly)

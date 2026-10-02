@@ -128,7 +128,8 @@ Task classes with a mandatory plan section — each row traces to a real review 
 |---|---|
 | Toolchain / engines / Node version | `npm view <tool> engines` for every root devDependency and their intersection; fresh-clone, stale-cache and incremental scenarios, each named with its expected outcome |
 | CI workflow | Feature list checked against the runner image's tool versions; every diagnostic/cleanup step still runs when the step it diagnoses has failed (`if: failure()`/`always()`, `continue-on-error`) |
-| Compose / env | Interpolation and env semantics verified with `docker compose config` before the plan is written, output quoted |
+| Compose / env | Interpolation and env semantics verified with `docker compose config` before the plan is written, output quoted — on the CI runner's Compose version too (a standalone release binary in a scratch dir), not only the local one (#192: a nested `${A+${B:?}}` passed on 5.5.1 and failed every `config` on the runner's 2.38.2) |
+| Developer environment (VM, host services, package manager) | Behaviour across a host sleep/wake and a restart, not only right after the change; the rollback and its trigger; dry-run output of every package-manager step read in full and quoted (no `head`/`tail`); the exact scope of the owner's authorization (#166: a VM clock fix passed a 16-min acceptance and left the clock 84 min behind after the first sleep; a truncated `brew --dry-run` hid four upgrades) |
 | Schema / constraints | Enforcement column in Step 3; every CHECK run on NULL/boundary rows; permission × restriction compatibility |
 | Timeouts / budgets | Each constant → the operation it bounds; the ordering chain and where it is asserted (import + test) per process |
 | Logging changes | The test that reads the log itself (a destination seam), not the HTTP response |
