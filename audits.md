@@ -876,3 +876,49 @@ PR #203, rebase-merged (6 коммитов, голова `3efec56`). **Два к
 2. **Параллельные implementer'ы на одной машине** (свой worktree через `git worktree add` + lock, свой scratch-подкаталог, sub-skills на `gh pr diff`, окно общего Postgres). — **внедрено в #207: `.claude/skills/tech-lead/SKILL.md` → Conflict detection → Step 7**
 3. **Minor-находки:** #177 — владелец: не заводить; #192 → **вынесено в #197**; #103 → **вынесено в #204**; #166 → **вынесено в #206**, дедлайны в тестах → **вынесено в #205**.
 4. **Пост-фактум Codex по `e374541`, `f96d581`, `f3ac5cd`, `3efec56`** — присоединяется к предложению 4 аудита #163. — **открыто (2026-10-02, владелец): после сброса лимита 2026-10-05**
+
+---
+
+## #198 — Бот: стиль сообщений — «ты», эмодзи, HTML-разметка с экранированием (2026-10-02)
+
+PR #208 смержен через rebase: 5 коммитов, голова `1e12991`, в `main` — `7bb90e8`. Ветка удалена. **Два круга ревью.** Круг 1: 8 Minor; владелец решил исправить m1–m5 до мержа. Круг 2 чистый, найдено ещё 5 Minor. Оставшиеся m6–m8 и n1–n5 вынесены в #209 после «да» владельца.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Preflight | Чисто: `main` = `origin/main` (`0f427df`), открытых PR нет, ничего не в работе, `.claude/CLAUDE.md` = `origin/main`, Node 22.23.2, compose поднят, у всех предложений аудита #166 есть статусы. Codex пропущен по вейверу. |
+| Architect | Clarify + план | Спавн `fable` → `claude-fable-5-1`. 5 вопросов; владелец отошёл от рекомендации в одном: эмодзи на всех кнопках. Полный текст каждого сообщения и каждой кнопки — в плане (ответ владельца 2); владелец утвердил тексты до старта implementer'а. Оценка ~860 строк. Codex пропущен. |
+| Implementer | Clarify | Спавн `opus` → `claude-opus-5-5`. 4 вопроса; Q4 (одинаковые имена с `apps/web`) отдан архитектору. Plan Update: переименование в `telegramHtml`/`TelegramHtml`/`escapeTelegramHtml`, проверено tsc-пробой. |
+| Implementer | Код | 4 коммита, на каждом `pnpm check` exit 0. Тексты сверены с планом скриптом; 29 мутаций модуля. Отклонения от плана записаны в PR: type-only экспорт класса из-за TS4094, коды оракула TS2724/TS1362. |
+| Reviewer | Iteration 1 | Спавн `opus`. Первый запуск завис по stream watchdog, ничего не опубликовав; его продолжили через `SendMessage` после проверки GitHub. 0 Blocker, 0 Major, 8 Minor. m1 противоречит ответу владельца «все цитаты в доках»; LGTM не опубликован до решения владельца. |
+| Architect | Plan Update | Без Codex (итерация 1). Поиск устаревших цитат — по самим текстам, с таблицей находок; `"` → `&quot;`; seam закрывает `entities`. |
+| Implementer | Fixes | 3 вопроса, коммит один (решение владельца). `pnpm check` exit 0, мутации для m4/m5. Попутно исправлены ещё два ложных утверждения того же класса. |
+| Reviewer | Iteration 2 | Весь `gh pr diff 208`. m1–m5 держатся, найдено 5 новых Minor (n1–n5). CI зелёный. |
+| Tech Lead | Merge / Done | Перед мержем спросил через `AskUserQuestion` → rebase и удаление ветки, `--match-head-commit 1e12991`. `MERGED` в 14:43:45Z, после этого — Done. Задача #209 заведена после «да» владельца. |
+| Model policy | Check | Architect `claude-fable-5-1`; implementer, reviewer, 3b, 3c — `claude-opus-5-5`; 3d — `claude-sonnet-5-5`. В таблице `.claude/CLAUDE.md` было `claude-sonnet-5`; исправлено в этом PR. |
+
+### Review iterations: 2 (один возврат после круга 1)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m1, m2: устаревшие цитаты в `docs/bot-start.md` и `docs/binodex-oauth.md` | Minor | instance-vs-class | Поиск шёл по символу кавычки `«` и только по одному файлу | Architect plan |
+| m3: правило стиля в доке шире утверждённых текстов | Minor | unverified-claim | Правило записано без сверки с текстами | Implementer docs |
+| m4: `"` не экранировалась | Minor | other | Набор экранирования взят для текстового контекста, атрибуты не учтены | Architect plan |
+| m5: seam пропускал `entities` | Minor | other | `Omit` закрыл только `parse_mode` | Architect plan |
+| n1: устаревшая цитата в комментарии `texts.ts` | Minor | instance-vs-class | Поиск по Plan Update не включал файлы, где определены константы | Architect Plan Update |
+| n2–n5, m6–m8 | Minor | other | Вынесено | → #209 |
+| Ревьюер завис по stream watchdog | Process | other | Сбой harness; ничего не было опубликовано, агента продолжили | — |
+| `gh issue comment --jq` молча не сработал (второй раз после #179) | Process | single-source | Шаблон в `/github` не говорил, что флаг не поддерживается | — |
+| Алиас `sonnet` разрешается в `claude-sonnet-5-5`, в таблице было `claude-sonnet-5` | Process | single-source | Таблица — запись последней сверки | Model policy check |
+| Codex не читал ни план, ни код, ни этот docs-PR | Process | codex-ops | Вейвер владельца до 2026-10-05 | — |
+
+### Process improvement proposals
+
+1. **Поиск устаревших цитат — по самим текстам.** Когда меняются тексты, видимые пользователю, план ищет старые тексты сами по себе по `docs/`, README, комментариям и файлам констант и перечисляет найденное. — **внедрено в #210: `.claude/skills/architect/SKILL.md` → Validation checklist**
+2. **`gh issue comment` и `gh pr comment` не принимают `--jq`.** — **внедрено в #210: `.claude/skills/github/SKILL.md` → Operation: Post a comment**
+3. **Таблица моделей:** `sonnet` → `claude-sonnet-5-5`. — **внедрено в #210: `.claude/CLAUDE.md` → Модели по ролям pipeline**
+4. **Minor m6–m8 и n1–n5.** — **вынесено в #209**
+5. **Пост-фактум Codex по `7bb90e8`** — присоединяется к предложению 4 аудита #171. — **открыто (2026-10-02, владелец): после сброса лимита 2026-10-05**
