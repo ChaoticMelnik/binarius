@@ -150,6 +150,18 @@ importers:
         specifier: ^0.31.11
         version: 0.31.11
 
+  packages/mock-broker:
+    dependencies:
+      '@binarius/shared':
+        specifier: workspace:*
+        version: link:../shared
+      fastify:
+        specifier: ^5.12.5
+        version: 5.12.5
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
   packages/shared:
     dependencies:
       zod:
