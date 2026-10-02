@@ -73,7 +73,8 @@ function render(value: unknown): string {
 
 type AttributeRule = 'required' | 'optional';
 
-// tag → the attributes it may carry; anything not listed is refused
+// tag → the attributes it may carry; anything not listed is refused. Looked up by own property
+// only: a tag or attribute name is author-written text, and `<constructor>` passed before.
 const TAGS: Record<string, Record<string, AttributeRule>> = {
   b: {},
   strong: {},
@@ -158,13 +159,13 @@ export function telegramHtmlProblems(value: string): string[] {
 }
 
 function openingTagProblems(name: string, attributes: string, open: readonly string[]): string[] {
-  const allowed = TAGS[name];
+  const allowed = Object.hasOwn(TAGS, name) ? TAGS[name] : undefined;
   if (allowed === undefined) return [`<${name}> is not a Telegram tag`];
   const problems: string[] = [];
   const seen = new Map<string, string | undefined>();
   for (const [, rawAttribute = '', attributeValue] of attributes.matchAll(ATTRIBUTE)) {
     const attribute = rawAttribute.toLowerCase();
-    if (allowed[attribute] === undefined) {
+    if (!Object.hasOwn(allowed, attribute)) {
       problems.push(`<${name}> does not take ${attribute}`);
       continue;
     }

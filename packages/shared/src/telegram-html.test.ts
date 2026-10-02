@@ -83,7 +83,17 @@ describe('telegramHtmlProblems', () => {
   it.each([
     ['an unknown tag', '<p>a</p>', '<p> is not a Telegram tag'],
     ['a tag Telegram does not list', '<br>', '<br> is not a Telegram tag'],
+    [
+      'a tag named like an Object member',
+      '<constructor>a</constructor>',
+      '<constructor> is not a Telegram tag',
+    ],
     ['an attribute the tag does not take', '<b class="x">a</b>', '<b> does not take class'],
+    [
+      'an attribute named like an Object member',
+      '<b constructor="x">a</b>',
+      '<b> does not take constructor',
+    ],
     ['a link without href', '<a>a</a>', '<a> needs href'],
     [
       'a span that is not a spoiler',
