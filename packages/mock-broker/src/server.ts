@@ -60,6 +60,12 @@ const ROUTES: Record<MockRestEndpoint, { method: 'GET' | 'POST'; url: string; au
   chart: { method: 'GET', url: '/v1/broker/chart', auth: false },
 };
 
+// a body that is not JSON: broken, empty, or another content type (Fastify answers that one 415)
+const INVALID_BODY_CODES = new Set([
+  'FST_ERR_CTP_INVALID_JSON_BODY',
+  'FST_ERR_CTP_EMPTY_JSON_BODY',
+  'FST_ERR_CTP_INVALID_MEDIA_TYPE',
+]);
 const DEFAULT_TRADES_LIMIT = 20;
 const TRADE_STATUSES = Object.values(MockTradeStatus);
 const BOOLEANS = ['true', 'false'];
@@ -241,10 +247,13 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
   );
 
   app.setErrorHandler((error, _request, reply) => {
-    // FST_ERR_CTP_*: a body that is not JSON, an empty JSON body, an unsupported content type
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === 'string' && code.startsWith('FST_ERR_CTP_')) {
+    const { code, statusCode } = error as { code?: unknown; statusCode?: unknown };
+    if (typeof code === 'string' && INVALID_BODY_CODES.has(code)) {
       return reply.code(400).send(brokerError(FIXTURE_MESSAGES.invalidJson));
+    }
+    // any other client error Fastify raises keeps its status (a body over bodyLimit is a 413)
+    if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
+      return reply.code(statusCode).send(brokerError(FIXTURE_MESSAGES.requestFailed));
     }
     return reply.code(500).send(brokerError(FIXTURE_MESSAGES.internal));
   });
