@@ -1030,3 +1030,79 @@ PR #216 смержен через rebase: 3 коммита, голова `f33ad3
 1. **Каждую пробу или мутацию, которую план называет доказательством, прогонять против текущего кода до публикации плана.** Она должна ломать ровно свою проверку. — **внедрено в #217: `.claude/skills/architect/SKILL.md` → Validation checklist**
 2. **Minor 1.** — **вынесено в #214**
 3. **Пост-фактум Codex по `a08bd86`** присоединяется к предложению 4 аудита #171. — **открыто (2026-10-02, владелец): после сброса лимита 2026-10-05**
+
+---
+
+## #97 — ARCH-01: декодер payload и нормализатор событий брокера (2026-10-03)
+
+PR #218 смержен через rebase: 2 коммита, голова `62c1d18`, в `main` — `8dbe7b4`, `220291d`. Ветка удалена. **Один круг ревью, чистый, 3 Minor.** Первая задача цепочки ARCH-01 (#97 → #98 → #104 → #99 → #100 → #101), план готовился волнами по решению владельца 2026-10-02.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Preflight | `main` = `origin/main`, CLAUDE.md без расхождений, Postgres/Redis подняты. Codex пропущен по вейверу. Планирование шло из read-only worktree `origin/main`: основной checkout был занят другой сессией. |
+| Architect | Clarify + план | Спавн `fable`. 5 вопросов, все — рекомендованные варианты; выяснилось, что декодер уже есть в shared, и задача свелась к нормализатору. Оценка ~1050 строк. |
+| Implementer | Clarify | Спавн `opus`. 5 вопросов, 1 дефект плана: живая проба 2026-10-02 показала, что `user.auth.success` приходит с одним аргументом `null`, и план считал бы его лишним при каждой авторизации. Plan Update — архитектор на `opus` (решение владельца 2026-10-03: Fable-лимит сессии исчерпан). |
+| Implementer | Код | 2 коммита, `pnpm check` exit 0 перед каждым, 13 мутаций в Gate verification. Один прогон наложился на прогон #85: pgrep-проверка напечатала чужой прогон, но не остановила команду; повтор после него — exit 0. |
+| Reviewer | Iteration 1 | Спавн `opus`, 3b–3d параллельно. 0 Blocker, 0 Major, 3 Minor. Подскиллы загрузили diff основного checkout'а; агенты это заметили и проверили `gh pr diff 218` вручную. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase и удаление ветки, `--match-head-commit 62c1d18`. `MERGED`, после этого — Done. |
+| Model policy | Check | architect `claude-fable-5-1`, Plan Update `claude-opus-5-5` (по решению владельца); implementer, reviewer, 3b, 3c — `claude-opus-5-5`; 3d — `claude-sonnet-5-5`. |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| `user.auth.success` с аргументом `null` считался бы лишним аргументом | Plan defect | unverified-claim | Форма события взята из исходников broker-web, живьём не наблюдалась до плана | Architect plan; поймано на Implementer Step 0 после живой пробы |
+| `docs/broker-socket.md`: `open_trade_fail[].field` не назван свободным текстом брокера | Minor | other | Перечисление полей с текстом брокера неполное | Implementer docs |
+| Описание PR: аннотации мапперов якобы нужны, потому что вывод падает в `unknown` — tsc без них проходит | Minor | unverified-claim | Причина не проверена удалением аннотаций | Implementer |
+| Два избыточных теста | Minor | other | — | Implementer |
+| pgrep-проверка печатала чужой прогон, но не останавливала `pnpm check` | Process | preflight | Правило Step 7 не говорило, что проверка обязана останавливать | Tech-lead Step 7 |
+| Подскиллы ревью загрузили diff основного checkout'а | Process | other | Указание в брифе подскилл не соблюдает | Tech-lead Step 7 |
+
+### Process improvement proposals
+
+1. **Проверка на чужой прогон обязана останавливать команду, а не только печатать.** — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Step 7, Shared-resource window**
+2. **Подскиллам ревью — diff файлом и путь worktree, запрет checkout в основном checkout'е.** — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Step 7, Sub-skills**
+3. **3 Minor ревью PR #218** — **открыто (2026-10-03, владелец): PR смержен с ними, Minor в комментарии ревью; отдельная задача — по решению владельца**
+4. **Пост-фактум Codex по `220291d`** присоединяется к предложению 4 аудита #171. — **открыто (2026-10-03, владелец): после сброса лимита 2026-10-05**
+
+---
+
+## #85 — Whitelist-сериализатор `err` в логах (2026-10-03)
+
+PR #219 смержен через rebase: 3 коммита, голова `f8cbd48`, в `main` — до `a49f30b`. Ветка удалена. **Один круг ревью, чистый, 5 Minor.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Preflight | Как у #97 (параллельная волна). |
+| Architect | Clarify + план | Спавн `fable`. 5 вопросов, все — рекомендованные варианты; пробы pino/Fastify (наследование сериализаторов, `hooks.logMethod`, тип `logger.serializers.err`). Оценка ~430 строк. |
+| Implementer | Clarify | Спавн `opus`. 5 вопросов, 1 дефект плана: у `new TypeError()` поле `name` не собственное, и буквальное прочтение плана ломало все тесты `errorIdentity`. Plan Update — архитектор на `opus`, вариант A с проверкой формы identity. |
+| Implementer | Код | 3 коммита, `pnpm check` exit 0 после каждого, pgrep перед каждым прогоном. Мутация порядка веток из плана не могла упасть — заменена на ту, что падает, замена названа в PR. |
+| Reviewer | Iteration 1 | Спавн `opus`, 3b–3d. 0 Blocker, 0 Major, 5 Minor. Форк `/code-review` переключил основной checkout на ветку PR на ~2 минуты и вернул `main`; потерь нет. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase и удаление ветки, `--match-head-commit f8cbd48`. `MERGED`, после этого — Done. |
+| Model policy | Check | Как у #97. |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| `name` у `Error` унаследован, не собственный | Plan defect | unverified-claim | Утверждение об «own name» не проверено на стандартной ошибке | Architect plan; поймано на Implementer Step 0 |
+| `loggerInstance: pino(...)` ломал тип возврата `buildApp` (TS2322) | Plan defect | unverified-claim | tsc-проба плана компилировала только вызов `Fastify(...)` | Architect plan; поймано implementer'ом |
+| m1: `log.error(null, err)` не назван в списках «не покрыто» | Minor | unverified-claim | Форма вызова не перебрана | Architect plan |
+| m2: `code` берётся из любого объекта | Minor | other | Не регрессия: раньше логировался весь объект | — |
+| m3: «имя только у формы identity» шире кода (любой `Error` тоже) | Minor | unverified-claim | Формулировка шире места enforcement | Implementer docs |
+| m4: backend раскладывает `LOG_SERIALIZERS`, а не `logOptions(level).serializers` | Minor | single-source | — | Implementer |
+| m5: дублирование ветки `cause`, лишние override'ы `SafeLogController` | Minor | other | — | Implementer |
+
+### Process improvement proposals
+
+1. **tsc-проба для изменения фабрики компилирует экспортируемую сигнатуру потребителя, а не только место вызова.** — **внедрено в #<PR>: `.claude/skills/architect/SKILL.md` → Validation checklist**
+2. **5 Minor ревью PR #219** — **открыто (2026-10-03, владелец): PR смержен с ними, Minor в комментарии ревью; отдельная задача — по решению владельца**
+3. **Пост-фактум Codex по `a49f30b`** присоединяется к предложению 4 аудита #171. — **открыто (2026-10-03, владелец): после сброса лимита 2026-10-05**
