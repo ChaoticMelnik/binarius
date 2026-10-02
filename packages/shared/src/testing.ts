@@ -1,5 +1,12 @@
 // Test-only helpers shared by the apps' suites (subpath `@binarius/shared/testing`).
 
+import {
+  plainTextOf,
+  TELEGRAM_MESSAGE_LIMIT,
+  telegramHtmlProblems,
+  type TelegramHtml,
+} from './telegram-html';
+
 // Reads one direct key of a compose service out of compose.yaml text, so a test can hold a
 // TypeScript timing constant and the container's stop_grace_period together. A service block
 // starts at its two-space-indented `<name>:` line and ends at the next line indented the same
@@ -88,4 +95,22 @@ export function composeDurationMs(value: string | undefined): number | undefined
   if (value === undefined) return undefined;
   const match = /^(\d+)s$/.exec(value);
   return match === null ? undefined : Number(match[1]) * 1000;
+}
+
+// Everything the texts' tests check about one message: valid Telegram HTML, non-empty after
+// entities parsing, inside the limit (UTF-16 code units of the parsed text, as the Bot API
+// counts), no line starting or ending with a space. Empty when the text is fine.
+export function telegramTextProblems(text: TelegramHtml, limit = TELEGRAM_MESSAGE_LIMIT): string[] {
+  const problems = telegramHtmlProblems(text.value);
+  const plain = plainTextOf(text);
+  if (plain.trim() === '') problems.push('empty after entities parsing');
+  if (plain.length > limit) {
+    problems.push(
+      `${plain.length} UTF-16 code units after entities parsing, the limit is ${limit}`,
+    );
+  }
+  plain.split('\n').forEach((line, index) => {
+    if (line !== line.trim()) problems.push(`line ${index + 1} starts or ends with a space`);
+  });
+  return problems;
 }

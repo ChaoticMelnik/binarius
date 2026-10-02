@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { composeDurationMs, composeServiceEnvValue, composeServiceValue } from './testing';
+import { telegramHtml } from './telegram-html';
+import {
+  composeDurationMs,
+  composeServiceEnvValue,
+  composeServiceValue,
+  telegramTextProblems,
+} from './testing';
 
 const yaml = `services:
   postgres:
@@ -46,5 +52,41 @@ describe('composeDurationMs', () => {
     expect(composeDurationMs('40s')).toBe(40_000);
     expect(composeDurationMs('1m')).toBeUndefined();
     expect(composeDurationMs(undefined)).toBeUndefined();
+  });
+});
+
+describe('telegramTextProblems', () => {
+  it('passes a clean text', () => {
+    expect(telegramTextProblems(telegramHtml`<b>a</b>\nb`)).toEqual([]);
+  });
+
+  it('reports what the validator finds', () => {
+    expect(telegramTextProblems(telegramHtml`<p>${'x'}</p>`)).toContain(
+      '<p> is not a Telegram tag',
+    );
+  });
+
+  it('reports a text empty after entities parsing', () => {
+    expect(telegramTextProblems(telegramHtml`<b></b>`)).toEqual(['empty after entities parsing']);
+  });
+
+  it('reports a text over the limit it is given', () => {
+    expect(telegramTextProblems(telegramHtml`${'a'.repeat(5)}`, 4)).toEqual([
+      '5 UTF-16 code units after entities parsing, the limit is 4',
+    ]);
+  });
+
+  it('measures against the message limit by default', () => {
+    expect(telegramTextProblems(telegramHtml`${'a'.repeat(4096)}`)).toEqual([]);
+    expect(telegramTextProblems(telegramHtml`${'a'.repeat(4097)}`)).toEqual([
+      '4097 UTF-16 code units after entities parsing, the limit is 4096',
+    ]);
+  });
+
+  it('reports a line starting or ending with a space, by its number', () => {
+    expect(telegramTextProblems(telegramHtml`a\n b\nc `)).toEqual([
+      'line 2 starts or ends with a space',
+      'line 3 starts or ends with a space',
+    ]);
   });
 });
