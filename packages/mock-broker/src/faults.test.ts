@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { FaultQueue, RateWindow, scriptKind, scriptedMessage, type MockScript } from './faults';
+import { RateWindow, restFaultQueue, scriptKind, scriptedMessage, type MockScript } from './faults';
 
 describe('FaultQueue', () => {
   it('hands scripts out once, in order, per endpoint', () => {
-    const queue = new FaultQueue();
+    const queue = restFaultQueue();
     queue.push('user', { status: 500 });
     queue.push('chart', { status: 502 });
     queue.push('user', { delayMs: 5 });
@@ -27,7 +27,7 @@ describe('FaultQueue.push validation', () => {
   ] as [MockScript, RegExp][])(
     'refuses %j with a RangeError, queueing nothing',
     (script, message) => {
-      const queue = new FaultQueue();
+      const queue = restFaultQueue();
       expect(() => queue.push('user', script)).toThrow(RangeError);
       expect(() => queue.push('user', script)).toThrow(message);
       expect(queue.shift('user')).toBeUndefined();
@@ -35,7 +35,7 @@ describe('FaultQueue.push validation', () => {
   );
 
   it('refuses a script of no known shape with a TypeError', () => {
-    const queue = new FaultQueue();
+    const queue = restFaultQueue();
     expect(() => queue.push('user', {} as MockScript)).toThrow(TypeError);
     expect(() => queue.push('user', { hang: false } as unknown as MockScript)).toThrow(TypeError);
   });
@@ -60,7 +60,7 @@ describe('FaultQueue.push validation', () => {
       [delayBody, /\{ delayMs \} does not take body/],
     ];
     for (const [script, message] of cases) {
-      const queue = new FaultQueue();
+      const queue = restFaultQueue();
       expect(() => queue.push('user', script)).toThrow(TypeError);
       expect(() => queue.push('user', script)).toThrow(message);
       expect(queue.shift('user')).toBeUndefined();
@@ -68,7 +68,7 @@ describe('FaultQueue.push validation', () => {
   });
 
   it('ignores a field that is present but undefined', () => {
-    const queue = new FaultQueue();
+    const queue = restFaultQueue();
     queue.push('user', { status: 429, delayMs: undefined });
     expect(queue.shift('user')).toEqual({ status: 429, delayMs: undefined });
   });
@@ -81,7 +81,7 @@ describe('FaultQueue.push validation', () => {
     { delayMs: 0 },
     { hang: true },
   ] as MockScript[])('accepts the boundary %j', (script) => {
-    const queue = new FaultQueue();
+    const queue = restFaultQueue();
     queue.push('user', script);
     expect(queue.shift('user')).toEqual(script);
   });

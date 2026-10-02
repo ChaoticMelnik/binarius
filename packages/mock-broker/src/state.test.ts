@@ -95,6 +95,17 @@ describe('users', () => {
     state.revokeToken('token-1');
     expect(state.authenticate('token-1')).toBeUndefined();
   });
+
+  it('announces a revoked known token once, and an unknown one never', () => {
+    const state = stateWithUser();
+    const changes: MockChange[] = [];
+    state.onChange((change) => changes.push(change));
+    state.revokeToken('nope');
+    expect(changes).toEqual([]);
+    state.revokeToken('token-1');
+    state.revokeToken('token-1');
+    expect(changes).toEqual([{ type: 'token_revoked', userId: 1 }]);
+  });
 });
 
 describe('pairs', () => {
@@ -103,6 +114,7 @@ describe('pairs', () => {
     expect(pairs).toEqual(DEFAULT_PAIRS);
     expect(safeParseBinaryPairs(pairs).success).toBe(true);
     expect(pairs.find((pair) => pair.id === GBPUSD)?.scheduled_until).toBeGreaterThan(1e12);
+    expect(pairs.every((pair) => typeof pair.is_otc === 'boolean')).toBe(true);
   });
 
   it('hands out copies, and update changes the store and announces it', () => {

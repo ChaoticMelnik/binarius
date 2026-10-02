@@ -6,8 +6,8 @@ import {
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { buildCandles, validateChartQuery } from './chart';
 import {
-  FaultQueue,
   RateWindow,
+  restFaultQueue,
   scriptedMessage,
   scriptKind,
   type MockAnswerScript,
@@ -157,7 +157,7 @@ interface Delayed extends InFlight {
 
 export async function startMockBroker(options: MockBrokerOptions = {}): Promise<MockBroker> {
   const state = createBrokerState(options);
-  const faults = new FaultQueue();
+  const faults = restFaultQueue();
   const rate = new RateWindow(state.rateLimit);
   const journal: MockRequestRecord[] = [];
   const contexts = new WeakMap<FastifyRequest, RequestContext>();
