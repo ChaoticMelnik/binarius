@@ -194,6 +194,25 @@ jobs:
               fi
             done
           done
+      # #114 renamed ADMIN_PUBLIC_URL to WEB_PUBLIC_URL; an .env still carrying the old name would
+      # otherwise give `web` the loopback default and 403 every admin POST. compose.yaml's
+      # x-renamed-variables refuses while the old name is set, even empty. The job's env supplies
+      # the eight required values, so the guard is the only reason left to refuse.
+      - name: the renamed ADMIN_PUBLIC_URL is refused
+        run: |
+          set -u
+          for value in https://binarius.example ''; do
+            out="$(env ADMIN_PUBLIC_URL="$value" docker compose --env-file /dev/null config -q 2>&1)" \
+              && status=0 || status=$?
+            if [ "$status" -eq 0 ]; then
+              echo "compose accepted ADMIN_PUBLIC_URL='$value'" >&2
+              exit 1
+            fi
+            if ! printf '%s' "$out" | grep -qw ADMIN_PUBLIC_URL; then
+              echo "ADMIN_PUBLIC_URL='$value' was refused for another reason: $out" >&2
+              exit 1
+            fi
+          done
       # `bot` is the one service CI never starts, and --wait could not tell us if we did: with
       # the fake token above the bot fails at getMe (401, which grammY does not retry) and the
       # process exits 1, but `dev` is `tsx watch`, whose supervisor survives that and keeps the

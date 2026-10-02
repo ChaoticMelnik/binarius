@@ -10,6 +10,13 @@ x-app-environment: &app-environment
 x-broker-environment: &broker-environment
   BROKER_WS_URL:
 
+# Names this file stopped reading. Interpolated like everything else and delivered to no
+# container: while the old name is set in .env or the shell (even empty), compose stops at
+# interpolation with the message, instead of handing `web` the loopback default (#114 renamed
+# it; the CI compose job checks the refusal). The message must not contain " #" — that starts a
+# YAML comment and truncates the expression.
+x-renamed-variables: ${ADMIN_PUBLIC_URL+${ADMIN_PUBLIC_URL_WAS_RENAMED:?ADMIN_PUBLIC_URL was renamed to WEB_PUBLIC_URL in issue 114 - rename it in .env}}
+
 x-app: &app
   build: .
   init: true
@@ -81,9 +88,10 @@ services:
       BROKER_OAUTH_AUTHORIZE_URL: &broker-authorize-url ${BROKER_OAUTH_AUTHORIZE_URL:-https://binodex.app/oauth/authorize}
       BROKER_API_BASE_URL: ${BROKER_API_BASE_URL:-https://api.binodex.app}
       # The broker redirects to the callback page `web` serves, so the default is WEB_PUBLIC_URL
-      # plus that page's path (tied by apps/web/src/timing.test.ts). Set it only when the URI
-      # registered with the broker is not on the web origin; it must match that registration
-      # byte for byte.
+      # plus that page's path (tied by apps/web/src/timing.test.ts). A login completes only when
+      # the value equals <WEB_PUBLIC_URL>/oauth/callback of this deployment: the page forwards to
+      # this stack's backend. Set it only to match the spelling registered with the broker — the
+      # backend sends it byte for byte — never to point elsewhere.
       BROKER_OAUTH_REDIRECT_URI: ${BROKER_OAUTH_REDIRECT_URI:-${WEB_PUBLIC_URL:-http://127.0.0.1:3001}/oauth/callback}
       BROKER_PARTNER_REF: ${BROKER_PARTNER_REF:?set it in .env; see .env.example}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?set it in .env; see .env.example}
@@ -242,7 +250,8 @@ services:
       # the origin the pages are served from: a POST's Origin header must equal it, and the
       # broker redirects back to it. Change it together with WEB_PORT below: the two defaults
       # are tied by apps/web/src/timing.test.ts, because a mismatch makes every form submission
-      # a 403.
+      # a 403. Nothing after the host or port — no trailing `/`, `?` or `#`: the redirect default
+      # above is this value plus a path.
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://127.0.0.1:3001}
       BROKER_OAUTH_AUTHORIZE_URL: *broker-authorize-url
     ports:
