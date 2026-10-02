@@ -51,8 +51,6 @@ describe('the account card picture', () => {
     expect(width).toBeGreaterThan(0);
     expect(height).toBeGreaterThan(0);
     expect(width + height).toBeLessThanOrEqual(PHOTO_MAX_WIDTH_PLUS_HEIGHT);
-    expect(Math.max(width, height) / Math.min(width, height)).toBeLessThanOrEqual(
-      PHOTO_MAX_RATIO,
-    );
+    expect(Math.max(width, height) / Math.min(width, height)).toBeLessThanOrEqual(PHOTO_MAX_RATIO);
   });
 });
