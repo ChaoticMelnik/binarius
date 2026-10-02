@@ -131,3 +131,20 @@ export const LABELS = {
   // 2026-10-02); the Bot API bounds it at 256 characters, held by commands.test.ts
   startCommand: 'Начать',
 } as const satisfies Record<string, string | ((value: string | null) => string)>;
+
+// The bot's profile: `description` is the «Что умеет этот бот?» block an empty chat shows before
+// Start, `shortDescription` the line on the profile page and in the preview of a shared link.
+// Telegram parses neither, so like LABELS they are plain and never escaped; line breaks are kept
+// as written. The Bot API limits (512 and 120) are held by texts.test.ts.
+export const PROFILE = {
+  description: `🚀 Binarius — торговля на Binodex прямо в Telegram.
+
+🎮 Демо-торговля без риска: пробуй на демобалансе, деньги не нужны.
+🤖 Автоторговля за токены: бот открывает сделки на Binodex за тебя.
+📊 Баланс, токены и история сделок — прямо в этом чате.
+📧 Подключение за минуту: пришли адрес электронной почты и код из письма.
+
+👉 Нажми «Запустить» — и начнём.`,
+  shortDescription:
+    '🚀 Торговля на Binodex прямо в Telegram: демо без риска и автоторговля за токены',
+} as const satisfies Record<string, string>;
