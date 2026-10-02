@@ -742,7 +742,8 @@ not.
 - **#114** is the bot's `web_app` button and the Mini App login and callback pages in `apps/web`
   ([The Mini App pages](#the-mini-app-pages-114)); the callback page sends
   `Telegram.WebApp.initData` unchanged with the code and the state, through `apps/web`.
-- **#10** owns the starter pack, the confirm button and the outcome message in the bot. Re-linking
+- **#10** owns the starter pack and the confirm button; the outcome message in the bot is the
+  account card (#200, [bot-start.md → The account card](bot-start.md#the-account-card)). Re-linking
   an account that belongs to another Telegram user is out of scope: `broker_account_taken` is
   final, and moving an account is a separate support task.
 - **#162** is the backend half of the email + code login ([Email login](#email-login-issue-162)):

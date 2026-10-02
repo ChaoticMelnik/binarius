@@ -13,14 +13,16 @@ routes, the confirmation and the starter pack are described in
 - `packages/db/src/user-ops.ts` — `recordUserStart` (one upsert, the active-account check and
   the list of links waiting for confirmation) and `toUserStartView` (the allowlisted projection).
 - `apps/backend/src/users/routes.ts` — `POST /users/start`, behind the internal bearer.
-- `apps/bot/src/` — `env.ts`, `timing.ts`, `backend-client.ts`, `texts.ts`, `logging.ts`,
-  `login-dialog.ts` (the email dialog's state, [Email dialog](#email-dialog)), `bot.ts` (the
-  handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
+- `apps/bot/src/` — `env.ts`, `timing.ts`, `backend-client.ts`, `texts.ts` (with `accountCard`,
+  [The account card](#the-account-card)), `send.ts`, `logging.ts`, `assets.ts` (the path of
+  `assets/account-card.jpg`, the card's picture), `login-dialog.ts` (the email dialog's state,
+  [Email dialog](#email-dialog)), `bot.ts` (the handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
   `lifecycle.ts` (start, the menu registration, signals, drain), `index.ts` (wiring), and
   `testing.ts`, the fixtures the suites share.
 - `packages/shared/src/link-confirmation.ts` — the texts and the confirm button's callback data
   the bot shares with the backend's push after an OAuth login (#128): the prompt, «✅ Аккаунт
-  Binodex подключён!», the blocked and the account-taken texts (`LINK_TEXTS`), the button label
+  Binodex подключён!» (sent by the push alone; the bot sends the account card instead), the
+  blocked and the account-taken texts (`LINK_TEXTS`), the button label
   (`LINK_LABELS`), and the pattern the bot recognises the button by.
 - `packages/shared/src/telegram-html.ts` — Telegram HTML for every text a user receives
   ([Texts](#texts)).
@@ -64,7 +66,7 @@ text on the code step
          "❌ Код не подошёл…", no backend call
          POST /auth/binodex/email/login { telegramUserId, email, code }
   back → { account, grant }
-  bot  → dialog ends, the outcome with the pack, as after "✅ Подтвердить"
+  bot  → dialog ends, the account card with the pack, as after "✅ Подтвердить"
          a failure that is not a definite refusal → POST /users/start, the recheck below
 
 tap "🔄 Запросить код ещё раз" (callback data resend)
@@ -85,8 +87,9 @@ tap "✅ Подтвердить" (callback data confirm:<account id>) — from /
 push after an OAuth login (#128): the same button, handled the same way
   bot  → answerCallbackQuery ∥ POST /auth/binodex/confirm { telegramUserId, accountId }
   back → { account, grant }
-  bot  → the outcome: linked with the pack (the number the backend sent), linked without it
-         (not a partner account, or the pack was already paid), or the refusal
+  bot  → the account card, pinned (The account card below): the greeting, the account's
+         address, what is available, and the pack (the number the backend sent) or why none was
+         paid (not a partner account, or the pack was already paid); or the refusal
 ```
 
 A waiting link comes before "welcome back" on purpose: a user with an active account who finds
@@ -209,12 +212,59 @@ because the broker's code is single-use. So a login failure that is not one of t
 refusals in the table (`too_many_requests`, `too_many_attempts`, `user_blocked`,
 `broker_account_taken`) is followed by `POST /users/start` with the user's name and language, the request
 `/start` sends without a payload; it refreshes the name as any `/start` does. An active account
-is reported as «✅ Аккаунт Binodex подключён!», without a number — the recheck knows the account is
-active, not what was paid; a blocked user gets the blocked text; otherwise the original failure
-is answered. When the recheck itself fails, the answer is «⚠️ Сервис временно недоступен», not
-«❌ Код не подошёл»: without the state that would be a guess. A user who already had an active
-account and types a wrong code is told the account is connected, which is true (the owner's
-answer 1a).
+is reported with the account card without the pack line and without the address: the recheck
+knows that an account is active, not which one nor what was paid. A user who already had an
+active account and types a wrong code for another address is therefore told, truly, that an
+account is connected (the owner's answer 1a), and that card replaces their pinned one minus the
+«📧» line (#200, Plan Update); the address is on the card the activating login or confirmation
+sent. A blocked user gets the blocked text; otherwise the original failure is answered. When the
+recheck itself fails, the answer is «⚠️ Сервис временно недоступен», not «❌ Код не подошёл»:
+without the state that would be a guess.
+
+## The account card
+
+Where an account becomes usable and the user is told so, the bot sends one **account card** (#200)
+and pins it: after a successful email login, after «✅ Подтвердить», and after the recheck above
+finds an account active. It replaces the success texts the bot used to send; the backend's push
+after an OAuth login still sends «✅ Аккаунт Binodex подключён!» as text
+([binodex-oauth.md → The push after the callback](binodex-oauth.md#the-push-after-the-callback-128)),
+and a waiting link is confirmed with the button, which sends the card.
+
+**What it says.** `accountCard({ firstName, email, grant })` in `apps/bot/src/texts.ts` builds the
+caption from those three fields and nothing else, so no token, code or password can reach it:
+the greeting by Telegram's `first_name` («🎉 Привет!» when the name is blank), the account's
+address when it is known (`📧`), what Binarius gives, and the pack — the number the backend sent
+in a blockquote, or the `ℹ️` reason none was paid. The address is the broker's for the account
+it issued tokens for, or after an email login without one the address the code was redeemed for;
+a confirmed link without an address and the recheck show no `📧` line, and the recheck shows no
+pack line either. Every fragment is a `TEXTS` entry.
+
+**The picture.** `apps/bot/src/assets/account-card.jpg`, its path in `assets.ts`, uploaded as an
+`InputFile` with every card — no `file_id` cache, accepted at one card per account activation.
+The bot runs from `src` (tsx), so the path resolves there; the Dockerfile's `COPY . .` puts the
+file in the image. `assets.test.ts` checks it is a JPEG inside the Bot API's photo limits (10 MB,
+width + height ≤ 10 000, ratio ≤ 20), and a test in `bot.test.ts` lets grammY upload it to a
+loopback server and finds its bytes in the `sendPhoto` body, so a wrong path is caught there.
+
+**Three outcomes of the photo call**, as for the welcome video: a refusal (`GrammyError`, nothing
+was sent) → the same card goes as a text message, and that message is pinned; a transport failure
+(`HttpError`: the 8 s timeout, a dropped socket, a file that could not be opened) → delivery is
+unknown, nothing more is sent and nothing is pinned, logged at `error` with `method: 'sendPhoto'`
+and the update id; anything else is rethrown into `bot.catch`. A user left without a card that way
+has an active account all the same; `/start` says «👋 С возвращением!», and re-sending a lost card
+is #24's.
+
+**Pinning.** `unpinAllChatMessages`, then `pinChatMessage` on the card with
+`disable_notification: true` — the card has just notified. The bot stores no message id, so
+clearing every pin is what leaves one card pinned; the user's own pins in the bot chat go too (the
+owner's choice). In a private chat neither call needs rights. Each may fail: one `warn` line with
+the method and the Telegram code, and the next step runs — a failed unpin still pins, a failed
+pin changes nothing about the connection, which is already committed. Neither is retried, and the
+caption does not claim the card is pinned.
+
+What is logged is the error's identity, the method and the code (`telegramErrorFields`), never
+the payload: the caption holds the user's address. `logging.test.ts` reads those lines at `trace`
+and finds neither the address nor the code typed in them.
 
 ## First touch
 
@@ -298,7 +348,7 @@ part of a template is the author's: a literal `&` or `<` there is written as an 
 defeats the type, as it defeats any.
 
 **Two seams.** `parse_mode` is set and `TelegramHtml` is unwrapped in two places only:
-`apps/bot/src/send.ts` (`replyHtml`, `replyWithVideoHtml`) and
+`apps/bot/src/send.ts` (`replyHtml`, `replyWithVideoHtml`, `replyWithPhotoHtml`) and
 `apps/backend/src/auth/link-notifier.ts`; a caller's extra can neither override `parse_mode` nor
 pass `entities`. ESLint (`eslint.config.js`, the Telegram block) forbids grammY's send methods by
 name everywhere else in `apps/bot/src` and `apps/backend/src/auth`, outside tests; it does not see a
@@ -324,7 +374,11 @@ measured on `plainTextOf(...)` — the text "after entities parsing" the Bot API
 code units: at most 4096 for a message (`TELEGRAM_MESSAGE_LIMIT`, the helper's default) and 1024
 for the welcome, which travels as a video caption whenever `WELCOME_VIDEO_FILE_ID` is set
 (`TELEGRAM_CAPTION_LIMIT`, passed by its own test), so configuring a video cannot break sending. A text that takes a value
-is called with a 254-character argument of `<&>_*"`, which must read back as it went in. A
+is called with a 254-character argument of `<&>_*"`, which must read back as it went in. The
+account card is a photo caption too: every variant of it is checked against 1024 with each hole
+at its real maximum — a 64-character name, a 254-character address, a 19-digit token count — of
+the same characters. The broker's address is not bounded on the wire, so a longer one can push
+the caption over the limit; Telegram then refuses the photo and the card goes as text. A
 Telegram refusal at runtime ("can't parse entities") goes through the existing error paths; there
 is no check at send time.
 
@@ -337,7 +391,7 @@ count, printed as it arrives. A multi-line text starts at column zero in the sou
 indentation inside a template is part of the message; `telegramTextProblems` refuses a line that
 starts or ends with a space. A button named inside a text is quoted by its exact label, emoji included.
 
-New messages (the pinned card, the bot profile, nudges) are written with the same module: a
+New messages (the bot profile, nudges) are written with the same module, as the account card is: a
 message goes into a `TelegramHtml` constant beside `TEXTS`, a label or a profile description that
 Telegram does not parse goes into a plain constant beside `LABELS`.
 
@@ -430,12 +484,15 @@ call is capped at 5 s.
 
 The handler budget is not a sentence about the handlers, it is computed from `HANDLER_CALLS`,
 which declares what each handler does on its longest path: `/start` is one backend call and up
-to two Bot API calls (the video refused, then the text); the oauth, confirm and resend buttons
-are one backend call and two Bot API calls each; the connect button is no backend call and two
-Bot API calls; a text on the address step is one backend call and one Bot API call, and a text
-on the code step two backend calls (the login and the recheck) and one Bot API call, 18 s. The
-longest is 5 000 + 8 000 + 8 000 = **21 s**, inside the **25 s** shutdown budget, inside the
-**30 s** `stop_grace_period` of the compose service. `timing.test.ts` runs
+to two Bot API calls (the video refused, then the text); the oauth and resend buttons are one
+backend call and two Bot API calls each; the confirm button is one backend call and up to five
+Bot API calls (the query answered, then the account card: the photo refused, the text, the unpin,
+the pin); the connect button is no backend call and two Bot API calls; a text on the address
+step is one backend call and one Bot API call, and a text on the code step two backend calls
+(the login and the recheck) and up to four Bot API calls (the same card), 42 s. The longest is
+5 000 + 5 × 8 000 = **45 s**, inside the **50 s** shutdown budget, inside the **55 s**
+`stop_grace_period` of the compose service. The usual path is far shorter — one upload and two
+short calls — and the 45 s needs five consecutive Bot API calls each to hit the 8 s timeout. `timing.test.ts` runs
 every terminal branch of each handler through the real handlers and asserts that each makes the
 calls it is declared to make and that the worst of them is what `HANDLER_CALLS` says — so a
 handler that grows a call turns the suite red instead of quietly outgrowing the budget. It reads
@@ -461,7 +518,7 @@ update is in flight during that sleep, so an overrun there costs the exit code a
 The command-menu registration ([Command menu](#command-menu)) is one Bot API call at startup,
 bounded by the same 8 s client timeout, and is not part of `HANDLER_CALLS`: no update is in
 flight while it runs. A SIGTERM during it runs `bot.stop()`'s offset confirmation (≤ 8 s)
-alongside the registration (≤ 8 s), so the drain takes at most 8 s, inside the 25 s budget, and
+alongside the registration (≤ 8 s), so the drain takes at most 8 s, inside the 50 s budget, and
 grammY then returns from `start()` without a first `getUpdates`. In that case `bot started` is
 still written, after `shutting down`, because `onStart` finishes before grammY sees the stop.
 
@@ -482,7 +539,9 @@ written only when a step really did run out of time.
 - **#10** — re-linking an account that belongs to another Telegram user is out of scope:
   `broker_account_taken` is final, and moving an account is a separate support task.
 - **#24** — the main menu and the demo balance, including what a returning user sees instead of
-  a one-line greeting.
+  a one-line greeting, and re-sending an account card that was lost (a transport failure on the
+  photo) or unpinned.
+- **#199** — the bot profile.
 - **#31** — referral start links; they take their own payload prefix, and the format is not
   fixed here.
 - **#114** — the Mini App login and callback pages in `apps/web` behind the `web_app` button; the
