@@ -13,7 +13,8 @@ routes, the confirmation and the starter pack are described in
 - `packages/db/src/user-ops.ts` — `recordUserStart` (one upsert, the active-account check and
   the list of links waiting for confirmation) and `toUserStartView` (the allowlisted projection).
 - `apps/backend/src/users/routes.ts` — `POST /users/start` and `POST /users/chat-member`, behind
-  the internal bearer.
+  the internal bearer, and `POST /users/account` beside them, which `/account` reads
+  ([bot-account.md](bot-account.md)).
 - `packages/db/src/delivery-ops.ts` — whether the bot may send to a user: `deliverable()`, the
   mark and clear helpers and the pending-job cancel ([Blocking the bot](#blocking-the-bot-119)).
 - `apps/backend/src/users/telegram-delivery.ts` — what a 403 on a send means:
@@ -484,10 +485,12 @@ plugin — and is rethrown into `bot.catch` unchanged rather than reported as on
 
 ## Command menu
 
-Telegram's «Меню» button and the hints shown when the user types `/` list one command: `/start` —
-«Начать». The list is `BOT_COMMANDS` in `apps/bot/src/commands.ts`, the only place it is written;
-the description is `LABELS.startCommand`. The next command is one more element there and one more
-literal in the `setMyCommands` assertions of `lifecycle.test.ts`, which name the values on purpose.
+Telegram's «Меню» button and the hints shown when the user types `/` list two commands: `/start` —
+«Начать», and `/account` — «Аккаунт Binodex» ([bot-account.md](bot-account.md)). The list is
+`BOT_COMMANDS` in `apps/bot/src/commands.ts`, the only place it is written; the descriptions are
+`LABELS.startCommand` and `LABELS.accountCommand`. The next command is one more element there and
+one more literal in each of the two `setMyCommands` assertions of `lifecycle.test.ts`, which name
+the values on purpose.
 `commands.test.ts` holds the Bot API limits (a command of 1-32 lowercase letters, digits and
 underscores, a description of 1-256 UTF-16 code units, at most 100 commands, each once) and sends
 every listed command through the real handlers to check that it is answered — grammY keeps no
@@ -591,10 +594,10 @@ to two Bot API calls (the video refused, then the text); the oauth and resend bu
 backend call and two Bot API calls each; the confirm button is one backend call and up to five
 Bot API calls (the query answered, then the account card: the photo refused, the text, the unpin,
 the pin); the connect button is no backend call and two Bot API calls; a `my_chat_member` update
-is one backend call and no Bot API call (5 s); a text on the address
-step is one backend call and one Bot API call, and a text on the code step two backend calls
-(the login and the recheck) and up to four Bot API calls (the same card), 42 s. The longest is
-5 000 + 5 × 8 000 = **45 s**, inside the **50 s** shutdown budget, inside the **55 s**
+is one backend call and no Bot API call (5 s); a text on the address step is one backend call and
+one Bot API call, as is `/account` (the read, then the status), and a text on the code step two
+backend calls (the login and the recheck) and up to four Bot API calls (the same card), 42 s. The
+longest is 5 000 + 5 × 8 000 = **45 s**, inside the **50 s** shutdown budget, inside the **55 s**
 `stop_grace_period` of the compose service. The usual path is far shorter — one upload and two
 short calls — and the 45 s needs five consecutive Bot API calls each to hit the 8 s timeout. `timing.test.ts` runs
 every terminal branch of each handler through the real handlers and asserts that each makes the
@@ -662,3 +665,5 @@ written only when a step really did run out of time.
   `cancelPendingNotificationJobs`.
 - **#123, #124, #202** — the senders that claim with `deliverable()` and call
   `recordTelegramSendFailure` ([Blocking the bot](#blocking-the-bot-119)).
+- **#185** — `/account`, the state of the Binodex link: [bot-account.md](bot-account.md).
+- **#184** — `/help`; it and #120's `/settings` and `/support` are more entries in the same menu.
