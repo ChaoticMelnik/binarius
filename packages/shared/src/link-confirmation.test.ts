@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  CONFIRM_CALLBACK_PATTERN,
-  confirmCallbackData,
-  LINK_TEXTS,
-  TELEGRAM_MESSAGE_LIMIT,
-} from './link-confirmation';
+import { CONFIRM_CALLBACK_PATTERN, confirmCallbackData, LINK_TEXTS } from './link-confirmation';
+import { TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
 
 const ACCOUNT_ID = '0b7e3a52-8c1d-4f6e-9a2b-3c4d5e6f7a8b';
 

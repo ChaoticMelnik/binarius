@@ -65,6 +65,10 @@
       "types": "./src/link-confirmation.ts",
       "default": "./src/link-confirmation.ts"
     },
+    "./telegram-html": {
+      "types": "./src/telegram-html.ts",
+      "default": "./src/telegram-html.ts"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"

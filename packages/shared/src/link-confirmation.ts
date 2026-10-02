@@ -6,9 +6,6 @@
 // someone else's data, and plain text can neither be broken by a stray underscore in it nor
 // turned into markup by it.
 
-// Bot API sendMessage: "1-4096 characters after entities parsing"
-export const TELEGRAM_MESSAGE_LIMIT = 4096;
-
 // Callback data is 1-64 bytes; 'confirm:' + a 36-character uuid is 44.
 export const CONFIRM_CALLBACK_PREFIX = 'confirm:';
 export const confirmCallbackData = (accountId: string): string =>
