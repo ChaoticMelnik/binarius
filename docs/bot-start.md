@@ -14,10 +14,11 @@ routes, the confirmation and the starter pack are described in
   the list of links waiting for confirmation) and `toUserStartView` (the allowlisted projection).
 - `apps/backend/src/users/routes.ts` — `POST /users/start`, behind the internal bearer.
 - `apps/bot/src/` — `env.ts`, `timing.ts`, `backend-client.ts`, `texts.ts` (with `accountCard`,
-  [The account card](#the-account-card)), `send.ts`, `logging.ts`, `assets.ts` (the path of
+  [The account card](#the-account-card), and `PROFILE`, [Bot profile](#bot-profile)), `send.ts`, `logging.ts`, `assets.ts` (the path of
   `assets/account-card.jpg`, the card's picture), `login-dialog.ts` (the email dialog's state,
   [Email dialog](#email-dialog)), `bot.ts` (the handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
-  `lifecycle.ts` (start, the menu registration, signals, drain), `index.ts` (wiring), and
+  `lifecycle.ts` (start, the profile registration — the menu, the description, the short
+  description — signals, drain), `index.ts` (wiring), and
   `testing.ts`, the fixtures the suites share.
 - `packages/shared/src/link-confirmation.ts` — the texts and the confirm button's callback data
   the bot shares with the backend's push after an OAuth login (#128): the prompt, «✅ Аккаунт
@@ -358,7 +359,9 @@ Bot API method that takes parsed text and every grammY alias of one, derived fro
 
 **Labels are plain.** Button labels and the `/start` description (`LABELS`, `LINK_LABELS`) are not
 parsed by Telegram, so they are plain strings and are never escaped: «✅ Подтвердить: <email>»
-shows the broker's email as it is, `&` included.
+shows the broker's email as it is, `&` included. The same holds for the bot's description and
+short description (`PROFILE`, [Bot profile](#bot-profile)): plain, line breaks kept as written,
+their limits held by `texts.test.ts`.
 
 **Checked by tests.** Next to each constant (`texts.test.ts`, `link-confirmation.test.ts`,
 `link-notifier.test.ts`), every text goes through `telegramTextProblems`
@@ -391,9 +394,9 @@ count, printed as it arrives. A multi-line text starts at column zero in the sou
 indentation inside a template is part of the message; `telegramTextProblems` refuses a line that
 starts or ends with a space. A button named inside a text is quoted by its exact label, emoji included.
 
-New messages (the bot profile, nudges) are written with the same module, as the account card is: a
-message goes into a `TelegramHtml` constant beside `TEXTS`, a label or a profile description that
-Telegram does not parse goes into a plain constant beside `LABELS`.
+New messages (nudges) are written with the same module, as the account card is: a message goes
+into a `TelegramHtml` constant beside `TEXTS`, a label that Telegram does not parse goes into a plain
+constant beside `LABELS`, as the profile texts did ([Bot profile](#bot-profile)).
 
 The text fallback answers a **refusal**, not any failure, and the video call has three outcomes
 rather than two. When Telegram replies `ok: false` (`GrammyError`) nothing was sent, so the
@@ -440,6 +443,33 @@ is set for a private chat, then it is applied in the chat. Otherwise the default
 applied. By default, the menu button opens the list of bot commands.» Choosing `/start` from the
 menu sends the same `/start` message, with the `bot_command` entity and no payload, as typing it,
 so the handler is unchanged.
+
+## Bot profile
+
+Two texts describe the bot before anyone talks to it. The **description** is the «Что умеет этот
+бот?» block an empty chat shows before Start; the **short description** is the line on the bot's
+profile page and in the preview of a shared link to it. Both are `PROFILE` in
+`apps/bot/src/texts.ts`, the only place they are written, and follow the [Style](#texts) of the
+other texts. Telegram parses neither, so they are plain and never escaped, and line breaks are kept
+as written. The Bot API bounds the description at 512 and the short description at 120 characters,
+counted here in UTF-16 code units (`String#length`, the unit `commands.test.ts` counts in).
+`texts.test.ts` holds both limits against the texts themselves, refuses an empty text (an empty
+string is what removes the text on Telegram's side), markup or an entity, a non-empty line without a
+leading emoji, a line with a space at either end, and a line break in the short description.
+
+`runBot` registers them on every start, inside grammY's `onStart`, right after the command menu:
+`setMyCommands`, then `setMyDescription`, then `setMyShortDescription`, one call at a time and
+one attempt each. Every call is caught on its own — a refusal, a transport failure or the 8 s
+client timeout, anything else — and logged at `warn` by the error's identity and the method:
+`bot commands not registered`, `bot description not registered`,
+`bot short description not registered`. The next call is still made and polling begins as usual;
+a failure costs that part of the profile, and Telegram keeps the last value that did register
+until the next start repeats the call. No `language_code` is sent: one text for every interface
+language, as for the menu. The value typed into @BotFather is the same property, so the first
+successful registration replaces it.
+
+The bot's name and avatar are not registered: they stay with @BotFather (`setMyName` and
+`setMyProfilePhoto` are not called, owner, 2026-10-02).
 
 ## Configuration
 
@@ -515,12 +545,17 @@ shorten is grammY's 3 s sleep after a failed `getUpdates` (`retry_after` after a
 which has no ceiling): `bot.stop()` does not interrupt it, so the drain waits it out — but no
 update is in flight during that sleep, so an overrun there costs the exit code and nothing else.
 
-The command-menu registration ([Command menu](#command-menu)) is one Bot API call at startup,
-bounded by the same 8 s client timeout, and is not part of `HANDLER_CALLS`: no update is in
-flight while it runs. A SIGTERM during it runs `bot.stop()`'s offset confirmation (≤ 8 s)
-alongside the registration (≤ 8 s), so the drain takes at most 8 s, inside the 50 s budget, and
-grammY then returns from `start()` without a first `getUpdates`. In that case `bot started` is
-still written, after `shutting down`, because `onStart` finishes before grammY sees the stop.
+The profile registration ([Command menu](#command-menu), [Bot profile](#bot-profile)) is
+`STARTUP_CALLS` = 3 Bot API calls at startup, one after another, each bounded by the same 8 s
+client timeout, and is not part of `HANDLER_CALLS`: no update is in flight while it runs. Its
+bound is `STARTUP_BUDGET_MS` = 3 × 8 s = **24 s**, and `STARTUP_BUDGET_MS < SHUTDOWN_BUDGET_MS` is a
+conjunct of the import-time chain; `lifecycle.test.ts` checks that the real start makes exactly
+`STARTUP_CALLS` calls between `deleteWebhook` and the first `getUpdates`. grammY awaits `onStart`
+to completion and `bot.stop()` cancels none of these calls, so a SIGTERM during the registration
+waits for all three (≤ 24 s) with `bot.stop()`'s offset confirmation (≤ 8 s) running alongside,
+inside the 50 s budget, and grammY then returns from `start()` without a first `getUpdates`. In
+that case `bot started` is still written, after `shutting down`, because `onStart` finishes before
+grammY sees the stop.
 
 An overrun exits 1, losing the update in flight rather than the whole container's shutdown. The
 closing line distinguishes the two ways a drain ends badly: a step that rejected logs itself as
@@ -541,7 +576,9 @@ written only when a step really did run out of time.
 - **#24** — the main menu and the demo balance, including what a returning user sees instead of
   a one-line greeting, and re-sending an account card that was lost (a transport failure on the
   photo) or unpinned.
-- **#199** — the bot profile.
+- The bot's name and avatar — set by hand in @BotFather; `setMyName`/`setMyProfilePhoto` are not
+  called (owner, 2026-10-02).
+- The staff bot's profile (`apps/backend/src/admin`, `ADMIN_BOT_TOKEN`) — not registered.
 - **#31** — referral start links; they take their own payload prefix, and the format is not
   fixed here.
 - **#114** — the Mini App login and callback pages in `apps/web` behind the `web_app` button; the
