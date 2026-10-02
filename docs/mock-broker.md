@@ -113,7 +113,8 @@ limit. A client classifies by status, never by text. All 4xx and 5xx responses u
 | chart missing `interval` | 400 | `Validation failed: "interval" is required` | fixture rule |
 | chart order: interval, then asset, then start_time | | | observed |
 | chart step below 5 s, `start_time` in seconds | 200 | `[]` | observed (the 5 s threshold is an approximation) |
-| trade body field invalid or missing | 400 | `Validation failed: "<field>" is required` | fixture rule, in the observed `"code" is required` form |
+| trade body field missing | 400 | `Validation failed: "<field>" is required` | fixture rule, in the observed `"code" is required` form |
+| trade body field present but wrong (a JSON-number `amount`, `"0.00"`, `"1."`, an unknown `action`, …) | 400 | `Validation failed: "<field>" is invalid` | fixture rule |
 | trade amount with more than 2 decimals | 400 | `Validation failed: "amount" must have at most 2 decimal places` | fixture rule |
 | trade on an unknown asset | 400 | `Unknown asset` | fixture rule (text borrowed from the chart) |
 | trade on a scheduled asset | 400 | `Asset is not available` | fixture rule |

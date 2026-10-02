@@ -187,14 +187,28 @@ describe('POST /v1/broker/user/trades', () => {
   });
 
   it.each([
-    [{ asset_id: undefined }, 'asset_id'],
+    ['asset_id', { asset_id: undefined }],
+    ['amount', { amount: undefined }],
+    ['is_demo', { is_demo: undefined }],
+  ])('answers a missing %s as required', async (field, overrides) => {
+    expectError(await openTrade(overrides), 400, `Validation failed: "${field}" is required`);
+  });
+
+  it.each([
     [{ amount: 10 }, 'amount'],
     [{ amount: '0' }, 'amount'],
+    [{ amount: '0.00' }, 'amount'],
+    [{ amount: '-1.00' }, 'amount'],
+    [{ amount: '1.' }, 'amount'],
+    [{ amount: '.5' }, 'amount'],
+    [{ amount: null }, 'amount'],
     [{ action: 'sideways' }, 'action'],
+    [{ action: 'UP' }, 'action'],
     [{ duration: 0 }, 'duration'],
+    [{ asset_id: '101' }, 'asset_id'],
     [{ is_demo: 'true' }, 'is_demo'],
-  ])('names the first invalid field (%j)', async (overrides, field) => {
-    expectError(await openTrade(overrides), 400, `Validation failed: "${field}" is required`);
+  ])('answers a present but wrong field as invalid (%j)', async (overrides, field) => {
+    expectError(await openTrade(overrides), 400, `Validation failed: "${field}" is invalid`);
   });
 
   it('answers a body that is not an object as a missing asset_id', async () => {
