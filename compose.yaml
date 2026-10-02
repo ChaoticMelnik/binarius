@@ -145,9 +145,9 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    # above the bot's shutdown budget (25 s, apps/bot/src/timing.ts): a SIGTERM lets the update
+    # above the bot's shutdown budget (50 s, apps/bot/src/timing.ts): a SIGTERM lets the update
     # in flight finish instead of killing it mid-handler
-    stop_grace_period: 30s
+    stop_grace_period: 55s
     # not the shared anchor: env.ts reads exactly these five names, and the Postgres password
     # and the Redis URL have no business inside a process that never opens either connection
     environment:

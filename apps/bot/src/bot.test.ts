@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { BotError, HttpError } from 'grammy';
+import { BotError, HttpError, InputFile } from 'grammy';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   confirmCallbackData,
@@ -9,17 +10,20 @@ import {
   UserStatus,
   type UserStartView,
 } from '@binarius/shared';
+import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA, RESEND_CALLBACK_DATA, createBot } from './bot';
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   BOT_INFO,
+  CARD_MESSAGE_ID,
   CODE,
   CODE_SENT,
   CONFIRMED,
   EMAIL,
   LOGIN,
   PENDING_ACCOUNT_ID,
+  TEXT_CARD_MESSAGE_ID,
   USER,
   captureApi,
   closeServer,
@@ -27,13 +31,14 @@ import {
   fakeLogger,
   inlineButtons,
   listen,
+  messageAnswer,
   rejectionOf,
   sentPayload,
   startUpdate,
   textUpdate,
   userView,
 } from './testing';
-import { LABELS, TEXTS } from './texts';
+import { accountCard, LABELS, TEXTS, type AccountCardInput } from './texts';
 
 // Every message and caption the bot sends is Telegram HTML: checked on every send any test in
 // this file captures, not on one of them.
@@ -42,7 +47,7 @@ afterEach(() => {
   const sends = capturedCalls
     .splice(0)
     .flat()
-    .filter((call) => call.method === 'sendMessage' || call.method === 'sendVideo');
+    .filter((call) => ['sendMessage', 'sendVideo', 'sendPhoto'].includes(call.method));
   for (const call of sends) expect(call.payload.parse_mode, call.method).toBe('HTML');
 });
 
@@ -80,6 +85,8 @@ function setup(
       : { welcomeVideoFileId: options.welcomeVideoFileId }),
   });
   const { calls, apiErrors, answers } = captureApi(bot);
+  answers.set('sendPhoto', messageAnswer(CARD_MESSAGE_ID));
+  answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   capturedCalls.push(calls);
   return { bot, backend, calls, logger, apiErrors, answers, dialog };
 }
@@ -104,8 +111,21 @@ const CODE_STEP_BUTTONS = [
   { text: LABELS.changeEmailButton, callback_data: CONNECT_CALLBACK_DATA },
 ];
 
+// what the user reads, in order: message texts and the account card's caption
 const sentTexts = (calls: readonly { method: string; payload: Record<string, unknown> }[]) =>
-  calls.filter((call) => call.method === 'sendMessage').map((call) => call.payload.text);
+  calls
+    .filter((call) => call.method === 'sendMessage' || call.method === 'sendPhoto')
+    .map((call) => call.payload.text ?? call.payload.caption);
+
+// the card CONFIRMED produces for USER, with a field replaced where a scene needs it
+const cardOf = (patch: Partial<AccountCardInput> = {}) =>
+  accountCard({
+    firstName: USER.first_name,
+    email: CONFIRMED.account.email,
+    grant: CONFIRMED.grant,
+    ...patch,
+  }).value;
+const RECHECK_CARD = cardOf({ email: null, grant: null });
 
 describe('/start', () => {
   it('greets a new user with the CTA and records the start without optional fields', async () => {
@@ -449,24 +469,48 @@ describe('the confirm button', () => {
     await bot.handleUpdate(update());
 
     expect(backend.confirmLogin).toHaveBeenCalledWith('4242', PENDING_ACCOUNT_ID);
-    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    const message = sentPayload(calls, 'sendMessage');
-    expect(message?.text).toBe(TEXTS.linkedWithBonus('7').value);
-    expect(message?.text).toContain(': 7</blockquote>');
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'sendPhoto',
+      'unpinAllChatMessages',
+      'pinChatMessage',
+    ]);
+    const photo = sentPayload(calls, 'sendPhoto');
+    expect(photo?.photo).toBeInstanceOf(InputFile);
+    expect(photo?.caption).toBe(cardOf());
+    expect(photo?.caption).toContain(': 7</blockquote>');
+    expect(sentPayload(calls, 'pinChatMessage')).toMatchObject({
+      message_id: CARD_MESSAGE_ID,
+      disable_notification: true,
+    });
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['not_partner_client' as const, TEXTS.linkedNoBonusNotPartner.value],
-    ['already_granted' as const, TEXTS.linkedNoBonusAlready.value],
-  ])('says why no pack was paid (%s)', async (reason, text) => {
+    ['not_partner_client' as const, TEXTS.cardBonusNotPartner],
+    ['already_granted' as const, TEXTS.cardBonusAlready],
+  ])('says why no pack was paid (%s)', async (reason, line) => {
+    const grant = { granted: false as const, reason };
+    const { bot, calls } = setup({
+      confirmLogin: vi.fn(() => Promise.resolve({ ...CONFIRMED, grant })),
+    });
+    await bot.handleUpdate(update());
+    const caption = sentPayload(calls, 'sendPhoto')?.caption;
+    expect(caption).toBe(cardOf({ grant }));
+    expect(caption).toContain(line.value);
+  });
+
+  // a link made through the site may carry no address
+  it('leaves the address line out when the account has none', async () => {
     const { bot, calls } = setup({
       confirmLogin: vi.fn(() =>
-        Promise.resolve({ ...CONFIRMED, grant: { granted: false as const, reason } }),
+        Promise.resolve({ ...CONFIRMED, account: { ...CONFIRMED.account, email: null } }),
       ),
     });
     await bot.handleUpdate(update());
-    expect(sentPayload(calls, 'sendMessage')?.text).toBe(text);
+    const caption = sentPayload(calls, 'sendPhoto')?.caption;
+    expect(caption).toBe(cardOf({ email: null }));
+    expect(caption).not.toContain('📧');
   });
 
   it.each([
@@ -506,7 +550,7 @@ describe('the confirm button', () => {
       description: 'Bad Request: query is too old',
     });
     await bot.handleUpdate(update());
-    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.linkedWithBonus('7').value);
+    expect(sentPayload(calls, 'sendPhoto')?.caption).toBe(cardOf());
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
   });
 
@@ -522,6 +566,206 @@ describe('the confirm button', () => {
     await bot.handleUpdate(callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID), 'group'));
     expect(backend.confirmLogin).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
+  });
+});
+
+describe('the account card', () => {
+  const confirm = () => callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID));
+  const PHOTO_REFUSED = {
+    ok: false as const,
+    error_code: 400,
+    description: 'Bad Request: IMAGE_PROCESS_FAILED',
+  };
+  const PIN_REFUSED = {
+    ok: false as const,
+    error_code: 400,
+    description: 'Bad Request: not enough rights to manage pinned messages in the chat',
+  };
+
+  it('sends the card as text and pins that message when Telegram refuses the photo', async () => {
+    const { bot, calls, logger, apiErrors } = setup();
+    apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    await bot.handleUpdate(confirm());
+
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'sendPhoto',
+      'sendMessage',
+      'unpinAllChatMessages',
+      'pinChatMessage',
+    ]);
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(cardOf());
+    expect(sentPayload(calls, 'pinChatMessage')).toMatchObject({
+      message_id: TEXT_CARD_MESSAGE_ID,
+      disable_notification: true,
+    });
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        expect.objectContaining({ method: 'sendPhoto', telegramErrorCode: 400 }),
+        'the account card photo was refused, sending the text instead',
+      ],
+    ]);
+  });
+
+  it('sends nothing more and pins nothing when the photo call fails in transport', async () => {
+    const { bot, calls, logger, apiErrors, dialog } = setup({ dialog: ON_CODE_STEP });
+    apiErrors.set(
+      'sendPhoto',
+      new HttpError(
+        "Network request for 'sendPhoto' failed!",
+        new Error('The operation was aborted due to timeout'),
+      ),
+    );
+    await bot.handleUpdate(textUpdate(CODE));
+
+    expect(calls.map((call) => call.method)).toEqual(['sendPhoto']);
+    // the login is committed whatever became of the card
+    expect(dialog.get(USER.id)).toBeUndefined();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          err: expect.objectContaining({ name: 'HttpError' }),
+          method: 'sendPhoto',
+          transportError: { name: 'Error' },
+        }),
+        'the account card call failed in transport, sending nothing more',
+      ],
+    ]);
+  });
+
+  it('lets anything that is neither a refusal nor the transport reach bot.catch', async () => {
+    const { bot, calls, logger, answers } = setup();
+    answers.set('sendPhoto', () => {
+      throw new TypeError('sentinel');
+    });
+    const thrown = await rejectionOf(bot.handleUpdate(confirm()));
+    expect(thrown).toBeInstanceOf(BotError);
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendPhoto']);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  // two pinned cards are better than none
+  it.each([
+    ['refused', PIN_REFUSED],
+    [
+      'failing in transport',
+      new HttpError(
+        "Network request for 'unpinAllChatMessages' failed!",
+        new Error('socket hang up'),
+      ),
+    ],
+  ])('still pins the card with the old pins %s to clear', async (_label, failure) => {
+    const { bot, calls, logger, apiErrors } = setup();
+    apiErrors.set('unpinAllChatMessages', failure);
+    await bot.handleUpdate(confirm());
+
+    expect(calls.map((call) => call.method).slice(-2)).toEqual([
+      'unpinAllChatMessages',
+      'pinChatMessage',
+    ]);
+    expect(sentPayload(calls, 'pinChatMessage')?.message_id).toBe(CARD_MESSAGE_ID);
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        expect.objectContaining({ method: 'unpinAllChatMessages' }),
+        'the old pins were not cleared',
+      ],
+    ]);
+  });
+
+  it('ends the dialog and sends nothing else when the pin is refused', async () => {
+    const { bot, calls, logger, apiErrors, dialog } = setup({ dialog: ON_CODE_STEP });
+    apiErrors.set('pinChatMessage', PIN_REFUSED);
+    await bot.handleUpdate(textUpdate(CODE));
+
+    expect(calls.map((call) => call.method)).toEqual([
+      'sendPhoto',
+      'unpinAllChatMessages',
+      'pinChatMessage',
+    ]);
+    expect(dialog.get(USER.id)).toBeUndefined();
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        expect.objectContaining({ method: 'pinChatMessage', telegramErrorCode: 400 }),
+        'the account card was not pinned',
+      ],
+    ]);
+  });
+
+  it('shows a name made of markup characters as typed and greets a blank name without it', async () => {
+    const named = setup({ dialog: ON_CODE_STEP });
+    const hostile = { ...USER, first_name: '<b>&"Ada"</b>' };
+    await named.bot.handleUpdate(textUpdate(CODE, 'private', hostile));
+    const caption = sentPayload(named.calls, 'sendPhoto')?.caption;
+    expect(caption).toBe(cardOf({ firstName: hostile.first_name }));
+    expect(String(caption)).toContain('Привет, &lt;b&gt;&amp;&quot;Ada&quot;&lt;/b&gt;!');
+
+    const blank = setup({ dialog: ON_CODE_STEP });
+    await blank.bot.handleUpdate(textUpdate(CODE, 'private', { ...USER, first_name: '   ' }));
+    expect(String(sentPayload(blank.calls, 'sendPhoto')?.caption)).toMatch(
+      /^🎉 <b>Привет!<\/b>\n📧 /u,
+    );
+  });
+
+  describe('through a real Bot API connection', () => {
+    let server: Server | undefined;
+    afterEach(async () => {
+      const running = server;
+      server = undefined;
+      await closeServer(running);
+    });
+
+    // Every other scene replaces the transport, so the file is never read there: this one lets
+    // grammY upload it, which is what catches a wrong path in assets.ts.
+    it('uploads the picture from assets.ts as the photo', async () => {
+      const bodies = new Map<string, Buffer>();
+      const started = createServer((request, response) => {
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        request.on('end', () => {
+          const method = request.url?.split('/').pop() ?? '';
+          bodies.set(method, Buffer.concat(chunks));
+          const result =
+            method === 'sendPhoto'
+              ? { message_id: CARD_MESSAGE_ID, date: 1, chat: { id: USER.id, type: 'private' } }
+              : true;
+          response.setHeader('content-type', 'application/json');
+          response.end(JSON.stringify({ ok: true, result }));
+        });
+      });
+      server = started;
+      const apiRoot = await listen(started);
+      const logger = fakeLogger();
+      const bot = createBot({
+        token: '123456:AA-bot-token',
+        backend: {
+          recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
+          startLogin: vi.fn(() => Promise.reject(new Error('unused'))),
+          confirmLogin: vi.fn(() => Promise.resolve(CONFIRMED)),
+          sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
+          emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
+        },
+        logger,
+        botInfo: BOT_INFO,
+        apiRoot,
+      });
+
+      await bot.handleUpdate(confirm());
+
+      expect([...bodies.keys()]).toEqual([
+        'answerCallbackQuery',
+        'sendPhoto',
+        'unpinAllChatMessages',
+        'pinChatMessage',
+      ]);
+      const picture = readFileSync(ACCOUNT_CARD_PHOTO_PATH);
+      expect(bodies.get('sendPhoto')?.includes(picture)).toBe(true);
+      expect(String(bodies.get('pinChatMessage'))).toContain(`"message_id":${CARD_MESSAGE_ID}`);
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -731,7 +975,13 @@ describe('the code step', () => {
     await bot.handleUpdate(textUpdate(` ${CODE} `));
 
     expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
-    expect(sentTexts(calls)).toEqual([TEXTS.linkedWithBonus('7').value]);
+    expect(sentTexts(calls)).toEqual([cardOf()]);
+    expect(calls.map((call) => call.method)).toEqual([
+      'sendPhoto',
+      'unpinAllChatMessages',
+      'pinChatMessage',
+    ]);
+    expect(sentPayload(calls, 'pinChatMessage')?.message_id).toBe(CARD_MESSAGE_ID);
     expect(dialog.get(USER.id)).toBeUndefined();
     expect(backend.recordStart).not.toHaveBeenCalled();
     expect(logger.warn).not.toHaveBeenCalled();
@@ -748,7 +998,32 @@ describe('the code step', () => {
       ),
     });
     await bot.handleUpdate(textUpdate(CODE));
-    expect(sentTexts(calls)).toEqual([TEXTS.linkedNoBonusNotPartner.value]);
+    expect(sentTexts(calls)).toEqual([
+      cardOf({ grant: { granted: false, reason: 'not_partner_client' } }),
+    ]);
+  });
+
+  // the broker's address for the account it issued the tokens for, which may be spelled
+  // differently from what was typed
+  it("shows the broker's address of the account, not the one typed", async () => {
+    const account = { ...CONFIRMED.account, email: 'Ada.Lovelace@example.test' };
+    const { bot, calls } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin: vi.fn(() => Promise.resolve({ ...CONFIRMED, account })),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(sentTexts(calls)).toEqual([cardOf({ email: account.email })]);
+  });
+
+  it('shows the address the code was redeemed for when the broker sent none', async () => {
+    const { bot, calls } = setup({
+      dialog: { step: 'code', email: 'typed@example.test' },
+      emailLogin: vi.fn(() =>
+        Promise.resolve({ ...CONFIRMED, account: { ...CONFIRMED.account, email: null } }),
+      ),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(sentTexts(calls)).toEqual([cardOf({ email: 'typed@example.test' })]);
   });
 
   it('answers a code the schema refuses at once, keeping the step', async () => {
@@ -793,7 +1068,7 @@ describe('the code step', () => {
 
     await bot.handleUpdate(textUpdate(CODE));
     expect(emailLogin).toHaveBeenLastCalledWith('4242', EMAIL, CODE);
-    expect(sentTexts(calls)).toEqual([TEXTS.loginBusy.value, TEXTS.linkedWithBonus('7').value]);
+    expect(sentTexts(calls)).toEqual([TEXTS.loginBusy.value, cardOf()]);
   });
 
   it('rechecks an invalid code and keeps the step when no account is active', async () => {
@@ -819,15 +1094,38 @@ describe('the code step', () => {
     ['an invalid code', refused(400, OAuthErrorCode.InvalidCode)],
     ['an unreachable backend', unreachable()],
     ['a broker outage', refused(502, OAuthErrorCode.BrokerUnavailable)],
-  ])('reports the account connected after %s when it is active', async (_label, emailLogin) => {
+  ])('sends the card after %s when an account is active', async (_label, emailLogin) => {
     const { bot, calls, dialog } = setup({
       dialog: ON_CODE_STEP,
       emailLogin,
       user: userView({ hasActiveBrokerAccount: true }),
     });
     await bot.handleUpdate(textUpdate(CODE));
-    expect(sentTexts(calls)).toEqual([TEXTS.linkedActive.value]);
+    expect(sentTexts(calls)).toEqual([RECHECK_CARD]);
+    expect(calls.map((call) => call.method)).toEqual([
+      'sendPhoto',
+      'unpinAllChatMessages',
+      'pinChatMessage',
+    ]);
+    expect(sentPayload(calls, 'pinChatMessage')?.message_id).toBe(CARD_MESSAGE_ID);
     expect(dialog.get(USER.id)).toBeUndefined();
+  });
+
+  // The recheck knows that an account is active, not which one nor what was paid: a user who
+  // already had one and typed a wrong code for another address lands here too (Plan Update,
+  // #200), so neither the typed address nor a pack line may appear.
+  it('puts neither the typed address nor a pack line on the card after a recheck', async () => {
+    const { bot, calls } = setup({
+      dialog: { step: 'code', email: 'other@example.test' },
+      emailLogin: refused(400, OAuthErrorCode.InvalidCode),
+      user: userView({ hasActiveBrokerAccount: true }),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    const caption = String(sentPayload(calls, 'sendPhoto')?.caption);
+    expect(caption).toBe(RECHECK_CARD);
+    expect(caption).not.toContain('other@example.test');
+    expect(caption).not.toContain(CODE);
+    expect(caption).not.toMatch(/📧|🎁|ℹ️/u);
   });
 
   it('shows the blocked text when the recheck finds the user blocked', async () => {
@@ -900,7 +1198,7 @@ describe('the code step', () => {
     expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
     await bot.handleUpdate(textUpdate(CODE));
 
-    expect(sentTexts(calls)).toEqual([TEXTS.unavailable.value, TEXTS.linkedActive.value]);
+    expect(sentTexts(calls)).toEqual([TEXTS.unavailable.value, RECHECK_CARD]);
     expect(dialog.get(USER.id)).toBeUndefined();
   });
 });
