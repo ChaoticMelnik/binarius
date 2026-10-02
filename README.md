@@ -10,7 +10,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 - `apps/trading-worker` — trading loop worker (Socket.IO client)
 - `packages/db` — Drizzle schema and transactional operations, shared by `apps/backend` and `apps/trading-worker`
 - `packages/shared` — shared types/contracts, consumed by all 4 apps
-- `packages/mock-broker` — test-only Binodex Broker API fixture (REST), for the broker clients' tests
+- `packages/mock-broker` — test-only Binodex Broker API fixture (REST and Socket.IO), for the broker clients' tests
 
 How a trade order travels from the bot to the worker (PostgreSQL outbox + BullMQ) is described in
 [docs/trade-intent-transport.md](docs/trade-intent-transport.md); how a user links a Binodex
