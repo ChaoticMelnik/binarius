@@ -551,7 +551,7 @@ describe('the connect button', () => {
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
   });
 
-  // «Изменить адрес» carries the same data
+  // «✏️ Изменить адрес» carries the same data
   it('takes a user waiting for a code back to the address', async () => {
     const { bot, dialog } = setup({ dialog: ON_CODE_STEP });
     await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
