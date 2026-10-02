@@ -12,7 +12,13 @@ routes, the confirmation and the starter pack are described in
   patterns, and the request/response schemas of `POST /users/start`.
 - `packages/db/src/user-ops.ts` — `recordUserStart` (one upsert, the active-account check and
   the list of links waiting for confirmation) and `toUserStartView` (the allowlisted projection).
-- `apps/backend/src/users/routes.ts` — `POST /users/start`, behind the internal bearer.
+- `apps/backend/src/users/routes.ts` — `POST /users/start` and `POST /users/chat-member`, behind
+  the internal bearer.
+- `packages/db/src/delivery-ops.ts` — whether the bot may send to a user: `deliverable()`, the
+  mark and clear helpers and the pending-job cancel ([Blocking the bot](#blocking-the-bot-119)).
+- `apps/backend/src/users/telegram-delivery.ts` — what a 403 on a send means:
+  `isTelegramForbidden` and `recordTelegramSendFailure`, the one place every sender hands a
+  failed send to.
 - `apps/bot/src/` — `env.ts`, `timing.ts`, `backend-client.ts`, `texts.ts` (with `accountCard`,
   [The account card](#the-account-card), and `PROFILE`, [Bot profile](#bot-profile)), `send.ts`, `logging.ts`, `assets.ts` (the path of
   `assets/account-card.jpg`, the card's picture), `login-dialog.ts` (the email dialog's state,
@@ -331,6 +337,73 @@ also carries `hasActiveBrokerAccount` and `pendingBrokerAccounts`, both read in 
 transaction after the upsert, in the lock order `users → broker_accounts` the rest of the schema
 uses.
 
+## Blocking the bot (#119)
+
+A user who blocks the bot stops receiving anything from it, and nothing is tried again until
+they come back. The fact lives in one column, `users.telegram_blocked_at` (NULL = deliverable,
+migration 0009), independent of `users.status`, which is the admin block: neither path writes the
+other.
+
+```text
+the user blocks the bot
+  Telegram → my_chat_member, new status `kicked`
+  bot  → POST /users/chat-member { telegramUserId, status: 'kicked' }
+  back → markTelegramBlocked: telegram_blocked_at = coalesce(telegram_blocked_at, now()),
+         and in the same transaction the user's `pending` notification_jobs → `canceled`
+the user unblocks the bot
+  Telegram → my_chat_member, new status `member`
+  bot  → POST /users/chat-member { telegramUserId, status: 'member' }
+  back → markTelegramReachable: telegram_blocked_at = NULL
+the user sends /start
+  the /users/start upsert sets telegram_blocked_at = NULL: they have just written to the bot
+a send is refused with 403 (today: the link push after the callback)
+  back → recordTelegramSendFailure → markTelegramBlocked, as above
+```
+
+The bot asks Telegram for `my_chat_member` (`ALLOWED_UPDATES` in `lifecycle.ts`), handles it in
+private chats only, forwards `kicked` and `member` as Telegram spells them and ignores any other
+status; it decides nothing and sends nothing — a blocked chat could not receive it anyway. A
+repeated `kicked` keeps the first time and runs the cancel again, so a job created between two
+signals is caught. An id with no users row is answered `recorded: false` and nothing is inserted:
+rows are created by `/start`.
+
+Any 403 on a send counts as "cannot deliver" — blocked, deactivated, never started — and the
+mark clears on the user's next `/start` or unblock. Telegram's `description` is neither compared
+nor logged.
+
+What a sender does (#123, #124, #202, none of which exists yet): it claims its jobs with
+`deliverable()` in the claim query (joining `users`) instead of spelling the column, and hands
+every send error to `recordTelegramSendFailure`. A job claimed a moment before the block lands
+may still be attempted once; that attempt is the 403 that marks the user, and no second one
+follows.
+
+Deliberately not done: no message on unblock (the user's next `/start` answers as usual); blocks
+from before the deploy are not replayed — Telegram does not resend old `my_chat_member` updates,
+so such a user is marked on their first 403; a 403 on the bot's own replies is not reported,
+because a block always produces `my_chat_member` as well. The staff bot is its own domain.
+
+Log lines: the route writes `the user blocked the bot` (`recorded`, `canceledJobs`) or `the user
+unblocked the bot` (`recorded`) at `info`; `recordTelegramSendFailure` writes `Telegram refused a
+send with 403; the user is marked unreachable` (`recorded`, `canceledJobs`) at `info`, or `the
+Telegram block could not be recorded` at `error` with the error's identity — the caller's own
+response does not change either way. None of them carries the Telegram id. The bot writes `chat
+member status not recorded` at `warn` with the error's identity, the backend status and
+`chatMember`.
+
+## POST /users/chat-member
+
+Internal route, `Authorization: Bearer <INTERNAL_API_TOKEN>`, in the same plugin as
+`/users/start`. Request and response are validated by `@binarius/shared/users`.
+
+| Field            | Notes                                                        |
+| ---------------- | ------------------------------------------------------------ |
+| `telegramUserId` | decimal string, the shared `telegramUserIdSchema`            |
+| `status`         | `kicked` or `member` (`TelegramChatMemberStatus`)            |
+
+Answers: `200 { recorded }` — `false` when no users row has this id, and then nothing was
+written — `400 { error: 'validation', issues }`, `401 { error: 'unauthorized' }`. A retry is
+idempotent.
+
 ## Texts
 
 Every text a Telegram user receives is Telegram HTML, sent with `parse_mode: 'HTML'`: `TEXTS` in
@@ -517,7 +590,8 @@ which declares what each handler does on its longest path: `/start` is one backe
 to two Bot API calls (the video refused, then the text); the oauth and resend buttons are one
 backend call and two Bot API calls each; the confirm button is one backend call and up to five
 Bot API calls (the query answered, then the account card: the photo refused, the text, the unpin,
-the pin); the connect button is no backend call and two Bot API calls; a text on the address
+the pin); the connect button is no backend call and two Bot API calls; a `my_chat_member` update
+is one backend call and no Bot API call (5 s); a text on the address
 step is one backend call and one Bot API call, and a text on the code step two backend calls
 (the login and the recheck) and up to four Bot API calls (the same card), 42 s. The longest is
 5 000 + 5 × 8 000 = **45 s**, inside the **50 s** shutdown budget, inside the **55 s**
@@ -584,3 +658,7 @@ written only when a step really did run out of time.
 - **#114** — the Mini App login and callback pages in `apps/web` behind the `web_app` button; the
   `initData` check they rely on is the backend's (#113, binodex-oauth.md).
 - **#35** — end-to-end coverage against the mock broker.
+- **#120** — message frequency, opt-out and `/support`; it widens `deliverable()` and reuses
+  `cancelPendingNotificationJobs`.
+- **#123, #124, #202** — the senders that claim with `deliverable()` and call
+  `recordTelegramSendFailure` ([Blocking the bot](#blocking-the-bot-119)).

@@ -320,11 +320,15 @@ to the chat.
 One attempt, after `linkBrokerAccount` has committed and outside any transaction, bounded by
 `LINK_PUSH_TELEGRAM_API_TIMEOUT_MS` (3 s, `apps/backend/src/timing.ts`; the code exchange plus
 the push stay inside shutdown phase 1, which the timing chain checks at import). The route
-awaits it, so the page can wait up to those 3 s longer, but its response does not depend on it:
-the status and body are the ones in the table whatever Telegram answers, and nothing is written
-about the push. A push that does not arrive — Telegram refused it (403 when the user blocked the
-bot), was slow, or was unreachable — is made up for by the button on the user's next `/start`;
-there is no queue and no retry.
+awaits it, so the page can wait up to those 3 s longer (plus, after a 403, one database write),
+but its response does not depend on it: the status and body are the ones in the table whatever
+Telegram answers, and nothing is written about the push, with one exception: a 403 marks the
+user as having blocked the bot (#119,
+[bot-start.md → Blocking the bot](bot-start.md#blocking-the-bot-119)) — their pending
+`notification_jobs` are canceled, and every sender is to skip the user until they unblock or
+send `/start` (a rule for senders that do not exist yet, not yet enforced by one). A push that does not arrive — Telegram refused it (403 when the user blocked the bot), was slow,
+or was unreachable — is made up for by the button on the user's next `/start`; there is no queue
+and no retry.
 
 The backend holds the public bot's token (`TELEGRAM_BOT_TOKEN`) for this and only sends on it: a
 bare grammY `Api` calls nothing until the push, not even `getMe`, so `apps/bot` stays the one
