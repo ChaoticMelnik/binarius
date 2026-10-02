@@ -40,6 +40,7 @@ await broker.close();
 | `trades.settle(tradeId, { outcome, closePrice?, closeTimestamp? })` | closes an open trade; a second call throws |
 | `rest.failNext(endpoint, script)` | queues a script for the next request on `user`, `pairs`, `tradesList`, `openTrade` or `chart` |
 | `rest.journal` / `rest.clearJournal()` | every request, without the token or any body value |
+| `rest.pendingHangs` | how many `hang` requests are still waiting for `close()`; one whose client aborted is dropped |
 | `priceAt(assetId, atMs)` | the one price curve that produces chart candles, `open_price` and the default `close_price` |
 | `close()` | answers every hanging request with 503, then stops the server; rejects with an `AggregateError` if an `onChange` listener threw and the errors were not cleared ([Listeners](#listeners)) |
 

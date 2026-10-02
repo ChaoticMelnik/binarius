@@ -523,6 +523,23 @@ describe('failNext', () => {
     broker = await startMockBroker();
   });
 
+  it('forgets a hung request once its client aborts', async () => {
+    const waitFor = async (expected: number) => {
+      for (let i = 0; i < 100 && broker.rest.pendingHangs !== expected; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(broker.rest.pendingHangs).toBe(expected);
+    };
+    broker.rest.failNext('pairs', { hang: true });
+    const controller = new AbortController();
+    const pending = call('/v1/broker/pairs/binary', { signal: controller.signal });
+    await waitFor(1);
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    await waitFor(0);
+    expect((await call('/v1/broker/pairs/binary')).status).toBe(200);
+  });
+
   it('hangs until close(), which answers 503 and finishes at once', async () => {
     broker.rest.failNext('pairs', { hang: true });
     const pending = call('/v1/broker/pairs/binary');
@@ -532,6 +549,7 @@ describe('failNext', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(settled).toBe(false);
+    expect(broker.rest.pendingHangs).toBe(1);
     const started = Date.now();
     await broker.close();
     expect(Date.now() - started).toBeLessThan(1_000);

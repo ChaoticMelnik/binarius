@@ -45,6 +45,8 @@ export interface MockBroker {
   };
   rest: {
     failNext(endpoint: MockRestEndpoint, script: MockScript): void;
+    // hung requests still waiting for close(); one the client aborted is no longer counted
+    readonly pendingHangs: number;
     journal: readonly MockRequestRecord[];
     clearJournal(): void;
   };
@@ -199,7 +201,14 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
 
     if (script !== undefined) {
       if ('hang' in script) {
-        await new Promise<void>((release) => hanging.add({ reply, release }));
+        await new Promise<void>((release) => {
+          const entry = { reply, release };
+          hanging.add(entry);
+          // a client that gives up takes its entry with it instead of waiting for close()
+          reply.raw.once('close', () => {
+            if (hanging.delete(entry)) release();
+          });
+        });
         return reply;
       }
       if ('delayMs' in script) {
@@ -313,6 +322,9 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
     },
     rest: {
       failNext: (endpoint, script) => faults.push(endpoint, script),
+      get pendingHangs() {
+        return hanging.size;
+      },
       journal,
       clearJournal: () => {
         journal.length = 0;
