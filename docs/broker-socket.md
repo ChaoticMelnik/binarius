@@ -126,10 +126,11 @@ this section with what it sees.
   `user.demo.futures.closed.recent`. They are `unknown_event` by design: `packages/shared` is not
   changed for them. A test pins each name to `unknown_event`, so adding one to shared turns that
   test red on purpose.
-- **Money fields in `user.data` are JSON integers**, not decimal strings. Shared's schema expects
-  strings, so today a live `user.data` is a `schema` problem. Fixing that drift is #98's job. The
-  tests here use stable failures for `user.data` (a missing `id`, `id: {}`) and no numeric-balance
-  case.
+- **Money fields in `user.data` are JSON integers**, not decimal strings. Since #98 shared's
+  `moneyWireSchema` accepts a decimal string or a safe JSON integer and maps either to a
+  `DecimalString`, so the all-integer shape seen live parses; a fraction is still a `schema`
+  problem (docs/broker-rest.md → Money). The tests here use decimal-string fixtures, and shared's
+  `socket.test.ts` parses the all-integer form.
 - **The `price.update` timestamp unit** (seconds or milliseconds) is still unconfirmed. The value
   is passed through as received, and the consumers normalize it (#17/#19). #99 records the unit.
 
@@ -138,7 +139,7 @@ this section with what it sees.
 - `packages/shared` (decoder, schemas, event maps, `modeEvent`) is used as it is and not changed
   here.
 - #85: the `err` whitelist serializer. Nothing on this module's path depends on it.
-- #98: the REST client, and the integer-money drift above.
+- #98: the REST client (docs/broker-rest.md) and the integer-money fix above, in shared.
 - #99: the Socket.IO client, `onAny` wiring, auth handshake, subscriptions, reconnect, the
   logging and counting of problems, the ack callbacks.
 - #100: the trade command executor and the client→server payloads
