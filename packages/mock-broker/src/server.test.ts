@@ -214,6 +214,8 @@ describe('POST /v1/broker/user/trades', () => {
   it('answers a body that is not an object as a missing asset_id', async () => {
     const response = await call('/v1/broker/user/trades', { method: 'POST', body: [1, 2] });
     expectError(response, 400, 'Validation failed: "asset_id" is required');
+    // an array is not a body with keys: the journal records none
+    expect(broker.rest.journal.at(-1)?.bodyKeys).toBeUndefined();
   });
 
   it('passes the store refusals through as 400', async () => {

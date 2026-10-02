@@ -82,6 +82,11 @@ function bearerOf(header: string | undefined): string | undefined {
   return header.slice('Bearer '.length).trim();
 }
 
+const pathOf = (request: FastifyRequest) => request.url.split('?')[0] ?? request.url;
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
 function flatQuery(query: unknown): Record<string, string> {
   if (query === null || typeof query !== 'object') return {};
   return Object.fromEntries(
@@ -219,7 +224,7 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
     // pushed on arrival so the journal keeps arrival order; observe() settles bearer later
     const record: MockRequestRecord = {
       method: request.method,
-      path: request.url.split('?')[0] ?? request.url,
+      path: pathOf(request),
       ...(endpoint === undefined ? {} : { endpoint }),
       query: flatQuery(request.query),
       bearer: 'pending',
@@ -297,7 +302,7 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
   app.addHook('preHandler', async (request) => {
     const record = contexts.get(request)?.record;
     const body = request.body;
-    if (record !== undefined && body !== null && typeof body === 'object' && !Array.isArray(body)) {
+    if (record !== undefined && isPlainObject(body)) {
       record.bodyKeys = Object.keys(body).sort();
     }
   });
@@ -305,11 +310,7 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
   app.setNotFoundHandler((request, reply) =>
     reply.code(404).send({
       code: 404,
-      message: LIVE_MESSAGES.notFound(
-        request.host,
-        request.url.split('?')[0] ?? request.url,
-        request.method,
-      ),
+      message: LIVE_MESSAGES.notFound(request.host, pathOf(request), request.method),
     }),
   );
 
@@ -337,12 +338,12 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
 
   app.post(ROUTES.openTrade.url, async (request, reply) => {
     const body = request.body;
-    const input = body !== null && typeof body === 'object' && !Array.isArray(body) ? body : {};
+    const input: Record<string, unknown> = isPlainObject(body) ? body : {};
     const parsed = openTradeRequestWireSchema.safeParse(input);
     if (!parsed.success) {
       const field = String(parsed.error.issues[0]?.path[0] ?? 'asset_id');
       const message =
-        (input as Record<string, unknown>)[field] === undefined
+        input[field] === undefined
           ? FIXTURE_MESSAGES.required(field)
           : FIXTURE_MESSAGES.invalid(field);
       return reply.code(400).send(brokerError(message));
