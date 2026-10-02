@@ -33,7 +33,9 @@ export interface MockRequestRecord {
   path: string;
   endpoint?: MockRestEndpoint;
   query: Record<string, string>;
-  bearer: 'none' | 'known' | 'unknown';
+  // 'pending' until the request is observed (while it waits on a delay or a hang); never left
+  // after close()
+  bearer: 'pending' | 'none' | 'known' | 'unknown';
   bodyKeys?: string[];
   scripted: boolean;
 }

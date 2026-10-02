@@ -9,7 +9,7 @@ import {
 } from '@binarius/shared';
 import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MockRestEndpoint } from './faults';
+import type { MockRequestRecord, MockRestEndpoint, MockScript } from './faults';
 import { startMockBroker, type MockBroker } from './server';
 
 const TOKEN = 'access-token-of-user-1';
@@ -485,78 +485,187 @@ describe('failNext', () => {
     expect(broker.rest.journal.map((record) => record.scripted)).toEqual([true, false]);
   });
 
-  it('checks a token revoked during the delay as revoked', async () => {
-    broker.rest.failNext('user', { delayMs: 200 });
-    const pending = call('/v1/broker/user');
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    broker.users.revokeToken(TOKEN);
-    expectError(await pending, 401, 'Authentication failed: Invalid token');
-    expect(broker.rest.journal[0]).toMatchObject({ scripted: true, bearer: 'unknown' });
-  });
-
-  it('accepts a token registered during the delay', async () => {
-    broker.rest.failNext('user', { delayMs: 200 });
-    const pending = call('/v1/broker/user', { token: 'registered-later' });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    broker.users.register({ id: 2, accessToken: 'registered-later' });
-    const response = await pending;
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({ id: 2 });
-    expect(broker.rest.journal[0]).toMatchObject({ scripted: true, bearer: 'known' });
-  });
-
   it('survives a client that gave up during the delay', async () => {
     broker.rest.failNext('user', { delayMs: 200 });
     await expect(call('/v1/broker/user', { signal: AbortSignal.timeout(30) })).rejects.toThrow();
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect((await call('/v1/broker/user')).status).toBe(200);
   });
+});
 
-  it('does not let a delayed request hold close() up', async () => {
-    broker.rest.failNext('user', { delayMs: 3_000 });
-    const pending = call('/v1/broker/user');
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const started = Date.now();
-    await broker.close();
-    expect(Date.now() - started).toBeLessThan(1_000);
-    await expect(pending).rejects.toThrow();
-    broker = await startMockBroker();
-  });
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  it('forgets a hung request once its client aborts', async () => {
-    const waitFor = async (expected: number) => {
-      for (let i = 0; i < 100 && broker.rest.pendingHangs !== expected; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-      expect(broker.rest.pendingHangs).toBe(expected);
-    };
-    broker.rest.failNext('pairs', { hang: true });
-    const controller = new AbortController();
-    const pending = call('/v1/broker/pairs/binary', { signal: controller.signal });
-    await waitFor(1);
-    controller.abort();
-    await expect(pending).rejects.toThrow();
-    await waitFor(0);
-    expect((await call('/v1/broker/pairs/binary')).status).toBe(200);
-  });
+// Every branch of onRequest x every state of the token: the status, the journal record and the
+// rate-limit headers, each read at the moment docs/mock-broker.md -> Journal defines.
+describe('observation matrix', () => {
+  type Branch = 'plain' | 'answer' | 'delay' | 'hang' | 'delayClose';
+  type TokenCase = 'none' | 'known' | 'unknown' | 'revokedDuring' | 'registeredDuring';
+  const LATER = 'registered-during-the-wait';
+  const presented: Record<TokenCase, string | null> = {
+    none: null,
+    known: TOKEN,
+    unknown: 'never-issued',
+    revokedDuring: TOKEN,
+    registeredDuring: LATER,
+  };
+  const scripts: Record<Exclude<Branch, 'plain'>, MockScript> = {
+    answer: { status: 429, retryAfterSec: 1 },
+    delay: { delayMs: 200 },
+    hang: { hang: true },
+    delayClose: { delayMs: 3_000 },
+  };
 
-  it('hangs until close(), which answers 503 and finishes at once', async () => {
-    broker.rest.failNext('pairs', { hang: true });
-    const pending = call('/v1/broker/pairs/binary');
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
+  type Expected = { status: number; message?: string } | 'no answer';
+  const cells: [Branch, TokenCase, Expected, MockRequestRecord['bearer']][] = [
+    [
+      'plain',
+      'none',
+      { status: 401, message: 'Authentication failed: Missing bearer token' },
+      'none',
+    ],
+    ['plain', 'known', { status: 200 }, 'known'],
+    [
+      'plain',
+      'unknown',
+      { status: 401, message: 'Authentication failed: Invalid token' },
+      'unknown',
+    ],
+    ['answer', 'none', { status: 429, message: 'Too many requests' }, 'none'],
+    ['answer', 'known', { status: 429, message: 'Too many requests' }, 'known'],
+    ['answer', 'unknown', { status: 429, message: 'Too many requests' }, 'unknown'],
+    [
+      'delay',
+      'none',
+      { status: 401, message: 'Authentication failed: Missing bearer token' },
+      'none',
+    ],
+    ['delay', 'known', { status: 200 }, 'known'],
+    [
+      'delay',
+      'unknown',
+      { status: 401, message: 'Authentication failed: Invalid token' },
+      'unknown',
+    ],
+    [
+      'delay',
+      'revokedDuring',
+      { status: 401, message: 'Authentication failed: Invalid token' },
+      'unknown',
+    ],
+    ['delay', 'registeredDuring', { status: 200 }, 'known'],
+    ['hang', 'none', { status: 503, message: 'Connection closed by fixture' }, 'none'],
+    ['hang', 'known', { status: 503, message: 'Connection closed by fixture' }, 'known'],
+    ['hang', 'unknown', { status: 503, message: 'Connection closed by fixture' }, 'unknown'],
+    ['hang', 'revokedDuring', { status: 503, message: 'Connection closed by fixture' }, 'unknown'],
+    ['hang', 'registeredDuring', { status: 503, message: 'Connection closed by fixture' }, 'known'],
+    ['delayClose', 'none', 'no answer', 'none'],
+    ['delayClose', 'known', 'no answer', 'known'],
+    ['delayClose', 'revokedDuring', 'no answer', 'unknown'],
+  ];
+
+  it.each(cells)('%s with token %s', async (branch, tokenCase, expected, bearer) => {
+    if (branch !== 'plain') broker.rest.failNext('user', scripts[branch]);
+    const settled = call('/v1/broker/user', { token: presented[tokenCase] }).then(
+      (response) => ({ response }),
+      (error: unknown) => ({ error }),
+    );
+
+    const waits = branch === 'delay' || branch === 'hang' || branch === 'delayClose';
+    if (waits) {
+      await sleep(50);
+      expect(broker.rest.journal[0]?.bearer).toBe('pending');
+      if (branch === 'hang') expect(broker.rest.pendingHangs).toBe(1);
+      if (tokenCase === 'revokedDuring') broker.users.revokeToken(TOKEN);
+      if (tokenCase === 'registeredDuring') broker.users.register({ id: 2, accessToken: LATER });
+    }
+    if (branch === 'hang' || branch === 'delayClose') {
+      const started = Date.now();
+      await broker.close();
+      expect(Date.now() - started).toBeLessThan(1_000);
+    }
+    const outcome = await settled;
+    if (branch !== 'hang' && branch !== 'delayClose') await broker.close();
+
+    expect(broker.rest.journal).toHaveLength(1);
+    expect(broker.rest.journal[0]).toMatchObject({
+      endpoint: 'user',
+      scripted: branch !== 'plain',
+      bearer,
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(settled).toBe(false);
-    expect(broker.rest.pendingHangs).toBe(1);
-    const started = Date.now();
-    await broker.close();
-    expect(Date.now() - started).toBeLessThan(1_000);
-    const answer = await pending;
-    expectError(answer, 503, 'Connection closed by fixture');
-    expect(answer.headers.get('x-ratelimit-limit')).toBe('600');
+    expect(broker.rest.journal.filter((record) => record.bearer === 'pending')).toEqual([]);
+
+    if (expected === 'no answer') {
+      expect('error' in outcome).toBe(true);
+    } else {
+      if (!('response' in outcome)) throw outcome.error;
+      const { response } = outcome;
+      if (expected.message === undefined) expect(response.status).toBe(expected.status);
+      else expectError(response, expected.status, expected.message);
+      expect(response.headers.get('x-ratelimit-limit')).toBe('600');
+      expect(response.headers.get('x-ratelimit-remaining')).toBe('599');
+      const reset = Number(response.headers.get('x-ratelimit-reset'));
+      expect(reset * 1000).toBeGreaterThan(Date.now() - 1_000);
+      expect(reset * 1000).toBeLessThanOrEqual(Date.now() + 60_000);
+      expect(response.headers.get('retry-after')).toBe(branch === 'answer' ? '1' : null);
+    }
     broker = await startMockBroker();
+  });
+
+  it.each([
+    ['after', 'known'],
+    ['before', 'unknown'],
+  ] as const)(
+    'observes an aborted hang when it is aborted (token revoked %s the abort)',
+    async (when, bearer) => {
+      broker.rest.failNext('user', { hang: true });
+      const controller = new AbortController();
+      const pending = call('/v1/broker/user', { signal: controller.signal });
+      await sleep(50);
+      expect(broker.rest.pendingHangs).toBe(1);
+      if (when === 'before') broker.users.revokeToken(TOKEN);
+      controller.abort();
+      await expect(pending).rejects.toThrow();
+      for (let i = 0; i < 100 && broker.rest.pendingHangs !== 0; i += 1) await sleep(10);
+      expect(broker.rest.pendingHangs).toBe(0);
+      if (when === 'after') broker.users.revokeToken(TOKEN);
+      expect(broker.rest.journal[0]).toMatchObject({ scripted: true, bearer });
+      // the aborted request took no place in the rate window
+      const next = await call('/v1/broker/pairs/binary');
+      expect(next.headers.get('x-ratelimit-remaining')).toBe('599');
+    },
+  );
+
+  it('runs nothing more for a delayed request once close() has cut it', async () => {
+    broker.rest.failNext('user', { delayMs: 300 });
+    const pending = call('/v1/broker/user').catch(() => undefined);
+    await sleep(50);
+    await broker.close();
+    expect(broker.rest.journal[0]?.bearer).toBe('known');
+    broker.users.revokeToken(TOKEN);
+    await sleep(400);
+    expect(broker.rest.journal[0]?.bearer).toBe('known');
+    await pending;
+    broker = await startMockBroker();
+  });
+
+  it('journals the bearer of an immediately scripted request to a public endpoint', async () => {
+    broker.rest.failNext('pairs', { status: 503 });
+    expect((await call('/v1/broker/pairs/binary')).status).toBe(503);
+    expect(broker.rest.journal[0]).toMatchObject({
+      endpoint: 'pairs',
+      scripted: true,
+      bearer: 'known',
+    });
+  });
+
+  it('records bodyKeys only where the body is read: unscripted and after a delay, not for a script', async () => {
+    await openTrade();
+    broker.rest.failNext('openTrade', { delayMs: 10 });
+    await openTrade();
+    broker.rest.failNext('openTrade', { status: 503 });
+    await openTrade();
+    const keys = ['action', 'amount', 'asset_id', 'duration', 'is_demo'];
+    expect(broker.rest.journal.map((record) => record.bodyKeys)).toEqual([keys, keys, undefined]);
   });
 });
 
