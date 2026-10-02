@@ -9,6 +9,10 @@
 // sweeper — declares the intent unknown only once it has been submitting for STALE_SUBMITTING_MS.
 // The phase-1 budget covers the ack deadline plus the outcome write; a database that times out
 // every statement is the exit(1) path (intent left submitting, resolved by the sweeper).
+// A side link: BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS, so a job that makes a broker
+// REST call without a deadline of its own still finishes inside the drain. It is deliberately not
+// ordered against SUBMIT_ACK_TIMEOUT_MS: the processor passes its own signal, and a REST call ends
+// at the earlier of the two (docs/broker-rest.md).
 export const MAX_SUBMIT_ACK_TIMEOUT_MS = 30_000;
 export const SHUTDOWN_PHASE1_BUDGET_MS = 35_000;
 export const SHUTDOWN_PHASE2_BUDGET_MS = 4_000;
@@ -17,6 +21,7 @@ export const LOCK_DURATION_MS = 60_000;
 export const STALLED_INTERVAL_MS = 30_000;
 export const MAX_STALLED_COUNT = 1;
 export const STALE_SUBMITTING_MS = 60_000;
+export const BROKER_REST_TIMEOUT_MS = 5_000;
 
 export const SWEEP_INTERVAL_MS = 15_000;
 export const SWEEP_BATCH_SIZE = 50;
@@ -29,7 +34,8 @@ export const TIMING_CHAIN_HOLDS =
   MAX_SUBMIT_ACK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS &&
   COMPOSE_STOP_GRACE_PERIOD_MS < LOCK_DURATION_MS &&
-  LOCK_DURATION_MS <= STALE_SUBMITTING_MS;
+  LOCK_DURATION_MS <= STALE_SUBMITTING_MS &&
+  BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('trading-worker timing constants are out of order (see intents/config.ts)');
 }

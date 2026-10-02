@@ -118,6 +118,9 @@ importers:
         specifier: ^10.3.1
         version: 10.3.1
     devDependencies:
+      '@binarius/mock-broker':
+        specifier: workspace:*
+        version: link:../../packages/mock-broker
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
