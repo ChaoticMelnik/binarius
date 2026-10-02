@@ -3,8 +3,11 @@ import { START_PAYLOAD_CORPUS } from './testing';
 import {
   LANGUAGE_CODE_PATTERN,
   START_PAYLOAD_PATTERN,
+  TelegramChatMemberStatus,
   UserStatus,
   languageCodeSchema,
+  safeParseChatMemberRequest,
+  safeParseChatMemberResponse,
   safeParseUserStartRequest,
   safeParseUserStartResponse,
   startPayloadSchema,
@@ -156,5 +159,45 @@ describe('userStartResponseSchema', () => {
     ],
   ])('rejects a body where %s', (_label, body) => {
     expect(safeParseUserStartResponse(body).success).toBe(false);
+  });
+});
+
+describe('chatMemberRequestSchema', () => {
+  it.each(Object.values(TelegramChatMemberStatus))('accepts %s with a decimal id', (status) => {
+    expect(safeParseChatMemberRequest({ telegramUserId: '12345', status })).toEqual({
+      success: true,
+      data: { telegramUserId: '12345', status },
+    });
+  });
+
+  it.each([
+    ['a status Telegram uses but the backend does not take', { status: 'left' }],
+    ['a non-numeric telegram id', { telegramUserId: 'abc' }],
+    ['a missing status', { status: undefined }],
+  ])('rejects %s', (_label, patch) => {
+    expect(
+      safeParseChatMemberRequest({
+        telegramUserId: '12345',
+        status: TelegramChatMemberStatus.Kicked,
+        ...patch,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('ignores unknown keys', () => {
+    const parsed = safeParseChatMemberRequest({
+      telegramUserId: '12345',
+      status: TelegramChatMemberStatus.Member,
+      chatId: '1',
+    });
+    expect(parsed.success && parsed.data).not.toHaveProperty('chatId');
+  });
+});
+
+describe('chatMemberResponseSchema', () => {
+  it('accepts both answers and refuses a body without recorded', () => {
+    expect(safeParseChatMemberResponse({ recorded: true }).success).toBe(true);
+    expect(safeParseChatMemberResponse({ recorded: false }).success).toBe(true);
+    expect(safeParseChatMemberResponse({}).success).toBe(false);
   });
 });

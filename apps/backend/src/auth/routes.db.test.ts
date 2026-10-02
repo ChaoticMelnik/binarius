@@ -10,10 +10,12 @@ import {
 } from '@binarius/shared';
 import {
   LINK_BONUS_TOKENS,
+  NotificationJobStatus,
   brokerAccounts,
   createDb,
   createTokenCipher,
   hashToken,
+  notificationJobs,
   oauthStates,
   tokenLedger,
   users,
@@ -1059,7 +1061,10 @@ describe('the push after the callback', () => {
 });
 
 describe('a push that fails', () => {
-  const failing = async (notifier: AuthRoutesDeps['linkNotifier']) => {
+  const failing = async (
+    notifier: AuthRoutesDeps['linkNotifier'],
+    prepare?: (telegram: string) => Promise<void>,
+  ) => {
     const lines: string[] = [];
     const instance = await own(
       { linkNotifier: notifier },
@@ -1067,6 +1072,7 @@ describe('a push that fails', () => {
     );
     const telegram = telegramId();
     const state = await stateFor(telegram, instance);
+    await prepare?.(telegram);
     const code = stub.issueCode({ brokerUserId: `MARKER-BROKER-${telegram}` });
     try {
       const response = await callback({ state, code }, instance);
@@ -1086,18 +1092,27 @@ describe('a push that fails', () => {
     expect(all).not.toContain(code);
     expect(all).not.toContain('MARKER-PUSH-TOKEN');
     expect(all).not.toContain('MARKER-BROKER');
-    return warned[0];
+    return { warned: warned[0], telegram };
+  };
+
+  const blockedAtOf = async (telegram: string) => {
+    const [row] = await tmp.db
+      .select({ at: users.telegramBlockedAt })
+      .from(users)
+      .where(eq(users.telegramUserId, BigInt(telegram)));
+    return row?.at;
+  };
+
+  const refusing = (error_code: number, description: string) => {
+    const notifier = createLinkNotifier({ token: PUSH_BOT_TOKEN });
+    const captured = captureApi(notifier);
+    captured.apiErrors.set('sendMessage', { ok: false, error_code, description });
+    return { notifier, captured };
   };
 
   it('logs a refusal by Telegram by its code and still answers the callback', async () => {
-    const notifier = createLinkNotifier({ token: PUSH_BOT_TOKEN });
-    const captured = captureApi(notifier);
-    captured.apiErrors.set('sendMessage', {
-      ok: false,
-      error_code: 403,
-      description: 'Forbidden: bot was blocked by the user',
-    });
-    const warned = await failing(notifier);
+    const { notifier, captured } = refusing(403, 'Forbidden: bot was blocked by the user');
+    const { warned } = await failing(notifier);
     expect(warned).toMatchObject({
       level: 40,
       err: { name: 'GrammyError' },
@@ -1111,9 +1126,10 @@ describe('a push that fails', () => {
   // the real transport, so the message grammY builds — with the token in its URL — is the one
   // that could leak
   it('logs a transport failure by its identity', async () => {
-    const warned = await failing(
+    const { warned, telegram } = await failing(
       createLinkNotifier({ token: PUSH_BOT_TOKEN, apiRoot: 'http://127.0.0.1:1' }),
     );
+    expect(await blockedAtOf(telegram)).toBeNull();
     expect(warned).toMatchObject({
       level: 40,
       err: { name: 'HttpError' },
@@ -1121,6 +1137,37 @@ describe('a push that fails', () => {
       transportError: { name: expect.any(String) as string },
       push: 'pending',
     });
+  });
+
+  // #119: a 403 means the user cannot be reached; it is recorded without touching the response
+  it('marks the state owner unreachable on a 403 and cancels their pending job', async () => {
+    const { notifier } = refusing(403, 'Forbidden: bot was blocked by the user');
+    let jobId = '';
+    // the row the bot's /start would have created; the callback's upsert finds it
+    const { warned, telegram } = await failing(notifier, async (owner) => {
+      const [user] = await tmp.db
+        .insert(users)
+        .values({ telegramUserId: BigInt(owner) })
+        .returning({ id: users.id });
+      const [job] = await tmp.db
+        .insert(notificationJobs)
+        .values({ userId: user!.id, kind: 'test' })
+        .returning({ id: notificationJobs.id });
+      jobId = job!.id;
+    });
+    expect(warned).toMatchObject({ telegramErrorCode: 403, push: 'pending' });
+    expect(await blockedAtOf(telegram)).toBeInstanceOf(Date);
+    const [job] = await tmp.db
+      .select({ status: notificationJobs.status })
+      .from(notificationJobs)
+      .where(eq(notificationJobs.id, jobId));
+    expect(job?.status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('does not mark the user on a refusal other than 403', async () => {
+    const { notifier } = refusing(400, 'Bad Request: chat not found');
+    const { telegram } = await failing(notifier);
+    expect(await blockedAtOf(telegram)).toBeNull();
   });
 });
 

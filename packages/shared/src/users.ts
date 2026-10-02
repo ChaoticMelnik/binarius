@@ -62,3 +62,27 @@ export const safeParseUserStartRequest = (input: unknown) =>
   userStartRequestSchema.safeParse(input);
 export const safeParseUserStartResponse = (input: unknown) =>
   userStartResponseSchema.safeParse(input);
+
+// The two private-chat statuses of the bot that matter for delivery, spelled as the Bot API
+// spells them (ChatMemberBanned.status, ChatMemberMember.status): the bot forwards Telegram's
+// own word, and the backend decides what it means (#119).
+export const TelegramChatMemberStatus = { Kicked: 'kicked', Member: 'member' } as const;
+export type TelegramChatMemberStatus =
+  (typeof TelegramChatMemberStatus)[keyof typeof TelegramChatMemberStatus];
+export const telegramChatMemberStatusSchema = z.enum(TelegramChatMemberStatus);
+
+// POST /users/chat-member — the bot reports that a user blocked or unblocked it
+export const chatMemberRequestSchema = z.object({
+  telegramUserId: telegramUserIdSchema,
+  status: telegramChatMemberStatusSchema,
+});
+export type ChatMemberRequest = z.infer<typeof chatMemberRequestSchema>;
+
+// `recorded: false` — no users row for this id; nothing was written
+export const chatMemberResponseSchema = z.object({ recorded: z.boolean() });
+export type ChatMemberResponse = z.infer<typeof chatMemberResponseSchema>;
+
+export const safeParseChatMemberRequest = (input: unknown) =>
+  chatMemberRequestSchema.safeParse(input);
+export const safeParseChatMemberResponse = (input: unknown) =>
+  chatMemberResponseSchema.safeParse(input);
