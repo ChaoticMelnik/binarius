@@ -123,9 +123,11 @@ executor may return a free-text `detail`; it is truncated to 200 characters and 
 stored. An executor that throws is logged by the error's name and code only: a client library's
 message can embed a header or a response body, and key-based redaction cannot scrub a string.
 Queue payloads carry the intent id only. Neither the publisher nor the worker loads broker
-tokens. Both loggers redact `authorization` and token-like keys at every depth from zero to five
-(`LOG_REDACT_PATHS` in `packages/shared`, exercised against real pino by a worker test); deeper
-nesting and string contents are not covered.
+tokens. Both loggers are built from `logOptions` in `packages/shared`: they redact `authorization`
+and token-like keys at every depth from zero to five (`LOG_REDACT_PATHS`, exercised against real
+pino by a worker test), deeper nesting and string contents not covered, and their serializers
+reduce an error object under `err`, `error`, `cause` or `exception` at the top level of a log line
+to its name, string code and one level of cause (docs/binodex-oauth.md → Secrets).
 
 ## Configuration
 

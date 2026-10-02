@@ -93,9 +93,9 @@ describe('errorIdentity on objects that are not errors', () => {
   });
 
   it('names a record that merely has a name by its type', () => {
-    expect(errorIdentity({ id: 1, name: 'Ivan Petrov', email: 'i@example.test' })).toStrictEqual(
-      { name: 'object' },
-    );
+    expect(errorIdentity({ id: 1, name: 'Ivan Petrov', email: 'i@example.test' })).toStrictEqual({
+      name: 'object',
+    });
   });
 
   it('names a thrown plain object with a message by its type', () => {

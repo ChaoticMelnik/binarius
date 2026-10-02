@@ -73,8 +73,7 @@ function isIdentityShape(value: unknown, allowCause: boolean): value is LoggedEr
 // token, and none of the redact paths above can scrub a string. Idempotent on its own output,
 // because pino runs the serializers below over values that already went through it.
 export function errorIdentity(error: unknown): { name: string; code?: string } {
-  const name =
-    error instanceof Error || isIdentityShape(error, true) ? error.name : typeof error;
+  const name = error instanceof Error || isIdentityShape(error, true) ? error.name : typeof error;
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === 'string' ? { name, code } : { name };
 }

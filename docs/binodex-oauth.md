@@ -669,22 +669,39 @@ drizzle's query error sets neither `name` nor `code`, and the SQLSTATE that make
 failure actionable is on the pg error underneath.
 No key path can reach a string, so what is logged is shaped rather than redacted. Every line this
 application writes passes the error through `errorIdentity` or `errorLogFields`, a rule in
-`eslint.config.js` refuses an `err`/`cause` field that does not — within the shapes it can see,
-which its own comment lists — and a subclass of Fastify's
+`eslint.config.js` refuses an `err`/`error`/`cause`/`exception` field that does not — within the
+shapes it can see, which its own comment lists — and a subclass of Fastify's
 `LogController` does the same for the lines the framework writes on our behalf — including the
 4xx path, which our error handler reaches by delegating through `reply.send(error)`. The request
 serializer and a custom not-found handler strip `code` and `state` from the logged URL, for the
 case where the broker delivers them as query parameters.
 
-That is not the same as "the log contains no raw error". Fastify logs a few of its own events
-without going through `LogController`, and neither the subclass nor the lint rule reaches them:
-errors thrown by hooks, a promise rejected after the reply was sent, trailer errors, a stream
-error on an auto-generated HEAD route, the raw URL inside its duplicate-reply warning — and
-client errors. All but the last need a bug of this project's own to fire; a client error is
-triggered by a malformed request from outside, and Node attaches the raw request bytes to the
-parser errors it raises, which is one reason the default level is `info` rather than `trace`.
-The claim this project makes is the narrower one, because the last four rounds of review were
-spent on claims that were wider than the code.
+Under that, the logger itself holds a whitelist (#85). Every process builds its pino logger from
+`logOptions` (`packages/shared/src/logging.ts`); backend and web hand the instance to Fastify as
+`loggerInstance`, so request loggers and children inherit it. Its serializers reduce whatever sits
+under one of the four keys `err`, `error`, `cause`, `exception` at the top level of a log object to
+`{ name, code?, cause?: { name, code? } }` — the error's name, a string code and one level of
+cause, nested under the key; `errorLogFields` puts the cause beside `err` instead, and both shapes
+pass the serializer unchanged. An object is let through by its own `name` only when it already has
+that shape: a plain or null-prototype object whose own keys are a string `name`, optionally a
+string `code` and such a `cause`.
+A record that merely has a `name` is logged as `{ name: 'object' }`; a plain object with nothing
+but string `name`/`code` is indistinguishable from an identity and keeps its `name`. A hook writes
+a fixed message, `error logged without a message`, where pino would otherwise copy `err.message`
+into `msg` — an error logged positionally or as `{ err }` without a message of its own.
+
+That is not the same as "the log contains no raw error". Fastify's own lines that carry the error
+under `err` or positionally — errors thrown by hooks, a promise rejected after the reply was
+sent, trailer errors, a stream error on an auto-generated HEAD route, client errors — now reach
+the log by name and code only. What the whitelist does not reach: an error nested under another
+key (`{ ctx: { err } }`), an error interpolated into the message by a format argument (`%s`,
+`%o`), free text a call site writes itself, and a message passed explicitly — Fastify passes `error.message` as the message of its
+default error log and its head-write failure, which is why `SafeLogController` stays, and it
+writes the raw URL into its duplicate-reply warning. A client error is triggered by a malformed
+request from outside, and Node attaches the raw request bytes to the parser errors it raises; the
+whitelist drops those fields, and the default level is `info` rather than `trace` besides. The
+claim this project makes is the narrower one, because the earlier rounds of review were spent on
+claims that were wider than the code.
 
 A state legitimately appears in what `start` returns — inside the authorize URL and as a field of
 its own, which is what the bot passes on. It is absent from callback responses, from errors, and

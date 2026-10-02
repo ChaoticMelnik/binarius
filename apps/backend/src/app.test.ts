@@ -222,7 +222,11 @@ describe('what reaches the log', () => {
       detail: 'DETAIL-SECRET',
       cause: Object.assign(new Error('CAUSE-SECRET'), { code: '23505' }),
     });
-  const WHITELISTED = { name: 'TypeError', code: 'E_LEAKY', cause: { name: 'Error', code: '23505' } };
+  const WHITELISTED = {
+    name: 'TypeError',
+    code: 'E_LEAKY',
+    cause: { name: 'Error', code: '23505' },
+  };
   const expectNoSecret = (text: string) => {
     for (const secret of ['MARKER-SECRET', 'DETAIL-SECRET', 'CAUSE-SECRET', '    at ']) {
       expect(text).not.toContain(secret);
@@ -235,9 +239,7 @@ describe('what reaches the log', () => {
         await reply.send('ok');
         throw leaky();
       });
-      expect((await app.inject({ method: 'GET', url: '/sent-then-failed' })).statusCode).toBe(
-        200,
-      );
+      expect((await app.inject({ method: 'GET', url: '/sent-then-failed' })).statusCode).toBe(200);
       expect(logs.entry('Promise errored, but reply.sent = true was set').err).toStrictEqual(
         WHITELISTED,
       );
