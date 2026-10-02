@@ -7,6 +7,7 @@ import {
   safeParseClosedTrade,
   safeParseOpenTrade,
 } from '@binarius/shared';
+import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockRestEndpoint } from './faults';
 import { startMockBroker, type MockBroker } from './server';
@@ -225,10 +226,31 @@ describe('POST /v1/broker/user/trades', () => {
 });
 
 describe('a body over the size limit', () => {
+  // Only the headers are sent: Fastify refuses on the declared Content-Length before it reads,
+  // whereas uploading a real 1 MiB body races the early 413 against a reset socket.
   it('keeps its 413 instead of passing for invalid JSON', async () => {
-    const response = await call('/v1/broker/user/trades', {
-      method: 'POST',
-      rawBody: JSON.stringify({ pad: 'x'.repeat(1_048_576) }),
+    const response = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const request = httpRequest(`${broker.url}/v1/broker/user/trades`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          'content-type': 'application/json',
+          'content-length': String(1_048_576 + 1),
+        },
+      });
+      request.on('error', reject);
+      request.on('response', (incoming) => {
+        let text = '';
+        incoming.setEncoding('utf8');
+        incoming.on('data', (chunk: string) => {
+          text += chunk;
+        });
+        incoming.on('end', () => {
+          request.destroy();
+          resolve({ status: incoming.statusCode ?? 0, body: JSON.parse(text) as unknown });
+        });
+      });
+      request.flushHeaders();
     });
     expectError(response, 413, 'Request failed');
   });
