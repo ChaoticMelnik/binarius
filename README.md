@@ -22,7 +22,8 @@ broker answers, and which of it was observed on the live broker, is in
 [docs/mock-broker.md](docs/mock-broker.md); how a raw broker Socket.IO event becomes a typed
 domain event or a log-safe problem is in [docs/broker-socket.md](docs/broker-socket.md); what
 the worker's REST client sends to the broker and how it classifies answers is in
-[docs/broker-rest.md](docs/broker-rest.md).
+[docs/broker-rest.md](docs/broker-rest.md); what `/account` shows about a user's Binodex links is
+in [docs/bot-account.md](docs/bot-account.md).
 
 ## Requirements
 
