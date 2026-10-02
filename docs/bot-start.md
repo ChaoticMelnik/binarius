@@ -310,7 +310,11 @@ shows the broker's email as it is, `&` included.
 
 **Checked by tests.** Next to each constant (`texts.test.ts`, `link-confirmation.test.ts`,
 `link-notifier.test.ts`), `telegramHtmlProblems` fails any text with a tag or an attribute Telegram
-does not list, a tag left open or closed out of order, a nested blockquote, or a bare `<`, `>`, `&`.
+does not list, a tag left open or closed out of order, a nested blockquote, a tag inside `pre` or
+`code` other than `code` directly in `pre`, one of `a`, `tg-emoji`, `tg-time`, `pre`, `code` inside
+another of them, or a bare `<`, `>`, `&`. Where the Bot API's nesting rules do not settle a case —
+whether a blockquote may hold or sit inside one of those five, whether bold and its kind may hold
+`pre` or `code` — the validator accepts it and Telegram's verdict comes at send time.
 Lengths are measured on `plainTextOf(...)` — the text "after entities parsing" the Bot API counts,
 in UTF-16 code units: at most 4096 for a message (`TELEGRAM_MESSAGE_LIMIT`) and 1024 for the
 welcome, which travels as a video caption whenever `WELCOME_VIDEO_FILE_ID` is set

@@ -76,6 +76,17 @@ describe('telegramHtmlProblems', () => {
     ['nested formatting', '<b>a <i>b <u>c</u></i></b>'],
     ['every supported entity', '&lt;&gt;&amp;&quot;&#39;&#x1F600;'],
     ['an uppercase tag', '<B>a</B>'],
+    ['formatting inside a link', '<a href="x"><b>a</b></a>'],
+    ['a link inside formatting', '<b><a href="x">a</a></b>'],
+    ['code inside bold, which the spec leaves unsettled', '<b><code>a</code></b>'],
+    [
+      'a link inside a blockquote, which the spec leaves unsettled',
+      '<blockquote><a href="x">a</a></blockquote>',
+    ],
+    [
+      'code inside a blockquote, which the spec leaves unsettled',
+      '<blockquote><code>a</code></blockquote>',
+    ],
   ])('accepts %s', (_name, value) => {
     expect(telegramHtmlProblems(value)).toEqual([]);
   });
@@ -129,6 +140,38 @@ describe('telegramHtmlProblems', () => {
       'a blockquote nested through another tag',
       '<blockquote><b><blockquote>a</blockquote></b></blockquote>',
       'blockquotes cannot be nested',
+    ],
+    ['a tag inside code', '<code><b>a</b></code>', '<b> inside <code>: pre and code hold no tags'],
+    ['a tag inside pre', '<pre><b>a</b></pre>', '<b> inside <pre>: pre and code hold no tags'],
+    [
+      'code inside pre through another tag',
+      '<pre><b><code>a</code></b></pre>',
+      '<code> inside <pre>: pre and code hold no tags',
+    ],
+    [
+      'a link inside code',
+      '<code><a href="x">a</a></code>',
+      '<a> inside <code>: pre and code hold no tags',
+    ],
+    [
+      'a link inside a link',
+      '<a href="x"><a href="y">a</a></a>',
+      '<a> inside <a>: these tags do not nest in each other',
+    ],
+    [
+      'a custom emoji inside a link through another tag',
+      '<a href="x"><b><tg-emoji emoji-id="1">👍</tg-emoji></b></a>',
+      '<tg-emoji> inside <a>: these tags do not nest in each other',
+    ],
+    [
+      'pre inside a link',
+      '<a href="x"><pre>a</pre></a>',
+      '<pre> inside <a>: these tags do not nest in each other',
+    ],
+    [
+      'a link inside a time',
+      '<tg-time unix="1"><a href="x">a</a></tg-time>',
+      '<a> inside <tg-time>: these tags do not nest in each other',
     ],
     ['a bare <', 'a < b', 'a bare "<" at 2'],
     ['a bare >', 'a > b', 'a bare ">" at 2'],

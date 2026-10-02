@@ -98,14 +98,26 @@ const TAGS: Record<string, Record<string, AttributeRule>> = {
 // attributes that are written bare (`<blockquote expandable>`); every other one needs a value
 const BARE_ATTRIBUTES = new Set(['expandable']);
 
+// Nesting, as message.d.ts:380-384 states it: bold, italic, underline, strikethrough and spoiler
+// "can contain and can be part of any other entities, except pre and code"; "all other entities
+// can't contain each other". This set is that second group, so pre and code hold no tag at all —
+// except code directly in pre, which line 482 asks for ("nested `pre` and `code` tags"). Not
+// checked, because the text does not settle them: whether a blockquote may hold or sit inside one
+// of these (the list only says blockquotes do not nest), and whether bold and its kind may hold
+// pre or code — `<b><code>` is accepted.
+const EXCLUSIVE = new Set(['a', 'tg-emoji', 'tg-time', 'pre', 'code']);
+
 const TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[a-zA-Z][a-zA-Z0-9-]*(?:="[^"<>]*")?)*)\s*>/y;
 const ATTRIBUTE = /\s+([a-zA-Z][a-zA-Z0-9-]*)(?:="([^"<>]*)")?/g;
 const ENTITY = /&(?:lt|gt|amp|quot|#\d+|#x[0-9a-fA-F]+);/y;
 
 /**
  * What would make Telegram refuse `value` as HTML; empty when it is valid. A tokenizer over
- * Telegram's small dialect, not an HTML parser: it checks tags, attributes, nesting and entities,
- * not the URLs, emoji ids or timestamps inside attribute values.
+ * Telegram's small dialect, not an HTML parser. It checks: tags and their attributes against the
+ * Bot API's list; tags left open or closed out of order; a nested blockquote; a class on code only
+ * directly inside pre; a tag inside pre or code other than code directly in pre; a, tg-emoji,
+ * tg-time, pre and code inside one another; a bare `<`, `>` or `&`. Not the URLs, emoji ids or
+ * timestamps inside attribute values, and not what EXCLUSIVE's comment names as unsettled.
  */
 export function telegramHtmlProblems(value: string): string[] {
   const problems: string[] = [];
@@ -196,6 +208,17 @@ function openingTagProblems(name: string, attributes: string, open: readonly str
   }
   if (name === 'blockquote' && open.includes('blockquote')) {
     problems.push('blockquotes cannot be nested');
+  }
+  let holder: string | undefined;
+  for (let index = open.length - 1; index >= 0 && holder === undefined; index -= 1) {
+    if (EXCLUSIVE.has(open[index] ?? '')) holder = open[index];
+  }
+  if (holder === 'pre' || holder === 'code') {
+    if (!(name === 'code' && holder === 'pre' && open.at(-1) === 'pre')) {
+      problems.push(`<${name}> inside <${holder}>: pre and code hold no tags`);
+    }
+  } else if (holder !== undefined && EXCLUSIVE.has(name)) {
+    problems.push(`<${name}> inside <${holder}>: these tags do not nest in each other`);
   }
   return problems;
 }
