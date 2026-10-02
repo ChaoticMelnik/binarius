@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FaultQueue, RateWindow, scriptedMessage } from './faults';
+import { FaultQueue, RateWindow, scriptedMessage, type MockScript } from './faults';
 
 describe('FaultQueue', () => {
   it('hands scripts out once, in order, per endpoint', () => {
@@ -12,6 +12,44 @@ describe('FaultQueue', () => {
     expect(queue.shift('user')).toBeUndefined();
     expect(queue.shift('pairs')).toBeUndefined();
     expect(queue.shift('chart')).toEqual({ status: 502 });
+  });
+});
+
+describe('FaultQueue.push validation', () => {
+  it.each([
+    [{ status: 199 }, /200\.\.599/],
+    [{ status: 600 }, /200\.\.599/],
+    [{ status: 429.5 }, /200\.\.599/],
+    [{ status: 429, retryAfterSec: -1 }, /retryAfterSec/],
+    [{ status: 429, retryAfterSec: 1.5 }, /retryAfterSec/],
+    [{ delayMs: -1 }, /delayMs/],
+    [{ delayMs: 1.5 }, /delayMs/],
+  ] as [MockScript, RegExp][])(
+    'refuses %j with a RangeError, queueing nothing',
+    (script, message) => {
+      const queue = new FaultQueue();
+      expect(() => queue.push('user', script)).toThrow(RangeError);
+      expect(() => queue.push('user', script)).toThrow(message);
+      expect(queue.shift('user')).toBeUndefined();
+    },
+  );
+
+  it('refuses a script of no known shape with a TypeError', () => {
+    const queue = new FaultQueue();
+    expect(() => queue.push('user', {} as MockScript)).toThrow(TypeError);
+    expect(() => queue.push('user', { hang: false } as unknown as MockScript)).toThrow(TypeError);
+  });
+
+  it.each([
+    { status: 200 },
+    { status: 599 },
+    { status: 429, retryAfterSec: 0 },
+    { delayMs: 0 },
+    { hang: true },
+  ] as MockScript[])('accepts the boundary %j', (script) => {
+    const queue = new FaultQueue();
+    queue.push('user', script);
+    expect(queue.shift('user')).toEqual(script);
   });
 });
 
