@@ -171,26 +171,22 @@ No record is left `'pending'` after `close()`.
 `bodyKeys` is present only where the body is read: without a script, or after a `{ delayMs }`.
 A request answered by a script or a hang never has its body parsed.
 
-## Drift (for #98)
+## Drift
 
 The fixture follows the shared contract wherever the contract has an answer. Each response is
 checked in the fixture's own tests by shared's `safeParse*` functions. In the places below,
-shared and the live broker (or `binodex/broker-web`) disagree, or shared is silent:
+shared and the live broker (or `binodex/broker-web`) disagreed or shared was silent; items 1–3
+are resolved, 4–5 remain:
 
-1. **Money as decimal strings is not verified against the live broker** (accepted risk, owner
-   decision 2026-10-02). `broker-web/src/lib/types.ts` types `available`/`held`/`total`,
-   `min_trade_amount`, `amount`, `potential_profit` and `profit` as `number`. The fixture
-   follows shared and sends strings (`"10000.00"`). If the broker sends JSON numbers,
-   `parseBrokerUser`/`parseOpenTrade` fail on every live response, and a client that is green
-   on this fixture does not work in production. To check, run `curl -H 'Authorization: Bearer
-   <live access token>' https://api.binodex.app/v1/broker/user` and see whether `"available"`
-   is a string. #98's plan starts with that check.
-2. **Chart request.** `chartRequestWireSchema` accepts an integer `interval` and an optional
-   `start_time`. The live broker refuses both (`60` gives `Unsupported interval 60; …`, and a
-   missing `start_time` is a 400), and the fixture does the same. A client built on the current
-   schema fails here. That failure is the signal.
-3. **`{ trades }` envelope.** Shared has no schema for the list response. The fixture answers
-   `{ trades: [...] }`, as broker-web reads it.
+1. **Money form. Resolved 2026-10-02.** The live `GET /v1/broker/user` answers every money field
+   as a JSON integer. Since #98 shared accepts a decimal string or a safe JSON integer
+   (`moneyWireSchema`) and maps both to `DecimalString`. The fixture still sends strings
+   (`"10000.00"`) and does not mirror the live form, because the unit (whole currency units or
+   minor units) is not known yet. Switching the fixture is a follow-up once the unit is
+   confirmed (docs/broker-rest.md → Open items).
+2. **Chart request. Resolved in #98.** Shared now takes `interval` only in the string form
+   (`CHART_INTERVAL_PATTERN`) and requires `start_time`, as the live broker and the fixture do.
+3. **`{ trades }` envelope. Resolved in #98:** `tradesListWireSchema`.
 4. **`close_timestamp` and `symbol`.** An open trade carries `close_timestamp` (its expiry), and
    both open and closed trades carry `symbol`, as broker-web reads them. Shared's
    `openTradeWireSchema` knows neither field, and `closedTradeWireSchema` has no `symbol`. Zod
@@ -198,7 +194,7 @@ shared and the live broker (or `binodex/broker-web`) disagree, or shared is sile
    tests check both fields on the raw body, and one test fails once shared's parse keeps them,
    as a signal to drop the duplicate check.
 5. **`is_demo`** is optional in broker-web and always present in shared and in the fixture. The
-   live call from item 1 settles this one too.
+   live trade list was empty on 2026-10-02, so this waits for a live trade.
 
 ## Accepted risks
 
@@ -214,9 +210,10 @@ shared and the live broker (or `binodex/broker-web`) disagree, or shared is sile
 
 ## Boundaries
 
-- The `BrokerRestClient` and its tests are #98. The issue's criterion "used by the
-  `BrokerRestClient` tests" closes there.
+- The `BrokerRestClient` and its tests landed in #98 (docs/broker-rest.md). The issue's
+  criterion "used by the `BrokerRestClient` tests" is closed there.
 - Socket.IO on the same server and store: #104.
 - The OAuth endpoints, moving `apps/backend/src/broker/testing/oauth-stub.ts` here, and a `bin`
   or compose service: #105.
-- Changes to `packages/shared` (money, chart, the `{trades}` schema): #98 or a separate issue.
+- Changes to `packages/shared`: money, chart and `{trades}` landed in #98; `symbol` and
+  `close_timestamp` (Drift 4) remain.
