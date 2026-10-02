@@ -12,7 +12,9 @@ const LOG_ERROR_FIELD =
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**'],
+    // .claude/worktrees/ holds other agents' checkouts of this repository: their unfinished code
+    // would fail this lint, and one removed mid-run fails it with ENOENT
+    ignores: ['**/dist/**', '**/node_modules/**', '.claude/worktrees/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
