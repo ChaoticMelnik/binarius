@@ -275,7 +275,11 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
     const parsed = openTradeRequestWireSchema.safeParse(input);
     if (!parsed.success) {
       const field = String(parsed.error.issues[0]?.path[0] ?? 'asset_id');
-      return reply.code(400).send(brokerError(FIXTURE_MESSAGES.required(field)));
+      const message =
+        (input as Record<string, unknown>)[field] === undefined
+          ? FIXTURE_MESSAGES.required(field)
+          : FIXTURE_MESSAGES.invalid(field);
+      return reply.code(400).send(brokerError(message));
     }
     const result = state.openTrade(userIdOf(request), parsed.data);
     if (!result.ok) return reply.code(400).send(brokerError(result.message));

@@ -17,6 +17,7 @@ export const LIVE_MESSAGES = {
 // is required` where one applies.
 export const FIXTURE_MESSAGES = {
   required: (field: string) => `Validation failed: "${field}" is required`,
+  invalid: (field: string) => `Validation failed: "${field}" is invalid`,
   oneOf: (field: string, values: readonly string[]) =>
     `Validation failed: "${field}" must be one of [${values.join(', ')}]`,
   positiveInteger: (field: string) => `Validation failed: "${field}" must be a positive integer`,
