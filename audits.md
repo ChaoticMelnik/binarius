@@ -779,3 +779,100 @@ PR #191, rebase-merged (2 коммита, голова `4bc72f0`, в `main` до
 1. **Minor ревью #191.** — **вынесено в #192**
 2. **Живой тест #114 после деплоя** (телефон, затем Telegram Web; сигнатуры отказов — в ревью PR #191). — **открыто (2026-10-02, владелец): после деплоя на VPS**
 3. **Пост-фактум Codex по `4bc72f0`** — присоединяется к предложению 4 аудита #163. — **открыто (2026-10-02, владелец): после сброса лимита 2026-10-05**
+
+---
+
+## #177 — Бот, вход по email: 4xx на send-code — не неизвестный исход (2026-10-02)
+
+PR #194, rebase-merged (2 коммита, голова `e374541`). 5 файлов, +186/−9. **Один круг ревью, ноль возвратов.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`. Исследование ночью без владельца (clarify-only), 5 вопросов, ответы утром (5b — не рекомендованный). Таблица источников кодов отказа по правилу PR #178. Step 7 Codex — вейвер. |
+| Implementer | Clarify + код | Спавн `opus`. 4 вопроса; 9 мутаций в Gate verification. ESLint `pnpm check` дважды краснел на чужих `.claude/worktrees/**` — записано в PR, исправлено в #166. |
+| Reviewer | Iteration 1 | 0 Blocker, 0 Major, 2 Minor; владелец: не заводить задачу. |
+| Tech Lead | Merge / Done | Подтверждение перед мержем, rebase, `--match-head-commit`. |
+
+### Review iterations: 0
+
+---
+
+## #192 — Web: нормализация redirect_uri, отказ запуска при старом ADMIN_PUBLIC_URL (2026-10-02)
+
+PR #195, rebase-merged (6 коммитов, голова `f96d581`). 17 файлов, +202/−70. **Один круг ревью, ноль возвратов.** Minor m1-m3 → #197.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`, ночью clarify-only. Pre-implementation Plan Update по дефекту implementer'а (хвостовые `?`/`#` → производная проверка «голого» origin, плюс `\` и пробел). Step 7 Codex — вейвер. |
+| Implementer | Код | Спавн `opus`, свой worktree. CI `compose` упал на первом push: Compose 2.38.2 раннера вычисляет вложенный `:?` в `${A+…}` всегда — guard перенесён в `web.init` (булево), проверено на 2.38.2 и 5.5.1 отдельным бинарём. |
+| Reviewer | Iteration 1 | 0 Blocker, 0 Major, 4 Minor (m1-m3 → #197). |
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Guard `${A+${B:?}}` ломал каждый `compose config` на раннере | Process | env-parity | Правило «CI-tooling на версии раннера» не применено к compose; проверено только на 5.5.1 | Architect plan → **внедрено в #<DOCS_PR>** |
+
+### Review iterations: 0
+
+---
+
+## #103 — Mock-брокер: REST-фикстура Broker API (2026-10-02)
+
+PR #196, rebase-merged после **3 кругов (лимит)**, голова `f3ac5cd`, +3070 (выше потолка 3000 с согласия владельца, прирост — тесты). Остаток m11-m15 → #204.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`, ночью clarify-only; read-only пробы живого API. Q3 (деньги строками) и Q4 (chart только в фикстуре) — против рекомендации, записаны как accepted risk. |
+| Reviewer | Iteration 1 | 1 Major (M1: auth до задержки) + 8 Minor → Plan Update без Codex. |
+| Reviewer | Iteration 2 | 1 Major (M2: регрессия от фикса M1) → смена подхода (владелец: перепроектировать `onRequest`), Codex re-check — вейвер. |
+| Reviewer | Iteration 3 | 0 Blocker/Major, 5 Minor → #204 с «да» владельца; LGTM не ставился. Первый спавн R3 умер на API 403 (`claude-opus-5-5`), повтор прошёл. |
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| M1 | Major | other | Состояние прочитано до `await` | Architect plan |
+| M2 | Major | instance-vs-class | Фикс M1 не прошёл все пути записи | Architect Plan Update R1 |
+| Общий scratchpad: чужой `check.sh` перезаписан, один `pnpm check` прошёл не в том дереве | Process | other | Параллельные агенты в одном scratchpad | Tech Lead → **внедрено в #<DOCS_PR>** |
+
+### Review iterations: 2
+
+---
+
+## #166 — DB-тесты: часы и таймауты (2026-10-02)
+
+PR #203, rebase-merged (6 коммитов, голова `3efec56`). **Два круга ревью, один возврат.** Minor раунда 2 → #206; дедлайны внутри тестов → #205.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Исследование | Ночью исполнением найдена причина флейка: `lima-guestagent` шагает часы VM назад (Lima #5543). |
+| Implementer | R0 | Drop-in без CAP_SYS_TIME с авторизацией владельца; позитивный контроль 96 → 0 шагов; приёмка в устойчивом состоянии. |
+| Reviewer | R1 | Major: после сна Mac часы VM на 84 мин позади (подтверждено tech-lead'ом). **Откат drop-in'а** tech-lead'ом с «да» владельца в тот же час. |
+| Architect | Plan Update | Владелец: нативный PostgreSQL 18 на хосте (5434, `TEST_DATABASE_URL`, preflight). |
+| Implementer | R1 | Остановился на непредусмотренных апгрейдах brew (`--dry-run \| head` раньше их скрыл); владелец разрешил ровно 5 изменений. Приёмка 10/10 + 3/3, 0 шагов, 0 skew. |
+| Reviewer | R2 | 0 Blocker/Major, Minor → #206. |
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Часы VM после сна | Major | env-parity | Приёмка без sleep/wake; пробник без проверки расхождения с хостом | Architect plan → **внедрено в #<DOCS_PR>** |
+| Усечённый `brew --dry-run` | Process | unverified-claim | Вывод инструмента обрезан `head` | Implementer → **внедрено в #<DOCS_PR>** |
+
+### Review iterations: 1
+
+### Process improvement proposals (все четыре задачи)
+
+1. **Compose на версии раннера + раздел «среда разработчика» в плане.** — **внедрено в #<DOCS_PR>: `.claude/skills/architect/SKILL.md` → Task classes (Compose / env, Developer environment)**
+2. **Параллельные implementer'ы на одной машине** (свой worktree через `git worktree add` + lock, свой scratch-подкаталог, sub-skills на `gh pr diff`, окно общего Postgres). — **внедрено в #<DOCS_PR>: `.claude/skills/tech-lead/SKILL.md` → Conflict detection → Step 7**
+3. **Minor-находки:** #177 — владелец: не заводить; #192 → **вынесено в #197**; #103 → **вынесено в #204**; #166 → **вынесено в #206**, дедлайны в тестах → **вынесено в #205**.
+4. **Пост-фактум Codex по `e374541`, `f96d581`, `f3ac5cd`, `3efec56`** — присоединяется к предложению 4 аудита #163. — **открыто (2026-10-02, владелец): после сброса лимита 2026-10-05**
