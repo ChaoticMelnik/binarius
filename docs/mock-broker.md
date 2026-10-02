@@ -131,7 +131,7 @@ limit. A client classifies by status, never by text. All 4xx and 5xx responses u
 
 ## Scripts: `failNext`
 
-Each endpoint has its own FIFO queue, and each script is used once. `failNext` throws on a script the fixture cannot play as written: a `RangeError` for a status outside 200..599 or a negative or fractional `delayMs`/`retryAfterSec`, a `TypeError` for an object of no known shape. A script is applied before
+Each endpoint has its own FIFO queue, and each script is used once. `failNext` throws on a script the fixture cannot play as written: a `RangeError` for a status outside 200..599 or a negative or fractional `delayMs`/`retryAfterSec`, a `TypeError` for an object of no known shape or one that mixes shapes. The three shapes exclude each other: exactly one of `status`, `delayMs`, `hang: true`, and `delayMs`/`hang` take no other field. The type says the same, so `{ status: 429, delayMs: 50 }` does not compile. A script is applied before
 auth and validation, like a failure in front of the broker, so a script on `user` also fires for
 a request without a token.
 

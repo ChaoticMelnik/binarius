@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FaultQueue, RateWindow, scriptedMessage, type MockScript } from './faults';
+import { FaultQueue, RateWindow, scriptKind, scriptedMessage, type MockScript } from './faults';
 
 describe('FaultQueue', () => {
   it('hands scripts out once, in order, per endpoint', () => {
@@ -40,16 +40,61 @@ describe('FaultQueue.push validation', () => {
     expect(() => queue.push('user', { hang: false } as unknown as MockScript)).toThrow(TypeError);
   });
 
+  // each mixed shape is refused by the type and at runtime, and queues nothing
+  it('refuses a script that mixes shapes', () => {
+    // @ts-expect-error status with delayMs
+    const statusDelay: MockScript = { status: 429, delayMs: 50 };
+    // @ts-expect-error status with hang
+    const statusHang: MockScript = { status: 500, hang: true };
+    // @ts-expect-error delayMs with hang
+    const delayHang: MockScript = { delayMs: 10, hang: true };
+    // @ts-expect-error hang must be true
+    const hangFalse: MockScript = { hang: false };
+    // @ts-expect-error delayMs takes no body
+    const delayBody: MockScript = { delayMs: 10, body: {} };
+    const cases: [MockScript, RegExp][] = [
+      [statusDelay, /exactly one of status, delayMs, hang; got status, delayMs/],
+      [statusHang, /exactly one of status, delayMs, hang; got status, hang/],
+      [delayHang, /exactly one of status, delayMs, hang; got delayMs, hang/],
+      [hangFalse, /hang must be true/],
+      [delayBody, /\{ delayMs \} does not take body/],
+    ];
+    for (const [script, message] of cases) {
+      const queue = new FaultQueue();
+      expect(() => queue.push('user', script)).toThrow(TypeError);
+      expect(() => queue.push('user', script)).toThrow(message);
+      expect(queue.shift('user')).toBeUndefined();
+    }
+  });
+
+  it('ignores a field that is present but undefined', () => {
+    const queue = new FaultQueue();
+    queue.push('user', { status: 429, delayMs: undefined });
+    expect(queue.shift('user')).toEqual({ status: 429, delayMs: undefined });
+  });
+
   it.each([
     { status: 200 },
     { status: 599 },
     { status: 429, retryAfterSec: 0 },
+    { status: 503, body: { x: 1 }, headers: { 'x-test': 'y' }, retryAfterSec: 2 },
     { delayMs: 0 },
     { hang: true },
   ] as MockScript[])('accepts the boundary %j', (script) => {
     const queue = new FaultQueue();
     queue.push('user', script);
     expect(queue.shift('user')).toEqual(script);
+  });
+});
+
+describe('scriptKind', () => {
+  it('reads the shape the server plays', () => {
+    expect(scriptKind({ status: 429, retryAfterSec: 1 })).toEqual({
+      kind: 'answer',
+      script: { status: 429, retryAfterSec: 1 },
+    });
+    expect(scriptKind({ delayMs: 5 })).toEqual({ kind: 'delay', delayMs: 5 });
+    expect(scriptKind({ hang: true })).toEqual({ kind: 'hang' });
   });
 });
 

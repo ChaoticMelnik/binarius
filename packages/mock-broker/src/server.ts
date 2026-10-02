@@ -9,6 +9,8 @@ import {
   FaultQueue,
   RateWindow,
   scriptedMessage,
+  scriptKind,
+  type MockAnswerScript,
   type MockRequestRecord,
   type MockRestEndpoint,
   type MockScript,
@@ -161,14 +163,13 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
     return userId;
   };
 
-  function sendScripted(reply: FastifyReply, script: { status: number } & MockScript) {
+  function sendScripted(reply: FastifyReply, script: MockAnswerScript) {
     reply.code(script.status);
-    if ('headers' in script && script.headers !== undefined) reply.headers(script.headers);
-    if ('retryAfterSec' in script && script.retryAfterSec !== undefined) {
+    if (script.headers !== undefined) reply.headers(script.headers);
+    if (script.retryAfterSec !== undefined) {
       reply.header('retry-after', String(script.retryAfterSec));
     }
-    const body = 'body' in script ? script.body : undefined;
-    if (body !== undefined) return reply.send(body);
+    if (script.body !== undefined) return reply.send(script.body);
     return script.status >= 400
       ? reply.send(brokerError(scriptedMessage(script.status)))
       : reply.send();
@@ -199,8 +200,9 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
     journal.push(record);
     contexts.set(request, { record });
 
-    if (script !== undefined) {
-      if ('hang' in script) {
+    const played = script === undefined ? undefined : scriptKind(script);
+    switch (played?.kind) {
+      case 'hang':
         await new Promise<void>((release) => {
           const entry = { reply, release };
           hanging.add(entry);
@@ -210,13 +212,14 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
           });
         });
         return reply;
-      }
-      if ('delayMs' in script) {
-        await new Promise((resolve) => setTimeout(resolve, script.delayMs));
-      } else {
+      case 'delay':
+        await new Promise((resolve) => setTimeout(resolve, played.delayMs));
+        break;
+      case 'answer':
         applyRateHeaders(reply);
-        return sendScripted(reply, script);
-      }
+        return sendScripted(reply, played.script);
+      case undefined:
+        break;
     }
 
     // From here the request is handled as if it arrived only now: a token revoked or a user
