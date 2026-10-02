@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CHART_INTERVAL_PATTERN,
   chartRequestWireSchema,
+  isClosedTrade,
   openTradeRequestWireSchema,
   parseBinaryPair,
   parseBinaryPairs,
@@ -9,16 +11,18 @@ import {
   parseCandles,
   parseClosedTrade,
   parseOpenTrade,
+  parseTradesList,
   safeParseBinaryPair,
   safeParseBinaryPairs,
   safeParseBrokerBalance,
   safeParseBrokerUser,
   safeParseCandles,
   safeParseOpenTrade,
+  safeParseTradesList,
   toChartRequestWire,
   toOpenTradeRequestWire,
 } from './broker';
-import type { DecimalString } from './money';
+import { isDecimalString, type DecimalString } from './money';
 
 const pairWire = {
   id: 91,
@@ -122,12 +126,34 @@ describe('BrokerUser', () => {
 
   it('exposes a safe balance parser', () => {
     expect(safeParseBrokerBalance(balanceWire).success).toBe(true);
-    expect(safeParseBrokerBalance({ ...balanceWire, held: 10 }).success).toBe(false);
+    expect(safeParseBrokerBalance({ ...balanceWire, held: 10.5 }).success).toBe(false);
+  });
+
+  // the shape GET /v1/broker/user answered live on 2026-10-02: every money field a JSON integer
+  it('converts the live all-integer user to decimal strings', () => {
+    const live = {
+      id: 1001,
+      level: { code: 'standard', rank: 1 },
+      min_trade_amount: 1,
+      real: { available: 0, held: 0, total: 0 },
+      demo: { available: 9990, held: 10, total: 10000 },
+    };
+    const user = parseBrokerUser(live);
+    expect(user).toEqual({
+      id: '1001',
+      level: { code: 'standard', rank: 1 },
+      minTradeAmount: '1',
+      real: { available: '0', held: '0', total: '0' },
+      demo: { available: '9990', held: '10', total: '10000' },
+    });
+    const money = [user.minTradeAmount, ...Object.values(user.real), ...Object.values(user.demo)];
+    expect(money.every(isDecimalString)).toBe(true);
   });
 
   it.each([
-    ['min_trade_amount', 1],
-    ['real', { ...balanceWire, total: 10000 }],
+    ['min_trade_amount', 1.5],
+    ['real', { ...balanceWire, total: 10000.5 }],
+    ['demo', { ...balanceWire, available: 2 ** 53 }],
     ['level', { code: 'standard' }],
   ])('rejects %s=%j', (field, value) => {
     expect(safeParseBrokerUser({ ...userWire, [field]: value }).success).toBe(false);
@@ -186,7 +212,7 @@ describe('Trades', () => {
   });
 
   it.each([
-    ['amount', 10],
+    ['amount', 10.5],
     ['potential_profit', 8.5],
     ['action', 'UP'],
     ['source', 5],
@@ -218,25 +244,71 @@ describe('Trades', () => {
   });
 });
 
-describe('ChartRequest', () => {
-  it('encodes the query with an optional start_time', () => {
-    expect(toChartRequestWire({ assetId: 91, interval: 60, limit: 100 })).toEqual({
-      asset_id: 91,
-      interval: 60,
-      limit: 100,
+describe('Trades list', () => {
+  it('parses the empty list the live broker answered', () => {
+    expect(parseTradesList({ trades: [] })).toEqual([]);
+  });
+
+  it('tells an open trade from a closed one', () => {
+    const [open, closed] = parseTradesList({ trades: [openTradeWire, closedTradeWire] });
+    expect(open && isClosedTrade(open)).toBe(false);
+    expect(open).toEqual(parseOpenTrade(openTradeWire));
+    expect(closed && isClosedTrade(closed)).toBe(true);
+    expect(closed).toEqual(parseClosedTrade(closedTradeWire));
+  });
+
+  it('reads an open trade that carries its expiry as close_timestamp as open', () => {
+    const [trade] = parseTradesList({
+      trades: [{ ...openTradeWire, close_timestamp: 1790028556624 }],
     });
+    expect(trade && isClosedTrade(trade)).toBe(false);
+  });
+
+  it('reads a closed trade that also carries potential_profit as closed', () => {
+    const [trade] = parseTradesList({
+      trades: [{ ...closedTradeWire, potential_profit: '8.50' }],
+    });
+    expect(trade && isClosedTrade(trade)).toBe(true);
+  });
+
+  it('converts integer trade money', () => {
+    const [trade] = parseTradesList({ trades: [{ ...closedTradeWire, amount: 10, profit: -10 }] });
+    expect(trade).toMatchObject({ amount: '10', profit: '-10' });
+  });
+
+  it.each([
+    { trades: 'x' },
+    [],
+    { trades: [{ ...openTradeWire, amount: 10.5 }] },
+    { trades: [{ ...closedTradeWire, potential_profit: undefined, profit: undefined }] },
+  ])('rejects %j', (input) => {
+    expect(safeParseTradesList(input).success).toBe(false);
+  });
+});
+
+describe('ChartRequest', () => {
+  it('encodes all four query keys', () => {
     expect(
       toChartRequestWire({ assetId: 91, interval: '1m', limit: 100, startTime: 1790028496624 }),
     ).toEqual({ asset_id: 91, interval: '1m', limit: 100, start_time: 1790028496624 });
   });
 
+  it.each(['250ms', '5s', '1m', '1h', '1d', '1w', '1M'])('accepts the live interval %j', (value) => {
+    expect(CHART_INTERVAL_PATTERN.test(value)).toBe(true);
+  });
+
+  const wire = { asset_id: 91, interval: '1m', limit: 100, start_time: 1790028496624 };
+
   it.each([
     ['limit', 0],
     ['interval', ''],
-    ['interval', 0],
+    ['interval', 60],
+    ['interval', '60'],
+    ['interval', '1y'],
     ['start_time', -1],
+    ['start_time', undefined],
   ])('rejects %s=%j', (field, value) => {
-    const wire = { asset_id: 91, interval: 60, limit: 100 };
+    expect(chartRequestWireSchema.safeParse(wire).success).toBe(true);
     expect(chartRequestWireSchema.safeParse({ ...wire, [field]: value }).success).toBe(false);
   });
 });

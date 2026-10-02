@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { idWireSchema, toId } from './ids';
-import { decimalStringSchema, positiveDecimalStringSchema, type DecimalString } from './money';
+import { moneyWireSchema, positiveDecimalStringSchema, type DecimalString } from './money';
 import { unixMsSchema, type UnixMs } from './time';
 import { tradeActionSchema, type TradeAction } from './trading';
 
@@ -54,9 +54,9 @@ export function toBinaryPair(wire: BinaryPairWire): BinaryPair {
 // --- BrokerBalance / BrokerUser ---------------------------------------------------------------
 
 export const brokerBalanceWireSchema = z.object({
-  available: decimalStringSchema,
-  held: decimalStringSchema,
-  total: decimalStringSchema,
+  available: moneyWireSchema,
+  held: moneyWireSchema,
+  total: moneyWireSchema,
 });
 export type BrokerBalanceWire = z.infer<typeof brokerBalanceWireSchema>;
 
@@ -75,7 +75,7 @@ export const brokerUserLevelWireSchema = z.looseObject({ code: z.string(), rank:
 export const brokerUserWireSchema = z.object({
   id: idWireSchema,
   level: brokerUserLevelWireSchema,
-  min_trade_amount: decimalStringSchema,
+  min_trade_amount: moneyWireSchema,
   real: brokerBalanceWireSchema,
   demo: brokerBalanceWireSchema,
 });
@@ -137,7 +137,7 @@ const tradeBaseWireShape = {
   id: idWireSchema,
   asset_id: z.int(),
   action: tradeActionSchema,
-  amount: decimalStringSchema,
+  amount: moneyWireSchema,
   payout: z.number(),
   open_price: z.number(),
   open_timestamp: unixMsSchema,
@@ -149,7 +149,7 @@ const tradeBaseWireShape = {
 
 export const openTradeWireSchema = z.object({
   ...tradeBaseWireShape,
-  potential_profit: decimalStringSchema,
+  potential_profit: moneyWireSchema,
 });
 export type OpenTradeWire = z.infer<typeof openTradeWireSchema>;
 
@@ -157,7 +157,7 @@ export const closedTradeWireSchema = z.object({
   ...tradeBaseWireShape,
   close_price: z.number(),
   close_timestamp: unixMsSchema,
-  profit: decimalStringSchema,
+  profit: moneyWireSchema,
 });
 export type ClosedTradeWire = z.infer<typeof closedTradeWireSchema>;
 
@@ -212,6 +212,22 @@ export function toClosedTrade(wire: ClosedTradeWire): ClosedTrade {
   };
 }
 
+// GET /broker/user/trades answers { trades: [...] } (live, 2026-10-02, an empty list). Closed is
+// tried first because it is the member with the extra required fields: an open trade carrying a
+// close_timestamp (its expiry) has no close_price/profit and falls through to open.
+export const tradeWireSchema = z.union([closedTradeWireSchema, openTradeWireSchema]);
+export type TradeWire = z.infer<typeof tradeWireSchema>;
+export const tradesListWireSchema = z.object({ trades: z.array(tradeWireSchema) });
+export type TradesListWire = z.infer<typeof tradesListWireSchema>;
+
+export type BrokerTrade = OpenTrade | ClosedTrade;
+
+export const isClosedTrade = (trade: BrokerTrade): trade is ClosedTrade => 'profit' in trade;
+
+export function toBrokerTrade(wire: TradeWire): BrokerTrade {
+  return 'profit' in wire ? toClosedTrade(wire) : toOpenTrade(wire);
+}
+
 // --- Open-trade request (REST: POST /broker/user/trades) --------------------------------------
 
 export interface OpenTradeRequest {
@@ -245,17 +261,20 @@ export function toOpenTradeRequestWire(request: OpenTradeRequest): OpenTradeRequ
 
 export interface ChartRequest {
   assetId: number;
-  interval: number | string;
+  interval: string;
   limit: number;
-  startTime?: UnixMs;
+  startTime: UnixMs;
 }
 
-// #6 names the parameters but not interval's wire type; both are accepted until #18 sees a call
+// The live broker (2026-10-02) takes interval only as a count and a unit ("1m"; interval=60 is a
+// 400 "Unsupported interval") and refuses a request without start_time.
+export const CHART_INTERVAL_PATTERN = /^\d+(ms|s|m|h|d|w|M)$/;
+
 export const chartRequestWireSchema = z.object({
   asset_id: z.int(),
-  interval: z.union([z.int().positive(), z.string().min(1)]),
+  interval: z.string().regex(CHART_INTERVAL_PATTERN),
   limit: z.int().positive(),
-  start_time: unixMsSchema.optional(),
+  start_time: unixMsSchema,
 });
 export type ChartRequestWire = z.infer<typeof chartRequestWireSchema>;
 
@@ -264,7 +283,7 @@ export function toChartRequestWire(request: ChartRequest): ChartRequestWire {
     asset_id: request.assetId,
     interval: request.interval,
     limit: request.limit,
-    ...(request.startTime === undefined ? {} : { start_time: request.startTime }),
+    start_time: request.startTime,
   };
 }
 
@@ -316,6 +335,10 @@ export const safeParseOpenTrade = (input: unknown) => openTradeWireSchema.safePa
 export const parseClosedTrade = (input: unknown): ClosedTrade =>
   toClosedTrade(closedTradeWireSchema.parse(input));
 export const safeParseClosedTrade = (input: unknown) => closedTradeWireSchema.safeParse(input);
+
+export const parseTradesList = (input: unknown): BrokerTrade[] =>
+  tradesListWireSchema.parse(input).trades.map(toBrokerTrade);
+export const safeParseTradesList = (input: unknown) => tradesListWireSchema.safeParse(input);
 
 export const parseBrokerError = (input: unknown): BrokerError =>
   toBrokerError(brokerErrorEnvelopeWireSchema.parse(input));

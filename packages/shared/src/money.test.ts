@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { decimalStringSchema, isDecimalString, positiveDecimalStringSchema } from './money';
+import {
+  decimalStringSchema,
+  isDecimalString,
+  moneyWireSchema,
+  positiveDecimalStringSchema,
+} from './money';
 
 describe('decimalStringSchema', () => {
   it.each(['0', '-3', '12.50', '0.001', '100000000000000000000'])('accepts %j', (value) => {
@@ -25,4 +30,29 @@ describe('positiveDecimalStringSchema', () => {
   it.each(['0', '0.00', '-0', '-1', '-0.5', '', 'abc'])('rejects %j', (value) => {
     expect(positiveDecimalStringSchema.safeParse(value).success).toBe(false);
   });
+});
+
+describe('moneyWireSchema', () => {
+  it.each([
+    [1000000, '1000000'],
+    [0, '0'],
+    [-0, '0'],
+    [-10, '-10'],
+    [2 ** 53 - 1, '9007199254740991'],
+  ])('converts the integer %j to the decimal string %j', (value, expected) => {
+    const parsed = moneyWireSchema.parse(value);
+    expect(parsed).toBe(expected);
+    expect(isDecimalString(parsed)).toBe(true);
+  });
+
+  it.each(['0', '12.50', '-3', '100000000000000000000'])('passes the string %j through', (value) => {
+    expect(moneyWireSchema.parse(value)).toBe(value);
+  });
+
+  it.each([2 ** 53, 1e21, 1.5, 10000.5, Number.NaN, Number.POSITIVE_INFINITY, true, null, '1e3'])(
+    'rejects %j',
+    (value) => {
+      expect(moneyWireSchema.safeParse(value).success).toBe(false);
+    },
+  );
 });
