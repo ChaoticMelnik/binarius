@@ -1,6 +1,6 @@
 import { Api, InlineKeyboard } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
-import { confirmCallbackData, LINK_TEXTS } from '@binarius/shared';
+import { confirmCallbackData, LINK_LABELS, LINK_TEXTS, type TelegramHtml } from '@binarius/shared';
 import { LINK_PUSH_TELEGRAM_API_TIMEOUT_MS } from '../timing';
 import { AUTH_TEXTS } from './texts';
 
@@ -25,7 +25,7 @@ export type LinkPushOutcome =
     };
 
 export interface LinkPushMessage {
-  text: string;
+  text: TelegramHtml;
   reply_markup?: InlineKeyboardMarkup;
 }
 
@@ -35,7 +35,7 @@ export function linkPushMessage(outcome: LinkPushOutcome): LinkPushMessage {
       return {
         text: LINK_TEXTS.confirmPrompt,
         reply_markup: new InlineKeyboard().text(
-          LINK_TEXTS.confirmButton(outcome.account.email),
+          LINK_LABELS.confirmButton(outcome.account.email),
           confirmCallbackData(outcome.account.id),
         ),
       };
@@ -82,12 +82,14 @@ export function createLinkNotifier({
     async send(telegramUserId, outcome) {
       const { text, reply_markup } = linkPushMessage(outcome);
       // chat_id as a string: the column is bigint, and a string is the conversion that cannot
-      // round. No parse_mode: the button carries the email the broker reported.
-      await api.sendMessage(
-        String(telegramUserId),
-        text,
-        reply_markup === undefined ? {} : { reply_markup },
-      );
+      // round. This is the backend's one send seam for user texts, as apps/bot/src/send.ts is the
+      // bot's: the only place here that sets parse_mode and unwraps TelegramHtml, which is why
+      // ESLint allows a raw sendMessage in this file alone. The button label is plain: Telegram
+      // does not parse it.
+      await api.sendMessage(String(telegramUserId), text.value, {
+        parse_mode: 'HTML',
+        ...(reply_markup === undefined ? {} : { reply_markup }),
+      });
     },
   };
 }

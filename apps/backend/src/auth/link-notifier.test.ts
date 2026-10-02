@@ -2,7 +2,12 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { GrammyError, HttpError } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LINK_TEXTS } from '@binarius/shared';
+import {
+  LINK_TEXTS,
+  plainTextOf,
+  TELEGRAM_MESSAGE_LIMIT,
+  telegramHtmlProblems,
+} from '@binarius/shared';
 import { captureApi, inlineButtons, sentPayload } from '../admin/testing';
 import { createLinkNotifier, LinkPushKind, type LinkPushOutcome } from './link-notifier';
 import { AUTH_TEXTS } from './texts';
@@ -24,6 +29,16 @@ async function listen(server: Server): Promise<string> {
   return `http://127.0.0.1:${port}`;
 }
 
+describe("the backend's own texts", () => {
+  it.each(Object.entries(AUTH_TEXTS))('keeps %s valid Telegram HTML', (_key, text) => {
+    expect(telegramHtmlProblems(text.value)).toEqual([]);
+    const plain = plainTextOf(text);
+    expect(plain.trim().length).toBeGreaterThan(0);
+    expect(plain.length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
+    for (const line of plain.split('\n')) expect(line).toBe(line.trim());
+  });
+});
+
 describe('the link push message', () => {
   const sent = async (outcome: LinkPushOutcome) => {
     const notifier = createLinkNotifier({ token: TOKEN });
@@ -32,7 +47,7 @@ describe('the link push message', () => {
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     const payload = sentPayload(calls, 'sendMessage');
     expect(payload?.chat_id).toBe('9007199254740993');
-    expect(payload?.parse_mode).toBeUndefined();
+    expect(payload?.parse_mode).toBe('HTML');
     return payload;
   };
 
@@ -41,9 +56,9 @@ describe('the link push message', () => {
       kind: LinkPushKind.Pending,
       account: { id: ACCOUNT_ID, email: 'ada@example.test' },
     });
-    expect(payload?.text).toBe(LINK_TEXTS.confirmPrompt);
+    expect(payload?.text).toBe(LINK_TEXTS.confirmPrompt.value);
     expect(inlineButtons(payload)).toEqual([
-      { text: 'Подтвердить: ada@example.test', callback_data: `confirm:${ACCOUNT_ID}` },
+      { text: '✅ Подтвердить: ada@example.test', callback_data: `confirm:${ACCOUNT_ID}` },
     ]);
   });
 
@@ -53,8 +68,19 @@ describe('the link push message', () => {
       account: { id: ACCOUNT_ID, email: null },
     });
     expect(inlineButtons(payload)).toEqual([
-      { text: 'Подтвердить привязку', callback_data: `confirm:${ACCOUNT_ID}` },
+      { text: '✅ Подтвердить привязку', callback_data: `confirm:${ACCOUNT_ID}` },
     ]);
+  });
+
+  // the label is not parsed by Telegram, so the broker's email goes into it unescaped; the email
+  // is not part of the text at all
+  it('puts an email with markup characters into the button as it is', async () => {
+    const email = 'a&b<c>_*@example.test';
+    const payload = await sent({ kind: LinkPushKind.Pending, account: { id: ACCOUNT_ID, email } });
+    expect(inlineButtons(payload)).toEqual([
+      { text: `✅ Подтвердить: ${email}`, callback_data: `confirm:${ACCOUNT_ID}` },
+    ]);
+    expect(payload?.text).toBe(LINK_TEXTS.confirmPrompt.value);
   });
 
   it.each([
@@ -65,7 +91,7 @@ describe('the link push message', () => {
     [LinkPushKind.Mismatch, AUTH_TEXTS.oauthLoginFailed],
   ] as const)('sends %s as text alone, with no button', async (kind, text) => {
     const payload = await sent({ kind });
-    expect(payload?.text).toBe(text);
+    expect(payload?.text).toBe(text.value);
     expect(payload?.reply_markup).toBeUndefined();
   });
 });

@@ -10,7 +10,7 @@
 /**
  * A fragment that is already Telegram HTML. The class is not exported and carries a private
  * member, so the type is nominal: an object literal does not satisfy it and the class cannot be
- * named outside this module — the only way in without a cast is `telegramHtml`, which escapes
+ * constructed outside this module — the only way in without a cast is `telegramHtml`, which escapes
  * every hole. A class rather than a branded string because the tag has to recognise its own
  * output at runtime to nest it without escaping it a second time. A cast defeats this, as it
  * defeats any type. `telegram-html.typecheck.ts` is the oracle.
@@ -28,7 +28,9 @@ class TelegramHtmlValue {
   }
 }
 
-export type TelegramHtml = TelegramHtmlValue;
+// A type-only export under the public name: declarations elsewhere can name the type (an
+// inferred `TEXTS` object needs to), while `new TelegramHtml(...)` is still refused (TS1362).
+export type { TelegramHtmlValue as TelegramHtml };
 
 // Bot API: sendMessage takes "1-4096 characters after entities parsing", a caption "0-1024", both
 // counted in UTF-16 code units — what String#length returns on plainTextOf's result.
@@ -44,13 +46,13 @@ export const escapeTelegramHtml = (value: string): string =>
 // No number or bigint: tokens and money are strings in every view, and a number that reaches a
 // text was converted somewhere it should not have been. No null either: the caller decides what
 // an absent value reads as.
-export type TelegramHtmlHole = string | TelegramHtml | readonly TelegramHtml[];
+export type TelegramHtmlHole = string | TelegramHtmlValue | readonly TelegramHtmlValue[];
 
 /** Tagged template: every hole is escaped unless it is already TelegramHtml. */
 export function telegramHtml(
   strings: TemplateStringsArray,
   ...values: TelegramHtmlHole[]
-): TelegramHtml {
+): TelegramHtmlValue {
   let out = strings[0] ?? '';
   for (let index = 0; index < values.length; index += 1) {
     out += render(values[index]) + (strings[index + 1] ?? '');
@@ -203,7 +205,7 @@ const NAMED_ENTITIES: Record<string, string> = { lt: '<', gt: '>', amp: '&', quo
  * entities decoded in one pass (so `&amp;lt;` reads `&lt;`, as in Telegram). Meaningful only for a
  * value telegramHtmlProblems accepts.
  */
-export function plainTextOf(value: TelegramHtml | string): string {
+export function plainTextOf(value: TelegramHtmlValue | string): string {
   return String(value)
     .replace(TAG_ANYWHERE, '')
     .replace(ENTITY_ANYWHERE, (entity) => {

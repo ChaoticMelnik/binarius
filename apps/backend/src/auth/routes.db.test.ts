@@ -672,7 +672,7 @@ describe('the Telegram proof on the callback', () => {
     expect(stub.tokenRequests).toBe(before);
     expect(await accountsOf(`broker-${owner}`)).toEqual([]);
     expect(pushesTo(owner).map((push) => [push.text, push.reply_markup])).toEqual([
-      [AUTH_TEXTS.oauthLoginFailed, undefined],
+      [AUTH_TEXTS.oauthLoginFailed.value, undefined],
     ]);
     expect(pushesTo(other)).toEqual([]);
   });
@@ -930,11 +930,11 @@ describe('the push after the callback', () => {
 
     const pushes = pushesTo(telegram);
     expect(pushes).toHaveLength(1);
-    expect(pushes[0]?.text).toBe(LINK_TEXTS.confirmPrompt);
-    expect(pushes[0]?.parse_mode).toBeUndefined();
+    expect(pushes[0]?.text).toBe(LINK_TEXTS.confirmPrompt.value);
+    expect(pushes[0]?.parse_mode).toBe('HTML');
     expect(inlineButtons(pushes[0])).toEqual([
       {
-        text: `Подтвердить: broker-${telegram}@example.test`,
+        text: `✅ Подтвердить: broker-${telegram}@example.test`,
         callback_data: `confirm:${account.id}`,
       },
     ]);
@@ -948,7 +948,7 @@ describe('the push after the callback', () => {
 
     const pushes = pushesTo(telegram);
     expect(pushes).toHaveLength(2);
-    expect(pushes[1]?.text).toBe(LINK_TEXTS.confirmPrompt);
+    expect(pushes[1]?.text).toBe(LINK_TEXTS.confirmPrompt.value);
     expect(inlineButtons(pushes[1])).toHaveLength(1);
   });
 
@@ -964,7 +964,7 @@ describe('the push after the callback', () => {
       expect(again.response.statusCode).toBe(200);
       const pushes = pushesTo(telegram);
       expect(pushes).toHaveLength(2);
-      expect(pushes[1]?.text).toBe(LINK_TEXTS.linkedActive);
+      expect(pushes[1]?.text).toBe(LINK_TEXTS.linkedActive.value);
       expect(pushes[1]?.reply_markup).toBeUndefined();
     },
   );
@@ -978,7 +978,7 @@ describe('the push after the callback', () => {
     expect(response.statusCode).toBe(409);
 
     expect(pushesTo(intruder).map((push) => [push.text, push.reply_markup])).toEqual([
-      [LINK_TEXTS.accountTaken, undefined],
+      [LINK_TEXTS.accountTaken.value, undefined],
     ]);
     // the owner heard only about their own login
     expect(pushesTo(owner)).toHaveLength(1);
@@ -994,7 +994,9 @@ describe('the push after the callback', () => {
       code: stub.issueCode({ brokerUserId: `broker-${seeded.telegramUserId}` }),
     });
     expect(response.statusCode).toBe(409);
-    expect(pushesTo(seeded.telegramUserId).map((push) => push.text)).toEqual([LINK_TEXTS.blocked]);
+    expect(pushesTo(seeded.telegramUserId).map((push) => push.text)).toEqual([
+      LINK_TEXTS.blocked.value,
+    ]);
   });
 
   it('tells the user to start over when the code is refused', async () => {
@@ -1003,7 +1005,9 @@ describe('the push after the callback', () => {
     const response = await callback({ state, code: 'never-issued' });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: 'invalid_code' });
-    expect(pushesTo(telegram).map((push) => push.text)).toEqual([AUTH_TEXTS.oauthLoginFailed]);
+    expect(pushesTo(telegram).map((push) => push.text)).toEqual([
+      AUTH_TEXTS.oauthLoginFailed.value,
+    ]);
   });
 
   it('tells the user to start over when the broker fails', async () => {
@@ -1021,7 +1025,9 @@ describe('the push after the callback', () => {
     } finally {
       await instance.close();
     }
-    expect(pushesTo(telegram).map((push) => push.text)).toEqual([AUTH_TEXTS.oauthLoginFailed]);
+    expect(pushesTo(telegram).map((push) => push.text)).toEqual([
+      AUTH_TEXTS.oauthLoginFailed.value,
+    ]);
   });
 
   // nobody to address: the state is what names the Telegram user
