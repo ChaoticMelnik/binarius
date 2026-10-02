@@ -52,9 +52,12 @@ text on the address step
          no answer, 5xx or a broken body → dialog → code step all the same, "Не удалось
          подтвердить отправку кода на <address>…" + the same two buttons: the letter may have
          gone out
+         any other 4xx (400 validation, 401, 404, a Fastify 4xx) → "Сервис временно
+         недоступен…", the address step stays: the backend refused before the letter
 
 text on the code step
-  bot  → longer than 64 characters (emailLoginCodeSchema) → "Код не подошёл…", no backend call
+  bot  → empty after trimming, or longer than 64 characters (emailLoginCodeSchema) → "Код не
+         подошёл…", no backend call
          POST /auth/binodex/email/login { telegramUserId, email, code }
   back → { account, grant }
   bot  → dialog ends, the outcome with the pack, as after "Подтвердить"
@@ -64,6 +67,8 @@ tap "Запросить код ещё раз" (callback data resend)
   bot  → answerCallbackQuery ∥ POST /auth/binodex/email/send-code with the dialog's address
          a 429 → "Новый код сейчас запросить нельзя…", the code step stays: the code already
          sent is still good
+         any other 4xx → "Сервис временно недоступен…" + the same two buttons, the code step
+         stays: the backend refused before the letter, and the code already sent is still good
 
 tap "Войти через сайт Binodex" (callback data oauth)
   bot  → answerCallbackQuery ∥ POST /auth/binodex/start { telegramUserId }
@@ -116,8 +121,9 @@ process's memory (the owner's decision in #162), with no new dependency:
 
 The address is kept only in that entry, because the login call needs it beside the code; it is
 not stored anywhere else and is not written to the log. `logging.test.ts` reads the lines at
-`trace` for an unreachable send-code, a failed login, a failed recheck and a reply that fails on
-the code step, and finds neither the address nor the code in any of them.
+`trace` for an unreachable send-code, a send-code refused by status, a failed login, a failed
+recheck and a reply that fails on the code step, and finds neither the address nor the code in
+any of them.
 
 No lock guards the entry: grammY runs updates one after another and the bot polls one update at
 a time (`POLLING_BATCH_LIMIT`), so a read, an awaited backend call and a write never interleave
@@ -130,7 +136,8 @@ What each step does with what the user types:
   the code step, and the reply shows the address back so a typo is visible next to «Изменить
   адрес».
 - **code step** — anything typed is a code, an address included (the owner's answer 4b);
-  `emailLoginCodeSchema` only refuses a text longer than 64 characters.
+  `emailLoginCodeSchema` trims the text and refuses only an empty result or one longer than 64
+  characters.
 
 The backend answers 429 for two different limits ([binodex-oauth.md →
 Limits](binodex-oauth.md#limits); `ceiling` and `keyedWindows` in
@@ -142,6 +149,22 @@ Telegram user's or this address's own allowance for the next minutes: asking for
 typing a code again would be refused the same way, so the dialog ends — except on «Запросить код
 ещё раз», where the code already sent is still good and the code step stays.
 
+An unknown send-code outcome — the code step all the same, «Не удалось подтвердить отправку
+кода…» — is what is left when nothing says whether the letter went out: no answer at all, a 500
+(opaque by design, whatever failed), a 502 (the broker failed after it was called) or a 2xx
+with a broken body (the route answers 200 only after the broker). A 4xx is not one of them.
+Every 4xx that send-code answers today comes either before the letter or from the broker's
+refusal of the address (`apps/backend/src/auth/routes.ts`): the bearer check, an unknown path,
+the route ceiling, the body, the blocked check and the windows all come before the broker, and
+`brokerOutcome` turns only the broker's `invalid_grant` into a 400 (`invalid_email`).
+`routes.db.test.ts` shows no broker call for a 400 `validation` and a 409, and the ceiling
+refusing before the body; `too_many_attempts` rests on the route's order alone. So a 4xx that is
+not in `SEND_CODE_REFUSALS` (`apps/bot/src/bot.ts`) — a 400 `validation`, a 401, a 404,
+Fastify's own 4xx without an error code, or one added later, which the bot takes on the same
+terms — is answered «Сервис временно недоступен» and the step stays as it was, with the code
+step's buttons on «Запросить код ещё раз». It is logged at `warn` as `email code not sent`, like
+the unknown outcome, with `backendStatus` and `backendReason` telling them apart.
+
 What ends the dialog, and what does not:
 
 | Event | Dialog |
@@ -149,6 +172,7 @@ What ends the dialog, and what does not:
 | `connect` («Подключить аккаунт Binodex», «Изменить адрес») | back to the address step |
 | code sent | to the code step |
 | send-code with no answer, a 5xx (502 included) or a broken body | to the code step: the letter may have gone out |
+| send-code any other 4xx (`validation`, 401, 404, a Fastify 4xx) | stays where it was, «Сервис временно недоступен»: refused before the letter |
 | send-code `invalid_email` | back to the address step |
 | send-code `too_many_requests` on the address step | stays on the address step |
 | send-code `too_many_attempts` on the address step | ends |
