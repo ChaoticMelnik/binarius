@@ -1,13 +1,17 @@
 import type { FastifyPluginAsync } from 'fastify';
 import {
   TelegramChatMemberStatus,
+  UserErrorCode,
   safeParseChatMemberRequest,
+  safeParseUserAccountRequest,
   safeParseUserStartRequest,
 } from '@binarius/shared';
 import {
   markTelegramBlocked,
   markTelegramReachable,
+  readUserAccounts,
   recordUserStart,
+  toUserAccountView,
   toUserStartView,
   type Db,
 } from '@binarius/db';
@@ -18,7 +22,7 @@ export interface UsersRoutesDeps {
   internalApiToken: string;
 }
 
-// Registered as an encapsulated plugin so the auth hook covers exactly this route
+// Registered as an encapsulated plugin so the auth hook covers exactly these routes
 export const usersRoutes: FastifyPluginAsync<UsersRoutesDeps> = async (
   app,
   { db, internalApiToken },
@@ -64,5 +68,19 @@ export const usersRoutes: FastifyPluginAsync<UsersRoutesDeps> = async (
     const recorded = await markTelegramReachable(db, telegramUserId);
     request.log.info({ recorded }, 'the user unblocked the bot');
     return reply.send({ recorded });
+  });
+
+  // What the bot's /account shows; reads only. An unknown user is a 404 of its own code, so the
+  // bot can tell "no row yet" from a backend without this route (a bare 404 `not_found`).
+  app.post('/users/account', async (request, reply) => {
+    const parsed = safeParseUserAccountRequest(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
+    }
+    const snapshot = await readUserAccounts(db, BigInt(parsed.data.telegramUserId));
+    if (snapshot === undefined) {
+      return reply.code(404).send({ error: UserErrorCode.UserNotFound });
+    }
+    return reply.send({ user: toUserAccountView(snapshot) });
   });
 };
