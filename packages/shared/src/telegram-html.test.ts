@@ -39,7 +39,7 @@ describe('telegramHtml', () => {
     expect(telegramHtml`${foreign}`.value).toBe('&lt;script&gt;');
   });
 
-  // no text has an attribute hole today; #200 and #199 may
+  // no text has an attribute hole today
   it('keeps a hole inside an attribute from closing it', () => {
     const link = telegramHtml`<a href="${'x" onclick="y'}">t</a>`;
     expect(link.value).toContain('href="x&quot; onclick=&quot;y"');
