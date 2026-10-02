@@ -3,6 +3,7 @@ import {
   safeParseConfirmLoginResponse,
   safeParseEmailLoginResponse,
   safeParseEmailSendCodeResponse,
+  safeParseUserAccountResponse,
   safeParseUserStartResponse,
   startLoginResponseSchema,
   type ChatMemberResponse,
@@ -11,6 +12,7 @@ import {
   type EmailSendCodeResponse,
   type StartLoginResponse,
   type TelegramChatMemberStatus,
+  type UserAccountView,
   type UserStartRequest,
   type UserStartView,
 } from '@binarius/shared';
@@ -52,6 +54,7 @@ export class BackendError extends Error {
 
 export interface BackendClient {
   recordStart(request: UserStartRequest): Promise<UserStartView>;
+  readAccount(telegramUserId: string): Promise<UserAccountView>;
   startLogin(telegramUserId: string): Promise<StartLoginResponse>;
   confirmLogin(telegramUserId: string, accountId: string): Promise<ConfirmLoginResponse>;
   sendEmailCode(telegramUserId: string, email: string): Promise<EmailSendCodeResponse>;
@@ -122,6 +125,11 @@ export function createBackendClient({
   return {
     async recordStart(request) {
       const parsed = safeParseUserStartResponse(await post('users/start', request));
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.user;
+    },
+    async readAccount(telegramUserId) {
+      const parsed = safeParseUserAccountResponse(await post('users/account', { telegramUserId }));
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data.user;
     },

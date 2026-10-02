@@ -4,6 +4,7 @@ import { LABELS } from './texts';
 // The one list of commands shown in Telegram's menu; the next command is one more element here.
 export const BOT_COMMANDS = [
   { command: 'start', description: LABELS.startCommand },
+  { command: 'account', description: LABELS.accountCommand },
 ] as const satisfies readonly BotCommand[];
 
 // Private chats only: the bot ignores every other chat type (bot.chatType('private') in bot.ts),

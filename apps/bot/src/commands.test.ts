@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BackendClient } from './backend-client';
 import { createBot } from './bot';
 import { BOT_COMMANDS, BOT_COMMAND_SCOPE } from './commands';
-import { BOT_INFO, USER_VIEW, captureApi, fakeLogger, textUpdate } from './testing';
+import { ACCOUNT_VIEW, BOT_INFO, USER_VIEW, captureApi, fakeLogger, textUpdate } from './testing';
 
 // Bot API limits of BotCommand (setMyCommands): a command is 1-32 lowercase English letters,
 // digits and underscores, a description 1-256 characters counted in UTF-16 code units, which is
@@ -40,6 +40,7 @@ describe('the command menu', () => {
   it.each(BOT_COMMANDS.map((entry) => entry.command))('answers /%s', async (command) => {
     const backend: BackendClient = {
       recordStart: () => Promise.resolve(USER_VIEW),
+      readAccount: () => Promise.resolve(ACCOUNT_VIEW),
       startLogin: () => Promise.reject(new Error('not used here')),
       confirmLogin: () => Promise.reject(new Error('not used here')),
       sendEmailCode: () => Promise.reject(new Error('not used here')),

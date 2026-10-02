@@ -1,19 +1,23 @@
 import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } from 'grammy';
 import type { Message, User, UserFromGetMe } from 'grammy/types';
 import {
+  BrokerAccountStatus,
   CONFIRM_CALLBACK_PATTERN,
   confirmCallbackData,
   confirmLoginRequestSchema,
   emailAddressSchema,
   emailLoginCodeSchema,
   errorLogFields,
+  isPendingLink,
   languageCodeSchema,
   OAuthErrorCode,
   startPayloadSchema,
   TelegramChatMemberStatus,
   userStartRequestSchema,
+  UserErrorCode,
   UserStatus,
   type EmailSendCodeResponse,
+  type LinkedAccountView,
   type PendingBrokerAccountView,
   type TelegramHtml,
   type UserStartRequest,
@@ -23,7 +27,7 @@ import { BackendError, BackendErrorCode, type BackendClient } from './backend-cl
 import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
 import { replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
-import { accountCard, LABELS, TEXTS, type AccountCardInput } from './texts';
+import { accountCard, accountStatus, LABELS, TEXTS, type AccountCardInput } from './texts';
 import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 
 // Callback data of the buttons; Bot API allows 1-64 bytes. `connect` is the main button of the
@@ -67,11 +71,7 @@ export function createBot({
     },
   });
 
-  const welcomeKeyboard = () =>
-    new InlineKeyboard()
-      .text(LABELS.connectButton, CONNECT_CALLBACK_DATA)
-      .row()
-      .text(LABELS.oauthButton, OAUTH_CALLBACK_DATA);
+  const welcomeKeyboard = () => addConnectButtons(new InlineKeyboard());
 
   const codeKeyboard = () =>
     new InlineKeyboard()
@@ -117,6 +117,40 @@ export function createBot({
       return;
     }
     await sendWelcome(ctx);
+  });
+
+  // Reads only: the users row is not refreshed and nothing is recorded, so /start stays the one
+  // place that writes it.
+  privateChats.command('account', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) return;
+
+    let user;
+    try {
+      user = await backend.readAccount(String(from.id));
+    } catch (error) {
+      // no users row yet (the backend was down on /start): nothing is connected, and that is an
+      // answer, not a failure. Decided by the code, not the status: a bare 404 is a backend
+      // without the route.
+      if (error instanceof BackendError && error.reason === UserErrorCode.UserNotFound) {
+        await replyHtml(ctx, TEXTS.accountNone, { reply_markup: welcomeKeyboard() });
+        return;
+      }
+      logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, '/account not read');
+      await replyHtml(ctx, TEXTS.unavailable);
+      return;
+    }
+
+    if (user.status === UserStatus.Blocked) {
+      await replyHtml(ctx, TEXTS.blocked);
+      return;
+    }
+    const keyboard = accountKeyboard(user.accounts);
+    await replyHtml(
+      ctx,
+      accountStatus(user.accounts),
+      keyboard === undefined ? undefined : { reply_markup: keyboard },
+    );
   });
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
@@ -234,9 +268,10 @@ export function createBot({
     }
   });
 
-  // Registered after command('start'), which does not call next(): /start never reaches this
-  // handler, so it neither feeds the dialog nor resets it. Any other command is ignored here for
-  // the same reason. Text outside a dialog is ignored altogether (the owner's decision, #162).
+  // Registered after command('start') and command('account'), which do not call next(): neither
+  // reaches this handler, so they neither feed the dialog nor reset it. Any other command is
+  // ignored here for the same reason. Text outside a dialog is ignored altogether (the owner's
+  // decision, #162).
   privateChats.on('message:text', async (ctx) => {
     const from = ctx.from;
     const text = ctx.message.text;
@@ -524,6 +559,24 @@ function startRequestOf(from: User): UserStartRequest {
     displayName: displayNameOf(from),
     ...languageOf(from.language_code),
   };
+}
+
+// the welcome's two ways in, also under /account while no link is active
+function addConnectButtons(keyboard: InlineKeyboard): InlineKeyboard {
+  return keyboard
+    .text(LABELS.connectButton, CONNECT_CALLBACK_DATA)
+    .row()
+    .text(LABELS.oauthButton, OAUTH_CALLBACK_DATA);
+}
+
+// A confirm button per waiting link, then the two ways in while nothing is active; undefined when
+// there is no button at all (an InlineKeyboard starts as one empty row, so its length says nothing).
+function accountKeyboard(accounts: readonly LinkedAccountView[]): InlineKeyboard | undefined {
+  const pending = accounts.filter(isPendingLink);
+  const connect = !accounts.some((account) => account.status === BrokerAccountStatus.Active);
+  if (pending.length === 0 && !connect) return undefined;
+  const keyboard = confirmKeyboard(pending);
+  return connect ? addConnectButtons(keyboard) : keyboard;
 }
 
 function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineKeyboard {

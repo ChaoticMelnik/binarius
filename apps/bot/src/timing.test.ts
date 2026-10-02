@@ -3,18 +3,22 @@ import { fileURLToPath } from 'node:url';
 import { HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
-import { confirmCallbackData, OAuthErrorCode, UserStatus } from '@binarius/shared';
+import { confirmCallbackData, OAuthErrorCode, UserErrorCode, UserStatus } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA, RESEND_CALLBACK_DATA, createBot } from './bot';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
+  ACCOUNT_VIEW,
   BOT_INFO,
   CARD_MESSAGE_ID,
   CODE,
   CODE_SENT,
   CONFIRMED,
   EMAIL,
+  LINK_ACTIVE,
+  LINK_PENDING,
+  LINK_REVOKED,
   LOGIN,
   PENDING_ACCOUNT_ID,
   USER,
@@ -27,6 +31,7 @@ import {
   messageAnswer,
   startUpdate,
   textUpdate,
+  accountView,
   type ApiAnswer,
 } from './testing';
 import { COMPOSE_STOP_GRACE_PERIOD_MS, GRAMMY_POLLING_BACKOFF_MS, HANDLER_CALLS } from './timing';
@@ -52,6 +57,7 @@ interface Branch {
   update: Update;
   expected: Calls;
   recordStart?: BackendClient['recordStart'];
+  readAccount?: BackendClient['readAccount'];
   startLogin?: BackendClient['startLogin'];
   confirmLogin?: BackendClient['confirmLogin'];
   sendEmailCode?: BackendClient['sendEmailCode'];
@@ -151,6 +157,10 @@ async function observe(branch: Branch): Promise<Calls> {
     recordStart: (request) => {
       backend += 1;
       return (branch.recordStart ?? (() => Promise.resolve(USER_VIEW)))(request);
+    },
+    readAccount: (telegramUserId) => {
+      backend += 1;
+      return (branch.readAccount ?? (() => Promise.resolve(ACCOUNT_VIEW)))(telegramUserId);
     },
     startLogin: (telegramUserId) => {
       backend += 1;
@@ -732,6 +742,65 @@ const MY_CHAT_MEMBER_BRANCHES: readonly Branch[] = [
   },
 ];
 
+// Every terminal branch of /account: one read, one message, whatever the read said.
+const ACCOUNT_WORST_CASE: Branch = {
+  label: 'an active link is shown',
+  update: textUpdate('/account'),
+  readAccount: () => Promise.resolve(accountView({ accounts: [LINK_ACTIVE] })),
+  expected: { backend: 1, telegram: 1 },
+};
+
+const ACCOUNT_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the update carries no sender',
+    update: withoutSender(textUpdate('/account')),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the chat is not private',
+    update: textUpdate('/account', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  ACCOUNT_WORST_CASE,
+  {
+    label: 'a link waits for confirmation beside a revoked one',
+    update: textUpdate('/account'),
+    readAccount: () => Promise.resolve(accountView({ accounts: [LINK_PENDING, LINK_REVOKED] })),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the user has no link',
+    update: textUpdate('/account'),
+    readAccount: () => Promise.resolve(ACCOUNT_VIEW),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the user is blocked',
+    update: textUpdate('/account'),
+    readAccount: () =>
+      Promise.resolve(accountView({ status: UserStatus.Blocked, accounts: [LINK_ACTIVE] })),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the backend has no users row',
+    update: textUpdate('/account'),
+    readAccount: () =>
+      Promise.reject(
+        new BackendError(BackendErrorCode.HttpStatus, {
+          status: 404,
+          reason: UserErrorCode.UserNotFound,
+        }),
+      ),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the backend is unreachable',
+    update: textUpdate('/account'),
+    readAccount: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 1 },
+  },
+];
+
 describe('what the handlers do, against what HANDLER_CALLS declares', () => {
   it('/start', async () => {
     await checkHandler('start', START_BRANCHES, START_WORST_CASE, HANDLER_CALLS.start);
@@ -765,6 +834,10 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('the resend button', async () => {
     await checkHandler('resend', RESEND_BRANCHES, RESEND_WORST_CASE, HANDLER_CALLS.resend);
+  });
+
+  it('/account', async () => {
+    await checkHandler('account', ACCOUNT_BRANCHES, ACCOUNT_WORST_CASE, HANDLER_CALLS.account);
   });
 
   it('the confirm button', async () => {

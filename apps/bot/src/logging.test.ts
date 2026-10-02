@@ -14,6 +14,7 @@ import { OAUTH_CALLBACK_DATA, createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
+  ACCOUNT_VIEW,
   BOT_INFO,
   CARD_MESSAGE_ID,
   CODE_SENT,
@@ -53,6 +54,7 @@ const lineWith = (lines: readonly string[], msg: string): Record<string, unknown
 interface Scenario {
   update: Update;
   recordStart?: BackendClient['recordStart'];
+  readAccount?: BackendClient['readAccount'];
   startLogin?: BackendClient['startLogin'];
   confirmLogin?: BackendClient['confirmLogin'];
   sendEmailCode?: BackendClient['sendEmailCode'];
@@ -68,6 +70,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
   const { lines, logger } = sink(scenario.level);
   const backend: BackendClient = {
     recordStart: scenario.recordStart ?? (() => Promise.resolve(USER_VIEW)),
+    readAccount: scenario.readAccount ?? (() => Promise.resolve(ACCOUNT_VIEW)),
     startLogin: scenario.startLogin ?? (() => Promise.resolve(LOGIN)),
     confirmLogin: scenario.confirmLogin ?? (() => Promise.resolve(CONFIRMED)),
     sendEmailCode: scenario.sendEmailCode ?? (() => Promise.resolve(CODE_SENT)),
@@ -209,6 +212,30 @@ describe('what the bot writes about a failed backend call', () => {
       backendStatus: 500,
     });
     expect(lines.join('')).not.toContain(INTERNAL_TOKEN);
+  });
+
+  it('names the error, its code, the status and the reason when /account cannot be read', async () => {
+    const { lines } = await linesFrom({
+      update: textUpdate('/account'),
+      readAccount: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, {
+            status: 404,
+            reason: 'not_found',
+            cause: new Error(`SECRET-ADDRESS@example.test with Bearer ${INTERNAL_TOKEN}`),
+          }),
+        ),
+    });
+    const logged = lineWith(lines, '/account not read');
+
+    expect(logged).toMatchObject({
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      cause: { name: 'Error' },
+      backendStatus: 404,
+      backendReason: 'not_found',
+    });
+    expect(lines.join('')).not.toContain(INTERNAL_TOKEN);
+    expect(lines.join('')).not.toContain('SECRET-ADDRESS');
   });
 
   it('carries the backend status when the login cannot be confirmed', async () => {

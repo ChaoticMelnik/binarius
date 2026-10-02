@@ -1,11 +1,20 @@
 import {
+  BrokerAccountStatus,
+  isPendingLink,
   LINK_LABELS,
   LINK_TEXTS,
   LinkBonusSkipReason,
   telegramHtml,
   type LinkBonusGrantView,
+  type LinkedAccountView,
   type TelegramHtml,
 } from '@binarius/shared';
+
+// in place of an address the broker did not send; a fragment, so it is nested without a second
+// escape
+const UNKNOWN_ADDRESS = telegramHtml`адрес неизвестен`;
+const addressOf = (email: string | null): string | TelegramHtml =>
+  email === null ? UNKNOWN_ADDRESS : email;
 
 // Messages are Telegram HTML, sent with parse_mode HTML by send.ts only. Every hole goes through
 // telegramHtml, which escapes it: the address in codeSent is what the user typed, the name on the
@@ -79,7 +88,56 @@ export const TEXTS = {
   // «🔄 Запросить код ещё раз» with no dialog behind it: expired, finished by a login, or dropped
   // by a restart — the bot cannot tell which, so the text must hold for all of them
   codeRequestStale: telegramHtml`⚠️ Этот запрос кода уже не действует. Если аккаунт ещё не подключён, начни заново через /start.`,
+  // /account (#185), assembled by accountStatus below: a header, a blank line, one line per link
+  accountNone: telegramHtml`❌ <b>Аккаунт Binodex не подключён</b>
+Подключи его: по почте или через сайт Binodex — кнопки ниже.`,
+  // the header when at least one link is active
+  accountConnected: telegramHtml`✅ <b>Аккаунт Binodex подключён</b>`,
+  // the header when no link is active and one waits
+  accountPending: telegramHtml`⏳ <b>Привязка ждёт подтверждения</b>
+Если вход выполнял ты — подтверди её по кнопке ниже.`,
+  // the header when every link is revoked
+  accountRevoked: telegramHtml`⚠️ <b>Подключение Binodex отозвано</b>
+Войди заново: по почте или через сайт Binodex — кнопки ниже.`,
+  accountLineActive: (email: string | null) => telegramHtml`✅ Подключён: ${addressOf(email)}`,
+  accountLinePending: (email: string | null) =>
+    telegramHtml`⏳ Ждёт подтверждения: ${addressOf(email)}`,
+  accountLineRevoked: (email: string | null) =>
+    telegramHtml`⚠️ Подключение отозвано: ${addressOf(email)}`,
+  accountUnknownAddress: UNKNOWN_ADDRESS,
 } as const satisfies Record<string, TelegramHtml | ((value: string) => TelegramHtml)>;
+
+// What /account says about the user's links, in the order given (newest first). No link at all
+// is accountNone; otherwise the header follows the best link there is.
+export function accountStatus(accounts: readonly LinkedAccountView[]): TelegramHtml {
+  const [first, ...rest] = accounts.map(accountLine);
+  if (first === undefined) return TEXTS.accountNone;
+  const header = accounts.some((account) => account.status === BrokerAccountStatus.Active)
+    ? TEXTS.accountConnected
+    : accounts.some(isPendingLink)
+      ? TEXTS.accountPending
+      : TEXTS.accountRevoked;
+  // a hole holding an array is joined without a separator, so the newlines are written here
+  const lines = rest.reduce(
+    (joined, line) => telegramHtml`${joined}
+${line}`,
+    first,
+  );
+  return telegramHtml`${header}
+
+${lines}`;
+}
+
+function accountLine(account: LinkedAccountView): TelegramHtml {
+  switch (account.status) {
+    case BrokerAccountStatus.Active:
+      return TEXTS.accountLineActive(account.email);
+    case BrokerAccountStatus.Pending:
+      return TEXTS.accountLinePending(account.email);
+    case BrokerAccountStatus.Revoked:
+      return TEXTS.accountLineRevoked(account.email);
+  }
+}
 
 // Only these three fields reach the card, so no token, code or other secret can. `email` is null
 // when the address of the connected account is not known; `grant` is null when what the login
@@ -130,6 +188,8 @@ export const LABELS = {
   // the description of /start in Telegram's command menu, not a button, so no emoji (owner,
   // 2026-10-02); the Bot API bounds it at 256 characters, held by commands.test.ts
   startCommand: 'Начать',
+  // the description of /account, plain like startCommand (#185)
+  accountCommand: 'Аккаунт Binodex',
 } as const satisfies Record<string, string | ((value: string | null) => string)>;
 
 // The bot's profile: `description` is the «Что умеет этот бот?» block an empty chat shows before
