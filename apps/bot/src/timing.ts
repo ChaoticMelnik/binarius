@@ -51,6 +51,8 @@ export const HANDLER_CALLS = {
   codeStep: { backend: 2, telegram: 4 },
   // answerCallbackQuery ∥ sendEmailCode, then sendMessage — counted the same way as oauth
   resend: { backend: 1, telegram: 2 },
+  // my_chat_member in a private chat: recordChatMember; nothing is sent
+  myChatMember: { backend: 1, telegram: 0 },
 } as const;
 
 export const handlerBudgetMs = ({

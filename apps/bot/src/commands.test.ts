@@ -44,6 +44,7 @@ describe('the command menu', () => {
       confirmLogin: () => Promise.reject(new Error('not used here')),
       sendEmailCode: () => Promise.reject(new Error('not used here')),
       emailLogin: () => Promise.reject(new Error('not used here')),
+      recordChatMember: () => Promise.reject(new Error('not used here')),
     };
     const bot = createBot({
       token: '123456:AA-bot-token',

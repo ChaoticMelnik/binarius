@@ -10,6 +10,7 @@ import {
   languageCodeSchema,
   OAuthErrorCode,
   startPayloadSchema,
+  TelegramChatMemberStatus,
   userStartRequestSchema,
   UserStatus,
   type EmailSendCodeResponse,
@@ -213,6 +214,24 @@ export function createBot({
     ]);
     if (answered.status === 'rejected') logAnswerFailure(answered.reason);
     await replyToSendCode(ctx, id, state.email, 'code', sent);
+  });
+
+  // The user blocked (`kicked`) or unblocked (`member`) the bot (#119). The bot forwards
+  // Telegram's word and decides nothing; it sends nothing either, since a blocked chat cannot
+  // receive it. In a private chat `from` is the user, the same key /start records.
+  privateChats.on('my_chat_member', async (ctx) => {
+    const status = ctx.myChatMember.new_chat_member.status;
+    if (status !== TelegramChatMemberStatus.Kicked && status !== TelegramChatMemberStatus.Member) {
+      return;
+    }
+    try {
+      await backend.recordChatMember(String(ctx.myChatMember.from.id), status);
+    } catch (error) {
+      logger.warn(
+        { ...errorLogFields(error), ...backendErrorFields(error), chatMember: status },
+        'chat member status not recorded',
+      );
+    }
   });
 
   // Registered after command('start'), which does not call next(): /start never reaches this

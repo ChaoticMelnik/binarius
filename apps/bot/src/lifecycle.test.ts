@@ -92,7 +92,7 @@ describe('runBot', () => {
     expect(fake.options[0]).toMatchObject({
       timeout: 5,
       limit: 1,
-      allowed_updates: ['message', 'callback_query'],
+      allowed_updates: ['message', 'callback_query', 'my_chat_member'],
     });
     expect(signalSource.listenerCount('SIGTERM')).toBe(1);
     expect(signalSource.listenerCount('SIGINT')).toBe(1);
@@ -375,6 +375,7 @@ function scene(options: SceneOptions = {}) {
     confirmLogin: () => Promise.reject(new Error('not used by these scenes')),
     sendEmailCode: () => Promise.reject(new Error('not used by these scenes')),
     emailLogin: () => Promise.reject(new Error('not used by these scenes')),
+    recordChatMember: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({
     token: TOKEN,
@@ -545,7 +546,7 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     expect(s.longPolls()[0]?.payload).toMatchObject({
       limit: 1,
       timeout: 5,
-      allowed_updates: ['message', 'callback_query'],
+      allowed_updates: ['message', 'callback_query', 'my_chat_member'],
     });
   });
 

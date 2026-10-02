@@ -277,6 +277,30 @@ describe('sendEmailCode', () => {
   });
 });
 
+describe('recordChatMember', () => {
+  it('posts the id and the status under the bearer and returns the answer', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { recorded: true });
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).recordChatMember('4242', 'kicked'),
+    ).toEqual({ recorded: true });
+    expect(capture.url).toBe('/users/chat-member');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', status: 'kicked' });
+  });
+
+  it('reports an answer without recorded as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, {});
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).recordChatMember('4242', 'member'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
 describe('emailLogin', () => {
   it('sends the telegram id, the address and the code and returns the grant', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {

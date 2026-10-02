@@ -129,6 +129,34 @@ export const textUpdate = (text: string, chatType = 'private', from: User = USER
     },
   }) as unknown as Update;
 
+// The bot's own membership changing in a chat: in a private chat Telegram sends `kicked` when the
+// user blocks the bot and `member` when they unblock it.
+export const chatMemberUpdate = (
+  newStatus: string,
+  {
+    oldStatus = newStatus === 'kicked' ? 'member' : 'kicked',
+    chatType = 'private',
+    from = USER,
+  }: { oldStatus?: string; chatType?: string; from?: User } = {},
+): Update =>
+  ({
+    update_id: ++updateId,
+    my_chat_member: {
+      chat:
+        chatType === 'private'
+          ? { id: from.id, type: chatType, first_name: from.first_name }
+          : { id: -1001, type: chatType, title: 'A group' },
+      from,
+      date: 1,
+      old_chat_member: { status: oldStatus, user: { ...BOT_INFO } },
+      new_chat_member: {
+        status: newStatus,
+        user: { ...BOT_INFO },
+        ...(newStatus === 'kicked' ? { until_date: 0 } : {}),
+      },
+    },
+  }) as unknown as Update;
+
 export const callbackUpdate = (data: string, chatType = 'private'): Update =>
   ({
     update_id: ++updateId,

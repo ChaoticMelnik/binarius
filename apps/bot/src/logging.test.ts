@@ -72,6 +72,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     confirmLogin: scenario.confirmLogin ?? (() => Promise.resolve(CONFIRMED)),
     sendEmailCode: scenario.sendEmailCode ?? (() => Promise.resolve(CODE_SENT)),
     emailLogin: scenario.emailLogin ?? (() => Promise.resolve(CONFIRMED)),
+    recordChatMember: () => Promise.reject(new Error('not used by these scenes')),
   };
   const loginDialog = createLoginDialog();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
