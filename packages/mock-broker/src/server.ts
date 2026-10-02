@@ -49,6 +49,7 @@ export interface MockBroker {
     clearJournal(): void;
   };
   priceAt(assetId: number, atMs: number): number;
+  // rejects with an AggregateError when an onChange listener threw and the test did not clear it
   close(): Promise<void>;
 }
 
@@ -322,6 +323,11 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
       }
       hanging.clear();
       await app.close();
+      if (state.listenerErrors.length > 0) {
+        const errors = [...state.listenerErrors];
+        state.clearListenerErrors();
+        throw new AggregateError(errors, `${errors.length} onChange listener error(s)`);
+      }
     },
   };
 }

@@ -41,11 +41,21 @@ await broker.close();
 | `rest.failNext(endpoint, script)` | queues a script for the next request on `user`, `pairs`, `tradesList`, `openTrade` or `chart` |
 | `rest.journal` / `rest.clearJournal()` | every request, without the token or any body value |
 | `priceAt(assetId, atMs)` | the one price curve that produces chart candles, `open_price` and the default `close_price` |
-| `close()` | answers every hanging request with 503, then stops the server |
+| `close()` | answers every hanging request with 503, then stops the server; rejects with an `AggregateError` if an `onChange` listener threw and the errors were not cleared ([Listeners](#listeners)) |
 
 There are no timers and no fake clock. A trade stays open until a test settles it. Times come
 from `Date.now()`, so tests check relations between values (`close_timestamp = open_timestamp +
 duration * 1000`), not absolute times.
+
+## Listeners
+
+`state.onChange(listener)` is called after every change is committed: a trade opened or
+closed, a pair updated. A listener must not throw. If one does, the change stands, the other
+listeners still run, the HTTP client gets its normal answer, and the error is kept in
+`state.listenerErrors`. `close()` then rejects with an `AggregateError` of those errors, so a
+test that did not expect them fails at teardown. A test that throws on purpose reads the errors
+and calls `state.clearListenerErrors()` before `close()`. This is fixture behaviour, not the
+broker's.
 
 ## Endpoints
 

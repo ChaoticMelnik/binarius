@@ -240,6 +240,41 @@ describe('openTrade', () => {
   });
 });
 
+describe('onChange listeners that throw', () => {
+  it('neither undo the change nor stop the other listeners; the error is kept', () => {
+    const state = stateWithUser();
+    const failure = new Error('socket gone');
+    const after = vi.fn();
+    state.onChange(() => {
+      throw failure;
+    });
+    state.onChange(after);
+    const result = state.openTrade(1, request());
+    expect(result.ok).toBe(true);
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(state.listTrades(1, { limit: 20, offset: 0 })).toHaveLength(1);
+    expect(state.getUser(1).demo).toEqual({
+      available: '9990.00',
+      held: '10.00',
+      total: '10000.00',
+    });
+    expect(state.listenerErrors).toEqual([failure]);
+    state.clearListenerErrors();
+    expect(state.listenerErrors).toEqual([]);
+  });
+
+  it('keep a thrown non-Error as an Error', () => {
+    const state = stateWithUser();
+    state.onChange(() => {
+      throw 'plain string';
+    });
+    state.updatePair(EURUSD, { payout: 80 });
+    expect(state.listenerErrors).toHaveLength(1);
+    expect(state.listenerErrors[0]).toBeInstanceOf(Error);
+    expect(state.listenerErrors[0]?.message).toBe('plain string');
+  });
+});
+
 describe('settle', () => {
   it('pays stake plus profit on a win', () => {
     const state = stateWithUser();

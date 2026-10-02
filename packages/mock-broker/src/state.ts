@@ -167,6 +167,10 @@ export interface BrokerState {
   priceAt(assetId: number, atMs: number): number;
   // every balance or trade change goes through the store and is announced here (#104's socket)
   onChange(listener: (change: MockChange) => void): () => void;
+  // A listener runs after the change is committed, so its throw cannot undo the change or reach
+  // the HTTP client; it is kept here instead, and MockBroker.close() throws what is left.
+  readonly listenerErrors: readonly Error[];
+  clearListenerErrors(): void;
 }
 
 const modeOf = (isDemo: boolean): TradeMode => (isDemo ? TradeMode.Demo : TradeMode.Real);
@@ -241,8 +245,16 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
   const listeners = new Set<(change: MockChange) => void>();
   let lastTradeId = 0;
 
+  const listenerErrors: Error[] = [];
+
   const emit = (change: MockChange) => {
-    for (const listener of listeners) listener(change);
+    for (const listener of listeners) {
+      try {
+        listener(change);
+      } catch (error) {
+        listenerErrors.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
   };
 
   function userRecord(id: number): UserRecord {
@@ -395,6 +407,12 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
     priceAt(assetId, atMs) {
       const pair = pairRecord(assetId);
       return roundTo(rawPriceAt(pair.id, atMs), pair.digits);
+    },
+
+    listenerErrors,
+
+    clearListenerErrors() {
+      listenerErrors.length = 0;
     },
 
     onChange(listener) {
