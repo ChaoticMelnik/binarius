@@ -23,7 +23,7 @@ export interface WebAppDeps {
   logDestination?: { write(line: string): void };
 }
 
-const CSP = [
+export const ADMIN_CSP = [
   "default-src 'none'",
   "style-src 'self'",
   "form-action 'self'",
@@ -69,7 +69,7 @@ export function buildWebApp({
   // frame them; every other reply gets the admin pages' policy and may not be framed at all.
   app.addHook('onSend', async (_request, reply, payload) => {
     if (reply.getHeader('content-security-policy') === undefined) {
-      void reply.header('content-security-policy', CSP);
+      void reply.header('content-security-policy', ADMIN_CSP);
       void reply.header('x-frame-options', 'DENY');
     }
     void reply.header('x-content-type-options', 'nosniff');

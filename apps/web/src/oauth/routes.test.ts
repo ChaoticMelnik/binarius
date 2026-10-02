@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OAUTH_CALLBACK_BODY_LIMIT_BYTES, type OAuthCallbackRequest } from '@binarius/shared';
-import { buildWebApp } from '../app';
+import { ADMIN_CSP, buildWebApp } from '../app';
 import { BackendError, BackendErrorCode, type BackendClient } from '../backend-client';
 import { OAUTH_CLIENT_JS } from './client';
 import { TELEGRAM_SDK_URL } from './pages';
@@ -14,8 +14,6 @@ const STATE = 'S'.repeat(43);
 const CODE = 'MARKER-CODE';
 // `+` is a signed space and `%2B` a signed plus: the forward must carry both exactly as given
 const INIT_DATA = 'query_id=AA%2BBB&user=%7B%22first_name%22%3A%22A+B%22%7D&auth_date=1&hash=ff';
-const ADMIN_CSP =
-  "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 const ACCOUNT = {
   id: '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01',
   brokerUserId: 'broker-1',
@@ -114,6 +112,7 @@ describe('the Mini App pages headers', () => {
   it('leaves the admin pages unframeable', async () => {
     const response = await app.inject({ method: 'GET', url: '/admin/login' });
     expect(response.headers['content-security-policy']).toBe(ADMIN_CSP);
+    expect(ADMIN_CSP).toContain("frame-ancestors 'none'");
     expect(response.headers['x-frame-options']).toBe('DENY');
   });
 
@@ -136,6 +135,17 @@ describe('GET /oauth/login', () => {
     expect(response.body).toContain('<script src="/oauth/static/app.js" defer></script>');
   });
 
+  // the backend sends the redirect spelled as registered with the broker, byte for byte
+  it.each([
+    ['an upper-case host', 'https://Binarius.Example/oauth/callback'],
+    ['the default port', 'https://binarius.example:443/oauth/callback'],
+  ])('accepts a redirect with %s', async (_label, redirect) => {
+    const url = authorizeUrl({ redirect_uri: redirect });
+    const response = await loginWith(url);
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain(`href="${new URL(url).href.replaceAll('&', '&amp;')}"`);
+  });
+
   it.each([
     ['no parameter', null, 'missing'],
     ['an overlong value', `${authorizeUrl()}&x=${'a'.repeat(2048)}`, 'too_long'],
@@ -147,6 +157,13 @@ describe('GET /oauth/login', () => {
     ['a state of 257 chars', authorizeUrl({ state: 'a'.repeat(257) }), 'state'],
     ['a redirect to another origin', authorizeUrl({ redirect_uri: 'https://evil.example/oauth/callback' }), 'redirect_uri'],
     ['a redirect to another path', authorizeUrl({ redirect_uri: `${ORIGIN}/admin/login` }), 'redirect_uri'],
+    ['no redirect', authorizeUrl({ redirect_uri: null }), 'redirect_uri'],
+    ['an unparsable redirect', authorizeUrl({ redirect_uri: 'not-a-url' }), 'redirect_uri'],
+    ['a redirect with a query', authorizeUrl({ redirect_uri: `${ORIGIN}/oauth/callback?x=1` }), 'redirect_uri'],
+    ['a redirect with a fragment', authorizeUrl({ redirect_uri: `${ORIGIN}/oauth/callback#f` }), 'redirect_uri'],
+    ['a redirect with a trailing slash', authorizeUrl({ redirect_uri: `${ORIGIN}/oauth/callback/` }), 'redirect_uri'],
+    ['a redirect with credentials', authorizeUrl({ redirect_uri: 'https://u:p@binarius.example/oauth/callback' }), 'redirect_uri'],
+    ['a percent-encoded redirect path', authorizeUrl({ redirect_uri: `${ORIGIN}/oauth/%63allback` }), 'redirect_uri'],
   ])('refuses %s, logging the reason and never the value', async (_label, authorize, reason) => {
     const response =
       authorize === null
