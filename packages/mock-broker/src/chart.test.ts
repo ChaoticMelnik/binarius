@@ -74,6 +74,20 @@ describe('validateChartQuery', () => {
     });
   });
 
+  it('answers Unknown asset for a missing asset_id', () => {
+    expect(validateChartQuery({ interval: '1m', start_time: String(START) }, findPair)).toEqual({
+      ok: false,
+      message: 'Unknown asset',
+    });
+  });
+
+  it.each(['abc', '-1', '1.5e12'])('asks for start_time when it is %j', (startTime) => {
+    expect(validateChartQuery({ ...valid, start_time: startTime }, findPair)).toEqual({
+      ok: false,
+      message: 'Validation failed: "start_time" (ms epoch) is required',
+    });
+  });
+
   it('asks for a missing interval', () => {
     expect(validateChartQuery({ asset_id: '7', start_time: String(START) }, findPair)).toEqual({
       ok: false,
