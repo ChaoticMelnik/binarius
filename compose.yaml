@@ -10,13 +10,6 @@ x-app-environment: &app-environment
 x-broker-environment: &broker-environment
   BROKER_WS_URL:
 
-# Names this file stopped reading. Interpolated like everything else and delivered to no
-# container: while the old name is set in .env or the shell (even empty), compose stops at
-# interpolation with the message, instead of handing `web` the loopback default (#114 renamed
-# it; the CI compose job checks the refusal). The message must not contain " #" — that starts a
-# YAML comment and truncates the expression.
-x-renamed-variables: ${ADMIN_PUBLIC_URL+${ADMIN_PUBLIC_URL_WAS_RENAMED:?ADMIN_PUBLIC_URL was renamed to WEB_PUBLIC_URL in issue 114 - rename it in .env}}
-
 x-app: &app
   build: .
   init: true
@@ -239,6 +232,13 @@ services:
     # above the web shutdown budget (11 s, apps/web/src/timing.ts): a SIGTERM lets the request
     # in flight finish its one backend call instead of cutting a login in half
     stop_grace_period: 14s
+    # The anchor's `init: true`, restated as a guard for the name #114 renamed: while
+    # ADMIN_PUBLIC_URL is set in .env or the shell (even empty), the value stops being a boolean
+    # and compose refuses at interpolation with the message, instead of handing `web` the
+    # loopback default. Not `${ADMIN_PUBLIC_URL+${X:?message}}`: Compose 2.38 evaluates the
+    # nested `:?` even when ADMIN_PUBLIC_URL is unset, which would refuse every run. The CI
+    # compose job checks the refusal; the message must not contain " #" (a YAML comment) or "}".
+    init: ${ADMIN_PUBLIC_URL+ADMIN_PUBLIC_URL was renamed to WEB_PUBLIC_URL in issue 114, rename it in .env - }true
     # Not the shared anchor: env.ts reads exactly these six names, and DATABASE_URL and
     # REDIS_URL have no business in a process that never opens either connection — everything
     # it may read is decided by a staff session the backend checks (docs/staff-login.md).

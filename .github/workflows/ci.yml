@@ -195,8 +195,9 @@ jobs:
             done
           done
       # #114 renamed ADMIN_PUBLIC_URL to WEB_PUBLIC_URL; an .env still carrying the old name would
-      # otherwise give `web` the loopback default and 403 every admin POST. compose.yaml's
-      # x-renamed-variables refuses while the old name is set, even empty. The job's env supplies
+      # otherwise give `web` the loopback default and 403 every admin POST. The guard on web's
+      # `init` in compose.yaml refuses while the old name is set, even empty; the plain `config -q`
+      # above is the check that it stays silent while the name is unset. The job's env supplies
       # the eight required values, so the guard is the only reason left to refuse.
       - name: the renamed ADMIN_PUBLIC_URL is refused
         run: |
