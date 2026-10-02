@@ -9,6 +9,7 @@ import {
   type OpenTradeWire,
   type UnixMs,
 } from '@binarius/shared';
+import type { MockSocketPayload } from './encoding';
 import { FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
 import { formatCents, parseCents, percentOf, requireCents } from './money';
 import { rawPriceAt, roundTo } from './price';
@@ -43,6 +44,8 @@ export interface MockBrokerOptions {
   pairs?: BinaryPairWire[];
   // the x-ratelimit-limit the fixture reports; it never refuses on its own
   rateLimit?: number;
+  // how every server->client Socket.IO payload is delivered; 'object' when left out
+  socketPayload?: MockSocketPayload;
 }
 
 export interface MockUserSeed {
