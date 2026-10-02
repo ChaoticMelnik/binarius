@@ -125,8 +125,8 @@ a request without a token.
 | Script | Effect |
 | --- | --- |
 | `{ status, body?, headers?, retryAfterSec? }` | answers `status`. Without `body`, a status of 400 or more gets the envelope with a default text: 429 `Too many requests`, 502/503/504 `Service unavailable`, other 5xx `Internal error`, other 4xx `Request failed`. `Retry-After` is sent only when `retryAfterSec` is given. `{ status: 200, body }` serves a contract-violating body as is |
-| `{ delayMs }` | waits, then handles the request as usual, auth included. If the client aborts first, the late answer goes nowhere and the fixture keeps serving |
-| `{ hang: true }` | no answer until `close()`, which answers 503 `Connection closed by fixture` and returns at once. A request delayed past `close()` is cut off (`forceCloseConnections`) |
+| `{ delayMs }` | waits, then handles the request as if it arrived only then: the rate-limit headers, the token check and the store are all read after the delay, so a token revoked during it is refused and a user registered during it is accepted. If the client aborts first, the late answer goes nowhere and the fixture keeps serving |
+| `{ hang: true }` | no answer until `close()`, which answers 503 `Connection closed by fixture` (with the rate-limit headers of that moment) and returns at once. A request delayed past `close()` is cut off (`forceCloseConnections`) |
 
 The 429 body text and `Retry-After` were never observed: a real 429 would mean hammering the API.
 
