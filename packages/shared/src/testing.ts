@@ -22,6 +22,33 @@ export function composeServiceValue(
   return undefined;
 }
 
+// Reads one variable of a compose service's `environment:` map — the block's direct four-space
+// `environment:` child, then its six-space `NAME: value` lines — so a test can pin a default the
+// file interpolates. The same name under another service, outside `environment:`, or nested
+// deeper never matches.
+export function composeServiceEnvValue(
+  yaml: string,
+  service: string,
+  name: string,
+): string | undefined {
+  const lines = yaml.split('\n');
+  const start = lines.findIndex((line) => line === `  ${service}:`);
+  if (start === -1) return undefined;
+  let inEnvironment = false;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (/^ {2}\S/.test(line)) break;
+    if (/^ {4}[^\s#]/.test(line)) {
+      inEnvironment = line.trimEnd() === '    environment:';
+      continue;
+    }
+    if (!inEnvironment) continue;
+    const match = /^ {6}([A-Z_]+):\s*(.*?)\s*$/.exec(line);
+    if (match !== null && match[1] === name) return match[2];
+  }
+  return undefined;
+}
+
 // The start-payload corpus, run twice: against startPayloadSchema (packages/shared) and against
 // the live users_acquisition_source_check (packages/db). One list, so the two verdicts are
 // compared row by row instead of two lists drifting apart.

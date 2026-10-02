@@ -1,4 +1,5 @@
 import {
+  HTTPS_ONLY_RULES,
   parseBoundedIntegerEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
@@ -9,9 +10,6 @@ import {
   type LogLevel,
   type UrlEnvRules,
 } from '@binarius/shared';
-
-// the broker's authorize page: GET /oauth/login forwards only to this origin and path
-const HTTPS_ONLY_RULES: UrlEnvRules = { protocols: ['https:'], allowIpv6Literal: false };
 
 // the backend is reached over the compose network; https is allowed so a split deployment can
 // put the two behind separate hosts
