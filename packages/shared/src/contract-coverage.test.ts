@@ -32,6 +32,7 @@ import * as oauth from './oauth';
 import * as partner from './partner';
 import * as processModule from './process';
 import * as socket from './socket';
+import * as telegramHtml from './telegram-html';
 import * as time from './time';
 import * as trading from './trading';
 import * as users from './users';
@@ -249,6 +250,7 @@ describe('contract coverage (issue #6)', () => {
       process: processModule,
       logging,
       linkConfirmation,
+      telegramHtml,
     };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {

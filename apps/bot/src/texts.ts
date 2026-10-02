@@ -1,9 +1,5 @@
 import { LINK_TEXTS } from '@binarius/shared';
 
-// The welcome has to fit a caption: with a video it travels as one, and sendVideo takes "0-1024
-// characters after entities parsing". The message limit is TELEGRAM_MESSAGE_LIMIT.
-export const CAPTION_LIMIT = 1024;
-
 // Sent without parse_mode: the confirm button carries the email the broker reported, which is
 // someone else's data, and plain text can neither be broken by a stray underscore in it nor
 // turned into markup by it. The texts the backend's push sends too live in LINK_TEXTS.
