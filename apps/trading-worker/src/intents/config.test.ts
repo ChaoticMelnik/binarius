@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import {
+  BROKER_REST_TIMEOUT_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   LOCK_DURATION_MS,
   MAX_SUBMIT_ACK_TIMEOUT_MS,
@@ -27,6 +28,7 @@ describe('timing constants', () => {
     );
     expect(COMPOSE_STOP_GRACE_PERIOD_MS).toBeLessThan(LOCK_DURATION_MS);
     expect(LOCK_DURATION_MS).toBeLessThanOrEqual(STALE_SUBMITTING_MS);
+    expect(BROKER_REST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   it('matches the stop_grace_period compose gives the trading-worker service', () => {
