@@ -88,6 +88,6 @@ describe('texts', () => {
   // the same button is pressed after a successful login too, where "expired" would read as a
   // failure (review of PR #176, finding 5)
   it('does not tell a user without a dialog that the code expired', () => {
-    expect(plainTextOf(TEXTS.codeRequestStale)).not.toMatch(/истек/i);
+    expect(plainTextOf(TEXTS.codeRequestStale)).not.toMatch(/ист[её]к/i);
   });
 });
