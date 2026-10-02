@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { plainTextOf, TELEGRAM_CAPTION_LIMIT, type LinkBonusGrantView } from '@binarius/shared';
 import { telegramTextProblems } from '@binarius/shared/testing';
-import { accountCard, LABELS, TEXTS, type AccountCardInput } from './texts';
+import { accountCard, LABELS, PROFILE, TEXTS, type AccountCardInput } from './texts';
 
 describe('texts', () => {
   // the welcome travels as a caption whenever WELCOME_VIDEO_FILE_ID is set, and a caption over
@@ -146,6 +146,38 @@ describe('texts', () => {
     it('greets a blank name without it, and trims a padded one', () => {
       expect(TEXTS.cardGreeting('   ').value).toBe('🎉 <b>Привет!</b>');
       expect(TEXTS.cardGreeting(' Ada ').value).toBe('🎉 <b>Привет, Ada!</b>');
+    });
+  });
+
+  describe('the bot profile', () => {
+    // Bot API limits of setMyDescription and setMyShortDescription, counted in UTF-16 code units,
+    // which is what String#length returns — the unit commands.test.ts counts in. A text over its
+    // limit is refused at every start and the refusal is only a warn line, so it is caught here.
+    const BOT_DESCRIPTION_LIMIT = 512;
+    const BOT_SHORT_DESCRIPTION_LIMIT = 120;
+
+    // an empty string is what removes the text on Telegram's side
+    it.each([
+      ['description', PROFILE.description, BOT_DESCRIPTION_LIMIT],
+      ['shortDescription', PROFILE.shortDescription, BOT_SHORT_DESCRIPTION_LIMIT],
+    ] as const)('keeps the %s non-empty, plain and inside its limit', (_key, text, limit) => {
+      expect(text.trim().length).toBeGreaterThan(0);
+      expect(text.length).toBeLessThanOrEqual(limit);
+      expect(text).not.toMatch(/[<>]|&(?:lt|gt|amp|quot|#\d+|#x[0-9a-f]+);/i);
+    });
+
+    it.each(Object.entries(PROFILE))(
+      'starts every line of the %s with an emoji, and pads none',
+      (_key, text) => {
+        for (const line of text.split('\n').filter((entry) => entry !== '')) {
+          expect(line).toMatch(/^\p{Extended_Pictographic}/u);
+          expect(line).toBe(line.trim());
+        }
+      },
+    );
+
+    it('keeps the short description on one line', () => {
+      expect(PROFILE.shortDescription).not.toContain('\n');
     });
   });
 });
