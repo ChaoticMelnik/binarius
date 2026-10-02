@@ -122,6 +122,8 @@ EOF
 )"
 ```
 
+`gh issue comment` and `gh pr comment` take no `--jq`; with that flag the command fails, and a suppressed stderr makes the failure silent. The command prints the comment URL, which is the confirmation (#179, #198).
+
 ## Operation: Create an issue
 
 ```bash
