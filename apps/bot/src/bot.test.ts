@@ -28,6 +28,7 @@ import {
   captureApi,
   closeServer,
   callbackUpdate,
+  chatMemberUpdate,
   fakeLogger,
   inlineButtons,
   listen,
@@ -59,6 +60,7 @@ function setup(
     confirmLogin?: BackendClient['confirmLogin'];
     sendEmailCode?: BackendClient['sendEmailCode'];
     emailLogin?: BackendClient['emailLogin'];
+    recordChatMember?: BackendClient['recordChatMember'];
     welcomeVideoFileId?: string;
     dialog?: LoginDialogState;
     now?: () => number;
@@ -70,6 +72,7 @@ function setup(
     confirmLogin: options.confirmLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
     sendEmailCode: options.sendEmailCode ?? vi.fn(() => Promise.resolve(CODE_SENT)),
     emailLogin: options.emailLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
+    recordChatMember: options.recordChatMember ?? vi.fn(() => Promise.resolve({ recorded: true })),
   };
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
@@ -746,6 +749,7 @@ describe('the account card', () => {
           confirmLogin: vi.fn(() => Promise.resolve(CONFIRMED)),
           sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
           emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
+          recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -1374,6 +1378,52 @@ describe('text outside the dialog', () => {
   });
 });
 
+describe('a user blocking or unblocking the bot (#119)', () => {
+  it.each(['kicked', 'member'] as const)(
+    'forwards %s to the backend and sends nothing',
+    async (status) => {
+      const { bot, backend, calls, logger } = setup();
+      await bot.handleUpdate(chatMemberUpdate(status));
+      expect(backend.recordChatMember).toHaveBeenCalledTimes(1);
+      expect(backend.recordChatMember).toHaveBeenCalledWith(String(USER.id), status);
+      expect(calls).toEqual([]);
+      expect(logger.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['left', 'administrator'])('ignores a %s status', async (status) => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(chatMemberUpdate(status));
+    expect(backend.recordChatMember).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it('ignores the bot being removed from a group', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(chatMemberUpdate('kicked', { chatType: 'group' }));
+    expect(backend.recordChatMember).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it('logs a backend failure by its identity, sends nothing and does not throw', async () => {
+    const { bot, calls, logger } = setup({
+      recordChatMember: refused(500),
+    });
+    await expect(bot.handleUpdate(chatMemberUpdate('kicked'))).resolves.toBeUndefined();
+    expect(calls).toEqual([]);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0]).toEqual([
+      expect.objectContaining({
+        err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+        backendStatus: 500,
+        chatMember: 'kicked',
+      }),
+      'chat member status not recorded',
+    ]);
+  });
+});
+
 describe('the Bot API timeout', () => {
   let server: Server | undefined;
   afterEach(async () => {
@@ -1398,6 +1448,7 @@ describe('the Bot API timeout', () => {
         confirmLogin: vi.fn(() => Promise.reject(new Error('unused'))),
         sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
         emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
+        recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

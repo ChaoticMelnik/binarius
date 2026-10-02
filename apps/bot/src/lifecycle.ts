@@ -7,9 +7,11 @@ import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './ti
 
 // Only the update kinds this bot handles: Telegram then stops delivering the rest, and a new
 // kind has to be enabled deliberately rather than arrive unhandled.
-export const ALLOWED_UPDATES = ['message', 'callback_query'] as const satisfies NonNullable<
-  PollingOptions['allowed_updates']
->;
+export const ALLOWED_UPDATES = [
+  'message',
+  'callback_query',
+  'my_chat_member',
+] as const satisfies NonNullable<PollingOptions['allowed_updates']>;
 
 // the parts of a grammY Bot this module drives: start, stop and the profile calls; a fake with
 // the same shape is what the tests run, so the drain is provable without a Telegram server
@@ -108,16 +110,15 @@ export function runBot({
     // between getUpdates waits the sleep out (bot.stop() does not interrupt it), with no
     // update in flight.
     let settled = 0;
-    const step =
-      (name: string, run: () => Promise<unknown>) => (): Promise<unknown> =>
-        run()
-          .catch((error: unknown) => {
-            logger.error(errorLogFields(error), `shutdown: ${name} failed`);
-            throw error;
-          })
-          .finally(() => {
-            settled += 1;
-          });
+    const step = (name: string, run: () => Promise<unknown>) => (): Promise<unknown> =>
+      run()
+        .catch((error: unknown) => {
+          logger.error(errorLogFields(error), `shutdown: ${name} failed`);
+          throw error;
+        })
+        .finally(() => {
+          settled += 1;
+        });
     const steps = [step('bot.stop()', () => bot.stop()), step('polling loop', () => started)];
 
     void closeAll(steps, shutdownBudgetMs).then((drained) => {

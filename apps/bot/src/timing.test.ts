@@ -22,6 +22,7 @@ import {
   USER_VIEW,
   captureApi,
   callbackUpdate,
+  chatMemberUpdate,
   fakeLogger,
   messageAnswer,
   startUpdate,
@@ -55,6 +56,7 @@ interface Branch {
   confirmLogin?: BackendClient['confirmLogin'];
   sendEmailCode?: BackendClient['sendEmailCode'];
   emailLogin?: BackendClient['emailLogin'];
+  recordChatMember?: BackendClient['recordChatMember'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -165,6 +167,13 @@ async function observe(branch: Branch): Promise<Calls> {
     emailLogin: (telegramUserId, email, code) => {
       backend += 1;
       return (branch.emailLogin ?? (() => Promise.resolve(CONFIRMED)))(telegramUserId, email, code);
+    },
+    recordChatMember: (telegramUserId, status) => {
+      backend += 1;
+      return (branch.recordChatMember ?? (() => Promise.resolve({ recorded: true })))(
+        telegramUserId,
+        status,
+      );
     },
   };
   const loginDialog = createLoginDialog();
@@ -692,6 +701,37 @@ const RESEND_BRANCHES: readonly Branch[] = [
   },
 ];
 
+const MY_CHAT_MEMBER_WORST_CASE: Branch = {
+  label: 'the user blocks the bot',
+  update: chatMemberUpdate('kicked'),
+  expected: { backend: 1, telegram: 0 },
+};
+
+const MY_CHAT_MEMBER_BRANCHES: readonly Branch[] = [
+  MY_CHAT_MEMBER_WORST_CASE,
+  {
+    label: 'the user unblocks the bot',
+    update: chatMemberUpdate('member'),
+    expected: { backend: 1, telegram: 0 },
+  },
+  {
+    label: 'another status',
+    update: chatMemberUpdate('left'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the chat is not private',
+    update: chatMemberUpdate('kicked', { chatType: 'group' }),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the backend fails',
+    update: chatMemberUpdate('kicked'),
+    recordChatMember: unreachable,
+    expected: { backend: 1, telegram: 0 },
+  },
+];
+
 describe('what the handlers do, against what HANDLER_CALLS declares', () => {
   it('/start', async () => {
     await checkHandler('start', START_BRANCHES, START_WORST_CASE, HANDLER_CALLS.start);
@@ -729,6 +769,15 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('the confirm button', async () => {
     await checkHandler('confirm', CONFIRM_BRANCHES, CONFIRM_WORST_CASE, HANDLER_CALLS.confirm);
+  });
+
+  it('a my_chat_member update', async () => {
+    await checkHandler(
+      'myChatMember',
+      MY_CHAT_MEMBER_BRANCHES,
+      MY_CHAT_MEMBER_WORST_CASE,
+      HANDLER_CALLS.myChatMember,
+    );
   });
 });
 

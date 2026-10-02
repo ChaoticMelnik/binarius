@@ -1,13 +1,16 @@
 import {
+  safeParseChatMemberResponse,
   safeParseConfirmLoginResponse,
   safeParseEmailLoginResponse,
   safeParseEmailSendCodeResponse,
   safeParseUserStartResponse,
   startLoginResponseSchema,
+  type ChatMemberResponse,
   type ConfirmLoginResponse,
   type EmailLoginResponse,
   type EmailSendCodeResponse,
   type StartLoginResponse,
+  type TelegramChatMemberStatus,
   type UserStartRequest,
   type UserStartView,
 } from '@binarius/shared';
@@ -53,6 +56,10 @@ export interface BackendClient {
   confirmLogin(telegramUserId: string, accountId: string): Promise<ConfirmLoginResponse>;
   sendEmailCode(telegramUserId: string, email: string): Promise<EmailSendCodeResponse>;
   emailLogin(telegramUserId: string, email: string, code: string): Promise<EmailLoginResponse>;
+  recordChatMember(
+    telegramUserId: string,
+    status: TelegramChatMemberStatus,
+  ): Promise<ChatMemberResponse>;
 }
 
 export interface BackendClientOptions {
@@ -142,6 +149,13 @@ export function createBackendClient({
     async emailLogin(telegramUserId, email, code) {
       const parsed = safeParseEmailLoginResponse(
         await post('auth/binodex/email/login', { telegramUserId, email, code }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
+    },
+    async recordChatMember(telegramUserId, status) {
+      const parsed = safeParseChatMemberResponse(
+        await post('users/chat-member', { telegramUserId, status }),
       );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
