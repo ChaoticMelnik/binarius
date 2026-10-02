@@ -19,9 +19,11 @@ routes, the confirmation and the starter pack are described in
   `lifecycle.ts` (start, the menu registration, signals, drain), `index.ts` (wiring), and
   `testing.ts`, the fixtures the suites share.
 - `packages/shared/src/link-confirmation.ts` — the texts and the confirm button's callback data
-  the bot shares with the backend's push after an OAuth login (#128): the prompt, the button
-  label, «Аккаунт Binodex подключён.», the blocked and the account-taken texts, and the pattern
-  the bot recognises the button by.
+  the bot shares with the backend's push after an OAuth login (#128): the prompt, «✅ Аккаунт
+  Binodex подключён!», the blocked and the account-taken texts (`LINK_TEXTS`), the button label
+  (`LINK_LABELS`), and the pattern the bot recognises the button by.
+- `packages/shared/src/telegram-html.ts` — Telegram HTML for every text a user receives
+  ([Texts](#texts)).
 
 The bot never opens a database connection: everything it knows comes from the backend's internal
 API over a shared bearer.
@@ -133,7 +135,7 @@ What each step does with what the user types:
 
 - **address step** — the text goes through `emailAddressSchema` from `@binarius/shared` first; a
   text it refuses is answered at once, without a backend call. A sent code moves the dialog to
-  the code step, and the reply shows the address back so a typo is visible next to «Изменить
+  the code step, and the reply shows the address back so a typo is visible next to «✏️ Изменить
   адрес».
 - **code step** — anything typed is a code, an address included (the owner's answer 4b);
   `emailLoginCodeSchema` trims the text and refuses only an empty result or one longer than 64
@@ -146,11 +148,11 @@ Limits](binodex-oauth.md#limits); `ceiling` and `keyedWindows` in
 letter goes out, no code is spent and none of this user's own allowance is used, so the step
 stays and the same message can be sent again a little later. `too_many_attempts` is this
 Telegram user's or this address's own allowance for the next minutes: asking for an address or
-typing a code again would be refused the same way, so the dialog ends — except on «Запросить код
-ещё раз», where the code already sent is still good and the code step stays.
+typing a code again would be refused the same way, so the dialog ends — except on «🔄 Запросить
+код ещё раз», where the code already sent is still good and the code step stays.
 
-An unknown send-code outcome — the code step all the same, «Не удалось подтвердить отправку
-кода…» — is what is left when nothing says whether the letter went out: no answer at all, a 500
+An unknown send-code outcome — the code step all the same, «⚠️ Не удалось подтвердить
+отправку кода…» — is what is left when nothing says whether the letter went out: no answer at all, a 500
 (opaque by design, whatever failed), a 502 (the broker failed after it was called) or a 2xx
 with a broken body (the route answers 200 only after the broker). A 4xx is not one of them.
 Every 4xx that send-code answers today comes either before the letter or from the broker's
@@ -161,22 +163,22 @@ the route ceiling, the body, the blocked check and the windows all come before t
 refusing before the body; `too_many_attempts` rests on the route's order alone. So a 4xx that is
 not in `SEND_CODE_REFUSALS` (`apps/bot/src/bot.ts`) — a 400 `validation`, a 401, a 404,
 Fastify's own 4xx without an error code, or one added later, which the bot takes on the same
-terms — is answered «Сервис временно недоступен» and the step stays as it was, with the code
-step's buttons on «Запросить код ещё раз». It is logged at `warn` as `email code not sent`, like
+terms — is answered «⚠️ Сервис временно недоступен» and the step stays as it was, with the code
+step's buttons on «🔄 Запросить код ещё раз». It is logged at `warn` as `email code not sent`, like
 the unknown outcome, with `backendStatus` and `backendReason` telling them apart.
 
 What ends the dialog, and what does not:
 
 | Event | Dialog |
 | --- | --- |
-| `connect` («Подключить аккаунт Binodex», «Изменить адрес») | back to the address step |
+| `connect` («🔗 Подключить аккаунт Binodex», «✏️ Изменить адрес») | back to the address step |
 | code sent | to the code step |
 | send-code with no answer, a 5xx (502 included) or a broken body | to the code step: the letter may have gone out |
-| send-code any other 4xx (`validation`, 401, 404, a Fastify 4xx) | stays where it was, «Сервис временно недоступен»: refused before the letter |
+| send-code any other 4xx (`validation`, 401, 404, a Fastify 4xx) | stays where it was, «⚠️ Сервис временно недоступен»: refused before the letter |
 | send-code `invalid_email` | back to the address step |
 | send-code `too_many_requests` on the address step | stays on the address step |
 | send-code `too_many_attempts` on the address step | ends |
-| send-code `too_many_requests` / `too_many_attempts` on «Запросить код ещё раз» | stays on the code step |
+| send-code `too_many_requests` / `too_many_attempts` on «🔄 Запросить код ещё раз» | stays on the code step |
 | send-code `user_blocked` | ends |
 | login succeeded | ends |
 | login `too_many_requests` | stays on the code step, no recheck |
@@ -188,14 +190,14 @@ What ends the dialog, and what does not:
 | text outside a dialog | ignored, nothing is sent |
 
 A step kept after a refusal ("stays" in the table) keeps the clock it had; every row that moves
-the dialog to a step, the unknown send-code included, restarts the 10 minutes. «Запросить код ещё раз» pressed when there is no dialog — it expired, a login
-already finished it, or the bot restarted — answers «Этот запрос кода уже не действует…», which
-holds in each of those cases.
+the dialog to a step, the unknown send-code included, restarts the 10 minutes. «🔄 Запросить код ещё раз» pressed when there is no dialog — it
+expired, a login already finished it, or the bot restarted — answers «⚠️ Этот запрос кода уже не
+действует…», which holds in each of those cases.
 
 `/start` answers as it always does and leaves the dialog alone (the owner's answer 3c): the
 `/start` handler is registered before the text handler and does not pass the update on, and the
 text handler ignores every text that starts with `/`. A user who wants a different address uses
-«Изменить адрес», or the connect button of the welcome that `/start` shows a user without an
+«✏️ Изменить адрес», or the connect button of the welcome that `/start` shows a user without an
 active account.
 
 **The recheck.** The login activates the account and pays the pack in one transaction, and its
@@ -205,10 +207,10 @@ because the broker's code is single-use. So a login failure that is not one of t
 refusals in the table (`too_many_requests`, `too_many_attempts`, `user_blocked`,
 `broker_account_taken`) is followed by `POST /users/start` with the user's name and language, the request
 `/start` sends without a payload; it refreshes the name as any `/start` does. An active account
-is reported as «Аккаунт Binodex подключён.», without a number — the recheck knows the account is
+is reported as «✅ Аккаунт Binodex подключён!», without a number — the recheck knows the account is
 active, not what was paid; a blocked user gets the blocked text; otherwise the original failure
-is answered. When the recheck itself fails, the answer is «Сервис временно недоступен», not
-«Код не подошёл»: without the state that would be a guess. A user who already had an active
+is answered. When the recheck itself fails, the answer is «⚠️ Сервис временно недоступен», not
+«❌ Код не подошёл»: without the state that would be a guess. A user who already had an active
 account and types a wrong code is told the account is connected, which is true (the owner's
 answer 1a).
 
@@ -278,17 +280,57 @@ uses.
 
 ## Texts
 
-All user-facing strings live in `apps/bot/src/texts.ts`, in Russian, sent without `parse_mode`;
-the ones the backend's push sends too are spread into it from `packages/shared` (`LINK_TEXTS`) —
-which is also why «Код отправлен на <address>» can carry what the user typed: plain text cannot be
-turned into markup by it.
-The welcome has to fit in 1024 UTF-16 code units because it travels as a video caption whenever
-`WELCOME_VIDEO_FILE_ID` is set — `apps/bot/src/texts.test.ts` holds that limit in the unit the
-Bot API counts in, so configuring a video cannot break sending.
+Every text a Telegram user receives is Telegram HTML, sent with `parse_mode: 'HTML'`: `TEXTS` in
+`apps/bot/src/texts.ts`, `LINK_TEXTS` in `packages/shared/src/link-confirmation.ts` (spread into
+`TEXTS`; the backend's push sends them too) and `AUTH_TEXTS` in `apps/backend/src/auth/texts.ts`
+(the push alone). The staff bot (`apps/backend/src/admin`) stays plain text, addressed with «вы»
+(the owner's decision of 2026-10-02).
+
+**The module.** `packages/shared/src/telegram-html.ts` holds `telegramHtml`, a tagged template
+that escapes every hole (`&`, `<`, `>` — the three the Bot API requires; `_`, `*` and quotes mean
+nothing in HTML mode), and `TelegramHtml`, the type it returns. The type is nominal: a string or an
+object literal is not one, so «📩 Код отправлен на <address>» can carry what the user typed only
+through a hole, escaped once. A `TelegramHtml` in a hole, or an array of them, is nested without a
+second escaping pass. A static part of a template is the author's: a literal `&` or `<` there is
+written as an entity. A cast defeats the type, as it defeats any.
+
+**Two seams.** `parse_mode` is set and `TelegramHtml` is unwrapped in two places only:
+`apps/bot/src/send.ts` (`replyHtml`, `replyWithVideoHtml`) and
+`apps/backend/src/auth/link-notifier.ts`. ESLint (`eslint.config.js`, the Telegram block) forbids
+grammY's send methods by name everywhere else in `apps/bot/src` and `apps/backend/src/auth`; it does
+not see a method held in a variable.
+
+**Labels are plain.** Button labels and the `/start` description (`LABELS`, `LINK_LABELS`) are not
+parsed by Telegram, so they are plain strings and are never escaped: «✅ Подтвердить: <email>»
+shows the broker's email as it is, `&` included.
+
+**Checked by tests.** Next to each constant (`texts.test.ts`, `link-confirmation.test.ts`,
+`link-notifier.test.ts`), `telegramHtmlProblems` fails any text with a tag or an attribute Telegram
+does not list, a tag left open or closed out of order, a nested blockquote, or a bare `<`, `>`, `&`.
+Lengths are measured on `plainTextOf(...)` — the text "after entities parsing" the Bot API counts,
+in UTF-16 code units: at most 4096 for a message (`TELEGRAM_MESSAGE_LIMIT`) and 1024 for the
+welcome, which travels as a video caption whenever `WELCOME_VIDEO_FILE_ID` is set
+(`TELEGRAM_CAPTION_LIMIT`), so configuring a video cannot break sending. A text that takes a value
+is called with a 254-character argument of `<&>_*"`, which must read back as it went in. A
+Telegram refusal at runtime ("can't parse entities") goes through the existing error paths; there
+is no check at send time.
+
+**Style** (the owner, 2026-10-02): «ты»; an emoji at the start of each meaningful line and in a
+header; a bold first line for a message of more than one line; a reward in a `<blockquote>`;
+every button label starts with an emoji, the `/start` description does not; short lines, one
+thought each. Texts promise no profit, no signal accuracy and no "model training", and the only
+number in them is the backend's token count, printed as it arrives. A multi-line text starts at
+column zero in the source, since indentation inside a template is part of the message; the tests
+refuse a line that starts or ends with a space. A button named inside a text is quoted by its
+exact label, emoji included.
+
+New messages (the pinned card, the bot profile, nudges) are written with the same module: a
+message goes into a `TelegramHtml` constant beside `TEXTS`, a label or a profile description that
+Telegram does not parse goes into a plain constant beside `LABELS`.
 
 The text fallback answers a **refusal**, not any failure, and the video call has three outcomes
 rather than two. When Telegram replies `ok: false` (`GrammyError`) nothing was sent, so the
-welcome goes out as plain text with the same button and the refusal is logged: a wrong file id
+welcome goes out as a text message with the same button and the refusal is logged: a wrong file id
 costs the video, not the screen. When the call fails in transport instead — our own 8 s client
 timeout, a dropped socket, anything that arrives as `HttpError` — Telegram may already have
 delivered the video, so nothing further is sent; it is logged on the spot, by identity and with
