@@ -581,6 +581,35 @@ describe('failures inside the fixture', () => {
   });
 });
 
+describe('an onChange listener that throws', () => {
+  it('does not turn a committed trade into a 500, and close() reports the error', async () => {
+    const failure = new Error('socket gone');
+    broker.state.onChange(() => {
+      throw failure;
+    });
+    const response = await openTrade();
+    expect(response.status).toBe(200);
+    expect(broker.trades.list(1)).toHaveLength(1);
+    expect(broker.state.listenerErrors).toEqual([failure]);
+
+    const closing = broker.close();
+    await expect(closing).rejects.toBeInstanceOf(AggregateError);
+    await expect(closing).rejects.toMatchObject({ errors: [failure] });
+    expect(broker.state.listenerErrors).toEqual([]);
+    broker = await startMockBroker();
+  });
+
+  it('lets close() resolve once the test cleared the errors', async () => {
+    broker.state.onChange(() => {
+      throw new Error('expected');
+    });
+    await openTrade();
+    broker.state.clearListenerErrors();
+    await expect(broker.close()).resolves.toBeUndefined();
+    broker = await startMockBroker();
+  });
+});
+
 describe('the facade', () => {
   it('lists every trade of a user and settles through the store', async () => {
     for (let i = 0; i < 3; i += 1) await openTrade();
