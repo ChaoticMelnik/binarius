@@ -5,6 +5,7 @@ import {
 } from '@binarius/shared';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { buildCandles, validateChartQuery } from './chart';
+import { assertSocketPayload, MockSocketPayload } from './encoding';
 import {
   RateWindow,
   restFaultQueue,
@@ -16,6 +17,7 @@ import {
   type MockScript,
 } from './faults';
 import { brokerError, FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
+import { attachMockSocket, type MockSocket } from './socket';
 import {
   createBrokerState,
   MockTradeStatus,
@@ -28,9 +30,10 @@ import {
 } from './state';
 
 export interface MockBroker {
-  // http://127.0.0.1:<port>, without the /v1/broker prefix
+  // http://127.0.0.1:<port>, without the /v1/broker prefix; also the Socket.IO URL
+  // (io(url, { transports: ['websocket'] }))
   url: string;
-  // the store behind the routes, for a Socket.IO layer on the same server (#104)
+  // the store behind the routes and the socket
   state: BrokerState;
   users: {
     register: BrokerState['registerUser'];
@@ -52,6 +55,7 @@ export interface MockBroker {
     journal: readonly MockRequestRecord[];
     clearJournal(): void;
   };
+  socket: MockSocket;
   priceAt(assetId: number, atMs: number): number;
   // rejects with an AggregateError when an onChange listener threw and the test did not clear it
   close(): Promise<void>;
@@ -156,6 +160,8 @@ interface Delayed extends InFlight {
 }
 
 export async function startMockBroker(options: MockBrokerOptions = {}): Promise<MockBroker> {
+  const socketPayload = options.socketPayload ?? MockSocketPayload.Object;
+  assertSocketPayload(socketPayload);
   const state = createBrokerState(options);
   const faults = restFaultQueue();
   const rate = new RateWindow(state.rateLimit);
@@ -360,6 +366,7 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
     return buildCandles(query.pair, query.stepMs, query.startTime, query.limit, Date.now());
   });
 
+  const socketLayer = attachMockSocket(app.server, state, socketPayload);
   const url = await app.listen({ port: 0, host: '127.0.0.1' });
 
   return {
@@ -388,6 +395,7 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
         journal.length = 0;
       },
     },
+    socket: socketLayer.socket,
     priceAt: (assetId, atMs) => state.priceAt(assetId, atMs),
     async close() {
       for (const entry of [...hanging]) {
@@ -402,6 +410,8 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
         observe(entry, { answer: false });
         entry.cut();
       }
+      // before app.close(), which does not return while a WebSocket client is connected
+      socketLayer.close();
       await app.close();
       if (state.listenerErrors.length > 0) {
         const errors = [...state.listenerErrors];
