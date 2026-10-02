@@ -23,6 +23,7 @@ export const MockChangeType = {
   TradeOpened: 'trade_opened',
   TradeClosed: 'trade_closed',
   PairUpdated: 'pair_updated',
+  TokenRevoked: 'token_revoked',
 } as const;
 export type MockChangeType = (typeof MockChangeType)[keyof typeof MockChangeType];
 
@@ -35,7 +36,8 @@ export type MockTradeWire = MockOpenTradeWire | MockClosedTradeWire;
 export type MockChange =
   | { type: typeof MockChangeType.TradeOpened; userId: number; trade: MockOpenTradeWire }
   | { type: typeof MockChangeType.TradeClosed; userId: number; trade: MockClosedTradeWire }
-  | { type: typeof MockChangeType.PairUpdated; pair: BinaryPairWire };
+  | { type: typeof MockChangeType.PairUpdated; pair: BinaryPairWire }
+  | { type: typeof MockChangeType.TokenRevoked; userId: number };
 
 export interface MockBrokerOptions {
   pairs?: BinaryPairWire[];
@@ -69,11 +71,13 @@ export interface MockSettleInput {
 export type OpenTradeResult =
   { ok: true; trade: MockOpenTradeWire } | { ok: false; message: string };
 
-// ids deliberately unlike the symbols: a client keys pairs by id only
+// ids deliberately unlike the symbols: a client keys pairs by id only. Every pair carries is_otc,
+// as every pair of the live common.assets_list did (2026-10-02)
 export const DEFAULT_PAIRS: readonly BinaryPairWire[] = [
   {
     id: 101,
     symbol: 'EUR/USD',
+    is_otc: false,
     type: 'currency',
     digits: 5,
     payout: 85,
@@ -97,6 +101,7 @@ export const DEFAULT_PAIRS: readonly BinaryPairWire[] = [
   {
     id: 303,
     symbol: 'BTC/USD',
+    is_otc: false,
     type: 'cryptocurrency',
     digits: 2,
     payout: 80,
@@ -109,6 +114,7 @@ export const DEFAULT_PAIRS: readonly BinaryPairWire[] = [
     // unavailable: scheduled_until is read as "not tradable until" (ms epoch, 2100-01-01)
     id: 404,
     symbol: 'GBP/USD',
+    is_otc: false,
     type: 'currency',
     digits: 5,
     payout: 82,
@@ -296,7 +302,10 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
     },
 
     revokeToken(token) {
+      const userId = tokens.get(token);
+      if (userId === undefined) return;
       tokens.delete(token);
+      emit({ type: MockChangeType.TokenRevoked, userId });
     },
 
     authenticate: (token) => tokens.get(token),

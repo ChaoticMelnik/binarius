@@ -97,20 +97,26 @@ export function assertScript(script: MockScript): void {
   }
 }
 
-export class FaultQueue {
-  private readonly queues = new Map<MockRestEndpoint, MockScript[]>();
+// one-shot FIFO queues per endpoint; a script the validator refuses is never queued
+export class FaultQueue<Endpoint extends string, Script> {
+  private readonly queues = new Map<Endpoint, Script[]>();
 
-  push(endpoint: MockRestEndpoint, script: MockScript): void {
-    assertScript(script);
+  constructor(private readonly validate: (endpoint: Endpoint, script: Script) => void) {}
+
+  push(endpoint: Endpoint, script: Script): void {
+    this.validate(endpoint, script);
     const queue = this.queues.get(endpoint);
     if (queue === undefined) this.queues.set(endpoint, [script]);
     else queue.push(script);
   }
 
-  shift(endpoint: MockRestEndpoint): MockScript | undefined {
+  shift(endpoint: Endpoint): Script | undefined {
     return this.queues.get(endpoint)?.shift();
   }
 }
+
+export const restFaultQueue = () =>
+  new FaultQueue<MockRestEndpoint, MockScript>((_endpoint, script) => assertScript(script));
 
 // the envelope text for a scripted status without a body; none of them was seen live
 export function scriptedMessage(status: number): string {
