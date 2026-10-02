@@ -19,7 +19,8 @@ what `/start` does and where the acquisition source is kept is in
 [docs/bot-start.md](docs/bot-start.md); how a staff member gets into the admin pages, and how
 those sessions are revoked, is in [docs/staff-login.md](docs/staff-login.md); what the mock
 broker answers, and which of it was observed on the live broker, is in
-[docs/mock-broker.md](docs/mock-broker.md).
+[docs/mock-broker.md](docs/mock-broker.md); how a raw broker Socket.IO event becomes a typed
+domain event or a log-safe problem is in [docs/broker-socket.md](docs/broker-socket.md).
 
 ## Requirements
 
