@@ -2,12 +2,8 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { GrammyError, HttpError } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  LINK_TEXTS,
-  plainTextOf,
-  TELEGRAM_MESSAGE_LIMIT,
-  telegramHtmlProblems,
-} from '@binarius/shared';
+import { LINK_TEXTS } from '@binarius/shared';
+import { telegramTextProblems } from '@binarius/shared/testing';
 import { captureApi, inlineButtons, sentPayload } from '../admin/testing';
 import { createLinkNotifier, LinkPushKind, type LinkPushOutcome } from './link-notifier';
 import { AUTH_TEXTS } from './texts';
@@ -30,13 +26,12 @@ async function listen(server: Server): Promise<string> {
 }
 
 describe("the backend's own texts", () => {
-  it.each(Object.entries(AUTH_TEXTS))('keeps %s valid Telegram HTML', (_key, text) => {
-    expect(telegramHtmlProblems(text.value)).toEqual([]);
-    const plain = plainTextOf(text);
-    expect(plain.trim().length).toBeGreaterThan(0);
-    expect(plain.length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
-    for (const line of plain.split('\n')) expect(line).toBe(line.trim());
-  });
+  it.each(Object.entries(AUTH_TEXTS))(
+    'keeps %s valid Telegram HTML, inside the limit, non-empty, with no padded line',
+    (_key, text) => {
+      expect(telegramTextProblems(text)).toEqual([]);
+    },
+  );
 });
 
 describe('the link push message', () => {

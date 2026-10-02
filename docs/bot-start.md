@@ -311,16 +311,19 @@ parsed by Telegram, so they are plain strings and are never escaped: «✅ По�
 shows the broker's email as it is, `&` included.
 
 **Checked by tests.** Next to each constant (`texts.test.ts`, `link-confirmation.test.ts`,
-`link-notifier.test.ts`), `telegramHtmlProblems` fails any text with a tag or an attribute Telegram
-does not list, a tag left open or closed out of order, a nested blockquote, a tag inside `pre` or
-`code` other than `code` directly in `pre`, one of `a`, `tg-emoji`, `tg-time`, `pre`, `code` inside
-another of them, or a bare `<`, `>`, `&`. Where the Bot API's nesting rules do not settle a case —
-whether a blockquote may hold or sit inside one of those five, whether bold and its kind may hold
-`pre` or `code` — the validator accepts it and Telegram's verdict comes at send time.
-Lengths are measured on `plainTextOf(...)` — the text "after entities parsing" the Bot API counts,
-in UTF-16 code units: at most 4096 for a message (`TELEGRAM_MESSAGE_LIMIT`) and 1024 for the
-welcome, which travels as a video caption whenever `WELCOME_VIDEO_FILE_ID` is set
-(`TELEGRAM_CAPTION_LIMIT`), so configuring a video cannot break sending. A text that takes a value
+`link-notifier.test.ts`), every text goes through `telegramTextProblems`
+(`@binarius/shared/testing`), which must report nothing. It runs `telegramHtmlProblems`, which
+fails any text with a tag or an attribute Telegram does not list, a tag left open or closed out of
+order, a nested blockquote, a tag inside `pre` or `code` other than `code` directly in `pre`, one of
+`a`, `tg-emoji`, `tg-time`, `pre`, `code` inside another of them, or a bare `<`, `>`, `&`. Where the
+Bot API's nesting rules do not settle a case — whether a blockquote may hold or sit inside one of
+those five, whether bold and its kind may hold `pre` or `code` — the validator accepts it, and
+Telegram decides when the message is sent. The helper also refuses a text that is empty after
+entities parsing, one over its limit, and a line that starts or ends with a space. Lengths are
+measured on `plainTextOf(...)` — the text "after entities parsing" the Bot API counts, in UTF-16
+code units: at most 4096 for a message (`TELEGRAM_MESSAGE_LIMIT`, the helper's default) and 1024
+for the welcome, which travels as a video caption whenever `WELCOME_VIDEO_FILE_ID` is set
+(`TELEGRAM_CAPTION_LIMIT`, passed by its own test), so configuring a video cannot break sending. A text that takes a value
 is called with a 254-character argument of `<&>_*"`, which must read back as it went in. A
 Telegram refusal at runtime ("can't parse entities") goes through the existing error paths; there
 is no check at send time.

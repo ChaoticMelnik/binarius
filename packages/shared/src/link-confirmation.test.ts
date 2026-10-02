@@ -5,7 +5,7 @@ import {
   LINK_LABELS,
   LINK_TEXTS,
 } from './link-confirmation';
-import { plainTextOf, TELEGRAM_MESSAGE_LIMIT, telegramHtmlProblems } from './telegram-html';
+import { telegramTextProblems } from './testing';
 
 const ACCOUNT_ID = '0b7e3a52-8c1d-4f6e-9a2b-3c4d5e6f7a8b';
 
@@ -30,15 +30,13 @@ describe('link confirmation', () => {
     expect(CONFIRM_CALLBACK_PATTERN.test(data)).toBe(false);
   });
 
-  // Measured as Telegram counts it: on the text after entities parsing, in UTF-16 code units
-  // (String#length). The validator is what stands between a typo in a tag and a refused message.
-  it.each(Object.entries(LINK_TEXTS))('keeps %s valid Telegram HTML', (_key, text) => {
-    expect(telegramHtmlProblems(text.value)).toEqual([]);
-    const plain = plainTextOf(text);
-    expect(plain.trim().length).toBeGreaterThan(0);
-    expect(plain.length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
-    for (const line of plain.split('\n')) expect(line).toBe(line.trim());
-  });
+  // The validator is what stands between a typo in a tag and a refused message.
+  it.each(Object.entries(LINK_TEXTS))(
+    'keeps %s valid Telegram HTML, inside the limit, non-empty, with no padded line',
+    (_key, text) => {
+      expect(telegramTextProblems(text)).toEqual([]);
+    },
+  );
 
   it('labels the confirm button with the email, or without one when the broker sent none', () => {
     expect(LINK_LABELS.confirmButton('ada@example.test')).toBe('✅ Подтвердить: ada@example.test');

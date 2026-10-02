@@ -65,10 +65,11 @@ export function telegramHtml(
 
 // String(...) rather than trusting the hole type: a cast that lets a foreign object through is
 // escaped through its toString() instead of crashing on it.
+const renderOne = (value: unknown): string =>
+  value instanceof TelegramHtmlValue ? value.value : escapeTelegramHtml(String(value));
+
 function render(value: unknown): string {
-  if (value instanceof TelegramHtmlValue) return value.value;
-  if (Array.isArray(value)) return value.map(render).join('');
-  return escapeTelegramHtml(String(value));
+  return Array.isArray(value) ? value.map(renderOne).join('') : renderOne(value);
 }
 
 type AttributeRule = 'required' | 'optional';

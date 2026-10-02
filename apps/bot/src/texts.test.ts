@@ -1,20 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import {
-  plainTextOf,
-  TELEGRAM_CAPTION_LIMIT,
-  TELEGRAM_MESSAGE_LIMIT,
-  telegramHtmlProblems,
-} from '@binarius/shared';
+import { plainTextOf, TELEGRAM_CAPTION_LIMIT } from '@binarius/shared';
+import { telegramTextProblems } from '@binarius/shared/testing';
 import { LABELS, TEXTS } from './texts';
 
-// The Bot API counts its 1024/4096 limits "after entities parsing", in UTF-16 code units: the
-// String#length of plainTextOf(...). Counting code points would let an astral character through
-// here and be refused by Telegram.
 describe('texts', () => {
   // the welcome travels as a caption whenever WELCOME_VIDEO_FILE_ID is set, and a caption over
   // the limit is refused by the Bot API — which would only show up once a video is configured
   it('keeps the welcome inside the caption limit', () => {
-    expect(plainTextOf(TEXTS.welcome).length).toBeLessThanOrEqual(TELEGRAM_CAPTION_LIMIT);
+    expect(telegramTextProblems(TEXTS.welcome, TELEGRAM_CAPTION_LIMIT)).toEqual([]);
   });
 
   // A function is called with a 254-character argument, RFC 5321's limit for an address, made of
@@ -25,20 +18,9 @@ describe('texts', () => {
     typeof entry === 'function' ? entry(HOSTILE_ARGUMENT) : entry;
 
   it.each(Object.entries(TEXTS))(
-    'keeps %s valid Telegram HTML, inside the message limit and non-empty',
+    'keeps %s valid Telegram HTML, inside the limit, non-empty, with no padded line',
     (_key, entry) => {
-      const text = textOf(entry);
-      expect(telegramHtmlProblems(text.value)).toEqual([]);
-      const plain = plainTextOf(text);
-      expect(plain.trim().length).toBeGreaterThan(0);
-      expect(plain.length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_LIMIT);
-    },
-  );
-
-  it.each(Object.entries(TEXTS))(
-    'has no line of %s starting or ending with a space',
-    (_key, entry) => {
-      for (const line of plainTextOf(textOf(entry)).split('\n')) expect(line).toBe(line.trim());
+      expect(telegramTextProblems(textOf(entry))).toEqual([]);
     },
   );
 
