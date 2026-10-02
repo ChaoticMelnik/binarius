@@ -10,8 +10,8 @@ import {
 } from './telegram-html';
 
 describe('escapeTelegramHtml', () => {
-  it('escapes the three characters the Bot API requires and nothing else', () => {
-    expect(escapeTelegramHtml(`a<b>&c_d*e"f'g`)).toBe(`a&lt;b&gt;&amp;c_d*e"f'g`);
+  it('escapes the three characters the Bot API requires and the double quote, nothing else', () => {
+    expect(escapeTelegramHtml(`a<b>&c_d*e"f'g`)).toBe(`a&lt;b&gt;&amp;c_d*e&quot;f'g`);
   });
 
   it('escapes an entity-looking text instead of passing it through', () => {
@@ -37,6 +37,13 @@ describe('telegramHtml', () => {
   it('escapes a foreign object that a cast let through instead of crashing on it', () => {
     const foreign = { toString: () => '<script>' } as unknown as TelegramHtml;
     expect(telegramHtml`${foreign}`.value).toBe('&lt;script&gt;');
+  });
+
+  // no text has an attribute hole today; #200 and #199 may
+  it('keeps a hole inside an attribute from closing it', () => {
+    const link = telegramHtml`<a href="${'x" onclick="y'}">t</a>`;
+    expect(link.value).toContain('href="x&quot; onclick=&quot;y"');
+    expect(telegramHtmlProblems(link.value)).toEqual([]);
   });
 
   it('turns into its value as a string', () => {
