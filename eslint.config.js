@@ -10,6 +10,52 @@ const ERROR_LIKE_NAME = '(e|err|error|ex|exception|cause|failure)';
 const LOG_ERROR_FIELD =
   'CallExpression[callee.property.name=/^(fatal|error|warn|info|debug|trace)$/] > ObjectExpression:first-child > :matches(Property[key.name=/^(err|error|cause|exception)$/], Property[key.value=/^(err|error|cause|exception)$/])';
 
+// The logging rule's two selectors. Hoisted because a later config block that sets
+// no-restricted-syntax replaces this option list for the files it matches rather than adding to
+// it, so the Telegram block below has to carry them again.
+const LOG_ERROR_RULES = [
+  {
+    // Scoped to the object a logger is called with. A global match would fail on the
+    // `error` and `cause` fields legitimate objects carry — zod options, an ErrorOptions
+    // cause, the publisher's outcome, an API response body.
+    //
+    // What it does not see, all deliberate: a nested object (`{ ctx: { err } }`), an object
+    // passed as the second argument, a computed key, `logger[level](error)`, a logger
+    // method held in a variable, a spread. A logger reached through a variable IS seen
+    // (`const l = request.log; l.error({ err })`). It also flags a cast around the helper
+    // (`{ err: errorIdentity(e) as T }`), which fails safe. The rule narrows the class of
+    // mistake; it does not close it.
+    selector: `${LOG_ERROR_FIELD}:matches([value.type!='CallExpression'], [value.type='CallExpression'][value.callee.name!='errorIdentity'][value.callee.name!='errorLogFields'])`,
+    message:
+      'log errors through errorIdentity() or errorLogFields(): a whole error carries its message, stack and its own fields, and no redact path can scrub a string',
+  },
+  {
+    // pino's own error-first form, which the property rule cannot see. Matched by the
+    // argument's name rather than its type, because the type alone also catches
+    // `logger.info(messageVar)`, which is not an error.
+    //
+    // The trade runs both ways and neither side is free: an error held in a variable named
+    // something else (`problem`, `thrown`) is missed, and a string in a variable named like
+    // an error would be flagged. `reason` is deliberately absent from the list — in this
+    // repository that name holds a revocation reason, which is a string. Also missed:
+    // `new Error(x)` passed positionally, and `logger[level](error)`.
+    selector: `CallExpression[callee.property.name=/^(fatal|error|warn|info|debug|trace)$/]:matches([arguments.0.type='Identifier'][arguments.0.name=/^${ERROR_LIKE_NAME}$/i], [arguments.0.type='MemberExpression'][arguments.0.property.name=/^${ERROR_LIKE_NAME}$/i])`,
+    message:
+      'do not log an error positionally: pass errorIdentity() or errorLogFields() in the log object instead',
+  },
+];
+
+// grammY's methods that send text or a caption to a Telegram user. Matched by the method's name
+// on any object, so `ctx.reply`, `ctx.api.sendMessage` and `bot.api.raw.sendMessage` are all seen;
+// a method held in a variable or reached by a computed key is not — the same class of gap as the
+// logging rule. answerCallbackQuery is left out: the user bot passes it no text.
+const RAW_TELEGRAM_SEND = {
+  selector:
+    'CallExpression[callee.property.name=/^(reply|replyWithPhoto|replyWithVideo|replyWithAnimation|replyWithDocument|sendMessage|sendPhoto|sendVideo|sendAnimation|sendDocument|editMessageText|editMessageCaption)$/]',
+  message:
+    'send user texts through replyHtml/replyWithVideoHtml (apps/bot/src/send.ts) or the link notifier: they take TelegramHtml and set parse_mode HTML, so nothing unescaped reaches the user as markup',
+};
+
 export default tseslint.config(
   {
     // .claude/worktrees/ holds other agents' checkouts of this repository: their unfinished code
@@ -35,38 +81,18 @@ export default tseslint.config(
       // tests stay out of this block on purpose: they must be able to spell a raw value to
       // prove the CHECK constraint rejects or accepts it
       'local/no-status-literal': 'error',
-      'no-restricted-syntax': [
-        'error',
-        {
-          // Scoped to the object a logger is called with. A global match would fail on the
-          // `error` and `cause` fields legitimate objects carry — zod options, an ErrorOptions
-          // cause, the publisher's outcome, an API response body.
-          //
-          // What it does not see, all deliberate: a nested object (`{ ctx: { err } }`), an object
-          // passed as the second argument, a computed key, `logger[level](error)`, a logger
-          // method held in a variable, a spread. A logger reached through a variable IS seen
-          // (`const l = request.log; l.error({ err })`). It also flags a cast around the helper
-          // (`{ err: errorIdentity(e) as T }`), which fails safe. The rule narrows the class of
-          // mistake; it does not close it.
-          selector: `${LOG_ERROR_FIELD}:matches([value.type!='CallExpression'], [value.type='CallExpression'][value.callee.name!='errorIdentity'][value.callee.name!='errorLogFields'])`,
-          message:
-            'log errors through errorIdentity() or errorLogFields(): a whole error carries its message, stack and its own fields, and no redact path can scrub a string',
-        },
-        {
-          // pino's own error-first form, which the property rule cannot see. Matched by the
-          // argument's name rather than its type, because the type alone also catches
-          // `logger.info(messageVar)`, which is not an error.
-          //
-          // The trade runs both ways and neither side is free: an error held in a variable named
-          // something else (`problem`, `thrown`) is missed, and a string in a variable named like
-          // an error would be flagged. `reason` is deliberately absent from the list — in this
-          // repository that name holds a revocation reason, which is a string. Also missed:
-          // `new Error(x)` passed positionally, and `logger[level](error)`.
-          selector: `CallExpression[callee.property.name=/^(fatal|error|warn|info|debug|trace)$/]:matches([arguments.0.type='Identifier'][arguments.0.name=/^${ERROR_LIKE_NAME}$/i], [arguments.0.type='MemberExpression'][arguments.0.property.name=/^${ERROR_LIKE_NAME}$/i])`,
-          message:
-            'do not log an error positionally: pass errorIdentity() or errorLogFields() in the log object instead',
-        },
-      ],
+      'no-restricted-syntax': ['error', ...LOG_ERROR_RULES],
+    },
+  },
+  {
+    // Telegram user texts (#198): the user bot and the backend's push send only TelegramHtml, and
+    // only through their seams. The staff bot (apps/backend/src/admin) stays plain text by the
+    // owner's decision of 2026-10-02 and is outside this block. The seam files are ignored here,
+    // so they fall back to the block above and keep the logging rule.
+    files: ['apps/bot/src/**/*.ts', 'apps/backend/src/auth/**/*.ts'],
+    ignores: ['**/*.test.ts', 'apps/bot/src/send.ts', 'apps/backend/src/auth/link-notifier.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', ...LOG_ERROR_RULES, RAW_TELEGRAM_SEND],
     },
   },
 );
