@@ -22,14 +22,16 @@ import {
 } from './schema/index';
 import type { DecimalString } from '@binarius/shared';
 import { STAFF_LOGIN_CORPUS } from '@binarius/shared/testing';
-// Integration tests: a migrated Postgres named by DATABASE_URL (README → Database).
+// Integration tests: a migrated Postgres named by TEST_DATABASE_URL (README → Test database).
 // Each case runs in one transaction that is rolled back at the end; Postgres aborts a
 // transaction after its first error, so every case expects exactly one error code.
 // This file shares that database with a locally running compose stack, so no case runs DDL:
 // its locks would sit in front of the stack's own writers, in an order they do not expect.
-const url = process.env.DATABASE_URL;
+const url = process.env.TEST_DATABASE_URL;
 if (url === undefined || url === '') {
-  throw new Error('DATABASE_URL is required for packages/db integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for packages/db integration tests (see README → Test database)',
+  );
 }
 
 const pool = new Pool({ connectionString: url });
@@ -864,14 +866,12 @@ describe('users and token_ledger', () => {
             ? { depositEventId: await seedDeposit(tx, seed) }
             : {};
       await rejectsWith(
-        tx
-          .insert(tokenLedger)
-          .values({
-            userId: seed.userId,
-            brokerAccountId: seed.accountId,
-            ...reference,
-            ...values,
-          }),
+        tx.insert(tokenLedger).values({
+          userId: seed.userId,
+          brokerAccountId: seed.accountId,
+          ...reference,
+          ...values,
+        }),
         '23514',
         'token_ledger_reference_check',
       );

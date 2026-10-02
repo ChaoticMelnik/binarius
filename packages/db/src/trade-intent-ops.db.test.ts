@@ -29,9 +29,11 @@ import { brokerAccounts, outboxEvents, tokenLedger, tradeIntents, users } from '
 
 // Integration tests on a temporary migrated database (README → Database). Rows are committed
 // for real: concurrency cases need separate connections, and token_ledger is append-only.
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for packages/db integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for packages/db integration tests (see README → Test database)',
+  );
 }
 
 const MAX_AGE_MS = 60_000;

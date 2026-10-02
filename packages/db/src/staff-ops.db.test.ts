@@ -31,9 +31,11 @@ import { StaffLoginChallengeStatus } from './schema/staff-login-challenges';
 import { StaffStatus } from './schema/staff';
 import { AuditAction } from './schema/audit-log';
 
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for packages/db integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for packages/db integration tests (see README → Test database)',
+  );
 }
 
 let tmp: TempDatabase;
@@ -97,8 +99,12 @@ const entriesFor = async (staffId: string) =>
     .orderBy(asc(auditLog.createdAt), asc(auditLog.id));
 
 const sessionCount = async (staffId: string) =>
-  (await tmp.db.select({ id: staffSessions.id }).from(staffSessions).where(eq(staffSessions.staffId, staffId)))
-    .length;
+  (
+    await tmp.db
+      .select({ id: staffSessions.id })
+      .from(staffSessions)
+      .where(eq(staffSessions.staffId, staffId))
+  ).length;
 
 // listLiveStaffSessions answers with every live session in the database, so a case that
 // wants its own row has to ask for it by the token it holds
@@ -172,11 +178,13 @@ describe('registerPasswordFailure', () => {
     const seeded = await seedStaff(tmp.db);
     const outcomes = [];
     for (let attempt = 0; attempt < STAFF_MAX_PASSWORD_ATTEMPTS; attempt += 1) {
-      outcomes.push(await registerPasswordFailure(tmp.db, {
-        staffId: seeded.staffId,
-        passwordHash: seeded.passwordHash,
-        ip: IP,
-      }));
+      outcomes.push(
+        await registerPasswordFailure(tmp.db, {
+          staffId: seeded.staffId,
+          passwordHash: seeded.passwordHash,
+          ip: IP,
+        }),
+      );
     }
     expect(outcomes.map((o) => o.attempts)).toEqual([1, 2, 3, 4, 5]);
     expect(outcomes.map((o) => o.locked)).toEqual([false, false, false, false, true]);
@@ -244,7 +252,12 @@ describe('startLoginChallenge', () => {
     const started = await start(seeded);
 
     expect(started).toEqual({ ok: false, reason: 'state_changed' });
-    expect(await tmp.db.select().from(staffLoginChallenges).where(eq(staffLoginChallenges.staffId, seeded.staffId))).toEqual([]);
+    expect(
+      await tmp.db
+        .select()
+        .from(staffLoginChallenges)
+        .where(eq(staffLoginChallenges.staffId, seeded.staffId)),
+    ).toEqual([]);
     const actions = (await entriesFor(seeded.staffId)).map((e) => e.action);
     expect(actions).toEqual([AuditAction.StaffLoginFailed]);
   });
@@ -266,7 +279,12 @@ describe('startLoginChallenge', () => {
 
     const second = await start(seeded);
 
-    expect(second).toMatchObject({ ok: true, challengeId: first.challengeId, reused: true, sendPrompt: false });
+    expect(second).toMatchObject({
+      ok: true,
+      challengeId: first.challengeId,
+      reused: true,
+      sendPrompt: false,
+    });
     const [, entry] = await entriesFor(seeded.staffId);
     expect(entry?.payload).toMatchObject({ reused: true, resent: false });
   });
@@ -308,7 +326,12 @@ describe('startLoginChallenge', () => {
 
     const second = await start(seeded);
 
-    expect(second).toMatchObject({ ok: true, challengeId: first.challengeId, reused: true, sendPrompt: true });
+    expect(second).toMatchObject({
+      ok: true,
+      challengeId: first.challengeId,
+      reused: true,
+      sendPrompt: true,
+    });
     const [, entry] = await entriesFor(seeded.staffId);
     expect(entry?.payload).toMatchObject({ reused: true, resent: true });
   });
@@ -319,7 +342,10 @@ describe('startLoginChallenge', () => {
     if (!first.ok) throw new Error('unreachable');
     await tmp.db
       .update(staffLoginChallenges)
-      .set({ createdAt: sql`now() - interval '10 minutes'`, expiresAt: sql`now() - interval '5 minutes'` })
+      .set({
+        createdAt: sql`now() - interval '10 minutes'`,
+        expiresAt: sql`now() - interval '5 minutes'`,
+      })
       .where(eq(staffLoginChallenges.id, first.challengeId));
 
     const second = await start(seeded);
@@ -419,7 +445,10 @@ describe('the Telegram side', () => {
     if (!started.ok) throw new Error('unreachable');
     await tmp.db
       .update(staffLoginChallenges)
-      .set({ createdAt: sql`now() - interval '10 minutes'`, expiresAt: sql`now() - interval '5 minutes'` })
+      .set({
+        createdAt: sql`now() - interval '10 minutes'`,
+        expiresAt: sql`now() - interval '5 minutes'`,
+      })
       .where(eq(staffLoginChallenges.id, started.challengeId));
 
     expect(
@@ -441,9 +470,7 @@ describe('the Telegram side', () => {
     });
 
     expect(denied).toEqual({ staffId: seeded.staffId, ip: IP });
-    expect((await challengeRow(started.challengeId)).status).toBe(
-      StaffLoginChallengeStatus.Denied,
-    );
+    expect((await challengeRow(started.challengeId)).status).toBe(StaffLoginChallengeStatus.Denied);
     const entries = await entriesFor(seeded.staffId);
     expect(entries.at(-1)).toMatchObject({
       action: AuditAction.StaffLoginDenied,
@@ -478,9 +505,7 @@ describe('the Telegram side', () => {
       ...TELEGRAM_FAILURE,
     });
 
-    expect((await challengeRow(started.challengeId)).status).toBe(
-      StaffLoginChallengeStatus.Failed,
-    );
+    expect((await challengeRow(started.challengeId)).status).toBe(StaffLoginChallengeStatus.Failed);
     const entry = (await entriesFor(seeded.staffId)).at(-1);
     expect(entry).toMatchObject({
       action: AuditAction.StaffLoginTelegramFailed,
@@ -600,7 +625,9 @@ describe('completeLogin', () => {
 
     const outcomes = [];
     for (let attempt = 0; attempt < STAFF_MAX_CODE_ATTEMPTS; attempt += 1) {
-      outcomes.push(await completeLogin(tmp.db, { challengeId, code: wrong, ip: IP, userAgent: UA }));
+      outcomes.push(
+        await completeLogin(tmp.db, { challengeId, code: wrong, ip: IP, userAgent: UA }),
+      );
     }
 
     expect(outcomes.map((o) => (o.ok ? 'ok' : o.exhausted))).toEqual([
@@ -657,7 +684,10 @@ describe('completeLogin', () => {
     const { challengeId, code } = await reachCodeEntry(seeded);
     await tmp.db
       .update(staffLoginChallenges)
-      .set({ createdAt: sql`now() - interval '10 minutes'`, expiresAt: sql`now() - interval '5 minutes'` })
+      .set({
+        createdAt: sql`now() - interval '10 minutes'`,
+        expiresAt: sql`now() - interval '5 minutes'`,
+      })
       .where(eq(staffLoginChallenges.id, challengeId));
 
     expect(await completeLogin(tmp.db, { challengeId, code, ip: IP, userAgent: UA })).toEqual({

@@ -36,6 +36,8 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://binarius:binarius@localhost:5432/binarius
+      # the service container runs on the runner's own kernel clock, so the tests may share it
+      TEST_DATABASE_URL: postgres://binarius:binarius@localhost:5432/binarius
       REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4

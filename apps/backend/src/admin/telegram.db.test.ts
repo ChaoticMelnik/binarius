@@ -33,17 +33,14 @@ import {
   type CapturedApi,
   type FakeLogger,
 } from './testing';
-import {
-  confirmCallbackData,
-  createAdminBot,
-  denyCallbackData,
-  type AdminBot,
-} from './telegram';
+import { confirmCallbackData, createAdminBot, denyCallbackData, type AdminBot } from './telegram';
 import { ADMIN_TEXTS } from './texts';
 
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for apps/backend integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for apps/backend integration tests (see README → Test database)',
+  );
 }
 
 let tmp: TempDatabase;
@@ -84,7 +81,10 @@ const challengeRow = async (id: string) => {
 
 const actionsFor = async (staffId: string) =>
   (
-    await tmp.db.select({ action: auditLog.action }).from(auditLog).where(eq(auditLog.actorId, staffId))
+    await tmp.db
+      .select({ action: auditLog.action })
+      .from(auditLog)
+      .where(eq(auditLog.actorId, staffId))
   ).map((row) => row.action);
 
 describe('/start', () => {
@@ -142,10 +142,7 @@ describe('the confirm button', () => {
 
   it('answers a challenge id nobody issued without touching anything', async () => {
     await admin.bot.handleUpdate(
-      callbackUpdate(
-        confirmCallbackData('00000000-0000-4000-8000-0000000000aa'),
-        staffUser(4242),
-      ),
+      callbackUpdate(confirmCallbackData('00000000-0000-4000-8000-0000000000aa'), staffUser(4242)),
     );
     expect(sentPayload(api.calls, 'answerCallbackQuery')?.text).toBe(ADMIN_TEXTS.stale);
     expect(callsTo(api.calls, 'sendMessage')).toEqual([]);

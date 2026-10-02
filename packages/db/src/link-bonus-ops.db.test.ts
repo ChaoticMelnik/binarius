@@ -6,9 +6,11 @@ import { LINK_BONUS_RULE_CODE, LINK_BONUS_TOKENS, toLinkBonusGrantView } from '.
 import { confirmBrokerAccount } from './oauth-ops';
 import { brokerAccounts, tokenLedger, users } from './schema/index';
 
-const baseUrl = process.env.DATABASE_URL;
+const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
-  throw new Error('DATABASE_URL is required for packages/db integration tests (see README)');
+  throw new Error(
+    'TEST_DATABASE_URL is required for packages/db integration tests (see README → Test database)',
+  );
 }
 
 let tmp: TempDatabase;

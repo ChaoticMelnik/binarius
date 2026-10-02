@@ -1,7 +1,7 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
-// The one definition of an integration test: it talks to the Postgres in DATABASE_URL or the
-// Redis in REDIS_URL. tooling/vitest-projects.test.ts holds every test file to this name.
+// The one definition of an integration test: it talks to the Postgres in TEST_DATABASE_URL or
+// the Redis in REDIS_URL. tooling/vitest-projects.test.ts holds every test file to this name.
 export const INTEGRATION_TEST_GLOB = '{apps,packages}/*/src/**/*.{db,redis}.test.ts';
 
 export default defineConfig({
@@ -28,9 +28,11 @@ export default defineConfig({
         test: {
           name: 'integration',
           include: [INTEGRATION_TEST_GLOB],
-          // A starved dev VM (2 vCPU under a busy host) took createTempDatabase (CREATE DATABASE
-          // and every migration) past the 10 s default; 170 ms alone, 1.2 s with 8 in parallel
-          // on an idle VM. 60 s still shows a real migration hang within a minute (#166).
+          // refuses a TEST_DATABASE_URL that is not a native PostgreSQL 18 on this host's clock
+          globalSetup: ['./tooling/integration-preflight.ts'],
+          // A starved database took createTempDatabase (CREATE DATABASE and every migration) past
+          // the 10 s default; 170 ms alone, 1.2 s with 8 in parallel when idle. 60 s still shows
+          // a real migration hang within a minute (#166).
           hookTimeout: 60_000,
           // Under the same load `trade-intent-ops` "does not deadlock…" (≈140 transactions) and
           // `cli/staff reset-password` (production scrypt cost) passed 5 s. Kept below
