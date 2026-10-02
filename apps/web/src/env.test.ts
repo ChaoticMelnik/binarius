@@ -46,10 +46,10 @@ describe('parseEnv', () => {
   });
 
   it('normalises the public origin the way a browser does', () => {
-    expect(parseEnv({ ...valid, WEB_PUBLIC_URL: 'https://Admin.Example/' }).publicOrigin).toBe(
+    expect(parseEnv({ ...valid, WEB_PUBLIC_URL: 'https://Admin.Example' }).publicOrigin).toBe(
       'https://admin.example',
     );
-    expect(parseEnv({ ...valid, WEB_PUBLIC_URL: 'https://admin.example:443/' }).publicOrigin).toBe(
+    expect(parseEnv({ ...valid, WEB_PUBLIC_URL: 'https://admin.example:443' }).publicOrigin).toBe(
       'https://admin.example',
     );
   });
@@ -59,6 +59,9 @@ describe('parseEnv', () => {
   it.each([
     'https://admin.example/path',
     'https://admin.example/?a=1',
+    'https://admin.example/',
+    'https://admin.example?',
+    'https://admin.example#',
     'http://admin.example',
     'ftp://admin.example',
     'not-a-url',

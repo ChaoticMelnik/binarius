@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeDurationMs, composeServiceValue } from './testing';
+import { composeDurationMs, composeServiceEnvValue, composeServiceValue } from './testing';
 
 const yaml = `services:
   postgres:
@@ -11,6 +11,8 @@ const yaml = `services:
     stop_grace_period: 20s
     environment:
       PORT: "3000"
+    labels:
+      HOST: backend.example
   trading-worker:
     stop_grace_period: 40s
 `;
@@ -24,6 +26,18 @@ describe('composeServiceValue', () => {
   it('ignores the same key nested under another key or on a neighbouring service', () => {
     expect(composeServiceValue(yaml, 'postgres', 'stop_grace_period')).toBeUndefined();
     expect(composeServiceValue(yaml, 'bot', 'stop_grace_period')).toBeUndefined();
+  });
+});
+
+describe('composeServiceEnvValue', () => {
+  it("reads a variable of the named service's environment map", () => {
+    expect(composeServiceEnvValue(yaml, 'backend', 'PORT')).toBe('"3000"');
+  });
+
+  it('ignores the name outside environment, under another service, or absent', () => {
+    expect(composeServiceEnvValue(yaml, 'backend', 'HOST')).toBeUndefined();
+    expect(composeServiceEnvValue(yaml, 'postgres', 'PORT')).toBeUndefined();
+    expect(composeServiceEnvValue(yaml, 'backend', 'MISSING')).toBeUndefined();
   });
 });
 

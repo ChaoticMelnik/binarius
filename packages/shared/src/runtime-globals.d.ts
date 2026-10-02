@@ -10,6 +10,7 @@ declare class URL {
   pathname: string;
   search: string;
   hash: string;
+  readonly href: string;
   readonly origin: string;
 }
 

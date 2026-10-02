@@ -5,6 +5,10 @@ export interface UrlEnvRules {
   allowIpv6Literal: boolean;
 }
 
+// Public endpoints reached over the internet — the broker's authorize page and API: an http page
+// would hand the authorization code to anyone on the path.
+export const HTTPS_ONLY_RULES: UrlEnvRules = { protocols: ['https:'], allowIpv6Literal: false };
+
 // pg-connection-string passes bracketed IPv6 hosts through to the socket; ioredis strips them
 export const DATABASE_URL_RULES: UrlEnvRules = {
   protocols: ['postgres:', 'postgresql:'],
@@ -75,9 +79,16 @@ export function parseLoopbackOrHttpsUrlEnv(raw: string, name: string): string {
 
 // An origin, for comparing against a browser's `Origin` header and for deciding whether a
 // cookie may be marked Secure. The value is normalised through `URL.origin` — the header is
-// normalised too, so `https://Admin.Example/` and `https://admin.example` are one origin — and
+// normalised too, so `https://Admin.Example` and `https://admin.example:443` are one origin — and
 // anything an origin cannot carry is refused rather than silently dropped: a path, a query, a
 // fragment or credentials in the variable means it was meant to be something else.
+//
+// The raw value must also take a path appended as text: compose builds the default
+// BROKER_OAUTH_REDIRECT_URI as `${WEB_PUBLIC_URL}/oauth/callback`. A trailing "/", "?", "#", "\"
+// or whitespace all normalise away here yet break that concatenation, so the rule is checked by
+// doing the concatenation rather than by listing characters.
+const ORIGIN_PROBE_PATH = '/probe';
+
 export function parseOriginEnv(raw: string, name: string): string {
   const value = parseLoopbackOrHttpsUrlEnv(raw, name);
   const url = new URL(value);
@@ -86,6 +97,17 @@ export function parseOriginEnv(raw: string, name: string): string {
   }
   if (url.username !== '' || url.password !== '') {
     throw new Error(`Env ${name} must not carry credentials`);
+  }
+  let appended: string | undefined;
+  try {
+    appended = new URL(raw + ORIGIN_PROBE_PATH).href;
+  } catch {
+    appended = undefined;
+  }
+  if (appended !== url.origin + ORIGIN_PROBE_PATH) {
+    throw new Error(
+      `Env ${name} must be a bare origin: appending a path to it must stay on that path (no trailing "/", "?", "#", "\\" or whitespace); compose appends /oauth/callback to it`,
+    );
   }
   return url.origin;
 }

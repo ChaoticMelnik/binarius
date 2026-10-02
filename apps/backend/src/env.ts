@@ -2,6 +2,7 @@ import type { LogLevel } from 'fastify';
 import {
   DATABASE_URL_RULES,
   REDIS_URL_RULES,
+  HTTPS_ONLY_RULES,
   parseBoundedIntegerEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
@@ -10,7 +11,6 @@ import {
   parseUrlEnv,
   readEnv,
   type EnvSource,
-  type UrlEnvRules,
 } from '@binarius/shared';
 import { OAUTH_CALLBACK_PATH } from '@binarius/shared/oauth';
 
@@ -22,9 +22,6 @@ const MAX_HEALTH_TIMEOUT_MS = 2500;
 const TOKEN_ENCRYPTION_KEY_BYTES = 32;
 // the key id the all-zero development key is only usable with
 const DEV_TOKEN_ENCRYPTION_KEY_ID = 'dev';
-// the broker is reached over the public internet, and an authorize page served over http would
-// hand the authorization code to anyone on the path
-const HTTPS_ONLY_RULES: UrlEnvRules = { protocols: ['https:'], allowIpv6Literal: false };
 // The broker's authorize page reduces its `ref` to this shape, and its email login takes
 // `partner_code` only in it: the whole partner link is refused there with a 400.
 const PARTNER_CODE = /^[A-Za-z0-9_-]{1,64}$/;
