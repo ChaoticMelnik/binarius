@@ -20,6 +20,14 @@ export const TELEGRAM_API_TIMEOUT_MS = 8_000;
 // One call to the backend's internal API (AbortSignal.timeout in backend-client.ts).
 export const BACKEND_REQUEST_TIMEOUT_MS = 5_000;
 
+// The Bot API calls onStart makes one after another before the first getUpdates: the command
+// menu, the description, the short description (lifecycle.ts). Not a handler path — no update is
+// in flight while they run — but grammY awaits onStart to completion and bot.stop() cancels none
+// of them, so a signal during the registration waits for all of them. lifecycle.test.ts compares
+// this number with the calls the real start makes.
+export const STARTUP_CALLS = 3;
+export const STARTUP_BUDGET_MS = STARTUP_CALLS * TELEGRAM_API_TIMEOUT_MS;
+
 // What each handler does on its longest path — declared, not described in prose, because the
 // budget below is computed from these numbers and timing.test.ts compares them against the
 // calls the handlers actually make. A new handler, or a new terminal branch of one, has to be
@@ -72,6 +80,7 @@ export const TIMING_CHAIN_HOLDS =
   POLLING_TIMEOUT_S * 1000 < TELEGRAM_API_TIMEOUT_MS &&
   HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
   TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
+  STARTUP_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
   GRAMMY_POLLING_BACKOFF_MS < SHUTDOWN_BUDGET_MS &&
   SHUTDOWN_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS;
 if (!TIMING_CHAIN_HOLDS) {
