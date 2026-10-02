@@ -59,12 +59,21 @@ const OUTCOMES: Record<string, CallbackOutcome> = {
 
 const callbackQuerySchema = oauthCallbackRequestSchema.pick({ state: true, code: true });
 
+const redirectHrefOf = (value: string | null): string | undefined => {
+  if (value === null) return undefined;
+  try {
+    return new URL(value).href;
+  } catch {
+    return undefined;
+  }
+};
+
 export const oauthRoutes: FastifyPluginAsync<OAuthRoutesOptions> = async (
   app,
   { backend, publicOrigin, brokerAuthorizeUrl },
 ) => {
   const broker = new URL(brokerAuthorizeUrl);
-  const callbackUrl = `${publicOrigin}${OAUTH_CALLBACK_PATH}`;
+  const callbackHref = new URL(OAUTH_CALLBACK_PATH, publicOrigin).href;
 
   // set before the handler, so an error page Fastify sends for these routes carries it too; the
   // app's onSend hook adds the admin policy only to a reply that has none
@@ -72,35 +81,41 @@ export const oauthRoutes: FastifyPluginAsync<OAuthRoutesOptions> = async (
     void reply.header('content-security-policy', MINI_APP_CSP);
   });
 
-  // Which check refused the link, as one word: the value itself is never logged — it carries a
-  // live state.
-  const refusalOf = (raw: unknown): string | undefined => {
-    if (typeof raw !== 'string') return 'missing';
-    if (raw.length > AUTHORIZE_MAX_LENGTH) return 'too_long';
+  // The parsed link, or which check refused it as one word: the value itself is never logged —
+  // it carries a live state.
+  const checkAuthorize = (raw: unknown): { reason: string } | { href: string } => {
+    if (typeof raw !== 'string') return { reason: 'missing' };
+    if (raw.length > AUTHORIZE_MAX_LENGTH) return { reason: 'too_long' };
     let url: URL;
     try {
       url = new URL(raw);
     } catch {
-      return 'not_url';
+      return { reason: 'not_url' };
     }
-    if (url.protocol !== 'https:') return 'protocol';
-    if (url.origin !== broker.origin || url.pathname !== broker.pathname) return 'target';
+    if (url.protocol !== 'https:') return { reason: 'protocol' };
+    if (url.origin !== broker.origin || url.pathname !== broker.pathname) {
+      return { reason: 'target' };
+    }
     if (!callbackQuerySchema.shape.state.safeParse(url.searchParams.get('state')).success) {
-      return 'state';
+      return { reason: 'state' };
     }
-    // the callback must come back to this origin: the launch data the SDK stored lives here
-    if (url.searchParams.get('redirect_uri') !== callbackUrl) return 'redirect_uri';
-    return undefined;
+    // The callback must come back to this origin: the launch data the SDK stored lives here.
+    // Compared parsed, because the backend sends the spelling registered with the broker byte
+    // for byte: host case and a default port do not matter, anything else in the URL does.
+    if (redirectHrefOf(url.searchParams.get('redirect_uri')) !== callbackHref) {
+      return { reason: 'redirect_uri' };
+    }
+    return { href: url.href };
   };
 
   app.get(OAUTH_LOGIN_PATH, async (request, reply) => {
     const raw = (request.query as Record<string, unknown>)[MINI_APP_AUTHORIZE_PARAM];
-    const reason = refusalOf(raw);
-    if (reason !== undefined) {
-      request.log.warn({ reason }, 'a Mini App login link was refused');
+    const checked = checkAuthorize(raw);
+    if ('reason' in checked) {
+      request.log.warn({ reason: checked.reason }, 'a Mini App login link was refused');
       return sendHtml(reply, 400, noticePage(OAUTH_TEXTS.refusedTitle, OAUTH_TEXTS.refusedLogin));
     }
-    return sendHtml(reply, 200, loginPage(new URL(raw as string).href));
+    return sendHtml(reply, 200, loginPage(checked.href));
   });
 
   // The broker's redirect. Nothing is exchanged here: the page posts the code back with the
