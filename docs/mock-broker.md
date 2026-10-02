@@ -113,6 +113,7 @@ limit. A client classifies by status, never by text. All 4xx and 5xx responses u
 | trades query `status` / `is_demo` invalid | 400 | `Validation failed: "<field>" must be one of [...]` | fixture rule |
 | trades query `limit` / `offset` invalid | 400 | `Validation failed: "limit" must be a positive integer` / `"offset" must be a non-negative integer` | fixture rule |
 | body not JSON, empty JSON body, non-JSON content type | 400 | `Validation failed: body is not valid JSON` | fixture rule |
+| body over 1 MiB (Fastify's `bodyLimit`), or any other client error Fastify raises | 413 (or Fastify's 4xx) | `Request failed` | fixture rule |
 | anything the fixture throws | 500 | `Internal error` | fixture rule |
 | `x-ratelimit-*` on every response | | | observed |
 

@@ -224,6 +224,16 @@ describe('POST /v1/broker/user/trades', () => {
   });
 });
 
+describe('a body over the size limit', () => {
+  it('keeps its 413 instead of passing for invalid JSON', async () => {
+    const response = await call('/v1/broker/user/trades', {
+      method: 'POST',
+      rawBody: JSON.stringify({ pad: 'x'.repeat(1_048_576) }),
+    });
+    expectError(response, 413, 'Request failed');
+  });
+});
+
 describe('GET /v1/broker/user/trades', () => {
   it('answers { trades } with open and closed trades in the shared shapes, symbol on both', async () => {
     const first = (await openTrade()).body as { id: number };
