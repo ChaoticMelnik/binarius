@@ -2,13 +2,29 @@ import { FIXTURE_MESSAGES } from './messages';
 
 export type MockRestEndpoint = 'user' | 'pairs' | 'tradesList' | 'openTrade' | 'chart';
 
-// one scripted answer to the next request on an endpoint, consumed before auth and validation
+// one scripted answer to the next request on an endpoint, consumed before auth and validation.
+// The shapes exclude each other in the type as well as at runtime (assertScript): a mixed
+// object would be played as one shape while the test believes it scripted another.
+export type MockAnswerScript = {
+  status: number;
+  body?: unknown;
+  headers?: Record<string, string>;
+  retryAfterSec?: number;
+  delayMs?: never;
+  hang?: never;
+};
+type NoAnswerFields = { status?: never; body?: never; headers?: never; retryAfterSec?: never };
 export type MockScript =
-  | { status: number; body?: unknown; headers?: Record<string, string>; retryAfterSec?: number }
-  // waits, then the request is handled as usual
-  | { delayMs: number }
+  | MockAnswerScript
+  // waits, then the request is handled as if it arrived only then
+  | ({ delayMs: number; hang?: never } & NoAnswerFields)
   // never answers until close(), which answers it 503
-  | { hang: true };
+  | ({ hang: true; delayMs?: never } & NoAnswerFields);
+
+export type PlayedScript =
+  | { kind: 'answer'; script: MockAnswerScript }
+  | { kind: 'delay'; delayMs: number }
+  | { kind: 'hang' };
 
 // what a request looked like, without the token value or the body: a test proves what the
 // client sent without the journal becoming a place secrets collect
@@ -25,29 +41,58 @@ export interface MockRequestRecord {
 const isNonNegativeInteger = (value: unknown) =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0;
 
+const DISCRIMINATORS = ['status', 'delayMs', 'hang'] as const;
+const ANSWER_KEYS: ReadonlySet<string> = new Set(['status', 'body', 'headers', 'retryAfterSec']);
+
+// the one place a script's shape is read: assertScript validates with it, the server plays by it
+export function scriptKind(script: MockScript): PlayedScript {
+  if (script.hang !== undefined) return { kind: 'hang' };
+  if (script.delayMs !== undefined) return { kind: 'delay', delayMs: script.delayMs };
+  return { kind: 'answer', script: script as MockAnswerScript };
+}
+
 // a script the fixture cannot play as written would test something other than what it says
 export function assertScript(script: MockScript): void {
-  if ('status' in script) {
-    if (!Number.isInteger(script.status) || script.status < 200 || script.status > 599) {
-      throw new RangeError(`failNext: status must be an integer in 200..599, got ${script.status}`);
-    }
-    if (script.retryAfterSec !== undefined && !isNonNegativeInteger(script.retryAfterSec)) {
+  if (script === null || typeof script !== 'object') {
+    throw new TypeError('failNext: a script is { status }, { delayMs } or { hang: true }');
+  }
+  const fields = Object.entries(script).filter(([, value]) => value !== undefined);
+  const present = DISCRIMINATORS.filter((key) => fields.some(([field]) => field === key));
+  if (present.length !== 1) {
+    throw new TypeError(
+      `failNext: a script has exactly one of status, delayMs, hang; got ${present.join(', ') || 'none'}`,
+    );
+  }
+  const [discriminator] = present;
+  const allowed = (key: string) =>
+    discriminator === 'status' ? ANSWER_KEYS.has(key) : key === discriminator;
+  const extra = fields.map(([key]) => key).filter((key) => !allowed(key));
+  if (extra.length > 0) {
+    throw new TypeError(`failNext: { ${discriminator} } does not take ${extra.join(', ')}`);
+  }
+
+  const played = scriptKind(script);
+  if (played.kind === 'hang') {
+    if (script.hang !== true) throw new TypeError('failNext: hang must be true');
+    return;
+  }
+  if (played.kind === 'delay') {
+    if (!isNonNegativeInteger(played.delayMs)) {
       throw new RangeError(
-        `failNext: retryAfterSec must be a non-negative integer, got ${script.retryAfterSec}`,
+        `failNext: delayMs must be a non-negative integer, got ${played.delayMs}`,
       );
     }
     return;
   }
-  if ('delayMs' in script) {
-    if (!isNonNegativeInteger(script.delayMs)) {
-      throw new RangeError(
-        `failNext: delayMs must be a non-negative integer, got ${script.delayMs}`,
-      );
-    }
-    return;
+  const { status, retryAfterSec } = played.script;
+  if (!Number.isInteger(status) || status < 200 || status > 599) {
+    throw new RangeError(`failNext: status must be an integer in 200..599, got ${status}`);
   }
-  if ('hang' in script && script.hang === true) return;
-  throw new TypeError('failNext: a script is { status }, { delayMs } or { hang: true }');
+  if (retryAfterSec !== undefined && !isNonNegativeInteger(retryAfterSec)) {
+    throw new RangeError(
+      `failNext: retryAfterSec must be a non-negative integer, got ${retryAfterSec}`,
+    );
+  }
 }
 
 export class FaultQueue {
