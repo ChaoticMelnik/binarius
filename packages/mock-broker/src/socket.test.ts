@@ -184,6 +184,15 @@ describe('handshake', () => {
     await client.expectQuiet(ev('demo', 'update_balance'));
   });
 
+  it('leaves an authenticated socket its user when a later user.auth fails', async () => {
+    const client = await authed();
+    client.socket.emit(BrokerSocketEvent.UserAuth, { id: 1, token: 'nope' });
+    await client.waitFor(BrokerSocketEvent.UserAuthError);
+    expect(broker.socket.sockets()[0]?.userId).toBe(1);
+    broker.pairs.update(EURUSD, { payout: 70 });
+    await client.waitFor(BrokerSocketEvent.CommonAssetsUpdate);
+  });
+
   it('refuses a websocket-less client', async () => {
     const socket = io(broker.url, { transports: ['polling'], reconnection: false, forceNew: true });
     clients.push(socket);

@@ -1,11 +1,12 @@
-# Mock broker: the REST fixture (issue #103)
+# Mock broker: the REST and Socket.IO fixture (issues #103, #104)
 
 `packages/mock-broker` (`@binarius/mock-broker`) is a test-only stand-in for the Binodex Broker
 API. A test starts it on `127.0.0.1` with a random port and points its client at it. The fixture
 answers the four REST endpoints of #103: the user, the binary pairs, the user's trades (list and
 open), and the chart. A test can also script a failure for the next request on any of them: a
-429, a 5xx, a delay, or a request that never answers. It is a library only. Nothing in the repo
-starts it as a process or a compose service; that is #105.
+429, a 5xx, a delay, or a request that never answers. The same server and the same store also
+speak the broker's Socket.IO protocol (#104, [Socket.IO](#socketio)). It is a library only.
+Nothing in the repo starts it as a process or a compose service; that is #105.
 
 ```bash
 pnpm test packages/mock-broker   # the fixture's own tests; they need no database
@@ -30,10 +31,10 @@ await broker.close();
 
 | Member | What it does |
 | --- | --- |
-| `url` | `http://127.0.0.1:<port>`, without the `/v1/broker` prefix |
-| `state` | the store behind the routes (`createBrokerState()`); #104 attaches Socket.IO to the same store and announces `state.onChange` events (`trade_opened`, `trade_closed`, `pair_updated`) |
+| `url` | `http://127.0.0.1:<port>`, without the `/v1/broker` prefix; also the Socket.IO URL |
+| `state` | the store behind the routes and the socket (`createBrokerState()`); it announces `state.onChange` events (`trade_opened`, `trade_closed`, `pair_updated`, `token_revoked`) |
 | `users.register(seed)` | a user with a bearer token; defaults: level `standard`/1, `min_trade_amount` `1.00`, demo `10000.00` (#8), real `0.00` |
-| `users.revokeToken(token)` | the token is answered `Invalid token` from then on |
+| `users.revokeToken(token)` | the token is answered `Invalid token` from then on, and every socket of its user gets `user.disconnect_token_expired` and is dropped |
 | `users.get(id)` | the `GET /user` body |
 | `pairs.list()` / `pairs.update(id, { payout?, scheduled_until? })` | the catalogue, `DEFAULT_PAIRS` unless `options.pairs` is given |
 | `trades.list(userId)` | every trade of the user, newest first |
@@ -41,8 +42,9 @@ await broker.close();
 | `rest.failNext(endpoint, script)` | queues a script for the next request on `user`, `pairs`, `tradesList`, `openTrade` or `chart` |
 | `rest.journal` / `rest.clearJournal()` | every request, without the token or any body value |
 | `rest.pendingHangs` | how many `hang` requests are still waiting for `close()`; one whose client aborted is dropped |
-| `priceAt(assetId, atMs)` | the one price curve that produces chart candles, `open_price` and the default `close_price` |
-| `close()` | answers every hanging request with 503, then stops the server; rejects with an `AggregateError` if an `onChange` listener threw and the errors were not cleared ([Listeners](#listeners)) |
+| `socket` | the Socket.IO side: scripts, journal, connected sockets, price pushes ([Socket.IO](#socketio)) |
+| `priceAt(assetId, atMs)` | the one price curve that produces chart candles, `open_price`, the default `close_price` and `price.update` |
+| `close()` | answers every hanging request with 503, drops every socket, then stops the server; rejects with an `AggregateError` if an `onChange` listener threw and the errors were not cleared ([Listeners](#listeners)) |
 
 There are no timers and no fake clock. A trade stays open until a test settles it. Times come
 from `Date.now()`, so tests check relations between values (`close_timestamp = open_timestamp +
@@ -51,7 +53,8 @@ duration * 1000`), not absolute times.
 ## Listeners
 
 `state.onChange(listener)` is called after every change is committed: a trade opened or
-closed, a pair updated. A listener must not throw. If one does, the change stands, the other
+closed, a pair updated, a known token revoked (an unknown token changes nothing and announces
+nothing). The socket layer is one such listener. A listener must not throw. If one does, the change stands, the other
 listeners still run, the HTTP client gets its normal answer, and the error is kept in
 `state.listenerErrors`. `close()` then rejects with an `AggregateError` of those errors, so a
 test that did not expect them fails at teardown. A test that throws on purpose reads the errors
@@ -171,12 +174,169 @@ No record is left `'pending'` after `close()`.
 `bodyKeys` is present only where the body is read: without a script, or after a `{ delayMs }`.
 A request answered by a script or a hang never has its body parsed.
 
+## Socket.IO
+
+The Socket.IO server runs on the fixture's own HTTP server, so `broker.url` is both the REST
+base URL and the socket URL. Namespace `/`, path `/socket.io`, as in broker-web. Only the
+`websocket` transport is accepted: a client that keeps the default transports starts with
+polling and gets `connect_error`. The live transports are not known, and #99 is websocket-only.
+
+```ts
+import { io } from 'socket.io-client';
+import { startMockBroker } from '@binarius/mock-broker';
+
+const broker = await startMockBroker({ socketPayload: 'bytes' }); // as the live broker sends
+broker.users.register({ id: 1, accessToken: 'access-1' });
+const socket = io(broker.url, { transports: ['websocket'], reconnection: false });
+socket.emit('user.auth', { id: 1, token: 'access-1' });
+// user.auth.success (null), user.data, common.assets_list, then six observed extras
+
+broker.socket.failNext('openTrade', { disconnect: true, open: true });
+// the next open_trade drops the socket and the trade opens anyway
+```
+
+The socket never changes balances or trades itself: it calls the store, and every event that
+follows a change (`update_balance`, `close_trade.success`, `assets_update`,
+`disconnect_token_expired`) comes from one `state.onChange` listener. A REST trade, a socket trade
+and `settle()` therefore reach the sockets the same way. There are no timers: every event is
+the answer to an incoming event, to a store change, or to a `broker.socket.*` call.
+
+| `broker.socket` member | What it does |
+| --- | --- |
+| `failNext(endpoint, script)` | queues a script for the next `user.auth` (`'auth'`) or the next `open_trade` in either mode (`'openTrade'`) |
+| `journal` / `clearJournal()` | every incoming event, without the token or any payload value |
+| `sockets()` | the connected sockets in connection order: `{ id, userId?, subscriptions }`, subscriptions sorted |
+| `disconnect({ userId } \| { socketId })` | the server drops each matching socket (`io server disconnect` at the client); returns how many |
+| `pushPrice(assetId, atMs = Date.now())` | one `price.update` to each socket subscribed to the asset; returns how many. An asset without a pair throws `RangeError` |
+| `pushPrices(atMs = Date.now())` | one `price.update` per subscription of every socket, ids without a pair skipped; returns how many were sent |
+| `pendingDelays` | `openTrade` scripts still waiting on their `delayMs` |
+
+### Client → server
+
+Every incoming event is a journal record first. An event name the fixture does not know is
+recorded as `unknown` and ignored. A trailing ack function is counted in `argc` and never called
+(broker-web uses no acks, and none was seen live).
+
+| Event | Checks, in order | Answer |
+| --- | --- | --- |
+| `user.auth { id, token }` | an `auth` script; shared's `userAuthWireSchema` (`invalid`: `user.auth.error` with `Validation failed: "<field>" is required` / `is invalid`); the token belongs to `id`, compared as strings so `'1'` matches `1` (`auth_failed`: `Authentication failed: Invalid token`) | `user.auth.success` with one argument, `null`, then `user.data`, `common.assets_list` and the six observed extras below, in this order. A repeated `user.auth` is handled like the first: the burst comes again, a different user moves the socket to that user's events, and the subscriptions stay |
+| `price.subscribe { assets }` | authenticated (else nothing); shared's `priceSubscribeWireSchema`, 1..40 integers (else nothing, `invalid`) | the ids are added to the socket's subscriptions; `price.subscribed { assets }` echoes the request. An id without a pair is kept, and `pushPrices` skips it |
+| `user.{demo,real}.open_trade { asset_id, amount, action, duration }` | an `openTrade` script; authenticated (else nothing); shared's `socketOpenTradeRequestWireSchema` (`.fail [{ message, field }]`, same texts as the REST body); the store's checks, in the REST order (`.fail [{ message }]`, same texts as REST) | the trade opens in the event's mode. `user.<mode>.update_balance` goes to every socket of the user first, then `user.<mode>.open_trade.success` (the REST trade body, with `close_timestamp` and `symbol`) to the sender only |
+
+A failed `user.auth` leaves the socket as it was: a socket that never authenticated stays
+unauthenticated, and one that had authenticated keeps its user. Nothing before `user.auth`
+reaches a socket, except a scripted `open_trade` answer ([Socket scripts](#socket-scripts)).
+
+### Server → client
+
+Every payload except `null` goes through the fixture's payload form ([Payload forms](#payload-forms)).
+
+| Event | When | To |
+| --- | --- | --- |
+| `user.auth.success` (`null`), `user.auth.error { message }` | `user.auth` | the sender |
+| `user.data`, `common.assets_list` | a successful `user.auth` | the sender |
+| `user.real.close_trade.recent { trades: [] }`, `user.demo.close_trade.recent { trades: [] }`, `user.real.futures.positions { positions: [], orders: [] }`, `user.real.futures.closed.recent { orders: [] }`, `user.demo.futures.positions { … }`, `user.demo.futures.closed.recent { … }` | a successful `user.auth`, after `common.assets_list`, in this order; always empty | the sender |
+| `price.subscribed { assets }` | `price.subscribe` | the sender |
+| `price.update [assetId, price, atMs]` | `pushPrice` / `pushPrices`; `price` is `priceAt(assetId, atMs)` | subscribed sockets |
+| `user.<mode>.open_trade.success` / `.fail` | `open_trade` | the sender |
+| `user.<mode>.update_balance { available, held, total }` | a trade opened or settled in that mode, over REST or the socket | every socket of the user |
+| `user.<mode>.close_trade.success { trades: [closed] }` | `trades.settle()`, before that mode's `update_balance` | every socket of the user |
+| `common.assets_update { asset_id, payout, scheduled_until }` | `pairs.update()`, even with an empty patch | every authenticated socket |
+| `user.disconnect_token_expired` (`null`), then the server drops the socket | `users.revokeToken()` of a known token | every socket of the user |
+
+Money is decimal strings, as on REST (Drift 1 and 6). All 15 server→client events of shared's
+`BrokerServerToClientEvents` are emitted. The last test of `socket.test.ts` triggers each one in a
+single test and fails on a missing one; a type check in the same file fails to compile if
+the contract gains an event that the list does not name.
+
+### Observed vs fixture rule
+
+Observed on 2026-10-02 against the live broker (tech-lead's probe, socket.io-client 4.8.4,
+without trades; docs/broker-socket.md → Observed live):
+
+| Fact | Source |
+| --- | --- |
+| auth by the `user.auth { id, token }` event, not by handshake options | observed |
+| `user.auth.success` as one argument, `null` | observed |
+| the burst after auth: `user.data`, `common.assets_list`, then the six extras in the order of the table above | observed |
+| the six extras' payloads always empty | observed empty; the fixture never fills them |
+| `price.subscribed { assets }` after `price.subscribe` | observed with one id; the echo and the additive subscriptions are fixture rules |
+| `price.update` as one array `[assetId, price, third]` | observed; the third element is `atMs` here, its live unit is not known |
+| every payload a Node `Buffer` | observed: the `bytes` form |
+| `is_otc` on every pair of `common.assets_list` | observed; every `DEFAULT_PAIRS` entry carries it |
+| `user.auth.error`, `user.disconnect_token_expired`, `open_trade.success/.fail`, `update_balance`, `close_trade.success`, `common.assets_update` | not observed: from shared and broker-web (#8). The texts are the REST texts; a client classifies by the event, never by the text |
+| `update_balance` before `open_trade.success`, `close_trade.success` before `update_balance` | fixture rules (the store announces a change before the socket answers) |
+| ack callbacks never called, websocket only, no idle drop | fixture rules |
+
+The live server closed the probe's connection after about 16.7 s (`transport close`). The fixture
+never drops a socket on its own. A test drops one with `socket.disconnect(...)` or a script.
+
+### Socket scripts
+
+Each endpoint has its own one-shot FIFO queue, like `rest.failNext`. One `openTrade` queue serves
+both modes. A script is consumed when its event arrives, before auth and validation, as REST
+scripts are. So a scripted `fail` also reaches a socket that has not authenticated.
+
+| Endpoint | Script | Effect |
+| --- | --- | --- |
+| `auth` | `{ error: { message } }` | `user.auth.error` with this text |
+| `auth` | `{ silent: true }` | no answer |
+| `auth` | `{ disconnect: true }` | the server drops the socket, no answer |
+| `openTrade` | `{ fail: [{ message, field? }] }` | `user.<mode>.open_trade.fail` with this array; nothing opens |
+| `openTrade` | `{ silent: true, open? }` | no answer. With `open: true` the command runs as without a script (schema, then the store), so the trade opens if the store accepts it and the sender still gets `update_balance`: a balance is not a confirmation |
+| `openTrade` | `{ disconnect: true, open? }` | the server drops the socket first. With `open: true` the command then runs, so the trade opens and `update_balance` reaches only the user's other sockets |
+| `openTrade` | `{ delayMs }` | waits, then handles the event as if it arrived only then: auth, schema and store are read after the delay. A sender that left meanwhile gets no answer, and the trade still opens |
+
+`open: true` is "the order opened, the answer was lost". A client learns the outcome only by
+reading `GET /v1/broker/user/trades`, which shows the trade, or `broker.trades.list(userId)` in a
+test. `failNext` throws on a script it cannot play as written: a `TypeError` for an unknown
+endpoint, no shape or mixed shapes, `silent`/`disconnect` other than `true`, `open` other than a
+boolean or on `fail`/`delayMs`/`auth`, an `error` without a string `message` or a `fail` that is
+not shared's `openTradeFailWireSchema`; a `RangeError` for a negative or fractional `delayMs`.
+The type says the same.
+
+### Socket journal
+
+`broker.socket.journal` holds one record per incoming event, in arrival order: `{ socketId,
+event, argc, userId?, outcome }`. `userId` is the socket's user after the event was handled.
+`outcome` is a `MockSocketOutcome`: `handled`, `scripted`, `unauthenticated`, `invalid`,
+`auth_failed` or `unknown`. No token, payload value or asset id is stored; the subscriptions are
+visible through `sockets()`. `connect` and `disconnect` are not events and are not recorded.
+
+### Payload forms
+
+`startMockBroker({ socketPayload })` picks how every server→client payload is delivered; one form
+per fixture:
+
+| `socketPayload` | A Node client receives |
+| --- | --- |
+| `'object'` (default) | the object |
+| `'json'` | a JSON string |
+| `'bytes'` | a `Buffer` of the UTF-8 JSON (the live form) |
+| `'envelope'` | `{ data: [...bytes] }` |
+
+`null` (`user.auth.success`, `user.disconnect_token_expired`) is sent as `null` in every form, as
+seen live. An `ArrayBuffer` or a typed array reaches a Node client as the same `Buffer`, so they
+are one form here. Shared's `decodeSocketPayload` turns each form back into the same object. The
+default is `object`, but the live broker sends `bytes`, so #99 runs its main suite under
+`'bytes'` and repeats it over all four. Any other value throws `RangeError` before the server
+listens.
+
+### Close
+
+`close()` answers REST hangs and cuts REST delays as before. Then it cancels the socket scripts'
+delays (nothing more runs for them), drops every socket (`io server disconnect` at the client) and
+stops the engine, and only then closes the HTTP server. The order matters: Fastify's
+`app.close()` does not return while a WebSocket client is connected, and socket.io's
+`io.close()` waits for an HTTP connection that `close()` has cut but not yet dropped. Both were
+checked against socket.io 4.8.4 and Fastify 5.12.5. A second `close()` resolves.
+
 ## Drift
 
 The fixture follows the shared contract wherever the contract has an answer. Each response is
 checked in the fixture's own tests by shared's `safeParse*` functions. In the places below,
 shared and the live broker (or `binodex/broker-web`) disagreed or shared was silent; items 1–3
-are resolved, 4–5 remain:
+are resolved, 4–5 and 9 remain, and 6–8 are handled on the consumer's side:
 
 1. **Money form. Resolved 2026-10-02.** The live `GET /v1/broker/user` answers every money field
    as a JSON integer. Since #98 shared accepts a decimal string or a safe JSON integer
@@ -195,6 +355,21 @@ are resolved, 4–5 remain:
    as a signal to drop the duplicate check.
 5. **`is_demo`** is optional in broker-web and always present in shared and in the fixture. The
    live trade list was empty on 2026-10-02, so this waits for a live trade.
+6. **Money on the socket.** The live `user.data` carried every money field as a JSON integer. The
+   socket sends decimal strings like REST, and shared parses both forms. Like item 1, it moves
+   to the live form together with REST, in the same follow-up, once the unit is known
+   (docs/broker-rest.md → Open items 1). `balanceWire`, `openWire` and `closedWire` in `state.ts`
+   are the one place to change for both.
+7. **`user.auth.success` carries one argument, `null`**, where shared's event map says
+   `() => void`. The normalizer's `extraArgs` rule does not count that `null`
+   (docs/broker-socket.md → `extraArgs`).
+8. **Seven events outside shared's map**: `price.subscribed` and the six post-auth extras. The
+   normalizer answers them `unknown_event` by design (docs/broker-socket.md → Observed live), and
+   #99 drops them without treating them as errors. The fixture names them in one constant,
+   `OBSERVED_EXTRA_EVENTS` in `socket.ts`.
+9. **Open for #99:** the unit of `price.update`'s third element (the fixture sends ms), and why
+   the live server closed the probe's connection after about 16.7 s (keepalive, a session limit or
+   something else). The fixture models neither.
 
 ## Accepted risks
 
@@ -207,13 +382,22 @@ are resolved, 4–5 remain:
 - The chart cap of 5000: the live broker answered `limit=5000` with 4999 rows. Whether that is a
   cap or the data window is not known.
 - The status for opening a trade (200) was not observed.
+- Socket: the default payload form `object` is not the live `bytes` (owner decision, #104). A
+  consumer's suite that never sets `socketPayload` runs on the less faithful form.
+- Socket: the order of `update_balance` and `open_trade.success`, and of `close_trade.success`
+  and `update_balance`, was not observed. Neither was the echo of `price.subscribed` with more
+  than one id, nor what the live broker does with more than 40 ids.
+- Socket: the six post-auth extras are always empty, even when the store holds closed trades. A
+  non-empty live form has not been seen; when #99 sees one, the fixture follows.
 
 ## Boundaries
 
 - The `BrokerRestClient` and its tests landed in #98 (docs/broker-rest.md). The issue's
   criterion "used by the `BrokerRestClient` tests" is closed there.
-- Socket.IO on the same server and store: #104.
+- Socket.IO on the same server and store landed in #104. The `BrokerSocketClient` and its
+  subscriptions are #99, the trade executor #100, the session manager and the end-to-end scenario
+  #101.
 - The OAuth endpoints, moving `apps/backend/src/broker/testing/oauth-stub.ts` here, and a `bin`
   or compose service: #105.
 - Changes to `packages/shared`: money, chart and `{trades}` landed in #98; `symbol` and
-  `close_timestamp` (Drift 4) remain.
+  `close_timestamp` (Drift 4) remain. #104 changes nothing in shared (Drift 6-9).
