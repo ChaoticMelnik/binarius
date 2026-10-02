@@ -20,6 +20,7 @@ import type {
 } from './partner';
 import type { AssetsUpdate, PriceUpdate, SocketOpenTradeRequest } from './socket';
 import type { TradeIntent, TradeIntentView } from './trading';
+import * as account from './account';
 import * as admin from './admin';
 import * as broker from './broker';
 import * as env from './env';
@@ -236,6 +237,7 @@ describe('contract coverage (issue #6)', () => {
 
   it('root index re-exports every module', () => {
     const modules = {
+      account,
       admin,
       money,
       time,
