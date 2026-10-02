@@ -450,6 +450,18 @@ const EMAIL_STEP_BRANCHES: readonly Branch[] = [
     sendEmailCode: refusedWith(400, reason),
     expected: { backend: 1, telegram: 1 },
   })),
+  ...(
+    [
+      [401, 'unauthorized'],
+      [400, 'validation'],
+    ] as const
+  ).map(([status, reason]): Branch => ({
+    label: `the backend refuses before the letter with ${status} ${reason}`,
+    update: textUpdate(EMAIL),
+    dialog: ON_EMAIL_STEP,
+    sendEmailCode: refusedWith(status, reason),
+    expected: { backend: 1, telegram: 1 },
+  })),
   {
     label: 'the backend fails for any other reason',
     update: textUpdate(EMAIL),
@@ -576,6 +588,13 @@ const RESEND_BRANCHES: readonly Branch[] = [
     sendEmailCode: refusedWith(429, reason),
     expected: { backend: 1, telegram: 2 },
   })),
+  {
+    label: 'a new code is refused before the letter with 401',
+    update: callbackUpdate(RESEND_CALLBACK_DATA),
+    dialog: ON_CODE_STEP,
+    sendEmailCode: refusedWith(401, 'unauthorized'),
+    expected: { backend: 1, telegram: 2 },
+  },
   {
     label: 'the backend fails for any other reason',
     update: callbackUpdate(RESEND_CALLBACK_DATA),

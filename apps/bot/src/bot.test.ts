@@ -622,6 +622,61 @@ describe('the address step', () => {
     expect(dialog.get(USER.id)).toBeUndefined();
   });
 
+  // every other 4xx comes before the broker (apps/backend/src/auth/routes.ts), so no letter went
+  // out; 415 with no reason stands for a 4xx of Fastify's own, whose body has no error code
+  it.each([
+    [400, 'validation'],
+    [401, 'unauthorized'],
+    [404, 'not_found'],
+    [415, undefined],
+  ])(
+    'keeps the address step on a %i %s before the letter, and takes the address again',
+    async (status, reason) => {
+      const sendEmailCode = refusedOnce(status, reason, CODE_SENT);
+      const { bot, calls, dialog, logger } = setup({ dialog: ON_EMAIL_STEP, sendEmailCode });
+      await bot.handleUpdate(textUpdate(EMAIL));
+      const message = sentPayload(calls, 'sendMessage');
+      expect(message?.text).toBe(TEXTS.unavailable);
+      expect(message?.reply_markup).toBeUndefined();
+      expect(dialog.get(USER.id)).toEqual(ON_EMAIL_STEP);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ backendStatus: status }),
+        'email code not sent',
+      );
+
+      await bot.handleUpdate(textUpdate(EMAIL));
+      expect(sendEmailCode).toHaveBeenCalledTimes(2);
+      expect(sentTexts(calls)).toEqual([TEXTS.unavailable, TEXTS.codeSent(EMAIL)]);
+    },
+  );
+
+  it('does not give the step kept after a refusal before the letter a new lifetime', async () => {
+    let at = 0;
+    const { bot, dialog } = setup({
+      dialog: ON_EMAIL_STEP,
+      now: () => at,
+      sendEmailCode: refused(401, 'unauthorized'),
+    });
+    at = LOGIN_DIALOG_TTL_MS - 1;
+    await bot.handleUpdate(textUpdate(EMAIL));
+    at = LOGIN_DIALOG_TTL_MS;
+    expect(dialog.get(USER.id)).toBeUndefined();
+  });
+
+  // a failure that is not the backend's answer at all: nothing says the letter did not go out
+  it('moves to the code step and warns when the client fails with something else', async () => {
+    const { bot, calls, dialog, logger } = setup({
+      dialog: ON_EMAIL_STEP,
+      sendEmailCode: vi.fn(() => Promise.reject(new TypeError('boom'))),
+    });
+    await bot.handleUpdate(textUpdate(EMAIL));
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.codeSentUnknown(EMAIL));
+    expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
+    expect(dialog.get(USER.id)).toEqual({ step: 'code', email: EMAIL });
+    expect(logger.warn.mock.calls[0]?.[1]).toBe('email code not sent');
+  });
+
   // the letter may have gone out although its answer did not come back
   it.each([
     ['unreachable', unreachable()],
@@ -867,6 +922,34 @@ describe('the resend button', () => {
       expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
       expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
       expect(logger.warn).not.toHaveBeenCalled();
+
+      await bot.handleUpdate(textUpdate(CODE));
+      expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
+    },
+  );
+
+  // refused before the letter (apps/backend/src/auth/routes.ts): the code already sent stays good
+  it.each([
+    [400, 'validation'],
+    [401, 'unauthorized'],
+    [404, 'not_found'],
+    [415, undefined],
+  ])(
+    'keeps the code step on a %i %s before the letter, and takes the old code',
+    async (status, reason) => {
+      const { bot, backend, calls, dialog, logger } = setup({
+        dialog: ON_CODE_STEP,
+        sendEmailCode: refused(status, reason),
+      });
+      await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
+      const message = sentPayload(calls, 'sendMessage');
+      expect(message?.text).toBe(TEXTS.unavailable);
+      expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
+      expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ backendStatus: status }),
+        'email code not sent',
+      );
 
       await bot.handleUpdate(textUpdate(CODE));
       expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
