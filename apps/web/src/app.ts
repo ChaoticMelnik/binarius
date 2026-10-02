@@ -1,7 +1,13 @@
 import cookie from '@fastify/cookie';
 import formbody from '@fastify/formbody';
-import Fastify, { LogController, type FastifyError, type FastifyInstance } from 'fastify';
-import { errorLogFields, LOG_REDACT_PATHS, type LogLevel } from '@binarius/shared';
+import Fastify, {
+  LogController,
+  type FastifyBaseLogger,
+  type FastifyError,
+  type FastifyInstance,
+} from 'fastify';
+import pino, { type DestinationStream } from 'pino';
+import { errorLogFields, logOptions, type LogLevel } from '@binarius/shared';
 import { adminRoutes } from './admin/routes';
 import { TEXTS } from './admin/texts';
 import { sendHtml } from './html';
@@ -20,7 +26,7 @@ export interface WebAppDeps {
   // where the logger writes; production omits it. What these pages keep out of their log
   // lines is only provable by reading them, and pino writes to a file descriptor that
   // stubbing process.stdout does not reach.
-  logDestination?: { write(line: string): void };
+  logDestination?: DestinationStream;
 }
 
 export const ADMIN_CSP = [
@@ -39,17 +45,18 @@ export function buildWebApp({
   logLevel,
   logDestination,
 }: WebAppDeps): FastifyInstance {
+  // Typed as Fastify's logger: left to inference, pino's Logger becomes the instance's logger
+  // type parameter and the app no longer is the FastifyInstance the route modules take.
+  const logger: FastifyBaseLogger = pino(logOptions(logLevel), logDestination);
   const app = Fastify({
     // An instance, not the class: Fastify validates `userController instanceof LogController`,
     // and options given to Fastify never reach a supplied controller. There are no access log
     // lines at all — a URL here carries a session id in its path and a login in its form, and
     // the durable record of who did what is audit_log, not this process's stdout.
     logController: new LogController({ disableRequestLogging: true }),
-    logger: {
-      level: logLevel,
-      redact: [...LOG_REDACT_PATHS],
-      ...(logDestination === undefined ? {} : { stream: logDestination }),
-    },
+    // An instance rather than `logger` options: Fastify's option type requires an `err`
+    // serializer to return `{ type, message, stack }`, which is what the whitelist withholds.
+    loggerInstance: logger,
   });
 
   void app.register(cookie);

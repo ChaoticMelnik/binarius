@@ -3,7 +3,12 @@ import pino from 'pino';
 import { BotError, HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
-import { confirmCallbackData, LOG_REDACT_PATHS } from '@binarius/shared';
+import {
+  confirmCallbackData,
+  logOptions,
+  UNNAMED_ERROR_MESSAGE,
+  type LogLevel,
+} from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { OAUTH_CALLBACK_DATA, createBot } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
@@ -34,12 +39,9 @@ import { TEXTS } from './texts';
 const TOKEN = '123456:AA-SECRET-TOKEN-0000000000000000';
 const INTERNAL_TOKEN = 'SECRET-INTERNAL-BEARER-0000';
 
-const sink = (level = 'info') => {
+const sink = (level: LogLevel = 'info') => {
   const lines: string[] = [];
-  const logger = pino(
-    { level, redact: [...LOG_REDACT_PATHS] },
-    { write: (line: string) => void lines.push(line) },
-  );
+  const logger = pino(logOptions(level), { write: (line: string) => void lines.push(line) });
   return { lines, logger };
 };
 
@@ -59,7 +61,7 @@ interface Scenario {
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
   dialog?: LoginDialogState;
-  level?: string;
+  level?: LogLevel;
 }
 
 async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: ApiCall[] }> {
@@ -651,4 +653,24 @@ describe('what the bot writes when a part of the profile is not registered', () 
       expect(lineWith(lines, 'long polling stopped with an error')).toBeUndefined();
     },
   );
+});
+
+// the logger's own whitelist, for an error that reaches it positionally: pino would otherwise
+// write the error whole and copy its message into `msg`
+describe('what the bot writes about an error logged positionally', () => {
+  it('names the error, writes a fixed message, and keeps the token out of the line', () => {
+    const { lines, logger } = sink();
+    const failure = Object.assign(
+      new Error(`request to https://api.telegram.org/bot${TOKEN}/getMe failed`),
+      { code: 'ECONNRESET' },
+    );
+    logger.error(failure);
+
+    expect(parsed(lines[0])).toMatchObject({
+      msg: UNNAMED_ERROR_MESSAGE,
+      err: { name: 'Error', code: 'ECONNRESET' },
+    });
+    expect(parsed(lines[0]).err).toStrictEqual({ name: 'Error', code: 'ECONNRESET' });
+    expect(lines.join('')).not.toContain('SECRET-TOKEN');
+  });
 });

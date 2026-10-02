@@ -1,12 +1,19 @@
 import Fastify, {
   LogController,
+  type FastifyBaseLogger,
   type FastifyError,
   type FastifyInstance,
   type FastifyReply,
   type FastifyRequest,
-  type LogLevel,
 } from 'fastify';
-import { errorIdentity, errorLogFields, LOG_REDACT_PATHS } from '@binarius/shared';
+import pino, { type DestinationStream } from 'pino';
+import {
+  errorIdentity,
+  errorLogFields,
+  LOG_SERIALIZERS,
+  logOptions,
+  type LogLevel,
+} from '@binarius/shared';
 import { adminRoutes, type AdminRoutesDeps } from './admin/routes';
 import { authRoutes, type AuthRoutesDeps } from './auth/routes';
 import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
@@ -26,24 +33,23 @@ export interface AppDeps {
   // Where the logger writes. Production omits it and pino uses its own destination; the tests
   // pass a sink, because what this app keeps out of its log lines is only provable by reading
   // them, and pino writes to a file descriptor that stubbing `process.stdout` does not reach.
-  // Typed structurally rather than as pino's DestinationStream: this package does not depend
-  // on pino directly.
-  logDestination?: { write(line: string): void };
+  logDestination?: DestinationStream;
 }
 
 type CheckResult = { status: 'ok' } | { status: 'error'; error: unknown };
 
-// Fastify logs a handful of events itself, and it logs the error object whole: `{ err: error }`
-// plus `error.message` as the log message, which is the message, the stack and whatever fields
-// the error carries. Our own 4xx path reaches it, because the error handler delegates through
-// `reply.send(error)`. These overrides keep every operational field and level the originals
-// have — dropping `res`, `responseTime` or `statusCode` would cost the reason those lines exist
-// — and replace only the error itself and the free-text message.
+// Fastify logs a handful of events itself, as `{ err: error }`. The logger's serializer reduces
+// that `err` to its whitelist (logOptions), but two of these lines also pass `error.message` as
+// the log message — the default error log and the head-write failure — and a message given
+// explicitly is out of the serializer's and the hook's reach. Our own 4xx path reaches the
+// first, because the error handler delegates through `reply.send(error)`. These overrides keep
+// every operational field and level the originals have — dropping `res`, `responseTime` or
+// `statusCode` would cost the reason those lines exist — and replace the error and the message.
 //
-// This does not make the log free of raw errors: Fastify also logs client errors, hook errors,
-// rejected promises after send, trailer errors, a stream error on an auto-generated HEAD route,
-// and a raw url in its duplicate-reply warning without going through this class — and the lint
-// rule cannot see inside a dependency either. docs/binodex-oauth.md says which of those remain.
+// Fastify's other own lines — client errors, hook errors, rejected promises after send, a stream
+// error on an auto-generated HEAD route — carry the error under `err` and so reach the log by
+// name and code only. Its duplicate-reply warning still writes the raw url into the message.
+// docs/binodex-oauth.md says what remains.
 class SafeLogController extends LogController {
   override requestCompleted(
     error: Error | null | undefined,
@@ -128,20 +134,27 @@ export function buildApp({
   admin,
   logDestination,
 }: AppDeps): FastifyInstance {
+  // Typed as Fastify's logger: left to inference, pino's Logger becomes the instance's logger
+  // type parameter and the app no longer is the FastifyInstance every route module takes.
+  const logger: FastifyBaseLogger = pino(
+    {
+      ...logOptions(logLevel),
+      // the default serializer logs the raw url, and the broker delivers the authorization
+      // code as a query parameter of the redirect
+      serializers: { ...LOG_SERIALIZERS, req: serializeRequest },
+    },
+    logDestination,
+  );
   const app = Fastify({
     // An instance, not the class: Fastify validates `userController instanceof LogController`.
     // Its options belong here rather than in the Fastify options — a supplied controller is
     // returned as-is, so `disableRequestLogging` or `requestIdLogLabel` given to Fastify would
     // never reach it. The empty object takes the same defaults Fastify would have applied.
     logController: new SafeLogController({}),
-    logger: {
-      level: logLevel,
-      redact: [...LOG_REDACT_PATHS],
-      // the default serializer logs the raw url, and the broker delivers the authorization
-      // code as a query parameter of the redirect
-      serializers: { req: serializeRequest },
-      ...(logDestination === undefined ? {} : { stream: logDestination }),
-    },
+    // An instance rather than `logger` options: Fastify's option type requires an `err`
+    // serializer to return `{ type, message, stack }`, which is what the whitelist withholds.
+    // Fastify merges its own `res` serializer under these and keeps ours.
+    loggerInstance: logger,
   });
 
   // Fastify's own not-found log builds its message from the raw url, where no redact path and

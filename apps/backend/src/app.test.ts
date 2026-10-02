@@ -1,5 +1,6 @@
 import { DrizzleQueryError } from 'drizzle-orm/errors';
 import { describe, expect, it } from 'vitest';
+import { UNNAMED_ERROR_MESSAGE } from '@binarius/shared';
 import { buildApp, withoutSecrets, type AppDeps } from './app';
 import type { AuthRoutesDeps } from './auth/routes';
 import type { TradingRoutesDeps } from './trading/routes';
@@ -210,6 +211,51 @@ describe('what reaches the log', () => {
       const text = logs.text();
       expect(text).not.toContain('MARKER-SECRET');
       expect(text).not.toContain('    at ');
+    });
+  });
+
+  // Fastify's own lines that no override covers: the logger's serializer and hook are what keep
+  // them to the whitelist
+  const leaky = () =>
+    Object.assign(new TypeError('message with MARKER-SECRET'), {
+      code: 'E_LEAKY',
+      detail: 'DETAIL-SECRET',
+      cause: Object.assign(new Error('CAUSE-SECRET'), { code: '23505' }),
+    });
+  const WHITELISTED = { name: 'TypeError', code: 'E_LEAKY', cause: { name: 'Error', code: '23505' } };
+  const expectNoSecret = (text: string) => {
+    for (const secret of ['MARKER-SECRET', 'DETAIL-SECRET', 'CAUSE-SECRET', '    at ']) {
+      expect(text).not.toContain(secret);
+    }
+  };
+
+  it('logs a rejection after the reply was sent by the whitelist', async () => {
+    await withLogs(async (app, logs) => {
+      app.get('/sent-then-failed', async (_request, reply) => {
+        await reply.send('ok');
+        throw leaky();
+      });
+      expect((await app.inject({ method: 'GET', url: '/sent-then-failed' })).statusCode).toBe(
+        200,
+      );
+      expect(logs.entry('Promise errored, but reply.sent = true was set').err).toStrictEqual(
+        WHITELISTED,
+      );
+      expectNoSecret(logs.text());
+    });
+  });
+
+  it('logs an error passed to the request logger positionally with a fixed message', async () => {
+    await withLogs(async (app, logs) => {
+      app.get('/positional', async (request) => {
+        request.log.error(leaky());
+        return 'ok';
+      });
+      expect((await app.inject({ method: 'GET', url: '/positional' })).statusCode).toBe(200);
+      const entry = logs.entry(UNNAMED_ERROR_MESSAGE);
+      expect(entry.err).toStrictEqual(WHITELISTED);
+      expect(entry.reqId).toBeDefined();
+      expectNoSecret(logs.text());
     });
   });
 

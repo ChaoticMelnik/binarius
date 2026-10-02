@@ -4,6 +4,7 @@ import {
   AdminErrorCode,
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
+  UNNAMED_ERROR_MESSAGE,
   type StaffSessionView,
 } from '@binarius/shared';
 import { buildWebApp } from './app';
@@ -556,6 +557,46 @@ describe('what reaches the log', () => {
     expect(failure?.err).toEqual({ name: 'Error' });
     expect(lines.join('')).not.toContain('super-secret');
     expect(lines.join('')).not.toContain(TOKEN);
+  });
+
+  // Fastify's own lines and a positional error: the logger's serializer and hook keep them to
+  // the whitelist, with no override in this app
+  const leaky = () =>
+    Object.assign(new TypeError('message with MARKER-SECRET'), {
+      code: 'E_LEAKY',
+      detail: 'DETAIL-SECRET',
+      cause: Object.assign(new Error('CAUSE-SECRET'), { code: '23505' }),
+    });
+  const WHITELISTED = { name: 'TypeError', code: 'E_LEAKY', cause: { name: 'Error', code: '23505' } };
+  const loggedLines = () => lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+  const expectNoSecret = () => {
+    for (const secret of ['MARKER-SECRET', 'DETAIL-SECRET', 'CAUSE-SECRET', '    at ']) {
+      expect(lines.join('')).not.toContain(secret);
+    }
+  };
+
+  it('logs a rejection after the reply was sent by the whitelist', async () => {
+    app.get('/sent-then-failed', async (_request, reply) => {
+      await reply.send('ok');
+      throw leaky();
+    });
+    expect((await get('/sent-then-failed')).statusCode).toBe(200);
+    const entry = loggedLines().find(
+      (line) => line.msg === 'Promise errored, but reply.sent = true was set',
+    );
+    expect(entry?.err).toStrictEqual(WHITELISTED);
+    expectNoSecret();
+  });
+
+  it('logs an error passed to the request logger positionally with a fixed message', async () => {
+    app.get('/positional', async (request) => {
+      request.log.error(leaky());
+      return 'ok';
+    });
+    expect((await get('/positional')).statusCode).toBe(200);
+    const entry = loggedLines().find((line) => line.msg === UNNAMED_ERROR_MESSAGE);
+    expect(entry?.err).toStrictEqual(WHITELISTED);
+    expectNoSecret();
   });
 
   it('writes no access line for a page it served', async () => {
