@@ -815,7 +815,7 @@ PR #195, rebase-merged (6 коммитов, голова `f96d581`). 17 файл
 
 | Finding | Severity | Класс | Root cause | Missed at step |
 |---------|----------|-------|------------|-----------------|
-| Guard `${A+${B:?}}` ломал каждый `compose config` на раннере | Process | env-parity | Правило «CI-tooling на версии раннера» не применено к compose; проверено только на 5.5.1 | Architect plan → **внедрено в #<DOCS_PR>** |
+| Guard `${A+${B:?}}` ломал каждый `compose config` на раннере | Process | env-parity | Правило «CI-tooling на версии раннера» не применено к compose; проверено только на 5.5.1 | Architect plan → **внедрено в #207** |
 
 ### Review iterations: 0
 
@@ -840,7 +840,7 @@ PR #196, rebase-merged после **3 кругов (лимит)**, голова 
 |---------|----------|-------|------------|-----------------|
 | M1 | Major | other | Состояние прочитано до `await` | Architect plan |
 | M2 | Major | instance-vs-class | Фикс M1 не прошёл все пути записи | Architect Plan Update R1 |
-| Общий scratchpad: чужой `check.sh` перезаписан, один `pnpm check` прошёл не в том дереве | Process | other | Параллельные агенты в одном scratchpad | Tech Lead → **внедрено в #<DOCS_PR>** |
+| Общий scratchpad: чужой `check.sh` перезаписан, один `pnpm check` прошёл не в том дереве | Process | other | Параллельные агенты в одном scratchpad | Tech Lead → **внедрено в #207** |
 
 ### Review iterations: 2
 
@@ -865,14 +865,14 @@ PR #203, rebase-merged (6 коммитов, голова `3efec56`). **Два к
 
 | Finding | Severity | Класс | Root cause | Missed at step |
 |---------|----------|-------|------------|-----------------|
-| Часы VM после сна | Major | env-parity | Приёмка без sleep/wake; пробник без проверки расхождения с хостом | Architect plan → **внедрено в #<DOCS_PR>** |
-| Усечённый `brew --dry-run` | Process | unverified-claim | Вывод инструмента обрезан `head` | Implementer → **внедрено в #<DOCS_PR>** |
+| Часы VM после сна | Major | env-parity | Приёмка без sleep/wake; пробник без проверки расхождения с хостом | Architect plan → **внедрено в #207** |
+| Усечённый `brew --dry-run` | Process | unverified-claim | Вывод инструмента обрезан `head` | Implementer → **внедрено в #207** |
 
 ### Review iterations: 1
 
 ### Process improvement proposals (все четыре задачи)
 
-1. **Compose на версии раннера + раздел «среда разработчика» в плане.** — **внедрено в #<DOCS_PR>: `.claude/skills/architect/SKILL.md` → Task classes (Compose / env, Developer environment)**
-2. **Параллельные implementer'ы на одной машине** (свой worktree через `git worktree add` + lock, свой scratch-подкаталог, sub-skills на `gh pr diff`, окно общего Postgres). — **внедрено в #<DOCS_PR>: `.claude/skills/tech-lead/SKILL.md` → Conflict detection → Step 7**
+1. **Compose на версии раннера + раздел «среда разработчика» в плане.** — **внедрено в #207: `.claude/skills/architect/SKILL.md` → Task classes (Compose / env, Developer environment)**
+2. **Параллельные implementer'ы на одной машине** (свой worktree через `git worktree add` + lock, свой scratch-подкаталог, sub-skills на `gh pr diff`, окно общего Postgres). — **внедрено в #207: `.claude/skills/tech-lead/SKILL.md` → Conflict detection → Step 7**
 3. **Minor-находки:** #177 — владелец: не заводить; #192 → **вынесено в #197**; #103 → **вынесено в #204**; #166 → **вынесено в #206**, дедлайны в тестах → **вынесено в #205**.
 4. **Пост-фактум Codex по `e374541`, `f96d581`, `f3ac5cd`, `3efec56`** — присоединяется к предложению 4 аудита #163. — **открыто (2026-10-02, владелец): после сброса лимита 2026-10-05**
