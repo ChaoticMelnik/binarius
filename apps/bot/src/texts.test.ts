@@ -51,7 +51,10 @@ describe('texts', () => {
     const text = entry(HOSTILE_ARGUMENT);
     expect(plainTextOf(text)).toContain(HOSTILE_ARGUMENT);
     expect(text.value).toContain(
-      HOSTILE_ARGUMENT.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
+      HOSTILE_ARGUMENT.replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;'),
     );
   });
 

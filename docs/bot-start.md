@@ -35,51 +35,53 @@ API over a shared bearer.
   bot  → POST /users/start { telegramUserId, displayName, languageCode?, startPayload? }
   back → { user: { telegramUserId, status, acquisitionSource, acquiredAt, hasActiveBrokerAccount,
                    pendingBrokerAccounts } }
-  bot  → blocked                  → "Доступ ограничен", no button
-         pendingBrokerAccounts    → "Найдена новая привязка…" + one "Подтвердить" button per link
-         hasActiveBrokerAccount   → "С возвращением", no button
+  bot  → blocked                  → "🔒 Доступ ограничен", no button
+         pendingBrokerAccounts    → "🔐 Найдена новая привязка…" + one "✅ Подтвердить" button
+                                    per link
+         hasActiveBrokerAccount   → "👋 С возвращением!", no button
          otherwise                → welcome (video caption when configured) + two buttons:
-                                    "Подключить аккаунт Binodex" (connect),
-                                    "Войти через сайт Binodex" (oauth)
+                                    "🔗 Подключить аккаунт Binodex" (connect),
+                                    "🌐 Войти через сайт Binodex" (oauth)
 
-tap "Подключить аккаунт Binodex" (callback data connect)
-  bot  → answerCallbackQuery, dialog → address step, "Пришлите адрес…"
+tap "🔗 Подключить аккаунт Binodex" (callback data connect)
+  bot  → answerCallbackQuery, dialog → address step, "📧 Пришли адрес электронной почты…"
 
 text on the address step
-  bot  → not an address (emailAddressSchema) → "Это не похоже на адрес…", no backend call
+  bot  → not an address (emailAddressSchema) → "❌ Это не похоже на адрес…", no backend call
          POST /auth/binodex/email/send-code { telegramUserId, email }
   back → { codeSent: true }
-  bot  → dialog → code step, "Код отправлен на <address>…" + "Запросить код ещё раз" (resend)
-         and "Изменить адрес" (connect)
-         no answer, 5xx or a broken body → dialog → code step all the same, "Не удалось
-         подтвердить отправку кода на <address>…" + the same two buttons: the letter may have
-         gone out
-         any other 4xx (400 validation, 401, 404, a Fastify 4xx) → "Сервис временно
-         недоступен…", the address step stays: the backend refused before the letter
+  bot  → dialog → code step, "📩 Код отправлен на <address>…" + "🔄 Запросить код ещё раз"
+         (resend) and "✏️ Изменить адрес" (connect)
+         no answer, 5xx or a broken body → dialog → code step all the same,
+         "⚠️ Не удалось подтвердить отправку кода на <address>…" + the same two buttons: the
+         letter may have gone out
+         any other 4xx (400 validation, 401, 404, a Fastify 4xx) →
+         "⚠️ Сервис временно недоступен…", the address step stays: the backend refused before
+         the letter
 
 text on the code step
-  bot  → empty after trimming, or longer than 64 characters (emailLoginCodeSchema) → "Код не
-         подошёл…", no backend call
+  bot  → empty after trimming, or longer than 64 characters (emailLoginCodeSchema) →
+         "❌ Код не подошёл…", no backend call
          POST /auth/binodex/email/login { telegramUserId, email, code }
   back → { account, grant }
-  bot  → dialog ends, the outcome with the pack, as after "Подтвердить"
+  bot  → dialog ends, the outcome with the pack, as after "✅ Подтвердить"
          a failure that is not a definite refusal → POST /users/start, the recheck below
 
-tap "Запросить код ещё раз" (callback data resend)
+tap "🔄 Запросить код ещё раз" (callback data resend)
   bot  → answerCallbackQuery ∥ POST /auth/binodex/email/send-code with the dialog's address
-         a 429 → "Новый код сейчас запросить нельзя…", the code step stays: the code already
-         sent is still good
-         any other 4xx → "Сервис временно недоступен…" + the same two buttons, the code step
+         a 429 → "⚠️ Новый код сейчас запросить нельзя…", the code step stays: the code
+         already sent is still good
+         any other 4xx → "⚠️ Сервис временно недоступен…" + the same two buttons, the code step
          stays: the backend refused before the letter, and the code already sent is still good
 
-tap "Войти через сайт Binodex" (callback data oauth)
+tap "🌐 Войти через сайт Binodex" (callback data oauth)
   bot  → answerCallbackQuery ∥ POST /auth/binodex/start { telegramUserId }
   back → { authorizeUrl, state, expiresAt, miniAppUrl? }
   bot  → message with a web_app button on miniAppUrl, which opens apps/web's login page as a
          Mini App (#114); without miniAppUrl — an http redirect URI, the local stack — a url
          button on authorizeUrl, because Telegram opens only https Mini Apps
 
-tap "Подтвердить" (callback data confirm:<account id>) — from /start, or from the backend's
+tap "✅ Подтвердить" (callback data confirm:<account id>) — from /start, or from the backend's
 push after an OAuth login (#128): the same button, handled the same way
   bot  → answerCallbackQuery ∥ POST /auth/binodex/confirm { telegramUserId, accountId }
   back → { account, grant }
@@ -89,14 +91,14 @@ push after an OAuth login (#128): the same button, handled the same way
 
 A waiting link comes before "welcome back" on purpose: a user with an active account who finds
 a new link they did not make has to see it, not a greeting (binodex-oauth.md → Why a new account
-starts pending). The button reads `Подтвердить: <email>`, or `Подтвердить привязку` when the broker
-sent no email. Callback data that matches `confirm:` but is not a uuid only stops the spinner.
+starts pending). The button reads `✅ Подтвердить: <email>`, or `✅ Подтвердить привязку` when the
+broker sent no email. Callback data that matches `confirm:` but is not a uuid only stops the spinner.
 The refusals the user can act on have their own text — `broker_account_not_found` (start over),
-`account_not_pending` (already confirmed), `user_blocked` — and anything else is "Сервис временно
-недоступен" with a warn line carrying the backend status.
+`account_not_pending` (already confirmed), `user_blocked` — and anything else is "⚠️ Сервис
+временно недоступен" with a warn line carrying the backend status.
 
-Buttons sent before #171 carry `connect` under the same label, so they now open the email
-dialog — the label still says what happens.
+Buttons sent before #171 carry `connect`, so they now open the email dialog; an old message keeps
+its older label (without the emoji), which still says what happens.
 
 What happens after the tap is the Mini App's (#114, [binodex-oauth.md → The Mini App
 pages](binodex-oauth.md#the-mini-app-pages-114)): `apps/web`'s login page navigates to the broker
@@ -286,19 +288,21 @@ Every text a Telegram user receives is Telegram HTML, sent with `parse_mode: 'HT
 (the push alone). The staff bot (`apps/backend/src/admin`) stays plain text, addressed with «вы»
 (the owner's decision of 2026-10-02).
 
-**The module.** `packages/shared/src/telegram-html.ts` holds `telegramHtml`, a tagged template
-that escapes every hole (`&`, `<`, `>` — the three the Bot API requires; `_`, `*` and quotes mean
-nothing in HTML mode), and `TelegramHtml`, the type it returns. The type is nominal: a string or an
-object literal is not one, so «📩 Код отправлен на <address>» can carry what the user typed only
-through a hole, escaped once. A `TelegramHtml` in a hole, or an array of them, is nested without a
-second escaping pass. A static part of a template is the author's: a literal `&` or `<` there is
-written as an entity. A cast defeats the type, as it defeats any.
+**The module.** `packages/shared/src/telegram-html.ts` holds `telegramHtml`, a tagged template that
+escapes every hole (`&`, `<`, `>` and `"` — the three the Bot API requires in text, and the quote so
+a hole inside an attribute cannot close it; `'`, `_`, `*` mean nothing in HTML mode), and
+`TelegramHtml`, the type it returns. The type is nominal: a string or an object literal is not one,
+so «📩 Код отправлен на <address>» can carry what the user typed only through a hole, escaped once. A
+`TelegramHtml` in a hole, or an array of them, is nested without a second escaping pass. A static
+part of a template is the author's: a literal `&` or `<` there is written as an entity. A cast
+defeats the type, as it defeats any.
 
 **Two seams.** `parse_mode` is set and `TelegramHtml` is unwrapped in two places only:
 `apps/bot/src/send.ts` (`replyHtml`, `replyWithVideoHtml`) and
-`apps/backend/src/auth/link-notifier.ts`. ESLint (`eslint.config.js`, the Telegram block) forbids
-grammY's send methods by name everywhere else in `apps/bot/src` and `apps/backend/src/auth`; it does
-not see a method held in a variable.
+`apps/backend/src/auth/link-notifier.ts`; a caller's extra can neither override `parse_mode` nor
+pass `entities`. ESLint (`eslint.config.js`, the Telegram block) forbids grammY's send methods by
+name everywhere else in `apps/bot/src` and `apps/backend/src/auth`; it does not see a method held in
+a variable.
 
 **Labels are plain.** Button labels and the `/start` description (`LABELS`, `LINK_LABELS`) are not
 parsed by Telegram, so they are plain strings and are never escaped: «✅ Подтвердить: <email>»
@@ -316,13 +320,13 @@ Telegram refusal at runtime ("can't parse entities") goes through the existing e
 is no check at send time.
 
 **Style** (the owner, 2026-10-02): «ты»; an emoji at the start of each meaningful line and in a
-header; a bold first line for a message of more than one line; a reward in a `<blockquote>`;
-every button label starts with an emoji, the `/start` description does not; short lines, one
-thought each. Texts promise no profit, no signal accuracy and no "model training", and the only
-number in them is the backend's token count, printed as it arrives. A multi-line text starts at
-column zero in the source, since indentation inside a template is part of the message; the tests
-refuse a line that starts or ends with a space. A button named inside a text is quoted by its
-exact label, emoji included.
+header; a bold header line where a message has one (a warning that is itself the first line, as in
+`codeSentUnknown`, carries no header); a reward in a `<blockquote>`; every button label starts with
+an emoji, the `/start` description does not; short lines, one thought each. Texts promise no profit,
+no signal accuracy and no "model training", and the only number in them is the backend's token
+count, printed as it arrives. A multi-line text starts at column zero in the source, since
+indentation inside a template is part of the message; the tests refuse a line that starts or ends
+with a space. A button named inside a text is quoted by its exact label, emoji included.
 
 New messages (the pinned card, the bot profile, nudges) are written with the same module: a
 message goes into a `TelegramHtml` constant beside `TEXTS`, a label or a profile description that
@@ -343,7 +347,7 @@ plugin — and is rethrown into `bot.catch` unchanged rather than reported as on
 
 Telegram's «Меню» button and the hints shown when the user types `/` list one command: `/start` —
 «Начать». The list is `BOT_COMMANDS` in `apps/bot/src/commands.ts`, the only place it is written;
-the description is `TEXTS.startCommand`. The next command is one more element there and one more
+the description is `LABELS.startCommand`. The next command is one more element there and one more
 literal in the `setMyCommands` assertions of `lifecycle.test.ts`, which name the values on purpose.
 `commands.test.ts` holds the Bot API limits (a command of 1-32 lowercase letters, digits and
 underscores, a description of 1-256 UTF-16 code units, at most 100 commands, each once) and sends

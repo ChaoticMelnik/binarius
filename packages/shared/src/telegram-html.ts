@@ -37,11 +37,14 @@ export type { TelegramHtmlValue as TelegramHtml };
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
 export const TELEGRAM_CAPTION_LIMIT = 1024;
 
-const ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+const ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
 
-// Only the three the Bot API requires: `"`, `'`, `_` and `*` mean nothing in HTML mode text.
+// The three the Bot API requires in text, plus `"`, so a hole inside an attribute
+// (`href="${url}"`) cannot close it — &quot; is one of the four named entities Telegram accepts.
+// `'` stays: Telegram has no &apos;, and inside a `"`-delimited attribute it cannot break out.
+// `_` and `*` mean nothing in HTML mode.
 export const escapeTelegramHtml = (value: string): string =>
-  value.replace(/[&<>]/g, (c) => ESCAPES[c] ?? c);
+  value.replace(/[&<>"]/g, (c) => ESCAPES[c] ?? c);
 
 // No number or bigint: tokens and money are strings in every view, and a number that reaches a
 // text was converted somewhere it should not have been. No null either: the caller decides what

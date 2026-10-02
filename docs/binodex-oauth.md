@@ -36,9 +36,9 @@ web ──POST /auth/binodex/callback (public, no bearer), the body unchanged─
         │  initData signature + age (no query) ──▶ CAS on the state row
         │  ──▶ initData user == state's Telegram id ──▶ exchange code
         │  ──▶ link user + broker account (pending)
-        │  after the commit: sendMessage to the state's Telegram id ──▶ "Подтвердить" button (#128)
+        │  after the commit: sendMessage to the state's Telegram id ──▶ "✅ Подтвердить" button (#128)
         ◀── { account }                       web ──▶ page: { outcome } ──▶ its text
-user ──/start──▶ bot: pendingBrokerAccounts is not empty ──▶ "Подтвердить" button (#10)
+user ──/start──▶ bot: pendingBrokerAccounts is not empty ──▶ "✅ Подтвердить" button (#10)
 bot ──POST /auth/binodex/confirm (internal token)──▶ backend   pending ──▶ active, starter pack
         ◀── { account, grant }
 later: ensureFreshAccessToken(accountId) ──▶ stored token, or one exchange, or a revocation
@@ -85,7 +85,7 @@ this order (`apps/backend/src/auth/routes.ts`):
 5. the Telegram id the `initData` names against `oauth_states.telegram_user_id` from the row the
    CAS returned. A mismatch is 403 `telegram_user_mismatch`: the state stays spent, the code never
    reaches the broker, nothing is written to `broker_accounts`, and the state's owner gets the
-   «Не удалось завершить вход…» push. The response says nothing about the owner to the browser
+   «❌ Не удалось завершить вход…» push. The response says nothing about the owner to the browser
    that sent it;
 6. the code exchange and the link, as before.
 
@@ -204,8 +204,8 @@ that is still going to happen; its shutdown budget is 11 s and the compose `stop
 14 s. Both chains throw at import when out of order.
 
 **The first live test**, on a phone with the VPS deployed and the local stack stopped (they share
-the bot token): `/start` → «Войти через сайт Binodex» → the `web_app` button → the broker's login
-inside the Mini App → the callback page → «Готово» → the push with «Подтвердить». It checks the
+the bot token): `/start` → «🌐 Войти через сайт Binodex» → the `web_app` button → the broker's login
+inside the Mini App → the callback page → «Готово» → the push with «✅ Подтвердить». It checks the
 two assumptions nothing here can: (a) the webview keeps `sessionStorage` across `binodex.app`
 and back — «Откройте вход из Telegram ещё раз» on the callback page although it was opened from
 Telegram means it does not, and the fix is another carrier for the proof (a new issue); (b) the
@@ -307,12 +307,12 @@ to the chat.
 
 | Outcome of the callback | Status | Message |
 | --- | --- | --- |
-| a new link, or a re-login of an account still `pending` | 200 | «Найдена новая привязка…» with one «Подтвердить: ‹email›» button for that account — what `/start` shows for it (#10); the bot handles the press as before |
-| a re-login of an account that was `active` or `revoked` (it is `active` again) | 200 | «Аккаунт Binodex подключён.», no button: nothing is paid on this path |
-| `user_blocked` | 409 | «Доступ ограничен…» |
-| `broker_account_taken` | 409 | «Этот аккаунт Binodex уже подключён к другому пользователю Telegram…», to the user who started the login, never to the account's owner |
-| `invalid_code`, `broker_unavailable`, `broker_contract_violation` | 400 / 502 | «Не удалось завершить вход через сайт Binodex. Попробуйте ещё раз через /start.» — the state is spent, so a retry needs a new one |
-| `telegram_user_mismatch` | 403 | the same «Не удалось завершить вход…», to the state's owner only, never to the Telegram user the `initData` names; the state is spent and the code was never exchanged |
+| a new link, or a re-login of an account still `pending` | 200 | «🔐 Найдена новая привязка…» with one «✅ Подтвердить: ‹email›» button for that account — what `/start` shows for it (#10); the bot handles the press as before |
+| a re-login of an account that was `active` or `revoked` (it is `active` again) | 200 | «✅ Аккаунт Binodex подключён!», no button: nothing is paid on this path |
+| `user_blocked` | 409 | «🔒 Доступ ограничен…» |
+| `broker_account_taken` | 409 | «❌ Этот аккаунт Binodex уже подключён к другому пользователю Telegram…», to the user who started the login, never to the account's owner |
+| `invalid_code`, `broker_unavailable`, `broker_contract_violation` | 400 / 502 | «❌ Не удалось завершить вход через сайт Binodex. Попробуй ещё раз через /start.» — the state is spent, so a retry needs a new one |
+| `telegram_user_mismatch` | 403 | the same «❌ Не удалось завершить вход…», to the state's owner only, never to the Telegram user the `initData` names; the state is spent and the code was never exchanged |
 | `validation`, `invalid_telegram_auth` | 400 / 401 | none: the state has not been read, so there is no addressee |
 | `invalid_state` | 400 | none: the state is what names the addressee |
 | a database failure | 500 | none: the outcome is unknown |
@@ -359,7 +359,7 @@ callback() {   # state, code, Telegram id the initData names
 ```
 
 - Without the broker: `callback "$(start | jq -r .state)" any-code 1` answers
-  `{"error":"telegram_user_mismatch"} 403`, and your chat gets «Не удалось завершить вход…».
+  `{"error":"telegram_user_mismatch"} 403`, and your chat gets «❌ Не удалось завершить вход…».
 - With the broker: `start`, log in at its `authorizeUrl`, take the code from the address bar (as
   in the live check below) and run `callback <state> <code> "$MY_ID"` within 120 seconds: the
   chat gets the message for that outcome.

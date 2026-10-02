@@ -254,7 +254,7 @@ export function createBot({
     await replyHtml(ctx, grantText(login.grant));
   });
 
-  // `step` is the step the code was asked from: the address, or «Запросить код ещё раз» on the
+  // `step` is the step the code was asked from: the address, or «🔄 Запросить код ещё раз» on the
   // code step. The same refusal means a different thing for the dialog on each (SEND_CODE_REFUSALS).
   async function replyToSendCode(
     ctx: Context,
@@ -477,7 +477,7 @@ interface Refusal {
 // route's ceiling across all users, checked before anything else: no letter, no slot of this
 // user's, no code spent, so the step stays. too_many_attempts is this user's or this address's
 // own allowance for the next minutes, so asking for an address again is pointless — but a code
-// already sent stays good, which is why a refused «Запросить код ещё раз» keeps the code step.
+// already sent stays good, which is why a refused «🔄 Запросить код ещё раз» keeps the code step.
 // Anything not listed is either a refusal before the letter (a sub-500 status) or an unknown
 // outcome (replyToSendCode).
 const SEND_CODE_REFUSALS: Record<LoginDialogState['step'], Partial<Record<string, Refusal>>> = {
