@@ -32,13 +32,15 @@ export const HANDLER_CALLS = {
   // answerCallbackQuery ∥ startLogin, then sendMessage — the parallel pair is counted as
   // sequential, so this bound is loose by BACKEND_REQUEST_TIMEOUT_MS (accepted)
   oauth: { backend: 1, telegram: 2 },
-  // answerCallbackQuery ∥ confirmLogin, then sendMessage — counted the same way as oauth
-  confirm: { backend: 1, telegram: 2 },
+  // answerCallbackQuery ∥ confirmLogin — counted the same way as oauth — then the account card:
+  // sendPhoto refused by Telegram (GrammyError) → sendMessage, unpinAllChatMessages, pinChatMessage
+  confirm: { backend: 1, telegram: 5 },
   // a text on the address step: sendEmailCode, then sendMessage
   emailStep: { backend: 1, telegram: 1 },
   // a text on the code step: emailLogin, the recheck through recordStart when its outcome is
-  // not a definite refusal, then sendMessage
-  codeStep: { backend: 2, telegram: 1 },
+  // not a definite refusal and the recheck finds the account active, then the account card as
+  // in confirm: sendPhoto refused → sendMessage, unpinAllChatMessages, pinChatMessage
+  codeStep: { backend: 2, telegram: 4 },
   // answerCallbackQuery ∥ sendEmailCode, then sendMessage — counted the same way as oauth
   resend: { backend: 1, telegram: 2 },
 } as const;
@@ -54,7 +56,7 @@ export const handlerBudgetMs = ({
 // The longest declared handler path, in milliseconds.
 export const HANDLER_BUDGET_MS = Math.max(...Object.values(HANDLER_CALLS).map(handlerBudgetMs));
 // bot.stop() plus whatever middleware is still in flight.
-export const SHUTDOWN_BUDGET_MS = 25_000;
+export const SHUTDOWN_BUDGET_MS = 50_000;
 // How long grammY sleeps before retrying a failed getUpdates (out/bot.js, handlePollingError).
 // Nothing of ours configures it and bot.stop() does not interrupt the sleep, so a SIGTERM
 // during a backoff waits it out — with no update in flight, which is why an overrun there
@@ -63,7 +65,7 @@ export const SHUTDOWN_BUDGET_MS = 25_000;
 // than trusting this line.
 export const GRAMMY_POLLING_BACKOFF_MS = 3_000;
 // stop_grace_period of the compose service `bot`, kept in step by timing.test.ts.
-export const COMPOSE_STOP_GRACE_PERIOD_MS = 30_000;
+export const COMPOSE_STOP_GRACE_PERIOD_MS = 55_000;
 
 export const TIMING_CHAIN_HOLDS =
   POLLING_BATCH_LIMIT === 1 &&

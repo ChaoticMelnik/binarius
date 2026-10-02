@@ -173,8 +173,9 @@ export interface CapturedApi {
 }
 
 // Every outgoing Bot API call is recorded here instead of reaching Telegram. Unprogrammed
-// methods answer `result: true`, which no handler reads today; the first handler that reads
-// what a Bot API call returned has to be given a typed answer here instead.
+// methods answer `result: true`. The account card reads the message_id of the sendPhoto or
+// sendMessage that carried it, so a scene that reaches the pin programs those two with
+// messageAnswer; a handler that starts reading another result needs the same.
 export function captureApi(bot: Bot): CapturedApi {
   const captured: CapturedApi = { calls: [], apiErrors: new Map(), answers: new Map() };
   bot.api.config.use(((
@@ -197,6 +198,20 @@ export function captureApi(bot: Bot): CapturedApi {
   }) as Parameters<typeof bot.api.config.use>[0]);
   return captured;
 }
+
+// The message ids the account card's two carriers answer with, distinct so a test can tell
+// which message was pinned.
+export const CARD_MESSAGE_ID = 501;
+export const TEXT_CARD_MESSAGE_ID = 502;
+
+// The result of a send: grammY passes it through unchecked, and the bot reads only message_id.
+export const messageAnswer =
+  (message_id: number): ApiAnswer =>
+  () => ({
+    message_id,
+    date: 1,
+    chat: { id: USER.id, type: 'private', first_name: USER.first_name },
+  });
 
 export const sentPayload = (
   calls: readonly ApiCall[],

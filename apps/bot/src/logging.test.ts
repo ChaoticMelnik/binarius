@@ -10,6 +10,7 @@ import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   BOT_INFO,
+  CARD_MESSAGE_ID,
   CODE_SENT,
   CONFIRMED,
   LOGIN,
@@ -18,6 +19,7 @@ import {
   USER_VIEW,
   captureApi,
   callbackUpdate,
+  messageAnswer,
   rejectionOf,
   startUpdate,
   textUpdate,
@@ -352,7 +354,8 @@ describe('what the bot writes during the email dialog', () => {
       dialog: ON_CODE_STEP,
       answers: [
         [
-          'sendMessage',
+          // the reply to a login that went through is the account card
+          'sendPhoto',
           () => {
             throw new TypeError(`cannot send to ${ADDRESS} after ${CODE}`);
           },
@@ -457,6 +460,103 @@ describe('what the bot writes about the welcome video', () => {
       lineWith(lines, 'the welcome video call failed in transport, sending nothing more'),
     ).toBeUndefined();
     expect(calls.map((call) => call.method)).toEqual(['sendVideo']);
+  });
+});
+
+// The card's caption holds the account's address and the update holds the code typed, so every
+// line about the card is read at trace and searched for both.
+describe('what the bot writes about the account card', () => {
+  const ADDRESS = 'SECRET-ADDRESS@example.test';
+  const CODE = 'SECRET-CODE-123';
+  const onCodeStep = (scene: Pick<Scenario, 'apiErrors'>): Scenario => ({
+    update: textUpdate(CODE),
+    dialog: { step: 'code', email: ADDRESS },
+    emailLogin: () =>
+      Promise.resolve({ ...CONFIRMED, account: { ...CONFIRMED.account, email: ADDRESS } }),
+    answers: [
+      ['sendPhoto', messageAnswer(CARD_MESSAGE_ID)],
+      ['sendMessage', messageAnswer(CARD_MESSAGE_ID)],
+    ],
+    level: 'trace',
+    ...scene,
+  });
+  const refusal = (description: string): ApiError => ({
+    ok: false,
+    error_code: 400,
+    description: `Bad Request: SECRET-DESC ${description}`,
+  });
+
+  const expectNoSecrets = (lines: readonly string[]): void => {
+    const all = lines.join('');
+    expect(all).not.toContain('SECRET-ADDRESS');
+    expect(all).not.toContain(CODE);
+    expect(all).not.toContain('SECRET-DESC');
+    expect(all).not.toContain('SECRET-TOKEN');
+  };
+
+  it('names the method and the code of a refused photo, and nothing of the caption', async () => {
+    const { lines, calls } = await linesFrom(
+      onCodeStep({ apiErrors: [['sendPhoto', refusal('IMAGE_PROCESS_FAILED')]] }),
+    );
+    expect(
+      lineWith(lines, 'the account card photo was refused, sending the text instead'),
+    ).toMatchObject({ err: { name: 'GrammyError' }, method: 'sendPhoto', telegramErrorCode: 400 });
+    expect(calls.map((call) => call.method)).toEqual([
+      'sendPhoto',
+      'sendMessage',
+      'unpinAllChatMessages',
+      'pinChatMessage',
+    ]);
+    expectNoSecrets(lines);
+  });
+
+  it('reports a transport failure of the photo by identity and method, and drops the token', async () => {
+    const update = textUpdate(CODE);
+    const { lines, calls } = await linesFrom({
+      ...onCodeStep({
+        apiErrors: [
+          [
+            'sendPhoto',
+            new HttpError(
+              "Network request for 'sendPhoto' failed!",
+              new Error(`request to https://api.telegram.org/bot${TOKEN}/sendPhoto failed`),
+            ),
+          ],
+        ],
+      }),
+      update,
+    });
+    const logged = lineWith(
+      lines,
+      'the account card call failed in transport, sending nothing more',
+    );
+    expect(logged).toMatchObject({
+      level: 50,
+      err: { name: 'HttpError' },
+      method: 'sendPhoto',
+      transportError: { name: 'Error' },
+      updateId: update.update_id,
+    });
+    expect(logged?.err).not.toHaveProperty('message');
+    expect(lineWith(lines, 'update handler failed')).toBeUndefined();
+    expect(calls.map((call) => call.method)).toEqual(['sendPhoto']);
+    expectNoSecrets(lines);
+  });
+
+  it.each([
+    ['unpinAllChatMessages', 'the old pins were not cleared'],
+    ['pinChatMessage', 'the account card was not pinned'],
+  ])('names a refused %s by method and code at warn', async (method, msg) => {
+    const { lines } = await linesFrom(
+      onCodeStep({ apiErrors: [[method, refusal('not enough rights')]] }),
+    );
+    expect(lineWith(lines, msg)).toMatchObject({
+      level: 40,
+      err: { name: 'GrammyError' },
+      method,
+      telegramErrorCode: 400,
+    });
+    expectNoSecrets(lines);
   });
 });
 

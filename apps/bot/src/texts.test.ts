@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { plainTextOf, TELEGRAM_CAPTION_LIMIT } from '@binarius/shared';
+import { plainTextOf, TELEGRAM_CAPTION_LIMIT, type LinkBonusGrantView } from '@binarius/shared';
 import { telegramTextProblems } from '@binarius/shared/testing';
-import { LABELS, TEXTS } from './texts';
+import { accountCard, LABELS, TEXTS, type AccountCardInput } from './texts';
 
 describe('texts', () => {
   // the welcome travels as a caption whenever WELCOME_VIDEO_FILE_ID is set, and a caption over
@@ -71,5 +71,81 @@ describe('texts', () => {
   // failure (review of PR #176, finding 5)
   it('does not tell a user without a dialog that the code expired', () => {
     expect(plainTextOf(TEXTS.codeRequestStale)).not.toMatch(/ист[её]к/i);
+  });
+
+  describe('the account card', () => {
+    // Each hole at its real maximum, made of the characters that mean something in markup:
+    // Telegram's 64 for a first name, RFC 5321's 254 for an address, 19 digits for a bigint.
+    const NAME = `<&>_*"`.repeat(11).slice(0, 64);
+    const ADDRESS = HOSTILE_ARGUMENT;
+    const TOKENS = '9'.repeat(19);
+    const escaped = (value: string) =>
+      value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+
+    const GRANTS: readonly [string, LinkBonusGrantView | null][] = [
+      ['granted', { granted: true, tokens: TOKENS }],
+      ['not partner', { granted: false, reason: 'not_partner_client' }],
+      ['already', { granted: false, reason: 'already_granted' }],
+      ['unknown', null],
+    ];
+    const VARIANTS: readonly [string, AccountCardInput][] = GRANTS.flatMap(([label, grant]) => [
+      [`email, ${label}`, { firstName: NAME, email: ADDRESS, grant }] as const,
+      [`no email, ${label}`, { firstName: NAME, email: null, grant }] as const,
+    ]);
+
+    it.each(VARIANTS)('keeps the card (%s) valid and inside the caption limit', (_label, input) => {
+      expect(telegramTextProblems(accountCard(input), TELEGRAM_CAPTION_LIMIT)).toEqual([]);
+    });
+
+    it.each(VARIANTS)('shows the name and the address (%s) as typed', (_label, input) => {
+      const card = accountCard(input);
+      expect(plainTextOf(card)).toContain(NAME);
+      expect(card.value).toContain(escaped(NAME));
+      if (input.email === null) {
+        expect(plainTextOf(card)).not.toContain('📧');
+      } else {
+        expect(plainTextOf(card)).toContain(ADDRESS);
+        expect(card.value).toContain(escaped(ADDRESS));
+      }
+    });
+
+    it('is the greeting, the address, the body and the pack, one blank line apart', () => {
+      const card = accountCard({
+        firstName: 'Ada',
+        email: 'ada@example.test',
+        grant: { granted: true, tokens: '7' },
+      });
+      expect(card.value).toBe(
+        [
+          `${TEXTS.cardGreeting('Ada').value}\n${TEXTS.cardEmail('ada@example.test').value}`,
+          TEXTS.cardBody.value,
+          TEXTS.cardBonusGranted('7').value,
+        ].join('\n\n'),
+      );
+    });
+
+    it('says why no pack was paid, and nothing about a pack when that is unknown', () => {
+      const card = (grant: LinkBonusGrantView | null) =>
+        plainTextOf(accountCard({ firstName: 'Ada', email: null, grant }));
+      expect(card({ granted: false, reason: 'not_partner_client' })).toContain(
+        plainTextOf(TEXTS.cardBonusNotPartner),
+      );
+      expect(card({ granted: false, reason: 'already_granted' })).toContain(
+        plainTextOf(TEXTS.cardBonusAlready),
+      );
+      const unknown = card(null);
+      expect(unknown).not.toMatch(/🎁|ℹ️/u);
+      expect(unknown.endsWith(plainTextOf(TEXTS.cardBody))).toBe(true);
+    });
+
+    // the Bot API guarantees a first name non-empty, not non-blank
+    it('greets a blank name without it, and trims a padded one', () => {
+      expect(TEXTS.cardGreeting('   ').value).toBe('🎉 <b>Привет!</b>');
+      expect(TEXTS.cardGreeting(' Ada ').value).toBe('🎉 <b>Привет, Ada!</b>');
+    });
   });
 });

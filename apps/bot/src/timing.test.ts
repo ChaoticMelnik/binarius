@@ -10,6 +10,7 @@ import { CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA, RESEND_CALLBACK_DATA, creat
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   BOT_INFO,
+  CARD_MESSAGE_ID,
   CODE,
   CODE_SENT,
   CONFIRMED,
@@ -17,10 +18,12 @@ import {
   LOGIN,
   PENDING_ACCOUNT_ID,
   USER,
+  TEXT_CARD_MESSAGE_ID,
   USER_VIEW,
   captureApi,
   callbackUpdate,
   fakeLogger,
+  messageAnswer,
   startUpdate,
   textUpdate,
   type ApiAnswer,
@@ -74,6 +77,64 @@ const videoTimedOut = (): HttpError =>
     "Network request for 'sendVideo' failed!",
     new Error('The operation was aborted due to timeout'),
   );
+const PHOTO_REFUSED: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: IMAGE_PROCESS_FAILED',
+};
+const PIN_REFUSED: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: not enough rights to manage pinned messages in the chat',
+};
+const photoTimedOut = (): HttpError =>
+  new HttpError(
+    "Network request for 'sendPhoto' failed!",
+    new Error('The operation was aborted due to timeout'),
+  );
+const photoFailsUnexpectedly: ApiAnswer = () => {
+  throw new TypeError('sentinel');
+};
+
+// What happens once the account card is due, shared by the confirm button and the code step:
+// the Telegram calls each outcome makes, and what the scene programs to get there.
+interface CardOutcome {
+  label: string;
+  telegram: number;
+  scene: Pick<Branch, 'apiErrors' | 'answers'>;
+}
+
+const PHOTO_REFUSED_OUTCOME: CardOutcome = {
+  label: 'the photo is refused and the text card is sent and pinned instead',
+  telegram: 4,
+  scene: { apiErrors: [['sendPhoto', PHOTO_REFUSED]] },
+};
+
+const CARD_OUTCOMES: readonly CardOutcome[] = [
+  { label: 'the card is sent and pinned', telegram: 3, scene: {} },
+  {
+    label: 'the old pins are not cleared',
+    telegram: 3,
+    scene: { apiErrors: [['unpinAllChatMessages', PIN_REFUSED]] },
+  },
+  {
+    label: 'the card is not pinned',
+    telegram: 3,
+    scene: { apiErrors: [['pinChatMessage', PIN_REFUSED]] },
+  },
+  // delivery is unknown, so nothing is sent or pinned after it
+  {
+    label: 'the photo call fails in transport',
+    telegram: 1,
+    scene: { apiErrors: [['sendPhoto', photoTimedOut()]] },
+  },
+  // rethrown into bot.catch
+  {
+    label: 'the photo call fails for a reason the transport cannot produce',
+    telegram: 1,
+    scene: { answers: [['sendPhoto', photoFailsUnexpectedly]] },
+  },
+];
 
 const withoutSender = (update: Update): Update => {
   const copy = structuredClone(update) as { message?: { from?: unknown } };
@@ -119,6 +180,8 @@ async function observe(branch: Branch): Promise<Calls> {
       : { welcomeVideoFileId: branch.welcomeVideoFileId }),
   });
   const api = captureApi(bot);
+  api.answers.set('sendPhoto', messageAnswer(CARD_MESSAGE_ID));
+  api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   for (const [method, failure] of branch.apiErrors ?? []) api.apiErrors.set(method, failure);
   for (const [method, answer] of branch.answers ?? []) api.answers.set(method, answer);
   // a branch that rethrows reaches the polling loop as a rejection; the calls it made before
@@ -306,9 +369,10 @@ const confirmRefused = (status: number, reason?: string) => () =>
 const CONFIRM_UPDATE = callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID));
 
 const CONFIRM_WORST_CASE: Branch = {
-  label: 'the query is answered and the pack is reported',
+  label: `the query is answered and ${PHOTO_REFUSED_OUTCOME.label}`,
   update: CONFIRM_UPDATE,
-  expected: { backend: 1, telegram: 2 },
+  ...PHOTO_REFUSED_OUTCOME.scene,
+  expected: { backend: 1, telegram: 1 + PHOTO_REFUSED_OUTCOME.telegram },
 };
 
 const CONFIRM_BRANCHES: readonly Branch[] = [
@@ -324,25 +388,31 @@ const CONFIRM_BRANCHES: readonly Branch[] = [
     expected: { backend: 0, telegram: 1 },
   },
   CONFIRM_WORST_CASE,
+  ...CARD_OUTCOMES.map((outcome): Branch => ({
+    label: `the query is answered and ${outcome.label}`,
+    update: CONFIRM_UPDATE,
+    ...outcome.scene,
+    expected: { backend: 1, telegram: 1 + outcome.telegram },
+  })),
   {
     label: 'the link is confirmed without a pack for a non-partner account',
     update: CONFIRM_UPDATE,
     confirmLogin: () =>
       Promise.resolve({ ...CONFIRMED, grant: { granted: false, reason: 'not_partner_client' } }),
-    expected: { backend: 1, telegram: 2 },
+    expected: { backend: 1, telegram: 4 },
   },
   {
     label: 'the link is confirmed without a pack already paid',
     update: CONFIRM_UPDATE,
     confirmLogin: () =>
       Promise.resolve({ ...CONFIRMED, grant: { granted: false, reason: 'already_granted' } }),
-    expected: { backend: 1, telegram: 2 },
+    expected: { backend: 1, telegram: 4 },
   },
   {
-    label: 'answering the query is refused and the outcome still goes',
+    label: 'answering the query is refused and the card still goes',
     update: CONFIRM_UPDATE,
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-    expected: { backend: 1, telegram: 2 },
+    expected: { backend: 1, telegram: 4 },
   },
   {
     label: 'the backend no longer finds the link',
@@ -472,11 +542,13 @@ const EMAIL_STEP_BRANCHES: readonly Branch[] = [
 ];
 
 const CODE_STEP_WORST_CASE: Branch = {
-  label: 'an invalid code is rechecked and no account is active',
+  label: `an invalid code is rechecked, the account is active, and ${PHOTO_REFUSED_OUTCOME.label}`,
   update: textUpdate(CODE),
   dialog: ON_CODE_STEP,
   emailLogin: refusedWith(400, OAuthErrorCode.InvalidCode),
-  expected: { backend: 2, telegram: 1 },
+  recordStart: () => Promise.resolve({ ...USER_VIEW, hasActiveBrokerAccount: true }),
+  ...PHOTO_REFUSED_OUTCOME.scene,
+  expected: { backend: 2, telegram: PHOTO_REFUSED_OUTCOME.telegram },
 };
 
 const CODE_STEP_BRANCHES: readonly Branch[] = [
@@ -486,19 +558,20 @@ const CODE_STEP_BRANCHES: readonly Branch[] = [
     dialog: ON_CODE_STEP,
     expected: { backend: 0, telegram: 1 },
   },
-  {
-    label: 'the login pays the pack',
+  ...[...CARD_OUTCOMES, PHOTO_REFUSED_OUTCOME].map((outcome): Branch => ({
+    label: `the login pays the pack and ${outcome.label}`,
     update: textUpdate(CODE),
     dialog: ON_CODE_STEP,
-    expected: { backend: 1, telegram: 1 },
-  },
+    ...outcome.scene,
+    expected: { backend: 1, telegram: outcome.telegram },
+  })),
   {
     label: 'the login pays no pack',
     update: textUpdate(CODE),
     dialog: ON_CODE_STEP,
     emailLogin: () =>
       Promise.resolve({ ...CONFIRMED, grant: { granted: false, reason: 'already_granted' } }),
-    expected: { backend: 1, telegram: 1 },
+    expected: { backend: 1, telegram: 3 },
   },
   ...[
     OAuthErrorCode.TooManyAttempts,
@@ -515,20 +588,28 @@ const CODE_STEP_BRANCHES: readonly Branch[] = [
   })),
   CODE_STEP_WORST_CASE,
   {
-    label: 'an invalid code is rechecked and the account is active',
+    label: 'an invalid code is rechecked and no account is active',
+    update: textUpdate(CODE),
+    dialog: ON_CODE_STEP,
+    emailLogin: refusedWith(400, OAuthErrorCode.InvalidCode),
+    expected: { backend: 2, telegram: 1 },
+  },
+  ...CARD_OUTCOMES.map((outcome): Branch => ({
+    label: `an invalid code is rechecked, the account is active, and ${outcome.label}`,
     update: textUpdate(CODE),
     dialog: ON_CODE_STEP,
     emailLogin: refusedWith(400, OAuthErrorCode.InvalidCode),
     recordStart: () => Promise.resolve({ ...USER_VIEW, hasActiveBrokerAccount: true }),
-    expected: { backend: 2, telegram: 1 },
-  },
+    ...outcome.scene,
+    expected: { backend: 2, telegram: outcome.telegram },
+  })),
   {
     label: 'an unreachable login is rechecked and the account is active',
     update: textUpdate(CODE),
     dialog: ON_CODE_STEP,
     emailLogin: unreachable,
     recordStart: () => Promise.resolve({ ...USER_VIEW, hasActiveBrokerAccount: true }),
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 2, telegram: 3 },
   },
   {
     label: 'a failed login is rechecked and no account is active',

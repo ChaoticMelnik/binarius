@@ -1,5 +1,5 @@
-import { Bot, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
-import type { User, UserFromGetMe } from 'grammy/types';
+import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } from 'grammy';
+import type { Message, User, UserFromGetMe } from 'grammy/types';
 import {
   CONFIRM_CALLBACK_PATTERN,
   confirmCallbackData,
@@ -7,23 +7,22 @@ import {
   emailAddressSchema,
   emailLoginCodeSchema,
   errorLogFields,
-  LinkBonusSkipReason,
   languageCodeSchema,
   OAuthErrorCode,
   startPayloadSchema,
   userStartRequestSchema,
   UserStatus,
   type EmailSendCodeResponse,
-  type LinkBonusGrantView,
   type PendingBrokerAccountView,
   type TelegramHtml,
   type UserStartRequest,
 } from '@binarius/shared';
+import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
-import { replyHtml, replyWithVideoHtml } from './send';
-import { LABELS, TEXTS } from './texts';
+import { replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
+import { accountCard, LABELS, TEXTS, type AccountCardInput } from './texts';
 import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 
 // Callback data of the buttons; Bot API allows 1-64 bytes. `connect` is the main button of the
@@ -181,7 +180,8 @@ export function createBot({
     ]);
     if (answered.status === 'rejected') logAnswerFailure(answered.reason);
     if (confirmed.status === 'fulfilled') {
-      await replyHtml(ctx, grantText(confirmed.value.grant));
+      const { account, grant } = confirmed.value;
+      await sendAccountCard(ctx, { firstName: ctx.from.first_name, email: account.email, grant });
       return;
     }
     const error: unknown = confirmed.reason;
@@ -251,7 +251,13 @@ export function createBot({
       return;
     }
     loginDialog.delete(from.id);
-    await replyHtml(ctx, grantText(login.grant));
+    // the broker's address for the account it issued the tokens for; the one this login redeemed
+    // the code for when the broker sent none
+    await sendAccountCard(ctx, {
+      firstName: from.first_name,
+      email: login.account.email ?? state.email,
+      grant: login.grant,
+    });
   });
 
   // `step` is the step the code was asked from: the address, or «🔄 Запросить код ещё раз» on the
@@ -336,9 +342,12 @@ export function createBot({
       await replyHtml(ctx, TEXTS.blocked);
       return;
     }
+    // The recheck knows that an account is active, not which one nor what was paid: a user who
+    // already had one and typed a wrong code for another address lands here too. So the card
+    // carries neither the dialog's address nor a pack line (Plan Update, #200).
     if (user.hasActiveBrokerAccount) {
       loginDialog.delete(from.id);
-      await replyHtml(ctx, TEXTS.linkedActive);
+      await sendAccountCard(ctx, { firstName: from.first_name, email: null, grant: null });
       return;
     }
     if (invalidCode) {
@@ -346,6 +355,61 @@ export function createBot({
       return;
     }
     await replyHtml(ctx, TEXTS.unavailable);
+  }
+
+  // The account card (#200), sent where an account becomes usable and pinned as the only pin of
+  // the chat. The photo call has the welcome video's three outcomes: a refusal means nothing was
+  // sent, so the same card goes as text; a transport failure leaves delivery unknown, and a
+  // second card is worse than none, so nothing more is sent or pinned; anything else is a bug.
+  async function sendAccountCard(ctx: Context, input: AccountCardInput): Promise<void> {
+    const card = accountCard(input);
+    let sent: Message;
+    try {
+      sent = await replyWithPhotoHtml(ctx, new InputFile(ACCOUNT_CARD_PHOTO_PATH), card);
+    } catch (error) {
+      if (error instanceof GrammyError) {
+        logger.warn(
+          { ...errorLogFields(error), ...telegramErrorFields(error) },
+          'the account card photo was refused, sending the text instead',
+        );
+        sent = await replyHtml(ctx, card);
+      } else if (error instanceof HttpError) {
+        logger.error(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error, 'sendPhoto'),
+            updateId: ctx.update.update_id,
+          },
+          'the account card call failed in transport, sending nothing more',
+        );
+        return;
+      } else {
+        throw error;
+      }
+    }
+    await pinAccountCard(ctx, sent.message_id);
+  }
+
+  // The bot stores no message id, so clearing every pin is what leaves exactly one card pinned
+  // (the user's own pins go too, the owner's choice). Neither failure touches the connection,
+  // which is already committed: the unpin failing still lets the pin run, since two pinned cards
+  // are better than none. The pin is silent because the card itself has just notified.
+  async function pinAccountCard(ctx: Context, messageId: number): Promise<void> {
+    try {
+      await ctx.unpinAllChatMessages();
+    } catch (error) {
+      logPinFailure(error, 'unpinAllChatMessages', 'the old pins were not cleared');
+    }
+    try {
+      await ctx.pinChatMessage(messageId, { disable_notification: true });
+    } catch (error) {
+      logPinFailure(error, 'pinChatMessage', 'the account card was not pinned');
+    }
+  }
+
+  function logPinFailure(error: unknown, method: string, message: string): void {
+    if (!(error instanceof GrammyError || error instanceof HttpError)) throw error;
+    logger.warn({ ...errorLogFields(error), ...telegramErrorFields(error, method) }, message);
   }
 
   function logAnswerFailure(error: unknown): void {
@@ -449,13 +513,6 @@ function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineK
     keyboard.text(LABELS.confirmButton(account.email), confirmCallbackData(account.id)).row();
   }
   return keyboard;
-}
-
-function grantText(grant: LinkBonusGrantView): TelegramHtml {
-  if (grant.granted) return TEXTS.linkedWithBonus(grant.tokens);
-  return grant.reason === LinkBonusSkipReason.NotPartnerClient
-    ? TEXTS.linkedNoBonusNotPartner
-    : TEXTS.linkedNoBonusAlready;
 }
 
 // the refusals the user can act on; anything else is an outage to them
