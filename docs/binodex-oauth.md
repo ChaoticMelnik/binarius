@@ -132,8 +132,9 @@ local stack's loopback redirect gets the old `url` button instead. The page refu
 notice, and a one-word `reason` in the log, never the value — any `authorize` that is longer
 than 2 048 characters, not a URL, not `https:`, not exactly the configured
 `BROKER_OAUTH_AUTHORIZE_URL`'s origin and path, without a `state` of 1-256 characters, or whose
-`redirect_uri` is not `<WEB_PUBLIC_URL>/oauth/callback`. The parameter is therefore not an open
-redirect, and the broker sends the user back to the origin that holds the launch data. Otherwise
+`redirect_uri`, parsed as a URL, is not `<WEB_PUBLIC_URL>/oauth/callback` (host case and a default
+port do not matter; a query, a fragment, credentials or a trailing slash do). The parameter is
+therefore not an open redirect, and the broker sends the user back to the origin that holds the launch data. Otherwise
 the page loads Telegram's SDK and navigates the same webview to the broker with
 `location.replace`; the link on the page is for a webview that does not.
 
@@ -700,8 +701,8 @@ and `WEB_PUBLIC_URL` are read by `web`:
 | `BROKER_CLIENT_ID`, `BROKER_CLIENT_SECRET` | the OAuth client registered in the broker's cabinet (#8)                                                   |
 | `BROKER_OAUTH_AUTHORIZE_URL`               | the broker's authorize page; `https:` only. Read by `backend`, which builds the URL, and by `web`, whose login page navigates only to it; compose gives both one default through a YAML anchor |
 | `BROKER_API_BASE_URL`                      | the API host every `POST /v1/broker/...` call in `BROKER_ENDPOINTS` lives on: `https://api.binodex.app`; `https:` only. `binodex.app` without `api.` answers 405 to every API call |
-| `BROKER_OAUTH_REDIRECT_URI`                | must match the value registered with the client byte for byte (`localhost` is not `127.0.0.1`), and its path must be `/oauth/callback`, the page `web` serves — the backend refuses to start otherwise. `http:` only for `127.0.0.1` or `localhost`, and then the bot sends a plain link, not the Mini App. Compose defaults it to `<WEB_PUBLIC_URL>/oauth/callback`; set it only when the registered URI is not on the web origin |
-| `WEB_PUBLIC_URL`                           | `web` only: the origin its pages are served from (the admin pages and the Mini App pages); see docs/staff-login.md → Configuration |
+| `BROKER_OAUTH_REDIRECT_URI`                | must match the value registered with the client byte for byte (`localhost` is not `127.0.0.1`), and its path must be `/oauth/callback`, the page `web` serves — the backend refuses to start otherwise. `http:` only for `127.0.0.1` or `localhost`, and then the bot sends a plain link, not the Mini App. Compose defaults it to `<WEB_PUBLIC_URL>/oauth/callback`, and a login completes only when it equals that value of the same deployment; set it only to match the spelling registered with the broker, which the backend sends byte for byte |
+| `WEB_PUBLIC_URL`                           | `web` only: the origin its pages are served from (the admin pages and the Mini App pages), with nothing after the host or port — no trailing `/`, `?` or `#`; see docs/staff-login.md → Configuration |
 | `BROKER_PARTNER_REF`                       | the short partner code, `<code>` from `https://bdclick.app/smart/<code>` — never the link: `[A-Za-z0-9_-]`, 1-64 chars, checked at backend startup (`parsePartnerCode` in `apps/backend/src/env.ts`). Sent as `ref` on every authorization request and as `partner_code` on every email login, so a new user registers under this installation's partner account |
 | `TOKEN_ENCRYPTION_KEY`                     | 32 bytes, base64; `openssl rand -base64 32`                                                                |
 | `TOKEN_ENCRYPTION_KEY_ID`                  | names the key for rotation; no `\|`, no whitespace (the cipher binds with it)                              |
