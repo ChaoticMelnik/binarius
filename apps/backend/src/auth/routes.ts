@@ -31,6 +31,7 @@ import {
   type BrokerOAuthClient,
 } from '../broker/oauth-client';
 import { telegramErrorFields } from '../telegram-logging';
+import { recordTelegramSendFailure } from '../users/telegram-delivery';
 import { internalBearerAuth } from './internal';
 import { LinkPushKind, type LinkNotifier, type LinkPushOutcome } from './link-notifier';
 import { OAUTH_STATE_TTL_MS } from './oauth-timing';
@@ -90,9 +91,9 @@ export interface AuthRoutesDeps {
 }
 
 export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) => {
-  // One attempt, after the link has committed and outside any transaction. Its outcome changes
-  // nothing — not the response, not a row: a push that never arrives is made up for by the
-  // confirm button on the user's next /start (#10).
+  // One attempt, after the link has committed and outside any transaction. Its outcome never
+  // changes the response: a push that never arrives is made up for by the confirm button on the
+  // user's next /start (#10). A 403 writes one fact, the Telegram block (#119).
   const push = async (
     log: FastifyBaseLogger,
     telegramUserId: bigint,
@@ -111,6 +112,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
         },
         'the link outcome could not be pushed to Telegram',
       );
+      await recordTelegramSendFailure({ db: deps.db, log }, telegramUserId, error);
     }
   };
 

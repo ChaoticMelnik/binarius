@@ -1,8 +1,8 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BrokerAccountStatus, UserStatus } from '@binarius/shared';
+import { BrokerAccountStatus, TelegramChatMemberStatus, UserStatus } from '@binarius/shared';
 import { createTempDatabase, seedBrokerAccount, type TempDatabase } from '@binarius/db/testing';
-import { brokerAccounts, users } from '@binarius/db';
+import { NotificationJobStatus, brokerAccounts, notificationJobs, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
 
@@ -17,13 +17,14 @@ const TOKEN = 'internal-token-for-tests';
 let tmp: TempDatabase;
 let app: ReturnType<typeof buildApp>;
 
-beforeAll(async () => {
-  tmp = await createTempDatabase(baseUrl);
-  app = buildApp({
+const testApp = (logs?: { write(line: string): void }) =>
+  buildApp({
     admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
-    logLevel: 'silent',
+    // trace, so a level below production's info cannot hide a line from the log test
+    logLevel: logs === undefined ? 'silent' : 'trace',
+    ...(logs === undefined ? {} : { logDestination: logs }),
     checkTimeoutMs: 20,
     trading: { db: tmp.db, internalApiToken: TOKEN, onIntentQueued: () => {} },
     auth: {
@@ -40,6 +41,10 @@ beforeAll(async () => {
     },
     users: { db: tmp.db, internalApiToken: TOKEN },
   });
+
+beforeAll(async () => {
+  tmp = await createTempDatabase(baseUrl);
+  app = testApp();
   await app.ready();
 });
 afterAll(async () => {
@@ -201,5 +206,140 @@ describe('POST /users/start', () => {
       hasActiveBrokerAccount: true,
       pendingBrokerAccounts: [],
     });
+  });
+});
+
+// --- POST /users/chat-member (#119) ------------------------------------------------------------
+
+const postChatMember = (
+  payload: unknown,
+  authorization: string | null = `Bearer ${TOKEN}`,
+  instance = app,
+) =>
+  instance.inject({
+    method: 'POST',
+    url: '/users/chat-member',
+    headers: {
+      'content-type': 'application/json',
+      ...(authorization === null ? {} : { authorization }),
+    },
+    payload: JSON.stringify(payload),
+  });
+
+const started = async (
+  telegramUserId = nextTelegramUserId(),
+): Promise<{ telegramUserId: string; userId: string }> => {
+  expect((await post(body(telegramUserId))).statusCode).toBe(200);
+  const [row] = await tmp.db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.telegramUserId, BigInt(telegramUserId)));
+  if (row === undefined) throw new Error('no users row after /users/start');
+  return { telegramUserId, userId: row.id };
+};
+
+const blockedAtOf = async (telegramUserId: string) => {
+  const [row] = await tmp.db
+    .select({ at: users.telegramBlockedAt })
+    .from(users)
+    .where(eq(users.telegramUserId, BigInt(telegramUserId)));
+  return row?.at;
+};
+
+const kicked = (telegramUserId: string) => ({
+  telegramUserId,
+  status: TelegramChatMemberStatus.Kicked,
+});
+
+describe('POST /users/chat-member authorization', () => {
+  it.each([
+    ['no header', null],
+    ['another bearer', 'Bearer some-other-token'],
+    ['a non-bearer scheme', `Basic ${TOKEN}`],
+  ])('refuses %s and writes nothing', async (_label, authorization) => {
+    const { telegramUserId } = await started();
+    const response = await postChatMember(kicked(telegramUserId), authorization);
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: 'unauthorized' });
+    expect(await blockedAtOf(telegramUserId)).toBeNull();
+  });
+});
+
+describe('POST /users/chat-member validation', () => {
+  it.each([
+    ['an empty body', {}],
+    ['a status the backend does not take', { telegramUserId: '600001', status: 'left' }],
+    ['a non-numeric telegram id', { telegramUserId: 'abc', status: 'kicked' }],
+  ])('refuses %s with 400', async (_label, payload) => {
+    const response = await postChatMember(payload);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: 'validation' });
+  });
+});
+
+describe('POST /users/chat-member', () => {
+  it('marks a started user on kicked and cancels their pending job', async () => {
+    const { telegramUserId, userId } = await started();
+    const [job] = await tmp.db
+      .insert(notificationJobs)
+      .values({ userId, kind: 'test' })
+      .returning({ id: notificationJobs.id });
+
+    const response = await postChatMember(kicked(telegramUserId));
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ recorded: true });
+    expect(await blockedAtOf(telegramUserId)).toBeInstanceOf(Date);
+    const [after] = await tmp.db
+      .select({ status: notificationJobs.status })
+      .from(notificationJobs)
+      .where(and(eq(notificationJobs.id, job!.id), eq(notificationJobs.userId, userId)));
+    expect(after?.status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('clears the mark on member', async () => {
+    const { telegramUserId } = await started();
+    await postChatMember(kicked(telegramUserId));
+    const response = await postChatMember({
+      telegramUserId,
+      status: TelegramChatMemberStatus.Member,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ recorded: true });
+    expect(await blockedAtOf(telegramUserId)).toBeNull();
+  });
+
+  it('answers recorded: false for an unknown id and creates no row', async () => {
+    const telegramUserId = nextTelegramUserId();
+    const response = await postChatMember(kicked(telegramUserId));
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ recorded: false });
+    expect(await blockedAtOf(telegramUserId)).toBeUndefined();
+  });
+
+  it('is cleared by the next /users/start', async () => {
+    const { telegramUserId } = await started();
+    await postChatMember(kicked(telegramUserId));
+    expect(await blockedAtOf(telegramUserId)).toBeInstanceOf(Date);
+    await post(body(telegramUserId));
+    expect(await blockedAtOf(telegramUserId)).toBeNull();
+  });
+
+  it('logs the block without the Telegram id or the request body', async () => {
+    // long and distinctive, so no timestamp or pid in the log can contain it by chance
+    const { telegramUserId } = await started('7351902468135792');
+    const lines: string[] = [];
+    const instance = testApp({ write: (line: string) => void lines.push(line) });
+    await instance.ready();
+    try {
+      const response = await postChatMember(kicked(telegramUserId), undefined, instance);
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await instance.close();
+    }
+    const parsed = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(parsed.filter((line) => line.msg === 'the user blocked the bot')).toEqual([
+      expect.objectContaining({ level: 30, recorded: true, canceledJobs: 0 }),
+    ]);
+    expect(lines.join('\n')).not.toContain(telegramUserId);
   });
 });
