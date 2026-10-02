@@ -567,7 +567,11 @@ describe('what reaches the log', () => {
       detail: 'DETAIL-SECRET',
       cause: Object.assign(new Error('CAUSE-SECRET'), { code: '23505' }),
     });
-  const WHITELISTED = { name: 'TypeError', code: 'E_LEAKY', cause: { name: 'Error', code: '23505' } };
+  const WHITELISTED = {
+    name: 'TypeError',
+    code: 'E_LEAKY',
+    cause: { name: 'Error', code: '23505' },
+  };
   const loggedLines = () => lines.map((line) => JSON.parse(line) as Record<string, unknown>);
   const expectNoSecret = () => {
     for (const secret of ['MARKER-SECRET', 'DETAIL-SECRET', 'CAUSE-SECRET', '    at ']) {
