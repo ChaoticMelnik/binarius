@@ -135,16 +135,33 @@ interface RequestContext {
   userId?: number;
 }
 
+interface InFlight {
+  request: FastifyRequest;
+  reply: FastifyReply;
+  record: MockRequestRecord;
+}
+
+interface Parked extends InFlight {
+  release: () => void;
+}
+
+interface Delayed extends InFlight {
+  timer: ReturnType<typeof setTimeout>;
+  cut: () => void;
+}
+
 export async function startMockBroker(options: MockBrokerOptions = {}): Promise<MockBroker> {
   const state = createBrokerState(options);
   const faults = new FaultQueue();
   const rate = new RateWindow(state.rateLimit);
   const journal: MockRequestRecord[] = [];
   const contexts = new WeakMap<FastifyRequest, RequestContext>();
-  const hanging = new Set<{ reply: FastifyReply; release: () => void }>();
+  const hanging = new Set<Parked>();
+  const delayed = new Set<Delayed>();
 
-  // close() waits for every in-flight request: a hanging one is answered first (below), a delayed
-  // one is cut off by forceCloseConnections (both checked against Fastify 5.12.5)
+  // close() waits for every in-flight request: it answers each hanging one and cuts each delayed
+  // one first (below); forceCloseConnections then drops the sockets those leave open (both
+  // checked against Fastify 5.12.5)
   const app = Fastify({ logger: false, forceCloseConnections: true, exposeHeadRoutes: false });
 
   // JSON only: a text body is refused like a broken one, not read as an empty object
@@ -175,69 +192,106 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
       : reply.send();
   }
 
-  // called at the moment the fixture answers or starts handling, never on arrival: a delayed
-  // request must not report a window it arrived in
-  function applyRateHeaders(reply: FastifyReply) {
-    const window = rate.hit(Date.now());
-    reply.header('x-ratelimit-limit', String(window.limit));
-    reply.header('x-ratelimit-remaining', String(window.remaining));
-    reply.header('x-ratelimit-reset', String(window.reset));
+  // The one writer of record.bearer, the request's user and the x-ratelimit-* headers, called
+  // exactly once per request at the moment its branch defines (docs/mock-broker.md -> Journal):
+  // when the fixture answers or starts handling. A request that leaves without an answer (an
+  // aborted hang, a delay cut by close()) is observed with answer: false - no headers, and it
+  // takes no place in the rate window.
+  function observe({ request, reply, record }: InFlight, { answer }: { answer: boolean }) {
+    if (answer) {
+      const window = rate.hit(Date.now());
+      reply.header('x-ratelimit-limit', String(window.limit));
+      reply.header('x-ratelimit-remaining', String(window.remaining));
+      reply.header('x-ratelimit-reset', String(window.reset));
+    }
+    const token = bearerOf(request.headers.authorization);
+    const userId = token === undefined ? undefined : state.authenticate(token);
+    record.bearer = token === undefined ? 'none' : userId === undefined ? 'unknown' : 'known';
+    contexts.set(request, { record, ...(userId === undefined ? {} : { userId }) });
+    return { token, userId };
+  }
+
+  function arrive(
+    request: FastifyRequest,
+    endpoint: MockRestEndpoint | undefined,
+    scripted: boolean,
+  ) {
+    // pushed on arrival so the journal keeps arrival order; observe() settles bearer later
+    const record: MockRequestRecord = {
+      method: request.method,
+      path: request.url.split('?')[0] ?? request.url,
+      ...(endpoint === undefined ? {} : { endpoint }),
+      query: flatQuery(request.query),
+      bearer: 'pending',
+      scripted,
+    };
+    journal.push(record);
+    return record;
+  }
+
+  // answered by close(); a client that gives up takes its entry with it
+  function park(inFlight: InFlight) {
+    return new Promise<void>((release) => {
+      const entry: Parked = { ...inFlight, release };
+      hanging.add(entry);
+      inFlight.reply.raw.once('close', () => {
+        if (!hanging.delete(entry)) return;
+        observe(entry, { answer: false });
+        release();
+      });
+    });
+  }
+
+  // 'cut' when close() came first: close() has observed the request, and nothing more runs for it
+  function wait(inFlight: InFlight, delayMs: number) {
+    return new Promise<'elapsed' | 'cut'>((resolve) => {
+      const entry: Delayed = {
+        ...inFlight,
+        timer: setTimeout(() => {
+          delayed.delete(entry);
+          resolve('elapsed');
+        }, delayMs),
+        cut: () => resolve('cut'),
+      };
+      delayed.add(entry);
+    });
+  }
+
+  function authorize(
+    endpoint: MockRestEndpoint | undefined,
+    { token, userId }: { token: string | undefined; userId: number | undefined },
+    reply: FastifyReply,
+  ) {
+    if (endpoint === undefined || !ROUTES[endpoint].auth) return undefined;
+    if (token === undefined) return reply.code(401).send(brokerError(LIVE_MESSAGES.missingBearer));
+    if (userId === undefined) return reply.code(401).send(brokerError(LIVE_MESSAGES.invalidToken));
+    return undefined;
   }
 
   // runs before the body is parsed: a script and auth both come first, as on the live broker
   app.addHook('onRequest', async (request, reply) => {
     const endpoint = endpointOf(request);
     const script = endpoint === undefined ? undefined : faults.shift(endpoint);
-    // pushed on arrival so the journal keeps arrival order; bearer is filled in once auth runs
-    const record: MockRequestRecord = {
-      method: request.method,
-      path: request.url.split('?')[0] ?? request.url,
-      ...(endpoint === undefined ? {} : { endpoint }),
-      query: flatQuery(request.query),
-      bearer: 'none',
-      scripted: script !== undefined,
+    const inFlight: InFlight = {
+      request,
+      reply,
+      record: arrive(request, endpoint, script !== undefined),
     };
-    journal.push(record);
-    contexts.set(request, { record });
-
     const played = script === undefined ? undefined : scriptKind(script);
     switch (played?.kind) {
       case 'hang':
-        await new Promise<void>((release) => {
-          const entry = { reply, release };
-          hanging.add(entry);
-          // a client that gives up takes its entry with it instead of waiting for close()
-          reply.raw.once('close', () => {
-            if (hanging.delete(entry)) release();
-          });
-        });
+        await park(inFlight);
         return reply;
       case 'delay':
-        await new Promise((resolve) => setTimeout(resolve, played.delayMs));
+        if ((await wait(inFlight, played.delayMs)) === 'cut') return reply;
         break;
       case 'answer':
-        applyRateHeaders(reply);
+        observe(inFlight, { answer: true });
         return sendScripted(reply, played.script);
       case undefined:
         break;
     }
-
-    // From here the request is handled as if it arrived only now: a token revoked or a user
-    // registered during a delay counts, which is what a client's race tests rely on (#98).
-    applyRateHeaders(reply);
-    const token = bearerOf(request.headers.authorization);
-    const userId = token === undefined ? undefined : state.authenticate(token);
-    record.bearer = token === undefined ? 'none' : userId === undefined ? 'unknown' : 'known';
-    contexts.set(request, { record, ...(userId === undefined ? {} : { userId }) });
-
-    if (endpoint !== undefined && ROUTES[endpoint].auth) {
-      if (token === undefined) {
-        return reply.code(401).send(brokerError(LIVE_MESSAGES.missingBearer));
-      }
-      if (userId === undefined) {
-        return reply.code(401).send(brokerError(LIVE_MESSAGES.invalidToken));
-      }
-    }
+    return authorize(endpoint, observe(inFlight, { answer: true }), reply);
   });
 
   app.addHook('preHandler', async (request) => {
@@ -335,12 +389,18 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
     },
     priceAt: (assetId, atMs) => state.priceAt(assetId, atMs),
     async close() {
-      for (const entry of hanging) {
-        applyRateHeaders(entry.reply);
+      for (const entry of [...hanging]) {
+        hanging.delete(entry);
+        observe(entry, { answer: true });
         entry.reply.code(503).send(brokerError(FIXTURE_MESSAGES.closedByFixture));
         entry.release();
       }
-      hanging.clear();
+      for (const entry of [...delayed]) {
+        delayed.delete(entry);
+        clearTimeout(entry.timer);
+        observe(entry, { answer: false });
+        entry.cut();
+      }
       await app.close();
       if (state.listenerErrors.length > 0) {
         const errors = [...state.listenerErrors];

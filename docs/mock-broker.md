@@ -139,16 +139,37 @@ a request without a token.
 | --- | --- |
 | `{ status, body?, headers?, retryAfterSec? }` | answers `status`. Without `body`, a status of 400 or more gets the envelope with a default text: 429 `Too many requests`, 502/503/504 `Service unavailable`, other 5xx `Internal error`, other 4xx `Request failed`. `Retry-After` is sent only when `retryAfterSec` is given. `{ status: 200, body }` serves a contract-violating body as is |
 | `{ delayMs }` | waits, then handles the request as if it arrived only then: the rate-limit headers, the token check and the store are all read after the delay, so a token revoked during it is refused and a user registered during it is accepted. If the client aborts first, the late answer goes nowhere and the fixture keeps serving |
-| `{ hang: true }` | no answer until `close()`, which answers 503 `Connection closed by fixture` (with the rate-limit headers of that moment) and returns at once. A request delayed past `close()` is cut off (`forceCloseConnections`) |
+| `{ hang: true }` | no answer until `close()`, which answers 503 `Connection closed by fixture` (with the rate-limit headers of that moment) and returns at once. A client that aborts first leaves the queue (`rest.pendingHangs`) |
+
+`close()` during a `{ delayMs }` cuts the request off: the delay is cancelled, the client's
+connection is dropped without an answer, and nothing more runs for that request.
 
 The 429 body text and `Retry-After` were never observed: a real 429 would mean hammering the API.
 
 ## Journal
 
-`rest.journal` holds one record per request: `{ method, path, endpoint?, query, bearer:
-'none' | 'known' | 'unknown', bodyKeys?, scripted }`. A test can prove what its client sent,
-and no token value or body value is stored, so the journal never collects secrets. The fixture
-runs with `logger: false`.
+`rest.journal` holds one record per request, in arrival order: `{ method, path, endpoint?,
+query, bearer, bodyKeys?, scripted }`. A test can prove what its client sent, and no token
+value or body value is stored, so the journal never collects secrets. The fixture runs with
+`logger: false`.
+
+`bearer` is `'none'`, `'known'` or `'unknown'`: the `Authorization` header checked against the
+token table. It is read once per request, together with the request's user and the
+`x-ratelimit-*` headers, at the moment the fixture answers the request or starts handling it.
+Until then it is `'pending'`, which a test can see while a request waits on a delay or a hang.
+No record is left `'pending'` after `close()`.
+
+| Branch | Observed | Headers / rate window |
+| --- | --- | --- |
+| no script (a route or a 404) | on arrival | yes |
+| `{ status … }` | on arrival, before the scripted answer | yes |
+| `{ delayMs }` | after the delay, so a token revoked or registered during it counts | yes |
+| `{ delayMs }` cut by `close()` | in `close()` | none: no answer, not counted |
+| `{ hang }` answered by `close()` | in `close()`, before the 503 | yes |
+| `{ hang }` aborted by the client | at the abort | none: no answer, not counted |
+
+`bodyKeys` is present only where the body is read: without a script, or after a `{ delayMs }`.
+A request answered by a script or a hang never has its body parsed.
 
 ## Drift (for #98)
 
