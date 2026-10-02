@@ -119,7 +119,7 @@ limit. A client classifies by status, never by text. All 4xx and 5xx responses u
 
 ## Scripts: `failNext`
 
-Each endpoint has its own FIFO queue, and each script is used once. A script is applied before
+Each endpoint has its own FIFO queue, and each script is used once. `failNext` throws on a script the fixture cannot play as written: a `RangeError` for a status outside 200..599 or a negative or fractional `delayMs`/`retryAfterSec`, a `TypeError` for an object of no known shape. A script is applied before
 auth and validation, like a failure in front of the broker, so a script on `user` also fires for
 a request without a token.
 

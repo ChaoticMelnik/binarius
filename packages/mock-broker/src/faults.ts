@@ -22,10 +22,39 @@ export interface MockRequestRecord {
   scripted: boolean;
 }
 
+const isNonNegativeInteger = (value: unknown) =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0;
+
+// a script the fixture cannot play as written would test something other than what it says
+export function assertScript(script: MockScript): void {
+  if ('status' in script) {
+    if (!Number.isInteger(script.status) || script.status < 200 || script.status > 599) {
+      throw new RangeError(`failNext: status must be an integer in 200..599, got ${script.status}`);
+    }
+    if (script.retryAfterSec !== undefined && !isNonNegativeInteger(script.retryAfterSec)) {
+      throw new RangeError(
+        `failNext: retryAfterSec must be a non-negative integer, got ${script.retryAfterSec}`,
+      );
+    }
+    return;
+  }
+  if ('delayMs' in script) {
+    if (!isNonNegativeInteger(script.delayMs)) {
+      throw new RangeError(
+        `failNext: delayMs must be a non-negative integer, got ${script.delayMs}`,
+      );
+    }
+    return;
+  }
+  if ('hang' in script && script.hang === true) return;
+  throw new TypeError('failNext: a script is { status }, { delayMs } or { hang: true }');
+}
+
 export class FaultQueue {
   private readonly queues = new Map<MockRestEndpoint, MockScript[]>();
 
   push(endpoint: MockRestEndpoint, script: MockScript): void {
+    assertScript(script);
     const queue = this.queues.get(endpoint);
     if (queue === undefined) this.queues.set(endpoint, [script]);
     else queue.push(script);
