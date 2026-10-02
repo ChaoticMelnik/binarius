@@ -161,6 +161,20 @@ describe('server → client payloads', () => {
       }).id,
     ).toBe('1');
   });
+
+  // a live user.data (2026-10-02) carries every money field as a JSON integer
+  it('parses the all-integer user.data seen live', () => {
+    const balance = { available: 10000, held: 0, total: 10000 };
+    expect(
+      parseUserData({
+        id: 1,
+        level: { code: 'c', rank: 0 },
+        min_trade_amount: 1,
+        real: balance,
+        demo: balance,
+      }),
+    ).toMatchObject({ minTradeAmount: '1', demo: { available: '10000', held: '0' } });
+  });
 });
 
 describe('decodeSocketPayload', () => {

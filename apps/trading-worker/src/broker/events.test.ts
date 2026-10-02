@@ -479,7 +479,7 @@ describe('normalizeBrokerEvent: problems', () => {
     [
       'user.real.update_balance',
       { available: '1', total: '1' },
-      { code: 'invalid_type', path: 'held' },
+      { code: 'invalid_union', path: 'held' },
     ],
     ['user.data', null, { code: 'invalid_type', path: '' }],
     ['user.data', () => 1, { code: 'invalid_type', path: '' }],
