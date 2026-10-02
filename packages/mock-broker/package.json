@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@binarius/shared": "workspace:*",
-    "fastify": "^5.12.5",
-    "zod": "^4.6.5"
+    "fastify": "^5.12.5"
   }
 }
