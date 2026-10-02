@@ -18,7 +18,7 @@ import {
   type PendingBrokerAccountView,
   type UserStartRequest,
 } from '@binarius/shared';
-import { BackendError, type BackendClient } from './backend-client';
+import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
 import { TEXTS } from './texts';
@@ -273,10 +273,20 @@ export function createBot({
       await replyWithRefusal(ctx, id, refusal);
       return;
     }
-    // The letter may have gone out although the answer did not come back (a timeout, a broker
-    // that failed after sending, any 5xx), so the user is let type the code from it; the buttons
-    // cover the case where nothing arrived.
     logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, 'email code not sent');
+    // A refusal before the letter: the step stays as it was, and on the code step the code
+    // already sent is still good, so its buttons stay under the text.
+    if (refusedBeforeSending(error)) {
+      await replyWithRefusal(ctx, id, {
+        text: TEXTS.unavailable,
+        dialog: 'keep',
+        ...(step === 'code' ? { codeKeyboard: true as const } : {}),
+      });
+      return;
+    }
+    // The letter may have gone out although the answer did not come back (a timeout, a broker
+    // that failed after sending, any 5xx, a broken 2xx body), so the user is let type the code
+    // from it; the buttons cover the case where nothing arrived.
     loginDialog.set(id, { step: 'code', email });
     await ctx.reply(TEXTS.codeSentUnknown(email), { reply_markup: codeKeyboard() });
   }
@@ -465,7 +475,8 @@ interface Refusal {
 // user's, no code spent, so the step stays. too_many_attempts is this user's or this address's
 // own allowance for the next minutes, so asking for an address again is pointless — but a code
 // already sent stays good, which is why a refused «Запросить код ещё раз» keeps the code step.
-// Anything not listed is an unknown outcome (replyToSendCode).
+// Anything not listed is either a refusal before the letter (a sub-500 status) or an unknown
+// outcome (replyToSendCode).
 const SEND_CODE_REFUSALS: Record<LoginDialogState['step'], Partial<Record<string, Refusal>>> = {
   email: {
     [OAuthErrorCode.InvalidEmail]: { text: TEXTS.emailRefused, dialog: { step: 'email' } },
@@ -498,6 +509,17 @@ const LOGIN_REFUSALS: Partial<Record<string, Refusal>> = {
   [OAuthErrorCode.UserBlocked]: { text: TEXTS.blocked, dialog: 'end' },
   [OAuthErrorCode.BrokerAccountTaken]: { text: TEXTS.accountTaken, dialog: 'end' },
 };
+
+// The backend answers a 4xx on send-code only before the broker is called, or for the broker's
+// own refusal of the address (apps/backend/src/auth/routes.ts: the ceiling, the body, the blocked
+// check and the windows all come before the broker; brokerOutcome maps only invalid_grant to a
+// 400). So a sub-500 status means no letter went out. No answer, a 5xx and a broken 2xx body
+// leave that open.
+const refusedBeforeSending = (error: unknown): boolean =>
+  error instanceof BackendError &&
+  error.code === BackendErrorCode.HttpStatus &&
+  error.status !== undefined &&
+  error.status < 500;
 
 function backendErrorFields(error: unknown): { backendStatus?: number; backendReason?: string } {
   if (!(error instanceof BackendError)) return {};

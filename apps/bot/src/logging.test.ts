@@ -268,6 +268,35 @@ describe('what the bot writes during the email dialog', () => {
     );
   });
 
+  it('names a send-code the backend refused by status, without the address', async () => {
+    const { lines, calls } = await linesFrom({
+      level: 'trace',
+      update: textUpdate(ADDRESS),
+      dialog: { step: 'email' },
+      sendEmailCode: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, {
+            status: 401,
+            reason: 'unauthorized',
+            cause: leakyCause(),
+          }),
+        ),
+    });
+
+    expect(lineWith(lines, 'email code not sent')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 401,
+      backendReason: 'unauthorized',
+    });
+    expectNoSecrets(lines);
+    // unlike the unreachable case above, the reply carries no address, so the check above is
+    // against the cause the error drags along, not against the message sent back
+    expect(calls.find((call) => call.method === 'sendMessage')?.payload.text).toBe(
+      TEXTS.unavailable,
+    );
+  });
+
   it('names a failed login by status and reason, without the address or the code', async () => {
     const { lines } = await linesFrom({
       level: 'trace',
