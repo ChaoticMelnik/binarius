@@ -57,8 +57,8 @@ export const TEXTS = {
   ) => telegramHtml`⚠️ Не удалось подтвердить отправку кода на ${email}.
 Если письмо пришло — пришли код из него. Если нет — нажми «🔄 Запросить код ещё раз».`,
   tooManyCodeAttempts: telegramHtml`⚠️ Слишком много попыток ввести код. Подожди несколько минут и начни заново через /start.`,
-  // «Запросить код ещё раз» with no dialog behind it: expired, finished by a login, or dropped by
-  // a restart — the bot cannot tell which, so the text must hold for all of them
+  // «🔄 Запросить код ещё раз» with no dialog behind it: expired, finished by a login, or dropped
+  // by a restart — the bot cannot tell which, so the text must hold for all of them
   codeRequestStale: telegramHtml`⚠️ Этот запрос кода уже не действует. Если аккаунт ещё не подключён, начни заново через /start.`,
 } as const satisfies Record<string, TelegramHtml | ((value: string) => TelegramHtml)>;
 
