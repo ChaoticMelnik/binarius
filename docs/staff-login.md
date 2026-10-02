@@ -80,6 +80,12 @@ a session committed by a login that began later carries a `created_at` after it,
 `staff_sessions_revoked_after_created_check` would reject that, aborting the whole operation and
 leaving the account exactly as it was (#149).
 
+Every CHECK that orders a stamp against a `created_at` written by an earlier transaction (the
+sessions' `last_seen`/`revoked`, the challenges' `confirmed`/`prompt_sent`/`code_sent`) also
+assumes the database clock never steps backwards between the two. A production kernel clock does
+not; the Colima VM a Mac runs the dev Postgres in did, until the fix in README → The VM clock
+(#166).
+
 There is no way to change a password from the UI yet — that is a follow-up issue.
 
 ## What is written down

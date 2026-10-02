@@ -36,6 +36,7 @@ pnpm typecheck           # tsc -b across the project-reference graph
 pnpm lint                # eslint .
 pnpm test                # vitest run — needs a migrated Postgres, see Database below
 pnpm test apps/backend   # one package's tests (path filter)
+pnpm test --project unit # the tests that need no Postgres or Redis
 ```
 
 `pnpm check` runs `tsc -b --clean`, then the tests, then `tsc -b`, then `eslint .`. The order is
@@ -64,6 +65,54 @@ Under `--watch`, edits to `src/` restart the affected app; edits to a `package.j
 backend (`3000`) and `web` (`3001`: the admin pages and the Mini App login pages) are published
 on `127.0.0.1` only.
 
+### The VM clock (Colima)
+
+On a Mac the containers run in a Colima VM. Its `lima-guestagent` compares the VM's clock with the
+host's every 10 s and, past a 100 ms drift, sets the VM's time in one jump (Lima issue #5543).
+`systemd-timesyncd` in the VM pulls the same clock towards NTP at the same time, so the jump
+lands _backwards_, by 80-125 ms, as often as every 20 s under load. Postgres's `now()` then reads
+earlier in a later transaction, and the time-order CHECKs (`*_after_created`,
+`staff_login_challenges_code_sent_check` and the like) reject rows the code wrote correctly
+(#166). Production and CI run Postgres on the host's own kernel clock, where an NTP daemon slews
+small offsets instead of stepping.
+
+The fix takes the right to set the time away from the agent, leaving the VM's clock to
+`systemd-timesyncd` alone, which slews it:
+
+```bash
+colima ssh -- sudo mkdir -p /etc/systemd/system/lima-guestagent.service.d
+printf '[Service]\nCapabilityBoundingSet=~CAP_SYS_TIME\n' \
+  | colima ssh -- sudo tee /etc/systemd/system/lima-guestagent.service.d/no-sys-time.conf
+colima ssh -- sudo systemctl daemon-reload
+colima ssh -- sudo systemctl restart lima-guestagent
+```
+
+Restarting the agent drops and re-announces the port forwards; check that `docker ps` and
+`curl 127.0.0.1:3000/health` answer afterwards. To verify the fix:
+
+```bash
+colima ssh -- systemctl show lima-guestagent -p ActiveState -p NRestarts -p DropInPaths
+colima ssh -- systemctl is-active systemd-timesyncd   # active: it is now the only clock keeper
+colima ssh -- sudo journalctl -u lima-guestagent --since -10min | grep -i synctime
+```
+
+`DropInPaths` names `no-sys-time.conf`, and every 10 s the journal shows `SyncTime: failed to set
+system time` with `operation not permitted` instead of `system time synchronized with host`. The drop-in lives in the VM's
+disk: after `colima delete` repeat it; after `colima restart` check `DropInPaths`.
+
+`tooling/db-clock-probe.ts` is the detector: it reads Postgres's `clock_timestamp()` every 5 ms
+and logs each step back (exit 1 if there was one, 2 if it never got a sample):
+
+```bash
+node tooling/db-clock-probe.ts --seconds 900   # DATABASE_URL as for the tests
+```
+
+After the fix the VM's clock follows NTP and the Mac's does not quite, so the database reads
+ahead of `Date.now()` by the Mac's own NTP error (157 ms when this was written; `sntp
+time.apple.com` on the Mac shows it). Database-against-database comparisons do not see that;
+tests that compare `Date.now()` with a database column expect the column to be the later one, with
+margins of 500 ms or more.
+
 ## Database
 
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).
@@ -81,6 +130,28 @@ export REDIS_URL=redis://localhost:6379
 pnpm db:migrate          # apply pending migrations (idempotent)
 pnpm test
 ```
+
+The tests are two vitest projects (`vitest.config.ts`). `integration` is every
+`*.db.test.ts` and `*.redis.test.ts` under `apps/*/src` and `packages/*/src`: a test that reads
+`DATABASE_URL` or `REDIS_URL`, imports `pg`, `ioredis`, `bullmq` or `@binarius/db/testing`, or
+calls `createTempDatabase` must be named that way, and only such a test may be —
+`tooling/vitest-projects.test.ts` fails otherwise. The project's budgets are wider than vitest's
+defaults, because a busy host starves the VM Postgres runs in: 60 s for a hook (a temporary
+database is created and migrated in `beforeAll`) and 20 s for a test. `unit` is everything else,
+on the defaults. `pnpm test --project integration` runs only the first.
+
+`tooling/check-stability.sh` repeats the suite and tabulates timeouts, time-order CHECK
+violations and steps back of the database clock (`tooling/db-clock-probe.ts` runs throughout), with
+`DATABASE_URL` and `REDIS_URL` set as above and from a shell that ran `fnm use`:
+
+```bash
+tooling/check-stability.sh quiet 10   # ten `pnpm check` in a row
+tooling/check-stability.sh load 3     # three rounds of two parallel suites beside 4 CPU hogs
+```
+
+`load` refuses to start a round below 512 MB of free swap (`MIN_FREE_SWAP_MB`): it adds CPU pressure only,
+and a host that is swapping measures the swap. Logs and `summary.txt` go to `$STABILITY_OUT`, a
+fresh temporary directory by default.
 
 `packages/db/src/schema.db.test.ts` uses the migrated database itself; every other integration
 test creates its own `binarius_test_<timestamp>_<hex>` database (migrated on the fly, dropped
