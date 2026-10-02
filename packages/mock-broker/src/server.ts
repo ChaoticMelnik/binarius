@@ -165,27 +165,30 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
       : reply.send();
   }
 
-  // runs before the body is parsed: a script and auth both come first, as on the live broker
-  app.addHook('onRequest', async (request, reply) => {
+  // called at the moment the fixture answers or starts handling, never on arrival: a delayed
+  // request must not report a window it arrived in
+  function applyRateHeaders(reply: FastifyReply) {
     const window = rate.hit(Date.now());
     reply.header('x-ratelimit-limit', String(window.limit));
     reply.header('x-ratelimit-remaining', String(window.remaining));
     reply.header('x-ratelimit-reset', String(window.reset));
+  }
 
+  // runs before the body is parsed: a script and auth both come first, as on the live broker
+  app.addHook('onRequest', async (request, reply) => {
     const endpoint = endpointOf(request);
-    const token = bearerOf(request.headers.authorization);
-    const userId = token === undefined ? undefined : state.authenticate(token);
     const script = endpoint === undefined ? undefined : faults.shift(endpoint);
+    // pushed on arrival so the journal keeps arrival order; bearer is filled in once auth runs
     const record: MockRequestRecord = {
       method: request.method,
       path: request.url.split('?')[0] ?? request.url,
       ...(endpoint === undefined ? {} : { endpoint }),
       query: flatQuery(request.query),
-      bearer: token === undefined ? 'none' : userId === undefined ? 'unknown' : 'known',
+      bearer: 'none',
       scripted: script !== undefined,
     };
     journal.push(record);
-    contexts.set(request, { record, ...(userId === undefined ? {} : { userId }) });
+    contexts.set(request, { record });
 
     if (script !== undefined) {
       if ('hang' in script) {
@@ -195,9 +198,18 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
       if ('delayMs' in script) {
         await new Promise((resolve) => setTimeout(resolve, script.delayMs));
       } else {
+        applyRateHeaders(reply);
         return sendScripted(reply, script);
       }
     }
+
+    // From here the request is handled as if it arrived only now: a token revoked or a user
+    // registered during a delay counts, which is what a client's race tests rely on (#98).
+    applyRateHeaders(reply);
+    const token = bearerOf(request.headers.authorization);
+    const userId = token === undefined ? undefined : state.authenticate(token);
+    record.bearer = token === undefined ? 'none' : userId === undefined ? 'unknown' : 'known';
+    contexts.set(request, { record, ...(userId === undefined ? {} : { userId }) });
 
     if (endpoint !== undefined && ROUTES[endpoint].auth) {
       if (token === undefined) {
@@ -295,6 +307,7 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
     priceAt: (assetId, atMs) => state.priceAt(assetId, atMs),
     async close() {
       for (const entry of hanging) {
+        applyRateHeaders(entry.reply);
         entry.reply.code(503).send(brokerError(FIXTURE_MESSAGES.closedByFixture));
         entry.release();
       }

@@ -439,6 +439,26 @@ describe('failNext', () => {
     expect(Date.now() - fast).toBeLessThan(140);
   });
 
+  it('checks a token revoked during the delay as revoked', async () => {
+    broker.rest.failNext('user', { delayMs: 200 });
+    const pending = call('/v1/broker/user');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    broker.users.revokeToken(TOKEN);
+    expectError(await pending, 401, 'Authentication failed: Invalid token');
+    expect(broker.rest.journal[0]).toMatchObject({ scripted: true, bearer: 'unknown' });
+  });
+
+  it('accepts a token registered during the delay', async () => {
+    broker.rest.failNext('user', { delayMs: 200 });
+    const pending = call('/v1/broker/user', { token: 'registered-later' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    broker.users.register({ id: 2, accessToken: 'registered-later' });
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ id: 2 });
+    expect(broker.rest.journal[0]).toMatchObject({ scripted: true, bearer: 'known' });
+  });
+
   it('survives a client that gave up during the delay', async () => {
     broker.rest.failNext('user', { delayMs: 200 });
     await expect(call('/v1/broker/user', { signal: AbortSignal.timeout(30) })).rejects.toThrow();
@@ -469,7 +489,9 @@ describe('failNext', () => {
     const started = Date.now();
     await broker.close();
     expect(Date.now() - started).toBeLessThan(1_000);
-    expectError(await pending, 503, 'Connection closed by fixture');
+    const answer = await pending;
+    expectError(answer, 503, 'Connection closed by fixture');
+    expect(answer.headers.get('x-ratelimit-limit')).toBe('600');
     broker = await startMockBroker();
   });
 });
