@@ -334,8 +334,8 @@ header; a bold header line where a message has one (a warning that is itself the
 an emoji, the `/start` description does not; short lines, one thought each. Texts promise no profit,
 no signal accuracy and no "model training", and the only number in them is the backend's token
 count, printed as it arrives. A multi-line text starts at column zero in the source, since
-indentation inside a template is part of the message; the tests refuse a line that starts or ends
-with a space. A button named inside a text is quoted by its exact label, emoji included.
+indentation inside a template is part of the message; `telegramTextProblems` refuses a line that
+starts or ends with a space. A button named inside a text is quoted by its exact label, emoji included.
 
 New messages (the pinned card, the bot profile, nudges) are written with the same module: a
 message goes into a `TelegramHtml` constant beside `TEXTS`, a label or a profile description that

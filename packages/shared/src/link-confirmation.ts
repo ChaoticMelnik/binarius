@@ -14,7 +14,6 @@ export const confirmCallbackData = (accountId: string): string =>
   `${CONFIRM_CALLBACK_PREFIX}${accountId}`;
 export const CONFIRM_CALLBACK_PATTERN = new RegExp(`^${CONFIRM_CALLBACK_PREFIX}([0-9a-f-]{36})$`);
 
-// Multi-line values start at column zero: indentation inside a template is part of the message.
 export const LINK_TEXTS = {
   confirmPrompt: telegramHtml`🔐 <b>Найдена новая привязка аккаунта Binodex</b>
 Если вход выполнял ты — подтверди.`,

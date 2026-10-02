@@ -3,8 +3,7 @@ import { LINK_LABELS, LINK_TEXTS, telegramHtml, type TelegramHtml } from '@binar
 // Messages are Telegram HTML, sent with parse_mode HTML by send.ts only. Every hole goes through
 // telegramHtml, which escapes it: the address in codeSent is what the user typed. A static part
 // is the author's, so a literal `&` or `<` there is written as an entity — texts.test.ts runs the
-// validator over every entry. Multi-line values start at column zero: indentation inside a
-// template is part of the message. The texts the backend's push sends too live in LINK_TEXTS.
+// validator over every entry. The texts the backend's push sends too live in LINK_TEXTS.
 export const TEXTS = {
   ...LINK_TEXTS,
   welcome: telegramHtml`🚀 <b>Binarius — торговля на Binodex прямо в Telegram</b>
