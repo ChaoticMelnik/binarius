@@ -2,6 +2,7 @@ import type { Api, PollingOptions } from 'grammy';
 import { closeAll, errorLogFields } from '@binarius/shared';
 import { BOT_COMMANDS, BOT_COMMAND_SCOPE } from './commands';
 import { telegramErrorFields, type Logger } from './logging';
+import { PROFILE } from './texts';
 import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './timing';
 
 // Only the update kinds this bot handles: Telegram then stops delivering the rest, and a new
@@ -10,12 +11,12 @@ export const ALLOWED_UPDATES = ['message', 'callback_query'] as const satisfies 
   PollingOptions['allowed_updates']
 >;
 
-// the parts of a grammY Bot this module drives: start, stop and the command-menu call; a fake
-// with the same shape is what the tests run, so the drain is provable without a Telegram server
+// the parts of a grammY Bot this module drives: start, stop and the profile calls; a fake with
+// the same shape is what the tests run, so the drain is provable without a Telegram server
 export interface PollingLoop {
   start(options: PollingOptions): Promise<void>;
   stop(): Promise<void>;
-  api: Pick<Api, 'setMyCommands'>;
+  api: Pick<Api, 'setMyCommands' | 'setMyDescription' | 'setMyShortDescription'>;
 }
 
 export interface RunBotOptions {
@@ -41,17 +42,35 @@ export function runBot({
 }: RunBotOptions): void {
   let stopping = false;
 
-  // Everything is caught, one attempt: a failed registration costs the menu and nothing else —
-  // no update is lost and Telegram keeps the last list that did register — while a throw out of
-  // onStart would reject start() and exit 1. The next start registers again.
-  const registerCommands = async (): Promise<void> => {
-    try {
-      await bot.api.setMyCommands(BOT_COMMANDS, { scope: BOT_COMMAND_SCOPE });
-    } catch (error: unknown) {
-      logger.warn(
-        { ...errorLogFields(error), ...telegramErrorFields(error, 'setMyCommands') },
-        'bot commands not registered',
-      );
+  // The profile, one call at a time and one attempt each. Every call is caught on its own: a
+  // failed one costs that part of the profile and nothing else — the next call is still made, no
+  // update is lost and Telegram keeps the last value that did register — while a throw out of
+  // onStart would reject start() and exit 1. The next start registers again. The number of
+  // calls is STARTUP_CALLS in timing.ts.
+  const registrations = [
+    {
+      method: 'setMyCommands',
+      failure: 'bot commands not registered',
+      call: () => bot.api.setMyCommands(BOT_COMMANDS, { scope: BOT_COMMAND_SCOPE }),
+    },
+    {
+      method: 'setMyDescription',
+      failure: 'bot description not registered',
+      call: () => bot.api.setMyDescription(PROFILE.description),
+    },
+    {
+      method: 'setMyShortDescription',
+      failure: 'bot short description not registered',
+      call: () => bot.api.setMyShortDescription(PROFILE.shortDescription),
+    },
+  ] as const;
+  const registerProfile = async (): Promise<void> => {
+    for (const { method, failure, call } of registrations) {
+      try {
+        await call();
+      } catch (error: unknown) {
+        logger.warn({ ...errorLogFields(error), ...telegramErrorFields(error, method) }, failure);
+      }
     }
   };
 
@@ -62,7 +81,7 @@ export function runBot({
     // grammY awaits this after getMe and deleteWebhook and before the first getUpdates, so
     // `bot started` still means polling begins now
     onStart: async () => {
-      await registerCommands();
+      await registerProfile();
       logger.info('bot started');
     },
   });

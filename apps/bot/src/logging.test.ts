@@ -570,7 +570,11 @@ describe('what the bot writes when a drain step fails', () => {
         Promise.reject(
           new Error(`request to https://api.telegram.org/bot${TOKEN}/getUpdates failed`),
         ),
-      api: { setMyCommands: () => Promise.resolve(true as const) },
+      api: {
+        setMyCommands: () => Promise.resolve(true as const),
+        setMyDescription: () => Promise.resolve(true as const),
+        setMyShortDescription: () => Promise.resolve(true as const),
+      },
     };
     runBot({
       bot,
@@ -590,42 +594,61 @@ describe('what the bot writes when a drain step fails', () => {
   });
 });
 
-// The transport path — grammY surfacing the HttpError out of setMyCommands inside onStart — is
+// The transport path — grammY surfacing the HttpError out of a profile call inside onStart — is
 // read off the library by the lifecycle scenes; what reaches the log does not depend on it, so
 // this runs the same fake PollingLoop as the drain test above.
-describe('what the bot writes when the commands are not registered', () => {
-  it('names the error and the method at warn, and keeps the token out of the line', async () => {
-    const { lines, logger } = sink();
-    const bot: PollingLoop = {
-      start: async (options) => {
-        await options.onStart?.(BOT_INFO);
-      },
-      stop: () => Promise.resolve(),
-      api: {
-        setMyCommands: () =>
-          Promise.reject(
-            new HttpError(
-              "Network request for 'setMyCommands' failed!",
-              new Error(`request to https://api.telegram.org/bot${TOKEN}/setMyCommands failed`),
-            ),
-          ),
-      },
-    };
-    runBot({ bot, logger, exit: vi.fn(), signals: ['SIGTERM'], signalSource: new EventEmitter() });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+describe('what the bot writes when a part of the profile is not registered', () => {
+  const resolved = () => Promise.resolve(true as const);
+  const leaking = (method: string) => () =>
+    Promise.reject(
+      new HttpError(
+        `Network request for '${method}' failed!`,
+        new Error(`request to https://api.telegram.org/bot${TOKEN}/${method} failed`),
+      ),
+    );
 
-    const logged = lineWith(lines, 'bot commands not registered');
-    expect(logged).toMatchObject({
-      level: 40,
-      err: { name: 'HttpError' },
-      method: 'setMyCommands',
-      transportError: { name: 'Error' },
-    });
-    expect(logged?.err).not.toHaveProperty('message');
-    expect(logged).not.toHaveProperty('description');
-    expect(logged).not.toHaveProperty('payload');
-    expect(lines.join('')).not.toContain(TOKEN);
-    expect(lines.join('')).not.toContain('SECRET-TOKEN');
-    expect(lineWith(lines, 'long polling stopped with an error')).toBeUndefined();
-  });
+  it.each([
+    ['setMyCommands', 'bot commands not registered'],
+    ['setMyDescription', 'bot description not registered'],
+    ['setMyShortDescription', 'bot short description not registered'],
+  ] as const)(
+    'names the error and the method at warn when %s fails, and keeps the token out of the line',
+    async (method, message) => {
+      const { lines, logger } = sink();
+      const bot: PollingLoop = {
+        start: async (options) => {
+          await options.onStart?.(BOT_INFO);
+        },
+        stop: () => Promise.resolve(),
+        api: {
+          setMyCommands: resolved,
+          setMyDescription: resolved,
+          setMyShortDescription: resolved,
+          [method]: leaking(method),
+        },
+      };
+      runBot({
+        bot,
+        logger,
+        exit: vi.fn(),
+        signals: ['SIGTERM'],
+        signalSource: new EventEmitter(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const logged = lineWith(lines, message);
+      expect(logged).toMatchObject({
+        level: 40,
+        err: { name: 'HttpError' },
+        method,
+        transportError: { name: 'Error' },
+      });
+      expect(logged?.err).not.toHaveProperty('message');
+      expect(logged).not.toHaveProperty('description');
+      expect(logged).not.toHaveProperty('payload');
+      expect(lines.join('')).not.toContain(TOKEN);
+      expect(lines.join('')).not.toContain('SECRET-TOKEN');
+      expect(lineWith(lines, 'long polling stopped with an error')).toBeUndefined();
+    },
+  );
 });
