@@ -45,13 +45,76 @@ const LOG_ERROR_RULES = [
   },
 ];
 
-// grammY's methods that send text or a caption to a Telegram user. Matched by the method's name
-// on any object, so `ctx.reply`, `ctx.api.sendMessage` and `bot.api.raw.sendMessage` are all seen;
-// a method held in a variable or reached by a computed key is not — the same class of gap as the
-// logging rule. answerCallbackQuery is left out: the user bot passes it no text.
+// grammY's methods that send text Telegram parses (parse_mode) to a user. Matched by the method's
+// exact name on any object, so `ctx.reply`, `ctx.api.sendMessage` and `bot.api.raw.sendMessage`
+// are all seen; a method held in a variable or reached by a computed key is not — the same class
+// of gap as the logging rule. Derived on 2026-10-02 for @grammyjs/types 5.0.0 and grammy 1.46.0;
+// after an upgrade of either, re-run from the repository root and compare (step 1 writes api.txt
+// to the current directory, delete it afterwards):
+//   T=node_modules/.pnpm/@grammyjs+types@5.0.0/node_modules/@grammyjs/types
+//   D=node_modules/.pnpm/grammy@1.46.0/node_modules/grammy/out
+//   # 1. Bot API methods whose args carry parse_mode or a type that does
+//   awk '/^    [a-zA-Z]+\(args/ { match($0, /[a-zA-Z]+\(args/); name = substr($0, RSTART, RLENGTH-5) } /^    [a-z]/ && !/\(args/ { name = "" } name != "" && /parse_mode|InputMedia|InputPaidMedia|InputChecklist|InlineQueryResult/ { print name }' "$T/methods.d.ts" | sort -u > api.txt
+//   # 2. every grammY method that forwards to one of them under another name
+//   grep -hoE '^    [a-zA-Z]+\([^;]*Other<(R, )?"[a-zA-Z]+"' "$D/context.d.ts" "$D/core/api.d.ts" | sed -E 's/^    ([a-zA-Z]+)\(.*Other<(R, )?"([a-zA-Z]+)".*/\1 \3/' | sort -u | awk 'NR==FNR { api[$1]=1; next } ($2 in api) && $1 != $2 { print $1 " -> " $2 }' api.txt -
+// Left out on purpose: answerCallbackQuery (its text is shown unparsed); sendRichMessage,
+// sendRichMessageDraft and their replyWith* aliases (structured RichText, no parsed string);
+// methods whose fields are all plain (sendInvoice, sendVenue, sendContact, setMy*, setChat*).
+const RAW_TELEGRAM_SEND_METHODS = [
+  // step 1: the Bot API methods
+  'answerGuestQuery',
+  'answerInlineQuery',
+  'answerWebAppQuery',
+  'copyMessage',
+  'editEphemeralMessageCaption',
+  'editEphemeralMessageMedia',
+  'editEphemeralMessageText',
+  'editMessageCaption',
+  'editMessageChecklist',
+  'editMessageMedia',
+  'editMessageText',
+  'editStory',
+  'giftPremiumSubscription',
+  'postStory',
+  'savePreparedInlineMessage',
+  'sendAnimation',
+  'sendAudio',
+  'sendChecklist',
+  'sendDocument',
+  'sendGift',
+  'sendLivePhoto',
+  'sendMediaGroup',
+  'sendMessage',
+  'sendMessageDraft',
+  'sendPaidMedia',
+  'sendPhoto',
+  'sendPoll',
+  'sendVideo',
+  'sendVoice',
+  // step 2: grammY's aliases of them
+  'editMessageCaptionInline',
+  'editMessageMediaInline',
+  'editMessageTextInline',
+  'reply',
+  'replyWithAnimation',
+  'replyWithAudio',
+  'replyWithChecklist',
+  'replyWithDocument',
+  'replyWithDraft',
+  'replyWithGift',
+  'replyWithGiftToChannel',
+  'replyWithLivePhoto',
+  'replyWithMediaGroup',
+  'replyWithPaidMedia',
+  'replyWithPhoto',
+  'replyWithPoll',
+  'replyWithVideo',
+  'replyWithVoice',
+  'sendGiftToChannel',
+];
+
 const RAW_TELEGRAM_SEND = {
-  selector:
-    'CallExpression[callee.property.name=/^(reply|replyWithPhoto|replyWithVideo|replyWithAnimation|replyWithDocument|sendMessage|sendPhoto|sendVideo|sendAnimation|sendDocument|editMessageText|editMessageCaption)$/]',
+  selector: `CallExpression[callee.property.name=/^(${RAW_TELEGRAM_SEND_METHODS.join('|')})$/]`,
   message:
     'send user texts through replyHtml/replyWithVideoHtml (apps/bot/src/send.ts) or the link notifier: they take TelegramHtml and set parse_mode HTML, so nothing unescaped reaches the user as markup',
 };

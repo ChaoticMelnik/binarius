@@ -84,8 +84,8 @@ export function createLinkNotifier({
       // chat_id as a string: the column is bigint, and a string is the conversion that cannot
       // round. This is the backend's one send seam for user texts, as apps/bot/src/send.ts is the
       // bot's: the only place here that sets parse_mode and unwraps TelegramHtml, which is why
-      // ESLint allows a raw sendMessage in this file alone. The button label is plain: Telegram
-      // does not parse it.
+      // ESLint allows a raw sendMessage in this file alone outside tests. The button label is
+      // plain: Telegram does not parse it.
       await api.sendMessage(String(telegramUserId), text.value, {
         parse_mode: 'HTML',
         ...(reply_markup === undefined ? {} : { reply_markup }),
