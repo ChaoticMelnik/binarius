@@ -7,7 +7,9 @@ import {
   OAuthErrorCode,
   plainTextOf,
   telegramHtmlProblems,
+  UserErrorCode,
   UserStatus,
+  type LinkedAccountView,
   type UserStartView,
 } from '@binarius/shared';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
@@ -15,12 +17,16 @@ import { BackendError, BackendErrorCode, type BackendClient } from './backend-cl
 import { CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA, RESEND_CALLBACK_DATA, createBot } from './bot';
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
+  ACCOUNT_VIEW,
   BOT_INFO,
   CARD_MESSAGE_ID,
   CODE,
   CODE_SENT,
   CONFIRMED,
   EMAIL,
+  LINK_ACTIVE,
+  LINK_PENDING,
+  LINK_REVOKED,
   LOGIN,
   PENDING_ACCOUNT_ID,
   TEXT_CARD_MESSAGE_ID,
@@ -37,6 +43,7 @@ import {
   sentPayload,
   startUpdate,
   textUpdate,
+  accountView,
   userView,
 } from './testing';
 import { accountCard, LABELS, TEXTS, type AccountCardInput } from './texts';
@@ -56,6 +63,7 @@ function setup(
   options: {
     user?: UserStartView;
     recordStart?: BackendClient['recordStart'];
+    readAccount?: BackendClient['readAccount'];
     startLogin?: BackendClient['startLogin'];
     confirmLogin?: BackendClient['confirmLogin'];
     sendEmailCode?: BackendClient['sendEmailCode'];
@@ -68,6 +76,7 @@ function setup(
 ) {
   const backend: BackendClient = {
     recordStart: options.recordStart ?? vi.fn(() => Promise.resolve(options.user ?? userView())),
+    readAccount: options.readAccount ?? vi.fn(() => Promise.resolve(ACCOUNT_VIEW)),
     startLogin: options.startLogin ?? vi.fn(() => Promise.resolve(LOGIN)),
     confirmLogin: options.confirmLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
     sendEmailCode: options.sendEmailCode ?? vi.fn(() => Promise.resolve(CODE_SENT)),
@@ -316,6 +325,159 @@ describe('/start', () => {
     await bot.handleUpdate(startUpdate('/start', 'group'));
     expect(backend.recordStart).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
+  });
+});
+
+describe('/account', () => {
+  const CONNECT_BUTTONS = [
+    { text: LABELS.connectButton, callback_data: CONNECT_CALLBACK_DATA },
+    { text: LABELS.oauthButton, callback_data: OAUTH_CALLBACK_DATA },
+  ];
+  const CONFIRM_BUTTON = {
+    text: '✅ Подтвердить: new@example.test',
+    callback_data: `confirm:${PENDING_ACCOUNT_ID}`,
+  };
+  const withAccounts = (...accounts: LinkedAccountView[]) =>
+    vi.fn(() => Promise.resolve(accountView({ accounts })));
+  const account = async (options: Parameters<typeof setup>[0] = {}, text = '/account') => {
+    const scene = setup(options);
+    await scene.bot.handleUpdate(textUpdate(text));
+    const sends = scene.calls.filter((call) => call.method === 'sendMessage');
+    return { ...scene, sends, message: sends[0]?.payload };
+  };
+
+  it('asks for the user’s own Telegram id and writes nothing', async () => {
+    const { backend, sends } = await account();
+    expect(backend.readAccount).toHaveBeenCalledWith('4242');
+    expect(backend.recordStart).not.toHaveBeenCalled();
+    expect(sends).toHaveLength(1);
+  });
+
+  it('shows a user with no link the not-connected text and the two connect buttons', async () => {
+    const { message, logger } = await account({ readAccount: withAccounts() });
+    expect(message?.text).toBe(TEXTS.accountNone.value);
+    expect(inlineButtons(message)).toEqual(CONNECT_BUTTONS);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('answers a user the backend has no row for the same way, and logs nothing', async () => {
+    const { message, logger } = await account({
+      readAccount: refused(404, UserErrorCode.UserNotFound),
+    });
+    expect(message?.text).toBe(TEXTS.accountNone.value);
+    expect(inlineButtons(message)).toEqual(CONNECT_BUTTONS);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('shows an active link with its address and no buttons', async () => {
+    const { message } = await account({ readAccount: withAccounts(LINK_ACTIVE) });
+    expect(message?.text).toBe(`${TEXTS.accountConnected.value}\n\n✅ Подключён: ada@example.test`);
+    expect(message?.reply_markup).toBeUndefined();
+  });
+
+  it('offers to confirm a waiting link beside an active one, without the connect buttons', async () => {
+    const { message } = await account({ readAccount: withAccounts(LINK_PENDING, LINK_ACTIVE) });
+    expect(message?.text).toBe(
+      `${TEXTS.accountConnected.value}\n\n⏳ Ждёт подтверждения: new@example.test\n✅ Подключён: ada@example.test`,
+    );
+    expect(inlineButtons(message)).toEqual([CONFIRM_BUTTON]);
+  });
+
+  it('shows a waiting link alone under the pending header, with confirm and connect buttons', async () => {
+    const { message } = await account({ readAccount: withAccounts(LINK_PENDING) });
+    expect(message?.text).toBe(
+      `${TEXTS.accountPending.value}\n\n⏳ Ждёт подтверждения: new@example.test`,
+    );
+    expect(inlineButtons(message)).toEqual([CONFIRM_BUTTON, ...CONNECT_BUTTONS]);
+  });
+
+  it('shows revoked links under the revoked header, with the connect buttons', async () => {
+    const { message } = await account({ readAccount: withAccounts(LINK_REVOKED) });
+    expect(message?.text).toBe(
+      `${TEXTS.accountRevoked.value}\n\n⚠️ Подключение отозвано: old@example.test`,
+    );
+    expect(inlineButtons(message)).toEqual(CONNECT_BUTTONS);
+  });
+
+  it('shows a revoked link beside an active one under the connected header, without buttons', async () => {
+    const { message } = await account({ readAccount: withAccounts(LINK_ACTIVE, LINK_REVOKED) });
+    expect(message?.text).toBe(
+      `${TEXTS.accountConnected.value}\n\n✅ Подключён: ada@example.test\n⚠️ Подключение отозвано: old@example.test`,
+    );
+    expect(message?.reply_markup).toBeUndefined();
+  });
+
+  it('says the address is unknown when the broker sent none', async () => {
+    const { message } = await account({
+      readAccount: withAccounts({ ...LINK_ACTIVE, email: null }, { ...LINK_PENDING, email: null }),
+    });
+    expect(message?.text).toBe(
+      `${TEXTS.accountConnected.value}\n\n✅ Подключён: адрес неизвестен\n⏳ Ждёт подтверждения: адрес неизвестен`,
+    );
+    expect(inlineButtons(message)).toEqual([
+      { text: '✅ Подтвердить привязку', callback_data: `confirm:${PENDING_ACCOUNT_ID}` },
+    ]);
+  });
+
+  it('shows a blocked user only the blocked text, whatever links there are', async () => {
+    const { message, sends } = await account({
+      readAccount: vi.fn(() =>
+        Promise.resolve(
+          accountView({ status: UserStatus.Blocked, accounts: [LINK_PENDING, LINK_ACTIVE] }),
+        ),
+      ),
+    });
+    expect(sends).toHaveLength(1);
+    expect(message?.text).toBe(TEXTS.blocked.value);
+    expect(message?.reply_markup).toBeUndefined();
+  });
+
+  it.each([
+    ['the backend is unreachable', new BackendError(BackendErrorCode.Unreachable), {}],
+    [
+      'the backend fails',
+      new BackendError(BackendErrorCode.HttpStatus, { status: 500 }),
+      { backendStatus: 500 },
+    ],
+    ['the body breaks the contract', new BackendError(BackendErrorCode.ContractViolation), {}],
+    [
+      'the backend has no such route',
+      new BackendError(BackendErrorCode.HttpStatus, { status: 404, reason: 'not_found' }),
+      { backendStatus: 404, backendReason: 'not_found' },
+    ],
+  ])('says the service is unavailable when %s, and warns', async (_label, error, fields) => {
+    const { message, logger } = await account({ readAccount: vi.fn(() => Promise.reject(error)) });
+    expect(message?.text).toBe(TEXTS.unavailable.value);
+    expect(message?.reply_markup).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
+      err: { name: 'BackendError', code: error.code },
+      ...fields,
+    });
+    expect(logger.warn.mock.calls[0]?.[1]).toBe('/account not read');
+  });
+
+  it('ignores /account in a group', async () => {
+    const scene = setup();
+    await scene.bot.handleUpdate(textUpdate('/account', 'group'));
+    expect(scene.calls).toEqual([]);
+    expect(scene.backend.readAccount).not.toHaveBeenCalled();
+  });
+
+  it('answers /account with trailing text as /account', async () => {
+    const { backend, message } = await account({}, '/account please');
+    expect(backend.readAccount).toHaveBeenCalledTimes(1);
+    expect(message?.text).toBe(TEXTS.accountNone.value);
+  });
+
+  it('answers /account in the middle of the dialog without ending it', async () => {
+    const { bot, backend, message, dialog } = await account({ dialog: ON_CODE_STEP });
+    expect(message?.text).toBe(TEXTS.accountNone.value);
+    expect(backend.emailLogin).not.toHaveBeenCalled();
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
   });
 });
 
@@ -745,6 +907,7 @@ describe('the account card', () => {
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
+          readAccount: vi.fn(() => Promise.reject(new Error('unused'))),
           startLogin: vi.fn(() => Promise.reject(new Error('unused'))),
           confirmLogin: vi.fn(() => Promise.resolve(CONFIRMED)),
           sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1444,6 +1607,7 @@ describe('the Bot API timeout', () => {
       // no handler runs in this test: the call under test is bot.api.sendMessage itself
       backend: {
         recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
+        readAccount: vi.fn(() => Promise.reject(new Error('unused'))),
         startLogin: vi.fn(() => Promise.reject(new Error('unused'))),
         confirmLogin: vi.fn(() => Promise.reject(new Error('unused'))),
         sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),

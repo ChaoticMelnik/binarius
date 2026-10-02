@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { plainTextOf, TELEGRAM_CAPTION_LIMIT, type LinkBonusGrantView } from '@binarius/shared';
+import {
+  BrokerAccountStatus,
+  plainTextOf,
+  TELEGRAM_CAPTION_LIMIT,
+  TELEGRAM_MESSAGE_LIMIT,
+  USER_ACCOUNT_LIST_LIMIT,
+  type LinkBonusGrantView,
+  type LinkedAccountView,
+} from '@binarius/shared';
 import { telegramTextProblems } from '@binarius/shared/testing';
-import { accountCard, LABELS, PROFILE, TEXTS, type AccountCardInput } from './texts';
+import { LINK_ACTIVE, LINK_PENDING, LINK_REVOKED, PENDING_ACCOUNT_ID } from './testing';
+import { accountCard, accountStatus, LABELS, PROFILE, TEXTS, type AccountCardInput } from './texts';
 
 describe('texts', () => {
   // the welcome travels as a caption whenever WELCOME_VIDEO_FILE_ID is set, and a caption over
@@ -48,12 +57,13 @@ describe('texts', () => {
   });
 
   it('starts every button label with an emoji, and the command description without one', () => {
-    const { startCommand, ...buttons } = LABELS;
+    const { startCommand, accountCommand, ...buttons } = LABELS;
     for (const entry of Object.values(buttons)) {
       const label = typeof entry === 'function' ? entry(null) : entry;
       expect(label).toMatch(/^\p{Extended_Pictographic}/u);
     }
     expect(startCommand).not.toMatch(/\p{Extended_Pictographic}/u);
+    expect(accountCommand).not.toMatch(/\p{Extended_Pictographic}/u);
   });
 
   it('names both buttons of the welcome by their labels', () => {
@@ -71,6 +81,75 @@ describe('texts', () => {
   // failure (review of PR #176, finding 5)
   it('does not tell a user without a dialog that the code expired', () => {
     expect(plainTextOf(TEXTS.codeRequestStale)).not.toMatch(/ист[её]к/i);
+  });
+
+  describe('the /account status', () => {
+    const HOSTILE_ADDRESS = `<&>_*"`.repeat(43).slice(0, 254);
+    const KINDS: readonly [string, LinkedAccountView][] = [
+      ['active', { status: BrokerAccountStatus.Active, email: HOSTILE_ADDRESS }],
+      [
+        'pending',
+        { status: BrokerAccountStatus.Pending, id: PENDING_ACCOUNT_ID, email: HOSTILE_ADDRESS },
+      ],
+      ['revoked', { status: BrokerAccountStatus.Revoked, email: HOSTILE_ADDRESS }],
+    ];
+    const lengthOf = (link: LinkedAccountView, count: number) =>
+      plainTextOf(accountStatus(Array.from({ length: count }, () => link))).length;
+
+    // the list bound is checked against the texts rather than assumed: at the bound the longest
+    // message fits, and a list half as long again would not
+    it.each(KINDS)(
+      `keeps ${USER_ACCOUNT_LIST_LIMIT} %s links of 254-character addresses inside the limit`,
+      (_kind, link) => {
+        const links = Array.from({ length: USER_ACCOUNT_LIST_LIMIT }, () => link);
+        expect(telegramTextProblems(accountStatus(links))).toEqual([]);
+        expect(lengthOf(link, 16)).toBeGreaterThan(TELEGRAM_MESSAGE_LIMIT);
+      },
+    );
+
+    it('puts the header, a blank line and one line per link, in the order given', () => {
+      expect(accountStatus([LINK_ACTIVE]).value).toBe(
+        `${TEXTS.accountConnected.value}\n\n${TEXTS.accountLineActive('ada@example.test').value}`,
+      );
+      expect(plainTextOf(accountStatus([LINK_PENDING, LINK_ACTIVE, LINK_REVOKED]))).toBe(
+        [
+          '✅ Аккаунт Binodex подключён',
+          '',
+          '⏳ Ждёт подтверждения: new@example.test',
+          '✅ Подключён: ada@example.test',
+          '⚠️ Подключение отозвано: old@example.test',
+        ].join('\n'),
+      );
+    });
+
+    it.each<[string, keyof typeof TEXTS, LinkedAccountView[]]>([
+      ['active and pending', 'accountConnected', [LINK_PENDING, LINK_ACTIVE]],
+      ['active and revoked', 'accountConnected', [LINK_REVOKED, LINK_ACTIVE]],
+      ['pending and revoked', 'accountPending', [LINK_REVOKED, LINK_PENDING]],
+      ['pending only', 'accountPending', [LINK_PENDING]],
+      ['revoked only', 'accountRevoked', [LINK_REVOKED, LINK_REVOKED]],
+    ])('heads %s with %s', (_label, header, links) => {
+      const entry = TEXTS[header];
+      if (typeof entry === 'function') throw new Error(`${header} is not a header`);
+      expect(accountStatus(links).value.startsWith(`${entry.value}\n\n`)).toBe(true);
+    });
+
+    it('is the not-connected text for no link at all', () => {
+      expect(accountStatus([])).toBe(TEXTS.accountNone);
+    });
+
+    it('says the address is unknown, escaped once, for a link without one', () => {
+      const text = accountStatus([{ status: BrokerAccountStatus.Revoked, email: null }]);
+      expect(plainTextOf(text)).toContain('⚠️ Подключение отозвано: адрес неизвестен');
+      expect(text.value).toContain(TEXTS.accountUnknownAddress.value);
+      expect(text.value).not.toContain('&amp;');
+    });
+
+    it('shows a hostile address as typed, escaped in the markup', () => {
+      const text = accountStatus([{ status: BrokerAccountStatus.Active, email: HOSTILE_ADDRESS }]);
+      expect(plainTextOf(text)).toContain(HOSTILE_ADDRESS);
+      expect(telegramTextProblems(text)).toEqual([]);
+    });
   });
 
   describe('the account card', () => {

@@ -1,16 +1,20 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { OAuthErrorCode, type UserStartRequest } from '@binarius/shared';
+import { OAuthErrorCode, UserErrorCode, type UserStartRequest } from '@binarius/shared';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
 import {
   CODE,
   CODE_SENT,
   CONFIRMED,
   EMAIL,
+  LINK_ACTIVE,
+  LINK_PENDING,
+  LINK_REVOKED,
   LOGIN,
   PENDING_ACCOUNT_ID,
   closeServer,
   listen,
+  accountView,
   rejectionOf,
   userView,
 } from './testing';
@@ -156,6 +160,59 @@ describe('recordStart', () => {
       createBackendClient({ baseUrl: dead, token: TOKEN }).recordStart(request),
     );
     expect((error as BackendError).code).toBe(BackendErrorCode.Unreachable);
+  });
+});
+
+describe('readAccount', () => {
+  const account = accountView({ accounts: [LINK_PENDING, LINK_ACTIVE, LINK_REVOKED] });
+
+  it('posts the telegram id under the internal bearer and returns the view', async () => {
+    const { baseUrl, capture } = await serve((_request, response) => {
+      json(response, 200, { user: account });
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).readAccount('4242')).toEqual(
+      account,
+    );
+    expect(capture.url).toBe('/users/account');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
+  });
+
+  it('reports a body without accounts as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, response) => {
+      json(response, 200, { user: { status: account.status } });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readAccount('4242'),
+    );
+    expect(error).toBeInstanceOf(BackendError);
+    expect((error as BackendError).code).toBe(BackendErrorCode.ContractViolation);
+  });
+
+  it('carries user_not_found as the reason of a 404', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 404, { error: UserErrorCode.UserNotFound });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readAccount('4242'),
+    );
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: UserErrorCode.UserNotFound,
+    });
+  });
+
+  it('carries a 500 as its status, without the body', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 500, { message: 'ada@example.test is broken' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readAccount('4242'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status: 500 });
+    expect((error as BackendError).reason).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain('ada@example.test');
   });
 });
 

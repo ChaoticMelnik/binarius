@@ -11,7 +11,10 @@ import {
   UserStatus,
   type ConfirmLoginResponse,
   type EmailSendCodeResponse,
+  type LinkedAccountView,
+  type PendingLinkedAccountView,
   type StartLoginResponse,
+  type UserAccountView,
   type UserStartView,
 } from '@binarius/shared';
 
@@ -70,6 +73,26 @@ export const CONFIRMED: ConfirmLoginResponse = {
   },
   grant: { granted: true, tokens: '7' },
 };
+
+// /account (#185): one link of each status, and a user with none
+export const LINK_ACTIVE: LinkedAccountView = {
+  status: BrokerAccountStatus.Active,
+  email: 'ada@example.test',
+};
+export const LINK_PENDING: PendingLinkedAccountView = {
+  status: BrokerAccountStatus.Pending,
+  id: PENDING_ACCOUNT_ID,
+  email: 'new@example.test',
+};
+export const LINK_REVOKED: LinkedAccountView = {
+  status: BrokerAccountStatus.Revoked,
+  email: 'old@example.test',
+};
+export const ACCOUNT_VIEW: UserAccountView = { status: UserStatus.Active, accounts: [] };
+export const accountView = (patch: Partial<UserAccountView> = {}): UserAccountView => ({
+  ...ACCOUNT_VIEW,
+  ...patch,
+});
 
 export const EMAIL = 'ada@example.test';
 export const CODE = '123456';

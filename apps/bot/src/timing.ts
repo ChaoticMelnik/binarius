@@ -53,6 +53,8 @@ export const HANDLER_CALLS = {
   resend: { backend: 1, telegram: 2 },
   // my_chat_member in a private chat: recordChatMember; nothing is sent
   myChatMember: { backend: 1, telegram: 0 },
+  // /account: readAccount, then sendMessage
+  account: { backend: 1, telegram: 1 },
 } as const;
 
 export const handlerBudgetMs = ({

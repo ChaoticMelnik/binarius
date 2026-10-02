@@ -101,7 +101,10 @@ describe('runBot', () => {
     await fake.options[0]?.onStart?.(BOT_INFO);
     expect(fake.api.setMyCommands).toHaveBeenCalledTimes(1);
     expect(fake.api.setMyCommands).toHaveBeenCalledWith(
-      [{ command: 'start', description: 'Начать' }],
+      [
+        { command: 'start', description: 'Начать' },
+        { command: 'account', description: 'Аккаунт Binodex' },
+      ],
       { scope: { type: 'all_private_chats' } },
     );
     // the profile texts by reference: their content is checked where it lives, texts.test.ts;
@@ -371,6 +374,7 @@ function scene(options: SceneOptions = {}) {
 
   const backend: BackendClient = {
     recordStart: options.recordStart ?? (() => Promise.resolve(USER_VIEW)),
+    readAccount: () => Promise.reject(new Error('not used by these scenes')),
     startLogin: () => Promise.reject(new Error('not used by these scenes')),
     confirmLogin: () => Promise.reject(new Error('not used by these scenes')),
     sendEmailCode: () => Promise.reject(new Error('not used by these scenes')),
@@ -522,7 +526,10 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
       'getUpdates#1',
     ]);
     expect(sentPayload(s.api.calls, 'setMyCommands')).toEqual({
-      commands: [{ command: 'start', description: 'Начать' }],
+      commands: [
+        { command: 'start', description: 'Начать' },
+        { command: 'account', description: 'Аккаунт Binodex' },
+      ],
       scope: { type: 'all_private_chats' },
     });
     // equality on the whole payload: a language_code would fail it
