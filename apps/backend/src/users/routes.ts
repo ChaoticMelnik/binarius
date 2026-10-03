@@ -3,6 +3,7 @@ import {
   TelegramChatMemberStatus,
   UserErrorCode,
   safeParseChatMemberRequest,
+  safeParseNotificationLevelRequest,
   safeParseUserAccountRequest,
   safeParseUserStartRequest,
 } from '@binarius/shared';
@@ -11,6 +12,7 @@ import {
   markTelegramReachable,
   readUserAccounts,
   recordUserStart,
+  setNotificationLevel,
   toUserAccountView,
   toUserStartView,
   type Db,
@@ -68,6 +70,29 @@ export const usersRoutes: FastifyPluginAsync<UsersRoutesDeps> = async (
     const recorded = await markTelegramReachable(db, telegramUserId);
     request.log.info({ recorded }, 'the user unblocked the bot');
     return reply.send({ recorded });
+  });
+
+  // The user picked a level in /settings (#120). Like the chat-member route, the log line carries
+  // no Telegram id.
+  app.post('/users/notification-level', async (request, reply) => {
+    const parsed = safeParseNotificationLevelRequest(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
+    }
+    const set = await setNotificationLevel(
+      db,
+      BigInt(parsed.data.telegramUserId),
+      parsed.data.level,
+    );
+    if (set === undefined) {
+      return reply.code(404).send({ error: UserErrorCode.UserNotFound });
+    }
+    // not `level`: that key is pino's own, and a second one would replace it in the JSON line
+    request.log.info(
+      { notificationLevel: set.level, canceledJobs: set.canceledJobs },
+      'notification level set',
+    );
+    return reply.send({ level: set.level });
   });
 
   // What the bot's /account shows; reads only. An unknown user is a 404 of its own code, so the

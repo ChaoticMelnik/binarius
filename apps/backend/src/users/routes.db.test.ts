@@ -4,6 +4,7 @@ import {
   BrokerAccountStatus,
   NotificationLevel,
   TelegramChatMemberStatus,
+  UserErrorCode,
   UserStatus,
 } from '@binarius/shared';
 import { createTempDatabase, seedBrokerAccount, type TempDatabase } from '@binarius/db/testing';
@@ -345,6 +346,120 @@ describe('POST /users/chat-member', () => {
     const parsed = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(parsed.filter((line) => line.msg === 'the user blocked the bot')).toEqual([
       expect.objectContaining({ level: 30, recorded: true, canceledJobs: 0 }),
+    ]);
+    expect(lines.join('\n')).not.toContain(telegramUserId);
+  });
+});
+
+// --- POST /users/notification-level (#120) -----------------------------------------------------
+
+const postLevel = (
+  payload: unknown,
+  authorization: string | null = `Bearer ${TOKEN}`,
+  instance = app,
+) =>
+  instance.inject({
+    method: 'POST',
+    url: '/users/notification-level',
+    headers: {
+      'content-type': 'application/json',
+      ...(authorization === null ? {} : { authorization }),
+    },
+    payload: JSON.stringify(payload),
+  });
+
+const levelOf = async (telegramUserId: string) => {
+  const [row] = await tmp.db
+    .select({ level: users.notificationLevel })
+    .from(users)
+    .where(eq(users.telegramUserId, BigInt(telegramUserId)));
+  return row?.level;
+};
+
+describe('POST /users/notification-level authorization', () => {
+  it.each([
+    ['no header', null],
+    ['another bearer', 'Bearer some-other-token'],
+    ['a non-bearer scheme', `Basic ${TOKEN}`],
+  ])('refuses %s and writes nothing', async (_label, authorization) => {
+    const { telegramUserId } = await started();
+    const response = await postLevel(
+      { telegramUserId, level: NotificationLevel.Off },
+      authorization,
+    );
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: 'unauthorized' });
+    expect(await levelOf(telegramUserId)).toBe(NotificationLevel.All);
+  });
+});
+
+describe('POST /users/notification-level validation', () => {
+  it.each([
+    ['an empty body', {}],
+    ['an unknown level', { telegramUserId: '600001', level: 'daily' }],
+    ['a non-numeric telegram id', { telegramUserId: 'abc', level: 'off' }],
+  ])('refuses %s with 400', async (_label, payload) => {
+    const response = await postLevel(payload);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: 'validation' });
+  });
+});
+
+describe('POST /users/notification-level', () => {
+  it('stores off and cancels a pending job, then all, and /users/start reports it', async () => {
+    const { telegramUserId, userId } = await started();
+    const [job] = await tmp.db
+      .insert(notificationJobs)
+      .values({ userId, kind: 'test' })
+      .returning({ id: notificationJobs.id });
+
+    const off = await postLevel({ telegramUserId, level: NotificationLevel.Off });
+    expect(off.statusCode).toBe(200);
+    expect(off.json()).toEqual({ level: NotificationLevel.Off });
+    expect(await levelOf(telegramUserId)).toBe(NotificationLevel.Off);
+    const [after] = await tmp.db
+      .select({ status: notificationJobs.status })
+      .from(notificationJobs)
+      .where(eq(notificationJobs.id, job!.id));
+    expect(after?.status).toBe(NotificationJobStatus.Canceled);
+
+    const reduced = await postLevel({ telegramUserId, level: NotificationLevel.Reduced });
+    expect(reduced.json()).toEqual({ level: NotificationLevel.Reduced });
+    expect((await post(body(telegramUserId))).json().user).toMatchObject({
+      notificationLevel: NotificationLevel.Reduced,
+    });
+
+    const all = await postLevel({ telegramUserId, level: NotificationLevel.All });
+    expect(all.json()).toEqual({ level: NotificationLevel.All });
+    expect(await levelOf(telegramUserId)).toBe(NotificationLevel.All);
+  });
+
+  it('answers 404 user_not_found for an unknown id and creates no row', async () => {
+    const telegramUserId = nextTelegramUserId();
+    const response = await postLevel({ telegramUserId, level: NotificationLevel.Off });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: UserErrorCode.UserNotFound });
+    expect(await levelOf(telegramUserId)).toBeUndefined();
+  });
+
+  it('logs the level at info without the Telegram id or the request body', async () => {
+    const { telegramUserId } = await started('7351902468135793');
+    const lines: string[] = [];
+    const instance = testApp({ write: (line: string) => void lines.push(line) });
+    await instance.ready();
+    try {
+      const response = await postLevel(
+        { telegramUserId, level: NotificationLevel.Off },
+        undefined,
+        instance,
+      );
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await instance.close();
+    }
+    const parsed = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(parsed.filter((line) => line.msg === 'notification level set')).toEqual([
+      expect.objectContaining({ level: 30, notificationLevel: 'off', canceledJobs: 0 }),
     ]);
     expect(lines.join('\n')).not.toContain(telegramUserId);
   });
