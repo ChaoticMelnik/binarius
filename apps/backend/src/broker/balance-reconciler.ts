@@ -32,6 +32,8 @@ export type BalanceRefreshOutcome =
   | 'aborted'
   // the token needs an exchange and this caller forbade one; nothing recorded
   | 'refresh_needed'
+  // the user is blocked, seen under the account lock when the token was taken; nothing recorded
+  | 'user_blocked'
   | 'account_not_found';
 
 export interface BalanceRefreshOptions {
@@ -129,6 +131,8 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
           return { outcome: 'account_not_found', marked: false };
         case 'refresh_needed':
           return { outcome: 'refresh_needed', marked: false };
+        case 'user_blocked':
+          return { outcome: 'user_blocked', marked: false };
         case 'account_pending':
           return fail(accountId, BalanceRefreshError.AccountPending);
         case 'account_revoked':
@@ -251,7 +255,11 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
         }
         const { outcome, marked } = result;
         if (outcome === 'ok') counts.refreshed += 1;
-        else if (outcome === 'refresh_needed' || outcome === 'account_not_found') {
+        else if (
+          outcome === 'refresh_needed' ||
+          outcome === 'account_not_found' ||
+          outcome === 'user_blocked'
+        ) {
           counts.skipped += 1;
         } else if (outcome !== 'aborted') counts.failed += 1;
         if (outcome !== 'ok' && outcome !== 'aborted' && !marked) {

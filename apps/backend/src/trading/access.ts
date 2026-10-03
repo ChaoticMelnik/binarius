@@ -44,6 +44,8 @@ function reasonFor(outcome: BalanceRefreshOutcome): BrokerBalanceUnavailableReas
       return BrokerBalanceUnavailableReason.AccountPending;
     case 'account_revoked':
       return BrokerBalanceUnavailableReason.AccountRevoked;
+    case 'user_blocked':
+      return BrokerBalanceUnavailableReason.UserBlocked;
     // joined a background attempt that may not exchange the token; the next request will
     case 'refresh_needed':
       return BrokerBalanceUnavailableReason.Refreshing;

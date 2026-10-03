@@ -1,5 +1,10 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { AuthRevokedReason, BrokerAccountStatus, errorLogFields } from '@binarius/shared';
+import {
+  AuthRevokedReason,
+  BrokerAccountStatus,
+  UserStatus,
+  errorLogFields,
+} from '@binarius/shared';
 import {
   applyRotatedTokens,
   backfillRefreshTokenHash,
@@ -28,6 +33,8 @@ export const ACCESS_SKEW_MS = 60_000;
 export type AccessTokenResult =
   | { ok: true; accessToken: string }
   | { ok: false; reason: 'account_not_found' }
+  // the user is blocked: nothing is decrypted, exchanged or revoked (Rule 12)
+  | { ok: false; reason: 'user_blocked' }
   // linked but not confirmed in the bot yet, so it may not act on the user's behalf
   | { ok: false; reason: 'account_pending' }
   // the row was encrypted under a key this process does not hold; another process has it
@@ -51,12 +58,6 @@ interface ExchangedPair {
   refreshTokenHash: string | null;
 }
 
-// Returns a usable access token for the account, refreshing it when needed.
-//
-// The whole decision runs under one row lock, which makes the refresh single-flight per
-// account: a second caller waits and then finds a fresh token instead of exchanging a token
-// the first caller has already consumed. Revocation is committed by the transaction and only
-// then reported — throwing inside it would roll the revocation back.
 export interface AccessTokenOptions {
   // false: never exchange the refresh token here, and never revoke for its age either — a caller
   // nobody is waiting on (the background balance refresh) must not change the account. Decided
@@ -64,6 +65,12 @@ export interface AccessTokenOptions {
   mayRefresh?: boolean;
 }
 
+// Returns a usable access token for the account, refreshing it when needed.
+//
+// The whole decision runs under one row lock, which makes the refresh single-flight per
+// account: a second caller waits and then finds a fresh token instead of exchanging a token
+// the first caller has already consumed. Revocation is committed by the transaction and only
+// then reported — throwing inside it would roll the revocation back.
 export async function ensureFreshAccessToken(
   deps: TokenServiceDeps,
   accountId: string,
@@ -94,6 +101,7 @@ async function refreshUnderLock(
   const { broker, cipher, logger } = deps;
   const account = await lockAccountForRefresh(tx, accountId);
   if (account === undefined) return { ok: false, reason: 'account_not_found' };
+  if (account.userStatus === UserStatus.Blocked) return { ok: false, reason: 'user_blocked' };
   // status before expiry: an account that may not act must not hand out the token it stores
   if (account.status === BrokerAccountStatus.Pending) {
     return { ok: false, reason: 'account_pending' };

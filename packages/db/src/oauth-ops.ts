@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, isNull, sql } from 'drizzle-orm';
 import {
   AuthRevokedReason,
   BrokerAccountStatus,
@@ -236,15 +236,18 @@ async function upsertUser(tx: Tx, telegramUserId: bigint): Promise<{ id: string 
   return raced.status === UserStatus.Blocked ? undefined : { id: raced.id };
 }
 
+// users is read, not locked: locking it here would invert users → broker_accounts (Rule 5), and
+// locking it first would hold it through the token exchange
 export async function lockAccountForRefresh(
   tx: Tx,
   accountId: string,
-): Promise<BrokerAccountRow | undefined> {
+): Promise<(BrokerAccountRow & { userStatus: UserStatus }) | undefined> {
   const [row] = await tx
-    .select()
+    .select({ ...getTableColumns(brokerAccounts), userStatus: users.status })
     .from(brokerAccounts)
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
     .where(eq(brokerAccounts.id, accountId))
-    .for('no key update');
+    .for('no key update', { of: brokerAccounts });
   return row;
 }
 
