@@ -68,7 +68,7 @@ Check diff size first: `gh pr diff <N> | wc -l`.
 
 **3b. Security review agent** *(skip on small diff)* — spawn `Agent` with `model: "opus"` and the full `/security-review` prompt.
 
-**3c. Code review agent** *(always)* — spawn `Agent` with `model: "opus"` and the full `/code-review high` prompt.
+**3c. Code review agent** *(always)* — spawn `Agent` with `model: "opus"` and the full `/code-review high` prompt. The forked `Skill("code-review")` ignores the target it is given and reviews the main checkout's recent commits (#97, #98, #119, #185, #104: every time): the prompt says not to invoke the Skill, and to apply its recipe by hand to the saved PR diff file and the review worktree.
 
 **3d. Simplification agent** *(skip on small diff)* — spawn `Agent` with `model: "sonnet"` and the full `/simplify` prompt, with two explicit instructions: **report only — no file edits** (`~/.claude/CLAUDE.md` → Reviewer sub-tools → File-mutation coordination) and **no nested agents** (it otherwise fans out and gets cut off).
 

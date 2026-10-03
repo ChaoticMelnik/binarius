@@ -52,7 +52,7 @@ Every entity in the domain must appear — "not mentioned in the issue" is not a
 
 ### Step 4: Identify affected areas
 
-Files to create/modify; schema changes (`packages/db` Drizzle schema); API/Socket.IO contract changes shared between `apps/backend` and `apps/trading-worker`; auth/authorization consistency (every mutating route needs the same pattern as its neighbors); frontend components affected in `apps/web`/`apps/bot`; conflicts with other in-flight branches.
+Files to create/modify; schema changes (`packages/db` Drizzle schema); API/Socket.IO contract changes shared between `apps/backend` and `apps/trading-worker`; auth/authorization consistency (every mutating route needs the same pattern as its neighbors); frontend components affected in `apps/web`/`apps/bot`; conflicts with other in-flight branches. Sibling issues of the same wave that already have plans: read their file lists and merge order, and make this plan agree on who owns each shared file and who merges first (#119 and #185 were planned in one session, both claimed `users.ts`/`user-ops.ts` and both said they merge first; it surfaced only at implementer clarify).
 
 If a project-specific schema/design skill is installed (`drizzle-orm-patterns` for this project), invoke it before drafting schema changes.
 

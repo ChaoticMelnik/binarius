@@ -1106,3 +1106,127 @@ PR #219 смержен через rebase: 3 коммита, голова `f8cbd4
 1. **tsc-проба для изменения фабрики компилирует экспортируемую сигнатуру потребителя, а не только место вызова.** — **внедрено в #221: `.claude/skills/architect/SKILL.md` → Validation checklist**
 2. **5 Minor ревью PR #219** — **открыто (2026-10-03, владелец): PR смержен с ними, Minor в комментарии ревью; отдельная задача — по решению владельца**
 3. **Пост-фактум Codex по `a49f30b`** присоединяется к предложению 4 аудита #171. — **открыто (2026-10-03, владелец): после сброса лимита 2026-10-05**
+
+---
+
+## #98 — ARCH-01: REST-клиент Broker API (2026-10-03)
+
+PR #222 смержен через rebase: 3 коммита, голова `4b1f331`. Ветка удалена. **Один круг ревью, чистый, 4 Minor.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`. Ответ владельца на вопрос о деньгах — живая проба вместо вариантов: tech-lead прогнал read-only скрипт в backend-контейнере на токене сохранённого аккаунта (токен не печатался). Деньги — JSON-целые, `level` — объект. Оценка ~1220 строк. |
+| Implementer | Clarify + код | Спавн `opus`. 5 вопросов; устаревший текст `docs/broker-socket.md` (#97) поправлен в PR по выбору владельца вместо Plan Update. Rebase после мержа #85, лог-тест на `logOptions`. 3 коммита, `pnpm check` exit 0 на каждом, 36 мутаций. |
+| Reviewer | Iteration 1 | Спавн `opus`. 0 Blocker, 0 Major, 4 Minor. Diff — файлом (правило #221), но `/code-review` всё равно ревьюил main. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase; единица денег записана предусловием в #99 и #100. |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Единица денег не подтверждена: при целых единицах profit почти всегда дробный и `openTrade` даст `contract_violation`, при минорных — ×100 | Minor | unverified-claim | Аккаунт без сделок, живой пробой не проверить | Принято в плане; → предусловие #99/#100 |
+| Тело ошибки читается целиком до проверки `MAX_ERROR_BODY_CHARS` | Minor | other | — | Implementer |
+| «Дробь отвергается» шире кода (`12.0000000000000001` → 12) | Minor | unverified-claim | Формулировка шире `z.int()` | Implementer docs |
+| Ожидание в тесте #97 сменилось `invalid_type` → `invalid_union` | Plan gap | unverified-claim | План утверждал, что тесты #97 пройдут без правок | Architect plan |
+
+### Process improvement proposals
+
+1. **Единица денег — предусловие #99 и #100** — **внедрено: комментарии в #99 и #100 (2026-10-03)**
+2. **Пост-фактум Codex по `4b1f331`** — **открыто (2026-10-03, владелец): после сброса лимита 2026-10-05**
+
+---
+
+## #119 — Уведомления: блокировка бота пользователем останавливает рассылки (2026-10-03)
+
+PR #223 смержен через rebase: 4 коммита, голова `1a33f6c`. **Один круг ревью, чистый, 4 Minor + мелочи.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План | Подготовлен в предыдущей сессии вместе с #185 и #120. |
+| Implementer | Clarify + код | Спавн `opus`. 4 вопроса; противоречие планов #119 и #185 (оба «первые», оба владеют `users.ts`/`user-ops.ts`) решил владелец: файлы за #119. Полный `pnpm check` только на голове — выбор владельца. Миграция 0009 (один ADD COLUMN) применена к общей тестовой БД. 28 мутаций. |
+| Reviewer | Iteration 1 | Первый спавн умер на лимите сессии вместе с ещё двумя ревьюерами, ничего не опубликовав; повтор после сброса — 0 Blocker, 0 Major. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase; Minor про Rule 5 и формулировки перенесены в #120. |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Планы #119 и #185 противоречили в порядке мержа и владении файлами | Plan defect | single-source | Планы одной волны писались без сверки друг с другом | Architect plan; поймано на Implementer Step 0 |
+| Тест «ignores unknown keys» не может упасть | Minor | unverified-claim | `parsed.success && …` проходит при неуспехе | Implementer |
+| `docs/bot-start.md` и Rule 19 шире кода | Minor | unverified-claim | Обещания на будущих отправителей | → #120 |
+| Rule 5 без порядка `users → notification_jobs` | Minor | other | — | → #120 |
+| Три параллельных ревью исчерпали лимит сессии | Process | other | Каждый ревьюер — три opus/sonnet подагента | Tech-lead Step 7 |
+
+### Process improvement proposals
+
+1. **Планы одной волны сверяют владение общими файлами и порядок мержа** — **внедрено в #<PR>: `.claude/skills/architect/SKILL.md` → Step 4**
+2. **Не больше двух ревьюеров одновременно** — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+3. **Minor Rule 5 и формулировки** — **вынесено в #120 (комментарий 2026-10-03)**
+
+---
+
+## #185 — Бот: команда /account (2026-10-03)
+
+PR #224 смержен через rebase: 3 коммита, голова `3e515b4` (после rebase на #119). **Один круг ревью, чистый, 2 Minor.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Implementer | Clarify + код | Спавн `opus`. 5 вопросов; новый код в `account.ts`/`account-ops.ts` по решению владельца. `pnpm check` exit 0 перед каждым коммитом. После мержа #119 — rebase с конфликтами (только добавления); rebase стёр subject'ы коммитов (`#185` как комментарий git), пересобраны через `git commit-tree`. |
+| Reviewer | Iteration 1 | Первый спавн умер на лимите; повтор — по перебазированной голове, резолюция конфликтов проверена. 0 Blocker, 0 Major. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase. |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| `git rebase` счёл строки `#185: …` комментариями и стёр subject'ы | Process | other | `core.commentChar` по умолчанию `#`, формат коммитов начинается с `#` | Implementer rebase |
+| Тест «escaped once» не может упасть | Minor | unverified-claim | — | Implementer |
+| Проверка «есть активная привязка» продублирована | Minor | other | — | Implementer |
+
+### Process improvement proposals
+
+1. **Rebase с форматом `#<N>:`** — `git -c core.commentChar=';' rebase …`, иначе subject'ы теряются — **открыто (2026-10-03, tech-lead): внести в implementer SKILL при следующем rebase-случае**
+
+---
+
+## #104 — Mock-брокер: Socket.IO-фикстура с управляемыми сценариями (2026-10-03)
+
+PR #225 смержен через rebase: 4 коммита, голова `94bba0e`. **Два круга ревью: после первого владелец выбрал строгий вариант m1 до мержа.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`, живая WS-проба (порядок событий, Buffer, лишние события, обрыв ~16.7 с). Агент упал на лимите Fable после публикации плана — проверено по GitHub, повтора не было. |
+| Implementer | Clarify + код | Спавн `opus`. 3 вопроса, docs переложены на текст #98. Противоречие плана (таблица open_trade vs решение 4) решено в пользу решения 4. 25 мутаций. |
+| Reviewer | Iteration 1 | Первый спавн умер на лимите; повтор — 0 Blocker, 0 Major, 3 Minor; code-review агент оценил m1 как Major, ревьюер понизил. |
+| Tech Lead | Iteration 1 → fix | Владелец выбрал «строго: исправить до мержа». Issue → Todo, Plan Update (`opus`, без Codex), фикс одним коммитом, rebase на #119. |
+| Reviewer | Iteration 2 | Ревью всего PR, не только фикса. 0 Blocker, 0 Major, 2 Minor. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase. |
+
+### Review iterations: 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m1: сценарий open_trade тратится до проверки auth; delayMs открывал сделку для пользователя на момент срабатывания | Minor → исправлен | single-source | План описывал порядок в двух местах по-разному | Architect plan |
+| r2-m1: строка disconnect с delayMs 50 мс может пройти, ничего не доказав | Minor | unverified-claim | Нет ожидания `sockets()` пустых | Implementer |
+| r2-m2: «There are no timers» и «ответ отправителю» в docs | Minor | unverified-claim | Старые формулировки не найдены поиском | Implementer docs |
+
+### Process improvement proposals
+
+1. **`/code-review` не вызывать как Skill — рецепт вручную по diff-файлу** (ревьюил main во всех пяти ревью этой волны) — **внедрено в #<PR>: `.claude/skills/reviewer/SKILL.md` → 3c**
+2. **Пост-фактум Codex по #119, #185, #104** присоединяется к предложению 4 аудита #171 — **открыто (2026-10-03, владелец): после сброса лимита 2026-10-05**
