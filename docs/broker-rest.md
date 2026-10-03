@@ -1,13 +1,15 @@
 # Broker REST client (issue #98)
 
-`apps/trading-worker/src/broker/rest.ts` is the trading worker's client for the Binodex Broker
+`packages/broker-rest/src/rest.ts` (`@binarius/broker-rest`) is the client for the Binodex Broker
 REST API: five calls, one error class, and no state. It has no logger, no counters and no
 retries. The caller passes the access token on every authorized call and decides what to retry
-and what to log. Nothing in the worker uses it yet: wiring it into the process (the base URL in
-`env.ts`, compose) is #100/#101.
+and what to log. It moved out of `apps/trading-worker` in #138 so the backend and the worker
+share one client. Its first caller is the backend's pairs catalog (docs/pairs-catalog.md).
+Nothing in the worker calls it yet: wiring it into the worker (the base URL in its `env.ts`,
+compose) is #100/#101.
 
 ```bash
-pnpm test --project unit apps/trading-worker/src/broker   # needs no database or Redis
+pnpm test --project unit packages/broker-rest   # needs no database or Redis
 ```
 
 ## Use
@@ -72,7 +74,8 @@ the name of the code. There is no catch-all row: every status lands in exactly o
 ## `detail`
 
 `detail` is the broker's `error.message` from the envelope `{ "error": { "message", "details" } }`,
-cut to `MAX_DETAIL_LENGTH` (200, `intents/config.ts`). It is read only from a 4xx/5xx body whose
+cut to `MAX_DETAIL_LENGTH` (200, `rest.ts`; the worker's processor cuts the executor's `detail` with
+the same constant). It is read only from a 4xx/5xx body whose
 `content-type` starts with `application/json` and whose text is at most `MAX_ERROR_BODY_CHARS`
 (16 384) characters. In any other case, and on any failure while reading, it is not set, and the
 status still decides the code. `details` is never copied: it is `unknown` and may echo the
@@ -102,11 +105,20 @@ a real pino logger built with `logOptions('info')` and reads the line back. `err
 
 ## Timeouts
 
-`BROKER_REST_TIMEOUT_MS = 5_000` (`apps/trading-worker/src/intents/config.ts`) bounds one request,
-headers and body together. It is a link in the worker's timing chain:
-`BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` (35 000). A job that makes a REST call
-without a deadline of its own therefore still finishes inside the drain. `TIMING_CHAIN_HOLDS`
-throws at import when the link breaks, and `config.test.ts` asserts it.
+`BROKER_REST_TIMEOUT_MS = 5_000` (`rest.ts`) bounds one request, headers and body together. Each
+process that waits on a call during shutdown orders it below its phase-1 budget, and the link is
+checked where that process's chain lives:
+
+- worker: `BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` (35 000) in
+  `apps/trading-worker/src/intents/config.ts`. A job that makes a REST call without a deadline of
+  its own still finishes inside the drain. `config.test.ts` asserts it.
+- backend: `BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` (10 000) in
+  `apps/backend/src/timing.ts`. The pairs catalog's warm-up or tick ends inside phase 1 even when
+  `stop()` did not cut it. `timing.test.ts` asserts it.
+- the pairs catalog: `BROKER_REST_TIMEOUT_MS < MIN_BROKER_PAIRS_TTL_MS` in
+  `packages/broker-rest/src/pairs-catalog.ts` (docs/pairs-catalog.md).
+
+Each `*_CHAIN_HOLDS` throws at import when its link breaks.
 
 It is deliberately not ordered against `SUBMIT_ACK_TIMEOUT_MS` (500–30 000, env). The processor
 passes its own signal, and a request ends at whichever comes first: the caller's signal or the
@@ -162,6 +174,7 @@ decimals, never as strings.
 - #99: the Socket.IO client.
 - #100: the trade executor and the REST fallback decision. #100/#101: the base URL in the
   worker's env and compose.
+- #138: the pairs catalog (docs/pairs-catalog.md), the first caller, in the backend.
 - #101: the session manager and 401 handling (refresh and revocation). Retries on
   `rate_limited`/`unavailable` belong to the callers.
 - #104: the Socket.IO side of `packages/mock-broker`. The fixture is used here as published and is
