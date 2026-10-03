@@ -14,6 +14,7 @@ import {
   type Db,
 } from '@binarius/db';
 import { internalBearerAuth } from '../auth/internal';
+import { registerTradingAccess } from './access';
 
 export interface TradingRoutesDeps {
   db: Db;
@@ -37,6 +38,8 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
   { db, internalApiToken, onIntentQueued },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
+  // after the hook: a route registered before it would not be covered
+  registerTradingAccess(app, { db });
 
   app.post('/trading/intents', async (request, reply) => {
     const parsed = safeParseCreateTradeIntentRequest(request.body);
