@@ -59,6 +59,7 @@ export const userStartViewSchema = z.object({
   hasActiveBrokerAccount: z.boolean(),
   // newest first
   pendingBrokerAccounts: z.array(pendingBrokerAccountViewSchema),
+  notificationLevel: notificationLevelSchema,
 });
 export type UserStartView = z.infer<typeof userStartViewSchema>;
 

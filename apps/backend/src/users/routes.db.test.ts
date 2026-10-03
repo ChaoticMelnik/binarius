@@ -1,6 +1,11 @@
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BrokerAccountStatus, TelegramChatMemberStatus, UserStatus } from '@binarius/shared';
+import {
+  BrokerAccountStatus,
+  NotificationLevel,
+  TelegramChatMemberStatus,
+  UserStatus,
+} from '@binarius/shared';
 import { createTempDatabase, seedBrokerAccount, type TempDatabase } from '@binarius/db/testing';
 import { NotificationJobStatus, brokerAccounts, notificationJobs, users } from '@binarius/db';
 import { buildApp } from '../app';
@@ -129,6 +134,7 @@ describe('POST /users/start', () => {
         acquiredAt: null,
         hasActiveBrokerAccount: false,
         pendingBrokerAccounts: [],
+        notificationLevel: NotificationLevel.All,
       },
     });
   });

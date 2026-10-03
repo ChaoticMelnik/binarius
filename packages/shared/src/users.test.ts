@@ -30,6 +30,7 @@ const view = (patch: Record<string, unknown> = {}) => ({
   acquiredAt: null,
   hasActiveBrokerAccount: false,
   pendingBrokerAccounts: [],
+  notificationLevel: NotificationLevel.All,
   ...patch,
 });
 
@@ -132,6 +133,13 @@ describe('userStartResponseSchema', () => {
     ).toBe(true);
   });
 
+  it.each(Object.values(NotificationLevel))('carries notificationLevel %s', (notificationLevel) => {
+    expect(safeParseUserStartResponse({ user: view({ notificationLevel }) })).toMatchObject({
+      success: true,
+      data: { user: { notificationLevel } },
+    });
+  });
+
   it('accepts pending accounts with and without an email', () => {
     const pendingBrokerAccounts = [
       { id: PENDING_ID, email: 'ada@example.test' },
@@ -152,6 +160,8 @@ describe('userStartResponseSchema', () => {
       { user: { ...view(), hasActiveBrokerAccount: undefined } },
     ],
     ['pendingBrokerAccounts is absent', { user: { ...view(), pendingBrokerAccounts: undefined } }],
+    ['notificationLevel is absent', { user: { ...view(), notificationLevel: undefined } }],
+    ['notificationLevel is unknown', { user: view({ notificationLevel: 'daily' }) }],
     [
       'a pending account id is not a uuid',
       { user: view({ pendingBrokerAccounts: [{ id: 'broker-1', email: null }] }) },

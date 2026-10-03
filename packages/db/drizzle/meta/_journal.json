@@ -71,6 +71,13 @@
       "when": 1790978416997,
       "tag": "0009_telegram_blocked_at",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791004942441,
+      "tag": "0010_notification_level",
+      "breakpoints": true
     }
   ]
 }
