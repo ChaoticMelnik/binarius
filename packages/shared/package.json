@@ -77,6 +77,10 @@
       "types": "./src/trading-access.ts",
       "default": "./src/trading-access.ts"
     },
+    "./catalog": {
+      "types": "./src/catalog.ts",
+      "default": "./src/catalog.ts"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"

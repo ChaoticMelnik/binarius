@@ -9,6 +9,7 @@ import type {
   OpenTrade,
   OpenTradeRequest,
 } from './broker';
+import type { PairsCatalogView, PairView } from './catalog';
 import type { DecimalString } from './money';
 import type { OAuthTokens, RefreshedTokens, WidgetSession, WidgetSessionRequest } from './oauth';
 import type {
@@ -24,6 +25,7 @@ import type { TradingAccessResponse } from './trading-access';
 import * as account from './account';
 import * as admin from './admin';
 import * as broker from './broker';
+import * as catalog from './catalog';
 import * as env from './env';
 import * as ids from './ids';
 import * as linkConfirmation from './link-confirmation';
@@ -244,6 +246,11 @@ describe('contract coverage (issue #6)', () => {
     expectTypeOf<keyof AssetsUpdate>().toEqualTypeOf<'assetId' | 'payout' | 'scheduledUntil'>();
   });
 
+  it('Pairs catalog view (issue #138)', () => {
+    expectTypeOf<keyof PairView>().toEqualTypeOf<keyof BinaryPair>();
+    expectTypeOf<keyof PairsCatalogView>().toEqualTypeOf<'pairs' | 'fetchedAt' | 'ageMs'>();
+  });
+
   it('root index re-exports every module', () => {
     const modules = {
       account,
@@ -263,6 +270,7 @@ describe('contract coverage (issue #6)', () => {
       logging,
       linkConfirmation,
       telegramHtml,
+      catalog,
     };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {
