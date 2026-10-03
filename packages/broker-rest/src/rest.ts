@@ -32,7 +32,12 @@ export const MAX_DETAIL_LENGTH = 200;
 
 // An error body longer than this is not parsed for its message: the envelope seen live is a
 // few dozen characters, and a page this size is not one.
-export const MAX_ERROR_BODY_CHARS = 16_384;
+export const MAX_ERROR_BODY_BYTES = 16_384;
+
+// A 2xx body longer than this is a contract violation. The longest answer is a chart at its
+// 5000-row cap (the live broker answered limit=5000 with 4999 rows, docs/mock-broker.md), six
+// numbers and under 100 bytes a row: below 0.5 MiB, so this leaves a margin of eight.
+export const MAX_SUCCESS_BODY_BYTES = 4 * 1024 * 1024;
 
 // Told apart by the HTTP status and the transport failure, never by the body text. Which rows
 // mean "the broker refused before acting" and which mean "the outcome is unknown" is the table in
@@ -153,6 +158,27 @@ function retryAfterSecOf(response: Response): number | undefined {
   return raw !== null && /^\d+$/.test(raw) ? Number(raw) : undefined;
 }
 
+// The body as text, or undefined once it passes maxBytes. Counted as the bytes arrive, so a body
+// without content-length, with a false one, or without an end costs at most maxBytes of memory.
+// A failed read (cut mid-flight, our timeout, the caller's abort) is thrown.
+async function readBody(response: Response, maxBytes: number): Promise<string | undefined> {
+  if (response.body === null) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
 // Any failure here leaves detail undefined: the status already decided the code.
 async function detailOf(response: Response): Promise<string | undefined> {
   try {
@@ -160,8 +186,8 @@ async function detailOf(response: Response): Promise<string | undefined> {
       await response.body?.cancel();
       return undefined;
     }
-    const text = await response.text();
-    if (text.length > MAX_ERROR_BODY_CHARS) return undefined;
+    const text = await readBody(response, MAX_ERROR_BODY_BYTES);
+    if (text === undefined) return undefined;
     const parsed = safeParseBrokerError(JSON.parse(text));
     return parsed.success ? parsed.data.error.message.slice(0, MAX_DETAIL_LENGTH) : undefined;
   } catch {
@@ -229,15 +255,22 @@ export function createBrokerRestClient(options: BrokerRestClientOptions): Broker
       throw new BrokerRestError(code, { status, retryAfterSec, detail });
     }
 
+    // read and parse apart: a body cut mid-flight is transport, one that arrived and is not
+    // JSON, or is too long to be an answer, breaks the contract
+    let text: string | undefined;
+    try {
+      text = await readBody(response, MAX_SUCCESS_BODY_BYTES);
+    } catch {
+      throw failure(combined, call.signal, status);
+    }
+    if (text === undefined) {
+      throw new BrokerRestError(BrokerRestErrorCode.ContractViolation, { status });
+    }
     let json: unknown;
     try {
-      json = await response.json();
-    } catch (error) {
-      // a body that arrived and is not JSON breaks the contract; one cut mid-flight is transport
-      if (error instanceof SyntaxError) {
-        throw new BrokerRestError(BrokerRestErrorCode.ContractViolation, { status });
-      }
-      throw failure(combined, call.signal, status);
+      json = JSON.parse(text);
+    } catch {
+      throw new BrokerRestError(BrokerRestErrorCode.ContractViolation, { status });
     }
     const parsed = call.parse(json);
     if (!parsed.success) {

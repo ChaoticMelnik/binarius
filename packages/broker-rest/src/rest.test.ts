@@ -12,6 +12,7 @@ import {
 } from '@binarius/shared';
 import {
   LIVE_MESSAGES,
+  MAX_CHART_LIMIT,
   MockTradeOutcome,
   MockTradeStatus,
   startMockBroker,
@@ -24,7 +25,8 @@ import {
   BrokerRestErrorCode,
   createBrokerRestClient,
   MAX_DETAIL_LENGTH,
-  MAX_ERROR_BODY_CHARS,
+  MAX_ERROR_BODY_BYTES,
+  MAX_SUCCESS_BODY_BYTES,
   TradeListStatus,
   type BrokerRestClient,
 } from './rest';
@@ -330,10 +332,10 @@ describe('detail', () => {
     expect(await caught(client.getUser(auth))).not.toHaveProperty('detail');
   });
 
-  it('is absent for an envelope longer than MAX_ERROR_BODY_CHARS', async () => {
+  it('is absent for an envelope longer than MAX_ERROR_BODY_BYTES', async () => {
     broker.rest.failNext('user', {
       status: 400,
-      body: { error: { message: 'y'.repeat(MAX_ERROR_BODY_CHARS) } },
+      body: { error: { message: 'y'.repeat(MAX_ERROR_BODY_BYTES) } },
     });
     const error = await caught(client.getUser(auth));
     expect(error.code).toBe(BrokerRestErrorCode.Rejected);
@@ -406,6 +408,67 @@ describe('transport', () => {
       const error = await caught(cut.listPairs());
       expect(error).toMatchObject({ code: BrokerRestErrorCode.Unavailable, status: 200 });
     });
+  });
+});
+
+describe('body size', () => {
+  let server: Server | undefined;
+  afterEach(async () => {
+    if (server === undefined) return;
+    const closing = server;
+    server = undefined;
+    closing.closeAllConnections();
+    await new Promise<void>((resolve) => closing.close(() => resolve()));
+  });
+
+  async function serve(handler: Parameters<typeof createServer>[1]): Promise<string> {
+    server = createServer(handler);
+    await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    return `http://127.0.0.1:${port}`;
+  }
+
+  it('refuses a 2xx body over MAX_SUCCESS_BODY_BYTES as a contract violation', async () => {
+    // valid JSON of valid pairs, padded with whitespace: only the size can refuse it
+    const pairs = JSON.stringify(broker.pairs.list());
+    const padding = ' '.repeat(64 * 1024);
+    const baseUrl = await serve((_request, response) => {
+      response.on('error', () => undefined);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.write(pairs);
+      let written = Buffer.byteLength(pairs);
+      while (written <= MAX_SUCCESS_BODY_BYTES) {
+        response.write(padding);
+        written += padding.length;
+      }
+      response.end();
+    });
+    const error = await caught(createBrokerRestClient({ baseUrl }).listPairs());
+    expect(error).toMatchObject({ code: BrokerRestErrorCode.ContractViolation, status: 200 });
+  });
+
+  it('stops reading an error body at MAX_ERROR_BODY_BYTES, even one without an end', async () => {
+    const chunk = 'x'.repeat(4096);
+    const baseUrl = await serve((_request, response) => {
+      response.on('error', () => undefined);
+      response.writeHead(429, { 'content-type': 'application/json' });
+      response.write('{"error":{"message":"');
+      const pump = () => {
+        while (!response.destroyed && response.write(chunk));
+        if (!response.destroyed) response.once('drain', pump);
+      };
+      pump();
+    });
+    const patient = createBrokerRestClient({ baseUrl, timeoutMs: 60_000 });
+    const error = await caught(patient.listPairs());
+    expect(error.code).toBe(BrokerRestErrorCode.RateLimited);
+    expect(error).not.toHaveProperty('detail');
+  }, 2_000);
+
+  it('leaves the longest chart far below MAX_SUCCESS_BODY_BYTES', () => {
+    const row = [9999999999999, 99999.99999, 99999.99999, 99999.99999, 99999.99999, 999999999.99];
+    const body = JSON.stringify(Array.from({ length: MAX_CHART_LIMIT }, () => row));
+    expect(Buffer.byteLength(body)).toBeLessThan(MAX_SUCCESS_BODY_BYTES / 4);
   });
 });
 

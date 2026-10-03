@@ -52,7 +52,7 @@ text never decides it.
 | `rate_limited` | 429; `retryAfterSec` from an integer `Retry-After` | refused before acting | did not open | wait, the caller decides |
 | `rejected` | any other 4xx | refused before acting; `detail` says why | did not open | fix the request |
 | `unavailable` | 5xx; `fetch` failed (network, DNS, TLS); our own timeout; a 2xx body cut mid-flight | **outcome unknown** | may have opened: `unknown` | the caller may retry |
-| `contract_violation` | a 2xx body that is not JSON or fails the schema; any 3xx | **outcome unknown** | may have opened: `unknown` | drift, retrying will not help |
+| `contract_violation` | a 2xx body that is not JSON, fails the schema or is over `MAX_SUCCESS_BODY_BYTES` (4 MiB); any 3xx | **outcome unknown** | may have opened: `unknown` | drift, retrying will not help |
 | `aborted` | the caller's `signal` fired first | the caller's own limit | the caller has already decided | — |
 
 #100 decides `rejected` or `unknown` for a REST open from the "What it means" column, not from
@@ -65,9 +65,9 @@ the name of the code. There is no catch-all row: every status lands in exactly o
   `AbortSignal.any`. The abort reason shows which one fired first, so our own timeout stays
   `unavailable` even when the caller aborts a moment later. A signal that is already aborted
   sends nothing.
-- **A body cut mid-flight** makes `response.json()` reject with `TypeError: terminated`, not a
-  `SyntaxError`, so it is `unavailable` and not `contract_violation`. An empty 2xx body is a
-  `SyntaxError`, so it is `contract_violation`.
+- **A body cut mid-flight** makes the body read reject with `TypeError: terminated`. The read and
+  `JSON.parse` are separate steps, so it is `unavailable` and not `contract_violation`. An empty
+  2xx body fails `JSON.parse`, so it is `contract_violation`.
 - **`Retry-After` as an HTTP date** leaves `retryAfterSec` unset. The `x-ratelimit-*` headers the
   live broker sends on every response are not exposed.
 
@@ -75,11 +75,11 @@ the name of the code. There is no catch-all row: every status lands in exactly o
 
 `detail` is the broker's `error.message` from the envelope `{ "error": { "message", "details" } }`,
 cut to `MAX_DETAIL_LENGTH` (200, `rest.ts`; the worker's processor cuts the executor's `detail` with
-the same constant). It is read only from a 4xx/5xx body whose
-`content-type` starts with `application/json` and whose text is at most `MAX_ERROR_BODY_CHARS`
-(16 384) characters. In any other case, and on any failure while reading, it is not set, and the
-status still decides the code. `details` is never copied: it is `unknown` and may echo the
-request. A 2xx body is read for its data only and never lands on an error.
+the same constant). It is read only from a 4xx/5xx body whose `content-type` starts with
+`application/json` and which is at most `MAX_ERROR_BODY_BYTES` (16 384) bytes. In any other
+case, and on any failure while reading, it is not set, and the status still decides the code.
+`details` is never copied: it is `unknown` and may echo the request. A 2xx body is read for its
+data only and never lands on an error.
 
 The policy is the one #97 set for the socket's `auth_error.message` and `open_trade_fail[].message`:
 the text is logged, truncated, and never persisted. The texts observed live (401, the chart's 400s)
@@ -105,7 +105,9 @@ a real pino logger built with `logOptions('info')` and reads the line back. `err
 
 ## Timeouts
 
-`BROKER_REST_TIMEOUT_MS = 5_000` (`rest.ts`) bounds one request, headers and body together. Each
+`BROKER_REST_TIMEOUT_MS = 5_000` (`rest.ts`) bounds one request, headers and body together. The
+body is also capped in bytes as it arrives, whatever `content-length` says:
+`MAX_SUCCESS_BODY_BYTES` for a 2xx, `MAX_ERROR_BODY_BYTES` for the error envelope. Each
 process that waits on a call during shutdown orders it below its phase-1 budget, and the link is
 checked where that process's chain lives:
 
