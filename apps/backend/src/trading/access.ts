@@ -3,7 +3,7 @@ import { UserErrorCode, safeParseTradingAccessRequest } from '@binarius/shared';
 import { readTokenBalance, toTradingAccessView, type Db } from '@binarius/db';
 
 // Read-only: nothing here reserves or credits; the reservation itself is createTradeIntent's CAS.
-// Registered inside tradingRoutes, after its bearer hook.
+// Registered inside tradingRoutes, whose bearer hook covers every route of that plugin.
 export function registerTradingAccess(app: FastifyInstance, { db }: { db: Db }): void {
   app.post('/trading/access', async (request, reply) => {
     const parsed = safeParseTradingAccessRequest(request.body);

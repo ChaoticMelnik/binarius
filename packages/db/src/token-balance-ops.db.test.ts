@@ -142,7 +142,7 @@ describe('readTokenBalance', () => {
     await expectCacheEqualsLedger(user);
   });
 
-  it('never shows a torn row while reserves commit concurrently', async () => {
+  it('a burst of reserves ends at 4, equal to the ledger, and every snapshot parses', async () => {
     const user = await creditedUser(10n);
     const accounts = await Promise.all(
       [1, 2, 3, 4].map(() => seedBrokerAccount(tmp.db, user.userId)),
@@ -190,13 +190,18 @@ describe('readTokenBalance', () => {
       await gate;
     });
     try {
-      await updated;
+      // the holder only settles after release(), so here it can win only by rejecting
+      await Promise.race([updated, holder]);
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const outcome = await Promise.race([
-        read(user),
-        new Promise<'waited'>((resolve) => (timer = setTimeout(() => resolve('waited'), 1_000))),
-      ]);
-      clearTimeout(timer);
+      let outcome;
+      try {
+        outcome = await Promise.race([
+          read(user),
+          new Promise<'waited'>((resolve) => (timer = setTimeout(() => resolve('waited'), 1_000))),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
       expect(outcome).toEqual({ status: UserStatus.Active, balance: 5n, reserved: 0n });
     } finally {
       release();
