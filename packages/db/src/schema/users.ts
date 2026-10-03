@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { bigint, check, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
-import { START_PAYLOAD_PATTERN, UserStatus } from '@binarius/shared';
+import { NotificationLevel, START_PAYLOAD_PATTERN, UserStatus } from '@binarius/shared';
 import { createdAt, id, inList, sqlTextLiteral, tokenAmount, updatedAt } from './columns';
 
 // token_balance / token_reserved are caches of token_ledger sums, updated in the same
@@ -22,8 +22,14 @@ export const users = pgTable(
     acquiredAt: timestamp('acquired_at', { withTimezone: true }),
     // When the bot learned it cannot reach this user (#119): a `kicked` chat-member update or a
     // 403 on a send. NULL = deliverable. Independent of `status`, which is the admin block.
-    // Read only through deliverable() (delivery-ops.ts), so #120 can widen the rule in one place.
+    // Read only through deliverable() (delivery-ops.ts).
     telegramBlockedAt: timestamp('telegram_blocked_at', { withTimezone: true }),
+    // The user's choice in /settings (#120), a preference rather than a deliverability fact:
+    // written only by setNotificationLevel, read only through deliverable()/acceptsMailing().
+    notificationLevel: text('notification_level')
+      .$type<NotificationLevel>()
+      .notNull()
+      .default(NotificationLevel.All),
     tokenBalance: tokenAmount('token_balance'),
     tokenReserved: tokenAmount('token_reserved'),
     createdAt: createdAt(),
@@ -32,6 +38,7 @@ export const users = pgTable(
   (t) => [
     uniqueIndex('users_telegram_user_id_idx').on(t.telegramUserId),
     inList('users_status_check', t.status, UserStatus),
+    inList('users_notification_level_check', t.notificationLevel, NotificationLevel),
     // The CHECK spells the same rule as startPayloadSchema, from the same regex source rather
     // than from a copy of it: PostgreSQL's POSIX engine and JavaScript's are not the same
     // engine, so the two verdicts are compared row by row over one corpus in

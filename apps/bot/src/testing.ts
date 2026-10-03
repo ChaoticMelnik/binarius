@@ -8,6 +8,7 @@ import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
 import {
   BrokerAccountStatus,
+  NotificationLevel,
   UserStatus,
   type ConfirmLoginResponse,
   type EmailSendCodeResponse,
@@ -43,6 +44,7 @@ export const USER_VIEW: UserStartView = {
   acquiredAt: null,
   hasActiveBrokerAccount: false,
   pendingBrokerAccounts: [],
+  notificationLevel: NotificationLevel.All,
 };
 
 export const userView = (patch: Partial<UserStartView> = {}): UserStartView => ({

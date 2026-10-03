@@ -169,6 +169,11 @@ describe('enum and uniqueness constraints', () => {
         tx.insert(users).values({ telegramUserId: 970_001n, status: 'bogus' as never }),
     ],
     [
+      'users_notification_level_check',
+      async (tx: Tx) =>
+        tx.insert(users).values({ telegramUserId: 970_002n, notificationLevel: 'bogus' as never }),
+    ],
+    [
       'audit_log_actor_type_check',
       (tx: Tx) =>
         tx.execute(

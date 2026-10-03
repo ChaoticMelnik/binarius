@@ -1,0 +1,2 @@
+ALTER TABLE "users" ADD COLUMN "notification_level" text DEFAULT 'all' NOT NULL;--> statement-breakpoint
+ALTER TABLE "users" ADD CONSTRAINT "users_notification_level_check" CHECK ("users"."notification_level" in ('all', 'reduced', 'off'));

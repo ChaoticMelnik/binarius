@@ -10,7 +10,7 @@ import { users } from './schema/users';
 
 export type UserStartRow = Pick<
   typeof users.$inferSelect,
-  'id' | 'telegramUserId' | 'status' | 'acquisitionSource' | 'acquiredAt'
+  'id' | 'telegramUserId' | 'status' | 'acquisitionSource' | 'acquiredAt' | 'notificationLevel'
 >;
 
 export interface RecordUserStartInput {
@@ -68,6 +68,7 @@ export async function recordUserStart(
         status: users.status,
         acquisitionSource: users.acquisitionSource,
         acquiredAt: users.acquiredAt,
+        notificationLevel: users.notificationLevel,
       });
     if (row === undefined) throw new Error('users upsert returned no row');
 
@@ -114,5 +115,6 @@ export function toUserStartView(
     acquiredAt: row.acquiredAt === null ? null : row.acquiredAt.toISOString(),
     hasActiveBrokerAccount,
     pendingBrokerAccounts: pendingBrokerAccounts.map(({ id, email }) => ({ id, email })),
+    notificationLevel: row.notificationLevel,
   };
 }

@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   BrokerAccountStatus,
+  NotificationLevel,
   START_PAYLOAD_PATTERN,
   UserStatus,
   startPayloadSchema,
@@ -11,6 +12,7 @@ import {
 } from '@binarius/shared';
 import { START_PAYLOAD_CORPUS } from '@binarius/shared/testing';
 import { createTokenCipher } from './crypto';
+import { setNotificationLevel } from './delivery-ops';
 import { confirmBrokerAccount, linkBrokerAccount } from './oauth-ops';
 import { createTempDatabase, seedBrokerAccount, type TempDatabase } from './testing';
 import { brokerAccounts, users } from './schema/index';
@@ -168,6 +170,14 @@ describe('recordUserStart: the rest of the row', () => {
 
     await start(telegramUserId);
     expect(await blockedAt()).toBeNull();
+  });
+
+  it('returns all for a new user, the stored level afterwards, and keeps it on a repeat /start', async () => {
+    const telegramUserId = nextTelegramUserId();
+    expect((await start(telegramUserId)).row.notificationLevel).toBe(NotificationLevel.All);
+    await setNotificationLevel(tmp.db, telegramUserId, NotificationLevel.Reduced);
+    expect((await start(telegramUserId)).row.notificationLevel).toBe(NotificationLevel.Reduced);
+    expect((await start(telegramUserId)).row.notificationLevel).toBe(NotificationLevel.Reduced);
   });
 
   it('creates exactly one row when two first /start updates race', async () => {
@@ -338,6 +348,7 @@ describe('toUserStartView', () => {
       'acquiredAt',
       'acquisitionSource',
       'hasActiveBrokerAccount',
+      'notificationLevel',
       'pendingBrokerAccounts',
       'status',
       'telegramUserId',
@@ -348,6 +359,7 @@ describe('toUserStartView', () => {
       acquisitionSource: 'src_view',
       hasActiveBrokerAccount: false,
       pendingBrokerAccounts: [],
+      notificationLevel: NotificationLevel.All,
     });
     expect(userStartViewSchema.safeParse(view).success).toBe(true);
   });
