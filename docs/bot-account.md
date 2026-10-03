@@ -140,7 +140,7 @@ worst of them.
 
 ## Boundaries
 
-- **#136** — the token balance and anything about money.
+- **#136** — the token balance is `POST /trading/access` ([trading-access.md](trading-access.md)); the bot shows it from #24.
 - **#24** — the main menu, and re-sending a lost or unpinned account card.
 - **#184** — `/help`; it lists the commands from `BOT_COMMANDS`, `/account` included.
 - **#120** — `/settings` and `/support`: [bot-start.md](bot-start.md#notification-level-and-support-120).

@@ -24,7 +24,8 @@ domain event or a log-safe problem is in [docs/broker-socket.md](docs/broker-soc
 the worker's REST client sends to the broker and how it classifies answers is in
 [docs/broker-rest.md](docs/broker-rest.md); what `/account` shows about a user's Binodex links is
 in [docs/bot-account.md](docs/bot-account.md); how the worker turns candles into a direction, or
-into a reason for none, is in [docs/signal.md](docs/signal.md).
+into a reason for none, is in [docs/signal.md](docs/signal.md); how the backend answers a user's
+token balance is in [docs/trading-access.md](docs/trading-access.md).
 
 ## Requirements
 
