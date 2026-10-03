@@ -18,6 +18,7 @@ COPY --chown=node:node apps/backend/package.json apps/backend/
 COPY --chown=node:node apps/bot/package.json apps/bot/
 COPY --chown=node:node apps/trading-worker/package.json apps/trading-worker/
 COPY --chown=node:node apps/web/package.json apps/web/
+COPY --chown=node:node packages/broker-rest/package.json packages/broker-rest/
 COPY --chown=node:node packages/db/package.json packages/db/
 COPY --chown=node:node packages/mock-broker/package.json packages/mock-broker/
 COPY --chown=node:node packages/shared/package.json packages/shared/

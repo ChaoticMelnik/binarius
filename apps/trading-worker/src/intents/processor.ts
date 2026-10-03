@@ -15,7 +15,7 @@ import {
   type Db,
   type TradeIntentRow,
 } from '@binarius/db';
-import { MAX_DETAIL_LENGTH } from './config';
+import { MAX_DETAIL_LENGTH } from '@binarius/broker-rest';
 import type { SubmitResult, TradeExecutor } from './executor';
 
 export type Logger = Pick<pino.Logger, 'info' | 'warn' | 'error' | 'debug'>;

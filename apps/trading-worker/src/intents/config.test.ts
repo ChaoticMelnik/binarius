@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
+import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import {
-  BROKER_REST_TIMEOUT_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   LOCK_DURATION_MS,
   MAX_SUBMIT_ACK_TIMEOUT_MS,

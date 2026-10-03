@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
+    "@binarius/broker-rest": "workspace:*",
     "@binarius/db": "workspace:*",
     "@binarius/shared": "workspace:*",
     "bullmq": "^6.3.8",
@@ -16,7 +17,6 @@
     "pino": "^10.3.1"
   },
   "devDependencies": {
-    "@binarius/mock-broker": "workspace:*",
     "@types/pg": "^8.23.1"
   }
 }

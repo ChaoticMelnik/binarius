@@ -1,3 +1,5 @@
+import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
+
 // The worker's time constants form one chain, and every link has a reason:
 //   SUBMIT_ACK_TIMEOUT_MS ≤ MAX_SUBMIT_ACK_TIMEOUT_MS  — env cap on how long one submit may wait
 //   < SHUTDOWN_PHASE1_BUDGET_MS                         — a SIGTERM during a submit waits it out
@@ -12,7 +14,8 @@
 // A side link: BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS, so a job that makes a broker
 // REST call without a deadline of its own still finishes inside the drain. It is deliberately not
 // ordered against SUBMIT_ACK_TIMEOUT_MS: the processor passes its own signal, and a REST call ends
-// at the earlier of the two (docs/broker-rest.md).
+// at the earlier of the two (docs/broker-rest.md). The constant is the REST client's own
+// (packages/broker-rest/src/rest.ts).
 export const MAX_SUBMIT_ACK_TIMEOUT_MS = 30_000;
 export const SHUTDOWN_PHASE1_BUDGET_MS = 35_000;
 export const SHUTDOWN_PHASE2_BUDGET_MS = 4_000;
@@ -21,13 +24,9 @@ export const LOCK_DURATION_MS = 60_000;
 export const STALLED_INTERVAL_MS = 30_000;
 export const MAX_STALLED_COUNT = 1;
 export const STALE_SUBMITTING_MS = 60_000;
-export const BROKER_REST_TIMEOUT_MS = 5_000;
 
 export const SWEEP_INTERVAL_MS = 15_000;
 export const SWEEP_BATCH_SIZE = 50;
-
-// free text from the executor is logged, never persisted, and only this much of it
-export const MAX_DETAIL_LENGTH = 200;
 
 // the chain above is the invariant; a constant edited out of order fails at import, not in prod
 export const TIMING_CHAIN_HOLDS =

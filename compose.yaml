@@ -30,6 +30,11 @@ x-watch-db: &watch-db
   target: /app/packages/db/src
   action: sync
 
+x-watch-broker-rest: &watch-broker-rest
+  path: ./packages/broker-rest/src
+  target: /app/packages/broker-rest/src
+  action: sync
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -116,9 +121,14 @@ services:
           action: sync
         - *watch-shared
         - *watch-db
+        - *watch-broker-rest
         - path: ./apps/backend/package.json
           action: rebuild
         - path: ./apps/backend/tsconfig.json
+          action: rebuild
+        - path: ./packages/broker-rest/package.json
+          action: rebuild
+        - path: ./packages/broker-rest/tsconfig.json
           action: rebuild
         - path: ./packages/shared/package.json
           action: rebuild
@@ -200,9 +210,14 @@ services:
           action: sync
         - *watch-shared
         - *watch-db
+        - *watch-broker-rest
         - path: ./apps/trading-worker/package.json
           action: rebuild
         - path: ./apps/trading-worker/tsconfig.json
+          action: rebuild
+        - path: ./packages/broker-rest/package.json
+          action: rebuild
+        - path: ./packages/broker-rest/tsconfig.json
           action: rebuild
         - path: ./packages/shared/package.json
           action: rebuild
