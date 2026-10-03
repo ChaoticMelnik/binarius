@@ -423,20 +423,51 @@ describe('tick', () => {
     expect(tokenCalls.map((call) => call.accountId)).toEqual([healthy.accountId]);
   });
 
-  it.each<[string, AccessTokenResult, boolean]>([
-    ['a key this process lacks, no snapshot', { ok: false, reason: 'key_unavailable' }, false],
-    ['a token that needs an exchange', { ok: false, reason: 'refresh_needed' }, true],
+  it.each<
+    [
+      string,
+      AccessTokenResult | (() => Promise<AccessTokenResult>),
+      boolean,
+      { failed: number; skipped: number },
+    ]
+  >([
+    [
+      'a key this process lacks, no snapshot',
+      { ok: false, reason: 'key_unavailable' },
+      false,
+      { failed: 1, skipped: 0 },
+    ],
+    [
+      'a token that needs an exchange',
+      { ok: false, reason: 'refresh_needed' },
+      true,
+      { failed: 0, skipped: 1 },
+    ],
+    [
+      'a user blocked after the candidates were listed',
+      { ok: false, reason: 'user_blocked' },
+      true,
+      { failed: 0, skipped: 1 },
+    ],
+    [
+      'an attempt that throws, no snapshot',
+      () => Promise.reject(new Error('boom')),
+      false,
+      { failed: 1, skipped: 0 },
+    ],
   ])(
     'holds back an account whose attempt left nothing in its row: %s',
-    async (_label, answer, withSnapshot) => {
+    async (_label, answer, withSnapshot, firstTick) => {
       const stuck = withSnapshot ? await requested('-5 minutes') : await withIntent();
       const healthy = await requested('-2 minutes');
       tokenAnswers.set(stuck.accountId, answer);
       const balance = reconciler(own.db, { maxPerMinute: 1, stalledRetryMs: 100 });
 
+      lines = [];
       await balance.tick();
       expect(tokenCalls.map((call) => call.accountId)).toEqual([stuck.accountId]);
       expect(userGets()).toHaveLength(0);
+      expect(logsAt(INFO).find((entry) => entry.msg === 'balance tick')).toMatchObject(firstTick);
       tokenCalls.length = 0;
 
       await balance.tick();

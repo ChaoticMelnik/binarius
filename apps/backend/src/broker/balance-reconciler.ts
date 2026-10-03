@@ -250,6 +250,9 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
         } catch (error) {
           // a database error carries the statement and the row's values: name and code only
           logger.error({ accountId, ...errorLogFields(error) }, 'balance refresh threw');
+          // nothing reached the row, so its queue key did not move: held back like any attempt
+          // that left nothing
+          stalled.set(accountId, Date.now() + stalledRetryMs);
           counts.failed += 1;
           continue;
         }
