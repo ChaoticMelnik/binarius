@@ -5,6 +5,7 @@ export * from './crypto';
 export * from './trade-intent-ops';
 export * from './oauth-ops';
 export * from './link-bonus-ops';
+export * from './token-balance-ops';
 export * from './user-ops';
 export * from './delivery-ops';
 export * from './account-ops';
