@@ -10,6 +10,7 @@ import {
   type BrokerBalanceView,
 } from '@binarius/shared';
 import {
+  BalanceRefreshError,
   readBalanceSnapshot,
   readTokenBalance,
   resolveBalanceAccount,
@@ -40,18 +41,34 @@ const unavailable = (reason: BrokerBalanceUnavailableReason): BrokerSection => (
 // what a failed refresh says when there is no snapshot to fall back on
 function reasonFor(outcome: BalanceRefreshOutcome): BrokerBalanceUnavailableReason {
   switch (outcome) {
-    case 'account_pending':
+    case BalanceRefreshError.AccountPending:
       return BrokerBalanceUnavailableReason.AccountPending;
-    case 'account_revoked':
+    case BalanceRefreshError.AccountRevoked:
       return BrokerBalanceUnavailableReason.AccountRevoked;
     case 'user_blocked':
       return BrokerBalanceUnavailableReason.UserBlocked;
     // joined a background attempt that may not exchange the token; the next request will
     case 'refresh_needed':
       return BrokerBalanceUnavailableReason.Refreshing;
-    default:
+    // ok without a snapshot and account_not_found cannot happen (neither broker_accounts nor
+    // snapshot rows are deleted); they are listed so a new outcome has to be placed here
+    case 'ok':
+    case 'account_not_found':
+    case 'aborted':
+    case BalanceRefreshError.Unauthorized:
+    case BalanceRefreshError.RateLimited:
+    case BalanceRefreshError.Rejected:
+    case BalanceRefreshError.Unavailable:
+    case BalanceRefreshError.ContractViolation:
+    case BalanceRefreshError.AccountMismatch:
+    case BalanceRefreshError.KeyUnavailable:
       return BrokerBalanceUnavailableReason.BrokerUnavailable;
   }
+  return assertExhausted(outcome);
+}
+
+function assertExhausted(value: never): never {
+  throw new Error(`unhandled balance refresh outcome: ${String(value)}`);
 }
 
 async function brokerSection(
@@ -90,7 +107,7 @@ async function brokerSection(
   const current = (fallback: BrokerBalanceUnavailableReason): BrokerSection =>
     view === undefined ? unavailable(fallback) : { broker: view, brokerUnavailable: null };
 
-  if (view?.fresh === true) return current(BrokerBalanceUnavailableReason.BrokerUnavailable);
+  if (view?.fresh === true) return { broker: view, brokerUnavailable: null };
   // a blocked user never reaches the broker (Rule 12); what is stored is still theirs to see
   if (account.userStatus === UserStatus.Blocked) {
     return current(BrokerBalanceUnavailableReason.UserBlocked);

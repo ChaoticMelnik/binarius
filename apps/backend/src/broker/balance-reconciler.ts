@@ -144,6 +144,12 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
           return assertExhausted(token);
       }
     }
+    // before the GET: a missing account must not spend a call counted against the rate limit
+    const [account] = await db
+      .select({ brokerUserId: brokerAccounts.brokerUserId })
+      .from(brokerAccounts)
+      .where(eq(brokerAccounts.id, accountId));
+    if (account === undefined) return { outcome: 'account_not_found', marked: false };
     if (signal.aborted) return { outcome: 'aborted', marked: false };
 
     let user;
@@ -165,11 +171,6 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
       return fail(accountId, BROKER_FAILURE[error.code]);
     }
 
-    const [account] = await db
-      .select({ brokerUserId: brokerAccounts.brokerUserId })
-      .from(brokerAccounts)
-      .where(eq(brokerAccounts.id, accountId));
-    if (account === undefined) return { outcome: 'account_not_found', marked: false };
     if (account.brokerUserId !== user.id) {
       logger.warn(
         { accountId, expected: account.brokerUserId, received: user.id },
@@ -213,17 +214,19 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
     accountId: string,
     options: BalanceRefreshOptions = {},
   ): Promise<BalanceRefreshOutcome> {
-    if (stopped) return Promise.resolve('aborted');
-    const outcome = fly(accountId, options).then((result) => result.outcome);
     const { signal } = options;
+    // an already aborted signal starts no flight
+    if (stopped || signal?.aborted === true) return Promise.resolve('aborted');
+    const outcome = fly(accountId, options).then((result) => result.outcome);
     if (signal === undefined) return outcome;
-    return Promise.race([
-      outcome,
-      new Promise<BalanceRefreshOutcome>((resolve) => {
-        if (signal.aborted) resolve('aborted');
-        signal.addEventListener('abort', () => resolve('aborted'), { once: true });
-      }),
-    ]);
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<BalanceRefreshOutcome>((resolve) => {
+      onAbort = () => resolve('aborted');
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    return Promise.race([outcome, aborted]).finally(() => {
+      if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
+    });
   }
 
   async function runTick(): Promise<void> {
