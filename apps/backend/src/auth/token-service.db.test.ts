@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   brokerAccounts,
+  users,
   confirmBrokerAccount,
   createTokenCipher,
   hashToken,
@@ -620,5 +621,91 @@ describe('ensureFreshAccessToken with mayRefresh: false', () => {
     const account = await linkedAccount();
     const result = await ensureFreshAccessToken(deps(), account.id, { mayRefresh: false });
     expect(result.ok).toBe(true);
+  });
+});
+
+// Rule 12: the token of a blocked user's account is never handed out. users.status is read by the
+// statement that locks the account, and users itself is not locked (Rule 5).
+describe('ensureFreshAccessToken for a blocked user', () => {
+  const block = (account: BrokerAccountRow) =>
+    tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, account.userId));
+
+  const untouched = async (account: BrokerAccountRow) => {
+    expect(await rowOf(account.id)).toMatchObject({
+      status: 'active',
+      authRevokedReason: null,
+      accessTokenEnc: account.accessTokenEnc,
+    });
+  };
+
+  it('hands out no token while the access token is valid', async () => {
+    const account = await linkedAccount();
+    await block(account);
+    const before = stub.tokenRequests;
+    expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
+      ok: false,
+      reason: 'user_blocked',
+    });
+    expect(stub.tokenRequests).toBe(before);
+    await untouched(account);
+  });
+
+  it('exchanges nothing for an expired token either, even when a refresh is allowed', async () => {
+    const account = await expiredAccount();
+    await block(account);
+    const before = stub.tokenRequests;
+    expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
+      ok: false,
+      reason: 'user_blocked',
+    });
+    expect(stub.tokenRequests).toBe(before);
+    await untouched(account);
+  });
+
+  it('does not lock the users row while it holds the account', async () => {
+    const slow = await startOAuthStub({
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      redirectUri: REDIRECT_URI,
+      delayMs: 1_000,
+    });
+    let refreshing: Promise<unknown> | undefined;
+    try {
+      const patient = createBrokerOAuthClient({
+        baseUrl: slow.url,
+        clientId: CLIENT_ID,
+        clientSecret: CLIENT_SECRET,
+        timeoutMs: 5_000,
+      });
+      const n = ++seq;
+      const tokens = await patient.exchangeCode({
+        code: slow.issueCode({ brokerUserId: `svc-broker-${n}` }),
+        redirectUri: REDIRECT_URI,
+      });
+      const telegramUserId = BigInt(900_000 + n);
+      const linked = await linkBrokerAccount(tmp.db, {
+        telegramUserId,
+        tokens,
+        cipher,
+        activate: true,
+      });
+      if (!linked.ok) throw new Error(`link failed: ${linked.reason}`);
+      await expireAccessToken(linked.account.id);
+
+      const before = slow.tokenRequests;
+      refreshing = ensureFreshAccessToken(deps({ broker: patient }), linked.account.id);
+      // the exchange has reached the stub: the account row is locked until it answers
+      while (slow.tokenRequests === before) await new Promise((r) => setTimeout(r, 5));
+
+      await tmp.db.transaction(async (tx) => {
+        await tx.execute(sql`set local lock_timeout = '300ms'`);
+        await tx.update(users).set({ status: 'active' }).where(eq(users.id, linked.account.userId));
+      });
+      expect(await refreshing).toMatchObject({ ok: true });
+    } finally {
+      // the stub's close() would wait on the exchange still in flight
+      await refreshing?.catch(() => undefined);
+      await slow.close();
+    }
   });
 });

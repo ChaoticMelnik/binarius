@@ -348,6 +348,15 @@ describe('POST /trading/access → broker', () => {
     expect(userGets()).toBe(0);
   });
 
+  // blocked after the route read users.status: the token lookup sees it under the account lock
+  it('says user_blocked when the user is blocked between the lookup and the token', async () => {
+    const user = await linkedUser();
+    tokenAnswers.set(user.accountId, { ok: false, reason: 'user_blocked' });
+    const response = await access({ telegramUserId: user.telegramUserId });
+    expect(response.json()).toMatchObject({ broker: null, brokerUnavailable: 'user_blocked' });
+    expect(userGets()).toBe(0);
+  });
+
   it('picks an account by id when the user has several, and only among their own', async () => {
     const user = await linkedUser();
     const second = await seedBrokerAccount(tmp.db, user.userId, { brokerUserId: 'second-account' });
