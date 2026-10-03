@@ -44,6 +44,9 @@ importers:
 
   apps/backend:
     dependencies:
+      '@binarius/broker-rest':
+        specifier: workspace:*
+        version: link:../../packages/broker-rest
       '@binarius/db':
         specifier: workspace:*
         version: link:../../packages/db

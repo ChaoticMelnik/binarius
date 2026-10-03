@@ -16,6 +16,7 @@ import {
 } from '@binarius/shared';
 import { adminRoutes, type AdminRoutesDeps } from './admin/routes';
 import { authRoutes, type AuthRoutesDeps } from './auth/routes';
+import { pairsRoutes, type PairsRoutesDeps } from './trading/pairs-routes';
 import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
 import { usersRoutes, type UsersRoutesDeps } from './users/routes';
 
@@ -27,6 +28,7 @@ export interface AppDeps {
   logLevel: LogLevel;
   checkTimeoutMs: number;
   trading: TradingRoutesDeps;
+  pairs: PairsRoutesDeps;
   auth: AuthRoutesDeps;
   users: UsersRoutesDeps;
   admin: AdminRoutesDeps;
@@ -129,6 +131,7 @@ export function buildApp({
   logLevel,
   checkTimeoutMs,
   trading,
+  pairs,
   auth,
   users,
   admin,
@@ -187,6 +190,7 @@ export function buildApp({
   });
 
   void app.register(tradingRoutes, trading);
+  void app.register(pairsRoutes, pairs);
   void app.register(authRoutes, auth);
   void app.register(usersRoutes, users);
   void app.register(adminRoutes, admin);

@@ -11,6 +11,7 @@ import { createTempDatabase, seedBrokerAccount, type TempDatabase } from '@binar
 import { NotificationJobStatus, brokerAccounts, notificationJobs, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
+import { unusedPairsDeps } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -25,6 +26,7 @@ let app: ReturnType<typeof buildApp>;
 
 const testApp = (logs?: { write(line: string): void }) =>
   buildApp({
+    pairs: unusedPairsDeps(),
     admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),

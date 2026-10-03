@@ -19,6 +19,7 @@ import {
   unusedAdminDeps,
   type CapturedApi,
 } from './testing';
+import { unusedPairsDeps } from '../trading/testing';
 
 // The whole path, over HTTP and with real cookies: a browser's form reaches apps/web, which
 // calls a listening apps/backend with its bearer, which drives a real grammY bot against a
@@ -55,6 +56,7 @@ beforeAll(async () => {
   api = captureApi(adminBot.bot);
 
   backend = buildApp({
+    pairs: unusedPairsDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'silent',

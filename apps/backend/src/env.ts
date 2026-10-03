@@ -13,6 +13,11 @@ import {
   type EnvSource,
 } from '@binarius/shared';
 import { OAUTH_CALLBACK_PATH } from '@binarius/shared/oauth';
+import {
+  DEFAULT_BROKER_PAIRS_TTL_MS,
+  MAX_BROKER_PAIRS_TTL_MS,
+  MIN_BROKER_PAIRS_TTL_MS,
+} from '@binarius/broker-rest';
 
 // the compose probe timeout (3s) is sized above this ceiling
 const MIN_HEALTH_TIMEOUT_MS = 500;
@@ -37,6 +42,7 @@ export interface Env {
   brokerClientSecret: string;
   brokerOauthAuthorizeUrl: string;
   brokerApiBaseUrl: string;
+  brokerPairsTtlMs: number;
   brokerOauthRedirectUri: string;
   brokerPartnerRef: string;
   tokenEncryptionKey: Buffer;
@@ -68,6 +74,12 @@ export function parseEnv(source: EnvSource): Env {
       readEnv(source, 'BROKER_API_BASE_URL'),
       'BROKER_API_BASE_URL',
       HTTPS_ONLY_RULES,
+    ),
+    brokerPairsTtlMs: parseBoundedIntegerEnv(
+      readEnv(source, 'BROKER_PAIRS_TTL_MS', String(DEFAULT_BROKER_PAIRS_TTL_MS)),
+      'BROKER_PAIRS_TTL_MS',
+      MIN_BROKER_PAIRS_TTL_MS,
+      MAX_BROKER_PAIRS_TTL_MS,
     ),
     brokerOauthRedirectUri: parseRedirectUri(source),
     brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),

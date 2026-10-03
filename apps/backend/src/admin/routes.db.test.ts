@@ -26,6 +26,7 @@ import {
 import { buildApp } from '../app';
 import { createPasswordQueue } from './password-queue';
 import { stubTelegram, unusedAdminDeps } from './testing';
+import { unusedPairsDeps } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -56,6 +57,7 @@ const build = (
   telegram = stubTelegram(true);
   derivations = 0;
   return buildApp({
+    pairs: unusedPairsDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: logs === undefined ? 'silent' : 'error',
