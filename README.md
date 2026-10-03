@@ -23,7 +23,8 @@ broker answers, and which of it was observed on the live broker, is in
 domain event or a log-safe problem is in [docs/broker-socket.md](docs/broker-socket.md); what
 the worker's REST client sends to the broker and how it classifies answers is in
 [docs/broker-rest.md](docs/broker-rest.md); what `/account` shows about a user's Binodex links is
-in [docs/bot-account.md](docs/bot-account.md).
+in [docs/bot-account.md](docs/bot-account.md); how the worker turns candles into a direction, or
+into a reason for none, is in [docs/signal.md](docs/signal.md).
 
 ## Requirements
 
