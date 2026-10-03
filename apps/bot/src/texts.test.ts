@@ -94,17 +94,30 @@ describe('texts', () => {
 
     it('names the selected level in bold', () => {
       expect(settingsText(NotificationLevel.Reduced).value).toContain(
-        `Сейчас выбрано: <b>${LABELS.levelReduced}</b>`,
+        'Сейчас выбрано: <b>🔕 Реже</b>',
       );
     });
 
     it('maps each level to its label, and marks the selected one', () => {
+      // the labels the owner approved verbatim (2026-10-03)
       expect(Object.values(NotificationLevel).map(levelLabel)).toEqual([
-        LABELS.levelAll,
-        LABELS.levelReduced,
-        LABELS.levelOff,
+        '🔔 Все',
+        '🔕 Реже',
+        '❌ Выключить',
       ]);
-      expect(currentLevelLabel(NotificationLevel.Off)).toBe(`${LABELS.levelOff} ✅`);
+      expect(currentLevelLabel(NotificationLevel.Off)).toBe('❌ Выключить ✅');
+    });
+
+    // the level buttons are not in LABELS, so the LABELS-wide checks above do not see them
+    it.each(
+      Object.values(NotificationLevel).flatMap((level) => [
+        levelLabel(level),
+        currentLevelLabel(level),
+      ]),
+    )('keeps the level button %s plain, non-empty and starting with an emoji', (label) => {
+      expect(label.trim().length).toBeGreaterThan(0);
+      expect(label).not.toMatch(/[<>]|&(?:lt|gt|amp|quot|#\d+|#x[0-9a-f]+);/i);
+      expect(label).toMatch(/^\p{Extended_Pictographic}/u);
     });
 
     // Bot API: callback data is 1-64 bytes

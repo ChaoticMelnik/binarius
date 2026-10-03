@@ -215,9 +215,6 @@ export const LABELS = {
   // the descriptions of /settings and /support, plain like startCommand (#120)
   settingsCommand: 'Настройки уведомлений',
   supportCommand: 'Поддержка',
-  levelAll: LEVEL_LABELS.all,
-  levelReduced: LEVEL_LABELS.reduced,
-  levelOff: LEVEL_LABELS.off,
   supportButton: '💬 Написать в поддержку',
 } as const satisfies Record<string, string | ((value: string | null) => string)>;
 

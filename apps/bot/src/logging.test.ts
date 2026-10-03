@@ -497,8 +497,6 @@ describe('what the bot writes about the welcome video', () => {
   });
 });
 
-// The card's caption holds the account's address and the update holds the code typed, so every
-// line about the card is read at trace and searched for both.
 // #120: the /settings message is re-rendered by an edit after a press
 describe('what the bot writes about the settings edit', () => {
   const update = () => callbackUpdate(levelCallbackData(NotificationLevel.Off));
@@ -510,7 +508,11 @@ describe('what the bot writes about the settings edit', () => {
       apiErrors: [
         [
           'editMessageText',
-          { ok: false, error_code: 400, description: 'Bad Request: SECRET-DESC not found' },
+          {
+            ok: false,
+            error_code: 400,
+            description: 'Bad Request: message to edit not found SECRET-DESC',
+          },
         ],
       ],
     });
@@ -530,6 +532,31 @@ describe('what the bot writes about the settings edit', () => {
       'sendMessage',
     ]);
     expect(calls[2]?.payload.text).toBe(settingsText(NotificationLevel.Off).value);
+  });
+
+  it('writes the not-modified refusal at info with the method and code, not its text', async () => {
+    const { lines, calls } = await linesFrom({
+      update: update(),
+      level: 'trace',
+      apiErrors: [
+        [
+          'editMessageText',
+          {
+            ok: false,
+            error_code: 400,
+            description: 'Bad Request: message is not modified SECRET-DESC',
+          },
+        ],
+      ],
+    });
+    expect(lineWith(lines, 'the settings message already shows this level')).toMatchObject({
+      level: 30,
+      method: 'editMessageText',
+      telegramErrorCode: 400,
+    });
+    expect(lines.join('')).not.toContain('SECRET-DESC');
+    expect(lines.join('')).not.toContain('Сейчас выбрано');
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
   });
 
   it('reports a transport failure by identity and method, sends nothing more, drops the token', async () => {
@@ -576,9 +603,16 @@ describe('what the bot writes about the settings edit', () => {
       err: { name: 'BackendError' },
       backendStatus: 503,
     });
+    // time and pid are numbers that could hold 4242 by chance; every other field is searched
+    const fields = lines.map((line) =>
+      JSON.stringify({ ...parsed(line), time: undefined, pid: undefined }),
+    );
+    expect(fields.join('')).not.toContain(String(USER.id));
   });
 });
 
+// The card's caption holds the account's address and the update holds the code typed, so every
+// line about the card is read at trace and searched for both.
 describe('what the bot writes about the account card', () => {
   const ADDRESS = 'SECRET-ADDRESS@example.test';
   const CODE = 'SECRET-CODE-123';

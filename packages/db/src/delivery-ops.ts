@@ -47,8 +47,8 @@ export async function cancelPendingNotificationJobs(tx: Tx, userId: string): Pro
 
 // The user blocked the bot (or Telegram refused a send with 403). The first time is kept; the
 // cancel runs on every call, so a job created between two signals is caught by the second.
-// No users row → undefined and nothing is inserted: rows are created by /start, and a user who
-// never started cannot be mailed anyway.
+// No users row → undefined and nothing is inserted: rows are created by /users/start (/start and
+// /settings), and a user who never wrote to the bot cannot be mailed anyway.
 export async function markTelegramBlocked(
   db: Db,
   telegramUserId: bigint,
@@ -83,7 +83,7 @@ export async function setNotificationLevel(
   db: Db,
   telegramUserId: bigint,
   level: NotificationLevel,
-): Promise<{ userId: string; level: NotificationLevel; canceledJobs: number } | undefined> {
+): Promise<{ level: NotificationLevel; canceledJobs: number } | undefined> {
   return db.transaction(async (tx) => {
     const [row] = await tx
       .update(users)
@@ -93,6 +93,6 @@ export async function setNotificationLevel(
     if (row === undefined) return undefined;
     const canceledJobs =
       level === NotificationLevel.Off ? await cancelPendingNotificationJobs(tx, row.id) : 0;
-    return { userId: row.id, level: row.level, canceledJobs };
+    return { level: row.level, canceledJobs };
   });
 }

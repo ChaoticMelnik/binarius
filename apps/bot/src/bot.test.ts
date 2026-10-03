@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { BotError, HttpError, InputFile } from 'grammy';
+import { BotError, GrammyError, HttpError, InputFile } from 'grammy';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   confirmCallbackData,
@@ -1709,22 +1709,71 @@ describe('/settings', () => {
       );
     });
 
-    it('sends the same text and keyboard as a new message when the edit is refused', async () => {
+    it('treats the not-modified refusal of a double press as done and sends nothing', async () => {
       const { bot, calls, logger, apiErrors } = setup();
-      apiErrors.set('editMessageText', EDIT_REFUSED);
-      await bot.handleUpdate(press(NotificationLevel.Reduced));
+      apiErrors.set('editMessageText', {
+        ok: false,
+        error_code: 400,
+        description:
+          'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message',
+      });
+      await bot.handleUpdate(press(NotificationLevel.Off));
 
-      const edit = sentPayload(calls, 'editMessageText');
-      const message = sentPayload(calls, 'sendMessage');
-      expect(message?.text).toBe(settingsText(NotificationLevel.Reduced).value);
-      expect(message?.reply_markup).toEqual(edit?.reply_markup);
-      expect(logger.warn).toHaveBeenCalledTimes(1);
-      expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
+      expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledTimes(1);
+      expect(logger.info.mock.calls[0]?.[0]).toMatchObject({
         method: 'editMessageText',
         telegramErrorCode: 400,
       });
-      expect(logger.error).not.toHaveBeenCalled();
     });
+
+    it.each([
+      ["message can't be edited", EDIT_REFUSED],
+      [
+        'message to edit not found',
+        {
+          ok: false as const,
+          error_code: 400,
+          description: 'Bad Request: message to edit not found',
+        },
+      ],
+    ])(
+      'sends the same text and keyboard as a new message when the edit is refused: %s',
+      async (_label, refusal) => {
+        const { bot, calls, logger, apiErrors } = setup();
+        apiErrors.set('editMessageText', refusal);
+        await bot.handleUpdate(press(NotificationLevel.Reduced));
+
+        const edit = sentPayload(calls, 'editMessageText');
+        const message = sentPayload(calls, 'sendMessage');
+        expect(message?.text).toBe(settingsText(NotificationLevel.Reduced).value);
+        expect(message?.reply_markup).toEqual(edit?.reply_markup);
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
+          method: 'editMessageText',
+          telegramErrorCode: 400,
+        });
+        expect(logger.error).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['a blocked user', 403, 'Forbidden: bot was blocked by the user'],
+      ['an unparsable text', 400, "Bad Request: can't parse entities: unsupported start tag"],
+      ['a non-400 refusal with the same words', 403, 'Forbidden: message is not modified'],
+    ])(
+      'lets an unlisted refusal of the edit (%s) reach bot.catch and sends nothing',
+      async (_label, error_code, description) => {
+        const { bot, calls, apiErrors } = setup();
+        apiErrors.set('editMessageText', { ok: false, error_code, description });
+        const thrown = await rejectionOf(bot.handleUpdate(press(NotificationLevel.Off)));
+        expect(thrown).toBeInstanceOf(BotError);
+        expect((thrown as BotError).error).toBeInstanceOf(GrammyError);
+        expect(calls.map((call) => call.method)).not.toContain('sendMessage');
+      },
+    );
 
     it('sends nothing more when the edit fails in transport', async () => {
       const { bot, calls, logger, apiErrors } = setup();
