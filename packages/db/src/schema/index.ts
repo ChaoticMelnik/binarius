@@ -7,6 +7,7 @@ export * from './trading-sessions';
 export * from './trade-intents';
 export * from './outbox-events';
 export * from './broker-trades';
+export * from './broker-balance-snapshots';
 export * from './deposit-events';
 export * from './bonus-rules';
 export * from './notification-jobs';
