@@ -8,9 +8,5 @@
     "types": ["node"]
   },
   "include": ["src"],
-  "references": [
-    { "path": "../../packages/shared" },
-    { "path": "../../packages/db" },
-    { "path": "../../packages/broker-rest" }
-  ]
+  "references": [{ "path": "../shared" }, { "path": "../mock-broker" }]
 }

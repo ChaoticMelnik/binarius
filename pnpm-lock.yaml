@@ -96,6 +96,9 @@ importers:
 
   apps/trading-worker:
     dependencies:
+      '@binarius/broker-rest':
+        specifier: workspace:*
+        version: link:../../packages/broker-rest
       '@binarius/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -118,9 +121,6 @@ importers:
         specifier: ^10.3.1
         version: 10.3.1
     devDependencies:
-      '@binarius/mock-broker':
-        specifier: workspace:*
-        version: link:../../packages/mock-broker
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -145,6 +145,19 @@ importers:
       zod:
         specifier: ^4.6.5
         version: 4.6.5
+
+  packages/broker-rest:
+    dependencies:
+      '@binarius/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@binarius/mock-broker':
+        specifier: workspace:*
+        version: link:../mock-broker
+      pino:
+        specifier: ^10.3.1
+        version: 10.3.1
 
   packages/db:
     dependencies:

@@ -20,7 +20,14 @@ import {
   type OpenTrade,
   type OpenTradeRequest,
 } from '@binarius/shared';
-import { BROKER_REST_TIMEOUT_MS, MAX_DETAIL_LENGTH } from '../intents/config';
+
+// One REST call's deadline when the caller passes none. Every process that waits on a call in a
+// shutdown phase orders it below that phase: apps/trading-worker/src/intents/config.ts and
+// apps/backend/src/timing.ts; the pairs catalog orders it below its TTL (pairs-catalog.ts).
+export const BROKER_REST_TIMEOUT_MS = 5_000;
+
+// free text from the broker is logged, never persisted, and only this much of it
+export const MAX_DETAIL_LENGTH = 200;
 
 // An error body longer than this is not parsed for its message: the envelope seen live is a
 // few dozen characters, and a page this size is not one.

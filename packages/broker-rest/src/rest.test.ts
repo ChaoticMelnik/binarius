@@ -18,12 +18,12 @@ import {
   type MockBroker,
   type MockRestEndpoint,
 } from '@binarius/mock-broker';
-import { MAX_DETAIL_LENGTH } from '../intents/config';
 import {
   BROKER_REST_ENDPOINTS,
   BrokerRestError,
   BrokerRestErrorCode,
   createBrokerRestClient,
+  MAX_DETAIL_LENGTH,
   MAX_ERROR_BODY_CHARS,
   TradeListStatus,
   type BrokerRestClient,
