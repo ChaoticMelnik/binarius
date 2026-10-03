@@ -173,6 +173,37 @@ describe('single flight and stop', () => {
     expect(catalog.read()).toEqual(before);
   });
 
+  it('recovers from a listPairs that throws synchronously', async () => {
+    let calls = 0;
+    const throwingOnce: Pick<BrokerRestClient, 'listPairs'> = {
+      listPairs: (options) => {
+        calls += 1;
+        if (calls === 1) throw new Error('sync');
+        return client.listPairs(options);
+      },
+    };
+    const catalog = catalogOf({ client: throwingOnce });
+    expect(await catalog.refresh()).toBe(false);
+    expect(lines).toHaveLength(1);
+    expect(await catalog.refresh()).toBe(true);
+    expect(calls).toBe(2);
+    expect(catalog.read()?.pairs).toEqual(brokerPairs());
+  });
+
+  it('drops an answer that arrives after stop()', async () => {
+    const answeringAfterStop: Pick<BrokerRestClient, 'listPairs'> = {
+      listPairs: async () => {
+        const pairs = await client.listPairs();
+        catalog.stop();
+        return pairs;
+      },
+    };
+    const catalog = catalogOf({ client: answeringAfterStop });
+    expect(await catalog.refresh()).toBe(false);
+    expect(catalog.read()).toBeUndefined();
+    expect(lines).toEqual([]);
+  });
+
   it('makes no request once stopped', async () => {
     const catalog = catalogOf();
     catalog.stop();
