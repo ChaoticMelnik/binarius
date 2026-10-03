@@ -20,6 +20,7 @@ import type {
 } from './partner';
 import type { AssetsUpdate, PriceUpdate, SocketOpenTradeRequest } from './socket';
 import type { TradeIntent, TradeIntentView } from './trading';
+import type { TradingAccessResponse } from './trading-access';
 import * as account from './account';
 import * as admin from './admin';
 import * as broker from './broker';
@@ -36,6 +37,7 @@ import * as socket from './socket';
 import * as telegramHtml from './telegram-html';
 import * as time from './time';
 import * as trading from './trading';
+import * as tradingAccess from './trading-access';
 import * as users from './users';
 
 // every field issue #6 lists, on the domain type it belongs to
@@ -94,6 +96,13 @@ describe('contract coverage (issue #6)', () => {
         | 'processing_failed'
         | null;
       updatedAt: string;
+    }>();
+  });
+
+  it('TradingAccessResponse (issue #136)', () => {
+    expectTypeOf<TradingAccessResponse>().toEqualTypeOf<{
+      status: 'active' | 'blocked';
+      tokens: { balance: string; reserved: string; available: string };
     }>();
   });
 
@@ -243,6 +252,7 @@ describe('contract coverage (issue #6)', () => {
       time,
       ids,
       trading,
+      tradingAccess,
       broker,
       oauth,
       users,

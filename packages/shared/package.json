@@ -73,6 +73,10 @@
       "types": "./src/telegram-html.ts",
       "default": "./src/telegram-html.ts"
     },
+    "./trading-access": {
+      "types": "./src/trading-access.ts",
+      "default": "./src/trading-access.ts"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"

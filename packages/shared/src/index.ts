@@ -6,6 +6,7 @@ export * from './broker';
 export * from './oauth';
 export * from './users';
 export * from './account';
+export * from './trading-access';
 export * from './admin';
 export * from './partner';
 export * from './socket';
