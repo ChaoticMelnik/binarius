@@ -7,6 +7,13 @@ export const UserStatus = { Active: 'active', Blocked: 'blocked' } as const;
 export type UserStatus = (typeof UserStatus)[keyof typeof UserStatus];
 export const userStatusSchema = z.enum(UserStatus);
 
+// How often the bot may mail a user without being asked (#120). It never governs replies to the
+// user's commands and buttons, the push after a site login, or the results of the user's own
+// trades. `reduced` is at most one mailing per REDUCED_LEVEL_WINDOW_HOURS (packages/db).
+export const NotificationLevel = { All: 'all', Reduced: 'reduced', Off: 'off' } as const;
+export type NotificationLevel = (typeof NotificationLevel)[keyof typeof NotificationLevel];
+export const notificationLevelSchema = z.enum(NotificationLevel);
+
 // Telegram: "Start parameter, up to 64 base64url characters" (core.telegram.org/api/links#bot-links).
 // Anyone can compose a ?start=... link, so this is untrusted input at three places that must agree:
 // the bot, the request schema below, and users_acquisition_source_check in packages/db.
@@ -86,3 +93,18 @@ export const safeParseChatMemberRequest = (input: unknown) =>
   chatMemberRequestSchema.safeParse(input);
 export const safeParseChatMemberResponse = (input: unknown) =>
   chatMemberResponseSchema.safeParse(input);
+
+// POST /users/notification-level — the user picked a level in /settings
+export const notificationLevelRequestSchema = z.object({
+  telegramUserId: telegramUserIdSchema,
+  level: notificationLevelSchema,
+});
+export type NotificationLevelRequest = z.infer<typeof notificationLevelRequestSchema>;
+
+export const notificationLevelResponseSchema = z.object({ level: notificationLevelSchema });
+export type NotificationLevelResponse = z.infer<typeof notificationLevelResponseSchema>;
+
+export const safeParseNotificationLevelRequest = (input: unknown) =>
+  notificationLevelRequestSchema.safeParse(input);
+export const safeParseNotificationLevelResponse = (input: unknown) =>
+  notificationLevelResponseSchema.safeParse(input);
