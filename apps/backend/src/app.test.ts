@@ -6,6 +6,7 @@ import type { AuthRoutesDeps } from './auth/routes';
 import type { TradingRoutesDeps } from './trading/routes';
 import type { UsersRoutesDeps } from './users/routes';
 import { unusedAdminDeps } from './admin/testing';
+import { unusedPairsDeps } from './trading/testing';
 
 const ok = () => Promise.resolve();
 const down = () => Promise.reject(new Error('down'));
@@ -41,6 +42,7 @@ const unusedUsers: UsersRoutesDeps = {
 
 async function health(deps: Pick<AppDeps, 'checkPostgres' | 'checkRedis'>) {
   const app = buildApp({
+    pairs: unusedPairsDeps(),
     admin: unusedAdminDeps(),
     ...deps,
     logLevel: 'silent',
@@ -119,6 +121,7 @@ describe('what reaches the log', () => {
   ) {
     const logs = captureLogs();
     const app = buildApp({
+      pairs: unusedPairsDeps(),
       admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,
@@ -302,6 +305,7 @@ describe('request logging', () => {
 
   it('answers an unknown route without echoing what it carried', async () => {
     const app = buildApp({
+      pairs: unusedPairsDeps(),
       admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,
@@ -328,6 +332,7 @@ describe('request logging', () => {
 describe('error handler', () => {
   async function withApp(run: (app: ReturnType<typeof buildApp>) => Promise<void>) {
     const app = buildApp({
+      pairs: unusedPairsDeps(),
       admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,

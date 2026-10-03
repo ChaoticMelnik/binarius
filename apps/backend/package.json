@@ -8,6 +8,7 @@
     "staff": "tsx src/cli/staff.ts"
   },
   "dependencies": {
+    "@binarius/broker-rest": "workspace:*",
     "@binarius/db": "workspace:*",
     "@binarius/shared": "workspace:*",
     "bullmq": "^6.3.8",

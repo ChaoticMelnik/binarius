@@ -33,6 +33,7 @@ describe('parseEnv', () => {
       brokerClientSecret: valid.BROKER_CLIENT_SECRET,
       brokerOauthAuthorizeUrl: valid.BROKER_OAUTH_AUTHORIZE_URL,
       brokerApiBaseUrl: valid.BROKER_API_BASE_URL,
+      brokerPairsTtlMs: 30_000,
       brokerOauthRedirectUri: valid.BROKER_OAUTH_REDIRECT_URI,
       brokerPartnerRef: valid.BROKER_PARTNER_REF,
       tokenEncryptionKey: Buffer.from(KEY, 'base64'),
@@ -49,8 +50,10 @@ describe('parseEnv', () => {
       PORT: '8080',
       LOG_LEVEL: 'debug',
       HEALTH_TIMEOUT_MS: '2500',
+      BROKER_PAIRS_TTL_MS: '45000',
     });
     expect(env.port).toBe(8080);
+    expect(env.brokerPairsTtlMs).toBe(45_000);
     expect(env.logLevel).toBe('debug');
     expect(env.healthTimeoutMs).toBe(2500);
   });
@@ -88,6 +91,7 @@ describe('parseEnv', () => {
     'PORT',
     'LOG_LEVEL',
     'HEALTH_TIMEOUT_MS',
+    'BROKER_PAIRS_TTL_MS',
     'INTERNAL_API_TOKEN',
   ])('rejects empty %s instead of defaulting it', (name) => {
     expect(() => parseEnv({ ...valid, [name]: '' })).toThrow(`Env ${name} must not be empty`);
@@ -147,6 +151,18 @@ describe('parseEnv', () => {
 
   it.each(['500', '2500'])('accepts the HEALTH_TIMEOUT_MS boundary %s', (value) => {
     expect(parseEnv({ ...valid, HEALTH_TIMEOUT_MS: value }).healthTimeoutMs).toBe(Number(value));
+  });
+
+  it.each([
+    ['30000.5', 'Env BROKER_PAIRS_TTL_MS must be an integer'],
+    ['29999', 'Env BROKER_PAIRS_TTL_MS must be between 30000 and 60000'],
+    ['60001', 'Env BROKER_PAIRS_TTL_MS must be between 30000 and 60000'],
+  ])('rejects BROKER_PAIRS_TTL_MS=%s', (value, message) => {
+    expect(() => parseEnv({ ...valid, BROKER_PAIRS_TTL_MS: value })).toThrow(message);
+  });
+
+  it.each(['30000', '60000'])('accepts the BROKER_PAIRS_TTL_MS boundary %s', (value) => {
+    expect(parseEnv({ ...valid, BROKER_PAIRS_TTL_MS: value }).brokerPairsTtlMs).toBe(Number(value));
   });
 });
 

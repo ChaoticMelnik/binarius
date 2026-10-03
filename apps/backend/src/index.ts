@@ -1,6 +1,7 @@
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import { closeAll, errorLogFields } from '@binarius/shared';
+import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
 import { createDb, createTokenCipher } from '@binarius/db';
 import { createAdminBot } from './admin/telegram';
 import { buildApp } from './app';
@@ -51,6 +52,16 @@ const broker = createBrokerOAuthClient({
   clientSecret: env.brokerClientSecret,
 });
 
+// The route reads it from the first request on; it is warmed before listen() and refreshed by its
+// own timer every BROKER_PAIRS_TTL_MS (docs/pairs-catalog.md). The client adds /v1/broker/... to
+// the same base the OAuth client uses.
+const pairsCatalog = createPairsCatalog({
+  client: createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl }),
+  ttlMs: env.brokerPairsTtlMs,
+  // the app's logger does not exist yet, and this one is first used by the warm-up below
+  logger: { warn: (object, message) => app.log.warn(object, message) },
+});
+
 // created before the app so the routes can hold it; polling starts after listen()
 const adminBot = createAdminBot({
   token: env.adminBotToken,
@@ -72,6 +83,10 @@ const app = buildApp({
     db,
     internalApiToken: env.internalApiToken,
     onIntentQueued: () => publisher.wake(),
+  },
+  pairs: {
+    catalog: pairsCatalog,
+    internalApiToken: env.internalApiToken,
   },
   auth: {
     db,
@@ -119,7 +134,12 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   shuttingDown = true;
   app.log.info({ signal }, 'shutting down');
   const drained = await closeAll(
-    [() => app.close(), () => publisher.stop(), () => adminBot.stop()],
+    [
+      () => app.close(),
+      () => publisher.stop(),
+      () => adminBot.stop(),
+      () => Promise.resolve(pairsCatalog.stop()),
+    ],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
   if (!drained) {
@@ -143,8 +163,16 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
 process.once('SIGTERM', (signal) => void shutdown(signal));
 process.once('SIGINT', (signal) => void shutdown(signal));
 
-await app.listen({ port: env.port, host: '0.0.0.0' });
-publisher.start();
-// A failed start is logged and leaves isPolling() false; it does not stop the process, and
-// every staff login then answers 503 with a row in audit_log saying why.
-adminBot.start();
+// A failed warm-up is logged as a warn and the route answers 503 until a tick succeeds.
+const warmed = await pairsCatalog.refresh();
+// A SIGTERM during the warm-up has already started phase 1, and no start() may run after its
+// stop(): the publisher would restart its loop on the pool phase 2 closes.
+if (!shuttingDown) {
+  pairsCatalog.start();
+  app.log.info({ warmed }, 'pairs catalog started');
+  await app.listen({ port: env.port, host: '0.0.0.0' });
+  publisher.start();
+  // A failed start is logged and leaves isPolling() false; it does not stop the process, and
+  // every staff login then answers 503 with a row in audit_log saying why.
+  adminBot.start();
+}
