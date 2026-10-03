@@ -1,40 +1,57 @@
-import { eq } from 'drizzle-orm';
 import { Pool } from 'pg';
-import { TokenField, brokerAccounts, createDb, createTokenCipher } from '@binarius/db';
-import { DATABASE_URL_RULES, parseUrlEnv, readEnv } from '@binarius/shared';
+import { pino } from 'pino';
+import * as z from 'zod';
+import { createDb, createTokenCipher } from '@binarius/db';
+import { logOptions, readEnv } from '@binarius/shared';
+import { ensureFreshAccessToken } from '../auth/token-service';
+import { createBrokerOAuthClient } from '../broker/oauth-client';
+import { parseEnv } from '../env';
 
 // Two authorized GET /v1/broker/user calls for one account, printing each status and the
 // x-ratelimit-* headers: whether authorized calls share the per-IP window
-// (docs/broker-balance.md → Observed live). The token is decrypted here and never printed.
+// (docs/broker-balance.md → Observed live). The token comes from ensureFreshAccessToken with
+// mayRefresh: false, so an account that is not active, of a blocked user, or whose token needs an
+// exchange is refused, and nothing is ever exchanged. The token is never printed.
 // Run inside the backend container: ACCOUNT_ID=<broker_accounts.id> pnpm rate-limit-probe
 
-const env = process.env;
-const pool = new Pool({
-  connectionString: parseUrlEnv(readEnv(env, 'DATABASE_URL'), 'DATABASE_URL', DATABASE_URL_RULES),
-});
-const accountId = readEnv(env, 'ACCOUNT_ID');
-const [row] = await createDb(pool)
-  .select()
-  .from(brokerAccounts)
-  .where(eq(brokerAccounts.id, accountId));
-await pool.end();
-if (row === undefined) throw new Error(`no broker account ${accountId}`);
+const env = parseEnv(process.env);
+const accountId = z.uuid().parse(readEnv(process.env, 'ACCOUNT_ID'));
+const pool = new Pool({ connectionString: env.databaseUrl });
 
-const cipher = createTokenCipher({
-  keyId: readEnv(env, 'TOKEN_ENCRYPTION_KEY_ID'),
-  key: Buffer.from(readEnv(env, 'TOKEN_ENCRYPTION_KEY'), 'base64'),
-});
-const token = cipher.decrypt(row.accessTokenEnc, { accountId: row.id, field: TokenField.Access });
-const url = new URL('/v1/broker/user', readEnv(env, 'BROKER_API_BASE_URL'));
-
-for (const call of [1, 2]) {
-  const response = await fetch(url, {
-    headers: { authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(5_000),
-  });
-  await response.body?.cancel();
-  const limits = ['limit', 'remaining', 'reset'].map(
-    (name) => `${name}=${response.headers.get(`x-ratelimit-${name}`)}`,
+try {
+  const token = await ensureFreshAccessToken(
+    {
+      db: createDb(pool),
+      broker: createBrokerOAuthClient({
+        baseUrl: env.brokerApiBaseUrl,
+        clientId: env.brokerClientId,
+        clientSecret: env.brokerClientSecret,
+      }),
+      cipher: createTokenCipher({ keyId: env.tokenEncryptionKeyId, key: env.tokenEncryptionKey }),
+      logger: pino(logOptions(env.logLevel)),
+    },
+    accountId,
+    { mayRefresh: false },
   );
-  process.stdout.write(`call ${call}: HTTP ${response.status} ${limits.join(' ')}\n`);
+  if (!token.ok) {
+    const hint =
+      token.reason === 'refresh_needed' ? ' (open the bot balance once, then retry)' : '';
+    process.stderr.write(`refused: ${token.reason}${hint}\n`);
+    process.exitCode = 1;
+  } else {
+    const url = new URL('/v1/broker/user', env.brokerApiBaseUrl);
+    for (const call of [1, 2]) {
+      const response = await fetch(url, {
+        headers: { authorization: `Bearer ${token.accessToken}` },
+        signal: AbortSignal.timeout(5_000),
+      });
+      await response.body?.cancel();
+      const limits = ['limit', 'remaining', 'reset'].map(
+        (name) => `${name}=${response.headers.get(`x-ratelimit-${name}`)}`,
+      );
+      process.stdout.write(`call ${call}: HTTP ${response.status} ${limits.join(' ')}\n`);
+    }
+  }
+} finally {
+  await pool.end();
 }
