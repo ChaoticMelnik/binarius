@@ -135,6 +135,12 @@ export const telegramUserIdSchema = z
     error: 'exceeds the bigint range',
   });
 
+// A token count on the wire: tokens are whole units held as bigint, so a decimal string carries
+// any int8 value a JSON number would round.
+export const tokenCountSchema = z
+  .string()
+  .regex(/^\d+$/, { error: 'expected a non-negative integer string' });
+
 export const createTradeIntentRequestSchema = z.object({
   telegramUserId: telegramUserIdSchema,
   brokerAccountId: z.uuid().optional(),
@@ -152,7 +158,7 @@ export type CreateTradeIntentRequest = z.infer<typeof createTradeIntentRequestSc
 export const tradeIntentViewSchema = tradeIntentSchema.extend({
   status: tradeIntentStatusSchema,
   version: z.int().positive(),
-  tokensReserved: z.string().regex(/^\d+$/),
+  tokensReserved: tokenCountSchema,
   transport: tradeTransportSchema.nullable(),
   submittedAt: z.iso.datetime({ offset: true }).nullable(),
   lastError: tradeIntentFailureReasonSchema.nullable(),
