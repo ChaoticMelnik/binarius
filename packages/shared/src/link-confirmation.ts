@@ -20,8 +20,8 @@ export const LINK_TEXTS = {
   // also the bot's recheck after an unknown outcome: it knows the account is active, not what
   // was paid
   linkedActive: telegramHtml`✅ <b>Аккаунт Binodex подключён!</b>`,
-  blocked: telegramHtml`🔒 Доступ ограничен. Если это ошибка, напиши в поддержку.`,
-  accountTaken: telegramHtml`❌ Этот аккаунт Binodex уже подключён к другому пользователю Telegram. Если это ошибка, напиши в поддержку.`,
+  blocked: telegramHtml`🔒 Доступ ограничен. Если это ошибка, напиши в поддержку: /support`,
+  accountTaken: telegramHtml`❌ Этот аккаунт Binodex уже подключён к другому пользователю Telegram. Если это ошибка, напиши в поддержку: /support`,
 } as const satisfies Record<string, TelegramHtml>;
 
 export const LINK_LABELS = {

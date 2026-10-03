@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { START_PAYLOAD_CORPUS } from './testing';
 import {
   LANGUAGE_CODE_PATTERN,
+  NotificationLevel,
   START_PAYLOAD_PATTERN,
   TelegramChatMemberStatus,
   UserStatus,
   languageCodeSchema,
   safeParseChatMemberRequest,
   safeParseChatMemberResponse,
+  safeParseNotificationLevelRequest,
+  safeParseNotificationLevelResponse,
   safeParseUserStartRequest,
   safeParseUserStartResponse,
   startPayloadSchema,
@@ -199,5 +202,36 @@ describe('chatMemberResponseSchema', () => {
     expect(safeParseChatMemberResponse({ recorded: true }).success).toBe(true);
     expect(safeParseChatMemberResponse({ recorded: false }).success).toBe(true);
     expect(safeParseChatMemberResponse({}).success).toBe(false);
+  });
+});
+
+describe('notificationLevelRequestSchema', () => {
+  it.each(Object.values(NotificationLevel))('accepts %s with a decimal id', (level) => {
+    expect(safeParseNotificationLevelRequest({ telegramUserId: '12345', level })).toEqual({
+      success: true,
+      data: { telegramUserId: '12345', level },
+    });
+  });
+
+  it.each([
+    ['an unknown level', { level: 'daily' }],
+    ['a missing level', { level: undefined }],
+    ['a non-numeric telegram id', { telegramUserId: 'abc' }],
+  ])('rejects %s', (_label, patch) => {
+    expect(
+      safeParseNotificationLevelRequest({
+        telegramUserId: '12345',
+        level: NotificationLevel.Off,
+        ...patch,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('notificationLevelResponseSchema', () => {
+  it('accepts a level and refuses a body without one or with an unknown one', () => {
+    expect(safeParseNotificationLevelResponse({ level: NotificationLevel.Off }).success).toBe(true);
+    expect(safeParseNotificationLevelResponse({}).success).toBe(false);
+    expect(safeParseNotificationLevelResponse({ level: 'daily' }).success).toBe(false);
   });
 });
