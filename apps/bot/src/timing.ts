@@ -55,6 +55,15 @@ export const HANDLER_CALLS = {
   myChatMember: { backend: 1, telegram: 0 },
   // /account: readAccount, then sendMessage
   account: { backend: 1, telegram: 1 },
+  // /settings: recordStart, then sendMessage
+  settings: { backend: 1, telegram: 1 },
+  // a level pressed: answerCallbackQuery ∥ setNotificationLevel — counted the same way as oauth —
+  // then editMessageText refused by Telegram (GrammyError) → sendMessage
+  level: { backend: 1, telegram: 3 },
+  // the selected level pressed: answerCallbackQuery only
+  levelCurrent: { backend: 0, telegram: 1 },
+  // /support: sendMessage; no backend call
+  support: { backend: 0, telegram: 1 },
 } as const;
 
 export const handlerBudgetMs = ({

@@ -8,6 +8,10 @@ import type { TelegramHtml } from '@binarius/shared';
 // photo, nor pass entities, which the Bot API takes instead of parse_mode.
 
 type ReplyExtra = Omit<NonNullable<Parameters<Context['reply']>[1]>, 'parse_mode' | 'entities'>;
+type EditExtra = Omit<
+  NonNullable<Parameters<Context['editMessageText']>[1]>,
+  'parse_mode' | 'entities'
+>;
 type VideoExtra = Omit<
   NonNullable<Parameters<Context['replyWithVideo']>[1]>,
   'parse_mode' | 'caption' | 'caption_entities'
@@ -19,6 +23,10 @@ type PhotoExtra = Omit<
 
 export const replyHtml = (ctx: Context, text: TelegramHtml, extra?: ReplyExtra) =>
   ctx.reply(text.value, { ...extra, parse_mode: 'HTML' });
+
+// On a callback query, grammY edits the message the pressed button is under.
+export const editMessageTextHtml = (ctx: Context, text: TelegramHtml, extra?: EditExtra) =>
+  ctx.editMessageText(text.value, { ...extra, parse_mode: 'HTML' });
 
 export const replyWithVideoHtml = (
   ctx: Context,

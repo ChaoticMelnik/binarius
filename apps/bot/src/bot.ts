@@ -10,6 +10,8 @@ import {
   errorLogFields,
   isPendingLink,
   languageCodeSchema,
+  NotificationLevel,
+  notificationLevelSchema,
   OAuthErrorCode,
   startPayloadSchema,
   TelegramChatMemberStatus,
@@ -26,8 +28,18 @@ import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
-import { replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
-import { accountCard, accountStatus, LABELS, TEXTS, type AccountCardInput } from './texts';
+import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
+import {
+  accountCard,
+  accountStatus,
+  currentLevelLabel,
+  LABELS,
+  levelLabel,
+  settingsText,
+  supportUrl,
+  TEXTS,
+  type AccountCardInput,
+} from './texts';
 import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 
 // Callback data of the buttons; Bot API allows 1-64 bytes. `connect` is the main button of the
@@ -37,6 +49,15 @@ import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 export const CONNECT_CALLBACK_DATA = 'connect';
 export const OAUTH_CALLBACK_DATA = 'oauth';
 export const RESEND_CALLBACK_DATA = 'resend';
+// The /settings buttons (#120): `level:<level>` sets it; the selected one carries
+// `level:current` and only stops the spinner. The longest, `level:reduced`, is 13 bytes.
+export const LEVEL_CALLBACK_PREFIX = 'level:';
+export const levelCallbackData = (level: NotificationLevel): string =>
+  `${LEVEL_CALLBACK_PREFIX}${level}`;
+export const LEVEL_CURRENT_CALLBACK_DATA = `${LEVEL_CALLBACK_PREFIX}current`;
+const LEVEL_CALLBACK_PATTERN = new RegExp(
+  `^${LEVEL_CALLBACK_PREFIX}(${Object.values(NotificationLevel).join('|')})$`,
+);
 
 export interface CreateBotOptions {
   token: string;
@@ -151,6 +172,68 @@ export function createBot({
       accountStatus(user.accounts),
       keyboard === undefined ? undefined : { reply_markup: keyboard },
     );
+  });
+
+  // The level comes from /users/start, the call /start already makes: it creates a missing row,
+  // so /settings works before the first /start too (#120).
+  privateChats.command('settings', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) return;
+
+    let user;
+    try {
+      user = await backend.recordStart(startRequestOf(from));
+    } catch (error) {
+      logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, '/settings not read');
+      await replyHtml(ctx, TEXTS.unavailable);
+      return;
+    }
+    if (user.status === UserStatus.Blocked) {
+      await replyHtml(ctx, TEXTS.blocked);
+      return;
+    }
+    await replyHtml(ctx, settingsText(user.notificationLevel), {
+      reply_markup: levelKeyboard(user.notificationLevel),
+    });
+  });
+
+  privateChats.callbackQuery(LEVEL_CALLBACK_PATTERN, async (ctx) => {
+    const level = notificationLevelSchema.safeParse(ctx.match[1]);
+    if (!level.success) {
+      await ctx.answerCallbackQuery().catch((error: unknown) => {
+        logAnswerFailure(error);
+      });
+      return;
+    }
+    // independent, as in oauth
+    const [answered, set] = await Promise.allSettled([
+      ctx.answerCallbackQuery(),
+      backend.setNotificationLevel(String(ctx.from.id), level.data),
+    ]);
+    if (answered.status === 'rejected') logAnswerFailure(answered.reason);
+    if (set.status === 'rejected') {
+      // no error code is acted on: the keyboard stays, so pressing again is the retry
+      logger.warn(
+        { ...errorLogFields(set.reason), ...backendErrorFields(set.reason) },
+        'notification level not set',
+      );
+      await replyHtml(ctx, TEXTS.unavailable);
+      return;
+    }
+    await showLevel(ctx, set.value.level);
+  });
+
+  privateChats.callbackQuery(LEVEL_CURRENT_CALLBACK_DATA, async (ctx) => {
+    await ctx.answerCallbackQuery().catch((error: unknown) => {
+      logAnswerFailure(error);
+    });
+  });
+
+  // No backend call: the way to a person works for a blocked user and during an outage too.
+  privateChats.command('support', async (ctx) => {
+    await replyHtml(ctx, TEXTS.support, {
+      reply_markup: new InlineKeyboard().url(LABELS.supportButton, supportUrl()),
+    });
   });
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
@@ -268,8 +351,8 @@ export function createBot({
     }
   });
 
-  // Registered after command('start') and command('account'), which do not call next(): neither
-  // reaches this handler, so they neither feed the dialog nor reset it. Any other command is
+  // Registered after the command handlers, which do not call next(): none of them reaches this
+  // handler, so they neither feed the dialog nor reset it. Any other command is
   // ignored here for the same reason. Text outside a dialog is ignored altogether (the owner's
   // decision, #162).
   privateChats.on('message:text', async (ctx) => {
@@ -444,6 +527,37 @@ export function createBot({
     await pinAccountCard(ctx, sent.message_id);
   }
 
+  // The /settings message re-rendered in place after a press (#120). The edit has the welcome
+  // video's three outcomes: a refusal (the message is gone or too old) sent nothing, so the same
+  // text and keyboard go as a new message; a transport failure leaves the edit unknown, and the
+  // keyboard is still there to press, so nothing more is sent; anything else is a bug.
+  async function showLevel(ctx: Context, level: NotificationLevel): Promise<void> {
+    const text = settingsText(level);
+    const reply_markup = levelKeyboard(level);
+    try {
+      await editMessageTextHtml(ctx, text, { reply_markup });
+    } catch (error) {
+      if (error instanceof GrammyError) {
+        logger.warn(
+          { ...errorLogFields(error), ...telegramErrorFields(error) },
+          'the settings message was not edited, sending it anew',
+        );
+        await replyHtml(ctx, text, { reply_markup });
+      } else if (error instanceof HttpError) {
+        logger.error(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error, 'editMessageText'),
+            updateId: ctx.update.update_id,
+          },
+          'the settings edit failed in transport, sending nothing more',
+        );
+      } else {
+        throw error;
+      }
+    }
+  }
+
   // The bot stores no message id, so clearing every pin is what leaves exactly one card pinned
   // (the user's own pins go too, the owner's choice). Neither failure touches the connection,
   // which is already committed: the unpin failing still lets the pin run, since two pinned cards
@@ -577,6 +691,16 @@ function accountKeyboard(accounts: readonly LinkedAccountView[]): InlineKeyboard
   if (pending.length === 0 && !connect) return undefined;
   const keyboard = confirmKeyboard(pending);
   return connect ? addConnectButtons(keyboard) : keyboard;
+}
+
+// one row of the three levels; the selected one is marked and does nothing when pressed
+function levelKeyboard(current: NotificationLevel): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  for (const level of Object.values(NotificationLevel)) {
+    if (level === current) keyboard.text(currentLevelLabel(level), LEVEL_CURRENT_CALLBACK_DATA);
+    else keyboard.text(levelLabel(level), levelCallbackData(level));
+  }
+  return keyboard;
 }
 
 function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineKeyboard {

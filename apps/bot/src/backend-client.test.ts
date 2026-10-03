@@ -358,6 +358,44 @@ describe('recordChatMember', () => {
   });
 });
 
+describe('setNotificationLevel', () => {
+  it('posts the id and the level under the bearer and returns the answer', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { level: 'off' });
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).setNotificationLevel('4242', 'off'),
+    ).toEqual({ level: 'off' });
+    expect(capture.url).toBe('/users/notification-level');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', level: 'off' });
+  });
+
+  it('reports an unknown level in the answer as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { level: 'daily' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).setNotificationLevel('4242', 'reduced'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('carries user_not_found as the reason of a 404', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 404, { error: UserErrorCode.UserNotFound });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).setNotificationLevel('4242', 'all'),
+    );
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: UserErrorCode.UserNotFound,
+    });
+  });
+});
+
 describe('emailLogin', () => {
   it('sends the telegram id, the address and the code and returns the grant', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {
