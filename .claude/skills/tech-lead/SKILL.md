@@ -226,6 +226,7 @@ Several implementers or reviewers at once (#177, #192, #103, #166 on 2026-10-02)
 - **Own scratch subdirectory** (`<scratchpad>/impl-<N>/`, `review-<N>/`): agents overwrote each other's `check.sh` and one `pnpm check` ran in the wrong tree.
 - **Sub-skills pointed explicitly** at `gh pr diff <N>` and the worktree: `/security-review` and `/code-review` load the main checkout's diff by default. A brief alone did not hold (#97, #85: both loaded the main checkout's diff, and one `/code-review` fork checked the PR branch out in the main checkout for two minutes): the spawn prompt hands them the diff saved as a file in the reviewer's scratch dir plus the review worktree path, and forbids `git checkout`/`switch` in the main checkout.
 - **Shared-resource window**: before a full `pnpm check`, a VM/host change or a long series, `pgrep -fl 'vitest|check-stability|db-clock-probe'` must show no foreign run, and the guard stops the command on a hit (non-zero exit or a wait loop) — one that only prints the hit let #97's run overlap #85's on the shared database; tech-lead serialises anything that restarts shared services ("GO" only when the others are idle).
+- **At most two reviewers at once**: each spawns three opus/sonnet sub-agents, and three parallel reviews (#119, #185, #104 on 2026-10-03) exhausted the session limit together before any of them posted; a dead reviewer is re-spawned only after GitHub shows it posted nothing.
 
 ---
 
