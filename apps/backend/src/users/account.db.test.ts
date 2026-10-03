@@ -10,7 +10,7 @@ import {
 import { brokerAccounts, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
-import { unusedPairsDeps } from '../trading/testing';
+import { unusedBalanceDeps, unusedPairsDeps } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -32,7 +32,12 @@ beforeAll(async () => {
     checkRedis: () => Promise.resolve(),
     logLevel: 'silent',
     checkTimeoutMs: 20,
-    trading: { db: tmp.db, internalApiToken: TOKEN, onIntentQueued: () => {} },
+    trading: {
+      db: tmp.db,
+      internalApiToken: TOKEN,
+      onIntentQueued: () => {},
+      balance: unusedBalanceDeps(),
+    },
     auth: {
       db: tmp.db,
       cipher: {} as never,

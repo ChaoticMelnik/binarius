@@ -34,6 +34,8 @@ describe('parseEnv', () => {
       brokerOauthAuthorizeUrl: valid.BROKER_OAUTH_AUTHORIZE_URL,
       brokerApiBaseUrl: valid.BROKER_API_BASE_URL,
       brokerPairsTtlMs: 30_000,
+      balanceReconcileIntervalMs: 60_000,
+      balancePollMaxPerMinute: 200,
       brokerOauthRedirectUri: valid.BROKER_OAUTH_REDIRECT_URI,
       brokerPartnerRef: valid.BROKER_PARTNER_REF,
       tokenEncryptionKey: Buffer.from(KEY, 'base64'),
@@ -51,7 +53,11 @@ describe('parseEnv', () => {
       LOG_LEVEL: 'debug',
       HEALTH_TIMEOUT_MS: '2500',
       BROKER_PAIRS_TTL_MS: '45000',
+      BALANCE_RECONCILE_INTERVAL_MS: '30000',
+      BALANCE_POLL_MAX_PER_MINUTE: '100',
     });
+    expect(env.balanceReconcileIntervalMs).toBe(30_000);
+    expect(env.balancePollMaxPerMinute).toBe(100);
     expect(env.port).toBe(8080);
     expect(env.brokerPairsTtlMs).toBe(45_000);
     expect(env.logLevel).toBe('debug');
@@ -92,6 +98,8 @@ describe('parseEnv', () => {
     'LOG_LEVEL',
     'HEALTH_TIMEOUT_MS',
     'BROKER_PAIRS_TTL_MS',
+    'BALANCE_RECONCILE_INTERVAL_MS',
+    'BALANCE_POLL_MAX_PER_MINUTE',
     'INTERNAL_API_TOKEN',
   ])('rejects empty %s instead of defaulting it', (name) => {
     expect(() => parseEnv({ ...valid, [name]: '' })).toThrow(`Env ${name} must not be empty`);
@@ -159,6 +167,31 @@ describe('parseEnv', () => {
     ['60001', 'Env BROKER_PAIRS_TTL_MS must be between 30000 and 60000'],
   ])('rejects BROKER_PAIRS_TTL_MS=%s', (value, message) => {
     expect(() => parseEnv({ ...valid, BROKER_PAIRS_TTL_MS: value })).toThrow(message);
+  });
+
+  it.each([
+    ['BALANCE_RECONCILE_INTERVAL_MS', '10000', 10_000],
+    ['BALANCE_RECONCILE_INTERVAL_MS', '60000', 60_000],
+    ['BALANCE_POLL_MAX_PER_MINUTE', '1', 1],
+    ['BALANCE_POLL_MAX_PER_MINUTE', '500', 500],
+  ])('accepts %s=%s at its bound', (name, value, expected) => {
+    const env = parseEnv({ ...valid, [name]: value });
+    const key =
+      name === 'BALANCE_RECONCILE_INTERVAL_MS'
+        ? 'balanceReconcileIntervalMs'
+        : 'balancePollMaxPerMinute';
+    expect(env[key]).toBe(expected);
+  });
+
+  it.each([
+    ['BALANCE_RECONCILE_INTERVAL_MS', '9999', 'must be between 10000 and 60000'],
+    ['BALANCE_RECONCILE_INTERVAL_MS', '60001', 'must be between 10000 and 60000'],
+    ['BALANCE_RECONCILE_INTERVAL_MS', '30000.5', 'must be an integer'],
+    ['BALANCE_POLL_MAX_PER_MINUTE', '0', 'must be between 1 and 500'],
+    ['BALANCE_POLL_MAX_PER_MINUTE', '501', 'must be between 1 and 500'],
+    ['BALANCE_POLL_MAX_PER_MINUTE', '1.5', 'must be an integer'],
+  ])('rejects %s=%s', (name, value, message) => {
+    expect(() => parseEnv({ ...valid, [name]: value })).toThrow(`Env ${name} ${message}`);
   });
 
   it.each(['30000', '60000'])('accepts the BROKER_PAIRS_TTL_MS boundary %s', (value) => {

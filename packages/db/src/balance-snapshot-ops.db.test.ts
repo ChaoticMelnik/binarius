@@ -15,8 +15,10 @@ import {
   recordBalanceRefreshFailure,
   resolveBalanceAccount,
   summarizeWatchedBalances,
+  toBrokerBalanceView,
   touchBalanceRequested,
   upsertBalanceSnapshot,
+  type BalanceSnapshotRead,
 } from './balance-snapshot-ops';
 import type { Db } from './client';
 import { BalanceRefreshError, brokerBalanceSnapshots } from './schema/index';
@@ -170,6 +172,16 @@ describe('upsertBalanceSnapshot', () => {
       requested: false,
     });
     expect((await snapshotRow(accountId))!.row.realEventAt).toEqual(first.realEventAt);
+
+    await upsertBalanceSnapshot(tmp.db, {
+      brokerAccountId: accountId,
+      user: brokerUser(),
+      requested: false,
+      eventAt: [TradeMode.Demo],
+    });
+    const third = (await snapshotRow(accountId))!.row;
+    expect(third.demoEventAt).toBeInstanceOf(Date);
+    expect(third.realEventAt).toEqual(first.realEventAt);
   });
 });
 
@@ -177,6 +189,7 @@ describe('the stored domain', () => {
   const withAmount = (value: string) =>
     brokerUser({ real: { available: money(value), held: money('0'), total: money('100') } });
   const withRank = (rank: number) => brokerUser({ level: { code: 'standard', rank } });
+  const withCode = (code: string) => brokerUser({ level: { code, rank: 1 } });
 
   // each against an existing snapshot, which must come out of it unchanged
   it.each<[string, BrokerUser, string]>([
@@ -207,6 +220,10 @@ describe('the stored domain', () => {
     ['a rank that rounds up to 10000', withRank(9999.99995), 'level.rank'],
     ['a negative rank', withRank(-1), 'level.rank'],
     ['a rank in exponent form', withRank(1e-7), 'level.rank'],
+    ['a level code with NUL', withCode('a\u0000b'), 'level.code'],
+    ['a level code over 64 characters', withCode('x'.repeat(65)), 'level.code'],
+    ['an empty level code', withCode(''), 'level.code'],
+    ['a level code with a line break', withCode('vip\n'), 'level.code'],
   ])('refuses %s', async (_label, user, field) => {
     const { accountId } = await seedAccount();
     await upsertBalanceSnapshot(tmp.db, {
@@ -251,6 +268,18 @@ describe('the stored domain', () => {
       }),
     ).toEqual({ written: true });
     expect((await snapshotRow(zeroRank.accountId))!.row.levelRank).toBe(0);
+
+    for (const code of ['x'.repeat(64), 'золото 2']) {
+      const { accountId: codeAccount } = await seedAccount();
+      expect(
+        await upsertBalanceSnapshot(tmp.db, {
+          brokerAccountId: codeAccount,
+          user: withCode(code),
+          requested: false,
+        }),
+      ).toEqual({ written: true });
+      expect((await snapshotRow(codeAccount))!.row.levelCode).toBe(code);
+    }
   });
 
   it('names nothing for a value inside it', () => {
@@ -403,7 +432,7 @@ describe('the accounts in work', () => {
       oldestAgeSec: null,
     });
     const askedOlder = await requested('-9 minutes');
-    await shift(askedOlder, 'rest_observed_at', '-5 minutes', own.db);
+    await shift(askedOlder, 'rest_observed_at', '-500 seconds', own.db);
     const askedNewer = await requested('-1 minute');
     await shift(askedNewer, 'rest_observed_at', '-2 minutes', own.db);
 
@@ -434,12 +463,28 @@ describe('the accounts in work', () => {
     expect(await candidates()).toEqual([withIntent, askedOlder, askedNewer]);
     expect(await candidates(2)).toEqual([withIntent, askedOlder]);
 
-    // the expiring token is watched but not a candidate: this is where its age shows
-    await shift(expiring, 'rest_observed_at', '-200 seconds', own.db);
+    // the expiring token is watched but not a candidate: this is where its age shows. The older
+    // REST snapshot has a recent event, so it is not the stalest observation.
+    await shift(expiring, 'rest_observed_at', '-400 seconds', own.db);
+    await shift(askedOlder, 'real_event_at', '-10 seconds', own.db);
     const summary = await summarizeWatchedBalances(own.db, { watchWindowMs: WINDOW_MS });
     expect(summary).toMatchObject({ watched: 4, withoutSnapshot: 1 });
-    expect(summary.oldestAgeSec).toBeGreaterThanOrEqual(299);
-    expect(summary.oldestAgeSec).toBeLessThanOrEqual(301);
+    expect(summary.oldestAgeSec).toBeGreaterThanOrEqual(399);
+    expect(summary.oldestAgeSec).toBeLessThanOrEqual(401);
+
+    // a recorded failure counts as an attempt: the failing account goes behind the healthy one
+    await recordBalanceRefreshFailure(own.db, askedOlder, BalanceRefreshError.AccountMismatch);
+    expect(await candidates()).toEqual([withIntent, askedNewer, askedOlder]);
+
+    // held back by the caller: gone from the list, the rest in the same order
+    expect(
+      await listBalanceRefreshCandidates(own.db, {
+        watchWindowMs: WINDOW_MS,
+        accessSkewMs: SKEW_MS,
+        limit: 100,
+        exclude: [withIntent],
+      }),
+    ).toEqual([askedNewer, askedOlder]);
   });
 });
 
@@ -509,5 +554,50 @@ describe('resolveBalanceAccount', () => {
     expect(await resolve(user.telegramUserId, '00000000-0000-4000-8000-000000000000')).toEqual({
       kind: 'not_found',
     });
+  });
+});
+
+describe('toBrokerBalanceView', () => {
+  const read: BalanceSnapshotRead = {
+    real: {
+      available: money('100.00000000'),
+      held: money('0.00000000'),
+      total: money('100.00000000'),
+    },
+    demo: {
+      available: money('10.00000000'),
+      held: money('0.00000000'),
+      total: money('10.00000000'),
+    },
+    minTradeAmount: money('1.00000000'),
+    level: { code: 'standard', rank: 1 },
+    restSnapshotAgeSec: 5,
+    balanceEventAgeSec: null,
+    lastRefreshError: BalanceRefreshError.Unavailable,
+  };
+
+  it('carries exactly the view keys, without the refresh error', () => {
+    const view = toBrokerBalanceView(read);
+    expect(Object.keys(view).sort()).toEqual([
+      'balanceEventAgeSec',
+      'demo',
+      'fresh',
+      'level',
+      'minTradeAmount',
+      'real',
+      'restSnapshotAgeSec',
+    ]);
+    expect(view).toMatchObject({ real: read.real, demo: read.demo, fresh: true });
+  });
+
+  it('is fresh by a recent event over a stale REST snapshot', () => {
+    expect(
+      toBrokerBalanceView({ ...read, restSnapshotAgeSec: 600, balanceEventAgeSec: 10 }).fresh,
+    ).toBe(true);
+  });
+
+  it('goes by the REST age while there is no event', () => {
+    expect(toBrokerBalanceView({ ...read, restSnapshotAgeSec: 61 }).fresh).toBe(false);
+    expect(toBrokerBalanceView({ ...read, restSnapshotAgeSec: 60 }).fresh).toBe(true);
   });
 });

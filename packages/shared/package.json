@@ -73,6 +73,10 @@
       "types": "./src/telegram-html.ts",
       "default": "./src/telegram-html.ts"
     },
+    "./broker-balance": {
+      "types": "./src/broker-balance.ts",
+      "default": "./src/broker-balance.ts"
+    },
     "./trading-access": {
       "types": "./src/trading-access.ts",
       "default": "./src/trading-access.ts"

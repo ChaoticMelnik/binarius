@@ -1934,6 +1934,13 @@ const SNAPSHOT_AMOUNTS = [
   ['minTradeAmount', 'min_trade_amount'],
 ] as const;
 
+const SNAPSHOT_REQUIRED = [
+  ...SNAPSHOT_AMOUNTS,
+  ['levelCode', 'level_code'],
+  ['levelRank', 'level_rank'],
+  ['restObservedAt', 'rest_observed_at'],
+] as const;
+
 describe('broker_balance_snapshots', () => {
   it.each(SNAPSHOT_AMOUNTS)('accepts a zero %s', async (field) => {
     await rolledBack(async (tx) => {
@@ -1962,7 +1969,7 @@ describe('broker_balance_snapshots', () => {
     });
   });
 
-  it.each(SNAPSHOT_AMOUNTS)('rejects a NULL %s', async (field, column) => {
+  it.each(SNAPSHOT_REQUIRED)('rejects a NULL %s', async (field, column) => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       const error = await tx
@@ -2010,14 +2017,12 @@ describe('broker_balance_snapshots', () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       await rejectsWith(
-        tx
-          .insert(brokerBalanceSnapshots)
-          .values(
-            snapshot(seed.accountId, {
-              lastRefreshError: 'timeout',
-              lastRefreshFailedAt: sql`now()`,
-            }),
-          ),
+        tx.insert(brokerBalanceSnapshots).values(
+          snapshot(seed.accountId, {
+            lastRefreshError: 'timeout',
+            lastRefreshFailedAt: sql`now()`,
+          }),
+        ),
         '23514',
         'broker_balance_snapshots_last_refresh_error_check',
       );

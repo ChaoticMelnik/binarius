@@ -4,7 +4,7 @@ import {
   BrokerAccountStatus,
   TradeIntentFailureReason,
   UserStatus,
-  tradingAccessResponseSchema,
+  tokenBalanceViewSchema,
 } from '@binarius/shared';
 import {
   createTempDatabase,
@@ -166,7 +166,7 @@ describe('readTokenBalance', () => {
     for (const snapshot of snapshots) {
       expect(snapshot!.balance).toBe(10n);
       expect(snapshot!.reserved >= 0n && snapshot!.reserved <= 4n).toBe(true);
-      expect(tradingAccessResponseSchema.safeParse(toTradingAccessView(snapshot!)).success).toBe(
+      expect(tokenBalanceViewSchema.safeParse(toTradingAccessView(snapshot!).tokens).success).toBe(
         true,
       );
     }

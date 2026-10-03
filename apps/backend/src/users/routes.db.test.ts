@@ -11,7 +11,7 @@ import { createTempDatabase, seedBrokerAccount, type TempDatabase } from '@binar
 import { NotificationJobStatus, brokerAccounts, notificationJobs, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
-import { unusedPairsDeps } from '../trading/testing';
+import { unusedBalanceDeps, unusedPairsDeps } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -34,7 +34,12 @@ const testApp = (logs?: { write(line: string): void }) =>
     logLevel: logs === undefined ? 'silent' : 'trace',
     ...(logs === undefined ? {} : { logDestination: logs }),
     checkTimeoutMs: 20,
-    trading: { db: tmp.db, internalApiToken: TOKEN, onIntentQueued: () => {} },
+    trading: {
+      db: tmp.db,
+      internalApiToken: TOKEN,
+      onIntentQueued: () => {},
+      balance: unusedBalanceDeps(),
+    },
     auth: {
       db: tmp.db,
       cipher: {} as never,

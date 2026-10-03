@@ -8,6 +8,8 @@ import { buildApp } from './app';
 import { createLinkNotifier } from './auth/link-notifier';
 import { INIT_DATA_MAX_AGE_MS } from './auth/oauth-timing';
 import { createInitDataVerifier } from './auth/telegram-init-data';
+import { ensureFreshAccessToken } from './auth/token-service';
+import { createBalanceReconciler } from './broker/balance-reconciler';
 import { createBrokerOAuthClient } from './broker/oauth-client';
 import { parseEnv } from './env';
 import { createBullmqPublisher } from './outbox/bullmq';
@@ -52,11 +54,14 @@ const broker = createBrokerOAuthClient({
   clientSecret: env.brokerClientSecret,
 });
 
+// One REST client for the process: the pairs catalog and the balance reconciler. It adds
+// /v1/broker/... to the same base the OAuth client uses.
+const brokerRest = createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl });
+
 // The route reads it from the first request on; it is warmed before listen() and refreshed by its
-// own timer every BROKER_PAIRS_TTL_MS (docs/pairs-catalog.md). The client adds /v1/broker/... to
-// the same base the OAuth client uses.
+// own timer every BROKER_PAIRS_TTL_MS (docs/pairs-catalog.md).
 const pairsCatalog = createPairsCatalog({
-  client: createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl }),
+  client: brokerRest,
   ttlMs: env.brokerPairsTtlMs,
   // the app's logger does not exist yet, and this one is first used by the warm-up below
   logger: { warn: (object, message) => app.log.warn(object, message) },
@@ -83,6 +88,8 @@ const app = buildApp({
     db,
     internalApiToken: env.internalApiToken,
     onIntentQueued: () => publisher.wake(),
+    // the reconciler needs the app's logger, so it is created after the app
+    balance: { refresh: (accountId, options) => balanceReconciler.refresh(accountId, options) },
   },
   pairs: {
     catalog: pairsCatalog,
@@ -116,6 +123,20 @@ const app = buildApp({
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
 
+// docs/broker-balance.md: refreshed on demand by POST /trading/access and every
+// BALANCE_RECONCILE_INTERVAL_MS over the accounts in work, the latter never exchanging a token
+const balanceReconciler = createBalanceReconciler({
+  db,
+  client: brokerRest,
+  accessToken: (accountId, options) =>
+    ensureFreshAccessToken({ db, broker, cipher, logger: app.log }, accountId, options),
+  logger: app.log,
+  config: {
+    intervalMs: env.balanceReconcileIntervalMs,
+    maxPerMinute: env.balancePollMaxPerMinute,
+  },
+});
+
 // an unhandled 'error' on either client would crash the process instead of degrading /health
 pool.on('error', (error) => app.log.error(errorLogFields(error), 'postgres pool error'));
 redis.on('error', (error) => app.log.warn(errorLogFields(error), 'redis connection error'));
@@ -139,6 +160,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => publisher.stop(),
       () => adminBot.stop(),
       () => Promise.resolve(pairsCatalog.stop()),
+      () => balanceReconciler.stop(),
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
@@ -165,13 +187,17 @@ process.once('SIGINT', (signal) => void shutdown(signal));
 
 // A failed warm-up is logged as a warn and the route answers 503 until a tick succeeds.
 const warmed = await pairsCatalog.refresh();
-// A SIGTERM during the warm-up has already started phase 1, and no start() may run after its
-// stop(): the publisher would restart its loop on the pool phase 2 closes.
+// A SIGTERM during the warm-up or during listen() has already started phase 1, and no start()
+// may run after its stop(): the publisher would restart its loop on the pool phase 2 closes. So
+// each await is followed by a fresh check.
 if (!shuttingDown) {
   pairsCatalog.start();
   app.log.info({ warmed }, 'pairs catalog started');
   await app.listen({ port: env.port, host: '0.0.0.0' });
+}
+if (!shuttingDown) {
   publisher.start();
+  balanceReconciler.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();

@@ -21,6 +21,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@binarius/mock-broker": "workspace:*",
     "@binarius/web": "workspace:*",
     "@types/pg": "^8.23.1"
   }

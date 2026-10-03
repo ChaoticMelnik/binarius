@@ -4,7 +4,7 @@ import { createTempDatabase, seedUserWithAccount, type TempDatabase } from '@bin
 import { brokerAccounts, findTradeIntent, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
-import { unusedPairsDeps } from './testing';
+import { unusedBalanceDeps, unusedPairsDeps } from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -58,6 +58,7 @@ beforeAll(async () => {
         }
         if (wakeThrows) throw new Error('publisher down');
       },
+      balance: unusedBalanceDeps(),
     },
   });
   await app.ready();

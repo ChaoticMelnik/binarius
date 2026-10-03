@@ -1,10 +1,18 @@
-import { and, eq, sql, type SQL } from 'drizzle-orm';
-import { BrokerAccountStatus, TradeMode, UserStatus, type BrokerUser } from '@binarius/shared';
+import { and, eq, notInArray, sql, type SQL } from 'drizzle-orm';
+import {
+  BrokerAccountStatus,
+  TradeMode,
+  UserStatus,
+  isBalanceFresh,
+  type BrokerBalanceView,
+  type BrokerUser,
+} from '@binarius/shared';
 import type { Db } from './client';
 import { MONEY_INTEGER_DIGITS, MONEY_SCALE, sqlLiteralList } from './schema/columns';
 import { brokerAccounts } from './schema/broker-accounts';
 import {
   BalanceRefreshError,
+  LEVEL_CODE_MAX_LENGTH,
   LEVEL_RANK_INTEGER_DIGITS,
   LEVEL_RANK_SCALE,
   brokerBalanceSnapshots,
@@ -32,6 +40,9 @@ const MONEY_SHAPE = new RegExp(`^\\d{1,${MONEY_INTEGER_DIGITS}}(\\.\\d{1,${MONEY
 const LEVEL_RANK_SHAPE = new RegExp(
   `^\\d{1,${LEVEL_RANK_INTEGER_DIGITS}}(\\.\\d{1,${LEVEL_RANK_SCALE}})?$`,
 );
+// level_code is text without a CHECK; this is its only bound. With the u flag the count is in
+// code points, and \p{Cc} covers NUL (which text refuses outright), line breaks, tab and DEL.
+const LEVEL_CODE_SHAPE = new RegExp(`^[^\\p{Cc}]{1,${LEVEL_CODE_MAX_LENGTH}}$`, 'u');
 
 // The wire schemas accept a sign and any number of digits, because broker_trades shares them and
 // signs a profit. The columns here would round extra fraction digits silently, fail on extra
@@ -52,6 +63,7 @@ export function balanceSnapshotOutOfDomain(user: BrokerUser): string | undefined
     if (!MONEY_SHAPE.test(value)) return field;
   }
   if (!LEVEL_RANK_SHAPE.test(String(user.level.rank))) return 'level.rank';
+  if (!LEVEL_CODE_SHAPE.test(user.level.code)) return 'level.code';
   return undefined;
 }
 
@@ -142,11 +154,10 @@ export async function touchBalanceRequested(db: Db, brokerAccountId: string): Pr
 }
 
 // Whole seconds since a timestamp by the database clock; a future timestamp (clock step) is 0.
-// NULL stays NULL: greatest(0, NULL) would be 0, a missing time read as a fresh one.
-const ageSec = (at: SQL): SQL<number | null> =>
-  sql<
-    number | null
-  >`case when ${at} is null then null else greatest(0, floor(extract(epoch from now() - ${at})))::int end`;
+const ageSecOf = (at: SQL) => sql`greatest(0, floor(extract(epoch from now() - ${at})))::int`;
+// NULL stays NULL: greatest(0, NULL) would be 0, a missing time read as a fresh one
+const nullableAgeSec = (at: SQL): SQL<number | null> =>
+  sql<number | null>`case when ${at} is null then null else ${ageSecOf(at)} end`;
 
 // greatest() skips NULLs, so this is NULL only while neither mode has seen an event
 const newestEventAt = sql`greatest(${brokerBalanceSnapshots.realEventAt}, ${brokerBalanceSnapshots.demoEventAt})`;
@@ -178,24 +189,35 @@ export async function readBalanceSnapshot(
       minTradeAmount: t.minTradeAmount,
       levelCode: t.levelCode,
       levelRank: t.levelRank,
-      restSnapshotAgeSec: ageSec(sql`${t.restObservedAt}`),
-      balanceEventAgeSec: ageSec(newestEventAt),
+      restSnapshotAgeSec: sql<number>`${ageSecOf(sql`${t.restObservedAt}`)}`,
+      balanceEventAgeSec: nullableAgeSec(newestEventAt),
       lastRefreshError: t.lastRefreshError,
     })
     .from(t)
     .where(eq(t.brokerAccountId, brokerAccountId));
   if (row === undefined) return undefined;
-  const { restSnapshotAgeSec } = row;
-  // unreachable: rest_observed_at is NOT NULL
-  if (restSnapshotAgeSec === null) throw new Error('snapshot without rest_observed_at');
   return {
     real: { available: row.realAvailable, held: row.realHeld, total: row.realTotal },
     demo: { available: row.demoAvailable, held: row.demoHeld, total: row.demoTotal },
     minTradeAmount: row.minTradeAmount,
     level: { code: row.levelCode, rank: row.levelRank },
-    restSnapshotAgeSec,
+    restSnapshotAgeSec: row.restSnapshotAgeSec,
     balanceEventAgeSec: row.balanceEventAgeSec,
     lastRefreshError: row.lastRefreshError,
+  };
+}
+
+// The wire view: keys built one by one, so nothing the row carries (lastRefreshError, the
+// account id) reaches the bot by accident.
+export function toBrokerBalanceView(read: BalanceSnapshotRead): BrokerBalanceView {
+  return {
+    real: { available: read.real.available, held: read.real.held, total: read.real.total },
+    demo: { available: read.demo.available, held: read.demo.held, total: read.demo.total },
+    minTradeAmount: read.minTradeAmount,
+    level: { code: read.level.code, rank: read.level.rank },
+    restSnapshotAgeSec: read.restSnapshotAgeSec,
+    balanceEventAgeSec: read.balanceEventAgeSec,
+    fresh: isBalanceFresh(read.restSnapshotAgeSec, read.balanceEventAgeSec),
   };
 }
 
@@ -219,15 +241,19 @@ const activeAccountOfActiveUser = and(
 export interface BalanceRefreshCandidatesOptions {
   watchWindowMs: number;
   // only accounts whose access token outlives now() + this: the background refresh never needs
-  // a token exchange (the refresh itself still refuses one under the row lock, #137)
+  // a token exchange; ensureFreshAccessToken with mayRefresh: false still refuses one under the
+  // row lock (apps/backend/src/auth/token-service.ts)
   accessSkewMs: number;
   limit: number;
+  // accounts the caller holds back for now (the reconciler's attempts that left no row to mark)
+  exclude?: readonly string[];
 }
 
-// Never-observed accounts first, then the oldest snapshots.
+// Never-observed accounts first, then the longest since the last attempt (a recorded failure
+// counts as one), so an account that keeps failing does not hold the head of the queue.
 export async function listBalanceRefreshCandidates(
   db: Db,
-  { watchWindowMs, accessSkewMs, limit }: BalanceRefreshCandidatesOptions,
+  { watchWindowMs, accessSkewMs, limit, exclude = [] }: BalanceRefreshCandidatesOptions,
 ): Promise<string[]> {
   const rows = await db
     .select({ id: brokerAccounts.id })
@@ -239,9 +265,13 @@ export async function listBalanceRefreshCandidates(
         activeAccountOfActiveUser,
         sql`${brokerAccounts.accessTokenExpiresAt} > now() + (${accessSkewMs}::int * interval '1 millisecond')`,
         inWork(watchWindowMs),
+        notInArray(brokerAccounts.id, [...exclude]),
       ),
     )
-    .orderBy(sql`${brokerBalanceSnapshots.restObservedAt} asc nulls first`, brokerAccounts.id)
+    .orderBy(
+      sql`greatest(${brokerBalanceSnapshots.restObservedAt}, ${brokerBalanceSnapshots.lastRefreshFailedAt}) asc nulls first`,
+      brokerAccounts.id,
+    )
     .limit(limit);
   return rows.map((row) => row.id);
 }
@@ -267,13 +297,14 @@ export async function summarizeWatchedBalances(
       withoutSnapshot: sql<number>`(count(*) - count(${t.brokerAccountId}))::int`,
       oldestAgeSec: sql<
         number | null
-      >`max(${ageSec(sql`greatest(${t.restObservedAt}, ${newestEventAt})`)})`,
+      >`max(${nullableAgeSec(sql`greatest(${t.restObservedAt}, ${newestEventAt})`)})`,
     })
     .from(brokerAccounts)
     .innerJoin(users, eq(users.id, brokerAccounts.userId))
     .leftJoin(t, eq(t.brokerAccountId, brokerAccounts.id))
     .where(and(activeAccountOfActiveUser, inWork(watchWindowMs)));
-  return row ?? { watched: 0, withoutSnapshot: 0, oldestAgeSec: null };
+  // an aggregate without GROUP BY returns exactly one row
+  return row;
 }
 
 export interface BalanceAccount {

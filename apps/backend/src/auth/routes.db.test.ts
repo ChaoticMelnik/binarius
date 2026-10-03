@@ -42,7 +42,7 @@ import { INIT_DATA_MAX_AGE_MS } from './oauth-timing';
 import { createInitDataVerifier } from './telegram-init-data';
 import { signInitData } from './testing/init-data';
 import { AUTH_TEXTS } from './texts';
-import { unusedPairsDeps } from '../trading/testing';
+import { unusedBalanceDeps, unusedPairsDeps } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -119,7 +119,12 @@ const testApp = (auth: AuthRoutesDeps, logs?: { write(line: string): void }) =>
     logLevel: logs === undefined ? 'silent' : 'trace',
     ...(logs === undefined ? {} : { logDestination: logs }),
     checkTimeoutMs: 20,
-    trading: { db: tmp.db, internalApiToken: TOKEN, onIntentQueued: () => {} },
+    trading: {
+      db: tmp.db,
+      internalApiToken: TOKEN,
+      onIntentQueued: () => {},
+      balance: unusedBalanceDeps(),
+    },
     auth,
     users: { db: tmp.db, internalApiToken: TOKEN },
   });
