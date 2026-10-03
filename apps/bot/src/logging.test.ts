@@ -6,11 +6,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   confirmCallbackData,
   logOptions,
+  NotificationLevel,
   UNNAMED_ERROR_MESSAGE,
   type LogLevel,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { OAUTH_CALLBACK_DATA, createBot } from './bot';
+import { OAUTH_CALLBACK_DATA, createBot, levelCallbackData } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
@@ -32,7 +33,7 @@ import {
   type ApiAnswer,
   type ApiCall,
 } from './testing';
-import { TEXTS } from './texts';
+import { settingsText, TEXTS } from './texts';
 
 // What reaches the log is only provable by reading the log, so this suite runs the real pino
 // configuration from index.ts into a sink and asserts on the lines themselves.
@@ -59,6 +60,7 @@ interface Scenario {
   confirmLogin?: BackendClient['confirmLogin'];
   sendEmailCode?: BackendClient['sendEmailCode'];
   emailLogin?: BackendClient['emailLogin'];
+  setNotificationLevel?: BackendClient['setNotificationLevel'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -76,6 +78,8 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     sendEmailCode: scenario.sendEmailCode ?? (() => Promise.resolve(CODE_SENT)),
     emailLogin: scenario.emailLogin ?? (() => Promise.resolve(CONFIRMED)),
     recordChatMember: () => Promise.reject(new Error('not used by these scenes')),
+    setNotificationLevel:
+      scenario.setNotificationLevel ?? ((_telegramUserId, level) => Promise.resolve({ level })),
   };
   const loginDialog = createLoginDialog();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
@@ -495,6 +499,86 @@ describe('what the bot writes about the welcome video', () => {
 
 // The card's caption holds the account's address and the update holds the code typed, so every
 // line about the card is read at trace and searched for both.
+// #120: the /settings message is re-rendered by an edit after a press
+describe('what the bot writes about the settings edit', () => {
+  const update = () => callbackUpdate(levelCallbackData(NotificationLevel.Off));
+
+  it('names the method and the code of a refused edit, and nothing of the text', async () => {
+    const { lines, calls } = await linesFrom({
+      update: update(),
+      level: 'trace',
+      apiErrors: [
+        [
+          'editMessageText',
+          { ok: false, error_code: 400, description: 'Bad Request: SECRET-DESC not found' },
+        ],
+      ],
+    });
+    const logged = lineWith(lines, 'the settings message was not edited, sending it anew');
+
+    expect(logged).toMatchObject({
+      level: 40,
+      err: { name: 'GrammyError' },
+      method: 'editMessageText',
+      telegramErrorCode: 400,
+    });
+    expect(lines.join('')).not.toContain('SECRET-DESC');
+    expect(lines.join('')).not.toContain('Сейчас выбрано');
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'editMessageText',
+      'sendMessage',
+    ]);
+    expect(calls[2]?.payload.text).toBe(settingsText(NotificationLevel.Off).value);
+  });
+
+  it('reports a transport failure by identity and method, sends nothing more, drops the token', async () => {
+    const pressed = update();
+    const { lines, calls } = await linesFrom({
+      update: pressed,
+      level: 'trace',
+      apiErrors: [
+        [
+          'editMessageText',
+          new HttpError(
+            "Network request for 'editMessageText' failed!",
+            new Error(`request to https://api.telegram.org/bot${TOKEN}/editMessageText failed`),
+          ),
+        ],
+      ],
+    });
+    const logged = lineWith(lines, 'the settings edit failed in transport, sending nothing more');
+
+    expect(logged).toMatchObject({
+      level: 50,
+      err: { name: 'HttpError' },
+      method: 'editMessageText',
+      transportError: { name: 'Error' },
+      updateId: pressed.update_id,
+    });
+    expect(logged?.err).not.toHaveProperty('message');
+    expect(lineWith(lines, 'update handler failed')).toBeUndefined();
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(lines.join('')).not.toContain(TOKEN);
+    expect(lines.join('')).not.toContain('SECRET-TOKEN');
+    expect(lines.join('')).not.toContain('Сейчас выбрано');
+  });
+
+  it('names a failed set by status, without the Telegram id', async () => {
+    const { lines } = await linesFrom({
+      update: update(),
+      level: 'trace',
+      setNotificationLevel: () =>
+        Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 503 })),
+    });
+    expect(lineWith(lines, 'notification level not set')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError' },
+      backendStatus: 503,
+    });
+  });
+});
+
 describe('what the bot writes about the account card', () => {
   const ADDRESS = 'SECRET-ADDRESS@example.test';
   const CODE = 'SECRET-CODE-123';

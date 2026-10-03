@@ -4,7 +4,7 @@
 // tsc reports TS2578 (unused directive) and `pnpm check` fails.
 import type { Context } from 'grammy';
 import type { TelegramHtml } from '@binarius/shared';
-import { replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
+import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
 
 declare const ctx: Context;
 declare const text: TelegramHtml;
@@ -12,6 +12,10 @@ declare const text: TelegramHtml;
 export const viaSeam = replyHtml(ctx, 'raw');
 // @ts-expect-error entities replace parse_mode, so the seam does not take them (TS2353)
 export const viaEntities = replyHtml(ctx, text, { entities: [] });
+// @ts-expect-error the edit takes TelegramHtml, not a string (TS2345)
+export const viaEdit = editMessageTextHtml(ctx, 'raw');
+// @ts-expect-error nor entities in place of parse_mode (TS2353)
+export const viaEditEntities = editMessageTextHtml(ctx, text, { entities: [] });
 // @ts-expect-error caption_entities replace parse_mode for the caption (TS2353)
 export const viaCaptionEntities = replyWithVideoHtml(ctx, 'id', text, { caption_entities: [] });
 export const viaPhotoCaptionEntities = replyWithPhotoHtml(ctx, 'id', text, {

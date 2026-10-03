@@ -104,6 +104,8 @@ describe('runBot', () => {
       [
         { command: 'start', description: 'Начать' },
         { command: 'account', description: 'Аккаунт Binodex' },
+        { command: 'settings', description: 'Настройки уведомлений' },
+        { command: 'support', description: 'Поддержка' },
       ],
       { scope: { type: 'all_private_chats' } },
     );
@@ -380,6 +382,7 @@ function scene(options: SceneOptions = {}) {
     sendEmailCode: () => Promise.reject(new Error('not used by these scenes')),
     emailLogin: () => Promise.reject(new Error('not used by these scenes')),
     recordChatMember: () => Promise.reject(new Error('not used by these scenes')),
+    setNotificationLevel: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({
     token: TOKEN,
@@ -529,6 +532,8 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
       commands: [
         { command: 'start', description: 'Начать' },
         { command: 'account', description: 'Аккаунт Binodex' },
+        { command: 'settings', description: 'Настройки уведомлений' },
+        { command: 'support', description: 'Поддержка' },
       ],
       scope: { type: 'all_private_chats' },
     });

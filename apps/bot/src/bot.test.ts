@@ -4,6 +4,7 @@ import { BotError, HttpError, InputFile } from 'grammy';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   confirmCallbackData,
+  NotificationLevel,
   OAuthErrorCode,
   plainTextOf,
   telegramHtmlProblems,
@@ -14,7 +15,14 @@ import {
 } from '@binarius/shared';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA, RESEND_CALLBACK_DATA, createBot } from './bot';
+import {
+  CONNECT_CALLBACK_DATA,
+  LEVEL_CURRENT_CALLBACK_DATA,
+  OAUTH_CALLBACK_DATA,
+  RESEND_CALLBACK_DATA,
+  createBot,
+  levelCallbackData,
+} from './bot';
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCOUNT_VIEW,
@@ -46,7 +54,15 @@ import {
   accountView,
   userView,
 } from './testing';
-import { accountCard, LABELS, TEXTS, type AccountCardInput } from './texts';
+import {
+  accountCard,
+  currentLevelLabel,
+  LABELS,
+  levelLabel,
+  settingsText,
+  TEXTS,
+  type AccountCardInput,
+} from './texts';
 
 // Every message and caption the bot sends is Telegram HTML: checked on every send any test in
 // this file captures, not on one of them.
@@ -55,7 +71,9 @@ afterEach(() => {
   const sends = capturedCalls
     .splice(0)
     .flat()
-    .filter((call) => ['sendMessage', 'sendVideo', 'sendPhoto'].includes(call.method));
+    .filter((call) =>
+      ['sendMessage', 'sendVideo', 'sendPhoto', 'editMessageText'].includes(call.method),
+    );
   for (const call of sends) expect(call.payload.parse_mode, call.method).toBe('HTML');
 });
 
@@ -69,6 +87,7 @@ function setup(
     sendEmailCode?: BackendClient['sendEmailCode'];
     emailLogin?: BackendClient['emailLogin'];
     recordChatMember?: BackendClient['recordChatMember'];
+    setNotificationLevel?: BackendClient['setNotificationLevel'];
     welcomeVideoFileId?: string;
     dialog?: LoginDialogState;
     now?: () => number;
@@ -82,6 +101,9 @@ function setup(
     sendEmailCode: options.sendEmailCode ?? vi.fn(() => Promise.resolve(CODE_SENT)),
     emailLogin: options.emailLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
     recordChatMember: options.recordChatMember ?? vi.fn(() => Promise.resolve({ recorded: true })),
+    setNotificationLevel:
+      options.setNotificationLevel ??
+      vi.fn((_telegramUserId: string, level: NotificationLevel) => Promise.resolve({ level })),
   };
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
@@ -913,6 +935,7 @@ describe('the account card', () => {
           sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
           emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
           recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
+          setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -1587,6 +1610,221 @@ describe('a user blocking or unblocking the bot (#119)', () => {
   });
 });
 
+// #120
+describe('/settings', () => {
+  // the keyboard /settings shows when `current` is selected
+  const levelButtons = (current: NotificationLevel) =>
+    Object.values(NotificationLevel).map((level) =>
+      level === current
+        ? { text: currentLevelLabel(level), callback_data: LEVEL_CURRENT_CALLBACK_DATA }
+        : { text: levelLabel(level), callback_data: levelCallbackData(level) },
+    );
+
+  it.each(Object.values(NotificationLevel))(
+    'shows the levels with %s marked, read through /users/start',
+    async (notificationLevel) => {
+      const { bot, backend, calls } = setup({ user: userView({ notificationLevel }) });
+      await bot.handleUpdate(textUpdate('/settings'));
+
+      expect(backend.recordStart).toHaveBeenCalledTimes(1);
+      expect(backend.recordStart).toHaveBeenCalledWith({
+        telegramUserId: '4242',
+        displayName: 'Ada Lovelace',
+      });
+      const sends = calls.filter((call) => call.method === 'sendMessage');
+      expect(sends).toHaveLength(1);
+      expect(sends[0]?.payload.text).toBe(settingsText(notificationLevel).value);
+      expect(
+        (sends[0]?.payload.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard,
+      ).toEqual([levelButtons(notificationLevel)]);
+    },
+  );
+
+  it('shows a blocked user the blocked text and no keyboard', async () => {
+    const { bot, calls } = setup({ user: userView({ status: UserStatus.Blocked }) });
+    await bot.handleUpdate(textUpdate('/settings'));
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.blocked.value);
+    expect(message?.reply_markup).toBeUndefined();
+  });
+
+  it('says the service is unavailable when the backend cannot be reached', async () => {
+    const { bot, calls, logger } = setup({ recordStart: unreachable() });
+    await bot.handleUpdate(textUpdate('/settings'));
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+    expect(logger.warn.mock.calls[0]?.[1]).toBe('/settings not read');
+  });
+
+  it('ignores the command outside a private chat', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(textUpdate('/settings', 'group'));
+    expect(backend.recordStart).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  describe('a level pressed', () => {
+    const press = (level: string, chatType = 'private') =>
+      callbackUpdate(
+        level.startsWith('level:') ? level : levelCallbackData(level as never),
+        chatType,
+      );
+    const QUERY_TOO_OLD = {
+      ok: false as const,
+      error_code: 400,
+      description: 'Bad Request: query is too old',
+    };
+    const EDIT_REFUSED = {
+      ok: false as const,
+      error_code: 400,
+      description: "Bad Request: message can't be edited",
+    };
+
+    it('sets the level and edits the pressed message in place', async () => {
+      const { bot, backend, calls } = setup();
+      const update = press(NotificationLevel.Off);
+      await bot.handleUpdate(update);
+
+      expect(backend.setNotificationLevel).toHaveBeenCalledWith('4242', NotificationLevel.Off);
+      expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
+      const edit = sentPayload(calls, 'editMessageText');
+      const message = (update.callback_query as { message: { message_id: number } }).message;
+      expect(edit).toMatchObject({
+        chat_id: USER.id,
+        message_id: message.message_id,
+        text: settingsText(NotificationLevel.Off).value,
+        parse_mode: 'HTML',
+      });
+      expect((edit?.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard).toEqual([
+        levelButtons(NotificationLevel.Off),
+      ]);
+    });
+
+    it('renders the level the backend answered with', async () => {
+      const { bot, calls } = setup({
+        setNotificationLevel: vi.fn(() => Promise.resolve({ level: NotificationLevel.Reduced })),
+      });
+      await bot.handleUpdate(press(NotificationLevel.Off));
+      expect(sentPayload(calls, 'editMessageText')?.text).toBe(
+        settingsText(NotificationLevel.Reduced).value,
+      );
+    });
+
+    it('sends the same text and keyboard as a new message when the edit is refused', async () => {
+      const { bot, calls, logger, apiErrors } = setup();
+      apiErrors.set('editMessageText', EDIT_REFUSED);
+      await bot.handleUpdate(press(NotificationLevel.Reduced));
+
+      const edit = sentPayload(calls, 'editMessageText');
+      const message = sentPayload(calls, 'sendMessage');
+      expect(message?.text).toBe(settingsText(NotificationLevel.Reduced).value);
+      expect(message?.reply_markup).toEqual(edit?.reply_markup);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
+        method: 'editMessageText',
+        telegramErrorCode: 400,
+      });
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing more when the edit fails in transport', async () => {
+      const { bot, calls, logger, apiErrors } = setup();
+      const update = press(NotificationLevel.Off);
+      apiErrors.set(
+        'editMessageText',
+        new HttpError(
+          "Network request for 'editMessageText' failed!",
+          new Error('The operation was aborted due to timeout'),
+        ),
+      );
+      await bot.handleUpdate(update);
+
+      expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(logger.error.mock.calls[0]?.[0]).toMatchObject({
+        method: 'editMessageText',
+        updateId: update.update_id,
+      });
+    });
+
+    it('lets any other failure of the edit reach bot.catch', async () => {
+      const { bot, calls, answers } = setup();
+      answers.set('editMessageText', () => {
+        throw new TypeError('sentinel');
+      });
+      const thrown = await rejectionOf(bot.handleUpdate(press(NotificationLevel.Off)));
+      expect(thrown).toBeInstanceOf(BotError);
+      expect((thrown as BotError).error).toBeInstanceOf(TypeError);
+      expect(calls.map((call) => call.method)).not.toContain('sendMessage');
+    });
+
+    it('says the service is unavailable when the level is not set, and edits nothing', async () => {
+      const { bot, calls, logger } = setup({
+        setNotificationLevel: refused(500),
+      });
+      await bot.handleUpdate(press(NotificationLevel.Off));
+
+      expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+      expect(calls.map((call) => call.method)).not.toContain('editMessageText');
+      expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ backendStatus: 500 });
+    });
+
+    it('still edits the message when answering the query fails', async () => {
+      const { bot, calls, logger, apiErrors } = setup();
+      apiErrors.set('answerCallbackQuery', QUERY_TOO_OLD);
+      await bot.handleUpdate(press(NotificationLevel.All));
+
+      expect(sentPayload(calls, 'editMessageText')?.text).toBe(
+        settingsText(NotificationLevel.All).value,
+      );
+      expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
+    });
+
+    it('ignores the press outside a private chat', async () => {
+      const { bot, backend, calls } = setup();
+      await bot.handleUpdate(press(NotificationLevel.Off, 'group'));
+      expect(backend.setNotificationLevel).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    });
+
+    it('does not answer data that names no level', async () => {
+      const { bot, backend, calls } = setup();
+      await bot.handleUpdate(callbackUpdate('level:daily'));
+      expect(backend.setNotificationLevel).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    });
+
+    it('only stops the spinner when the selected level is pressed', async () => {
+      const { bot, backend, calls } = setup();
+      await bot.handleUpdate(callbackUpdate(LEVEL_CURRENT_CALLBACK_DATA));
+      expect(backend.setNotificationLevel).not.toHaveBeenCalled();
+      expect(backend.recordStart).not.toHaveBeenCalled();
+      expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery']);
+    });
+  });
+});
+
+describe('/support', () => {
+  it('sends the support text and one url button, without calling the backend', async () => {
+    const { bot, backend, calls } = setup({ recordStart: unreachable() });
+    await bot.handleUpdate(textUpdate('/support'));
+
+    expect(backend.recordStart).not.toHaveBeenCalled();
+    expect(backend.readAccount).not.toHaveBeenCalled();
+    const sends = calls.filter((call) => call.method === 'sendMessage');
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.payload.text).toBe(TEXTS.support.value);
+    expect(inlineButtons(sends[0]?.payload)).toEqual([
+      { text: LABELS.supportButton, url: 'https://t.me/dimmelya' },
+    ]);
+  });
+
+  it('ignores the command outside a private chat', async () => {
+    const { bot, calls } = setup();
+    await bot.handleUpdate(textUpdate('/support', 'group'));
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('the Bot API timeout', () => {
   let server: Server | undefined;
   afterEach(async () => {
@@ -1613,6 +1851,7 @@ describe('the Bot API timeout', () => {
         sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
         emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
         recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
+        setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

@@ -3,10 +3,23 @@ import { fileURLToPath } from 'node:url';
 import { HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
-import { confirmCallbackData, OAuthErrorCode, UserErrorCode, UserStatus } from '@binarius/shared';
+import {
+  confirmCallbackData,
+  NotificationLevel,
+  OAuthErrorCode,
+  UserErrorCode,
+  UserStatus,
+} from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA, RESEND_CALLBACK_DATA, createBot } from './bot';
+import {
+  CONNECT_CALLBACK_DATA,
+  LEVEL_CURRENT_CALLBACK_DATA,
+  OAUTH_CALLBACK_DATA,
+  RESEND_CALLBACK_DATA,
+  createBot,
+  levelCallbackData,
+} from './bot';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCOUNT_VIEW,
@@ -63,6 +76,7 @@ interface Branch {
   sendEmailCode?: BackendClient['sendEmailCode'];
   emailLogin?: BackendClient['emailLogin'];
   recordChatMember?: BackendClient['recordChatMember'];
+  setNotificationLevel?: BackendClient['setNotificationLevel'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -183,6 +197,13 @@ async function observe(branch: Branch): Promise<Calls> {
       return (branch.recordChatMember ?? (() => Promise.resolve({ recorded: true })))(
         telegramUserId,
         status,
+      );
+    },
+    setNotificationLevel: (telegramUserId, level) => {
+      backend += 1;
+      return (branch.setNotificationLevel ?? (() => Promise.resolve({ level })))(
+        telegramUserId,
+        level,
       );
     },
   };
@@ -801,7 +822,146 @@ const ACCOUNT_BRANCHES: readonly Branch[] = [
   },
 ];
 
+// Every terminal branch of /settings: one read, one message (#120).
+const SETTINGS_WORST_CASE: Branch = {
+  label: 'the levels are shown',
+  update: textUpdate('/settings'),
+  expected: { backend: 1, telegram: 1 },
+};
+
+const SETTINGS_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the update carries no sender',
+    update: withoutSender(textUpdate('/settings')),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the chat is not private',
+    update: textUpdate('/settings', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the backend is unreachable',
+    update: textUpdate('/settings'),
+    recordStart: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the user is blocked',
+    update: textUpdate('/settings'),
+    recordStart: () => Promise.resolve({ ...USER_VIEW, status: UserStatus.Blocked }),
+    expected: { backend: 1, telegram: 1 },
+  },
+  SETTINGS_WORST_CASE,
+];
+
+const LEVEL_UPDATE = callbackUpdate(levelCallbackData(NotificationLevel.Off));
+const EDIT_REFUSED: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: "Bad Request: message can't be edited",
+};
+
+// A level pressed: answer ∥ set, then the edit — or, when the edit is refused, a new message.
+const LEVEL_WORST_CASE: Branch = {
+  label: 'the edit is refused and the message is sent anew',
+  update: LEVEL_UPDATE,
+  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  expected: { backend: 1, telegram: 3 },
+};
+
+const LEVEL_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(levelCallbackData(NotificationLevel.Off), 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the backend fails',
+    update: LEVEL_UPDATE,
+    setNotificationLevel: () =>
+      Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the message is edited',
+    update: LEVEL_UPDATE,
+    expected: { backend: 1, telegram: 2 },
+  },
+  LEVEL_WORST_CASE,
+  {
+    label: 'the edit fails in transport',
+    update: LEVEL_UPDATE,
+    apiErrors: [
+      [
+        'editMessageText',
+        new HttpError(
+          "Network request for 'editMessageText' failed!",
+          new Error('The operation was aborted due to timeout'),
+        ),
+      ],
+    ],
+    expected: { backend: 1, telegram: 2 },
+  },
+  // rethrown into bot.catch
+  {
+    label: 'the edit fails for a reason the transport cannot produce',
+    update: LEVEL_UPDATE,
+    answers: [
+      [
+        'editMessageText',
+        () => {
+          throw new TypeError('sentinel');
+        },
+      ],
+    ],
+    expected: { backend: 1, telegram: 2 },
+  },
+];
+
+const LEVEL_CURRENT_WORST_CASE: Branch = {
+  label: 'the selected level is pressed',
+  update: callbackUpdate(LEVEL_CURRENT_CALLBACK_DATA),
+  expected: { backend: 0, telegram: 1 },
+};
+
+const SUPPORT_WORST_CASE: Branch = {
+  label: 'the support message is sent',
+  update: textUpdate('/support'),
+  expected: { backend: 0, telegram: 1 },
+};
+
+const SUPPORT_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: textUpdate('/support', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  SUPPORT_WORST_CASE,
+];
+
 describe('what the handlers do, against what HANDLER_CALLS declares', () => {
+  it('/settings', async () => {
+    await checkHandler('settings', SETTINGS_BRANCHES, SETTINGS_WORST_CASE, HANDLER_CALLS.settings);
+  });
+
+  it('a level button', async () => {
+    await checkHandler('level', LEVEL_BRANCHES, LEVEL_WORST_CASE, HANDLER_CALLS.level);
+  });
+
+  it('the selected level button', async () => {
+    await checkHandler(
+      'levelCurrent',
+      [LEVEL_CURRENT_WORST_CASE],
+      LEVEL_CURRENT_WORST_CASE,
+      HANDLER_CALLS.levelCurrent,
+    );
+  });
+
+  it('/support', async () => {
+    await checkHandler('support', SUPPORT_BRANCHES, SUPPORT_WORST_CASE, HANDLER_CALLS.support);
+  });
+
   it('/start', async () => {
     await checkHandler('start', START_BRANCHES, START_WORST_CASE, HANDLER_CALLS.start);
   });

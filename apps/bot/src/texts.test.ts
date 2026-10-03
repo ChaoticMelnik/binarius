@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BrokerAccountStatus,
+  NotificationLevel,
   plainTextOf,
   TELEGRAM_CAPTION_LIMIT,
   TELEGRAM_MESSAGE_LIMIT,
@@ -10,7 +11,20 @@ import {
 } from '@binarius/shared';
 import { telegramTextProblems } from '@binarius/shared/testing';
 import { LINK_ACTIVE, LINK_PENDING, LINK_REVOKED, PENDING_ACCOUNT_ID } from './testing';
-import { accountCard, accountStatus, LABELS, PROFILE, TEXTS, type AccountCardInput } from './texts';
+import { LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
+import {
+  accountCard,
+  accountStatus,
+  currentLevelLabel,
+  LABELS,
+  levelLabel,
+  PROFILE,
+  settingsText,
+  SUPPORT,
+  supportUrl,
+  TEXTS,
+  type AccountCardInput,
+} from './texts';
 
 describe('texts', () => {
   // the welcome travels as a caption whenever WELCOME_VIDEO_FILE_ID is set, and a caption over
@@ -56,14 +70,65 @@ describe('texts', () => {
     expect(label).not.toMatch(/[<>]|&(?:lt|gt|amp|quot|#\d+|#x[0-9a-f]+);/i);
   });
 
-  it('starts every button label with an emoji, and the command description without one', () => {
-    const { startCommand, accountCommand, ...buttons } = LABELS;
-    for (const entry of Object.values(buttons)) {
+  // a key ending in `Command` is a description in Telegram's command menu, every other one a button
+  it.each(Object.entries(LABELS))(
+    'gives %s an emoji at the start if it is a button, and none if it is a command description',
+    (key, entry) => {
       const label = typeof entry === 'function' ? entry(null) : entry;
-      expect(label).toMatch(/^\p{Extended_Pictographic}/u);
-    }
-    expect(startCommand).not.toMatch(/\p{Extended_Pictographic}/u);
-    expect(accountCommand).not.toMatch(/\p{Extended_Pictographic}/u);
+      if (key.endsWith('Command')) expect(label).not.toMatch(/\p{Extended_Pictographic}/u);
+      else expect(label).toMatch(/^\p{Extended_Pictographic}/u);
+    },
+  );
+
+  // #120
+  describe('the notification levels and support', () => {
+    it.each(Object.values(NotificationLevel))(
+      'lists %s in the /settings legend by its label',
+      (level) => {
+        const text = plainTextOf(TEXTS.settings('ignored'));
+        expect(text.split('\n').some((line) => line.startsWith(`${levelLabel(level)} — `))).toBe(
+          true,
+        );
+      },
+    );
+
+    it('names the selected level in bold', () => {
+      expect(settingsText(NotificationLevel.Reduced).value).toContain(
+        `Сейчас выбрано: <b>${LABELS.levelReduced}</b>`,
+      );
+    });
+
+    it('maps each level to its label, and marks the selected one', () => {
+      expect(Object.values(NotificationLevel).map(levelLabel)).toEqual([
+        LABELS.levelAll,
+        LABELS.levelReduced,
+        LABELS.levelOff,
+      ]);
+      expect(currentLevelLabel(NotificationLevel.Off)).toBe(`${LABELS.levelOff} ✅`);
+    });
+
+    // Bot API: callback data is 1-64 bytes
+    it.each([
+      ...Object.values(NotificationLevel).map(levelCallbackData),
+      LEVEL_CURRENT_CALLBACK_DATA,
+    ])('keeps the callback data %s inside 64 bytes', (data) => {
+      expect(Buffer.byteLength(data)).toBeLessThanOrEqual(64);
+    });
+
+    // Telegram usernames: 5-32 letters, digits and underscores
+    it('leads /support to an https t.me link of a valid username', () => {
+      expect(SUPPORT.telegramUsername).toMatch(/^[A-Za-z0-9_]{5,32}$/);
+      const url = new URL(supportUrl());
+      expect(url.protocol).toBe('https:');
+      expect(url.host).toBe('t.me');
+      expect(url.pathname).toBe(`/${SUPPORT.telegramUsername}`);
+    });
+
+    it('points every «напиши в поддержку» to /support', () => {
+      for (const text of [TEXTS.cardBody, TEXTS.blocked, TEXTS.accountTaken]) {
+        expect(plainTextOf(text)).toMatch(/напиши в поддержку: \/support$/);
+      }
+    });
   });
 
   it('names both buttons of the welcome by their labels', () => {

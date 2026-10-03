@@ -4,6 +4,7 @@ import {
   LINK_LABELS,
   LINK_TEXTS,
   LinkBonusSkipReason,
+  NotificationLevel,
   telegramHtml,
   type LinkBonusGrantView,
   type LinkedAccountView,
@@ -15,6 +16,13 @@ import {
 const UNKNOWN_ADDRESS = telegramHtml`адрес неизвестен`;
 const addressOf = (email: string | null): string | TelegramHtml =>
   email === null ? UNKNOWN_ADDRESS : email;
+
+// The /settings buttons, also the legend of its message: one source for both (#120)
+const LEVEL_LABELS = {
+  [NotificationLevel.All]: '🔔 Все',
+  [NotificationLevel.Reduced]: '🔕 Реже',
+  [NotificationLevel.Off]: '❌ Выключить',
+} as const satisfies Record<NotificationLevel, string>;
 
 // Messages are Telegram HTML, sent with parse_mode HTML by send.ts only. Every hole goes through
 // telegramHtml, which escapes it: the address in codeSent is what the user typed, the name on the
@@ -53,7 +61,7 @@ export const TEXTS = {
 🎮 Демо-торговля без риска: пробуй на демобалансе, деньги не нужны.
 🤖 Автоторговля за токены: бот открывает сделки на Binodex за тебя.
 📊 Баланс, токены и история сделок прямо в этом чате.
-🆘 Если что-то пошло не так — напиши в поддержку.`,
+🆘 Если что-то пошло не так — напиши в поддержку: /support`,
   // the number is the backend's (LINK_BONUS_TOKENS), printed as it arrives
   cardBonusGranted: (tokens: string) =>
     telegramHtml`<blockquote>🎁 Начислено токенов автоторговли: ${tokens}</blockquote>`,
@@ -105,6 +113,20 @@ export const TEXTS = {
   accountLineRevoked: (email: string | null) =>
     telegramHtml`⚠️ Подключение отозвано: ${addressOf(email)}`,
   accountUnknownAddress: UNKNOWN_ADDRESS,
+  // /settings (#120); the hole is the current level's label (settingsText below)
+  settings: (current: string) => telegramHtml`🔔 <b>Уведомления</b>
+Так бот присылает напоминания и подсказки — например, когда ты ещё не начал демо.
+Ответы на твои команды и итоги твоих сделок приходят всегда.
+
+Сейчас выбрано: <b>${current}</b>
+
+${LEVEL_LABELS.all} — каждое напоминание.
+${LEVEL_LABELS.reduced} — не чаще одного в день.
+${LEVEL_LABELS.off} — никаких напоминаний.`,
+  // /support (#120), sent with the url button to SUPPORT's account
+  support: telegramHtml`🆘 <b>Поддержка</b>
+Если что-то пошло не так или есть вопрос — напиши нам.
+👇 Нажми кнопку ниже, откроется чат с поддержкой.`,
 } as const satisfies Record<string, TelegramHtml | ((value: string) => TelegramHtml)>;
 
 // What /account says about the user's links, in the order given (newest first). No link at all
@@ -190,7 +212,25 @@ export const LABELS = {
   startCommand: 'Начать',
   // the description of /account, plain like startCommand (#185)
   accountCommand: 'Аккаунт Binodex',
+  // the descriptions of /settings and /support, plain like startCommand (#120)
+  settingsCommand: 'Настройки уведомлений',
+  supportCommand: 'Поддержка',
+  levelAll: LEVEL_LABELS.all,
+  levelReduced: LEVEL_LABELS.reduced,
+  levelOff: LEVEL_LABELS.off,
+  supportButton: '💬 Написать в поддержку',
 } as const satisfies Record<string, string | ((value: string | null) => string)>;
+
+export const levelLabel = (level: NotificationLevel): string => LEVEL_LABELS[level];
+// the label of the level that is selected now, on its button
+export const currentLevelLabel = (level: NotificationLevel): string => `${levelLabel(level)} ✅`;
+export const settingsText = (level: NotificationLevel): TelegramHtml =>
+  TEXTS.settings(levelLabel(level));
+
+// Where /support leads (#120). A temporary personal account: #220 replaces it, and this is the one
+// line to change.
+export const SUPPORT = { telegramUsername: 'dimmelya' } as const;
+export const supportUrl = (): string => `https://t.me/${SUPPORT.telegramUsername}`;
 
 // The bot's profile: `description` is the «Что умеет этот бот?» block an empty chat shows before
 // Start, `shortDescription` the line on the profile page and in the preview of a shared link.

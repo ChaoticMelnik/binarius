@@ -3,6 +3,7 @@ import {
   safeParseConfirmLoginResponse,
   safeParseEmailLoginResponse,
   safeParseEmailSendCodeResponse,
+  safeParseNotificationLevelResponse,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
   startLoginResponseSchema,
@@ -10,6 +11,8 @@ import {
   type ConfirmLoginResponse,
   type EmailLoginResponse,
   type EmailSendCodeResponse,
+  type NotificationLevel,
+  type NotificationLevelResponse,
   type StartLoginResponse,
   type TelegramChatMemberStatus,
   type UserAccountView,
@@ -63,6 +66,10 @@ export interface BackendClient {
     telegramUserId: string,
     status: TelegramChatMemberStatus,
   ): Promise<ChatMemberResponse>;
+  setNotificationLevel(
+    telegramUserId: string,
+    level: NotificationLevel,
+  ): Promise<NotificationLevelResponse>;
 }
 
 export interface BackendClientOptions {
@@ -164,6 +171,13 @@ export function createBackendClient({
     async recordChatMember(telegramUserId, status) {
       const parsed = safeParseChatMemberResponse(
         await post('users/chat-member', { telegramUserId, status }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
+    },
+    async setNotificationLevel(telegramUserId, level) {
+      const parsed = safeParseNotificationLevelResponse(
+        await post('users/notification-level', { telegramUserId, level }),
       );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
