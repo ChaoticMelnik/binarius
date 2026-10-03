@@ -862,6 +862,12 @@ const EDIT_REFUSED: ApiError = {
   description: "Bad Request: message can't be edited",
 };
 
+const EDIT_NOT_MODIFIED: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: message is not modified',
+};
+
 // A level pressed: answer ∥ set, then the edit — or, when the edit is refused, a new message.
 const LEVEL_WORST_CASE: Branch = {
   label: 'the edit is refused and the message is sent anew',
@@ -889,6 +895,24 @@ const LEVEL_BRANCHES: readonly Branch[] = [
     expected: { backend: 1, telegram: 2 },
   },
   LEVEL_WORST_CASE,
+  {
+    label: 'the edit is refused as not modified',
+    update: LEVEL_UPDATE,
+    apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
+    expected: { backend: 1, telegram: 2 },
+  },
+  // rethrown into bot.catch
+  {
+    label: 'the edit is refused for an unlisted reason',
+    update: LEVEL_UPDATE,
+    apiErrors: [
+      [
+        'editMessageText',
+        { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
+      ],
+    ],
+    expected: { backend: 1, telegram: 2 },
+  },
   {
     label: 'the edit fails in transport',
     update: LEVEL_UPDATE,

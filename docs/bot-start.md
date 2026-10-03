@@ -361,7 +361,7 @@ the user unblocks the bot
   Telegram → my_chat_member, new status `member`
   bot  → POST /users/chat-member { telegramUserId, status: 'member' }
   back → markTelegramReachable: telegram_blocked_at = NULL
-the user sends /start
+the user sends /start or /settings
   the /users/start upsert sets telegram_blocked_at = NULL: they have just written to the bot
 a send is refused with 403 (today: the link push after the callback)
   back → recordTelegramSendFailure → markTelegramBlocked, as above
@@ -372,12 +372,13 @@ private chats only, forwards `kicked` and `member` as Telegram spells them and i
 status; it decides nothing and sends nothing — a blocked chat could not receive it anyway. A
 repeated `kicked` keeps the first time and runs the cancel again, so a job created between two
 signals is caught. An id with no users row is answered `recorded: false` and nothing is inserted:
-rows are created by `/start`.
+rows are created by `POST /users/start` (`/start` and `/settings`).
 
 A 403 on a send that is reported counts as "cannot deliver" — blocked, deactivated, never started
-— and the mark clears on the user's next `/start` or unblock. Today the only send that reports
-one is the link push after the OAuth callback (`apps/backend/src/auth/routes.ts`), the only send
-that calls `recordTelegramSendFailure`. Telegram's `description` is neither compared nor logged.
+— and the mark clears on the user's next `/start` or `/settings` (both upsert through
+`/users/start`) or unblock. Today the only send that reports one is the link push after the OAuth
+callback (`apps/backend/src/auth/routes.ts`), the only send that calls `recordTelegramSendFailure`.
+On this path Telegram's `description` is neither compared nor logged.
 
 What a sender must do (#123, #124, #202, none of which exists yet; `stated`, enforced by nothing
 until a sender exists): claim its jobs with `acceptsMailing()` — which includes `deliverable()` —
@@ -430,8 +431,10 @@ a level pressed (level:all, level:reduced, level:off)
   bot  → answerCallbackQuery ∥ POST /users/notification-level { telegramUserId, level }
   back → setNotificationLevel: the users row updated; for `off`, in the same transaction, the
          user's `pending` notification_jobs → `canceled` (lock order users → notification_jobs)
-  bot  → the message edited in place from the answer's level; refused (GrammyError): the same
-         text and keyboard as a new message; failed in transport (HttpError): nothing more
+  bot  → the message edited in place from the answer's level; refused as not modified:
+         nothing more; refused as gone or not editable: the same text and keyboard as a new
+         message; any other refusal: bot.catch, nothing sent; failed in transport (HttpError):
+         nothing more
 the selected level pressed (level:current)
   bot  → answerCallbackQuery only
 /support
@@ -453,9 +456,22 @@ accept that locks the users row first. What a sender must do is in
 row and clears the Telegram block mark, as `/start` would; a blocked user gets the blocked text and
 no keyboard, and a backend failure the unavailable text. A press acts on no error code of the set
 route: any failure is the unavailable text as a new message, the keyboard untouched, so pressing
-again is the retry. The edit has the welcome video's three outcomes (below): a refusal — the
-message is gone or too old — sends the same text and keyboard anew; a transport failure sends
-nothing more, since the keyboard is still there; anything else goes to `bot.catch`. An older
+again is the retry.
+
+Unlike a refused send, a refused edit may mean the message already shows the result, so the
+refusal is classified (`editRefusal` in `bot.ts`), by `error_code` 400 and the lead phrase of
+Telegram's `description` as the Bot API server words it (telegram-bot-api `Client.cpp`); the
+description is compared, never logged.
+
+| Edit outcome | What the bot does |
+| --- | --- |
+| 400 `message is not modified` — a second press of the same level, queued against the keyboard the first edit had not yet replaced | nothing more: the message already shows it; one `info` line |
+| 400 `message to edit not found` or `message can't be edited` — the message is gone or too old | the same text and keyboard as a new message; one `warn` line |
+| any other refusal (another 400, 403, 429, …) | rethrown into `bot.catch`, nothing sent: the message is most likely still on screen, and its keyboard is the retry |
+| a transport failure (`HttpError`) | nothing more, since the edit may have landed and the keyboard is still there; one `error` line |
+| anything else | rethrown into `bot.catch` |
+
+An older
 `/settings` message keeps a stale ✅ until it is pressed. The route does not check `status`, so a
 stale keyboard still works for an admin-blocked user. `/support` calls nothing, so it answers a
 blocked user and a backend outage alike.
@@ -468,8 +484,9 @@ text and the account-taken text — end with `: /support`, which Telegram shows 
 Log lines: the route writes `notification level set` at `info` with `notificationLevel` and
 `canceledJobs` — not `level`, which is pino's own key — and no Telegram id. The bot writes
 `/settings not read` and `notification level not set` at `warn` with the error's identity and the
-backend status, `the settings message was not edited, sending it anew` at `warn` with
-`method: 'editMessageText'` and the Telegram code, and `the settings edit failed in transport,
+backend status, `the settings message already shows this level` at `info` and `the settings
+message was not edited, sending it anew` at `warn`, both with `method: 'editMessageText'` and the
+Telegram code, and `the settings edit failed in transport,
 sending nothing more` at `error` with the method and the update id; never the message text.
 
 ## POST /users/notification-level

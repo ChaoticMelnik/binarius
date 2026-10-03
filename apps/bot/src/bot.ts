@@ -140,8 +140,8 @@ export function createBot({
     await sendWelcome(ctx);
   });
 
-  // Reads only: the users row is not refreshed and nothing is recorded, so /start stays the one
-  // place that writes it.
+  // Reads only: the users row is not refreshed and nothing is recorded, so the row is written only
+  // through /users/start (/start and /settings).
   privateChats.command('account', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) return;
@@ -198,17 +198,13 @@ export function createBot({
   });
 
   privateChats.callbackQuery(LEVEL_CALLBACK_PATTERN, async (ctx) => {
-    const level = notificationLevelSchema.safeParse(ctx.match[1]);
-    if (!level.success) {
-      await ctx.answerCallbackQuery().catch((error: unknown) => {
-        logAnswerFailure(error);
-      });
-      return;
-    }
+    // the pattern is built from Object.values(NotificationLevel), so a mismatch is a bug for
+    // bot.catch
+    const level = notificationLevelSchema.parse(ctx.match[1]);
     // independent, as in oauth
     const [answered, set] = await Promise.allSettled([
       ctx.answerCallbackQuery(),
-      backend.setNotificationLevel(String(ctx.from.id), level.data),
+      backend.setNotificationLevel(String(ctx.from.id), level),
     ]);
     if (answered.status === 'rejected') logAnswerFailure(answered.reason);
     if (set.status === 'rejected') {
@@ -527,17 +523,26 @@ export function createBot({
     await pinAccountCard(ctx, sent.message_id);
   }
 
-  // The /settings message re-rendered in place after a press (#120). The edit has the welcome
-  // video's three outcomes: a refusal (the message is gone or too old) sent nothing, so the same
-  // text and keyboard go as a new message; a transport failure leaves the edit unknown, and the
-  // keyboard is still there to press, so nothing more is sent; anything else is a bug.
+  // The /settings message re-rendered in place after a press (#120). Unlike a refused send, a
+  // refused edit may mean the message already shows the result, so a refusal is classified
+  // (editRefusal): already shown — a second press of the same level queued against the old
+  // keyboard — is done; a message that is gone or cannot be edited gets the same text and
+  // keyboard anew; any other refusal goes to bot.catch with nothing sent, the keyboard on screen
+  // being the retry. A transport failure leaves the edit unknown and sends nothing more; anything
+  // else is a bug.
   async function showLevel(ctx: Context, level: NotificationLevel): Promise<void> {
     const text = settingsText(level);
     const reply_markup = levelKeyboard(level);
     try {
       await editMessageTextHtml(ctx, text, { reply_markup });
     } catch (error) {
-      if (error instanceof GrammyError) {
+      const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
+      if (refusal === 'shown') {
+        logger.info(
+          { ...telegramErrorFields(error) },
+          'the settings message already shows this level',
+        );
+      } else if (refusal === 'gone') {
         logger.warn(
           { ...errorLogFields(error), ...telegramErrorFields(error) },
           'the settings message was not edited, sending it anew',
@@ -701,6 +706,22 @@ function levelKeyboard(current: NotificationLevel): InlineKeyboard {
     else keyboard.text(levelLabel(level), levelCallbackData(level));
   }
   return keyboard;
+}
+
+// What a refused editMessageText means, from Telegram's own wording (telegram-bot-api Client.cpp:
+// MESSAGE_NOT_MODIFIED → "message is not modified: …", check_message → "message to edit not
+// found", tdlib's edit_message_text → "message can't be edited"), always as a 400. The
+// description is compared by its lead phrase, since the not-modified tail is free text, and is
+// never logged: telegramErrorFields carries only the method and the code. Anything else is not
+// ours to interpret.
+const EDIT_ALREADY_SHOWN = 'message is not modified';
+const EDIT_TARGET_GONE = ['message to edit not found', "message can't be edited"] as const;
+
+function editRefusal(error: GrammyError): 'shown' | 'gone' | undefined {
+  if (error.error_code !== 400) return undefined;
+  if (error.description.includes(EDIT_ALREADY_SHOWN)) return 'shown';
+  if (EDIT_TARGET_GONE.some((phrase) => error.description.includes(phrase))) return 'gone';
+  return undefined;
 }
 
 function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineKeyboard {

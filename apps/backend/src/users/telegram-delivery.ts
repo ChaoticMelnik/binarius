@@ -5,7 +5,8 @@ import { markTelegramBlocked, type Db } from '@binarius/db';
 
 // Any 403 from Telegram on a send means nothing can be delivered to this user: they blocked the
 // bot, deleted their account, or never started it. All three are marked alike — the mark clears
-// on their next /start or unblock. `description` is neither compared nor logged (rule 8).
+// on their next /start or /settings (the /users/start upsert) or unblock. `description` is neither
+// compared nor logged (rule 8).
 export function isTelegramForbidden(error: unknown): boolean {
   return error instanceof GrammyError && error.error_code === 403;
 }

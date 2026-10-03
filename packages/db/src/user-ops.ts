@@ -26,11 +26,12 @@ export interface RecordedUserStart {
   pendingBrokerAccounts: PendingBrokerAccountView[];
 }
 
-// What /start writes: one upsert, no read-before-write, so two /start updates racing on a new
-// user produce one row rather than a unique violation. The lock order is the one every other
-// writer here uses — the UPDATE takes the users row, broker_accounts is read after it and only
-// for information. `status` is deliberately absent from the SET: a blocked user does not become
-// active by sending /start, the same line upsertUser (oauth-ops.ts) holds.
+// What /users/start writes (/start and /settings): one upsert, no read-before-write, so two such
+// updates racing on a new user produce one row rather than a unique violation. The lock order is
+// the one every other writer here uses — the UPDATE takes the users row, broker_accounts is read
+// after it and only for information. `status` is deliberately absent from the SET: a blocked user
+// does not become active by sending /start or /settings, the same line upsertUser (oauth-ops.ts)
+// holds.
 export async function recordUserStart(
   db: Db,
   { telegramUserId, displayName, languageCode, startPayload }: RecordUserStartInput,

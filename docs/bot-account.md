@@ -2,7 +2,8 @@
 
 `/account` (#185) shows a user, in the bot, which Binodex accounts are linked to their Telegram
 account and in what state. It reads only: the users row is not refreshed and nothing is
-recorded — `/start` ([bot-start.md](bot-start.md)) stays the one place that writes it.
+recorded — `/start` and `/settings`, both through `POST /users/start` ([bot-start.md](bot-start.md)),
+are the places that write it.
 
 ## Components
 
