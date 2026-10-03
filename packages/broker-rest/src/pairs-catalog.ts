@@ -81,13 +81,16 @@ export function createPairsCatalog(deps: PairsCatalogDeps): PairsCatalog {
       return false;
     } finally {
       controller = undefined;
-      inFlight = undefined;
     }
   }
 
   function refresh(): Promise<boolean> {
     if (stopped) return Promise.resolve(false);
-    inFlight ??= fetchOnce();
+    // reset in .finally, which always runs after this assignment: a listPairs that throws
+    // synchronously settles fetchOnce() before it returns
+    inFlight ??= fetchOnce().finally(() => {
+      inFlight = undefined;
+    });
     return inFlight;
   }
 
