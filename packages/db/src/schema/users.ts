@@ -25,7 +25,8 @@ export const users = pgTable(
     // Read only through deliverable() (delivery-ops.ts).
     telegramBlockedAt: timestamp('telegram_blocked_at', { withTimezone: true }),
     // The user's choice in /settings (#120), a preference rather than a deliverability fact:
-    // written only by setNotificationLevel, read only through deliverable()/acceptsMailing().
+    // written only by setNotificationLevel; a sender reads it only through deliverable() or
+    // acceptsMailing(), and /users/start shows it to /settings.
     notificationLevel: text('notification_level')
       .$type<NotificationLevel>()
       .notNull()

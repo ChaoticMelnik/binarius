@@ -8,20 +8,24 @@ routes, the confirmation and the starter pack are described in
 
 ## Components
 
-- `packages/shared/src/users.ts` — the contract: `UserStatus`, the start-payload and language-tag
-  patterns, and the request/response schemas of `POST /users/start`.
+- `packages/shared/src/users.ts` — the contract: `UserStatus`, `NotificationLevel`, the
+  start-payload and language-tag patterns, and the request/response schemas of `POST /users/start`,
+  `POST /users/chat-member` and `POST /users/notification-level`.
 - `packages/db/src/user-ops.ts` — `recordUserStart` (one upsert, the active-account check and
   the list of links waiting for confirmation) and `toUserStartView` (the allowlisted projection).
-- `apps/backend/src/users/routes.ts` — `POST /users/start` and `POST /users/chat-member`, behind
-  the internal bearer, and `POST /users/account` beside them, which `/account` reads
+- `apps/backend/src/users/routes.ts` — `POST /users/start`, `POST /users/chat-member` and
+  `POST /users/notification-level`, behind the internal bearer, and `POST /users/account` beside them, which `/account` reads
   ([bot-account.md](bot-account.md)).
-- `packages/db/src/delivery-ops.ts` — whether the bot may send to a user: `deliverable()`, the
-  mark and clear helpers and the pending-job cancel ([Blocking the bot](#blocking-the-bot-119)).
+- `packages/db/src/delivery-ops.ts` — whether the bot may mail a user: `deliverable()`,
+  `acceptsMailing()` and `REDUCED_LEVEL_WINDOW_HOURS`, the mark and clear helpers, the pending-job
+  cancel and `setNotificationLevel` ([Blocking the bot](#blocking-the-bot-119),
+  [Notification level and /support](#notification-level-and-support-120)).
 - `apps/backend/src/users/telegram-delivery.ts` — what a 403 on a send means:
-  `isTelegramForbidden` and `recordTelegramSendFailure`, the one place every sender hands a
-  failed send to.
+  `isTelegramForbidden` and `recordTelegramSendFailure`, the helper a sender hands a failed send
+  to (today only the link push does).
 - `apps/bot/src/` — `env.ts`, `timing.ts`, `backend-client.ts`, `texts.ts` (with `accountCard`,
-  [The account card](#the-account-card), and `PROFILE`, [Bot profile](#bot-profile)), `send.ts`, `logging.ts`, `assets.ts` (the path of
+  [The account card](#the-account-card), `PROFILE`, [Bot profile](#bot-profile), and `SUPPORT`,
+  [Notification level and /support](#notification-level-and-support-120)), `send.ts`, `logging.ts`, `assets.ts` (the path of
   `assets/account-card.jpg`, the card's picture), `login-dialog.ts` (the email dialog's state,
   [Email dialog](#email-dialog)), `bot.ts` (the handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
   `lifecycle.ts` (start, the profile registration — the menu, the description, the short
@@ -323,6 +327,7 @@ Answers: `200 { user }`, `400 { error: 'validation', issues }`, `401 { error: 'u
 | `acquiredAt`             | ISO timestamp with offset, or `null`                                     |
 | `hasActiveBrokerAccount` | any of the user's accounts is `active`                                   |
 | `pendingBrokerAccounts`  | links waiting for confirmation, newest first, each `{ id, email }` only — `email` may be `null` |
+| `notificationLevel`      | `all`, `reduced` or `off` (`NotificationLevel`); what `/settings` shows   |
 
 Every field the bot derives is checked against this same schema before it is sent, `displayName`
 included: the joined name goes through `userStartRequestSchema.shape.displayName`, and when it
@@ -340,10 +345,11 @@ uses.
 
 ## Blocking the bot (#119)
 
-A user who blocks the bot stops receiving anything from it, and nothing is tried again until
-they come back. The fact lives in one column, `users.telegram_blocked_at` (NULL = deliverable,
-migration 0009), independent of `users.status`, which is the admin block: neither path writes the
-other.
+When a user blocks the bot, the backend marks them unreachable until they come back and cancels
+their pending notification jobs. Nothing sends mailings today, so nothing reads the mark yet; what
+it will hold back is the senders' part, below. The fact lives in one column,
+`users.telegram_blocked_at` (NULL = deliverable, migration 0009), independent of `users.status`,
+which is the admin block: neither path writes the other.
 
 ```text
 the user blocks the bot
@@ -368,15 +374,16 @@ repeated `kicked` keeps the first time and runs the cancel again, so a job creat
 signals is caught. An id with no users row is answered `recorded: false` and nothing is inserted:
 rows are created by `/start`.
 
-Any 403 on a send counts as "cannot deliver" — blocked, deactivated, never started — and the
-mark clears on the user's next `/start` or unblock. Telegram's `description` is neither compared
-nor logged.
+A 403 on a send that is reported counts as "cannot deliver" — blocked, deactivated, never started
+— and the mark clears on the user's next `/start` or unblock. Today the only send that reports
+one is the link push after the OAuth callback (`apps/backend/src/auth/routes.ts`), the only send
+that calls `recordTelegramSendFailure`. Telegram's `description` is neither compared nor logged.
 
-What a sender does (#123, #124, #202, none of which exists yet): it claims its jobs with
-`deliverable()` in the claim query (joining `users`) instead of spelling the column, and hands
-every send error to `recordTelegramSendFailure`. A job claimed a moment before the block lands
-may still be attempted once; that attempt is the 403 that marks the user, and no second one
-follows.
+What a sender must do (#123, #124, #202, none of which exists yet; `stated`, enforced by nothing
+until a sender exists): claim its jobs with `acceptsMailing()` — which includes `deliverable()` —
+in the claim query (joining `users`) instead of spelling the columns, and hand every send error to
+`recordTelegramSendFailure`. A job claimed a moment before the block lands may then still be
+attempted once; that attempt is the 403 that marks the user, and no second one follows.
 
 Deliberately not done: no message on unblock (the user's next `/start` answers as usual); blocks
 from before the deploy are not replayed — Telegram does not resend old `my_chat_member` updates,
@@ -405,6 +412,80 @@ Answers: `200 { recorded }` — `false` when no users row has this id, and then 
 written — `400 { error: 'validation', issues }`, `401 { error: 'unauthorized' }`. A retry is
 idempotent.
 
+## Notification level and /support (#120)
+
+A user chooses how often the bot may write to them unasked: `users.notification_level` (migration
+0010), one of `NotificationLevel` in `packages/shared/src/users.ts` — `all` (the default, every
+existing user included), `reduced` or `off`. It is a preference beside `telegram_blocked_at` and
+`status`; none of the three writes another. The level never governs the replies to the user's
+commands and buttons, the push after a site login (#128) or the results of the user's own trades
+(the owner, 2026-10-03). Nothing sends mailings yet, so today the choice is stored and `off`
+cancels what is pending, and nothing else changes for the user.
+
+```text
+/settings
+  bot  → POST /users/start (the recheck request: id, name, language; no payload)
+  bot  → blocked: the blocked text; otherwise the levels message, the selected level marked ✅
+a level pressed (level:all, level:reduced, level:off)
+  bot  → answerCallbackQuery ∥ POST /users/notification-level { telegramUserId, level }
+  back → setNotificationLevel: the users row updated; for `off`, in the same transaction, the
+         user's `pending` notification_jobs → `canceled` (lock order users → notification_jobs)
+  bot  → the message edited in place from the answer's level; refused (GrammyError): the same
+         text and keyboard as a new message; failed in transport (HttpError): nothing more
+the selected level pressed (level:current)
+  bot  → answerCallbackQuery only
+/support
+  bot  → the support message with one url button; no backend call
+```
+
+**What a level means** (`packages/db/src/delivery-ops.ts`): `deliverable()` is
+`telegram_blocked_at is null and notification_level <> 'off'`; `acceptsMailing()` is
+`deliverable()` and, at `reduced`, no `sent` notification job of this user with `sent_at` inside
+the last `REDUCED_LEVEL_WINDOW_HOURS` (24) by the database clock — at most one mailing a day,
+counted from what was sent, not from what was scheduled. `reduced` cancels nothing: the window is
+applied when a sender claims, and a job it skips stays `pending`. Two senders claiming the same
+`reduced` user at the same instant can both pass the window (accepted); a sender that cannot
+accept that locks the users row first. What a sender must do is in
+[Blocking the bot](#blocking-the-bot-119): `acceptsMailing()` in its claim, and a `sent` row with
+`sent_at` for each mailing, which is what the window reads.
+
+**The bot.** `/settings` reads the level from `/users/start`, so it also creates a missing users
+row and clears the Telegram block mark, as `/start` would; a blocked user gets the blocked text and
+no keyboard, and a backend failure the unavailable text. A press acts on no error code of the set
+route: any failure is the unavailable text as a new message, the keyboard untouched, so pressing
+again is the retry. The edit has the welcome video's three outcomes (below): a refusal — the
+message is gone or too old — sends the same text and keyboard anew; a transport failure sends
+nothing more, since the keyboard is still there; anything else goes to `bot.catch`. An older
+`/settings` message keeps a stale ✅ until it is pressed. The route does not check `status`, so a
+stale keyboard still works for an admin-blocked user. `/support` calls nothing, so it answers a
+blocked user and a backend outage alike.
+
+**Support.** The button opens `https://t.me/<SUPPORT.telegramUsername>`, `SUPPORT` in
+`apps/bot/src/texts.ts`: a temporary personal account, which #220 replaces by changing that one
+line. The three texts that send the user to support — the account card's last line, the blocked
+text and the account-taken text — end with `: /support`, which Telegram shows as a command.
+
+Log lines: the route writes `notification level set` at `info` with `notificationLevel` and
+`canceledJobs` — not `level`, which is pino's own key — and no Telegram id. The bot writes
+`/settings not read` and `notification level not set` at `warn` with the error's identity and the
+backend status, `the settings message was not edited, sending it anew` at `warn` with
+`method: 'editMessageText'` and the Telegram code, and `the settings edit failed in transport,
+sending nothing more` at `error` with the method and the update id; never the message text.
+
+## POST /users/notification-level
+
+Internal route, `Authorization: Bearer <INTERNAL_API_TOKEN>`, in the same plugin as
+`/users/start`. Request and response are validated by `@binarius/shared/users`.
+
+| Field            | Notes                                                  |
+| ---------------- | ------------------------------------------------------ |
+| `telegramUserId` | decimal string, the shared `telegramUserIdSchema`      |
+| `level`          | `all`, `reduced` or `off` (`NotificationLevel`)        |
+
+Answers: `200 { level }` — the stored level — `400 { error: 'validation', issues }`,
+`401 { error: 'unauthorized' }`, `404 { error: 'user_not_found' }` when no users row has this id
+(nothing is inserted). A retry is idempotent; `off` repeated cancels whatever became pending since.
+
 ## Texts
 
 Every text a Telegram user receives is Telegram HTML, sent with `parse_mode: 'HTML'`: `TEXTS` in
@@ -423,7 +504,8 @@ part of a template is the author's: a literal `&` or `<` there is written as an 
 defeats the type, as it defeats any.
 
 **Two seams.** `parse_mode` is set and `TelegramHtml` is unwrapped in two places only:
-`apps/bot/src/send.ts` (`replyHtml`, `replyWithVideoHtml`, `replyWithPhotoHtml`) and
+`apps/bot/src/send.ts` (`replyHtml`, `replyWithVideoHtml`, `replyWithPhotoHtml`,
+`editMessageTextHtml`) and
 `apps/backend/src/auth/link-notifier.ts`; a caller's extra can neither override `parse_mode` nor
 pass `entities`. ESLint (`eslint.config.js`, the Telegram block) forbids grammY's send methods by
 name everywhere else in `apps/bot/src` and `apps/backend/src/auth`, outside tests; it does not see a
@@ -431,7 +513,7 @@ method held in a variable. The list is `RAW_TELEGRAM_SEND_METHODS` in `eslint.co
 Bot API method that takes parsed text and every grammY alias of one, derived from
 `@grammyjs/types` 5.0.0 and grammy 1.46.0 by the two commands in the comment above it.
 
-**Labels are plain.** Button labels and the `/start` description (`LABELS`, `LINK_LABELS`) are not
+**Labels are plain.** Button labels and the command descriptions (`LABELS`, `LINK_LABELS`) are not
 parsed by Telegram, so they are plain strings and are never escaped: «✅ Подтвердить: <email>»
 shows the broker's email as it is, `&` included. The same holds for the bot's description and
 short description (`PROFILE`, [Bot profile](#bot-profile)): plain, line breaks kept as written,
@@ -462,7 +544,7 @@ is no check at send time.
 **Style** (the owner, 2026-10-02): «ты»; an emoji at the start of each meaningful line and in a
 header; a bold header line where a message has one (a warning that is itself the first line, as in
 `codeSentUnknown`, carries no header); a reward in a `<blockquote>`; every button label starts with
-an emoji, the `/start` description does not; short lines, one thought each. Texts promise no profit,
+an emoji, a command description (a `LABELS` key ending in `Command`) does not; short lines, one thought each. Texts promise no profit,
 no signal accuracy and no "model training", and the only number in them is the backend's token
 count, printed as it arrives. A multi-line text starts at column zero in the source, since
 indentation inside a template is part of the message; `telegramTextProblems` refuses a line that
@@ -485,10 +567,13 @@ plugin — and is rethrown into `bot.catch` unchanged rather than reported as on
 
 ## Command menu
 
-Telegram's «Меню» button and the hints shown when the user types `/` list two commands: `/start` —
-«Начать», and `/account` — «Аккаунт Binodex» ([bot-account.md](bot-account.md)). The list is
-`BOT_COMMANDS` in `apps/bot/src/commands.ts`, the only place it is written; the descriptions are
-`LABELS.startCommand` and `LABELS.accountCommand`. The next command is one more element there and
+Telegram's «Меню» button and the hints shown when the user types `/` list four commands, in this
+order: `/start` — «Начать», `/account` — «Аккаунт Binodex» ([bot-account.md](bot-account.md)),
+`/settings` — «Настройки уведомлений» and `/support` — «Поддержка»
+([Notification level and /support](#notification-level-and-support-120)). `/help` (#184) goes
+between `/settings` and `/support` (the owner, 2026-10-03). The list is `BOT_COMMANDS` in
+`apps/bot/src/commands.ts`, the only place it is written; the descriptions are the `LABELS` keys
+ending in `Command`. The next command is one more element there and
 one more literal in each of the two `setMyCommands` assertions of `lifecycle.test.ts`, which name
 the values on purpose.
 `commands.test.ts` holds the Bot API limits (a command of 1-32 lowercase letters, digits and
@@ -595,7 +680,10 @@ backend call and two Bot API calls each; the confirm button is one backend call 
 Bot API calls (the query answered, then the account card: the photo refused, the text, the unpin,
 the pin); the connect button is no backend call and two Bot API calls; a `my_chat_member` update
 is one backend call and no Bot API call (5 s); a text on the address step is one backend call and
-one Bot API call, as is `/account` (the read, then the status), and a text on the code step two
+one Bot API call, as are `/account` (the read, then the status) and `/settings` (the read, then the
+levels); a level pressed is one backend call and up to three Bot API calls (the query answered,
+the edit refused, the message sent anew), the selected level one Bot API call and `/support` one
+Bot API call and no backend call; and a text on the code step two
 backend calls (the login and the recheck) and up to four Bot API calls (the same card), 42 s. The
 longest is 5 000 + 5 × 8 000 = **45 s**, inside the **50 s** shutdown budget, inside the **55 s**
 `stop_grace_period` of the compose service. The usual path is far shorter — one upload and two
@@ -661,9 +749,9 @@ written only when a step really did run out of time.
 - **#114** — the Mini App login and callback pages in `apps/web` behind the `web_app` button; the
   `initData` check they rely on is the backend's (#113, binodex-oauth.md).
 - **#35** — end-to-end coverage against the mock broker.
-- **#120** — message frequency, opt-out and `/support`; it widens `deliverable()` and reuses
-  `cancelPendingNotificationJobs`.
-- **#123, #124, #202** — the senders that claim with `deliverable()` and call
-  `recordTelegramSendFailure` ([Blocking the bot](#blocking-the-bot-119)).
+- **#123, #124, #202** — the senders that claim with `acceptsMailing()`, record each mailing as a
+  `sent` job and call `recordTelegramSendFailure` ([Blocking the bot](#blocking-the-bot-119)).
+- **#220** — a permanent support account in place of the temporary `SUPPORT.telegramUsername`.
+- Per-kind toggles, a daily digest, quiet hours — not asked (#120).
 - **#185** — `/account`, the state of the Binodex link: [bot-account.md](bot-account.md).
-- **#184** — `/help`; it and #120's `/settings` and `/support` are more entries in the same menu.
+- **#184** — `/help`, between `/settings` and `/support` in the same menu.
