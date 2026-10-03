@@ -221,11 +221,11 @@ recorded as `unknown` and ignored. A trailing ack function is counted in `argc` 
 | --- | --- | --- |
 | `user.auth { id, token }` | an `auth` script; shared's `userAuthWireSchema` (`invalid`: `user.auth.error` with `Validation failed: "<field>" is required` / `is invalid`); the token belongs to `id`, compared as strings so `'1'` matches `1` (`auth_failed`: `Authentication failed: Invalid token`) | `user.auth.success` with one argument, `null`, then `user.data`, `common.assets_list` and the six observed extras below, in this order. A repeated `user.auth` is handled like the first: the burst comes again, a different user moves the socket to that user's events, and the subscriptions stay |
 | `price.subscribe { assets }` | authenticated (else nothing); shared's `priceSubscribeWireSchema`, 1..40 integers (else nothing, `invalid`) | the ids are added to the socket's subscriptions; `price.subscribed { assets }` echoes the request. An id without a pair is kept, and `pushPrices` skips it |
-| `user.{demo,real}.open_trade { asset_id, amount, action, duration }` | an `openTrade` script; authenticated (else nothing); shared's `socketOpenTradeRequestWireSchema` (`.fail [{ message, field }]`, same texts as the REST body); the store's checks, in the REST order (`.fail [{ message }]`, same texts as REST) | the trade opens in the event's mode. `user.<mode>.update_balance` goes to every socket of the user first, then `user.<mode>.open_trade.success` (the REST trade body, with `close_timestamp` and `symbol`) to the sender only |
+| `user.{demo,real}.open_trade { asset_id, amount, action, duration }` | authenticated (else nothing, and a queued `openTrade` script stays queued); an `openTrade` script; shared's `socketOpenTradeRequestWireSchema` (`.fail [{ message, field }]`, same texts as the REST body); the store's checks, in the REST order (`.fail [{ message }]`, same texts as REST) | the trade opens in the event's mode. `user.<mode>.update_balance` goes to every socket of the user first, then `user.<mode>.open_trade.success` (the REST trade body, with `close_timestamp` and `symbol`) to the sender only |
 
 A failed `user.auth` leaves the socket as it was: a socket that never authenticated stays
 unauthenticated, and one that had authenticated keeps its user. Nothing before `user.auth`
-reaches a socket, except a scripted `open_trade` answer ([Socket scripts](#socket-scripts)).
+reaches a socket.
 
 ### Server → client
 
@@ -267,6 +267,7 @@ without trades; docs/broker-socket.md → Observed live):
 | `user.auth.error`, `user.disconnect_token_expired`, `open_trade.success/.fail`, `update_balance`, `close_trade.success`, `common.assets_update` | not observed: from shared and broker-web (#8). The texts are the REST texts; a client classifies by the event, never by the text |
 | `update_balance` before `open_trade.success`, `close_trade.success` before `update_balance` | fixture rules (the store announces a change before the socket answers) |
 | ack callbacks never called, websocket only, no idle drop | fixture rules |
+| an `open_trade` accepted before a token revocation still opens after a `delayMs` | fixture rule: the command was accepted under a valid session, and the store does not check tokens. For a client this is the "outcome unknown" case: it hears `disconnect_token_expired`, and the order may still have opened |
 
 The live server closed the probe's connection after about 16.7 s (`transport close`). The fixture
 never drops a socket on its own. A test drops one with `socket.disconnect(...)` or a script.
@@ -274,8 +275,11 @@ never drops a socket on its own. A test drops one with `socket.disconnect(...)` 
 ### Socket scripts
 
 Each endpoint has its own one-shot FIFO queue, like `rest.failNext`. One `openTrade` queue serves
-both modes. A script is consumed when its event arrives, before auth and validation, as REST
-scripts are. So a scripted `fail` also reaches a socket that has not authenticated.
+both modes. An `auth` script is consumed before validation. An `openTrade` script is consumed
+after the auth check and before validation: an unauthenticated `open_trade` is recorded
+`unauthenticated`, gets no answer and leaves the script queued for the next authenticated one.
+REST scripts come before the bearer check instead: they model the edge, and a request carries its
+own credential.
 
 | Endpoint | Script | Effect |
 | --- | --- | --- |
@@ -285,7 +289,7 @@ scripts are. So a scripted `fail` also reaches a socket that has not authenticat
 | `openTrade` | `{ fail: [{ message, field? }] }` | `user.<mode>.open_trade.fail` with this array; nothing opens |
 | `openTrade` | `{ silent: true, open? }` | no answer. With `open: true` the command runs as without a script (schema, then the store), so the trade opens if the store accepts it and the sender still gets `update_balance`: a balance is not a confirmation |
 | `openTrade` | `{ disconnect: true, open? }` | the server drops the socket first. With `open: true` the command then runs, so the trade opens and `update_balance` reaches only the user's other sockets |
-| `openTrade` | `{ delayMs }` | waits, then handles the event as if it arrived only then: auth, schema and store are read after the delay. A sender that left meanwhile gets no answer, and the trade still opens |
+| `openTrade` | `{ delayMs }` | waits. The user is the one the socket was authenticated as when the event arrived; the schema and the store are read after the delay. The trade opens for that user even if the socket disconnected, the token was revoked or the socket re-authenticated as someone else meanwhile. The answer goes only to a socket still authenticated as that user. Only `close()` cancels the command. REST `{ delayMs }` differs: it reads the bearer after the delay |
 
 `open: true` is "the order opened, the answer was lost". A client learns the outcome only by
 reading `GET /v1/broker/user/trades`, which shows the trade, or `broker.trades.list(userId)` in a
