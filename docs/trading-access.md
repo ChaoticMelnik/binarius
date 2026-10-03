@@ -167,7 +167,7 @@ The bot's request timeout sits above it (#24).
 | `ambiguous_account` | no `brokerAccountId`, and the user has more than one active account |
 | `account_pending` | the chosen account is not confirmed yet, or the refresh found it so |
 | `account_revoked` | the chosen account is revoked, or the refresh found it so |
-| `user_blocked` | the user is blocked and there is no stored snapshot |
+| `user_blocked` | the user is blocked (seen by the route, or under the account lock when the token was taken) and there is no stored snapshot |
 | `refreshing` | no snapshot yet and the token needs an exchange, which is running; ask again |
 | `broker_unavailable` | no snapshot and the refresh failed: a broker error, an answer for another user, a value outside the stored domain, a missing token, or the budget ran out |
 
