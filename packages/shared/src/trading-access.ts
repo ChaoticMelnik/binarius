@@ -9,7 +9,7 @@ import { userStatusSchema } from './users';
 export const tradingAccessRequestSchema = z.object({ telegramUserId: telegramUserIdSchema });
 export type TradingAccessRequest = z.infer<typeof tradingAccessRequestSchema>;
 
-const COUNT = /^\d+$/;
+const isCount = (value: unknown): value is string => tokenCountSchema.safeParse(value).success;
 
 // The backend computes `available`; this refine only lets the bot's parser refuse a body whose
 // numbers disagree. Zod 4 runs an object-level refine even after a field failed, so it re-tests
@@ -22,9 +22,9 @@ export const tokenBalanceViewSchema = z
   })
   .refine(
     ({ balance, reserved, available }) =>
-      !COUNT.test(balance) ||
-      !COUNT.test(reserved) ||
-      !COUNT.test(available) ||
+      !isCount(balance) ||
+      !isCount(reserved) ||
+      !isCount(available) ||
       BigInt(balance) - BigInt(reserved) === BigInt(available),
     { error: 'available must equal balance - reserved' },
   );

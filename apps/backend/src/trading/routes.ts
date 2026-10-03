@@ -38,7 +38,6 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
   { db, internalApiToken, onIntentQueued },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
-  // after the hook: a route registered before it would not be covered
   registerTradingAccess(app, { db });
 
   app.post('/trading/intents', async (request, reply) => {

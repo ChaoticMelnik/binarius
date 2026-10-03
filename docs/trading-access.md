@@ -10,9 +10,9 @@ users row is not touched.
 
 | Part | File | What it holds |
 | --- | --- | --- |
-| Contract | `packages/shared/src/trading-access.ts` | request and response schemas, `safeParseTradingAccessRequest` / `safeParseTradingAccessResponse`; `tokenCountSchema` (`trading.ts`) is the one spelling of a token count on the wire |
+| Contract | `packages/shared/src/trading-access.ts` | request and response schemas, `safeParseTradingAccessRequest` / `safeParseTradingAccessResponse`; `tokenCountSchema` (`trading.ts`) is the one spelling of a non-negative token count on the wire; a positive count (`linkBonusGrantViewSchema.tokens`, `oauth.ts`) keeps its own pattern |
 | Read | `packages/db/src/token-balance-ops.ts` | `readTokenBalance` (one `select` of the users row) and the allowlisted projection `toTradingAccessView` |
-| Route | `apps/backend/src/trading/access.ts` | `registerTradingAccess`, called by the `tradingRoutes` plugin (`routes.ts`) after its bearer hook |
+| Route | `apps/backend/src/trading/access.ts` | `registerTradingAccess`, registered inside the `tradingRoutes` plugin (`routes.ts`), so its bearer hook covers it |
 | Tests | `token-balance-ops.db.test.ts`, `access.db.test.ts`, `trading-access.test.ts` | the cache against the ledger, concurrency, the HTTP outcomes, the parser |
 
 ## Sequence
@@ -89,16 +89,28 @@ the log line carries the error's name.
 
 ## Running it locally
 
-From a fresh volume. Only `backend` and the services it depends on are started, so no Telegram
-poller from the `bot` service runs. Nothing applies migrations when a container starts yet (#75):
+In a compose project of its own, on its own ports and volume, so it touches neither the
+`binarius` stack nor its `pgdata` (the dev database). Only `backend` and the services it depends
+on start, and both bot tokens are replaced with dummies: the backend polls `ADMIN_BOT_TOKEN`
+itself (the staff bot), and a real token here would compete with the deployment that owns it.
+With a dummy, that poller logs `the staff login bot stopped polling` and the backend stays up.
+Nothing applies migrations when a container starts yet (#75). Run from the repository root, with
+`.env` filled in:
 
 ```bash
-docker compose up --build --wait backend
-docker compose exec -T backend pnpm db:migrate
-INTERNAL_API_TOKEN="$(docker compose exec -T backend printenv INTERNAL_API_TOKEN)"
+dc() {
+  COMPOSE_PROJECT_NAME=binarius-trading-access \
+  POSTGRES_PORT=55432 REDIS_PORT=56379 BACKEND_PORT=53000 \
+  ADMIN_BOT_TOKEN=local-only-admin-token TELEGRAM_BOT_TOKEN=local-only-public-token \
+  docker compose "$@"
+}
+dc down -v   # a leftover volume from an earlier run would keep the users row
+dc up --build --wait backend
+dc exec -T backend pnpm db:migrate
+INTERNAL_API_TOKEN="$(dc exec -T backend printenv INTERNAL_API_TOKEN)"
 access() {
   printf 'Authorization: Bearer %s\n' "$INTERNAL_API_TOKEN" |
-  curl -s -w '\nHTTP %{http_code}\n' -X POST "127.0.0.1:${BACKEND_PORT:-3000}$1" \
+  curl -s -w '\nHTTP %{http_code}\n' -X POST "127.0.0.1:53000$1" \
     -H @- -H 'Content-Type: application/json' -d "$2"
 }
 access /trading/access '{"telegramUserId":"1"}'
@@ -106,9 +118,10 @@ access /trading/access '{"telegramUserId":"1"}'
 access /users/start '{"telegramUserId":"1","displayName":"Ada"}' >/dev/null   # what /start sends
 access /trading/access '{"telegramUserId":"1"}'
 # {"status":"active","tokens":{"balance":"0","reserved":"0","available":"0"}}  HTTP 200
+dc down -v   # removes this project's containers and its volume only
 ```
 
-`docker compose down -v` removes the stack and its volume afterwards.
+If 55432, 56379 or 53000 is taken, change it in `dc` (and 53000 in `access`).
 
 ## Boundaries
 
