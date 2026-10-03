@@ -10,6 +10,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 - `apps/trading-worker` — trading loop worker (Socket.IO client)
 - `packages/db` — Drizzle schema and transactional operations, shared by `apps/backend` and `apps/trading-worker`
 - `packages/shared` — shared types/contracts, consumed by all 4 apps
+- `packages/broker-rest` — the Binodex Broker REST client and the pairs catalog cache, shared by `apps/backend` and `apps/trading-worker`
 - `packages/mock-broker` — test-only Binodex Broker API fixture (REST and Socket.IO), for the broker clients' tests
 
 How a trade order travels from the bot to the worker (PostgreSQL outbox + BullMQ) is described in
@@ -21,11 +22,13 @@ those sessions are revoked, is in [docs/staff-login.md](docs/staff-login.md); wh
 broker answers, and which of it was observed on the live broker, is in
 [docs/mock-broker.md](docs/mock-broker.md); how a raw broker Socket.IO event becomes a typed
 domain event or a log-safe problem is in [docs/broker-socket.md](docs/broker-socket.md); what
-the worker's REST client sends to the broker and how it classifies answers is in
-[docs/broker-rest.md](docs/broker-rest.md); what `/account` shows about a user's Binodex links is
-in [docs/bot-account.md](docs/bot-account.md); how the worker turns candles into a direction, or
-into a reason for none, is in [docs/signal.md](docs/signal.md); how the backend answers a user's
-token balance is in [docs/trading-access.md](docs/trading-access.md).
+the broker REST client sends to the broker and how it classifies answers is in
+[docs/broker-rest.md](docs/broker-rest.md); how the backend caches the broker's pairs and serves
+them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md); what
+`/account` shows about a user's Binodex links is in [docs/bot-account.md](docs/bot-account.md);
+how the worker turns candles into a direction, or into a reason for none, is in
+[docs/signal.md](docs/signal.md); how the backend answers a user's token balance is in
+[docs/trading-access.md](docs/trading-access.md).
 
 ## Requirements
 
