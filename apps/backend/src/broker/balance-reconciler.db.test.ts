@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { pino } from 'pino';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import { BrokerAccountStatus, logOptions } from '@binarius/shared';
@@ -505,6 +505,20 @@ describe('tick', () => {
     expect(lines.join('\n')).not.toContain('insert into');
     expect(lines.join('\n')).not.toContain('Failing row');
     expect(await rowOf(next.accountId, own.db)).toBeDefined();
+  });
+
+  // a behavioural test would not see a second timer: running ??= hides the doubled ticks
+  it('arms one timer for a second start()', async () => {
+    const balance = reconciler(own.db, { intervalMs: 60_000 });
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      balance.start();
+      balance.start();
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+      await balance.stop();
+    }
   });
 
   it('runs on its timer without overlapping ticks, and stays stopped', async () => {

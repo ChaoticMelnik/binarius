@@ -43,10 +43,8 @@ const tokenAnswers = new Map<string, AccessTokenResult>();
 // registerTradingAccess call both live in the plugin, and a dependency buildApp gains later
 // (#138's `pairs`) does not reach this file. No case here asserts a 500 body or an unknown
 // route — those are buildApp's handlers (app.test.ts).
-beforeAll(async () => {
-  tmp = await createTempDatabase(baseUrl);
-  broker = await startMockBroker();
-  balance = createBalanceReconciler({
+const createReconciler = () =>
+  createBalanceReconciler({
     db: tmp.db,
     client: createBrokerRestClient({ baseUrl: broker.url }),
     accessToken: (accountId) =>
@@ -56,14 +54,24 @@ beforeAll(async () => {
     logger: Fastify({ logger: false }).log,
     config: { intervalMs: 60_000, maxPerMinute: 200 },
   });
-  app = Fastify();
-  await app.register(tradingRoutes, {
+
+async function buildAccessApp(reconciler: BalanceReconciler): Promise<FastifyInstance> {
+  const built = Fastify();
+  await built.register(tradingRoutes, {
     db: tmp.db,
     internalApiToken: TOKEN,
     onIntentQueued: () => {},
-    balance,
+    balance: reconciler,
   });
-  await app.ready();
+  await built.ready();
+  return built;
+}
+
+beforeAll(async () => {
+  tmp = await createTempDatabase(baseUrl);
+  broker = await startMockBroker();
+  balance = createReconciler();
+  app = await buildAccessApp(balance);
 });
 
 afterAll(async () => {
@@ -75,8 +83,13 @@ afterAll(async () => {
 
 // null, not undefined: an explicit undefined would fall back to the default parameter and the
 // "no header" case would have tested the happy path
-const post = (url: string, payload: unknown, authorization: string | null = `Bearer ${TOKEN}`) =>
-  app.inject({
+const post = (
+  url: string,
+  payload: unknown,
+  authorization: string | null = `Bearer ${TOKEN}`,
+  target: FastifyInstance = app,
+) =>
+  target.inject({
     method: 'POST',
     url,
     headers: {
@@ -316,20 +329,37 @@ describe('POST /trading/access → broker', () => {
     await tmp.db.execute(
       sql`update broker_accounts set access_token_expires_at = now() + interval '30 seconds' where id = ${user.accountId}`,
     );
-    broker.rest.clearJournal();
-    broker.rest.failNext('user', { hang: true });
+    // its own reconciler and app, so the hang it leaves is ended here and not seen by a later case
+    const own = createReconciler();
+    const ownApp = await buildAccessApp(own);
+    try {
+      expect(broker.rest.pendingHangs).toBe(0);
+      broker.rest.clearJournal();
+      broker.rest.failNext('user', { hang: true });
 
-    const started = Date.now();
-    const response = await access({ telegramUserId: user.telegramUserId });
-    expect(Date.now() - started).toBeLessThan(1_000);
-    if (withSnapshot) {
-      expect(response.json()).toMatchObject({ brokerUnavailable: null, broker: { fresh: false } });
-    } else {
-      expect(response.json()).toMatchObject({ broker: null, brokerUnavailable: 'refreshing' });
+      const started = Date.now();
+      const response = await post(
+        '/trading/access',
+        { telegramUserId: user.telegramUserId },
+        `Bearer ${TOKEN}`,
+        ownApp,
+      );
+      expect(Date.now() - started).toBeLessThan(1_000);
+      if (withSnapshot) {
+        expect(response.json()).toMatchObject({
+          brokerUnavailable: null,
+          broker: { fresh: false },
+        });
+      } else {
+        expect(response.json()).toMatchObject({ broker: null, brokerUnavailable: 'refreshing' });
+      }
+      // the background refresh went out and is the one hanging
+      await until(() => broker.rest.pendingHangs === 1, 'the background refresh');
+    } finally {
+      await ownApp.close();
+      await own.stop();
+      await until(() => broker.rest.pendingHangs === 0, 'the hang to end');
     }
-    // the background refresh went out and is the one hanging
-    await until(() => broker.rest.pendingHangs === 1, 'the background refresh');
-    await balance.refresh(user.accountId, { signal: AbortSignal.timeout(1) });
   });
 
   it('never calls the broker for a blocked user, and still shows what is stored', async () => {
