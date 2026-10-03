@@ -1,10 +1,12 @@
 import { openTradeFailWireSchema, type OpenTradeFailWire } from '@binarius/shared';
+import { isNonNegativeInteger } from './faults';
 
 export type MockSocketEndpoint = 'auth' | 'openTrade';
 
-// One scripted answer to the next event on an endpoint, consumed when the event arrives, before
-// auth and validation (as REST scripts are). The shapes exclude each other in the type and at
-// runtime (assertSocketScript), as MockScript does.
+// One scripted answer to the next event on an endpoint. An auth script is consumed before
+// validation; an openTrade script after the auth check (an unauthenticated event leaves it
+// queued), before validation. The shapes exclude each other in the type and at runtime
+// (assertSocketScript), as MockScript does.
 export type MockAuthScript =
   // user.auth.error with this text
   | { error: { message: string }; silent?: never; disconnect?: never }
@@ -21,7 +23,8 @@ export type MockOpenTradeScript =
   | ({ silent: true; open?: boolean } & Omit<NoOpenTradeFields, 'silent'>)
   // the server drops the socket first; open: true opens the trade after the drop
   | ({ disconnect: true; open?: boolean } & Omit<NoOpenTradeFields, 'disconnect'>)
-  // waits, then the event is handled as if it arrived only then
+  // waits; the user is the one authenticated when the event arrived, the schema and the store
+  // are read after the delay
   | ({ delayMs: number } & Omit<NoOpenTradeFields, 'delayMs'> & { open?: never });
 
 export type MockSocketScript<E extends MockSocketEndpoint> = E extends 'auth'
@@ -54,9 +57,6 @@ export function socketScriptKind(script: MockAuthScript | MockOpenTradeScript): 
   if (script.disconnect !== undefined) return { kind: 'disconnect', open };
   return { kind: 'silent', open };
 }
-
-const isNonNegativeInteger = (value: unknown) =>
-  typeof value === 'number' && Number.isInteger(value) && value >= 0;
 
 // a script the fixture cannot play as written would test something other than what it says
 export function assertSocketScript(endpoint: MockSocketEndpoint, script: unknown): void {

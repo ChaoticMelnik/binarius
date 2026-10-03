@@ -181,18 +181,22 @@ export function attachMockSocket(
   }
 
   // the unscripted path; reply: false runs the command and answers no one (a silent or
-  // disconnect script with open: true)
+  // disconnect script with open: true). userId is the user the socket was authenticated as when
+  // the command arrived: a delayed command still belongs to that user, and its answer goes only
+  // to a socket still logged in as that user, never into a session that re-authenticated as
+  // someone else.
   function runOpenTrade(
     connection: Connection,
+    userId: number,
     mode: TradeMode,
     payload: unknown,
     reply: boolean,
   ): MockSocketOutcome {
     const answer = (event: ModeScopedEvent, body: unknown) => {
-      if (reply) emitTo(connection.socket, modeEvent(mode, event), body);
+      if (reply && connection.userId === userId) {
+        emitTo(connection.socket, modeEvent(mode, event), body);
+      }
     };
-    const { userId } = connection;
-    if (userId === undefined) return MockSocketOutcome.Unauthenticated;
     const parsed = socketOpenTradeRequestWireSchema.safeParse(payload);
     if (!parsed.success) {
       const failure = schemaMessage(payload, parsed.error.issues, 'asset_id');
@@ -205,25 +209,28 @@ export function attachMockSocket(
     return MockSocketOutcome.Handled;
   }
 
+  // auth comes before the script: an unauthenticated command leaves the script queued
   function onOpenTrade(connection: Connection, mode: TradeMode, payload: unknown) {
+    const { userId } = connection;
+    if (userId === undefined) return MockSocketOutcome.Unauthenticated;
     const script = faults.shift('openTrade');
-    if (script === undefined) return runOpenTrade(connection, mode, payload, true);
+    if (script === undefined) return runOpenTrade(connection, userId, mode, payload, true);
     const played = socketScriptKind(script);
     switch (played.kind) {
       case 'fail':
         emitTo(connection.socket, modeEvent(mode, 'open_trade.fail'), played.failures);
         break;
       case 'silent':
-        if (played.open) runOpenTrade(connection, mode, payload, false);
+        if (played.open) runOpenTrade(connection, userId, mode, payload, false);
         break;
       case 'disconnect':
         connection.socket.disconnect(true);
-        if (played.open) runOpenTrade(connection, mode, payload, false);
+        if (played.open) runOpenTrade(connection, userId, mode, payload, false);
         break;
       case 'delay': {
         const timer = setTimeout(() => {
           delayed.delete(timer);
-          runOpenTrade(connection, mode, payload, true);
+          runOpenTrade(connection, userId, mode, payload, true);
         }, played.delayMs);
         delayed.add(timer);
         break;

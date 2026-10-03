@@ -21,6 +21,7 @@ import { MockSocketPayload } from './encoding';
 import { FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
 import { startMockBroker, type MockBroker } from './server';
 import { MockSocketOutcome, OBSERVED_EXTRA_EVENTS } from './socket';
+import type { MockOpenTradeScript } from './socket-faults';
 
 const TOKEN = 'access-token-of-user-1';
 const OTHER_TOKEN = 'access-token-of-user-2';
@@ -410,13 +411,31 @@ describe('open_trade scripts', () => {
     expect(broker.socket.journal.at(-1)?.outcome).toBe(MockSocketOutcome.Scripted);
   });
 
-  it('plays before auth too, as REST scripts do', async () => {
-    broker.socket.failNext('openTrade', { fail: [{ message: 'scripted' }] });
+  it.each<['fail' | 'delayMs', MockOpenTradeScript]>([
+    ['fail', { fail: [{ message: 'scripted' }] }],
+    ['delayMs', { delayMs: 50 }],
+  ])('an unauthenticated open_trade consumes no %s script', async (kind, script) => {
+    broker.socket.failNext('openTrade', script);
     const client = await connectClient();
     client.socket.emit(ev('demo', 'open_trade'), tradeCommand());
-    expect(await client.waitFor(ev('demo', 'open_trade.fail'))).toEqual([
-      [{ message: 'scripted' }],
-    ]);
+    await client.expectQuiet(ev('demo', 'open_trade.fail'));
+    await client.expectQuiet(ev('demo', 'open_trade.success'));
+    expect(broker.socket.pendingDelays).toBe(0);
+    expect(broker.trades.list(1)).toEqual([]);
+    expect(broker.socket.journal.at(-1)?.outcome).toBe(MockSocketOutcome.Unauthenticated);
+
+    client.socket.emit(BrokerSocketEvent.UserAuth, { id: 1, token: TOKEN });
+    await client.waitFor(BURST_END);
+    client.socket.emit(ev('demo', 'open_trade'), tradeCommand());
+    if (kind === 'fail') {
+      expect(await client.waitFor(ev('demo', 'open_trade.fail'))).toEqual([
+        [{ message: 'scripted' }],
+      ]);
+    } else {
+      await vi.waitFor(() => expect(broker.socket.pendingDelays).toBe(1), { interval: 5 });
+      await client.waitFor(ev('demo', 'open_trade.success'));
+    }
+    expect(broker.socket.journal.at(-1)?.outcome).toBe(MockSocketOutcome.Scripted);
   });
 
   it.each([false, true])('silent with open: %s answers nothing', async (open) => {
@@ -463,15 +482,39 @@ describe('open_trade scripts', () => {
     expect(broker.socket.journal.at(-1)?.outcome).toBe(MockSocketOutcome.Scripted);
   });
 
-  it('delayMs still opens the trade after the sender left', async () => {
-    broker.socket.failNext('openTrade', { delayMs: 50 });
+  it.each(['disconnect', 'revokeToken'] as const)(
+    'delayMs still opens the trade after the sender left (%s)',
+    async (trigger) => {
+      broker.socket.failNext('openTrade', { delayMs: 50 });
+      const client = await authed();
+      client.socket.emit(ev('demo', 'open_trade'), tradeCommand());
+      await vi.waitFor(() => expect(broker.socket.pendingDelays).toBe(1), { interval: 5 });
+      if (trigger === 'disconnect') {
+        client.socket.disconnect();
+      } else {
+        broker.users.revokeToken(TOKEN);
+        await client.waitFor(BrokerSocketEvent.UserDisconnectTokenExpired);
+        await client.disconnected;
+      }
+      await vi.waitFor(() => expect(broker.trades.list(1)).toHaveLength(1), { interval: 5 });
+      expect(broker.socket.pendingDelays).toBe(0);
+      expect(broker.state.listenerErrors).toEqual([]);
+    },
+  );
+
+  it('delayMs opens for the user who sent it when the socket re-authenticates as another', async () => {
+    broker.socket.failNext('openTrade', { delayMs: 300 });
     const client = await authed();
     client.socket.emit(ev('demo', 'open_trade'), tradeCommand());
     await vi.waitFor(() => expect(broker.socket.pendingDelays).toBe(1), { interval: 5 });
-    client.socket.disconnect();
-    await vi.waitFor(() => expect(broker.trades.list(1)).toHaveLength(1), { interval: 5 });
-    expect(broker.socket.pendingDelays).toBe(0);
-    expect(broker.state.listenerErrors).toEqual([]);
+    client.socket.emit(BrokerSocketEvent.UserAuth, { id: 2, token: OTHER_TOKEN });
+    await client.waitFor(BrokerSocketEvent.UserAuthSuccess, 2);
+    await vi.waitFor(() => expect(broker.trades.list(1)).toHaveLength(1), {
+      timeout: 1000,
+      interval: 5,
+    });
+    expect(broker.trades.list(2)).toEqual([]);
+    await client.expectQuiet(ev('demo', 'open_trade.success'));
   });
 
   it('is one queue for both modes', async () => {

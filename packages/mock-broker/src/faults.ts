@@ -40,7 +40,7 @@ export interface MockRequestRecord {
   scripted: boolean;
 }
 
-const isNonNegativeInteger = (value: unknown) =>
+export const isNonNegativeInteger = (value: unknown) =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0;
 
 const DISCRIMINATORS = ['status', 'delayMs', 'hang'] as const;
