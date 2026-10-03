@@ -96,9 +96,9 @@ omits it), `type`, `digits`, `payout`, `maxPayout`, `minTimeframe`, `maxTimefram
 - A broker that is down at start does not stop the process: the warm-up logs its `warn`,
   `warmed` is `false`, and the route answers 503 until a tick succeeds.
 - Shutdown phase 1 calls `stop()` beside `app.close()`. A SIGTERM during the warm-up aborts it,
-  and the start-up after it (`start()`, `listen()`, the publisher and the staff bot) is skipped
-  because `shutdown()` has already set `shuttingDown`. A SIGTERM during the `listen()` call
-  itself is not covered; that window predates the catalog.
+  and the start-up after it (`start()`, `listen()`, the publisher, the balance reconciler and the
+  staff bot) is skipped because `shutdown()` has already set `shuttingDown`. The start-ups after
+  `listen()` re-check `shuttingDown`, so a SIGTERM during `listen()` skips them too.
 
 ## Logging
 
