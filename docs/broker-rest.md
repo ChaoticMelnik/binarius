@@ -112,13 +112,11 @@ checked where that process's chain lives:
 - worker: `BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` (35 000) in
   `apps/trading-worker/src/intents/config.ts`. A job that makes a REST call without a deadline of
   its own still finishes inside the drain. `config.test.ts` asserts it.
-- backend: `BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` (10 000) in
-  `apps/backend/src/timing.ts`. The pairs catalog's warm-up or tick ends inside phase 1 even when
-  `stop()` did not cut it. `timing.test.ts` asserts it.
 - the pairs catalog: `BROKER_REST_TIMEOUT_MS < MIN_BROKER_PAIRS_TTL_MS` in
   `packages/broker-rest/src/pairs-catalog.ts` (docs/pairs-catalog.md).
 
-Each `*_CHAIN_HOLDS` throws at import when its link breaks.
+Each `*_CHAIN_HOLDS` throws at import when its link breaks. The backend waits on no REST call
+during shutdown: its one caller, the pairs catalog, is aborted by `stop()` in phase 1.
 
 It is deliberately not ordered against `SUBMIT_ACK_TIMEOUT_MS` (500–30 000, env). The processor
 passes its own signal, and a request ends at whichever comes first: the caller's signal or the

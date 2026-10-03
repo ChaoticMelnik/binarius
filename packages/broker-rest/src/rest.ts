@@ -22,8 +22,9 @@ import {
 } from '@binarius/shared';
 
 // One REST call's deadline when the caller passes none. Every process that waits on a call in a
-// shutdown phase orders it below that phase: apps/trading-worker/src/intents/config.ts and
-// apps/backend/src/timing.ts; the pairs catalog orders it below its TTL (pairs-catalog.ts).
+// shutdown phase orders it below that phase: apps/trading-worker/src/intents/config.ts; the pairs
+// catalog orders it below its TTL (pairs-catalog.ts) and is aborted, not awaited, at the
+// backend's shutdown.
 export const BROKER_REST_TIMEOUT_MS = 5_000;
 
 // free text from the broker is logged, never persisted, and only this much of it
