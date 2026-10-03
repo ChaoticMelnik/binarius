@@ -21,6 +21,7 @@ import {
   inList,
   literal,
   money,
+  nonNegativeNumeric,
   nullableFiniteFloat,
   nullablePositiveNumeric,
   positiveNumeric,
@@ -81,7 +82,7 @@ export const brokerTrades = pgTable(
     // excluded. A test asserts a negative profit is accepted, to keep this from being
     // "tightened" back to > 0 without the suite noticing.
     check('broker_trades_profit_check', sql`${t.profit} is null or ${t.profit} <> 'NaN'::numeric`),
-    check('broker_trades_payout_check', sql`${t.payout} >= 0 and ${t.payout} <> 'NaN'::numeric`),
+    nonNegativeNumeric('broker_trades_payout_check', t.payout),
     finiteFloat('broker_trades_open_price_check', t.openPrice),
     nullableFiniteFloat('broker_trades_close_price_check', t.closePrice),
     check('broker_trades_open_timestamp_check', sql`${t.openTimestampMs} > 0`),

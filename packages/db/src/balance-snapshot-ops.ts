@@ -1,0 +1,331 @@
+import { and, eq, sql, type SQL } from 'drizzle-orm';
+import { BrokerAccountStatus, TradeMode, UserStatus, type BrokerUser } from '@binarius/shared';
+import type { Db } from './client';
+import { MONEY_INTEGER_DIGITS, MONEY_SCALE, sqlLiteralList } from './schema/columns';
+import { brokerAccounts } from './schema/broker-accounts';
+import {
+  BalanceRefreshError,
+  LEVEL_RANK_INTEGER_DIGITS,
+  LEVEL_RANK_SCALE,
+  brokerBalanceSnapshots,
+} from './schema/broker-balance-snapshots';
+import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
+import { users } from './schema/users';
+import { millisecondsAgo } from './trade-intent-ops';
+
+// The only writers of broker_balance_snapshots (#235, part 1 of #137).
+//
+// Every operation takes Db, not a transaction, and is one autocommit statement: the snapshot row
+// is never locked while users, broker_accounts or trade_intents are (lock order users →
+// broker_accounts → trade_intents is unaffected). Times are the database clock at the statement.
+//
+// Contract for the writers that come later. The REST refresh (#137) and the socket's user.data
+// (#99/#101) both write through upsertBalanceSnapshot; user.data passes the modes it carries in
+// `eventAt`. A user.<mode>.update_balance event updates only that mode's three amounts and
+// <mode>_event_at on an existing row, and inserts nothing (it carries neither the other mode nor
+// min_trade_amount): whoever adds it starts a session with a REST snapshot first. Each writer
+// checks that the broker's user id is the account's broker_user_id before it writes.
+
+export type BalanceSnapshotWrite = { written: true } | { written: false; field: string };
+
+const MONEY_SHAPE = new RegExp(`^\\d{1,${MONEY_INTEGER_DIGITS}}(\\.\\d{1,${MONEY_SCALE}})?$`);
+const LEVEL_RANK_SHAPE = new RegExp(
+  `^\\d{1,${LEVEL_RANK_INTEGER_DIGITS}}(\\.\\d{1,${LEVEL_RANK_SCALE}})?$`,
+);
+
+// The wire schemas accept a sign and any number of digits, because broker_trades shares them and
+// signs a profit. The columns here would round extra fraction digits silently, fail on extra
+// integer digits and refuse a sign, so a value outside them is refused before the statement and
+// named by its path. The rank is checked by its decimal form: a range check on the number lets
+// 9999.99995 round up to an overflow and 1e-7 round down to 0.
+export function balanceSnapshotOutOfDomain(user: BrokerUser): string | undefined {
+  const amounts: [string, string][] = [
+    ['real.available', user.real.available],
+    ['real.held', user.real.held],
+    ['real.total', user.real.total],
+    ['demo.available', user.demo.available],
+    ['demo.held', user.demo.held],
+    ['demo.total', user.demo.total],
+    ['minTradeAmount', user.minTradeAmount],
+  ];
+  for (const [field, value] of amounts) {
+    if (!MONEY_SHAPE.test(value)) return field;
+  }
+  if (!LEVEL_RANK_SHAPE.test(String(user.level.rank))) return 'level.rank';
+  return undefined;
+}
+
+export interface UpsertBalanceSnapshotInput {
+  brokerAccountId: string;
+  user: BrokerUser;
+  // the bot asked for this account: last_requested_at moves to now(), otherwise it is kept
+  requested: boolean;
+  // the modes whose *_event_at moves to now() (the socket's user.data); the REST refresh passes none
+  eventAt?: readonly TradeMode[];
+}
+
+export async function upsertBalanceSnapshot(
+  db: Db,
+  { brokerAccountId, user, requested, eventAt = [] }: UpsertBalanceSnapshotInput,
+): Promise<BalanceSnapshotWrite> {
+  const field = balanceSnapshotOutOfDomain(user);
+  if (field !== undefined) return { written: false, field };
+
+  const t = brokerBalanceSnapshots;
+  const now = sql`now()`;
+  const realEvent = eventAt.includes(TradeMode.Real);
+  const demoEvent = eventAt.includes(TradeMode.Demo);
+  await db
+    .insert(t)
+    .values({
+      brokerAccountId,
+      realAvailable: user.real.available,
+      realHeld: user.real.held,
+      realTotal: user.real.total,
+      demoAvailable: user.demo.available,
+      demoHeld: user.demo.held,
+      demoTotal: user.demo.total,
+      minTradeAmount: user.minTradeAmount,
+      levelCode: user.level.code,
+      levelRank: user.level.rank,
+      restObservedAt: now,
+      realEventAt: realEvent ? now : null,
+      demoEventAt: demoEvent ? now : null,
+      lastRequestedAt: requested ? now : null,
+    })
+    .onConflictDoUpdate({
+      target: t.brokerAccountId,
+      set: {
+        realAvailable: sql`excluded.real_available`,
+        realHeld: sql`excluded.real_held`,
+        realTotal: sql`excluded.real_total`,
+        demoAvailable: sql`excluded.demo_available`,
+        demoHeld: sql`excluded.demo_held`,
+        demoTotal: sql`excluded.demo_total`,
+        minTradeAmount: sql`excluded.min_trade_amount`,
+        levelCode: sql`excluded.level_code`,
+        levelRank: sql`excluded.level_rank`,
+        restObservedAt: now,
+        ...(realEvent ? { realEventAt: now } : {}),
+        ...(demoEvent ? { demoEventAt: now } : {}),
+        ...(requested ? { lastRequestedAt: now } : {}),
+        lastRefreshError: null,
+        lastRefreshFailedAt: null,
+        updatedAt: now,
+      },
+    });
+  return { written: true };
+}
+
+// false when the account has no snapshot yet: a failure alone does not create one
+export async function recordBalanceRefreshFailure(
+  db: Db,
+  brokerAccountId: string,
+  error: BalanceRefreshError,
+): Promise<boolean> {
+  const rows = await db
+    .update(brokerBalanceSnapshots)
+    .set({ lastRefreshError: error, lastRefreshFailedAt: sql`now()`, updatedAt: sql`now()` })
+    .where(eq(brokerBalanceSnapshots.brokerAccountId, brokerAccountId))
+    .returning({ id: brokerBalanceSnapshots.brokerAccountId });
+  return rows.length > 0;
+}
+
+// false when the account has no snapshot yet; the refresh that follows sets it on insert
+export async function touchBalanceRequested(db: Db, brokerAccountId: string): Promise<boolean> {
+  const rows = await db
+    .update(brokerBalanceSnapshots)
+    .set({ lastRequestedAt: sql`now()`, updatedAt: sql`now()` })
+    .where(eq(brokerBalanceSnapshots.brokerAccountId, brokerAccountId))
+    .returning({ id: brokerBalanceSnapshots.brokerAccountId });
+  return rows.length > 0;
+}
+
+// Whole seconds since a timestamp by the database clock; a future timestamp (clock step) is 0.
+// NULL stays NULL: greatest(0, NULL) would be 0, a missing time read as a fresh one.
+const ageSec = (at: SQL): SQL<number | null> =>
+  sql<
+    number | null
+  >`case when ${at} is null then null else greatest(0, floor(extract(epoch from now() - ${at})))::int end`;
+
+// greatest() skips NULLs, so this is NULL only while neither mode has seen an event
+const newestEventAt = sql`greatest(${brokerBalanceSnapshots.realEventAt}, ${brokerBalanceSnapshots.demoEventAt})`;
+
+export interface BalanceSnapshotRead {
+  real: BrokerUser['real'];
+  demo: BrokerUser['demo'];
+  minTradeAmount: BrokerUser['minTradeAmount'];
+  level: BrokerUser['level'];
+  restSnapshotAgeSec: number;
+  // NULL until a socket writer (#99/#101) has recorded an event for either mode
+  balanceEventAgeSec: number | null;
+  lastRefreshError: BalanceRefreshError | null;
+}
+
+export async function readBalanceSnapshot(
+  db: Db,
+  brokerAccountId: string,
+): Promise<BalanceSnapshotRead | undefined> {
+  const t = brokerBalanceSnapshots;
+  const [row] = await db
+    .select({
+      realAvailable: t.realAvailable,
+      realHeld: t.realHeld,
+      realTotal: t.realTotal,
+      demoAvailable: t.demoAvailable,
+      demoHeld: t.demoHeld,
+      demoTotal: t.demoTotal,
+      minTradeAmount: t.minTradeAmount,
+      levelCode: t.levelCode,
+      levelRank: t.levelRank,
+      restSnapshotAgeSec: ageSec(sql`${t.restObservedAt}`),
+      balanceEventAgeSec: ageSec(newestEventAt),
+      lastRefreshError: t.lastRefreshError,
+    })
+    .from(t)
+    .where(eq(t.brokerAccountId, brokerAccountId));
+  if (row === undefined) return undefined;
+  const { restSnapshotAgeSec } = row;
+  // unreachable: rest_observed_at is NOT NULL
+  if (restSnapshotAgeSec === null) throw new Error('snapshot without rest_observed_at');
+  return {
+    real: { available: row.realAvailable, held: row.realHeld, total: row.realTotal },
+    demo: { available: row.demoAvailable, held: row.demoHeld, total: row.demoTotal },
+    minTradeAmount: row.minTradeAmount,
+    level: { code: row.levelCode, rank: row.levelRank },
+    restSnapshotAgeSec,
+    balanceEventAgeSec: row.balanceEventAgeSec,
+    lastRefreshError: row.lastRefreshError,
+  };
+}
+
+// "An account in work": an active account of an active user with a non-terminal intent, or one
+// the bot asked about within the window. The intent predicate is trade_intents_active_account_idx's
+// own, so the EXISTS can use that index.
+const inWork = (watchWindowMs: number): SQL => sql`(
+  exists (
+    select 1 from ${tradeIntents}
+     where ${tradeIntents.brokerAccountId} = ${brokerAccounts.id}
+       and ${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})
+  )
+  or ${brokerBalanceSnapshots.lastRequestedAt} > ${millisecondsAgo(watchWindowMs)}
+)`;
+
+const activeAccountOfActiveUser = and(
+  eq(brokerAccounts.status, BrokerAccountStatus.Active),
+  eq(users.status, UserStatus.Active),
+);
+
+export interface BalanceRefreshCandidatesOptions {
+  watchWindowMs: number;
+  // only accounts whose access token outlives now() + this: the background refresh never needs
+  // a token exchange (the refresh itself still refuses one under the row lock, #137)
+  accessSkewMs: number;
+  limit: number;
+}
+
+// Never-observed accounts first, then the oldest snapshots.
+export async function listBalanceRefreshCandidates(
+  db: Db,
+  { watchWindowMs, accessSkewMs, limit }: BalanceRefreshCandidatesOptions,
+): Promise<string[]> {
+  const rows = await db
+    .select({ id: brokerAccounts.id })
+    .from(brokerAccounts)
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .leftJoin(brokerBalanceSnapshots, eq(brokerBalanceSnapshots.brokerAccountId, brokerAccounts.id))
+    .where(
+      and(
+        activeAccountOfActiveUser,
+        sql`${brokerAccounts.accessTokenExpiresAt} > now() + (${accessSkewMs}::int * interval '1 millisecond')`,
+        inWork(watchWindowMs),
+      ),
+    )
+    .orderBy(sql`${brokerBalanceSnapshots.restObservedAt} asc nulls first`, brokerAccounts.id)
+    .limit(limit);
+  return rows.map((row) => row.id);
+}
+
+export interface WatchedBalancesSummary {
+  watched: number;
+  withoutSnapshot: number;
+  // the stalest snapshot among the watched, by its newest observation (REST or event); NULL
+  // when none of them has a snapshot
+  oldestAgeSec: number | null;
+}
+
+// Over every account in work, whatever its token: one whose token needs an exchange is not
+// refreshed in the background, and this is where its age shows.
+export async function summarizeWatchedBalances(
+  db: Db,
+  { watchWindowMs }: { watchWindowMs: number },
+): Promise<WatchedBalancesSummary> {
+  const t = brokerBalanceSnapshots;
+  const [row] = await db
+    .select({
+      watched: sql<number>`count(*)::int`,
+      withoutSnapshot: sql<number>`(count(*) - count(${t.brokerAccountId}))::int`,
+      oldestAgeSec: sql<
+        number | null
+      >`max(${ageSec(sql`greatest(${t.restObservedAt}, ${newestEventAt})`)})`,
+    })
+    .from(brokerAccounts)
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .leftJoin(t, eq(t.brokerAccountId, brokerAccounts.id))
+    .where(and(activeAccountOfActiveUser, inWork(watchWindowMs)));
+  return row ?? { watched: 0, withoutSnapshot: 0, oldestAgeSec: null };
+}
+
+export interface BalanceAccount {
+  id: string;
+  status: BrokerAccountStatus;
+  brokerUserId: string;
+  accessTokenExpiresAt: Date;
+  userStatus: UserStatus;
+}
+
+export type BalanceAccountResolution =
+  | { kind: 'account'; account: BalanceAccount }
+  | { kind: 'no_user' }
+  // no explicit id and no active account
+  | { kind: 'no_account' }
+  // no explicit id and more than one active account
+  | { kind: 'ambiguous' }
+  // the explicit id is not an account of this user
+  | { kind: 'not_found' };
+
+// Which account a balance read is about. Without an id, the user's only active account; with
+// one, that account whatever its status, so the caller can say it is pending or revoked.
+export async function resolveBalanceAccount(
+  db: Db,
+  { telegramUserId, brokerAccountId }: { telegramUserId: bigint; brokerAccountId?: string },
+): Promise<BalanceAccountResolution> {
+  const accountFilter =
+    brokerAccountId === undefined
+      ? eq(brokerAccounts.status, BrokerAccountStatus.Active)
+      : eq(brokerAccounts.id, brokerAccountId);
+  const rows = await db
+    .select({
+      userStatus: users.status,
+      id: brokerAccounts.id,
+      status: brokerAccounts.status,
+      brokerUserId: brokerAccounts.brokerUserId,
+      accessTokenExpiresAt: brokerAccounts.accessTokenExpiresAt,
+    })
+    .from(users)
+    .leftJoin(brokerAccounts, and(eq(brokerAccounts.userId, users.id), accountFilter))
+    .where(eq(users.telegramUserId, telegramUserId))
+    .orderBy(brokerAccounts.id)
+    .limit(2);
+  const [first, second] = rows;
+  if (first === undefined) return { kind: 'no_user' };
+  if (second !== undefined) return { kind: 'ambiguous' };
+  const { id, status, brokerUserId, accessTokenExpiresAt, userStatus } = first;
+  if (id === null || status === null || brokerUserId === null || accessTokenExpiresAt === null) {
+    return { kind: brokerAccountId === undefined ? 'no_account' : 'not_found' };
+  }
+  return {
+    kind: 'account',
+    account: { id, status, brokerUserId, accessTokenExpiresAt, userStatus },
+  };
+}
