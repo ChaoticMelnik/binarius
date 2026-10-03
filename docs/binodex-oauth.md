@@ -471,8 +471,11 @@ warn line. The first live email login after a deploy is what checks it.
 
 ## Refresh
 
-`ensureFreshAccessToken(accountId)` runs the whole decision inside one transaction holding the
-account row, which makes it single-flight per account:
+`ensureFreshAccessToken(accountId, { mayRefresh? })` runs the whole decision inside one
+transaction holding the account row, which makes it single-flight per account. Its callers are
+the broker balance refresh (`apps/backend/src/broker/balance-reconciler.ts`): `POST
+/trading/access` with the default `mayRefresh: true`, and the background tick with
+`mayRefresh: false`.
 
 | Step                                                        | Outcome                                                                                                           |
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -483,8 +486,16 @@ account row, which makes it single-flight per account:
 | ciphertext fails to decrypt under its own key id            | revoke `storage_inconsistent`                                                                                     |
 | stored hash ≠ hash of the stored ciphertext                 | revoke `storage_inconsistent`                                                                                     |
 | access token still valid (60 s skew)                        | return it; a legacy row missing its hash gets one here, and only the hash                                         |
+| `mayRefresh: false`                                         | `refresh_needed`: nothing exchanged and nothing revoked, the 90-day rule below included                           |
 | `coalesce(token_rotated_at, created_at)` older than 90 days | revoke `refresh_expired`, without asking the broker                                                               |
 | otherwise                                                   | exactly one refresh exchange                                                                                      |
+
+**A timer never exchanges a token.** A failed exchange revokes the account, and the background
+balance tick runs for accounts nobody is using at that moment. It would revoke them during a
+broker outage. So the tick passes `mayRefresh: false`, and the decision is made here, under the row
+lock, with the same clock and comparison as the exchange (`token-service.db.test.ts`, including
+a process clock ahead of the database's). Its SQL selection of accounts with a valid token is an
+optimisation, not the guarantee.
 
 A row encrypted under another key id is left strictly alone. During a key rollout both the old
 and the new process are running, and a process holding the old key would otherwise see every

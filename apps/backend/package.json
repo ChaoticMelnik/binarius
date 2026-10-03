@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "staff": "tsx src/cli/staff.ts"
+    "staff": "tsx src/cli/staff.ts",
+    "rate-limit-probe": "tsx src/cli/rate-limit-probe.ts"
   },
   "dependencies": {
     "@binarius/broker-rest": "workspace:*",

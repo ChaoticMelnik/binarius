@@ -158,7 +158,7 @@ Fixed constants and why they relate the way they do: `apps/trading-worker/src/in
 - **#17** owns the remaining state-machine rules; **#15/#16/#21** the demo/real eligibility rules
   (the creation transaction only checks the user and account flags that exist today). #15 is
   split into #136 (the token balance, [trading-access.md](trading-access.md)), #137 (the broker
-  balance snapshot) and #138 (the pair catalog).
+  balance snapshot, [broker-balance.md](broker-balance.md)) and #138 (the pair catalog).
 - **#25 / #29**: the bot tracks and notifies by `intent.id`. `GET /trading/intents/:id` is the
   status source; a notification dedupe key should be derived from the intent id and status.
   The internal API is fully trusted: the read is not scoped to a user, because the only caller
