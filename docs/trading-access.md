@@ -1,10 +1,11 @@
-# Trading access — the token balance
+# Trading access — the token balance and the broker balance
 
-`POST /trading/access` (#136) tells the bot what a user may trade with right now. Issue #15 is
-split in three: #136 answers the token side (this document), #137 adds the broker balance
-snapshot and its age to the same response, #138 serves the pair catalog as its own
-`GET /trading/pairs`. The route only reads: nothing is reserved, credited or refreshed, and the
-users row is not touched.
+`POST /trading/access` tells the bot what a user may trade with right now. Issue #15 is split in
+three: #136 answers the token side, #137 adds the broker balance snapshot and its ages to the
+same response (the `broker` section below, [broker-balance.md](broker-balance.md) for the
+snapshot itself), and #138 serves the pair catalog as its own `GET /trading/pairs`. The token
+side only reads: nothing is reserved or credited, and the users row is not touched. The broker
+side may refresh the snapshot.
 
 ## Components
 
@@ -12,15 +13,18 @@ users row is not touched.
 | --- | --- | --- |
 | Contract | `packages/shared/src/trading-access.ts` | request and response schemas, `safeParseTradingAccessRequest` / `safeParseTradingAccessResponse`; `tokenCountSchema` (`trading.ts`) is the one spelling of a non-negative token count on the wire; a positive count (`linkBonusGrantViewSchema.tokens`, `oauth.ts`) keeps its own pattern |
 | Read | `packages/db/src/token-balance-ops.ts` | `readTokenBalance` (one `select` of the users row) and the allowlisted projection `toTradingAccessView` |
-| Route | `apps/backend/src/trading/access.ts` | `registerTradingAccess`, registered inside the `tradingRoutes` plugin (`routes.ts`), so its bearer hook covers it |
-| Tests | `token-balance-ops.db.test.ts`, `access.db.test.ts`, `trading-access.test.ts` | the cache against the ledger, concurrency, the HTTP outcomes, the parser |
+| Route | `apps/backend/src/trading/access.ts` | `registerTradingAccess`, registered inside the `tradingRoutes` plugin (`routes.ts`), so its bearer hook covers it; the broker section through `TradingRoutesDeps.balance` |
+| Broker contract | `packages/shared/src/broker-balance.ts` | `brokerBalanceViewSchema`, `BrokerBalanceUnavailableReason`, `TRADING_ACCESS_BUDGET_MS` |
+| Tests | `token-balance-ops.db.test.ts`, `access.db.test.ts`, `trading-access.test.ts`, `broker-balance.test.ts` | the cache against the ledger, concurrency, the HTTP outcomes against the mock broker, the parsers |
 
 ## Sequence
 
 ```text
-bot  → POST /trading/access { telegramUserId }        (Authorization: Bearer INTERNAL_API_TOKEN)
+bot  → POST /trading/access { telegramUserId, brokerAccountId? }   (Authorization: Bearer INTERNAL_API_TOKEN)
 back → SELECT status, token_balance, token_reserved FROM users WHERE telegram_user_id = $1
-back → 200 { status, tokens: { balance, reserved, available } }   or   404 { error: 'user_not_found' }
+back → the account and its snapshot; at most one GET /v1/broker/user (Broker balance below)
+back → 200 { status, tokens: { balance, reserved, available }, broker, brokerUnavailable }
+       or 404 { error: 'user_not_found' } / 404 { error: 'broker_account_not_found' }
 ```
 
 The bot's display and its `BackendClient` method are #24's.
@@ -30,6 +34,7 @@ The bot's display and its `BackendClient` method are #24's.
 | Field | Type | Rule |
 | --- | --- | --- |
 | `telegramUserId` | string | `telegramUserIdSchema`: a positive integer that fits int8 |
+| `brokerAccountId` | uuid, optional | which of the user's accounts the broker section is about; without it, the user's only active account |
 
 ## Response (200)
 
@@ -39,6 +44,8 @@ The bot's display and its `BackendClient` method are #24's.
 | `tokens.balance` | unsigned decimal string | `users.token_balance` |
 | `tokens.reserved` | unsigned decimal string | `users.token_reserved`: tokens held by intents not yet settled or released |
 | `tokens.available` | unsigned decimal string | `balance - reserved`, computed in `bigint` from the same row |
+| `broker` | object or null | the broker balance snapshot (below); null exactly when `brokerUnavailable` is set |
+| `brokerUnavailable` | string or null | why `broker` is null |
 
 The response schema refuses a body where `available` is not `balance - reserved`. The backend never
 sends one, so for the bot's parser such a body is a contract violation, not numbers to show.
@@ -50,6 +57,7 @@ sends one, so for the bot's parser such a body is a contract violation, not numb
 | 200 `status: 'active'` | the users row | show the numbers |
 | 200 `status: 'blocked'` | the users row | the blocked text; the numbers are still the user's |
 | 404 `user_not_found` (`UserErrorCode.UserNotFound`) | no users row: such a user has no ledger and no reservation | «not connected», chosen by the error code |
+| 404 `broker_account_not_found` (`TradeIntentErrorCode.BrokerAccountNotFound`) | `brokerAccountId` is not an account of this user | as for `POST /trading/intents` |
 | 404 `not_found` (an older backend without the route), 401, 400 `validation`, any other 4xx | the route refused or does not exist; nothing about the user is known | unavailable + warn |
 | 5xx, unreachable, timeout, a 2xx body that does not parse | unknown, but nothing was written, so a retry is free | unavailable + warn |
 
@@ -117,16 +125,57 @@ access /trading/access '{"telegramUserId":"1"}'
 # {"error":"user_not_found"}  HTTP 404 — no users row yet
 access /users/start '{"telegramUserId":"1","displayName":"Ada"}' >/dev/null   # what /start sends
 access /trading/access '{"telegramUserId":"1"}'
-# {"status":"active","tokens":{"balance":"0","reserved":"0","available":"0"}}  HTTP 200
+# {"status":"active","tokens":{"balance":"0","reserved":"0","available":"0"},"broker":null,"brokerUnavailable":"no_account"}  HTTP 200
 dc down -v   # removes this project's containers and its volume only
 ```
 
 If 55432, 56379 or 53000 is taken, change it in `dc` (and 53000 in `access`).
 
+## Broker balance
+
+`broker` is `toBrokerBalanceView` of the account's snapshot ([broker-balance.md](broker-balance.md)):
+
+| Field | Meaning |
+| --- | --- |
+| `real` / `demo` `{ available, held, total }` | decimal strings as stored, scale 8 (`'10000.00000000'`); the bot formats them |
+| `minTradeAmount` | decimal string, scale 8 |
+| `level { code, rank }` | the broker's level |
+| `restSnapshotAgeSec` | whole seconds since the last REST write, by the database clock |
+| `balanceEventAgeSec` | since the newest socket balance event; null until #99/#101 write one |
+| `fresh` | the newest of the two ages is at most `BROKER_BALANCE_SLA_SEC` (60) |
+
+What the route does, in order:
+
+1. Resolve the account. With `brokerAccountId`, the user's own account of that id whatever its
+   status; without it, the user's only active account.
+2. Move `last_requested_at` and read the snapshot. A fresh one is answered from the database,
+   with no broker call.
+3. A blocked user never reaches the broker (Rule 12). What is stored is still answered.
+4. If `ensureFreshAccessToken` would hand out the stored token as it is (same comparison and
+   clock), one `GET /v1/broker/user` runs, bounded by `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s).
+   The answer is the snapshot after it. When the GET failed, that is the old snapshot with
+   `fresh: false`, or no snapshot and a reason.
+5. Otherwise the token needs an exchange, which may take `BROKER_HTTP_TIMEOUT_MS`. It runs in the
+   background, and the current state is answered at once.
+
+`TRADING_ACCESS_BUDGET_MS` (4 000, `packages/shared`) is the upper estimate of the whole answer.
+The bot's request timeout sits above it (#24).
+
+| `brokerUnavailable` | When |
+| --- | --- |
+| `no_account` | no `brokerAccountId`, and the user has no active account |
+| `ambiguous_account` | no `brokerAccountId`, and the user has more than one active account |
+| `account_pending` | the chosen account is not confirmed yet, or the refresh found it so |
+| `account_revoked` | the chosen account is revoked, or the refresh found it so |
+| `user_blocked` | the user is blocked (seen by the route, or under the account lock when the token was taken) and there is no stored snapshot |
+| `refreshing` | no snapshot yet and the token needs an exchange, which is running; ask again |
+| `broker_unavailable` | no snapshot and the refresh failed: a broker error, an answer for another user, a value outside the stored domain, a missing token, or the budget ran out |
+
+With a snapshot, a failure never empties `broker`. The snapshot comes back with its real age and
+`fresh: false`. The internal account id is never in the view.
+
 ## Boundaries
 
-- **#137**: the `broker` section of this response (the balance snapshot and its ages) and
-  `brokerAccountId?` in the request.
 - **#138**: the pair catalog, `GET /trading/pairs`.
 - **#24**: the bot's display and `BackendClient`.
 - **#117, #109, ARCH-04**: future ledger writers, bound by the same-transaction rule above.

@@ -1,4 +1,6 @@
+import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
+import { BROKER_BALANCE_SLA_MS, TRADING_ACCESS_BUDGET_MS } from '@binarius/shared/broker-balance';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
@@ -67,6 +69,38 @@ export const PASSWORD_VERIFY_COST_CEILING_MS = 1_000;
 // reads the number back out of grammY rather than trusting this line.
 export const GRAMMY_POLLING_BACKOFF_MS = 3_000;
 
+// --- The broker balance snapshot (#137) --------------------------------------------------------
+// docs/broker-balance.md. The background refresh runs every BALANCE_RECONCILE_INTERVAL_MS (env,
+// bounded here) over the accounts in work, at most BALANCE_POLL_MAX_PER_MINUTE GETs a minute.
+
+// Above one GET's timeout, so a request ends before the next tick starts.
+export const MIN_BALANCE_RECONCILE_INTERVAL_MS = 10_000;
+// Not longer than the SLA: a longer interval would leave watched snapshots stale by configuration.
+export const MAX_BALANCE_RECONCILE_INTERVAL_MS = BROKER_BALANCE_SLA_MS;
+export const DEFAULT_BALANCE_RECONCILE_INTERVAL_MS = 60_000;
+
+// The broker's window, observed live without a token on 2026-10-03: x-ratelimit-limit 600 per
+// 60 s, counted per IP. The ceiling leaves room for OAuth, token refreshes and the pairs catalog
+// from the same IP.
+export const BROKER_RATE_LIMIT_PER_MINUTE = 600;
+export const MIN_BALANCE_POLL_PER_MINUTE = 1;
+export const MAX_BALANCE_POLL_PER_MINUTE = 500;
+export const DEFAULT_BALANCE_POLL_PER_MINUTE = 200;
+
+// GETs of one tick in flight at once.
+export const BALANCE_POLL_CONCURRENCY = 4;
+
+// How long after the bot's last request an account stays watched without an open intent.
+export const BALANCE_WATCH_WINDOW_MS = 600_000;
+
+// How long a tick leaves alone an account whose attempt left nothing in its row to move it
+// down the queue (no snapshot to mark, or a token that needs an exchange).
+export const BALANCE_STALLED_RETRY_MS = 300_000;
+
+// The one broker GET POST /trading/access may wait for (the route's signal; the client ends at
+// the earlier of it and BROKER_REST_TIMEOUT_MS).
+export const TRADING_ACCESS_REFRESH_BUDGET_MS = 3_000;
+
 // the broker call is the other bounded operation phase 1 can be waiting on: a login handler
 // holds no lock, but a refresh does, and its transaction must fit in the budget
 export const TIMING_CHAIN_HOLDS =
@@ -86,7 +120,22 @@ export const TIMING_CHAIN_HOLDS =
   ADMIN_LOGIN_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   ADMIN_HANDLER_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   GRAMMY_POLLING_BACKOFF_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS;
+  SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS &&
+  BROKER_REST_TIMEOUT_MS < MIN_BALANCE_RECONCILE_INTERVAL_MS &&
+  MIN_BALANCE_RECONCILE_INTERVAL_MS <= DEFAULT_BALANCE_RECONCILE_INTERVAL_MS &&
+  DEFAULT_BALANCE_RECONCILE_INTERVAL_MS <= MAX_BALANCE_RECONCILE_INTERVAL_MS &&
+  MAX_BALANCE_RECONCILE_INTERVAL_MS <= BROKER_BALANCE_SLA_MS &&
+  MIN_BALANCE_POLL_PER_MINUTE <= DEFAULT_BALANCE_POLL_PER_MINUTE &&
+  DEFAULT_BALANCE_POLL_PER_MINUTE <= MAX_BALANCE_POLL_PER_MINUTE &&
+  MAX_BALANCE_POLL_PER_MINUTE < BROKER_RATE_LIMIT_PER_MINUTE &&
+  // a watched account is skipped by at least one tick, and retried within its watch window
+  MAX_BALANCE_RECONCILE_INTERVAL_MS < BALANCE_STALLED_RETRY_MS &&
+  BALANCE_STALLED_RETRY_MS < BALANCE_WATCH_WINDOW_MS &&
+  // an account the bot asked about survives at least one tick
+  MAX_BALANCE_RECONCILE_INTERVAL_MS < BALANCE_WATCH_WINDOW_MS &&
+  // the GET inside the route, the route inside what the bot waits for (#24), and inside phase 1
+  TRADING_ACCESS_REFRESH_BUDGET_MS < TRADING_ACCESS_BUDGET_MS &&
+  TRADING_ACCESS_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }

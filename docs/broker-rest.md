@@ -175,6 +175,8 @@ decimals, never as strings.
 - #100: the trade executor and the REST fallback decision. #100/#101: the base URL in the
   worker's env and compose.
 - #138: the pairs catalog (docs/pairs-catalog.md), the first caller, in the backend.
+- #137: `getUser` for the broker balance snapshot (docs/broker-balance.md), in the backend, on
+  the same client instance as the catalog.
 - #101: the session manager and 401 handling (refresh and revocation). Retries on
   `rate_limited`/`unavailable` belong to the callers.
 - #104: the Socket.IO side of `packages/mock-broker`. The fixture is used here as published and is

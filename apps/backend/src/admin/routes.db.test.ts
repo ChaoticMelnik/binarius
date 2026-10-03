@@ -26,7 +26,7 @@ import {
 import { buildApp } from '../app';
 import { createPasswordQueue } from './password-queue';
 import { stubTelegram, unusedAdminDeps } from './testing';
-import { unusedPairsDeps } from '../trading/testing';
+import { unusedBalanceDeps, unusedPairsDeps } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -63,7 +63,12 @@ const build = (
     logLevel: logs === undefined ? 'silent' : 'error',
     ...(logs === undefined ? {} : { logDestination: logs }),
     checkTimeoutMs: 50,
-    trading: { db: tmp.db, internalApiToken: 'internal', onIntentQueued: () => undefined },
+    trading: {
+      db: tmp.db,
+      internalApiToken: 'internal',
+      onIntentQueued: () => undefined,
+      balance: unusedBalanceDeps(),
+    },
     auth: {
       db: tmp.db,
       cipher: {} as never,

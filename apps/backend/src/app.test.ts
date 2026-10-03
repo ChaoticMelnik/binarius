@@ -6,7 +6,7 @@ import type { AuthRoutesDeps } from './auth/routes';
 import type { TradingRoutesDeps } from './trading/routes';
 import type { UsersRoutesDeps } from './users/routes';
 import { unusedAdminDeps } from './admin/testing';
-import { unusedPairsDeps } from './trading/testing';
+import { unusedBalanceDeps, unusedPairsDeps } from './trading/testing';
 
 const ok = () => Promise.resolve();
 const down = () => Promise.reject(new Error('down'));
@@ -20,6 +20,7 @@ const unusedTrading: TradingRoutesDeps = {
   db: {} as TradingRoutesDeps['db'],
   internalApiToken: 'internal-token-for-tests',
   onIntentQueued: () => {},
+  balance: unusedBalanceDeps(),
 };
 
 const unusedAuth: AuthRoutesDeps = {

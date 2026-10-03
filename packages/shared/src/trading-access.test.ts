@@ -5,7 +5,19 @@ import { UserStatus } from './users';
 const body = (tokens: Record<string, unknown>, status: unknown = UserStatus.Active) => ({
   status,
   tokens,
+  broker: null,
+  brokerUnavailable: 'no_account',
 });
+
+const view = {
+  real: { available: '100.00000000', held: '0.00000000', total: '100.00000000' },
+  demo: { available: '10000.00000000', held: '0.00000000', total: '10000.00000000' },
+  minTradeAmount: '1.00000000',
+  level: { code: 'standard', rank: 1 },
+  restSnapshotAgeSec: 3,
+  balanceEventAgeSec: null,
+  fresh: true,
+};
 
 const canonical = { balance: '7', reserved: '2', available: '5' };
 
@@ -14,8 +26,18 @@ describe('safeParseTradingAccessRequest', () => {
     expect(safeParseTradingAccessRequest({ telegramUserId: '12345' }).success).toBe(true);
   });
 
+  it('accepts a broker account id', () => {
+    const input = {
+      telegramUserId: '12345',
+      brokerAccountId: '0b8f3c62-7a1e-4d2b-9a55-3c1f2e4d5a6b',
+    };
+    const parsed = safeParseTradingAccessRequest(input);
+    expect(parsed.success && parsed.data).toEqual(input);
+  });
+
   it.each([
     ['an empty body', {}],
+    ['a broker account id that is not a uuid', { telegramUserId: '1', brokerAccountId: 'abc' }],
     ['a non-numeric id', { telegramUserId: 'abc' }],
     ['a number instead of a string', { telegramUserId: 12345 }],
     ['an id above int8', { telegramUserId: '9223372036854775808' }],
@@ -86,5 +108,42 @@ describe('safeParseTradingAccessResponse', () => {
       telegramUserId: '1',
     });
     expect(parsed.success && parsed.data).toEqual(body(canonical));
+  });
+});
+
+describe('the broker section', () => {
+  const tokens = canonical;
+
+  it('accepts a snapshot with no reason', () => {
+    const input = { status: UserStatus.Active, tokens, broker: view, brokerUnavailable: null };
+    const parsed = safeParseTradingAccessResponse(input);
+    expect(parsed.success && parsed.data).toEqual(input);
+  });
+
+  it.each([
+    ['both null', { broker: null, brokerUnavailable: null }],
+    ['a snapshot and a reason', { broker: view, brokerUnavailable: 'refreshing' }],
+  ])('refuses %s', (_label, section) => {
+    const parsed = safeParseTradingAccessResponse({
+      status: UserStatus.Active,
+      tokens,
+      ...section,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('refuses a reason outside the list', () => {
+    const input = { ...body(tokens), brokerUnavailable: 'timeout' };
+    expect(safeParseTradingAccessResponse(input).success).toBe(false);
+  });
+
+  it('strips unknown keys of the snapshot', () => {
+    const parsed = safeParseTradingAccessResponse({
+      status: UserStatus.Active,
+      tokens,
+      broker: { ...view, brokerAccountId: 'x', lastRefreshError: 'unavailable' },
+      brokerUnavailable: null,
+    });
+    expect(parsed.success && parsed.data.broker).toEqual(view);
   });
 });

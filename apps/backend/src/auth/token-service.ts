@@ -1,5 +1,10 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { AuthRevokedReason, BrokerAccountStatus, errorLogFields } from '@binarius/shared';
+import {
+  AuthRevokedReason,
+  BrokerAccountStatus,
+  UserStatus,
+  errorLogFields,
+} from '@binarius/shared';
 import {
   applyRotatedTokens,
   backfillRefreshTokenHash,
@@ -23,15 +28,19 @@ import {
 // asking would burn the token we still hold
 const REFRESH_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 // renew a little before expiry, so a token handed out now is still valid when it is used
-const ACCESS_SKEW_MS = 60_000;
+export const ACCESS_SKEW_MS = 60_000;
 
 export type AccessTokenResult =
   | { ok: true; accessToken: string }
   | { ok: false; reason: 'account_not_found' }
+  // the user is blocked: nothing is decrypted, exchanged or revoked (Rule 12)
+  | { ok: false; reason: 'user_blocked' }
   // linked but not confirmed in the bot yet, so it may not act on the user's behalf
   | { ok: false; reason: 'account_pending' }
   // the row was encrypted under a key this process does not hold; another process has it
   | { ok: false; reason: 'key_unavailable' }
+  // the token needs an exchange and the caller forbade one (mayRefresh: false)
+  | { ok: false; reason: 'refresh_needed' }
   | { ok: false; reason: 'account_revoked'; revokedReason: AuthRevokedReason | null };
 
 export interface TokenServiceDeps {
@@ -49,6 +58,13 @@ interface ExchangedPair {
   refreshTokenHash: string | null;
 }
 
+export interface AccessTokenOptions {
+  // false: never exchange the refresh token here, and never revoke for its age either — a caller
+  // nobody is waiting on (the background balance refresh) must not change the account. Decided
+  // under the row lock, by the same clock and comparison as the exchange itself.
+  mayRefresh?: boolean;
+}
+
 // Returns a usable access token for the account, refreshing it when needed.
 //
 // The whole decision runs under one row lock, which makes the refresh single-flight per
@@ -58,13 +74,14 @@ interface ExchangedPair {
 export async function ensureFreshAccessToken(
   deps: TokenServiceDeps,
   accountId: string,
+  options: AccessTokenOptions = {},
 ): Promise<AccessTokenResult> {
   // set inside the transaction, read after it: the exchange is the point of no return, and a
   // failure raised by the COMMIT itself is never visible to code running inside the callback
   let exchanged: ExchangedPair | undefined;
   try {
     return await deps.db.transaction((tx) =>
-      refreshUnderLock(deps, tx, accountId, (pair) => {
+      refreshUnderLock(deps, tx, accountId, options, (pair) => {
         exchanged = pair;
       }),
     );
@@ -78,11 +95,13 @@ async function refreshUnderLock(
   deps: TokenServiceDeps,
   tx: Tx,
   accountId: string,
+  options: AccessTokenOptions,
   onExchanged: (pair: ExchangedPair) => void,
 ): Promise<AccessTokenResult> {
   const { broker, cipher, logger } = deps;
   const account = await lockAccountForRefresh(tx, accountId);
   if (account === undefined) return { ok: false, reason: 'account_not_found' };
+  if (account.userStatus === UserStatus.Blocked) return { ok: false, reason: 'user_blocked' };
   // status before expiry: an account that may not act must not hand out the token it stores
   if (account.status === BrokerAccountStatus.Pending) {
     return { ok: false, reason: 'account_pending' };
@@ -150,6 +169,8 @@ async function refreshUnderLock(
     }
     return { ok: true, accessToken };
   }
+
+  if (options.mayRefresh === false) return { ok: false, reason: 'refresh_needed' };
 
   const rotatedAt = account.tokenRotatedAt ?? account.createdAt;
   if (rotatedAt.getTime() < Date.now() - REFRESH_MAX_AGE_MS) {
