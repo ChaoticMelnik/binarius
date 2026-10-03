@@ -62,9 +62,8 @@ In `packages/broker-rest/src/pairs-catalog.ts`:
 
 `PAIRS_CATALOG_CHAIN_HOLDS` throws at import unless
 `BROKER_REST_TIMEOUT_MS < MIN_BROKER_PAIRS_TTL_MS ≤ DEFAULT ≤ MAX < BROKER_PAIRS_MAX_STALE_MS`.
-The backend's own chain (`apps/backend/src/timing.ts`) adds
-`BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`: a warm-up or a tick in flight ends inside
-phase 1 even when `stop()` did not cut it.
+Shutdown phase 1 does not wait for the catalog's GET: `stop()` aborts it (see Start and
+shutdown), so the backend's chain (`apps/backend/src/timing.ts`) has no link for it.
 
 `BROKER_PAIRS_TTL_MS` is parsed in `apps/backend/src/env.ts` as an integer between the MIN and the
 MAX, default `DEFAULT_BROKER_PAIRS_TTL_MS`; an empty value is refused like every other variable.
