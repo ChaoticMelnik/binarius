@@ -4,7 +4,6 @@ import {
   foreignKey,
   index,
   jsonb,
-  numeric,
   pgTable,
   text,
   timestamp,
@@ -12,8 +11,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import type { DecimalString } from '@binarius/shared';
-import { createdAt, id, inList, nullablePositiveNumeric } from './columns';
+import { createdAt, id, inList, money, nullablePositiveNumeric } from './columns';
 import { brokerAccounts } from './broker-accounts';
 import { users } from './users';
 
@@ -40,7 +38,7 @@ export const depositEvents = pgTable(
     }),
     postbackId: text('postback_id').notNull(),
     paymentId: text('payment_id'),
-    amount: numeric('amount', { precision: 20, scale: 8, mode: 'string' }).$type<DecimalString>(),
+    amount: money('amount'),
     currency: text('currency'),
     status: text('status')
       .$type<DepositEventStatus>()

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import Fastify from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   brokerAccounts,
   confirmBrokerAccount,
@@ -554,5 +554,71 @@ describe('ensureFreshAccessToken', () => {
     expect(first.ok && second.ok).toBe(true);
     expect(stub.tokenRequests).toBe(before + 1);
     if (first.ok && second.ok) expect(first.accessToken).toBe(second.accessToken);
+  });
+});
+
+// The background balance refresh (#137) passes mayRefresh: false. Whatever the token's state, the
+// account must come out exactly as it went in, and the broker must not hear about it.
+describe('ensureFreshAccessToken with mayRefresh: false', () => {
+  const unchanged = async (account: BrokerAccountRow) => {
+    const row = await rowOf(account.id);
+    expect(row).toMatchObject({
+      status: 'active',
+      authRevokedReason: null,
+      accessTokenEnc: account.accessTokenEnc,
+      tokenRotatedAt: account.tokenRotatedAt,
+    });
+  };
+
+  it('refuses the exchange an expired token needs', async () => {
+    const account = await expiredAccount();
+    const before = stub.tokenRequests;
+    expect(await ensureFreshAccessToken(deps(), account.id, { mayRefresh: false })).toEqual({
+      ok: false,
+      reason: 'refresh_needed',
+    });
+    expect(stub.tokenRequests).toBe(before);
+    await unchanged(account);
+  });
+
+  // the process clock ahead of the database's: by the database the token has ten minutes left,
+  // by the process it expired five minutes ago, and the decision is the process's
+  it('refuses it when only the process clock says the token expired', async () => {
+    const account = await linkedAccount();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ accessTokenExpiresAt: sql`now() + interval '10 minutes'` })
+      .where(eq(brokerAccounts.id, account.id));
+    const before = stub.tokenRequests;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 15 * 60_000);
+      expect(await ensureFreshAccessToken(deps(), account.id, { mayRefresh: false })).toEqual({
+        ok: false,
+        reason: 'refresh_needed',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(stub.tokenRequests).toBe(before);
+  });
+
+  it('does not revoke a refresh token past its ninety days either', async () => {
+    const account = await expiredAccount();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ tokenRotatedAt: sql`now() - interval '91 days'` })
+      .where(eq(brokerAccounts.id, account.id));
+    expect(await ensureFreshAccessToken(deps(), account.id, { mayRefresh: false })).toEqual({
+      ok: false,
+      reason: 'refresh_needed',
+    });
+    expect(await rowOf(account.id)).toMatchObject({ status: 'active', authRevokedReason: null });
+  });
+
+  it('still hands out a valid token', async () => {
+    const account = await linkedAccount();
+    const result = await ensureFreshAccessToken(deps(), account.id, { mayRefresh: false });
+    expect(result.ok).toBe(true);
   });
 });

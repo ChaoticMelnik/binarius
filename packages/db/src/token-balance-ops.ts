@@ -37,7 +37,7 @@ export function toTradingAccessView({
   status,
   balance,
   reserved,
-}: TokenBalanceSnapshot): TradingAccessResponse {
+}: TokenBalanceSnapshot): Pick<TradingAccessResponse, 'status' | 'tokens'> {
   const available = balance - reserved;
   // unreachable under users_token_reserved_check; a signed count must not reach the wire
   if (available < 0n) throw new Error('token reserve exceeds balance');

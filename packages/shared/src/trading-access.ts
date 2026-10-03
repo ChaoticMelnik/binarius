@@ -1,12 +1,16 @@
 import * as z from 'zod';
+import { brokerBalanceUnavailableReasonSchema, brokerBalanceViewSchema } from './broker-balance';
 import { telegramUserIdSchema, tokenCountSchema } from './trading';
 import { userStatusSchema } from './users';
 
-// POST /trading/access — what a user may trade with right now. #136 answers the token side;
-// #137 adds a `broker` section (the balance snapshot and its age) to the response and an
-// optional `brokerAccountId` to the request.
+// POST /trading/access — what a user may trade with right now: the token side (#136) and the
+// broker's balance snapshot with its ages (#137). `brokerAccountId` picks one account when the
+// user has several; without it the user's only active account is used.
 
-export const tradingAccessRequestSchema = z.object({ telegramUserId: telegramUserIdSchema });
+export const tradingAccessRequestSchema = z.object({
+  telegramUserId: telegramUserIdSchema,
+  brokerAccountId: z.uuid().optional(),
+});
 export type TradingAccessRequest = z.infer<typeof tradingAccessRequestSchema>;
 
 const isCount = (value: unknown): value is string => tokenCountSchema.safeParse(value).success;
@@ -30,10 +34,17 @@ export const tokenBalanceViewSchema = z
   );
 export type TokenBalanceView = z.infer<typeof tokenBalanceViewSchema>;
 
-export const tradingAccessResponseSchema = z.object({
-  status: userStatusSchema,
-  tokens: tokenBalanceViewSchema,
-});
+// `broker` is null exactly when `brokerUnavailable` says why
+export const tradingAccessResponseSchema = z
+  .object({
+    status: userStatusSchema,
+    tokens: tokenBalanceViewSchema,
+    broker: brokerBalanceViewSchema.nullable(),
+    brokerUnavailable: brokerBalanceUnavailableReasonSchema.nullable(),
+  })
+  .refine(({ broker, brokerUnavailable }) => (broker === null) === (brokerUnavailable !== null), {
+    error: 'broker is null exactly when brokerUnavailable is set',
+  });
 export type TradingAccessResponse = z.infer<typeof tradingAccessResponseSchema>;
 
 export const safeParseTradingAccessRequest = (input: unknown) =>

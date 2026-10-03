@@ -9,6 +9,7 @@ import type {
   OpenTrade,
   OpenTradeRequest,
 } from './broker';
+import type { BrokerBalanceView } from './broker-balance';
 import type { PairsCatalogView, PairView } from './catalog';
 import type { DecimalString } from './money';
 import type { OAuthTokens, RefreshedTokens, WidgetSession, WidgetSessionRequest } from './oauth';
@@ -25,6 +26,7 @@ import type { TradingAccessResponse } from './trading-access';
 import * as account from './account';
 import * as admin from './admin';
 import * as broker from './broker';
+import * as brokerBalance from './broker-balance';
 import * as catalog from './catalog';
 import * as env from './env';
 import * as ids from './ids';
@@ -105,6 +107,28 @@ describe('contract coverage (issue #6)', () => {
     expectTypeOf<TradingAccessResponse>().toEqualTypeOf<{
       status: 'active' | 'blocked';
       tokens: { balance: string; reserved: string; available: string };
+      broker: BrokerBalanceView | null;
+      brokerUnavailable:
+        | 'no_account'
+        | 'ambiguous_account'
+        | 'account_pending'
+        | 'account_revoked'
+        | 'user_blocked'
+        | 'refreshing'
+        | 'broker_unavailable'
+        | null;
+    }>();
+  });
+
+  it('BrokerBalanceView (issue #137)', () => {
+    expectTypeOf<BrokerBalanceView>().toEqualTypeOf<{
+      real: { available: DecimalString; held: DecimalString; total: DecimalString };
+      demo: { available: DecimalString; held: DecimalString; total: DecimalString };
+      minTradeAmount: DecimalString;
+      level: { code: string; rank: number };
+      restSnapshotAgeSec: number;
+      balanceEventAgeSec: number | null;
+      fresh: boolean;
     }>();
   });
 
@@ -261,6 +285,7 @@ describe('contract coverage (issue #6)', () => {
       trading,
       tradingAccess,
       broker,
+      brokerBalance,
       oauth,
       users,
       partner,

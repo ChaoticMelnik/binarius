@@ -22,6 +22,8 @@ export type BalanceRefreshError = (typeof BalanceRefreshError)[keyof typeof Bala
 // level.rank is a JSON number the broker sends that is not money: the broker_trades.payout shape
 export const LEVEL_RANK_INTEGER_DIGITS = 4;
 export const LEVEL_RANK_SCALE = 4;
+// level_code has no CHECK: upsertBalanceSnapshot bounds it (balance-snapshot-ops.ts)
+export const LEVEL_CODE_MAX_LENGTH = 64;
 
 // The broker's balance for one account, as last seen. Written only by balance-snapshot-ops.ts,
 // each operation one autocommit statement outside the users → broker_accounts → trade_intents

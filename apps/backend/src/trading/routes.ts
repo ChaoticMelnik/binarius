@@ -14,13 +14,15 @@ import {
   type Db,
 } from '@binarius/db';
 import { internalBearerAuth } from '../auth/internal';
-import { registerTradingAccess } from './access';
+import { registerTradingAccess, type TradingAccessDeps } from './access';
 
 export interface TradingRoutesDeps {
   db: Db;
   internalApiToken: string;
   // called after the creating transaction committed; a throw is logged, never surfaced
   onIntentQueued: () => void;
+  // POST /trading/access refreshes the broker balance through it
+  balance: TradingAccessDeps['balance'];
 }
 
 const NOT_FOUND_CODES: ReadonlySet<ErrorCode> = new Set([
@@ -35,10 +37,10 @@ const idParamSchema = z.uuid();
 // Registered as an encapsulated plugin so the auth hook covers exactly these routes
 export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
   app,
-  { db, internalApiToken, onIntentQueued },
+  { db, internalApiToken, onIntentQueued, balance },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
-  registerTradingAccess(app, { db });
+  registerTradingAccess(app, { db, balance });
 
   app.post('/trading/intents', async (request, reply) => {
     const parsed = safeParseCreateTradeIntentRequest(request.body);

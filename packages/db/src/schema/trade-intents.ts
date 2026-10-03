@@ -4,7 +4,6 @@ import {
   foreignKey,
   index,
   integer,
-  numeric,
   pgTable,
   text,
   timestamp,
@@ -19,12 +18,12 @@ import {
   TradeIntentStatus,
   TradeMode,
   TradeTransport,
-  type DecimalString,
 } from '@binarius/shared';
 import {
   createdAt,
   id,
   inList,
+  money,
   positiveNumeric,
   sqlLiteralList,
   tokenAmount,
@@ -56,9 +55,7 @@ export const tradeIntents = pgTable(
     }),
     mode: text('mode').$type<TradeMode>().notNull(),
     assetId: integer('asset_id').notNull(),
-    amount: numeric('amount', { precision: 20, scale: 8, mode: 'string' })
-      .$type<DecimalString>()
-      .notNull(),
+    amount: money('amount').notNull(),
     action: text('action').$type<TradeAction>().notNull(),
     durationSec: integer('duration_sec').notNull(),
     clientRequestId: text('client_request_id').notNull(),
