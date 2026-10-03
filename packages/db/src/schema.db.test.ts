@@ -8,6 +8,7 @@ import {
   AuditAction,
   auditLog,
   brokerAccounts,
+  brokerBalanceSnapshots,
   brokerTrades,
   depositEvents,
   oauthStates,
@@ -1901,6 +1902,189 @@ describe('audit_log actions', () => {
           tx.insert(auditLog).values({ actorType: 'system', action }),
         ).resolves.toBeDefined();
       }
+    });
+  });
+});
+
+// --- broker_balance_snapshots (#235) ---------------------------------------------------------
+// Amounts and the level rank may be zero, never negative or NaN; NOT NULL is the column's own.
+
+const snapshot = (accountId: string, patch: Record<string, unknown> = {}) => ({
+  brokerAccountId: accountId,
+  realAvailable: '100' as DecimalString,
+  realHeld: '0' as DecimalString,
+  realTotal: '100' as DecimalString,
+  demoAvailable: '10000' as DecimalString,
+  demoHeld: '0' as DecimalString,
+  demoTotal: '10000' as DecimalString,
+  minTradeAmount: '1' as DecimalString,
+  levelCode: 'standard',
+  levelRank: 1,
+  restObservedAt: sql`now()`,
+  ...patch,
+});
+
+const SNAPSHOT_AMOUNTS = [
+  ['realAvailable', 'real_available'],
+  ['realHeld', 'real_held'],
+  ['realTotal', 'real_total'],
+  ['demoAvailable', 'demo_available'],
+  ['demoHeld', 'demo_held'],
+  ['demoTotal', 'demo_total'],
+  ['minTradeAmount', 'min_trade_amount'],
+] as const;
+
+describe('broker_balance_snapshots', () => {
+  it.each(SNAPSHOT_AMOUNTS)('accepts a zero %s', async (field) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(brokerBalanceSnapshots)
+        .values(snapshot(seed.accountId, { [field]: '0' }))
+        .returning();
+      expect(row![field]).toBe('0.00000000');
+    });
+  });
+
+  it.each(
+    SNAPSHOT_AMOUNTS.flatMap(([field, column]) => [
+      [field, column, '-0.00000001'],
+      [field, column, 'NaN'],
+    ]),
+  )('rejects %s = %s', async (field, column, value) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(brokerBalanceSnapshots).values(snapshot(seed.accountId, { [field]: value })),
+        '23514',
+        `broker_balance_snapshots_${column}_check`,
+      );
+    });
+  });
+
+  it.each(SNAPSHOT_AMOUNTS)('rejects a NULL %s', async (field, column) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const error = await tx
+        .insert(brokerBalanceSnapshots)
+        .values(snapshot(seed.accountId, { [field]: null }))
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column });
+    });
+  });
+
+  it('accepts a zero and a fractional level rank', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const other = await seedAccount(tx);
+      const [zero] = await tx
+        .insert(brokerBalanceSnapshots)
+        .values(snapshot(seed.accountId, { levelRank: 0 }))
+        .returning();
+      const [fraction] = await tx
+        .insert(brokerBalanceSnapshots)
+        .values(snapshot(other.accountId, { levelRank: 2.5 }))
+        .returning();
+      expect([zero!.levelRank, fraction!.levelRank]).toEqual([0, 2.5]);
+    });
+  });
+
+  it.each([
+    ['negative', -1],
+    ['NaN', Number.NaN],
+  ])('rejects a %s level rank', async (_label, levelRank) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(brokerBalanceSnapshots).values(snapshot(seed.accountId, { levelRank })),
+        '23514',
+        'broker_balance_snapshots_level_rank_check',
+      );
+    });
+  });
+
+  it('rejects a refresh error outside the list', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx
+          .insert(brokerBalanceSnapshots)
+          .values(
+            snapshot(seed.accountId, {
+              lastRefreshError: 'timeout',
+              lastRefreshFailedAt: sql`now()`,
+            }),
+          ),
+        '23514',
+        'broker_balance_snapshots_last_refresh_error_check',
+      );
+    });
+  });
+
+  it.each([
+    ['a code without a time', { lastRefreshError: 'unavailable' }],
+    ['a time without a code', { lastRefreshFailedAt: sql`now()` }],
+  ])('rejects %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(brokerBalanceSnapshots).values(snapshot(seed.accountId, patch)),
+        '23514',
+        'broker_balance_snapshots_failure_pair_check',
+      );
+    });
+  });
+
+  it('accepts a failure as a code with its time, and neither', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const other = await seedAccount(tx);
+      const [failed] = await tx
+        .insert(brokerBalanceSnapshots)
+        .values(
+          snapshot(seed.accountId, {
+            lastRefreshError: 'unavailable',
+            lastRefreshFailedAt: sql`now()`,
+          }),
+        )
+        .returning();
+      const [clean] = await tx
+        .insert(brokerBalanceSnapshots)
+        .values(snapshot(other.accountId))
+        .returning();
+      expect(failed!.lastRefreshError).toBe('unavailable');
+      expect([clean!.lastRefreshError, clean!.lastRefreshFailedAt]).toEqual([null, null]);
+    });
+  });
+
+  it('keeps one row per account', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await tx.insert(brokerBalanceSnapshots).values(snapshot(seed.accountId));
+      const error = await tx
+        .insert(brokerBalanceSnapshots)
+        .values(snapshot(seed.accountId))
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({
+        code: '23505',
+        constraint: 'broker_balance_snapshots_pkey',
+      });
+    });
+  });
+
+  it('rejects a snapshot of an account that does not exist', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(brokerBalanceSnapshots).values(snapshot(randomUUID())),
+        '23503',
+        'broker_balance_snapshots_account_fk',
+      );
     });
   });
 });

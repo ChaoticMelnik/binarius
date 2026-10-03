@@ -13,13 +13,14 @@ import {
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { TradeAction, TradeMode, type DecimalString, type UnixMs } from '@binarius/shared';
+import { TradeAction, TradeMode, type UnixMs } from '@binarius/shared';
 import {
   createdAt,
   finiteFloat,
   id,
   inList,
   literal,
+  money,
   nullableFiniteFloat,
   nullablePositiveNumeric,
   positiveNumeric,
@@ -30,9 +31,6 @@ import { tradeIntents } from './trade-intents';
 
 export const BrokerTradeStatus = { Open: 'open', Closed: 'closed' } as const;
 export type BrokerTradeStatus = (typeof BrokerTradeStatus)[keyof typeof BrokerTradeStatus];
-
-const money = (name: string) =>
-  numeric(name, { precision: 20, scale: 8, mode: 'string' }).$type<DecimalString>();
 
 // Broker timestamps are Unix ms (bigint) as the broker sends them; prices are JSON numbers,
 // not money. close_* / profit are NULL until settlement: the broker omits them, it never sends 0.

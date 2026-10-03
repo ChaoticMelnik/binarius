@@ -1,0 +1,32 @@
+CREATE TABLE "broker_balance_snapshots" (
+	"broker_account_id" uuid PRIMARY KEY NOT NULL,
+	"real_available" numeric(20, 8) NOT NULL,
+	"real_held" numeric(20, 8) NOT NULL,
+	"real_total" numeric(20, 8) NOT NULL,
+	"demo_available" numeric(20, 8) NOT NULL,
+	"demo_held" numeric(20, 8) NOT NULL,
+	"demo_total" numeric(20, 8) NOT NULL,
+	"min_trade_amount" numeric(20, 8) NOT NULL,
+	"level_code" text NOT NULL,
+	"level_rank" numeric(8, 4) NOT NULL,
+	"rest_observed_at" timestamp with time zone NOT NULL,
+	"real_event_at" timestamp with time zone,
+	"demo_event_at" timestamp with time zone,
+	"last_requested_at" timestamp with time zone,
+	"last_refresh_error" text,
+	"last_refresh_failed_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "broker_balance_snapshots_real_available_check" CHECK ("broker_balance_snapshots"."real_available" >= 0 and "broker_balance_snapshots"."real_available" <> 'NaN'::numeric),
+	CONSTRAINT "broker_balance_snapshots_real_held_check" CHECK ("broker_balance_snapshots"."real_held" >= 0 and "broker_balance_snapshots"."real_held" <> 'NaN'::numeric),
+	CONSTRAINT "broker_balance_snapshots_real_total_check" CHECK ("broker_balance_snapshots"."real_total" >= 0 and "broker_balance_snapshots"."real_total" <> 'NaN'::numeric),
+	CONSTRAINT "broker_balance_snapshots_demo_available_check" CHECK ("broker_balance_snapshots"."demo_available" >= 0 and "broker_balance_snapshots"."demo_available" <> 'NaN'::numeric),
+	CONSTRAINT "broker_balance_snapshots_demo_held_check" CHECK ("broker_balance_snapshots"."demo_held" >= 0 and "broker_balance_snapshots"."demo_held" <> 'NaN'::numeric),
+	CONSTRAINT "broker_balance_snapshots_demo_total_check" CHECK ("broker_balance_snapshots"."demo_total" >= 0 and "broker_balance_snapshots"."demo_total" <> 'NaN'::numeric),
+	CONSTRAINT "broker_balance_snapshots_min_trade_amount_check" CHECK ("broker_balance_snapshots"."min_trade_amount" >= 0 and "broker_balance_snapshots"."min_trade_amount" <> 'NaN'::numeric),
+	CONSTRAINT "broker_balance_snapshots_level_rank_check" CHECK ("broker_balance_snapshots"."level_rank" >= 0 and "broker_balance_snapshots"."level_rank" <> 'NaN'::numeric),
+	CONSTRAINT "broker_balance_snapshots_last_refresh_error_check" CHECK ("broker_balance_snapshots"."last_refresh_error" in ('unauthorized', 'rate_limited', 'rejected', 'unavailable', 'contract_violation', 'account_mismatch', 'account_pending', 'account_revoked', 'key_unavailable')),
+	CONSTRAINT "broker_balance_snapshots_failure_pair_check" CHECK (("broker_balance_snapshots"."last_refresh_error" is null) = ("broker_balance_snapshots"."last_refresh_failed_at" is null))
+);
+--> statement-breakpoint
+ALTER TABLE "broker_balance_snapshots" ADD CONSTRAINT "broker_balance_snapshots_account_fk" FOREIGN KEY ("broker_account_id") REFERENCES "public"."broker_accounts"("id") ON DELETE restrict ON UPDATE no action;

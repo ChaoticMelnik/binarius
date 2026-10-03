@@ -1,5 +1,14 @@
 import { sql } from 'drizzle-orm';
-import { bigint, check, customType, timestamp, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  check,
+  customType,
+  numeric,
+  timestamp,
+  uuid,
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core';
+import type { DecimalString } from '@binarius/shared';
 
 export const id = () => uuid('id').primaryKey().defaultRandom();
 
@@ -19,6 +28,18 @@ export const tokenAmount = (name: string) =>
     .notNull()
     .default(sql`0`);
 
+// Money columns: numeric(20,8) in string mode. The digit counts are exported because a writer that
+// takes broker values checks them against this domain before the statement (balance-snapshot-ops.ts):
+// numeric rounds extra fraction digits silently and fails on extra integer digits.
+export const MONEY_INTEGER_DIGITS = 12;
+export const MONEY_SCALE = 8;
+export const money = (name: string) =>
+  numeric(name, {
+    precision: MONEY_INTEGER_DIGITS + MONEY_SCALE,
+    scale: MONEY_SCALE,
+    mode: 'string',
+  }).$type<DecimalString>();
+
 // pg-core 0.45 ships no bytea builder
 export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => 'bytea',
@@ -31,6 +52,10 @@ export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
 // so a wrong choice is a type error at the call site rather than a silent runtime rejection.
 export const positiveNumeric = (name: string, column: AnyPgColumn) =>
   check(name, sql`${column} > 0 and ${column} <> 'NaN'::numeric`);
+
+// zero allowed: a balance or an amount held can be nothing
+export const nonNegativeNumeric = (name: string, column: AnyPgColumn) =>
+  check(name, sql`${column} >= 0 and ${column} <> 'NaN'::numeric`);
 
 export const nullablePositiveNumeric = (name: string, column: AnyPgColumn) =>
   check(name, sql`${column} is null or (${column} > 0 and ${column} <> 'NaN'::numeric)`);
