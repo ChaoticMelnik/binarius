@@ -72,20 +72,27 @@ account id reaches the bot.
 ## Refresh
 
 `refresh(accountId, { signal?, requested?, mayRefresh? })`, one flight per account. A second
-caller joins the flight in progress and gets its outcome. A joining caller's own signal ends only
-its own wait, and its `requested: true` still reaches the write. The steps:
+caller joins the flight in progress and gets its outcome, and its `requested: true` still reaches
+the write. The starter's signal ends the GET for every caller joined to that flight. When the
+route's 3 s `TRADING_ACCESS_REFRESH_BUDGET_MS` runs out, a joined tick gets `aborted` (not held
+back, see the tick), and a joined second bot request falls back to the stored snapshot or
+`broker_unavailable`. A joiner's own signal ends only its own wait, and an already aborted
+signal starts no flight. The steps:
 
 1. The access token: `ensureFreshAccessToken(…, { mayRefresh })`
-   ([binodex-oauth.md](binodex-oauth.md) → Refresh).
-2. `GET /v1/broker/user`, with the caller's signal and `stop()`'s.
-3. The owner check: the answer's `id` must be the account's `broker_user_id`.
-4. `upsertBalanceSnapshot`, and its domain check.
+   ([binodex-oauth.md](binodex-oauth.md) → Refresh). It reads the user's status in the statement
+   that locks the account, and a blocked user gets no token.
+2. The account's `broker_user_id`; a missing account spends no call.
+3. `GET /v1/broker/user`, with the caller's signal and `stop()`'s.
+4. The owner check: the answer's `id` must be the account's `broker_user_id`.
+5. `upsertBalanceSnapshot`, and its domain check.
 
 | Source | Outcome, `last_refresh_error` | Logged |
 | --- | --- | --- |
 | a snapshot written | `ok`, cleared | — |
 | token `account_pending` / `account_revoked` / `key_unavailable` | the same code | token-service logs `key_unavailable` |
 | token `refresh_needed` (the tick, `mayRefresh: false`) | `refresh_needed`, nothing written | — |
+| token `user_blocked` | `user_blocked`, nothing written | — |
 | token `account_not_found` | nothing written | — |
 | `BrokerRestError` `unauthorized` / `rate_limited` / `rejected` / `unavailable` / `contract_violation` | the same code | `warn` `balance refresh failed`, with `status`, `retryAfterSec`, `detail` |
 | `BrokerRestError` `aborted` (`stop()`, the route's budget) | `aborted`, nothing written | — |
@@ -108,16 +115,21 @@ Every `BALANCE_RECONCILE_INTERVAL_MS` (env, 10 000 to 60 000, default 60 000):
 
 1. **Accounts in work** (`listBalanceRefreshCandidates`): an active account of an active user,
    with a non-terminal intent or one the bot asked about within `BALANCE_WATCH_WINDOW_MS`
-   (10 min), whose access token outlives `now() + ACCESS_SKEW_MS` by the database clock.
+   (10 min), whose access token outlives `now() + ACCESS_SKEW_MS` by the database clock. This
+   filter is an optimisation: the user's status is read again under the account lock when the
+   token is taken (`user_blocked`: nothing written, counted `skipped`, held back).
 2. **Order.** Never-observed accounts come first. After them, the account that has gone longest
    since its last attempt (`greatest(rest_observed_at, last_refresh_failed_at)`), so a recorded
    failure moves an account to the back of the queue.
 3. **Held back.** An attempt of the tick that left nothing in the row puts the account in the
    reconciler's in-memory `stalled` map for `BALANCE_STALLED_RETRY_MS` (5 min), and the next
-   ticks pass it as `exclude`. That happens when there is no snapshot to mark the failure on, or
-   when the outcome was `refresh_needed` or `account_not_found`. A successful refresh, from the
-   tick or from the route, removes the account from the map. A restart forgets the map, and each
-   such account is tried once more.
+   ticks pass it as `exclude`. That happens when there is no snapshot to mark the failure on,
+   when the outcome was `refresh_needed`, `user_blocked` or `account_not_found`, and when the
+   attempt threw. A successful refresh, from the tick or from the route, removes the account from
+   the map. A restart forgets the map, and each such account is tried once more. `aborted` is not
+   held back: in the tick it comes from `stop()`, or from joining a route's flight cut by its
+   budget. The next tick's own GET is bounded by `BROKER_REST_TIMEOUT_MS`, and its failure is
+   recorded.
 4. **Limit.** `max(1, floor(BALANCE_POLL_MAX_PER_MINUTE × interval / 60 000))` accounts per tick
    (env, 1 to 500, default 200), four at a time. A `rate_limited` answer stops new calls for the
    rest of the tick. A tick still running when the next interval fires makes that one a no-op.
@@ -144,8 +156,11 @@ per tick, at most the tick limit.
   before the next tick.
 - `MAX_BALANCE_RECONCILE_INTERVAL_MS` `<= BROKER_BALANCE_SLA_MS` (60 000): the interval cannot
   outgrow the SLA by configuration.
-- `MAX_BALANCE_POLL_PER_MINUTE` (500) `< BROKER_RATE_LIMIT_PER_MINUTE` (600): leaves room for
-  OAuth, token refreshes and the pairs catalog from the same IP.
+- `MAX_BALANCE_POLL_PER_MINUTE` (500) `< BROKER_RATE_LIMIT_PER_MINUTE` (600). This budgets the
+  tick only. GETs triggered by the route (`POST /trading/access` with a stale snapshot, at most
+  one in flight per account) come on top and are not capped. Until the probe in Observed live
+  shows whether authorized calls share the per-IP window, the headroom of 100 a minute is shared
+  by OAuth, token exchanges, the pairs catalog and these route GETs.
 - `MAX_BALANCE_RECONCILE_INTERVAL_MS < BALANCE_STALLED_RETRY_MS < BALANCE_WATCH_WINDOW_MS`: a
   held-back account skips at least one tick and is retried inside its watch window.
 - `MAX_BALANCE_RECONCILE_INTERVAL_MS < BALANCE_WATCH_WINDOW_MS`: an account the bot asked about
@@ -195,7 +210,10 @@ answers `aborted` without a call.
   ```
 
   `apps/backend/src/cli/rate-limit-probe.ts` makes two authorized `GET /v1/broker/user` calls and
-  prints each one's status and `x-ratelimit-*` headers, nothing else. The result goes here.
+  prints each one's status and `x-ratelimit-*` headers, nothing else. It takes the token through
+  `ensureFreshAccessToken` with `mayRefresh: false`. So it refuses an account that is not active,
+  of a blocked user, or whose access token needs an exchange, and it never exchanges one. The
+  result goes here.
 
 ## Accepted risks
 
@@ -207,6 +225,10 @@ answers `aborted` without a call.
 - An account in work with an expired access token gets a snapshot only when its user acts; its
   age shows in the tick summary.
 - `rest_observed_at` is the time of the write, milliseconds after the broker answered.
+- The token is handed out inside a transaction, and the GET goes out after its COMMIT. A block
+  committed in those milliseconds does not stop a request already sent. Nothing sets a block
+  today. Future code that needs a hard guarantee revokes the user's accounts in the same
+  transaction, in the order `users → broker_accounts`.
 
 ## Boundaries
 

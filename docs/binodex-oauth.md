@@ -480,6 +480,7 @@ the broker balance refresh (`apps/backend/src/broker/balance-reconciler.ts`): `P
 | Step                                                        | Outcome                                                                                                           |
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | account missing                                             | `account_not_found`                                                                                               |
+| user `blocked`                                              | `user_blocked`: nothing decrypted, exchanged or revoked. `users.status` is read in the statement that locks the account, without locking `users` (lock order, Rule 5) |
 | `status = pending`                                          | `account_pending` — nobody has confirmed it, so it may not act on the user's behalf                               |
 | `status = revoked`                                          | `account_revoked` — checked **before** the expiry, so a revoked account never hands out the token it still stores |
 | `token_key_id ≠ the process's key id`                       | `key_unavailable`, and **nothing is written** (see below)                                                         |
