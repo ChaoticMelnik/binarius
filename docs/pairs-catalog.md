@@ -76,7 +76,7 @@ or `.env` sets it. The module itself takes any positive `ttlMs`.
 
 | Code | Body | When | What the caller does (#125) |
 |---|---|---|---|
-| `200` | `{ pairs: PairView[], fetchedAt, ageMs }` | the cache has a snapshot no older than `BROKER_PAIRS_MAX_STALE_MS` | show it; how fresh is fresh enough is the caller's decision from `ageMs` against `MAX_BROKER_PAIRS_TTL_MS` |
+| `200` | `{ pairs: PairView[], fetchedAt, ageMs }` | the cache has a snapshot no older than `BROKER_PAIRS_MAX_STALE_MS` | show it; how fresh is fresh enough is the caller's decision from `ageMs`; a healthy snapshot reaches `BROKER_PAIRS_TTL_MS + BROKER_REST_TIMEOUT_MS` (65 s at the maximum TTL). The constants live in `@binarius/broker-rest`; the bot gets the bound with #125 |
 | `503` | `{ error: 'catalog_unavailable' }` | no snapshot yet, or the broker has been failing for longer than the ceiling; a read, nothing happened | say the catalog is unavailable and offer to retry; not an unknown outcome |
 | `401` | `{ error: 'unauthorized' }` | the bearer did not match | configuration, not a user scenario |
 | other | `{ error: 'internal' }` | the app's error handler | like any 500 |
@@ -118,6 +118,7 @@ when the error has them. The line holds neither the base URL nor any of the resp
 - #99/#101: the socket's `common.assets_list`/`common.assets_update` as a source of updates, the
   catalog instance in the worker, `BROKER_API_BASE_URL` in the worker's env, and the `refresh()`
   call on reconnect.
-- #125: the bot's client for `GET /trading/pairs`, the asset picker and its use of `ageMs`.
+- #125: the bot's client for `GET /trading/pairs`, the asset picker and its use of `ageMs`, and
+  where the freshness bound lives.
 - #136/#137: `POST /trading/access` and its broker section.
 - Not done anywhere yet: the catalog in `/health`, `GET /trading/pairs/:id`, backoff on 429/5xx.

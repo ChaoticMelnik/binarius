@@ -5,8 +5,8 @@ import { BROKER_REST_TIMEOUT_MS, BrokerRestError, type BrokerRestClient } from '
 //   BROKER_REST_TIMEOUT_MS < MIN_BROKER_PAIRS_TTL_MS — one GET ends before the next tick
 //   MIN ≤ DEFAULT ≤ MAX                              — the env range (BROKER_PAIRS_TTL_MS) holds its default
 //   MAX_BROKER_PAIRS_TTL_MS < BROKER_PAIRS_MAX_STALE_MS — a snapshot outlives several failed ticks
-// The TTL is the timer's period and so the age a caller may treat as fresh; MAX_STALE is how long
-// the last snapshot is still served while the broker is unavailable.
+// The TTL is the timer's period; a healthy snapshot is at most TTL + BROKER_REST_TIMEOUT_MS old.
+// MAX_STALE is how long the last snapshot is still served while the broker is unavailable.
 export const MIN_BROKER_PAIRS_TTL_MS = 30_000;
 export const DEFAULT_BROKER_PAIRS_TTL_MS = 30_000;
 export const MAX_BROKER_PAIRS_TTL_MS = 60_000;
@@ -21,19 +21,16 @@ if (!PAIRS_CATALOG_CHAIN_HOLDS) {
   throw new Error('pairs catalog timing constants are out of order (see pairs-catalog.ts)');
 }
 
-export interface PairsSnapshot {
+interface PairsSnapshot {
   pairs: BinaryPair[];
   fetchedAt: number;
 }
 
 export interface PairsCatalog {
-  // undefined: no snapshot yet, or the last one is older than BROKER_PAIRS_MAX_STALE_MS
   read(): PairsCatalogView | undefined;
   // true when the snapshot was replaced; one request at a time; false without a request after stop()
   refresh(): Promise<boolean>;
-  // setInterval(refresh, ttlMs); a second start() and a start() after stop() do nothing
   start(): void;
-  // clears the timer and aborts the request in flight
   stop(): void;
 }
 
