@@ -23,7 +23,10 @@ import type {
 import type { AssetsUpdate, PriceUpdate, SocketOpenTradeRequest } from './socket';
 import type { SignalParams, TradingSignalResponse } from './signal';
 import type { TradeIntent, TradeIntentView } from './trading';
+import type { AccessTokenRefusal, AccessTokenRequest, AccessTokenResponse } from './access-token';
+import type { AccountHaltReason } from './oauth';
 import type { TradingAccessResponse } from './trading-access';
+import * as accessToken from './access-token';
 import * as account from './account';
 import * as admin from './admin';
 import * as broker from './broker';
@@ -126,6 +129,20 @@ describe('contract coverage (issue #6)', () => {
         | null;
       realTradingAllowed: boolean;
     }>();
+  });
+
+  it('access token route and halt reason (issue #90)', () => {
+    expectTypeOf<AccessTokenRequest>().toEqualTypeOf<{ mayRefresh: boolean }>();
+    expectTypeOf<AccessTokenResponse>().toEqualTypeOf<{ accessToken: string }>();
+    expectTypeOf<AccessTokenRefusal>().toEqualTypeOf<
+      | 'account_not_found'
+      | 'user_blocked'
+      | 'account_pending'
+      | 'account_revoked'
+      | 'key_unavailable'
+      | 'refresh_needed'
+    >();
+    expectTypeOf<AccountHaltReason>().toEqualTypeOf<'reconciliation_ambiguous' | 'trade_mismatch'>();
   });
 
   it('BrokerBalanceView (issue #137)', () => {
@@ -307,6 +324,7 @@ describe('contract coverage (issue #6)', () => {
 
   it('root index re-exports every module', () => {
     const modules = {
+      accessToken,
       account,
       admin,
       money,

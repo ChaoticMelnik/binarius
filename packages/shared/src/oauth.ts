@@ -119,7 +119,7 @@ export const safeParseWidgetSessionResponse = (input: unknown) =>
 // --- Login flow contract (issue #9) ------------------------------------------------------------
 
 // Reasons this flow may revoke a broker account. Trading halts (trading_halted/halted_reason)
-// belong to reconciliation (ARCH-04) and are never written here.
+// belong to reconciliation (haltAccountForManualReview, packages/db) and are never written here.
 export const AuthRevokedReason = {
   // the broker refused our refresh token: it has already been consumed, which is what a
   // replayed refresh token looks like from our side
@@ -133,6 +133,16 @@ export const AuthRevokedReason = {
 } as const;
 export type AuthRevokedReason = (typeof AuthRevokedReason)[keyof typeof AuthRevokedReason];
 export const authRevokedReasonSchema = z.enum(AuthRevokedReason);
+
+// Why trading on an account stopped (broker_accounts.halted_reason, #90): reconciliation could not
+// tell which broker trade an intent became, or the one it found disagrees with the intent. Only an
+// operator lifts it, writing trading_halted and halted_reason together.
+export const AccountHaltReason = {
+  ReconciliationAmbiguous: 'reconciliation_ambiguous',
+  TradeMismatch: 'trade_mismatch',
+} as const;
+export type AccountHaltReason = (typeof AccountHaltReason)[keyof typeof AccountHaltReason];
+export const accountHaltReasonSchema = z.enum(AccountHaltReason);
 
 // A freshly linked account starts pending: the OAuth callback proves someone authorized at the
 // broker, not that the Telegram user who started the login is that someone. Confirming in the

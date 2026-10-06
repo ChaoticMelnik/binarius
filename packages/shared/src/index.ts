@@ -8,6 +8,7 @@ export * from './users';
 export * from './account';
 export * from './broker-balance';
 export * from './trading-access';
+export * from './access-token';
 export * from './admin';
 export * from './partner';
 export * from './socket';
