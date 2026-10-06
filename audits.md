@@ -1535,8 +1535,8 @@ PR #248 смержен через rebase: 3 коммита, голова `653e50
 
 ### Process improvement proposals
 
-1. **Номера в общих списках (Architecture Rules) сверяются с соседними планами волны; второй по мержу перенумеровывает** — **внедрено в #DOCS: `.claude/skills/architect/SKILL.md` → Step 4 (sibling plans)**
-2. **Проверка чужих прогонов — по имени процесса (`ps … awk`), не `pgrep -f`** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Shared-resource window**
+1. **Номера в общих списках (Architecture Rules) сверяются с соседними планами волны; второй по мержу перенумеровывает** — **внедрено в #255: `.claude/skills/architect/SKILL.md` → Step 4 (sibling plans)**
+2. **Проверка чужих прогонов — по имени процесса (`ps … awk`), не `pgrep -f`** — **внедрено в #255: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Shared-resource window**
 3. **Minor 2 (обвязка рубежей)** — **вынесено в #100 (комментарий-требование, решение владельца 2026-10-06)**
 
 ---
@@ -1568,7 +1568,7 @@ PR #249 смержен через rebase: 5 коммитов, голова `b79b
 
 ### Process improvement proposals
 
-1. **Не больше трёх Opus-агентов фаз одновременно** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+1. **Не больше трёх Opus-агентов фаз одновременно** — **внедрено в #255: `.claude/skills/tech-lead/SKILL.md` → Step 7**
 
 ---
 
@@ -1633,7 +1633,7 @@ PR #250 смержен через rebase: 2 коммита, голова `80b798
 
 ### Process improvement proposals
 
-1. **Проектное подтверждение оговорки CodeGraph** — **внедрено в #DOCS: `.claude/CLAUDE.md` → CodeGraph**
+1. **Проектное подтверждение оговорки CodeGraph** — **внедрено в #255: `.claude/CLAUDE.md` → CodeGraph**
 
 ---
 
@@ -1667,8 +1667,8 @@ PR #252 смержен через rebase: 3 коммита, голова `f22df0
 ### Process improvement proposals
 
 1. **Minor m1-m6** — **вынесено в #253**
-2. **План с «мерж после #X» называет промежуточную форму, если у #X нет ветки** — **внедрено в #DOCS: `.claude/skills/architect/SKILL.md` → Step 4 (sibling plans)**
-3. **После мержа PR с миграцией tech-lead применяет её к общей тестовой БД** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Unmerged migrations**
-4. **Stacked PR ревьюится после мержа базы и rebase на `main`** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Phase 3**
-5. **Свежий путь review-worktree на каждый круг, `codex status` из worktree** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+2. **План с «мерж после #X» называет промежуточную форму, если у #X нет ветки** — **внедрено в #255: `.claude/skills/architect/SKILL.md` → Step 4 (sibling plans)**
+3. **После мержа PR с миграцией tech-lead применяет её к общей тестовой БД** — **внедрено в #255: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Unmerged migrations**
+4. **Stacked PR ревьюится после мержа базы и rebase на `main`** — **внедрено в #255: `.claude/skills/tech-lead/SKILL.md` → Phase 3**
+5. **Свежий путь review-worktree на каждый круг, `codex status` из worktree** — **внедрено в #255: `.claude/skills/tech-lead/SKILL.md` → Step 7**
 6. **#99 (PR #251) не смержен: прошёл 3 круга (лимит), Minor → #254, ждёт #205 + шаг 5 + whole-feature Codex на итоговом head** — **открыто (2026-10-06, владелец/tech-lead): запись аудита #99 — после его мержа**
