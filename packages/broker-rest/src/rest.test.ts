@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import pino from 'pino';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import {
+  BrokerRestErrorCode,
   errorLogFields,
   isClosedTrade,
   isDecimalString,
@@ -23,7 +24,6 @@ import {
 import {
   BROKER_REST_ENDPOINTS,
   BrokerRestError,
-  BrokerRestErrorCode,
   createBrokerRestClient,
   MAX_DETAIL_LENGTH,
   MAX_ERROR_BODY_BYTES,

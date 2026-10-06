@@ -1,9 +1,5 @@
-import {
-  BrokerRestError,
-  type BrokerRestClient,
-  type BrokerRestErrorCode,
-} from '@binarius/broker-rest';
-import { errorLogFields } from '@binarius/shared';
+import { BrokerRestError, type BrokerRestClient } from '@binarius/broker-rest';
+import { errorLogFields, type BrokerRestErrorCode } from '@binarius/shared';
 import type { Logger } from 'pino';
 import { assertSignalClock } from './candles';
 import { createSignalDecider, type SignalDecider } from './decide';

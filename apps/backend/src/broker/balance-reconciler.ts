@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
-import { BrokerRestError, BrokerRestErrorCode, type BrokerRestClient } from '@binarius/broker-rest';
-import { BROKER_BALANCE_SLA_SEC, errorLogFields } from '@binarius/shared';
+import { BrokerRestError, type BrokerRestClient } from '@binarius/broker-rest';
+import { BROKER_BALANCE_SLA_SEC, BrokerRestErrorCode, errorLogFields } from '@binarius/shared';
 import {
   BalanceRefreshError,
   brokerAccounts,

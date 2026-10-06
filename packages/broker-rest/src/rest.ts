@@ -1,4 +1,5 @@
 import {
+  BrokerRestErrorCode,
   safeParseBinaryPairs,
   safeParseBrokerError,
   safeParseBrokerUser,
@@ -38,26 +39,6 @@ export const MAX_ERROR_BODY_BYTES = 16_384;
 // 5000-row cap (the live broker answered limit=5000 with 4999 rows, docs/mock-broker.md), six
 // numbers and under 100 bytes a row: below 0.5 MiB, so this leaves a margin of eight.
 export const MAX_SUCCESS_BODY_BYTES = 4 * 1024 * 1024;
-
-// Told apart by the HTTP status and the transport failure, never by the body text. Which rows
-// mean "the broker refused before acting" and which mean "the outcome is unknown" is the table in
-// docs/broker-rest.md -> Errors; a REST open that ends unavailable or contract_violation may have
-// opened.
-export const BrokerRestErrorCode = {
-  // 401
-  Unauthorized: 'unauthorized',
-  // 429; retryAfterSec when Retry-After is an integer
-  RateLimited: 'rate_limited',
-  // any other 4xx
-  Rejected: 'rejected',
-  // 5xx, a failed or timed-out fetch, a 2xx body cut mid-flight
-  Unavailable: 'unavailable',
-  // a 2xx body that is not JSON or fails the schema, and any 3xx
-  ContractViolation: 'contract_violation',
-  // the caller's signal fired first
-  Aborted: 'aborted',
-} as const;
-export type BrokerRestErrorCode = (typeof BrokerRestErrorCode)[keyof typeof BrokerRestErrorCode];
 
 // Carries no cause, URL, header or body: a thrown error ends up in a log line, and any of those
 // can hold the bearer token. `detail` is the broker's error message only, cut to
