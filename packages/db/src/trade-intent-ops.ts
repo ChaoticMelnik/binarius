@@ -945,10 +945,12 @@ export function markIntentManualReview(
 
 export type ManualReviewReason =
   | typeof TradeIntentFailureReason.ReconciliationAmbiguous
+  | typeof TradeIntentFailureReason.ReconciliationNotFound
   | typeof TradeIntentFailureReason.TradeMismatch;
 
 const HALT_REASON_FOR = {
   [TradeIntentFailureReason.ReconciliationAmbiguous]: AccountHaltReason.ReconciliationAmbiguous,
+  [TradeIntentFailureReason.ReconciliationNotFound]: AccountHaltReason.ReconciliationNotFound,
   [TradeIntentFailureReason.TradeMismatch]: AccountHaltReason.TradeMismatch,
 } as const satisfies Record<ManualReviewReason, AccountHaltReason>;
 

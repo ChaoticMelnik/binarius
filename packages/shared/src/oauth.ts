@@ -135,10 +135,12 @@ export type AuthRevokedReason = (typeof AuthRevokedReason)[keyof typeof AuthRevo
 export const authRevokedReasonSchema = z.enum(AuthRevokedReason);
 
 // Why trading on an account stopped (broker_accounts.halted_reason, #90): reconciliation could not
-// tell which broker trade an intent became, or the one it found disagrees with the intent. Only an
-// operator lifts it, writing trading_halted and halted_reason together.
+// tell which broker trade an intent became, found none once the window closed (absence is not
+// proven before #274), or the one it found disagrees with the intent. Only an operator lifts it,
+// writing trading_halted and halted_reason together.
 export const AccountHaltReason = {
   ReconciliationAmbiguous: 'reconciliation_ambiguous',
+  ReconciliationNotFound: 'reconciliation_not_found',
   TradeMismatch: 'trade_mismatch',
 } as const;
 export type AccountHaltReason = (typeof AccountHaltReason)[keyof typeof AccountHaltReason];

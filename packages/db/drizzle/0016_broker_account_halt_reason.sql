@@ -1,2 +1,2 @@
-ALTER TABLE "broker_accounts" ADD CONSTRAINT "broker_accounts_halted_reason_check" CHECK ("broker_accounts"."halted_reason" in ('reconciliation_ambiguous', 'trade_mismatch'));--> statement-breakpoint
+ALTER TABLE "broker_accounts" ADD CONSTRAINT "broker_accounts_halted_reason_check" CHECK ("broker_accounts"."halted_reason" in ('reconciliation_ambiguous', 'reconciliation_not_found', 'trade_mismatch'));--> statement-breakpoint
 ALTER TABLE "broker_accounts" ADD CONSTRAINT "broker_accounts_halt_reason_pair_check" CHECK ("broker_accounts"."trading_halted" = ("broker_accounts"."halted_reason" is not null));

@@ -51,6 +51,7 @@ import {
   takeIntent,
   transitionIntent,
   uniqueViolation,
+  type ManualReviewReason,
   type TradeIntentRow,
   type TradePolicy,
 } from './trade-intent-ops';
@@ -1488,16 +1489,14 @@ describe('haltAccountForManualReview (#90)', () => {
         .from(brokerAccounts)
         .where(eq(brokerAccounts.id, id))
     )[0]!;
-  const halt = (
-    intent: { id: string; version: number },
-    reason: 'reconciliation_ambiguous' | 'trade_mismatch',
-  ) =>
+  const halt = (intent: { id: string; version: number }, reason: ManualReviewReason) =>
     tmp.db.transaction((tx) =>
       haltAccountForManualReview(tx, { id: intent.id, expectedVersion: intent.version, reason }),
     );
 
   it.each([
     [TradeIntentFailureReason.ReconciliationAmbiguous, AccountHaltReason.ReconciliationAmbiguous],
+    [TradeIntentFailureReason.ReconciliationNotFound, AccountHaltReason.ReconciliationNotFound],
     [TradeIntentFailureReason.TradeMismatch, AccountHaltReason.TradeMismatch],
   ] as const)('parks the intent and halts the account for %s', async (reason, haltReason) => {
     const { intent, brokerAccountId, userId } = await claimedIntent();
