@@ -85,6 +85,10 @@
       "types": "./src/catalog.ts",
       "default": "./src/catalog.ts"
     },
+    "./signal": {
+      "types": "./src/signal.ts",
+      "default": "./src/signal.ts"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"

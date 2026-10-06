@@ -17,3 +17,4 @@ export * from './logging';
 export * from './link-confirmation';
 export * from './telegram-html';
 export * from './catalog';
+export * from './signal';

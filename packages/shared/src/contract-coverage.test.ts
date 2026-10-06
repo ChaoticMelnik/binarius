@@ -21,6 +21,7 @@ import type {
   PartnerTraderStats,
 } from './partner';
 import type { AssetsUpdate, PriceUpdate, SocketOpenTradeRequest } from './socket';
+import type { SignalParams, TradingSignalResponse } from './signal';
 import type { TradeIntent, TradeIntentView } from './trading';
 import type { TradingAccessResponse } from './trading-access';
 import * as account from './account';
@@ -37,6 +38,7 @@ import * as money from './money';
 import * as oauth from './oauth';
 import * as partner from './partner';
 import * as processModule from './process';
+import * as signal from './signal';
 import * as socket from './socket';
 import * as telegramHtml from './telegram-html';
 import * as time from './time';
@@ -283,6 +285,26 @@ describe('contract coverage (issue #6)', () => {
     >();
   });
 
+  it('Trading signal response (issue #258)', () => {
+    expectTypeOf<TradingSignalResponse['outcome']>().toEqualTypeOf<'decided' | 'fetch_failed'>();
+    expectTypeOf<
+      Extract<TradingSignalResponse, { outcome: 'decided' }>['params']
+    >().toEqualTypeOf<SignalParams>();
+    expectTypeOf<keyof Extract<TradingSignalResponse, { outcome: 'fetch_failed' }>>().toEqualTypeOf<
+      'outcome' | 'code' | 'retryAfterSec'
+    >();
+    expectTypeOf<
+      Extract<TradingSignalResponse, { outcome: 'fetch_failed' }>['code']
+    >().toEqualTypeOf<
+      | 'unauthorized'
+      | 'rate_limited'
+      | 'rejected'
+      | 'unavailable'
+      | 'contract_violation'
+      | 'aborted'
+    >();
+  });
+
   it('root index re-exports every module', () => {
     const modules = {
       account,
@@ -304,6 +326,7 @@ describe('contract coverage (issue #6)', () => {
       linkConfirmation,
       telegramHtml,
       catalog,
+      signal,
     };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {
