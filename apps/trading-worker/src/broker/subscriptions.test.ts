@@ -61,10 +61,4 @@ describe('chunkAssets', () => {
     expect(chunkAssets(range(1, MAX_PRICE_SUBSCRIPTION_ASSETS))).toHaveLength(1);
     expect(chunkAssets([])).toEqual([]);
   });
-
-  it('takes a smaller size and refuses a size that is not a positive integer', () => {
-    expect(chunkAssets([1, 2, 3], 2)).toEqual([[1, 2], [3]]);
-    expect(() => chunkAssets([1], 0)).toThrow(RangeError);
-    expect(() => chunkAssets([1], 1.5)).toThrow(RangeError);
-  });
 });

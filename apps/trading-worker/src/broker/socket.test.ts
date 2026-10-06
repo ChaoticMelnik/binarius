@@ -19,6 +19,7 @@ import {
   type BrokerSocket,
   type BrokerSocketClient,
   type BrokerSocketClientOptions,
+  type BrokerSocketOptions,
   type BrokerSocketStateChange,
 } from './socket';
 
@@ -60,6 +61,28 @@ interface Harness {
   states: BrokerSocketStateChange[];
   lines: string[];
   logs(msg: string): LogEntry[];
+}
+
+interface Emit {
+  event: string;
+  args: unknown[];
+}
+
+// the openSocket seam wrapping io(): every emit the client makes, per socket, in order
+function recordEmits() {
+  const sockets: Emit[][] = [];
+  const openSocket = (url: string, options: BrokerSocketOptions): BrokerSocket => {
+    const socket: BrokerSocket = io(url, options);
+    const sent: Emit[] = [];
+    sockets.push(sent);
+    const emit = socket.emit.bind(socket) as (event: string, ...args: unknown[]) => BrokerSocket;
+    vi.spyOn(socket, 'emit').mockImplementation(((event: string, ...args: unknown[]) => {
+      sent.push({ event, args });
+      return emit(event, ...args);
+    }) as BrokerSocket['emit']);
+    return socket;
+  };
+  return { sockets, openSocket };
 }
 
 let broker: MockBroker;
@@ -145,8 +168,8 @@ describe('handshake', () => {
   it.each(Object.values(MockSocketPayload))(
     'authenticates, sends the registry once and delivers the burst (%s payloads)',
     async (form) => {
-      broker = await startMockBroker({ socketPayload: form });
       extraBrokers.push(broker);
+      broker = await startMockBroker({ socketPayload: form });
       broker.users.register({ id: 1, accessToken: TOKEN });
       const h = harness();
       h.client.subscribe([AAPL, EURUSD]);
@@ -219,24 +242,8 @@ describe('handshake', () => {
 
   it('holds a subscribe made while authenticating for the next pass; a hung auth reconnects', async () => {
     broker.socket.failNext('auth', { silent: true });
-    const emitted: string[][] = [];
-    const h = harness({
-      // the seam records what the client emits, per socket
-      openSocket: (url, options) => {
-        const socket: BrokerSocket = io(url, options);
-        const sent: string[] = [];
-        emitted.push(sent);
-        const emit = socket.emit.bind(socket) as (
-          event: string,
-          ...args: unknown[]
-        ) => BrokerSocket;
-        vi.spyOn(socket, 'emit').mockImplementation(((event: string, ...args: unknown[]) => {
-          sent.push(event);
-          return emit(event, ...args);
-        }) as BrokerSocket['emit']);
-        return socket;
-      },
-    });
+    const recorded = recordEmits();
+    const h = harness({ openSocket: recorded.openSocket });
     h.client.start(CREDENTIALS);
     await waitFor('authenticating', () => h.client.state === BrokerSocketState.Authenticating);
     h.client.subscribe([EURUSD]);
@@ -246,7 +253,7 @@ describe('handshake', () => {
       'the pass on the socket',
       () => broker.socket.sockets()[0]?.subscriptions.length === 1,
     );
-    expect(emitted).toEqual([
+    expect(recorded.sockets.map((sent) => sent.map(({ event }) => event))).toEqual([
       [BrokerSocketEvent.UserAuth, BrokerSocketEvent.UserAuth, BrokerSocketEvent.PriceSubscribe],
     ]);
     const [hung, live] = bySocket();
@@ -270,6 +277,29 @@ describe('handshake', () => {
     expect(h.logs('broker socket ready')).toEqual([
       expect.objectContaining({ level: LEVEL.info, connection: 2, attempt: 1, subscriptions: 1 }),
     ]);
+  });
+
+  it('sends a subscribe made by a ready listener once, after the pass', async () => {
+    const recorded = recordEmits();
+    const h = harness({ openSocket: recorded.openSocket });
+    h.client.subscribe([EURUSD]);
+    h.client.onState(({ to }) => {
+      if (to === BrokerSocketState.Ready) h.client.subscribe([BTCUSD]);
+    });
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    await waitFor(
+      'both ids on the socket',
+      () => broker.socket.sockets()[0]?.subscriptions.length === 2,
+    );
+    const subscribes = (recorded.sockets[0] ?? []).filter(
+      ({ event }) => event === BrokerSocketEvent.PriceSubscribe,
+    );
+    expect(subscribes.map(({ args }) => args)).toEqual([
+      [{ assets: [EURUSD] }],
+      [{ assets: [BTCUSD] }],
+    ]);
+    expect(broker.socket.sockets()[0]?.subscriptions).toEqual(h.client.subscriptions());
   });
 
   it('disarms the auth timer once authenticated', async () => {
@@ -449,6 +479,80 @@ describe('terminal states', () => {
   );
 });
 
+describe('a CONNECT_ERROR from the server', () => {
+  it.each([
+    ['on the first connection', false],
+    ['on a reconnection', true],
+  ])('is disconnected_by_server %s, without reconnecting', async (_name, reconnect) => {
+    const refusal = { error: { message: 'SECRET-refusal' } };
+    const h = harness();
+    if (!reconnect) broker.socket.failNext('connect', refusal);
+    h.client.start(CREDENTIALS);
+    if (reconnect) {
+      await ready(h);
+      broker.socket.failNext('connect', refusal);
+      expect(broker.socket.cutTransport({ userId: 1 })).toBe(1);
+    }
+    await waitFor(
+      'disconnected_by_server',
+      () => h.client.state === BrokerSocketState.DisconnectedByServer,
+    );
+    expect(h.states.at(-1)).toEqual({
+      from: reconnect ? BrokerSocketState.Reconnecting : BrokerSocketState.Connecting,
+      to: BrokerSocketState.DisconnectedByServer,
+      reason: 'connect_error',
+    });
+    await quiet();
+    expect(broker.socket.sockets()).toEqual([]);
+    expect(bySocket()).toHaveLength(reconnect ? 1 : 0);
+    expect(h.logs('broker socket disconnected by server')).toEqual([
+      expect.objectContaining({
+        level: LEVEL.warn,
+        reason: 'connect_error',
+        err: { name: 'Error' },
+      }),
+    ]);
+    for (const line of h.lines) expect(line).not.toContain('SECRET');
+
+    h.client.start(CREDENTIALS);
+    await ready(h);
+  });
+});
+
+describe('listeners that end the session', () => {
+  it('a restart on auth_failed gets one live socket, and the old auth_error is not dispatched', async () => {
+    const h = harness();
+    let restarted = false;
+    h.client.onState(({ to }) => {
+      if (to !== BrokerSocketState.AuthFailed || restarted) return;
+      restarted = true;
+      h.client.start(CREDENTIALS);
+    });
+    h.client.start({ brokerUserId: '1', accessToken: 'SECRET-WRONG-TOKEN' });
+    await ready(h);
+    expect(h.client.connections).toBe(1);
+    await quiet();
+    expect(broker.socket.sockets()).toHaveLength(1);
+    expect(bySocket()).toHaveLength(2);
+    expect(typesOf(h.events)).not.toContain(BrokerEventType.AuthError);
+  });
+
+  it('a stop() on connecting leaves no socket on the broker', async () => {
+    const h = harness();
+    h.client.onState(({ to }) => {
+      if (to === BrokerSocketState.Connecting) h.client.stop();
+    });
+    h.client.start(CREDENTIALS);
+    await quiet();
+    expect(h.states.map(({ to }) => to)).toEqual([
+      BrokerSocketState.Connecting,
+      BrokerSocketState.Idle,
+    ]);
+    expect(broker.socket.sockets()).toEqual([]);
+    expect(broker.socket.journal).toEqual([]);
+  });
+});
+
 describe('start() and stop()', () => {
   it('refuses a second start while live and invalid credentials without quoting them', async () => {
     const h = harness();
@@ -578,6 +682,9 @@ describe('logs', () => {
     h.client.onEvent(() => {
       throw new Error(`listener saw ${TOKEN}`);
     });
+    h.client.onState(() => {
+      throw new Error(`state listener saw ${TOKEN}`);
+    });
     h.client.subscribe([EURUSD]);
     h.client.start(CREDENTIALS);
     await ready(h);
@@ -633,6 +740,7 @@ describe('logs', () => {
       'broker event with extra arguments',
       'broker event ignored',
       'broker event listener threw',
+      'broker socket state listener threw',
     ]) {
       expect(messages, msg).toContain(msg);
     }
