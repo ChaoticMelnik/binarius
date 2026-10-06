@@ -1503,3 +1503,172 @@ PR #242 смержен через rebase: 5 коммитов, голова `99db
 2. **Minor m1-m4** — **вынесено в #243**
 3. **Правка `~/.claude/CLAUDE.md` по двум находкам Codex (c)** — **отклонено: глобальный файл общий для всех проектов, проектный CLAUDE.md уже правит при расхождении (решение владельца 2026-10-06)**
 4. **Пост-фактум Codex**: к списку предложения 4 аудита #171 добавляются головы этой волны (`7fde2cd`, `756285a`, `7ea46c3`, `45962ff`, `99d8747`) и docs-PR #221, #226, #228, смерженные без Codex — **открыто (2026-10-06, владелец)**
+
+---
+
+## #134 — Real-режим за флагом REAL_TRADING_ENABLED (2026-10-06)
+
+PR #248 смержен через rebase: 3 коммита, голова `653e500` (на `main` — `8211c38`..`e1fe5e3`). **Один круг ревью, чистый, 3 Minor. Codex на ревью пропущен по явному решению владельца.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План | Другая сессия, 2026-10-06 07:45, Codex plan review `task-muwd1szm-spgzlo`. Владелец передал реализацию этой сессии. |
+| Implementer | Clarify + код | Спавн `opus`: 4 вопроса, дефектов плана нет. Ранний push после коммита 1 (миграция 0012 + `createTradeIntent(db, input, policy)`), чтобы #17/#89 могли ветвиться. Своя БД `binarius_impl_134`. 587 строк без snapshot (оценка ~600). 21 мутация. |
+| Tech Lead | Phase 3 | Аудит до ревью опубликован (issuecomment-6014181557). |
+| Reviewer | Iteration 1 | Спавн `opus`, умер на лимите сессии (`<synthetic>`), продолжен через SendMessage — ничего не было опубликовано. 3b-3d: 0 Blocker/Major, 3 Minor. `pnpm check` на своей БД `binarius_review_248`, второй прогон (первый — флейк `oauth-client.test.ts` при load average 18.75). |
+| Tech Lead | Whole-feature pass — check | Codex не запускался по решению владельца (лимит до 15:25 MSK) — маркера нет. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase + удалить ветку. Minor 2 записан требованием в #100 (#40 закрыт и разбит на #99/#100/#101). |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Rule 14 шире, чем enforced (третья форма `${VAR:-default}`, три непокрытых пина воркера) | Minor | single-source | Формулировка правила не сверена с пинами | Implementer |
+| Продакшен-обвязка обоих рубежей без теста | Minor | unverified-claim | Три независимых слоя делают её не единственной защитой — до #100 | Architect plan → требование в #100 |
+| Устаревшая фраза ARCH-01 в `docs/trade-intent-transport.md` | Minor | single-source | — | Implementer |
+| Rule 22 взят одновременно #134 и #19 | Process | single-source | Параллельные планы одной волны не сверили номера правил | Architect Step 4 → предложение 1 |
+| Ожидание `pgrep -f 'vitest'` совпадает с собственным shell'ом | Process | env-parity | Шаблон проверки — по тексту команды, не по имени процесса | Tech-lead Step 7 → предложение 2 |
+
+### Process improvement proposals
+
+1. **Номера в общих списках (Architecture Rules) сверяются с соседними планами волны; второй по мержу перенумеровывает** — **внедрено в #DOCS: `.claude/skills/architect/SKILL.md` → Step 4 (sibling plans)**
+2. **Проверка чужих прогонов — по имени процесса (`ps … awk`), не `pgrep -f`** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Shared-resource window**
+3. **Minor 2 (обвязка рубежей)** — **вынесено в #100 (комментарий-требование, решение владельца 2026-10-06)**
+
+---
+
+## #133 — Signal v1: подключение к свечам ARCH-01 и журнал решений (2026-10-06)
+
+PR #249 смержен через rebase: 5 коммитов, голова `b79b7e0` (на `main` — `8b55b86`..`a386b28`). **Один круг ревью, чистый, 4 Minor. Codex на плане и ревью пропущен по явному решению владельца.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`: 6 вопросов (владелец выбрал окно 60 вместо рекомендованных 100; цепочка пересчитана 60 − 1 − 2 = 57 ≥ 50). Живая read-only проба chart. Зависимость от #99 по тексту задачи не подтвердилась — план только на REST. Plan Update до реализации по 2 дефектам implementer'а. |
+| Implementer | Clarify + код | Спавн `opus`: 5 вопросов. 5 коммитов, `pnpm check` перед каждым, +923. Умер на лимите сессии после push до PR, продолжен. Живая проба один раз (форма и число строк, без цен). |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6015860347). |
+| Reviewer | Iteration 1 | Спавн `opus`. 3b-3d: 0 Blocker/Major, 4 Minor (guard интервала `Object.hasOwn`, формулировка F9, длина строки от брокера — принято на плане, порт F3b). |
+| Tech Lead | Whole-feature pass — check | Codex не запускался по решению владельца — маркера нет. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase + удалить ветку. Ветка отставала на 3 коммита #134 (общий только SKILL.md, без конфликта). |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| F7 `stale` недостижим при `now = closedNow`; плоская серия с wick 0.1 не даёт `volatility_too_low` | Plan defect | unverified-claim | Фикстуры теста не прогнаны до плана | Architect plan; поймано на Implementer Step 0 |
+| m1-m4 (guard интервала, F9, длина строки, порт F3b) | Minor | other | — | Implementer; не вынесены (решения владельца не было) |
+| Пять Opus-агентов одновременно упёрлись в лимит сессии | Process | other | Параллельность волны выше бюджета сессии | Tech-lead Step 7 → предложение 1 |
+
+### Process improvement proposals
+
+1. **Не больше трёх Opus-агентов фаз одновременно** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+
+---
+
+## #19 — Stake-sizing v1 (2026-10-06)
+
+PR #247 смержен через rebase: 4 коммита, голова `9eba0d6` (на `main` — `8c8d4df`..`1b14b14`). **Два круга ревью + проверка rebase. Codex на плане и ревью пропущен по явному решению владельца.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`: 8 вопросов, все рекомендованные. Проба BigInt-формулы (99 ячеек) и tsc-проба union. Plan Update до реализации (4 дефекта), Plan Update после круга 1 (без Codex). |
+| Implementer | Clarify + код | Спавн `opus`: 3 коммита, +1 530, 30 мутаций. Круг 1 — S22a-c. Rebase на `main` после #134/#133, правило перенумеровано в 23. |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6014045763). |
+| Reviewer | Iteration 1 | 1 Major: стоп-лосс сессии не различал `realizedSessionLoss` и `streakLoss` тестами. |
+| Reviewer | Iteration 2 | Код чистый, но конфликт с `main` (Rule 22 от #134); по решению владельца — rebase и проверка range-diff без полного ревью, LGTM на `9eba0d6`. |
+| Tech Lead | Whole-feature pass — check | Codex не запускался по решению владельца — маркера нет. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase + удалить ветку. |
+
+### Review iterations: 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| S2-сетка не проходит через `next()` вне домена; оракул `percentOf` точен только для ≤ 2 знаков | Plan defect | unverified-claim | Сетка и оракул не прогнаны до плана | Architect plan; поймано на Implementer Step 0 |
+| M1: проверка 9m (`realizedSessionLoss`) и 11 (`candidate` vs `base`) не различались тестами | Major → исправлен | instance-vs-class | Все тесты лимита — истории из одних проигрышей; архитектор по классу нашёл вторую дыру (11) | Implementer Step 5.5; Architect plan (таблица мутаций) |
+| m4-m7: верхняя граница прибыли, порядок стопов, K10, неиспользуемые типы | Minor | other | — | Implementer; не вынесены |
+
+### Process improvement proposals
+
+1. Покрыто предложением 1 записи #134 (номера правил волны).
+
+---
+
+## #17 — Trade intent state machine (2026-10-06)
+
+PR #250 смержен через rebase: 2 коммита, голова `80b798e` (на `main` — `b70d175`, `fb230bc`). **Два круга ревью с Codex.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`: 6 вопросов, проба триггера и CHECK на временной БД (сетка 10×10). Codex plan review пропущен по решению владельца. Hand-off #89/#90/#101 назван. Plan Update до реализации (список producer'ов `accepted`, `duration_sec`), Plan Update после круга 1 (без Codex). |
+| Implementer | Clarify + код | Спавн `opus`: ветка от `feat/134-…` (merge chain), два rebase на `main`. Один коммит по выбору владельца + коммит круга 1 без force-push (на ветке строился #89). Своя БД `binarius_impl_17`. |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6016171488). |
+| Reviewer | Iteration 1 | Codex `task-muwnl1ci-ifn828` + 3b-3d: 1 Major — отклонение implementer'а (повторная сверка привязанной сделки в `settleIntent`) делало заявку вечной `accepted`. Владелец: вернуться к плану. |
+| Reviewer | Iteration 2 | Codex `task-muwode18-1xi6ts` «No findings», маркер `Iteration review #250: base=a386b28 head=80b798e diff-sha256=65d56109…`. 5 Minor. |
+| Tech Lead | Whole-feature pass — check | Перехешировано перед мержем: хеш совпал, голова = одобренная = смерженная. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase + удалить ветку. |
+
+### Review iterations: 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| M1: повторная сверка привязанной сделки — тупик `accepted` (резерв, блокировка аккаунта, голодание #90) | Major → исправлен | other | Противоречие в самом плане (edge case «как получено» против `mismatch` в тесте шага 6); implementer разрешил его не в ту сторону | Architect plan; Implementer deviation |
+| Шаг 2(d): три `accepted` на одном аккаунте невозможны (один активный intent) | Plan defect | unverified-claim | Тест не сверен с unique-индексом | Architect Plan Update |
+| n1-n5 (лог несовпадения, наблюдаемость батча, `raw` при закрытии, устаревшее тело PR) | Minor | other | — | не вынесены |
+| `codegraph_callers` — ноль вызовов для каждой операции домена | Process | other | Ограничение статического извлечения (оговорка глобального CLAUDE.md) | — → предложение 1 |
+
+### Process improvement proposals
+
+1. **Проектное подтверждение оговорки CodeGraph** — **внедрено в #DOCS: `.claude/CLAUDE.md` → CodeGraph**
+
+---
+
+## #89 — Reconciliation: unknown → reconciling → accepted | rejected | manual_review (2026-10-06)
+
+PR #252 смержен через rebase: 3 коммита, голова `f22df0c` (на `main` — `3439871`..`64cf7e3`). **Один круг ревью с Codex, чистый, 6 Minor → #253.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable` после плана #17 по решению владельца: 6 вопросов, SQL-проба claim-запроса. Codex plan review пропущен по решению владельца. Plan Update до реализации (`until()` из несмерженного #205; шаг 10 runtime-проверки переписан). |
+| Implementer | Clarify + код | Спавн `opus`: ветка от `feat/17-…` на `80b798e`, после мержа #250 — `rebase --onto origin/main 80b798e`. 3 коммита, ~1 540 строк. Runtime-проверка в изолированном compose-проекте `binarius-89`. |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6016773528); ревью отложено до мержа базы и rebase. |
+| Reviewer | Iteration 1 | Codex `task-muwox90h-8uu1v0`, маркер `Iteration review #252: base=fb230bc head=f22df0c diff-sha256=25ac182a…`. 0 Blocker/Major, 6 Minor. |
+| Tech Lead | Whole-feature pass — check | Перехешировано перед мержем: хеш совпал, голова = одобренная = смерженная. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase + удалить ветку; Minor → #253 (решение владельца). Общая тестовая БД получила 0013-0015 только после замечания ревьюера #99. |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| `until()` из #205 недоступен; шаг 10 runtime невыполним (worker берёт job за миллисекунды, триггер #17 запрещает `rejected → submitting`) | Plan defect | unverified-claim | План опирался на несмерженную задачу и не прогнал процедуру | Architect plan; поймано на Implementer Step 0 → предложение 2 |
+| m1-m6 (отмена по AbortSignal как `failed`, warn до CAS, тип `MarkAcceptedOptions`, тесты) | Minor | other | — | → #253 |
+| Общая тестовая БД без миграций `main` после мержа | Process | env-parity | Никто не применял смерженные миграции к общей БД | Tech-lead Step 7 → предложение 3 |
+| Stacked PR: дифф показывал коммиты #17 до мержа базы | Process | other | — | Tech-lead Phase 3 → предложение 4 |
+| Codex второй попытки ревью #99 упал: брокер привязан к удалённому worktree | Process | codex-ops | Путь worktree переиспользован между кругами | Tech-lead Step 7 → предложение 5 |
+
+### Process improvement proposals
+
+1. **Minor m1-m6** — **вынесено в #253**
+2. **План с «мерж после #X» называет промежуточную форму, если у #X нет ветки** — **внедрено в #DOCS: `.claude/skills/architect/SKILL.md` → Step 4 (sibling plans)**
+3. **После мержа PR с миграцией tech-lead применяет её к общей тестовой БД** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Unmerged migrations**
+4. **Stacked PR ревьюится после мержа базы и rebase на `main`** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Phase 3**
+5. **Свежий путь review-worktree на каждый круг, `codex status` из worktree** — **внедрено в #DOCS: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+6. **#99 (PR #251) не смержен: прошёл 3 круга (лимит), Minor → #254, ждёт #205 + шаг 5 + whole-feature Codex на итоговом head** — **открыто (2026-10-06, владелец/tech-lead): запись аудита #99 — после его мержа**
