@@ -61,6 +61,8 @@ export const IGNORED_BROKER_EVENTS: ReadonlySet<string> = new Set([
 // socket.io's reasons: the server sent DISCONNECT, or our own disconnect()
 const SERVER_DISCONNECT = 'io server disconnect';
 const CLIENT_DISCONNECT = 'io client disconnect';
+// the client's reason for a connection the server refused with a CONNECT_ERROR packet
+const CONNECT_ERROR = 'connect_error';
 
 export interface BrokerCredentials {
   brokerUserId: string;
@@ -113,7 +115,6 @@ interface Counters {
 interface Connection {
   ordinal: number;
   connectedAt: number;
-  authSentAt: number;
   attempt: number;
   counters: Counters;
   warned: Set<string>;
@@ -170,6 +171,9 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
     }
   }
 
+  // stopped, or replaced by a later start(): its socket's events no longer speak for the client
+  const sessionEnded = (current: Session) => current.stopped || session !== current;
+
   function clearAuthTimer(current: Session) {
     if (current.authTimer !== undefined) clearTimeout(current.authTimer);
     current.authTimer = undefined;
@@ -213,19 +217,18 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
     }
     current.connectionCount += 1;
     current.connectErrorWarned = false;
-    const now = Date.now();
     current.connection = {
       ordinal: current.connectionCount,
-      connectedAt: now,
-      authSentAt: now,
+      connectedAt: Date.now(),
       attempt: current.reconnectAttempt,
       counters: newCounters(),
       warned: new Set(),
     };
     current.reconnectAttempt = 0;
-    transition(BrokerSocketState.Authenticating);
     current.socket.emit(BrokerSocketEvent.UserAuth, current.auth);
     current.authTimer = setTimeout(() => onAuthTimeout(current), timing.authTimeoutMs);
+    // last: state listeners run inside transition() and may stop or restart the client
+    transition(BrokerSocketState.Authenticating);
   }
 
   function onAuthTimeout(current: Session) {
@@ -256,7 +259,7 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
       return;
     }
     if (reason === SERVER_DISCONNECT) {
-      logger.warn({}, 'broker socket disconnected by server');
+      logger.warn({ reason }, 'broker socket disconnected by server');
       transition(BrokerSocketState.DisconnectedByServer, reason);
       return;
     }
@@ -264,7 +267,17 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
   }
 
   function onConnectError(current: Session, error: Error) {
-    if (current.stopped) return;
+    if (sessionEnded(current) || isTerminalBrokerSocketState(state)) return;
+    // a CONNECT_ERROR packet (the server's namespace middleware refused): socket.io destroys the
+    // socket before emitting and never retries it; a transport failure leaves it active
+    if (!current.socket.active) {
+      logger.warn(
+        { reason: CONNECT_ERROR, ...errorLogFields(error) },
+        'broker socket disconnected by server',
+      );
+      transition(BrokerSocketState.DisconnectedByServer, CONNECT_ERROR);
+      return;
+    }
     const fields = { attempt: current.reconnectAttempt, ...errorLogFields(error) };
     if (current.connectErrorWarned) {
       logger.debug(fields, 'broker socket connect error');
@@ -281,29 +294,31 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
     }
     clearAuthTimer(current);
     connections += 1;
-    transition(BrokerSocketState.Ready);
     const { connection } = current;
     logger.info(
       {
         connection: connection?.ordinal,
         attempt: connection?.attempt,
         subscriptions: registry.size,
-        authMs: connection === undefined ? undefined : Date.now() - connection.authSentAt,
+        authMs: connection === undefined ? undefined : Date.now() - connection.connectedAt,
       },
       'broker socket ready',
     );
     sendSubscriptions(current, registry.all());
+    // after the pass: a ready listener's subscribe() then sends only what the pass did not
+    transition(BrokerSocketState.Ready);
   }
 
   function onTerminalEvent(current: Session, to: BrokerSocketState, message?: string) {
-    if (isTerminalBrokerSocketState(state)) return;
+    if (sessionEnded(current) || isTerminalBrokerSocketState(state)) return;
     if (to === BrokerSocketState.AuthFailed) {
       logger.warn({ detail: message?.slice(0, MAX_DETAIL_LENGTH) }, 'broker socket auth failed');
     } else {
-      logger.warn({}, 'broker socket token expired');
+      logger.warn('broker socket token expired');
     }
-    transition(to, to === BrokerSocketState.AuthFailed ? 'auth_error' : 'token_expired');
+    // closed before the state is published, so a listener that restarts never sees two sockets
     closeSocket(current);
+    transition(to, to === BrokerSocketState.AuthFailed ? 'auth_error' : 'token_expired');
   }
 
   function dispatch(current: Session, event: BrokerEvent) {
@@ -322,7 +337,7 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
   }
 
   function onAnyEvent(current: Session, name: string, args: unknown[]) {
-    if (current.stopped) return;
+    if (sessionEnded(current)) return;
     const counters = current.connection?.counters;
     if (counters !== undefined) counters.events += 1;
     if (IGNORED_BROKER_EVENTS.has(name)) {
@@ -360,6 +375,9 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
       default:
         break;
     }
+    // a listener stopped or restarted the client inside the state change: the change was
+    // published, the event belongs to a session that no longer exists
+    if (sessionEnded(current)) return;
     dispatch(current, event);
   }
 
@@ -373,7 +391,10 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
     });
     // the zod error is not passed on: its issues may quote the input
     if (!auth.success) throw new TypeError('broker socket credentials are invalid');
-    if (session !== undefined) detach(session);
+    if (session !== undefined) {
+      closeSocket(session);
+      detach(session);
+    }
     const socket = openSocket(options.url, {
       transports: ['websocket'],
       forceNew: true,
@@ -402,8 +423,10 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
       current.reconnectAttempt = attempt;
     });
     socket.onAny((name: string, ...args: unknown[]) => onAnyEvent(current, name, args));
-    transition(BrokerSocketState.Connecting);
     socket.connect();
+    // after connect(): a listener's stop() on connecting must find a socket that disconnect()
+    // can close for good (Manager.open would undo skipReconnect)
+    transition(BrokerSocketState.Connecting);
   }
 
   function stop() {

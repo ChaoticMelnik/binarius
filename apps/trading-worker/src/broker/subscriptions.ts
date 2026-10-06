@@ -39,17 +39,12 @@ export function createAssetSubscriptionRegistry(): AssetSubscriptionRegistry {
   };
 }
 
-// order kept; every chunk holds 1..size ids, so each one is a valid price.subscribe payload
-export function chunkAssets(
-  ids: readonly number[],
-  size: number = MAX_PRICE_SUBSCRIPTION_ASSETS,
-): number[][] {
-  if (!Number.isSafeInteger(size) || size < 1) {
-    throw new RangeError(`chunk size must be a positive integer, got ${String(size)}`);
-  }
+// order kept; every chunk holds 1..MAX_PRICE_SUBSCRIPTION_ASSETS ids, so each one is a valid
+// price.subscribe payload
+export function chunkAssets(ids: readonly number[]): number[][] {
   const chunks: number[][] = [];
-  for (let start = 0; start < ids.length; start += size) {
-    chunks.push(ids.slice(start, start + size));
+  for (let start = 0; start < ids.length; start += MAX_PRICE_SUBSCRIPTION_ASSETS) {
+    chunks.push(ids.slice(start, start + MAX_PRICE_SUBSCRIPTION_ASSETS));
   }
   return chunks;
 }

@@ -48,6 +48,11 @@ describe('broker socket timing', () => {
     ['a negative jitter', { jitter: -0.1 }],
     ['a jitter above 1', { jitter: 1.1 }],
     ['NaN', { authTimeoutMs: Number.NaN }],
+    ['a zero auth timeout', { authTimeoutMs: 0 }],
+    ['a negative first wait', { reconnectDelayMs: -1 }],
+    ['an infinite connect timeout', { connectTimeoutMs: Number.POSITIVE_INFINITY }],
+    ['a NaN jitter', { jitter: Number.NaN }],
+    ['a fractional delay', { reconnectDelayMs: 1.5 }],
   ])('refuses %s', (_name, override) => {
     expect(() => resolveBrokerSocketTiming(override)).toThrow(RangeError);
   });
