@@ -1004,15 +1004,18 @@ export async function findTradeIntent(
   return row;
 }
 
+// Scoped by the owner: the id reaches the bot in a button's callback data, so a forwarded message
+// must not read another user's intent. Another user's id and a missing one are both undefined.
 export async function getTradeIntentView(
   exec: DbExecutor,
   id: string,
+  telegramUserId: bigint,
 ): Promise<TradeIntentView | undefined> {
   const [row] = await exec
     .select({ intent: tradeIntents, telegramUserId: users.telegramUserId })
     .from(tradeIntents)
     .innerJoin(users, eq(users.id, tradeIntents.userId))
-    .where(eq(tradeIntents.id, id));
+    .where(and(eq(tradeIntents.id, id), eq(users.telegramUserId, telegramUserId)));
   return row === undefined ? undefined : toTradeIntentView(row.intent, row.telegramUserId);
 }
 

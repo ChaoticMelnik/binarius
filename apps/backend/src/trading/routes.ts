@@ -4,6 +4,7 @@ import {
   errorIdentity,
   TradeIntentErrorCode,
   safeParseCreateTradeIntentRequest,
+  telegramUserIdSchema,
   type TradeIntentErrorCode as ErrorCode,
 } from '@binarius/shared';
 import {
@@ -35,6 +36,8 @@ const NOT_FOUND_CODES: ReadonlySet<ErrorCode> = new Set([
 const statusOf = (code: ErrorCode): number => (NOT_FOUND_CODES.has(code) ? 404 : 409);
 
 const idParamSchema = z.uuid();
+// the owner of the intent (#127): the bot reads an id it took from a button's callback data
+const readIntentQuerySchema = z.object({ telegramUserId: telegramUserIdSchema });
 
 // Registered as an encapsulated plugin so the auth hook covers exactly these routes
 export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
@@ -76,7 +79,12 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
   app.get('/trading/intents/:id', async (request, reply) => {
     const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
     if (!id.success) return reply.code(404).send({ error: 'not_found' });
-    const view = await getTradeIntentView(db, id.data);
+    const query = readIntentQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return reply.code(400).send({ error: 'validation', issues: query.error.issues });
+    }
+    // another user's id answers exactly as a missing one, so an id's existence is not answerable
+    const view = await getTradeIntentView(db, id.data, BigInt(query.data.telegramUserId));
     if (view === undefined) return reply.code(404).send({ error: 'not_found' });
     return reply.send({ intent: view });
   });

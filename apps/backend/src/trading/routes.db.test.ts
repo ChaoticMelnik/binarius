@@ -98,8 +98,13 @@ const post = (payload: unknown, authorization = `Bearer ${token}`, target = app)
     payload: JSON.stringify(payload),
   });
 
-const get = (id: string, authorization = `Bearer ${token}`) =>
-  app.inject({ method: 'GET', url: `/trading/intents/${id}`, headers: { authorization } });
+const get = (id: string, telegramUserId?: string, authorization = `Bearer ${token}`) =>
+  app.inject({
+    method: 'GET',
+    url: `/trading/intents/${id}`,
+    ...(telegramUserId === undefined ? {} : { query: { telegramUserId } }),
+    headers: { authorization },
+  });
 
 const VIEW_KEYS = [
   'id',
@@ -125,7 +130,7 @@ describe('auth', () => {
   it('rejects both routes without the internal token', async () => {
     const s = await seed();
     expect((await post(body(s.telegramUserId), 'Bearer nope')).statusCode).toBe(401);
-    expect((await get('00000000-0000-0000-0000-000000000000', 'Bearer nope')).statusCode).toBe(401);
+    expect((await get('00000000-0000-0000-0000-000000000000', '1', 'Bearer nope')).statusCode).toBe(401);
   });
 });
 
@@ -293,15 +298,37 @@ describe('POST /trading/intents: the real-mode grant (#134)', () => {
 });
 
 describe('GET /trading/intents/:id', () => {
-  it('returns the view for an existing intent and 404 otherwise', async () => {
+  it("returns the owner's view and 404 otherwise", async () => {
     const s = await seed();
     const created = (await post(body(s.telegramUserId))).json().intent;
-    const found = await get(created.id);
+    const found = await get(created.id, s.telegramUserId);
     expect(found.statusCode).toBe(200);
     expect(found.json().intent).toEqual(created);
 
-    expect((await get('00000000-0000-0000-0000-000000000000')).statusCode).toBe(404);
-    expect((await get('not-a-uuid')).statusCode).toBe(404);
-    expect((await get('not-a-uuid')).json()).toEqual({ error: 'not_found' });
+    expect((await get('00000000-0000-0000-0000-000000000000', s.telegramUserId)).statusCode).toBe(
+      404,
+    );
+    expect((await get('not-a-uuid', s.telegramUserId)).statusCode).toBe(404);
+    expect((await get('not-a-uuid', s.telegramUserId)).json()).toEqual({ error: 'not_found' });
+  });
+
+  it("answers another user's id exactly as a missing one (#127)", async () => {
+    const owner = await seed();
+    const other = await seed();
+    const created = (await post(body(owner.telegramUserId))).json().intent;
+    const foreign = await get(created.id, other.telegramUserId);
+    const missing = await get('00000000-0000-0000-0000-000000000000', other.telegramUserId);
+    expect(foreign.statusCode).toBe(404);
+    expect(foreign.body).toBe(missing.body);
+    expect(foreign.json()).toEqual({ error: 'not_found' });
+  });
+
+  it('refuses a read without the owner as validation (#127)', async () => {
+    const s = await seed();
+    const created = (await post(body(s.telegramUserId))).json().intent;
+    for (const response of [await get(created.id), await get(created.id, 'abc')]) {
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: 'validation', issues: expect.any(Array) });
+    }
   });
 });

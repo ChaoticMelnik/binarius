@@ -618,7 +618,7 @@ describe('getTradeIntentView', () => {
     const s = await seedUserWithAccount(tmp.db);
     const input = intentRequest(s.telegramUserId);
     const { intent } = await createTradeIntent(tmp.db, input, flagOff);
-    const view = await getTradeIntentView(tmp.db, intent.id);
+    const view = await getTradeIntentView(tmp.db, intent.id, BigInt(s.telegramUserId));
     expect(view).toEqual({
       id: intent.id,
       brokerAccountId: s.brokerAccountId,
@@ -639,8 +639,26 @@ describe('getTradeIntentView', () => {
       updatedAt: intent.updatedAt.toISOString(),
     });
     expect(
-      await getTradeIntentView(tmp.db, '00000000-0000-0000-0000-000000000000'),
+      await getTradeIntentView(
+        tmp.db,
+        '00000000-0000-0000-0000-000000000000',
+        BigInt(s.telegramUserId),
+      ),
     ).toBeUndefined();
+  });
+
+  it("reads another user's intent as undefined, like a missing one (#127)", async () => {
+    const owner = await seedUserWithAccount(tmp.db);
+    const other = await seedUserWithAccount(tmp.db);
+    const { intent } = await createTradeIntent(
+      tmp.db,
+      intentRequest(owner.telegramUserId),
+      flagOff,
+    );
+    expect(await getTradeIntentView(tmp.db, intent.id, BigInt(owner.telegramUserId))).toMatchObject({
+      id: intent.id,
+    });
+    expect(await getTradeIntentView(tmp.db, intent.id, BigInt(other.telegramUserId))).toBeUndefined();
   });
 });
 
