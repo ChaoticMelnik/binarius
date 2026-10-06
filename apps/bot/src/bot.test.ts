@@ -23,6 +23,7 @@ import {
   createBot,
   levelCallbackData,
 } from './bot';
+import { BOT_COMMANDS } from './commands';
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCOUNT_VIEW,
@@ -42,6 +43,7 @@ import {
   captureApi,
   closeServer,
   callbackUpdate,
+  channelPostUpdate,
   chatMemberUpdate,
   fakeLogger,
   inlineButtons,
@@ -57,6 +59,7 @@ import {
 import {
   accountCard,
   currentLevelLabel,
+  helpText,
   LABELS,
   levelLabel,
   settingsText,
@@ -1537,8 +1540,10 @@ describe('text outside the dialog', () => {
   });
 
   it('ignores a command in the middle of the dialog and keeps the step', async () => {
+    // a command nothing answers; the sample must not become a real command unnoticed
+    expect(BOT_COMMANDS.map((entry) => entry.command)).not.toContain('unknown');
     const { bot, backend, calls, dialog } = setup({ dialog: ON_CODE_STEP });
-    await bot.handleUpdate(textUpdate('/help'));
+    await bot.handleUpdate(textUpdate('/unknown'));
     expect(calls).toEqual([]);
     expect(backend.emailLogin).not.toHaveBeenCalled();
     expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
@@ -1871,6 +1876,64 @@ describe('/support', () => {
     const { bot, calls } = setup();
     await bot.handleUpdate(textUpdate('/support', 'group'));
     expect(calls).toEqual([]);
+  });
+});
+
+describe('/help', () => {
+  const helpSends = async (text: string) => {
+    const { bot, backend, calls } = setup({
+      recordStart: unreachable(),
+      readAccount: unreachable(),
+    });
+    await bot.handleUpdate(textUpdate(text));
+    return { backend, sends: calls.filter((call) => call.method === 'sendMessage'), calls };
+  };
+
+  it('sends the help text once, with no buttons and no backend call', async () => {
+    const { backend, sends, calls } = await helpSends('/help');
+    expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
+    expect(sends[0]?.payload.text).toBe(helpText(BOT_COMMANDS).value);
+    expect(sends[0]?.payload.reply_markup).toBeUndefined();
+    expect(backend.recordStart).not.toHaveBeenCalled();
+    expect(backend.readAccount).not.toHaveBeenCalled();
+  });
+
+  // the acceptance criterion: a command in the menu but missing from the answer reddens this
+  it('lists every command of the menu', async () => {
+    const { sends } = await helpSends('/help');
+    const lines = plainTextOf(String(sends[0]?.payload.text)).split('\n');
+    for (const { command, description } of BOT_COMMANDS) {
+      expect(lines).toContain(`/${command} — ${description}`);
+    }
+  });
+
+  it.each(['/help@binarius_bot', '/help please'])('answers %s the same way', async (text) => {
+    const { sends } = await helpSends(text);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.payload.text).toBe(helpText(BOT_COMMANDS).value);
+  });
+
+  it.each(['group', 'supergroup'])('ignores the command in a %s', async (chatType) => {
+    const { bot, calls } = setup();
+    await bot.handleUpdate(textUpdate('/help', chatType));
+    expect(calls).toEqual([]);
+  });
+
+  it('ignores the command posted in a channel', async () => {
+    const { bot, calls } = setup();
+    await bot.handleUpdate(channelPostUpdate('/help'));
+    expect(calls).toEqual([]);
+  });
+
+  it('answers /help in the middle of the dialog without ending it', async () => {
+    const { bot, backend, calls, dialog } = setup({ dialog: ON_CODE_STEP });
+    await bot.handleUpdate(textUpdate('/help'));
+    expect(calls.filter((call) => call.method === 'sendMessage')).toHaveLength(1);
+    expect(backend.emailLogin).not.toHaveBeenCalled();
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
   });
 });
 

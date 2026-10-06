@@ -24,8 +24,9 @@ routes, the confirmation and the starter pack are described in
   `isTelegramForbidden` and `recordTelegramSendFailure`, the helper a sender hands a failed send
   to (today only the link push does).
 - `apps/bot/src/` — `env.ts`, `timing.ts`, `backend-client.ts`, `texts.ts` (with `accountCard`,
-  [The account card](#the-account-card), `PROFILE`, [Bot profile](#bot-profile), and `SUPPORT`,
-  [Notification level and /support](#notification-level-and-support-120)), `send.ts`, `logging.ts`, `assets.ts` (the path of
+  [The account card](#the-account-card), `PROFILE`, [Bot profile](#bot-profile), `SUPPORT`,
+  [Notification level and /support](#notification-level-and-support-120), and `helpText`,
+  [/help](#help-184)), `send.ts`, `logging.ts`, `assets.ts` (the path of
   `assets/account-card.jpg`, the card's picture), `login-dialog.ts` (the email dialog's state,
   [Email dialog](#email-dialog)), `bot.ts` (the handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
   `lifecycle.ts` (start, the profile registration — the menu, the description, the short
@@ -582,13 +583,47 @@ that line from a timeout on any other call. The user repeats `/start`: a second 
 than a missing one. Anything else is neither a refusal nor a delivery problem — a bug, a broken
 plugin — and is rethrown into `bot.catch` unchanged rather than reported as one.
 
+## /help (#184)
+
+```text
+/help
+  bot  → one message: what the bot does, how to connect, the commands; no backend call
+```
+
+The message is `helpText(BOT_COMMANDS)` in `apps/bot/src/texts.ts`, built once when `bot.ts` is
+loaded and sent through `replyHtml` with no buttons. Three blocks, one blank line apart:
+
+- `TEXTS.helpAbout` — the header and the three feature lines, `FEATURE_LINES`, the same fragment
+  the account card nests, so the two copies cannot drift (`PROFILE.description` keeps its own plain
+  copy, which Telegram does not parse);
+- `TEXTS.helpConnect` — `/start` and the two ways to connect, each button quoted by its exact
+  label;
+- `TEXTS.helpCommands` and one `/<command> — <description>` line per entry of `BOT_COMMANDS`, in
+  the menu's order, with no emoji. `texts.ts` cannot import the list (`commands.ts` imports
+  `LABELS` from it), so `bot.ts` passes it in. Both holes of a line are escaped; Telegram shows
+  every `/<command>` as a tappable command without markup.
+
+The answer reads no state, so an admin-blocked user (`UserStatus.Blocked`) and a backend outage
+get the same message; a user who blocked the bot cannot send `/help` at all. A static connect block
+is accepted: a user with an account connected also reads «Если аккаунт ещё не подключён, нажми
+/start». `/help@<bot username>` and `/help` with trailing text are answered the same way; groups,
+supergroups and channels are ignored by `privateChats`, as for every command; any command that is
+not in the menu is still ignored (#162). On the address or code step `/help` answers and leaves the
+step and its clock untouched, as `/start` and `/account` do. A refused or failed `sendMessage`
+reaches `bot.catch`, nothing is retried, and the handler writes no log line of its own.
+
+`HANDLER_CALLS.help` is one Bot API call and no backend call (8 s). `texts.test.ts` holds the
+message inside the limit, its exact assembly, the command lines equal to `BOT_COMMANDS` (each once,
+in order), the escaping of both holes, the feature lines shared with the card and both button
+labels; `bot.test.ts` sends `/help` through the real handlers and fails when a command of the menu
+is missing from the answer; `timing.test.ts` holds the declared calls.
+
 ## Command menu
 
-Telegram's «Меню» button and the hints shown when the user types `/` list four commands, in this
+Telegram's «Меню» button and the hints shown when the user types `/` list five commands, in this
 order: `/start` — «Начать», `/account` — «Аккаунт Binodex» ([bot-account.md](bot-account.md)),
-`/settings` — «Настройки уведомлений» and `/support` — «Поддержка»
-([Notification level and /support](#notification-level-and-support-120)). `/help` (#184) goes
-between `/settings` and `/support` (the owner, 2026-10-03). The list is `BOT_COMMANDS` in
+`/settings` — «Настройки уведомлений», `/help` — «Помощь» ([/help](#help-184)) and `/support` —
+«Поддержка» ([Notification level and /support](#notification-level-and-support-120)). The list is `BOT_COMMANDS` in
 `apps/bot/src/commands.ts`, the only place it is written; the descriptions are the `LABELS` keys
 ending in `Command`. The next command is one more element there and
 one more literal in each of the two `setMyCommands` assertions of `lifecycle.test.ts`, which name
@@ -699,8 +734,8 @@ the pin); the connect button is no backend call and two Bot API calls; a `my_cha
 is one backend call and no Bot API call (5 s); a text on the address step is one backend call and
 one Bot API call, as are `/account` (the read, then the status) and `/settings` (the read, then the
 levels); a level pressed is one backend call and up to three Bot API calls (the query answered,
-the edit refused, the message sent anew), the selected level one Bot API call and `/support` one
-Bot API call and no backend call; and a text on the code step two
+the edit refused, the message sent anew), the selected level one Bot API call, `/support` and
+`/help` one Bot API call and no backend call each; and a text on the code step two
 backend calls (the login and the recheck) and up to four Bot API calls (the same card), 42 s. The
 longest is 5 000 + 5 × 8 000 = **45 s**, inside the **50 s** shutdown budget, inside the **55 s**
 `stop_grace_period` of the compose service. The usual path is far shorter — one upload and two
@@ -771,4 +806,3 @@ written only when a step really did run out of time.
 - **#220** — a permanent support account in place of the temporary `SUPPORT.telegramUsername`.
 - Per-kind toggles, a daily digest, quiet hours — not asked (#120).
 - **#185** — `/account`, the state of the Binodex link: [bot-account.md](bot-account.md).
-- **#184** — `/help`, between `/settings` and `/support` in the same menu.

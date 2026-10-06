@@ -12,10 +12,12 @@ import {
 import { telegramTextProblems } from '@binarius/shared/testing';
 import { LINK_ACTIVE, LINK_PENDING, LINK_REVOKED, PENDING_ACCOUNT_ID } from './testing';
 import { LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
+import { BOT_COMMANDS } from './commands';
 import {
   accountCard,
   accountStatus,
   currentLevelLabel,
+  helpText,
   LABELS,
   levelLabel,
   PROFILE,
@@ -303,6 +305,55 @@ describe('texts', () => {
     it('greets a blank name without it, and trims a padded one', () => {
       expect(TEXTS.cardGreeting('   ').value).toBe('🎉 <b>Привет!</b>');
       expect(TEXTS.cardGreeting(' Ada ').value).toBe('🎉 <b>Привет, Ada!</b>');
+    });
+  });
+
+  describe('/help', () => {
+    const lineOf = ({ command, description }: { command: string; description: string }) =>
+      `/${command} — ${description}`;
+
+    it('keeps the message valid Telegram HTML, inside the message limit', () => {
+      expect(telegramTextProblems(helpText(BOT_COMMANDS), TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+    });
+
+    it('is the three blocks one blank line apart, the command lines after the last', () => {
+      const lines = BOT_COMMANDS.map((entry) => `\n${lineOf(entry)}`).join('');
+      expect(helpText(BOT_COMMANDS).value).toBe(
+        [TEXTS.helpAbout.value, TEXTS.helpConnect.value, TEXTS.helpCommands.value + lines].join(
+          '\n\n',
+        ),
+      );
+    });
+
+    // every command once, in the menu's order: a presence check would pass a duplicate
+    it('lists exactly the commands of the menu, in its order', () => {
+      const lines = plainTextOf(helpText(BOT_COMMANDS)).split('\n');
+      const after = lines.slice(lines.indexOf(plainTextOf(TEXTS.helpCommands)) + 1);
+      expect(after).toEqual(BOT_COMMANDS.map(lineOf));
+    });
+
+    it('shows a command and its description as they are, escaped in the markup', () => {
+      const text = helpText([{ command: HOSTILE_ARGUMENT, description: HOSTILE_ARGUMENT }]);
+      const escaped = HOSTILE_ARGUMENT.replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+      expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+      expect(plainTextOf(text)).toContain(`/${HOSTILE_ARGUMENT} — ${HOSTILE_ARGUMENT}`);
+      expect(text.value).toContain(`/${escaped} — ${escaped}`);
+    });
+
+    it("describes the bot with the account card's feature lines", () => {
+      const [, ...features] = plainTextOf(TEXTS.helpAbout).split('\n');
+      expect(features).toHaveLength(3);
+      for (const line of features) {
+        expect(plainTextOf(TEXTS.cardBody).split('\n')).toContain(line);
+      }
+    });
+
+    it('names both ways to connect by their button labels', () => {
+      expect(plainTextOf(TEXTS.helpConnect)).toContain(`«${LABELS.connectButton}»`);
+      expect(plainTextOf(TEXTS.helpConnect)).toContain(`«${LABELS.oauthButton}»`);
     });
   });
 

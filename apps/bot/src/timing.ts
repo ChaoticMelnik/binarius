@@ -64,6 +64,8 @@ export const HANDLER_CALLS = {
   levelCurrent: { backend: 0, telegram: 1 },
   // /support: sendMessage; no backend call
   support: { backend: 0, telegram: 1 },
+  // /help: sendMessage; no backend call
+  help: { backend: 0, telegram: 1 },
 } as const;
 
 export const handlerBudgetMs = ({
