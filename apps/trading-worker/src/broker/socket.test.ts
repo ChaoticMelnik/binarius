@@ -8,6 +8,7 @@ import {
   type MockSocketRecord,
 } from '@binarius/mock-broker';
 import { BrokerSocketEvent, logOptions, MAX_PRICE_SUBSCRIPTION_ASSETS } from '@binarius/shared';
+import { until } from '@binarius/shared/testing';
 import pino from 'pino';
 import { io } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -43,11 +44,6 @@ const TIMING = {
 const QUIET_MS = 100;
 
 const range = (from: number, count: number) => Array.from({ length: count }, (_, i) => from + i);
-
-// the signature of #205's until(); the body is this repository's current wait
-async function waitFor(what: string, condition: () => boolean): Promise<void> {
-  await vi.waitFor(() => expect(condition(), what).toBe(true), { timeout: 1000, interval: 5 });
-}
 
 const quiet = () => new Promise((resolve) => setTimeout(resolve, QUIET_MS));
 
@@ -121,7 +117,7 @@ function harness(
 }
 
 const ready = (h: Harness, connections = 1) =>
-  waitFor(
+  until(
     `ready after ${connections} auth(s)`,
     () => h.client.state === BrokerSocketState.Ready && h.client.connections === connections,
   );
@@ -183,7 +179,7 @@ describe('handshake', () => {
       expect(h.client.state).toBe(BrokerSocketState.Connecting);
       await ready(h);
 
-      await waitFor(
+      await until(
         'subscriptions on the socket',
         () => broker.socket.sockets()[0]?.subscriptions.length === 2,
       );
@@ -194,7 +190,7 @@ describe('handshake', () => {
         BrokerSocketState.Authenticating,
         BrokerSocketState.Ready,
       ]);
-      await waitFor('the burst', () => typesOf(h.events).includes(BrokerEventType.AssetsList));
+      await until('the burst', () => typesOf(h.events).includes(BrokerEventType.AssetsList));
       expect(typesOf(h.events)).toEqual([
         BrokerEventType.AuthSuccess,
         BrokerEventType.UserData,
@@ -202,7 +198,7 @@ describe('handshake', () => {
       ]);
 
       expect(broker.socket.pushPrice(EURUSD, 1_790_000_000_000)).toBe(1);
-      await waitFor('a price', () => typesOf(h.events).includes(BrokerEventType.PriceUpdate));
+      await until('a price', () => typesOf(h.events).includes(BrokerEventType.PriceUpdate));
       expect(h.events.at(-1)).toEqual({
         type: BrokerEventType.PriceUpdate,
         update: {
@@ -222,7 +218,7 @@ describe('handshake', () => {
     h.client.subscribe(ids);
     h.client.start(CREDENTIALS);
     await ready(h);
-    await waitFor(
+    await until(
       'every id on the socket',
       () => broker.socket.sockets()[0]?.subscriptions.length === ids.length,
     );
@@ -238,7 +234,7 @@ describe('handshake', () => {
     h.client.subscribe([EURUSD]);
     h.client.subscribe([EURUSD, BTCUSD]);
     h.client.subscribe([]);
-    await waitFor(
+    await until(
       'BTCUSD on the socket',
       () => broker.socket.sockets()[0]?.subscriptions.length === 2,
     );
@@ -251,11 +247,11 @@ describe('handshake', () => {
     const recorded = recordEmits();
     const h = harness({ openSocket: recorded.openSocket });
     h.client.start(CREDENTIALS);
-    await waitFor('authenticating', () => h.client.state === BrokerSocketState.Authenticating);
+    await until('authenticating', () => h.client.state === BrokerSocketState.Authenticating);
     h.client.subscribe([EURUSD]);
 
     await ready(h);
-    await waitFor(
+    await until(
       'the pass on the socket',
       () => broker.socket.sockets()[0]?.subscriptions.length === 1,
     );
@@ -294,7 +290,7 @@ describe('handshake', () => {
     });
     h.client.start(CREDENTIALS);
     await ready(h);
-    await waitFor(
+    await until(
       'both ids on the socket',
       () => broker.socket.sockets()[0]?.subscriptions.length === 2,
     );
@@ -333,9 +329,9 @@ describe('handshake', () => {
     h.client.subscribe([EURUSD]);
     h.client.start(CREDENTIALS);
     await ready(h);
-    await waitFor('the pass', () => subscribeRecords() === 1);
+    await until('the pass', () => subscribeRecords() === 1);
     expect(broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.UserAuthSuccess, null)).toBe(1);
-    await waitFor(
+    await until(
       'the second auth_success',
       () => typesOf(h.events).filter((type) => type === BrokerEventType.AuthSuccess).length === 2,
     );
@@ -351,17 +347,17 @@ describe('reconnection', () => {
     h.client.subscribe(ids);
     h.client.start(CREDENTIALS);
     await ready(h);
-    await waitFor(
+    await until(
       'the first pass',
       () => broker.socket.sockets()[0]?.subscriptions.length === ids.length,
     );
 
     expect(broker.socket.cutTransport({ userId: 1 })).toBe(1);
-    await waitFor('reconnecting', () => h.client.state === BrokerSocketState.Reconnecting);
+    await until('reconnecting', () => h.client.state === BrokerSocketState.Reconnecting);
     // made while disconnected: socket.io would buffer an emit and flush it ahead of user.auth
     h.client.subscribe([5_000]);
     await ready(h, 2);
-    await waitFor(
+    await until(
       'the second pass',
       () => broker.socket.sockets()[0]?.subscriptions.length === ids.length + 1,
     );
@@ -392,7 +388,7 @@ describe('reconnection', () => {
     const h = harness({ url });
     h.client.subscribe([EURUSD]);
     h.client.start(CREDENTIALS);
-    await waitFor('three connect errors', () => h.logs('broker socket connect error').length >= 3);
+    await until('three connect errors', () => h.logs('broker socket connect error').length >= 3);
     expect(h.client.state).toBe(BrokerSocketState.Connecting);
     const errors = h.logs('broker socket connect error');
     expect(errors.map(({ level }) => level)).toEqual([
@@ -416,8 +412,8 @@ describe('terminal states', () => {
   it('auth_failed on user.auth.error: the socket is closed and not reopened until start()', async () => {
     const h = harness();
     h.client.start({ brokerUserId: '1', accessToken: 'SECRET-WRONG-TOKEN' });
-    await waitFor('auth_failed', () => h.client.state === BrokerSocketState.AuthFailed);
-    await waitFor('the socket gone', () => broker.socket.sockets().length === 0);
+    await until('auth_failed', () => h.client.state === BrokerSocketState.AuthFailed);
+    await until('the socket gone', () => broker.socket.sockets().length === 0);
     await quiet();
     expect(bySocket().map(shape)).toEqual([
       [{ event: BrokerSocketEvent.UserAuth, argc: 1, outcome: MockSocketOutcome.AuthFailed }],
@@ -440,10 +436,10 @@ describe('terminal states', () => {
     broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.UserAuthError, {
       message: 'x'.repeat(500),
     });
-    await waitFor('auth_failed', () => h.client.state === BrokerSocketState.AuthFailed);
+    await until('auth_failed', () => h.client.state === BrokerSocketState.AuthFailed);
     const [line] = h.logs('broker socket auth failed');
     expect(line?.detail).toBe('x'.repeat(200));
-    await waitFor('the socket gone', () => broker.socket.sockets().length === 0);
+    await until('the socket gone', () => broker.socket.sockets().length === 0);
   });
 
   it('token_expired stays when the server then drops the socket', async () => {
@@ -451,8 +447,8 @@ describe('terminal states', () => {
     h.client.start(CREDENTIALS);
     await ready(h);
     broker.users.revokeToken(TOKEN);
-    await waitFor('token_expired', () => h.client.state === BrokerSocketState.TokenExpired);
-    await waitFor('the socket gone', () => broker.socket.sockets().length === 0);
+    await until('token_expired', () => h.client.state === BrokerSocketState.TokenExpired);
+    await until('the socket gone', () => broker.socket.sockets().length === 0);
     await quiet();
     expect(h.client.state).toBe(BrokerSocketState.TokenExpired);
     expect(h.states.at(-1)).toEqual({
@@ -477,7 +473,7 @@ describe('terminal states', () => {
         await ready(h);
         expect(broker.socket.disconnect({ userId: 1 })).toBe(1);
       }
-      await waitFor(
+      await until(
         'disconnected_by_server',
         () => h.client.state === BrokerSocketState.DisconnectedByServer,
       );
@@ -508,7 +504,7 @@ describe('a CONNECT_ERROR from the server', () => {
       broker.socket.failNext('connect', refusal);
       expect(broker.socket.cutTransport({ userId: 1 })).toBe(1);
     }
-    await waitFor(
+    await until(
       'disconnected_by_server',
       () => h.client.state === BrokerSocketState.DisconnectedByServer,
     );
@@ -564,7 +560,7 @@ describe('listeners', () => {
       }),
     );
     h.client.start(CREDENTIALS);
-    await waitFor('idle again', () => h.states.at(-1)?.to === BrokerSocketState.Idle);
+    await until('idle again', () => h.states.at(-1)?.to === BrokerSocketState.Idle);
     expect(h.states.map(({ to }) => to)).toEqual([
       BrokerSocketState.Connecting,
       BrokerSocketState.Authenticating,
@@ -585,7 +581,7 @@ describe('listeners', () => {
       }),
     );
     h.client.start(CREDENTIALS);
-    await waitFor('the second auth', () => bySocket().length === 2);
+    await until('the second auth', () => bySocket().length === 2);
     await ready(h);
     await quiet();
     expect(typesOf(h.events).filter((type) => type === BrokerEventType.AuthSuccess)).toHaveLength(
@@ -658,7 +654,7 @@ describe('openSocket seam', () => {
     });
     ref.client = h.client;
     h.client.start(CREDENTIALS);
-    await waitFor('idle', () => h.states.at(-1)?.to === BrokerSocketState.Idle);
+    await until('idle', () => h.states.at(-1)?.to === BrokerSocketState.Idle);
     await new Promise((resolve) => setTimeout(resolve, TIMING.authTimeoutMs));
     await quiet();
     expect(h.client.state).toBe(BrokerSocketState.Idle);
@@ -670,10 +666,7 @@ describe('openSocket seam', () => {
     expect(broker.socket.sockets()).toEqual([]);
     ref.client = undefined;
     h.client.start(CREDENTIALS);
-    await waitFor(
-      'authenticating again',
-      () => h.client.state === BrokerSocketState.Authenticating,
-    );
+    await until('authenticating again', () => h.client.state === BrokerSocketState.Authenticating);
   });
 });
 
@@ -733,10 +726,10 @@ describe('start() and stop()', () => {
       expect.objectContaining({ reason: 'io client disconnect', connection: 1 }),
     ]);
     h.client.stop();
-    await waitFor('the socket gone', () => broker.socket.sockets().length === 0);
+    await until('the socket gone', () => broker.socket.sockets().length === 0);
     h.client.start(CREDENTIALS);
     await ready(h);
-    await waitFor('the second pass', () => subscribeRecords() === 2);
+    await until('the second pass', () => subscribeRecords() === 2);
     expect(h.client.subscriptions()).toEqual([EURUSD]);
     expect(bySocket().map(shape)).toEqual([
       [AUTH, SUBSCRIBE],
@@ -762,7 +755,7 @@ describe('events and problems', () => {
     broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.UserData);
     broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.PriceUpdate, [EURUSD, 1, 2], 'SECRET-c');
     broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.PriceUpdate, [EURUSD, 1, 3], 'SECRET-d');
-    await waitFor(
+    await until(
       'the last frame',
       () => h.events.filter((e) => e.type === BrokerEventType.PriceUpdate).length === 2,
     );
@@ -800,11 +793,11 @@ describe('events and problems', () => {
     h.client.start(CREDENTIALS);
     await ready(h);
     broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.PriceUpdate, 'SECRET');
-    await waitFor('the first warning', () => h.logs('broker event problem').length === 1);
+    await until('the first warning', () => h.logs('broker event problem').length === 1);
     broker.socket.cutTransport({ userId: 1 });
     await ready(h, 2);
     broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.PriceUpdate, 'SECRET');
-    await waitFor('the second warning', () => h.logs('broker event problem').length === 2);
+    await until('the second warning', () => h.logs('broker event problem').length === 2);
   });
 
   it('runs every listener when one throws, and warns once per event type per connection', async () => {
@@ -817,10 +810,10 @@ describe('events and problems', () => {
     h.client.subscribe([EURUSD]);
     h.client.start(CREDENTIALS);
     await ready(h);
-    await waitFor('subscribed', () => broker.socket.sockets()[0]?.subscriptions.length === 1);
+    await until('subscribed', () => broker.socket.sockets()[0]?.subscriptions.length === 1);
     broker.socket.pushPrice(EURUSD, 1_000);
     broker.socket.pushPrice(EURUSD, 2_000);
-    await waitFor(
+    await until(
       'both prices',
       () => after.filter((e) => e.type === BrokerEventType.PriceUpdate).length === 2,
     );
@@ -857,15 +850,15 @@ describe('logs', () => {
     broker.socket.cutTransport({ userId: 1 });
     await ready(h, 2);
     broker.users.revokeToken(TOKEN);
-    await waitFor('token_expired', () => h.client.state === BrokerSocketState.TokenExpired);
+    await until('token_expired', () => h.client.state === BrokerSocketState.TokenExpired);
 
     broker.socket.failNext('auth', { silent: true });
     broker.socket.failNext('auth', { error: { message: 'refused' } });
     h.client.start({ brokerUserId: '2', accessToken: OTHER_TOKEN });
-    await waitFor('auth_failed', () => h.client.state === BrokerSocketState.AuthFailed);
+    await until('auth_failed', () => h.client.state === BrokerSocketState.AuthFailed);
     broker.socket.failNext('auth', { disconnect: true });
     h.client.start({ brokerUserId: '2', accessToken: OTHER_TOKEN });
-    await waitFor(
+    await until(
       'disconnected_by_server',
       () => h.client.state === BrokerSocketState.DisconnectedByServer,
     );
@@ -875,7 +868,7 @@ describe('logs', () => {
     await dead.close();
     const d = harness({ url: deadUrl });
     d.client.start({ brokerUserId: '1', accessToken: TOKEN });
-    await waitFor('a connect error', () => d.logs('broker socket connect error').length >= 1);
+    await until('a connect error', () => d.logs('broker socket connect error').length >= 1);
     d.client.stop();
 
     const lines = [...h.lines, ...d.lines];

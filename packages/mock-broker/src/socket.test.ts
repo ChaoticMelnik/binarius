@@ -678,10 +678,7 @@ describe('cutTransport', () => {
     await new Promise<void>((resolve) => socket.once('connect', resolve));
     const firstId = socket.id;
     expect(broker.socket.cutTransport({ socketId: firstId ?? '' })).toBe(1);
-    await vi.waitFor(() => expect(socket.connected && socket.id !== firstId).toBe(true), {
-      timeout: 1000,
-      interval: 5,
-    });
+    await until('the reconnection', () => socket.connected && socket.id !== firstId);
     expect(broker.socket.journal.map((record) => record.socketId)).toEqual(ids);
   });
 });
