@@ -1,4 +1,9 @@
-import { SIGNAL_ALGORITHM_VERSION, type Candle, type SignalDecision } from '@binarius/shared';
+import {
+  SIGNAL_ALGORITHM_VERSION,
+  signalDecisionSchema,
+  type Candle,
+  type SignalDecision,
+} from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SIGNAL_PARAMS } from './config';
 import { createSignalDecider } from './decide';
@@ -138,5 +143,42 @@ describe('createSignalDecider', () => {
     expect(() =>
       createSignalDecider({ ...DEFAULT_SIGNAL_PARAMS, emaFast: 21, emaSlow: 9 }),
     ).toThrow(/emaFast/);
+  });
+
+  // the decider's output against the wire schema the backend sends it under (#258): S1 in
+  // shared's signal.test.ts checks hand-written fixtures, which move with the schema
+  it.each([
+    ['signal', () => decide(trending(60, 0.5))],
+    ['volatility_too_low', () => decide(seriesFrom(Array<number>(60).fill(100), { wick: 0 }))],
+    [
+      'candle_gap',
+      () => {
+        const series = trending(60, 0.5);
+        series.splice(30, 1);
+        return decide(series);
+      },
+    ],
+    [
+      'stale',
+      () => {
+        const series = trending(60, 0.5);
+        return decide(series, closedNow(series) + 10 * INTERVAL_MS);
+      },
+    ],
+    ['insufficient_candles', () => decide(trending(10, 0.5))],
+    [
+      'invalid_candle',
+      () => {
+        const series = trending(60, 0.5);
+        series[20] = { ...series[20], close: Number.NaN };
+        return decide(series);
+      },
+    ],
+  ])('D15 a %s decision parses back through signalDecisionSchema unchanged', (shape, make) => {
+    const decision = make();
+    expect(decision.kind === 'signal' ? 'signal' : decision.reason).toBe(shape);
+    const parsed = signalDecisionSchema.safeParse(JSON.parse(JSON.stringify(decision)));
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.data).toStrictEqual(decision);
   });
 });
