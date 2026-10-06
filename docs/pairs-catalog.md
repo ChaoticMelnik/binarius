@@ -42,6 +42,10 @@ catalog.stop();
   next tick.
 - `read()` is `undefined` before the first success and once the snapshot is older than
   `BROKER_PAIRS_MAX_STALE_MS`. An empty array from the broker is a valid snapshot, not a failure.
+- `read()` also gives `fresh = ageMs <= ttlMs + BROKER_REST_TIMEOUT_MS`: the oldest a snapshot
+  gets while every tick succeeds. Older means at least one refresh has failed, and the snapshot
+  is still served (up to `BROKER_PAIRS_MAX_STALE_MS`) but no longer called fresh. The module owns
+  the TTL, so the verdict is its own: neither the route nor the bot compares ages.
 - A failed `refresh()` leaves the snapshot as it was and writes one `warn` line (see Logging).
   The next attempt is the next tick; there is no backoff, on 429 included.
 - `start()` arms `setInterval(refresh, ttlMs)`. A second `start()` does nothing, and neither does
@@ -57,11 +61,13 @@ In `packages/broker-rest/src/pairs-catalog.ts`:
 |---|---|---|
 | `MIN_BROKER_PAIRS_TTL_MS` | 30 000 | lowest accepted `BROKER_PAIRS_TTL_MS` |
 | `DEFAULT_BROKER_PAIRS_TTL_MS` | 30 000 | the timer's period when the env does not set one |
-| `MAX_BROKER_PAIRS_TTL_MS` | 60 000 | highest accepted `BROKER_PAIRS_TTL_MS`; the oldest age a caller sees under a working broker, plus one request |
+| `MAX_BROKER_PAIRS_TTL_MS` | 60 000 | highest accepted `BROKER_PAIRS_TTL_MS`; plus one request, the oldest age `read()` still calls fresh |
 | `BROKER_PAIRS_MAX_STALE_MS` | 300 000 | how long the last snapshot is still served while every refresh fails |
 
 `PAIRS_CATALOG_CHAIN_HOLDS` throws at import unless
-`BROKER_REST_TIMEOUT_MS < MIN_BROKER_PAIRS_TTL_MS ≤ DEFAULT ≤ MAX < BROKER_PAIRS_MAX_STALE_MS`.
+`BROKER_REST_TIMEOUT_MS < MIN_BROKER_PAIRS_TTL_MS ≤ DEFAULT ≤ MAX < BROKER_PAIRS_MAX_STALE_MS` and
+`MAX_BROKER_PAIRS_TTL_MS + BROKER_REST_TIMEOUT_MS < BROKER_PAIRS_MAX_STALE_MS` (65 000 < 300 000),
+so a snapshot is served for longer than it is fresh.
 Shutdown phase 1 does not wait for the catalog's GET: `stop()` aborts it (see Start and
 shutdown), so the backend's chain (`apps/backend/src/timing.ts`) has no link for it.
 
@@ -74,10 +80,10 @@ or `.env` sets it. The module itself takes any positive `ttlMs`.
 
 `Authorization: Bearer <INTERNAL_API_TOKEN>`, no body.
 
-| Code | Body | When | What the caller does (#125) |
+| Code | Body | When | What the bot does |
 |---|---|---|---|
-| `200` | `{ pairs: PairView[], fetchedAt, ageMs }` | the cache has a snapshot no older than `BROKER_PAIRS_MAX_STALE_MS` | show it; how fresh is fresh enough is the caller's decision from `ageMs`; a healthy snapshot reaches `BROKER_PAIRS_TTL_MS + BROKER_REST_TIMEOUT_MS` (65 s at the maximum TTL). The constants live in `@binarius/broker-rest`; the bot gets the bound with #125 |
-| `503` | `{ error: 'catalog_unavailable' }` | no snapshot yet, or the broker has been failing for longer than the ceiling; a read, nothing happened | say the catalog is unavailable and offer to retry; not an unknown outcome |
+| `200` | `{ pairs: PairView[], fetchedAt, ageMs, fresh }` | the cache has a snapshot no older than `BROKER_PAIRS_MAX_STALE_MS`; `fresh` is the module's verdict above | `fresh: true` — draws the screen from it; `fresh: false` — shows none of it, says the catalog is updating and offers «🔄 Повторить» (docs/bot-demo.md). `fresh` is required: a body without it is a contract violation, so an older backend never reads as fresh |
+| `503` | `{ error: 'catalog_unavailable' }` | no snapshot yet, or the broker has been failing for longer than the ceiling; a read, nothing happened | says the catalog is unavailable and offers «🔄 Повторить»; told by the reason, not the status; not an unknown outcome |
 | `401` | `{ error: 'unauthorized' }` | the bearer did not match | configuration, not a user scenario |
 | other | `{ error: 'internal' }` | the app's error handler | like any 500 |
 
@@ -118,7 +124,6 @@ when the error has them. The line holds neither the base URL nor any of the resp
 - #99/#101: the socket's `common.assets_list`/`common.assets_update` as a source of updates, the
   catalog instance in the worker, `BROKER_API_BASE_URL` in the worker's env, and the `refresh()`
   call on reconnect.
-- #125: the bot's client for `GET /trading/pairs`, the asset picker and its use of `ageMs`, and
-  where the freshness bound lives.
+- The bot's client for `GET /trading/pairs` and the asset picker: docs/bot-demo.md (#125).
 - #136/#137: `POST /trading/access` and its broker section.
 - Not done anywhere yet: the catalog in `/health`, `GET /trading/pairs/:id`, backoff on 429/5xx.
