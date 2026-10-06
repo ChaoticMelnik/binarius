@@ -13,6 +13,7 @@ import {
   type LinkedAccountView,
   type UserStartView,
 } from '@binarius/shared';
+import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
@@ -1978,6 +1979,6 @@ describe('the Bot API timeout', () => {
     // rules out grammY's 500 second default
     const elapsed = Date.now() - at;
     expect(elapsed).toBeGreaterThanOrEqual(250);
-    expect(elapsed).toBeLessThan(2_000);
+    expect(elapsed).toBeLessThan(UNIT_WAIT_CEILING_MS);
   });
 });

@@ -15,6 +15,7 @@ import {
   type ModeScopedEvent,
   type TradeMode,
 } from '@binarius/shared';
+import { UNIT_WAIT_CEILING_MS, until } from '@binarius/shared/testing';
 import { io, type Socket as ClientSocket } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MockSocketPayload } from './encoding';
@@ -80,10 +81,7 @@ async function connectClient(target: MockBroker = broker): Promise<Client> {
     disconnected,
     payloads: (event) => of(event).map((entry) => decodeSocketPayload(entry.args[0])),
     async waitFor(event, count = 1) {
-      await vi.waitFor(() => expect(of(event).length).toBeGreaterThanOrEqual(count), {
-        timeout: 1000,
-        interval: 5,
-      });
+      await until(`${count} × ${event}`, () => of(event).length >= count);
       return of(event).map((entry) => decodeSocketPayload(entry.args[0]));
     },
     async expectQuiet(event, count = 0) {
@@ -432,7 +430,7 @@ describe('open_trade scripts', () => {
         [{ message: 'scripted' }],
       ]);
     } else {
-      await vi.waitFor(() => expect(broker.socket.pendingDelays).toBe(1), { interval: 5 });
+      await until('the delayed open_trade', () => broker.socket.pendingDelays === 1);
       await client.waitFor(ev('demo', 'open_trade.success'));
     }
     expect(broker.socket.journal.at(-1)?.outcome).toBe(MockSocketOutcome.Scripted);
@@ -475,7 +473,7 @@ describe('open_trade scripts', () => {
     broker.socket.failNext('openTrade', { delayMs: 300 });
     const client = await authed();
     client.socket.emit(ev('demo', 'open_trade'), tradeCommand());
-    await vi.waitFor(() => expect(broker.socket.pendingDelays).toBe(1), { interval: 5 });
+    await until('the delayed open_trade', () => broker.socket.pendingDelays === 1);
     await client.expectQuiet(ev('demo', 'open_trade.success'));
     await client.waitFor(ev('demo', 'open_trade.success'));
     expect(broker.socket.pendingDelays).toBe(0);
@@ -488,7 +486,7 @@ describe('open_trade scripts', () => {
       broker.socket.failNext('openTrade', { delayMs: 50 });
       const client = await authed();
       client.socket.emit(ev('demo', 'open_trade'), tradeCommand());
-      await vi.waitFor(() => expect(broker.socket.pendingDelays).toBe(1), { interval: 5 });
+      await until('the delayed open_trade', () => broker.socket.pendingDelays === 1);
       if (trigger === 'disconnect') {
         client.socket.disconnect();
       } else {
@@ -496,7 +494,7 @@ describe('open_trade scripts', () => {
         await client.waitFor(BrokerSocketEvent.UserDisconnectTokenExpired);
         await client.disconnected;
       }
-      await vi.waitFor(() => expect(broker.trades.list(1)).toHaveLength(1), { interval: 5 });
+      await until('the trade to open', () => broker.trades.list(1).length === 1);
       expect(broker.socket.pendingDelays).toBe(0);
       expect(broker.state.listenerErrors).toEqual([]);
     },
@@ -506,13 +504,10 @@ describe('open_trade scripts', () => {
     broker.socket.failNext('openTrade', { delayMs: 300 });
     const client = await authed();
     client.socket.emit(ev('demo', 'open_trade'), tradeCommand());
-    await vi.waitFor(() => expect(broker.socket.pendingDelays).toBe(1), { interval: 5 });
+    await until('the delayed open_trade', () => broker.socket.pendingDelays === 1);
     client.socket.emit(BrokerSocketEvent.UserAuth, { id: 2, token: OTHER_TOKEN });
     await client.waitFor(BrokerSocketEvent.UserAuthSuccess, 2);
-    await vi.waitFor(() => expect(broker.trades.list(1)).toHaveLength(1), {
-      timeout: 1000,
-      interval: 5,
-    });
+    await until('the trade to open', () => broker.trades.list(1).length === 1);
     expect(broker.trades.list(2)).toEqual([]);
     await client.expectQuiet(ev('demo', 'open_trade.success'));
   });
@@ -640,7 +635,7 @@ describe('disconnect', () => {
     expect(broker.socket.disconnect({ userId: 1 })).toBe(2);
     expect(await first.disconnected).toBe('io server disconnect');
     expect(await second.disconnected).toBe('io server disconnect');
-    await vi.waitFor(() => expect(broker.socket.sockets()).toEqual([]), { interval: 5 });
+    await until('every socket to close', () => broker.socket.sockets().length === 0);
   });
 });
 
@@ -649,16 +644,16 @@ describe('close()', () => {
     const client = await authed();
     broker.socket.failNext('openTrade', { delayMs: 3000 });
     client.socket.emit(ev('demo', 'open_trade'), tradeCommand());
-    await vi.waitFor(() => expect(broker.socket.pendingDelays).toBe(1), { interval: 5 });
+    await until('the delayed open_trade', () => broker.socket.pendingDelays === 1);
     broker.rest.failNext('user', { delayMs: 3000 });
     broker.rest.failNext('pairs', { hang: true });
     const delayedRest = fetch(`${broker.url}/v1/broker/user`).catch(() => 'cut');
     const hungRest = fetch(`${broker.url}/v1/broker/pairs/binary`).then((r) => r.status);
-    await vi.waitFor(() => expect(broker.rest.pendingHangs).toBe(1), { interval: 5 });
+    await until('the hanging request', () => broker.rest.pendingHangs === 1);
 
     const started = Date.now();
     await broker.close();
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(Date.now() - started).toBeLessThan(UNIT_WAIT_CEILING_MS);
     expect(await client.disconnected).toBe('io server disconnect');
     expect(await hungRest).toBe(503);
     expect(await delayedRest).toBe('cut');

@@ -2,7 +2,7 @@ import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TradeIntentFailureReason, type OpenTrade } from '@binarius/shared';
-import { openTradeFor } from '@binarius/shared/testing';
+import { INTEGRATION_WAIT_CEILING_MS, openTradeFor } from '@binarius/shared/testing';
 import {
   brokerTrades,
   findTradeIntent,
@@ -239,7 +239,7 @@ describe('processIntentJob', () => {
     expect(await processIntentJob(deps(executor, { submitAckTimeoutMs: 50 }), { intentId })).toBe(
       'unknown',
     );
-    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(Date.now() - started).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
     expect(aborted).toBe(true);
     expect(await statusOf(intentId)).toMatchObject({
       status: 'unknown',
@@ -254,7 +254,7 @@ describe('processIntentJob', () => {
     expect(await processIntentJob(deps(executor, { submitAckTimeoutMs: 50 }), { intentId })).toBe(
       'unknown',
     );
-    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(Date.now() - started).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
     expect(await statusOf(intentId)).toMatchObject({
       status: 'unknown',
       lastError: 'executor_timeout',

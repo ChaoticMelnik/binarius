@@ -5,6 +5,7 @@ import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TradeIntentFailureReason } from '@binarius/shared';
+import { INTEGRATION_WAIT_CEILING_MS, until } from '@binarius/shared/testing';
 import {
   OutboxTopic,
   findTradeIntent,
@@ -223,7 +224,7 @@ describe('OutboxPublisher.tick', () => {
     const { intentId } = await newIntent();
     const started = Date.now();
     expect(await publisher(jobs, { publishTimeoutMs: 50 }).tick()).toBe(1);
-    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(Date.now() - started).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
     expect(await outboxOf(intentId)).toMatchObject({ status: 'pending', attempts: 1 });
     await park(intentId);
   });
@@ -305,14 +306,14 @@ describe('OutboxPublisher loop', () => {
     const p = publisher(jobs, { pollMs: 60_000 });
     p.start();
     try {
-      await sleep(20);
       const { intentId } = await newIntent();
-      p.wake();
-      const deadline = Date.now() + 2_000;
-      while ((await outboxOf(intentId)).status !== 'published' && Date.now() < deadline) {
-        await sleep(10);
-      }
-      expect((await outboxOf(intentId)).status).toBe('published');
+      // a wake that lands while the loop is mid-tick is dropped (the poll would pick the row up,
+      // docs/trade-intent-transport.md); waking on every poll lets the first one that finds the
+      // loop idle end the wait
+      await until('the row to be published', async () => {
+        p.wake();
+        return (await outboxOf(intentId)).status === 'published';
+      });
     } finally {
       await p.stop();
       await jobs.close();
@@ -320,16 +321,18 @@ describe('OutboxPublisher loop', () => {
   });
 
   it('stop waits for the row in flight and leaves the rest of the batch pending', async () => {
+    let adds = 0;
     const slow = fakeJobs(async () => {
+      adds += 1;
       await sleep(150);
     });
     const ids = await Promise.all(Array.from({ length: 5 }, () => newIntent()));
     const p = publisher(slow, { pollMs: 60_000, publishTimeoutMs: 5_000 });
     p.start();
-    await sleep(50);
+    await until('the first add to be in flight', () => adds >= 1);
     const started = Date.now();
     await p.stop();
-    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(Date.now() - started).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
     const statuses = await Promise.all(
       ids.map(async ({ intentId }) => (await outboxOf(intentId)).status),
     );
@@ -373,7 +376,7 @@ describe('OutboxPublisher shutdown semantics', () => {
     await p.stop();
     const elapsed = Date.now() - started;
     expect(elapsed).toBeGreaterThanOrEqual(150);
-    expect(elapsed).toBeLessThan(1_000);
+    expect(elapsed).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
     expect(await outboxOf(intentId)).toMatchObject({ status: 'pending', attempts: 1 });
 
     // stopping was cleared: a direct tick handles the row again once it is due

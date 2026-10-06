@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { scrypt } from 'node:crypto';
+import { describe, expect, it, vi } from 'vitest';
 import {
   DUMMY_PASSWORD_HASH,
   generatePassword,
@@ -6,6 +7,13 @@ import {
   SCRYPT_PARAMS,
   verifyPassword,
 } from './staff-password';
+
+// The real scrypt, counted: whether a derivation ran is read off the call, not off the clock.
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return { ...actual, scrypt: vi.fn(actual.scrypt) };
+});
+const derivations = vi.mocked(scrypt);
 
 // Cheap parameters everywhere the test only needs a real hash; the cases about cost say so.
 const CHEAP = { ln: 10, r: 8, p: 1 };
@@ -77,9 +85,9 @@ describe('verifyPassword', () => {
     ['p above the ceiling', { ln: 12, r: 8, p: 3 }],
   ])('refuses %s even when the password is right', async (_label, params) => {
     const stored = await hashPassword(PASSWORD, params);
-    const startedAt = Date.now();
+    derivations.mockClear();
     expect(await verifyPassword(stored, PASSWORD)).toBe(false);
-    expect(Date.now() - startedAt).toBeLessThan(50);
+    expect(derivations).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -98,27 +106,26 @@ describe('verifyPassword', () => {
   // A truncated row, not a password. Written at the parameters production uses, so the answer
   // has to come from the length rather than from a derivation nobody should have paid for.
   it('refuses a key that is not 32 bytes, without deriving anything', async () => {
-    const startedAt = Date.now();
+    derivations.mockClear();
     expect(await verifyPassword(`$scrypt$ln=17,r=8,p=1$${SALT}$aGFzaA`, PASSWORD)).toBe(false);
-    expect(Date.now() - startedAt).toBeLessThan(50);
+    expect(derivations).not.toHaveBeenCalled();
   });
 });
 
 describe('DUMMY_PASSWORD_HASH', () => {
   // It exists to be derived against, so `false` is not enough to check: a malformed string
   // also answers false, in a millisecond, and would give the unknown-login path away by how
-  // fast it came back. The derivation is what has to happen, so the case is timed from below
-  // — at ln=17 a real one takes a couple of hundred milliseconds — and the fields are checked
-  // to decode to the sizes this module writes.
+  // fast it came back. The derivation is what has to happen, so the case counts the scrypt
+  // call, and the fields are checked to decode to the sizes this module writes.
   it('is a hash this module really runs, and matches nothing anyone would type', async () => {
     const [, algorithm, params, salt = '', key = ''] = DUMMY_PASSWORD_HASH.split('$');
     expect([algorithm, params]).toEqual(['scrypt', 'ln=17,r=8,p=1']);
     expect(Buffer.from(salt, 'base64')).toHaveLength(16);
     expect(Buffer.from(key, 'base64')).toHaveLength(32);
 
-    const startedAt = Date.now();
+    derivations.mockClear();
     expect(await verifyPassword(DUMMY_PASSWORD_HASH, PASSWORD)).toBe(false);
-    expect(Date.now() - startedAt).toBeGreaterThan(50);
+    expect(derivations).toHaveBeenCalledTimes(1);
 
     expect(await verifyPassword(DUMMY_PASSWORD_HASH, '')).toBe(false);
   });

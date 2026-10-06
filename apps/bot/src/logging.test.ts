@@ -10,6 +10,7 @@ import {
   UNNAMED_ERROR_MESSAGE,
   type LogLevel,
 } from '@binarius/shared';
+import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { OAUTH_CALLBACK_DATA, createBot, levelCallbackData } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
@@ -732,7 +733,10 @@ describe('what the bot writes when a drain step fails', () => {
       signalSource,
     });
     signalSource.emit('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await until(
+      'the failed step to be logged',
+      () => lineWith(lines, 'shutdown: bot.stop() failed') !== undefined,
+    );
 
     const logged = lineWith(lines, 'shutdown: bot.stop() failed');
     expect(logged).toMatchObject({ err: { name: 'Error' } });
@@ -782,7 +786,8 @@ describe('what the bot writes when a part of the profile is not registered', () 
         signals: ['SIGTERM'],
         signalSource: new EventEmitter(),
       });
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // the last line onStart writes: a failure that escaped it would never get this far
+      await until('the bot to start', () => lineWith(lines, 'bot started') !== undefined);
 
       const logged = lineWith(lines, message);
       expect(logged).toMatchObject({

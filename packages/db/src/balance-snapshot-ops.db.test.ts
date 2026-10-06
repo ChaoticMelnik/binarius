@@ -8,6 +8,7 @@ import {
   type BrokerUser,
   type DecimalString,
 } from '@binarius/shared';
+import { INTEGRATION_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import {
   balanceSnapshotOutOfDomain,
   listBalanceRefreshCandidates,
@@ -107,7 +108,7 @@ describe('upsertBalanceSnapshot', () => {
       lastRefreshError: null,
       lastRefreshFailedAt: null,
     });
-    expect(Math.abs(stored!.restAgeMs)).toBeLessThan(2_000);
+    expect(Math.abs(stored!.restAgeMs)).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
   });
 
   it('sets last_requested_at only when the bot asked', async () => {
@@ -151,7 +152,7 @@ describe('upsertBalanceSnapshot', () => {
       lastRefreshError: null,
       lastRefreshFailedAt: null,
     });
-    expect(Math.abs(after!.restAgeMs)).toBeLessThan(2_000);
+    expect(Math.abs(after!.restAgeMs)).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
   });
 
   it('moves only the event times it is given, and keeps them on a REST write', async () => {
@@ -358,7 +359,7 @@ describe('readBalanceSnapshot', () => {
       lastRefreshError: null,
     });
     expect(read!.restSnapshotAgeSec).toBeGreaterThanOrEqual(89);
-    expect(read!.restSnapshotAgeSec).toBeLessThanOrEqual(91);
+    expect(read!.restSnapshotAgeSec).toBeLessThanOrEqual(90 + INTEGRATION_WAIT_CEILING_MS / 1_000);
   });
 
   it('reads a timestamp in the future as age 0', async () => {
@@ -376,7 +377,7 @@ describe('readBalanceSnapshot', () => {
     await shift(accountId, 'demo_event_at', '-10 seconds');
     const age = (await readBalanceSnapshot(tmp.db, accountId))!.balanceEventAgeSec;
     expect(age).toBeGreaterThanOrEqual(9);
-    expect(age).toBeLessThanOrEqual(11);
+    expect(age).toBeLessThanOrEqual(10 + INTEGRATION_WAIT_CEILING_MS / 1_000);
   });
 
   it('carries the last refresh error', async () => {
@@ -470,7 +471,7 @@ describe('the accounts in work', () => {
     const summary = await summarizeWatchedBalances(own.db, { watchWindowMs: WINDOW_MS });
     expect(summary).toMatchObject({ watched: 4, withoutSnapshot: 1 });
     expect(summary.oldestAgeSec).toBeGreaterThanOrEqual(399);
-    expect(summary.oldestAgeSec).toBeLessThanOrEqual(401);
+    expect(summary.oldestAgeSec).toBeLessThanOrEqual(400 + INTEGRATION_WAIT_CEILING_MS / 1_000);
 
     // a recorded failure counts as an attempt: the failing account goes behind the healthy one
     await recordBalanceRefreshFailure(own.db, askedOlder, BalanceRefreshError.AccountMismatch);

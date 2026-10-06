@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import Fastify, { type FastifyReply } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { until } from '@binarius/shared/testing';
 import { startOAuthStub, type OAuthStub } from './testing/oauth-stub';
 import {
   BROKER_ENDPOINTS,
@@ -382,21 +383,23 @@ describe('transport failures', () => {
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
       redirectUri: REDIRECT_URI,
-      delayMs: 2_000,
+      hang: true,
     });
+    // the client's timer is the only clock here, and it is also the window the request has to
+    // reach the stub in
     const impatient = createBrokerOAuthClient({
       baseUrl: slow.url,
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
-      timeoutMs: 50,
+      timeoutMs: 1_000,
     });
     try {
       const code = slow.issueCode({ brokerUserId: 'broker-7' });
-      const started = Date.now();
-      expect(await codeOf(impatient.exchangeCode({ code, redirectUri: REDIRECT_URI }))).toBe(
-        BrokerOAuthErrorCode.Unavailable,
-      );
-      expect(Date.now() - started).toBeLessThan(1_000);
+      const outcome = codeOf(impatient.exchangeCode({ code, redirectUri: REDIRECT_URI }));
+      await until('the stub to hold the request', () => slow.pendingHangs === 1);
+      expect(await outcome).toBe(BrokerOAuthErrorCode.Unavailable);
+      // the stub never answered: the client left on its own timer
+      expect(slow.pendingHangs).toBe(1);
       expect(slow.tokenRequests).toBe(1);
     } finally {
       await slow.close();

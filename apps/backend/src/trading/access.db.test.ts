@@ -11,6 +11,7 @@ import {
   UserStatus,
   safeParseTradingAccessResponse,
 } from '@binarius/shared';
+import { INTEGRATION_WAIT_CEILING_MS, until } from '@binarius/shared/testing';
 import {
   createTempDatabase,
   intentRequest,
@@ -245,14 +246,6 @@ const age = (accountId: string, by: string) =>
 
 const userGets = () => broker.rest.journal.filter((entry) => entry.endpoint === 'user').length;
 
-async function until(condition: () => boolean, what: string) {
-  const deadline = Date.now() + 2_000;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
-
 describe('POST /trading/access → broker', () => {
   beforeEach(() => broker.rest.clearJournal());
 
@@ -364,7 +357,15 @@ describe('POST /trading/access → broker', () => {
     );
     // its own reconciler and app, so the hang it leaves is ended here and not seen by a later case
     const own = createReconciler();
-    const ownApp = await buildAccessApp(own);
+    // the route's refresh, counted when it settles: it is still hanging when the answer arrives
+    let refreshesSettled = 0;
+    const ownApp = await buildAccessApp({
+      ...own,
+      refresh: (...args) =>
+        own.refresh(...args).finally(() => {
+          refreshesSettled += 1;
+        }),
+    });
     try {
       expect(broker.rest.pendingHangs).toBe(0);
       broker.rest.clearJournal();
@@ -377,7 +378,8 @@ describe('POST /trading/access → broker', () => {
         `Bearer ${TOKEN}`,
         ownApp,
       );
-      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(Date.now() - started).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
+      expect(refreshesSettled).toBe(0);
       if (withSnapshot) {
         expect(response.json()).toMatchObject({
           brokerUnavailable: null,
@@ -387,11 +389,11 @@ describe('POST /trading/access → broker', () => {
         expect(response.json()).toMatchObject({ broker: null, brokerUnavailable: 'refreshing' });
       }
       // the background refresh went out and is the one hanging
-      await until(() => broker.rest.pendingHangs === 1, 'the background refresh');
+      await until('the background refresh', () => broker.rest.pendingHangs === 1);
     } finally {
       await ownApp.close();
       await own.stop();
-      await until(() => broker.rest.pendingHangs === 0, 'the hang to end');
+      await until('the hang to end', () => broker.rest.pendingHangs === 0);
     }
   });
 

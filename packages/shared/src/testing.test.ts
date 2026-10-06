@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { telegramHtml } from './telegram-html';
 import { parseClosedTrade, parseOpenTrade, type ClosedTrade, type OpenTrade } from './broker';
 import type { DecimalString } from './money';
@@ -7,9 +7,12 @@ import {
   composeDurationMs,
   composeServiceEnvValue,
   composeServiceValue,
+  isIntegrationTestPath,
   openTradeFor,
   telegramTextProblems,
   type TradeTarget,
+  UNIT_WAIT_CEILING_MS,
+  until,
 } from './testing';
 
 const yaml = `services:
@@ -136,5 +139,74 @@ describe('trade builders', () => {
         profit: closed.profit,
       }),
     ).toEqual(closed);
+  });
+});
+
+// the ceiling is read from a fake clock: a real 4 s wait would sit next to the 5 s budget
+async function timeoutMessage(): Promise<string> {
+  vi.useFakeTimers();
+  try {
+    const waiting = until('nothing', () => false).then(
+      () => 'resolved',
+      (error: unknown) => (error as Error).message,
+    );
+    await vi.advanceTimersByTimeAsync(UNIT_WAIT_CEILING_MS + 10);
+    return await waiting;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe('until', () => {
+  let fromBeforeAll: string;
+  beforeAll(async () => {
+    fromBeforeAll = await timeoutMessage();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves once a sync condition turns true', async () => {
+    let polls = 0;
+    await until('three polls', () => (polls += 1) >= 3);
+    expect(polls).toBe(3);
+  });
+
+  it('resolves once an async condition turns true', async () => {
+    let polls = 0;
+    await until('two polls', () => Promise.resolve((polls += 1) >= 2));
+    expect(polls).toBe(2);
+  });
+
+  it('rejects at the unit ceiling, naming what it waited for', async () => {
+    expect(await timeoutMessage()).toBe(
+      `timed out after ${UNIT_WAIT_CEILING_MS} ms waiting for nothing`,
+    );
+  });
+
+  it('takes the unit ceiling outside a test body too', () => {
+    expect(fromBeforeAll).toBe(`timed out after ${UNIT_WAIT_CEILING_MS} ms waiting for nothing`);
+  });
+
+  it('propagates a condition that rejects, without retrying it', async () => {
+    let polls = 0;
+    const failing = () => {
+      polls += 1;
+      return Promise.reject(new Error('broken'));
+    };
+    await expect(until('a broken condition', failing)).rejects.toThrow('broken');
+    expect(polls).toBe(1);
+  });
+});
+
+describe('isIntegrationTestPath', () => {
+  it.each([
+    ['apps/x/src/a.db.test.ts', true],
+    ['apps/x/src/a.redis.test.ts', true],
+    ['apps/x/src/a.test.ts', false],
+    ['apps/x/src/db.test.ts', false],
+    ['apps/x/src/a.db.ts', false],
+  ])('%s → %s', (file, integration) => {
+    expect(isIntegrationTestPath(file)).toBe(integration);
   });
 });

@@ -14,8 +14,9 @@ export interface OAuthStubOptions {
   expiresInSec?: number;
   // the only partner_code the email login accepts
   partnerCode?: string;
-  // delays the response on every endpoint; used to exercise the client's abort
-  delayMs?: number;
+  // holds every request until release(), counted on arrival; used to exercise the client's abort
+  // while the request is provably still at the broker
+  hang?: boolean;
 }
 
 export interface IssuedCode {
@@ -31,6 +32,10 @@ export interface OAuthStub {
   tokenRequests: number;
   // the path of every request, in order
   paths: string[];
+  // seeded from the option; a case that needs one answered request first switches it on later
+  hang: boolean;
+  // requests parked by `hang` and not released yet
+  pendingHangs: number;
   // the body keys of the last request to each JSON endpoint, to prove what the client sends
   lastRefreshBodyKeys: string[] | undefined;
   lastSendCodeBodyKeys: string[] | undefined;
@@ -40,6 +45,9 @@ export interface OAuthStub {
   registerEmailUser(input: { email: string; brokerUserId: string; isPartnerClient: boolean }): void;
   // the newest code sent to the address, as the inbox would show it
   codeFor(email: string): string | undefined;
+  // lets every parked request answer as usual
+  release(): void;
+  // releases first: Fastify's close waits for handlers still in flight
   close(): Promise<void>;
 }
 
@@ -59,12 +67,15 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
   const emailCodes = new Map<string, { code: string; expiresAt: number; used: boolean }>();
   const emailUsers = new Map<string, { brokerUserId: string; isPartnerClient: boolean }>();
   let issued = 0;
+  let parked: (() => void)[] = [];
 
   const app: FastifyInstance = Fastify({ logger: false });
   const stub: OAuthStub = {
     url: '',
     tokenRequests: 0,
     paths: [],
+    hang: options.hang ?? false,
+    pendingHangs: 0,
     lastRefreshBodyKeys: undefined,
     lastSendCodeBodyKeys: undefined,
     lastEmailLoginBodyKeys: undefined,
@@ -84,7 +95,16 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
       emailUsers.set(email.toLowerCase(), { brokerUserId, isPartnerClient });
     },
     codeFor: (email) => emailCodes.get(email.toLowerCase())?.code,
-    close: () => app.close(),
+    release: () => {
+      const waiting = parked;
+      parked = [];
+      stub.pendingHangs = 0;
+      for (const resume of waiting) resume();
+    },
+    close: () => {
+      stub.release();
+      return app.close();
+    },
   };
 
   function issuePair(family: string) {
@@ -104,8 +124,9 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
   async function received(path: string) {
     stub.tokenRequests += 1;
     stub.paths.push(path);
-    if (options.delayMs !== undefined) {
-      await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+    if (stub.hang) {
+      stub.pendingHangs += 1;
+      await new Promise<void>((resolve) => parked.push(resolve));
     }
   }
 

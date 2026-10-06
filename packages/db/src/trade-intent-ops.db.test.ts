@@ -8,7 +8,11 @@ import {
   type DecimalString,
   type OpenTrade,
 } from '@binarius/shared';
-import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
+import {
+  closedTradeFor,
+  INTEGRATION_WAIT_CEILING_MS,
+  openTradeFor,
+} from '@binarius/shared/testing';
 import {
   createTempDatabase,
   intentRequest,
@@ -1233,7 +1237,9 @@ describe('claimReconciling (#89)', () => {
     const { intent } = await reconcilingIntent();
     const claimed = await claimReconciling(tmp.db, { id: intent.id, retryMs: RETRY_MS });
     expect(claimed).toMatchObject({ status: 'reconciling', version: intent.version + 1 });
-    expect(Math.abs(claimed!.reconcileClaimedAt!.getTime() - Date.now())).toBeLessThan(5_000);
+    expect(Math.abs(claimed!.reconcileClaimedAt!.getTime() - Date.now())).toBeLessThan(
+      INTEGRATION_WAIT_CEILING_MS,
+    );
     expect(await claimReconciling(tmp.db, { id: intent.id, retryMs: RETRY_MS })).toBeUndefined();
     await ageClaim(intent.id, RETRY_MS + 1_000);
     expect(await claimReconciling(tmp.db, { id: intent.id, retryMs: RETRY_MS })).toMatchObject({

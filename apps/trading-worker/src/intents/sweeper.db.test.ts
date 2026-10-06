@@ -3,6 +3,7 @@ import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { findTradeIntent, millisecondsAgo, takeIntent, tradeIntents } from '@binarius/db';
 import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
+import { until } from '@binarius/shared/testing';
 import { startSweeper, sweepStaleSubmitting } from './sweeper';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -51,14 +52,10 @@ describe('sweepStaleSubmitting', () => {
       limit: 10,
     });
     try {
-      const deadline = Date.now() + 2_000;
-      while (
-        (await findTradeIntent(tmp.db, stale))?.status !== 'unknown' &&
-        Date.now() < deadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-      expect((await findTradeIntent(tmp.db, stale))?.status).toBe('unknown');
+      await until(
+        'the sweeper to mark the stale intent unknown',
+        async () => (await findTradeIntent(tmp.db, stale))?.status === 'unknown',
+      );
     } finally {
       sweeper.stop();
     }

@@ -36,6 +36,17 @@ const configModule = (await import(
 };
 const config = configModule.default;
 
+// the same non-literal import: the waits' ceilings, which have to stay below these budgets
+const waits = (await import(
+  pathToFileURL(path.join(repoRoot, 'packages/shared/src/testing.ts')).href
+)) as {
+  UNIT_WAIT_CEILING_MS: number;
+  INTEGRATION_WAIT_CEILING_MS: number;
+  isIntegrationTestPath: (file: string) => boolean;
+};
+// vitest's documented default, which the unit project inherits by leaving testTimeout unset
+const VITEST_DEFAULT_TEST_TIMEOUT_MS = 5_000;
+
 // What makes a test an integration test is that it reaches the services, not its file name.
 // The three env.test.ts files pass variable names to readEnv as data and never read process.env;
 // a bare DATABASE_URL is the dev stack's and drizzle-kit's, which no test reads.
@@ -119,6 +130,13 @@ describe('vitest projects', () => {
     expect(unit.hookTimeout).toBeUndefined();
   });
 
+  it('keeps each wait ceiling below its project test budget', () => {
+    expect(waits.UNIT_WAIT_CEILING_MS).toBeLessThan(VITEST_DEFAULT_TEST_TIMEOUT_MS);
+    const { testTimeout } = project('integration').test;
+    if (testTimeout === undefined) throw new Error('the integration project must set testTimeout');
+    expect(waits.INTEGRATION_WAIT_CEILING_MS).toBeLessThan(testTimeout);
+  });
+
   it('runs the database preflight before integration tests only', () => {
     expect(project('integration').test.globalSetup).toEqual(['./tooling/integration-preflight.ts']);
     expect(project('unit').test.globalSetup).toBeUndefined();
@@ -194,6 +212,12 @@ describe('vitest projects', () => {
       expect(expected.filter((entry) => entry.endsWith(' integration')).length).toBeGreaterThan(0);
       expect(expected.filter((entry) => entry.endsWith(' unit')).length).toBeGreaterThan(0);
       expect(assigned.sort()).toEqual(expected.sort());
+      // until() picks its ceiling by file name; it has to agree with the project vitest chose
+      const misclassified = assigned.filter((entry) => {
+        const [file = '', projectName] = entry.split(' ');
+        return waits.isIntegrationTestPath(file) !== (projectName === 'integration');
+      });
+      expect(misclassified).toEqual([]);
     },
   );
 });

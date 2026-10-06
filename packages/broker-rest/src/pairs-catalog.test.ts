@@ -1,6 +1,7 @@
 import pino from 'pino';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { logOptions, toBinaryPair, type BinaryPair } from '@binarius/shared';
+import { until } from '@binarius/shared/testing';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import {
   BROKER_PAIRS_MAX_STALE_MS,
@@ -39,14 +40,6 @@ function catalogOf(overrides: Partial<PairsCatalogDeps> = {}): PairsCatalog {
 const pairsRequests = () => broker.rest.journal.filter((record) => record.endpoint === 'pairs');
 const brokerPairs = (): BinaryPair[] => broker.pairs.list().map(toBinaryPair);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error('condition not met in time');
-    await sleep(10);
-  }
-}
 
 beforeEach(async () => {
   broker = await startMockBroker();
@@ -121,7 +114,11 @@ describe('a failed refresh', () => {
       code: 'rejected',
       fields: { status: 400, detail: 'x' },
     },
-    { script: { status: 200, body: 'not json' }, code: 'contract_violation', fields: { status: 200 } },
+    {
+      script: { status: 200, body: 'not json' },
+      code: 'contract_violation',
+      fields: { status: 200 },
+    },
   ])('keeps the snapshot and logs one warn line on $code', async ({ script, code, fields }) => {
     const catalog = catalogOf();
     await catalog.refresh();
@@ -163,12 +160,12 @@ describe('single flight and stop', () => {
     const first = catalog.refresh();
     const second = catalog.refresh();
     expect(second).toBe(first);
-    await waitFor(() => broker.rest.pendingHangs === 1);
+    await until('the refresh to hang', () => broker.rest.pendingHangs === 1);
     expect(pairsRequests()).toHaveLength(2);
     catalog.stop();
     expect(await first).toBe(false);
     expect(await second).toBe(false);
-    await waitFor(() => broker.rest.pendingHangs === 0);
+    await until('the hang to end', () => broker.rest.pendingHangs === 0);
     expect(lines).toEqual([]);
     expect(catalog.read()).toEqual(before);
   });
@@ -216,11 +213,12 @@ describe('the timer', () => {
   it('refreshes every ttlMs over real HTTP and stops with stop()', async () => {
     const catalog = catalogOf({ ttlMs: 20, now: Date.now });
     catalog.start();
-    await waitFor(() => pairsRequests().length >= 3);
+    await until('three refreshes', () => pairsRequests().length >= 3);
     const [first] = broker.pairs.list();
     if (first === undefined) throw new Error('the mock broker has no pairs');
     broker.pairs.update(first.id, { payout: first.payout + 1 });
-    await waitFor(
+    await until(
+      'the new payout',
       () => catalog.read()?.pairs.find((pair) => pair.id === first.id)?.payout === first.payout + 1,
     );
     catalog.stop();
@@ -239,14 +237,13 @@ describe('the timer', () => {
       },
     };
     const ttlMs = 50;
-    const windowMs = 500;
     const catalog = catalogOf({ client: counting, ttlMs });
+    const started = Date.now();
     catalog.start();
     catalog.start();
-    await sleep(windowMs);
-    // a late timer only ticks less; two intervals would give about twice windowMs / ttlMs
-    expect(calls).toBeGreaterThanOrEqual(3);
-    expect(calls).toBeLessThanOrEqual(windowMs / ttlMs + 2);
+    await until('three ticks', () => calls >= 3);
+    // defence in depth only: one interval per start() is proven by the fake-timer case below
+    expect(calls).toBeLessThanOrEqual((Date.now() - started) / ttlMs + 2);
     catalog.stop();
     const atStop = calls;
     await sleep(4 * ttlMs);

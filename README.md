@@ -117,6 +117,20 @@ runs `tooling/integration-preflight.ts` ([Test database](#test-database-native-p
 `unit` is everything else, on the defaults, and needs no services: `pnpm test --project unit`.
 `pnpm test --project integration` runs only the first.
 
+A test waits through `until(what, condition)` from `@binarius/shared/testing`, never with a
+deadline of its own: the ceiling is picked by the file's project, `UNIT_WAIT_CEILING_MS` (4 s,
+under vitest's 5 s default) or `INTEGRATION_WAIT_CEILING_MS` (15 s, under the 20 s budget), and
+`tooling/vitest-projects.test.ts` keeps both below their budgets. An elapsed-time upper bound
+uses the same two constants or is proven structurally. `tooling/test-timing.test.ts` fails
+`pnpm check` on four forms in a `*.test.ts`: a polling loop with its own deadline
+(`Date.now()` against a `deadline`/`until`/`ceiling` name), `vi.waitFor`/`vi.waitUntil`, a
+`toBeLessThan(OrEqual)` ceiling given as a number or an all-caps constant on a timed line, and
+any fixed wait (`sleep(n)`, `setTimeout(resolve, n)` or a wrapper over it) other than a zero
+delay. A wait left on purpose - a negative wait, a duration a scripted delay must run out, a wait
+inside a fake - is listed in its `ALLOWED` with the reason; an entry that matches nothing fails.
+`DEFERRED_TO_FOLLOW_UP` holds the files in-flight issues still own until they are converted.
+The scan is regex-based: a deadline built another way is not caught.
+
 ### Test database: native PostgreSQL 18
 
 The tests compare the database's clock with their own (a column against `Date.now()`) and one
