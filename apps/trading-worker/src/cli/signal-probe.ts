@@ -6,11 +6,12 @@ import {
   parseLogLevelEnv,
   parseLoopbackOrHttpsUrlEnv,
   readEnv,
+  SIGNAL_INTERVALS,
+  SignalFeedOutcome,
+  SignalKind,
 } from '@binarius/shared';
+import { createSignalFeed } from '@binarius/signal';
 import { pino } from 'pino';
-import { SignalKind } from '../signal/codes';
-import { createSignalFeed, SignalFeedOutcome } from '../signal/feed';
-import { SIGNAL_INTERVALS } from '../signal/feed-config';
 
 // One chart fetch and one decision through the signal feed: the journal line on stdout, a summary
 // on stderr; exit 0 on a decision (a refusal included), 1 on fetch_failed. The chart endpoint is

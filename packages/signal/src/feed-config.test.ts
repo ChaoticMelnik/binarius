@@ -1,11 +1,7 @@
+import { SIGNAL_CHART_INTERVAL_MS, SIGNAL_INTERVALS, type SignalParams } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SIGNAL_PARAMS, type SignalParams } from './config';
-import {
-  assertFeedLimit,
-  SIGNAL_CHART_INTERVAL_MS,
-  SIGNAL_CHART_LIMIT,
-  SIGNAL_INTERVALS,
-} from './feed-config';
+import { DEFAULT_SIGNAL_PARAMS } from './config';
+import { assertFeedLimit, SIGNAL_CHART_LIMIT } from './feed-config';
 
 const withParams = (patch: Partial<SignalParams>): SignalParams => ({
   ...DEFAULT_SIGNAL_PARAMS,

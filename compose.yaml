@@ -35,6 +35,11 @@ x-watch-broker-rest: &watch-broker-rest
   target: /app/packages/broker-rest/src
   action: sync
 
+x-watch-signal: &watch-signal
+  path: ./packages/signal/src
+  target: /app/packages/signal/src
+  action: sync
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -134,6 +139,7 @@ services:
         - *watch-shared
         - *watch-db
         - *watch-broker-rest
+        - *watch-signal
         - path: ./apps/backend/package.json
           action: rebuild
         - path: ./apps/backend/tsconfig.json
@@ -141,6 +147,10 @@ services:
         - path: ./packages/broker-rest/package.json
           action: rebuild
         - path: ./packages/broker-rest/tsconfig.json
+          action: rebuild
+        - path: ./packages/signal/package.json
+          action: rebuild
+        - path: ./packages/signal/tsconfig.json
           action: rebuild
         - path: ./packages/shared/package.json
           action: rebuild
@@ -226,6 +236,7 @@ services:
         - *watch-shared
         - *watch-db
         - *watch-broker-rest
+        - *watch-signal
         - path: ./apps/trading-worker/package.json
           action: rebuild
         - path: ./apps/trading-worker/tsconfig.json
@@ -233,6 +244,10 @@ services:
         - path: ./packages/broker-rest/package.json
           action: rebuild
         - path: ./packages/broker-rest/tsconfig.json
+          action: rebuild
+        - path: ./packages/signal/package.json
+          action: rebuild
+        - path: ./packages/signal/tsconfig.json
           action: rebuild
         - path: ./packages/shared/package.json
           action: rebuild

@@ -11,6 +11,7 @@
     "@binarius/broker-rest": "workspace:*",
     "@binarius/db": "workspace:*",
     "@binarius/shared": "workspace:*",
+    "@binarius/signal": "workspace:*",
     "bullmq": "^6.3.8",
     "drizzle-orm": "^0.45.3",
     "ioredis": "^6.0.0",

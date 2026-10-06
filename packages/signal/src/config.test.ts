@@ -1,10 +1,6 @@
+import type { SignalParams } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
-import {
-  assertSignalParams,
-  DEFAULT_SIGNAL_PARAMS,
-  minClosedCandlesFloor,
-  type SignalParams,
-} from './config';
+import { assertSignalParams, DEFAULT_SIGNAL_PARAMS, minClosedCandlesFloor } from './config';
 
 const withParams = (patch: Partial<SignalParams>): SignalParams => ({
   ...DEFAULT_SIGNAL_PARAMS,

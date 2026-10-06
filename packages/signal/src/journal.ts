@@ -1,7 +1,11 @@
-import type { Candle } from '@binarius/shared';
-import { SIGNAL_ALGORITHM_VERSION, type SignalParams } from './config';
-import { createSignalDecider, type SignalDecision } from './decide';
-import type { SignalInterval } from './feed-config';
+import {
+  SIGNAL_ALGORITHM_VERSION,
+  type Candle,
+  type SignalDecision,
+  type SignalInterval,
+  type SignalParams,
+} from '@binarius/shared';
+import { createSignalDecider } from './decide';
 
 // volume is never read by the decider, so the line does not carry it
 export type JournalCandle = readonly [
