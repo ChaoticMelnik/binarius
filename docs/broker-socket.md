@@ -95,7 +95,8 @@ supported form. Shared decodes the top level only, so it fails as `schema` too.
 - Broker free text that reaches a domain event, `auth_error.message` and
   `open_trade_fail[].message`, is treated like the executor's `detail`. It is logged truncated to
   `MAX_DETAIL_LENGTH` and never persisted. The normalizer does not enforce it; the client does
-  for `auth_error` ([Client → Logs](#logs)), #100 for `open_trade_fail`.
+  for `auth_error` ([Client → Logs](#logs)); the trade command executor does for
+  `open_trade_fail` ([trade-executor.md](trade-executor.md)).
 - Client-library errors from the socket are not problems. They go through `errorLogFields`, with
   the `err` serializer from #85 as the second line.
 
@@ -111,6 +112,7 @@ refresh and the place in `index.ts` are #101's.
 | `stop()` | closes the socket and forgets the credentials; synchronous, a no-op when idle. The registry stays |
 | `subscribe(assetIds)` | adds to the registry; the ids that are new go out at once when `ready`, otherwise with the next pass |
 | `subscriptions()` | the registry, ascending |
+| `openTrade(mode, request, signal)` | the trade command (#100, [below](#the-trade-command-100)): emits `user.<mode>.open_trade` only while `ready` and answers with the first `open_trade.success`/`.fail` of that mode on the same connection |
 | `state`, `connections` | the state below; successful auths since the last `start()` |
 | `onEvent(listener)`, `onState(listener)` | every valid `BrokerEvent`; every state change `{ from, to, reason? }`. Each returns its unsubscribe |
 | `isTerminalBrokerSocketState(state)` | whether `start()` may be called again without `stop()` |
@@ -173,6 +175,39 @@ socket id from the fixture's journal: one `user.auth`, then `ceil(n / 40)` `pric
 `openSocket` seam, that an id a `ready` listener subscribes goes out once, after the pass. A second
 `user.auth.success` on one connection is logged at `debug` and starts no second pass.
 
+### The trade command (#100)
+
+`openTrade(mode, request, signal)` resolves with one of four outcomes (`SocketOpenTradeResult`):
+
+| `outcome` | When | Emitted? |
+|---|---|---|
+| `success` (`trade`) | the first `user.<mode>.open_trade.success` on the connection the command went out on | yes |
+| `fail` (`failures`) | the first `user.<mode>.open_trade.fail` there | yes |
+| `not_sent` (`reason: not_ready`, `state`) | the client is not `ready`: no session, or any other state | no |
+| `not_sent` (`reason: aborted`, `state`) | the caller's signal was already aborted | no |
+| `unknown` (`reason: state_changed`, `state`) | any state change while waiting: `ready → reconnecting` (a transport drop), a terminal state, `idle` (`stop()`) | yes |
+| `unknown` (`reason: aborted`, `state`) | the caller's signal aborted while waiting | yes |
+
+- The readiness check and the emit are one synchronous unit (no await between them), so the state
+  the caller is answered by is the state the command went out in. The payload is parsed with
+  `socketOpenTradeRequestWireSchema` first; a request it refuses throws before anything is sent,
+  as a subscription chunk does. `user.<mode>.open_trade` is the client's third emit, after
+  `user.auth` and `price.subscribe`, and the only one carrying a command.
+- Correlation: the command carries no id the broker echoes, so the answer is the first
+  `open_trade.success`/`.fail` of the command's mode on the same connection after the emit. At
+  most one command waits per client — a second `openTrade()` while one waits throws
+  (`broker socket open_trade already pending`); the active-intent index (one non-terminal intent
+  per account) makes that unreachable in production. `update_balance` (the fixture sends it
+  first), the other mode's answers, problems and ignored events are not an answer. The answering
+  event is still dispatched to the listeners.
+- A state change ends the wait at once: the command is never emitted again on a new connection,
+  and an answer on a new connection is never matched to it. An emit made after the transport died
+  but before socket.io noticed is buffered and then dropped with the send buffer on `disconnect`
+  (the subscription case above), so it never reaches the broker on the next connection either;
+  the caller sees `unknown` for it, which is the safe reading.
+- The client writes `broker socket open_trade sent` at `debug` (`mode`, `connection`) and nothing
+  about the answer; no amount, no broker text. The executor logs the outcome.
+
 ### Reconnection and timing
 
 socket.io's own reconnection; the client reacts to `connect` (re-auth), `disconnect` (state) and
@@ -222,11 +257,13 @@ connection and reset on `connect`.
 | `broker event listener threw` | warn once per event type per connection | an `onEvent` listener throws; the others still run | `type`, `err` |
 | `broker socket state listener threw` | warn | an `onState` listener throws; the others still run | `to`, `err` |
 | `broker socket state` | debug | every state change | `from`, `to`, `reason` |
+| `broker socket open_trade sent` | debug | each command emitted | `mode`, `connection` |
 
 `IGNORED_BROKER_EVENTS` holds the same names as the mock's `OBSERVED_EXTRA_EVENTS`; a test keeps
 the two equal. `socket.test.ts` reads the log itself: a pino sink built from `logOptions('debug')`
-across every path above, no line containing a `SECRET-` sentinel (the token, payloads, a
-listener's error text) or the URL, and every `msg` of the table present.
+across every path above, a trade command included, no line containing a `SECRET-` sentinel (the
+token, payloads, a listener's error text), the command's amount or the URL, and every `msg` of
+the table present.
 
 ### Tests
 
@@ -303,9 +340,9 @@ Node 22 (the 2026-10-03 one is recorded in #99).
   here.
 - #85: the `err` whitelist serializer. Nothing on this module's path depends on it.
 - #98: the REST client (docs/broker-rest.md) and the integer-money fix above, in shared.
-- #99: the Socket.IO client above. It sends no trade command and writes nothing to the database.
-- #100: the trade command executor and the client→server payloads
-  (`toSocketOpenTradeRequestWire`).
+- #99: the Socket.IO client above. It writes nothing to the database.
+- #100: `openTrade()` on the client ([The trade command](#the-trade-command-100)) and the trade
+  command executor on top of it ([trade-executor.md](trade-executor.md)).
 - #101: the session manager on top of the client: one client per account, the token refresh after
   `token_expired`/`auth_failed`, the balance writers from `user.data`/`update_balance`,
   `BROKER_WS_URL`, the place in `index.ts` and the shutdown order, and the end-to-end mock

@@ -384,7 +384,7 @@ request in flight) and `SIGNAL_CACHE_MAX_TTL_MS < 60 000`; `timing.test.ts` asse
 ## Boundaries
 
 - #130: session orchestration, which evaluates the feed inside a session and wires it into
-  `index.ts`. #100/#101: the broker base URL in the worker's env and compose.
+  `index.ts`. #90: the broker base URL in the worker's env and compose.
 - #126: the analysis screen and its texts in the bot, on `POST /trading/signal`
   ([bot-demo.md](bot-demo.md#the-analysis)). #127: the stake button's press and the intent status. Stake size: docs/stake.md.
 - The decision's wire shape and codes are in `packages/shared/src/signal.ts` (#258).

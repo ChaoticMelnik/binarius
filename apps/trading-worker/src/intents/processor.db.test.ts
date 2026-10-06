@@ -1,6 +1,8 @@
 import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createBrokerRestClient } from '@binarius/broker-rest';
+import { MockSocketPayload, startMockBroker } from '@binarius/mock-broker';
 import { TradeIntentFailureReason, type OpenTrade } from '@binarius/shared';
 import { INTEGRATION_WAIT_CEILING_MS, openTradeFor } from '@binarius/shared/testing';
 import {
@@ -15,9 +17,12 @@ import {
   type TradeIntentRow,
 } from '@binarius/db';
 import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
+import { noTradeSessions } from '../broker/trade-session';
+import { parseEnv } from '../env';
 import type { SubmitResult, TradeExecutor } from './executor';
-import { notConfiguredExecutor, realTradingGate } from './executor';
+import { buildExecutor, realTradingGate } from './executor';
 import { InvalidJobError, processIntentJob, type ProcessorDeps } from './processor';
+import { createTradeCommandExecutor } from './trade-command-executor';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -51,6 +56,10 @@ const executorOf = (
   };
   return executor;
 };
+
+// a refusal before anything reaches a broker; rows may hold the code
+const rejectingExecutor = () =>
+  executorOf({ outcome: 'rejected', reason: TradeIntentFailureReason.ExecutorNotConfigured });
 
 // the broker's open trade for the very intent submitted, as an executor hands it over (#17)
 const acceptingExecutor = (patch: Partial<OpenTrade> = {}) =>
@@ -95,13 +104,13 @@ const topicsOf = async (intentId: string) =>
 describe('processIntentJob', () => {
   it('rejects a malformed payload and a missing intent as invalid jobs', async () => {
     await expect(
-      processIntentJob(deps(notConfiguredExecutor), { intentId: 'nope' }),
+      processIntentJob(deps(rejectingExecutor()), { intentId: 'nope' }),
     ).rejects.toBeInstanceOf(InvalidJobError);
-    await expect(processIntentJob(deps(notConfiguredExecutor), null)).rejects.toBeInstanceOf(
+    await expect(processIntentJob(deps(rejectingExecutor()), null)).rejects.toBeInstanceOf(
       InvalidJobError,
     );
     await expect(
-      processIntentJob(deps(notConfiguredExecutor), {
+      processIntentJob(deps(rejectingExecutor()), {
         intentId: '00000000-0000-0000-0000-000000000000',
       }),
     ).rejects.toBeInstanceOf(InvalidJobError);
@@ -146,9 +155,51 @@ describe('processIntentJob', () => {
     expect(recorded).toMatchObject({ intentId, outcome: 'unknown', status: 'unknown' });
   });
 
+  it('opens the trade over REST through the production composition', async () => {
+    const broker = await startMockBroker({ socketPayload: MockSocketPayload.Bytes });
+    try {
+      broker.users.register({ id: 1, accessToken: 'SECRET-TOKEN-of-user-1' });
+      // 101 is a pair of the fixture; the seed's default asset is not
+      const seed = await seedQueuedIntent(tmp.db, { assetId: 101 });
+      const executor = buildExecutor(
+        parseEnv({
+          DATABASE_URL: baseUrl,
+          REDIS_URL: 'redis://localhost:6379',
+          BACKEND_URL: 'http://backend:3000',
+          INTERNAL_API_TOKEN: 'internal-token-for-tests-0123456789',
+          BROKER_API_BASE_URL: 'https://api.binodex.app',
+        }),
+        createTradeCommandExecutor({
+          sessions: noTradeSessions,
+          rest: createBrokerRestClient({ baseUrl: broker.url }),
+          tokens: {
+            accessToken: async () => ({ ok: true, accessToken: 'SECRET-TOKEN-of-user-1' }),
+          },
+          logger,
+        }),
+      );
+      expect(
+        await processIntentJob(deps(executor, { submitAckTimeoutMs: 5_000 }), {
+          intentId: seed.intent.id,
+        }),
+      ).toBe('accepted');
+      expect(await statusOf(seed.intent.id)).toMatchObject({
+        status: 'accepted',
+        transport: 'rest_fallback',
+      });
+      const [opened] = broker.trades.list(1);
+      // '10' went out and came back; the row matched it to '10.00000000' by value
+      expect(await tradesOf(seed.intent.id)).toMatchObject([
+        { brokerTradeId: String(opened?.id), amount: '10.00000000', assetId: 101 },
+      ]);
+    } finally {
+      await broker.close();
+    }
+  });
+
   it('records a rejection and releases the token', async () => {
     const { intentId, userId } = await newIntent();
-    expect(await processIntentJob(deps(notConfiguredExecutor), { intentId })).toBe('rejected');
+    expect(await processIntentJob(deps(rejectingExecutor()), { intentId })).toBe('rejected');
     expect(await statusOf(intentId)).toMatchObject({
       status: 'rejected',
       lastError: 'executor_not_configured',
