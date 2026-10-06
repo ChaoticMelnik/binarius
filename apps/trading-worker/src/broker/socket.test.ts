@@ -918,7 +918,10 @@ describe('openTrade', () => {
     await ready(h);
     broker.socket.failNext('openTrade', { fail: [{ message: 'refused', field: 'amount' }] });
     const result = await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal);
-    expect(result).toEqual({ outcome: 'fail', failures: [{ message: 'refused', field: 'amount' }] });
+    expect(result).toEqual({
+      outcome: 'fail',
+      failures: [{ message: 'refused', field: 'amount' }],
+    });
     expect(broker.trades.list(1)).toEqual([]);
   });
 
@@ -1025,9 +1028,9 @@ describe('openTrade', () => {
     );
     // the waiter was cleared: the next command is accepted and answered by its own event
     broker.socket.failNext('openTrade', { fail: [{ message: 'second' }] });
-    expect(
-      await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
-    ).toEqual({ outcome: 'fail', failures: [{ message: 'second' }] });
+    expect(await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal)).toEqual(
+      { outcome: 'fail', failures: [{ message: 'second' }] },
+    );
   });
 
   it('is not answered by the other mode, only by its own', async () => {
@@ -1053,9 +1056,9 @@ describe('openTrade', () => {
     await ready(h);
     broker.socket.failNext('openTrade', { delayMs: 20 });
     const first = h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal);
-    expect(() =>
-      h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
-    ).toThrow('broker socket open_trade already pending');
+    expect(() => h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal)).toThrow(
+      'broker socket open_trade already pending',
+    );
     expect(await first).toEqual(expect.objectContaining({ outcome: 'success' }));
     expect(openTradeRecords()).toHaveLength(1);
   });
@@ -1073,9 +1076,9 @@ describe('logs', () => {
     h.client.subscribe([EURUSD]);
     h.client.start(CREDENTIALS);
     await ready(h);
-    expect(
-      await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
-    ).toEqual(expect.objectContaining({ outcome: 'success' }));
+    expect(await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal)).toEqual(
+      expect.objectContaining({ outcome: 'success' }),
+    );
     broker.socket.emitRaw(
       { userId: 1 },
       BrokerSocketEvent.PriceUpdate,

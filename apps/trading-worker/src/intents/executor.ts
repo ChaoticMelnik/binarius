@@ -5,13 +5,14 @@ import {
   type TradeTransport,
 } from '@binarius/shared';
 import type { TradeIntentRow, TradePolicy } from '@binarius/db';
+import type { Env } from '../env';
 
 export type SubmitResult =
   | { outcome: 'accepted'; transport: TradeTransport; trade: OpenTrade }
   | { outcome: 'rejected'; reason: TradeIntentFailureReason; detail?: string }
   | { outcome: 'unknown'; reason: TradeIntentFailureReason; detail?: string };
 
-// The port ARCH-01 (#40) implements with the broker socket client. Contract:
+// The port createTradeCommandExecutor (#100) implements. Contract:
 // - resolve with an explicit outcome; `rejected` only when the order certainly did not open,
 //   `unknown` whenever it may have (sent, then no answer);
 // - `accepted` carries the broker's open trade as received (open_trade.success or the REST
@@ -35,7 +36,7 @@ export const notConfiguredExecutor: TradeExecutor = {
   }),
 };
 
-// The outermost layer over any executor, today's and ARCH-01's alike (#134): with the grant off,
+// The outermost layer over any executor (#134): with the grant off,
 // a real intent is rejected without the inner executor being called. `rejected`, because nothing
 // was sent to the broker.
 export function realTradingGate(inner: TradeExecutor, policy: TradePolicy): TradeExecutor {
@@ -47,4 +48,13 @@ export function realTradingGate(inner: TradeExecutor, policy: TradePolicy): Trad
       return inner.submit(intent, signal);
     },
   };
+}
+
+// The worker's one production composition and the one place the parsed env becomes a policy:
+// the gate stays outside the trade command executor (#134 review, Minor 2).
+export function buildExecutor(
+  env: Pick<Env, 'realTradingEnabled'>,
+  inner: TradeExecutor,
+): TradeExecutor {
+  return realTradingGate(inner, { realTradingEnabled: env.realTradingEnabled });
 }

@@ -102,7 +102,7 @@ body). `getTradeIntentView(db, id, telegramUserId)` adds the owner to the join's
 | `submitting`                      | worker, `takeIntent` CAS                                                                                                                                                                                                                                                        | the job was taken; `submitted_at` is set on the database clock                                                                                                               |
 | `accepted`                        | worker, an explicit executor result that carries the broker's open trade (`markIntentAccepted`); the reconciliation pass, `concludeReconciled` from `reconciling` with the trade the reconciler found (open → `accepted`; closed → `accepted` and `settled` in one transaction) | the broker confirmed the order and its trade matches the intent; the open `broker_trades` row is written in the same transaction. `socket.emit` or a local `ok` never counts |
 | `rejected`                        | worker (executor said no, the intent expired, or the grant gate: a real intent while the worker's `REAL_TRADING_ENABLED` is not `true`, `real_trading_disabled`), publisher (delivery exhausted); #274: the reconciliation pass on a proven absence                              | terminal; the token reserve is released in the same transaction                                                                                                              |
-| `unknown`                         | worker (executor timeout, throw, a stale `submitting`, or an accepted trade that does not match the intent, `trade_mismatch`), sweeper                                                                                                                                          | the order may have reached the broker; reserve kept; a `trading-reconciliation` outbox row is written for reconciliation (#89)                                               |
+| `unknown`                         | worker (executor timeout, throw, a stale `submitting`, an order sent with no answer, `broker_unavailable`, or an accepted trade that does not match the intent, `trade_mismatch`), sweeper                                                                                     | the order may have reached the broker; reserve kept; a `trading-reconciliation` outbox row is written for reconciliation (#89)                                               |
 | `settled`                         | `settleIntent` from `accepted` (a `close_trade.success` or a REST closed snapshot through `settleClosedTrades`) or from `manual_review` (operator)                                                                                                                              | terminal; the token is debited in the same transaction whatever the trade's profit; `broker_trades` closed                                                                   |
 | `reconciling`                     | worker, `trading-reconciliation` job: `startReconciling` CAS from `unknown`; the pass claims it (`reconcile_claimed_at`, database clock) and asks the `IntentReconciler`                                                                                                        | the outcome is being established; the reserve is kept and the account stays blocked; `unavailable` leaves it here and the pass retries after `RECONCILE_RETRY_MS`            |
 | `manual_review`                   | the reconciliation pass: the reconciler answered `ambiguous` (`reconciliation_ambiguous`), found nothing once the window closed (`reconciliation_not_found`, absence not proven: #274) or offered a trade that does not match (`trade_mismatch`); operator (`manual_review → settled \| rejected`: the ops exist, the tool is a later issue)                                 | the reserve is kept; the same transaction halts the account (`trading_halted`, `halted_reason`) and an `error` line alerts after the commit (#90) |
@@ -213,8 +213,9 @@ entered twice. What resolves an intent left at each stage:
 | `manual_review`                                        | the operator: `settleIntent` (with the closed trade from that account's own closed list) or `rejectIntent` (`manual_rejected`)                                             | a later issue (the tool)                     |
 
 The catch-up (#90) resolves an `accepted` intent from the closed list once it is overdue;
-`close_trade.success` (#101) will be the main path. No executor accepts yet
-(`notConfiguredExecutor` rejects every intent).
+`close_trade.success` (#101) will be the main path. The trade command executor (#100,
+[trade-executor.md](trade-executor.md)) accepts; until #101 every intent reaches the broker over
+REST (`rest_fallback`).
 
 ## Reconciliation matching (#90)
 
@@ -312,7 +313,7 @@ stated, not enforced.
 | Worker shutdown                                                                                                                                   | —                                                                                                                                                                         | phase 1 budget 35 s (`SHUTDOWN_PHASE1_BUDGET_MS`) > longest ack timeout 30 s, phase 2 4 s; compose `stop_grace_period` 40 s                               | a job in flight finishes and its dead-letter write is awaited before any connection closes; an overrun exits 1 and the sweeper resolves the intent after the restart                                                                                                     |
 | Backend shutdown                                                                                                                                  | —                                                                                                                                                                         | phase 1 budget 10 s (`SHUTDOWN_PHASE1_BUDGET_MS`, `apps/backend/src/timing.ts`) > publish/has deadline 5 s, phase 2 4 s; compose `stop_grace_period` 20 s | `publisher.stop()` finishes the row in flight and leaves the rest of the batch `pending`; an overrun (a database timing out every statement, a request that hangs) exits 1 with the transaction rolled back and the outbox row replayed                                  |
 | `takeIntent`                                                                                                                                      | —                                                                                                                                                                         | `INTENT_MAX_AGE_MS` (60 s) in the CAS predicate, database clock                                                                                           | too old → `rejected` (`expired`), executor never called                                                                                                                                                                                                                  |
-| `executor.submit`                                                                                                                                 | none                                                                                                                                                                      | `SUBMIT_ACK_TIMEOUT_MS` (10 s), enforced by the processor with `Promise.race`; the executor also receives an `AbortSignal`                                | `realTradingGate` first: a real intent with the flag off → `rejected` (`real_trading_disabled`), the inner executor never called. Then timeout → `unknown` (`executor_timeout`); throw → `unknown` (`executor_error`)                                                    |
+| `executor.submit`                                                                                                                                 | none                                                                                                                                                                      | `SUBMIT_ACK_TIMEOUT_MS` (10 s), enforced by the processor with `Promise.race`; the executor also receives an `AbortSignal`                                | `realTradingGate` first (`buildExecutor`): a real intent with the flag off → `rejected` (`real_trading_disabled`), the inner executor never called. Then the trade command executor: socket when the account's session is ready, REST only when nothing was emitted; an order sent with no answer → `unknown` (`broker_unavailable`), a refusal → `rejected` (`broker_rejected`) ([trade-executor.md](trade-executor.md) → Outcomes). Timeout → `unknown` (`executor_timeout`); throw → `unknown` (`executor_error`) |
 | Outcome write                                                                                                                                     | none                                                                                                                                                                      | —                                                                                                                                                         | `accepted` writes the open `broker_trades` row in the same transaction; a trade that does not match the intent → `unknown` (`trade_mismatch`) + reconciliation row. A database failure here fails the job (dead letter); the intent stays `submitting` until the sweeper |
 | Stale `submitting` (redelivery or sweeper, every 15 s)                                                                                            | —                                                                                                                                                                         | `STALE_SUBMITTING_MS` 60 s ≥ `lockDuration` > max ack timeout                                                                                             | → `unknown` (`stale_submitting`) + reconciliation row                                                                                                                                                                                                                    |
 | Reconciliation job, topic `trading-reconciliation`                                                                                                | `attempts: 1`, as above                                                                                                                                                   | the BullMQ job options above                                                                                                                              | `unknown → reconciling`; the pass takes it on its next tick, within `RECONCILE_TICK_MS`; the job never asks the broker. A throw dead-letters with `topic`, and the outbox re-pends the row after 30 s while the intent is still `unknown`                                                                              |
@@ -357,7 +358,9 @@ stored. An executor that throws is logged by the error's name and code only: a c
 message can embed a header or a response body, and key-based redaction cannot scrub a string.
 `trade_mismatch` (the accepted trade does not match the intent) and `manual_rejected` (the
 operator's rejection from `manual_review`) are two of those codes (#17);
-`reconciliation_not_found` (a parked intent in #90, a release in #274) and `reconciliation_ambiguous` are the reconciler's two (#89). Queue
+`reconciliation_not_found` (a parked intent in #90, a release in #274) and `reconciliation_ambiguous` are the reconciler's two (#89);
+`broker_unavailable` is the trade command executor's "sent, no answer says whether it opened"
+(#100), and `executor_not_configured` stays in the list for rows written before it. Queue
 payloads carry the intent id only. Neither the publisher nor the worker loads broker tokens. Both loggers are built from `logOptions` in `packages/shared`: they redact `authorization`
 and token-like keys at every depth from zero to five (`LOG_REDACT_PATHS`, exercised against real
 pino by a worker test), deeper nesting and string contents not covered, and their serializers
@@ -401,20 +404,21 @@ its reserve. The name, the default and the parsing live in `parseRealTradingEnab
 
 ## Boundaries
 
-- **ARCH-01 (#40)** implements `TradeExecutor` (`apps/trading-worker/src/intents/executor.ts`)
-  with the broker socket client. Until then `notConfiguredExecutor` rejects every intent with
-  `executor_not_configured`, so the whole path can be exercised without a broker.
+- **#100** implements `TradeExecutor` (`apps/trading-worker/src/intents/executor.ts`) with
+  `createTradeCommandExecutor`, composed under `realTradingGate` by `buildExecutor`
+  ([trade-executor.md](trade-executor.md)).
 - **#89** (this pipeline's reconciliation half): the `trading-reconciliation` consumer, the
   pass, the `IntentReconciler` port (`apps/trading-worker/src/intents/reconciler.ts`) and the
   outcome writes. The port only reads: it never opens a trade.
 - **#90** (shipped): the REST reconciler, the halt and alert on `manual_review`, the settlement
   catch-up and the backend's token route — Reconciliation matching above; it never releases a
   reserve on absence. **#274**: `not_found` and the release after the live probe. **#91**: no second open
-  after `unknown` in the executor. **#92**: the broker balance check after a reconciliation and a
+  after `unknown` (the executor side is proven in #100, [trade-executor.md](trade-executor.md) →
+  The two-cases rule). **#92**: the broker balance check after a reconciliation and a
   DLQ for unprocessable events.
-- **#101** feeds `close_trade.success` into `settleClosedTrades` and runs the REST closed pass at
-  session start; **#100** implements the executor that returns `{ outcome: 'accepted', transport,
-trade }`. The operator tool for `manual_review` is a later issue.
+- **#101** feeds `close_trade.success` into `settleClosedTrades`, runs the REST closed pass at
+  session start and replaces `noTradeSessions` with the session manager, so the socket path runs
+  in production. The operator tool for `manual_review` is a later issue.
 - Real-mode eligibility: **#134** the grant gate
   (this document); **#135** what a revoked grant does to running sessions; **#21/#121** starting
   real mode from the bot; **#144** the kill switch, a separate operational flag. Country
@@ -442,6 +446,6 @@ curl -s -X POST 127.0.0.1:3000/trading/intents \
   -H @- -H 'Content-Type: application/json' \
   -d '{"telegramUserId":"1","mode":"demo","assetId":1,"amount":"10.00","action":"up","durationSec":60,"clientRequestId":"demo-1"}'
 # 404 user_not_found until a user and broker account exist (OAuth, #9); with them: 201 queued,
-# then GET /trading/intents/<id>?telegramUserId=1 shows rejected / executor_not_configured within
-# a second
+# then GET /trading/intents/<id>?telegramUserId=1 shows accepted / rest_fallback within the
+# submit timeout, or rejected / broker_rejected when the token source or the broker refused
 ```

@@ -8,7 +8,8 @@ share one client. Its first caller is the backend's pairs catalog (docs/pairs-ca
 signal feed (`packages/signal`, docs/signal.md → Feed and journal) calls `getChart` on a client its
 caller builds: the backend's `POST /trading/signal` (#258) and, from #130, the worker. The worker's
 base URL is `BROKER_API_BASE_URL` (its `env.ts`, compose's `x-broker-environment`, #90); the REST
-reconciler and the settlement catch-up call `listTrades`.
+reconciler and the settlement catch-up call `listTrades`; the trade command executor
+(docs/trade-executor.md) calls `openTrade`.
 
 ```bash
 pnpm test --project unit packages/broker-rest   # needs no database or Redis
@@ -59,8 +60,11 @@ bot; the class and `MAX_DETAIL_LENGTH` stay here.
 | `contract_violation` | a 2xx body that is not JSON, fails the schema or is over `MAX_SUCCESS_BODY_BYTES` (4 MiB); any 3xx | **outcome unknown** | may have opened: `unknown` | drift, retrying will not help |
 | `aborted` | the caller's `signal` fired first | the caller's own limit | the caller has already decided | — |
 
-#100 decides `rejected` or `unknown` for a REST open from the "What it means" column, not from
-the name of the code. There is no catch-all row: every status lands in exactly one row.
+The trade command executor (#100, docs/trade-executor.md → Outcomes) decides `rejected` or
+`unknown` for a REST open from the "What it means" column, not from the name of the code:
+`unauthorized`, `rate_limited` and `rejected` are `rejected`/`broker_rejected`; `unavailable`,
+`contract_violation` and `aborted` are `unknown`/`broker_unavailable`. There is no catch-all row:
+every status lands in exactly one row.
 
 - **3xx is not followed** (`redirect: 'manual'`). The API host has never been seen to redirect.
   Following would make `fetch` replay a POST to the target, and whether the origin acted on the
@@ -234,8 +238,8 @@ without a candidate is parked for the operator and the reserve is held (#274).
 - #97: the socket normalizer (docs/broker-socket.md). It shares the money schema and the `detail`
   policy, and imports nothing from here.
 - #99: the Socket.IO client.
-- #100: the trade executor and the REST fallback decision. #90: the base URL in the worker's env
-  and compose, and the worker's first `listTrades` callers.
+- #100: the trade command executor and its REST fallback (docs/trade-executor.md). #90: the base
+  URL in the worker's env and compose, and the worker's first `listTrades` callers.
 - #138: the pairs catalog (docs/pairs-catalog.md), the first caller, in the backend.
 - #133, #258: the signal feed (`packages/signal`, docs/signal.md); the backend's
   `POST /trading/signal` is its first caller of `getChart`.
