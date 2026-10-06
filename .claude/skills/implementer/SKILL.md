@@ -105,6 +105,8 @@ git add <specific files>       # never git add . or git add -A
 git commit -m "#N: description"
 ```
 
+**Rebase:** run `git -c core.commentChar=';' rebase …` and `git -c core.commentChar=';' rebase --continue`. With the default comment char `#`, the commit message after a conflict loses its `#N: …` subject as a comment line, leaving only the trailer (#185, #138). Probed on git 2.32: the plain `--continue` dropped the subject; with `;` it was kept.
+
 ### Step 7: Create the PR
 
 Same stop-point check as Step 6, this time for push/PR:

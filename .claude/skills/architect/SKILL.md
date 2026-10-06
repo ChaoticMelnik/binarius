@@ -52,7 +52,7 @@ Every entity in the domain must appear — "not mentioned in the issue" is not a
 
 ### Step 4: Identify affected areas
 
-Files to create/modify; schema changes (`packages/db` Drizzle schema); API/Socket.IO contract changes shared between `apps/backend` and `apps/trading-worker`; auth/authorization consistency (every mutating route needs the same pattern as its neighbors); frontend components affected in `apps/web`/`apps/bot`; conflicts with other in-flight branches. Sibling issues of the same wave that already have plans: read their file lists and merge order, and make this plan agree on who owns each shared file and who merges first (#119 and #185 were planned in one session, both claimed `users.ts`/`user-ops.ts` and both said they merge first; it surfaced only at implementer clarify).
+Files to create/modify; schema changes (`packages/db` Drizzle schema); API/Socket.IO contract changes shared between `apps/backend` and `apps/trading-worker`; auth/authorization consistency (every mutating route needs the same pattern as its neighbors); frontend components affected in `apps/web`/`apps/bot`; conflicts with other in-flight branches. Sibling issues of the same wave that already have plans: read their file lists and merge order, and make this plan agree on who owns each shared file and who merges first (#119 and #185 were planned in one session, both claimed `users.ts`/`user-ops.ts` and both said they merge first; it surfaced only at implementer clarify). Agreeing on files is not enough: for every type or signature a sibling plan changes (a required field added to a deps type, a renamed export), list the new files of this plan that construct or call it, since git shows no conflict there and `main` breaks in whichever PR merges second (#136 built its new test on `buildApp`, while #138 made `AppDeps.pairs` required and patched only the existing `buildApp` callers).
 
 If a project-specific schema/design skill is installed (`drizzle-orm-patterns` for this project), invoke it before drafting schema changes.
 
@@ -136,6 +136,7 @@ Task classes with a mandatory plan section — each row traces to a real review 
 | Timeouts / budgets | Each constant → the operation it bounds; the ordering chain and where it is asserted (import + test) per process |
 | Logging changes | The test that reads the log itself (a destination seam), not the HTTP response |
 | Text / docs edits | Every command the text gives, run before commit **from the starting state the text names** (a fresh volume, an empty database — not an environment that already works); the edited paragraph re-read whole |
+| Work queue / background tick (candidates picked by an order key) | A table of every way an attempt can end (success, each failure code, a throw, an abort, a skip) and what each does to the order key or to a hold-back. If some ending leaves the item at the head of the queue, that item starves every other one (#235 m1: failures did not move `rest_observed_at`; the #137 fix covered the outcomes but not a throw, round 1 m2) |
 | Credential / session lifecycle (disable, reset, revoke) | Every artifact issued under the old credential and every request in flight, with the source of each timestamp written (`now()` is transaction start) and the lock modes checked against a concurrent issue path |
 
 ### Step 7: Run Codex plan review

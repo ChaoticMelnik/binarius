@@ -1197,7 +1197,7 @@ PR #224 смержен через rebase: 3 коммита, голова `3e515b
 
 ### Process improvement proposals
 
-1. **Rebase с форматом `#<N>:`** — `git -c core.commentChar=';' rebase …`, иначе subject'ы теряются — **открыто (2026-10-03, tech-lead): внести в implementer SKILL при следующем rebase-случае**
+1. **Rebase с форматом `#<N>:`** — `git -c core.commentChar=';' rebase …`, иначе subject'ы теряются — **внедрено в #PRNUM: `.claude/skills/implementer/SKILL.md` → Step 6 (повтор на #138, 2026-10-03)**
 
 ---
 
@@ -1264,3 +1264,241 @@ PR #227 смержен через rebase: 6 коммитов, голова `529e
 
 1. **Ответы внешнего API (Telegram в том числе) подпадают под пункт чек-листа об источнике каждого кода ошибки** — уже покрыто `.claude/skills/architect/SKILL.md` → Validation checklist (#176); класс повторился, новой правки нет — **отклонено как дубль существующего правила (2026-10-03, tech-lead): применение проверяет ревьюер**
 2. **Пост-фактум Codex по `a2dd51c`** присоединяется к предложению 4 аудита #171 — **открыто (2026-10-03, владелец): после сброса лимита 2026-10-05**
+
+---
+
+## #132 — Signal v1: алгоритм сигнала по свечам (2026-10-03)
+
+PR #230 смержен через rebase: 3 коммита, голова `7fde2cd`. **Один круг ревью, чистый, 5 Minor → #232.** Аудит записан 2026-10-06 вместе с остальной волной (#132, #136, #138, #235, #137) и #236, одним docs-PR по решению владельца; Phase 3 аудит по задачам волны не публиковался.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable` (`claude-fable-5-1`). 6 вопросов, владелец выбрал все рекомендованные. Codex plan review пропущен с пометкой (waiver владельца 2026-10-01..2026-10-05). Оценка ≈ 1 300 строк, факт +1 116. |
+| Architect | Plan Update (до реализации) | Implementer на clarify нашёл два дефекта плана, при проверке нашёлся третий. Тот же агент Fable, продолженный для Plan Update, умер на недельном лимите Fable, ничего не опубликовав (в транскрипте `<synthetic>`). Владелец 2026-10-03 разрешил Plan Update на Opus: спавн `opus`, это исключение по его решению. |
+| Implementer | Clarify + код | Спавн `opus`. 3 вопроса (пятый код `trend_flat`, нарезка коммитов, таблица мутаций). 3 коммита, таблица из 52 мутаций. Ревьюер принял отклонения: `codes.ts` против цикла импорта, экспорт `assertSignalClock`. |
+| Tech Lead | Phase 3 | Аудит не опубликован, ревьюер запущен сразу после PR. |
+| Reviewer | Iteration 1 | Спавн `opus`, 3b-3d (`opus`/`opus`/`sonnet`). 0 Blocker, 0 Major, 5 Minor. Codex 3a и whole-feature pass пропущены (waiver), вместо них ревью всего diff против плана и Plan Update. `pnpm check` exit 0, 2 822 теста. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase + удалить ветку. Minor вынесены в #232 по решению владельца. |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Будущая свеча и правило формирующейся свечи: план требовал недостижимый кейс «закрытая + одна будущая → in_future» | Plan defect | unverified-claim | Кейсы плана не прогнаны по шагу проверки данных | Architect plan (Codex снят); поймано на Implementer Step 0 |
+| Оракул `rsi_neutral` / `trend_flat` не различал отказы, фикстура disagree падала в `trend_flat` | Plan defect | unverified-claim | Пункт чек-листа «проба прогнана по текущему коду до плана» не применён к фикстурам | Architect plan; поймано на Implementer Step 0 |
+| m1: при экстремальных конечных ценах в `features` попадают NaN/Infinity, а docs обещают «every number finite» | Minor | unverified-claim | Docs шире кода, итог всё равно отказ | Implementer docs → #232 |
+| m2, m3: сторона `low` в OHLC не тестируется; тест заморозки не отличает копию от заморозки входа | Minor | unverified-claim | Тест не может упасть на своей мутации | Implementer Step 5.5 → #232 |
+| m4, m5: лишний экспорт `assertSignalClock`; «every field finite» в docs шире `candleProblem` | Minor | other | — | Implementer → #232 |
+| Codex plan review, 3a и whole-feature pass не запускались | Process | codex-ops | Waiver владельца 2026-10-01..2026-10-05 (лимит Codex) | Пометка с датой в плане и ревью |
+| Phase 3 аудит не опубликован ни по одной задаче волны и по #236 | Process | other | Ревьюер запускался сразу после PR | Tech-lead Phase 3 |
+
+### Process improvement proposals
+
+1. **Ревьюер запускается только с URL комментария аудита Phase 3** — **внедрено в #PRNUM: `.claude/skills/tech-lead/SKILL.md` → Phase 3**
+2. **Minor m1-m5** — **вынесено в #232**
+3. **Пост-фактум Codex по `7fde2cd`** присоединяется к предложению 4 аудита #171 — **открыто (2026-10-06, владелец): лимит Codex сброшен 2026-10-05, прогоны не запускались**
+
+---
+
+## #136 — Trading access: баланс токенов из token_ledger (2026-10-03)
+
+PR #229 смержен через rebase: 5 коммитов, голова `756285a`. **Два круга ревью: в первом 6 Minor, владелец выбрал исправить их до мержа; второй круг чистый.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`. Общие вопросы #136/#137/#138 (эндпоинты бота, пакет REST-клиента) владелец решил одним `AskUserQuestion`. Codex plan review пропущен (waiver). Факт +740 строк. |
+| Architect | Plan Update 1 (до реализации) | Спавн `opus` по решению владельца (лимит Fable). Дефект с clarify implementer'а: семантический конфликт с #138, которого git не покажет. |
+| Implementer | Clarify + код | Спавн `opus`, 4 вопроса. Runtime-проверка 2026-10-03 09:27 UTC: копия основного `.env` в worktree и `docker compose -p binarius-136 up`. `bot` и staff-бот внутри `backend` поллили Telegram токенами пилотного сервера, оба серверных поллера получили 409 и остановились. Контейнеры остались «running», владелец заметил только на следующий день; починено рестартом, локальный `.env` переведён на отдельных dev-ботов 2026-10-04. 4 коммита. |
+| Tech Lead | Phase 3 | Аудит не опубликован. |
+| Reviewer | Iteration 1 | Спавн `opus`. 0 Blocker, 0 Major, 6 Minor. Codex пропущен (waiver). Блок «Running it locally» прогнан в отдельном compose-проекте. |
+| Tech Lead | Iteration 1 → fix | Владелец: «Сначала исправить Minor». Plan Update 2 на `opus`, без Codex (раунд 1). Та же ловушка в других docs вынесена в #233. |
+| Implementer | Fix | Один коммит `756285a`, мутации процитированы, rebase на #132. |
+| Reviewer | Iteration 2 | Весь diff `5bc96bf..756285a` вместе с резолюцией rebase. Чисто. Блок docs прогнан как закоммичен, `printenv` показал фиктивные токены. Свой m6 из круга 1 ревьюер признал ошибочным. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase + удалить ветку. |
+
+### Review iterations: 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Новый тест #136 строился на `buildApp`, а #138 делает `AppDeps.pairs` обязательным: оба PR мержатся без конфликта, `tsc -b` на `main` падает | Plan defect | other | Правило волны (#226) сверяет файлы и порядок мержа, но не сигнатуры, которые меняет соседний план | Architect Step 4; поймано на Implementer Step 0 |
+| Runtime-проверка на токенах пилота остановила оба серверных бота на сутки | Process | env-parity | Локальный `.env` и сервер делили токены; правила о токенах для runtime-проверок не было; у поллеров нет healthcheck (#65/#67) | Tech-lead Step 7 |
+| m1: «Running it locally» поднимает проект compose по умолчанию; `down -v` удалил бы локальную dev-БД; staff-бот не назван | Minor → исправлен | instance-vs-class | В тексте закоммичена не та команда, что прогонялась (implementer гонял изолированный проект) | Implementer Step 5.5 (класс Text / docs edits); остальные docs → #233 |
+| m2: комментарий «хук до роута обязателен» неверен для Fastify 5 | Minor → исправлен | unverified-claim | Поведение фреймворка не проверено запуском | Architect plan / Implementer |
+| m3, m4: имя burst-теста шире того, что он ловит; кейс незакоммиченного reserve мог зависнуть вместо падения | Minor → исправлен | unverified-claim | — | Implementer Step 5.5 |
+| m5: «единственное написание счётчика токенов» шире кода, regex скопирован | Minor → исправлен | single-source | Вторая копия паттерна `tokenCountSchema` | Implementer |
+| m6 круга 1 («writes nothing» не может упасть) ошибочен: падает от любого update `users` | Reviewer error | unverified-claim | Утверждение ревьюера не проверено мутацией | Reviewer Step 4; исправлено самим ревьюером в круге 2 |
+
+### Process improvement proposals
+
+1. **Runtime-проверка с `bot`/`backend` — только на фиктивных токенах или токенах, которыми больше никто не поллит** — **внедрено в #PRNUM: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+2. **Планы одной волны сверяют сигнатуры, которые меняет соседний план, с новыми файлами своего плана** — **внедрено в #PRNUM: `.claude/skills/architect/SKILL.md` → Step 4**
+3. **Изолированный compose-проект и фиктивные токены в остальных локальных процедурах** — **вынесено в #233**
+4. **Пост-фактум Codex по `756285a`** присоединяется к предложению 4 аудита #171 — **открыто (2026-10-06, владелец)**
+
+---
+
+## #138 — Trading access: каталог пар с TTL-кэшем (2026-10-03)
+
+PR #231 смержен через rebase: 9 коммитов, голова `7ea46c3`. **Два круга ревью: в первом 5 Minor, владелец выбрал исправить их вместе с rebase; во втором 3 Minor, смержен.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`. REST-клиент брокера переезжает в `packages/broker-rest` в этой задаче, #137 идёт после (решение владельца). Codex plan review пропущен (waiver). Факт +1 169 строк. |
+| Architect | Plan Update 1 (до реализации) | Спавн `opus` по решению владельца, общий с #136. Три дефекта с clarify implementer'а: конфликт с #136, SIGTERM во время прогрева, цикл пакетов `shared` ↔ `broker-rest`. |
+| Implementer | Clarify + код | Спавн `opus`. 5 коммитов, `pnpm check` после каждого. По данным tech-lead'а тоже поднимал локальный backend со staff-ботом на токенах основного `.env`. |
+| Tech Lead | Phase 3 | Аудит не опубликован. |
+| Reviewer | Iteration 1 | Спавн `opus`. 0 Blocker, 0 Major, 5 Minor, плюс пометка для #125. Codex пропущен (waiver). |
+| Tech Lead | Iteration 1 → fix | Владелец: «Исправить Minor вместе с rebase». Plan Update 2 на `opus`, без Codex. Тот же класс в `oauth-client.ts` вынесен в #234. |
+| Implementer | Fix | Rebase на `4a5463a` (#132, #136), 4 fix-коммита, мутации процитированы. При rebase два коммита потеряли subject (остался trailer), восстановлено через `git filter-branch --msg-filter`: повтор #185. |
+| Reviewer | Iteration 2 | Весь diff и `git range-diff` rebase. 0 Blocker, 0 Major, 3 Minor (n1-n3). |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase + удалить ветку, n1-n3 оставлены. |
+
+### Review iterations: 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| SIGTERM во время прогрева: `start()` после `stop()` взводил таймер | Plan defect | other | Порядок старта и остановки не разобран для прогрева | Architect plan; поймано на Implementer Step 0 |
+| Цикл пакетов `shared` ↔ `broker-rest` | Plan defect | unverified-claim | Граф зависимостей пакетов не проверен | Architect plan; поймано на Implementer Step 0 |
+| m1: синхронный throw из `listPairs` навсегда клинит single-flight | Minor → исправлен | other | В плане разобран только async-отказ | Architect plan (пункт чек-листа о try/catch) |
+| m2: проверка `stopped` после await без теста | Minor → исправлен | unverified-claim | Нет мутации на каждую ветку | Implementer Step 5.5 |
+| m3: связь таймингов backend описана сильнее, чем делает shutdown | Minor → исправлен | unverified-claim | — | Implementer docs |
+| m4: 2xx-тело брокера читается без лимита | Minor → исправлен | instance-vs-class | Тот же класс, что Minor аудита #98 о теле ошибки; третье место — `oauth-client.ts` | #98 review; → #234 |
+| Rebase стёр subject'ы `#138: …` | Process | other | `core.commentChar` = `#`, предложение аудита #185 было открыто | Implementer rebase |
+| n1-n3: запас лимита тела не закреплён тестом; комментарий `if (!shuttingDown)` шире кода; два экспорта без потребителя | Minor | unverified-claim | — | Implementer |
+
+### Process improvement proposals
+
+1. **Rebase через `git -c core.commentChar=';'`** (предложение аудита #185) — **внедрено в #PRNUM: `.claude/skills/implementer/SKILL.md` → Step 6**
+2. **Лимит размера ответа в `oauth-client.ts`** — **вынесено в #234**
+3. **Пост-фактум Codex по `7ea46c3`** присоединяется к предложению 4 аудита #171 — **открыто (2026-10-06, владелец)**
+
+---
+
+## #235 — Снимок баланса брокера: схема broker_balance_snapshots и операции (часть 1 #137) (2026-10-03)
+
+PR #237 смержен через rebase: 2 коммита, голова `45962ff`. **Один круг ревью, чистый, 6 Minor; владелец перенёс их в план второй части #137.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План | Своего плана нет: действуют план и Plan Update 1 из #137 по линии 137a/137b. Разделение — решение владельца 2026-10-03 после того, как Plan Update поднял оценку до ~3 070 строк при потолке 3 000. Codex пропущен (waiver). Оценка ~1 000, факт +1 189 без snapshot. |
+| Implementer | Код | Спавн `opus`, тот же агент потом делал вторую часть #137. Агент завис (stream watchdog, 600 с), его продолжили, ничего не потеряно, правило «Failed or stalled phase» соблюдено. Имя FK в 64 символа PostgreSQL обрезал, это поймал гейт. Незакоммиченную 0011 implementer руками убрал из общей тестовой БД (`drop table` + `delete from drizzle.__drizzle_migrations`) и сгенерировал заново, без вопроса владельцу. |
+| Tech Lead | Phase 3 | Аудит не опубликован. |
+| Reviewer | Iteration 1 | Спавн `opus`. 0 Blocker, 0 Major, 6 Minor. Codex пропущен (waiver). Сверено: 0011 в общей БД совпадает с закоммиченной по sha256, лишних constraint нет. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → «Да, m1-m6 в план #137». |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m1: порядок кандидатов `rest_observed_at asc nulls first`: аккаунт, который падает каждый раз, навсегда в голове тика | Minor | instance-vs-class | Неудача не двигает ключ сортировки (решение 8 плана) | Architect plan; → #137, повтор в #137 m2 |
+| m2: `level.code` не проверяется до записи (NUL → 22021, длина без предела) | Minor | instance-vs-class | Проверка домена покрыла суммы и rank, но не код | Architect plan → #137 |
+| m3: комментарий обещает поведение второй части | Minor | unverified-claim | — | Implementer → #137 |
+| m4: пробелы тестов (сводка, ветка `demoEvent`, NOT NULL трёх колонок) | Minor | unverified-claim | — | Implementer → #137 |
+| m5: недостижимый код (`row ?? …`, throw на NOT NULL) | Minor | other | — | Implementer → #137 |
+| m6: `money()` не единственный источник домена (20,8) | Minor | single-source | Две колонки задают numeric руками | Implementer → #137 |
+| Незакоммиченная миграция в общей тестовой БД и её ручное удаление | Process | env-parity | Правила для незамерженных миграций на общей БД не было; деструктивная операция без подтверждения (глобальный Database Safety) | Tech-lead Step 7 |
+
+### Process improvement proposals
+
+1. **Незамерженная миграция идёт в собственную БД implementer'а, общая получает только миграции из `main`** — **внедрено в #PRNUM: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+2. **Minor m1-m6** — **вынесено в #137 (Plan Update 2, 2026-10-03)**
+3. **Пост-фактум Codex по `45962ff`** присоединяется к предложению 4 аудита #171 — **открыто (2026-10-06, владелец)**
+
+---
+
+## #137 — Trading access: снимок баланса брокера (event-first и сверка раз в 60 с) (2026-10-04)
+
+PR #238 (часть 2) смержен через rebase: 8 коммитов, голова `99d8747`. **Два круга ревью: в первом 6 Minor, владелец выбрал исправить их до мержа; во втором 1 Minor → #239.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`, 8 вопросов. Оценка ~2 100 строк, владелец оставил одной задачей. Codex plan review пропущен (waiver). |
+| Architect | Plan Update 1 (до реализации) | Спавн `opus` по решению владельца. Дефекты с clarify implementer'а: значения брокера вне домена колонок, несовпадение часов при решении о refresh. Оценка ~2 980, затем ~3 070, выше потолка: владелец разделил задачу до реализации, часть 1 → #235. |
+| Tech Lead | Живая проба | 2026-10-03, аккаунт владельца на пилоте: деньги в целых единицах, дробь приходит дробным числом JSON, `moneyWireSchema` её отклоняет. Создана #236. |
+| Architect | Plan Update 2 (часть 2) | Спавн `opus`. Minor m1-m6 из #235 вошли в план; оценка ~2 235 строк, владелец: одним PR. |
+| Implementer | Код | Спавн `opus`. 2 коммита вместо 4 (принято). Итог с исправлениями +2 568 строк. |
+| Tech Lead | Phase 3 | Аудит не опубликован. |
+| Reviewer | Iteration 1 | Спавн `opus`. 0 Blocker, 0 Major, 6 Minor. Codex пропущен (waiver). |
+| Tech Lead | Iteration 1 → fix | Владелец: «Сначала исправить m1-m6». Plan Update 3 на `opus`, без Codex. |
+| Implementer | Fix | 6 коммитов, таблица из 11 мутаций, повторно прогнаны 21 мутация из PR. |
+| Reviewer | Iteration 2 | Весь diff `b94c54a..99d8747`. 0 Blocker, 0 Major, 1 Minor (n1). |
+| Tech Lead | Merge / Done | `AskUserQuestion` → «Да + задача на n1» → #239. |
+
+### Review iterations: 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Значения брокера вне домена колонок (дробь из 9 знаков, rank ≥ 10 000) | Plan defect | unverified-claim | Домен провода не сверен с доменом колонок | Architect plan; поймано на Implementer Step 0 |
+| Часы при решении о refresh расходились | Plan defect | other | — | Architect plan; поймано на Implementer Step 0 |
+| Plan Update поднял оценку выше потолка | Process | other | Семь money-CHECK и полная матрица кодов; оценка плана была ниже факта | Architect Step 4a; разделено до реализации |
+| m1: Rule 12 — блокировка пользователя проверялась при выборе кандидатов, а не перед вызовом брокера | Minor → исправлен | instance-vs-class | Проверка стоит на пути выбора, а не перед побочным эффектом | Architect plan |
+| m2: тик, попытка которого бросила исключение, не откладывался и при `limit = 1` морил остальные аккаунты | Minor → исправлен | instance-vs-class | Plan Update 2 закрыл исходы, но не throw: повтор #235 m1 | Architect Plan Update 2 |
+| m3: изоляция кейса «answers at once», `refresh_needed` → `skipped`, второй `start()` | Minor → исправлен | unverified-claim | — | Implementer Step 5.5 |
+| m4: `reasonFor` заканчивался `default:` вопреки чек-листу плана | Minor → исправлен | other | Пункт Validation о catch-all не применён | Implementer |
+| m5, m6: проба rate-limit без проверки статусов; docs о сигналах и бюджете GET | Minor → исправлен | unverified-claim | — | Implementer |
+| n1: соединение с `users` читает статус из снимка запроса, блокировка, закоммиченная во время ожидания lock'а, не видна | Minor | instance-vs-class | Новый путь исправления не перенёс инвариант целиком | Architect Plan Update 3 → #239 |
+
+### Process improvement proposals
+
+1. **Класс задач «очередь / фоновый тик»: таблица исходов попытки и их действия на ключ сортировки** — **внедрено в #PRNUM: `.claude/skills/architect/SKILL.md` → Task classes**
+2. **n1** — **вынесено в #239**
+3. **Пост-фактум Codex по `99d8747`** присоединяется к предложению 4 аудита #171 — **открыто (2026-10-06, владелец)**
+
+---
+
+## #236 — Деньги брокера: дробное число JSON отклоняется moneyWireSchema (2026-10-06)
+
+PR #242 смержен через rebase: 5 коммитов, голова `99db31a` (на `main` — `78cc427`). **Один круг ревью, чистый, 4 Minor → #243. Первая задача после waiver'а, Codex прошёл на плане и на коде.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | 2026-10-04: спавн `fable` умер на лимите Fable, ничего не опубликовав. Владелец разрешил новый план на Opus, спавн `opus` упал на недельном лимите Opus (сброс 7 октября). 2026-10-06 спавн `fable` (`claude-fable-5-1`) отработал: 5 вопросов, Codex plan review `task-muwcu7mp-cnsbno` (`gpt-5.6-sol`, high), 2 Major и 6 Minor, все учтены. |
+| Architect | Plan Update (до реализации) | Тот же агент Fable. Исправлены два дефекта с clarify implementer'а. |
+| Implementer | Clarify + код | Спавн `opus`, 3 вопроса. 5 коммитов, правки `.claude/` отдельным коммитом. Красный прогон — во временном worktree. +438 строк. |
+| Tech Lead | Phase 3 | Аудит не опубликован. |
+| Reviewer | Iteration 1 | Спавн `opus`. Codex 3a `task-muwe9e8w-lbdd6r`, маркер `Iteration review #242: base=133ae6a head=99db31a diff-sha256=f0f7c9b2…`: к коду замечаний нет, 2 Minor по process docs (c). 3b-3d: 0 Blocker, 0 Major, 4 Minor. `pnpm check` exit 0, 3 144 теста. |
+| Tech Lead | Whole-feature pass — check | Job `task-muwe9e8w-lbdd6r` перехеширован в этом аудите: base-ok, `f0f7c9b27464f57c…` совпал, голова = одобренная = смерженная. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase + удалить ветку. Minor вынесены в #243. |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Четвёртая копия правила денег (`.claude/CLAUDE.md:71`) не попала в список плана | Plan defect | single-source | Список копий в плане неполон; повторный grep в Plan Update нашёл только эту | Architect plan; поймано на Implementer Step 0 |
+| Мутация m1 (потолок 15 → 16) краснила три теста, а не один | Plan defect | unverified-claim | Мутация не прогнана до плана | Architect plan (пункт чек-листа о мутациях); поймано на Implementer Step 0 |
+| m1: оценка ошибки округления в `docs/broker-rest.md` занижена вдвое | Minor | unverified-claim | Не учтён второй шаг (`String()` после `JSON.parse`) | Architect plan (Accepted risk 2) → #243 |
+| m2: граничный тест мока проверяет только `success`, не значение | Minor | unverified-claim | Plan Update §2 обосновал связь «проверено рассуждением», проверку значения из плана implementer не написал | Implementer → #243 |
+| m3, m4: `registerUser` без верхней границы; два лишних утверждения в `state.test.ts` | Minor | other | — | Implementer → #243 |
+| Codex (c): глобальный Task Workflow «Changes requested → In Progress» против проектного → Todo; глобальное «все три субагента» против правила малого diff | Minor | other | Глобальный файл не обновлён под проектные правила | Process docs; правит проектная секция |
+| Три спавна архитектора умерли на лимитах моделей | Process | other | Недельные лимиты Fable и Opus | Tech-lead Model policy — check |
+
+### Process improvement proposals
+
+1. **`<synthetic>` в Model policy — check: метка ошибки API, а не модель** — **внедрено в #PRNUM: `.claude/skills/tech-lead/SKILL.md` → Model policy — check**
+2. **Minor m1-m4** — **вынесено в #243**
+3. **Правка `~/.claude/CLAUDE.md` по двум находкам Codex (c)** — **открыто (2026-10-06, владелец): текст tech-lead предлагает отдельно**
+4. **Пост-фактум Codex**: к списку предложения 4 аудита #171 добавляются головы этой волны (`7fde2cd`, `756285a`, `7ea46c3`, `45962ff`, `99d8747`) и docs-PR #221, #226, #228, смерженные без Codex — **открыто (2026-10-06, владелец)**
