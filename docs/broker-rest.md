@@ -7,7 +7,8 @@ and what to log. It moved out of `apps/trading-worker` in #138 so the backend an
 share one client. Its first caller is the backend's pairs catalog (docs/pairs-catalog.md). The
 signal feed (`packages/signal`, docs/signal.md → Feed and journal) calls `getChart` on a client its
 caller builds: the backend's `POST /trading/signal` (#258) and, from #130, the worker. The worker's
-own base URL (its `env.ts`, compose) is #100/#101's.
+base URL is `BROKER_API_BASE_URL` (its `env.ts`, compose's `x-broker-environment`, #90); the REST
+reconciler and the settlement catch-up call `listTrades`.
 
 ```bash
 pnpm test --project unit packages/broker-rest   # needs no database or Redis
@@ -186,6 +187,25 @@ strings.
 - The owner's probe of 2026-10-03 (issue #133): `limit=6000` over 10 days gave 4 982 rows across
   exactly 4 999 minutes. The cap is 5 000 rows by `limit`, and the history has gaps.
 
+## Trades list: assumptions (#90)
+
+The reconciler and the catch-up (docs/trade-intent-transport.md → Reconciliation matching) rest on
+these, taken from the fixture and broker-web, not from a live run:
+
+- **A1 order:** `status=closed` and `status=open` come newest first by `open_timestamp`. The code
+  checks every page and the seam between pages; a violation answers `broker_contract`, never
+  `not_found`.
+- **A2 `limit`/`offset`:** honoured, with disjoint pages. If ignored, the short-page stop still
+  ends a short history; a longer one answers `window_not_covered`.
+- **A3 `status`:** filters open from closed. If not, the merge by `id` stays correct.
+- **A4 `is_demo`:** filters by mode. The local mode check stays either way.
+- **A5 `open_timestamp`** is Unix milliseconds (the shapes of 2026-10-03 show it).
+- **A6** the default page size (the fixture's 20) is not used: every call passes `limit`.
+
+Observed live: not yet. The read-only probe in issue #90's plan (6 GETs, shapes only) confirms
+A1–A6; until it runs, a broker that breaks A1 leaves reconciliation waiting with a `warn` and the
+reserve held.
+
 ## Open items
 
 1. **The money unit. Closed 2026-10-03:** whole currency units (Observed live 2026-10-03); the
@@ -205,8 +225,8 @@ strings.
 - #97: the socket normalizer (docs/broker-socket.md). It shares the money schema and the `detail`
   policy, and imports nothing from here.
 - #99: the Socket.IO client.
-- #100: the trade executor and the REST fallback decision. #100/#101: the base URL in the
-  worker's env and compose.
+- #100: the trade executor and the REST fallback decision. #90: the base URL in the worker's env
+  and compose, and the worker's first `listTrades` callers.
 - #138: the pairs catalog (docs/pairs-catalog.md), the first caller, in the backend.
 - #133, #258: the signal feed (`packages/signal`, docs/signal.md); the backend's
   `POST /trading/signal` is its first caller of `getChart`.
