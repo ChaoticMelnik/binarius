@@ -7,7 +7,15 @@ import {
   type MockBroker,
   type MockSocketRecord,
 } from '@binarius/mock-broker';
-import { BrokerSocketEvent, logOptions, MAX_PRICE_SUBSCRIPTION_ASSETS } from '@binarius/shared';
+import {
+  BrokerSocketEvent,
+  decimalStringSchema,
+  logOptions,
+  MAX_PRICE_SUBSCRIPTION_ASSETS,
+  TradeAction,
+  TradeMode,
+  type SocketOpenTradeRequest,
+} from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import pino from 'pino';
 import { io } from 'socket.io-client';
@@ -22,6 +30,7 @@ import {
   type BrokerSocketClientOptions,
   type BrokerSocketOptions,
   type BrokerSocketStateChange,
+  type SocketOpenTradeResult,
 } from './socket';
 
 const TOKEN = 'SECRET-TOKEN-of-user-1';
@@ -148,6 +157,28 @@ const subscribeRecords = () =>
     .length;
 
 const typesOf = (events: BrokerEvent[]) => events.map((event) => event.type);
+
+// an amount no other value of the fixture spells, so a log line carrying it is found
+const AMOUNT = decimalStringSchema.parse('13.37');
+const REQUEST: SocketOpenTradeRequest = {
+  assetId: EURUSD,
+  amount: AMOUNT,
+  action: TradeAction.Up,
+  durationSec: 60,
+};
+const DEMO_OPEN_TRADE = 'user.demo.open_trade';
+
+const openTradeRecords = () =>
+  broker.socket.journal.filter((record) => record.event.endsWith('.open_trade'));
+
+// the command's promise with a flag that says whether it has answered yet
+function track(promise: Promise<SocketOpenTradeResult>) {
+  const tracked = { settled: false, promise };
+  void promise.then(() => {
+    tracked.settled = true;
+  });
+  return tracked;
+}
 
 beforeEach(async () => {
   broker = await startMockBroker({ socketPayload: MockSocketPayload.Bytes });
@@ -858,6 +889,178 @@ describe('events and problems', () => {
   });
 });
 
+describe('openTrade', () => {
+  it('emits the command once and answers with the trade of the open_trade.success', async () => {
+    const h = harness();
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    const result = await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal);
+    const [stored] = broker.trades.list(1);
+    expect(result).toEqual({
+      outcome: 'success',
+      trade: expect.objectContaining({ id: String(stored?.id), assetId: EURUSD, amount: AMOUNT }),
+    });
+    // the fixture's update_balance came first and was not taken for the answer; listeners got both
+    expect(typesOf(h.events)).toEqual(
+      expect.arrayContaining([BrokerEventType.BalanceUpdate, BrokerEventType.OpenTradeSuccess]),
+    );
+    expect(shape(openTradeRecords())).toEqual([
+      { event: DEMO_OPEN_TRADE, argc: 1, outcome: MockSocketOutcome.Handled },
+    ]);
+    expect(h.logs('broker socket open_trade sent')).toEqual([
+      expect.objectContaining({ level: LEVEL.debug, mode: TradeMode.Demo, connection: 1 }),
+    ]);
+  });
+
+  it('answers fail with the failures of the open_trade.fail, and nothing opens', async () => {
+    const h = harness();
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    broker.socket.failNext('openTrade', { fail: [{ message: 'refused', field: 'amount' }] });
+    const result = await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal);
+    expect(result).toEqual({ outcome: 'fail', failures: [{ message: 'refused', field: 'amount' }] });
+    expect(broker.trades.list(1)).toEqual([]);
+  });
+
+  it('emits nothing unless ready: before start() and while authenticating', async () => {
+    const h = harness();
+    const signal = new AbortController().signal;
+    expect(await h.client.openTrade(TradeMode.Demo, REQUEST, signal)).toEqual({
+      outcome: 'not_sent',
+      reason: 'not_ready',
+      state: BrokerSocketState.Idle,
+    });
+    broker.socket.failNext('auth', { silent: true });
+    h.client.start(CREDENTIALS);
+    await until('authenticating', () => h.client.state === BrokerSocketState.Authenticating);
+    expect(await h.client.openTrade(TradeMode.Demo, REQUEST, signal)).toEqual({
+      outcome: 'not_sent',
+      reason: 'not_ready',
+      state: BrokerSocketState.Authenticating,
+    });
+    await ready(h);
+    expect(openTradeRecords()).toEqual([]);
+  });
+
+  it('emits nothing for a signal already aborted', async () => {
+    const h = harness();
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    expect(await h.client.openTrade(TradeMode.Demo, REQUEST, AbortSignal.abort())).toEqual({
+      outcome: 'not_sent',
+      reason: 'aborted',
+      state: BrokerSocketState.Ready,
+    });
+    await quiet();
+    expect(openTradeRecords()).toEqual([]);
+  });
+
+  it('answers unknown when the transport drops after the emit, and never emits it again', async () => {
+    const h = harness();
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    broker.socket.failNext('openTrade', { silent: true });
+    const command = track(
+      h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
+    );
+    await until('the command on the broker', () => openTradeRecords().length === 1);
+    expect(broker.socket.cutTransport({ userId: 1 })).toBe(1);
+    await until('the command answered', () => command.settled);
+    expect(await command.promise).toEqual({
+      outcome: 'unknown',
+      reason: 'state_changed',
+      state: BrokerSocketState.Reconnecting,
+    });
+    await ready(h, 2);
+    await quiet();
+    expect(openTradeRecords()).toHaveLength(1);
+    expect(broker.trades.list(1)).toEqual([]);
+  });
+
+  it('answers unknown when the server drops the socket before the answer, the trade open', async () => {
+    const h = harness();
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    broker.socket.failNext('openTrade', { disconnect: true, open: true });
+    const result = await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal);
+    expect(result).toEqual({
+      outcome: 'unknown',
+      reason: 'state_changed',
+      state: BrokerSocketState.DisconnectedByServer,
+    });
+    expect(broker.trades.list(1)).toHaveLength(1);
+  });
+
+  it('answers unknown on stop() while waiting', async () => {
+    const h = harness();
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    broker.socket.failNext('openTrade', { silent: true });
+    const command = h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal);
+    await until('the command on the broker', () => openTradeRecords().length === 1);
+    h.client.stop();
+    expect(await command).toEqual({
+      outcome: 'unknown',
+      reason: 'state_changed',
+      state: BrokerSocketState.Idle,
+    });
+  });
+
+  it('answers unknown on abort while waiting; the late answer is matched to nothing', async () => {
+    const h = harness();
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    broker.socket.failNext('openTrade', { delayMs: 50 });
+    const controller = new AbortController();
+    const command = h.client.openTrade(TradeMode.Demo, REQUEST, controller.signal);
+    await until('the command on the broker', () => openTradeRecords().length === 1);
+    controller.abort();
+    expect(await command).toEqual({
+      outcome: 'unknown',
+      reason: 'aborted',
+      state: BrokerSocketState.Ready,
+    });
+    await until('the late answer', () =>
+      typesOf(h.events).includes(BrokerEventType.OpenTradeSuccess),
+    );
+    // the waiter was cleared: the next command is accepted and answered by its own event
+    broker.socket.failNext('openTrade', { fail: [{ message: 'second' }] });
+    expect(
+      await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
+    ).toEqual({ outcome: 'fail', failures: [{ message: 'second' }] });
+  });
+
+  it('is not answered by the other mode, only by its own', async () => {
+    const h = harness();
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    broker.socket.failNext('openTrade', { delayMs: 50 });
+    const command = track(
+      h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
+    );
+    await until('the command on the broker', () => openTradeRecords().length === 1);
+    expect(
+      broker.socket.emitRaw({ userId: 1 }, 'user.real.open_trade.fail', [{ message: 'real' }]),
+    ).toBe(1);
+    await until('the real fail', () => typesOf(h.events).includes(BrokerEventType.OpenTradeFail));
+    expect(command.settled).toBe(false);
+    expect(await command.promise).toEqual(expect.objectContaining({ outcome: 'success' }));
+  });
+
+  it('throws on a second command while one is waiting', async () => {
+    const h = harness();
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    broker.socket.failNext('openTrade', { delayMs: 20 });
+    const first = h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal);
+    expect(() =>
+      h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
+    ).toThrow('broker socket open_trade already pending');
+    expect(await first).toEqual(expect.objectContaining({ outcome: 'success' }));
+    expect(openTradeRecords()).toHaveLength(1);
+  });
+});
+
 describe('logs', () => {
   it('never carry the token, a payload value or the URL, and name every path they cover', async () => {
     const h = harness();
@@ -870,6 +1073,9 @@ describe('logs', () => {
     h.client.subscribe([EURUSD]);
     h.client.start(CREDENTIALS);
     await ready(h);
+    expect(
+      await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
+    ).toEqual(expect.objectContaining({ outcome: 'success' }));
     broker.socket.emitRaw(
       { userId: 1 },
       BrokerSocketEvent.PriceUpdate,
@@ -905,6 +1111,7 @@ describe('logs', () => {
     const lines = [...h.lines, ...d.lines];
     for (const line of lines) {
       expect(line).not.toContain('SECRET');
+      expect(line).not.toContain(AMOUNT);
       expect(line).not.toContain(broker.url.replace('http://', ''));
       expect(line).not.toContain(deadUrl.replace('http://', ''));
     }
@@ -923,6 +1130,7 @@ describe('logs', () => {
       'broker event ignored',
       'broker event listener threw',
       'broker socket state listener threw',
+      'broker socket open_trade sent',
     ]) {
       expect(messages, msg).toContain(msg);
     }
