@@ -260,6 +260,28 @@ describe('the reconciliation pass: outcomes', () => {
     expect((refused as TradeIntentError).code).toBe('account_halted');
   });
 
+  it('parks the intent on unresolved, halts the account with reconciliation_not_found and keeps the reserve', async () => {
+    const { intent, brokerAccountId, userId } = await reconcilingIntent();
+    const log = capture('info');
+    await tickOnce(reconcilerOf({ [intent.id]: () => ({ outcome: 'unresolved' }) }), log.logger);
+    expect(await rowOf(intent.id)).toMatchObject({
+      status: 'manual_review',
+      lastError: 'reconciliation_not_found',
+      tokensReserved: 1n,
+    });
+    expect(await ledgerKinds(intent.id)).toEqual(['reserve']);
+    expect((await userTokens(userId)).reserved).toBe(1n);
+    expect(await accountOf(brokerAccountId)).toEqual({
+      halted: true,
+      reason: AccountHaltReason.ReconciliationNotFound,
+    });
+    expect(log.line(ALERT)).toMatchObject({
+      intentId: intent.id,
+      brokerAccountId,
+      reason: 'reconciliation_not_found',
+    });
+  });
+
   it('neither halts nor alerts when the manual_review CAS is lost (#90)', async () => {
     const { intent, brokerAccountId } = await reconcilingIntent();
     const log = capture('info');
@@ -442,18 +464,24 @@ describe('the reconciliation pass with the REST reconciler (#90)', () => {
     ]);
   });
 
-  it('rejects with reconciliation_not_found once the window has closed without a trade', async () => {
-    const { intent } = await intentWithBroker();
+  it('parks for manual review with reconciliation_not_found and halts the account once the window has closed without a trade', async () => {
+    const { intent, brokerAccountId } = await intentWithBroker();
     await tmp.db
       .update(tradeIntents)
       .set({ submittedAt: millisecondsAgo(200_000) })
       .where(eq(tradeIntents.id, intent.id));
-    await tickOnce(restReconciler());
+    const log = capture('info');
+    await tickOnce(restReconciler(), log.logger);
     expect(await rowOf(intent.id)).toMatchObject({
-      status: 'rejected',
+      status: 'manual_review',
       lastError: 'reconciliation_not_found',
-      tokensReserved: 0n,
+      tokensReserved: 1n,
     });
+    expect(await accountOf(brokerAccountId)).toEqual({
+      halted: true,
+      reason: AccountHaltReason.ReconciliationNotFound,
+    });
+    expect(log.line(ALERT)).toMatchObject({ intentId: intent.id, reason: 'reconciliation_not_found' });
   });
 });
 

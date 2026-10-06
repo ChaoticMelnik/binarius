@@ -200,6 +200,10 @@ export function createReconciliationPass({
         row = await haltForManualReview(claimed, TradeIntentFailureReason.ReconciliationAmbiguous);
         ending = 'manualReview';
         break;
+      case 'unresolved':
+        row = await haltForManualReview(claimed, TradeIntentFailureReason.ReconciliationNotFound);
+        ending = 'manualReview';
+        break;
       case 'unavailable':
         logger.warn({ intentId: claimed.id, reason: result.reason }, 'reconciliation unavailable');
         return 'unavailable';

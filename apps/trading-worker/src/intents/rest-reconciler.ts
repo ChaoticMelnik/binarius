@@ -52,6 +52,7 @@ interface WindowRead {
   trades: BrokerTrade[];
   // the list was read down past the window's start, or to its end
   covered: boolean;
+  pagesRead: number;
 }
 
 const unavailable = (reason: ReconcileUnavailableReason): ReconcileResult => ({
@@ -98,6 +99,7 @@ export function createRestReconciler({
         (trade) => trade.openTimestamp >= windowStart && trade.openTimestamp <= windowEnd,
       ),
       covered: read.covered,
+      pagesRead: read.pagesRead,
     };
   }
 
@@ -194,26 +196,33 @@ export function createRestReconciler({
       const covered = open.covered && closed.covered;
       const ambiguous = (): ReconcileResult => {
         logger.warn(
-          { ...ids, candidates: exact.length, nearMatches: near, ackMismatch },
+          { ...ids, candidates: exact.length, nearMatches: near, ackMismatch, covered },
           'reconciliation is ambiguous',
         );
         return { outcome: 'ambiguous' };
       };
 
+      // Absence is never concluded here: what the pages show depends on limit/offset semantics
+      // not observed live, so no answer releases the reserve (proving absence is #274).
       if (exact.length > 1) return ambiguous();
-      // one candidate in a window the pages did not cover could have a twin beyond them
-      if (!covered) {
-        logger.warn(ids, 'trade pages did not cover the reconciliation window');
-        return unavailable(ReconcileUnavailableReason.WindowNotCovered);
-      }
       const [found] = exact;
-      if (found !== undefined) return { outcome: 'found', trade: found };
-      // absence is certain only once the window has closed by the database clock
+      if (found !== undefined && covered) return { outcome: 'found', trade: found };
+      // by the database clock: a trade may still be opened inside the window
       if (intent.reconcileClaimedAt.getTime() < windowEnd) {
+        if (!covered) {
+          logger.warn(ids, 'trade pages did not cover the reconciliation window');
+          return unavailable(ReconcileUnavailableReason.WindowNotCovered);
+        }
         return unavailable(ReconcileUnavailableReason.WindowOpen);
       }
+      // one candidate in pages that did not cover the window could have a twin beyond them
+      if (found !== undefined) return ambiguous();
       if (near > 0 || ackMismatch) return ambiguous();
-      return { outcome: 'not_found' };
+      logger.warn(
+        { ...ids, covered, openPages: open.pagesRead, closedPages: closed.pagesRead },
+        'reconciliation unresolved; parked for manual review',
+      );
+      return { outcome: 'unresolved' };
     },
   };
 }
