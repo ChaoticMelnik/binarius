@@ -392,18 +392,17 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
             error: blocked ? OAuthErrorCode.UserBlocked : OAuthErrorCode.BrokerAccountTaken,
           });
         }
+        // the push and the response read one projection of the row, so they agree on the address
+        const account = toBrokerAccountView(linked.account);
         // one button, for the account this login linked; any other waiting link is /start's
         await push(
           request.log,
           consumed.telegramUserId,
-          linked.account.status === BrokerAccountStatus.Pending
-            ? {
-                kind: LinkPushKind.Pending,
-                account: { id: linked.account.id, email: linked.account.email },
-              }
+          account.status === BrokerAccountStatus.Pending
+            ? { kind: LinkPushKind.Pending, account: { id: account.id, email: account.email } }
             : { kind: LinkPushKind.Active },
         );
-        return reply.send({ account: toBrokerAccountView(linked.account) });
+        return reply.send({ account });
       },
     );
   });
