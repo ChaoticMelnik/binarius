@@ -142,7 +142,10 @@ interface Ledger {
 
 // the first unusable trade in creation order, or the session's ledger
 function readHistory(history: readonly SessionTrade[]): DataStop | Ledger {
-  const settled: { index: number; profit: bigint }[] = [];
+  let settledTrades = 0;
+  let consecutiveLosses = 0;
+  let streakLoss = 0n;
+  let net = 0n;
   for (const [index, trade] of history.entries()) {
     if (trade.kind === SessionTradeKind.Rejected) continue;
     // any kind but settled and rejected has no result: the next stake and the stop-loss need it
@@ -175,23 +178,19 @@ function readHistory(history: readonly SessionTrade[]): DataStop | Ledger {
         detail: { index, problem: TradeProblem.LossExceedsStake },
       };
     }
-    settled.push({ index, profit });
-  }
-
-  let consecutiveLosses = 0;
-  let streakLoss = 0n;
-  // ties and rejected orders neither extend nor end the streak; a win of any size ends it
-  for (let i = settled.length - 1; i >= 0; i -= 1) {
-    const { profit } = settled[i];
-    if (profit > 0n) break;
-    if (profit < 0n) {
+    settledTrades += 1;
+    net += profit;
+    // ties and rejected orders neither extend nor end the streak; a win of any size ends it
+    if (profit > 0n) {
+      consecutiveLosses = 0;
+      streakLoss = 0n;
+    } else if (profit < 0n) {
       consecutiveLosses += 1;
       streakLoss -= profit;
     }
   }
-  const net = settled.reduce((sum, trade) => sum + trade.profit, 0n);
   return {
-    settledTrades: settled.length,
+    settledTrades,
     consecutiveLosses,
     streakLoss,
     realizedSessionLoss: net < 0n ? -net : 0n,
