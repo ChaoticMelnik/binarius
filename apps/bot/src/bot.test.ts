@@ -559,6 +559,43 @@ describe('the welcome video', () => {
     });
   });
 
+  it('logs the transport failure of the text with its method and sends no second welcome', async () => {
+    const { bot, calls, logger, apiErrors } = setup({ welcomeVideoFileId: 'not-a-file-id' });
+    apiErrors.set('sendVideo', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: wrong file identifier/HTTP URL specified',
+    });
+    apiErrors.set(
+      'sendMessage',
+      new HttpError(
+        "Network request for 'sendMessage' failed!",
+        new Error('The operation was aborted due to timeout'),
+      ),
+    );
+    const update = startUpdate('/start');
+
+    await bot.handleUpdate(update);
+    expect(calls.map((call) => call.method)).toEqual(['sendVideo', 'sendMessage']);
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        expect.objectContaining({ method: 'sendVideo', telegramErrorCode: 400 }),
+        'the welcome video was refused, sending the text instead',
+      ],
+    ]);
+    expect(logger.error.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          err: expect.objectContaining({ name: 'HttpError' }),
+          method: 'sendMessage',
+          transportError: { name: 'Error' },
+          updateId: update.update_id,
+        }),
+        'the text in place of the welcome video failed in transport, sending nothing more',
+      ],
+    ]);
+  });
+
   it('lets anything that is neither a refusal nor the transport reach bot.catch', async () => {
     const { bot, calls, logger, answers } = setup({ welcomeVideoFileId: 'BAACAgIAAxkB' });
     // not through apiErrors: its type no longer admits a failure the transport cannot produce,
@@ -820,9 +857,59 @@ describe('the account card', () => {
           method: 'sendPhoto',
           transportError: { name: 'Error' },
         }),
-        'the account card call failed in transport, sending nothing more',
+        'the account card photo call failed in transport, sending nothing more',
       ],
     ]);
+  });
+
+  const TEXT_CARD_TIMED_OUT = new HttpError(
+    "Network request for 'sendMessage' failed!",
+    new Error('The operation was aborted due to timeout'),
+  );
+  const textCardFailure = (updateId: number) => [
+    [
+      expect.objectContaining({
+        err: expect.objectContaining({ name: 'HttpError' }),
+        method: 'sendMessage',
+        transportError: { name: 'Error' },
+        updateId,
+      }),
+      'the text in place of the account card photo failed in transport, sending nothing more',
+    ],
+  ];
+
+  it('pins nothing and logs the method when the text card fails in transport', async () => {
+    const { bot, calls, logger, apiErrors } = setup();
+    apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    apiErrors.set('sendMessage', TEXT_CARD_TIMED_OUT);
+    const update = confirm();
+    await bot.handleUpdate(update);
+
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'sendPhoto',
+      'sendMessage',
+    ]);
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        expect.objectContaining({ method: 'sendPhoto', telegramErrorCode: 400 }),
+        'the account card photo was refused, sending the text instead',
+      ],
+    ]);
+    expect(logger.error.mock.calls).toEqual(textCardFailure(update.update_id));
+  });
+
+  it('keeps the login committed when the text card fails in transport on the code step', async () => {
+    const { bot, calls, logger, apiErrors, dialog } = setup({ dialog: ON_CODE_STEP });
+    apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    apiErrors.set('sendMessage', TEXT_CARD_TIMED_OUT);
+    const update = textUpdate(CODE);
+    await bot.handleUpdate(update);
+
+    expect(calls.map((call) => call.method)).toEqual(['sendPhoto', 'sendMessage']);
+    // the login is committed whatever became of the card
+    expect(dialog.get(USER.id)).toBeUndefined();
+    expect(logger.error.mock.calls).toEqual(textCardFailure(update.update_id));
   });
 
   it('lets anything that is neither a refusal nor the transport reach bot.catch', async () => {
@@ -834,6 +921,22 @@ describe('the account card', () => {
     expect(thrown).toBeInstanceOf(BotError);
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendPhoto']);
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('lets a text card failing with anything but the transport reach bot.catch', async () => {
+    const { bot, calls, logger, apiErrors, answers } = setup();
+    apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    answers.set('sendMessage', () => {
+      throw new TypeError('sentinel');
+    });
+    const thrown = await rejectionOf(bot.handleUpdate(confirm()));
+    expect(thrown).toBeInstanceOf(BotError);
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'sendPhoto',
+      'sendMessage',
+    ]);
     expect(logger.error).not.toHaveBeenCalled();
   });
 
