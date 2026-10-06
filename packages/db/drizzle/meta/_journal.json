@@ -92,6 +92,20 @@
       "when": 1791280673103,
       "tag": "0012_real_trading_disabled",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791288400127,
+      "tag": "0013_trade_intent_settlement_reasons",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791288404551,
+      "tag": "0014_trade_intent_transition_guard",
+      "breakpoints": true
     }
   ]
 }

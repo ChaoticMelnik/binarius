@@ -108,6 +108,15 @@ export const tradeIntents = pgTable(
     positiveNumeric('trade_intents_amount_check', t.amount),
     check('trade_intents_duration_sec_check', sql`${t.durationSec} > 0`),
     check('trade_intents_tokens_reserved_check', sql`${t.tokensReserved} >= 0`),
+    // #17: a live intent always holds its token and a finished one never does. Both directions:
+    // a terminal row with a reserve would leak it, a live row without one would let settlement
+    // debit a token nobody reserved. Creation inserts planned with the reserve already set, and
+    // rejectIntent/settleIntent zero it in the UPDATE that changes the status, so it holds at
+    // every statement.
+    check(
+      'trade_intents_terminal_reserve_check',
+      sql`(${t.status} in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})) = (${t.tokensReserved} = 0)`,
+    ),
     index('trade_intents_account_status_idx').on(t.brokerAccountId, t.status),
     index('trade_intents_status_updated_idx').on(t.status, t.updatedAt),
     index('trade_intents_user_id_idx').on(t.userId),

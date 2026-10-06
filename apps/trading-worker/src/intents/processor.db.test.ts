@@ -1,8 +1,10 @@
 import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { TradeIntentFailureReason } from '@binarius/shared';
+import { TradeIntentFailureReason, type OpenTrade } from '@binarius/shared';
+import { openTradeFor } from '@binarius/shared/testing';
 import {
+  brokerTrades,
   findTradeIntent,
   markIntentUnknown,
   outboxEvents,
@@ -10,6 +12,7 @@ import {
   tokenLedger,
   tradeIntents,
   users,
+  type TradeIntentRow,
 } from '@binarius/db';
 import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import type { SubmitResult, TradeExecutor } from './executor';
@@ -37,17 +40,25 @@ async function newIntent() {
 }
 
 const executorOf = (
-  result: SubmitResult | (() => Promise<SubmitResult>),
+  result: SubmitResult | ((intent: TradeIntentRow) => SubmitResult | Promise<SubmitResult>),
 ): TradeExecutor & { calls: number } => {
   const executor = {
     calls: 0,
-    submit: async () => {
+    submit: async (intent: TradeIntentRow) => {
       executor.calls += 1;
-      return typeof result === 'function' ? result() : result;
+      return typeof result === 'function' ? result(intent) : result;
     },
   };
   return executor;
 };
+
+// the broker's open trade for the very intent submitted, as an executor hands it over (#17)
+const acceptingExecutor = (patch: Partial<OpenTrade> = {}) =>
+  executorOf((intent) => ({
+    outcome: 'accepted',
+    transport: 'socket',
+    trade: openTradeFor(intent, patch),
+  }));
 
 const deps = (
   executor: TradeExecutor,
@@ -60,6 +71,8 @@ const deps = (
 });
 
 const statusOf = async (id: string) => (await findTradeIntent(tmp.db, id))!;
+const tradesOf = (intentId: string) =>
+  tmp.db.select().from(brokerTrades).where(eq(brokerTrades.intentId, intentId));
 const reservedOf = async (userId: string) =>
   (await tmp.db.select({ v: users.tokenReserved }).from(users).where(eq(users.id, userId)))[0]!.v;
 const ledgerKinds = async (intentId: string) =>
@@ -96,7 +109,7 @@ describe('processIntentJob', () => {
 
   it('records an accepted outcome with the transport, bumping the version per transition', async () => {
     const { intentId, version } = await newIntent();
-    const executor = executorOf({ outcome: 'accepted', transport: 'socket' });
+    const executor = acceptingExecutor();
     expect(await processIntentJob(deps(executor), { intentId })).toBe('accepted');
     const row = await statusOf(intentId);
     expect(row).toMatchObject({
@@ -107,6 +120,28 @@ describe('processIntentJob', () => {
     });
     expect(row.submittedAt).toBeInstanceOf(Date);
     expect(executor.calls).toBe(1);
+    expect(await tradesOf(intentId)).toMatchObject([{ intentId, status: 'open' }]);
+  });
+
+  it('turns an accepted trade that does not match the intent into unknown', async () => {
+    const { intentId, userId } = await newIntent();
+    const lines: string[] = [];
+    const capturing = pino({ level: 'warn' }, { write: (line: string) => void lines.push(line) });
+    const executor = acceptingExecutor({ id: 'bt-mismatch', assetId: 92 });
+    expect(await processIntentJob({ ...deps(executor), logger: capturing }, { intentId })).toBe(
+      'unknown',
+    );
+    expect(await statusOf(intentId)).toMatchObject({
+      status: 'unknown',
+      lastError: 'trade_mismatch',
+      tokensReserved: 1n,
+    });
+    expect(await reservedOf(userId)).toBe(1n);
+    expect(await topicsOf(intentId)).toEqual(['trading-intents', 'trading-reconciliation']);
+    expect(await tradesOf(intentId)).toEqual([]);
+    const warned = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    const mismatch = warned.find((entry) => entry.mismatch !== undefined);
+    expect(mismatch).toMatchObject({ intentId, brokerTradeId: 'bt-mismatch', mismatch: 'asset' });
   });
 
   it('records a rejection and releases the token', async () => {
@@ -125,7 +160,7 @@ describe('processIntentJob', () => {
   it('rejects a real intent at the grant gate and releases the token', async () => {
     const seed = await seedQueuedIntent(tmp.db, { mode: 'real' }, { realTradingEnabled: true });
     const intentId = seed.intent.id;
-    const inner = executorOf({ outcome: 'accepted' });
+    const inner = acceptingExecutor();
     const gated = realTradingGate(inner, { realTradingEnabled: false });
     expect(await processIntentJob(deps(gated), { intentId })).toBe('rejected');
     const row = await statusOf(intentId);
@@ -230,7 +265,7 @@ describe('processIntentJob', () => {
       .update(tradeIntents)
       .set({ createdAt: sql`now() - interval '2 minutes'` })
       .where(eq(tradeIntents.id, intentId));
-    const executor = executorOf({ outcome: 'accepted' });
+    const executor = acceptingExecutor();
     expect(await processIntentJob(deps(executor), { intentId })).toBe('expired');
     expect(executor.calls).toBe(0);
     expect(await statusOf(intentId)).toMatchObject({
@@ -243,7 +278,7 @@ describe('processIntentJob', () => {
 
   it('makes a duplicate delivery of a finished intent a no-op', async () => {
     const { intentId } = await newIntent();
-    const executor = executorOf({ outcome: 'accepted' });
+    const executor = acceptingExecutor();
     expect(await processIntentJob(deps(executor), { intentId })).toBe('accepted');
     expect(await processIntentJob(deps(executor), { intentId })).toBe('noop');
     expect(executor.calls).toBe(1);
@@ -256,7 +291,7 @@ describe('processIntentJob', () => {
       expectedVersion: version,
       maxAgeMs: MAX_AGE_MS,
     }))!;
-    const executor = executorOf({ outcome: 'accepted' });
+    const executor = acceptingExecutor();
     expect(await processIntentJob(deps(executor), { intentId })).toBe('noop');
     expect((await statusOf(intentId)).status).toBe('submitting');
 
@@ -285,7 +320,7 @@ describe('processIntentJob', () => {
             reason: TradeIntentFailureReason.StaleSubmitting,
           }),
         );
-        return { outcome: 'accepted' };
+        return { outcome: 'accepted', transport: 'socket', trade: openTradeFor(intent) };
       },
     };
     expect(await processIntentJob(deps(executor), { intentId })).toBe('noop');

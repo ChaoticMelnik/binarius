@@ -64,7 +64,7 @@ export const brokerTrades = pgTable(
   },
   (t) => [
     unique('broker_trades_account_trade_key').on(t.brokerAccountId, t.brokerTradeId),
-    // ARCH-04: a trade found by reconciliation links to an intent exactly once
+    // a broker trade links to one intent exactly once, at acceptance (#17) or reconciliation
     unique('broker_trades_intent_id_key').on(t.intentId),
     // ...and only to an intent of the same account running in the same mode
     foreignKey({

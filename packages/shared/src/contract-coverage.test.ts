@@ -99,6 +99,8 @@ describe('contract coverage (issue #6)', () => {
         | 'invalid_job'
         | 'processing_failed'
         | 'real_trading_disabled'
+        | 'trade_mismatch'
+        | 'manual_rejected'
         | null;
       updatedAt: string;
     }>();

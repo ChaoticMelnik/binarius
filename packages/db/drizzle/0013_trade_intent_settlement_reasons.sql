@@ -1,0 +1,5 @@
+ALTER TABLE "trade_intents" DROP CONSTRAINT "trade_intents_last_error_check";--> statement-breakpoint
+ALTER TABLE "outbox_events" DROP CONSTRAINT "outbox_events_last_error_check";--> statement-breakpoint
+ALTER TABLE "trade_intents" ADD CONSTRAINT "trade_intents_terminal_reserve_check" CHECK (("trade_intents"."status" in ('settled', 'rejected')) = ("trade_intents"."tokens_reserved" = 0));--> statement-breakpoint
+ALTER TABLE "trade_intents" ADD CONSTRAINT "trade_intents_last_error_check" CHECK ("trade_intents"."last_error" in ('expired', 'executor_not_configured', 'executor_timeout', 'executor_error', 'broker_rejected', 'publish_failed', 'stale_submitting', 'invalid_job', 'processing_failed', 'real_trading_disabled', 'trade_mismatch', 'manual_rejected'));--> statement-breakpoint
+ALTER TABLE "outbox_events" ADD CONSTRAINT "outbox_events_last_error_check" CHECK ("outbox_events"."last_error" in ('expired', 'executor_not_configured', 'executor_timeout', 'executor_error', 'broker_rejected', 'publish_failed', 'stale_submitting', 'invalid_job', 'processing_failed', 'real_trading_disabled', 'trade_mismatch', 'manual_rejected'));

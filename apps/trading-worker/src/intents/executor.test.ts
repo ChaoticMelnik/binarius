@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { TradeMode } from '@binarius/shared';
+import { TradeAction, TradeMode, type DecimalString } from '@binarius/shared';
+import { openTradeFor } from '@binarius/shared/testing';
 import type { TradeIntentRow } from '@binarius/db';
 import { realTradingGate, type SubmitResult, type TradeExecutor } from './executor';
 
@@ -15,7 +16,16 @@ const recording = (result: SubmitResult) => {
 };
 
 const intentIn = (mode: TradeMode) => ({ mode }) as TradeIntentRow;
-const accepted: SubmitResult = { outcome: 'accepted', transport: 'socket' };
+const accepted: SubmitResult = {
+  outcome: 'accepted',
+  transport: 'socket',
+  trade: openTradeFor({
+    mode: TradeMode.Demo,
+    assetId: 91,
+    action: TradeAction.Up,
+    amount: '10.00' as DecimalString,
+  }),
+};
 
 describe('realTradingGate', () => {
   it('rejects a real intent with the flag off without calling the inner executor', async () => {

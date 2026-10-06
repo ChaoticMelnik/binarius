@@ -1,10 +1,19 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { TradeIntentFailureReason, TradeMode, type DecimalString } from '@binarius/shared';
+import {
+  TradeIntentFailureReason,
+  TradeIntentStatus,
+  TradeMode,
+  type ClosedTrade,
+  type DecimalString,
+  type OpenTrade,
+} from '@binarius/shared';
+import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import {
   createTempDatabase,
   intentRequest,
   seedBrokerAccount,
+  seedQueuedIntent,
   seedUser,
   seedUserWithAccount,
   type TempDatabase,
@@ -12,21 +21,33 @@ import {
 import {
   TOKENS_PER_INTENT,
   TradeIntentError,
+  TradeIntentMismatchError,
   createTradeIntent,
   findTradeIntent,
   getTradeIntentView,
+  listOverdueAcceptedIntents,
   listStaleSubmittingIntents,
   markIntentAccepted,
   millisecondsAgo,
   markIntentUnknown,
   rejectExpiredIntent,
   rejectIntent,
+  settleClosedTrades,
+  settleIntent,
   takeIntent,
   transitionIntent,
   uniqueViolation,
+  type TradeIntentRow,
   type TradePolicy,
 } from './trade-intent-ops';
-import { brokerAccounts, outboxEvents, tokenLedger, tradeIntents, users } from './schema/index';
+import {
+  brokerAccounts,
+  brokerTrades,
+  outboxEvents,
+  tokenLedger,
+  tradeIntents,
+  users,
+} from './schema/index';
 
 // Integration tests on a temporary migrated database (README → Database). Rows are committed
 // for real: concurrency cases need separate connections, and token_ledger is append-only.
@@ -562,25 +583,6 @@ describe('transitions', () => {
     ]);
   });
 
-  it('accepts with the transport that carried the order', async () => {
-    const s = await seedUserWithAccount(tmp.db);
-    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff);
-    const taken = (await take(intent))!;
-    const accepted = await markIntentAccepted(tmp.db, {
-      id: intent.id,
-      expectedVersion: taken.version,
-      transport: 'socket',
-    });
-    expect(accepted).toMatchObject({
-      status: 'accepted',
-      transport: 'socket',
-      tokensReserved: TOKENS_PER_INTENT,
-    });
-    expect(
-      await markIntentAccepted(tmp.db, { id: intent.id, expectedVersion: taken.version }),
-    ).toBeUndefined();
-  });
-
   it('lists only intents submitting longer than the threshold', async () => {
     const stale = await seedUserWithAccount(tmp.db);
     const fresh = await seedUserWithAccount(tmp.db);
@@ -692,5 +694,402 @@ describe('createTradeIntent: the real-mode grant (#134)', () => {
     );
     expect(created).toBe(true);
     expect(intent.mode).toBe('demo');
+  });
+});
+
+// --- #17: acceptance with the broker's trade, settlement, the closed-trade applier -------------
+
+const tradesOf = (intentId: string) =>
+  tmp.db.select().from(brokerTrades).where(eq(brokerTrades.intentId, intentId));
+
+const userTokens = async (userId: string) =>
+  (
+    await tmp.db
+      .select({ balance: users.tokenBalance, reserved: users.tokenReserved })
+      .from(users)
+      .where(eq(users.id, userId))
+  )[0]!;
+
+const settleRowsOf = (intentId: string) =>
+  tmp.db
+    .select({ reservedDelta: tokenLedger.reservedDelta, balanceDelta: tokenLedger.balanceDelta })
+    .from(tokenLedger)
+    .where(and(eq(tokenLedger.intentId, intentId), eq(tokenLedger.kind, 'settle')));
+
+async function submittingIntent() {
+  const seed = await seedQueuedIntent(tmp.db);
+  const intent = (await take(seed.intent))!;
+  return { ...seed, intent };
+}
+
+const accept = (intent: TradeIntentRow, trade: OpenTrade, from?: 'submitting' | 'reconciling') =>
+  tmp.db.transaction((tx) =>
+    markIntentAccepted(tx, {
+      id: intent.id,
+      expectedVersion: intent.version,
+      transport: 'socket',
+      trade,
+      ...(from === undefined ? {} : { from }),
+    }),
+  );
+
+async function acceptedIntent() {
+  const seed = await submittingIntent();
+  const open = openTradeFor(seed.intent);
+  const intent = (await accept(seed.intent, open))!;
+  return { ...seed, intent, open };
+}
+
+// submitting → unknown → reconciling (→ manual_review): the edges #89/#90 will own, driven here
+// through the shared CAS so the trigger sees ordinary transitions
+async function parkedIntent(to: 'reconciling' | 'manual_review') {
+  const seed = await submittingIntent();
+  const unknown = (await tmp.db.transaction((tx) =>
+    markIntentUnknown(tx, {
+      id: seed.intent.id,
+      reason: TradeIntentFailureReason.StaleSubmitting,
+    }),
+  ))!;
+  let intent = (await transitionIntent(tmp.db, {
+    id: unknown.id,
+    from: TradeIntentStatus.Unknown,
+    to: TradeIntentStatus.Reconciling,
+    expectedVersion: unknown.version,
+  }))!;
+  if (to === 'manual_review') {
+    intent = (await transitionIntent(tmp.db, {
+      id: intent.id,
+      from: TradeIntentStatus.Reconciling,
+      to: TradeIntentStatus.ManualReview,
+      expectedVersion: intent.version,
+    }))!;
+  }
+  return { ...seed, intent };
+}
+
+async function mismatchOf(promise: Promise<unknown>) {
+  const error = await promise.then(
+    () => undefined,
+    (thrown: unknown) => thrown,
+  );
+  expect(error).toBeInstanceOf(TradeIntentMismatchError);
+  return (error as TradeIntentMismatchError).reason;
+}
+
+const settle = (
+  intent: TradeIntentRow,
+  trade: ClosedTrade,
+  from: 'accepted' | 'manual_review' = 'accepted',
+) => tmp.db.transaction((tx) => settleIntent(tx, { id: intent.id, from, trade }));
+
+describe('markIntentAccepted (#17)', () => {
+  it('accepts with the broker trade and writes its open row in the same transaction', async () => {
+    const { intent } = await submittingIntent();
+    const open = openTradeFor(intent);
+    const accepted = await accept(intent, open);
+    expect(accepted).toMatchObject({
+      status: 'accepted',
+      transport: 'socket',
+      tokensReserved: TOKENS_PER_INTENT,
+      version: intent.version + 1,
+    });
+    const rows = await tradesOf(intent.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      brokerAccountId: intent.brokerAccountId,
+      brokerTradeId: open.id,
+      mode: 'demo',
+      status: 'open',
+      amount: '10.00000000',
+      openTimestampMs: open.openTimestamp,
+      closePrice: null,
+      raw: { ...open },
+    });
+    expect(await accept(intent, open)).toBeUndefined();
+    expect(await tradesOf(intent.id)).toHaveLength(1);
+  });
+
+  it.each([
+    ['mode', { isDemo: false }],
+    ['asset', { assetId: 92 }],
+    ['action', { action: 'down' as const }],
+    ['amount', { amount: '10.5' as DecimalString }],
+  ])(
+    'refuses a trade that disagrees on %s and leaves the intent submitting',
+    async (reason, patch) => {
+      const { intent } = await submittingIntent();
+      expect(await mismatchOf(accept(intent, openTradeFor(intent, patch)))).toBe(reason);
+      expect(await findTradeIntent(tmp.db, intent.id)).toMatchObject({
+        status: 'submitting',
+        version: intent.version,
+      });
+      expect(await tradesOf(intent.id)).toEqual([]);
+    },
+  );
+
+  it('compares the amount as a decimal, not as a spelling', async () => {
+    const { intent } = await submittingIntent();
+    const accepted = await accept(
+      intent,
+      openTradeFor(intent, { amount: '10.0' as DecimalString }),
+    );
+    expect(accepted?.status).toBe('accepted');
+  });
+
+  it('refuses a broker trade already linked to another intent of the account', async () => {
+    const first = await acceptedIntent();
+    const settled = await settle(first.intent, closedTradeFor(first.open));
+    expect(settled?.status).toBe('settled');
+    const second = (await take(
+      (
+        await createTradeIntent(
+          tmp.db,
+          intentRequest(first.telegramUserId, { brokerAccountId: first.brokerAccountId }),
+          flagOff,
+        )
+      ).intent,
+    ))!;
+    expect(await mismatchOf(accept(second, { ...first.open }))).toBe('trade_already_linked');
+    expect(await findTradeIntent(tmp.db, second.id)).toMatchObject({ status: 'submitting' });
+    expect(await tradesOf(second.id)).toEqual([]);
+  });
+
+  it('accepts from reconciling with the trade reconciliation found', async () => {
+    const { intent } = await parkedIntent('reconciling');
+    const accepted = await accept(intent, openTradeFor(intent), 'reconciling');
+    expect(accepted).toMatchObject({ status: 'accepted', lastError: 'stale_submitting' });
+    expect(await tradesOf(intent.id)).toHaveLength(1);
+  });
+});
+
+describe('settleIntent (#17)', () => {
+  it('settles an accepted intent, debits the token and closes the trade at a loss', async () => {
+    const { intent, open, userId } = await acceptedIntent();
+    const before = await userTokens(userId);
+    const closed = closedTradeFor(open);
+    const settled = await settle(intent, closed);
+    expect(settled).toMatchObject({ status: 'settled', tokensReserved: 0n });
+    expect(await settleRowsOf(intent.id)).toEqual([{ reservedDelta: -1n, balanceDelta: -1n }]);
+    expect(await userTokens(userId)).toEqual({
+      balance: before.balance - 1n,
+      reserved: before.reserved - 1n,
+    });
+    const [row] = await tradesOf(intent.id);
+    expect(row).toMatchObject({
+      status: 'closed',
+      closePrice: closed.closePrice,
+      closeTimestampMs: closed.closeTimestamp,
+      profit: '-10.00000000',
+      raw: { ...closed },
+    });
+
+    expect(await settle(intent, closed)).toBeUndefined();
+    expect(await settleRowsOf(intent.id)).toHaveLength(1);
+    expect(await tradesOf(intent.id)).toHaveLength(1);
+    expect(await userTokens(userId)).toEqual({
+      balance: before.balance - 1n,
+      reserved: before.reserved - 1n,
+    });
+  });
+
+  it('refuses a closed trade other than the linked one and changes nothing', async () => {
+    const { intent, open, userId } = await acceptedIntent();
+    const before = await userTokens(userId);
+    const other = closedTradeFor(openTradeFor(intent));
+    expect(await mismatchOf(settle(intent, other))).toBe('trade_already_linked');
+    expect(await findTradeIntent(tmp.db, intent.id)).toMatchObject({ status: 'accepted' });
+    expect(await settleRowsOf(intent.id)).toEqual([]);
+    expect(await userTokens(userId)).toEqual(before);
+    expect(await tradesOf(intent.id)).toMatchObject([{ brokerTradeId: open.id, status: 'open' }]);
+  });
+
+  it('settles a never-linked manual_review intent by inserting the closed trade', async () => {
+    const { intent, userId } = await parkedIntent('manual_review');
+    const before = await userTokens(userId);
+    const closed = closedTradeFor(openTradeFor(intent));
+    expect(await settle(intent, closed, 'manual_review')).toMatchObject({ status: 'settled' });
+    expect(await tradesOf(intent.id)).toMatchObject([
+      { brokerTradeId: closed.id, status: 'closed', profit: '-10.00000000', potentialProfit: null },
+    ]);
+    expect((await userTokens(userId)).balance).toBe(before.balance - 1n);
+  });
+
+  it('refuses a mismatching trade for a manual_review intent and inserts nothing', async () => {
+    const { intent } = await parkedIntent('manual_review');
+    const closed = closedTradeFor(openTradeFor(intent, { assetId: 92 }));
+    expect(await mismatchOf(settle(intent, closed, 'manual_review'))).toBe('asset');
+    expect(await findTradeIntent(tmp.db, intent.id)).toMatchObject({ status: 'manual_review' });
+    expect(await tradesOf(intent.id)).toEqual([]);
+  });
+
+  it('lets the operator reject a manual_review intent and releases the token', async () => {
+    const { intent, userId } = await parkedIntent('manual_review');
+    const rejected = await tmp.db.transaction((tx) =>
+      rejectIntent(tx, {
+        id: intent.id,
+        from: TradeIntentStatus.ManualReview,
+        reason: TradeIntentFailureReason.ManualRejected,
+      }),
+    );
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      lastError: 'manual_rejected',
+      tokensReserved: 0n,
+    });
+    expect((await ledgerOf(intent.id)).map((r) => r.kind)).toEqual(['reserve', 'release']);
+    expect(await tokenReservedOf(userId)).toBe(0n);
+  });
+});
+
+describe('settleClosedTrades (#17)', () => {
+  it('answers every trade of a batch and replays it without a second debit', async () => {
+    const ours = await acceptedIntent();
+    const done = await acceptedIntent();
+    // one account per intent: the applier is called per account, so each gets its own batch
+    await settleClosedTrades(tmp.db, {
+      brokerAccountId: done.brokerAccountId,
+      trades: [closedTradeFor(done.open)],
+    });
+    const reconciling = await parkedIntent('reconciling');
+    const reconcilingOpen = openTradeFor(reconciling.intent);
+    await tmp.db.insert(brokerTrades).values({
+      brokerAccountId: reconciling.brokerAccountId,
+      intentId: reconciling.intent.id,
+      brokerTradeId: reconcilingOpen.id,
+      mode: 'demo',
+      assetId: reconcilingOpen.assetId,
+      action: reconcilingOpen.action,
+      amount: reconcilingOpen.amount,
+      payout: reconcilingOpen.payout,
+      openPrice: reconcilingOpen.openPrice,
+      openTimestampMs: reconcilingOpen.openTimestamp,
+      status: 'open',
+      raw: {},
+    });
+    const contradicting = await acceptedIntent();
+
+    const batch = async () => [
+      ...(await settleClosedTrades(tmp.db, {
+        brokerAccountId: ours.brokerAccountId,
+        trades: [closedTradeFor(ours.open), closedTradeFor(openTradeFor(ours.intent))],
+      })),
+      ...(await settleClosedTrades(tmp.db, {
+        brokerAccountId: done.brokerAccountId,
+        trades: [closedTradeFor(done.open)],
+      })),
+      ...(await settleClosedTrades(tmp.db, {
+        brokerAccountId: reconciling.brokerAccountId,
+        trades: [closedTradeFor(reconcilingOpen)],
+      })),
+      ...(await settleClosedTrades(tmp.db, {
+        brokerAccountId: contradicting.brokerAccountId,
+        trades: [closedTradeFor(contradicting.open, { amount: '11.00' as DecimalString })],
+      })),
+    ];
+    const first = await batch();
+    expect(first.map((o) => o.result)).toEqual([
+      'settled',
+      'not_ours',
+      'already_settled',
+      'intent_not_accepted',
+      'mismatch',
+    ]);
+    expect(first[3]).toMatchObject({ status: 'reconciling' });
+    expect(first[4]).toMatchObject({ reason: 'amount' });
+    expect(await findTradeIntent(tmp.db, ours.intent.id)).toMatchObject({ status: 'settled' });
+    expect(await findTradeIntent(tmp.db, contradicting.intent.id)).toMatchObject({
+      status: 'accepted',
+    });
+
+    const replay = await batch();
+    expect(replay.map((o) => o.result)).toEqual([
+      'already_settled',
+      'not_ours',
+      'already_settled',
+      'intent_not_accepted',
+      'mismatch',
+    ]);
+    expect(await settleRowsOf(ours.intent.id)).toHaveLength(1);
+  });
+
+  it('applies each trade on its own: a mismatch does not stop the rest of the batch', async () => {
+    const ours = await acceptedIntent();
+    const closed = closedTradeFor(ours.open);
+    const outcomes = await settleClosedTrades(tmp.db, {
+      brokerAccountId: ours.brokerAccountId,
+      trades: [{ ...closed, action: 'down' }, closed],
+    });
+    expect(outcomes.map((o) => o.result)).toEqual(['mismatch', 'settled']);
+    expect(await findTradeIntent(tmp.db, ours.intent.id)).toMatchObject({ status: 'settled' });
+  });
+});
+
+describe('listOverdueAcceptedIntents (#17)', () => {
+  const backdate = (intentId: string, ms: number) =>
+    tmp.db
+      .update(brokerTrades)
+      .set({ openTimestampMs: sql`(extract(epoch from now()) * 1000)::bigint - ${ms}` })
+      .where(eq(brokerTrades.intentId, intentId));
+
+  it('lists accepted intents past open time + duration + grace, oldest close first', async () => {
+    // created in the opposite order of their expected close, so the order is the query's own
+    const old = await acceptedIntent();
+    const older = await acceptedIntent();
+    const fresh = await acceptedIntent();
+    const settled = await acceptedIntent();
+    const closedByHand = await acceptedIntent();
+    await backdate(older.intent.id, 2 * 86_400_000);
+    await backdate(old.intent.id, 86_400_000);
+    await backdate(settled.intent.id, 3 * 86_400_000);
+    await settle(settled.intent, closedTradeFor(settled.open));
+    // a closed trade under an accepted intent cannot arise through the ops (settleIntent closes
+    // both in one transaction); the query still refuses to call it overdue
+    await backdate(closedByHand.intent.id, 3 * 86_400_000);
+    await tmp.db
+      .update(brokerTrades)
+      .set({ status: 'closed', closePrice: 1.1, closeTimestampMs: 1, profit: '1' as DecimalString })
+      .where(eq(brokerTrades.intentId, closedByHand.intent.id));
+
+    const listed = await listOverdueAcceptedIntents(tmp.db, { graceMs: 60_000, limit: 100 });
+    const ids = listed.map((r) => r.id);
+    expect(ids).not.toContain(fresh.intent.id);
+    expect(ids).not.toContain(settled.intent.id);
+    expect(ids).not.toContain(closedByHand.intent.id);
+    expect(ids.filter((id) => id === older.intent.id || id === old.intent.id)).toEqual([
+      older.intent.id,
+      old.intent.id,
+    ]);
+    expect(listed.find((r) => r.id === old.intent.id)).toEqual({
+      id: old.intent.id,
+      brokerAccountId: old.brokerAccountId,
+      brokerTradeId: old.open.id,
+      mode: 'demo',
+    });
+    expect(
+      (await listOverdueAcceptedIntents(tmp.db, { graceMs: 60_000, limit: 1 })).map((r) => r.id),
+    ).toEqual([older.intent.id]);
+    // the grace is part of the predicate: one day of grace keeps the one-day-old trade out
+    const graced = await listOverdueAcceptedIntents(tmp.db, { graceMs: 86_400_000, limit: 100 });
+    expect(graced.map((r) => r.id)).toContain(older.intent.id);
+    expect(graced.map((r) => r.id)).not.toContain(old.intent.id);
+  });
+});
+
+describe('the transition guard seen through the ops (#17)', () => {
+  it('refuses an edge outside the graph at the database even with the version bumped', async () => {
+    const { intent } = await seedQueuedIntent(tmp.db);
+    const error = await tmp.db
+      .update(tradeIntents)
+      .set({ status: 'accepted', version: sql`${tradeIntents.version} + 1` })
+      .where(eq(tradeIntents.id, intent.id))
+      .then(
+        () => undefined,
+        (thrown: unknown) => thrown,
+      );
+    expect((error as { cause?: unknown }).cause).toMatchObject({
+      code: 'P0001',
+      constraint: 'trade_intents_transition_guard',
+    });
+    expect(await findTradeIntent(tmp.db, intent.id)).toMatchObject({ status: 'queued' });
   });
 });

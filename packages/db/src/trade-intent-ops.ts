@@ -7,12 +7,15 @@ import {
   TradeIntentStatus,
   TradeMode,
   canTransition,
+  type ClosedTrade,
   type CreateTradeIntentRequest,
+  type OpenTrade,
   type TradeIntentView,
   type TradeTransport,
 } from '@binarius/shared';
 import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
+import { BrokerTradeStatus, brokerTrades } from './schema/broker-trades';
 import { OutboxTopic, outboxEvents } from './schema/outbox-events';
 import { TokenLedgerKind, tokenLedger } from './schema/token-ledger';
 import { tradeIntents } from './schema/trade-intents';
@@ -362,16 +365,7 @@ export async function rejectIntent(
   tx: Tx,
   { id, from, expectedVersion, reason, where }: RejectIntentOptions,
 ): Promise<TradeIntentRow | undefined> {
-  await tx
-    .select({ id: users.id })
-    .from(users)
-    .where(
-      eq(
-        users.id,
-        sql`(select ${tradeIntents.userId} from ${tradeIntents} where ${tradeIntents.id} = ${id})`,
-      ),
-    )
-    .for('no key update');
+  await lockIntentUser(tx, id);
   const [current] = await tx
     .select({
       userId: tradeIntents.userId,
@@ -401,6 +395,19 @@ export async function rejectIntent(
     });
   }
   return rejected;
+}
+
+async function lockIntentUser(tx: Tx, intentId: string): Promise<void> {
+  await tx
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      eq(
+        users.id,
+        sql`(select ${tradeIntents.userId} from ${tradeIntents} where ${tradeIntents.id} = ${intentId})`,
+      ),
+    )
+    .for('no key update');
 }
 
 export interface RejectExpiredOptions {
@@ -441,6 +448,36 @@ async function releaseTokens(
   if (rows.length === 0) throw new Error(`token reserve underflow for user ${userId}`);
 }
 
+// settlement: the reserved token leaves both the reserve and the balance, in the ledger row and
+// in the users cache, in one transaction (the settle row's terminal index makes it exactly-once)
+async function consumeTokens(
+  tx: Tx,
+  { userId, intentId, tokens }: { userId: string; intentId: string; tokens: bigint },
+): Promise<void> {
+  await tx.insert(tokenLedger).values({
+    userId,
+    kind: TokenLedgerKind.Settle,
+    reservedDelta: -tokens,
+    balanceDelta: -tokens,
+    intentId,
+  });
+  const rows = await tx
+    .update(users)
+    .set({
+      tokenBalance: sql`${users.tokenBalance} - ${tokens}`,
+      tokenReserved: sql`${users.tokenReserved} - ${tokens}`,
+    })
+    .where(
+      and(
+        eq(users.id, userId),
+        sql`${users.tokenReserved} >= ${tokens}`,
+        sql`${users.tokenBalance} >= ${tokens}`,
+      ),
+    )
+    .returning({ id: users.id });
+  if (rows.length === 0) throw new Error(`token settle underflow for user ${userId}`);
+}
+
 export interface MarkUnknownOptions {
   id: string;
   reason: TradeIntentFailureReason;
@@ -474,23 +511,284 @@ export async function markIntentUnknown(
   return row;
 }
 
+// --- Acceptance and settlement (#17) ----------------------------------------------------------
+// Lock order for everything below: users → trade_intents → broker_trades (the creation chain
+// users → broker_accounts → trade_intents, with broker_trades as its tail). Settlement does not
+// lock broker_accounts. A future writer of broker_trades (#90's reconciliation) keeps the order.
+
+export const TradeMismatchReason = {
+  Mode: 'mode',
+  Asset: 'asset',
+  Action: 'action',
+  Amount: 'amount',
+  // the broker trade is already linked to another intent, or this intent to another trade
+  TradeAlreadyLinked: 'trade_already_linked',
+} as const;
+export type TradeMismatchReason = (typeof TradeMismatchReason)[keyof typeof TradeMismatchReason];
+
+// Thrown inside the caller's transaction, which then rolls back: nothing of the acceptance or
+// settlement is written. Carries ids and a code only, nothing the broker sent.
+export class TradeIntentMismatchError extends Error {
+  constructor(
+    readonly reason: TradeMismatchReason,
+    readonly intentId: string,
+    readonly brokerTradeId: string,
+  ) {
+    super(`broker trade does not match the intent: ${reason}`);
+    this.name = 'TradeIntentMismatchError';
+  }
+}
+
+const LINK_CONSTRAINTS: ReadonlySet<string> = new Set([
+  'broker_trades_account_trade_key',
+  'broker_trades_intent_id_key',
+]);
+
+type IntentTerms = Pick<TradeIntentRow, 'mode' | 'assetId' | 'action' | 'amount'>;
+
+function mismatchOf(intent: IntentTerms, trade: OpenTrade | ClosedTrade) {
+  if (trade.isDemo !== (intent.mode === TradeMode.Demo)) return TradeMismatchReason.Mode;
+  if (trade.assetId !== intent.assetId) return TradeMismatchReason.Asset;
+  if (trade.action !== intent.action) return TradeMismatchReason.Action;
+  if (normalizeDecimal(trade.amount) !== normalizeDecimal(intent.amount)) {
+    return TradeMismatchReason.Amount;
+  }
+  return undefined;
+}
+
+// the open columns of a broker_trades row; raw is the parsed domain trade (shared's parsers
+// strip unknown keys, so no token or wire extra reaches it)
+function tradeRow(intent: TradeIntentRow, trade: OpenTrade | ClosedTrade) {
+  return {
+    brokerAccountId: intent.brokerAccountId,
+    intentId: intent.id,
+    brokerTradeId: trade.id,
+    mode: intent.mode,
+    assetId: trade.assetId,
+    action: trade.action,
+    amount: trade.amount,
+    payout: trade.payout,
+    openPrice: trade.openPrice,
+    openTimestampMs: trade.openTimestamp,
+    source: trade.source ?? null,
+    brokerClientId: trade.brokerClientId ?? null,
+    raw: { ...trade },
+  };
+}
+
+async function insertTrade(
+  tx: Tx,
+  intent: TradeIntentRow,
+  trade: OpenTrade | ClosedTrade,
+  values: Partial<typeof brokerTrades.$inferInsert> & { status: BrokerTradeStatus },
+): Promise<void> {
+  try {
+    await tx.insert(brokerTrades).values({ ...tradeRow(intent, trade), ...values });
+  } catch (error) {
+    const constraint = uniqueViolation(error);
+    if (constraint === undefined || !LINK_CONSTRAINTS.has(constraint)) throw error;
+    throw new TradeIntentMismatchError(TradeMismatchReason.TradeAlreadyLinked, intent.id, trade.id);
+  }
+}
+
 export interface MarkAcceptedOptions {
   id: string;
   expectedVersion: number;
-  transport?: TradeTransport;
+  // submitting for the executor's answer; reconciling for #89, with the trade REST found
+  from?: typeof TradeIntentStatus.Submitting | typeof TradeIntentStatus.Reconciling;
+  transport: TradeTransport;
+  // the broker's open trade as received, never a locally built one
+  trade: OpenTrade;
 }
 
-export function markIntentAccepted(
-  exec: DbExecutor,
-  { id, expectedVersion, transport }: MarkAcceptedOptions,
-): Promise<TradeIntentRow | undefined> {
-  return transitionIntent(exec, {
+// accepted only together with the broker's open trade: the CAS, then the trade is checked
+// against the row the CAS returned, then the open broker_trades row is written. A lost CAS
+// answers undefined and reads nothing; a mismatch throws TradeIntentMismatchError, and the
+// caller's transaction rolls the CAS back.
+export async function markIntentAccepted(
+  tx: Tx,
+  {
     id,
-    from: TradeIntentStatus.Submitting,
+    expectedVersion,
+    from = TradeIntentStatus.Submitting,
+    transport,
+    trade,
+  }: MarkAcceptedOptions,
+): Promise<TradeIntentRow | undefined> {
+  const row = await transitionIntent(tx, {
+    id,
+    from,
     to: TradeIntentStatus.Accepted,
     expectedVersion,
-    patch: { transport: transport ?? null },
+    patch: { transport },
   });
+  if (row === undefined) return undefined;
+  const reason = mismatchOf(row, trade);
+  if (reason !== undefined) throw new TradeIntentMismatchError(reason, id, trade.id);
+  await insertTrade(tx, row, trade, {
+    status: BrokerTradeStatus.Open,
+    potentialProfit: trade.potentialProfit,
+  });
+  return row;
+}
+
+export interface SettleIntentOptions {
+  id: string;
+  expectedVersion?: number;
+  // manual_review: the operator's conclusion with the trade the broker reports closed
+  from: typeof TradeIntentStatus.Accepted | typeof TradeIntentStatus.ManualReview;
+  trade: ClosedTrade;
+}
+
+// → settled: the token is debited whatever the trade's outcome (owner, 2026-10-06), the
+// broker_trades row is closed, or inserted closed for a manual_review intent never linked.
+// The closed trade is checked against the intent on both paths: a close that contradicts what
+// was opened is never settled on, it is answered with a mismatch for a human or reconciliation.
+export async function settleIntent(
+  tx: Tx,
+  { id, expectedVersion, from, trade }: SettleIntentOptions,
+): Promise<TradeIntentRow | undefined> {
+  await lockIntentUser(tx, id);
+  const [current] = await tx
+    .select()
+    .from(tradeIntents)
+    .where(eq(tradeIntents.id, id))
+    .for('update');
+  if (current === undefined || current.status !== from) return undefined;
+  if (expectedVersion !== undefined && current.version !== expectedVersion) return undefined;
+
+  const [linked] = await tx
+    .select({ id: brokerTrades.id, brokerTradeId: brokerTrades.brokerTradeId })
+    .from(brokerTrades)
+    .where(eq(brokerTrades.intentId, id))
+    .for('update');
+  if (linked !== undefined && linked.brokerTradeId !== trade.id) {
+    throw new TradeIntentMismatchError(TradeMismatchReason.TradeAlreadyLinked, id, trade.id);
+  }
+  const reason = mismatchOf(current, trade);
+  if (reason !== undefined) throw new TradeIntentMismatchError(reason, id, trade.id);
+
+  const settled = await transitionIntent(tx, {
+    id,
+    from,
+    to: TradeIntentStatus.Settled,
+    expectedVersion: current.version,
+    patch: { tokensReserved: 0n },
+  });
+  if (settled === undefined) return undefined;
+  if (current.tokensReserved > 0n) {
+    await consumeTokens(tx, {
+      userId: current.userId,
+      intentId: id,
+      tokens: current.tokensReserved,
+    });
+  }
+  const closing = {
+    status: BrokerTradeStatus.Closed,
+    closePrice: trade.closePrice,
+    closeTimestampMs: trade.closeTimestamp,
+    profit: trade.profit,
+    raw: { ...trade },
+  };
+  if (linked === undefined) {
+    await insertTrade(tx, current, trade, closing);
+  } else {
+    await tx.update(brokerTrades).set(closing).where(eq(brokerTrades.id, linked.id));
+  }
+  return settled;
+}
+
+export type ClosedTradeOutcome =
+  // the intent is settled and the token debited
+  | { brokerTradeId: string; result: 'settled'; intentId: string }
+  // an earlier pass settled it; nothing to do
+  | { brokerTradeId: string; result: 'already_settled'; intentId: string }
+  // no intent behind this trade: a platform/manual trade, or an acceptance not persisted yet —
+  // ignore; a later snapshot links it
+  | { brokerTradeId: string; result: 'not_ours' }
+  // the intent is reconciling/manual_review: for #89/#90/the operator, never settled here
+  | {
+      brokerTradeId: string;
+      result: 'intent_not_accepted';
+      intentId: string;
+      status: TradeIntentStatus;
+    }
+  // the closed trade contradicts the intent; nothing was written
+  | { brokerTradeId: string; result: 'mismatch'; intentId: string; reason: TradeMismatchReason };
+
+// The one applier of closed trades: a close_trade.success payload (#101) and a REST closed
+// snapshot (#90). One transaction per trade, so a database error mid-batch leaves the earlier
+// trades applied and propagates; every outcome is idempotent, so the replay is safe.
+export async function settleClosedTrades(
+  db: Db,
+  { brokerAccountId, trades }: { brokerAccountId: string; trades: readonly ClosedTrade[] },
+): Promise<ClosedTradeOutcome[]> {
+  const outcomes: ClosedTradeOutcome[] = [];
+  for (const trade of trades) {
+    outcomes.push(await settleClosedTrade(db, brokerAccountId, trade));
+  }
+  return outcomes;
+}
+
+async function settleClosedTrade(
+  db: Db,
+  brokerAccountId: string,
+  trade: ClosedTrade,
+): Promise<ClosedTradeOutcome> {
+  const brokerTradeId = trade.id;
+  const link = () =>
+    db
+      .select({
+        tradeStatus: brokerTrades.status,
+        intentId: brokerTrades.intentId,
+        intentStatus: tradeIntents.status,
+      })
+      .from(brokerTrades)
+      .leftJoin(tradeIntents, eq(tradeIntents.id, brokerTrades.intentId))
+      .where(
+        and(
+          eq(brokerTrades.brokerAccountId, brokerAccountId),
+          eq(brokerTrades.brokerTradeId, brokerTradeId),
+        ),
+      );
+  // an outcome, or the id of the accepted intent to settle
+  const classify = (
+    found: Awaited<ReturnType<typeof link>>[number] | undefined,
+  ): ClosedTradeOutcome | string => {
+    if (found === undefined || found.intentId === null || found.intentStatus === null) {
+      return { brokerTradeId, result: 'not_ours' };
+    }
+    if (found.tradeStatus === BrokerTradeStatus.Closed) {
+      return { brokerTradeId, result: 'already_settled', intentId: found.intentId };
+    }
+    if (found.intentStatus !== TradeIntentStatus.Accepted) {
+      return {
+        brokerTradeId,
+        result: 'intent_not_accepted',
+        intentId: found.intentId,
+        status: found.intentStatus,
+      };
+    }
+    return found.intentId;
+  };
+
+  const [found] = await link();
+  const intentId = classify(found);
+  if (typeof intentId !== 'string') return intentId;
+  try {
+    const settled = await db.transaction((tx) =>
+      settleIntent(tx, { id: intentId, from: TradeIntentStatus.Accepted, trade }),
+    );
+    if (settled !== undefined) return { brokerTradeId, result: 'settled', intentId };
+  } catch (error) {
+    if (!(error instanceof TradeIntentMismatchError)) throw error;
+    return { brokerTradeId, result: 'mismatch', intentId, reason: error.reason };
+  }
+  // a concurrent writer won the CAS: report what it left
+  const after = classify((await link())[0]);
+  return typeof after === 'string'
+    ? { brokerTradeId, result: 'intent_not_accepted', intentId, status: TradeIntentStatus.Accepted }
+    : after;
 }
 
 // --- Reads --------------------------------------------------------------------------------------
@@ -511,6 +809,41 @@ export async function listStaleSubmittingIntents(
       ),
     )
     .orderBy(tradeIntents.submittedAt)
+    .limit(limit);
+}
+
+export interface OverdueAcceptedIntent {
+  id: string;
+  brokerAccountId: string;
+  brokerTradeId: string;
+  mode: TradeMode;
+}
+
+// The one definition of "accepted past its expected close" (#17), for the REST catch-up of #90:
+// the broker's open time plus the intent's duration plus graceMs, against the database clock.
+// Ordered by that expected close, oldest first; graceMs and its chain belong to the polling loop.
+export async function listOverdueAcceptedIntents(
+  exec: DbExecutor,
+  { graceMs, limit }: { graceMs: number; limit: number },
+): Promise<OverdueAcceptedIntent[]> {
+  const expectedCloseMs = sql`${brokerTrades.openTimestampMs} + ${tradeIntents.durationSec}::bigint * 1000`;
+  return exec
+    .select({
+      id: tradeIntents.id,
+      brokerAccountId: tradeIntents.brokerAccountId,
+      brokerTradeId: brokerTrades.brokerTradeId,
+      mode: tradeIntents.mode,
+    })
+    .from(tradeIntents)
+    .innerJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+    .where(
+      and(
+        eq(tradeIntents.status, TradeIntentStatus.Accepted),
+        eq(brokerTrades.status, BrokerTradeStatus.Open),
+        sql`${expectedCloseMs} + ${graceMs}::bigint < (extract(epoch from now()) * 1000)`,
+      ),
+    )
+    .orderBy(expectedCloseMs)
     .limit(limit);
 }
 

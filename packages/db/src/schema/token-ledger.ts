@@ -37,8 +37,9 @@ const kind = (value: TokenLedgerKind) => literal(value);
 // Append-only (trigger in drizzle/0001_append_only.sql). Invariants:
 // sum(balance_delta) = users.token_balance, sum(reserved_delta) = users.token_reserved.
 // An intent gets at most one reserve row and at most one terminal (release | settle) row;
-// "a terminal row implies a prior reserve" is an application invariant owned by ARCH-04,
-// since the partial uniques give at-most-once, not at-least-once.
+// "a terminal row implies a prior reserve" is an application invariant (rejectIntent and
+// settleIntent read tokens_reserved under lock and write the row only when it is > 0), since
+// the partial uniques give at-most-once, not at-least-once.
 //
 // Dedupe keys by kind: reserve/release/settle are keyed by intent, purchase and a
 // deposit-linked bonus by (deposit, kind), the starter pack (a bonus naming a broker account)

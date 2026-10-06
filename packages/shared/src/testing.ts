@@ -1,5 +1,8 @@
 // Test-only helpers shared by the apps' suites (subpath `@binarius/shared/testing`).
 
+import type { ClosedTrade, OpenTrade } from './broker';
+import type { DecimalString } from './money';
+import { TradeMode, type TradeAction } from './trading';
 import {
   plainTextOf,
   TELEGRAM_MESSAGE_LIMIT,
@@ -113,4 +116,54 @@ export function telegramTextProblems(text: TelegramHtml, limit = TELEGRAM_MESSAG
     if (line !== line.trim()) problems.push(`line ${index + 1} starts or ends with a space`);
   });
   return problems;
+}
+
+// --- Broker trade builders (#17) ---------------------------------------------------------------
+// The broker's open trade for an intent, as the executor would hand it over. A TradeIntentRow
+// satisfies the first parameter as is, so the integration suites pass the row; a patch makes the
+// mismatch cases (another asset, mode, amount) one line each.
+
+let tradeSeq = 0;
+
+export interface TradeTarget {
+  mode: TradeMode;
+  assetId: number;
+  action: TradeAction;
+  amount: DecimalString;
+}
+
+export function openTradeFor(
+  { mode, assetId, action, amount }: TradeTarget,
+  patch: Partial<OpenTrade> = {},
+): OpenTrade {
+  return {
+    id: `bt-${++tradeSeq}`,
+    assetId,
+    action,
+    amount,
+    payout: 85,
+    openPrice: 1.08765,
+    openTimestamp: Date.now(),
+    isDemo: mode === TradeMode.Demo,
+    potentialProfit: amount,
+    ...patch,
+  };
+}
+
+// a loss by default, so the signed profit column is exercised
+export function closedTradeFor(open: OpenTrade, patch: Partial<ClosedTrade> = {}): ClosedTrade {
+  return {
+    id: open.id,
+    assetId: open.assetId,
+    action: open.action,
+    amount: open.amount,
+    payout: open.payout,
+    openPrice: open.openPrice,
+    openTimestamp: open.openTimestamp,
+    isDemo: open.isDemo,
+    closePrice: 1.08712,
+    closeTimestamp: open.openTimestamp + 60_000,
+    profit: '-10.00' as DecimalString,
+    ...patch,
+  };
 }
