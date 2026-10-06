@@ -188,6 +188,66 @@ const payloadCases: PayloadCase[] = [
   ...modeCases(TradeMode.Real),
 ];
 
+// the live money form (2026-10-03): whole amounts JSON integers, fractions JSON fractions, in one
+// object; the trade shapes were not recorded, so their money as numbers is assumed
+const liveBalanceWire = { available: 9998.5, held: 1.5, total: 10000 };
+const liveBalance = { available: '9998.5', held: '1.5', total: '10000' };
+const liveTradeWire = { ...tradeBaseWire, amount: 1.5 };
+const liveTrade = { ...tradeBase, amount: '1.5' };
+const liveModeCases = (mode: TradeMode): PayloadCase[] => [
+  {
+    name: modeEvent(mode, 'open_trade.success'),
+    wire: { ...liveTradeWire, potential_profit: 1.275 },
+    event: {
+      type: BrokerEventType.OpenTradeSuccess,
+      mode,
+      trade: { ...liveTrade, potentialProfit: '1.275' },
+    } as BrokerEvent,
+  },
+  {
+    name: modeEvent(mode, 'close_trade.success'),
+    wire: {
+      trades: [
+        { ...liveTradeWire, close_price: 1.0, close_timestamp: 1790028556624, profit: -1.5 },
+      ],
+    },
+    event: {
+      type: BrokerEventType.CloseTradeSuccess,
+      mode,
+      trades: [{ ...liveTrade, closePrice: 1.0, closeTimestamp: 1790028556624, profit: '-1.5' }],
+    } as BrokerEvent,
+  },
+  {
+    name: modeEvent(mode, 'update_balance'),
+    wire: liveBalanceWire,
+    event: { type: BrokerEventType.BalanceUpdate, mode, balance: liveBalance } as BrokerEvent,
+  },
+];
+const liveNumberCases: PayloadCase[] = [
+  {
+    name: 'user.data',
+    wire: {
+      id: 1,
+      level: { code: 'c', rank: 0 },
+      min_trade_amount: 1,
+      real: { available: 0, held: 0, total: 0 },
+      demo: liveBalanceWire,
+    },
+    event: {
+      type: BrokerEventType.UserData,
+      user: {
+        id: '1',
+        level: { code: 'c', rank: 0 },
+        minTradeAmount: '1',
+        real: { available: '0', held: '0', total: '0' },
+        demo: liveBalance,
+      },
+    } as BrokerEvent,
+  },
+  ...liveModeCases(TradeMode.Demo),
+  ...liveModeCases(TradeMode.Real),
+];
+
 const PAYLOADLESS = ['user.auth.success', 'user.disconnect_token_expired'] as const;
 const payloadlessType = {
   'user.auth.success': BrokerEventType.AuthSuccess,
@@ -216,6 +276,20 @@ const expectProblem = (result: NormalizedBrokerEvent): BrokerEventProblem => {
   if (result.ok) throw new Error(`expected a problem, got ${JSON.stringify(result.event)}`);
   return result.problem;
 };
+
+describe('normalizeBrokerEvent: live number form × payload forms', () => {
+  const matrix = liveNumberCases.flatMap((c) =>
+    FORMS.map(([form, encode]) => [c.name, form, encode, c] as const),
+  );
+
+  it.each(matrix)('%s as %s', (name, _form, encode, c) => {
+    expect(normalizeBrokerEvent(name, [encode(c.wire)])).toEqual({
+      ok: true,
+      event: c.event,
+      extraArgs: 0,
+    });
+  });
+});
 
 describe('normalizeBrokerEvent: payload events × payload forms', () => {
   const matrix = payloadCases.flatMap((c) =>
@@ -480,6 +554,11 @@ describe('normalizeBrokerEvent: problems', () => {
       'user.real.update_balance',
       { available: '1', total: '1' },
       { code: 'invalid_union', path: 'held' },
+    ],
+    [
+      'user.demo.update_balance',
+      { ...liveBalanceWire, available: 0.30000000000000004 },
+      { code: 'invalid_union', path: 'available' },
     ],
     ['user.data', null, { code: 'invalid_type', path: '' }],
     ['user.data', () => 1, { code: 'invalid_type', path: '' }],

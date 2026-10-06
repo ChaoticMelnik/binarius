@@ -145,6 +145,23 @@ describe('refresh', () => {
     expect(row!.lastRequestedAt).toBeInstanceOf(Date);
   });
 
+  // the live form after a 1.5 demo stake (2026-10-03): available/held fractions, total an integer
+  it('stores a fractional balance in the live number form exactly', async () => {
+    const account = await linked();
+    const balance = reconciler();
+    broker.rest.failNext('user', {
+      status: 200,
+      body: userBody(account.mockId, { demo: { available: 9998.5, held: 1.5, total: 10000 } }),
+    });
+    expect(await balance.refresh(account.accountId)).toBe('ok');
+    expect(await rowOf(account.accountId)).toMatchObject({
+      demoAvailable: '9998.50000000',
+      demoHeld: '1.50000000',
+      demoTotal: '10000.00000000',
+      lastRefreshError: null,
+    });
+  });
+
   it('refuses an answer for another broker user and says so in the log', async () => {
     const account = await linked(tmp.db, { brokerUserId: 'someone-else' });
     const balance = reconciler();
