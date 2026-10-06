@@ -4,13 +4,17 @@ import {
   LINK_LABELS,
   LINK_TEXTS,
   LinkBonusSkipReason,
+  BrokerBalanceUnavailableReason,
   NotificationLevel,
   telegramHtml,
+  TradeMode,
   type LinkBonusGrantView,
   type LinkedAccountView,
   type TelegramHtml,
+  type TradingAccessResponse,
 } from '@binarius/shared';
 import type { BotCommand } from 'grammy/types';
+import { formatAge, formatCount, formatUsd } from './format';
 
 // in place of an address the broker did not send; a fragment, so it is nested without a second
 // escape
@@ -31,9 +35,17 @@ const LEVEL_LABELS = {
   [NotificationLevel.Off]: '❌ Выключить',
 } as const satisfies Record<NotificationLevel, string>;
 
+// The status card's header (#24): the card says DEMO until a user can trade on real, and the
+// issue that adds that passes the user's mode without touching this file.
+export const MODE_LABELS = {
+  [TradeMode.Demo]: 'DEMO',
+  [TradeMode.Real]: 'REAL',
+} as const satisfies Record<TradeMode, string>;
+
 // Messages are Telegram HTML, sent with parse_mode HTML by send.ts only. Every hole goes through
 // telegramHtml, which escapes it: the address in codeSent is what the user typed, the name on the
-// account card is what the user put in Telegram. A static part is the author's, so a literal `&`
+// account card is what the user put in Telegram, the status card's are the backend's amounts and
+// counts after format.ts — strings only. A static part is the author's, so a literal `&`
 // or `<` there is written as an entity — texts.test.ts runs the validator over every entry. The
 // texts the backend's push sends too live in LINK_TEXTS.
 export const TEXTS = {
@@ -48,8 +60,6 @@ export const TEXTS = {
 3️⃣ Готово — аккаунт подключён, бот открывает меню.
 
 🌐 Удобнее через браузер? Кнопка «🌐 Войти через сайт Binodex» подключит аккаунт на сайте брокера.`,
-  welcomeBack: telegramHtml`👋 <b>С возвращением!</b>
-Аккаунт Binodex уже подключён.`,
   // the link's lifetime is the backend's (OAUTH_STATE_TTL_MS) and is deliberately not repeated here
   loginLink: telegramHtml`🌐 <b>Вход через сайт Binodex</b>
 Открой вход по кнопке ниже, а затем вернись в этот чат.`,
@@ -141,6 +151,22 @@ ${FEATURE_LINES}`,
 📧 «🔗 Подключить аккаунт Binodex» — пришли адрес почты и код из письма.
 🌐 «🌐 Войти через сайт Binodex» — вход на сайте брокера.`,
   helpCommands: telegramHtml`<b>Команды</b>`,
+  // The status card (#24), assembled by statusCard below; the holes are formatted already
+  statusHeader: (mode: string) => telegramHtml`🎮 <b>Режим: ${mode}</b>`,
+  statusReal: (amount: string) => telegramHtml`💵 Реальный баланс: ${amount}`,
+  statusDemo: (amount: string) => telegramHtml`🧪 Демобаланс: ${amount}`,
+  statusTokens: (count: string) => telegramHtml`🪙 Токены: ${count}`,
+  // follows statusTokens on the same line when some tokens are reserved
+  statusReserved: (count: string) => telegramHtml`(в резерве: ${count})`,
+  // a snapshot older than the freshness SLA (fresh: false); the hole is formatAge's
+  statusStale: (age: string) => telegramHtml`🕒 Баланс Binodex обновлён ${age} назад.`,
+  // no snapshot to show, for any reason but ambiguous_account
+  statusNoSnapshot: telegramHtml`⏳ Баланс Binodex ещё не получен — попробуй /menu через минуту.`,
+  statusAmbiguous: telegramHtml`⚠️ Подключено несколько аккаунтов Binodex, баланс не выбран — напиши в поддержку: /support`,
+  statusHint: telegramHtml`💡 Демо без риска — деньги не нужны.`,
+  // the demo button until #125 runs a session behind it
+  demoSoon: telegramHtml`🎮 <b>Запуск демо пока в разработке</b>
+Баланс и токены уже здесь — загляни позже.`,
 } as const satisfies Record<string, TelegramHtml | ((value: string) => TelegramHtml)>;
 
 // The /help message: the three blocks, then one line per command in the menu's order.
@@ -222,6 +248,58 @@ function bonusOf(grant: LinkBonusGrantView | null): TelegramHtml | null {
     : TEXTS.cardBonusAlready;
 }
 
+// Only what the card prints reaches it: `status` is branched on before a card exists, and
+// realTradingAllowed is the backend's switch, not the user's mode.
+export type StatusCardInput = Pick<
+  TradingAccessResponse,
+  'tokens' | 'broker' | 'brokerUnavailable'
+> & {
+  mode: TradeMode;
+};
+
+export const modeHeader = (mode: TradeMode): TelegramHtml => TEXTS.statusHeader(MODE_LABELS[mode]);
+
+// The header, a blank line, the balances and tokens, the status line when there is one, a blank
+// line, the hint. With no snapshot both amounts read $0.00 and the status line says why.
+export function statusCard({
+  mode,
+  tokens,
+  broker,
+  brokerUnavailable,
+}: StatusCardInput): TelegramHtml {
+  const zero = formatUsd('0');
+  const real = TEXTS.statusReal(broker === null ? zero : formatUsd(broker.real.available));
+  const demo = TEXTS.statusDemo(broker === null ? zero : formatUsd(broker.demo.available));
+  // the wire form of a count is ^\d+$, so a non-zero digit is a non-zero count
+  const reserved = /[1-9]/.test(tokens.reserved)
+    ? [telegramHtml` ${TEXTS.statusReserved(formatCount(tokens.reserved))}`]
+    : [];
+  const status = statusLineOf(broker, brokerUnavailable);
+  const statusTail = status === null ? [] : [telegramHtml`\n${status}`];
+  return telegramHtml`${modeHeader(mode)}
+
+${real}
+${demo}
+${TEXTS.statusTokens(formatCount(tokens.available))}${reserved}${statusTail}
+
+${TEXTS.statusHint}`;
+}
+
+function statusLineOf(
+  broker: StatusCardInput['broker'],
+  brokerUnavailable: StatusCardInput['brokerUnavailable'],
+): TelegramHtml | null {
+  if (broker === null) {
+    return brokerUnavailable === BrokerBalanceUnavailableReason.AmbiguousAccount
+      ? TEXTS.statusAmbiguous
+      : TEXTS.statusNoSnapshot;
+  }
+  if (broker.fresh) return null;
+  // the same age isBalanceFresh judged: the newer of the REST snapshot and the last event
+  const age = Math.min(broker.restSnapshotAgeSec, broker.balanceEventAgeSec ?? Infinity);
+  return TEXTS.statusStale(formatAge(age));
+}
+
 // Button labels and the command description: Telegram does not parse them, so they are plain
 // strings and are never escaped — an entity here would be shown literally.
 export const LABELS = {
@@ -241,6 +319,10 @@ export const LABELS = {
   supportCommand: 'Поддержка',
   // the description of /help, plain like startCommand (#184)
   helpCommand: 'Помощь',
+  // the description of /menu, plain like startCommand (#24)
+  menuCommand: 'Главное меню',
+  // the status card's one button (#24)
+  demoButton: '🎮 Запустить демо',
   supportButton: '💬 Написать в поддержку',
 } as const satisfies Record<string, string | ((value: string | null) => string)>;
 

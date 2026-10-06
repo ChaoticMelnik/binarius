@@ -169,7 +169,7 @@ per tick, at most the tick limit.
   survives at least one tick.
 - `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 000) `< TRADING_ACCESS_BUDGET_MS` (4 000, shared)
   `< SHUTDOWN_PHASE1_BUDGET_MS` (10 000). The bot's link
-  `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` is #24's.
+  `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` is held by `apps/bot/src/timing.ts`.
 
 Both env variables are forwarded by `compose.yaml` without a value, so the code's defaults apply
 unless the host sets them.
@@ -235,8 +235,8 @@ answers `aborted` without a call.
 ## Boundaries
 
 - #99/#101: the socket writers and the 401 handling. #100: refresh after `accepted`; #92: after a reconciliation (the worker has no `refresh()`; it is the backend balance reconciler).
-- #24: the bot's display, `BackendClient.readTradingAccess`, and the link
-  `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`.
+- The bot's display, `BackendClient.readTradingAccess` and the link
+  `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`: [bot-menu.md](bot-menu.md).
 - The money unit is whole currency units (live 2026-10-03, [broker-rest.md](broker-rest.md) →
   Money). The snapshot stores the string as received and does no arithmetic.
 - `/health` does not reflect the snapshots. There is no metrics stack: the tick's log line is the

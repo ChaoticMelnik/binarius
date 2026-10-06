@@ -25,8 +25,9 @@ routes, the confirmation and the starter pack are described in
   to (today only the link push does).
 - `apps/bot/src/` — `env.ts`, `timing.ts`, `backend-client.ts`, `texts.ts` (with `accountCard`,
   [The account card](#the-account-card), `PROFILE`, [Bot profile](#bot-profile), `SUPPORT`,
-  [Notification level and /support](#notification-level-and-support-120), and `helpText`,
-  [/help](#help-184)), `send.ts`, `logging.ts`, `assets.ts` (the path of
+  [Notification level and /support](#notification-level-and-support-120), `helpText`,
+  [/help](#help-184), and `statusCard`, [bot-menu.md](bot-menu.md)), `format.ts` (the status
+  card's amounts and counts, [bot-menu.md](bot-menu.md)), `send.ts`, `logging.ts`, `assets.ts` (the path of
   `assets/account-card.jpg`, the card's picture), `login-dialog.ts` (the email dialog's state,
   [Email dialog](#email-dialog)), `bot.ts` (the handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
   `lifecycle.ts` (start, the profile registration — the menu, the description, the short
@@ -53,7 +54,8 @@ API over a shared bearer.
   bot  → blocked                  → "🔒 Доступ ограничен", no button
          pendingBrokerAccounts    → "🔐 Найдена новая привязка…" + one "✅ Подтвердить" button
                                     per link
-         hasActiveBrokerAccount   → "👋 С возвращением!", no button
+         hasActiveBrokerAccount   → POST /trading/access → the status card, pinned
+                                    (bot-menu.md)
          otherwise                → welcome (video caption when configured) + two buttons:
                                     "🔗 Подключить аккаунт Binodex" (connect),
                                     "🌐 Войти через сайт Binodex" (oauth)
@@ -269,8 +271,8 @@ outcomes: sent and pinned, or failed in transport — logged at `error` with
 `method: 'sendMessage'` and the update id, nothing pinned, nothing more sent (#214); a refusal of
 the text message reaches `bot.catch`, which logs a `GrammyError` with its method. The card and the
 welcome go through one helper, `sendWithTextFallback` in `bot.ts`. A user left without a card that
-way has an active account all the same; `/start` says «👋 С возвращением!», and re-sending a lost
-card is #24's.
+way has an active account all the same; `/start` and `/menu` send and pin the status card
+([bot-menu.md](bot-menu.md)), which takes the account card's place as the pinned message.
 
 **Pinning.** `unpinAllChatMessages`, then `pinChatMessage` on the card with
 `disable_notification: true` — the card has just notified. The bot stores no message id, so
@@ -629,8 +631,9 @@ is missing from the answer; `timing.test.ts` holds the declared calls.
 
 ## Command menu
 
-Telegram's «Меню» button and the hints shown when the user types `/` list five commands, in this
-order: `/start` — «Начать», `/account` — «Аккаунт Binodex» ([bot-account.md](bot-account.md)),
+Telegram's «Меню» button and the hints shown when the user types `/` list six commands, in this
+order: `/start` — «Начать», `/menu` — «Главное меню» ([bot-menu.md](bot-menu.md)), `/account` —
+«Аккаунт Binodex» ([bot-account.md](bot-account.md)),
 `/settings` — «Настройки уведомлений», `/help` — «Помощь» ([/help](#help-184)) and `/support` —
 «Поддержка» ([Notification level and /support](#notification-level-and-support-120)). The list is `BOT_COMMANDS` in
 `apps/bot/src/commands.ts`, the only place it is written; the descriptions are the `LABELS` keys
@@ -735,8 +738,10 @@ updates. Long polling asks for **one** update per `getUpdates` and waits 5 s for
 call is capped at 5 s.
 
 The handler budget is not a sentence about the handlers, it is computed from `HANDLER_CALLS`,
-which declares what each handler does on its longest path: `/start` is one backend call and up
-to two Bot API calls (the video refused, then the text); the oauth and resend buttons are one
+which declares what each handler does on its longest path: `/start` and `/menu` are two backend
+calls and up to four Bot API calls (the access read, then the status card: the photo refused, the
+text, the unpin, the pin — [bot-menu.md](bot-menu.md)); the demo button is no backend call and two
+Bot API calls; the oauth and resend buttons are one
 backend call and two Bot API calls each; the confirm button is one backend call and up to five
 Bot API calls (the query answered, then the account card: the photo refused, the text, the unpin,
 the pin); the connect button is no backend call and two Bot API calls; a `my_chat_member` update
@@ -799,9 +804,7 @@ written only when a step really did run out of time.
   from the state, with the confirm button and texts shared with the bot.
 - **#10** — re-linking an account that belongs to another Telegram user is out of scope:
   `broker_account_taken` is final, and moving an account is a separate support task.
-- **#24** — the main menu and the demo balance, including what a returning user sees instead of
-  a one-line greeting, and re-sending an account card that was lost (a transport failure on the
-  photo) or unpinned.
+- **#24** — the status card a connected user gets on `/start` and `/menu`: [bot-menu.md](bot-menu.md).
 - The bot's name and avatar — set by hand in @BotFather; `setMyName`/`setMyProfilePhoto` are not
   called (owner, 2026-10-02).
 - The staff bot's profile (`apps/backend/src/admin`, `ADMIN_BOT_TOKEN`) — not registered.

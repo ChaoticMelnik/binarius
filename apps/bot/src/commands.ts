@@ -4,6 +4,7 @@ import { LABELS } from './texts';
 // The one list of commands shown in Telegram's menu; the next command is one more element here.
 export const BOT_COMMANDS = [
   { command: 'start', description: LABELS.startCommand },
+  { command: 'menu', description: LABELS.menuCommand },
   { command: 'account', description: LABELS.accountCommand },
   { command: 'settings', description: LABELS.settingsCommand },
   { command: 'help', description: LABELS.helpCommand },

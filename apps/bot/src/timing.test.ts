@@ -4,16 +4,20 @@ import { HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
 import {
+  BrokerBalanceUnavailableReason,
   confirmCallbackData,
   NotificationLevel,
   OAuthErrorCode,
+  TRADING_ACCESS_BUDGET_MS,
   UserErrorCode,
   UserStatus,
+  type TradingAccessResponse,
 } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
   CONNECT_CALLBACK_DATA,
+  DEMO_CALLBACK_DATA,
   LEVEL_CURRENT_CALLBACK_DATA,
   OAUTH_CALLBACK_DATA,
   RESEND_CALLBACK_DATA,
@@ -22,6 +26,7 @@ import {
 } from './bot';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
+  ACCESS_VIEW,
   ACCOUNT_VIEW,
   BOT_INFO,
   CARD_MESSAGE_ID,
@@ -42,12 +47,18 @@ import {
   chatMemberUpdate,
   fakeLogger,
   messageAnswer,
-  startUpdate,
   textUpdate,
+  accessView,
   accountView,
+  brokerBalance,
   type ApiAnswer,
 } from './testing';
-import { COMPOSE_STOP_GRACE_PERIOD_MS, GRAMMY_POLLING_BACKOFF_MS, HANDLER_CALLS } from './timing';
+import {
+  BACKEND_REQUEST_TIMEOUT_MS,
+  COMPOSE_STOP_GRACE_PERIOD_MS,
+  GRAMMY_POLLING_BACKOFF_MS,
+  HANDLER_CALLS,
+} from './timing';
 
 // HANDLER_BUDGET_MS is computed from HANDLER_CALLS, so nothing here recomputes it: what this
 // file asserts is that HANDLER_CALLS still describes the handlers, that the two numbers this
@@ -77,6 +88,7 @@ interface Branch {
   emailLogin?: BackendClient['emailLogin'];
   recordChatMember?: BackendClient['recordChatMember'];
   setNotificationLevel?: BackendClient['setNotificationLevel'];
+  readTradingAccess?: BackendClient['readTradingAccess'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -222,6 +234,10 @@ async function observe(branch: Branch): Promise<Calls> {
         level,
       );
     },
+    readTradingAccess: (telegramUserId) => {
+      backend += 1;
+      return (branch.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)))(telegramUserId);
+    },
   };
   const loginDialog = createLoginDialog();
   if (branch.dialog !== undefined) loginDialog.set(USER.id, branch.dialog);
@@ -281,101 +297,183 @@ async function checkHandler(
   expect(seen[worst], `${handler}: worst case is "${worstCase.label}"`).toEqual(declared);
 }
 
-// Every terminal branch of /start. A branch missing from this list is the one thing the
-// budget cannot be checked against — see the note in timing.ts.
-const START_WORST_CASE: Branch = {
-  label: 'the video is refused and the text replaces it',
-  update: startUpdate('/start'),
-  welcomeVideoFileId: 'not-a-file-id',
-  apiErrors: [['sendVideo', VIDEO_REFUSED]],
-  expected: { backend: 1, telegram: 2 },
+// Every terminal branch of /start and /menu, which share one path (answerHome). A branch missing
+// from this list is the one thing the budget cannot be checked against — see the note in
+// timing.ts.
+const ACTIVE_VIEW = { ...USER_VIEW, hasActiveBrokerAccount: true };
+
+function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst: Branch } {
+  const update = (chatType?: string) => textUpdate(command, chatType);
+  const active = { update: update(), recordStart: () => Promise.resolve(ACTIVE_VIEW) };
+  const access =
+    (patch: Partial<TradingAccessResponse>): BackendClient['readTradingAccess'] =>
+    () =>
+      Promise.resolve(accessView(patch));
+  const worst: Branch = {
+    label: `the account is active and ${PHOTO_REFUSED_OUTCOME.label}`,
+    ...active,
+    ...PHOTO_REFUSED_OUTCOME.scene,
+    expected: { backend: 2, telegram: PHOTO_REFUSED_OUTCOME.telegram },
+  };
+  const branches: Branch[] = [
+    {
+      label: 'the update carries no sender',
+      update: withoutSender(update()),
+      expected: { backend: 0, telegram: 0 },
+    },
+    {
+      label: 'the chat is not private',
+      update: update('group'),
+      expected: { backend: 0, telegram: 0 },
+    },
+    {
+      label: 'the backend refuses the start',
+      update: update(),
+      recordStart: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+      expected: { backend: 1, telegram: 1 },
+    },
+    {
+      label: 'the user is blocked',
+      update: update(),
+      recordStart: () => Promise.resolve({ ...USER_VIEW, status: UserStatus.Blocked }),
+      expected: { backend: 1, telegram: 1 },
+    },
+    {
+      label: 'a link waits for confirmation',
+      update: update(),
+      recordStart: () =>
+        Promise.resolve({
+          ...USER_VIEW,
+          pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: 'ada@example.test' }],
+        }),
+      expected: { backend: 1, telegram: 1 },
+    },
+    {
+      label: 'a link without an email waits for confirmation beside an active account',
+      update: update(),
+      recordStart: () =>
+        Promise.resolve({
+          ...ACTIVE_VIEW,
+          pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: null }],
+        }),
+      expected: { backend: 1, telegram: 1 },
+    },
+    worst,
+    ...CARD_OUTCOMES.map((outcome): Branch => ({
+      label: `the account is active and ${outcome.label}`,
+      ...active,
+      ...outcome.scene,
+      expected: { backend: 2, telegram: outcome.telegram },
+    })),
+    {
+      label: 'the access read fails',
+      ...active,
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+      expected: { backend: 2, telegram: 1 },
+    },
+    {
+      label: 'the access finds the user blocked',
+      ...active,
+      readTradingAccess: access({
+        status: UserStatus.Blocked,
+        broker: null,
+        brokerUnavailable: BrokerBalanceUnavailableReason.UserBlocked,
+      }),
+      expected: { backend: 2, telegram: 1 },
+    },
+    {
+      label: 'the access says no account is active',
+      ...active,
+      readTradingAccess: access({
+        broker: null,
+        brokerUnavailable: BrokerBalanceUnavailableReason.NoAccount,
+      }),
+      expected: { backend: 2, telegram: 1 },
+    },
+    {
+      label: 'the access has no snapshot',
+      ...active,
+      readTradingAccess: access({
+        broker: null,
+        brokerUnavailable: BrokerBalanceUnavailableReason.BrokerUnavailable,
+      }),
+      expected: { backend: 2, telegram: 3 },
+    },
+    {
+      label: 'the snapshot is stale',
+      ...active,
+      readTradingAccess: access({
+        broker: brokerBalance({ restSnapshotAgeSec: 600, fresh: false }),
+      }),
+      expected: { backend: 2, telegram: 3 },
+    },
+    {
+      label: 'no video is configured',
+      update: update(),
+      expected: { backend: 1, telegram: 1 },
+    },
+    {
+      label: 'the video is sent',
+      update: update(),
+      welcomeVideoFileId: 'BAACAgIAAxkB',
+      expected: { backend: 1, telegram: 1 },
+    },
+    {
+      label: 'the video is refused and the text replaces it',
+      update: update(),
+      welcomeVideoFileId: 'not-a-file-id',
+      apiErrors: [['sendVideo', VIDEO_REFUSED]],
+      expected: { backend: 1, telegram: 2 },
+    },
+    {
+      // delivery is unknown, so nothing is sent after it
+      label: 'the video call fails in transport',
+      update: update(),
+      welcomeVideoFileId: 'BAACAgIAAxkB',
+      apiErrors: [['sendVideo', videoTimedOut()]],
+      expected: { backend: 1, telegram: 1 },
+    },
+    {
+      // neither a refusal nor the transport: the branch rethrows into bot.catch, and whatever it
+      // sent before that still has to fit the budget
+      label: 'the video call fails for a reason the transport cannot produce',
+      update: update(),
+      welcomeVideoFileId: 'BAACAgIAAxkB',
+      answers: [
+        [
+          'sendVideo',
+          () => {
+            throw new TypeError('sentinel');
+          },
+        ],
+      ],
+      expected: { backend: 1, telegram: 1 },
+    },
+  ];
+  return { branches, worst };
+}
+
+const START = homeBranches('/start');
+const MENU = homeBranches('/menu');
+
+const DEMO_WORST_CASE: Branch = {
+  label: 'the query is answered and the text is sent',
+  update: callbackUpdate(DEMO_CALLBACK_DATA),
+  expected: { backend: 0, telegram: 2 },
 };
 
-const START_BRANCHES: readonly Branch[] = [
-  {
-    label: 'the update carries no sender',
-    update: withoutSender(startUpdate('/start')),
-    expected: { backend: 0, telegram: 0 },
-  },
+const DEMO_BRANCHES: readonly Branch[] = [
   {
     label: 'the chat is not private',
-    update: startUpdate('/start', 'group'),
+    update: callbackUpdate(DEMO_CALLBACK_DATA, 'group'),
     expected: { backend: 0, telegram: 0 },
   },
+  DEMO_WORST_CASE,
   {
-    label: 'the backend refuses the start',
-    update: startUpdate('/start'),
-    recordStart: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 1, telegram: 1 },
-  },
-  {
-    label: 'the user is blocked',
-    update: startUpdate('/start'),
-    recordStart: () => Promise.resolve({ ...USER_VIEW, status: UserStatus.Blocked }),
-    expected: { backend: 1, telegram: 1 },
-  },
-  {
-    label: 'a link waits for confirmation',
-    update: startUpdate('/start'),
-    recordStart: () =>
-      Promise.resolve({
-        ...USER_VIEW,
-        pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: 'ada@example.test' }],
-      }),
-    expected: { backend: 1, telegram: 1 },
-  },
-  {
-    label: 'a link without an email waits for confirmation beside an active account',
-    update: startUpdate('/start'),
-    recordStart: () =>
-      Promise.resolve({
-        ...USER_VIEW,
-        hasActiveBrokerAccount: true,
-        pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: null }],
-      }),
-    expected: { backend: 1, telegram: 1 },
-  },
-  {
-    label: 'the user already has an account',
-    update: startUpdate('/start'),
-    recordStart: () => Promise.resolve({ ...USER_VIEW, hasActiveBrokerAccount: true }),
-    expected: { backend: 1, telegram: 1 },
-  },
-  {
-    label: 'no video is configured',
-    update: startUpdate('/start'),
-    expected: { backend: 1, telegram: 1 },
-  },
-  {
-    label: 'the video is sent',
-    update: startUpdate('/start'),
-    welcomeVideoFileId: 'BAACAgIAAxkB',
-    expected: { backend: 1, telegram: 1 },
-  },
-  START_WORST_CASE,
-  {
-    // delivery is unknown, so nothing is sent after it
-    label: 'the video call fails in transport',
-    update: startUpdate('/start'),
-    welcomeVideoFileId: 'BAACAgIAAxkB',
-    apiErrors: [['sendVideo', videoTimedOut()]],
-    expected: { backend: 1, telegram: 1 },
-  },
-  {
-    // neither a refusal nor the transport: the branch rethrows into bot.catch, and whatever it
-    // sent before that still has to fit the budget
-    label: 'the video call fails for a reason the transport cannot produce',
-    update: startUpdate('/start'),
-    welcomeVideoFileId: 'BAACAgIAAxkB',
-    answers: [
-      [
-        'sendVideo',
-        () => {
-          throw new TypeError('sentinel');
-        },
-      ],
-    ],
-    expected: { backend: 1, telegram: 1 },
+    label: 'answering the query is refused and the text still goes',
+    update: callbackUpdate(DEMO_CALLBACK_DATA),
+    apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+    expected: { backend: 0, telegram: 2 },
   },
 ];
 
@@ -1022,7 +1120,15 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
   });
 
   it('/start', async () => {
-    await checkHandler('start', START_BRANCHES, START_WORST_CASE, HANDLER_CALLS.start);
+    await checkHandler('start', START.branches, START.worst, HANDLER_CALLS.start);
+  });
+
+  it('/menu', async () => {
+    await checkHandler('menu', MENU.branches, MENU.worst, HANDLER_CALLS.menu);
+  });
+
+  it('the demo button', async () => {
+    await checkHandler('demo', DEMO_BRANCHES, DEMO_WORST_CASE, HANDLER_CALLS.demo);
   });
 
   it('the connect button', async () => {
@@ -1070,6 +1176,14 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
       MY_CHAT_MEMBER_WORST_CASE,
       HANDLER_CALLS.myChatMember,
     );
+  });
+});
+
+describe('the bounds shared with the backend', () => {
+  // the backend's upper estimate of POST /trading/access: a shorter wait here would read a broker
+  // GET inside its budget as an outage
+  it('waits for /trading/access at least as long as the backend budgets the route', () => {
+    expect(TRADING_ACCESS_BUDGET_MS).toBeLessThanOrEqual(BACKEND_REQUEST_TIMEOUT_MS);
   });
 });
 

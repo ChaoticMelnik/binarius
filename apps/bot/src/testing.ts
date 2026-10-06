@@ -8,13 +8,16 @@ import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
 import {
   BrokerAccountStatus,
+  brokerBalanceViewSchema,
   NotificationLevel,
   UserStatus,
+  type BrokerBalanceView,
   type ConfirmLoginResponse,
   type EmailSendCodeResponse,
   type LinkedAccountView,
   type PendingLinkedAccountView,
   type StartLoginResponse,
+  type TradingAccessResponse,
   type UserAccountView,
   type UserStartView,
 } from '@binarius/shared';
@@ -93,6 +96,33 @@ export const LINK_REVOKED: LinkedAccountView = {
 export const ACCOUNT_VIEW: UserAccountView = { status: UserStatus.Active, accounts: [] };
 export const accountView = (patch: Partial<UserAccountView> = {}): UserAccountView => ({
   ...ACCOUNT_VIEW,
+  ...patch,
+});
+
+// The status card (#24): a fresh snapshot of a demo-only account. Amounts are the wire's decimal
+// strings with all eight fraction digits, as the route sends them.
+export const BROKER_BALANCE: BrokerBalanceView = brokerBalanceViewSchema.parse({
+  real: { available: '0.00000000', held: '0.00000000', total: '0.00000000' },
+  demo: { available: '10000.00000000', held: '0.00000000', total: '10000.00000000' },
+  minTradeAmount: '1.00000000',
+  level: { code: 'standard', rank: 1 },
+  restSnapshotAgeSec: 5,
+  balanceEventAgeSec: null,
+  fresh: true,
+});
+export const brokerBalance = (patch: Partial<BrokerBalanceView> = {}): BrokerBalanceView => ({
+  ...BROKER_BALANCE,
+  ...patch,
+});
+export const ACCESS_VIEW: TradingAccessResponse = {
+  status: UserStatus.Active,
+  tokens: { balance: '5', reserved: '0', available: '5' },
+  broker: BROKER_BALANCE,
+  brokerUnavailable: null,
+  realTradingAllowed: false,
+};
+export const accessView = (patch: Partial<TradingAccessResponse> = {}): TradingAccessResponse => ({
+  ...ACCESS_VIEW,
   ...patch,
 });
 

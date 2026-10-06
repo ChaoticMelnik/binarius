@@ -26,6 +26,8 @@ the broker REST client sends to the broker and how it classifies answers is in
 [docs/broker-rest.md](docs/broker-rest.md); how the backend caches the broker's pairs and serves
 them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md); what
 `/account` shows about a user's Binodex links is in [docs/bot-account.md](docs/bot-account.md);
+what a connected user sees as the bot's home — the status card with the balances and the tokens —
+is in [docs/bot-menu.md](docs/bot-menu.md);
 how the worker fetches candles, turns them into a direction or into a reason for none, and
 journals each decision is in [docs/signal.md](docs/signal.md); how the worker sizes the next
 stake and when a session stops is in [docs/stake.md](docs/stake.md); how the backend answers a

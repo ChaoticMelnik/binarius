@@ -1,3 +1,5 @@
+import { TRADING_ACCESS_BUDGET_MS } from '@binarius/shared';
+
 // Every bound the bot runs under, and what each one bounds. The chain is checked at import, so
 // a constant edited into an impossible order stops the process instead of producing a shutdown
 // that silently loses updates.
@@ -33,8 +35,14 @@ export const STARTUP_BUDGET_MS = STARTUP_CALLS * TELEGRAM_API_TIMEOUT_MS;
 // calls the handlers actually make. A new handler, or a new terminal branch of one, has to be
 // added here and to that test by hand: grammY keeps no registry of handlers to enumerate.
 export const HANDLER_CALLS = {
-  // recordStart, then sendVideo refused by Telegram (GrammyError) → sendMessage
-  start: { backend: 1, telegram: 2 },
+  // recordStart, readTradingAccess for an active account, then the status card: sendPhoto
+  // refused by Telegram (GrammyError) → sendMessage, unpinAllChatMessages, pinChatMessage. The
+  // welcome (sendVideo refused → sendMessage) is shorter.
+  start: { backend: 2, telegram: 4 },
+  // /menu: /start's path without a payload
+  menu: { backend: 2, telegram: 4 },
+  // the status card's button: answerCallbackQuery, then sendMessage; no backend call
+  demo: { backend: 0, telegram: 2 },
   // answerCallbackQuery, then sendMessage asking for the address
   connect: { backend: 0, telegram: 2 },
   // answerCallbackQuery ∥ startLogin, then sendMessage — the parallel pair is counted as
@@ -90,8 +98,11 @@ export const GRAMMY_POLLING_BACKOFF_MS = 3_000;
 // stop_grace_period of the compose service `bot`, kept in step by timing.test.ts.
 export const COMPOSE_STOP_GRACE_PERIOD_MS = 55_000;
 
+// TRADING_ACCESS_BUDGET_MS is the backend's upper estimate of POST /trading/access: waiting at
+// least that long keeps a broker GET inside its budget from reading as an outage here.
 export const TIMING_CHAIN_HOLDS =
   POLLING_BATCH_LIMIT === 1 &&
+  TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   POLLING_TIMEOUT_S * 1000 < TELEGRAM_API_TIMEOUT_MS &&
   HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
   TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&

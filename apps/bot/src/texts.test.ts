@@ -1,17 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import {
   BrokerAccountStatus,
+  BrokerBalanceUnavailableReason,
   NotificationLevel,
   plainTextOf,
   TELEGRAM_CAPTION_LIMIT,
   TELEGRAM_MESSAGE_LIMIT,
   USER_ACCOUNT_LIST_LIMIT,
+  TradeMode,
+  type BrokerBalanceView,
   type LinkBonusGrantView,
   type LinkedAccountView,
 } from '@binarius/shared';
 import { telegramTextProblems } from '@binarius/shared/testing';
-import { LINK_ACTIVE, LINK_PENDING, LINK_REVOKED, PENDING_ACCOUNT_ID } from './testing';
-import { LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
+import {
+  ACCESS_VIEW,
+  LINK_ACTIVE,
+  LINK_PENDING,
+  LINK_REVOKED,
+  PENDING_ACCOUNT_ID,
+  brokerBalance,
+} from './testing';
+import { DEMO_CALLBACK_DATA, LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
 import { BOT_COMMANDS } from './commands';
 import {
   accountCard,
@@ -20,12 +30,16 @@ import {
   helpText,
   LABELS,
   levelLabel,
+  MODE_LABELS,
+  modeHeader,
   PROFILE,
   settingsText,
   SUPPORT,
   supportUrl,
+  statusCard,
   TEXTS,
   type AccountCardInput,
+  type StatusCardInput,
 } from './texts';
 
 // Telegram parses none of these texts: markup or any entity — the four Telegram knows and any
@@ -144,7 +158,12 @@ describe('texts', () => {
     });
 
     it('points every «напиши в поддержку» to /support', () => {
-      for (const text of [TEXTS.cardBody, TEXTS.blocked, TEXTS.accountTaken]) {
+      for (const text of [
+        TEXTS.cardBody,
+        TEXTS.blocked,
+        TEXTS.accountTaken,
+        TEXTS.statusAmbiguous,
+      ]) {
         expect(plainTextOf(text)).toMatch(/напиши в поддержку: \/support$/);
       }
     });
@@ -391,5 +410,132 @@ describe('texts', () => {
     it('keeps the short description on one line', () => {
       expect(PROFILE.shortDescription).not.toContain('\n');
     });
+  });
+});
+
+describe('the status card', () => {
+  const card = (patch: Partial<StatusCardInput> = {}) =>
+    statusCard({
+      mode: TradeMode.Demo,
+      tokens: ACCESS_VIEW.tokens,
+      broker: ACCESS_VIEW.broker,
+      brokerUnavailable: ACCESS_VIEW.brokerUnavailable,
+      ...patch,
+    });
+  const noSnapshot = (reason: BrokerBalanceUnavailableReason) =>
+    card({ broker: null, brokerUnavailable: reason });
+  const BIG = '123456789012.12345678';
+  const widest = (patch: Partial<BrokerBalanceView>): BrokerBalanceView =>
+    brokerBalance({
+      real: { available: BIG, held: BIG, total: BIG },
+      demo: { available: BIG, held: BIG, total: BIG },
+      ...patch,
+    } as Partial<BrokerBalanceView>);
+  const COUNT = '9'.repeat(19);
+  const reasons = Object.values(BrokerBalanceUnavailableReason).filter(
+    (reason) => reason !== BrokerBalanceUnavailableReason.NoAccount,
+  );
+  const variants = [
+    ['a fresh snapshot', widest({})],
+    ['a stale snapshot', widest({ restSnapshotAgeSec: 2_147_483_647, fresh: false })],
+    ...reasons.map((reason) => [reason, null] as const),
+  ] as const;
+  const tokenCases = [
+    ['nothing reserved', { balance: COUNT, reserved: '0', available: COUNT }],
+    ['some reserved', { balance: COUNT, reserved: COUNT, available: COUNT }],
+  ] as const;
+
+  describe.each(variants)('with %s', (label, broker) => {
+    it.each(tokenCases)(
+      'is valid Telegram HTML inside the caption limit with %s and every hole at its widest',
+      (_tokensLabel, tokens) => {
+        const text = card({
+          tokens,
+          broker,
+          brokerUnavailable: broker === null ? (label as BrokerBalanceUnavailableReason) : null,
+        });
+        expect(telegramTextProblems(text, TELEGRAM_CAPTION_LIMIT)).toEqual([]);
+        // nothing empty after a colon
+        for (const line of plainTextOf(text).split('\n')) expect(line).not.toMatch(/:$/);
+      },
+    );
+  });
+
+  it('lays out the header, the three lines, the hint', () => {
+    expect(plainTextOf(card())).toBe(
+      [
+        '🎮 Режим: DEMO',
+        '',
+        '💵 Реальный баланс: $0.00',
+        '🧪 Демобаланс: $10\u00a0000.00',
+        '🪙 Токены: 5',
+        '',
+        '💡 Демо без риска — деньги не нужны.',
+      ].join('\n'),
+    );
+  });
+
+  // the acceptance criterion: no real balance is 0, never an empty value or an error
+  it.each([
+    ['no snapshot', noSnapshot(BrokerBalanceUnavailableReason.BrokerUnavailable)],
+    ['a zero real balance', card()],
+  ])('prints $0.00 as the real balance with %s', (_label, text) => {
+    expect(plainTextOf(text)).toMatch(/^💵 Реальный баланс: \$0\.00$/m);
+  });
+
+  it('prints both amounts as $0.00 when there is no snapshot', () => {
+    const plain = plainTextOf(noSnapshot(BrokerBalanceUnavailableReason.Refreshing));
+    expect(plain).toMatch(/^🧪 Демобаланс: \$0\.00$/m);
+  });
+
+  it('shows the available amounts, not the totals', () => {
+    const plain = plainTextOf(
+      card({
+        broker: brokerBalance({
+          real: { available: '12.5', held: '3', total: '15.5' },
+          demo: { available: '9998.5', held: '1.5', total: '10000' },
+        } as Partial<BrokerBalanceView>),
+      }),
+    );
+    expect(plain).toMatch(/^💵 Реальный баланс: \$12\.50$/m);
+    expect(plain).toMatch(/^🧪 Демобаланс: \$9\u00a0998\.50$/m);
+  });
+
+  it('adds the age line exactly when the snapshot is not fresh, with the newer age', () => {
+    expect(plainTextOf(card())).not.toContain('🕒');
+    const stale = card({
+      broker: brokerBalance({ restSnapshotAgeSec: 400, balanceEventAgeSec: 75, fresh: false }),
+    });
+    expect(plainTextOf(stale)).toContain(plainTextOf(TEXTS.statusStale('1 мин')));
+    const restOnly = card({
+      broker: brokerBalance({ restSnapshotAgeSec: 180, balanceEventAgeSec: null, fresh: false }),
+    });
+    expect(plainTextOf(restOnly)).toContain(plainTextOf(TEXTS.statusStale('3 мин')));
+  });
+
+  it.each(reasons)('says why there is no balance for %s', (reason) => {
+    const plain = plainTextOf(noSnapshot(reason));
+    const ambiguous = reason === BrokerBalanceUnavailableReason.AmbiguousAccount;
+    expect(plain.includes(plainTextOf(TEXTS.statusAmbiguous))).toBe(ambiguous);
+    expect(plain.includes(plainTextOf(TEXTS.statusNoSnapshot))).toBe(!ambiguous);
+    expect(plain).not.toContain('🕒');
+  });
+
+  it('shows the reserve only when some tokens are reserved', () => {
+    expect(plainTextOf(card())).toMatch(/^🪙 Токены: 5$/m);
+    const reserved = card({ tokens: { balance: '1005', reserved: '1000', available: '5' } });
+    expect(plainTextOf(reserved)).toMatch(/^🪙 Токены: 5 \(в резерве: 1\u00a0000\)$/m);
+    const zeros = card({ tokens: { balance: '5', reserved: '000', available: '5' } });
+    expect(plainTextOf(zeros)).not.toContain('резерв');
+  });
+
+  it('labels both trade modes', () => {
+    expect(MODE_LABELS).toEqual({ demo: 'DEMO', real: 'REAL' });
+    expect(plainTextOf(modeHeader(TradeMode.Real))).toBe('🎮 Режим: REAL');
+    expect(plainTextOf(card({ mode: TradeMode.Real }))).toMatch(/^🎮 Режим: REAL$/m);
+  });
+
+  it('keeps the demo button data inside the Bot API 64 bytes', () => {
+    expect(Buffer.byteLength(DEMO_CALLBACK_DATA, 'utf8')).toBeLessThanOrEqual(64);
   });
 });

@@ -2,6 +2,7 @@ import { Bot, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } 
 import type { Message, User, UserFromGetMe } from 'grammy/types';
 import {
   BrokerAccountStatus,
+  BrokerBalanceUnavailableReason,
   CONFIRM_CALLBACK_PATTERN,
   confirmCallbackData,
   confirmLoginRequestSchema,
@@ -15,6 +16,7 @@ import {
   OAuthErrorCode,
   startPayloadSchema,
   TelegramChatMemberStatus,
+  TradeMode,
   userStartRequestSchema,
   UserErrorCode,
   UserStatus,
@@ -38,6 +40,7 @@ import {
   LABELS,
   levelLabel,
   settingsText,
+  statusCard,
   supportUrl,
   TEXTS,
   type AccountCardInput,
@@ -51,6 +54,9 @@ import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 export const CONNECT_CALLBACK_DATA = 'connect';
 export const OAUTH_CALLBACK_DATA = 'oauth';
 export const RESEND_CALLBACK_DATA = 'resend';
+// The status card's button (#24). #125 replaces its handler and keeps the data, so a button on an
+// old card leads to the same place.
+export const DEMO_CALLBACK_DATA = 'demo';
 // The /settings buttons (#120): `level:<level>` sets it; the selected one carries
 // `level:current` and only stops the spinner. The longest, `level:reduced`, is 13 bytes.
 export const LEVEL_CALLBACK_PREFIX = 'level:';
@@ -118,15 +124,41 @@ export function createBot({
   privateChats.command('start', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) return;
-    const request: UserStartRequest = { ...startRequestOf(from), ...payloadOf(ctx.match) };
+    await answerHome(ctx, from, { ...startRequestOf(from), ...payloadOf(ctx.match) }, '/start');
+  });
 
+  // The bot's home on demand (#24): /start's path without a payload — the request /settings
+  // sends — so /menu never spends the acquisition slot.
+  privateChats.command('menu', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) return;
+    await answerHome(ctx, from, startRequestOf(from), '/menu');
+  });
+
+  // Nothing behind the button yet (#125): the query is answered and the text says so, with no
+  // backend call and no state, so a button on an old card answers the same way.
+  privateChats.callbackQuery(DEMO_CALLBACK_DATA, async (ctx) => {
+    await ctx.answerCallbackQuery().catch((error: unknown) => {
+      logAnswerFailure(error);
+    });
+    await replyHtml(ctx, TEXTS.demoSoon);
+  });
+
+  // /start and /menu: blocked, then a waiting link, then the status card for an active account,
+  // otherwise the welcome. `command` only names the warn line.
+  async function answerHome(
+    ctx: Context,
+    from: User,
+    request: UserStartRequest,
+    command: '/start' | '/menu',
+  ): Promise<void> {
     let user;
     try {
       user = await backend.recordStart(request);
     } catch (error) {
       logger.warn(
         { ...errorLogFields(error), ...backendErrorFields(error) },
-        '/start not recorded',
+        `${command} not recorded`,
       );
       await replyHtml(ctx, TEXTS.unavailable);
       return;
@@ -137,7 +169,7 @@ export function createBot({
       return;
     }
     // before the active check on purpose: a link the owner of this Telegram account did not
-    // make must be in front of them, not behind a "welcome back"
+    // make must be in front of them, not behind the status card
     if (user.pendingBrokerAccounts.length > 0) {
       await replyHtml(ctx, TEXTS.confirmPrompt, {
         reply_markup: confirmKeyboard(user.pendingBrokerAccounts),
@@ -145,14 +177,60 @@ export function createBot({
       return;
     }
     if (user.hasActiveBrokerAccount) {
-      await replyHtml(ctx, TEXTS.welcomeBack);
+      await sendStatusCard(ctx, from);
       return;
     }
     await sendWelcome(ctx);
-  });
+  }
+
+  // The numbers are read on every /start and /menu and cached nowhere, so the card is at most
+  // the backend's freshness SLA old or says how old it is (docs/bot-menu.md).
+  async function sendStatusCard(ctx: Context, from: User): Promise<void> {
+    let access;
+    try {
+      access = await backend.readTradingAccess(String(from.id));
+    } catch (error) {
+      // user_not_found included: /users/start has just upserted the row, so it is not "no
+      // account" but a backend that contradicts itself
+      logger.warn(
+        { ...errorLogFields(error), ...backendErrorFields(error) },
+        'trading access not read',
+      );
+      await replyHtml(ctx, TEXTS.unavailable);
+      return;
+    }
+    if (access.status === UserStatus.Blocked) {
+      await replyHtml(ctx, TEXTS.blocked);
+      return;
+    }
+    // revoked between the two calls: what /account shows with nothing active
+    if (access.brokerUnavailable === BrokerBalanceUnavailableReason.NoAccount) {
+      await replyHtml(ctx, TEXTS.accountNone, { reply_markup: welcomeKeyboard() });
+      return;
+    }
+    const card = statusCard({
+      mode: TradeMode.Demo,
+      tokens: access.tokens,
+      broker: access.broker,
+      brokerUnavailable: access.brokerUnavailable,
+    });
+    const reply_markup = new InlineKeyboard().text(LABELS.demoButton, DEMO_CALLBACK_DATA);
+    const sent = await sendWithTextFallback(
+      ctx,
+      {
+        send: () =>
+          replyWithPhotoHtml(ctx, new InputFile(ACCOUNT_CARD_PHOTO_PATH), card, { reply_markup }),
+        method: 'sendPhoto',
+        what: 'the status card photo',
+      },
+      () => replyHtml(ctx, card, { reply_markup }),
+    );
+    if (sent === undefined) return;
+    await pinCard(ctx, sent.message_id, 'the status card');
+  }
 
   // Reads only: the users row is not refreshed and nothing is recorded, so the row is written only
-  // through /users/start (/start and /settings).
+  // through /users/start (/start, /menu and /settings).
   privateChats.command('account', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) return;
@@ -555,7 +633,8 @@ export function createBot({
   }
 
   // The account card (#200), sent where an account becomes usable and pinned as the only pin of
-  // the chat; nothing is pinned when delivery is unknown.
+  // the chat until the next /start or /menu pins the status card in its place; nothing is pinned
+  // when delivery is unknown.
   async function sendAccountCard(ctx: Context, input: AccountCardInput): Promise<void> {
     const card = accountCard(input);
     const sent = await sendWithTextFallback(
@@ -568,7 +647,7 @@ export function createBot({
       () => replyHtml(ctx, card),
     );
     if (sent === undefined) return;
-    await pinAccountCard(ctx, sent.message_id);
+    await pinCard(ctx, sent.message_id, 'the account card');
   }
 
   // The /settings message re-rendered in place after a press (#120). Unlike a refused send, a
@@ -615,7 +694,11 @@ export function createBot({
   // (the user's own pins go too, the owner's choice). Neither failure touches the connection,
   // which is already committed: the unpin failing still lets the pin run, since two pinned cards
   // are better than none. The pin is silent because the card itself has just notified.
-  async function pinAccountCard(ctx: Context, messageId: number): Promise<void> {
+  async function pinCard(
+    ctx: Context,
+    messageId: number,
+    what: 'the account card' | 'the status card',
+  ): Promise<void> {
     try {
       await ctx.unpinAllChatMessages();
     } catch (error) {
@@ -624,7 +707,7 @@ export function createBot({
     try {
       await ctx.pinChatMessage(messageId, { disable_notification: true });
     } catch (error) {
-      logPinFailure(error, 'pinChatMessage', 'the account card was not pinned');
+      logPinFailure(error, 'pinChatMessage', `${what} was not pinned`);
     }
   }
 
@@ -697,8 +780,8 @@ function languageOf(languageCode: string | undefined): Pick<UserStartRequest, 'l
   return parsed.success ? { languageCode: parsed.data } : {};
 }
 
-// What every /users/start carries apart from the payload: /start adds that one, and the recheck
-// after an email login sends none.
+// What every /users/start carries apart from the payload: /start adds that one; /menu, /settings
+// and the recheck after an email login send none.
 function startRequestOf(from: User): UserStartRequest {
   return {
     telegramUserId: String(from.id),

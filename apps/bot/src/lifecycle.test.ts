@@ -104,6 +104,7 @@ describe('runBot', () => {
     expect(fake.api.setMyCommands).toHaveBeenCalledWith(
       [
         { command: 'start', description: 'Начать' },
+        { command: 'menu', description: 'Главное меню' },
         { command: 'account', description: 'Аккаунт Binodex' },
         { command: 'settings', description: 'Настройки уведомлений' },
         { command: 'help', description: 'Помощь' },
@@ -370,6 +371,7 @@ function scene(options: SceneOptions = {}) {
     emailLogin: () => Promise.reject(new Error('not used by these scenes')),
     recordChatMember: () => Promise.reject(new Error('not used by these scenes')),
     setNotificationLevel: () => Promise.reject(new Error('not used by these scenes')),
+    readTradingAccess: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({
     token: TOKEN,
@@ -522,6 +524,7 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     expect(sentPayload(s.api.calls, 'setMyCommands')).toEqual({
       commands: [
         { command: 'start', description: 'Начать' },
+        { command: 'menu', description: 'Главное меню' },
         { command: 'account', description: 'Аккаунт Binodex' },
         { command: 'settings', description: 'Настройки уведомлений' },
         { command: 'help', description: 'Помощь' },

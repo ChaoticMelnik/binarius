@@ -27,7 +27,8 @@ back → 200 { status, tokens: { balance, reserved, available }, broker, brokerU
        or 404 { error: 'user_not_found' } / 404 { error: 'broker_account_not_found' }
 ```
 
-The bot's display and its `BackendClient` method are #24's.
+The bot reads it through `BackendClient.readTradingAccess` and shows it on the status card
+([bot-menu.md](bot-menu.md)); it sends no `brokerAccountId`.
 
 ## Request
 
@@ -53,12 +54,12 @@ sends one, so for the bot's parser such a body is a contract violation, not numb
 
 ## Outcomes
 
-| Outcome | Source | What the caller (#24) does |
+| Outcome | Source | What the bot does |
 | --- | --- | --- |
-| 200 `status: 'active'` | the users row | show the numbers |
-| 200 `status: 'blocked'` | the users row | the blocked text; the numbers are still the user's |
-| 404 `user_not_found` (`UserErrorCode.UserNotFound`) | no users row: such a user has no ledger and no reservation | «not connected», chosen by the error code |
-| 404 `broker_account_not_found` (`TradeIntentErrorCode.BrokerAccountNotFound`) | `brokerAccountId` is not an account of this user | as for `POST /trading/intents` |
+| 200 `status: 'active'` | the users row | the status card; `no_account` → «not connected» and the connect buttons ([bot-menu.md](bot-menu.md)) |
+| 200 `status: 'blocked'` | the users row | the blocked text, no card; the numbers are still the user's |
+| 404 `user_not_found` (`UserErrorCode.UserNotFound`) | no users row: such a user has no ledger and no reservation | unavailable + warn: the bot reads the route right after `/users/start` upserted the row, so this is the backend contradicting itself |
+| 404 `broker_account_not_found` (`TradeIntentErrorCode.BrokerAccountNotFound`) | `brokerAccountId` is not an account of this user | unavailable + warn (the bot sends no `brokerAccountId`) |
 | 404 `not_found` (an older backend without the route), 401, 400 `validation`, any other 4xx | the route refused or does not exist; nothing about the user is known | unavailable + warn |
 | 5xx, unreachable, timeout, a 2xx body that does not parse | unknown, but nothing was written, so a retry is free | unavailable + warn |
 
@@ -160,7 +161,8 @@ What the route does, in order:
    background, and the current state is answered at once.
 
 `TRADING_ACCESS_BUDGET_MS` (4 000, `packages/shared`) is the upper estimate of the whole answer.
-The bot's request timeout sits above it (#24).
+The bot's request timeout sits above it (`BACKEND_REQUEST_TIMEOUT_MS`, checked at import by
+`apps/bot/src/timing.ts`).
 
 | `brokerUnavailable` | When |
 | --- | --- |
@@ -178,7 +180,7 @@ With a snapshot, a failure never empties `broker`. The snapshot comes back with 
 ## Boundaries
 
 - **#138**: the pair catalog, `GET /trading/pairs`.
-- **#24**: the bot's display and `BackendClient`.
+- The bot's display and `BackendClient.readTradingAccess`: [bot-menu.md](bot-menu.md).
 - **#121**: reads `realTradingAllowed` for the real-mode start screen; **#135** (a revoked grant
   and running sessions) and **#144** (the kill switch) are separate from this flag.
 - **#117, #109, ARCH-04**: future ledger writers, bound by the same-transaction rule above.
