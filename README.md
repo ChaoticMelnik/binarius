@@ -31,7 +31,8 @@ them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md
 what a connected user sees as the bot's home — the status card with the balances and the tokens —
 is in [docs/bot-menu.md](docs/bot-menu.md); what the demo button leads to — the asset, the
 duration, the check on a fresh catalog and the analysis screen — is in
-[docs/bot-demo.md](docs/bot-demo.md);
+[docs/bot-demo.md](docs/bot-demo.md); how the stake button opens a demo trade and its status
+message follows the intent is in [docs/bot-demo-trade.md](docs/bot-demo-trade.md);
 how the signal package fetches candles, turns them into a direction or into a reason for none,
 and journals each decision, and how the backend serves it on `POST /trading/signal`, is in
 [docs/signal.md](docs/signal.md); how the worker sizes the next

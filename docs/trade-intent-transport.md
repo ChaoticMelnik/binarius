@@ -27,7 +27,7 @@ bot ──POST /trading/intents──▶ backend ──tx──▶ trade_intents
                               worker: re-read ──CAS queued→submitting──▶ executor.submit ──▶ CAS submitting→accepted|rejected|unknown
 unknown ──outbox──▶ BullMQ trading-reconciliation ──CAS unknown→reconciling + wake──▶ pass: claim
         ──reconciler (GETs only)──▶ CAS reconciling→accepted(→settled) | rejected | manual_review
-bot ──GET /trading/intents/:id──▶ backend ──▶ { intent }   (status, lastError, version)
+bot ──GET /trading/intents/:id?telegramUserId=…──▶ backend ──▶ { intent }   (status, lastError, version)
 ```
 
 ### Creation transaction (`createTradeIntent`)
@@ -74,6 +74,22 @@ keep the same order.
 Unexpected errors (a database failure, a bug) are answered with `500 { "error": "internal" }`
 and a log line; the response never carries the error message, because a query error's message
 contains the SQL text and its parameters.
+
+### GET /trading/intents/:id (#127)
+
+The bot reads an intent by the id it carries in the «🔄 Обновить статус» button's callback data
+([bot-demo-trade.md](bot-demo-trade.md)), so the read is scoped by its owner: `:id` is the intent's
+uuid and the query carries `telegramUserId` (the same `telegramUserIdSchema` as every request
+body). `getTradeIntentView(db, id, telegramUserId)` adds the owner to the join's `where`.
+
+| Answer | When |
+| --- | --- |
+| 200 `{ intent }` | the id is the user's — the same view `POST /trading/intents` answers |
+| 400 `{ error: 'validation', issues }` | no `telegramUserId`, or one the schema refuses |
+| 404 `{ error: 'not_found' }` | `:id` is not a uuid, the intent does not exist, or it is another user's — byte-identical, so an id's existence is not answerable |
+| 401 | the bearer is missing or wrong |
+
+`routes.db.test.ts` and `trade-intent-ops.db.test.ts` hold the foreign-id case.
 
 ## Statuses and who sets them
 
@@ -312,11 +328,10 @@ trade }`. The operator tool for `manual_review` is a later issue.
   the account predicates `status = active` and `trading_halted = false` apply as before. #15 is
   split into #136 (the token balance, [trading-access.md](trading-access.md)), #137 (the broker
   balance snapshot, [broker-balance.md](broker-balance.md)) and #138 (the pair catalog).
-- **#25 / #29**: the bot tracks and notifies by `intent.id`. `GET /trading/intents/:id` is the
-  status source; a notification dedupe key should be derived from the intent id and status.
-  The internal API is fully trusted: the read is not scoped to a user, because the only caller
-  is the bot holding the shared secret and ids are `gen_random_uuid()`. Once #25 forwards ids
-  that came from an end user, the read must take `telegramUserId` and add it to the `where`.
+- **#127 / #29**: the bot tracks by `intent.id` ([bot-demo-trade.md](bot-demo-trade.md)).
+  `GET /trading/intents/:id` is the status source, scoped by the owner since #127 because the id
+  travels in a button's callback data ([GET /trading/intents/:id](#get-tradingintentsid-127));
+  a notification dedupe key (#29) should be derived from the intent id and status.
 - `trading_session_id` stays `NULL` until #20 links intents to sessions.
 
 ## Running it locally
@@ -332,5 +347,6 @@ curl -s -X POST 127.0.0.1:3000/trading/intents \
   -H @- -H 'Content-Type: application/json' \
   -d '{"telegramUserId":"1","mode":"demo","assetId":1,"amount":"10.00","action":"up","durationSec":60,"clientRequestId":"demo-1"}'
 # 404 user_not_found until a user and broker account exist (OAuth, #9); with them: 201 queued,
-# then GET /trading/intents/<id> shows rejected / executor_not_configured within a second
+# then GET /trading/intents/<id>?telegramUserId=1 shows rejected / executor_not_configured within
+# a second
 ```

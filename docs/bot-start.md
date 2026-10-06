@@ -27,15 +27,18 @@ routes, the confirmation and the starter pack are described in
   [The account card](#the-account-card), `PROFILE`, [Bot profile](#bot-profile), `SUPPORT`,
   [Notification level and /support](#notification-level-and-support-120), `helpText`,
   [/help](#help-184), and `statusCard`, [bot-menu.md](bot-menu.md)), `format.ts` (the status
-  card's amounts and counts, [bot-menu.md](bot-menu.md)), `send.ts`, `logging.ts`, `assets.ts` (the path of
+  card's amounts and counts, [bot-menu.md](bot-menu.md)), `send.ts` (with `editMessageTextByIdHtml`, the
+  edit outside an update the intent tracker uses), `logging.ts`, `assets.ts` (the path of
   `assets/account-card.jpg`, the card's picture), `login-dialog.ts` (the email dialog's state,
   [Email dialog](#email-dialog)), `bot.ts` (the handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
   `lifecycle.ts` (start, the profile registration — the menu, the description, the short
   description — signals, drain), `index.ts` (wiring), and
   `testing.ts`, the fixtures the suites share; `demo.ts`, `demo-catalog.ts` and `analysis.ts` (the
   screens behind the demo button, their check on a fresh catalog and the analysis screen,
-  [bot-demo.md](bot-demo.md)) and
-  `screen.ts` (how a refused edit of a screen is classified, shared by `/settings` and the demo).
+  [bot-demo.md](bot-demo.md)), `demo-trade.ts` and `intent-tracker.ts` (the stake press, the
+  refresh button and the tracker that follows a demo trade's status, [bot-demo-trade.md](bot-demo-trade.md)) and
+  `screen.ts` (how a refused edit of a screen is classified, shared by `/settings`, the demo and
+  the demo trade).
 - `packages/shared/src/link-confirmation.ts` — the texts and the confirm button's callback data
   the bot shares with the backend's push after an OAuth login (#128): the prompt, «✅ Аккаунт
   Binodex подключён!» (sent by the push alone; the bot sends the account card instead), the
@@ -746,8 +749,10 @@ calls and up to four Bot API calls (the access read, then the status card: the p
 text, the unpin, the pin — [bot-menu.md](bot-menu.md)); the demo button is one backend call and two
 Bot API calls, and each demo screen after it one backend call and up to three Bot API calls (the
 query answered, the edit refused, the screen sent anew — [bot-demo.md](bot-demo.md)), except
-«📊 Анализ», two backend calls and up to four Bot API calls («⏳», the signal, the result), and the
-stake placeholder, no backend call and two Bot API calls; the oauth and resend buttons are one
+«📊 Анализ», two backend calls and up to four Bot API calls («⏳», the signal, the result); the
+stake button is four backend calls (the catalog and the access read together but counted one after
+the other, the intent and its one retry) and two Bot API calls, and «🔄 Обновить статус» two backend
+calls and up to three Bot API calls ([bot-demo-trade.md](bot-demo-trade.md)); the oauth and resend buttons are one
 backend call and two Bot API calls each; the confirm button is one backend call and up to five
 Bot API calls (the query answered, then the account card: the photo refused, the text, the unpin,
 the pin); the connect button is no backend call and two Bot API calls; a `my_chat_member` update
@@ -769,8 +774,9 @@ out of grammY.
 What that test cannot see, and no test here can: a handler or a terminal branch nobody added to
 the enumeration. Adding either is a manual step, because grammY keeps no registry of handlers.
 
-On SIGTERM or SIGINT `runBot` stops taking updates and waits for both `bot.stop()` and the
-polling loop itself within the budget, then exits 0. A second signal is ignored: the listeners
+On SIGTERM or SIGINT `runBot` stops taking updates and waits for `bot.stop()`, the polling loop
+itself and the intent tracker's `stop()` (#127: its timers cleared, the poll in flight drained,
+`INTENT_TRACK_DRAIN_MS` = 5 s + 8 s = 13 s, a conjunct of the chain) within the budget, then exits 0. A second signal is ignored: the listeners
 stay installed (`on`, not `once`), so Node never falls back to the default action, which would
 kill the drain instead. Because the batch is one update, the drain waits for at most one
 handler, and `bot.stop()` confirms the offset of exactly the update in flight — with grammY's
@@ -796,7 +802,8 @@ grammY sees the stop.
 
 An overrun exits 1, losing the update in flight rather than the whole container's shutdown. The
 closing line distinguishes the two ways a drain ends badly: a step that rejected logs itself as
-it fails (`shutdown: bot.stop() failed`, `shutdown: polling loop failed`), and the budget line is
+it fails (`shutdown: bot.stop() failed`, `shutdown: polling loop failed`,
+`shutdown: intent tracker failed`), and the budget line is
 written only when a step really did run out of time.
 
 ## Boundaries
@@ -811,7 +818,8 @@ written only when a step really did run out of time.
 - **#10** — re-linking an account that belongs to another Telegram user is out of scope:
   `broker_account_taken` is final, and moving an account is a separate support task.
 - **#24** — the status card a connected user gets on `/start` and `/menu`: [bot-menu.md](bot-menu.md);
-  the demo flow behind its button and the analysis screen: [bot-demo.md](bot-demo.md).
+  the demo flow behind its button and the analysis screen: [bot-demo.md](bot-demo.md); the demo
+  trade and its status message: [bot-demo-trade.md](bot-demo-trade.md) (#127).
 - The bot's name and avatar — set by hand in @BotFather; `setMyName`/`setMyProfilePhoto` are not
   called (owner, 2026-10-02).
 - The staff bot's profile (`apps/backend/src/admin`, `ADMIN_BOT_TOKEN`) — not registered.
