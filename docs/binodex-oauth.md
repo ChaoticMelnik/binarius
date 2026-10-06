@@ -476,7 +476,11 @@ warn line. The first live email login after a deploy is what checks it.
 transaction holding the account row, which makes it single-flight per account. Its callers are
 the broker balance refresh (`apps/backend/src/broker/balance-reconciler.ts`): `POST
 /trading/access` with the default `mayRefresh: true`, and the background tick with
-`mayRefresh: false`.
+`mayRefresh: false`; and the trading worker's token route `POST /trading/accounts/:id/access-token`
+(#90, internal bearer), which passes `mayRefresh` from its body — the caller names its policy
+(`accessTokenRequestSchema`, no default). The route answers `{ accessToken }` or `{ error }` with
+the refusal code alone (404 `account_not_found`, 409 the rest; `revokedReason` stays here), and
+neither side logs either body.
 
 | Step                                                        | Outcome                                                                                                           |
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -494,7 +498,11 @@ the broker balance refresh (`apps/backend/src/broker/balance-reconciler.ts`): `P
 
 **A timer never exchanges a token.** A failed exchange revokes the account, and the background
 balance tick runs for accounts nobody is using at that moment. It would revoke them during a
-broker outage. So the tick passes `mayRefresh: false`, and the decision is made here, under the row
+broker outage. So the tick passes `mayRefresh: false`, and so does the worker's settlement
+catch-up. The one exception is reconciling an intent whose outcome is unknown (owner's decision
+2026-10-06): the worker's REST reconciler passes `mayRefresh: true`, accepting that a broker
+failure on the exchange revokes the account — only accounts with an open reconciliation, which
+are blocked by their active intent anyway. Whether `false` holds is decided here, under the row
 lock, with the same clock and comparison as the exchange (`token-service.db.test.ts`, including
 a process clock ahead of the database's). Its SQL selection of accounts with a valid token is an
 optimisation, not the guarantee.
@@ -784,7 +792,8 @@ not.
   the client calls, the two routes, the activation and the starter pack. **#171** owns the bot's
   side: the address → code dialog, its state, the buttons and texts
   ([bot-start.md → Email dialog](bot-start.md#email-dialog)).
-- **ARCH-01 (#40)** will call `ensureFreshAccessToken` before talking to the broker socket.
+- **#100** (the executor) takes its token through the same worker route (`AccessTokenSource`,
+  `apps/trading-worker/src/broker/access-token.ts`) with the default `mayRefresh: true`.
 - **#35** owns the reusable mock broker; the stub next to the client
   (`apps/backend/src/broker/testing/oauth-stub.ts`) exists so this suite can prove code expiry,
   single use and refresh-family behaviour, and the email codes' single use and partner check,
