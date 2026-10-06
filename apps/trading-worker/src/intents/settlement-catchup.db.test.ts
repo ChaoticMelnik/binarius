@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { createBrokerRestClient } from '@binarius/broker-rest';
+import { createBrokerRestClient, type BrokerRestClient } from '@binarius/broker-rest';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import { type DecimalString } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
@@ -78,10 +78,11 @@ const catchupOf = (
   logger: pino.Logger,
   config: Partial<SettlementCatchupConfig> = {},
   db: Db = tmp.db,
+  rest: Pick<BrokerRestClient, 'listTrades'> = createBrokerRestClient({ baseUrl: broker.url }),
 ) =>
   createSettlementCatchup({
     db,
-    rest: createBrokerRestClient({ baseUrl: broker.url }),
+    rest,
     tokens,
     logger,
     config: {
@@ -194,6 +195,30 @@ describe('createSettlementCatchup (#90)', () => {
     // a second pass over the same page debits nothing again
     await tickOnce(capture().logger);
     expect(await ledgerKinds(a.intent.id)).toEqual(['reserve', 'settle']);
+  });
+
+  // review M1: a page the broker cuts below the limit is not the list's end
+  it('reads past a page the broker cut short', async () => {
+    const a = await acceptedAtBroker();
+    const client = createBrokerRestClient({ baseUrl: broker.url });
+    for (let i = 0; i < 2; i += 1) {
+      const later = await client.openTrade(
+        { accessToken: a.token },
+        { assetId: 101, amount: '5.00' as DecimalString, action: 'down', durationSec: 60, isDemo: true },
+      );
+      broker.trades.settle(Number(later.id), { outcome: 'loss' });
+    }
+    broker.trades.settle(Number(a.trade.id), { outcome: 'win' });
+    const capped: Pick<BrokerRestClient, 'listTrades'> = {
+      listTrades: async (auth, filter, options) =>
+        (await client.listTrades(auth, filter, options)).slice(0, 2),
+    };
+    const log = capture();
+    const catchup = catchupOf(log.logger, { maxPages: 2 }, tmp.db, capped);
+    await catchup.tick();
+    await catchup.stop();
+    expect(await statusOf(a.intent.id)).toBe('settled');
+    expect(log.line('overdue trade not closed at the broker')).toBeUndefined();
   });
 
   it('holds back an account whose trade is still open, so the next one is reached', async () => {
