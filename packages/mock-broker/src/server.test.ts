@@ -1,5 +1,4 @@
 import {
-  isDecimalString,
   safeParseBinaryPairs,
   safeParseBrokerError,
   safeParseBrokerUser,
@@ -79,7 +78,7 @@ function expectError(response: { status: number; body: unknown }, status: number
 }
 
 describe('GET /v1/broker/user', () => {
-  it('answers the user in the shared contract shape with money as decimal strings', async () => {
+  it('answers the user in the shared contract shape with money as JSON numbers', async () => {
     const response = await call('/v1/broker/user');
     expect(response.status).toBe(200);
     expect(safeParseBrokerUser(response.body).success).toBe(true);
@@ -90,7 +89,7 @@ describe('GET /v1/broker/user', () => {
       ...Object.values(user.demo),
       ...Object.values(user.real),
     ]) {
-      expect(isDecimalString(value)).toBe(true);
+      expect(typeof value).toBe('number');
     }
   });
 });
@@ -174,15 +173,18 @@ describe('POST /v1/broker/user/trades', () => {
     expect(safeParseOpenTrade(response.body).success).toBe(true);
     // shared's schema drops both fields, so they are checked on the raw body
     const trade = response.body as {
+      amount: unknown;
+      potential_profit: unknown;
       open_timestamp: number;
       close_timestamp: number;
       symbol: string;
     };
+    expect(trade).toMatchObject({ amount: 10, potential_profit: 8.5 });
     expect(trade.close_timestamp).toBe(trade.open_timestamp + 120_000);
     expect(trade.symbol).toBe('EUR/USD');
     expect(safeParseOpenTrade(response.body).data).not.toHaveProperty('close_timestamp');
     expect((await call('/v1/broker/user')).body).toMatchObject({
-      demo: { available: '9990.00', held: '10.00', total: '10000.00' },
+      demo: { available: 9990, held: 10, total: 10000 },
     });
   });
 
@@ -288,7 +290,7 @@ describe('GET /v1/broker/user/trades', () => {
     expect(safeParseClosedTrade(closed).success).toBe(true);
     expect(open?.symbol).toBe('EUR/USD');
     expect(closed?.symbol).toBe('EUR/USD');
-    expect(closed?.profit).toBe('8.50');
+    expect(closed?.profit).toBe(8.5);
   });
 
   it('filters by status and is_demo and pages with limit and offset', async () => {
@@ -758,12 +760,8 @@ describe('the facade', () => {
     for (let i = 0; i < 3; i += 1) await openTrade();
     expect(broker.trades.list(1).map((trade) => trade.id)).toEqual([3, 2, 1]);
     const closed = broker.trades.settle(2, { outcome: 'loss' });
-    expect(closed.profit).toBe('-10.00');
-    expect(broker.users.get(1).demo).toEqual({
-      available: '9970.00',
-      held: '20.00',
-      total: '9990.00',
-    });
+    expect(closed.profit).toBe(-10);
+    expect(broker.users.get(1).demo).toEqual({ available: 9970, held: 20, total: 9990 });
     expect(broker.priceAt(EURUSD, 1_790_000_000_000)).toBe(
       broker.state.priceAt(EURUSD, 1_790_000_000_000),
     );

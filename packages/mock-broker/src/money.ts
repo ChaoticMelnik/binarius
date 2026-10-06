@@ -1,4 +1,8 @@
-import { decimalStringSchema, type DecimalString } from '@binarius/shared';
+import {
+  MAX_WIRE_SIGNIFICANT_DIGITS,
+  decimalStringSchema,
+  type DecimalString,
+} from '@binarius/shared';
 
 // the fixture keeps money as bigint cents (scale 2) and only formats it at the wire
 const AMOUNT = /^(\d+)(?:\.(\d{1,2}))?$/;
@@ -16,6 +20,18 @@ export function formatCents(cents: bigint): DecimalString {
   const abs = cents < 0n ? -cents : cents;
   const fraction = (abs % 100n).toString().padStart(2, '0');
   return decimalStringSchema.parse(`${sign}${abs / 100n}.${fraction}`);
+}
+
+// the one place money becomes a JS number: the wire form of the live broker, built from the decimal
+// text with no arithmetic. At most 15 digits of cents keep String(Number(text)) equal to the text
+// without trailing zeros, so the fixture never sends what moneyWireSchema refuses.
+const WIRE_CENTS_LIMIT = 10n ** BigInt(MAX_WIRE_SIGNIFICANT_DIGITS);
+
+export function wireMoney(cents: bigint): number {
+  if (cents >= WIRE_CENTS_LIMIT || cents <= -WIRE_CENTS_LIMIT) {
+    throw new RangeError(`the fixture cannot send ${cents} cents as an exact JSON number`);
+  }
+  return Number(formatCents(cents));
 }
 
 // a seed or a test input the fixture cannot represent is a mistake in the test, not a scenario

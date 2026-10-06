@@ -1,7 +1,7 @@
 import {
   openTradeRequestWireSchema,
   type BinaryPairWire,
-  type BrokerUserWire,
+  type BrokerUserWireInput,
 } from '@binarius/shared';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { buildCandles, validateChartQuery } from './chart';
@@ -38,7 +38,7 @@ export interface MockBroker {
   users: {
     register: BrokerState['registerUser'];
     revokeToken(token: string): void;
-    get(id: number): BrokerUserWire;
+    get(id: number): BrokerUserWireInput;
   };
   pairs: {
     list(): BinaryPairWire[];

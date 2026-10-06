@@ -112,7 +112,7 @@ describe('happy paths', () => {
     const money = [user.minTradeAmount, ...Object.values(user.real), ...Object.values(user.demo)];
     expect(money).toHaveLength(7);
     expect(money.every(isDecimalString)).toBe(true);
-    expect(user.demo.available).toBe('10000.00');
+    expect(user.demo.available).toBe('10000');
   });
 
   it('lists the pairs mapped from the broker list', async () => {
@@ -123,7 +123,7 @@ describe('happy paths', () => {
 
   it('opens a trade with the request body the broker validates', async () => {
     const trade = await client.openTrade(auth, openRequest);
-    expect(trade).toMatchObject({ assetId: 101, action: 'up', amount: '10.00', isDemo: true });
+    expect(trade).toMatchObject({ assetId: 101, action: 'up', amount: '10', isDemo: true });
     expect(isDecimalString(trade.potentialProfit)).toBe(true);
     expect(broker.rest.journal[0]?.bodyKeys).toEqual([
       'action',

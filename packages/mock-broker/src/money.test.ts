@@ -1,6 +1,6 @@
-import { isDecimalString } from '@binarius/shared';
+import { MAX_WIRE_SIGNIFICANT_DIGITS, isDecimalString, moneyWireSchema } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
-import { formatCents, parseCents, percentOf, requireCents } from './money';
+import { formatCents, parseCents, percentOf, requireCents, wireMoney } from './money';
 
 describe('parseCents', () => {
   it.each([
@@ -40,6 +40,30 @@ describe('formatCents', () => {
     for (const value of ['10000.00', '0.01', '1.10', '987654321.99']) {
       expect(formatCents(requireCents(value, 'value'))).toBe(value);
     }
+  });
+});
+
+describe('wireMoney', () => {
+  it.each([
+    [0n, 0],
+    [150n, 1.5],
+    [1234n, 12.34],
+    [1_000_000n, 10000],
+    [-150n, -1.5],
+  ])('sends %s cents as the JSON number %j', (cents, value) => {
+    expect(wireMoney(cents)).toBe(value);
+  });
+
+  it('writes a whole amount as a JSON integer and a fraction as a JSON fraction', () => {
+    expect(JSON.stringify(wireMoney(1_000_000n))).toBe('10000');
+    expect(JSON.stringify(wireMoney(999_850n))).toBe('9998.5');
+  });
+
+  it('sends nothing the shared wire schema refuses', () => {
+    const limit = 10n ** BigInt(MAX_WIRE_SIGNIFICANT_DIGITS);
+    expect(moneyWireSchema.safeParse(wireMoney(limit - 1n)).success).toBe(true);
+    expect(() => wireMoney(limit)).toThrow(RangeError);
+    expect(() => wireMoney(-limit)).toThrow(RangeError);
   });
 });
 
