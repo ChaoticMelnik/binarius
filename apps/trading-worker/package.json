@@ -17,6 +17,7 @@
     "pino": "^10.3.1"
   },
   "devDependencies": {
+    "@binarius/mock-broker": "workspace:*",
     "@types/pg": "^8.23.1"
   }
 }

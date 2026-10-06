@@ -11,6 +11,7 @@
   "references": [
     { "path": "../../packages/shared" },
     { "path": "../../packages/db" },
-    { "path": "../../packages/broker-rest" }
+    { "path": "../../packages/broker-rest" },
+    { "path": "../../packages/mock-broker" }
   ]
 }
