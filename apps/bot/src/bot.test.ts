@@ -117,6 +117,7 @@ function setup(
       vi.fn((_telegramUserId: string, level: NotificationLevel) => Promise.resolve({ level })),
     readTradingAccess: options.readTradingAccess ?? vi.fn(() => Promise.resolve(ACCESS_VIEW)),
     readPairs: vi.fn(() => Promise.reject(new Error('not used here'))),
+    evaluateSignal: vi.fn(() => Promise.reject(new Error('not used here'))),
   };
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
@@ -1315,6 +1316,7 @@ describe('the account card', () => {
           setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
           readTradingAccess: vi.fn(() => Promise.reject(new Error('unused'))),
           readPairs: vi.fn(() => Promise.reject(new Error('unused'))),
+          evaluateSignal: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -1352,6 +1354,7 @@ describe('the account card', () => {
           setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
           readTradingAccess: vi.fn(() => Promise.resolve(ACCESS_VIEW)),
           readPairs: vi.fn(() => Promise.reject(new Error('unused'))),
+          evaluateSignal: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -2373,6 +2376,7 @@ describe('the Bot API timeout', () => {
         setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
         readTradingAccess: vi.fn(() => Promise.reject(new Error('unused'))),
         readPairs: vi.fn(() => Promise.reject(new Error('unused'))),
+        evaluateSignal: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

@@ -26,6 +26,7 @@ import {
   LOGIN,
   PAIR_EURUSD,
   PAIRS_RESPONSE,
+  SIGNAL_DECIDED,
   PENDING_ACCOUNT_ID,
   USER,
   USER_VIEW,
@@ -69,6 +70,7 @@ interface Scenario {
   setNotificationLevel?: BackendClient['setNotificationLevel'];
   readTradingAccess?: BackendClient['readTradingAccess'];
   readPairs?: BackendClient['readPairs'];
+  evaluateSignal?: BackendClient['evaluateSignal'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -90,6 +92,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
       scenario.setNotificationLevel ?? ((_telegramUserId, level) => Promise.resolve({ level })),
     readTradingAccess: scenario.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
     readPairs: scenario.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)),
+    evaluateSignal: scenario.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
   };
   const loginDialog = createLoginDialog();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
