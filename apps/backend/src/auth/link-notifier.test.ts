@@ -105,13 +105,13 @@ describe('the link push transport', () => {
     // accepts the connection and then says nothing: only the client's own timeout ends the call
     server = createServer(() => {});
     const apiRoot = await listen(server);
-    const notifier = createLinkNotifier({ token: TOKEN, apiRoot, telegramApiTimeoutMs: 300 });
+    const notifier = createLinkNotifier({ token: TOKEN, apiRoot, telegramApiTimeoutMs: 500 });
 
     const at = Date.now();
     const error = await rejectionOf(notifier.send(TELEGRAM_USER_ID, { kind: LinkPushKind.Active }));
     const elapsed = Date.now() - at;
     expect(error).toBeInstanceOf(HttpError);
-    expect(elapsed).toBeGreaterThanOrEqual(250);
+    expect(elapsed).toBeGreaterThanOrEqual(450);
     expect(elapsed).toBeLessThan(UNIT_WAIT_CEILING_MS);
   });
 

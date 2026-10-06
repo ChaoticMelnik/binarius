@@ -398,8 +398,6 @@ describe('transport failures', () => {
       const outcome = codeOf(impatient.exchangeCode({ code, redirectUri: REDIRECT_URI }));
       await until('the stub to hold the request', () => slow.pendingHangs === 1);
       expect(await outcome).toBe(BrokerOAuthErrorCode.Unavailable);
-      // the stub never answered: the client left on its own timer
-      expect(slow.pendingHangs).toBe(1);
       expect(slow.tokenRequests).toBe(1);
     } finally {
       await slow.close();

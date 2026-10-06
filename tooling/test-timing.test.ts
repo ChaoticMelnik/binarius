@@ -122,12 +122,6 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
   {
     file: 'packages/broker-rest/src/pairs-catalog.test.ts',
     form: 'F4',
-    match: 'await sleep(30);',
-    reason: 'a duration: the request stop() aborted settles before the count is sampled',
-  },
-  {
-    file: 'packages/broker-rest/src/pairs-catalog.test.ts',
-    form: 'F4',
     match: 'await sleep(100);',
     reason: NEGATIVE,
   },
@@ -165,7 +159,7 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     file: 'packages/mock-broker/src/server.test.ts',
     form: 'F4',
     match: 'await sleep(400);',
-    reason: DURATION,
+    reason: `${NEGATIVE} (sized past the 300 ms delay it must outlast)`,
   },
   {
     file: 'apps/backend/src/broker/balance-reconciler.db.test.ts',

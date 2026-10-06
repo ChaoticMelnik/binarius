@@ -5,7 +5,7 @@ import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TradeIntentFailureReason } from '@binarius/shared';
-import { INTEGRATION_WAIT_CEILING_MS, until } from '@binarius/shared/testing';
+import { INTEGRATION_WAIT_CEILING_MS, UNIT_WAIT_CEILING_MS, until } from '@binarius/shared/testing';
 import {
   OutboxTopic,
   findTradeIntent,
@@ -17,7 +17,12 @@ import {
 } from '@binarius/db';
 import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import { createBullmqPublisher, type JobPublisher } from './bullmq';
-import { OutboxPublisher, backoffMs, type PublisherConfig } from './publisher';
+import {
+  DEFAULT_PUBLISHER_CONFIG,
+  OutboxPublisher,
+  backoffMs,
+  type PublisherConfig,
+} from './publisher';
 
 // Real Postgres and Redis (README → Database): the BullMQ dedupe, job presence and the
 // per-row transaction are what these tests are about, so neither is faked here.
@@ -224,9 +229,16 @@ describe('OutboxPublisher.tick', () => {
     const { intentId } = await newIntent();
     const started = Date.now();
     expect(await publisher(jobs, { publishTimeoutMs: 50 }).tick()).toBe(1);
-    expect(Date.now() - started).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
+    // the unit ceiling: the 5 s default deadline cannot fit under it, so this is what proves the
+    // override
+    expect(Date.now() - started).toBeLessThan(UNIT_WAIT_CEILING_MS);
     expect(await outboxOf(intentId)).toMatchObject({ status: 'pending', attempts: 1 });
     await park(intentId);
+  });
+
+  // what the two deadline cases rely on to tell the override from the default
+  it('keeps the default publish deadline above the unit wait ceiling', () => {
+    expect(UNIT_WAIT_CEILING_MS).toBeLessThan(DEFAULT_PUBLISHER_CONFIG.publishTimeoutMs);
   });
 
   it('fails the row but leaves an intent the worker already took alone', async () => {
@@ -376,7 +388,9 @@ describe('OutboxPublisher shutdown semantics', () => {
     await p.stop();
     const elapsed = Date.now() - started;
     expect(elapsed).toBeGreaterThanOrEqual(150);
-    expect(elapsed).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
+    // the unit ceiling: the 5 s default deadline cannot fit under it, so this is what proves the
+    // override
+    expect(elapsed).toBeLessThan(UNIT_WAIT_CEILING_MS);
     expect(await outboxOf(intentId)).toMatchObject({ status: 'pending', attempts: 1 });
 
     // stopping was cleared: a direct tick handles the row again once it is due

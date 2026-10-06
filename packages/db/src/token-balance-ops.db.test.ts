@@ -6,7 +6,11 @@ import {
   UserStatus,
   tokenBalanceViewSchema,
 } from '@binarius/shared';
-import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
+import {
+  closedTradeFor,
+  INTEGRATION_WAIT_CEILING_MS,
+  openTradeFor,
+} from '@binarius/shared/testing';
 import {
   createTempDatabase,
   intentRequest,
@@ -289,7 +293,9 @@ describe('readTokenBalance', () => {
       try {
         outcome = await Promise.race([
           read(user),
-          new Promise<'waited'>((resolve) => (timer = setTimeout(() => resolve('waited'), 1_000))),
+          new Promise<'waited'>(
+            (resolve) => (timer = setTimeout(() => resolve('waited'), INTEGRATION_WAIT_CEILING_MS)),
+          ),
         ]);
       } finally {
         clearTimeout(timer);
