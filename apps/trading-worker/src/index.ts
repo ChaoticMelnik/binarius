@@ -5,6 +5,7 @@ import { errorLogFields, closeAll, logOptions } from '@binarius/shared';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import { createDb, listLinkedBrokerTradeIds, OutboxTopic } from '@binarius/db';
 import { createBackendAccessTokenSource } from './broker/access-token';
+import { noTradeSessions } from './broker/trade-session';
 import { parseEnv } from './env';
 import {
   CATCHUP_ATTEMPT_TIMEOUT_MS,
@@ -29,12 +30,13 @@ import {
   SWEEP_INTERVAL_MS,
 } from './intents/config';
 import { startIntentConsumer } from './intents/consumer';
-import { notConfiguredExecutor, realTradingGate } from './intents/executor';
+import { buildExecutor } from './intents/executor';
 import { processIntentJob } from './intents/processor';
 import { createReconciliationPass, processReconciliationJob } from './intents/reconciliation';
 import { createRestReconciler } from './intents/rest-reconciler';
 import { createSettlementCatchup } from './intents/settlement-catchup';
 import { startSweeper } from './intents/sweeper';
+import { createTradeCommandExecutor } from './intents/trade-command-executor';
 
 const env = parseEnv(process.env);
 
@@ -48,10 +50,19 @@ const redis = new Redis(env.redisUrl, { maxRetriesPerRequest: null });
 pool.on('error', (error) => logger.error(errorLogFields(error), 'postgres pool error'));
 redis.on('error', (error) => logger.warn(errorLogFields(error), 'redis connection error'));
 
-// ARCH-01 replaces the inner executor with the broker socket client; the gate stays outside it
-const executor = realTradingGate(notConfiguredExecutor, {
-  realTradingEnabled: env.realTradingEnabled,
+// The broker's REST API for the trade lists and the REST open, and the backend's token route for
+// the token: the worker holds no broker credentials of its own (#90)
+const brokerRest = createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl });
+const tokens = createBackendAccessTokenSource({
+  baseUrl: env.backendUrl,
+  token: env.internalApiToken,
 });
+
+// #101 replaces noTradeSessions with the session manager; the gate stays the outermost layer (#134)
+const executor = buildExecutor(
+  env,
+  createTradeCommandExecutor({ sessions: noTradeSessions, rest: brokerRest, tokens, logger }),
+);
 
 const consumer = startIntentConsumer({
   topic: OutboxTopic.TradingIntents,
@@ -72,14 +83,6 @@ const consumer = startIntentConsumer({
       },
       payload,
     ),
-});
-
-// The broker's REST API for the trade lists, and the backend's token route for the token: the
-// worker holds no broker credentials of its own (#90)
-const brokerRest = createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl });
-const tokens = createBackendAccessTokenSource({
-  baseUrl: env.backendUrl,
-  token: env.internalApiToken,
 });
 
 const pass = createReconciliationPass({
@@ -111,8 +114,7 @@ const reconciliationConsumer = startIntentConsumer({
   connection: redis,
   logger,
   concurrency: env.workerConcurrency,
-  processor: (payload) =>
-    processReconciliationJob({ db, logger }, payload),
+  processor: (payload) => processReconciliationJob({ db, logger }, payload),
 });
 
 // accepted intents whose close_trade.success never arrived (#101 is the main path)
