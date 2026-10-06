@@ -18,11 +18,10 @@ export function createAssetSubscriptionRegistry(): AssetSubscriptionRegistry {
   const ids = new Set<number>();
   return {
     add(input) {
-      const invalid = input.find((id) => !isAssetId(id));
-      if (invalid !== undefined) {
-        throw new RangeError(
-          `asset id must be a non-negative safe integer, got ${String(invalid)}`,
-        );
+      const invalid = input.findIndex((id) => !isAssetId(id));
+      // the index, never the value: an id is caller data and errors reach logs
+      if (invalid !== -1) {
+        throw new RangeError(`asset id at index ${invalid} is not a non-negative safe integer`);
       }
       const added: number[] = [];
       for (const id of input) {

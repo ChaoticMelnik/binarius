@@ -34,6 +34,20 @@ describe('createAssetSubscriptionRegistry', () => {
     expect(registry.all()).toEqual([101]);
   });
 
+  it('names the index of a rejected id, never its value', () => {
+    const registry = createAssetSubscriptionRegistry();
+    let thrown: unknown;
+    try {
+      registry.add([101, 'SECRET-id' as unknown as number]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(RangeError);
+    expect((thrown as Error).message).not.toContain('SECRET');
+    expect((thrown as Error).message).toContain('index 1');
+    expect(registry.all()).toEqual([]);
+  });
+
   it('hands out copies', () => {
     const registry = createAssetSubscriptionRegistry();
     registry.add([101]);
