@@ -4,6 +4,7 @@ import { Redis } from 'ioredis';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { findTradeIntent } from '@binarius/db';
+import { openTradeFor } from '@binarius/shared/testing';
 import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import { deadLetter, startIntentConsumer, type DeadLetter, type IntentConsumer } from './consumer';
 import { InvalidJobError, processIntentJob } from './processor';
@@ -98,7 +99,13 @@ describe('startIntentConsumer', () => {
         processIntentJob(
           {
             db: tmp.db,
-            executor: { submit: async () => ({ outcome: 'accepted', transport: 'socket' }) },
+            executor: {
+              submit: async (intent) => ({
+                outcome: 'accepted',
+                transport: 'socket',
+                trade: openTradeFor(intent),
+              }),
+            },
             logger,
             config: { intentMaxAgeMs: 60_000, submitAckTimeoutMs: 500, staleSubmittingMs: 60_000 },
           },

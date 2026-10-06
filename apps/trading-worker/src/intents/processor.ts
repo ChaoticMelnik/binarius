@@ -12,6 +12,7 @@ import {
   rejectExpiredIntent,
   rejectIntent,
   takeIntent,
+  TradeIntentMismatchError,
   type Db,
   type TradeIntentRow,
 } from '@binarius/db';
@@ -161,9 +162,26 @@ async function persistOutcome(
   const { db, logger } = deps;
   const cas = { id: taken.id, expectedVersion: taken.version };
   let row: TradeIntentRow | undefined;
+  let outcome: SubmitResult['outcome'] = result.outcome;
   switch (result.outcome) {
     case 'accepted':
-      row = await markIntentAccepted(db, { ...cas, transport: result.transport });
+      try {
+        row = await db.transaction((tx) =>
+          markIntentAccepted(tx, { ...cas, transport: result.transport, trade: result.trade }),
+        );
+      } catch (error) {
+        if (!(error instanceof TradeIntentMismatchError)) throw error;
+        // the broker opened something we cannot tie to this intent: reconciliation finds out
+        // now instead of after the stale-submitting sweep
+        logger.warn(
+          { intentId: taken.id, brokerTradeId: error.brokerTradeId, mismatch: error.reason },
+          'accepted trade does not match the intent; marked unknown',
+        );
+        outcome = 'unknown';
+        row = await db.transaction((tx) =>
+          markIntentUnknown(tx, { ...cas, reason: TradeIntentFailureReason.TradeMismatch }),
+        );
+      }
       break;
     case 'rejected':
       row = await db.transaction((tx) =>
@@ -183,8 +201,8 @@ async function persistOutcome(
     return 'noop';
   }
   logger.info(
-    { intentId: taken.id, outcome: result.outcome, status: row.status, detail },
+    { intentId: taken.id, outcome, status: row.status, detail },
     'intent outcome recorded',
   );
-  return result.outcome;
+  return outcome;
 }

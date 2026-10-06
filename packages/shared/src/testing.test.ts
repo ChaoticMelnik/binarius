@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { telegramHtml } from './telegram-html';
+import { parseClosedTrade, parseOpenTrade, type ClosedTrade, type OpenTrade } from './broker';
+import type { DecimalString } from './money';
 import {
+  closedTradeFor,
   composeDurationMs,
   composeServiceEnvValue,
   composeServiceValue,
+  openTradeFor,
   telegramTextProblems,
+  type TradeTarget,
 } from './testing';
 
 const yaml = `services:
@@ -88,5 +93,48 @@ describe('telegramTextProblems', () => {
       'line 2 starts or ends with a space',
       'line 3 starts or ends with a space',
     ]);
+  });
+});
+
+// the builders stand in for the broker's parsed trades, so they must be what the parsers produce
+describe('trade builders', () => {
+  const wireOf = (trade: OpenTrade | ClosedTrade) => ({
+    id: trade.id,
+    asset_id: trade.assetId,
+    action: trade.action,
+    amount: trade.amount,
+    payout: trade.payout,
+    open_price: trade.openPrice,
+    open_timestamp: trade.openTimestamp,
+    is_demo: trade.isDemo,
+  });
+  const target: TradeTarget = {
+    mode: 'real',
+    assetId: 91,
+    action: 'down',
+    amount: '2.50' as DecimalString,
+  };
+
+  it('builds an open trade the open-trade parser reproduces', () => {
+    const open = openTradeFor(target);
+    expect(open).toMatchObject({ assetId: 91, action: 'down', amount: '2.50', isDemo: false });
+    expect(parseOpenTrade({ ...wireOf(open), potential_profit: open.potentialProfit })).toEqual(
+      open,
+    );
+  });
+
+  it('builds a closed trade at a loss the closed-trade parser reproduces', () => {
+    const open = openTradeFor({ ...target, mode: 'demo', action: 'up' });
+    const closed = closedTradeFor(open);
+    expect(closed).toMatchObject({ id: open.id, profit: '-10.00', isDemo: true });
+    expect(closed.closeTimestamp).toBe(open.openTimestamp + 60_000);
+    expect(
+      parseClosedTrade({
+        ...wireOf(closed),
+        close_price: closed.closePrice,
+        close_timestamp: closed.closeTimestamp,
+        profit: closed.profit,
+      }),
+    ).toEqual(closed);
   });
 });

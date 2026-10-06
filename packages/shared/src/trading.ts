@@ -92,6 +92,11 @@ export const TradeIntentFailureReason = {
   // a real intent reached the worker while REAL_TRADING_ENABLED=false there (#134,
   // realTradingGate); nothing was sent to the broker
   RealTradingDisabled: 'real_trading_disabled',
+  // the executor's accepted trade disagrees with the intent (mode, asset, action, amount) or is
+  // already linked to another intent (#17); the intent goes to unknown for reconciliation
+  TradeMismatch: 'trade_mismatch',
+  // an operator concluded a manual_review intent as rejected; the reserve is released (#17)
+  ManualRejected: 'manual_rejected',
 } as const;
 export type TradeIntentFailureReason =
   (typeof TradeIntentFailureReason)[keyof typeof TradeIntentFailureReason];

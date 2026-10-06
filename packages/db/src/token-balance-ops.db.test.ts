@@ -6,6 +6,7 @@ import {
   UserStatus,
   tokenBalanceViewSchema,
 } from '@binarius/shared';
+import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import {
   createTempDatabase,
   intentRequest,
@@ -20,7 +21,10 @@ import { readTokenBalance, toTradingAccessView } from './token-balance-ops';
 import {
   TOKENS_PER_INTENT,
   createTradeIntent,
+  markIntentAccepted,
   rejectIntent,
+  settleIntent,
+  takeIntent,
   type TradePolicy,
 } from './trade-intent-ops';
 
@@ -125,6 +129,42 @@ describe('readTokenBalance', () => {
     );
     expect(rejected?.status).toBe('rejected');
     expect(await read(user)).toMatchObject({ balance: 7n, reserved: 0n });
+    await expectCacheEqualsLedger(user);
+  });
+
+  it('follows a reserve, an acceptance and a settlement, equal to the ledger at every point', async () => {
+    const user = await creditedUser(7n);
+    const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId);
+    const { intent } = await createTradeIntent(
+      tmp.db,
+      intentRequest(user.telegramUserId, { brokerAccountId }),
+      flagOff,
+    );
+    expect(await read(user)).toMatchObject({ balance: 7n, reserved: 1n });
+    await expectCacheEqualsLedger(user);
+
+    const taken = (await takeIntent(tmp.db, {
+      id: intent.id,
+      expectedVersion: intent.version,
+      maxAgeMs: 60_000,
+    }))!;
+    const open = openTradeFor(taken);
+    const accepted = (await tmp.db.transaction((tx) =>
+      markIntentAccepted(tx, {
+        id: taken.id,
+        expectedVersion: taken.version,
+        transport: 'socket',
+        trade: open,
+      }),
+    ))!;
+    expect(await read(user)).toMatchObject({ balance: 7n, reserved: 1n });
+    await expectCacheEqualsLedger(user);
+
+    const settled = await tmp.db.transaction((tx) =>
+      settleIntent(tx, { id: accepted.id, from: 'accepted', trade: closedTradeFor(open) }),
+    );
+    expect(settled?.status).toBe('settled');
+    expect(await read(user)).toMatchObject({ balance: 6n, reserved: 0n });
     await expectCacheEqualsLedger(user);
   });
 

@@ -74,32 +74,130 @@ contains the SQL text and its parameters.
 
 ## Statuses and who sets them
 
-| Status                                    | Set by                                                                                                                                                                                           | Meaning                                                                                                           |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `planned` → `reserved` → `queued`         | backend, creation transaction                                                                                                                                                                    | intent and outbox row persisted, token reserved. `queued` is what the API returns                                 |
-| `submitting`                              | worker, `takeIntent` CAS                                                                                                                                                                         | the job was taken; `submitted_at` is set on the database clock                                                    |
-| `accepted`                                | worker, explicit executor result only                                                                                                                                                            | the broker confirmed the order. `socket.emit` or a local `ok` never counts                                        |
-| `rejected`                                | worker (executor said no, the intent expired, or the grant gate: a real intent while the worker's `REAL_TRADING_ENABLED` is not `true`, `real_trading_disabled`), publisher (delivery exhausted) | terminal; the token reserve is released in the same transaction                                                   |
-| `unknown`                                 | worker (executor timeout, throw, or a stale `submitting`), sweeper                                                                                                                               | the order may have reached the broker; reserve kept; a `trading-reconciliation` outbox row is written for ARCH-04 |
-| `settled`, `reconciling`, `manual_review` | ARCH-04 / #17                                                                                                                                                                                    | out of scope here                                                                                                 |
+| Status                            | Set by                                                                                                                                                                                           | Meaning                                                                                                                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `planned` → `reserved` → `queued` | backend, creation transaction                                                                                                                                                                    | intent and outbox row persisted, token reserved. `queued` is what the API returns                                                                                            |
+| `submitting`                      | worker, `takeIntent` CAS                                                                                                                                                                         | the job was taken; `submitted_at` is set on the database clock                                                                                                               |
+| `accepted`                        | worker, an explicit executor result that carries the broker's open trade (`markIntentAccepted`); #89 from `reconciling` with the trade REST found                                                | the broker confirmed the order and its trade matches the intent; the open `broker_trades` row is written in the same transaction. `socket.emit` or a local `ok` never counts |
+| `rejected`                        | worker (executor said no, the intent expired, or the grant gate: a real intent while the worker's `REAL_TRADING_ENABLED` is not `true`, `real_trading_disabled`), publisher (delivery exhausted) | terminal; the token reserve is released in the same transaction                                                                                                              |
+| `unknown`                         | worker (executor timeout, throw, a stale `submitting`, or an accepted trade that does not match the intent, `trade_mismatch`), sweeper                                                           | the order may have reached the broker; reserve kept; a `trading-reconciliation` outbox row is written for reconciliation (#89)                                               |
+| `settled`                         | `settleIntent` from `accepted` (a `close_trade.success` or a REST closed snapshot through `settleClosedTrades`) or from `manual_review` (operator)                                               | terminal; the token is debited in the same transaction whatever the trade's profit; `broker_trades` closed                                                                   |
+| `reconciling`, `manual_review`    | #89 / #90 (`unknown → reconciling → accepted \| rejected \| manual_review`); operator (`manual_review → settled \| rejected`: the ops exist, the tool is a later issue)                          | the outcome is being established; the reserve is kept and the account stays blocked                                                                                          |
 
 Every transition bumps `version`; every transition is a compare-and-set on `status` (and usually
-`version`), so a duplicate or late writer gets zero rows instead of overwriting newer state.
+`version`), so a duplicate or late writer gets zero rows instead of overwriting newer state. The
+database enforces the graph and the bump itself (trigger `trade_intents_transition_guard`) and
+that a live intent holds its token while a finished one holds none
+(`trade_intents_terminal_reserve_check`) — see [State machine](#state-machine-17).
+
+## State machine (#17)
+
+```
+planned       → reserved | rejected
+reserved      → queued | rejected
+queued        → submitting | rejected
+submitting    → accepted | rejected | unknown
+accepted      → settled
+unknown       → reconciling
+reconciling   → accepted | rejected | manual_review
+manual_review → settled | rejected
+settled, rejected: terminal
+```
+
+The graph is `TRADE_INTENT_TRANSITIONS` in `packages/shared/src/trading.ts`.
+
+**Ledger effect per edge.** `reserve` at creation (`reserved_delta +1`); `release` on every edge
+into `rejected` (`reserved_delta −1`, the balance untouched); `settle` on every edge into `settled`
+(`reserved_delta −1`, `balance_delta −1`: the token is spent whatever the trade's profit, a draw
+or a refund included). Every other edge leaves the ledger alone. The `users` cache moves in the
+same transaction as the row.
+
+**What the database guarantees.**
+
+| Guarantee                                                                                | Where                                                                                                                                               |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| only the edges of the graph, each bumping `version` by exactly one                       | trigger `trade_intents_transition_guard` (migration 0014); an UPDATE that keeps the status passes, the CAS predicate stays in each writer's `WHERE` |
+| a live intent holds its token, a `rejected`/`settled` one holds none                     | CHECK `trade_intents_terminal_reserve_check` (0013)                                                                                                 |
+| one live intent per account (`reconciling`/`manual_review` included)                     | `trade_intents_active_account_idx`                                                                                                                  |
+| a broker trade links to one intent, an intent to one trade, of the same account and mode | `broker_trades_account_trade_key`, `broker_trades_intent_id_key`, `broker_trades_intent_account_fk`                                                 |
+| one terminal ledger row (`release` or `settle`) per intent                               | `token_ledger_terminal_intent_idx`                                                                                                                  |
+
+The trigger's pairs are a copy of the shared table; the transition grid in
+`packages/db/src/schema.db.test.ts` tries every ordered pair and fails when the two disagree. A
+graph change is a new migration that replaces the function.
+
+**Transport state is not trade state.** The trade state is `trade_intents.status`; the socket's
+state (`BrokerSocketState`, #99) is never stored on the intent. A disconnect can produce only
+`unknown`, through the executor; the trigger refuses `submitting → settled` and
+`unknown → rejected`, so no transport event ends an intent without the broker's answer or a
+reconciliation.
+
+**Acceptance carries proof.** `SubmitResult.accepted` is `{ transport, trade: OpenTrade }`, both
+required. `markIntentAccepted` runs the CAS, checks the trade against the intent (`isDemo` against
+`mode`, `assetId`, `action`, `amount` compared as decimals) and inserts the open `broker_trades`
+row; a mismatch, or a trade already linked, throws `TradeIntentMismatchError` and the transaction
+rolls back. The processor then marks the intent `unknown` (`trade_mismatch`) with a
+reconciliation row and logs the intent id, the broker trade id and the reason code.
+`broker_trades.raw` holds the parsed domain trade, not the broker's bytes: shared's parsers strip
+unknown keys, and no token is in a trade.
+
+**Settlement.** `settleIntent` (from `accepted` or `manual_review`, with a `ClosedTrade`) locks
+`users → trade_intents → broker_trades`, checks the trade against the linked row (same broker
+id) and against the intent (the four fields above), then moves the intent, writes the `settle`
+row and closes the `broker_trades` row — or inserts it closed for a `manual_review` intent never
+linked. `settleClosedTrades(db, { brokerAccountId, trades })` is the one applier of a
+`close_trade.success` payload and of a REST closed snapshot: one transaction per trade, an
+outcome per trade —
+
+| Outcome               | Meaning                                                                            | Caller's action                             |
+| --------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------- |
+| `settled`             | settled now                                                                        | done                                        |
+| `already_settled`     | an earlier pass settled it                                                         | nothing                                     |
+| `not_ours`            | no intent behind this trade (a platform trade, or an acceptance not persisted yet) | ignore; a later snapshot links it           |
+| `intent_not_accepted` | the intent is `reconciling`/`manual_review`                                        | leave to #89/#90/the operator; never settle |
+| `mismatch`            | the closed trade contradicts the intent; nothing written                           | log; reconciliation                         |
+
+A database error propagates; the trades before it stay applied, and a replay is safe.
+`listOverdueAcceptedIntents(db, { graceMs, limit })` is the one definition of "accepted past its
+expected close": the broker's open time plus the intent's `duration_sec` plus `graceMs`, against
+the database clock, oldest first.
+
+**`last_error` is the last failure on the way, not the current state.** Acceptance and settlement
+leave it as it is: an intent that went `unknown` (`stale_submitting`) → `reconciling` →
+`accepted` → `settled` keeps `stale_submitting`. A reader looks at `status` first.
+
+**After a crash or restart** every op is one transaction, so nothing is half-applied, and the
+trigger, the two `broker_trades` keys and the terminal ledger index keep a stage from being
+entered twice. What resolves an intent left at each stage:
+
+| Left in                                                | Resolved by                                                                                                                                                                | Owner                                        |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `planned`/`reserved`                                   | cannot persist: created and queued in one transaction                                                                                                                      | #42                                          |
+| `queued`                                               | the publisher's lost-job sweep, or `expired` at take                                                                                                                       | #42 (in `main`)                              |
+| `submitting`                                           | the stale sweep → `unknown` (`stale_submitting`)                                                                                                                           | #42 (in `main`)                              |
+| `accepted`                                             | `close_trade.success` → `settleClosedTrades`; the REST catch-up `listOverdueAcceptedIntents` + `listTrades(closed)` + `settleClosedTrades`; the REST pass at session start | #101 (socket, session start), #90 (catch-up) |
+| `accepted`, closed before the acceptance was persisted | `settleClosedTrades` answered `not_ours`; the catch-up applies the closed snapshot once the intent is overdue                                                              | #90, #101                                    |
+| `unknown`                                              | the `trading-reconciliation` consumer → `reconciling`                                                                                                                      | #89                                          |
+| `reconciling`                                          | #89's pickup at worker start → `accepted` / `rejected` / `manual_review`                                                                                                   | #89                                          |
+| `manual_review`                                        | the operator: `settleIntent` or `rejectIntent` (`manual_rejected`)                                                                                                         | a later issue (the tool)                     |
+
+Until #101 and #90 ship their loops, an `accepted` intent is not self-resolving; no executor
+accepts before then (`notConfiguredExecutor` rejects every intent).
 
 ## Delivery, ACK and timeout semantics
 
-| Stage                                                                                                                                             | Retry policy                                                                                                                                           | Timeout                                                                                                                                                   | On failure                                                                                                                                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Publisher `queue.add`, topic `trading-intents`                                                                                                    | outbox `attempts` with backoff 1 s, 2 s, 4 s, 8 s (cap 16 s), max 5                                                                                    | 5 s per add (`Promise.race`; a late success is harmless, the job id dedupes)                                                                              | 5th failure: outbox `failed` **and**, in the same transaction, a still-`queued` intent → `rejected` (`publish_failed`) with token release                                                                                               |
-| Publisher `queue.add`, topic `trading-reconciliation`                                                                                             | same backoff, **no cap** — the row stays `pending` for as long as it takes; `attempts` keeps counting and every attempt from the 5th on logs a warning | 5 s per add                                                                                                                                               | never `failed`: giving up would strand an `unknown` intent with its reserve and no reconciliation                                                                                                                                       |
-| Lost job (published row, job absent after 30 s while the intent is still `queued` for `trading-intents` / `unknown` for `trading-reconciliation`) | counted as a failed delivery under the topic's policy                                                                                                  | sweep every 15 s                                                                                                                                          | row back to `pending`, republished                                                                                                                                                                                                      |
-| BullMQ job                                                                                                                                        | `attempts: 1` — the trade command is never retried by the queue                                                                                        | `lockDuration` 60 s, `stalledInterval` 30 s, `maxStalledCount` 1                                                                                          | a job that throws is dead-lettered; a stalled job is redelivered once                                                                                                                                                                   |
-| Worker shutdown                                                                                                                                   | —                                                                                                                                                      | phase 1 budget 35 s (`SHUTDOWN_PHASE1_BUDGET_MS`) > longest ack timeout 30 s, phase 2 4 s; compose `stop_grace_period` 40 s                               | a job in flight finishes and its dead-letter write is awaited before any connection closes; an overrun exits 1 and the sweeper resolves the intent after the restart                                                                    |
-| Backend shutdown                                                                                                                                  | —                                                                                                                                                      | phase 1 budget 10 s (`SHUTDOWN_PHASE1_BUDGET_MS`, `apps/backend/src/timing.ts`) > publish/has deadline 5 s, phase 2 4 s; compose `stop_grace_period` 20 s | `publisher.stop()` finishes the row in flight and leaves the rest of the batch `pending`; an overrun (a database timing out every statement, a request that hangs) exits 1 with the transaction rolled back and the outbox row replayed |
-| `takeIntent`                                                                                                                                      | —                                                                                                                                                      | `INTENT_MAX_AGE_MS` (60 s) in the CAS predicate, database clock                                                                                           | too old → `rejected` (`expired`), executor never called                                                                                                                                                                                 |
-| `executor.submit`                                                                                                                                 | none                                                                                                                                                   | `SUBMIT_ACK_TIMEOUT_MS` (10 s), enforced by the processor with `Promise.race`; the executor also receives an `AbortSignal`                                | `realTradingGate` first: a real intent with the flag off → `rejected` (`real_trading_disabled`), the inner executor never called. Then timeout → `unknown` (`executor_timeout`); throw → `unknown` (`executor_error`)                   |
-| Outcome write                                                                                                                                     | none                                                                                                                                                   | —                                                                                                                                                         | a database failure here fails the job (dead letter); the intent stays `submitting` until the sweeper                                                                                                                                    |
-| Stale `submitting` (redelivery or sweeper, every 15 s)                                                                                            | —                                                                                                                                                      | `STALE_SUBMITTING_MS` 60 s ≥ `lockDuration` > max ack timeout                                                                                             | → `unknown` (`stale_submitting`) + reconciliation row                                                                                                                                                                                   |
+| Stage                                                                                                                                             | Retry policy                                                                                                                                           | Timeout                                                                                                                                                   | On failure                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Publisher `queue.add`, topic `trading-intents`                                                                                                    | outbox `attempts` with backoff 1 s, 2 s, 4 s, 8 s (cap 16 s), max 5                                                                                    | 5 s per add (`Promise.race`; a late success is harmless, the job id dedupes)                                                                              | 5th failure: outbox `failed` **and**, in the same transaction, a still-`queued` intent → `rejected` (`publish_failed`) with token release                                                                                                                                |
+| Publisher `queue.add`, topic `trading-reconciliation`                                                                                             | same backoff, **no cap** — the row stays `pending` for as long as it takes; `attempts` keeps counting and every attempt from the 5th on logs a warning | 5 s per add                                                                                                                                               | never `failed`: giving up would strand an `unknown` intent with its reserve and no reconciliation                                                                                                                                                                        |
+| Lost job (published row, job absent after 30 s while the intent is still `queued` for `trading-intents` / `unknown` for `trading-reconciliation`) | counted as a failed delivery under the topic's policy                                                                                                  | sweep every 15 s                                                                                                                                          | row back to `pending`, republished                                                                                                                                                                                                                                       |
+| BullMQ job                                                                                                                                        | `attempts: 1` — the trade command is never retried by the queue                                                                                        | `lockDuration` 60 s, `stalledInterval` 30 s, `maxStalledCount` 1                                                                                          | a job that throws is dead-lettered; a stalled job is redelivered once                                                                                                                                                                                                    |
+| Worker shutdown                                                                                                                                   | —                                                                                                                                                      | phase 1 budget 35 s (`SHUTDOWN_PHASE1_BUDGET_MS`) > longest ack timeout 30 s, phase 2 4 s; compose `stop_grace_period` 40 s                               | a job in flight finishes and its dead-letter write is awaited before any connection closes; an overrun exits 1 and the sweeper resolves the intent after the restart                                                                                                     |
+| Backend shutdown                                                                                                                                  | —                                                                                                                                                      | phase 1 budget 10 s (`SHUTDOWN_PHASE1_BUDGET_MS`, `apps/backend/src/timing.ts`) > publish/has deadline 5 s, phase 2 4 s; compose `stop_grace_period` 20 s | `publisher.stop()` finishes the row in flight and leaves the rest of the batch `pending`; an overrun (a database timing out every statement, a request that hangs) exits 1 with the transaction rolled back and the outbox row replayed                                  |
+| `takeIntent`                                                                                                                                      | —                                                                                                                                                      | `INTENT_MAX_AGE_MS` (60 s) in the CAS predicate, database clock                                                                                           | too old → `rejected` (`expired`), executor never called                                                                                                                                                                                                                  |
+| `executor.submit`                                                                                                                                 | none                                                                                                                                                   | `SUBMIT_ACK_TIMEOUT_MS` (10 s), enforced by the processor with `Promise.race`; the executor also receives an `AbortSignal`                                | `realTradingGate` first: a real intent with the flag off → `rejected` (`real_trading_disabled`), the inner executor never called. Then timeout → `unknown` (`executor_timeout`); throw → `unknown` (`executor_error`)                                                    |
+| Outcome write                                                                                                                                     | none                                                                                                                                                   | —                                                                                                                                                         | `accepted` writes the open `broker_trades` row in the same transaction; a trade that does not match the intent → `unknown` (`trade_mismatch`) + reconciliation row. A database failure here fails the job (dead letter); the intent stays `submitting` until the sweeper |
+| Stale `submitting` (redelivery or sweeper, every 15 s)                                                                                            | —                                                                                                                                                      | `STALE_SUBMITTING_MS` 60 s ≥ `lockDuration` > max ack timeout                                                                                             | → `unknown` (`stale_submitting`) + reconciliation row                                                                                                                                                                                                                    |
 
 Invariants these numbers encode (asserted at import in `apps/trading-worker/src/intents/config.ts`
 and `apps/backend/src/timing.ts`, and held against `compose.yaml` by tests): worker
@@ -131,7 +229,9 @@ automatically; inspect it with the BullMQ tooling of your choice.
 executor may return a free-text `detail`; it is truncated to 200 characters and logged, never
 stored. An executor that throws is logged by the error's name and code only: a client library's
 message can embed a header or a response body, and key-based redaction cannot scrub a string.
-Queue payloads carry the intent id only. Neither the publisher nor the worker loads broker
+`trade_mismatch` (the accepted trade does not match the intent) and `manual_rejected` (the
+operator's rejection from `manual_review`) are two of those codes (#17). Queue payloads carry the
+intent id only. Neither the publisher nor the worker loads broker
 tokens. Both loggers are built from `logOptions` in `packages/shared`: they redact `authorization`
 and token-like keys at every depth from zero to five (`LOG_REDACT_PATHS`, exercised against real
 pino by a worker test), deeper nesting and string contents not covered, and their serializers
@@ -170,10 +270,19 @@ its reserve. The name, the default and the parsing live in `parseRealTradingEnab
 - **ARCH-01 (#40)** implements `TradeExecutor` (`apps/trading-worker/src/intents/executor.ts`)
   with the broker socket client. Until then `notConfiguredExecutor` rejects every intent with
   `executor_not_configured`, so the whole path can be exercised without a broker.
-- **ARCH-04 (#43)** consumes `trading-reconciliation` jobs and owns `unknown → reconciling → …`,
-  settlement and the release of reserves held by `unknown` intents. The publisher already
-  publishes that topic; jobs wait in the queue until the consumer exists.
-- **#17** owns the remaining state-machine rules. Real-mode eligibility: **#134** the grant gate
+- **#89** consumes `trading-reconciliation` jobs: `unknown → reconciling` (a new op),
+  `reconciling → accepted` through `markIntentAccepted({ from: 'reconciling', trade })`,
+  `reconciling → rejected` through `rejectIntent` with its own reason, `reconciling →
+manual_review` (the reserve stays), and the pickup of `reconciling` intents at worker start. The
+  edges already exist in the graph and the trigger. The publisher already publishes the topic; jobs
+  wait in the queue until the consumer exists.
+- **#90** matches REST snapshots to `unknown`/`reconciling` intents, halts the account on
+  `manual_review`, and runs the REST catch-up loop over `listOverdueAcceptedIntents` +
+  `settleClosedTrades` in the backend (the only process with a path to a broker token today).
+- **#101** feeds `close_trade.success` into `settleClosedTrades` and runs the REST closed pass at
+  session start; **#100** implements the executor that returns `{ outcome: 'accepted', transport,
+trade }`. The operator tool for `manual_review` is a later issue.
+- Real-mode eligibility: **#134** the grant gate
   (this document); **#135** what a revoked grant does to running sessions; **#21/#121** starting
   real mode from the bot; **#144** the kill switch, a separate operational flag. Country
   restrictions are deferred: there is no data source (`GET /v1/broker/user` has no country, the

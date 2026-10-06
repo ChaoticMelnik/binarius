@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { TransactionRollbackError, eq, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { TradeIntentFailureReason, canTransition, staffLoginSchema } from '@binarius/shared';
+import {
+  TradeIntentFailureReason,
+  TradeIntentStatus,
+  canTransition,
+  staffLoginSchema,
+} from '@binarius/shared';
 import { createDb, type Db } from './client';
 import {
   AuditAction,
@@ -128,6 +133,11 @@ async function seedDeposit(tx: Tx, seed: { accountId: string; userId: string }):
   return row!.id;
 }
 
+// a finished intent holds no reserve and a live one holds its token
+// (trade_intents_terminal_reserve_check), so the reserve follows the status unless patched
+const reserveFor = (status: unknown): bigint =>
+  status === 'rejected' || status === 'settled' ? 0n : 1n;
+
 const intent = (
   seed: { accountId: string; userId: string },
   clientRequestId: string,
@@ -141,6 +151,7 @@ const intent = (
   action: 'up' as const,
   durationSec: 60,
   clientRequestId,
+  tokensReserved: reserveFor(patch.status),
   ...patch,
 });
 
@@ -496,7 +507,7 @@ describe('trade_intents', () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       const [row] = await tx.insert(tradeIntents).values(intent(seed, 'r1')).returning();
-      expect(row).toMatchObject({ status: 'planned', version: 1, tokensReserved: 0n });
+      expect(row).toMatchObject({ status: 'planned', version: 1, tokensReserved: 1n });
       expect(row!.amount).toBe('10.00000000');
     });
   });
@@ -1242,10 +1253,136 @@ describe('trade_intents blocking', () => {
         .returning({ id: tradeIntents.id });
       await tx
         .update(tradeIntents)
-        .set({ status: 'settled' })
+        .set({ status: 'settled', version: sql`${tradeIntents.version} + 1`, tokensReserved: 0n })
         .where(eq(tradeIntents.id, parked!.id));
       const [next] = await tx.insert(tradeIntents).values(intent(seed, 'r2')).returning();
       expect(next!.status).toBe('planned');
+    });
+  });
+});
+
+// #17: the graph and the version bump at the database (0014), the reserve rule as a CHECK (0013)
+describe('trade_intents state machine', () => {
+  const STATUSES = Object.values(TradeIntentStatus);
+
+  it.each([
+    ['rejected', 1n],
+    ['settled', 1n],
+    ['planned', 0n],
+    ['manual_review', 0n],
+  ])('refuses a %s intent with reserve %s', async (status, tokensReserved) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(tradeIntents).values(intent(seed, 'r1', { status, tokensReserved })),
+        '23514',
+        'trade_intents_terminal_reserve_check',
+      );
+    });
+  });
+
+  it.each([
+    ['planned', 1n],
+    ['queued', 1n],
+    ['unknown', 1n],
+    ['manual_review', 1n],
+    ['settled', 0n],
+    ['rejected', 0n],
+  ])('accepts a %s intent with reserve %s', async (status, tokensReserved) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradeIntents)
+        .values(intent(seed, 'r1', { status, tokensReserved }))
+        .returning();
+      expect(row).toMatchObject({ status, tokensReserved });
+    });
+  });
+
+  // the single-source check for the trigger's hand copy of TRADE_INTENT_TRANSITIONS: every
+  // target is tried in its own savepoint, so one source row serves all nine
+  it.each(STATUSES)('lets %s move exactly along the shared graph', async (from) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradeIntents)
+        .values(intent(seed, 'r1', { status: from }))
+        .returning({ id: tradeIntents.id });
+      const actual: [string, boolean][] = [];
+      for (const to of STATUSES.filter((status) => status !== from)) {
+        const outcome = await tx
+          .transaction(async (sp) => {
+            await sp
+              .update(tradeIntents)
+              .set({
+                status: to,
+                version: sql`${tradeIntents.version} + 1`,
+                tokensReserved: reserveFor(to),
+              })
+              .where(eq(tradeIntents.id, row!.id));
+            sp.rollback();
+          })
+          .then(
+            () => 'committed' as const,
+            (error: unknown) => error,
+          );
+        if (outcome instanceof TransactionRollbackError) {
+          actual.push([to, true]);
+        } else {
+          expect(caught(outcome)).toMatchObject({
+            code: 'P0001',
+            constraint: 'trade_intents_transition_guard',
+          });
+          actual.push([to, false]);
+        }
+      }
+      observed.add('trade_intents_transition_guard');
+      const expected = STATUSES.filter((status) => status !== from).map((to) => [
+        to,
+        canTransition(from, to),
+      ]);
+      expect(actual).toEqual(expected);
+    });
+  });
+
+  it.each([
+    ['leaves the version as it is', sql`${tradeIntents.version}`],
+    ['moves the version by two', sql`${tradeIntents.version} + 2`],
+  ])('refuses a status change that %s', async (_label, version) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradeIntents)
+        .values(intent(seed, 'r1', { status: 'queued' }))
+        .returning({ id: tradeIntents.id });
+      await rejectsWith(
+        tx
+          .update(tradeIntents)
+          .set({ status: 'submitting', version })
+          .where(eq(tradeIntents.id, row!.id)),
+        'P0001',
+        'trade_intents_transition_guard',
+      );
+    });
+  });
+
+  it('lets an UPDATE that keeps the status or touches another column through', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradeIntents)
+        .values(intent(seed, 'r1', { status: 'submitting' }))
+        .returning({ id: tradeIntents.id });
+      await tx
+        .update(tradeIntents)
+        .set({ status: 'submitting' })
+        .where(eq(tradeIntents.id, row!.id));
+      const [after] = await tx
+        .update(tradeIntents)
+        .set({ lastError: 'stale_submitting' })
+        .where(eq(tradeIntents.id, row!.id))
+        .returning();
+      expect(after).toMatchObject({ status: 'submitting', version: 1 });
     });
   });
 });
