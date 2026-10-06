@@ -6,6 +6,7 @@ export const BOT_COMMANDS = [
   { command: 'start', description: LABELS.startCommand },
   { command: 'account', description: LABELS.accountCommand },
   { command: 'settings', description: LABELS.settingsCommand },
+  { command: 'help', description: LABELS.helpCommand },
   { command: 'support', description: LABELS.supportCommand },
 ] as const satisfies readonly BotCommand[];
 

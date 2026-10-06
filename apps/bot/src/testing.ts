@@ -154,6 +154,19 @@ export const textUpdate = (text: string, chatType = 'private', from: User = USER
     },
   }) as unknown as Update;
 
+// A command posted in a channel: Telegram delivers it as channel_post, with no `from`.
+export const channelPostUpdate = (text: string): Update =>
+  ({
+    update_id: ++updateId,
+    channel_post: {
+      message_id: ++updateId,
+      date: 1,
+      chat: { id: -1001234567890, type: 'channel', title: 'Binarius channel' },
+      text,
+      entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0]?.length }],
+    },
+  }) as unknown as Update;
+
 // The bot's own membership changing in a chat: in a private chat Telegram sends `kicked` when the
 // user blocks the bot and `member` when they unblock it.
 export const chatMemberUpdate = (

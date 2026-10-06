@@ -26,6 +26,7 @@ import {
 } from '@binarius/shared';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
+import { BOT_COMMANDS } from './commands';
 import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
 import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
@@ -33,6 +34,7 @@ import {
   accountCard,
   accountStatus,
   currentLevelLabel,
+  helpText,
   LABELS,
   levelLabel,
   settingsText,
@@ -58,6 +60,9 @@ export const LEVEL_CURRENT_CALLBACK_DATA = `${LEVEL_CALLBACK_PREFIX}current`;
 const LEVEL_CALLBACK_PATTERN = new RegExp(
   `^${LEVEL_CALLBACK_PREFIX}(${Object.values(NotificationLevel).join('|')})$`,
 );
+
+// built once: the list is a constant, and the menu (lifecycle.ts) reads the same one
+const HELP = helpText(BOT_COMMANDS);
 
 export interface CreateBotOptions {
   token: string;
@@ -230,6 +235,11 @@ export function createBot({
     await replyHtml(ctx, TEXTS.support, {
       reply_markup: new InlineKeyboard().url(LABELS.supportButton, supportUrl()),
     });
+  });
+
+  // No backend call, like /support: the same answer for everyone, during an outage too (#184).
+  privateChats.command('help', async (ctx) => {
+    await replyHtml(ctx, HELP);
   });
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {

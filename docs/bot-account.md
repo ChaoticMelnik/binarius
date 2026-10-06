@@ -142,7 +142,7 @@ worst of them.
 
 - **#136** — the token balance is `POST /trading/access` ([trading-access.md](trading-access.md)); the bot shows it from #24.
 - **#24** — the main menu, and re-sending a lost or unpinned account card.
-- **#184** — `/help`; it lists the commands from `BOT_COMMANDS`, `/account` included.
+- `/help` lists the commands from `BOT_COMMANDS`, `/account` included ([bot-start.md → /help](bot-start.md#help-184)).
 - **#120** — `/settings` and `/support`: [bot-start.md](bot-start.md#notification-level-and-support-120).
 - **#119** — a user who blocked the bot ([bot-start.md → Blocking the bot](bot-start.md#blocking-the-bot-119)); `/account` does not read or clear that mark.
 - **#214** — the empty-address rule for the contract and for `/start`.

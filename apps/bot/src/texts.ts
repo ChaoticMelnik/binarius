@@ -10,12 +10,19 @@ import {
   type LinkedAccountView,
   type TelegramHtml,
 } from '@binarius/shared';
+import type { BotCommand } from 'grammy/types';
 
 // in place of an address the broker did not send; a fragment, so it is nested without a second
 // escape
 const UNKNOWN_ADDRESS = telegramHtml`адрес неизвестен`;
 const addressOf = (email: string | null): string | TelegramHtml =>
   email === null ? UNKNOWN_ADDRESS : email;
+
+// What the bot offers, in the account card and in /help: one source for both HTML copies (#184).
+// PROFILE.description keeps its own plain copy, which Telegram does not parse.
+const FEATURE_LINES = telegramHtml`🎮 Демо-торговля без риска: пробуй на демобалансе, деньги не нужны.
+🤖 Автоторговля за токены: бот открывает сделки на Binodex за тебя.
+📊 Баланс, токены и история сделок прямо в этом чате.`;
 
 // The /settings buttons, also the legend of its message: one source for both (#120)
 const LEVEL_LABELS = {
@@ -58,9 +65,7 @@ export const TEXTS = {
   cardBody: telegramHtml`✅ <b>Аккаунт Binodex подключён</b>
 
 <b>Что теперь доступно</b>
-🎮 Демо-торговля без риска: пробуй на демобалансе, деньги не нужны.
-🤖 Автоторговля за токены: бот открывает сделки на Binodex за тебя.
-📊 Баланс, токены и история сделок прямо в этом чате.
+${FEATURE_LINES}
 🆘 Если что-то пошло не так — напиши в поддержку: /support`,
   // the number is the backend's (LINK_BONUS_TOKENS), printed as it arrives
   cardBonusGranted: (tokens: string) =>
@@ -127,7 +132,30 @@ ${LEVEL_LABELS.off} — никаких напоминаний.`,
   support: telegramHtml`🆘 <b>Поддержка</b>
 Если что-то пошло не так или есть вопрос — напиши нам.
 👇 Нажми кнопку ниже, откроется чат с поддержкой.`,
+  // /help (#184), assembled by helpText below. The command lines are not here: commands.ts
+  // imports LABELS from this file, so BOT_COMMANDS is passed in by bot.ts instead of imported.
+  helpAbout: telegramHtml`ℹ️ <b>Что умеет Binarius</b>
+${FEATURE_LINES}`,
+  helpConnect: telegramHtml`<b>Как подключить аккаунт Binodex</b>
+Если аккаунт ещё не подключён, нажми /start и выбери способ:
+📧 «🔗 Подключить аккаунт Binodex» — пришли адрес почты и код из письма.
+🌐 «🌐 Войти через сайт Binodex» — вход на сайте брокера.`,
+  helpCommands: telegramHtml`<b>Команды</b>`,
 } as const satisfies Record<string, TelegramHtml | ((value: string) => TelegramHtml)>;
+
+// The /help message: the three blocks, then one line per command in the menu's order.
+export function helpText(commands: readonly BotCommand[]): TelegramHtml {
+  // a hole holding an array is joined without a separator, so each line carries its newline
+  const lines = commands.map(
+    ({ command, description }) => telegramHtml`
+/${command} — ${description}`,
+  );
+  return telegramHtml`${TEXTS.helpAbout}
+
+${TEXTS.helpConnect}
+
+${TEXTS.helpCommands}${lines}`;
+}
 
 // What /account says about the user's links, in the order given (newest first). No link at all
 // is accountNone; otherwise the header follows the best link there is.
@@ -215,6 +243,8 @@ export const LABELS = {
   // the descriptions of /settings and /support, plain like startCommand (#120)
   settingsCommand: 'Настройки уведомлений',
   supportCommand: 'Поддержка',
+  // the description of /help, plain like startCommand (#184)
+  helpCommand: 'Помощь',
   supportButton: '💬 Написать в поддержку',
 } as const satisfies Record<string, string | ((value: string | null) => string)>;
 

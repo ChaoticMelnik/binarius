@@ -525,7 +525,7 @@ const EMAIL_STEP_BRANCHES: readonly Branch[] = [
   },
   {
     label: 'the text is a command',
-    update: textUpdate('/help'),
+    update: textUpdate('/unknown'),
     dialog: ON_EMAIL_STEP,
     expected: { backend: 0, telegram: 0 },
   },
@@ -964,6 +964,21 @@ const SUPPORT_BRANCHES: readonly Branch[] = [
   SUPPORT_WORST_CASE,
 ];
 
+const HELP_WORST_CASE: Branch = {
+  label: 'the help message is sent',
+  update: textUpdate('/help'),
+  expected: { backend: 0, telegram: 1 },
+};
+
+const HELP_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: textUpdate('/help', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  HELP_WORST_CASE,
+];
+
 describe('what the handlers do, against what HANDLER_CALLS declares', () => {
   it('/settings', async () => {
     await checkHandler('settings', SETTINGS_BRANCHES, SETTINGS_WORST_CASE, HANDLER_CALLS.settings);
@@ -984,6 +999,10 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('/support', async () => {
     await checkHandler('support', SUPPORT_BRANCHES, SUPPORT_WORST_CASE, HANDLER_CALLS.support);
+  });
+
+  it('/help', async () => {
+    await checkHandler('help', HELP_BRANCHES, HELP_WORST_CASE, HANDLER_CALLS.help);
   });
 
   it('/start', async () => {
