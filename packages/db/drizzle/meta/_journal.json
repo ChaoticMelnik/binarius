@@ -120,6 +120,13 @@
       "when": 1791319659938,
       "tag": "0016_broker_account_halt_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791321202657,
+      "tag": "0017_broker_unavailable",
+      "breakpoints": true
     }
   ]
 }
