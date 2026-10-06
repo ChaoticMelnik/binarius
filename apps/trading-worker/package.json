@@ -15,7 +15,8 @@
     "drizzle-orm": "^0.45.3",
     "ioredis": "^6.0.0",
     "pg": "^8.23.0",
-    "pino": "^10.3.1"
+    "pino": "^10.3.1",
+    "socket.io-client": "^4.8.4"
   },
   "devDependencies": {
     "@binarius/mock-broker": "workspace:*",

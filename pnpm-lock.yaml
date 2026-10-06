@@ -126,6 +126,9 @@ importers:
       pino:
         specifier: ^10.3.1
         version: 10.3.1
+      socket.io-client:
+        specifier: ^4.8.4
+        version: 4.8.4
     devDependencies:
       '@binarius/mock-broker':
         specifier: workspace:*
