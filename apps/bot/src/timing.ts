@@ -54,8 +54,13 @@ export const HANDLER_CALLS = {
   // sendMessage, evaluateSignal, the result by sendMessage; or «⏳» edited, evaluateSignal, the
   // result's edit refused as gone → sendMessage. Both are 2 / 4.
   demoAnalysis: { backend: 2, telegram: 4 },
-  // the stake button until #127: answerCallbackQuery, then sendMessage
-  stakePlaceholder: { backend: 0, telegram: 2 },
+  // the stake button (#127): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — the reads
+  // counted as sequential, as in oauth — then createIntent and its one retry on an unknown
+  // outcome, then sendMessage
+  stake: { backend: 4, telegram: 2 },
+  // «🔄 Обновить статус» (#127): answerCallbackQuery ∥ readIntent ∥ readPairs — counted the same
+  // way — then editMessageText refused as gone → sendMessage
+  intentRefresh: { backend: 2, telegram: 3 },
   // answerCallbackQuery, then sendMessage asking for the address
   connect: { backend: 0, telegram: 2 },
   // answerCallbackQuery ∥ startLogin, then sendMessage — the parallel pair is counted as

@@ -16,6 +16,7 @@ import {
   sentPayload,
   startUpdate,
   type FakeLogger,
+  stubTracker,
 } from './testing';
 
 // `bot.start()` resolves only once the polling loop has ended, which is what makes the drain
@@ -378,6 +379,7 @@ function scene(options: SceneOptions = {}) {
     readIntent: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({
+    intentTracker: stubTracker(),
     token: TOKEN,
     backend,
     logger: log,

@@ -675,7 +675,7 @@ describe('the demo screens', () => {
 describe('the analysis screen texts', () => {
   const HOSTILE = `<&>_*"`.repeat(11).slice(0, 64);
   const analysisEntries = Object.entries(TEXTS).filter(
-    ([key]) => key.startsWith('analysis') || key === 'analyzing' || key === 'stakeSoon',
+    ([key]) => key.startsWith('analysis') || key === 'analyzing',
   );
 
   // the payout sentence is demoPayout's, outside these entries

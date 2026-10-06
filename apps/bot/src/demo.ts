@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
   BrokerRestErrorCode,
@@ -67,14 +68,19 @@ export const demoDurationCallbackData = (assetId: number, durationSec: DemoDurat
   `demo:d:${assetId}:${durationSec}`;
 export const demoAnalysisCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
   `demo:an:${assetId}:${durationSec}`;
-// The analysis screen's button (#126); #127 owns the press. The longest,
-// `demo:stake:2147483647:3600:down`, is 31 bytes.
-export const STAKE_CALLBACK_PREFIX = 'demo:stake:';
+// The analysis screen's button (#126); the press opens the trade (#127, demo-trade.ts). The nonce
+// is drawn once per analysis render and is the trade's idempotency key: the same button pressed
+// again replays its intent, a new render allows a new trade. The longest,
+// `demo:stake:2147483647:3600:down:0123456789ab`, is 44 bytes.
+const STAKE_CALLBACK_PREFIX = 'demo:stake:';
 export const stakeCallbackData = (
   assetId: number,
   durationSec: DemoDurationSec,
   action: TradeAction,
-): string => `${STAKE_CALLBACK_PREFIX}${assetId}:${durationSec}:${action}`;
+  nonce: string,
+): string => `${STAKE_CALLBACK_PREFIX}${assetId}:${durationSec}:${action}:${nonce}`;
+// 48 bits: unique among one user's own renders is all it needs, since the key is per user
+export const newStakeNonce = (): string => randomBytes(6).toString('hex');
 
 // A group is matched loosely and checked against DEMO_ASSET_GROUPS in the handler, so a forged
 // one stops the spinner like a forged id; a duration is one of DEMO_DURATIONS_SEC by the pattern.
@@ -84,7 +90,7 @@ const DEMO_ASSET_PATTERN = /^demo:a:(\d{1,10})$/;
 const DEMO_DURATION_PATTERN = new RegExp(`^demo:d:(\\d{1,10}):(${DURATIONS})$`);
 const DEMO_ANALYSIS_PATTERN = new RegExp(`^demo:an:(\\d{1,10}):(${DURATIONS})$`);
 export const STAKE_CALLBACK_PATTERN = new RegExp(
-  `^${STAKE_CALLBACK_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')})$`,
+  `^${STAKE_CALLBACK_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')}):([0-9a-f]{12})$`,
 );
 
 // The shape #127 sends, so what the bot carries is what the backend accepts.
@@ -103,6 +109,7 @@ export interface StakeData {
   assetId: number;
   durationSec: DemoDurationSec;
   action: TradeAction;
+  nonce: string;
 }
 
 // The stake button's data from a STAKE_CALLBACK_PATTERN match, undefined when forged.
@@ -111,8 +118,16 @@ export function stakeDataOf(match: RegExpMatchArray | string): StakeData | undef
   const assetId = assetIdOf(match[1]);
   const durationSec = durationOf(match[2]);
   const action = actionOf(match[3]);
-  if (assetId === undefined || durationSec === undefined || action === undefined) return undefined;
-  return { assetId, durationSec, action };
+  const nonce = match[4];
+  if (
+    assetId === undefined ||
+    durationSec === undefined ||
+    action === undefined ||
+    nonce === undefined
+  ) {
+    return undefined;
+  }
+  return { assetId, durationSec, action, nonce };
 }
 
 export interface DemoComposerDeps {
@@ -245,7 +260,10 @@ export function createDemoComposer<C extends Context>({
     const keyboard = new InlineKeyboard();
     if (screen.stake !== null) {
       keyboard
-        .text(stakeButtonLabel(screen.stake), stakeCallbackData(assetId, durationSec, screen.stake))
+        .text(
+          stakeButtonLabel(screen.stake),
+          stakeCallbackData(assetId, durationSec, screen.stake, newStakeNonce()),
+        )
         .row();
     }
     return keyboard

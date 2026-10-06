@@ -34,12 +34,9 @@ import {
   type BackendClient,
 } from './backend-client';
 import { BOT_COMMANDS } from './commands';
-import {
-  createDemoComposer,
-  DEMO_CALLBACK_DATA,
-  STAKE_CALLBACK_PATTERN,
-  stakeDataOf,
-} from './demo';
+import { createDemoComposer, DEMO_CALLBACK_DATA } from './demo';
+import { createDemoTradeComposer } from './demo-trade';
+import type { IntentTracker } from './intent-tracker';
 import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
@@ -99,6 +96,8 @@ export interface CreateBotOptions {
   loginDialog?: LoginDialog;
   // the clock the demo compares a pair's schedule with
   now?: () => number;
+  // follows each demo trade's status message (#127); required, so no test arms timers unasked
+  intentTracker: Pick<IntentTracker, 'track'>;
 }
 
 export function createBot({
@@ -111,6 +110,7 @@ export function createBot({
   telegramApiTimeoutMs = TELEGRAM_API_TIMEOUT_MS,
   loginDialog = createLoginDialog(),
   now = Date.now,
+  intentTracker,
 }: CreateBotOptions): Bot {
   const bot = new Bot(token, {
     ...(botInfo === undefined ? {} : { botInfo }),
@@ -333,16 +333,16 @@ export function createBot({
   // only, so the private-chat filter covers them and the text handler below never sees them.
   privateChats.use(createDemoComposer({ backend, logger, now }));
 
-  // The analysis screen's stake button (#126) until #127 opens the trade there: no backend call
-  // and no state. Forged data stops the spinner and sends nothing, as on the demo's screens.
-  privateChats.callbackQuery(STAKE_CALLBACK_PATTERN, async (ctx) => {
-    const stake = stakeDataOf(ctx.match);
-    await ctx.answerCallbackQuery().catch((error: unknown) => {
-      logAnswerFailure(error);
-    });
-    if (stake === undefined) return;
-    await replyHtml(ctx, TEXTS.stakeSoon);
-  });
+  // the stake button under the analysis and the refresh button under the status (#127)
+  privateChats.use(
+    createDemoTradeComposer({
+      backend,
+      logger,
+      now,
+      intentTracker,
+      connectKeyboard: welcomeKeyboard,
+    }),
+  );
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
     loginDialog.set(ctx.from.id, { step: 'email' });

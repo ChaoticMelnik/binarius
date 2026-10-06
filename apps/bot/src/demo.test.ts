@@ -48,6 +48,7 @@ import {
   pairsResponse,
   rejectionOf,
   type ApiCall,
+  stubTracker,
 } from './testing';
 import {
   demoDurationsScreen,
@@ -85,6 +86,7 @@ function setup(
   const loginDialog = createLoginDialog(clock === undefined ? {} : { now: () => clock.at });
   if (options.dialog !== undefined) loginDialog.set(USER.id, options.dialog);
   const bot = createBot({
+    intentTracker: stubTracker(),
     token: '123456:AA-bot-token',
     backend: fakeBackend({ readPairs, evaluateSignal }),
     logger,
@@ -437,16 +439,17 @@ describe('the analysis', () => {
     // without a keyboard the edit removes the summary's, so «📊 Анализ» cannot be pressed twice
     expect(waiting?.payload.reply_markup).toBeUndefined();
     expect(result?.payload.text).toBe(resultOf());
-    expect(rowsOf(result?.payload)).toEqual([
-      [
-        button(
-          stakeButtonLabel(TradeAction.Up),
-          stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up),
-        ),
-      ],
-      [REPEAT],
-      [BACK_EURUSD_DURATIONS, BACK_GROUPS],
-    ]);
+    const [[stake], ...rest] = rowsOf(result?.payload);
+    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up));
+    // the nonce is drawn per render (#127); everything before it is the pressed pair
+    const match = STAKE_CALLBACK_PATTERN.exec(stake?.callback_data ?? '');
+    expect(stakeDataOf(match ?? '')).toEqual({
+      assetId: PAIR_EURUSD.id,
+      durationSec: 60,
+      action: TradeAction.Up,
+      nonce: expect.stringMatching(/^[0-9a-f]{12}$/),
+    });
+    expect(rest).toEqual([[REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
     expect(readPairs).toHaveBeenCalledTimes(1);
     expect(evaluateSignal.mock.calls).toEqual([[PAIR_EURUSD.id, '1m']]);
   });
@@ -507,13 +510,42 @@ describe('the analysis', () => {
     expect(evaluateSignal).not.toHaveBeenCalled();
   });
 
+  // #127: «🔄 Повторить анализ» re-renders the same message, so the nonce is what tells two
+  // renders' buttons apart and lets the second one open a trade of its own
+  it('draws a new nonce on every render, and nothing else changes', async () => {
+    const { press, calls } = setup();
+    await press(DATA);
+    await press(DATA);
+    const stakes = edits(calls)
+      .map((call) => rowsOf(call.payload)[0]?.[0]?.callback_data)
+      .filter((data): data is string => data?.startsWith('demo:stake:') === true);
+    expect(stakes).toHaveLength(2);
+    const [first, second] = stakes.map((data) =>
+      stakeDataOf(STAKE_CALLBACK_PATTERN.exec(data) ?? ''),
+    );
+    expect(first?.nonce).not.toBe(second?.nonce);
+    expect({ ...first, nonce: '' }).toEqual({ ...second, nonce: '' });
+  });
+
+  it.each(['0123456789a', '0123456789AB', 'AbCdEf012345', 'ASNFZ4mrze8=', '0123456789abc'])(
+    'refuses the nonce %s',
+    (nonce) => {
+      expect(STAKE_CALLBACK_PATTERN.exec(`demo:stake:101:60:up:${nonce}`)).toBeNull();
+    },
+  );
+
   it("carries stake data #127's request schema accepts", () => {
     for (const action of Object.values(TradeAction)) {
-      const data = stakeCallbackData(2_147_483_647, 3600, action);
+      const data = stakeCallbackData(2_147_483_647, 3600, action, 'ffffffffffff');
       const match = STAKE_CALLBACK_PATTERN.exec(data);
       expect(match, data).not.toBeNull();
       const parsed = stakeDataOf(match as RegExpMatchArray);
-      expect(parsed).toEqual({ assetId: 2_147_483_647, durationSec: 3600, action });
+      expect(parsed).toEqual({
+        assetId: 2_147_483_647,
+        durationSec: 3600,
+        action,
+        nonce: 'ffffffffffff',
+      });
       const shape = createTradeIntentRequestSchema.shape;
       expect(shape.assetId.safeParse(parsed?.assetId).success).toBe(true);
       expect(shape.durationSec.safeParse(parsed?.durationSec).success).toBe(true);
@@ -631,24 +663,6 @@ describe('the analysis', () => {
   });
 });
 
-describe('the stake placeholder', () => {
-  it('answers and says the trade is coming, with no backend call', async () => {
-    const { press, calls, readPairs, evaluateSignal } = setup();
-    await press(stakeCallbackData(PAIR_EURUSD.id, 300, TradeAction.Down));
-
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.stakeSoon.value);
-    expect(readPairs).not.toHaveBeenCalled();
-    expect(evaluateSignal).not.toHaveBeenCalled();
-  });
-
-  it('only stops the spinner on an id the request schema refuses', async () => {
-    const { press, calls } = setup();
-    await press('demo:stake:0:60:up');
-    expect(methods(calls)).toEqual(['answerCallbackQuery']);
-  });
-});
-
 describe('the edit of a demo screen', () => {
   const data = demoAssetCallbackData(PAIR_EURUSD.id);
 
@@ -728,8 +742,9 @@ describe('demo data the bot did not draw', () => {
   it.each([
     'demo:d:101:120',
     'demo:an:101:120',
-    'demo:stake:101:120:up',
-    'demo:stake:101:60:sideways',
+    'demo:stake:101:120:up:0123456789ab',
+    'demo:stake:101:60:sideways:0123456789ab',
+    'demo:stake:101:60:up',
     'demo:t:currency:-1',
     'demo:x',
   ])('does not answer %s at all: no demo pattern matches it', async (data) => {

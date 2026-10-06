@@ -9,13 +9,23 @@ import {
   logOptions,
   NotificationLevel,
   SignalFeedOutcome,
+  TradeAction,
+  TradeIntentErrorCode,
+  TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
   type LogLevel,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { OAUTH_CALLBACK_DATA, createBot, levelCallbackData } from './bot';
-import { DEMO_CALLBACK_DATA, demoAnalysisCallbackData, demoAssetCallbackData } from './demo';
+import {
+  DEMO_CALLBACK_DATA,
+  demoAnalysisCallbackData,
+  demoAssetCallbackData,
+  stakeCallbackData,
+} from './demo';
+import { intentCallbackData } from './demo-trade';
+import { createIntentTracker } from './intent-tracker';
 import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
@@ -25,12 +35,15 @@ import {
   CARD_MESSAGE_ID,
   CODE_SENT,
   CONFIRMED,
+  INTENT_ID,
+  INTENT_VIEW,
   LOGIN,
   PAIR_EURUSD,
   PAIRS_RESPONSE,
   SIGNAL_DECIDED,
   SIGNAL_FETCH_FAILED,
   PENDING_ACCOUNT_ID,
+  STAKE_NONCE,
   USER,
   USER_VIEW,
   captureApi,
@@ -42,6 +55,7 @@ import {
   textUpdate,
   type ApiAnswer,
   type ApiCall,
+  stubTracker,
 } from './testing';
 import { settingsText, TEXTS } from './texts';
 
@@ -74,6 +88,8 @@ interface Scenario {
   readTradingAccess?: BackendClient['readTradingAccess'];
   readPairs?: BackendClient['readPairs'];
   evaluateSignal?: BackendClient['evaluateSignal'];
+  createIntent?: BackendClient['createIntent'];
+  readIntent?: BackendClient['readIntent'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -96,12 +112,14 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     readTradingAccess: scenario.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
     readPairs: scenario.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)),
     evaluateSignal: scenario.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
-    createIntent: () => Promise.reject(new Error('not used by these scenes')),
-    readIntent: () => Promise.reject(new Error('not used by these scenes')),
+    createIntent:
+      scenario.createIntent ?? (() => Promise.resolve({ created: true, intent: INTENT_VIEW })),
+    readIntent: scenario.readIntent ?? (() => Promise.resolve(INTENT_VIEW)),
   };
   const loginDialog = createLoginDialog();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
   const bot = createBot({
+    intentTracker: stubTracker(),
     token: TOKEN,
     backend,
     logger,
@@ -1161,5 +1179,109 @@ describe('what the bot writes about an error logged positionally', () => {
     });
     expect(parsed(lines[0]).err).toStrictEqual({ name: 'Error', code: 'ECONNRESET' });
     expect(lines.join('')).not.toContain('SECRET-TOKEN');
+  });
+});
+
+// #127
+describe('what the bot writes about a demo trade', () => {
+  // time and pid are numbers that could hold 4242 by chance; every other field is searched
+  const fieldsOf = (lines: readonly string[]) =>
+    lines
+      .map((line) => JSON.stringify({ ...parsed(line), time: undefined, pid: undefined }))
+      .join('');
+  const noUserNoTrade = (lines: readonly string[]) => {
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+    expect(lines.join('')).not.toContain(PAIR_EURUSD.symbol);
+    expect(lines.join('')).not.toContain(INTENT_VIEW.amount);
+    expect(lines.join('')).not.toContain('$');
+  };
+  const staked = () =>
+    callbackUpdate(stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, STAKE_NONCE));
+
+  it('names an intent not created by error, code, status and reason only', async () => {
+    const { lines } = await linesFrom({
+      update: staked(),
+      level: 'trace',
+      createIntent: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, {
+            status: 409,
+            reason: TradeIntentErrorCode.RealTradingDisabled,
+          }),
+        ),
+    });
+    expect(lineWith(lines, 'trade intent not created')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 409,
+      backendReason: TradeIntentErrorCode.RealTradingDisabled,
+    });
+    noUserNoTrade(lines);
+    expect(lines.join('')).not.toContain(STAKE_NONCE);
+  });
+
+  it('names a refresh that could not read the status, without the user or the id', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate(intentCallbackData(INTENT_ID)),
+      level: 'trace',
+      readIntent: () =>
+        Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
+    });
+    expect(lineWith(lines, 'trade intent status not read')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 500,
+    });
+    noUserNoTrade(lines);
+    expect(lines.join('')).not.toContain(INTENT_ID);
+  });
+
+  it("names the tracker's failed read and failed edit with the intent id and the method", async () => {
+    vi.useFakeTimers();
+    try {
+      const { lines, logger } = sink('trace');
+      const reads = [
+        () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+        () => Promise.resolve({ ...INTENT_VIEW, status: TradeIntentStatus.Submitting }),
+      ];
+      const tracker = createIntentTracker({
+        backend: { readIntent: () => (reads.shift() ?? reads[0]!)() },
+        logger,
+        firstPollMs: 1,
+        pollMs: 2,
+        deadlineMs: 1_000,
+      });
+      tracker.track({
+        intentId: INTENT_ID,
+        telegramUserId: String(USER.id),
+        symbol: PAIR_EURUSD.symbol,
+        view: INTENT_VIEW,
+        edit: () =>
+          Promise.reject(
+            new HttpError(
+              "Network request for 'editMessageText' failed!",
+              Object.assign(new Error(`SECRET ${PAIR_EURUSD.symbol}`), { code: 'ECONNRESET' }),
+            ),
+          ),
+      });
+      await vi.advanceTimersByTimeAsync(3);
+      await tracker.stop();
+      expect(lineWith(lines, 'trade intent status not read')).toMatchObject({
+        level: 40,
+        err: { name: 'BackendError', code: BackendErrorCode.Unreachable },
+        intentId: INTENT_ID,
+      });
+      expect(lineWith(lines, 'trade intent message not edited')).toMatchObject({
+        level: 40,
+        err: { name: 'HttpError' },
+        method: 'editMessageText',
+        transportError: { name: 'Error', code: 'ECONNRESET' },
+        intentId: INTENT_ID,
+      });
+      noUserNoTrade(lines);
+      expect(lines.join('')).not.toContain('SECRET');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

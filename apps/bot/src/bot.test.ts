@@ -61,6 +61,7 @@ import {
   accountView,
   brokerBalance,
   userView,
+  stubTracker,
 } from './testing';
 import {
   accountCard,
@@ -125,6 +126,7 @@ function setup(
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
   if (options.dialog !== undefined) dialog.set(USER.id, options.dialog);
   const bot = createBot({
+    intentTracker: stubTracker(),
     token: '123456:AA-bot-token',
     backend,
     logger,
@@ -1306,6 +1308,7 @@ describe('the account card', () => {
       const { bodies, apiRoot } = await recordingServer();
       const logger = fakeLogger();
       const bot = createBot({
+        intentTracker: stubTracker(),
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1346,6 +1349,7 @@ describe('the account card', () => {
       const { bodies, apiRoot } = await recordingServer();
       const logger = fakeLogger();
       const bot = createBot({
+        intentTracker: stubTracker(),
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.resolve(userView({ hasActiveBrokerAccount: true }))),
@@ -2369,6 +2373,7 @@ describe('the Bot API timeout', () => {
     const apiRoot = await listen(started);
 
     const bot = createBot({
+      intentTracker: stubTracker(),
       token: '123456:AA-bot-token',
       // no handler runs in this test: the call under test is bot.api.sendMessage itself
       backend: {
