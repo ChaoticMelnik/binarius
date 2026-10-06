@@ -193,22 +193,27 @@ The reconciler and the catch-up (docs/trade-intent-transport.md → Reconciliati
 these, taken from the fixture and broker-web, not from a live run:
 
 - **A1 order:** `status=closed` and `status=open` come newest first by `open_timestamp`. The code
-  checks every page and the seam between pages; a violation answers `broker_contract`, never
-  `not_found`.
-- **A2 `limit`/`offset`:** honoured, with disjoint pages. The code does not depend on it: a
-  page's length is never the list's end (only an empty page is), the next offset is the previous
-  one plus the page's length minus one, and every page after the first must start with a trade
-  already read (`readTradePages`, `apps/trading-worker/src/intents/trade-pages.ts`). A capped or
-  ignored `limit` only shortens the reach of `RECONCILE_MAX_TRADE_PAGES` (`window_not_covered`,
-  never `not_found`); an ignored or skewed `offset` answers `broker_contract`.
-- **A3 `status`:** filters open from closed. If not, the merge by `id` stays correct.
+  checks every page and the seam between pages; a violation answers `broker_contract`.
+- **A2 `limit`/`offset`:** honoured, with disjoint pages. Not a safety condition: no reconciler
+  releases a reserve on what the pages show (#274 proves absence after the live probe).
+  `readTradePages` (`apps/trading-worker/src/intents/trade-pages.ts`) takes only an empty first
+  page, an empty page after a one-trade page, or a trade older than the window as the list's end;
+  every other page must start with a trade already read. What the code gets from a broken A2: a
+  capped or ignored `limit` shortens the reach (`window_not_covered` while the window is open, then
+  manual review); a cap of 1, an ignored, skewed or page-numbered `offset` and a list that shrinks
+  between pages answer `broker_contract` and are retried on the lease.
+- **A3 `status`:** filters open from closed, and a trade is on one of the two lists at every
+  moment (it leaves `open` no earlier than it appears in `closed`). If the filter is wrong, the
+  merge by `id` stays correct; if the move is not atomic, a trade closing during the read is on
+  neither list — in #90 that parks the intent (`unresolved`), it never releases.
 - **A4 `is_demo`:** filters by mode. The local mode check stays either way.
 - **A5 `open_timestamp`** is Unix milliseconds (the shapes of 2026-10-03 show it).
 - **A6** the default page size (the fixture's 20) is not used: every call passes `limit`.
 
 Observed live: not yet. The read-only probe in issue #90's plan (6 GETs, shapes only) confirms
-A1–A6; until it runs, a broker that breaks A1 leaves reconciliation waiting with a `warn` and the
-reserve held. A2 is no longer a safety condition, only one of reach.
+A1–A6 and whether a closing trade is on one of the two lists at every moment (two GETs, open then
+closed, while a 5-second trade closes). Until it runs, no reconciler answers `not_found`: an intent
+without a candidate is parked for the operator and the reserve is held (#274).
 
 ## Open items
 
