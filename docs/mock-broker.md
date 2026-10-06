@@ -208,6 +208,8 @@ the answer to an incoming event, to a store change, or to a `broker.socket.*` ca
 | `journal` / `clearJournal()` | every incoming event, without the token or any payload value |
 | `sockets()` | the connected sockets in connection order: `{ id, userId?, subscriptions }`, subscriptions sorted |
 | `disconnect({ userId } \| { socketId })` | the server drops each matching socket (`io server disconnect` at the client); returns how many |
+| `cutTransport({ userId } \| { socketId })` | closes each matching socket's transport without a DISCONNECT packet: the client sees `transport close` and its own reconnection runs, the shape of the live drop of 2026-10-02 ([Observed vs fixture rule](#observed-vs-fixture-rule-1)); returns how many |
+| `emitRaw({ userId } \| { socketId }, event, ...args)` | emits exactly these arguments to each matching socket, outside the payload form and the journal: a malformed payload, extra arguments or an unknown event name; returns how many |
 | `pushPrice(assetId, atMs = Date.now())` | one `price.update` to each socket subscribed to the asset; returns how many. An asset without a pair throws `RangeError` |
 | `pushPrices(atMs = Date.now())` | one `price.update` per subscription of every socket, ids without a pair skipped; returns how many were sent |
 | `pendingDelays` | `openTrade` scripts still waiting on their `delayMs` |
