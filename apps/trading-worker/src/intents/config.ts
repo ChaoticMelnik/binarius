@@ -75,9 +75,13 @@ export const CATCHUP_STALLED_RETRY_MS = 120_000;
 
 // The broker allows 600 requests a minute per IP (BROKER_RATE_LIMIT_PER_MINUTE in
 // apps/backend/src/timing.ts); the backend's balance refresh takes up to 200 by default. The worker
-// keeps to the rest in the worst case. The two processes share no constant: with
-// BALANCE_POLL_MAX_PER_MINUTE above 200 the sum can pass 600, an accepted risk — the broker then
-// answers 429, which ends a tick and loses nothing.
+// keeps to the rest in the worst case: its passes tick only on their intervals (nothing starts an
+// extra tick), and a tick never overlaps the next. A 429 ends a tick, and the attempt is retried on
+// the lease or the next tick. Its one real cost is a refresh exchange in flight on the backend: a
+// 429 on /user-auth/refresh is classified rejected → refresh_outcome_unknown → the account is
+// revoked (Rule 12, one attempt). The worker's share keeps its own traffic from driving the IP to
+// 429; the sum with the backend's with BALANCE_POLL_MAX_PER_MINUTE above 200 is stated, not
+// enforced.
 export const WORKER_BROKER_GETS_PER_MINUTE = 400;
 export const WORKER_BROKER_GETS_WORST_CASE =
   RECONCILE_BATCH_SIZE * 2 * RECONCILE_MAX_TRADE_PAGES * (60_000 / RECONCILE_TICK_MS) +

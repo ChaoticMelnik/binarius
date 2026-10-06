@@ -199,10 +199,8 @@ describe('startIntentConsumer on trading-reconciliation (#89)', () => {
 
   it('hands an unknown intent to the pass', async () => {
     const intentId = (await seedUnknownIntent(tmp.db)).intent.id;
-    let wakes = 0;
     const outcome = await withConsumer(
-      (payload) =>
-        processReconciliationJob({ db: tmp.db, logger, wake: () => (wakes += 1) }, payload),
+      (payload) => processReconciliationJob({ db: tmp.db, logger }, payload),
       async (consumer) => {
         const done = settled(consumer, intentId);
         await reconciliations.add('intent', { intentId }, jobOptions(intentId));
@@ -212,7 +210,6 @@ describe('startIntentConsumer on trading-reconciliation (#89)', () => {
     );
     expect(outcome).toBe('completed');
     expect((await findTradeIntent(tmp.db, intentId))?.status).toBe('reconciling');
-    expect(wakes).toBe(1);
   });
 
   it('dead-letters a failing reconciliation job with its topic, the intent still unknown', async () => {
