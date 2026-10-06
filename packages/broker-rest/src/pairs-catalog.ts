@@ -5,7 +5,10 @@ import { BROKER_REST_TIMEOUT_MS, BrokerRestError, type BrokerRestClient } from '
 //   BROKER_REST_TIMEOUT_MS < MIN_BROKER_PAIRS_TTL_MS — one GET ends before the next tick
 //   MIN ≤ DEFAULT ≤ MAX                              — the env range (BROKER_PAIRS_TTL_MS) holds its default
 //   MAX_BROKER_PAIRS_TTL_MS < BROKER_PAIRS_MAX_STALE_MS — a snapshot outlives several failed ticks
-// The TTL is the timer's period; a healthy snapshot is at most TTL + BROKER_REST_TIMEOUT_MS old.
+//   MAX_BROKER_PAIRS_TTL_MS + BROKER_REST_TIMEOUT_MS < BROKER_PAIRS_MAX_STALE_MS — a fresh snapshot
+//                                                    is still served
+// The TTL is the timer's period; a healthy snapshot is at most TTL + BROKER_REST_TIMEOUT_MS old,
+// and read() calls a snapshot within that age fresh: older means the broker is failing.
 // MAX_STALE is how long the last snapshot is still served while the broker is unavailable.
 export const MIN_BROKER_PAIRS_TTL_MS = 30_000;
 export const DEFAULT_BROKER_PAIRS_TTL_MS = 30_000;
@@ -16,7 +19,8 @@ export const PAIRS_CATALOG_CHAIN_HOLDS =
   BROKER_REST_TIMEOUT_MS < MIN_BROKER_PAIRS_TTL_MS &&
   MIN_BROKER_PAIRS_TTL_MS <= DEFAULT_BROKER_PAIRS_TTL_MS &&
   DEFAULT_BROKER_PAIRS_TTL_MS <= MAX_BROKER_PAIRS_TTL_MS &&
-  MAX_BROKER_PAIRS_TTL_MS < BROKER_PAIRS_MAX_STALE_MS;
+  MAX_BROKER_PAIRS_TTL_MS < BROKER_PAIRS_MAX_STALE_MS &&
+  MAX_BROKER_PAIRS_TTL_MS + BROKER_REST_TIMEOUT_MS < BROKER_PAIRS_MAX_STALE_MS;
 if (!PAIRS_CATALOG_CHAIN_HOLDS) {
   throw new Error('pairs catalog timing constants are out of order (see pairs-catalog.ts)');
 }
@@ -96,7 +100,12 @@ export function createPairsCatalog(deps: PairsCatalogDeps): PairsCatalog {
       if (snapshot === undefined) return undefined;
       const ageMs = Math.max(0, now() - snapshot.fetchedAt);
       if (ageMs > BROKER_PAIRS_MAX_STALE_MS) return undefined;
-      return { pairs: snapshot.pairs, fetchedAt: snapshot.fetchedAt, ageMs };
+      return {
+        pairs: snapshot.pairs,
+        fetchedAt: snapshot.fetchedAt,
+        ageMs,
+        fresh: ageMs <= deps.ttlMs + BROKER_REST_TIMEOUT_MS,
+      };
     },
     refresh,
     start() {
