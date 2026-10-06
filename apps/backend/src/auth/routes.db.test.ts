@@ -950,6 +950,25 @@ describe('the push after the callback', () => {
     ]);
   });
 
+  it('offers the plain confirm button for a blank address', async () => {
+    const telegram = telegramId();
+    const started = await start(telegram);
+    const { state } = started.json() as { state: string };
+    const response = await callback({
+      state,
+      code: stub.issueCode({ brokerUserId: `broker-${telegram}`, email: '' }),
+    });
+    expect(response.statusCode).toBe(200);
+    const { account } = response.json() as { account: { id: string; email: string | null } };
+    expect(account.email).toBeNull();
+
+    const pushes = pushesTo(telegram);
+    expect(pushes).toHaveLength(1);
+    expect(inlineButtons(pushes[0])).toEqual([
+      { text: '✅ Подтвердить привязку', callback_data: `confirm:${account.id}` },
+    ]);
+  });
+
   it('offers the button again when a still pending account logs in again', async () => {
     const telegram = telegramId();
     await login(telegram, `broker-${telegram}`);
