@@ -132,7 +132,7 @@ Simplify review PR 61 | depth 2 | requested sonnet | resolved not recorded at de
 Per row, comparing ids up to the first `[` (`[1m]` names the context-window variant, not a different model):
 - (a) `requested` is the policy alias for that phase or sub-tool;
 - (b) when `resolved` is an id, it is that alias's id in `.claude/CLAUDE.md` → Модели по ролям pipeline;
-- (c) `ran` is exactly one id, and it is the table's id for the requested alias.
+- (c) `ran` is exactly one id, and it is the table's id for the requested alias. `<synthetic>` is not a model: it is the harness's placeholder on an API error message (a usage limit, a 429). Drop it before judging (c), and record what the row shows instead: the agent died, and whether it had posted anything (#132, #136, #138 and #236 on 2026-10-03/04: Fable and Opus weekly limits).
 
 Depth 1 gets all three when a result came back; a phase continued through `SendMessage` has no result record and is judged by (a) + (c). Depth ≥ 2 (the reviewer's 3b-3d) is judged by (a) + (c). A depth-3 row with no requested model is a sub-tool's own fork: it is judged only by (c) against its parent's `ran`. Severity: Major if the architect did not run on Fable; Minor if another phase ran above its policy model (cost only).
 
@@ -227,6 +227,8 @@ Several implementers or reviewers at once (#177, #192, #103, #166 on 2026-10-02)
 - **Sub-skills pointed explicitly** at `gh pr diff <N>` and the worktree: `/security-review` and `/code-review` load the main checkout's diff by default. A brief alone did not hold (#97, #85: both loaded the main checkout's diff, and one `/code-review` fork checked the PR branch out in the main checkout for two minutes): the spawn prompt hands them the diff saved as a file in the reviewer's scratch dir plus the review worktree path, and forbids `git checkout`/`switch` in the main checkout.
 - **Shared-resource window**: before a full `pnpm check`, a VM/host change or a long series, `pgrep -fl 'vitest|check-stability|db-clock-probe'` must show no foreign run, and the guard stops the command on a hit (non-zero exit or a wait loop) — one that only prints the hit let #97's run overlap #85's on the shared database; tech-lead serialises anything that restarts shared services ("GO" only when the others are idle).
 - **At most two reviewers at once**: each spawns three opus/sonnet sub-agents, and three parallel reviews (#119, #185, #104 on 2026-10-03) exhausted the session limit together before any of them posted; a dead reviewer is re-spawned only after GitHub shows it posted nothing.
+- **No shared Telegram token**: a runtime check that starts `bot` or `backend` (the staff bot polls inside `backend`) runs with dummy `TELEGRAM_BOT_TOKEN`/`ADMIN_BOT_TOKEN` unless the check itself needs Telegram, and never with a token another poller uses. Two pollers on one token end each other with 409, and the loser's container stays "running" (#136 on 2026-10-03: a worktree copy of the main `.env` stopped both pilot bots for a day). The local `.env` has its own dev bots since 2026-10-04, but parallel agents would still share those.
+- **Unmerged migrations stay off the shared test database**: an implementer whose branch adds a migration points `TEST_DATABASE_URL` at a database of its own (`createdb -h 127.0.0.1 -p 5434 -U binarius binarius_impl_<N>`, then `DATABASE_URL=$TEST_DATABASE_URL pnpm db:migrate`) and drops it after the merge. The shared `binarius` database gets only migrations that are on `main`, and nobody drops tables or edits `drizzle.__drizzle_migrations` there by hand (#235: an uncommitted 0011 went into the shared database and was taken out with `drop table` plus `delete from drizzle.__drizzle_migrations` while other agents' `schema.db.test.ts` ran against it).
 
 ---
 
@@ -271,7 +273,7 @@ If a merge-chain base branch (Mode 1, Step 3) has already merged into `main` sin
 Once the PR exists and the issue is In Review:
 1. Run the Monitoring-mode audit on the completed work.
 2. Post the audit as a GitHub issue comment.
-3. Spawn the reviewer (`Agent`, `model: "opus"`) — the Tech Lead owns the full lifecycle end to end.
+3. Spawn the reviewer (`Agent`, `model: "opus"`) — the Tech Lead owns the full lifecycle end to end. The spawn waits for the audit comment's URL from step 2. Of the six issues of 2026-10-03 to 2026-10-06 (#132, #136, #138, #235, #137, #236), none got this audit: each reviewer was spawned straight after the PR, and their deviations were first written down in Phase 5.
 
 #### Phase 4 — Review findings loop
 
