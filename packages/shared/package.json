@@ -81,6 +81,10 @@
       "types": "./src/trading-access.ts",
       "default": "./src/trading-access.ts"
     },
+    "./access-token": {
+      "types": "./src/access-token.ts",
+      "default": "./src/access-token.ts"
+    },
     "./catalog": {
       "types": "./src/catalog.ts",
       "default": "./src/catalog.ts"
