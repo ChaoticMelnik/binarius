@@ -23,7 +23,7 @@ side may refresh the snapshot.
 bot  → POST /trading/access { telegramUserId, brokerAccountId? }   (Authorization: Bearer INTERNAL_API_TOKEN)
 back → SELECT status, token_balance, token_reserved FROM users WHERE telegram_user_id = $1
 back → the account and its snapshot; at most one GET /v1/broker/user (Broker balance below)
-back → 200 { status, tokens: { balance, reserved, available }, broker, brokerUnavailable }
+back → 200 { status, tokens: { balance, reserved, available }, broker, brokerUnavailable, realTradingAllowed }
        or 404 { error: 'user_not_found' } / 404 { error: 'broker_account_not_found' }
 ```
 
@@ -46,6 +46,7 @@ The bot's display and its `BackendClient` method are #24's.
 | `tokens.available` | unsigned decimal string | `balance - reserved`, computed in `bigint` from the same row |
 | `broker` | object or null | the broker balance snapshot (below); null exactly when `brokerUnavailable` is set |
 | `brokerUnavailable` | string or null | why `broker` is null |
+| `realTradingAllowed` | boolean | `REAL_TRADING_ENABLED` of this backend (#134): whether a `real` intent passes the grant gate of `createTradeIntent`. Not a property of the user or the account — the per-user refusals stay the 409 codes of `POST /trading/intents` |
 
 The response schema refuses a body where `available` is not `balance - reserved`. The backend never
 sends one, so for the bot's parser such a body is a contract violation, not numbers to show.
@@ -125,7 +126,7 @@ access /trading/access '{"telegramUserId":"1"}'
 # {"error":"user_not_found"}  HTTP 404 — no users row yet
 access /users/start '{"telegramUserId":"1","displayName":"Ada"}' >/dev/null   # what /start sends
 access /trading/access '{"telegramUserId":"1"}'
-# {"status":"active","tokens":{"balance":"0","reserved":"0","available":"0"},"broker":null,"brokerUnavailable":"no_account"}  HTTP 200
+# {"status":"active","tokens":{"balance":"0","reserved":"0","available":"0"},"broker":null,"brokerUnavailable":"no_account","realTradingAllowed":false}  HTTP 200
 dc down -v   # removes this project's containers and its volume only
 ```
 
@@ -178,6 +179,8 @@ With a snapshot, a failure never empties `broker`. The snapshot comes back with 
 
 - **#138**: the pair catalog, `GET /trading/pairs`.
 - **#24**: the bot's display and `BackendClient`.
+- **#121**: reads `realTradingAllowed` for the real-mode start screen; **#135** (a revoked grant
+  and running sessions) and **#144** (the kill switch) are separate from this flag.
 - **#117, #109, ARCH-04**: future ledger writers, bound by the same-transaction rule above.
 - `/users/start` and `/users/account` carry no balance, by design: their views stay allowlists
   without it.
