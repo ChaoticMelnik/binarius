@@ -108,7 +108,8 @@ push after an OAuth login (#128): the same button, handled the same way
 A waiting link comes before "welcome back" on purpose: a user with an active account who finds
 a new link they did not make has to see it, not a greeting (binodex-oauth.md → Why a new account
 starts pending). The button reads `✅ Подтвердить: <email>`, or `✅ Подтвердить привязку` when the
-broker sent no email. Callback data that matches `confirm:` but is not a uuid only stops the spinner.
+broker sent no email or a blank one (`addressOrNull`, [bot-account.md → An empty
+address](bot-account.md#an-empty-address)). Callback data that matches `confirm:` but is not a uuid only stops the spinner.
 The refusals the user can act on have their own text — `broker_account_not_found` (start over),
 `account_not_pending` (already confirmed), `user_blocked` — and anything else is "⚠️ Сервис
 временно недоступен" with a warn line carrying the backend status.
@@ -263,9 +264,13 @@ loopback server and finds its bytes in the `sendPhoto` body, so a wrong path is 
 was sent) → the same card goes as a text message, and that message is pinned; a transport failure
 (`HttpError`: the 8 s timeout, a dropped socket, a file that could not be opened) → delivery is
 unknown, nothing more is sent and nothing is pinned, logged at `error` with `method: 'sendPhoto'`
-and the update id; anything else is rethrown into `bot.catch`. A user left without a card that way
-has an active account all the same; `/start` says «👋 С возвращением!», and re-sending a lost card
-is #24's.
+and the update id; anything else is rethrown into `bot.catch`. The text sent instead has its own
+outcomes: sent and pinned, or failed in transport — logged at `error` with
+`method: 'sendMessage'` and the update id, nothing pinned, nothing more sent (#214); a refusal of
+the text message reaches `bot.catch`, which logs a `GrammyError` with its method. The card and the
+welcome go through one helper, `sendWithTextFallback` in `bot.ts`. A user left without a card that
+way has an active account all the same; `/start` says «👋 С возвращением!», and re-sending a lost
+card is #24's.
 
 **Pinning.** `unpinAllChatMessages`, then `pinChatMessage` on the card with
 `disable_notification: true` — the card has just notified. The bot stores no message id, so
@@ -580,7 +585,11 @@ timeout, a dropped socket, anything that arrives as `HttpError` — Telegram may
 delivered the video, so nothing further is sent; it is logged on the spot, by identity and with
 the `sendVideo` it was, because `HttpError` carries no method and `bot.catch` could not tell
 that line from a timeout on any other call. The user repeats `/start`: a second welcome is worse
-than a missing one. Anything else is neither a refusal nor a delivery problem — a bug, a broken
+than a missing one. The text welcome sent after a refusal has its own outcomes: sent, or
+failed in transport — logged at `error` with `method: 'sendMessage'` and the update id, nothing
+more sent (#214); a refusal of the text message reaches `bot.catch`, which logs a `GrammyError`
+with its method. The welcome and the account card go through one helper, `sendWithTextFallback` in
+`bot.ts`. Anything else is neither a refusal nor a delivery problem — a bug, a broken
 plugin — and is rethrown into `bot.catch` unchanged rather than reported as one.
 
 ## /help (#184)

@@ -373,7 +373,7 @@ describe('toUserStartView', () => {
     expect(Object.keys(view.pendingBrokerAccounts[0]!)).toEqual(['id', 'email']);
   });
 
-  // rows stored before #214 may hold a blank address; the button must not read "… для "
+  // rows stored before #214 may hold a blank address; the button must not read «✅ Подтвердить: »
   it.each([[''], [' \t ']])('shows a blank pending address %j as none', async (email) => {
     const telegramUserId = nextTelegramUserId();
     const { row } = await start(telegramUserId);

@@ -50,8 +50,8 @@ the order the backend sent them (newest first). The header follows the best link
 | none                         | `accountNone` alone, no lines |
 
 Each line is `accountLineActive`, `accountLinePending` or `accountLineRevoked` with the address;
-an address the broker did not send is «адрес неизвестен» (`accountUnknownAddress`, a fragment
-nested without a second escape). The address is a hole of `telegramHtml`, escaped once. The texts
+an address the broker did not send, or sent blank, is «адрес неизвестен» (`accountUnknownAddress`,
+a fragment nested without a second escape). The address is a hole of `telegramHtml`, escaped once. The texts
 are the ones the owner approved on 2026-10-03, verbatim.
 
 ## The keyboard
@@ -123,12 +123,18 @@ message is a text message already, not a caption, and a shorter one would have t
 
 ## An empty address
 
-`toLinkedAccountView` turns an address that is empty or only whitespace into `null`, so the line
-reads «адрес неизвестен» rather than «Подключён: » with nothing after it. This is done in the
-`/account` projection only. `/start`'s `toUserStartView` still passes such an address through, so
-for the same link the confirm button under `/start` can read «✅ Подтвердить: » while the one under
-`/account` reads «✅ Подтвердить привязку» — a known gap, left to #214, which decides the rule for
-the contract.
+An address that is empty or only whitespace is no address: `addressOrNull`
+(`packages/shared/src/oauth.ts`) turns it into `null` and leaves any other address as the broker
+sent it. `toOAuthTokens` applies it, so a blank address from the broker is stored as NULL, on the
+first login and on a re-login alike (the latest answer wins). Rows stored before #214 may still hold
+a blank one; nothing rewrites them, and the same function runs in the three projections that read
+the column — `toLinkedAccountView` (`/account`), `toUserStartView` (`/start`'s confirm buttons) and
+`toBrokerAccountView` (the callback, confirm and email-login answers, and the push after the
+callback). So `/account` reads «адрес неизвестен», both confirm buttons read «✅ Подтвердить
+привязку», and the account card after the confirm button has no 📧 line (after an email login it
+shows the address typed in the dialog), rather than «Подключён: » or «📧 Аккаунт Binodex: » with
+nothing after it. The column has no CHECK: a future writer that bypasses `toOAuthTokens` is
+caught by the projections, not by the database.
 
 ## Timing
 
@@ -145,6 +151,5 @@ worst of them.
 - `/help` lists the commands from `BOT_COMMANDS`, `/account` included ([bot-start.md → /help](bot-start.md#help-184)).
 - **#120** — `/settings` and `/support`: [bot-start.md](bot-start.md#notification-level-and-support-120).
 - **#119** — a user who blocked the bot ([bot-start.md → Blocking the bot](bot-start.md#blocking-the-bot-119)); `/account` does not read or clear that mark.
-- **#214** — the empty-address rule for the contract and for `/start`.
 - The revocation reason (`auth_revoked_reason`) stays internal: the user sees «Подключение
   отозвано» and the way back in.
