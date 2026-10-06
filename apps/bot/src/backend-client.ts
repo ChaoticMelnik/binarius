@@ -4,6 +4,7 @@ import {
   safeParseEmailLoginResponse,
   safeParseEmailSendCodeResponse,
   safeParseNotificationLevelResponse,
+  safeParseTradingAccessResponse,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
   startLoginResponseSchema,
@@ -15,6 +16,7 @@ import {
   type NotificationLevelResponse,
   type StartLoginResponse,
   type TelegramChatMemberStatus,
+  type TradingAccessResponse,
   type UserAccountView,
   type UserStartRequest,
   type UserStartView,
@@ -70,6 +72,7 @@ export interface BackendClient {
     telegramUserId: string,
     level: NotificationLevel,
   ): Promise<NotificationLevelResponse>;
+  readTradingAccess(telegramUserId: string): Promise<TradingAccessResponse>;
 }
 
 export interface BackendClientOptions {
@@ -178,6 +181,14 @@ export function createBackendClient({
     async setNotificationLevel(telegramUserId, level) {
       const parsed = safeParseNotificationLevelResponse(
         await post('users/notification-level', { telegramUserId, level }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
+    },
+    // no brokerAccountId: the card is about the user's only active account
+    async readTradingAccess(telegramUserId) {
+      const parsed = safeParseTradingAccessResponse(
+        await post('trading/access', { telegramUserId }),
       );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;

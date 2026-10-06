@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { BotError, GrammyError, HttpError, InputFile } from 'grammy';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  BrokerBalanceUnavailableReason,
   confirmCallbackData,
   NotificationLevel,
   OAuthErrorCode,
@@ -18,6 +19,7 @@ import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
   CONNECT_CALLBACK_DATA,
+  DEMO_CALLBACK_DATA,
   LEVEL_CURRENT_CALLBACK_DATA,
   OAUTH_CALLBACK_DATA,
   RESEND_CALLBACK_DATA,
@@ -27,6 +29,7 @@ import {
 import { BOT_COMMANDS } from './commands';
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
+  ACCESS_VIEW,
   ACCOUNT_VIEW,
   BOT_INFO,
   CARD_MESSAGE_ID,
@@ -54,7 +57,9 @@ import {
   sentPayload,
   startUpdate,
   textUpdate,
+  accessView,
   accountView,
+  brokerBalance,
   userView,
 } from './testing';
 import {
@@ -64,6 +69,7 @@ import {
   LABELS,
   levelLabel,
   settingsText,
+  statusCard,
   TEXTS,
   type AccountCardInput,
 } from './texts';
@@ -92,6 +98,7 @@ function setup(
     emailLogin?: BackendClient['emailLogin'];
     recordChatMember?: BackendClient['recordChatMember'];
     setNotificationLevel?: BackendClient['setNotificationLevel'];
+    readTradingAccess?: BackendClient['readTradingAccess'];
     welcomeVideoFileId?: string;
     dialog?: LoginDialogState;
     now?: () => number;
@@ -108,6 +115,7 @@ function setup(
     setNotificationLevel:
       options.setNotificationLevel ??
       vi.fn((_telegramUserId: string, level: NotificationLevel) => Promise.resolve({ level })),
+    readTradingAccess: options.readTradingAccess ?? vi.fn(() => Promise.resolve(ACCESS_VIEW)),
   };
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
@@ -272,14 +280,6 @@ describe('/start', () => {
     expect(message?.reply_markup).toBeUndefined();
   });
 
-  it('greets a user who already has an active account without the CTA', async () => {
-    const { bot, calls } = setup({ user: userView({ hasActiveBrokerAccount: true }) });
-    await bot.handleUpdate(startUpdate('/start'));
-    const message = sentPayload(calls, 'sendMessage');
-    expect(message?.text).toBe(TEXTS.welcomeBack.value);
-    expect(message?.reply_markup).toBeUndefined();
-  });
-
   it('offers to confirm a link that waits for it, one button per link', async () => {
     const other = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
     const { bot, calls } = setup({
@@ -311,17 +311,18 @@ describe('/start', () => {
     ]);
   });
 
-  // a link the owner of this Telegram account did not make must not hide behind "welcome back"
-  it('puts a waiting link before the welcome back', async () => {
-    const { bot, calls } = setup({
+  // a link the owner of this Telegram account did not make must not hide behind the status card
+  it('puts a waiting link before the status card', async () => {
+    const { bot, backend, calls } = setup({
       user: userView({
         hasActiveBrokerAccount: true,
         pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: null }],
       }),
     });
     await bot.handleUpdate(startUpdate('/start'));
-    expect(calls.filter((call) => call.method === 'sendMessage')).toHaveLength(1);
+    expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.confirmPrompt.value);
+    expect(backend.readTradingAccess).not.toHaveBeenCalled();
   });
 
   it('shows a blocked user no confirm button either', async () => {
@@ -350,6 +351,298 @@ describe('/start', () => {
     const { bot, backend, calls } = setup();
     await bot.handleUpdate(startUpdate('/start', 'group'));
     expect(backend.recordStart).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('the status card', () => {
+  const ACTIVE = userView({ hasActiveBrokerAccount: true });
+  const DEMO_BUTTON = [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }];
+  const cardFor = (access = ACCESS_VIEW) =>
+    statusCard({
+      mode: 'demo',
+      tokens: access.tokens,
+      broker: access.broker,
+      brokerUnavailable: access.brokerUnavailable,
+    }).value;
+  const PHOTO_REFUSED = {
+    ok: false as const,
+    error_code: 400,
+    description: 'Bad Request: IMAGE_PROCESS_FAILED',
+  };
+  const home = async (options: Parameters<typeof setup>[0] = {}, text = '/start') => {
+    const scene = setup({ user: ACTIVE, ...options });
+    await scene.bot.handleUpdate(textUpdate(text));
+    return scene;
+  };
+
+  it.each(['/start', '/menu'])(
+    'sends %s the card as the photo with the demo button and pins it',
+    async (text) => {
+      const { backend, calls, logger } = await home({}, text);
+      expect(calls.map((call) => call.method)).toEqual([
+        'sendPhoto',
+        'unpinAllChatMessages',
+        'pinChatMessage',
+      ]);
+      const photo = sentPayload(calls, 'sendPhoto');
+      expect(photo?.caption).toBe(cardFor());
+      expect(photo?.photo).toBeInstanceOf(InputFile);
+      expect(inlineButtons(photo)).toEqual(DEMO_BUTTON);
+      expect(sentPayload(calls, 'pinChatMessage')).toMatchObject({
+        message_id: CARD_MESSAGE_ID,
+        disable_notification: true,
+      });
+      expect(backend.readTradingAccess).toHaveBeenCalledWith('4242');
+      expect(vi.mocked(backend.recordStart).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(backend.readTradingAccess).mock.invocationCallOrder[0] ?? 0,
+      );
+      expect(logger.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it('sends the card as text with the same button and pins it when the photo is refused', async () => {
+    const scene = setup({ user: ACTIVE });
+    scene.apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    await scene.bot.handleUpdate(startUpdate('/start'));
+    const { calls, logger } = scene;
+    expect(calls.map((call) => call.method)).toEqual([
+      'sendPhoto',
+      'sendMessage',
+      'unpinAllChatMessages',
+      'pinChatMessage',
+    ]);
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(cardFor());
+    expect(inlineButtons(message)).toEqual(DEMO_BUTTON);
+    expect(sentPayload(calls, 'pinChatMessage')?.message_id).toBe(TEXT_CARD_MESSAGE_ID);
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        expect.objectContaining({ method: 'sendPhoto', telegramErrorCode: 400 }),
+        'the status card photo was refused, sending the text instead',
+      ],
+    ]);
+  });
+
+  it('sends nothing more and pins nothing when the photo fails in transport', async () => {
+    const scene = setup({ user: ACTIVE });
+    scene.apiErrors.set(
+      'sendPhoto',
+      new HttpError("Network request for 'sendPhoto' failed!", new Error('socket hang up')),
+    );
+    await scene.bot.handleUpdate(startUpdate('/start'));
+    expect(scene.calls.map((call) => call.method)).toEqual(['sendPhoto']);
+    expect(scene.logger.error.mock.calls).toEqual([
+      [
+        expect.objectContaining({ method: 'sendPhoto' }),
+        'the status card photo call failed in transport, sending nothing more',
+      ],
+    ]);
+  });
+
+  it('names the status card when the pin is refused', async () => {
+    const scene = setup({ user: ACTIVE });
+    scene.apiErrors.set('pinChatMessage', {
+      ok: false as const,
+      error_code: 400,
+      description: 'Bad Request: not enough rights to manage pinned messages in the chat',
+    });
+    await scene.bot.handleUpdate(startUpdate('/start'));
+    expect(scene.logger.warn.mock.calls).toEqual([
+      [
+        expect.objectContaining({ method: 'pinChatMessage', telegramErrorCode: 400 }),
+        'the status card was not pinned',
+      ],
+    ]);
+  });
+
+  it('shows the blocked text and no card when the access finds the user blocked', async () => {
+    const { calls } = await home({
+      readTradingAccess: vi.fn(() =>
+        Promise.resolve(
+          accessView({
+            status: UserStatus.Blocked,
+            broker: null,
+            brokerUnavailable: BrokerBalanceUnavailableReason.UserBlocked,
+          }),
+        ),
+      ),
+    });
+    expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.blocked.value);
+    expect(sentPayload(calls, 'sendMessage')?.reply_markup).toBeUndefined();
+  });
+
+  it('shows the not-connected text and the connect buttons when no account is active any more', async () => {
+    const { calls } = await home({
+      readTradingAccess: vi.fn(() =>
+        Promise.resolve(
+          accessView({ broker: null, brokerUnavailable: BrokerBalanceUnavailableReason.NoAccount }),
+        ),
+      ),
+    });
+    expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.accountNone.value);
+    expect(inlineButtons(message)).toEqual([
+      { text: LABELS.connectButton, callback_data: CONNECT_CALLBACK_DATA },
+      { text: LABELS.oauthButton, callback_data: OAUTH_CALLBACK_DATA },
+    ]);
+  });
+
+  it.each([
+    [BrokerBalanceUnavailableReason.AmbiguousAccount, TEXTS.statusAmbiguous],
+    [BrokerBalanceUnavailableReason.BrokerUnavailable, TEXTS.statusNoSnapshot],
+    [BrokerBalanceUnavailableReason.Refreshing, TEXTS.statusNoSnapshot],
+  ])('shows $0.00 and the status line for %s', async (reason, line) => {
+    const access = accessView({ broker: null, brokerUnavailable: reason });
+    const { calls } = await home({ readTradingAccess: vi.fn(() => Promise.resolve(access)) });
+    const caption = String(sentPayload(calls, 'sendPhoto')?.caption);
+    expect(caption).toBe(cardFor(access));
+    expect(plainTextOf(caption)).toMatch(/^💵 Реальный баланс: \$0\.00$/m);
+    expect(plainTextOf(caption)).toContain(plainTextOf(line));
+  });
+
+  it('says how old a stale snapshot is', async () => {
+    const access = accessView({
+      broker: brokerBalance({ restSnapshotAgeSec: 200, balanceEventAgeSec: 130, fresh: false }),
+    });
+    const { calls } = await home({ readTradingAccess: vi.fn(() => Promise.resolve(access)) });
+    expect(plainTextOf(String(sentPayload(calls, 'sendPhoto')?.caption))).toContain(
+      plainTextOf(TEXTS.statusStale('2 мин')),
+    );
+  });
+
+  it.each([
+    [
+      'unreachable',
+      vi.fn(() => Promise.reject(new BackendError(BackendErrorCode.Unreachable))),
+      {},
+    ],
+    [
+      'answering 404 user_not_found',
+      refused(404, UserErrorCode.UserNotFound),
+      { backendStatus: 404, backendReason: UserErrorCode.UserNotFound },
+    ],
+    ['answering 500', refused(500), { backendStatus: 500 }],
+  ])(
+    'says the service is unavailable and warns when the access is %s',
+    async (_label, read, fields) => {
+      const { calls, logger } = await home({ readTradingAccess: read });
+      expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
+      expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+      expect(logger.warn.mock.calls).toEqual([
+        [
+          expect.objectContaining({
+            err: expect.objectContaining({ name: 'BackendError' }),
+            ...fields,
+          }),
+          'trading access not read',
+        ],
+      ]);
+    },
+  );
+});
+
+describe('/menu', () => {
+  it('sends /users/start without a payload, even with trailing text', async () => {
+    const { bot, backend } = setup();
+    await bot.handleUpdate(textUpdate('/menu src_ab-CD9'));
+    expect(backend.recordStart).toHaveBeenCalledWith({
+      telegramUserId: '4242',
+      displayName: 'Ada Lovelace',
+    });
+  });
+
+  it('greets a user without an account with the welcome and its buttons', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(textUpdate('/menu'));
+    const message = sentPayload(calls, 'sendMessage');
+    expect(message?.text).toBe(TEXTS.welcome.value);
+    expect(inlineButtons(message)).toEqual([
+      { text: LABELS.connectButton, callback_data: CONNECT_CALLBACK_DATA },
+      { text: LABELS.oauthButton, callback_data: OAUTH_CALLBACK_DATA },
+    ]);
+    expect(backend.readTradingAccess).not.toHaveBeenCalled();
+  });
+
+  it('sends the welcome video when one is configured', async () => {
+    const { bot, calls } = setup({ welcomeVideoFileId: 'video-file-id' });
+    await bot.handleUpdate(textUpdate('/menu'));
+    expect(sentPayload(calls, 'sendVideo')?.caption).toBe(TEXTS.welcome.value);
+  });
+
+  it('shows a blocked user the blocked text', async () => {
+    const { bot, calls } = setup({ user: userView({ status: UserStatus.Blocked }) });
+    await bot.handleUpdate(textUpdate('/menu'));
+    expect(sentTexts(calls)).toEqual([TEXTS.blocked.value]);
+  });
+
+  it('puts a waiting link first', async () => {
+    const { bot, calls } = setup({
+      user: userView({
+        hasActiveBrokerAccount: true,
+        pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: null }],
+      }),
+    });
+    await bot.handleUpdate(textUpdate('/menu'));
+    expect(sentTexts(calls)).toEqual([TEXTS.confirmPrompt.value]);
+  });
+
+  it('says the service is unavailable and names /menu when /users/start fails', async () => {
+    const { bot, calls, logger } = setup({ recordStart: unreachable() });
+    await bot.handleUpdate(textUpdate('/menu'));
+    expect(sentTexts(calls)).toEqual([TEXTS.unavailable.value]);
+    expect(logger.warn.mock.calls[0]?.[1]).toBe('/menu not recorded');
+  });
+
+  it.each(['group', 'supergroup'])('ignores the command in a %s', async (chatType) => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(textUpdate('/menu', chatType));
+    expect(backend.recordStart).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it('answers /menu in the middle of the dialog without ending it', async () => {
+    const { bot, backend, calls, dialog } = setup({
+      user: userView({ hasActiveBrokerAccount: true }),
+      dialog: ON_CODE_STEP,
+    });
+    await bot.handleUpdate(textUpdate('/menu'));
+    expect(calls.map((call) => call.method)[0]).toBe('sendPhoto');
+    expect(backend.emailLogin).not.toHaveBeenCalled();
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
+  });
+});
+
+describe('the demo button', () => {
+  it('answers the query and says the demo is coming, without calling the backend', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(callbackUpdate(DEMO_CALLBACK_DATA));
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.demoSoon.value);
+    for (const call of Object.values(backend)) expect(call).not.toHaveBeenCalled();
+    expect(Buffer.byteLength(DEMO_CALLBACK_DATA, 'utf8')).toBeLessThanOrEqual(64);
+  });
+
+  it('still sends the text when answering the query is refused', async () => {
+    const { bot, calls, logger, apiErrors } = setup();
+    apiErrors.set('answerCallbackQuery', {
+      ok: false as const,
+      error_code: 400,
+      description: 'Bad Request: query is too old and response timeout expired',
+    });
+    await bot.handleUpdate(callbackUpdate(DEMO_CALLBACK_DATA));
+    expect(sentTexts(calls)).toEqual([TEXTS.demoSoon.value]);
+    expect(logger.warn.mock.calls[0]?.[1]).toBe('answering the callback query failed');
+  });
+
+  it('ignores the callback outside a private chat', async () => {
+    const { bot, calls } = setup();
+    await bot.handleUpdate(callbackUpdate(DEMO_CALLBACK_DATA, 'group'));
     expect(calls).toEqual([]);
   });
 });
@@ -1011,9 +1304,7 @@ describe('the account card', () => {
       await closeServer(running);
     });
 
-    // Every other scene replaces the transport, so the file is never read there: this one lets
-    // grammY upload it, which is what catches a wrong path in assets.ts.
-    it('uploads the picture from assets.ts as the photo', async () => {
+    const recordingServer = async () => {
       const bodies = new Map<string, Buffer>();
       const started = createServer((request, response) => {
         const chunks: Buffer[] = [];
@@ -1030,7 +1321,13 @@ describe('the account card', () => {
         });
       });
       server = started;
-      const apiRoot = await listen(started);
+      return { bodies, apiRoot: await listen(started) };
+    };
+
+    // Every other scene replaces the transport, so the file is never read there: this one lets
+    // grammY upload it, which is what catches a wrong path in assets.ts.
+    it('uploads the picture from assets.ts as the photo', async () => {
+      const { bodies, apiRoot } = await recordingServer();
       const logger = fakeLogger();
       const bot = createBot({
         token: '123456:AA-bot-token',
@@ -1043,6 +1340,7 @@ describe('the account card', () => {
           emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
           recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
           setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
+          readTradingAccess: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -1059,6 +1357,36 @@ describe('the account card', () => {
       ]);
       const picture = readFileSync(ACCOUNT_CARD_PHOTO_PATH);
       expect(bodies.get('sendPhoto')?.includes(picture)).toBe(true);
+      expect(String(bodies.get('pinChatMessage'))).toContain(`"message_id":${CARD_MESSAGE_ID}`);
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('uploads the same picture under the status card on /start (#24)', async () => {
+      const { bodies, apiRoot } = await recordingServer();
+      const logger = fakeLogger();
+      const bot = createBot({
+        token: '123456:AA-bot-token',
+        backend: {
+          recordStart: vi.fn(() => Promise.resolve(userView({ hasActiveBrokerAccount: true }))),
+          readAccount: vi.fn(() => Promise.reject(new Error('unused'))),
+          startLogin: vi.fn(() => Promise.reject(new Error('unused'))),
+          confirmLogin: vi.fn(() => Promise.reject(new Error('unused'))),
+          sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
+          emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
+          recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
+          setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
+          readTradingAccess: vi.fn(() => Promise.resolve(ACCESS_VIEW)),
+        },
+        logger,
+        botInfo: BOT_INFO,
+        apiRoot,
+      });
+
+      await bot.handleUpdate(startUpdate('/start'));
+
+      expect([...bodies.keys()]).toEqual(['sendPhoto', 'unpinAllChatMessages', 'pinChatMessage']);
+      expect(bodies.get('sendPhoto')?.includes(readFileSync(ACCOUNT_CARD_PHOTO_PATH))).toBe(true);
       expect(String(bodies.get('pinChatMessage'))).toContain(`"message_id":${CARD_MESSAGE_ID}`);
       expect(logger.warn).not.toHaveBeenCalled();
       expect(logger.error).not.toHaveBeenCalled();
@@ -2068,6 +2396,7 @@ describe('the Bot API timeout', () => {
         emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
         recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
         setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
+        readTradingAccess: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

@@ -4,6 +4,8 @@ import { OAuthErrorCode, UserErrorCode, type UserStartRequest } from '@binarius/
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
 import {
+  ACCESS_VIEW,
+  BROKER_BALANCE,
   CODE,
   CODE_SENT,
   CONFIRMED,
@@ -394,6 +396,64 @@ describe('setNotificationLevel', () => {
       status: 404,
       reason: UserErrorCode.UserNotFound,
     });
+  });
+});
+
+describe('readTradingAccess', () => {
+  it('posts only the telegram id under the bearer and returns the whole answer', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, ACCESS_VIEW);
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).readTradingAccess('4242')).toEqual(
+      ACCESS_VIEW,
+    );
+    expect(capture.url).toBe('/trading/access');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
+  });
+
+  it.each([
+    [
+      'available is not balance - reserved',
+      { tokens: { balance: '5', reserved: '1', available: '5' } },
+    ],
+    ['both broker and brokerUnavailable are set', { brokerUnavailable: 'refreshing' }],
+    ['fresh disagrees with the ages', { broker: { ...BROKER_BALANCE, fresh: false } }],
+    ['realTradingAllowed is missing', { realTradingAllowed: undefined }],
+  ])('reports a body where %s as a contract violation', async (_case, patch) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { ...ACCESS_VIEW, ...patch });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readTradingAccess('4242'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('carries user_not_found as the reason of a 404', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 404, { error: UserErrorCode.UserNotFound });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readTradingAccess('4242'),
+    );
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: UserErrorCode.UserNotFound,
+    });
+  });
+
+  it('carries a 500 as its status, without the body', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 500, { message: 'balance 10000.00000000 is broken' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readTradingAccess('4242'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status: 500 });
+    expect((error as BackendError).reason).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain('10000');
   });
 });
 

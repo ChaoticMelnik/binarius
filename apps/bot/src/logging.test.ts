@@ -16,6 +16,7 @@ import { OAUTH_CALLBACK_DATA, createBot, levelCallbackData } from './bot';
 import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
+  ACCESS_VIEW,
   ACCOUNT_VIEW,
   BOT_INFO,
   CARD_MESSAGE_ID,
@@ -26,6 +27,7 @@ import {
   USER,
   USER_VIEW,
   captureApi,
+  userView,
   callbackUpdate,
   messageAnswer,
   rejectionOf,
@@ -62,6 +64,7 @@ interface Scenario {
   sendEmailCode?: BackendClient['sendEmailCode'];
   emailLogin?: BackendClient['emailLogin'];
   setNotificationLevel?: BackendClient['setNotificationLevel'];
+  readTradingAccess?: BackendClient['readTradingAccess'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -81,6 +84,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     recordChatMember: () => Promise.reject(new Error('not used by these scenes')),
     setNotificationLevel:
       scenario.setNotificationLevel ?? ((_telegramUserId, level) => Promise.resolve({ level })),
+    readTradingAccess: scenario.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
   };
   const loginDialog = createLoginDialog();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
@@ -740,6 +744,95 @@ describe('what the bot writes about the account card', () => {
       telegramErrorCode: 400,
     });
     expectNoSecrets(lines);
+  });
+});
+
+describe('what the bot writes about the status card', () => {
+  // amounts no other fixture carries, so a line that printed any part of the answer would show
+  const ACCESS = {
+    ...ACCESS_VIEW,
+    tokens: { balance: '777123', reserved: '0', available: '777123' },
+    broker:
+      ACCESS_VIEW.broker === null
+        ? null
+        : {
+            ...ACCESS_VIEW.broker,
+            demo: { ...ACCESS_VIEW.broker.demo, available: '98765.43000000' },
+          },
+  } as typeof ACCESS_VIEW;
+  const active = (scene: Partial<Scenario> = {}): Scenario => ({
+    update: startUpdate('/start'),
+    recordStart: () => Promise.resolve(userView({ hasActiveBrokerAccount: true })),
+    readTradingAccess: () => Promise.resolve(ACCESS),
+    answers: [
+      ['sendPhoto', messageAnswer(CARD_MESSAGE_ID)],
+      ['sendMessage', messageAnswer(CARD_MESSAGE_ID)],
+    ],
+    level: 'trace',
+    ...scene,
+  });
+  // time, pid and hostname are the logger's own digits and may hold any of these by chance
+  const expectNoNumbers = (lines: readonly string[]): void => {
+    const all = lines
+      .map((line) => {
+        const entry = parsed(line);
+        delete entry.time;
+        delete entry.pid;
+        delete entry.hostname;
+        return JSON.stringify(entry);
+      })
+      .join('');
+    expect(all).not.toContain('777');
+    expect(all).not.toContain('98765');
+    expect(all).not.toContain('$');
+    expect(all).not.toContain('4242');
+  };
+
+  it('names the error, its code, the status and the reason, and no Telegram id', async () => {
+    const { lines } = await linesFrom(
+      active({
+        readTradingAccess: () =>
+          Promise.reject(
+            new BackendError(BackendErrorCode.HttpStatus, {
+              status: 404,
+              reason: 'user_not_found',
+              cause: new Error(`Bearer ${INTERNAL_TOKEN}`),
+            }),
+          ),
+      }),
+    );
+    const logged = lineWith(lines, 'trading access not read');
+    expect(logged).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 404,
+      backendReason: 'user_not_found',
+    });
+    expect(lines.join('')).not.toContain(INTERNAL_TOKEN);
+    expectNoNumbers(lines);
+  });
+
+  it('names the method and the code of a refused photo, and nothing of the caption', async () => {
+    const { lines, calls } = await linesFrom(
+      active({
+        apiErrors: [
+          [
+            'sendPhoto',
+            { ok: false, error_code: 400, description: 'Bad Request: IMAGE_PROCESS_FAILED' },
+          ],
+        ],
+      }),
+    );
+    expect(
+      lineWith(lines, 'the status card photo was refused, sending the text instead'),
+    ).toMatchObject({ err: { name: 'GrammyError' }, method: 'sendPhoto', telegramErrorCode: 400 });
+    expect(calls.map((call) => call.method)).toEqual([
+      'sendPhoto',
+      'sendMessage',
+      'unpinAllChatMessages',
+      'pinChatMessage',
+    ]);
+    expectNoNumbers(lines);
   });
 });
 

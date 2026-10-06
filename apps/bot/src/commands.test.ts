@@ -47,6 +47,7 @@ describe('the command menu', () => {
       emailLogin: () => Promise.reject(new Error('not used here')),
       recordChatMember: () => Promise.reject(new Error('not used here')),
       setNotificationLevel: () => Promise.reject(new Error('not used here')),
+      readTradingAccess: () => Promise.reject(new Error('not used here')),
     };
     const bot = createBot({
       token: '123456:AA-bot-token',

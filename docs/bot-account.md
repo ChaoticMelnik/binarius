@@ -2,8 +2,8 @@
 
 `/account` (#185) shows a user, in the bot, which Binodex accounts are linked to their Telegram
 account and in what state. It reads only: the users row is not refreshed and nothing is
-recorded — `/start` and `/settings`, both through `POST /users/start` ([bot-start.md](bot-start.md)),
-are the places that write it.
+recorded — `/start`, `/menu` and `/settings`, all through `POST /users/start`
+([bot-start.md](bot-start.md), [bot-menu.md](bot-menu.md)), are the places that write it.
 
 ## Components
 
@@ -146,8 +146,8 @@ worst of them.
 
 ## Boundaries
 
-- **#136** — the token balance is `POST /trading/access` ([trading-access.md](trading-access.md)); the bot shows it from #24.
-- **#24** — the main menu, and re-sending a lost or unpinned account card.
+- **#136** — the token balance is `POST /trading/access` ([trading-access.md](trading-access.md)); the bot shows it on the status card ([bot-menu.md](bot-menu.md)).
+- [bot-menu.md](bot-menu.md) — the status card `/start` and `/menu` send and pin, which is what replaces a lost or unpinned account card.
 - `/help` lists the commands from `BOT_COMMANDS`, `/account` included ([bot-start.md → /help](bot-start.md#help-184)).
 - **#120** — `/settings` and `/support`: [bot-start.md](bot-start.md#notification-level-and-support-120).
 - **#119** — a user who blocked the bot ([bot-start.md → Blocking the bot](bot-start.md#blocking-the-bot-119)); `/account` does not read or clear that mark.
