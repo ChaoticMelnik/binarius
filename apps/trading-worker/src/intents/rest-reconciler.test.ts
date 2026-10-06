@@ -396,6 +396,15 @@ describe('createRestReconciler: when absence is certain (#90)', () => {
     }
   });
 
+  it('answers broker_contract, not unresolved, when the open list shrinks between pages', async () => {
+    const open = Array.from({ length: PAGE + 1 }, (_, i) => at(80_000 - i * 1_000, { assetId: 102 }));
+    const h = harness({ open, closed: [old()] }, { shrinkAfterFirstPage: 2 });
+    expect(await h.run()).toEqual({ outcome: 'unavailable', reason: 'broker_contract' });
+    expect(h.line('broker trade pages are inconsistent; nothing concluded')).toMatchObject({
+      violation: 'continuity',
+    });
+  });
+
   // every violation kind is trade-pages.test.ts's; here the one mapping
   it('answers broker_contract when the pages are inconsistent', async () => {
     const h = harness({ open: [], closed: [old(), at(2_000, { assetId: 102 })] });

@@ -2,10 +2,12 @@ import type { BrokerTrade } from '@binarius/shared';
 
 // The one reader of the broker's trade list pages, for the reconciler and the settlement catch-up
 // (#90). It never takes a page's length for the list's end: a capped `limit` or a default page
-// would then hide every trade past it (review M1). The end is an empty page, or a trade the caller
-// says it needs nothing beyond (`stopAt`). Each next page is requested at the previous offset plus
-// the page's length minus one, so it must start with a trade already read; anything else is a
-// contract violation, never a short list (docs/broker-rest.md -> Trades list: assumptions).
+// would then hide every trade past it. The end is an empty first page, an empty page after a
+// one-trade page, or a trade the caller says it needs nothing beyond (`stopAt`). Each next page is
+// requested at the previous offset plus the page's length minus one, so it must start with a trade
+// already read; anything else is a contract violation, never a short list (docs/broker-rest.md ->
+// Trades list: assumptions). `covered` is reach: it gates `found` and the choice between a retry
+// and manual review; no reserve is released on it (proving absence is #274).
 
 export const TradePagesViolation = {
   // open_timestamp grows inside a page
@@ -44,7 +46,14 @@ export async function readTradePages(
   let offset = 0;
   for (let page = 1; page <= maxPages; page += 1) {
     const items = await fetchPage(offset);
-    if (items.length === 0) return { trades, covered: true, pagesRead: page };
+    if (items.length === 0) {
+      // after a page of two or more the request stood on a trade already read, so an empty answer
+      // overshot the list: trades closed between the reads, or the offset is not what we sent
+      if (previous !== undefined && previous.length >= 2) {
+        throw new TradePagesError(TradePagesViolation.Continuity);
+      }
+      return { trades, covered: true, pagesRead: page };
+    }
     for (let index = 1; index < items.length; index += 1) {
       if (items[index]!.openTimestamp > items[index - 1]!.openTimestamp) {
         throw new TradePagesError(TradePagesViolation.Order);

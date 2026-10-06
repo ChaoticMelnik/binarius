@@ -17,8 +17,10 @@ const list = (n: number) => Array.from({ length: n }, (_, i) => trade(`t${i}`, T
 interface Broker {
   cap?: number;
   ignoreOffset?: boolean;
-  // a page at offset > 0 starts one further (a 1-based offset)
+  // a page at offset > 0 starts this much further (1: a 1-based offset)
   offsetSkew?: number;
+  // the offset is read as a page number
+  offsetAsPage?: boolean;
   // changes the list after the given page was served
   mutate?: { afterPage: number; apply: (items: BrokerTrade[]) => BrokerTrade[] };
 }
@@ -28,7 +30,11 @@ function broker(initial: BrokerTrade[], options: Broker = {}) {
   const offsets: number[] = [];
   const fetchPage = (offset: number) => {
     offsets.push(offset);
-    const start = options.ignoreOffset ? 0 : offset + (offset > 0 ? (options.offsetSkew ?? 0) : 0);
+    const start = options.ignoreOffset
+      ? 0
+      : options.offsetAsPage
+        ? offset * PAGE
+        : offset + (offset > 0 ? (options.offsetSkew ?? 0) : 0);
     const page = items.slice(start, start + Math.min(PAGE, options.cap ?? PAGE));
     if (options.mutate !== undefined && offsets.length === options.mutate.afterPage) {
       items = options.mutate.apply(items);
@@ -146,6 +152,22 @@ describe('readTradePages (#90)', () => {
     const b = broker(list(10));
     await read(b);
     expect(b.offsets).toEqual([0, 3, 6, 9]);
+  });
+
+  // an empty page where the overlap trade should be: never the list's end
+  it('T16 refuses an empty page after open trades closed between the reads', async () => {
+    const b = broker(list(5), {
+      mutate: { afterPage: 1, apply: (items) => items.slice(2) },
+    });
+    expect(await violation(read(b))).toBe('continuity');
+  });
+
+  it('T17 refuses an empty page when the offset is read as a page number', async () => {
+    expect(await violation(read(broker(list(7), { offsetAsPage: true })))).toBe('continuity');
+  });
+
+  it('T18 refuses an empty page when the offset is skewed past the overlap', async () => {
+    expect(await violation(read(broker(list(5), { offsetSkew: 2 })))).toBe('continuity');
   });
 
   it('T15 refuses an unread trade newer than the previous page end', async () => {
