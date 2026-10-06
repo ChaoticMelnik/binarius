@@ -28,6 +28,10 @@ import {
   type AccountCardInput,
 } from './texts';
 
+// Telegram parses none of these texts: markup or any entity — the four Telegram knows and any
+// other named one alike — would be shown literally (#199)
+const MARKUP_OR_ENTITY = /[<>]|&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i;
+
 describe('texts', () => {
   // the welcome travels as a caption whenever WELCOME_VIDEO_FILE_ID is set, and a caption over
   // the limit is refused by the Bot API — which would only show up once a video is configured
@@ -69,7 +73,7 @@ describe('texts', () => {
   it.each(Object.entries(LABELS))('keeps the label %s plain and non-empty', (_key, entry) => {
     const label = typeof entry === 'function' ? entry('ada@example.test') : entry;
     expect(label.trim().length).toBeGreaterThan(0);
-    expect(label).not.toMatch(/[<>]|&(?:lt|gt|amp|quot|#\d+|#x[0-9a-f]+);/i);
+    expect(label).not.toMatch(MARKUP_OR_ENTITY);
   });
 
   // a key ending in `Command` is a description in Telegram's command menu, every other one a button
@@ -118,7 +122,7 @@ describe('texts', () => {
       ]),
     )('keeps the level button %s plain, non-empty and starting with an emoji', (label) => {
       expect(label.trim().length).toBeGreaterThan(0);
-      expect(label).not.toMatch(/[<>]|&(?:lt|gt|amp|quot|#\d+|#x[0-9a-f]+);/i);
+      expect(label).not.toMatch(MARKUP_OR_ENTITY);
       expect(label).toMatch(/^\p{Extended_Pictographic}/u);
     });
 
@@ -371,7 +375,7 @@ describe('texts', () => {
     ] as const)('keeps the %s non-empty, plain and inside its limit', (_key, text, limit) => {
       expect(text.trim().length).toBeGreaterThan(0);
       expect(text.length).toBeLessThanOrEqual(limit);
-      expect(text).not.toMatch(/[<>]|&(?:lt|gt|amp|quot|#\d+|#x[0-9a-f]+);/i);
+      expect(text).not.toMatch(MARKUP_OR_ENTITY);
     });
 
     it.each(Object.entries(PROFILE))(

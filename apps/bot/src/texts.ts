@@ -57,10 +57,10 @@ export const TEXTS = {
   // The account card (#200): the caption of its photo, or the text when the photo is refused,
   // assembled by accountCard below. The name is Telegram's first_name: the Bot API guarantees it
   // non-empty, not non-blank, and a padded name would pad the line.
-  cardGreeting: (firstName: string) =>
-    firstName.trim() === ''
-      ? telegramHtml`🎉 <b>Привет!</b>`
-      : telegramHtml`🎉 <b>Привет, ${firstName.trim()}!</b>`,
+  cardGreeting: (firstName: string) => {
+    const name = firstName.trim();
+    return name === '' ? telegramHtml`🎉 <b>Привет!</b>` : telegramHtml`🎉 <b>Привет, ${name}!</b>`;
+  },
   cardEmail: (email: string) => telegramHtml`📧 Аккаунт Binodex: ${email}`,
   cardBody: telegramHtml`✅ <b>Аккаунт Binodex подключён</b>
 
@@ -190,8 +190,9 @@ function accountLine(account: LinkedAccountView): TelegramHtml {
 }
 
 // Only these three fields reach the card, so no token, code or other secret can. `email` is null
-// when the address of the connected account is not known; `grant` is null when what the login
-// paid is not known (the recheck after a lost answer).
+// when the address of the connected account is not known — the broker sent none or a blank one
+// (addressOrNull), or the recheck after a lost answer; `grant` is null when what the login paid
+// is not known (that recheck).
 export interface AccountCardInput {
   firstName: string;
   email: string | null;
@@ -207,15 +208,10 @@ export function accountCard({ firstName, email, grant }: AccountCardInput): Tele
       : telegramHtml`${greeting}
 ${TEXTS.cardEmail(email)}`;
   const bonus = bonusOf(grant);
-  return bonus === null
-    ? telegramHtml`${header}
+  const tail = bonus === null ? [] : [telegramHtml`\n\n${bonus}`];
+  return telegramHtml`${header}
 
-${TEXTS.cardBody}`
-    : telegramHtml`${header}
-
-${TEXTS.cardBody}
-
-${bonus}`;
+${TEXTS.cardBody}${tail}`;
 }
 
 function bonusOf(grant: LinkBonusGrantView | null): TelegramHtml | null {
