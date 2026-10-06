@@ -111,6 +111,19 @@ export const GRAMMY_POLLING_BACKOFF_MS = 3_000;
 // stop_grace_period of the compose service `bot`, kept in step by timing.test.ts.
 export const COMPOSE_STOP_GRACE_PERIOD_MS = 55_000;
 
+// The demo trade's status tracker (#127, intent-tracker.ts). Its polls run between updates, like
+// the profile registration, so they are not in HANDLER_CALLS; what shutdown waits for is the
+// drain below. The first poll comes a second after the status message: the worker usually
+// answers within that. The deadline is the worker's INTENT_MAX_AGE_MS (60 s) plus its
+// SUBMIT_ACK_TIMEOUT_MS (10 s) with room — the worker's constants, not importable here, so the
+// relation is stated, not checked: past it, a live intent is still polled by nobody, and the
+// message says so and points at its refresh button.
+export const INTENT_TRACK_FIRST_POLL_MS = 1_000;
+export const INTENT_TRACK_POLL_MS = 3_000;
+export const INTENT_TRACK_DEADLINE_MS = 120_000;
+// what tracker.stop() waits for: one readIntent in flight, then one edit
+export const INTENT_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS;
+
 // TRADING_ACCESS_BUDGET_MS and TRADING_SIGNAL_BUDGET_MS are the backend's upper estimates of POST
 // /trading/access and POST /trading/signal (#126): waiting at least that long keeps a broker GET
 // inside its budget from reading as an outage here.
@@ -123,6 +136,9 @@ export const TIMING_CHAIN_HOLDS =
   TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
   STARTUP_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
   GRAMMY_POLLING_BACKOFF_MS < SHUTDOWN_BUDGET_MS &&
+  INTENT_TRACK_FIRST_POLL_MS < INTENT_TRACK_POLL_MS &&
+  INTENT_TRACK_POLL_MS < INTENT_TRACK_DEADLINE_MS &&
+  INTENT_TRACK_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
   SHUTDOWN_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error(

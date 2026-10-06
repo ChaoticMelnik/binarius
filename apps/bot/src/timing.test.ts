@@ -77,6 +77,12 @@ import {
   COMPOSE_STOP_GRACE_PERIOD_MS,
   GRAMMY_POLLING_BACKOFF_MS,
   HANDLER_CALLS,
+  INTENT_TRACK_DEADLINE_MS,
+  INTENT_TRACK_DRAIN_MS,
+  INTENT_TRACK_FIRST_POLL_MS,
+  INTENT_TRACK_POLL_MS,
+  SHUTDOWN_BUDGET_MS,
+  TELEGRAM_API_TIMEOUT_MS,
 } from './timing';
 
 // HANDLER_BUDGET_MS is computed from HANDLER_CALLS, so nothing here recomputes it: what this
@@ -1558,6 +1564,19 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
       MY_CHAT_MEMBER_WORST_CASE,
       HANDLER_CALLS.myChatMember,
     );
+  });
+});
+
+// #127: restated here so a change to the chain's conjuncts shows in review next to its test
+describe("the demo trade tracker's bounds", () => {
+  it('polls first sooner than between polls, and stops long after both', () => {
+    expect(INTENT_TRACK_FIRST_POLL_MS).toBeLessThan(INTENT_TRACK_POLL_MS);
+    expect(INTENT_TRACK_POLL_MS).toBeLessThan(INTENT_TRACK_DEADLINE_MS);
+  });
+
+  it('drains one read and one edit inside the shutdown budget', () => {
+    expect(INTENT_TRACK_DRAIN_MS).toBe(BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS);
+    expect(INTENT_TRACK_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
   });
 });
 
