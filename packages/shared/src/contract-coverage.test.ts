@@ -108,6 +108,7 @@ describe('contract coverage (issue #6)', () => {
         | 'manual_rejected'
         | 'reconciliation_not_found'
         | 'reconciliation_ambiguous'
+        | 'broker_unavailable'
         | null;
       updatedAt: string;
     }>();

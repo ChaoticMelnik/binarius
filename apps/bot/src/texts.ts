@@ -425,6 +425,7 @@ const REJECTED_LINES = {
   [TradeIntentFailureReason.ProcessingFailed]: TEXTS.intentRejected,
   [TradeIntentFailureReason.TradeMismatch]: TEXTS.intentRejected,
   [TradeIntentFailureReason.ReconciliationAmbiguous]: TEXTS.intentRejected,
+  [TradeIntentFailureReason.BrokerUnavailable]: TEXTS.intentRejected,
 } as const satisfies Record<TradeIntentFailureReason, TelegramHtml>;
 
 // The broker's symbol is an unbounded wire string: at most this many characters are printed.

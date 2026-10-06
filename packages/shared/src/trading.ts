@@ -102,6 +102,9 @@ export const TradeIntentFailureReason = {
   ReconciliationNotFound: 'reconciliation_not_found',
   // the reconciler found more than one candidate trade; parked in manual_review for a human (#89)
   ReconciliationAmbiguous: 'reconciliation_ambiguous',
+  // the order was sent (a socket emit, or a REST POST that got no classifiable answer) and no
+  // answer says whether it opened; reconciliation decides (#89/#90)
+  BrokerUnavailable: 'broker_unavailable',
 } as const;
 export type TradeIntentFailureReason =
   (typeof TradeIntentFailureReason)[keyof typeof TradeIntentFailureReason];
