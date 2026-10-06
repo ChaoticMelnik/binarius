@@ -341,6 +341,37 @@ describe('handshake', () => {
 });
 
 describe('reconnection', () => {
+  it('flushes nothing from a dead connection into the next one before user.auth', async () => {
+    const opened: BrokerSocket[] = [];
+    const h = harness({
+      openSocket: (url, options) => {
+        const socket: BrokerSocket = io(url, options);
+        opened.push(socket);
+        return socket;
+      },
+    });
+    h.client.subscribe([EURUSD]);
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    await until('the first pass', () => subscribeRecords() === 1);
+    // the ping deadline has passed and engine.io has not closed yet: socket.io buffers the emit
+    // instead of sending it, and engine.io schedules the `ping timeout` close
+    const engine = opened[0]?.io.engine as unknown as { _pingTimeoutTime: number };
+    engine._pingTimeoutTime = 1;
+    h.client.subscribe([BTCUSD]);
+    await ready(h, 2);
+    await until('the second pass', () => broker.socket.sockets()[0]?.subscriptions.length === 2);
+
+    expect(h.states.find(({ to }) => to === BrokerSocketState.Reconnecting)?.reason).toBe(
+      'ping timeout',
+    );
+    expect(bySocket().map(shape)).toEqual([
+      [AUTH, SUBSCRIBE],
+      [AUTH, SUBSCRIBE],
+    ]);
+    expect(broker.socket.sockets()[0]?.subscriptions).toEqual(h.client.subscriptions());
+  });
+
   it('re-authenticates and resends every subscription exactly once after a transport drop', async () => {
     const ids = range(1, MAX_PRICE_SUBSCRIPTION_ASSETS + 5);
     const h = harness();

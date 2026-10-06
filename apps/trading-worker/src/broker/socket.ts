@@ -311,6 +311,11 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
 
   function onDisconnect(current: Session, reason: string) {
     clearAuthTimer(current);
+    // An emit made after the ping deadline passed but before engine.io closed (a subscribe() or
+    // the pass) is buffered, and socket.io flushes its buffer on the next connect ahead of
+    // user.auth: the broker would see price.subscribe unauthenticated and then again in the pass.
+    // The pass resends everything the registry holds, so nothing buffered is needed.
+    current.socket.sendBuffer = [];
     const { connection } = current;
     if (connection !== undefined) {
       logger.info(
