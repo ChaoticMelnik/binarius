@@ -66,6 +66,9 @@ export const tradeIntents = pgTable(
     transport: text('transport').$type<TradeTransport>(),
     submittedAt: timestamp('submitted_at', { withTimezone: true }),
     lastError: text('last_error').$type<TradeIntentFailureReason>(),
+    // the reconciliation pass's lease and order key (#89): written only by claimReconciling, with
+    // the database clock; NULL = never attempted; kept when the intent leaves reconciling
+    reconcileClaimedAt: timestamp('reconcile_claimed_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

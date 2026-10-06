@@ -20,10 +20,14 @@ import { TokenLedgerKind, tokenLedger, users } from './schema/index';
 import { readTokenBalance, toTradingAccessView } from './token-balance-ops';
 import {
   TOKENS_PER_INTENT,
+  claimReconciling,
+  concludeReconciled,
   createTradeIntent,
   markIntentAccepted,
+  markIntentUnknown,
   rejectIntent,
   settleIntent,
+  startReconciling,
   takeIntent,
   type TradePolicy,
 } from './trade-intent-ops';
@@ -162,6 +166,46 @@ describe('readTokenBalance', () => {
 
     const settled = await tmp.db.transaction((tx) =>
       settleIntent(tx, { id: accepted.id, from: 'accepted', trade: closedTradeFor(open) }),
+    );
+    expect(settled?.status).toBe('settled');
+    expect(await read(user)).toMatchObject({ balance: 6n, reserved: 0n });
+    await expectCacheEqualsLedger(user);
+  });
+
+  it('follows a reserve, a reconciliation and a settlement, equal to the ledger at every point', async () => {
+    const user = await creditedUser(7n);
+    const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId);
+    const { intent } = await createTradeIntent(
+      tmp.db,
+      intentRequest(user.telegramUserId, { brokerAccountId }),
+      flagOff,
+    );
+    const taken = (await takeIntent(tmp.db, {
+      id: intent.id,
+      expectedVersion: intent.version,
+      maxAgeMs: 60_000,
+    }))!;
+    const unknown = (await tmp.db.transaction((tx) =>
+      markIntentUnknown(tx, {
+        id: taken.id,
+        expectedVersion: taken.version,
+        reason: TradeIntentFailureReason.ExecutorTimeout,
+      }),
+    ))!;
+    const reconciling = (await startReconciling(tmp.db, {
+      id: unknown.id,
+      expectedVersion: unknown.version,
+    }))!;
+    const claimed = (await claimReconciling(tmp.db, { id: reconciling.id, retryMs: 60_000 }))!;
+    expect(await read(user)).toMatchObject({ balance: 7n, reserved: 1n });
+    await expectCacheEqualsLedger(user);
+
+    const settled = await tmp.db.transaction((tx) =>
+      concludeReconciled(tx, {
+        id: claimed.id,
+        expectedVersion: claimed.version,
+        trade: closedTradeFor(openTradeFor(claimed)),
+      }),
     );
     expect(settled?.status).toBe('settled');
     expect(await read(user)).toMatchObject({ balance: 6n, reserved: 0n });

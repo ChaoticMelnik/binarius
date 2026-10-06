@@ -101,6 +101,8 @@ describe('contract coverage (issue #6)', () => {
         | 'real_trading_disabled'
         | 'trade_mismatch'
         | 'manual_rejected'
+        | 'reconciliation_not_found'
+        | 'reconciliation_ambiguous'
         | null;
       updatedAt: string;
     }>();

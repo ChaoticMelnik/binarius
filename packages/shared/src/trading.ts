@@ -93,10 +93,15 @@ export const TradeIntentFailureReason = {
   // realTradingGate); nothing was sent to the broker
   RealTradingDisabled: 'real_trading_disabled',
   // the executor's accepted trade disagrees with the intent (mode, asset, action, amount) or is
-  // already linked to another intent (#17); the intent goes to unknown for reconciliation
+  // already linked to another intent (#17); from the executor the intent goes to unknown for
+  // reconciliation, from the reconciliation pass to manual_review (#89)
   TradeMismatch: 'trade_mismatch',
   // an operator concluded a manual_review intent as rejected; the reserve is released (#17)
   ManualRejected: 'manual_rejected',
+  // the reconciler found no trade for the intent; the reserve is released (#89)
+  ReconciliationNotFound: 'reconciliation_not_found',
+  // the reconciler found more than one candidate trade; parked in manual_review for a human (#89)
+  ReconciliationAmbiguous: 'reconciliation_ambiguous',
 } as const;
 export type TradeIntentFailureReason =
   (typeof TradeIntentFailureReason)[keyof typeof TradeIntentFailureReason];
