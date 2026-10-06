@@ -1,5 +1,5 @@
-import { TradeIntentFailureReason, type TradeTransport } from '@binarius/shared';
-import type { TradeIntentRow } from '@binarius/db';
+import { TradeIntentFailureReason, TradeMode, type TradeTransport } from '@binarius/shared';
+import type { TradeIntentRow, TradePolicy } from '@binarius/db';
 
 export type SubmitResult =
   | { outcome: 'accepted'; transport?: TradeTransport }
@@ -26,3 +26,17 @@ export const notConfiguredExecutor: TradeExecutor = {
     reason: TradeIntentFailureReason.ExecutorNotConfigured,
   }),
 };
+
+// The outermost layer over any executor, today's and ARCH-01's alike (#134): with the grant off,
+// a real intent is rejected without the inner executor being called. `rejected`, because nothing
+// was sent to the broker.
+export function realTradingGate(inner: TradeExecutor, policy: TradePolicy): TradeExecutor {
+  return {
+    submit: async (intent, signal) => {
+      if (intent.mode === TradeMode.Real && !policy.realTradingEnabled) {
+        return { outcome: 'rejected', reason: TradeIntentFailureReason.RealTradingDisabled };
+      }
+      return inner.submit(intent, signal);
+    },
+  };
+}

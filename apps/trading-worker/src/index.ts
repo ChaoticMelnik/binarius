@@ -12,7 +12,7 @@ import {
   SWEEP_INTERVAL_MS,
 } from './intents/config';
 import { startIntentConsumer } from './intents/consumer';
-import { notConfiguredExecutor } from './intents/executor';
+import { notConfiguredExecutor, realTradingGate } from './intents/executor';
 import { processIntentJob } from './intents/processor';
 import { startSweeper } from './intents/sweeper';
 
@@ -28,8 +28,10 @@ const redis = new Redis(env.redisUrl, { maxRetriesPerRequest: null });
 pool.on('error', (error) => logger.error(errorLogFields(error), 'postgres pool error'));
 redis.on('error', (error) => logger.warn(errorLogFields(error), 'redis connection error'));
 
-// ARCH-01 replaces this with the broker socket client
-const executor = notConfiguredExecutor;
+// ARCH-01 replaces the inner executor with the broker socket client; the gate stays outside it
+const executor = realTradingGate(notConfiguredExecutor, {
+  realTradingEnabled: env.realTradingEnabled,
+});
 
 const consumer = startIntentConsumer({
   connection: redis,
