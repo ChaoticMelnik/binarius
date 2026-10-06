@@ -310,12 +310,12 @@ A broker failure is a 200 with an outcome, not an HTTP error: the bot's client k
 from a non-2xx body, and `retryAfterSec` has to reach the user. The body is built from named
 fields; the journal series never leaves the backend's log.
 
-| Outcome | What the caller (#126) does |
+| Outcome | What the caller (#126, [bot-demo.md](bot-demo.md#the-analysis)) does |
 |---|---|
-| `decided` | shows the decision |
-| `fetch_failed` `rate_limited` | asks the user to wait `retryAfterSec` seconds (its own wording when absent) |
-| any other `fetch_failed` code | shows the analysis as unavailable and logs a `warn` |
-| 500, a timeout | shows the analysis as unavailable |
+| `decided` | shows the decision: the direction and the stake button on a signal, the reason in words on a refusal; the feature lines from `features`, the periods from `params` |
+| `fetch_failed` `rate_limited` | «попробуй через N с» with `retryAfterSec`; without it, the analysis as unavailable; no log line |
+| any other `fetch_failed` code | shows the analysis as unavailable and logs `warn` `signal not evaluated` with `signalCode` |
+| 400, 401, 500, a timeout, a broken body | shows the analysis as unavailable and logs `warn` `signal not evaluated` with the error |
 
 `intervalForDuration(durationSec)` (shared) picks the interval for a trade's duration: the longest
 table interval not above it, `1m` below a minute. `durationSec` must be a positive integer; anything
@@ -364,7 +364,7 @@ per 429 window. The first fetch in a candle is that candle's answer for every us
 | Constant | Value | Where | Bounds |
 |---|---|---|---|
 | `SIGNAL_FETCH_BUDGET_MS` | 3 000 | `apps/backend/src/timing.ts` | the one chart GET (the cache's `fetchBudgetMs`); below `BROKER_REST_TIMEOUT_MS` (5 000), so it is this budget that ends a slow chart |
-| `TRADING_SIGNAL_BUDGET_MS` | 4 000 | `packages/shared/src/signal.ts` | the whole answer; the bot waits at least this long (#126 adds its link) |
+| `TRADING_SIGNAL_BUDGET_MS` | 4 000 | `packages/shared/src/signal.ts` | the whole answer; the bot waits at least this long (`TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` in `apps/bot/src/timing.ts`, #126) |
 | `SIGNAL_CACHE_MAX_TTL_MS` | 30 000 | `apps/backend/src/timing.ts` | the longest hold; below the 1m interval, or it would never bind |
 
 The backend's `TIMING_CHAIN_HOLDS` checks at import that `SIGNAL_FETCH_BUDGET_MS <
@@ -385,7 +385,7 @@ request in flight) and `SIGNAL_CACHE_MAX_TTL_MS < 60 000`; `timing.test.ts` asse
 
 - #130: session orchestration, which evaluates the feed inside a session and wires it into
   `index.ts`. #100/#101: the broker base URL in the worker's env and compose.
-- #126: the analysis screen and its texts in the bot, on `POST /trading/signal`. #127: the stake
-  button and the intent status. Stake size: docs/stake.md.
+- #126: the analysis screen and its texts in the bot, on `POST /trading/signal`
+  ([bot-demo.md](bot-demo.md#the-analysis)). #127: the stake button's press and the intent status. Stake size: docs/stake.md.
 - The decision's wire shape and codes are in `packages/shared/src/signal.ts` (#258).
   `packages/db` is not changed.
