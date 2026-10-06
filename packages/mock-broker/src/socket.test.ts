@@ -639,6 +639,62 @@ describe('disconnect', () => {
   });
 });
 
+describe('cutTransport', () => {
+  it('closes the transport without a DISCONNECT packet, so a reconnecting client comes back', async () => {
+    const plain = await authed();
+    const other = await authed(broker, 2, OTHER_TOKEN);
+    // a socket's id is cleared on disconnect
+    const ids = [plain.socket.id, other.socket.id];
+    expect(broker.socket.cutTransport({ socketId: 'nope' })).toBe(0);
+    expect(broker.socket.cutTransport({ userId: 1 })).toBe(1);
+    expect(await plain.disconnected).toBe('transport close');
+    expect(other.socket.connected).toBe(true);
+
+    const socket = io(broker.url, {
+      transports: ['websocket'],
+      forceNew: true,
+      reconnectionDelay: 10,
+      reconnectionDelayMax: 20,
+    });
+    clients.push(socket);
+    await new Promise<void>((resolve) => socket.once('connect', resolve));
+    const firstId = socket.id;
+    expect(broker.socket.cutTransport({ socketId: firstId ?? '' })).toBe(1);
+    await vi.waitFor(() => expect(socket.connected && socket.id !== firstId).toBe(true), {
+      timeout: 1000,
+      interval: 5,
+    });
+    expect(broker.socket.journal.map((record) => record.socketId)).toEqual(ids);
+  });
+});
+
+describe('emitRaw', () => {
+  it('sends exactly the given arguments, outside the payload form, and journals nothing', async () => {
+    const bytes = await startMockBroker({ socketPayload: MockSocketPayload.Bytes });
+    bytes.users.register({ id: 1, accessToken: TOKEN });
+    bytes.users.register({ id: 2, accessToken: OTHER_TOKEN });
+    try {
+      const client = await authed(bytes);
+      const other = await authed(bytes, 2, OTHER_TOKEN);
+      bytes.socket.clearJournal();
+      expect(bytes.socket.emitRaw({ socketId: 'nope' }, 'price.update', 'x')).toBe(0);
+      expect(
+        bytes.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.PriceUpdate, '[1,2', { extra: 1 }),
+      ).toBe(1);
+      expect(bytes.socket.emitRaw({ socketId: client.socket.id ?? '' }, 'user.unheard.of')).toBe(1);
+      await client.waitFor('user.unheard.of');
+      expect(client.received.slice(BURST.length)).toEqual([
+        { event: BrokerSocketEvent.PriceUpdate, args: ['[1,2', { extra: 1 }] },
+        { event: 'user.unheard.of', args: [] },
+      ]);
+      await other.expectQuiet(BrokerSocketEvent.PriceUpdate);
+      expect(bytes.socket.journal).toEqual([]);
+    } finally {
+      await bytes.close();
+    }
+  });
+});
+
 describe('close()', () => {
   it('returns at once with a client connected, a socket delay, a REST delay and a REST hang', async () => {
     const client = await authed();

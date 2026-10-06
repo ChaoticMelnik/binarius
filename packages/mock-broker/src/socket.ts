@@ -60,6 +60,8 @@ export interface MockSocketInfo {
   subscriptions: number[];
 }
 
+export type MockSocketTarget = { userId: number } | { socketId: string };
+
 export interface MockSocket {
   failNext<E extends MockSocketEndpoint>(endpoint: E, script: MockSocketScript<E>): void;
   journal: readonly MockSocketRecord[];
@@ -67,7 +69,14 @@ export interface MockSocket {
   // connected sockets, in connection order
   sockets(): MockSocketInfo[];
   // the server drops each matching socket; returns how many
-  disconnect(target: { userId: number } | { socketId: string }): number;
+  disconnect(target: MockSocketTarget): number;
+  // closes each matching socket's transport without a DISCONNECT packet: the client sees
+  // `transport close` and reconnects on its own, the shape of the live drop of 2026-10-02;
+  // returns how many
+  cutTransport(target: MockSocketTarget): number;
+  // emits exactly these arguments to each matching socket, outside the payload form: a malformed
+  // payload, extra arguments or an unknown event name; returns how many
+  emitRaw(target: MockSocketTarget, event: string, ...args: unknown[]): number;
   // one price.update to each authenticated socket subscribed to the asset; returns how many
   pushPrice(assetId: number, atMs?: number): number;
   // one price.update per subscription of each authenticated socket, ids without a pair skipped;
@@ -319,6 +328,13 @@ export function attachMockSocket(
     ]);
   }
 
+  const matchingConnections = (target: MockSocketTarget) =>
+    [...connections.values()].filter((connection) =>
+      'userId' in target
+        ? connection.userId === target.userId
+        : connection.socket.id === target.socketId,
+    );
+
   const socket: MockSocket = {
     failNext: (endpoint, script) => faults.push(endpoint, script),
     journal,
@@ -332,12 +348,18 @@ export function attachMockSocket(
         subscriptions: [...connection.subscriptions].sort((a, b) => a - b),
       })),
     disconnect(target) {
-      const matching = [...connections.values()].filter((connection) =>
-        'userId' in target
-          ? connection.userId === target.userId
-          : connection.socket.id === target.socketId,
-      );
+      const matching = matchingConnections(target);
       for (const connection of matching) connection.socket.disconnect(true);
+      return matching.length;
+    },
+    cutTransport(target) {
+      const matching = matchingConnections(target);
+      for (const connection of matching) connection.socket.conn.close();
+      return matching.length;
+    },
+    emitRaw(target, event, ...args) {
+      const matching = matchingConnections(target);
+      for (const connection of matching) connection.socket.emit(event, ...args);
       return matching.length;
     },
     pushPrice(assetId, atMs = Date.now()) {

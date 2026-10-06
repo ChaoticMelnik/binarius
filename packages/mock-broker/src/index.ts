@@ -25,6 +25,7 @@ export {
   type MockSocket,
   type MockSocketInfo,
   type MockSocketRecord,
+  type MockSocketTarget,
 } from './socket';
 export type {
   MockAuthScript,
