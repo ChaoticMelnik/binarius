@@ -48,6 +48,7 @@ import {
   PAIR_CLOSED,
   PAIR_EURUSD,
   PAIRS_RESPONSE,
+  SIGNAL_DECIDED,
   PENDING_ACCOUNT_ID,
   USER,
   TEXT_CARD_MESSAGE_ID,
@@ -101,6 +102,7 @@ interface Branch {
   setNotificationLevel?: BackendClient['setNotificationLevel'];
   readTradingAccess?: BackendClient['readTradingAccess'];
   readPairs?: BackendClient['readPairs'];
+  evaluateSignal?: BackendClient['evaluateSignal'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -253,6 +255,10 @@ async function observe(branch: Branch): Promise<Calls> {
     readPairs: () => {
       backend += 1;
       return (branch.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)))();
+    },
+    evaluateSignal: (assetId, interval) => {
+      backend += 1;
+      return (branch.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)))(assetId, interval);
     },
   };
   const loginDialog = createLoginDialog();

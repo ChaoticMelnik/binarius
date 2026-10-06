@@ -21,6 +21,9 @@ import {
   LOGIN,
   PAIRS_RESPONSE,
   PENDING_ACCOUNT_ID,
+  SIGNAL_DECIDED,
+  SIGNAL_DECISION,
+  SIGNAL_FETCH_FAILED,
   closeServer,
   listen,
   accountView,
@@ -522,6 +525,90 @@ describe('readPairs', () => {
     const started = Date.now();
     const error = await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN, timeoutMs: 150 }).readPairs(),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.Unreachable });
+    expect(Date.now() - started).toBeLessThan(UNIT_WAIT_CEILING_MS);
+  });
+});
+
+describe('evaluateSignal', () => {
+  it('posts the asset and the interval under the bearer and returns a decision whole', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, SIGNAL_DECIDED);
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).evaluateSignal(101, '5m')).toEqual(
+      SIGNAL_DECIDED,
+    );
+    expect(capture.method).toBe('POST');
+    expect(capture.url).toBe('/trading/signal');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ assetId: 101, interval: '5m' });
+  });
+
+  it('returns a fetch_failed answer as an answer, not an error', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, SIGNAL_FETCH_FAILED);
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).evaluateSignal(101, '1m')).toEqual(
+      SIGNAL_FETCH_FAILED,
+    );
+  });
+
+  // a bare decision is what the decider returns; the route wraps it with the outcome and params
+  it.each([
+    ['a bare decision without outcome', SIGNAL_DECISION],
+    [
+      'an unknown reason',
+      {
+        ...SIGNAL_DECIDED,
+        decision: { kind: 'no_signal', version: 'v1', reason: 'moon_phase', features: {} },
+      },
+    ],
+    [
+      'a decision of another version',
+      { ...SIGNAL_DECIDED, decision: { ...SIGNAL_DECISION, version: 'v2' } },
+    ],
+  ])('reports %s as a contract violation', async (_case, body) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, body);
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).evaluateSignal(101, '1m'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('carries a 400 validation as its status and reason', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 400, { error: 'validation', issues: [{ path: ['interval'] }] });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).evaluateSignal(101, '1m'),
+    );
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 400,
+      reason: 'validation',
+    });
+  });
+
+  it('carries a 500 as its status, without the body', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 500, { message: 'EUR/USD SECRET-BODY' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).evaluateSignal(101, '1m'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status: 500 });
+    expect((error as BackendError).reason).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain('SECRET-BODY');
+  });
+
+  it('gives up on a server that never answers', async () => {
+    const { baseUrl } = await serve(() => {});
+    const started = Date.now();
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN, timeoutMs: 150 }).evaluateSignal(101, '1m'),
     );
     expect(error).toMatchObject({ code: BackendErrorCode.Unreachable });
     expect(Date.now() - started).toBeLessThan(UNIT_WAIT_CEILING_MS);

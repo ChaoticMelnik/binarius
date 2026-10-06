@@ -6,6 +6,7 @@ import {
   safeParseNotificationLevelResponse,
   safeParsePairsCatalogResponse,
   safeParseTradingAccessResponse,
+  safeParseTradingSignalResponse,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
   startLoginResponseSchema,
@@ -16,9 +17,11 @@ import {
   type NotificationLevel,
   type NotificationLevelResponse,
   type PairsCatalogResponse,
+  type SignalInterval,
   type StartLoginResponse,
   type TelegramChatMemberStatus,
   type TradingAccessResponse,
+  type TradingSignalResponse,
   type UserAccountView,
   type UserStartRequest,
   type UserStartView,
@@ -76,6 +79,7 @@ export interface BackendClient {
   ): Promise<NotificationLevelResponse>;
   readTradingAccess(telegramUserId: string): Promise<TradingAccessResponse>;
   readPairs(): Promise<PairsCatalogResponse>;
+  evaluateSignal(assetId: number, interval: SignalInterval): Promise<TradingSignalResponse>;
 }
 
 export interface BackendClientOptions {
@@ -208,6 +212,14 @@ export function createBackendClient({
     // the whole answer: `fresh` is the backend's verdict, and the bot keeps no copy of its bound
     async readPairs() {
       const parsed = safeParsePairsCatalogResponse(await request('GET', 'trading/pairs'));
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
+    },
+    // a broker failure is a 200 `fetch_failed`, returned like a decision (#258)
+    async evaluateSignal(assetId, interval) {
+      const parsed = safeParseTradingSignalResponse(
+        await post('trading/signal', { assetId, interval }),
+      );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
     },

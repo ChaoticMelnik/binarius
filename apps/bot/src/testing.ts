@@ -10,7 +10,16 @@ import type { BackendClient } from './backend-client';
 import {
   BrokerAccountStatus,
   brokerBalanceViewSchema,
+  BrokerRestErrorCode,
+  MomentumDirection,
+  NoSignalReason,
   NotificationLevel,
+  SignalFeedOutcome,
+  SIGNAL_ALGORITHM_VERSION,
+  SignalKind,
+  TradeAction,
+  tradingSignalResponseSchema,
+  TrendDirection,
   UserStatus,
   type BrokerBalanceView,
   type ConfirmLoginResponse,
@@ -19,8 +28,12 @@ import {
   type PairsCatalogResponse,
   type PairView,
   type PendingLinkedAccountView,
+  type SignalDecision,
+  type SignalFeatures,
+  type SignalParams,
   type StartLoginResponse,
   type TradingAccessResponse,
+  type TradingSignalResponse,
   type UserAccountView,
   type UserStartView,
 } from '@binarius/shared';
@@ -190,6 +203,65 @@ export const pairsResponse = (patch: Partial<PairsCatalogResponse> = {}): PairsC
   ...patch,
 });
 
+// POST /trading/signal answers (#258), written by hand: the bot does not depend on packages/signal.
+// The periods differ from the decider's defaults (EMA9/21, RSI14, ATR14) on purpose, so a screen
+// that prints a period of its own instead of the answer's shows.
+export const SIGNAL_PARAMS: SignalParams = {
+  emaFast: 7,
+  emaSlow: 25,
+  slopeLookback: 3,
+  rsiPeriod: 10,
+  rsiBand: 5,
+  atrPeriod: 12,
+  minAtrPct: 0.001,
+  maxAtrPct: 2,
+  minClosedCandles: 50,
+  maxStaleIntervals: 2,
+};
+export const SIGNAL_FEATURES: SignalFeatures = {
+  emaFast: 1.085423,
+  emaSlow: 1.085114,
+  emaSlowSlope: 0.000021,
+  rsi: 62.34,
+  atr: 0.000447,
+  atrPct: 0.0412,
+  lastClose: 1.085604,
+  lastCandleTimestamp: 1_790_000_040_000,
+  closedCandles: 59,
+  trend: TrendDirection.Up,
+  momentum: MomentumDirection.Up,
+};
+export const signalDecided = (decision: SignalDecision): TradingSignalResponse =>
+  tradingSignalResponseSchema.parse({
+    outcome: SignalFeedOutcome.Decided,
+    params: SIGNAL_PARAMS,
+    decision,
+  });
+export const SIGNAL_DECISION: SignalDecision = {
+  kind: SignalKind.Signal,
+  version: SIGNAL_ALGORITHM_VERSION,
+  action: TradeAction.Up,
+  features: SIGNAL_FEATURES,
+};
+export const SIGNAL_DECIDED = signalDecided(SIGNAL_DECISION);
+export const SIGNAL_NO_SIGNAL = signalDecided({
+  kind: SignalKind.NoSignal,
+  version: SIGNAL_ALGORITHM_VERSION,
+  reason: NoSignalReason.RsiNeutral,
+  features: { ...SIGNAL_FEATURES, rsi: 52.1, momentum: MomentumDirection.Neutral },
+});
+export const SIGNAL_DATA_REFUSAL = signalDecided({
+  kind: SignalKind.NoSignal,
+  version: SIGNAL_ALGORITHM_VERSION,
+  reason: NoSignalReason.CandleGap,
+  detail: { index: 12, expectedTimestamp: 1_789_999_340_000, actualTimestamp: 1_789_999_400_000 },
+});
+export const SIGNAL_FETCH_FAILED: TradingSignalResponse = tradingSignalResponseSchema.parse({
+  outcome: SignalFeedOutcome.FetchFailed,
+  code: BrokerRestErrorCode.RateLimited,
+  retryAfterSec: 7,
+});
+
 // A client where every method the scene does not give rejects, so an unexpected call fails the
 // scene instead of answering with a fixture. A method added to BackendClient adds a line here.
 export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient => {
@@ -205,6 +277,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     setNotificationLevel: unused,
     readTradingAccess: unused,
     readPairs: unused,
+    evaluateSignal: unused,
     ...patch,
   };
 };
