@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { closeAll, errorLogFields } from '@binarius/shared';
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
 import { createDb, createTokenCipher } from '@binarius/db';
+import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
 import { createAdminBot } from './admin/telegram';
 import { buildApp } from './app';
 import { createLinkNotifier } from './auth/link-notifier';
@@ -14,7 +15,12 @@ import { createBrokerOAuthClient } from './broker/oauth-client';
 import { parseEnv } from './env';
 import { createBullmqPublisher } from './outbox/bullmq';
 import { OutboxPublisher } from './outbox/publisher';
-import { SHUTDOWN_PHASE1_BUDGET_MS, SHUTDOWN_PHASE2_BUDGET_MS } from './timing';
+import {
+  SHUTDOWN_PHASE1_BUDGET_MS,
+  SHUTDOWN_PHASE2_BUDGET_MS,
+  SIGNAL_CACHE_MAX_TTL_MS,
+  SIGNAL_FETCH_BUDGET_MS,
+} from './timing';
 
 const env = parseEnv(process.env);
 
@@ -67,6 +73,20 @@ const pairsCatalog = createPairsCatalog({
   logger: { warn: (object, message) => app.log.warn(object, message) },
 });
 
+// POST /trading/signal (docs/signal.md -> POST /trading/signal): one public chart GET per
+// (asset, interval) per candle at most, on the same REST client. No timer: nothing to stop.
+const signalFeed = createCachedSignalFeed(
+  createSignalFeed({
+    rest: brokerRest,
+    // the app's logger does not exist yet, and this one is first used by a request
+    logger: {
+      info: (object, message) => app.log.info(object, message),
+      warn: (object, message) => app.log.warn(object, message),
+    },
+  }),
+  { fetchBudgetMs: SIGNAL_FETCH_BUDGET_MS, maxTtlMs: SIGNAL_CACHE_MAX_TTL_MS },
+);
+
 // created before the app so the routes can hold it; polling starts after listen()
 const adminBot = createAdminBot({
   token: env.adminBotToken,
@@ -94,6 +114,10 @@ const app = buildApp({
   },
   pairs: {
     catalog: pairsCatalog,
+    internalApiToken: env.internalApiToken,
+  },
+  signal: {
+    feed: signalFeed,
     internalApiToken: env.internalApiToken,
   },
   auth: {

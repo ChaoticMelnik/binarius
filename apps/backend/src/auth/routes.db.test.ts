@@ -42,7 +42,7 @@ import { INIT_DATA_MAX_AGE_MS } from './oauth-timing';
 import { createInitDataVerifier } from './telegram-init-data';
 import { signInitData } from './testing/init-data';
 import { AUTH_TEXTS } from './texts';
-import { unusedBalanceDeps, unusedPairsDeps } from '../trading/testing';
+import { unusedBalanceDeps, unusedPairsDeps, unusedSignalDeps } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -112,6 +112,7 @@ const telegramId = () => String(800_000 + ++seq);
 const testApp = (auth: AuthRoutesDeps, logs?: { write(line: string): void }) =>
   buildApp({
     pairs: unusedPairsDeps(),
+    signal: unusedSignalDeps(),
     admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),

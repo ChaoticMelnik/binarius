@@ -6,7 +6,6 @@ import {
   type BrokerRestErrorCode,
   type SignalInterval,
 } from '@binarius/shared';
-import type { Logger } from 'pino';
 import { assertSignalClock } from './candles';
 import { createSignalDecider, type SignalDecider } from './decide';
 import { assertFeedLimit, SIGNAL_CHART_LIMIT } from './feed-config';
@@ -36,10 +35,16 @@ export type SignalEvaluation =
       retryAfterSec?: number;
     };
 
+// pino's logger fits; the backend passes one that forwards to the app's logger (#258)
+export interface SignalFeedLogger {
+  info(fields: object, message: string): void;
+  warn(fields: object, message: string): void;
+}
+
 export interface SignalFeedDeps {
   rest: Pick<BrokerRestClient, 'getChart'>;
   decider?: SignalDecider;
-  logger: Pick<Logger, 'info' | 'warn'>;
+  logger: SignalFeedLogger;
   // the decision's nowMs; the window is built from the same reading
   now?: () => number;
 }
