@@ -1083,6 +1083,7 @@ describe('what the bot writes when a drain step fails', () => {
     };
     runBot({
       bot,
+      tracker: { stop: () => Promise.resolve() },
       logger,
       exit: vi.fn(),
       signals: ['SIGTERM'],
@@ -1137,6 +1138,7 @@ describe('what the bot writes when a part of the profile is not registered', () 
       };
       runBot({
         bot,
+        tracker: { stop: () => Promise.resolve() },
         logger,
         exit: vi.fn(),
         signals: ['SIGTERM'],

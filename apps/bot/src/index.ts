@@ -33,4 +33,4 @@ const bot = createBot({
   intentTracker,
 });
 
-runBot({ bot, logger, exit: (code) => process.exit(code) });
+runBot({ bot, tracker: intentTracker, logger, exit: (code) => process.exit(code) });

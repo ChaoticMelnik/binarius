@@ -1,6 +1,7 @@
 import type { Api, PollingOptions } from 'grammy';
 import { closeAll, errorLogFields } from '@binarius/shared';
 import { BOT_COMMANDS, BOT_COMMAND_SCOPE } from './commands';
+import type { IntentTracker } from './intent-tracker';
 import { telegramErrorFields, type Logger } from './logging';
 import { PROFILE } from './texts';
 import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './timing';
@@ -23,6 +24,8 @@ export interface PollingLoop {
 
 export interface RunBotOptions {
   bot: PollingLoop;
+  // the demo trades' status tracker (#127): stopped with the bot, its attempt in flight drained
+  tracker: Pick<IntentTracker, 'stop'>;
   logger: Logger;
   exit: (code: number) => void;
   shutdownBudgetMs?: number;
@@ -36,6 +39,7 @@ export interface RunBotOptions {
 // only once the polling loop has ended, so it is drained alongside stop() rather than after it.
 export function runBot({
   bot,
+  tracker,
   logger,
   exit,
   shutdownBudgetMs = SHUTDOWN_BUDGET_MS,
@@ -119,7 +123,11 @@ export function runBot({
         .finally(() => {
           settled += 1;
         });
-    const steps = [step('bot.stop()', () => bot.stop()), step('polling loop', () => started)];
+    const steps = [
+      step('bot.stop()', () => bot.stop()),
+      step('polling loop', () => started),
+      step('intent tracker', () => tracker.stop()),
+    ];
 
     void closeAll(steps, shutdownBudgetMs).then((drained) => {
       if (!drained) {
