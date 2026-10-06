@@ -107,6 +107,9 @@ export function createSettlementCatchup({
     if (!token.ok) {
       if (isAccessTokenRefusal(token.reason)) {
         logger.warn({ ...ids, refusal: token.reason }, 'settlement catch-up token refused');
+      } else if (stopping.signal.aborted) {
+        // stop() aborted the request: the source answers that as unreachable (review m5)
+        return 'stopped';
       } else {
         logger.warn(
           { ...ids, failure: token.reason, status: token.status },
