@@ -28,14 +28,6 @@ export interface TradeExecutor {
   submit(intent: TradeIntentRow, signal: AbortSignal): Promise<SubmitResult>;
 }
 
-// until ARCH-01 lands, every intent is refused before anything reaches a broker
-export const notConfiguredExecutor: TradeExecutor = {
-  submit: async () => ({
-    outcome: 'rejected',
-    reason: TradeIntentFailureReason.ExecutorNotConfigured,
-  }),
-};
-
 // The outermost layer over any executor (#134): with the grant off,
 // a real intent is rejected without the inner executor being called. `rejected`, because nothing
 // was sent to the broker.
