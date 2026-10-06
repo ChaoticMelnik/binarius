@@ -1495,10 +1495,11 @@ PR #242 смержен через rebase: 5 коммитов, голова `99db
 | m3, m4: `registerUser` без верхней границы; два лишних утверждения в `state.test.ts` | Minor | other | — | Implementer → #243 |
 | Codex (c): глобальный Task Workflow «Changes requested → In Progress» против проектного → Todo; глобальное «все три субагента» против правила малого diff | Minor | other | Глобальный файл не обновлён под проектные правила | Process docs; правит проектная секция |
 | Три спавна архитектора умерли на лимитах моделей | Process | other | Недельные лимиты Fable и Opus | Tech-lead Model policy — check |
+| Docs-PR аудита #245 смержен без Codex whole-feature pass: попытка 1 (`task-muwf2dls-7wcshy`) упала на лимите Codex, второй не было | Process | codex-ops | Лимит использования Codex до 15:25 MSK 2026-10-06 | Tech-lead Phase 5 step 5; владелец явно принял мерж без прогона (2026-10-06) |
 
 ### Process improvement proposals
 
 1. **`<synthetic>` в Model policy — check: метка ошибки API, а не модель** — **внедрено в #245: `.claude/skills/tech-lead/SKILL.md` → Model policy — check**
 2. **Minor m1-m4** — **вынесено в #243**
-3. **Правка `~/.claude/CLAUDE.md` по двум находкам Codex (c)** — **открыто (2026-10-06, владелец): текст tech-lead предлагает отдельно**
+3. **Правка `~/.claude/CLAUDE.md` по двум находкам Codex (c)** — **отклонено: глобальный файл общий для всех проектов, проектный CLAUDE.md уже правит при расхождении (решение владельца 2026-10-06)**
 4. **Пост-фактум Codex**: к списку предложения 4 аудита #171 добавляются головы этой волны (`7fde2cd`, `756285a`, `7ea46c3`, `45962ff`, `99d8747`) и docs-PR #221, #226, #228, смерженные без Codex — **открыто (2026-10-06, владелец)**
