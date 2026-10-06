@@ -38,13 +38,28 @@ const NOT_MODIFIED = () =>
     'Bad Request: message is not modified: specified new message content and reply markup are exactly the same',
   );
 const GONE = () => editRefused('Bad Request: message to edit not found');
+const FORBIDDEN = () =>
+  new GrammyError(
+    `Call to 'editMessageText' failed!`,
+    { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
+    'editMessageText',
+    {},
+  );
 const editTimedOut = () =>
   new HttpError("Network request for 'editMessageText' failed!", new Error('aborted'));
 
 type Answer = TradeIntentView | Error;
 
 // readIntent answers the script in order and repeats its last entry
-function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }) {
+function setup({
+  script,
+  maxEntries,
+  now,
+}: {
+  script: Answer[];
+  maxEntries?: number;
+  now?: () => number;
+}) {
   const logger = fakeLogger();
   let index = 0;
   const readIntent = vi.fn<BackendClient['readIntent']>(() => {
@@ -67,6 +82,7 @@ function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }
     pollMs: POLL,
     deadlineMs: DEADLINE,
     ...(maxEntries === undefined ? {} : { maxEntries }),
+    ...(now === undefined ? {} : { now }),
   });
   const request = (patch: Partial<IntentTrackRequest> = {}): IntentTrackRequest => ({
     intentId: INTENT_ID,
@@ -213,6 +229,81 @@ describe('the intent tracker', () => {
     await vi.advanceTimersByTimeAsync(POLL);
     expect(edits.map((text) => text.value)).toEqual([shown(submitting)]);
     expect(tracker.size()).toBe(1);
+  });
+
+  // review round 1, M1: a stop status ends the entry only once its edit has landed
+  it('retries the edit of a stop status that failed in transport, then stops', async () => {
+    const rejected = intentView({
+      status: TradeIntentStatus.Rejected,
+      lastError: TradeIntentFailureReason.ExecutorNotConfigured,
+    });
+    const { tracker, edit, readIntent, request } = setup({ script: [rejected] });
+    edit.mockRejectedValueOnce(editTimedOut());
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(tracker.size()).toBe(1);
+    await vi.advanceTimersByTimeAsync(POLL);
+    expect(edit.mock.calls.map(([text]) => text.value)).toEqual([shown(rejected), shown(rejected)]);
+    expect(tracker.size()).toBe(0);
+    await vi.advanceTimersByTimeAsync(DEADLINE);
+    expect(readIntent).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a stop status whose edit always fails until the deadline, ending with its own text', async () => {
+    const rejected = intentView({
+      status: TradeIntentStatus.Rejected,
+      lastError: TradeIntentFailureReason.ExecutorNotConfigured,
+    });
+    const { tracker, edit, readIntent, logger, request } = setup({ script: [rejected] });
+    edit.mockImplementation(() => Promise.reject(FORBIDDEN()));
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
+    expect(tracker.size()).toBe(0);
+    const polls = readIntent.mock.calls.length;
+    expect(polls).toBeGreaterThan(DEADLINE / POLL - 2);
+    const texts = edit.mock.calls.map(([text]) => text.value);
+    expect(texts).toHaveLength(polls + 1);
+    expect(new Set(texts)).toEqual(new Set([shown(rejected)]));
+    expect(texts.at(-1)).not.toContain('обрабатывается');
+    // one line per entry, the later failures only counted
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ intentId: INTENT_ID, telegramErrorCode: 403 }),
+      'trade intent message not edited',
+    );
+    await vi.advanceTimersByTimeAsync(DEADLINE);
+    expect(readIntent).toHaveBeenCalledTimes(polls);
+  });
+
+  it('warns about a message that is gone even after an earlier edit failure', async () => {
+    const { tracker, edit, logger, request } = setup({ script: [submitting] });
+    edit.mockRejectedValueOnce(editTimedOut()).mockRejectedValueOnce(GONE());
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST + POLL);
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(tracker.size()).toBe(0);
+  });
+
+  // review round 1, m1: a throw outside the read and the edit
+  it('logs and stops the entry when the attempt itself throws, and stop() still resolves', async () => {
+    let calls = 0;
+    const now = () => {
+      calls += 1;
+      if (calls > 1) throw new TypeError('clock broke');
+      return 0;
+    };
+    const { tracker, logger, request } = setup({ script: [submitting], now });
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intentId: INTENT_ID,
+        err: expect.objectContaining({ name: 'TypeError' }),
+      }),
+      'trade intent tracking failed',
+    );
+    expect(tracker.size()).toBe(0);
+    await expect(tracker.stop()).resolves.toBeUndefined();
   });
 
   it('stops with an error line on anything that is not a backend or Telegram failure', async () => {

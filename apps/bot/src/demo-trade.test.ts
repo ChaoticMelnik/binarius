@@ -73,7 +73,7 @@ function setup(
     options.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
   );
   const createIntent = vi.fn<BackendClient['createIntent']>(
-    options.createIntent ?? (() => Promise.resolve({ created: true, intent: INTENT_VIEW })),
+    options.createIntent ?? (() => Promise.resolve(INTENT_VIEW)),
   );
   const readIntent = vi.fn<BackendClient['readIntent']>(
     options.readIntent ?? (() => Promise.resolve(INTENT_VIEW)),
@@ -204,10 +204,7 @@ describe('the stake button', () => {
   });
 
   it('sends the same key when the same button is pressed twice, and shows the replay', async () => {
-    const answers = [
-      { created: true, intent: INTENT_VIEW },
-      { created: false, intent: intentView({ status: TradeIntentStatus.Submitting }) },
-    ];
+    const answers = [INTENT_VIEW, intentView({ status: TradeIntentStatus.Submitting })];
     const { press, calls, createIntent, intentTracker } = setup({
       createIntent: () => Promise.resolve(answers.shift() ?? answers[0]!),
     });
@@ -239,7 +236,7 @@ describe('the stake button', () => {
     intentView({ status: TradeIntentStatus.Settled }),
   ])('shows a replay already at $status and does not track it', async (intent) => {
     const { press, calls, intentTracker } = setup({
-      createIntent: () => Promise.resolve({ created: false, intent }),
+      createIntent: () => Promise.resolve(intent),
     });
     await press(STAKE);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(statusOf(intent));
@@ -295,7 +292,7 @@ describe('the stake button', () => {
   ])('asks again with the same key when the outcome is %s', async (_case, error) => {
     const answers: (() => ReturnType<BackendClient['createIntent']>)[] = [
       () => Promise.reject(error),
-      () => Promise.resolve({ created: true, intent: INTENT_VIEW }),
+      () => Promise.resolve(INTENT_VIEW),
     ];
     const { press, calls, createIntent, intentTracker, logger } = setup({
       createIntent: () => answers.shift()!(),

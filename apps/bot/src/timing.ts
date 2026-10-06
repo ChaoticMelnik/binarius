@@ -117,8 +117,7 @@ export const GRAMMY_POLLING_BACKOFF_MS = 3_000;
 export const COMPOSE_STOP_GRACE_PERIOD_MS = 55_000;
 
 // The demo trade's status tracker (#127, intent-tracker.ts). Its polls run between updates, like
-// the profile registration, so they are not in HANDLER_CALLS; what shutdown waits for is the
-// drain below. The first poll comes a second after the status message: the worker usually
+// the profile registration, so they are not in HANDLER_CALLS. The first poll comes a second after the status message: the worker usually
 // answers within that. The deadline is the worker's INTENT_MAX_AGE_MS (60 s) plus its
 // SUBMIT_ACK_TIMEOUT_MS (10 s) with room — the worker's constants, not importable here, so the
 // relation is stated, not checked: past it, a live intent is still polled by nobody, and the
@@ -126,7 +125,9 @@ export const COMPOSE_STOP_GRACE_PERIOD_MS = 55_000;
 export const INTENT_TRACK_FIRST_POLL_MS = 1_000;
 export const INTENT_TRACK_POLL_MS = 3_000;
 export const INTENT_TRACK_DEADLINE_MS = 120_000;
-// what tracker.stop() waits for: one readIntent in flight, then one edit
+// The chain asserts that one readIntent plus one edit — what tracker.stop() can be waiting for —
+// fits inside SHUTDOWN_BUDGET_MS; the step itself is bounded by closeAll's budget in runBot, not
+// by this constant.
 export const INTENT_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS;
 
 // TRADING_ACCESS_BUDGET_MS and TRADING_SIGNAL_BUDGET_MS are the backend's upper estimates of POST

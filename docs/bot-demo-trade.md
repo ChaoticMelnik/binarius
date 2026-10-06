@@ -22,8 +22,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `createBot` and to `runBot`.
 - `apps/bot/src/demo.ts` — the stake button's data `demo:stake:<assetId>:<sec>:<up|down>:<nonce>`,
   `newStakeNonce`, `STAKE_CALLBACK_PATTERN` and `stakeDataOf`.
-- `apps/bot/src/backend-client.ts` — `createIntent(request)` → `{ created, intent }` (`created` is
-  true for a 201, false for a 200 replay). `readIntent(id, telegramUserId)` →
+- `apps/bot/src/backend-client.ts` — `createIntent(request)` → the intent; a 201 and a 200 replay
+  read the same, since the bot treats them the same. `readIntent(id, telegramUserId)` →
   `GET trading/intents/<id>?telegramUserId=<id>`. Both parse `intent` with
   `safeParseTradeIntentView`.
 - `apps/bot/src/send.ts` — `editMessageTextByIdHtml`, the tracker's edit, which runs outside any
@@ -132,15 +132,15 @@ no outgoing edge in `TRADE_INTENT_TRANSITIONS`, plus `accepted`.
 
 | An attempt ends with | The entry |
 | --- | --- |
-| a changed status | edited; stops on a stop status, otherwise polls again |
+| a changed status | edited; on a stop status the entry ends once the edit has landed, otherwise the edit is retried on every poll until the deadline |
 | the same status | not edited; polls again, or reaches the deadline |
-| a live status past `INTENT_TRACK_DEADLINE_MS` | one last edit with «⏳ Сделка всё ещё обрабатывается — нажми «🔄 Обновить статус» чуть позже.», then stops |
-| 404 `not_found` | «⚠️ Статус сделки недоступен.»; `warn` `trade intent status not read` with `intentId`; stops |
+| past `INTENT_TRACK_DEADLINE_MS` | one last edit, then stops: «⏳ Сделка всё ещё обрабатывается — нажми «🔄 Обновить статус» чуть позже.» under a live status, the status text itself for a stop status whose edit never landed. This edit is not retried, because the deadline is what ends every entry, even one whose every edit is refused (a 403 once the user blocked the bot) |
+| 404 `not_found` | «⚠️ Статус сделки недоступен.»; `warn` `trade intent status not read` with `intentId`; stops. That edit is not retried: polling cannot fix a missing or foreign id, and the refresh button gives the same answer |
 | any other read failure | `warn` once per entry; polls again until the deadline |
 | the edit refused as «message is not modified» | treated as shown |
-| the edit refused as gone | `warn` `trade intent message not edited`; stops |
-| any other refusal of the edit, or a transport failure | `warn`; not recorded as shown, so the next poll edits again |
-| anything else thrown | `error` `trade intent tracking failed`; stops |
+| the edit refused as gone | `warn` `trade intent message not edited` (always); stops |
+| any other refusal of the edit, or a transport failure | `warn` once per entry, then only counted; not recorded as shown, so the next poll edits again (the poll interval is the retry cadence; a 429's `retry_after` is not read) |
+| anything else thrown, anywhere in the attempt | `error` `trade intent tracking failed`; stops |
 
 When `INTENT_TRACKER_MAX_ENTRIES` (10 000) is reached, the oldest entry is dropped and its message
 keeps its last state. `stop()` clears every timer, refuses new entries and waits for every

@@ -83,10 +83,8 @@ export interface BackendClient {
   readTradingAccess(telegramUserId: string): Promise<TradingAccessResponse>;
   readPairs(): Promise<PairsCatalogResponse>;
   evaluateSignal(assetId: number, interval: SignalInterval): Promise<TradingSignalResponse>;
-  // created: 201, a new intent; false: 200, the replay of the same clientRequestId (#127)
-  createIntent(
-    request: CreateTradeIntentRequest,
-  ): Promise<{ created: boolean; intent: TradeIntentView }>;
+  // a new intent (201) and the replay of the same clientRequestId (200) read the same (#127)
+  createIntent(request: CreateTradeIntentRequest): Promise<TradeIntentView>;
   // scoped by the owner: another user's id is the same 404 not_found as a missing one
   readIntent(id: string, telegramUserId: string): Promise<TradeIntentView>;
 }
@@ -111,7 +109,7 @@ export function createBackendClient({
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
-  ): Promise<{ status: number; payload: unknown }> => {
+  ): Promise<unknown> => {
     const signal = AbortSignal.timeout(timeoutMs);
     let response: Response;
     try {
@@ -153,10 +151,10 @@ export function createBackendClient({
         reason: errorCodeOf(payload),
       });
     }
-    return { status: response.status, payload };
+    return payload;
   };
-  const post = async (path: string, body: unknown) => (await request('POST', path, body)).payload;
-  const get = async (path: string) => (await request('GET', path)).payload;
+  const post = (path: string, body: unknown) => request('POST', path, body);
+  const get = (path: string) => request('GET', path);
   const intentOf = (payload: unknown): TradeIntentView => {
     const parsed = safeParseTradeIntentView((payload as { intent?: unknown } | null)?.intent);
     if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
@@ -239,8 +237,7 @@ export function createBackendClient({
       return parsed.data;
     },
     async createIntent(intentRequest) {
-      const { status, payload } = await request('POST', 'trading/intents', intentRequest);
-      return { created: status === 201, intent: intentOf(payload) };
+      return intentOf(await post('trading/intents', intentRequest));
     },
     async readIntent(id, telegramUserId) {
       const query = new URLSearchParams({ telegramUserId });

@@ -632,16 +632,13 @@ describe('createIntent', () => {
     clientRequestId: 'demo:4242:0123456789ab',
   };
 
-  it.each([
-    [201, true],
-    [200, false],
-  ])('posts the request under the bearer; %i reads as created %s', async (status, created) => {
+  it.each([201, 200])('posts the request under the bearer; %i returns the view', async (status) => {
     const { baseUrl, capture } = await serve((_request, reply) => {
       json(reply, status, { intent: INTENT_VIEW });
     });
     expect(
       await createBackendClient({ baseUrl, token: TOKEN }).createIntent(intentRequest),
-    ).toEqual({ created, intent: INTENT_VIEW });
+    ).toEqual(INTENT_VIEW);
     expect(capture.method).toBe('POST');
     expect(capture.url).toBe('/trading/intents');
     expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
