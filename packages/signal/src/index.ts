@@ -5,3 +5,4 @@ export * from './config';
 export * from './feed';
 export * from './feed-config';
 export * from './journal';
+export * from './cache';
