@@ -27,7 +27,7 @@ import {
 // --- The trading-reconciliation job: a hand-off to the pass ----------------------------------
 
 export type ReconciliationJobOutcome =
-  // unknown → reconciling, and the pass was woken
+  // unknown → reconciling; the pass takes it on its next interval tick
   | 'reconciling'
   // the intent is already reconciling, parked or terminal, or another delivery won the CAS
   | 'noop';
@@ -35,14 +35,15 @@ export type ReconciliationJobOutcome =
 export interface ReconciliationJobDeps {
   db: Db;
   logger: Logger;
-  wake(): void;
 }
 
-// The job never asks the broker: the pass is the single attempt path. A throw (database down)
+// The job never asks the broker: the pass is the single attempt path. Nor does it start a tick:
+// ticks come only from the interval, which is what bounds the broker GETs a minute
+// (WORKER_BROKER_GETS_PER_MINUTE, #90 review m2). A throw (database down)
 // fails the job into the dead-letter queue, and the outbox publisher re-pends the row while the
 // intent is still unknown, so a reconciliation dead letter is a record, not a loss.
 export async function processReconciliationJob(
-  { db, logger, wake }: ReconciliationJobDeps,
+  { db, logger }: ReconciliationJobDeps,
   payload: unknown,
 ): Promise<ReconciliationJobOutcome> {
   const parsed = tradeIntentJobPayloadSchema.safeParse(payload);
@@ -60,7 +61,6 @@ export async function processReconciliationJob(
     return 'noop';
   }
   logger.info({ intentId }, 'intent reconciling');
-  wake();
   return 'reconciling';
 }
 
@@ -84,8 +84,6 @@ export interface ReconciliationPassDeps {
 export interface ReconciliationPass {
   // one tick at once, then every tickMs
   start(): void;
-  // a tick now unless one runs; a wake during a tick is picked up by the next interval tick
-  wake(): void;
   // resolves when the tick (the running one, if any) ends; never rejects
   tick(): Promise<void>;
   // stops the timer, aborts the attempt's signal and waits for the running tick
@@ -279,10 +277,6 @@ export function createReconciliationPass({
       if (stopped || timer !== undefined) return;
       void tick();
       timer = setInterval(() => void tick(), config.tickMs);
-    },
-    wake() {
-      if (stopped || running !== undefined) return;
-      void tick();
     },
     async stop() {
       stopped = true;

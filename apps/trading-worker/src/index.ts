@@ -112,7 +112,7 @@ const reconciliationConsumer = startIntentConsumer({
   logger,
   concurrency: env.workerConcurrency,
   processor: (payload) =>
-    processReconciliationJob({ db, logger, wake: () => pass.wake() }, payload),
+    processReconciliationJob({ db, logger }, payload),
 });
 
 // accepted intents whose close_trade.success never arrived (#101 is the main path)

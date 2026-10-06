@@ -152,28 +152,24 @@ const ageClaim = (id: string, ms: number) =>
     .where(eq(tradeIntents.id, id));
 
 describe('processReconciliationJob', () => {
-  const job = (payload: unknown, wake: () => void = () => undefined) =>
-    processReconciliationJob({ db: tmp.db, logger: silent, wake }, payload);
+  const job = (payload: unknown) =>
+    processReconciliationJob({ db: tmp.db, logger: silent }, payload);
 
-  it('moves an unknown intent to reconciling and wakes the pass once', async () => {
+  it('moves an unknown intent to reconciling for the next tick of the pass', async () => {
     const { intent } = await seedUnknownIntent(tmp.db);
-    let wakes = 0;
-    expect(await job({ intentId: intent.id }, () => (wakes += 1))).toBe('reconciling');
+    expect(await job({ intentId: intent.id })).toBe('reconciling');
     expect(await rowOf(intent.id)).toMatchObject({
       status: 'reconciling',
       version: intent.version + 1,
       reconcileClaimedAt: null,
     });
-    expect(wakes).toBe(1);
   });
 
   it('is a no-op for an intent already reconciling, and for a second delivery', async () => {
     const { intent } = await seedUnknownIntent(tmp.db);
     expect(await job({ intentId: intent.id })).toBe('reconciling');
-    let wakes = 0;
-    expect(await job({ intentId: intent.id }, () => (wakes += 1))).toBe('noop');
-    expect(await job({ intentId: intent.id }, () => (wakes += 1))).toBe('noop');
-    expect(wakes).toBe(0);
+    expect(await job({ intentId: intent.id })).toBe('noop');
+    expect(await job({ intentId: intent.id })).toBe('noop');
     expect((await rowOf(intent.id)).version).toBe(intent.version + 1);
   });
 
