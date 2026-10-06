@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "signal-probe": "tsx src/cli/signal-probe.ts"
   },
   "dependencies": {
     "@binarius/broker-rest": "workspace:*",
