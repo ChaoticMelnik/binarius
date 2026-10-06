@@ -5,6 +5,7 @@ import {
   safeParseEmailSendCodeResponse,
   safeParseNotificationLevelResponse,
   safeParsePairsCatalogResponse,
+  safeParseTradeIntentView,
   safeParseTradingAccessResponse,
   safeParseTradingSignalResponse,
   safeParseUserAccountResponse,
@@ -12,6 +13,7 @@ import {
   startLoginResponseSchema,
   type ChatMemberResponse,
   type ConfirmLoginResponse,
+  type CreateTradeIntentRequest,
   type EmailLoginResponse,
   type EmailSendCodeResponse,
   type NotificationLevel,
@@ -20,6 +22,7 @@ import {
   type SignalInterval,
   type StartLoginResponse,
   type TelegramChatMemberStatus,
+  type TradeIntentView,
   type TradingAccessResponse,
   type TradingSignalResponse,
   type UserAccountView,
@@ -80,6 +83,12 @@ export interface BackendClient {
   readTradingAccess(telegramUserId: string): Promise<TradingAccessResponse>;
   readPairs(): Promise<PairsCatalogResponse>;
   evaluateSignal(assetId: number, interval: SignalInterval): Promise<TradingSignalResponse>;
+  // created: 201, a new intent; false: 200, the replay of the same clientRequestId (#127)
+  createIntent(
+    request: CreateTradeIntentRequest,
+  ): Promise<{ created: boolean; intent: TradeIntentView }>;
+  // scoped by the owner: another user's id is the same 404 not_found as a missing one
+  readIntent(id: string, telegramUserId: string): Promise<TradeIntentView>;
 }
 
 export interface BackendClientOptions {
@@ -102,7 +111,7 @@ export function createBackendClient({
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
-  ): Promise<unknown> => {
+  ): Promise<{ status: number; payload: unknown }> => {
     const signal = AbortSignal.timeout(timeoutMs);
     let response: Response;
     try {
@@ -144,9 +153,15 @@ export function createBackendClient({
         reason: errorCodeOf(payload),
       });
     }
-    return payload;
+    return { status: response.status, payload };
   };
-  const post = (path: string, body: unknown) => request('POST', path, body);
+  const post = async (path: string, body: unknown) => (await request('POST', path, body)).payload;
+  const get = async (path: string) => (await request('GET', path)).payload;
+  const intentOf = (payload: unknown): TradeIntentView => {
+    const parsed = safeParseTradeIntentView((payload as { intent?: unknown } | null)?.intent);
+    if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+    return parsed.data;
+  };
 
   return {
     async recordStart(request) {
@@ -211,7 +226,7 @@ export function createBackendClient({
     },
     // the whole answer: `fresh` is the backend's verdict, and the bot keeps no copy of its bound
     async readPairs() {
-      const parsed = safeParsePairsCatalogResponse(await request('GET', 'trading/pairs'));
+      const parsed = safeParsePairsCatalogResponse(await get('trading/pairs'));
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
     },
@@ -222,6 +237,14 @@ export function createBackendClient({
       );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
+    },
+    async createIntent(intentRequest) {
+      const { status, payload } = await request('POST', 'trading/intents', intentRequest);
+      return { created: status === 201, intent: intentOf(payload) };
+    },
+    async readIntent(id, telegramUserId) {
+      const query = new URLSearchParams({ telegramUserId });
+      return intentOf(await get(`trading/intents/${encodeURIComponent(id)}?${query.toString()}`));
     },
   };
 }

@@ -374,6 +374,8 @@ function scene(options: SceneOptions = {}) {
     readTradingAccess: () => Promise.reject(new Error('not used by these scenes')),
     readPairs: () => Promise.reject(new Error('not used by these scenes')),
     evaluateSignal: () => Promise.reject(new Error('not used by these scenes')),
+    createIntent: () => Promise.reject(new Error('not used by these scenes')),
+    readIntent: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({
     token: TOKEN,

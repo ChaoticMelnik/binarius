@@ -269,6 +269,8 @@ async function observe(branch: Branch): Promise<Calls> {
       backend += 1;
       return (branch.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)))(assetId, interval);
     },
+    createIntent: () => Promise.reject(new Error('not used by these branches')),
+    readIntent: () => Promise.reject(new Error('not used by these branches')),
   };
   const loginDialog = createLoginDialog();
   if (branch.dialog !== undefined) loginDialog.set(USER.id, branch.dialog);

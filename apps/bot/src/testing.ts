@@ -18,6 +18,8 @@ import {
   SIGNAL_ALGORITHM_VERSION,
   SignalKind,
   TradeAction,
+  TradeIntentStatus,
+  TradeMode,
   tradingSignalResponseSchema,
   TrendDirection,
   UserStatus,
@@ -32,6 +34,7 @@ import {
   type SignalFeatures,
   type SignalParams,
   type StartLoginResponse,
+  type TradeIntentView,
   type TradingAccessResponse,
   type TradingSignalResponse,
   type UserAccountView,
@@ -262,6 +265,34 @@ export const SIGNAL_FETCH_FAILED: TradingSignalResponse = tradingSignalResponseS
   retryAfterSec: 7,
 });
 
+// A demo intent as POST /trading/intents answers it right after creation (#127): queued, the
+// broker's minimum stake, the key the stake button's fixed nonce gives.
+export const INTENT_ID = '7c1e9f2a-4b3d-4e5f-8a6b-9c0d1e2f3a4b';
+export const STAKE_NONCE = '0123456789ab';
+export const INTENT_VIEW: TradeIntentView = {
+  id: INTENT_ID,
+  brokerAccountId: '5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a',
+  telegramUserId: String(USER.id),
+  mode: TradeMode.Demo,
+  assetId: PAIR_EURUSD.id,
+  amount: BROKER_BALANCE.minTradeAmount,
+  action: TradeAction.Up,
+  durationSec: 60,
+  clientRequestId: `demo:${USER.id}:${STAKE_NONCE}`,
+  createdAt: '2026-10-06T10:00:00.000Z',
+  status: TradeIntentStatus.Queued,
+  version: 3,
+  tokensReserved: '1',
+  transport: null,
+  submittedAt: null,
+  lastError: null,
+  updatedAt: '2026-10-06T10:00:00.000Z',
+};
+export const intentView = (patch: Partial<TradeIntentView> = {}): TradeIntentView => ({
+  ...INTENT_VIEW,
+  ...patch,
+});
+
 // A client where every method the scene does not give rejects, so an unexpected call fails the
 // scene instead of answering with a fixture. A method added to BackendClient adds a line here.
 export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient => {
@@ -278,6 +309,8 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     readTradingAccess: unused,
     readPairs: unused,
     evaluateSignal: unused,
+    createIntent: unused,
+    readIntent: unused,
     ...patch,
   };
 };

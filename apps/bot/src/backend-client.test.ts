@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   OAuthErrorCode,
   PairsCatalogErrorCode,
+  TradeAction,
+  TradeIntentErrorCode,
+  TradeMode,
   UserErrorCode,
+  type CreateTradeIntentRequest,
   type UserStartRequest,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
@@ -15,6 +19,8 @@ import {
   CODE_SENT,
   CONFIRMED,
   EMAIL,
+  INTENT_ID,
+  INTENT_VIEW,
   LINK_ACTIVE,
   LINK_PENDING,
   LINK_REVOKED,
@@ -612,6 +618,120 @@ describe('evaluateSignal', () => {
     );
     expect(error).toMatchObject({ code: BackendErrorCode.Unreachable });
     expect(Date.now() - started).toBeLessThan(UNIT_WAIT_CEILING_MS);
+  });
+});
+
+describe('createIntent', () => {
+  const intentRequest: CreateTradeIntentRequest = {
+    telegramUserId: '4242',
+    mode: TradeMode.Demo,
+    assetId: 101,
+    amount: INTENT_VIEW.amount,
+    action: TradeAction.Up,
+    durationSec: 60,
+    clientRequestId: 'demo:4242:0123456789ab',
+  };
+
+  it.each([
+    [201, true],
+    [200, false],
+  ])('posts the request under the bearer; %i reads as created %s', async (status, created) => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, status, { intent: INTENT_VIEW });
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).createIntent(intentRequest),
+    ).toEqual({ created, intent: INTENT_VIEW });
+    expect(capture.method).toBe('POST');
+    expect(capture.url).toBe('/trading/intents');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual(intentRequest);
+  });
+
+  it.each([
+    ['no intent', { view: INTENT_VIEW }],
+    ['a status outside the enum', { intent: { ...INTENT_VIEW, status: 'open' } }],
+    ['a numeric amount', { intent: { ...INTENT_VIEW, amount: 1 } }],
+  ])('reports a body with %s as a contract violation', async (_name, body) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 201, body);
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).createIntent(intentRequest),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('carries a 409 as its status and reason', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 409, { error: TradeIntentErrorCode.ActiveIntentExists });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).createIntent(intentRequest),
+    );
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 409,
+      reason: TradeIntentErrorCode.ActiveIntentExists,
+    });
+  });
+
+  it('carries a 500 as its status, without the body', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 500, { message: 'SECRET-BODY' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).createIntent(intentRequest),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status: 500 });
+    expect((error as BackendError).reason).toBeUndefined();
+  });
+});
+
+describe('readIntent', () => {
+  it('sends a GET of the id with the owner in the query, and returns the view', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { intent: INTENT_VIEW });
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).readIntent(INTENT_ID, '4242'),
+    ).toEqual(INTENT_VIEW);
+    expect(capture.method).toBe('GET');
+    expect(capture.url).toBe(`/trading/intents/${INTENT_ID}?telegramUserId=4242`);
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(capture.contentType).toBeUndefined();
+  });
+
+  it('keeps an id that is not a path segment inside its segment', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 404, { error: 'not_found' });
+    });
+    await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readIntent('../x?y', '4242'));
+    expect(capture.url).toBe('/trading/intents/..%2Fx%3Fy?telegramUserId=4242');
+  });
+
+  it('carries a 404 not_found as its reason', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 404, { error: 'not_found' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readIntent(INTENT_ID, '4242'),
+    );
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: 'not_found',
+    });
+  });
+
+  it('reports a broken body as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { intent: { ...INTENT_VIEW, lastError: 'whatever' } });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readIntent(INTENT_ID, '4242'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });
 
