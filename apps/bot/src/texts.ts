@@ -258,9 +258,6 @@ ${FEATURE_LINES}`,
   stakeAccountNotConfirmed: telegramHtml`⏳ Привязка Binodex ждёт подтверждения — открой /account.`,
   stakeAccountHalted: telegramHtml`⛔ Торговля по аккаунту остановлена — напиши в поддержку: /support`,
   stakeOutcomeUnknown: telegramHtml`⚠️ Не удалось узнать, принята ли заявка. Нажми кнопку сделки ещё раз — вторая сделка от этого не откроется.`,
-  // the stake button until #127 opens the trade; #127 deletes it
-  stakeSoon: telegramHtml`💵 <b>Открытие сделки пока в разработке</b>
-Анализ уже настоящий — кнопка заработает в следующей версии.`,
 } as const satisfies Record<string, TelegramHtml | ((value: string) => TelegramHtml)>;
 
 // The /help message: the three blocks, then one line per command in the menu's order.

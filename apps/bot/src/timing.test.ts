@@ -9,6 +9,7 @@ import {
   NotificationLevel,
   OAuthErrorCode,
   TradeAction,
+  TradeIntentErrorCode,
   TRADING_ACCESS_BUDGET_MS,
   TRADING_SIGNAL_BUDGET_MS,
   UserErrorCode,
@@ -34,6 +35,7 @@ import {
   demoPageCallbackData,
   stakeCallbackData,
 } from './demo';
+import { intentCallbackData } from './demo-trade';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCESS_VIEW,
@@ -44,6 +46,7 @@ import {
   CODE_SENT,
   CONFIRMED,
   EMAIL,
+  INTENT_VIEW,
   LINK_ACTIVE,
   LINK_PENDING,
   LINK_REVOKED,
@@ -56,6 +59,7 @@ import {
   SIGNAL_FETCH_FAILED,
   SIGNAL_NO_SIGNAL,
   PENDING_ACCOUNT_ID,
+  STAKE_NONCE,
   USER,
   TEXT_CARD_MESSAGE_ID,
   USER_VIEW,
@@ -71,6 +75,7 @@ import {
   brokerBalance,
   pairsResponse,
   type ApiAnswer,
+  stubTracker,
 } from './testing';
 import {
   BACKEND_REQUEST_TIMEOUT_MS,
@@ -116,6 +121,8 @@ interface Branch {
   readTradingAccess?: BackendClient['readTradingAccess'];
   readPairs?: BackendClient['readPairs'];
   evaluateSignal?: BackendClient['evaluateSignal'];
+  createIntent?: BackendClient['createIntent'];
+  readIntent?: BackendClient['readIntent'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -275,12 +282,21 @@ async function observe(branch: Branch): Promise<Calls> {
       backend += 1;
       return (branch.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)))(assetId, interval);
     },
-    createIntent: () => Promise.reject(new Error('not used by these branches')),
-    readIntent: () => Promise.reject(new Error('not used by these branches')),
+    createIntent: (request) => {
+      backend += 1;
+      return (
+        branch.createIntent ?? (() => Promise.resolve({ created: true, intent: INTENT_VIEW }))
+      )(request);
+    },
+    readIntent: (id, telegramUserId) => {
+      backend += 1;
+      return (branch.readIntent ?? (() => Promise.resolve(INTENT_VIEW)))(id, telegramUserId);
+    },
   };
   const loginDialog = createLoginDialog();
   if (branch.dialog !== undefined) loginDialog.set(USER.id, branch.dialog);
   const bot = createBot({
+    intentTracker: stubTracker(),
     token: '123456:AA-bot-token',
     backend: client,
     logger: fakeLogger(),
@@ -804,15 +820,24 @@ const DEMO_ANALYSIS = {
   ] satisfies Branch[],
 };
 
-// the stake button until #127 (#126)
+// the stake button (#127)
 const stakeUpdate = (chatType?: string) =>
-  callbackUpdate(stakeCallbackData(PAIR_EURUSD.id, 300, TradeAction.Up), chatType);
-const STAKE_PLACEHOLDER_WORST_CASE: Branch = {
-  label: 'the query is answered and the placeholder is sent',
+  callbackUpdate(stakeCallbackData(PAIR_EURUSD.id, 300, TradeAction.Up, STAKE_NONCE), chatType);
+const createFails = (error: BackendError) => () => Promise.reject(error);
+const STAKE_WORST_CASE: Branch = {
+  label: 'the outcome is unknown, the retry creates it, and the status is sent',
   update: stakeUpdate(),
-  expected: { backend: 0, telegram: 2 },
+  createIntent: (() => {
+    let first = true;
+    return () => {
+      if (!first) return Promise.resolve({ created: true, intent: INTENT_VIEW });
+      first = false;
+      return Promise.reject(new BackendError(BackendErrorCode.Unreachable));
+    };
+  })(),
+  expected: { backend: 4, telegram: 2 },
 };
-const STAKE_PLACEHOLDER_BRANCHES: readonly Branch[] = [
+const STAKE_BRANCHES: readonly Branch[] = [
   {
     label: 'the chat is not private',
     update: stakeUpdate('group'),
@@ -820,15 +845,128 @@ const STAKE_PLACEHOLDER_BRANCHES: readonly Branch[] = [
   },
   {
     label: 'the data is forged',
-    update: callbackUpdate('demo:stake:0:300:up'),
+    update: callbackUpdate('demo:stake:0:300:up:0123456789ab'),
     expected: { backend: 0, telegram: 1 },
   },
-  STAKE_PLACEHOLDER_WORST_CASE,
   {
-    label: 'answering the query is refused and the placeholder still goes',
+    label: 'the catalog is unavailable',
+    update: stakeUpdate(),
+    readPairs: () =>
+      Promise.reject(
+        new BackendError(BackendErrorCode.HttpStatus, {
+          status: 503,
+          reason: 'catalog_unavailable',
+        }),
+      ),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the pair is closed',
+    update: callbackUpdate(stakeCallbackData(PAIR_CLOSED.id, 300, TradeAction.Up, STAKE_NONCE)),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the access is not read',
+    update: stakeUpdate(),
+    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'no broker snapshot',
+    update: stakeUpdate(),
+    readTradingAccess: () =>
+      Promise.resolve(
+        accessView({ broker: null, brokerUnavailable: BrokerBalanceUnavailableReason.Refreshing }),
+      ),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the intent is created and the status is sent',
+    update: stakeUpdate(),
+    expected: { backend: 3, telegram: 2 },
+  },
+  {
+    label: 'the backend refuses the intent',
+    update: stakeUpdate(),
+    createIntent: createFails(
+      new BackendError(BackendErrorCode.HttpStatus, {
+        status: 409,
+        reason: TradeIntentErrorCode.ActiveIntentExists,
+      }),
+    ),
+    expected: { backend: 3, telegram: 2 },
+  },
+  STAKE_WORST_CASE,
+  {
+    label: 'the outcome stays unknown after the retry',
+    update: stakeUpdate(),
+    createIntent: createFails(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
+    expected: { backend: 4, telegram: 2 },
+  },
+  {
+    label: 'answering the query is refused and the status still goes',
     update: stakeUpdate(),
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-    expected: { backend: 0, telegram: 2 },
+    expected: { backend: 3, telegram: 2 },
+  },
+];
+
+// «🔄 Обновить статус» (#127)
+const refreshUpdate = (chatType?: string) =>
+  callbackUpdate(intentCallbackData(INTENT_VIEW.id), chatType);
+const EDIT_GONE: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: message to edit not found',
+};
+const INTENT_REFRESH_WORST_CASE: Branch = {
+  label: 'the message is gone and the status is sent anew',
+  update: refreshUpdate(),
+  apiErrors: [['editMessageText', EDIT_GONE]],
+  expected: { backend: 2, telegram: 3 },
+};
+const INTENT_REFRESH_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: refreshUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the id is not a uuid',
+    update: callbackUpdate('intent:not-a-uuid'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the intent is not found',
+    update: refreshUpdate(),
+    readIntent: () =>
+      Promise.reject(
+        new BackendError(BackendErrorCode.HttpStatus, { status: 404, reason: 'not_found' }),
+      ),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the read fails',
+    update: refreshUpdate(),
+    readIntent: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the status is edited in place',
+    update: refreshUpdate(),
+    expected: { backend: 2, telegram: 2 },
+  },
+  INTENT_REFRESH_WORST_CASE,
+  {
+    label: 'the edit fails in transport',
+    update: refreshUpdate(),
+    apiErrors: [
+      [
+        'editMessageText',
+        new HttpError("Network request for 'editMessageText' failed!", new Error('aborted')),
+      ],
+    ],
+    expected: { backend: 2, telegram: 2 },
   },
 ];
 
@@ -1510,12 +1648,16 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     );
   });
 
-  it('the stake placeholder', async () => {
+  it('the stake button', async () => {
+    await checkHandler('stake', STAKE_BRANCHES, STAKE_WORST_CASE, HANDLER_CALLS.stake);
+  });
+
+  it('the refresh button', async () => {
     await checkHandler(
-      'stakePlaceholder',
-      STAKE_PLACEHOLDER_BRANCHES,
-      STAKE_PLACEHOLDER_WORST_CASE,
-      HANDLER_CALLS.stakePlaceholder,
+      'intentRefresh',
+      INTENT_REFRESH_BRANCHES,
+      INTENT_REFRESH_WORST_CASE,
+      HANDLER_CALLS.intentRefresh,
     );
   });
 

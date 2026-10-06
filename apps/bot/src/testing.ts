@@ -7,6 +7,7 @@ import type { Bot, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
 import type { BackendClient } from './backend-client';
+import type { IntentTracker } from './intent-tracker';
 import {
   BrokerAccountStatus,
   brokerBalanceViewSchema,
@@ -314,6 +315,9 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     ...patch,
   };
 };
+
+// a tracker that arms no timer: what every bot built in a test gets unless it asserts on tracking
+export const stubTracker = (): { track: Mock<IntentTracker['track']> } => ({ track: vi.fn() });
 
 export const EMAIL = 'ada@example.test';
 export const CODE = '123456';
