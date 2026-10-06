@@ -197,7 +197,7 @@ describe('createSettlementCatchup (#90)', () => {
     expect(await ledgerKinds(a.intent.id)).toEqual(['reserve', 'settle']);
   });
 
-  // review M1: a page the broker cuts below the limit is not the list's end
+  // a page the broker cuts below the limit is not the list's end
   it('reads past a page the broker cut short', async () => {
     const a = await acceptedAtBroker();
     const client = createBrokerRestClient({ baseUrl: broker.url });
@@ -330,7 +330,7 @@ describe('createSettlementCatchup (#90)', () => {
     expect(await statusOf(a.intent.id)).toBe('accepted');
   });
 
-  // review m5: the source answers an aborted request as backend_unreachable
+  // the token source answers an aborted request as backend_unreachable
   it('does not hold back an account when stop() lands in its token fetch', async () => {
     const a = await acceptedAtBroker();
     let entered = false;

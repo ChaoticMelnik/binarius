@@ -39,7 +39,7 @@ export interface ReconciliationJobDeps {
 
 // The job never asks the broker: the pass is the single attempt path. Nor does it start a tick:
 // ticks come only from the interval, which is what bounds the broker GETs a minute
-// (WORKER_BROKER_GETS_PER_MINUTE, #90 review m2). A throw (database down)
+// (WORKER_BROKER_GETS_PER_MINUTE). A throw (database down)
 // fails the job into the dead-letter queue, and the outbox publisher re-pends the row while the
 // intent is still unknown, so a reconciliation dead letter is a record, not a loss.
 export async function processReconciliationJob(

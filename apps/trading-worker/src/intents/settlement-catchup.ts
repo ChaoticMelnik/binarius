@@ -108,7 +108,7 @@ export function createSettlementCatchup({
       if (isAccessTokenRefusal(token.reason)) {
         logger.warn({ ...ids, refusal: token.reason }, 'settlement catch-up token refused');
       } else if (stopping.signal.aborted) {
-        // stop() aborted the request: the source answers that as unreachable (review m5)
+        // stop() aborted the request, and the source answers an abort as unreachable
         return 'stopped';
       } else {
         logger.warn(
@@ -161,7 +161,8 @@ export function createSettlementCatchup({
   }
 
   // The deadline is enforced here, as in the reconciliation pass: an attempt that ignores its
-  // signal cannot hold the tick past it.
+  // signal cannot hold the tick past it. Kept as a copy rather than a shared helper: the two differ
+  // in their result type and in what they log, and two callers do not earn the abstraction.
   function attemptWithDeadline(overdue: OverdueAcceptedIntent): Promise<Ending> {
     const deadline = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;

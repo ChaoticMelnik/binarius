@@ -190,7 +190,7 @@ describe('createRestReconciler: matching (#90)', () => {
     expect(await harness({ open: [at(2_000, patch)] }).run()).toEqual({ outcome: 'unresolved' });
   });
 
-  // review m1: the amount is the one key the broker may round
+  // the amount is the one key the broker may round, so a near match must never become a release
   it('answers ambiguous, not unresolved, for a trade that differs only in amount', async () => {
     const h = harness({ closed: [closedTradeFor(at(2_000, { amount: '10.5' as DecimalString }))] });
     expect(await h.run()).toEqual({ outcome: 'ambiguous' });
@@ -311,7 +311,7 @@ describe('createRestReconciler: when absence is certain (#90)', () => {
     expect(h.requests.filter((r) => r.filter.status === 'closed').map((r) => r.filter.offset)).toEqual([0, 3]);
   });
 
-  // review M1: a broker that caps the page below the limit must not make a short page the end
+  // a broker that caps the page below the limit must not make a short page the end
   it('finds the trade behind pages the broker cut short', async () => {
     const ours = at(3_000);
     const closed = [at(5_000, { assetId: 102 }), at(4_000, { assetId: 102 }), ours, at(2_000, { assetId: 102 }), old()];

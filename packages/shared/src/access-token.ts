@@ -35,7 +35,6 @@ export const accessTokenResponseSchema = z.strictObject({ accessToken: z.string(
 export type AccessTokenResponse = z.infer<typeof accessTokenResponseSchema>;
 
 export const accessTokenRefusalResponseSchema = z.strictObject({ error: accessTokenRefusalSchema });
-export type AccessTokenRefusalResponse = z.infer<typeof accessTokenRefusalResponseSchema>;
 
 export const safeParseAccessTokenRequest = (input: unknown) =>
   accessTokenRequestSchema.safeParse(input);
