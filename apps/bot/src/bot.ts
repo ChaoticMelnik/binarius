@@ -34,7 +34,12 @@ import {
   type BackendClient,
 } from './backend-client';
 import { BOT_COMMANDS } from './commands';
-import { createDemoComposer, DEMO_CALLBACK_DATA } from './demo';
+import {
+  createDemoComposer,
+  DEMO_CALLBACK_DATA,
+  STAKE_CALLBACK_PATTERN,
+  stakeDataOf,
+} from './demo';
 import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
@@ -327,6 +332,17 @@ export function createBot({
   // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries
   // only, so the private-chat filter covers them and the text handler below never sees them.
   privateChats.use(createDemoComposer({ backend, logger, now }));
+
+  // The analysis screen's stake button (#126) until #127 opens the trade there: no backend call
+  // and no state. Forged data stops the spinner and sends nothing, as on the demo's screens.
+  privateChats.callbackQuery(STAKE_CALLBACK_PATTERN, async (ctx) => {
+    const stake = stakeDataOf(ctx.match);
+    await ctx.answerCallbackQuery().catch((error: unknown) => {
+      logAnswerFailure(error);
+    });
+    if (stake === undefined) return;
+    await replyHtml(ctx, TEXTS.stakeSoon);
+  });
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
     loginDialog.set(ctx.from.id, { step: 'email' });

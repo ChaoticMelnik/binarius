@@ -193,9 +193,6 @@ ${FEATURE_LINES}`,
   demoChooseDuration: telegramHtml`Выбери длительность сделки.`,
   demoDurationLine: (label: string) => telegramHtml`⏱ Длительность: ${label}`,
   demoNext: telegramHtml`Дальше — анализ: бот посмотрит на свечи и скажет, есть ли сигнал.`,
-  // after «📊 Анализ» until #126 shows the analysis there
-  demoAnalysisSoon: telegramHtml`📊 <b>Анализ пока в разработке</b>
-Актив и длительность выбраны — анализ появится в следующей версии.`,
   demoCatalogUnavailable: telegramHtml`⚠️ Каталог активов сейчас недоступен. Попробуй через минуту.`,
   demoCatalogStale: telegramHtml`⏳ Каталог активов обновляется. Попробуй через минуту.`,
   demoPairMissing: telegramHtml`❌ Этот актив больше не доступен. Выбери другой.`,
