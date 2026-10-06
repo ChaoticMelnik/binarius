@@ -7,6 +7,8 @@ import {
   TradeIntentStatus,
   TradeMode,
   canTransition,
+  isClosedTrade,
+  type BrokerTrade,
   type ClosedTrade,
   type CreateTradeIntentRequest,
   type OpenTrade,
@@ -486,8 +488,8 @@ export interface MarkUnknownOptions {
   olderThanMs?: number;
 }
 
-// submitting → unknown plus the reconciliation outbox row (ARCH-04 consumes it); idempotent on
-// the (topic, intent_id) unique key
+// submitting → unknown plus the reconciliation outbox row (the trading-reconciliation job
+// consumes it, #89); idempotent on the (topic, intent_id) unique key
 export async function markIntentUnknown(
   tx: Tx,
   { id, reason, expectedVersion, olderThanMs }: MarkUnknownOptions,
@@ -514,7 +516,8 @@ export async function markIntentUnknown(
 // --- Acceptance and settlement (#17) ----------------------------------------------------------
 // Lock order for everything below: users → trade_intents → broker_trades (the creation chain
 // users → broker_accounts → trade_intents, with broker_trades as its tail). Settlement does not
-// lock broker_accounts. A future writer of broker_trades (#90's reconciliation) keeps the order.
+// lock broker_accounts. The reconciliation writer (concludeReconciled, #89) keeps the order; its
+// account halt (#90) locks broker_accounts before markIntentManualReview.
 
 export const TradeMismatchReason = {
   Mode: 'mode',
@@ -598,16 +601,20 @@ async function insertTrade(
 export interface MarkAcceptedOptions {
   id: string;
   expectedVersion: number;
-  // submitting for the executor's answer; reconciling for #89, with the trade REST found
+  // submitting for the executor's answer; reconciling for concludeReconciled (#89)
   from?: typeof TradeIntentStatus.Submitting | typeof TradeIntentStatus.Reconciling;
-  transport: TradeTransport;
-  // the broker's open trade as received, never a locally built one
-  trade: OpenTrade;
+  // null only from reconciliation of an intent whose transport was never recorded: it learns the
+  // trade, not how the order travelled
+  transport: TradeTransport | null;
+  // the broker's trade as received, never a locally built one; closed only from reconciliation,
+  // which then settles it in the same transaction
+  trade: BrokerTrade;
 }
 
-// accepted only together with the broker's open trade: the trade is checked against the intent
-// (mode, asset, action and amount never change after creation, so an unlocked read is enough),
-// then the CAS, then the open broker_trades row is written. A four-field mismatch throws before
+// accepted only together with the broker's trade (closed only from concludeReconciled, which
+// settles it next): the trade is checked against the intent (mode, asset, action and amount
+// never change after creation, so an unlocked read is enough), then the CAS, then the open
+// broker_trades row is written. A four-field mismatch throws before
 // any write; a lost CAS answers undefined and inserts nothing; a trade already linked throws from
 // the insert, and the caller's transaction rolls the CAS back.
 export async function markIntentAccepted(
@@ -642,7 +649,7 @@ export async function markIntentAccepted(
   if (row === undefined) return undefined;
   await insertTrade(tx, row, trade, {
     status: BrokerTradeStatus.Open,
-    potentialProfit: trade.potentialProfit,
+    potentialProfit: isClosedTrade(trade) ? null : trade.potentialProfit,
   });
   return row;
 }
@@ -806,6 +813,131 @@ async function settleClosedTrade(
   return typeof after === 'string'
     ? { brokerTradeId, result: 'intent_not_accepted', intentId, status: TradeIntentStatus.Accepted }
     : after;
+}
+
+// --- Reconciliation (#89) --------------------------------------------------------------------
+// unknown → reconciling by the trading-reconciliation job; the worker's pass then claims each
+// reconciling intent (the lease below), asks the IntentReconciler and writes one outcome CAS
+// with the version the claim returned.
+
+export interface StartReconcilingOptions {
+  id: string;
+  expectedVersion: number;
+}
+
+// reconcile_claimed_at stays NULL, which puts a fresh intent first in the pass's order
+export function startReconciling(
+  exec: DbExecutor,
+  { id, expectedVersion }: StartReconcilingOptions,
+): Promise<TradeIntentRow | undefined> {
+  return transitionIntent(exec, {
+    id,
+    from: TradeIntentStatus.Unknown,
+    to: TradeIntentStatus.Reconciling,
+    expectedVersion,
+  });
+}
+
+// the one spelling of the lease: never claimed, or claimed longer than retryMs ago (database
+// clock). A claim in the future is simply fresh.
+const reconcileLeaseExpired = (retryMs: number): SQL =>
+  sql`(${tradeIntents.reconcileClaimedAt} is null or ${tradeIntents.reconcileClaimedAt} < ${millisecondsAgo(retryMs)})`;
+
+export async function listReconcilingCandidates(
+  exec: DbExecutor,
+  { retryMs, limit }: { retryMs: number; limit: number },
+): Promise<{ id: string }[]> {
+  return exec
+    .select({ id: tradeIntents.id })
+    .from(tradeIntents)
+    .where(
+      and(eq(tradeIntents.status, TradeIntentStatus.Reconciling), reconcileLeaseExpired(retryMs)),
+    )
+    .orderBy(sql`${tradeIntents.reconcileClaimedAt} asc nulls first`, tradeIntents.createdAt)
+    .limit(limit);
+}
+
+// The one UPDATE of trade_intents that is not a transition: no status in its SET list (the
+// transition guard does not fire), but version + 1, so an older attempt whose lease lapsed and
+// was re-claimed can no longer write its outcome. Autocommit, before the broker is asked: the
+// lease outlives the transaction because the broker call is outside it.
+export async function claimReconciling(
+  exec: DbExecutor,
+  { id, retryMs }: { id: string; retryMs: number },
+): Promise<TradeIntentRow | undefined> {
+  const [row] = await exec
+    .update(tradeIntents)
+    .set({ reconcileClaimedAt: sql`now()`, version: sql`${tradeIntents.version} + 1` })
+    .where(
+      and(
+        eq(tradeIntents.id, id),
+        eq(tradeIntents.status, TradeIntentStatus.Reconciling),
+        reconcileLeaseExpired(retryMs),
+      ),
+    )
+    .returning();
+  return row;
+}
+
+export interface ConcludeReconciledOptions {
+  id: string;
+  expectedVersion: number;
+  // the broker's own record that the reconciler found, open or closed
+  trade: BrokerTrade;
+}
+
+// reconciling → accepted with the broker's trade, and → settled in the same transaction when
+// that trade is already closed. The user row is locked before the intent: settleIntent locks it,
+// and a creation for the same user holds it while its INSERT waits on this intent's
+// active-account index entry (rejectIntent's deadlock). A mismatch throws
+// TradeIntentMismatchError and the caller's transaction rolls back.
+export async function concludeReconciled(
+  tx: Tx,
+  { id, expectedVersion, trade }: ConcludeReconciledOptions,
+): Promise<TradeIntentRow | undefined> {
+  await lockIntentUser(tx, id);
+  const [current] = await tx
+    .select({ transport: tradeIntents.transport })
+    .from(tradeIntents)
+    .where(eq(tradeIntents.id, id));
+  if (current === undefined) return undefined;
+  const accepted = await markIntentAccepted(tx, {
+    id,
+    expectedVersion,
+    from: TradeIntentStatus.Reconciling,
+    transport: current.transport,
+    trade,
+  });
+  if (accepted === undefined || !isClosedTrade(trade)) return accepted;
+  const settled = await settleIntent(tx, {
+    id,
+    expectedVersion: accepted.version,
+    from: TradeIntentStatus.Accepted,
+    trade,
+  });
+  if (settled === undefined) throw new Error('accepted intent vanished inside its own tx');
+  return settled;
+}
+
+export interface MarkManualReviewOptions {
+  id: string;
+  expectedVersion: number;
+  reason: TradeIntentFailureReason;
+}
+
+// reconciling → manual_review; the reserve is kept and the account stays blocked by the
+// active-intent index. The explicit halt and the alert are #90's, which locks the account first.
+export function markIntentManualReview(
+  exec: DbExecutor,
+  { id, expectedVersion, reason }: MarkManualReviewOptions,
+): Promise<TradeIntentRow | undefined> {
+  return transitionIntent(exec, {
+    id,
+    from: TradeIntentStatus.Reconciling,
+    to: TradeIntentStatus.ManualReview,
+    expectedVersion,
+    patch: { lastError: reason },
+  });
 }
 
 // --- Reads --------------------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import { runMigrations } from './migrate';
 import {
   BrokerAccountStatus,
   TradeAction,
+  TradeIntentFailureReason,
   TradeMode,
   UserStatus,
   type CreateTradeIntentRequest,
@@ -15,7 +16,13 @@ import { brokerAccounts, staff, users } from './schema/index';
 import { StaffStatus } from './schema/staff';
 import { hashPassword, type ScryptParams } from './staff-password';
 import type { BrokerAccountRow } from './oauth-ops';
-import { createTradeIntent, type TradeIntentRow, type TradePolicy } from './trade-intent-ops';
+import {
+  createTradeIntent,
+  markIntentUnknown,
+  takeIntent,
+  type TradeIntentRow,
+  type TradePolicy,
+} from './trade-intent-ops';
 
 export interface TempDatabase {
   url: string;
@@ -192,6 +199,30 @@ export async function seedQueuedIntent(
 ): Promise<SeededAccount & { intent: TradeIntentRow }> {
   const seed = await seedUserWithAccount(db);
   const { intent } = await createTradeIntent(db, intentRequest(seed.telegramUserId, patch), policy);
+  return { ...seed, intent };
+}
+
+// an unknown intent with its reconciliation outbox row: the starting point of every
+// reconciliation case (#89)
+export async function seedUnknownIntent(
+  db: Db,
+  patch: Partial<CreateTradeIntentRequest> = {},
+): Promise<SeededAccount & { intent: TradeIntentRow }> {
+  const seed = await seedQueuedIntent(db, patch);
+  const taken = await takeIntent(db, {
+    id: seed.intent.id,
+    expectedVersion: seed.intent.version,
+    maxAgeMs: 60_000,
+  });
+  if (taken === undefined) throw new Error('seedUnknownIntent: take failed');
+  const intent = await db.transaction((tx) =>
+    markIntentUnknown(tx, {
+      id: taken.id,
+      expectedVersion: taken.version,
+      reason: TradeIntentFailureReason.ExecutorTimeout,
+    }),
+  );
+  if (intent === undefined) throw new Error('seedUnknownIntent: unknown failed');
   return { ...seed, intent };
 }
 

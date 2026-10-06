@@ -507,7 +507,12 @@ describe('trade_intents', () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       const [row] = await tx.insert(tradeIntents).values(intent(seed, 'r1')).returning();
-      expect(row).toMatchObject({ status: 'planned', version: 1, tokensReserved: 1n });
+      expect(row).toMatchObject({
+        status: 'planned',
+        version: 1,
+        tokensReserved: 1n,
+        reconcileClaimedAt: null,
+      });
       expect(row!.amount).toBe('10.00000000');
     });
   });
