@@ -30,14 +30,14 @@ describe('broker socket timing', () => {
         authTimeoutMs: 200,
         reconnectDelayMs: 40,
         reconnectDelayMaxMs: 40,
-        jitter: 1,
+        jitter: 0,
       }),
     ).toEqual({
       connectTimeoutMs: 200,
       authTimeoutMs: 200,
       reconnectDelayMs: 40,
       reconnectDelayMaxMs: 40,
-      jitter: 1,
+      jitter: 0,
     });
     expect(resolveBrokerSocketTiming({ jitter: 0 }).jitter).toBe(0);
   });
@@ -47,6 +47,8 @@ describe('broker socket timing', () => {
     ['an auth timeout above the connect timeout', { authTimeoutMs: 300, connectTimeoutMs: 200 }],
     ['a negative jitter', { jitter: -0.1 }],
     ['a jitter above 1', { jitter: 1.1 }],
+    ['a jitter of 1', { jitter: 1 }],
+    ['a connect timeout above the timer limit', { connectTimeoutMs: 2 ** 31 }],
     ['NaN', { authTimeoutMs: Number.NaN }],
     ['a zero auth timeout', { authTimeoutMs: 0 }],
     ['a negative first wait', { reconnectDelayMs: -1 }],

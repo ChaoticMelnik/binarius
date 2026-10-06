@@ -7,10 +7,6 @@ export type MockSocketEndpoint = 'connect' | 'auth' | 'openTrade';
 // validation; an openTrade script after the auth check (an unauthenticated event leaves it
 // queued), before validation. The shapes exclude each other in the type and at runtime
 // (assertSocketScript), as MockScript does.
-// the namespace middleware refuses the next connection with this message: the client gets a
-// CONNECT_ERROR packet, and socket.io-client gives up on that socket (no reconnection)
-export type MockConnectScript = { error: { message: string } };
-
 export type MockAuthScript =
   // user.auth.error with this text
   | { error: { message: string }; silent?: never; disconnect?: never }
@@ -30,6 +26,11 @@ export type MockOpenTradeScript =
   // waits; the user is the one authenticated when the event arrived, the schema and the store
   // are read after the delay
   | ({ delayMs: number } & Omit<NoOpenTradeFields, 'delayMs'> & { open?: never });
+
+// A connect script is played by the namespace middleware when the next socket connects: it
+// refuses the connection with this message, the client gets a CONNECT_ERROR packet, and
+// socket.io-client gives up on that socket (no reconnection).
+export type MockConnectScript = { error: { message: string } };
 
 export type MockSocketScript<E extends MockSocketEndpoint> = E extends 'connect'
   ? MockConnectScript

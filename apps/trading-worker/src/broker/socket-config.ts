@@ -8,10 +8,10 @@
 //   BROKER_SOCKET_RECONNECT_DELAY_MAX_MS — the longest wait between attempts
 //                                          (`reconnectionDelayMax`)
 //   BROKER_SOCKET_RECONNECT_JITTER       — the randomisation of each wait (`randomizationFactor`)
-// The chain: every *_MS is a positive integer, the first wait does not exceed the longest one, a
-// handshake is not allowed longer than a connection attempt, and the jitter is a factor socket.io
-// accepts. The link to the
-// worker's shutdown budget comes with the client's place in index.ts (#101).
+// The chain: every *_MS is an integer in [1, MAX_TIMER_MS], the first wait does not exceed the
+// longest one, a handshake is not allowed longer than a connection attempt, and the jitter is in
+// [0, 1) — at 1 a wait could shrink to 0. The link to the worker's shutdown budget comes with the
+// client's place in index.ts (#101).
 export const BROKER_SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 export const BROKER_SOCKET_AUTH_TIMEOUT_MS = 5_000;
 export const BROKER_SOCKET_RECONNECT_DELAY_MS = 1_000;
@@ -34,19 +34,24 @@ export const DEFAULT_BROKER_SOCKET_TIMING: Readonly<BrokerSocketTiming> = {
   jitter: BROKER_SOCKET_RECONNECT_JITTER,
 };
 
-const isPositiveMs = (value: number) => Number.isSafeInteger(value) && value > 0;
+// Node's setTimeout limit: a longer delay fires after 1 ms, and socket.io's backoff truncates its
+// waits to 32 bits
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
+const isTimerMs = (value: number) =>
+  Number.isSafeInteger(value) && value >= 1 && value <= MAX_TIMER_MS;
 
 export function brokerSocketTimingHolds(timing: BrokerSocketTiming): boolean {
   return (
-    isPositiveMs(timing.connectTimeoutMs) &&
-    isPositiveMs(timing.authTimeoutMs) &&
-    isPositiveMs(timing.reconnectDelayMs) &&
-    isPositiveMs(timing.reconnectDelayMaxMs) &&
+    isTimerMs(timing.connectTimeoutMs) &&
+    isTimerMs(timing.authTimeoutMs) &&
+    isTimerMs(timing.reconnectDelayMs) &&
+    isTimerMs(timing.reconnectDelayMaxMs) &&
     Number.isFinite(timing.jitter) &&
     timing.reconnectDelayMs <= timing.reconnectDelayMaxMs &&
     timing.authTimeoutMs <= timing.connectTimeoutMs &&
     timing.jitter >= 0 &&
-    timing.jitter <= 1
+    timing.jitter < 1
   );
 }
 

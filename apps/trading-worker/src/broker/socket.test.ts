@@ -89,7 +89,11 @@ let broker: MockBroker;
 const clients: BrokerSocketClient[] = [];
 const extraBrokers: MockBroker[] = [];
 
-function harness(overrides: Partial<BrokerSocketClientOptions> = {}): Harness {
+// `before` registers its listeners ahead of the harness's recorders
+function harness(
+  overrides: Partial<BrokerSocketClientOptions> = {},
+  before?: (client: BrokerSocketClient) => void,
+): Harness {
   const lines: string[] = [];
   // the worker's own options at the most verbose level, so every line the client can write is
   // read
@@ -101,6 +105,7 @@ function harness(overrides: Partial<BrokerSocketClientOptions> = {}): Harness {
     ...overrides,
   });
   clients.push(client);
+  before?.(client);
   const events: BrokerEvent[] = [];
   const states: BrokerSocketStateChange[] = [];
   client.onEvent((event) => events.push(event));
@@ -155,6 +160,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const client of clients.splice(0)) client.stop();
   for (const extra of extraBrokers.splice(0)) await extra.close();
   await broker.close();
@@ -302,15 +308,24 @@ describe('handshake', () => {
     expect(broker.socket.sockets()[0]?.subscriptions).toEqual(h.client.subscriptions());
   });
 
-  it('disarms the auth timer once authenticated', async () => {
+  it('clears the auth timer once authenticated', async () => {
+    const armed: unknown[] = [];
+    const setTimer = globalThis.setTimeout;
+    // the client's only timer with this delay; socket.io's own use other delays
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: () => void,
+      delay?: number,
+    ) => {
+      const handle = setTimer(handler, delay);
+      if (delay === TIMING.authTimeoutMs) armed.push(handle);
+      return handle;
+    }) as typeof setTimeout);
+    const cleared = vi.spyOn(globalThis, 'clearTimeout');
     const h = harness();
     h.client.start(CREDENTIALS);
     await ready(h);
-    await new Promise((resolve) => setTimeout(resolve, TIMING.authTimeoutMs));
-    await quiet();
-    expect(h.client.connections).toBe(1);
-    expect(h.client.state).toBe(BrokerSocketState.Ready);
-    expect(h.logs('broker socket auth timeout')).toEqual([]);
+    expect(armed).toHaveLength(1);
+    expect(cleared).toHaveBeenCalledWith(armed[0]);
   });
 
   it('ignores a second user.auth.success on one connection', async () => {
@@ -516,6 +531,149 @@ describe('a CONNECT_ERROR from the server', () => {
 
     h.client.start(CREDENTIALS);
     await ready(h);
+  });
+});
+
+describe('listeners', () => {
+  it('a restart on auth_failed is seen in causal order by a later listener', async () => {
+    let restarted = false;
+    const h = harness({}, (client) =>
+      client.onState(({ to }) => {
+        if (to !== BrokerSocketState.AuthFailed || restarted) return;
+        restarted = true;
+        client.start(CREDENTIALS);
+      }),
+    );
+    h.client.start({ brokerUserId: '1', accessToken: 'SECRET-WRONG-TOKEN' });
+    await ready(h);
+    expect(h.states.map(({ to }) => to)).toEqual([
+      BrokerSocketState.Connecting,
+      BrokerSocketState.Authenticating,
+      BrokerSocketState.AuthFailed,
+      BrokerSocketState.Connecting,
+      BrokerSocketState.Authenticating,
+      BrokerSocketState.Ready,
+    ]);
+    expect(h.states.at(-1)?.to).toBe(h.client.state);
+  });
+
+  it('a stop() on ready is seen last by a later listener', async () => {
+    const h = harness({}, (client) =>
+      client.onState(({ to }) => {
+        if (to === BrokerSocketState.Ready) client.stop();
+      }),
+    );
+    h.client.start(CREDENTIALS);
+    await waitFor('idle again', () => h.states.at(-1)?.to === BrokerSocketState.Idle);
+    expect(h.states.map(({ to }) => to)).toEqual([
+      BrokerSocketState.Connecting,
+      BrokerSocketState.Authenticating,
+      BrokerSocketState.Ready,
+      BrokerSocketState.Idle,
+    ]);
+    expect(h.client.state).toBe(BrokerSocketState.Idle);
+  });
+
+  it('an event listener that restarts the client ends the delivery of the old event', async () => {
+    let restarted = false;
+    const h = harness({}, (client) =>
+      client.onEvent((event) => {
+        if (event.type !== BrokerEventType.AuthSuccess || restarted) return;
+        restarted = true;
+        client.stop();
+        client.start(CREDENTIALS);
+      }),
+    );
+    h.client.start(CREDENTIALS);
+    await waitFor('the second auth', () => bySocket().length === 2);
+    await ready(h);
+    await quiet();
+    expect(typesOf(h.events).filter((type) => type === BrokerEventType.AuthSuccess)).toHaveLength(
+      1,
+    );
+    expect(h.client.connections).toBe(1);
+    expect(broker.socket.sockets()).toHaveLength(1);
+    expect(bySocket()).toHaveLength(2);
+  });
+});
+
+describe('openSocket seam', () => {
+  it('refuses a start() made from inside openSocket and leaves no socket', async () => {
+    const ref: { client?: BrokerSocketClient } = {};
+    let reentered = false;
+    const h = harness({
+      openSocket: (url, options) => {
+        if (!reentered) {
+          reentered = true;
+          ref.client?.start(CREDENTIALS);
+        }
+        return io(url, options);
+      },
+    });
+    ref.client = h.client;
+    expect(() => h.client.start(CREDENTIALS)).toThrow('broker socket client already started');
+    expect(h.client.state).toBe(BrokerSocketState.Idle);
+    await quiet();
+    expect(broker.socket.sockets()).toEqual([]);
+    expect(broker.socket.journal).toEqual([]);
+  });
+
+  it('is connecting when it calls connect()', () => {
+    const seen: string[] = [];
+    const ref: { client?: BrokerSocketClient } = {};
+    const h = harness({
+      openSocket: (url, options) => {
+        const socket: BrokerSocket = io(url, options);
+        const connect = socket.connect.bind(socket);
+        vi.spyOn(socket, 'connect').mockImplementation(() => {
+          seen.push(ref.client?.state ?? 'none');
+          return connect();
+        });
+        return socket;
+      },
+    });
+    ref.client = h.client;
+    h.client.start(CREDENTIALS);
+    expect(seen).toEqual([BrokerSocketState.Connecting]);
+  });
+
+  it('a stop() from inside the user.auth emit ends the session cleanly', async () => {
+    const ref: { client?: BrokerSocketClient } = {};
+    const h = harness({
+      openSocket: (url, options) => {
+        const socket: BrokerSocket = io(url, options);
+        const emit = socket.emit.bind(socket) as (
+          event: string,
+          ...args: unknown[]
+        ) => BrokerSocket;
+        vi.spyOn(socket, 'emit').mockImplementation(((event: string, ...args: unknown[]) => {
+          if (event === BrokerSocketEvent.UserAuth) {
+            ref.client?.stop();
+            return socket;
+          }
+          return emit(event, ...args);
+        }) as BrokerSocket['emit']);
+        return socket;
+      },
+    });
+    ref.client = h.client;
+    h.client.start(CREDENTIALS);
+    await waitFor('idle', () => h.states.at(-1)?.to === BrokerSocketState.Idle);
+    await new Promise((resolve) => setTimeout(resolve, TIMING.authTimeoutMs));
+    await quiet();
+    expect(h.client.state).toBe(BrokerSocketState.Idle);
+    expect(h.states.map(({ to }) => to)).toEqual([
+      BrokerSocketState.Connecting,
+      BrokerSocketState.Idle,
+    ]);
+    expect(h.logs('broker socket auth timeout')).toEqual([]);
+    expect(broker.socket.sockets()).toEqual([]);
+    ref.client = undefined;
+    h.client.start(CREDENTIALS);
+    await waitFor(
+      'authenticating again',
+      () => h.client.state === BrokerSocketState.Authenticating,
+    );
   });
 });
 
