@@ -284,9 +284,7 @@ async function observe(branch: Branch): Promise<Calls> {
     },
     createIntent: (request) => {
       backend += 1;
-      return (
-        branch.createIntent ?? (() => Promise.resolve({ created: true, intent: INTENT_VIEW }))
-      )(request);
+      return (branch.createIntent ?? (() => Promise.resolve(INTENT_VIEW)))(request);
     },
     readIntent: (id, telegramUserId) => {
       backend += 1;
@@ -830,7 +828,7 @@ const STAKE_WORST_CASE: Branch = {
   createIntent: (() => {
     let first = true;
     return () => {
-      if (!first) return Promise.resolve({ created: true, intent: INTENT_VIEW });
+      if (!first) return Promise.resolve(INTENT_VIEW);
       first = false;
       return Promise.reject(new BackendError(BackendErrorCode.Unreachable));
     };

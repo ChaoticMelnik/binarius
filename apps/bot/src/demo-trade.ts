@@ -185,8 +185,7 @@ export function createDemoTradeComposer<C extends Context>({
 
   async function create(request: CreateTradeIntentRequest): Promise<CreateOutcome> {
     try {
-      const { intent } = await backend.createIntent(request);
-      return { ok: true, intent };
+      return { ok: true, intent: await backend.createIntent(request) };
     } catch (error) {
       return { ok: false, unknown: outcomeUnknown(error), error };
     }

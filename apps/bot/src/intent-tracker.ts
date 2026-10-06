@@ -73,6 +73,7 @@ interface Entry extends IntentTrackRequest {
   rendered: string;
   timer: ReturnType<typeof setTimeout> | undefined;
   readFailures: number;
+  editFailures: number;
 }
 
 const renderKey = ({
@@ -107,16 +108,27 @@ export function createIntentTracker({
   const arm = (entry: Entry, delayMs: number): void => {
     entry.timer = setTimeout(() => {
       entry.timer = undefined;
-      const run = attempt(entry).finally(() => {
-        inFlight.delete(run);
-      });
+      // the row «anything thrown → error, stop» holds for the whole attempt, not only around the
+      // read and the edit, so a run always resolves and stop() always drains
+      const run = attempt(entry)
+        .catch((error: unknown) => {
+          logger.error(
+            { ...errorLogFields(error), intentId: entry.intentId },
+            'trade intent tracking failed',
+          );
+          finish(entry);
+        })
+        .finally(() => {
+          inFlight.delete(run);
+        });
       inFlight.add(run);
     }, delayMs);
   };
 
   // Every way an edit ends: shown or edited is rendered; gone stops the entry (the user deleted
-  // the message); any other refusal or a transport failure is retried by the next poll, since
-  // the status is not recorded as rendered; anything else is a bug and stops the entry.
+  // the message); any other refusal or a transport failure is retried on the next poll, until the
+  // deadline, since the status is not recorded as rendered — logged once per entry, the later
+  // ones only counted; anything else is a bug and stops the entry.
   async function editTo(entry: Entry, text: TelegramHtml, key: string): Promise<boolean> {
     try {
       await entry.edit(text);
@@ -128,15 +140,18 @@ export function createIntentTracker({
         entry.rendered = key;
         return true;
       }
-      if (refusal === 'gone' || error instanceof GrammyError || error instanceof HttpError) {
-        logger.warn(
-          {
-            ...errorLogFields(error),
-            ...telegramErrorFields(error, 'editMessageText'),
-            intentId: entry.intentId,
-          },
-          'trade intent message not edited',
-        );
+      if (error instanceof GrammyError || error instanceof HttpError) {
+        if (refusal === 'gone' || entry.editFailures === 0) {
+          logger.warn(
+            {
+              ...errorLogFields(error),
+              ...telegramErrorFields(error, 'editMessageText'),
+              intentId: entry.intentId,
+            },
+            'trade intent message not edited',
+          );
+        }
+        entry.editFailures += 1;
         if (refusal === 'gone') finish(entry);
         return refusal !== 'gone';
       }
@@ -174,6 +189,8 @@ export function createIntentTracker({
       }
       entry.readFailures += 1;
       if (notFound) {
+        // not retried: polling cannot fix a missing or foreign id; a failed edit leaves the last
+        // real status on screen, and the refresh button answers the same on its own
         await editTo(entry, TEXTS.intentStatusUnavailable, INTENT_NOT_FOUND);
         finish(entry);
         return;
@@ -181,6 +198,9 @@ export function createIntentTracker({
       await next(entry);
       return;
     }
+    // An entry evicted or finished while its read was in flight renders nothing. During stop()
+    // the attempt in flight still renders what it read: stop() waits for exactly that, so the
+    // message does not lag behind the poll that was paid for.
     if (!live(entry) && !stopping) return;
     entry.view = view;
     const key = renderKey(view);
@@ -188,21 +208,31 @@ export function createIntentTracker({
       const goOn = await editTo(entry, intentStatusText(entry.symbol, view), key);
       if (!goOn) return;
     }
-    if (TRACKER_STOP_STATUSES.has(view.status)) {
+    // a stop status ends the entry only once its edit has landed; otherwise the next poll
+    // edits it again
+    if (TRACKER_STOP_STATUSES.has(view.status) && entry.rendered === key) {
       finish(entry);
       return;
     }
     await next(entry);
   }
 
-  // re-arm, or past the deadline one last edit with the hint and stop
+  // Re-arm, or past the deadline one last edit and stop. The deadline is the bound that ends
+  // every entry, landed or not — an edit the chat always refuses (a 403 once the user blocked the
+  // bot) would otherwise be retried for ever — so this edit is the one not retried: the hint for
+  // a live status, the status itself for a stop status whose edit never landed.
   async function next(entry: Entry): Promise<void> {
     if (!live(entry)) return;
     if (now() - entry.startedAt < deadlineMs) {
       arm(entry, pollMs);
       return;
     }
-    await editTo(entry, intentStatusText(entry.symbol, entry.view, { deadline: true }), 'deadline');
+    const stopped = TRACKER_STOP_STATUSES.has(entry.view.status);
+    await editTo(
+      entry,
+      intentStatusText(entry.symbol, entry.view, stopped ? {} : { deadline: true }),
+      stopped ? renderKey(entry.view) : 'deadline',
+    );
     finish(entry);
   }
 
@@ -219,6 +249,7 @@ export function createIntentTracker({
         rendered: renderKey(request.view),
         timer: undefined,
         readFailures: 0,
+        editFailures: 0,
       };
       entries.set(request.intentId, entry);
       arm(entry, firstPollMs);

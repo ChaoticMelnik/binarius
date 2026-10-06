@@ -112,8 +112,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     readTradingAccess: scenario.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
     readPairs: scenario.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)),
     evaluateSignal: scenario.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
-    createIntent:
-      scenario.createIntent ?? (() => Promise.resolve({ created: true, intent: INTENT_VIEW })),
+    createIntent: scenario.createIntent ?? (() => Promise.resolve(INTENT_VIEW)),
     readIntent: scenario.readIntent ?? (() => Promise.resolve(INTENT_VIEW)),
   };
   const loginDialog = createLoginDialog();
