@@ -4,7 +4,7 @@ import { createTempDatabase, seedUserWithAccount, type TempDatabase } from '@bin
 import { brokerAccounts, findTradeIntent, tradeIntents, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
-import { unusedBalanceDeps, unusedPairsDeps } from './testing';
+import { unusedBalanceDeps, unusedPairsDeps, unusedSignalDeps } from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -26,6 +26,7 @@ let appOn: ReturnType<typeof buildApp>;
 const appWith = (realTradingEnabled: boolean) =>
   buildApp({
     pairs: unusedPairsDeps(),
+    signal: unusedSignalDeps(),
     admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),

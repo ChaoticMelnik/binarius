@@ -26,7 +26,7 @@ import {
 import { buildApp } from '../app';
 import { createPasswordQueue } from './password-queue';
 import { stubTelegram, unusedAdminDeps } from './testing';
-import { unusedBalanceDeps, unusedPairsDeps } from '../trading/testing';
+import { unusedBalanceDeps, unusedPairsDeps, unusedSignalDeps } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -58,6 +58,7 @@ const build = (
   derivations = 0;
   return buildApp({
     pairs: unusedPairsDeps(),
+    signal: unusedSignalDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: logs === undefined ? 'silent' : 'error',

@@ -2,6 +2,7 @@ import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
 import { BROKER_BALANCE_SLA_MS, TRADING_ACCESS_BUDGET_MS } from '@binarius/shared/broker-balance';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
+import { SIGNAL_CHART_INTERVAL_MS, TRADING_SIGNAL_BUDGET_MS } from '@binarius/shared/signal';
 import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
 
@@ -101,6 +102,13 @@ export const BALANCE_STALLED_RETRY_MS = 300_000;
 // the earlier of it and BROKER_REST_TIMEOUT_MS).
 export const TRADING_ACCESS_REFRESH_BUDGET_MS = 3_000;
 
+// --- POST /trading/signal (#258) ---------------------------------------------------------------
+// docs/signal.md -> Budgets. The one chart GET the route may wait for: the cache's own deadline on
+// every fetch, below the REST client's timeout so that this, not the client, ends a slow chart.
+export const SIGNAL_FETCH_BUDGET_MS = 3_000;
+// The longest the cache holds an answer. Below the shortest interval, or it would never bind.
+export const SIGNAL_CACHE_MAX_TTL_MS = 30_000;
+
 // the broker call is the other bounded operation phase 1 can be waiting on: a login handler
 // holds no lock, but a refresh does, and its transaction must fit in the budget
 export const TIMING_CHAIN_HOLDS =
@@ -135,7 +143,13 @@ export const TIMING_CHAIN_HOLDS =
   MAX_BALANCE_RECONCILE_INTERVAL_MS < BALANCE_WATCH_WINDOW_MS &&
   // the GET inside the route, the route inside what the bot waits for (#24), and inside phase 1
   TRADING_ACCESS_REFRESH_BUDGET_MS < TRADING_ACCESS_BUDGET_MS &&
-  TRADING_ACCESS_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS;
+  TRADING_ACCESS_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the chart GET inside the signal route, the route inside what the bot waits for (#126), and
+  // inside phase 1; the hold's cap below the shortest candle
+  SIGNAL_FETCH_BUDGET_MS < BROKER_REST_TIMEOUT_MS &&
+  SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS &&
+  TRADING_SIGNAL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  SIGNAL_CACHE_MAX_TTL_MS < SIGNAL_CHART_INTERVAL_MS['1m'];
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }

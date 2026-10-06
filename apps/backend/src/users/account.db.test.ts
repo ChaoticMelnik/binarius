@@ -10,7 +10,7 @@ import {
 import { brokerAccounts, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
-import { unusedBalanceDeps, unusedPairsDeps } from '../trading/testing';
+import { unusedBalanceDeps, unusedPairsDeps, unusedSignalDeps } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -27,6 +27,7 @@ beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
   app = buildApp({
     pairs: unusedPairsDeps(),
+    signal: unusedSignalDeps(),
     admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),

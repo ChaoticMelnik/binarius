@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { BROKER_BALANCE_SLA_MS, TRADING_ACCESS_BUDGET_MS } from '@binarius/shared/broker-balance';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
+import { SIGNAL_CHART_INTERVAL_MS, TRADING_SIGNAL_BUDGET_MS } from '@binarius/shared/signal';
 import {
   composeDurationMs,
   composeServiceEnvValue,
@@ -22,6 +23,8 @@ import {
   MIN_BALANCE_RECONCILE_INTERVAL_MS,
   SHUTDOWN_PHASE1_BUDGET_MS,
   SHUTDOWN_PHASE2_BUDGET_MS,
+  SIGNAL_CACHE_MAX_TTL_MS,
+  SIGNAL_FETCH_BUDGET_MS,
   TRADING_ACCESS_REFRESH_BUDGET_MS,
 } from './timing';
 
@@ -81,6 +84,13 @@ describe('broker balance timing', () => {
   it('fits the route GET inside the route budget and the budget inside phase 1', () => {
     expect(TRADING_ACCESS_REFRESH_BUDGET_MS).toBeLessThan(TRADING_ACCESS_BUDGET_MS);
     expect(TRADING_ACCESS_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  it('ends the signal route chart GET by its own budget, inside the route budget and phase 1', () => {
+    expect(SIGNAL_FETCH_BUDGET_MS).toBeLessThan(BROKER_REST_TIMEOUT_MS);
+    expect(SIGNAL_FETCH_BUDGET_MS).toBeLessThan(TRADING_SIGNAL_BUDGET_MS);
+    expect(TRADING_SIGNAL_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(SIGNAL_CACHE_MAX_TTL_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS['1m']);
   });
 
   it.each(['BALANCE_RECONCILE_INTERVAL_MS', 'BALANCE_POLL_MAX_PER_MINUTE'])(
