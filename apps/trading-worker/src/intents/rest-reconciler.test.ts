@@ -2,6 +2,7 @@ import pino from 'pino';
 import { describe, expect, it } from 'vitest';
 import { BrokerRestError, type TradeListFilter } from '@binarius/broker-rest';
 import {
+  TradeIntentFailureReason,
   TradeIntentStatus,
   type BrokerTrade,
   type DecimalString,
@@ -168,9 +169,56 @@ describe('createRestReconciler: matching (#90)', () => {
     ['asset', { assetId: 102 }],
     ['action', { action: 'down' as const }],
     ['mode', { isDemo: false }],
-    ['amount', { amount: '10.5' as DecimalString }],
   ])('does not count a trade of another %s', async (_name, patch) => {
     expect(await harness({ open: [at(2_000, patch)] }).run()).toEqual({ outcome: 'not_found' });
+  });
+
+  // review m1: the amount is the one key the broker may round
+  it('answers ambiguous, not not_found, for a trade that differs only in amount', async () => {
+    const h = harness({ closed: [closedTradeFor(at(2_000, { amount: '10.5' as DecimalString }))] });
+    expect(await h.run()).toEqual({ outcome: 'ambiguous' });
+    expect(h.line('reconciliation is ambiguous')).toMatchObject({
+      candidates: 0,
+      nearMatches: 1,
+      ackMismatch: false,
+    });
+  });
+
+  it('prefers the exact trade over a near match', async () => {
+    const ours = at(3_000);
+    const near = closedTradeFor(at(2_000, { amount: '10.5' as DecimalString }));
+    expect(await harness({ open: [ours], closed: [near] }).run()).toEqual({
+      outcome: 'found',
+      trade: ours,
+    });
+  });
+
+  it('waits for the window to close before a near match decides', async () => {
+    const near = at(2_000, { amount: '10.5' as DecimalString });
+    expect(
+      await harness({ open: [near] }).run(
+        intent({ reconcileClaimedAt: new Date(SUBMITTED + AFTER - 1) }),
+      ),
+    ).toEqual({ outcome: 'unavailable', reason: 'window_open' });
+  });
+
+  it('drops a near match already linked to an intent of the account', async () => {
+    const near = closedTradeFor(at(-20_000, { amount: '5' as DecimalString }));
+    const h = harness({ closed: [near] }, { linked: new Set([near.id]) });
+    expect(await h.run()).toEqual({ outcome: 'not_found' });
+    expect(h.linkedCalls).toEqual([[near.id]]);
+  });
+
+  it('never answers not_found for an intent the executor saw mismatch', async () => {
+    const h = harness({ open: [], closed: [] });
+    expect(await h.run(intent({ lastError: TradeIntentFailureReason.TradeMismatch }))).toEqual({
+      outcome: 'ambiguous',
+    });
+    expect(h.line('reconciliation is ambiguous')).toMatchObject({
+      candidates: 0,
+      nearMatches: 0,
+      ackMismatch: true,
+    });
   });
 
   it('compares the amount as a decimal, not as a spelling', async () => {

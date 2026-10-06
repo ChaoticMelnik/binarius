@@ -1,5 +1,11 @@
 import { BrokerRestError, TradeListStatus, type BrokerRestClient } from '@binarius/broker-rest';
-import { BrokerRestErrorCode, errorLogFields, TradeMode, type BrokerTrade } from '@binarius/shared';
+import {
+  BrokerRestErrorCode,
+  errorLogFields,
+  TradeIntentFailureReason,
+  TradeMode,
+  type BrokerTrade,
+} from '@binarius/shared';
 import { normalizeDecimal, type TradeIntentRow } from '@binarius/db';
 import { isAccessTokenRefusal, type AccessTokenSource } from '../broker/access-token';
 import type { Logger } from './processor';
@@ -162,39 +168,51 @@ export function createRestReconciler({
       // a trade that closed between the two reads is in both; the closed form is the newer
       const byId = new Map<string, BrokerTrade>();
       for (const trade of [...open.trades, ...closed.trades]) byId.set(trade.id, trade);
+      // exact: every key equal; near: the amount differs, the one key the broker may change by
+      // rounding. A near match is never `found`, but it forbids `not_found` (review m1).
       const amount = normalizeDecimal(intent.amount);
-      const matching = [...byId.values()].filter(
+      const sameTrade = [...byId.values()].filter(
         (trade) =>
           trade.assetId === intent.assetId &&
           trade.action === intent.action &&
-          trade.isDemo === isDemo &&
-          normalizeDecimal(trade.amount) === amount,
+          trade.isDemo === isDemo,
       );
+      // an earlier trade of the account backs its own intent (a Martingale step changes the
+      // amount between neighbours), so it is neither a candidate nor a near match
       const linked =
-        matching.length === 0
+        sameTrade.length === 0
           ? new Set<string>()
           : await linkedTradeIds(
               intent.brokerAccountId,
-              matching.map((trade) => trade.id),
+              sameTrade.map((trade) => trade.id),
             );
-      const candidates = matching.filter((trade) => !linked.has(trade.id));
+      const unlinked = sameTrade.filter((trade) => !linked.has(trade.id));
+      const exact = unlinked.filter((trade) => normalizeDecimal(trade.amount) === amount);
+      const near = unlinked.length - exact.length;
+      // the executor saw the broker open a trade for this order, only not the expected one
+      const ackMismatch = intent.lastError === TradeIntentFailureReason.TradeMismatch;
       const covered = open.covered && closed.covered;
-
-      if (candidates.length > 1) {
-        logger.warn({ ...ids, candidates: candidates.length }, 'reconciliation is ambiguous');
+      const ambiguous = (): ReconcileResult => {
+        logger.warn(
+          { ...ids, candidates: exact.length, nearMatches: near, ackMismatch },
+          'reconciliation is ambiguous',
+        );
         return { outcome: 'ambiguous' };
-      }
+      };
+
+      if (exact.length > 1) return ambiguous();
       // one candidate in a window the pages did not cover could have a twin beyond them
       if (!covered) {
         logger.warn(ids, 'trade pages did not cover the reconciliation window');
         return unavailable(ReconcileUnavailableReason.WindowNotCovered);
       }
-      const [found] = candidates;
+      const [found] = exact;
       if (found !== undefined) return { outcome: 'found', trade: found };
       // absence is certain only once the window has closed by the database clock
       if (intent.reconcileClaimedAt.getTime() < windowEnd) {
         return unavailable(ReconcileUnavailableReason.WindowOpen);
       }
+      if (near > 0 || ackMismatch) return ambiguous();
       return { outcome: 'not_found' };
     },
   };
