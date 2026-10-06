@@ -185,6 +185,9 @@ answers `aborted` without a call.
 
 ## Contract for the socket writers (#99/#101, #100, #92)
 
+The writers land in #101, on top of #99's socket client (docs/broker-socket.md → Client), which
+delivers `user_data` and `balance_update` events and writes nothing itself.
+
 - **`user.data`**: `upsertBalanceSnapshot(db, { brokerAccountId, user, requested: false, eventAt: [modes] })`.
   It writes the whole snapshot and moves `rest_observed_at` and each listed `<mode>_event_at` to
   `now()`.

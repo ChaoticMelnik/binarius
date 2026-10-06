@@ -21,7 +21,8 @@ what `/start` does and where the acquisition source is kept is in
 those sessions are revoked, is in [docs/staff-login.md](docs/staff-login.md); what the mock
 broker answers, and which of it was observed on the live broker, is in
 [docs/mock-broker.md](docs/mock-broker.md); how a raw broker Socket.IO event becomes a typed
-domain event or a log-safe problem is in [docs/broker-socket.md](docs/broker-socket.md); what
+domain event or a log-safe problem, and how the worker's socket client authenticates,
+subscribes and reconnects, is in [docs/broker-socket.md](docs/broker-socket.md); what
 the broker REST client sends to the broker and how it classifies answers is in
 [docs/broker-rest.md](docs/broker-rest.md); how the backend caches the broker's pairs and serves
 them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md); what
