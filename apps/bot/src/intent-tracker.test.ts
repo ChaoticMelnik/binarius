@@ -1,0 +1,275 @@
+import { GrammyError, HttpError } from 'grammy';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  TradeIntentFailureReason,
+  TradeIntentStatus,
+  type TelegramHtml,
+  type TradeIntentView,
+} from '@binarius/shared';
+import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
+import {
+  createIntentTracker,
+  INTENT_NOT_FOUND,
+  TRACKER_STOP_STATUSES,
+  type IntentTrackRequest,
+} from './intent-tracker';
+import { fakeLogger, INTENT_ID, intentView, PAIR_EURUSD, USER } from './testing';
+import { intentStatusText, TEXTS } from './texts';
+import {
+  INTENT_TRACK_DEADLINE_MS,
+  INTENT_TRACK_FIRST_POLL_MS,
+  INTENT_TRACK_POLL_MS,
+} from './timing';
+
+const FIRST = INTENT_TRACK_FIRST_POLL_MS;
+const POLL = INTENT_TRACK_POLL_MS;
+const DEADLINE = INTENT_TRACK_DEADLINE_MS;
+const SYMBOL = PAIR_EURUSD.symbol;
+
+const editRefused = (description: string): GrammyError =>
+  new GrammyError(
+    `Call to 'editMessageText' failed!`,
+    { ok: false, error_code: 400, description },
+    'editMessageText',
+    {},
+  );
+const NOT_MODIFIED = () =>
+  editRefused(
+    'Bad Request: message is not modified: specified new message content and reply markup are exactly the same',
+  );
+const GONE = () => editRefused('Bad Request: message to edit not found');
+const editTimedOut = () =>
+  new HttpError("Network request for 'editMessageText' failed!", new Error('aborted'));
+
+type Answer = TradeIntentView | Error;
+
+// readIntent answers the script in order and repeats its last entry
+function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }) {
+  const logger = fakeLogger();
+  let index = 0;
+  const readIntent = vi.fn<BackendClient['readIntent']>(() => {
+    const answer = script[Math.min(index, script.length - 1)];
+    index += 1;
+    return answer instanceof Error
+      ? Promise.reject(answer)
+      : Promise.resolve(answer as TradeIntentView);
+  });
+
+  const edits: TelegramHtml[] = [];
+  const edit = vi.fn((text: TelegramHtml) => {
+    edits.push(text);
+    return Promise.resolve(true);
+  });
+  const tracker = createIntentTracker({
+    backend: { readIntent },
+    logger,
+    firstPollMs: FIRST,
+    pollMs: POLL,
+    deadlineMs: DEADLINE,
+    ...(maxEntries === undefined ? {} : { maxEntries }),
+  });
+  const request = (patch: Partial<IntentTrackRequest> = {}): IntentTrackRequest => ({
+    intentId: INTENT_ID,
+    telegramUserId: String(USER.id),
+    symbol: SYMBOL,
+    view: intentView(),
+    edit,
+    ...patch,
+  });
+  return { tracker, readIntent, edit, edits, logger, request };
+}
+
+const shown = (view: TradeIntentView, deadline = false) =>
+  intentStatusText(SYMBOL, view, { deadline }).value;
+
+const submitting = intentView({ status: TradeIntentStatus.Submitting });
+const accepted = intentView({ status: TradeIntentStatus.Accepted });
+const unknown = intentView({ status: TradeIntentStatus.Unknown });
+const notFound = () =>
+  new BackendError(BackendErrorCode.HttpStatus, { status: 404, reason: INTENT_NOT_FOUND });
+const unreachable = () => new BackendError(BackendErrorCode.Unreachable);
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('the intent tracker', () => {
+  // the one place a status literal is written: the set the graph must derive
+  it('stops at settled, rejected and accepted', () => {
+    expect(new Set(TRACKER_STOP_STATUSES)).toEqual(new Set(['settled', 'rejected', 'accepted']));
+  });
+
+  it('follows queued → submitting → accepted, editing once per change, then stops', async () => {
+    const { tracker, readIntent, edits, request } = setup({ script: [submitting, accepted] });
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST - 1);
+    expect(readIntent).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readIntent).toHaveBeenCalledWith(INTENT_ID, String(USER.id));
+    expect(edits.map((text) => text.value)).toEqual([shown(submitting)]);
+    await vi.advanceTimersByTimeAsync(POLL);
+    expect(edits.map((text) => text.value)).toEqual([shown(submitting), shown(accepted)]);
+    expect(tracker.size()).toBe(0);
+    await vi.advanceTimersByTimeAsync(DEADLINE);
+    expect(readIntent).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(Object.values(TradeIntentFailureReason).map((lastError) => [lastError] as const))(
+    'renders a rejection for %s with its own line and stops',
+    async (lastError) => {
+      const rejected = intentView({ status: TradeIntentStatus.Rejected, lastError });
+      const { tracker, edits, readIntent, request } = setup({ script: [rejected] });
+      tracker.track(request());
+      await vi.advanceTimersByTimeAsync(FIRST + POLL);
+      expect(edits.map((text) => text.value)).toEqual([shown(rejected)]);
+      expect(readIntent).toHaveBeenCalledTimes(1);
+      expect(tracker.size()).toBe(0);
+    },
+  );
+
+  it('edits nothing while the status stays the same, and keeps polling a live one', async () => {
+    const { tracker, edits, readIntent, request } = setup({ script: [intentView(), unknown] });
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(edits).toEqual([]);
+    await vi.advanceTimersByTimeAsync(POLL * 3);
+    expect(edits.map((text) => text.value)).toEqual([shown(unknown)]);
+    expect(readIntent).toHaveBeenCalledTimes(4);
+    expect(tracker.size()).toBe(1);
+  });
+
+  it('at the deadline edits once with the hint and polls no more', async () => {
+    const { tracker, edits, readIntent, request } = setup({ script: [unknown] });
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
+    expect(edits.map((text) => text.value)).toEqual([shown(unknown), shown(unknown, true)]);
+    const polls = readIntent.mock.calls.length;
+    expect(tracker.size()).toBe(0);
+    await vi.advanceTimersByTimeAsync(DEADLINE);
+    expect(readIntent).toHaveBeenCalledTimes(polls);
+  });
+
+  it('on a 404 says the status is unavailable, warns once with the id, and stops', async () => {
+    const { tracker, edits, logger, readIntent, request } = setup({ script: [notFound()] });
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
+    expect(edits.map((text) => text.value)).toEqual([TEXTS.intentStatusUnavailable.value]);
+    expect(readIntent).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ intentId: INTENT_ID, backendStatus: 404 }),
+      'trade intent status not read',
+    );
+    expect(tracker.size()).toBe(0);
+  });
+
+  it('retries a failed read, warning once per entry, and renders the view that follows', async () => {
+    const { tracker, edits, logger, request } = setup({
+      script: [unreachable(), unreachable(), accepted],
+    });
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(edits.map((text) => text.value)).toEqual([shown(accepted)]);
+    expect(tracker.size()).toBe(0);
+  });
+
+  it('treats «message is not modified» as shown and goes on', async () => {
+    const { tracker, edit, readIntent, request } = setup({ script: [submitting, accepted] });
+    edit.mockRejectedValueOnce(NOT_MODIFIED());
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST + POLL);
+    expect(edit).toHaveBeenCalledTimes(2);
+    expect(readIntent).toHaveBeenCalledTimes(2);
+    expect(tracker.size()).toBe(0);
+  });
+
+  it('stops with a warning when the message is gone', async () => {
+    const { tracker, edit, logger, readIntent, request } = setup({ script: [submitting] });
+    edit.mockRejectedValueOnce(GONE());
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
+    expect(readIntent).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ intentId: INTENT_ID, method: 'editMessageText' }),
+      'trade intent message not edited',
+    );
+    expect(tracker.size()).toBe(0);
+  });
+
+  it('retries an edit that failed in transport on the next poll', async () => {
+    const { tracker, edit, logger, edits, request } = setup({ script: [submitting] });
+    edit.mockRejectedValueOnce(editTimedOut());
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ intentId: INTENT_ID, method: 'editMessageText' }),
+      'trade intent message not edited',
+    );
+    expect(edits).toEqual([]);
+    await vi.advanceTimersByTimeAsync(POLL);
+    expect(edits.map((text) => text.value)).toEqual([shown(submitting)]);
+    expect(tracker.size()).toBe(1);
+  });
+
+  it('stops with an error line on anything that is not a backend or Telegram failure', async () => {
+    const { tracker, logger, readIntent, request } = setup({ script: [new TypeError('bug')] });
+    tracker.track(request());
+    await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
+    expect(readIntent).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ intentId: INTENT_ID }),
+      'trade intent tracking failed',
+    );
+    expect(tracker.size()).toBe(0);
+  });
+
+  it('ignores a second track of the same id', async () => {
+    const { tracker, readIntent, request } = setup({ script: [intentView()] });
+    tracker.track(request());
+    tracker.track(request());
+    expect(tracker.size()).toBe(1);
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(readIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the oldest entry past its bound', async () => {
+    const { tracker, readIntent, request } = setup({ script: [intentView()], maxEntries: 2 });
+    const ids = ['a', 'b', 'c'].map((letter) => INTENT_ID.slice(0, -1) + letter);
+    for (const intentId of ids) tracker.track(request({ intentId }));
+    expect(tracker.size()).toBe(2);
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(readIntent.mock.calls.map(([id]) => id)).toEqual(ids.slice(1));
+  });
+
+  it('on stop cancels the timers, lets the attempt in flight finish, and refuses new entries', async () => {
+    const { tracker, readIntent, edits, request } = setup({ script: [submitting] });
+    let release: () => void = () => {};
+    readIntent.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(submitting);
+        }),
+    );
+    tracker.track(request());
+    tracker.track(request({ intentId: INTENT_ID.slice(0, -1) + 'f' }));
+    await vi.advanceTimersByTimeAsync(FIRST);
+    expect(readIntent).toHaveBeenCalledTimes(2);
+    let stopped = false;
+    const stopping = tracker.stop().then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
+    release();
+    await stopping;
+    expect(edits.map((text) => text.value)).toEqual([shown(submitting), shown(submitting)]);
+    tracker.track(request({ intentId: INTENT_ID.slice(0, -1) + 'e' }));
+    expect(tracker.size()).toBe(0);
+    await vi.advanceTimersByTimeAsync(DEADLINE);
+    expect(readIntent).toHaveBeenCalledTimes(2);
+  });
+});
