@@ -1,5 +1,6 @@
 // Test-only helpers shared by the apps' suites (subpath `@binarius/shared/testing`).
 
+import { expect } from 'vitest';
 import type { ClosedTrade, OpenTrade } from './broker';
 import type { DecimalString } from './money';
 import { TradeMode, type TradeAction } from './trading';
@@ -9,6 +10,45 @@ import {
   telegramHtmlProblems,
   type TelegramHtml,
 } from './telegram-html';
+
+// --- Waiting in tests (#205) ------------------------------------------------------------------
+// One ceiling per vitest project, each below that project's test budget so a wait that never ends
+// fails with its own message instead of the runner's timeout. The chain is asserted by
+// tooling/vitest-projects.test.ts.
+// Unit: vitest's default testTimeout (5 s); the unit project leaves it unset.
+export const UNIT_WAIT_CEILING_MS = 4_000;
+// Integration: the integration project's testTimeout (20 s, vitest.config.ts).
+export const INTEGRATION_WAIT_CEILING_MS = 15_000;
+
+// The suffix half of INTEGRATION_TEST_GLOB; tooling/vitest-projects.test.ts checks the two agree
+// file by file.
+export function isIntegrationTestPath(file: string): boolean {
+  return /\.(db|redis)\.test\.ts$/.test(file);
+}
+
+function waitCeilingMs(): number {
+  const file = expect.getState().testPath;
+  return file !== undefined && isIntegrationTestPath(file)
+    ? INTEGRATION_WAIT_CEILING_MS
+    : UNIT_WAIT_CEILING_MS;
+}
+
+// Polls until the condition holds. The ceiling comes from the calling file's project, never from
+// the call site; a condition that throws or rejects ends the wait with that error.
+export async function until(
+  what: string,
+  condition: () => boolean | Promise<boolean>,
+  options: { intervalMs?: number } = {},
+): Promise<void> {
+  const ceilingMs = waitCeilingMs();
+  const deadline = Date.now() + ceilingMs;
+  while (!(await condition())) {
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out after ${ceilingMs} ms waiting for ${what}`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, options.intervalMs ?? 10));
+  }
+}
 
 // Reads one direct key of a compose service out of compose.yaml text, so a test can hold a
 // TypeScript timing constant and the container's stop_grace_period together. A service block

@@ -2,7 +2,7 @@ import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { TradeIntentStatus } from '@binarius/shared';
-import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
+import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
   brokerTrades,
   claimReconciling,
@@ -43,17 +43,6 @@ afterEach(async () => {
     .set({ reconcileClaimedAt: sql`now() + interval '1 day'` })
     .where(eq(tradeIntents.status, TradeIntentStatus.Reconciling));
 });
-
-// Interim form of #205's until(): converted to the shared helper by whichever of #89/#205
-// merges second.
-const WAIT_CEILING_MS = 5_000;
-async function until(what: string, condition: () => boolean | Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + WAIT_CEILING_MS;
-  while (!(await condition())) {
-    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
 
 const RETRY_MS = 60_000;
 const silent = pino({ level: 'silent' });

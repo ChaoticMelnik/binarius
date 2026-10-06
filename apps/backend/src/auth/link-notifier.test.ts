@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { GrammyError, HttpError } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LINK_TEXTS } from '@binarius/shared';
-import { telegramTextProblems } from '@binarius/shared/testing';
+import { telegramTextProblems, UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { captureApi, inlineButtons, sentPayload } from '../admin/testing';
 import { createLinkNotifier, LinkPushKind, type LinkPushOutcome } from './link-notifier';
 import { AUTH_TEXTS } from './texts';
@@ -112,7 +112,7 @@ describe('the link push transport', () => {
     const elapsed = Date.now() - at;
     expect(error).toBeInstanceOf(HttpError);
     expect(elapsed).toBeGreaterThanOrEqual(250);
-    expect(elapsed).toBeLessThan(2_000);
+    expect(elapsed).toBeLessThan(UNIT_WAIT_CEILING_MS);
   });
 
   it('rejects with GrammyError when Telegram refuses the message', async () => {

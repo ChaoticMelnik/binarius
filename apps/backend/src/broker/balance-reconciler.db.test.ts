@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import { BrokerAccountStatus, logOptions } from '@binarius/shared';
+import { until } from '@binarius/shared/testing';
 import {
   brokerBalanceSnapshots,
   createTradeIntent,
@@ -104,14 +105,6 @@ async function shift(accountId: string, column: string, by: string, db: Db = tmp
 }
 
 const userGets = () => broker.rest.journal.filter((entry) => entry.endpoint === 'user');
-
-async function until(condition: () => boolean, what: string, timeoutMs = 2_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
 
 const userBody = (mockId: number, patch: Record<string, unknown> = {}) => ({
   ...broker.users.get(mockId),
@@ -292,14 +285,14 @@ describe('refresh', () => {
     broker.rest.failNext('user', { hang: true });
     const a = balance.refresh(first.accountId);
     const b = balance.refresh(first.accountId, { requested: true });
-    await until(() => broker.rest.pendingHangs === 1, 'the hanging request');
+    await until('the hanging request', () => broker.rest.pendingHangs === 1);
     expect(await balance.refresh(second.accountId)).toBe('ok');
     expect(userGets()).toHaveLength(2);
 
     await balance.stop();
     expect(await a).toBe('aborted');
     expect(await b).toBe('aborted');
-    await until(() => broker.rest.pendingHangs === 0, 'the aborted request to close');
+    await until('the aborted request to close', () => broker.rest.pendingHangs === 0);
     expect(await rowOf(first.accountId)).toBeUndefined();
     expect(logsAt(WARN)).toEqual([]);
 
@@ -315,7 +308,7 @@ describe('refresh', () => {
     expect(await balance.refresh(account.accountId, { signal: AbortSignal.timeout(50) })).toBe(
       'aborted',
     );
-    await until(() => broker.rest.pendingHangs === 0, 'the aborted request to close');
+    await until('the aborted request to close', () => broker.rest.pendingHangs === 0);
     expect((await rowOf(account.accountId))!.lastRefreshError).toBeNull();
     expect(logsAt(WARN)).toEqual([]);
     await balance.stop();
@@ -545,7 +538,7 @@ describe('tick', () => {
     broker.rest.failNext('user', { hang: true });
     const balance = reconciler(own.db, { intervalMs: 20 });
     balance.start();
-    await until(() => broker.rest.pendingHangs === 1, 'the first tick to hang');
+    await until('the first tick to hang', () => broker.rest.pendingHangs === 1);
     await new Promise((resolve) => setTimeout(resolve, 100));
     // later intervals found the tick still running
     expect(userGets()).toHaveLength(1);

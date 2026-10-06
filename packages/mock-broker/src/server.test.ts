@@ -6,6 +6,7 @@ import {
   safeParseClosedTrade,
   safeParseOpenTrade,
 } from '@binarius/shared';
+import { UNIT_WAIT_CEILING_MS, until } from '@binarius/shared/testing';
 import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockRequestRecord, MockRestEndpoint, MockScript } from './faults';
@@ -576,7 +577,9 @@ describe('observation matrix', () => {
 
     const waits = branch === 'delay' || branch === 'hang' || branch === 'delayClose';
     if (waits) {
-      await sleep(50);
+      await until('the request to arrive', () =>
+        branch === 'hang' ? broker.rest.pendingHangs === 1 : broker.rest.journal.length === 1,
+      );
       expect(broker.rest.journal[0]?.bearer).toBe('pending');
       if (branch === 'hang') expect(broker.rest.pendingHangs).toBe(1);
       if (tokenCase === 'revokedDuring') broker.users.revokeToken(TOKEN);
@@ -585,7 +588,7 @@ describe('observation matrix', () => {
     if (branch === 'hang' || branch === 'delayClose') {
       const started = Date.now();
       await broker.close();
-      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(Date.now() - started).toBeLessThan(UNIT_WAIT_CEILING_MS);
     }
     const outcome = await settled;
     if (branch !== 'hang' && branch !== 'delayClose') await broker.close();
@@ -624,13 +627,11 @@ describe('observation matrix', () => {
       broker.rest.failNext('user', { hang: true });
       const controller = new AbortController();
       const pending = call('/v1/broker/user', { signal: controller.signal });
-      await sleep(50);
-      expect(broker.rest.pendingHangs).toBe(1);
+      await until('the fixture to hold the request', () => broker.rest.pendingHangs === 1);
       if (when === 'before') broker.users.revokeToken(TOKEN);
       controller.abort();
       await expect(pending).rejects.toThrow();
-      for (let i = 0; i < 100 && broker.rest.pendingHangs !== 0; i += 1) await sleep(10);
-      expect(broker.rest.pendingHangs).toBe(0);
+      await until('the hang to end', () => broker.rest.pendingHangs === 0);
       if (when === 'after') broker.users.revokeToken(TOKEN);
       expect(broker.rest.journal[0]).toMatchObject({ scripted: true, bearer });
       // the aborted request took no place in the rate window
@@ -642,7 +643,7 @@ describe('observation matrix', () => {
   it('runs nothing more for a delayed request once close() has cut it', async () => {
     broker.rest.failNext('user', { delayMs: 300 });
     const pending = call('/v1/broker/user').catch(() => undefined);
-    await sleep(50);
+    await until('the request to arrive', () => broker.rest.journal.length === 1);
     await broker.close();
     expect(broker.rest.journal[0]?.bearer).toBe('known');
     broker.users.revokeToken(TOKEN);

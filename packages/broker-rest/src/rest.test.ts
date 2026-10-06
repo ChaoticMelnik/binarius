@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import pino from 'pino';
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import {
   errorLogFields,
   isClosedTrade,
@@ -10,6 +10,7 @@ import {
   type DecimalString,
   type OpenTradeRequest,
 } from '@binarius/shared';
+import { until } from '@binarius/shared/testing';
 import {
   LIVE_MESSAGES,
   MAX_CHART_LIMIT,
@@ -357,11 +358,14 @@ describe('detail', () => {
 
 describe('transport', () => {
   it('gives up after its own timeout as unavailable', async () => {
-    const quick = createBrokerRestClient({ baseUrl: broker.url, timeoutMs: 50 });
-    broker.rest.failNext('pairs', { delayMs: 2000 });
-    const started = Date.now();
-    const error = await caught(quick.listPairs());
-    expect(Date.now() - started).toBeLessThan(1000);
+    // the client's timer is the only clock, and also the window the request has to arrive in
+    const quick = createBrokerRestClient({ baseUrl: broker.url, timeoutMs: 1_000 });
+    broker.rest.failNext('pairs', { hang: true });
+    const pending = caught(quick.listPairs());
+    await until('the fixture to hold the request', () => broker.rest.pendingHangs === 1);
+    const error = await pending;
+    // the fixture answers a hang only at close(): the client leaving is what ends it
+    await until('the client to leave the hang', () => broker.rest.pendingHangs === 0);
     expect(error.code).toBe(BrokerRestErrorCode.Unavailable);
     expect(error).not.toHaveProperty('status');
     expect(broker.rest.journal).toHaveLength(1);
@@ -371,10 +375,10 @@ describe('transport', () => {
     broker.rest.failNext('user', { hang: true });
     const controller = new AbortController();
     const pending = caught(client.getUser(auth, { signal: controller.signal }));
-    await vi.waitFor(() => expect(broker.rest.pendingHangs).toBe(1));
+    await until('the fixture to hold the request', () => broker.rest.pendingHangs === 1);
     controller.abort();
     expect((await pending).code).toBe(BrokerRestErrorCode.Aborted);
-    await vi.waitFor(() => expect(broker.rest.pendingHangs).toBe(0));
+    await until('the hang to end', () => broker.rest.pendingHangs === 0);
   });
 
   it('reads its own timeout as unavailable while a caller signal is still pending', async () => {

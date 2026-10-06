@@ -13,6 +13,7 @@ import {
   type BrokerAccountRow,
 } from '@binarius/db';
 import { brokerAccountRow, createTempDatabase, type TempDatabase } from '@binarius/db/testing';
+import { until } from '@binarius/shared/testing';
 import { createBrokerOAuthClient, type BrokerOAuthClient } from '../broker/oauth-client';
 import { startOAuthStub, type OAuthStub } from '../broker/testing/oauth-stub';
 import { ensureFreshAccessToken, type TokenServiceDeps } from './token-service';
@@ -214,7 +215,7 @@ async function slowBroker() {
     clientId: CLIENT_ID,
     clientSecret: CLIENT_SECRET,
     redirectUri: REDIRECT_URI,
-    delayMs: 2_000,
+    hang: true,
   });
   return {
     impatient: createBrokerOAuthClient({
@@ -667,7 +668,6 @@ describe('ensureFreshAccessToken for a blocked user', () => {
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
       redirectUri: REDIRECT_URI,
-      delayMs: 1_000,
     });
     let refreshing: Promise<unknown> | undefined;
     try {
@@ -692,20 +692,20 @@ describe('ensureFreshAccessToken for a blocked user', () => {
       if (!linked.ok) throw new Error(`link failed: ${linked.reason}`);
       await expireAccessToken(linked.account.id);
 
-      const before = slow.tokenRequests;
+      slow.hang = true;
       refreshing = ensureFreshAccessToken(deps({ broker: patient }), linked.account.id);
-      // the exchange has reached the stub: the account row is locked until it answers
-      while (slow.tokenRequests === before) await new Promise((r) => setTimeout(r, 5));
+      // the exchange is held at the stub: the account row is locked until it answers
+      await until('the exchange to reach the stub', () => slow.pendingHangs === 1);
 
       await tmp.db.transaction(async (tx) => {
         await tx.execute(sql`set local lock_timeout = '300ms'`);
         await tx.update(users).set({ status: 'active' }).where(eq(users.id, linked.account.userId));
       });
+      slow.release();
       expect(await refreshing).toMatchObject({ ok: true });
     } finally {
-      // the stub's close() would wait on the exchange still in flight
-      await refreshing?.catch(() => undefined);
       await slow.close();
+      await refreshing?.catch(() => undefined);
     }
   });
 });

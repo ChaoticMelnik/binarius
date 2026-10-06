@@ -4,7 +4,7 @@ import { Redis } from 'ioredis';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { findTradeIntent, OutboxTopic } from '@binarius/db';
-import { openTradeFor } from '@binarius/shared/testing';
+import { openTradeFor, until } from '@binarius/shared/testing';
 import {
   createTempDatabase,
   seedQueuedIntent,
@@ -151,8 +151,9 @@ describe('startIntentConsumer', () => {
           { jobId: intentId, attempts: 1, removeOnComplete: true, removeOnFail: true },
         );
         await done;
-        // the failed listener runs after the event; give it a beat to reach the dlq
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        // the failed listener runs after the event: the drain waits for its dlq write
+        await consumer.worker.close();
+        await consumer.drainDeadLetters();
         return done;
       },
     );
@@ -178,7 +179,8 @@ describe('startIntentConsumer', () => {
         const done = settled(consumer, jobId);
         await intents.add('intent', { garbage: true }, { jobId, attempts: 1, removeOnFail: true });
         await done;
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await consumer.worker.close();
+        await consumer.drainDeadLetters();
       },
     );
     const entries = (await dlqEntries()).filter((entry) => entry.reason === 'invalid_job');
@@ -243,19 +245,24 @@ describe('startIntentConsumer on trading-reconciliation (#89)', () => {
 describe('drainDeadLetters', () => {
   it('lets shutdown wait for a dead-letter write started by a job that failed during close', async () => {
     const intentId = await newIntent();
+    let started = false;
     const consumer = startIntentConsumer({
       topic: OutboxTopic.TradingIntents,
       connection: redis,
       // fails only once the drain is under way, so the failed event fires inside close()
-      processor: () =>
-        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('late')), 150)),
+      processor: () => {
+        started = true;
+        return new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error('late')), 150),
+        );
+      },
       logger,
       concurrency: 1,
       prefix,
     });
     await consumer.worker.waitUntilReady();
     await intents.add('intent', { intentId }, { jobId: intentId, attempts: 1, removeOnFail: true });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await until('the job to start', () => started);
     await consumer.worker.close();
     await consumer.drainDeadLetters();
     try {

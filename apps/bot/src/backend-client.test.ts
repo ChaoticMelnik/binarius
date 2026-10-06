@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OAuthErrorCode, UserErrorCode, type UserStartRequest } from '@binarius/shared';
+import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
 import {
   CODE,
@@ -129,7 +130,7 @@ describe('recordStart', () => {
       createBackendClient({ baseUrl, token: TOKEN, timeoutMs: 150 }).recordStart(request),
     );
     expect((error as BackendError).code).toBe(BackendErrorCode.Unreachable);
-    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(Date.now() - started).toBeLessThan(UNIT_WAIT_CEILING_MS);
   });
 
   it.each([200, 500])(
@@ -146,7 +147,7 @@ describe('recordStart', () => {
         createBackendClient({ baseUrl, token: TOKEN, timeoutMs: 150 }).recordStart(request),
       );
       expect(error).toMatchObject({ code: BackendErrorCode.Unreachable, status });
-      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(Date.now() - started).toBeLessThan(UNIT_WAIT_CEILING_MS);
     },
   );
 
