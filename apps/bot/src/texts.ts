@@ -8,11 +8,14 @@ import {
   NotificationLevel,
   telegramHtml,
   TradeAction,
+  TradeIntentFailureReason,
+  TradeIntentStatus,
   TradeMode,
   type LinkBonusGrantView,
   type LinkedAccountView,
   type PairView,
   type TelegramHtml,
+  type TradeIntentView,
   type TradingAccessResponse,
 } from '@binarius/shared';
 import type { BotCommand } from 'grammy/types';
@@ -222,6 +225,39 @@ ${FEATURE_LINES}`,
   analysisRateLimited: (seconds: string) =>
     telegramHtml`⚠️ Брокер ограничил запросы. Попробуй через ${seconds} с.`,
   analysisUnavailable: telegramHtml`⚠️ Не удалось получить свечи у брокера. Попробуй ещё раз.`,
+  // The demo trade (#127), assembled by intentStatusText below: a header, the trade line, a blank
+  // line, the status line. The status line is chosen by the intent's status as the backend
+  // reports it, never by the press: «открыта» is reachable only from accepted.
+  intentHeader: telegramHtml`🎮 <b>Демо-сделка</b>`,
+  // the hole is the symbol, the direction, the duration and the stake, joined by intentStatusText
+  intentTrade: (line: string) => telegramHtml`📈 ${line}`,
+  // planned and reserved never reach the wire (creation is one transaction); they read as queued
+  intentQueued: telegramHtml`⏳ Заявка создана и ждёт отправки брокеру…`,
+  intentSubmitting: telegramHtml`📤 Отправляем заявку брокеру…`,
+  intentAccepted: telegramHtml`✅ Сделка открыта у брокера.`,
+  // the result is not in the intent: no profit and no token line here (#90/#101/#29)
+  intentSettled: telegramHtml`🏁 Сделка закрыта.`,
+  intentUnknown: telegramHtml`🔎 Результат сделки уточняется у брокера. Токен пока зарезервирован.`,
+  intentManualReview: telegramHtml`🛠 Сделка на ручной проверке — напиши в поддержку: /support`,
+  intentRejectedNotConfigured: telegramHtml`⚠️ Сделка не отправлена: исполнение сделок ещё не подключено. Токен возвращён.`,
+  intentRejectedExpired: telegramHtml`⚠️ Заявку не успели отправить вовремя. Токен возвращён.`,
+  intentRejectedByBroker: telegramHtml`❌ Брокер отклонил сделку. Токен возвращён.`,
+  intentRejectedPublishFailed: telegramHtml`⚠️ Заявка не дошла до исполнителя. Токен возвращён.`,
+  intentRejectedNotFound: telegramHtml`❌ Брокер сделку не открыл. Токен возвращён.`,
+  intentRejectedManual: telegramHtml`❌ Сделка отклонена при ручной проверке. Токен возвращён.`,
+  intentRejectedRealDisabled: telegramHtml`⚠️ Реальная торговля отключена. Токен возвращён.`,
+  intentRejected: telegramHtml`❌ Сделка не открыта. Токен возвращён.`,
+  // under a live status once the tracker stops polling
+  intentDeadline: telegramHtml`⏳ Сделка всё ещё обрабатывается — нажми «🔄 Обновить статус» чуть позже.`,
+  intentStatusUnavailable: telegramHtml`⚠️ Статус сделки недоступен.`,
+  // The stake press refused before or by POST /trading/intents (#127)
+  stakeBalanceMissing: telegramHtml`⏳ Баланс Binodex ещё не получен — попробуй через минуту.`,
+  stakeActiveIntent: telegramHtml`⏳ Предыдущая сделка ещё не завершена. Дождись её результата.`,
+  stakeButtonUsed: telegramHtml`⚠️ Эта кнопка уже использована. Открой анализ заново.`,
+  stakeInsufficientTokens: telegramHtml`🪙 Не хватает токенов для сделки.`,
+  stakeAccountNotConfirmed: telegramHtml`⏳ Привязка Binodex ждёт подтверждения — открой /account.`,
+  stakeAccountHalted: telegramHtml`⛔ Торговля по аккаунту остановлена — напиши в поддержку: /support`,
+  stakeOutcomeUnknown: telegramHtml`⚠️ Не удалось узнать, принята ли заявка. Нажми кнопку сделки ещё раз — вторая сделка от этого не откроется.`,
   // the stake button until #127 opens the trade; #127 deletes it
   stakeSoon: telegramHtml`💵 <b>Открытие сделки пока в разработке</b>
 Анализ уже настоящий — кнопка заработает в следующей версии.`,
@@ -358,6 +394,91 @@ function statusLineOf(
   return TEXTS.statusStale(formatAge(age));
 }
 
+// The status line of each status but rejected, whose line is its reason's. Exhaustive, so a
+// status added to the contract fails tsc here instead of falling into a catch-all.
+const INTENT_STATUS_LINES = {
+  [TradeIntentStatus.Planned]: TEXTS.intentQueued,
+  [TradeIntentStatus.Reserved]: TEXTS.intentQueued,
+  [TradeIntentStatus.Queued]: TEXTS.intentQueued,
+  [TradeIntentStatus.Submitting]: TEXTS.intentSubmitting,
+  [TradeIntentStatus.Accepted]: TEXTS.intentAccepted,
+  [TradeIntentStatus.Settled]: TEXTS.intentSettled,
+  [TradeIntentStatus.Unknown]: TEXTS.intentUnknown,
+  [TradeIntentStatus.Reconciling]: TEXTS.intentUnknown,
+  [TradeIntentStatus.ManualReview]: TEXTS.intentManualReview,
+} as const satisfies Record<
+  Exclude<TradeIntentStatus, typeof TradeIntentStatus.Rejected>,
+  TelegramHtml
+>;
+
+// rejectIntent writes its own reason, so a rejected row carries one of the first seven; the rest
+// lead to unknown or manual_review and read the generic line should one ever arrive here
+const REJECTED_LINES = {
+  [TradeIntentFailureReason.ExecutorNotConfigured]: TEXTS.intentRejectedNotConfigured,
+  [TradeIntentFailureReason.Expired]: TEXTS.intentRejectedExpired,
+  [TradeIntentFailureReason.BrokerRejected]: TEXTS.intentRejectedByBroker,
+  [TradeIntentFailureReason.PublishFailed]: TEXTS.intentRejectedPublishFailed,
+  [TradeIntentFailureReason.ReconciliationNotFound]: TEXTS.intentRejectedNotFound,
+  [TradeIntentFailureReason.ManualRejected]: TEXTS.intentRejectedManual,
+  [TradeIntentFailureReason.RealTradingDisabled]: TEXTS.intentRejectedRealDisabled,
+  [TradeIntentFailureReason.ExecutorTimeout]: TEXTS.intentRejected,
+  [TradeIntentFailureReason.ExecutorError]: TEXTS.intentRejected,
+  [TradeIntentFailureReason.StaleSubmitting]: TEXTS.intentRejected,
+  [TradeIntentFailureReason.InvalidJob]: TEXTS.intentRejected,
+  [TradeIntentFailureReason.ProcessingFailed]: TEXTS.intentRejected,
+  [TradeIntentFailureReason.TradeMismatch]: TEXTS.intentRejected,
+  [TradeIntentFailureReason.ReconciliationAmbiguous]: TEXTS.intentRejected,
+} as const satisfies Record<TradeIntentFailureReason, TelegramHtml>;
+
+// The broker's symbol is an unbounded wire string: at most this many characters are printed.
+export const INTENT_SYMBOL_LIMIT = 64;
+
+// What the status message shows of an intent: its trade and its status; nothing else of the view.
+export type IntentStatusView = Pick<
+  TradeIntentView,
+  'assetId' | 'action' | 'durationSec' | 'amount' | 'status' | 'lastError'
+>;
+
+const durationLabelOf = (durationSec: number): string =>
+  durationSec in DEMO_DURATION_LABELS
+    ? DEMO_DURATION_LABELS[durationSec as DemoDurationSec]
+    : `⏱ ${String(durationSec)} с`;
+
+const statusLineOfIntent = ({ status, lastError }: IntentStatusView): TelegramHtml =>
+  status === TradeIntentStatus.Rejected
+    ? lastError === null
+      ? TEXTS.intentRejected
+      : REJECTED_LINES[lastError]
+    : INTENT_STATUS_LINES[status];
+
+// The demo trade's one message (#127). `symbol` is the pair's as the catalog spells it, or null
+// when the catalog could not say (the refresh button): the asset's id stands in for it.
+export function intentStatusText(
+  symbol: string | null,
+  view: IntentStatusView,
+  { deadline = false }: { deadline?: boolean } = {},
+): TelegramHtml {
+  const asset =
+    symbol === null ? `актив #${String(view.assetId)}` : symbol.slice(0, INTENT_SYMBOL_LIMIT);
+  const trade = [
+    asset,
+    ACTION_LABELS[view.action],
+    durationLabelOf(view.durationSec),
+    `ставка ${formatUsd(view.amount)}`,
+  ].join(' · ');
+  const tail = deadline
+    ? [
+        telegramHtml`
+
+${TEXTS.intentDeadline}`,
+      ]
+    : [];
+  return telegramHtml`${TEXTS.intentHeader}
+${TEXTS.intentTrade(trade)}
+
+${statusLineOfIntent(view)}${tail}`;
+}
+
 // Button labels and the command description: Telegram does not parse them, so they are plain
 // strings and are never escaped — an entity here would be shown literally.
 export const LABELS = {
@@ -391,6 +512,8 @@ export const LABELS = {
   demoNextButton: '▶️',
   // the analysis screen (#126)
   repeatAnalysisButton: '🔄 Повторить анализ',
+  // under the demo trade's status message (#127)
+  refreshIntentButton: '🔄 Обновить статус',
   supportButton: '💬 Написать в поддержку',
 } as const satisfies Record<string, string | ((value: string | null) => string)>;
 
