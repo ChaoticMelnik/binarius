@@ -80,8 +80,8 @@ export function toSocketOpenTradeRequestWire(
 export const userAuthErrorWireSchema = z.looseObject({ message: z.string() });
 export type UserAuthErrorWire = z.infer<typeof userAuthErrorWireSchema>;
 
-// [assetId, price, timestamp]; the timestamp unit is not confirmed — consumers may apply
-// normalizeUnixMs. Extra elements are tolerated, fewer than three are rejected (as broker-web does).
+// [assetId, price, timestamp]; the timestamp is in milliseconds (observed live 2026-10-03). Extra
+// elements are tolerated, fewer than three are rejected (as broker-web does).
 export const priceUpdateWireSchema = z.tuple(
   [z.int(), z.number(), z.number().nonnegative()],
   z.unknown(),

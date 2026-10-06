@@ -264,7 +264,7 @@ without trades; docs/broker-socket.md → Observed live):
 | the burst after auth: `user.data`, `common.assets_list`, then the six extras in the order of the table above | observed |
 | the six extras' payloads always empty | observed empty; the fixture never fills them |
 | `price.subscribed { assets }` after `price.subscribe` | observed with one id; the echo and the additive subscriptions are fixture rules |
-| `price.update` as one array `[assetId, price, third]` | observed; the third element is `atMs` here, its live unit is not known |
+| `price.update` as one array `[assetId, price, ms]` | observed; the third element is milliseconds (observed 2026-10-03, docs/broker-socket.md → Observed live), `atMs` here |
 | every payload a Node `Buffer` | observed: the `bytes` form |
 | `is_otc` on every pair of `common.assets_list` | observed; every `DEFAULT_PAIRS` entry carries it |
 | `user.auth.error`, `user.disconnect_token_expired`, `open_trade.success/.fail`, `update_balance`, `close_trade.success`, `common.assets_update` | not observed: from shared and broker-web (#8). The texts are the REST texts; a client classifies by the event, never by the text |
@@ -272,8 +272,10 @@ without trades; docs/broker-socket.md → Observed live):
 | ack callbacks never called, websocket only, no idle drop | fixture rules |
 | an `open_trade` accepted before a token revocation still opens after a `delayMs` | fixture rule: the command was accepted under a valid session, and the store does not check tokens. For a client this is the "outcome unknown" case: it hears `disconnect_token_expired`, and the order may still have opened |
 
-The live server closed the probe's connection after about 16.7 s (`transport close`). The fixture
-never drops a socket on its own. A test drops one with `socket.disconnect(...)` or a script.
+The live server closed the probe's connection after about 16.7 s (`transport close`) on 2026-10-02;
+two runs on 2026-10-03 lived 28 s and 93 s without a drop. The fixture never drops a socket on its
+own. A test drops one with `socket.disconnect(...)` (a server DISCONNECT), `socket.cutTransport(...)`
+(the live drop's shape: no DISCONNECT packet, the client reconnects) or a script.
 
 ### Socket scripts
 
@@ -325,8 +327,9 @@ per fixture:
 `null` (`user.auth.success`, `user.disconnect_token_expired`) is sent as `null` in every form, as
 seen live. An `ArrayBuffer` or a typed array reaches a Node client as the same `Buffer`, so they
 are one form here. Shared's `decodeSocketPayload` turns each form back into the same object. The
-default is `object`, but the live broker sends `bytes`, so #99 runs its main suite under
-`'bytes'` and repeats it over all four. Any other value throws `RangeError` before the server
+default is `object`, but the live broker sends `bytes`, so the broker socket client's suite (#99,
+`apps/trading-worker/src/broker/socket.test.ts`) runs under `'bytes'` and repeats the handshake
+over all four. Any other value throws `RangeError` before the server
 listens.
 
 ### Close
@@ -373,11 +376,14 @@ and 6 are resolved, 4–5 and 9 remain, and 7–8 are handled on the consumer's 
    (docs/broker-socket.md → `extraArgs`).
 8. **Seven events outside shared's map**: `price.subscribed` and the six post-auth extras. The
    normalizer answers them `unknown_event` by design (docs/broker-socket.md → Observed live), and
-   #99 drops them without treating them as errors. The fixture names them in one constant,
+   the client (#99) ignores them at `debug` (`IGNORED_BROKER_EVENTS`, held equal to this constant by
+   a test). The fixture names them in one constant,
    `OBSERVED_EXTRA_EVENTS` in `socket.ts`.
-9. **Open for #99:** the unit of `price.update`'s third element (the fixture sends ms), and why
-   the live server closed the probe's connection after about 16.7 s (keepalive, a session limit or
-   something else). The fixture models neither.
+9. **The `price.update` unit is closed; the 16.7 s drop stays open.** The third element is
+   milliseconds, live and here (2026-10-03). Why the live server closed the 2026-10-02 probe's
+   connection after about 16.7 s (keepalive, a session limit or something else) is not known; it
+   did not recur on 2026-10-03. `cutTransport` reproduces its shape on demand; the fixture does not
+   drop a socket on its own.
 
 ## Accepted risks
 
@@ -397,14 +403,15 @@ and 6 are resolved, 4–5 and 9 remain, and 7–8 are handled on the consumer's 
   and `update_balance`, was not observed. Neither was the echo of `price.subscribed` with more
   than one id, nor what the live broker does with more than 40 ids.
 - Socket: the six post-auth extras are always empty, even when the store holds closed trades. A
-  non-empty live form has not been seen; when #99 sees one, the fixture follows.
+  non-empty live form has not been seen; when one is, the fixture follows.
 
 ## Boundaries
 
 - The `BrokerRestClient` and its tests landed in #98 (docs/broker-rest.md). The issue's
   criterion "used by the `BrokerRestClient` tests" is closed there.
-- Socket.IO on the same server and store landed in #104. The `BrokerSocketClient` and its
-  subscriptions are #99, the trade executor #100, the session manager and the end-to-end scenario
+- Socket.IO on the same server and store landed in #104; `cutTransport` and `emitRaw` in #99,
+  with the `BrokerSocketClient` and its subscriptions (docs/broker-socket.md → Client). The trade
+  executor is #100, the session manager and the end-to-end scenario
   #101.
 - The OAuth endpoints, moving `apps/backend/src/broker/testing/oauth-stub.ts` here, and a `bin`
   or compose service: #105.
