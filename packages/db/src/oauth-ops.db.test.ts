@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AuthRevokedReason, type OAuthTokens } from '@binarius/shared';
+import { AccountHaltReason, AuthRevokedReason, type OAuthTokens } from '@binarius/shared';
 import { brokerAccountRow, createTempDatabase, seedUser, type TempDatabase } from './testing';
 import { createTokenCipher, TokenField } from './crypto';
 import {
@@ -244,7 +244,7 @@ describe('linkBrokerAccount', () => {
         status: 'revoked',
         authRevokedReason: AuthRevokedReason.RefreshInvalidGrant,
         tradingHalted: true,
-        haltedReason: 'ambiguous reconciliation match',
+        haltedReason: AccountHaltReason.ReconciliationAmbiguous,
       })
       .where(eq(brokerAccounts.id, created.account.id));
 
@@ -260,7 +260,7 @@ describe('linkBrokerAccount', () => {
       status: 'active',
       authRevokedReason: null,
       tradingHalted: true,
-      haltedReason: 'ambiguous reconciliation match',
+      haltedReason: AccountHaltReason.ReconciliationAmbiguous,
     });
   });
 

@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool } from 'pg';
 import {
+  AccountHaltReason,
   confirmLoginResponseSchema,
   emailLoginResponseSchema,
   INIT_DATA_MAX_LENGTH,
@@ -42,7 +43,12 @@ import { INIT_DATA_MAX_AGE_MS } from './oauth-timing';
 import { createInitDataVerifier } from './telegram-init-data';
 import { signInitData } from './testing/init-data';
 import { AUTH_TEXTS } from './texts';
-import { unusedBalanceDeps, unusedPairsDeps, unusedSignalDeps } from '../trading/testing';
+import {
+  unusedAccessTokenDeps,
+  unusedBalanceDeps,
+  unusedPairsDeps,
+  unusedSignalDeps,
+} from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -126,6 +132,7 @@ const testApp = (auth: AuthRoutesDeps, logs?: { write(line: string): void }) =>
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
       realTradingEnabled: false,
+      accessToken: unusedAccessTokenDeps(),
     },
     auth,
     users: { db: tmp.db, internalApiToken: TOKEN },
@@ -415,7 +422,7 @@ describe('POST /auth/binodex/callback', () => {
         status: 'revoked',
         authRevokedReason: 'refresh_invalid_grant',
         tradingHalted: true,
-        haltedReason: 'reconciliation',
+        haltedReason: AccountHaltReason.ReconciliationAmbiguous,
       })
       .where(eq(brokerAccounts.id, accountId));
 
@@ -429,7 +436,7 @@ describe('POST /auth/binodex/callback', () => {
       status: 'active',
       authRevokedReason: null,
       tradingHalted: true,
-      haltedReason: 'reconciliation',
+      haltedReason: AccountHaltReason.ReconciliationAmbiguous,
     });
   });
 

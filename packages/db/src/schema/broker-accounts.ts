@@ -1,5 +1,7 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   index,
   pgTable,
   text,
@@ -8,7 +10,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { AuthRevokedReason, BrokerAccountStatus } from '@binarius/shared';
+import { AccountHaltReason, AuthRevokedReason, BrokerAccountStatus } from '@binarius/shared';
 import { bytea, createdAt, id, inList, updatedAt } from './columns';
 import { users } from './users';
 
@@ -32,7 +34,7 @@ export const brokerAccounts = pgTable(
     refreshTokenHash: text('refresh_token_hash'),
     tokenRotatedAt: timestamp('token_rotated_at', { withTimezone: true }),
     // why OAuth revoked this account; NULL while it is usable. Distinct from trading_halted,
-    // which reconciliation (ARCH-04) owns and this flow never writes.
+    // which reconciliation (#90) owns and this flow never writes.
     authRevokedReason: text('auth_revoked_reason').$type<AuthRevokedReason>(),
     // pending until the bot confirms the link (BrokerAccountStatus in @binarius/shared says why)
     status: text('status')
@@ -41,9 +43,10 @@ export const brokerAccounts = pgTable(
       // the restrictive value: an insert that forgets the column produces an account that
       // cannot act, rather than one that silently bypassed the confirmation
       .default(BrokerAccountStatus.Pending),
-    // ARCH-04: an ambiguous reconciliation match halts new intents for the account
+    // reconciliation's stop for new intents (#90, haltAccountForManualReview); the reason is set
+    // exactly while the halt is, so lifting one means writing both
     tradingHalted: boolean('trading_halted').notNull().default(false),
-    haltedReason: text('halted_reason'),
+    haltedReason: text('halted_reason').$type<AccountHaltReason>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -54,5 +57,10 @@ export const brokerAccounts = pgTable(
     index('broker_accounts_user_id_idx').on(t.userId),
     inList('broker_accounts_status_check', t.status, BrokerAccountStatus),
     inList('broker_accounts_auth_revoked_reason_check', t.authRevokedReason, AuthRevokedReason),
+    inList('broker_accounts_halted_reason_check', t.haltedReason, AccountHaltReason),
+    check(
+      'broker_accounts_halt_reason_pair_check',
+      sql`${t.tradingHalted} = (${t.haltedReason} is not null)`,
+    ),
   ],
 );

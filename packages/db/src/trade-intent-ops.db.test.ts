@@ -1,6 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  AccountHaltReason,
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
@@ -12,6 +13,7 @@ import {
   closedTradeFor,
   INTEGRATION_WAIT_CEILING_MS,
   openTradeFor,
+  until,
 } from '@binarius/shared/testing';
 import {
   createTempDatabase,
@@ -32,6 +34,8 @@ import {
   createTradeIntent,
   findTradeIntent,
   getTradeIntentView,
+  haltAccountForManualReview,
+  listLinkedBrokerTradeIds,
   listOverdueAcceptedIntents,
   listReconcilingCandidates,
   listStaleSubmittingIntents,
@@ -263,7 +267,7 @@ describe('createTradeIntent', () => {
 
   it.each([
     ['revoked', { status: 'revoked' as const }, 'account_revoked'],
-    ['halted', { tradingHalted: true }, 'account_halted'],
+    ['halted', { tradingHalted: true, haltedReason: AccountHaltReason.ReconciliationAmbiguous }, 'account_halted'],
     // linked but not confirmed in the bot: a distinct answer, because the user can fix it
     ['pending', { status: 'pending' as const }, 'account_not_confirmed'],
   ])('refuses a %s account', async (_label, patch, code) => {
@@ -1172,6 +1176,41 @@ describe('listOverdueAcceptedIntents (#17)', () => {
     expect(graced.map((r) => r.id)).toContain(older.intent.id);
     expect(graced.map((r) => r.id)).not.toContain(old.intent.id);
   });
+
+  it('leaves out the accounts the caller excludes (#90)', async () => {
+    const held = await acceptedIntent();
+    const other = await acceptedIntent();
+    await backdate(held.intent.id, 4 * 86_400_000);
+    await backdate(other.intent.id, 4 * 86_400_000);
+    const ids = async (exclude?: string[]) =>
+      (await listOverdueAcceptedIntents(tmp.db, { graceMs: 60_000, limit: 100, exclude })).map(
+        (r) => r.id,
+      );
+    expect(await ids()).toEqual(expect.arrayContaining([held.intent.id, other.intent.id]));
+    const excluded = await ids([held.brokerAccountId]);
+    expect(excluded).not.toContain(held.intent.id);
+    expect(excluded).toContain(other.intent.id);
+  });
+});
+
+describe('listLinkedBrokerTradeIds (#90)', () => {
+  it("answers which of the given trade ids back an intent of this account", async () => {
+    const linked = await acceptedIntent();
+    const foreign = await acceptedIntent();
+    const ids = [linked.open.id, foreign.open.id, 'never-seen'];
+    expect(
+      await listLinkedBrokerTradeIds(tmp.db, {
+        brokerAccountId: linked.brokerAccountId,
+        brokerTradeIds: ids,
+      }),
+    ).toEqual(new Set([linked.open.id]));
+    expect(
+      await listLinkedBrokerTradeIds(tmp.db, {
+        brokerAccountId: linked.brokerAccountId,
+        brokerTradeIds: [],
+      }),
+    ).toEqual(new Set());
+  });
 });
 
 describe('the transition guard seen through the ops (#17)', () => {
@@ -1438,6 +1477,116 @@ describe('markIntentManualReview (#89)', () => {
     );
     expect(rejected).toMatchObject({ status: 'rejected', lastError: 'manual_rejected' });
     expect(await tokenReservedOf(userId)).toBe(0n);
+  });
+});
+
+describe('haltAccountForManualReview (#90)', () => {
+  const accountOf = async (id: string) =>
+    (
+      await tmp.db
+        .select({ halted: brokerAccounts.tradingHalted, reason: brokerAccounts.haltedReason })
+        .from(brokerAccounts)
+        .where(eq(brokerAccounts.id, id))
+    )[0]!;
+  const halt = (
+    intent: { id: string; version: number },
+    reason: 'reconciliation_ambiguous' | 'trade_mismatch',
+  ) =>
+    tmp.db.transaction((tx) =>
+      haltAccountForManualReview(tx, { id: intent.id, expectedVersion: intent.version, reason }),
+    );
+
+  it.each([
+    [TradeIntentFailureReason.ReconciliationAmbiguous, AccountHaltReason.ReconciliationAmbiguous],
+    [TradeIntentFailureReason.TradeMismatch, AccountHaltReason.TradeMismatch],
+  ] as const)('parks the intent and halts the account for %s', async (reason, haltReason) => {
+    const { intent, brokerAccountId, userId } = await claimedIntent();
+    const parked = await halt(intent, reason);
+    expect(parked).toMatchObject({ status: 'manual_review', lastError: reason });
+    expect(await accountOf(brokerAccountId)).toEqual({ halted: true, reason: haltReason });
+    expect(await tokenReservedOf(userId)).toBe(TOKENS_PER_INTENT);
+  });
+
+  it('writes nothing when the CAS is lost', async () => {
+    const { intent, brokerAccountId } = await claimedIntent();
+    expect(
+      await halt({ id: intent.id, version: intent.version + 1 }, 'reconciliation_ambiguous'),
+    ).toBeUndefined();
+    expect(await accountOf(brokerAccountId)).toEqual({ halted: false, reason: null });
+    expect(await findTradeIntent(tmp.db, intent.id)).toMatchObject({ status: 'reconciling' });
+  });
+
+  it('rolls the halt back with the transaction it ran in', async () => {
+    const { intent, brokerAccountId } = await claimedIntent();
+    const rollback = new Error('rollback');
+    await expect(
+      tmp.db.transaction(async (tx) => {
+        await haltAccountForManualReview(tx, {
+          id: intent.id,
+          expectedVersion: intent.version,
+          reason: TradeIntentFailureReason.TradeMismatch,
+        });
+        throw rollback;
+      }),
+    ).rejects.toBe(rollback);
+    expect(await accountOf(brokerAccountId)).toEqual({ halted: false, reason: null });
+    expect(await findTradeIntent(tmp.db, intent.id)).toMatchObject({ status: 'reconciling' });
+  });
+
+  it('overwrites the reason on an account that is already halted', async () => {
+    const { intent, brokerAccountId } = await claimedIntent();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ tradingHalted: true, haltedReason: AccountHaltReason.ReconciliationAmbiguous })
+      .where(eq(brokerAccounts.id, brokerAccountId));
+    await halt(intent, TradeIntentFailureReason.TradeMismatch);
+    expect(await accountOf(brokerAccountId)).toEqual({
+      halted: true,
+      reason: AccountHaltReason.TradeMismatch,
+    });
+  });
+
+  // A creator holds broker_accounts FOR NO KEY UPDATE and then touches the account's active
+  // intent (its INSERT waits on the active-intent index). A halt that updated the intent before
+  // locking the account would wait on the creator while the creator waits on it (40P01). Here the
+  // creator is played by a transaction that holds the account lock until the halt is queued
+  // behind it, then locks the intent row.
+  it('locks the account before touching the intent, so a creator holding it finishes first', async () => {
+    const { intent, brokerAccountId } = await claimedIntent();
+    let lockTaken!: () => void;
+    const taken = new Promise<void>((resolve) => (lockTaken = resolve));
+    let releaseHolder!: () => void;
+    const released = new Promise<void>((resolve) => (releaseHolder = resolve));
+    const holder = tmp.db.transaction(async (tx) => {
+      await tx
+        .select({ id: brokerAccounts.id })
+        .from(brokerAccounts)
+        .where(eq(brokerAccounts.id, brokerAccountId))
+        .for('no key update');
+      lockTaken();
+      await released;
+      await tx
+        .select({ id: tradeIntents.id })
+        .from(tradeIntents)
+        .where(eq(tradeIntents.id, intent.id))
+        .for('update');
+    });
+    await taken;
+    const halting = halt(intent, TradeIntentFailureReason.ReconciliationAmbiguous);
+    await until('the halt to queue behind the account lock', async () => {
+      const { rows } = await tmp.db.execute<{ waiting: number }>(
+        sql`select count(*)::int as waiting from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+      );
+      return (rows[0]?.waiting ?? 0) > 0;
+    });
+    releaseHolder();
+    const [held, halted] = await Promise.allSettled([holder, halting]);
+    expect(held.status).toBe('fulfilled');
+    expect(halted.status === 'fulfilled' && halted.value?.status).toBe('manual_review');
+    expect(await accountOf(brokerAccountId)).toEqual({
+      halted: true,
+      reason: AccountHaltReason.ReconciliationAmbiguous,
+    });
   });
 });
 

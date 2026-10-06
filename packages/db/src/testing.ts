@@ -6,6 +6,7 @@ import { runMigrations } from './migrate';
 import {
   BrokerAccountStatus,
   TradeAction,
+  type AccountHaltReason,
   TradeIntentFailureReason,
   TradeMode,
   UserStatus,
@@ -143,6 +144,7 @@ export async function seedBrokerAccount(
   patch: {
     status?: BrokerAccountStatus;
     tradingHalted?: boolean;
+    haltedReason?: AccountHaltReason;
     isPartnerClient?: boolean;
     brokerUserId?: string;
     accessTokenExpiresAt?: Date;
