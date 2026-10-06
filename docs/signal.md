@@ -1,18 +1,20 @@
-# Signal v1 (issues #132, #133)
+# Signal v1 (issues #132, #133, #258)
 
-`apps/trading-worker/src/signal/` turns a series of candles into a trade direction (`up` or
-`down`) or into a reason why there is none. It does not use an LLM. The decider is a pure
-function: it reads no clock, no environment and no network, and writes no log. The same candles,
-`intervalMs`, `nowMs` and parameters always give the same decision. The signal feed (`feed.ts`,
-#133, [Feed and journal](#feed-and-journal-133)) fetches the candles, calls the decider and writes
-one journal line per decision. Nothing in the worker process calls the feed yet: wiring it into
-`index.ts` is #130's.
+`packages/signal` (`@binarius/signal`) turns a series of candles into a trade direction (`up` or
+`down`) or into a reason why there is none. It lived in `apps/trading-worker/src/signal/` until
+#258 moved it to a package, so the backend and the worker share one module. It does not use an
+LLM. The decider is a pure function: it reads no clock, no environment and no network, and writes
+no log. The same candles, `intervalMs`, `nowMs` and parameters always give the same decision. The
+signal feed (`feed.ts`, #133, [Feed and journal](#feed-and-journal-133)) fetches the candles,
+calls the decider and writes one journal line per decision. Its first caller is the backend's
+`POST /trading/signal` (#258, [below](#post-tradingsignal-258)), through a cache. Nothing in the
+worker process calls the feed yet: wiring it into the worker's `index.ts` is #130's.
 
 Nobody has shown that this algorithm makes money. It is a technical baseline: the defaults are not
 tuned and no backtest was run.
 
 ```bash
-pnpm test --project unit apps/trading-worker/src/signal   # needs no database or Redis
+pnpm test --project unit packages/signal   # needs no database or Redis
 ```
 
 ## Use
@@ -136,9 +138,13 @@ says nothing (owner's decision 2026-10-03).
 `features` is `{ emaFast, emaSlow, emaSlowSlope, rsi, atr, atrPct, lastClose,
 lastCandleTimestamp, closedCandles, trend, momentum }`. Every number in it is finite, and no key is
 ever set to `undefined`. A decision survives `JSON.parse(JSON.stringify(decision))` unchanged, so
-the feed logs it as it is. All codes come from `as const` constants in `codes.ts`: `SignalKind`,
-`NoSignalReason`, `CandleProblem`, `TrendDirection` and `MomentumDirection`. The direction is
-shared's `TradeAction`.
+the feed logs it as it is. All codes come from `as const` constants in
+`packages/shared/src/signal.ts`: `SignalKind`, `NoSignalReason` (split into
+`DATA_REFUSAL_REASONS` and `RULE_REFUSAL_REASONS`), `CandleProblem`, `TrendDirection` and
+`MomentumDirection`. The direction is shared's `TradeAction`. The same file holds the decision's
+wire schema, `signalDecisionSchema`, and `SignalDecision` is its inferred type, the one type
+`decide.ts` returns. `decide.test.ts` (D15) parses every decision shape the decider produces back
+through it.
 
 ## Parameters
 
@@ -174,9 +180,9 @@ const feed = createSignalFeed({ rest, logger }); // decider defaults to createSi
 const result = await feed.evaluate({ assetId, interval: '1m' }, { signal });
 ```
 
-The intervals are a closed table, `SIGNAL_CHART_INTERVAL_MS` in `feed-config.ts`: `1m`, `5m`,
-`15m`, `30m` and `1h`. The live broker accepted each of them (owner's probe 2026-10-03). An
-interval outside the table is a `RangeError` before any fetch.
+The intervals are a closed table, `SIGNAL_CHART_INTERVAL_MS` in `packages/shared/src/signal.ts`:
+`1m`, `5m`, `15m`, `30m` and `1h`. The live broker accepted each of them (owner's probe
+2026-10-03). An interval outside the table is a `RangeError` before any fetch.
 
 ### The window
 
@@ -219,7 +225,7 @@ Any other error, such as a programmer error, is rethrown and logs nothing.
 | `rejected` | any other 4xx (an interval or asset the broker refuses) | fixes the request and stops |
 | `unavailable` | 5xx, a failed fetch, the client's 5 s timeout, a body cut mid-flight | may evaluate again later |
 | `contract_violation` | a 2xx that is not JSON, fails `candlesWireSchema` or exceeds 4 MiB; any 3xx | treats it as drift and stops |
-| `aborted` | the caller's own `signal` fired first | nothing: it set the limit itself |
+| `aborted` | the caller's own `signal` fired first (the backend's cache: `SIGNAL_FETCH_BUDGET_MS`) | nothing: it set the limit itself |
 
 ### The journal line
 
@@ -281,6 +287,91 @@ BROKER_API_BASE_URL=https://api.binodex.app ASSET_ID=237831086 pnpm --filter @bi
   `candle_gap` refusals. The journal measures how many. A tolerance for gaps would be a change to
   the #132 parameters.
 
+## POST /trading/signal (#258)
+
+The backend computes the signal for the bot's analysis screen (#126). The route sits behind the
+internal bearer (`internalBearerAuth`, as `GET /trading/pairs`) and touches no database: one
+public chart GET through the cached feed, on the process's one REST client.
+
+Request: `{ assetId, interval }` (`tradingSignalRequestSchema`): `assetId` a positive int4, the
+same spelling as `POST /trading/intents`; `interval` a key of the table. There is no user id: the
+chart is public and a decision is per pair. Whether the asset is in the fresh catalog is the bot's
+check (#126); the route checks only the shape.
+
+| Evaluation | Status | Body (`tradingSignalResponseSchema`) |
+|---|---|---|
+| `decided` | 200 | `{ outcome: 'decided', params, decision }`: the decider's parameters, so the screen names `EMA9`/`EMA21` from them, and the decision |
+| `fetch_failed` | 200 | `{ outcome: 'fetch_failed', code, retryAfterSec? }`; `status` and the request facts stay in the feed's `warn` line |
+| a body that fails the schema | 400 | `{ error: 'validation', issues }` |
+| a wrong bearer | 401 | `{ error: 'unauthorized' }` |
+| a throw (a broken clock: a programmer error) | 500 | `{ error: 'internal' }`, logged by name and code |
+
+A broker failure is a 200 with an outcome, not an HTTP error: the bot's client keeps only `error`
+from a non-2xx body, and `retryAfterSec` has to reach the user. The body is built from named
+fields; the journal series never leaves the backend's log.
+
+| Outcome | What the caller (#126) does |
+|---|---|
+| `decided` | shows the decision |
+| `fetch_failed` `rate_limited` | asks the user to wait `retryAfterSec` seconds (its own wording when absent) |
+| any other `fetch_failed` code | shows the analysis as unavailable and logs a `warn` |
+| 500, a timeout | shows the analysis as unavailable |
+
+`intervalForDuration(durationSec)` (shared) picks the interval for a trade's duration: the longest
+table interval not above it, `1m` below a minute. `durationSec` must be a positive integer; anything
+else is a `RangeError`.
+
+The backend writes the feed's lines through its own logger: one `signal decision` line per fetch,
+one `signal fetch failed` line per failed fetch, nothing on a cache hit. The route adds no line of
+its own. `signal-routes.test.ts` (R6) reads the backend's log sink: two requests in one candle make
+one chart GET and one journal line, which replays to the answered decision.
+
+### The cache
+
+`createCachedSignalFeed(inner, { fetchBudgetMs, maxTtlMs, maxEntries, now })` (`cache.ts`) wraps a
+feed, keyed by `${assetId}:${interval}`:
+
+| Inner result | Held? | Until |
+|---|---|---|
+| `decided` (a signal or any refusal) | yes | `min(end of the candle containing entry.nowMs, entry.nowMs + maxTtlMs)` |
+| `fetch_failed` `rate_limited` with `retryAfterSec` | yes | `now() + min(retryAfterSec s, maxTtlMs)`; a hit answers what is left, `ceil((until − now()) / 1000)` |
+| any other `fetch_failed`, `rate_limited` without `retryAfterSec` | no | the next call fetches |
+| a throw | no | every waiter of that fetch rejects with it |
+
+- Concurrent calls for one key share one inner `evaluate`; the entry is set before the inner call
+  can settle and removed once it does, whatever the outcome.
+- Every inner call carries the cache's own deadline, `AbortSignal.timeout(fetchBudgetMs)`. The
+  cache takes no caller signal, so a joiner never inherits another caller's abort and nobody waits
+  longer than the budget from the fetch it joined.
+- The hold is computed from the entry's `nowMs`, the clock reading taken before the fetch: a fetch
+  that crossed a boundary is not held into the next candle. Every request in one candle gets the
+  same closed candles anyway; the forming one is dropped.
+- At most `maxEntries` (`SIGNAL_CACHE_MAX_ENTRIES`, 1 024; the live catalog is 144 pairs × 5
+  intervals) keys are held; an insert beyond it drops the oldest. Expired entries go on read.
+  Failures are never held, so an unknown asset id costs a GET and no entry.
+- The clock is the process clock (`now`, `Date.now` by default). A backward jump extends a hold by
+  the jump, a forward one shortens it. No timer: nothing to stop at shutdown.
+
+`cache.test.ts` (C1–C11) pins the table's rows, the shared fetch, the deadline, the bound and a
+backward clock jump.
+
+So the broker sees at most two chart GETs per key per minute (one per hold of up to 30 s) and one
+per 429 window. The first fetch in a candle is that candle's answer for every user, for at most
+30 s.
+
+### Budgets
+
+| Constant | Value | Where | Bounds |
+|---|---|---|---|
+| `SIGNAL_FETCH_BUDGET_MS` | 3 000 | `apps/backend/src/timing.ts` | the one chart GET (the cache's `fetchBudgetMs`); below `BROKER_REST_TIMEOUT_MS` (5 000), so it is this budget that ends a slow chart |
+| `TRADING_SIGNAL_BUDGET_MS` | 4 000 | `packages/shared/src/signal.ts` | the whole answer; the bot waits at least this long (#126 adds its link) |
+| `SIGNAL_CACHE_MAX_TTL_MS` | 30 000 | `apps/backend/src/timing.ts` | the longest hold; below the 1m interval, or it would never bind |
+
+The backend's `TIMING_CHAIN_HOLDS` checks at import that `SIGNAL_FETCH_BUDGET_MS <
+BROKER_REST_TIMEOUT_MS`, `SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS`,
+`TRADING_SIGNAL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS` (phase 1's `app.close()` waits for a
+request in flight) and `SIGNAL_CACHE_MAX_TTL_MS < 60 000`; `timing.test.ts` asserts the same four.
+
 ## What it is not
 
 - It gives no probability and no confidence score. The decision is the direction or the reason,
@@ -294,6 +385,7 @@ BROKER_API_BASE_URL=https://api.binodex.app ASSET_ID=237831086 pnpm --filter @bi
 
 - #130: session orchestration, which evaluates the feed inside a session and wires it into
   `index.ts`. #100/#101: the broker base URL in the worker's env and compose.
-- #126: the user-facing texts. Stake size: docs/stake.md.
-- `packages/shared` and `packages/db` are not changed. When the first issue carries a decision
-  across a process boundary, it moves the decision's wire shape into shared.
+- #126: the analysis screen and its texts in the bot, on `POST /trading/signal`. #127: the stake
+  button and the intent status. Stake size: docs/stake.md.
+- The decision's wire shape and codes are in `packages/shared/src/signal.ts` (#258).
+  `packages/db` is not changed.

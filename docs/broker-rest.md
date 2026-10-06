@@ -4,9 +4,10 @@
 REST API: five calls, one error class, and no state. It has no logger, no counters and no
 retries. The caller passes the access token on every authorized call and decides what to retry
 and what to log. It moved out of `apps/trading-worker` in #138 so the backend and the worker
-share one client. Its first caller is the backend's pairs catalog (docs/pairs-catalog.md). In the
-worker, the signal feed (docs/signal.md → Feed and journal) calls `getChart` on a client its
-caller builds. The worker's own base URL (its `env.ts`, compose) is #100/#101's.
+share one client. Its first caller is the backend's pairs catalog (docs/pairs-catalog.md). The
+signal feed (`packages/signal`, docs/signal.md → Feed and journal) calls `getChart` on a client its
+caller builds: the backend's `POST /trading/signal` (#258) and, from #130, the worker. The worker's
+own base URL (its `env.ts`, compose) is #100/#101's.
 
 ```bash
 pnpm test --project unit packages/broker-rest   # needs no database or Redis
@@ -44,7 +45,9 @@ not re-validated: an interval or a duration the broker does not accept comes bac
 Every failure is a `BrokerRestError` with `name` `'BrokerRestError'`, `message` equal to `code`,
 and own fields `code`, `status?`, `retryAfterSec?` and `detail?`. A field that does not apply is
 not set at all. The code comes from the HTTP status or from how the transport failed. The body
-text never decides it.
+text never decides it. The codes are the constant `BrokerRestErrorCode` in
+`packages/shared/src/broker.ts`, there since #258 because `POST /trading/signal` carries one to the
+bot; the class and `MAX_DETAIL_LENGTH` stay here.
 
 | `code` | From | What it means | For `openTrade` | For a GET |
 |---|---|---|---|---|
@@ -205,7 +208,8 @@ strings.
 - #100: the trade executor and the REST fallback decision. #100/#101: the base URL in the
   worker's env and compose.
 - #138: the pairs catalog (docs/pairs-catalog.md), the first caller, in the backend.
-- #133: the signal feed (docs/signal.md), the worker's first caller of `getChart`.
+- #133, #258: the signal feed (`packages/signal`, docs/signal.md); the backend's
+  `POST /trading/signal` is its first caller of `getChart`.
 - #137: `getUser` for the broker balance snapshot (docs/broker-balance.md), in the backend, on
   the same client instance as the catalog.
 - #101: the session manager and 401 handling (refresh and revocation). Retries on
