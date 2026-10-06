@@ -171,7 +171,8 @@ export function createRestReconciler({
       const byId = new Map<string, BrokerTrade>();
       for (const trade of [...open.trades, ...closed.trades]) byId.set(trade.id, trade);
       // exact: every key equal; near: the amount differs, the one key the broker may change by
-      // rounding. A near match is never `found`, but it forbids `not_found` (review m1).
+      // rounding. A near match is never `found`; once the window has closed it parks the
+      // intent as ambiguous rather than unresolved.
       const amount = normalizeDecimal(intent.amount);
       const sameTrade = [...byId.values()].filter(
         (trade) =>
