@@ -128,6 +128,7 @@ describe('checkDemoTrade', () => {
   const pair = { ...PAIR_EURUSD, minTimeframe: 300, maxTimeframe: 1800 };
   const catalog = pairsResponse({ pairs: [pair] });
 
+  // the durations around the range are the table's, so the range is what refuses them
   it('admits a duration on either end of the range, and nothing outside it', () => {
     expect(checkDemoTrade(catalog, pair.id, 300, NOW)).toEqual({
       ok: true,
@@ -139,15 +140,25 @@ describe('checkDemoTrade', () => {
       pair,
       durationSec: 1800,
     });
-    expect(checkDemoTrade(catalog, pair.id, 299, NOW)).toEqual({
+    expect(checkDemoTrade(catalog, pair.id, 60, NOW)).toEqual({
       ok: false,
       reason: 'duration_unsupported',
       pair,
     });
-    expect(checkDemoTrade(catalog, pair.id, 1801, NOW)).toEqual({
+    expect(checkDemoTrade(catalog, pair.id, 3600, NOW)).toEqual({
       ok: false,
       reason: 'duration_unsupported',
       pair,
+    });
+  });
+
+  // #125 review m5: the duration comes from callback data
+  it("refuses a duration outside the demo's table even where the pair's range admits it", () => {
+    const wide = { ...PAIR_EURUSD, minTimeframe: 60, maxTimeframe: 3600 };
+    expect(checkDemoTrade(pairsResponse({ pairs: [wide] }), wide.id, 120, NOW)).toEqual({
+      ok: false,
+      reason: 'duration_unsupported',
+      pair: wide,
     });
   });
 

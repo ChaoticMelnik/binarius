@@ -44,13 +44,18 @@ export const HANDLER_CALLS = {
   // the status card's button (#125): answerCallbackQuery ∥ readPairs — counted the same way as
   // oauth — then sendMessage with the asset types
   demo: { backend: 1, telegram: 2 },
-  // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair, a duration, «📊
-  // Анализ»): answerCallbackQuery ∥ readPairs, then editMessageText refused as gone → sendMessage
+  // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair, a duration):
+  // answerCallbackQuery ∥ readPairs, then editMessageText refused as gone → sendMessage
   demoGroups: { backend: 1, telegram: 3 },
   demoPage: { backend: 1, telegram: 3 },
   demoAsset: { backend: 1, telegram: 3 },
   demoDuration: { backend: 1, telegram: 3 },
-  demoAnalysis: { backend: 1, telegram: 3 },
+  // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs, the «⏳» edit refused as gone →
+  // sendMessage, evaluateSignal, the result by sendMessage; or «⏳» edited, evaluateSignal, the
+  // result's edit refused as gone → sendMessage. Both are 2 / 4.
+  demoAnalysis: { backend: 2, telegram: 4 },
+  // the stake button until #127: answerCallbackQuery, then sendMessage
+  stakePlaceholder: { backend: 0, telegram: 2 },
   // answerCallbackQuery, then sendMessage asking for the address
   connect: { backend: 0, telegram: 2 },
   // answerCallbackQuery ∥ startLogin, then sendMessage — the parallel pair is counted as

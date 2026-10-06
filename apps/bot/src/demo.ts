@@ -1,11 +1,21 @@
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
+  BrokerRestErrorCode,
   createTradeIntentRequestSchema,
   errorLogFields,
+  intervalForDuration,
+  SignalFeedOutcome,
+  TradeAction,
   type PairsCatalogResponse,
   type PairView,
   type TelegramHtml,
 } from '@binarius/shared';
+import {
+  analysisScreen,
+  analysisSubject,
+  analysisUnavailableScreen,
+  type AnalysisScreen,
+} from './analysis';
 import { backendErrorFields, type BackendClient } from './backend-client';
 import {
   checkDemoPair,
@@ -35,12 +45,13 @@ import {
   groupButtonLabel,
   LABELS,
   pairButtonLabel,
+  stakeButtonLabel,
   TEXTS,
   DEMO_GROUP_LABELS,
 } from './texts';
 
 // The demo's screens (#125, docs/bot-demo.md): the asset types, one type's pairs by page, the
-// durations of a pair, the summary, and «📊 Анализ». The bot keeps no state for them: what the
+// durations of a pair, the summary, and the analysis behind «📊 Анализ» (#126). The bot keeps no state for them: what the
 // user chose travels in the callback data, so a restart, an old message and a second device all
 // lead to the same screen, and every screen reads the catalog anew.
 
@@ -56,6 +67,14 @@ export const demoDurationCallbackData = (assetId: number, durationSec: DemoDurat
   `demo:d:${assetId}:${durationSec}`;
 export const demoAnalysisCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
   `demo:an:${assetId}:${durationSec}`;
+// The analysis screen's button (#126); #127 owns the press. The longest,
+// `demo:stake:2147483647:3600:down`, is 31 bytes.
+export const STAKE_CALLBACK_PREFIX = 'demo:stake:';
+export const stakeCallbackData = (
+  assetId: number,
+  durationSec: DemoDurationSec,
+  action: TradeAction,
+): string => `${STAKE_CALLBACK_PREFIX}${assetId}:${durationSec}:${action}`;
 
 // A group is matched loosely and checked against DEMO_ASSET_GROUPS in the handler, so a forged
 // one stops the spinner like a forged id; a duration is one of DEMO_DURATIONS_SEC by the pattern.
@@ -64,6 +83,9 @@ const DEMO_PAGE_PATTERN = /^demo:t:([a-z]{1,16}):(\d{1,4})$/;
 const DEMO_ASSET_PATTERN = /^demo:a:(\d{1,10})$/;
 const DEMO_DURATION_PATTERN = new RegExp(`^demo:d:(\\d{1,10}):(${DURATIONS})$`);
 const DEMO_ANALYSIS_PATTERN = new RegExp(`^demo:an:(\\d{1,10}):(${DURATIONS})$`);
+export const STAKE_CALLBACK_PATTERN = new RegExp(
+  `^${STAKE_CALLBACK_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')})$`,
+);
 
 // The shape #127 sends, so what the bot carries is what the backend accepts.
 const assetIdOf = (raw: string | undefined): number | undefined => {
@@ -74,9 +96,27 @@ const durationOf = (raw: string | undefined): DemoDurationSec | undefined =>
   DEMO_DURATIONS_SEC.find((sec) => String(sec) === raw);
 const groupOfData = (raw: string | undefined): DemoAssetGroup | undefined =>
   DEMO_ASSET_GROUPS.find((group) => group === raw);
+const actionOf = (raw: string | undefined): TradeAction | undefined =>
+  Object.values(TradeAction).find((action) => action === raw);
+
+export interface StakeData {
+  assetId: number;
+  durationSec: DemoDurationSec;
+  action: TradeAction;
+}
+
+// The stake button's data from a STAKE_CALLBACK_PATTERN match, undefined when forged.
+export function stakeDataOf(match: RegExpMatchArray | string): StakeData | undefined {
+  if (typeof match === 'string') return undefined;
+  const assetId = assetIdOf(match[1]);
+  const durationSec = durationOf(match[2]);
+  const action = actionOf(match[3]);
+  if (assetId === undefined || durationSec === undefined || action === undefined) return undefined;
+  return { assetId, durationSec, action };
+}
 
 export interface DemoComposerDeps {
-  backend: Pick<BackendClient, 'readPairs'>;
+  backend: Pick<BackendClient, 'readPairs' | 'evaluateSignal'>;
   logger: Logger;
   now: () => number;
 }
@@ -145,8 +185,10 @@ export function createDemoComposer<C extends Context>({
     await editOrReply(ctx, screen.text, screen.keyboard);
   });
 
-  // The placeholder until #126: the check runs on the catalog read at this press, never on the
-  // one the summary was drawn from. #126 keeps "check, then the screen" and replaces the screen.
+  // The analysis (#126): the check on the catalog read at this press, never on the one the
+  // summary was drawn from; then «⏳» in place of the summary, the signal, and the screen in place
+  // of «⏳». The signal is asked for only once «⏳» was delivered: after an edit of unknown outcome
+  // nothing more is sent, and a decision nobody sees would cost a broker call.
   composer.callbackQuery(DEMO_ANALYSIS_PATTERN, async (ctx) => {
     const assetId = assetIdOf(ctx.match[1]);
     const durationSec = durationOf(ctx.match[2]);
@@ -155,16 +197,63 @@ export function createDemoComposer<C extends Context>({
       return;
     }
     const read = await answerAnd(ctx, readDemoTrade(backend, assetId, durationSec, now));
-    const screen = read.ok
-      ? {
-          text: TEXTS.demoAnalysisSoon,
-          keyboard: new InlineKeyboard()
-            .text(LABELS.demoBackDurationsButton, demoAssetCallbackData(assetId))
-            .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA),
-        }
-      : tradeFailure(ctx, read, assetId);
-    await editOrReply(ctx, screen.text, screen.keyboard);
+    if (!read.ok) {
+      const screen = tradeFailure(ctx, read, assetId);
+      await editOrReply(ctx, screen.text, screen.keyboard);
+      return;
+    }
+    const waiting = await editOrReply(
+      ctx,
+      TEXTS.analyzing(analysisSubject(read.pair, durationSec)),
+    );
+    if (waiting === 'unknown') return;
+    const screen = await evaluate(read.pair, durationSec);
+    const keyboard = analysisKeyboard(assetId, durationSec, screen);
+    // «⏳» went as a new message: the result follows it rather than editing the summary again
+    if (waiting === 'sent') await replyHtml(ctx, screen.text, { reply_markup: keyboard });
+    else await editOrReply(ctx, screen.text, keyboard);
   });
+
+  // A thrown call (unreachable, a non-2xx, a broken body) and every fetch_failed but
+  // rate_limited are logged: rate_limited is the broker's ordinary answer, told to the user.
+  async function evaluate(pair: PairView, durationSec: DemoDurationSec): Promise<AnalysisScreen> {
+    let response;
+    try {
+      response = await backend.evaluateSignal(pair.id, intervalForDuration(durationSec));
+    } catch (error) {
+      logger.warn(
+        { ...errorLogFields(error), ...backendErrorFields(error) },
+        'signal not evaluated',
+      );
+      return analysisUnavailableScreen(pair, durationSec);
+    }
+    if (
+      response.outcome === SignalFeedOutcome.FetchFailed &&
+      response.code !== BrokerRestErrorCode.RateLimited
+    ) {
+      logger.warn({ signalCode: response.code }, 'signal not evaluated');
+    }
+    return analysisScreen({ pair, durationSec, response });
+  }
+
+  // the stake button on a signal only, then «🔄 Повторить анализ» and the way back
+  function analysisKeyboard(
+    assetId: number,
+    durationSec: DemoDurationSec,
+    screen: AnalysisScreen,
+  ): InlineKeyboard {
+    const keyboard = new InlineKeyboard();
+    if (screen.stake !== null) {
+      keyboard
+        .text(stakeButtonLabel(screen.stake), stakeCallbackData(assetId, durationSec, screen.stake))
+        .row();
+    }
+    return keyboard
+      .text(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(assetId, durationSec))
+      .row()
+      .text(LABELS.demoBackDurationsButton, demoAssetCallbackData(assetId))
+      .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
+  }
 
   // The spinner is worth less than the screen: a refused answer ("query is too old") is logged
   // and the screen still goes. The two calls are independent, so they run together.
@@ -189,23 +278,29 @@ export function createDemoComposer<C extends Context>({
   // twice — is done; a message that is gone or cannot be edited gets the screen anew; any other
   // refusal goes to bot.catch with nothing sent, the keyboard on screen being the retry. A
   // transport failure leaves the edit unknown and sends nothing more; anything else is a bug.
+  // The outcome tells the analysis where its result goes. Without a keyboard the edit removes
+  // the one on screen.
   async function editOrReply(
     ctx: Context,
     text: TelegramHtml,
-    reply_markup: InlineKeyboard,
-  ): Promise<void> {
+    reply_markup?: InlineKeyboard,
+  ): Promise<EditOutcome> {
+    const extra = reply_markup === undefined ? {} : { reply_markup };
     try {
-      await editMessageTextHtml(ctx, text, { reply_markup });
+      await editMessageTextHtml(ctx, text, extra);
+      return 'edited';
     } catch (error) {
       const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
       if (refusal === 'shown') {
         logger.info({ ...telegramErrorFields(error) }, 'the demo screen already shows this');
+        return 'shown';
       } else if (refusal === 'gone') {
         logger.warn(
           { ...errorLogFields(error), ...telegramErrorFields(error) },
           'the demo screen was not edited, sending it anew',
         );
-        await replyHtml(ctx, text, { reply_markup });
+        await replyHtml(ctx, text, extra);
+        return 'sent';
       } else if (error instanceof HttpError) {
         logger.error(
           {
@@ -215,6 +310,7 @@ export function createDemoComposer<C extends Context>({
           },
           'the demo screen edit failed in transport, sending nothing more',
         );
+        return 'unknown';
       } else {
         throw error;
       }
@@ -372,6 +468,8 @@ export function createDemoComposer<C extends Context>({
 
   return composer;
 }
+
+type EditOutcome = 'edited' | 'shown' | 'sent' | 'unknown';
 
 interface DemoScreen {
   text: TelegramHtml;

@@ -88,7 +88,7 @@ export function checkDemoPair(
 }
 
 export type DemoTradeCheck =
-  | { ok: true; pair: PairView; durationSec: number }
+  | { ok: true; pair: PairView; durationSec: DemoDurationSec }
   | { ok: false; reason: 'pair_missing' }
   | { ok: false; reason: 'pair_closed' | 'duration_unsupported'; pair: PairView };
 
@@ -101,10 +101,17 @@ export function checkDemoTrade(
   const checked = checkDemoPair(catalog, assetId, nowMs);
   if (!checked.ok) return checked;
   const { pair } = checked;
-  if (durationSec < pair.minTimeframe || durationSec > pair.maxTimeframe) {
+  // the duration arrives from callback data: one outside the table is refused even where the
+  // pair's range would admit it (#125 review m5)
+  const demoDuration = DEMO_DURATIONS_SEC.find((sec) => sec === durationSec);
+  if (
+    demoDuration === undefined ||
+    demoDuration < pair.minTimeframe ||
+    demoDuration > pair.maxTimeframe
+  ) {
     return { ok: false, reason: 'duration_unsupported', pair };
   }
-  return { ok: true, pair, durationSec };
+  return { ok: true, pair, durationSec: demoDuration };
 }
 
 export type DemoCatalogRead =

@@ -8,6 +8,7 @@ import {
   confirmCallbackData,
   NotificationLevel,
   OAuthErrorCode,
+  TradeAction,
   TRADING_ACCESS_BUDGET_MS,
   UserErrorCode,
   UserStatus,
@@ -30,6 +31,7 @@ import {
   demoAssetCallbackData,
   demoDurationCallbackData,
   demoPageCallbackData,
+  stakeCallbackData,
 } from './demo';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
@@ -48,13 +50,17 @@ import {
   PAIR_CLOSED,
   PAIR_EURUSD,
   PAIRS_RESPONSE,
+  SIGNAL_DATA_REFUSAL,
   SIGNAL_DECIDED,
+  SIGNAL_FETCH_FAILED,
+  SIGNAL_NO_SIGNAL,
   PENDING_ACCOUNT_ID,
   USER,
   TEXT_CARD_MESSAGE_ID,
   USER_VIEW,
   captureApi,
   callbackUpdate,
+  failFromSecondCall,
   chatMemberUpdate,
   fakeLogger,
   messageAnswer,
@@ -106,6 +112,8 @@ interface Branch {
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
+  // the result's edit refused after «⏳» was edited (#126)
+  failSecondEdit?: ApiError | HttpError;
   // the step the user is on when the update arrives
   dialog?: LoginDialogState;
 }
@@ -278,6 +286,9 @@ async function observe(branch: Branch): Promise<Calls> {
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   for (const [method, failure] of branch.apiErrors ?? []) api.apiErrors.set(method, failure);
   for (const [method, answer] of branch.answers ?? []) api.answers.set(method, answer);
+  if (branch.failSecondEdit !== undefined) {
+    failFromSecondCall(api, 'editMessageText', branch.failSecondEdit);
+  }
   // a branch that rethrows reaches the polling loop as a rejection; the calls it made before
   // that still have to fit in the budget
   await bot.handleUpdate(branch.update).catch(() => undefined);
@@ -678,11 +689,139 @@ const DEMO_DURATION = demoScreenBranches(
   'demo:d:2147483648:300',
   pairBranches([unsupported]),
 );
-const DEMO_ANALYSIS = demoScreenBranches(
-  demoAnalysisCallbackData(PAIR_EURUSD.id, 300),
-  'demo:an:0:300',
-  pairBranches([unsupported]),
+// «📊 Анализ» (#126): the check, «⏳» edited in place of the summary, the signal, the result in
+// place of «⏳». Its edits are two, so the shared screen branches do not describe it.
+const EDIT_TRANSPORT = new HttpError(
+  "Network request for 'editMessageText' failed!",
+  new Error('The operation was aborted due to timeout'),
 );
+const analysisUpdate = () => callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 300));
+const DEMO_ANALYSIS_WORST_CASE: Branch = {
+  label: '«⏳» is refused as gone and sent anew, then the result is sent',
+  update: analysisUpdate(),
+  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  expected: { backend: 2, telegram: 4 },
+};
+const DEMO_ANALYSIS = {
+  worst: DEMO_ANALYSIS_WORST_CASE,
+  branches: [
+    {
+      label: 'the chat is not private',
+      update: callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 300), 'group'),
+      expected: { backend: 0, telegram: 0 },
+    },
+    {
+      label: 'the data is forged',
+      update: callbackUpdate('demo:an:0:300'),
+      expected: { backend: 0, telegram: 1 },
+    },
+    ...catalogBranches(analysisUpdate, 2),
+    ...pairBranches([unsupported]).map((branch): Branch => ({
+      ...branch,
+      update: analysisUpdate(),
+    })),
+    {
+      label: '«⏳» and the result are edited',
+      update: analysisUpdate(),
+      expected: { backend: 2, telegram: 3 },
+    },
+    {
+      label: 'answering the query is refused and the analysis still goes',
+      update: analysisUpdate(),
+      apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+      expected: { backend: 2, telegram: 3 },
+    },
+    DEMO_ANALYSIS_WORST_CASE,
+    {
+      label: '«⏳» and the result are refused as not modified',
+      update: analysisUpdate(),
+      apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
+      expected: { backend: 2, telegram: 3 },
+    },
+    // rethrown into bot.catch
+    {
+      label: '«⏳» is refused for an unlisted reason',
+      update: analysisUpdate(),
+      apiErrors: [
+        [
+          'editMessageText',
+          { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
+        ],
+      ],
+      expected: { backend: 1, telegram: 2 },
+    },
+    {
+      label: '«⏳» fails in transport and nothing more is done',
+      update: analysisUpdate(),
+      apiErrors: [['editMessageText', EDIT_TRANSPORT]],
+      expected: { backend: 1, telegram: 2 },
+    },
+    {
+      label: 'the result edit is refused as gone and the result is sent anew',
+      update: analysisUpdate(),
+      failSecondEdit: EDIT_REFUSED,
+      expected: { backend: 2, telegram: 4 },
+    },
+    {
+      label: 'the result edit fails in transport',
+      update: analysisUpdate(),
+      failSecondEdit: EDIT_TRANSPORT,
+      expected: { backend: 2, telegram: 3 },
+    },
+    {
+      label: 'the signal call fails',
+      update: analysisUpdate(),
+      evaluateSignal: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+      expected: { backend: 2, telegram: 3 },
+    },
+    {
+      label: 'the broker rate-limits the candles',
+      update: analysisUpdate(),
+      evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
+      expected: { backend: 2, telegram: 3 },
+    },
+    {
+      label: 'the decision is a rule refusal',
+      update: analysisUpdate(),
+      evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
+      expected: { backend: 2, telegram: 3 },
+    },
+    {
+      label: 'the decision is a data refusal',
+      update: analysisUpdate(),
+      evaluateSignal: () => Promise.resolve(SIGNAL_DATA_REFUSAL),
+      expected: { backend: 2, telegram: 3 },
+    },
+  ] satisfies Branch[],
+};
+
+// the stake button until #127 (#126)
+const stakeUpdate = (chatType?: string) =>
+  callbackUpdate(stakeCallbackData(PAIR_EURUSD.id, 300, TradeAction.Up), chatType);
+const STAKE_PLACEHOLDER_WORST_CASE: Branch = {
+  label: 'the query is answered and the placeholder is sent',
+  update: stakeUpdate(),
+  expected: { backend: 0, telegram: 2 },
+};
+const STAKE_PLACEHOLDER_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: stakeUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the data is forged',
+    update: callbackUpdate('demo:stake:0:300:up'),
+    expected: { backend: 0, telegram: 1 },
+  },
+  STAKE_PLACEHOLDER_WORST_CASE,
+  {
+    label: 'answering the query is refused and the placeholder still goes',
+    update: stakeUpdate(),
+    apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+    expected: { backend: 0, telegram: 2 },
+  },
+];
 
 const OAUTH_WORST_CASE: Branch = {
   label: 'the query is answered and the link is sent',
@@ -1353,12 +1492,21 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     );
   });
 
-  it('the demo analysis placeholder', async () => {
+  it('the demo analysis', async () => {
     await checkHandler(
       'demoAnalysis',
       DEMO_ANALYSIS.branches,
       DEMO_ANALYSIS.worst,
       HANDLER_CALLS.demoAnalysis,
+    );
+  });
+
+  it('the stake placeholder', async () => {
+    await checkHandler(
+      'stakePlaceholder',
+      STAKE_PLACEHOLDER_BRANCHES,
+      STAKE_PLACEHOLDER_WORST_CASE,
+      HANDLER_CALLS.stakePlaceholder,
     );
   });
 

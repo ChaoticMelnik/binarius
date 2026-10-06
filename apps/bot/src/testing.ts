@@ -451,6 +451,19 @@ export function captureApi(bot: Bot): CapturedApi {
   return captured;
 }
 
+// The first call of `method` goes through and every later one fails with `failure`: a screen
+// edited once, then refused when edited again (#126's «⏳» and then the result).
+export function failFromSecondCall(
+  api: Pick<CapturedApi, 'apiErrors' | 'answers'>,
+  method: string,
+  failure: ApiError | HttpError,
+): void {
+  api.answers.set(method, () => {
+    api.apiErrors.set(method, failure);
+    return true;
+  });
+}
+
 // The message ids the account card's two carriers answer with, distinct so a test can tell
 // which message was pinned.
 export const CARD_MESSAGE_ID = 501;
