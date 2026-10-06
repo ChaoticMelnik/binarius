@@ -127,17 +127,32 @@ backend uses for its broker client (`BROKER_HTTP_TIMEOUT_MS`).
 
 ## Money
 
-The live broker sends money as JSON integers (`GET /v1/broker/user`, 2026-10-02: `min_trade_amount`,
-`real`/`demo` `available`/`held`/`total`). Shared's `moneyWireSchema` (`packages/shared/src/money.ts`)
-is the one place a JSON number becomes money. It accepts a decimal string or a safe integer and
-converts the integer with `String()`, with no arithmetic. A fraction, an integer beyond
-`2**53 - 1`, `NaN` and other types are refused, and that refusal is a `contract_violation`. The
-schema covers every money field the broker sends: the balances, `min_trade_amount`, a trade's
-`amount`, `potential_profit` and `profit`. What we send (`openTrade`'s `amount`) stays a positive
-decimal string.
+The live broker counts whole currency units. A whole amount comes as a JSON integer and a
+fractional one as a JSON fraction, both in one object (`GET /v1/broker/user`, 2026-10-03: after a
+1.5 demo stake `available` and `held` came as fractions and `total` as an integer). Shared's `moneyWireSchema`
+(`packages/shared/src/money.ts`) is the one place a JSON number becomes money. It accepts a
+decimal string, a safe integer, or a fraction whose `String()` is a plain decimal (no exponent) of
+at most `MAX_WIRE_SIGNIFICANT_DIGITS` (15) significant digits, and converts the number with
+`String()`, with no arithmetic and no rounding. A float artifact (`0.30000000000000004`, 17
+digits), a fraction of 16 or more significant digits, an exponent (`1e-7`, `1e+21`), an integer
+beyond `2**53 - 1`, `NaN`, `±Infinity` and other types are refused, and that refusal is a
+`contract_violation`. The schema covers every money field the broker sends: the balances,
+`min_trade_amount`, a trade's `amount`, `potential_profit` and `profit`; the Partner API's trader
+`balance` (`partnerTraderStatsWireSchema`, `packages/shared/src/partner.ts`) shares it, unchecked
+live (#14). What we send (`openTrade`'s
+`amount`) stays a positive decimal string.
 
-An integer has no fixed scale on the wire: `0` becomes `"0"`, not `"0.00"`. Money is compared as
-decimals, never as strings.
+The guarantee is exact only for a JSON text of at most 15 significant digits. A longer text may
+be rounded by `JSON.parse` to a shorter double before the schema sees it, and is then accepted as
+that double: `99999999999.999999` arrives as `100000000000`, `1.5000000000000001` as `1.5`. The
+error is at most half a unit in the last place of the double (6.2e-5 at 10^12, under 1e-9 below
+10^7). Every amount the broker has shown has at most 2 fraction digits and 12 integer digits, so
+at most 14 significant digits. Telling a rounded text apart needs the raw JSON source, which this
+client does not read.
+
+An integer has no fixed scale on the wire, nor has a fraction: `0` becomes `"0"`, not `"0.00"`,
+and `9998.5` becomes `"9998.5"`, not `"9998.50"`. Money is compared as decimals, never as
+strings.
 
 ## Observed live (2026-10-02)
 
@@ -150,19 +165,25 @@ decimals, never as strings.
 - With a stored account's token: `GET /v1/broker/user` gave 200 with money as integers.
   `GET /v1/broker/user/trades` gave 200 `{ "trades": [] }`.
 
+## Observed live (2026-10-03)
+
+- One demo trade opened with the stake sent as the decimal string `"1.5"` was accepted.
+- `GET /v1/broker/user` after the open: `demo.available` 1.5 lower and `demo.held` 1.5 higher,
+  both JSON fractions, `demo.total` unchanged and a JSON integer, in one object; after the loss
+  `demo.held` back and `demo.total` 1.5 lower. The amounts moved by exactly 1.5: the unit is whole
+  currency units. Only the shapes and these differences were recorded, not the balances.
+- The response shapes of the trade open and of the settled trade were not recorded.
+
 ## Open items
 
-1. **The money unit is unknown** (whole units or minor units). `10000` is read as `"10000"`. To
-   confirm, open one demo trade with a non-round stake (for example 1.5) in broker-web and read
-   `GET /v1/broker/user` again. A fraction (`9998.5`) means whole units, and `moneyWireSchema`
-   needs a fraction branch. `999850` means minor units, and `moneyWireSchema` needs a scale. Until
-   then a fractional live value is a `contract_violation`: loud, not wrong.
-2. **The body form of `POST /v1/broker/user/trades` is unconfirmed.** `amount` is sent as a decimal
-   string, which the fixture accepts. If the live broker wants a number, the answer is a 400
-   (`rejected`, with `detail`), caught on #100's first live demo trade. The fix would go into
-   `toOpenTradeRequestWire` only.
-3. **Trade money fields accept integers without a live trade** (the live list was empty). The
-   same broker types them `number` in broker-web.
+1. **The money unit. Closed 2026-10-03:** whole currency units (Observed live 2026-10-03); the
+   fraction branch of `moneyWireSchema` landed in #236.
+2. **The body form of `POST /v1/broker/user/trades`. Closed 2026-10-03:** decimal string accepted
+   live 2026-10-03 (`"1.5"`). `toOpenTradeRequestWire` is unchanged.
+3. **Trade money fields: the parser takes integers and fractions; the open/closed trade response
+   shapes of 2026-10-03 were not recorded**, so the fixtures assume `amount`/`potential_profit`/
+   `profit` as JSON numbers, fractional when fractional, `profit` negative on a loss (assumed, not
+   recorded). The same broker types them `number` in broker-web.
 4. **4xx is read as "refused before acting"** for a REST open. No 4xx that follows a placed order
    is known for this API.
 
@@ -179,5 +200,5 @@ decimals, never as strings.
   the same client instance as the catalog.
 - #101: the session manager and 401 handling (refresh and revocation). Retries on
   `rate_limited`/`unavailable` belong to the callers.
-- #104: the Socket.IO side of `packages/mock-broker`. The fixture is used here as published and is
-  not changed.
+- #104: the Socket.IO side of `packages/mock-broker`. #104/#236: the fixture, which sends money as
+  JSON numbers since #236, is used here as published.
