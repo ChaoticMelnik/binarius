@@ -677,7 +677,7 @@ describe('what the bot writes about the account card', () => {
     });
     const logged = lineWith(
       lines,
-      'the account card call failed in transport, sending nothing more',
+      'the account card photo call failed in transport, sending nothing more',
     );
     expect(logged).toMatchObject({
       level: 50,
@@ -689,6 +689,40 @@ describe('what the bot writes about the account card', () => {
     expect(logged?.err).not.toHaveProperty('message');
     expect(lineWith(lines, 'update handler failed')).toBeUndefined();
     expect(calls.map((call) => call.method)).toEqual(['sendPhoto']);
+    expectNoSecrets(lines);
+  });
+
+  it('reports a transport failure of the text card by identity and method, and drops the token', async () => {
+    const update = textUpdate(CODE);
+    const { lines, calls } = await linesFrom({
+      ...onCodeStep({
+        apiErrors: [
+          ['sendPhoto', refusal('IMAGE_PROCESS_FAILED')],
+          [
+            'sendMessage',
+            new HttpError(
+              "Network request for 'sendMessage' failed!",
+              new Error(`request to https://api.telegram.org/bot${TOKEN}/sendMessage failed`),
+            ),
+          ],
+        ],
+      }),
+      update,
+    });
+    const logged = lineWith(
+      lines,
+      'the text in place of the account card photo failed in transport, sending nothing more',
+    );
+    expect(logged).toMatchObject({
+      level: 50,
+      err: { name: 'HttpError' },
+      method: 'sendMessage',
+      transportError: { name: 'Error' },
+      updateId: update.update_id,
+    });
+    expect(logged?.err).not.toHaveProperty('message');
+    expect(lineWith(lines, 'update handler failed')).toBeUndefined();
+    expect(calls.map((call) => call.method)).toEqual(['sendPhoto', 'sendMessage']);
     expectNoSecrets(lines);
   });
 

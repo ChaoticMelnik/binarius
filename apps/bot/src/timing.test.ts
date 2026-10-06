@@ -114,6 +114,11 @@ const photoTimedOut = (): HttpError =>
     "Network request for 'sendPhoto' failed!",
     new Error('The operation was aborted due to timeout'),
   );
+const textCardTimedOut = (): HttpError =>
+  new HttpError(
+    "Network request for 'sendMessage' failed!",
+    new Error('The operation was aborted due to timeout'),
+  );
 const photoFailsUnexpectedly: ApiAnswer = () => {
   throw new TypeError('sentinel');
 };
@@ -149,6 +154,17 @@ const CARD_OUTCOMES: readonly CardOutcome[] = [
     label: 'the photo call fails in transport',
     telegram: 1,
     scene: { apiErrors: [['sendPhoto', photoTimedOut()]] },
+  },
+  // the same for the text sent in place of a refused photo
+  {
+    label: 'the photo is refused and the text card fails in transport',
+    telegram: 2,
+    scene: {
+      apiErrors: [
+        ['sendPhoto', PHOTO_REFUSED],
+        ['sendMessage', textCardTimedOut()],
+      ],
+    },
   },
   // rethrown into bot.catch
   {

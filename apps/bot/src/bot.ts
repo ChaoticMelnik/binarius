@@ -64,6 +64,12 @@ const LEVEL_CALLBACK_PATTERN = new RegExp(
 // built once: the list is a constant, and the menu (lifecycle.ts) reads the same one
 const HELP = helpText(BOT_COMMANDS);
 
+interface RichSend {
+  send: () => Promise<Message>;
+  method: 'sendVideo' | 'sendPhoto';
+  what: string;
+}
+
 export interface CreateBotOptions {
   token: string;
   backend: BackendClient;
@@ -395,7 +401,7 @@ export function createBot({
     }
     loginDialog.delete(from.id);
     // the broker's address for the account it issued the tokens for; the one this login redeemed
-    // the code for when the broker sent none
+    // the code for when the broker sent none — a blank address is none (addressOrNull, #214)
     await sendAccountCard(ctx, {
       firstName: from.first_name,
       email: login.account.email ?? state.email,
@@ -500,36 +506,68 @@ export function createBot({
     await replyHtml(ctx, TEXTS.unavailable);
   }
 
-  // The account card (#200), sent where an account becomes usable and pinned as the only pin of
-  // the chat. The photo call has the welcome video's three outcomes: a refusal means nothing was
-  // sent, so the same card goes as text; a transport failure leaves delivery unknown, and a
-  // second card is worse than none, so nothing more is sent or pinned; anything else is a bug.
-  async function sendAccountCard(ctx: Context, input: AccountCardInput): Promise<void> {
-    const card = accountCard(input);
-    let sent: Message;
+  // A rich message (the welcome video, the account card photo) with its text as the fallback.
+  // A refusal of the rich call means nothing was sent, so the same text goes instead. A
+  // transport failure — of the rich call or of the text — leaves delivery unknown, and a second
+  // copy is worse than none, so nothing more is sent and undefined is returned. It is logged here
+  // rather than in bot.catch because only this place still knows the method: HttpError carries
+  // none. A refused text message goes to bot.catch, as in every one-message handler — a
+  // GrammyError carries its own method there; so does anything that is neither a refusal nor the
+  // transport, a bug that must not be dressed up as a delivery problem.
+  async function sendWithTextFallback(
+    ctx: Context,
+    rich: RichSend,
+    sendText: () => Promise<Message>,
+  ): Promise<Message | undefined> {
     try {
-      sent = await replyWithPhotoHtml(ctx, new InputFile(ACCOUNT_CARD_PHOTO_PATH), card);
+      return await rich.send();
     } catch (error) {
       if (error instanceof GrammyError) {
         logger.warn(
           { ...errorLogFields(error), ...telegramErrorFields(error) },
-          'the account card photo was refused, sending the text instead',
+          `${rich.what} was refused, sending the text instead`,
         );
-        sent = await replyHtml(ctx, card);
       } else if (error instanceof HttpError) {
-        logger.error(
-          {
-            ...errorLogFields(error),
-            ...telegramErrorFields(error, 'sendPhoto'),
-            updateId: ctx.update.update_id,
-          },
-          'the account card call failed in transport, sending nothing more',
-        );
-        return;
+        logTransportFailure(ctx, error, rich.method, `${rich.what} call`);
+        return undefined;
       } else {
         throw error;
       }
     }
+    try {
+      return await sendText();
+    } catch (error) {
+      if (!(error instanceof HttpError)) throw error;
+      logTransportFailure(ctx, error, 'sendMessage', `the text in place of ${rich.what}`);
+      return undefined;
+    }
+  }
+
+  function logTransportFailure(ctx: Context, error: HttpError, method: string, what: string): void {
+    logger.error(
+      {
+        ...errorLogFields(error),
+        ...telegramErrorFields(error, method),
+        updateId: ctx.update.update_id,
+      },
+      `${what} failed in transport, sending nothing more`,
+    );
+  }
+
+  // The account card (#200), sent where an account becomes usable and pinned as the only pin of
+  // the chat; nothing is pinned when delivery is unknown.
+  async function sendAccountCard(ctx: Context, input: AccountCardInput): Promise<void> {
+    const card = accountCard(input);
+    const sent = await sendWithTextFallback(
+      ctx,
+      {
+        send: () => replyWithPhotoHtml(ctx, new InputFile(ACCOUNT_CARD_PHOTO_PATH), card),
+        method: 'sendPhoto',
+        what: 'the account card photo',
+      },
+      () => replyHtml(ctx, card),
+    );
+    if (sent === undefined) return;
     await pinAccountCard(ctx, sent.message_id);
   }
 
@@ -613,41 +651,20 @@ export function createBot({
     );
   });
 
+  // A file id the API refuses must not cost the user the whole first screen.
   async function sendWelcome(ctx: Context): Promise<void> {
     const reply_markup = welcomeKeyboard();
     if (welcomeVideoFileId !== undefined) {
-      try {
-        await replyWithVideoHtml(ctx, welcomeVideoFileId, TEXTS.welcome, { reply_markup });
-        return;
-      } catch (error) {
-        // Telegram answering `ok: false` means nothing was sent, so the text replaces the
-        // video rather than repeating it — a file id the API refuses must not cost the user
-        // the whole first screen.
-        if (error instanceof GrammyError) {
-          logger.warn(
-            { ...errorLogFields(error), ...telegramErrorFields(error) },
-            'the welcome video was refused, sending the text instead',
-          );
-        } else if (error instanceof HttpError) {
-          // A transport failure (our own 8 s abort, a dropped socket) leaves delivery unknown,
-          // and a second welcome is worse than none. It is logged here rather than in
-          // bot.catch because this is the only place that still knows the method: HttpError
-          // carries none, so from there the line reads like a timeout on any other call.
-          logger.error(
-            {
-              ...errorLogFields(error),
-              ...telegramErrorFields(error, 'sendVideo'),
-              updateId: ctx.update.update_id,
-            },
-            'the welcome video call failed in transport, sending nothing more',
-          );
-          return;
-        } else {
-          // neither a refusal nor the transport: a bug or a broken plugin, which must not be
-          // dressed up as a delivery problem
-          throw error;
-        }
-      }
+      await sendWithTextFallback(
+        ctx,
+        {
+          send: () => replyWithVideoHtml(ctx, welcomeVideoFileId, TEXTS.welcome, { reply_markup }),
+          method: 'sendVideo',
+          what: 'the welcome video',
+        },
+        () => replyHtml(ctx, TEXTS.welcome, { reply_markup }),
+      );
+      return;
     }
     await replyHtml(ctx, TEXTS.welcome, { reply_markup });
   }
