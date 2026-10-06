@@ -1,12 +1,12 @@
 import { createBrokerRestClient, type BrokerRestClient } from '@binarius/broker-rest';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
-import { logOptions, type Candle } from '@binarius/shared';
+import { logOptions, SIGNAL_CHART_INTERVAL_MS, type Candle } from '@binarius/shared';
 import { pino } from 'pino';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SIGNAL_PARAMS } from './config';
 import { createSignalDecider } from './decide';
 import { chartWindow, createSignalFeed, type SignalEvaluation } from './feed';
-import { SIGNAL_CHART_INTERVAL_MS, SIGNAL_CHART_LIMIT } from './feed-config';
+import { SIGNAL_CHART_LIMIT } from './feed-config';
 import { replaySignalJournalEntry, type SignalJournalEntry } from './journal';
 import { closedNow, INTERVAL_MS, seriesFrom, trending } from './testing';
 

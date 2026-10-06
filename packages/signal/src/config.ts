@@ -1,21 +1,4 @@
-export const SIGNAL_ALGORITHM_VERSION = 'v1';
-
-export interface SignalParams {
-  emaFast: number;
-  emaSlow: number;
-  // slope = slowEma[last] - slowEma[last - slopeLookback]
-  slopeLookback: number;
-  rsiPeriod: number;
-  // up at RSI >= 50 + band, down at RSI <= 50 - band
-  rsiBand: number;
-  atrPeriod: number;
-  // ATR as a percentage of the last close
-  minAtrPct: number;
-  maxAtrPct: number;
-  minClosedCandles: number;
-  // the last closed candle may have closed at most this many intervals before nowMs
-  maxStaleIntervals: number;
-}
+import type { SignalParams } from '@binarius/shared';
 
 // Uncalibrated by decision (#132): the corridor refuses a dead feed and a shock, it is not tuned.
 export const DEFAULT_SIGNAL_PARAMS: Readonly<SignalParams> = Object.freeze({

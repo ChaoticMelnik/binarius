@@ -1,6 +1,6 @@
-import type { Candle } from '@binarius/shared';
+import { SIGNAL_ALGORITHM_VERSION, type Candle } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SIGNAL_PARAMS, SIGNAL_ALGORITHM_VERSION } from './config';
+import { DEFAULT_SIGNAL_PARAMS } from './config';
 import { createSignalDecider, type SignalDecider } from './decide';
 import { SIGNAL_CHART_LIMIT } from './feed-config';
 import {

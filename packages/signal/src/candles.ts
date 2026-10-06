@@ -1,27 +1,13 @@
-import type { Candle } from '@binarius/shared';
-import { CandleProblem, NoSignalReason } from './codes';
-import type { SignalParams } from './config';
-
-export type DataRefusal =
-  | {
-      reason: typeof NoSignalReason.InvalidCandle;
-      detail: { index: number; problem: CandleProblem };
-    }
-  | {
-      reason: typeof NoSignalReason.CandleGap;
-      detail: { index: number; expectedTimestamp: number; actualTimestamp: number };
-    }
-  | {
-      reason: typeof NoSignalReason.Stale;
-      detail: { lastCandleTimestamp: number; ageMs: number; maxAgeMs: number };
-    }
-  | {
-      reason: typeof NoSignalReason.InsufficientCandles;
-      detail: { closedCandles: number; required: number };
-    };
+import {
+  CandleProblem,
+  NoSignalReason,
+  type Candle,
+  type SignalDataRefusal,
+  type SignalParams,
+} from '@binarius/shared';
 
 export type PreparedCandles =
-  { ok: true; closed: readonly Candle[] } | { ok: false; refusal: DataRefusal };
+  { ok: true; closed: readonly Candle[] } | { ok: false; refusal: SignalDataRefusal };
 
 export function assertSignalClock(intervalMs: number, nowMs: number): void {
   if (!Number.isInteger(intervalMs) || intervalMs <= 0) {

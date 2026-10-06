@@ -1,0 +1,21 @@
+{
+  "name": "@binarius/signal",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@binarius/broker-rest": "workspace:*",
+    "@binarius/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@binarius/mock-broker": "workspace:*",
+    "pino": "^10.3.1"
+  }
+}

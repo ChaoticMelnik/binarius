@@ -1,17 +1,5 @@
-import { DEFAULT_SIGNAL_PARAMS, type SignalParams } from './config';
-
-// every entry was accepted by the live broker (owner's probe 2026-10-03, docs/signal.md)
-export const SIGNAL_CHART_INTERVAL_MS = {
-  '1m': 60_000,
-  '5m': 300_000,
-  '15m': 900_000,
-  '30m': 1_800_000,
-  '1h': 3_600_000,
-} as const;
-
-export type SignalInterval = keyof typeof SIGNAL_CHART_INTERVAL_MS;
-
-export const SIGNAL_INTERVALS = Object.keys(SIGNAL_CHART_INTERVAL_MS) as SignalInterval[];
+import type { SignalParams } from '@binarius/shared';
+import { DEFAULT_SIGNAL_PARAMS } from './config';
 
 // the window holds this many candle starts; the last one is the forming candle
 export const SIGNAL_CHART_LIMIT = 60;

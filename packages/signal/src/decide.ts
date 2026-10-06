@@ -1,18 +1,18 @@
-import { TradeAction, type Candle } from '@binarius/shared';
-import { prepareCandles, type DataRefusal } from './candles';
 import {
   MomentumDirection,
   NoSignalReason,
-  SignalKind,
-  TrendDirection,
-  type RuleRefusalReason,
-} from './codes';
-import {
-  assertSignalParams,
-  DEFAULT_SIGNAL_PARAMS,
   SIGNAL_ALGORITHM_VERSION,
+  SignalKind,
+  TradeAction,
+  TrendDirection,
+  type Candle,
+  type RuleRefusalReason,
+  type SignalDecision,
+  type SignalFeatures,
   type SignalParams,
-} from './config';
+} from '@binarius/shared';
+import { prepareCandles } from './candles';
+import { assertSignalParams, DEFAULT_SIGNAL_PARAMS } from './config';
 import { atr, ema, rsi } from './indicators';
 
 export interface SignalInput {
@@ -21,36 +21,7 @@ export interface SignalInput {
   nowMs: number;
 }
 
-export interface SignalFeatures {
-  emaFast: number;
-  emaSlow: number;
-  emaSlowSlope: number;
-  rsi: number;
-  atr: number;
-  atrPct: number;
-  lastClose: number;
-  lastCandleTimestamp: number;
-  closedCandles: number;
-  trend: TrendDirection;
-  momentum: MomentumDirection;
-}
-
 type Version = typeof SIGNAL_ALGORITHM_VERSION;
-
-export type SignalDecision =
-  | {
-      kind: typeof SignalKind.Signal;
-      version: Version;
-      action: TradeAction;
-      features: SignalFeatures;
-    }
-  | {
-      kind: typeof SignalKind.NoSignal;
-      version: Version;
-      reason: RuleRefusalReason;
-      features: SignalFeatures;
-    }
-  | ({ kind: typeof SignalKind.NoSignal; version: Version } & DataRefusal);
 
 export interface SignalDecider {
   version: Version;

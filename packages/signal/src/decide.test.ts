@@ -1,7 +1,7 @@
-import type { Candle } from '@binarius/shared';
+import { SIGNAL_ALGORITHM_VERSION, type Candle, type SignalDecision } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SIGNAL_PARAMS, SIGNAL_ALGORITHM_VERSION } from './config';
-import { createSignalDecider, type SignalDecision } from './decide';
+import { DEFAULT_SIGNAL_PARAMS } from './config';
+import { createSignalDecider } from './decide';
 import { closedNow, INTERVAL_MS, seriesFrom, sine, trending } from './testing';
 
 const decider = createSignalDecider();

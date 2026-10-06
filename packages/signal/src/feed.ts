@@ -1,18 +1,16 @@
 import { BrokerRestError, type BrokerRestClient } from '@binarius/broker-rest';
-import { errorLogFields, type BrokerRestErrorCode } from '@binarius/shared';
+import {
+  errorLogFields,
+  SIGNAL_CHART_INTERVAL_MS,
+  SignalFeedOutcome,
+  type BrokerRestErrorCode,
+  type SignalInterval,
+} from '@binarius/shared';
 import type { Logger } from 'pino';
 import { assertSignalClock } from './candles';
 import { createSignalDecider, type SignalDecider } from './decide';
-import {
-  assertFeedLimit,
-  SIGNAL_CHART_INTERVAL_MS,
-  SIGNAL_CHART_LIMIT,
-  type SignalInterval,
-} from './feed-config';
+import { assertFeedLimit, SIGNAL_CHART_LIMIT } from './feed-config';
 import { toJournalCandle, type SignalJournalEntry } from './journal';
-
-export const SignalFeedOutcome = { Decided: 'decided', FetchFailed: 'fetch_failed' } as const;
-export type SignalFeedOutcome = (typeof SignalFeedOutcome)[keyof typeof SignalFeedOutcome];
 
 export interface SignalFeedRequest {
   assetId: number;
