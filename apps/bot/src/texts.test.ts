@@ -5,11 +5,14 @@ import {
   NotificationLevel,
   plainTextOf,
   TradeAction,
+  TradeIntentFailureReason,
+  TradeIntentStatus,
   TELEGRAM_CAPTION_LIMIT,
   TELEGRAM_MESSAGE_LIMIT,
   USER_ACCOUNT_LIST_LIMIT,
   TradeMode,
   type BrokerBalanceView,
+  type DecimalString,
   type LinkBonusGrantView,
   type LinkedAccountView,
 } from '@binarius/shared';
@@ -22,6 +25,7 @@ import {
   PAIR_EURUSD,
   PENDING_ACCOUNT_ID,
   brokerBalance,
+  intentView,
 } from './testing';
 import { LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
 import {
@@ -47,6 +51,8 @@ import {
   groupButtonLabel,
   pairButtonLabel,
   helpText,
+  INTENT_SYMBOL_LIMIT,
+  intentStatusText,
   LABELS,
   levelLabel,
   MODE_LABELS,
@@ -183,6 +189,8 @@ describe('texts', () => {
         TEXTS.blocked,
         TEXTS.accountTaken,
         TEXTS.statusAmbiguous,
+        TEXTS.intentManualReview,
+        TEXTS.stakeAccountHalted,
       ]) {
         expect(plainTextOf(text)).toMatch(/напиши в поддержку: \/support$/);
       }
@@ -694,4 +702,120 @@ describe('the analysis screen texts', () => {
       expect(label).toMatch(/^\p{Extended_Pictographic}/u);
     },
   );
+});
+
+// #127
+describe('the demo trade status', () => {
+  const HOSTILE_SYMBOL = `<&>"`.repeat(20);
+  const LIVE: TradeIntentStatus[] = [
+    TradeIntentStatus.Planned,
+    TradeIntentStatus.Reserved,
+    TradeIntentStatus.Queued,
+    TradeIntentStatus.Submitting,
+    TradeIntentStatus.Unknown,
+    TradeIntentStatus.Reconciling,
+    TradeIntentStatus.ManualReview,
+  ];
+  const views = [
+    ...Object.values(TradeIntentStatus)
+      .filter((status) => status !== TradeIntentStatus.Rejected)
+      .map((status) => intentView({ status })),
+    ...[...Object.values(TradeIntentFailureReason), null].map((lastError) =>
+      intentView({ status: TradeIntentStatus.Rejected, lastError }),
+    ),
+  ];
+
+  it.each(views.map((view) => [view.status, view.lastError, view] as const))(
+    'renders %s (%s) as valid Telegram HTML inside the limit with the widest holes',
+    (_status, _reason, view) => {
+      const widest = {
+        ...view,
+        durationSec: 2_147_483_647,
+        amount: '999999999999.99999999' as DecimalString,
+      };
+      for (const deadline of [false, true]) {
+        const text = intentStatusText(HOSTILE_SYMBOL, widest, { deadline });
+        expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+      }
+    },
+  );
+
+  // the acceptance criterion: the message never says the trade is open before the broker did
+  it.each(Object.values(TradeIntentStatus))(
+    'says «открыта» for %s only when it is accepted',
+    (status) => {
+      for (const lastError of [null, ...Object.values(TradeIntentFailureReason)]) {
+        const plain = plainTextOf(intentStatusText('EUR/USD', intentView({ status, lastError })));
+        // «не открыта» is a refusal, not a claim
+        expect(/(?<!не )открыта/.test(plain)).toBe(status === TradeIntentStatus.Accepted);
+      }
+    },
+  );
+
+  it('prints the trade line from the view and the symbol escaped once', () => {
+    const text = intentStatusText('EUR/<USD>', intentView());
+    expect(plainTextOf(text)).toBe(
+      [
+        '🎮 Демо-сделка',
+        '📈 EUR/<USD> · ⬆️ Вверх · ⏱ 1 мин · ставка $1.00',
+        '',
+        '⏳ Заявка создана и ждёт отправки брокеру…',
+      ].join('\n'),
+    );
+    expect(text.value).toContain('EUR/&lt;USD&gt;');
+  });
+
+  it('caps the symbol and stands the asset id in for a missing one', () => {
+    const long = 'S'.repeat(INTENT_SYMBOL_LIMIT + 10);
+    expect(plainTextOf(intentStatusText(long, intentView()))).toContain(
+      `📈 ${'S'.repeat(INTENT_SYMBOL_LIMIT)} · `,
+    );
+    expect(plainTextOf(intentStatusText(null, intentView({ assetId: 91 })))).toContain(
+      '📈 актив #91 · ',
+    );
+  });
+
+  it('prints a duration outside the demo table in seconds', () => {
+    expect(plainTextOf(intentStatusText('X', intentView({ durationSec: 45 })))).toContain(
+      ' · ⏱ 45 с · ',
+    );
+  });
+
+  it('appends the deadline hint only when asked', () => {
+    const hint = plainTextOf(TEXTS.intentDeadline);
+    expect(plainTextOf(intentStatusText('X', intentView()))).not.toContain(hint);
+    expect(
+      plainTextOf(intentStatusText('X', intentView(), { deadline: true })).endsWith(`\n\n${hint}`),
+    ).toBe(true);
+    expect(hint).toContain(`«${LABELS.refreshIntentButton}»`);
+  });
+
+  it('tells a trade the executor never took apart from a broker refusal', () => {
+    const notConfigured = plainTextOf(
+      intentStatusText(
+        'X',
+        intentView({
+          status: TradeIntentStatus.Rejected,
+          lastError: TradeIntentFailureReason.ExecutorNotConfigured,
+        }),
+      ),
+    );
+    expect(notConfigured).toContain('исполнение сделок ещё не подключено');
+    const byBroker = plainTextOf(
+      intentStatusText(
+        'X',
+        intentView({
+          status: TradeIntentStatus.Rejected,
+          lastError: TradeIntentFailureReason.BrokerRejected,
+        }),
+      ),
+    );
+    expect(byBroker).toContain('Брокер отклонил сделку');
+  });
+
+  it.each(LIVE)('keeps %s a live status, with no claim that the token came back', (status) => {
+    expect(plainTextOf(intentStatusText('X', intentView({ status })))).not.toContain(
+      'Токен возвращён',
+    );
+  });
 });
