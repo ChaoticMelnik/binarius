@@ -1672,3 +1672,213 @@ PR #252 смержен через rebase: 3 коммита, голова `f22df0
 4. **Stacked PR ревьюится после мержа базы и rebase на `main`** — **внедрено в #255: `.claude/skills/tech-lead/SKILL.md` → Phase 3**
 5. **Свежий путь review-worktree на каждый круг, `codex status` из worktree** — **внедрено в #255: `.claude/skills/tech-lead/SKILL.md` → Step 7**
 6. **#99 (PR #251) не смержен: прошёл 3 круга (лимит), Minor → #254, ждёт #205 + шаг 5 + whole-feature Codex на итоговом head** — **открыто (2026-10-06, владелец/tech-lead): запись аудита #99 — после его мержа**
+
+---
+
+## Волна «первая демосделка» — общие наблюдения (2026-10-06/07)
+
+Одна сессия tech-lead провела #125, #258 (выделен из #126), #126, #127, #90, #100 от планирования до мержа. Общее для всех шести:
+- **Codex не видел ни одной задачи волны.** Plan review пропущен по решению владельца у всех (лимит Codex до 20:27 MSK, затем до 01:46 MSK). Iteration review тоже: #125 — единственный прогон (`task-mux1xcp3-xn5mny`), у остальных пропуск по решению владельца.
+- **Первые три спавна архитекторов на Fable упали с 403, повтор завис на watchdog.** Третий запуск — по указанию владельца, прошёл.
+- **Три параллельных архитектора затёрли `plan-125.md`/`plan-126.md` в корне scratchpad** (текст восстановлен, опубликованные планы полные).
+- **LGTM с пропущенным Codex не проходит у субагента.** Классификатор прав отказал ревьюеру #258 («CI Bypass»), комментарий и удаление worktree выполнил tech-lead по явному указанию владельца. GitHub 19:46-19:50Z отвечал 500 на создание комментариев; опубликовано через REST, без дублей.
+
+### Process improvement proposals (волна)
+
+1. **Отдельная scratch-подпапка и для архитекторов** — **внедрено в #280: `.claude/skills/tech-lead/SKILL.md` → Step 7 → Own scratch subdirectory**
+2. **Раздел конфликтов плана — против всей доски и всех открытых PR, не только сиблингов** — **внедрено в #280: `.claude/skills/architect/SKILL.md` → Step 4**
+3. **Живая проба на продакшене — шаг владельца с командами, не действие исполнителя** — **внедрено в #280: `.claude/skills/architect/SKILL.md` → Step 4**
+4. **LGTM при пропущенном владельцем Codex публикует tech-lead из главного контекста** — **внедрено в #280: `.claude/skills/tech-lead/SKILL.md` → Merge relay**
+5. **Бюджет Codex на волну: шесть задач × (plan review + 1-3 круга) не помещаются в одно окно лимита** — **открыто (2026-10-07, владелец): планировать волну под окно Codex или принимать пропуск заранее**
+6. **#99: отладочные строки «out of state» логируют redacted `state`** — **вынесено в #279**
+
+---
+
+## #125 — Демо: выбор актива и длительности на свежем каталоге (2026-10-06)
+
+PR #265 смержен через rebase (3 коммита, голова `dfbf050`), +2435 строк. **Один круг ревью с Codex, чистый, 8 Minor.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable` (3-я попытка, см. волну): 5 вопросов. Codex plan review пропущен по решению владельца. |
+| Implementer | Clarify + код | Спавн `opus`: 4 вопроса, ветка от `origin/main`, 3 коммита по выбору владельца, Gate verification (11 мутаций). |
+| Tech Lead | Phase 3 | Аудит до ревью опубликован (issuecomment-6023482389). |
+| Reviewer | Iteration 1 | Codex `task-mux1xcp3-xn5mny`, маркер `Iteration review #265: base=a2ec408 head=dfbf050 diff-sha256=d24a8e1b…`. Codex дал 4 Major, ревьюер понизил до Minor с обоснованием на PR. |
+| Tech Lead | Whole-feature pass — check | Маркер head = одобренный = смерженный `dfbf050`. |
+| Tech Lead | Merge / Done | `AskUserQuestion` → rebase + удалить ветку. |
+
+### Review iterations: 1 (без возвратов)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m5: `checkDemoTrade` не сверяет длительность с `DEMO_DURATIONS_SEC` | Minor | instance-vs-class | Проверка паттерна callback есть, проверки в общем хелпере нет | → закрыто в #126 |
+| m1-m4, m6-m8 (часы назад и `fresh`, тип без пар, id/symbol брокера, Rule 10 и `timeoutMs`, тест без падения, упрощения) | Minor | other | — | → #268 |
+
+### Process improvement proposals
+
+1. **Minor m1-m4, m6-m8** — **вынесено в #268**; m5 — **вынесено в #126** (закрыто там)
+
+---
+
+## #258 — Signal v1: пакет packages/signal, wire-форма решения и POST /trading/signal (2026-10-06)
+
+Выделен архитектором из #126 (Step 4a). PR #269 смержен через rebase (6 коммитов, голова `4785a41`), +1544 строки.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План + Plan Update | План в одном раунде с #126. Три PLAN DEFECT от implementer'а (перенос `BrokerRestErrorCode` ломает #90/#100; раздел конфликтов без #90/#100; C9 невозможен на fake timers) → Plan Update до кода. Codex plan review пропущен владельцем. |
+| Implementer | Clarify + код | Спавн `opus`: 2 вопроса владельцу + 3 дефекта архитектору; 6 коммитов по шагам, `git mv` модуля. |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6023983612). |
+| Reviewer | Iteration 1 | Codex — 2 попытки упали на лимите (`task-mux2xt71-fy5qpe`, `task-mux3319p-z64ab3`); владелец пропустил Codex. Claude: 0 Blocker/Major, 4 Minor. |
+| Tech Lead | Merge / Done | LGTM опубликовал tech-lead (субагенту отказал классификатор). `AskUserQuestion` → rebase. |
+
+### Review iterations: 1
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Раздел конфликтов плана не видел #90/#100 | Plan defect | other | Конфликты строились только по сиблингам волны | Architect Step 4 → предложение 2 волны |
+| C9 на fake timers невозможен (`AbortSignal.timeout` не двигается) | Plan defect | unverified-claim | Тест не пробован до плана | Architect plan; поймано на Implementer Step 0 |
+| 4 Minor (кэш при `200 []`, Retry-After, охват D15, небезопасное целое) | Minor | other | — | → #270 |
+
+### Process improvement proposals
+
+1. **Minor 1-4** — **вынесено в #270**
+
+---
+
+## #126 — Демо: экран анализа из Signal module (2026-10-06)
+
+PR #271 смержен через rebase (5 коммитов, голова `1f75b65`), +1496 строк. Ветка начата поверх #258 и перенесена на `main` после его мержа.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План | 7 вопросов владельцу; план написан до мержа #258 (Step 4a велит планировать только первую часть — отклонение, отмечено архитектором). Codex plan review пропущен владельцем. |
+| Implementer | Clarify + код | 5 вопросов; m5 из ревью #125 закрыт в двух местах; `rebase --onto origin/main` после мержа #258. |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6024332341). |
+| Reviewer | Iteration 1 | Codex не запускался (лимит, попытки не тратились); владелец пропустил. Claude: 0 Blocker/Major, 5 Minor. |
+| Tech Lead | Merge / Done | LGTM — tech-lead. `AskUserQuestion` → rebase. |
+
+### Review iterations: 1
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| 5 Minor («⏳» без клавиатуры, забытое «⏳», `retryAfterSec: 0`, сравнение EMA по сырым числам, упрощения) | Minor | other | — | → #272 |
+
+### Process improvement proposals
+
+1. **Minor 1-5** — **вынесено в #272**
+
+---
+
+## #127 — Демо: подтверждение ставки и статус intent (2026-10-06)
+
+PR #273 смержен через rebase (9 коммитов, голова `8e04d1d`), ~+2800 строк. **Два круга ревью.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План + 2 Plan Update | 7 вопросов владельцу. PLAN DEFECT на clarify implementer'а: ключ идемпотентности по `message_id` повторялся после «Повторить анализ» → одноразовая метка в кнопке. После круга 1 — Plan Update без Codex. |
+| Implementer | Clarify + код + раунд | 3 + 4 вопроса; 8 коммитов, раунд исправлений одним коммитом (выбор владельца). |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6024819801). |
+| Reviewer | Iteration 1 | Codex не запускался (лимит). M1 (Major) + 5 Minor → Todo. |
+| Reviewer | Iteration 2 | Весь PR; Codex пропущен владельцем. 0 Blocker/Major, 3 Minor. |
+| Tech Lead | Merge / Done | LGTM — tech-lead. `AskUserQuestion` → rebase. |
+
+### Review iterations: 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Ключ `clientRequestId` по `message_id` при редактировании экрана на месте | Plan defect | unverified-claim | План не сверен с тем, как #126 перерисовывает анализ | Architect Step 4; поймано на Implementer Step 0 |
+| M1: правка финального статуса без повтора при сбое | Major → исправлен | instance-vs-class | В таблице решений плана две противоречивые строки для финального статуса, предел для постоянно падающей правки не назван | Architect plan |
+| m1-m4 (unhandled rejection трекера, комментарий DRAIN, `created`, лишнее условие) | Minor → исправлены | other | — | — |
+| m5 (третья копия `logAnswerFailure`) | Minor | other | — | оставлено с обоснованием |
+| n1-n3 (правка на последнем опросе при 429, комментарий 404, чистки) | Minor | other | — | → #276 |
+
+### Process improvement proposals
+
+1. **Minor n1-n3** — **вынесено в #276**
+
+---
+
+## #90 — Reconciliation: сопоставление сделки брокера с intent (2026-10-06/07)
+
+PR #267 смержен через rebase (голова `12c775b`), 3331 строка без snapshot (превышение потолка принято владельцем дважды: 3173, затем ~3280). **Три круга ревью — лимит; новый цикл со сменой подхода.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План (другая сессия) + 3 Plan Update + addendum | Codex plan review пропущен владельцем. После круга 1 — Plan Update без Codex и addendum на PLAN DEFECT (проверка стыка ломала T11). После круга 2 — новый цикл: владелец выбрал «вынести часть, сузить PR»; Codex re-check пропущен владельцем. |
+| Implementer | Clarify ×3 + код | 5 + 5 + 4 вопроса; живая проба заблокирована классификатором (SSH на продакшен), не обходилась. Force-with-lease только в feature-ветку — по решению владельца. |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6023835288). |
+| Reviewer | Iteration 1 | Codex — 2 попытки на лимите. M1 (Major, деньги: короткая страница = список прочитан → ложный `not_found` → release) + 5 Minor. |
+| Reviewer | Iteration 2 | Codex пропущен владельцем. M1-r2 (Major, деньги: пустая страница после страницы из ≥2 сделок) + 4 Minor. |
+| Tech Lead | Phase 4, iteration 2 | `AskUserQuestion` о смене подхода → (b): `not_found` убран из `main`, доказательство отсутствия → #274; 429 на refresh → #275. |
+| Reviewer | Iteration 3 (последний) | Весь PR; инвариант R-NF подтверждён мутацией (17 тестов). 0 Blocker/Major, 3 Minor. Codex пропущен владельцем. |
+| Tech Lead | Merge / Done | Без LGTM (лимит кругов); заметка о мерже на лимите. Minor → #277 после подтверждения владельца. `AskUserQuestion` → rebase. Миграции применены к общей тестовой БД. |
+
+### Review iterations: 3 (лимит)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| M1: покрытие списка по длине страницы → ложный `not_found` и release | Major → снят конструкцией | unverified-claim | Безопасность опиралась на непроверенные A1/A2 (живая проба не проведена) | Architect plan → предложение 3 волны |
+| M1-r2: пустая страница как конец списка на любой позиции | Major → снят конструкцией | instance-vs-class | Plan Update закрыл экземпляр (короткая страница), не класс «покрытие из формы страницы» | Architect Plan Update; итог — смена подхода |
+| Проверка стыка противоречила T11 | Plan defect | unverified-claim | Правило не прогнано на собственных кейсах плана | Architect Plan Update; поймано на Implementer Step 0 |
+| m1-m5 (круг 1), m1-m4 (круг 2) | Minor → исправлены/с обоснованием | other | — | — |
+| m1-r3..m3-r3 | Minor | other | — | → #277 |
+| 429 брокера на refresh отзывает аккаунт | Process/behaviour (вне #90) | other | — | → #275 |
+
+### Process improvement proposals
+
+1. **Доказательство отсутствия сделки и release — после живой пробы** — **вынесено в #274**
+2. **429 на `/user-auth/refresh` не отзывает аккаунт** — **вынесено в #275**
+3. **Minor третьего круга** — **вынесено в #277**
+4. **Перед деплоем: проверить вручную остановленные аккаунты до миграции 0016** — **открыто (2026-10-07, владелец): запрос в PR #267, issuecomment-6025534338**
+
+---
+
+## #100 — ARCH-01: исполнитель команды открытия сделки (2026-10-07)
+
+PR #266 смержен через rebase (4 коммита, голова `b016b5d`), +1206 строк без snapshot, миграция 0017.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План (другая сессия) | Codex plan review пропущен владельцем; промежуточная форма порта токена до мержа #90. |
+| Implementer | Clarify + код | 4 вопроса; draft PR до мержа #90 (решение владельца), затем rebase, порт #90, миграция 0017, коммит 4 (обвязка), `gh pr ready`. |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6025641693). |
+| Reviewer | Iteration 1 | Codex не запускался (лимит); владелец пропустил. Claude: 0 Blocker/Major, денежный путь проверен, 5 Minor. |
+| Tech Lead | Merge / Done | LGTM — tech-lead. `AskUserQuestion` → rebase. Миграции применены к общей тестовой БД (18). |
+
+### Review iterations: 1
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m4: поздний `open_trade.fail` прошлой команды совпадает с новой на том же соединении → release при возможно открытом ордере | Minor (сейчас недостижимо: `noTradeSessions`) | other | Принятый риск назвал только поздний `success` | → условие включения сокета в #101 |
+| m1-m3, m5 (тест real-режима, abort токена, S5, текст при сбое backend) | Minor | other | — | → #278 |
+| Отладочные строки #99 логируют redacted `state` | Minor (вне #100) | other | — | → #279 |
+
+### Process improvement proposals
+
+1. **m4 — обязательное условие включения сокета** — **вынесено в #101** (issuecomment-6025803167)
+2. **Minor m1-m3, m5** — **вынесено в #278**
