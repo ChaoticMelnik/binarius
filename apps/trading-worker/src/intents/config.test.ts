@@ -7,16 +7,28 @@ import {
   composeServiceValue,
 } from '@binarius/shared/testing';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
+import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import {
+  CATCHUP_ATTEMPT_TIMEOUT_MS,
+  CATCHUP_BATCH_SIZE,
+  CATCHUP_GRACE_MS,
+  CATCHUP_MAX_TRADE_PAGES,
+  CATCHUP_STALLED_RETRY_MS,
+  CATCHUP_TICK_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   LOCK_DURATION_MS,
   MAX_SUBMIT_ACK_TIMEOUT_MS,
   RECONCILE_ATTEMPT_TIMEOUT_MS,
+  RECONCILE_BATCH_SIZE,
+  RECONCILE_MAX_TRADE_PAGES,
   RECONCILE_RETRY_MS,
   RECONCILE_TICK_MS,
+  RECONCILE_WINDOW_AFTER_MS,
   SHUTDOWN_PHASE1_BUDGET_MS,
   SHUTDOWN_PHASE2_BUDGET_MS,
   STALE_SUBMITTING_MS,
+  WORKER_BROKER_GETS_PER_MINUTE,
+  WORKER_BROKER_GETS_WORST_CASE,
 } from './config';
 
 const composeYaml = readFileSync(
@@ -43,6 +55,28 @@ describe('timing constants', () => {
     expect(RECONCILE_ATTEMPT_TIMEOUT_MS).toBeLessThan(RECONCILE_RETRY_MS);
     expect(RECONCILE_ATTEMPT_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(RECONCILE_TICK_MS).toBeLessThanOrEqual(RECONCILE_RETRY_MS);
+  });
+
+  it('keep the token and every page inside an attempt, and the window past a late open (#90)', () => {
+    expect(
+      ACCESS_TOKEN_ROUTE_BUDGET_MS + 2 * RECONCILE_MAX_TRADE_PAGES * BROKER_REST_TIMEOUT_MS,
+    ).toBeLessThan(RECONCILE_ATTEMPT_TIMEOUT_MS);
+    expect(MAX_SUBMIT_ACK_TIMEOUT_MS).toBeLessThan(RECONCILE_WINDOW_AFTER_MS);
+    expect(BROKER_REST_TIMEOUT_MS).toBeLessThan(RECONCILE_WINDOW_AFTER_MS);
+    expect(
+      ACCESS_TOKEN_ROUTE_BUDGET_MS + CATCHUP_MAX_TRADE_PAGES * BROKER_REST_TIMEOUT_MS,
+    ).toBeLessThan(CATCHUP_ATTEMPT_TIMEOUT_MS);
+    expect(CATCHUP_ATTEMPT_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(BROKER_REST_TIMEOUT_MS).toBeLessThan(CATCHUP_GRACE_MS);
+    expect(CATCHUP_TICK_MS).toBeLessThan(CATCHUP_STALLED_RETRY_MS);
+  });
+
+  it('keep the worst case of broker GETs within the worker share of the IP limit (#90)', () => {
+    expect(WORKER_BROKER_GETS_WORST_CASE).toBe(
+      RECONCILE_BATCH_SIZE * 2 * RECONCILE_MAX_TRADE_PAGES * (60_000 / RECONCILE_TICK_MS) +
+        CATCHUP_BATCH_SIZE * CATCHUP_MAX_TRADE_PAGES * (60_000 / CATCHUP_TICK_MS),
+    );
+    expect(WORKER_BROKER_GETS_WORST_CASE).toBeLessThanOrEqual(WORKER_BROKER_GETS_PER_MINUTE);
   });
 
   it('matches the stop_grace_period compose gives the trading-worker service', () => {

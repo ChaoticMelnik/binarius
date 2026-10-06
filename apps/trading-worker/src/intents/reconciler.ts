@@ -2,7 +2,7 @@ import type { BrokerTrade } from '@binarius/shared';
 import type { TradeIntentRow } from '@binarius/db';
 
 export const ReconcileUnavailableReason = {
-  // no reconciler is wired (notConfiguredReconciler, a test or a disabled deployment)
+  // nothing that can answer is wired behind the reconciler (a stub in the pass's own tests)
   NotConfigured: 'not_configured',
   // the backend refused the token (blocked user, revoked account, ...) or the broker answered 401
   TokenUnavailable: 'token_unavailable',
@@ -39,8 +39,3 @@ export type ReconcileResult =
 export interface IntentReconciler {
   reconcile(intent: TradeIntentRow, signal: AbortSignal): Promise<ReconcileResult>;
 }
-
-export const notConfiguredReconciler: IntentReconciler = {
-  reconcile: () =>
-    Promise.resolve({ outcome: 'unavailable', reason: ReconcileUnavailableReason.NotConfigured }),
-};
