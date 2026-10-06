@@ -4,11 +4,11 @@ import {
   openTradeRequestWireSchema,
   toClosedTrade,
   type BinaryPairWire,
-  type BrokerBalanceWire,
-  type BrokerUserWire,
+  type BrokerBalanceWireInput,
+  type BrokerUserWireInput,
   type ClosedTrade,
   type OpenTradeRequest,
-  type OpenTradeWire,
+  type OpenTradeWireInput,
 } from './broker';
 import { idWireSchema } from './ids';
 import type { TradeMode } from './trading';
@@ -156,6 +156,7 @@ export const closeTradeSuccessWireSchema = z.looseObject({
   trades: z.array(closedTradeWireSchema),
 });
 export type CloseTradeSuccessWire = z.infer<typeof closeTradeSuccessWireSchema>;
+export type CloseTradeSuccessWireInput = z.input<typeof closeTradeSuccessWireSchema>;
 
 // --- Event maps (socket.io-client generics) ---------------------------------------------------
 
@@ -166,15 +167,15 @@ export interface BrokerServerToClientEvents {
   'price.update': (payload: PriceUpdateWire) => void;
   'common.assets_list': (payload: BinaryPairWire[]) => void;
   'common.assets_update': (payload: AssetsUpdateWire) => void;
-  'user.data': (payload: BrokerUserWire) => void;
-  'user.demo.open_trade.success': (payload: OpenTradeWire) => void;
-  'user.real.open_trade.success': (payload: OpenTradeWire) => void;
+  'user.data': (payload: BrokerUserWireInput) => void;
+  'user.demo.open_trade.success': (payload: OpenTradeWireInput) => void;
+  'user.real.open_trade.success': (payload: OpenTradeWireInput) => void;
   'user.demo.open_trade.fail': (payload: OpenTradeFailWire) => void;
   'user.real.open_trade.fail': (payload: OpenTradeFailWire) => void;
-  'user.demo.close_trade.success': (payload: CloseTradeSuccessWire) => void;
-  'user.real.close_trade.success': (payload: CloseTradeSuccessWire) => void;
-  'user.demo.update_balance': (payload: BrokerBalanceWire) => void;
-  'user.real.update_balance': (payload: BrokerBalanceWire) => void;
+  'user.demo.close_trade.success': (payload: CloseTradeSuccessWireInput) => void;
+  'user.real.close_trade.success': (payload: CloseTradeSuccessWireInput) => void;
+  'user.demo.update_balance': (payload: BrokerBalanceWireInput) => void;
+  'user.real.update_balance': (payload: BrokerBalanceWireInput) => void;
 }
 
 export interface BrokerClientToServerEvents {

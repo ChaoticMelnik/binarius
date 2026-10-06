@@ -175,6 +175,22 @@ describe('server → client payloads', () => {
       }),
     ).toMatchObject({ minTradeAmount: '1', demo: { available: '10000', held: '0' } });
   });
+
+  // live 2026-10-03 after a 1.5 demo stake: available/held fractions, total an integer
+  it('parses the mixed int/float user.data and update_balance seen live', () => {
+    const demo = { available: 9998.5, held: 1.5, total: 10000 };
+    const converted = { available: '9998.5', held: '1.5', total: '10000' };
+    expect(parseUpdateBalance(demo)).toEqual(converted);
+    expect(
+      parseUserData({
+        id: 1,
+        level: { code: 'c', rank: 0 },
+        min_trade_amount: 1,
+        real: { available: 0, held: 0, total: 0 },
+        demo,
+      }).demo,
+    ).toEqual(converted);
+  });
 });
 
 describe('decodeSocketPayload', () => {

@@ -49,10 +49,44 @@ describe('moneyWireSchema', () => {
     expect(moneyWireSchema.parse(value)).toBe(value);
   });
 
-  it.each([2 ** 53, 1e21, 1.5, 10000.5, Number.NaN, Number.POSITIVE_INFINITY, true, null, '1e3'])(
-    'rejects %j',
-    (value) => {
-      expect(moneyWireSchema.safeParse(value).success).toBe(false);
-    },
-  );
+  it.each([
+    [1.5, '1.5'],
+    [-1.5, '-1.5'],
+    [9998.5, '9998.5'],
+    [10000.5, '10000.5'],
+    [1.275, '1.275'],
+    [0.000001, '0.000001'],
+    [123456789012.123, '123456789012.123'],
+  ])('converts the fraction %j to the decimal string %j', (value, expected) => {
+    const parsed = moneyWireSchema.parse(value);
+    expect(parsed).toBe(expected);
+    expect(isDecimalString(parsed)).toBe(true);
+  });
+
+  it.each([
+    1234567890123.456,
+    0.30000000000000004,
+    12345678901234.566,
+    1e-7,
+    5e-7,
+    2 ** 53,
+    1e21,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    true,
+    null,
+    '1e3',
+  ])('rejects %j', (value) => {
+    expect(moneyWireSchema.safeParse(value).success).toBe(false);
+  });
+
+  // over 15 significant digits JSON.parse may round the text to a short double: accepted, not
+  // detectable after parsing (docs/broker-rest.md -> Money)
+  it.each([
+    ['99999999999.999999', '100000000000'],
+    ['1.5000000000000001', '1.5'],
+  ])('accepts the JSON text %s as %j after JSON.parse rounded it', (text, expected) => {
+    expect(moneyWireSchema.parse(JSON.parse(text))).toBe(expected);
+  });
 });

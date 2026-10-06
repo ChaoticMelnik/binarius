@@ -78,10 +78,15 @@ describe('Partner trader stats', () => {
     expect(stats).not.toHaveProperty('links');
   });
 
-  it('rejects a numeric balance', () => {
-    expect(safeParsePartnerTraderStats(envelope({ ...traderWire, balance: 125.4 })).success).toBe(
-      false,
-    );
+  it.each([
+    [125.4, '125.4'],
+    [100, '100'],
+  ])('converts the JSON number balance %j to the decimal string %j', (balance, expected) => {
+    expect(parsePartnerTraderStats(envelope({ ...traderWire, balance })).balance).toBe(expected);
+  });
+
+  it.each([0.30000000000000004, Number.NaN])('rejects the numeric balance %j', (balance) => {
+    expect(safeParsePartnerTraderStats(envelope({ ...traderWire, balance })).success).toBe(false);
   });
 
   it('normalizes a numeric uid to a string and rejects an empty one', () => {
