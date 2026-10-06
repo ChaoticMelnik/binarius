@@ -1,22 +1,34 @@
 import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { TradeIntentStatus } from '@binarius/shared';
+import { createBrokerRestClient } from '@binarius/broker-rest';
+import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
+import { AccountHaltReason, TradeIntentStatus, type DecimalString } from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
+  brokerAccounts,
   brokerTrades,
   claimReconciling,
+  createTradeIntent,
   findTradeIntent,
+  listLinkedBrokerTradeIds,
   millisecondsAgo,
   startReconciling,
+  TradeIntentError,
   tokenLedger,
   tradeIntents,
   users,
   type TradeIntentRow,
 } from '@binarius/db';
-import { createTempDatabase, seedUnknownIntent, type TempDatabase } from '@binarius/db/testing';
+import {
+  createTempDatabase,
+  intentRequest,
+  seedUnknownIntent,
+  type TempDatabase,
+} from '@binarius/db/testing';
 import { InvalidJobError } from './processor';
 import type { IntentReconciler, ReconcileResult } from './reconciler';
+import { createRestReconciler } from './rest-reconciler';
 import {
   createReconciliationPass,
   processReconciliationJob,
@@ -125,6 +137,14 @@ const userTokens = async (userId: string) =>
       .from(users)
       .where(eq(users.id, userId))
   )[0]!;
+const accountOf = async (id: string) =>
+  (
+    await tmp.db
+      .select({ halted: brokerAccounts.tradingHalted, reason: brokerAccounts.haltedReason })
+      .from(brokerAccounts)
+      .where(eq(brokerAccounts.id, id))
+  )[0]!;
+const ALERT = 'account halted for manual review';
 const ageClaim = (id: string, ms: number) =>
   tmp.db
     .update(tradeIntents)
@@ -211,15 +231,56 @@ describe('the reconciliation pass: outcomes', () => {
     expect((await userTokens(userId)).reserved).toBe(0n);
   });
 
-  it('parks the intent for manual review on ambiguous, reserve kept', async () => {
-    const { intent } = await reconcilingIntent();
-    await tickOnce(reconcilerOf({ [intent.id]: () => ({ outcome: 'ambiguous' }) }));
+  it('parks the intent on ambiguous, halts the account and alerts once (#90)', async () => {
+    const { intent, brokerAccountId, telegramUserId } = await reconcilingIntent();
+    const log = capture('info');
+    await tickOnce(reconcilerOf({ [intent.id]: () => ({ outcome: 'ambiguous' }) }), log.logger);
     expect(await rowOf(intent.id)).toMatchObject({
       status: 'manual_review',
       lastError: 'reconciliation_ambiguous',
       tokensReserved: 1n,
     });
     expect(await ledgerKinds(intent.id)).toEqual(['reserve']);
+    expect(await accountOf(brokerAccountId)).toEqual({
+      halted: true,
+      reason: AccountHaltReason.ReconciliationAmbiguous,
+    });
+    const alerts = log.parsed().filter((line) => line.msg === ALERT);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      level: 50,
+      intentId: intent.id,
+      brokerAccountId,
+      reason: 'reconciliation_ambiguous',
+    });
+    expect(Object.keys(alerts[0]!).sort()).toEqual(
+      ['brokerAccountId', 'hostname', 'intentId', 'level', 'msg', 'pid', 'reason', 'time'].sort(),
+    );
+    // the halt stops new intents for the account
+    const refused = await createTradeIntent(tmp.db, intentRequest(telegramUserId), {
+      realTradingEnabled: false,
+    }).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(TradeIntentError);
+    expect((refused as TradeIntentError).code).toBe('account_halted');
+  });
+
+  it('neither halts nor alerts when the manual_review CAS is lost (#90)', async () => {
+    const { intent, brokerAccountId } = await reconcilingIntent();
+    const log = capture('info');
+    await tickOnce(
+      reconcilerOf({
+        [intent.id]: async (row) => {
+          await ageClaim(row.id, RETRY_MS + 1_000);
+          await claimReconciling(tmp.db, { id: row.id, retryMs: RETRY_MS });
+          return { outcome: 'ambiguous' };
+        },
+      }),
+      log.logger,
+    );
+    expect((await rowOf(intent.id)).status).toBe('reconciling');
+    expect(await accountOf(brokerAccountId)).toEqual({ halted: false, reason: null });
+    expect(log.line(ALERT)).toBeUndefined();
+    expect(log.line('reconciliation outcome dropped')).toMatchObject({ outcome: 'ambiguous' });
   });
 
   it('writes nothing on unavailable and retries only once the lease lapsed', async () => {
@@ -299,9 +360,104 @@ describe('the reconciliation pass: outcomes', () => {
       tokensReserved: 1n,
     });
     expect(await tradesOf(intent.id)).toEqual([]);
+    expect(await accountOf(intent.brokerAccountId)).toEqual({
+      halted: true,
+      reason: AccountHaltReason.TradeMismatch,
+    });
+    expect(log.line(ALERT)).toMatchObject({
+      intentId: intent.id,
+      brokerAccountId: intent.brokerAccountId,
+      reason: 'trade_mismatch',
+    });
     expect(
       log.line('reconciled trade does not match the intent; parked for manual review'),
     ).toMatchObject({ intentId: intent.id, brokerTradeId: other.id, mismatch: 'asset' });
+  });
+});
+
+// The real reconciler against the mock broker's REST API: the stub token source stands in for
+// the backend's route (its own suite is broker/access-token.test.ts).
+describe('the reconciliation pass with the REST reconciler (#90)', () => {
+  const TOKEN = 'e2e-access-token';
+  let broker: MockBroker;
+  let brokerUserId = 9_000;
+  beforeAll(async () => {
+    broker = await startMockBroker();
+  });
+  afterAll(() => broker.close());
+
+  const restReconciler = () =>
+    createRestReconciler({
+      rest: createBrokerRestClient({ baseUrl: broker.url }),
+      tokens: { accessToken: () => Promise.resolve({ ok: true, accessToken: token }) },
+      linkedTradeIds: (accountId, ids) =>
+        listLinkedBrokerTradeIds(tmp.db, { brokerAccountId: accountId, brokerTradeIds: ids }),
+      logger: silent,
+      config: { windowBeforeMs: 60_000, windowAfterMs: 90_000, pageSize: 50, maxPages: 2 },
+    });
+  let token = TOKEN;
+
+  // each case trades as its own broker user, so the lists hold only that case's trades
+  async function intentWithBroker() {
+    token = `${TOKEN}-${++brokerUserId}`;
+    broker.users.register({ id: brokerUserId, accessToken: token });
+    const seed = await reconcilingIntent101();
+    return seed;
+  }
+
+  async function reconcilingIntent101() {
+    const seed = await seedUnknownIntent(tmp.db, { assetId: 101 });
+    const intent = (await startReconciling(tmp.db, {
+      id: seed.intent.id,
+      expectedVersion: seed.intent.version,
+    }))!;
+    return { ...seed, intent };
+  }
+
+  const openAtBroker = (intent: TradeIntentRow) =>
+    createBrokerRestClient({ baseUrl: broker.url }).openTrade(
+      { accessToken: token },
+      {
+        assetId: intent.assetId,
+        // the mock broker takes at most two decimals; the stored numeric(20,8) spelling has eight
+        amount: '10.00' as DecimalString,
+        action: intent.action,
+        durationSec: intent.durationSec,
+        isDemo: true,
+      },
+    );
+
+  it('accepts the open trade it finds and links it', async () => {
+    const { intent } = await intentWithBroker();
+    const trade = await openAtBroker(intent);
+    await tickOnce(restReconciler());
+    expect(await rowOf(intent.id)).toMatchObject({ status: 'accepted', tokensReserved: 1n });
+    expect(await tradesOf(intent.id)).toMatchObject([{ brokerTradeId: trade.id, status: 'open' }]);
+  });
+
+  it('settles the closed trade it finds', async () => {
+    const { intent } = await intentWithBroker();
+    const trade = await openAtBroker(intent);
+    broker.trades.settle(Number(trade.id), { outcome: 'loss' });
+    await tickOnce(restReconciler());
+    expect(await rowOf(intent.id)).toMatchObject({ status: 'settled', tokensReserved: 0n });
+    expect(await tradesOf(intent.id)).toMatchObject([
+      { brokerTradeId: trade.id, status: 'closed' },
+    ]);
+  });
+
+  it('rejects with reconciliation_not_found once the window has closed without a trade', async () => {
+    const { intent } = await intentWithBroker();
+    await tmp.db
+      .update(tradeIntents)
+      .set({ submittedAt: millisecondsAgo(200_000) })
+      .where(eq(tradeIntents.id, intent.id));
+    await tickOnce(restReconciler());
+    expect(await rowOf(intent.id)).toMatchObject({
+      status: 'rejected',
+      lastError: 'reconciliation_not_found',
+      tokensReserved: 0n,
+    });
   });
 });
 

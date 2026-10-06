@@ -8,12 +8,13 @@ import {
   claimReconciling,
   concludeReconciled,
   findTradeIntent,
+  haltAccountForManualReview,
   listReconcilingCandidates,
-  markIntentManualReview,
   rejectIntent,
   startReconciling,
   TradeIntentMismatchError,
   type Db,
+  type ManualReviewReason,
   type TradeIntentRow,
 } from '@binarius/db';
 import { InvalidJobError, type Logger } from './processor';
@@ -141,6 +142,24 @@ export function createReconciliationPass({
     return Promise.race([attempt, expired]).finally(() => clearTimeout(timeout));
   }
 
+  // Every manual_review out of the pass halts the account in the same transaction (#90). The
+  // alert follows the commit, so a halt that rolled back or lost its CAS never alerts.
+  async function haltForManualReview(
+    claimed: TradeIntentRow,
+    reason: ManualReviewReason,
+  ): Promise<TradeIntentRow | undefined> {
+    const row = await db.transaction((tx) =>
+      haltAccountForManualReview(tx, { id: claimed.id, expectedVersion: claimed.version, reason }),
+    );
+    if (row !== undefined) {
+      logger.error(
+        { intentId: claimed.id, brokerAccountId: row.brokerAccountId, reason },
+        'account halted for manual review',
+      );
+    }
+    return row;
+  }
+
   async function persist(
     claimed: TradeIntentRow,
     result: ReconcileResult | undefined,
@@ -164,10 +183,7 @@ export function createReconciliationPass({
             { intentId: claimed.id, brokerTradeId: error.brokerTradeId, mismatch: error.reason },
             'reconciled trade does not match the intent; parked for manual review',
           );
-          row = await markIntentManualReview(db, {
-            ...cas,
-            reason: TradeIntentFailureReason.TradeMismatch,
-          });
+          row = await haltForManualReview(claimed, TradeIntentFailureReason.TradeMismatch);
           ending = 'manualReview';
         }
         break;
@@ -183,10 +199,7 @@ export function createReconciliationPass({
         ending = 'rejected';
         break;
       case 'ambiguous':
-        row = await markIntentManualReview(db, {
-          ...cas,
-          reason: TradeIntentFailureReason.ReconciliationAmbiguous,
-        });
+        row = await haltForManualReview(claimed, TradeIntentFailureReason.ReconciliationAmbiguous);
         ending = 'manualReview';
         break;
       case 'unavailable':

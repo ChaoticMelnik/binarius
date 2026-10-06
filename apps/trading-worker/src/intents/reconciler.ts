@@ -2,14 +2,23 @@ import type { BrokerTrade } from '@binarius/shared';
 import type { TradeIntentRow } from '@binarius/db';
 
 export const ReconcileUnavailableReason = {
-  // no reconciler is wired yet (#90 replaces notConfiguredReconciler)
+  // no reconciler is wired (notConfiguredReconciler, a test or a disabled deployment)
   NotConfigured: 'not_configured',
+  // the backend refused the token (blocked user, revoked account, ...) or the broker answered 401
   TokenUnavailable: 'token_unavailable',
   BrokerUnavailable: 'broker_unavailable',
   // ends the pass's tick: the rest of the candidates would only be refused too
   RateLimited: 'rate_limited',
   // produced by the pass itself when an attempt outlives its deadline
   Timeout: 'timeout',
+  // the backend's token route did not answer usefully (#90)
+  BackendUnavailable: 'backend_unavailable',
+  // the broker refused the list request or its pages break the newest-first order
+  BrokerContract: 'broker_contract',
+  // no candidate yet, and the window is still open by the database clock
+  WindowOpen: 'window_open',
+  // the page cap ran out before the pages reached past the window's start
+  WindowNotCovered: 'window_not_covered',
 } as const;
 export type ReconcileUnavailableReason =
   (typeof ReconcileUnavailableReason)[keyof typeof ReconcileUnavailableReason];
@@ -18,7 +27,7 @@ export type ReconcileResult =
   // the broker's own record of this intent's trade, open or closed, as parsed by shared
   | { outcome: 'found'; trade: BrokerTrade }
   // confidently absent: this releases the token, so it is answered only when the absence is
-  // certain (the rule is the implementation's, #90)
+  // certain (createRestReconciler's three conditions, #90)
   | { outcome: 'not_found' }
   // more than one candidate trade
   | { outcome: 'ambiguous' }
