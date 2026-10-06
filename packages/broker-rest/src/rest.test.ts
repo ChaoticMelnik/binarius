@@ -115,6 +115,13 @@ describe('happy paths', () => {
     expect(user.demo.available).toBe('10000');
   });
 
+  // the fixture sends a fraction as a JSON fraction, as the live broker does (2026-10-03)
+  it('reads a fractional balance as the exact decimal string', async () => {
+    broker.users.register({ id: 2, accessToken: 'SECRET-SECOND', demo: { available: '9998.5' } });
+    const user = await client.getUser({ accessToken: 'SECRET-SECOND' });
+    expect(user.demo).toEqual({ available: '9998.5', held: '0', total: '9998.5' });
+  });
+
   it('lists the pairs mapped from the broker list', async () => {
     const pairs = await client.listPairs();
     expect(pairs.map((pair) => pair.id)).toEqual(broker.pairs.list().map((pair) => pair.id));
