@@ -183,7 +183,7 @@ the flights to finish. A token exchange in progress (a route refresh) is not abo
 covered by `BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`. A `refresh()` after `stop()`
 answers `aborted` without a call.
 
-## Contract for the socket writers (#99/#101, #100/#89)
+## Contract for the socket writers (#99/#101, #100, #92)
 
 - **`user.data`**: `upsertBalanceSnapshot(db, { brokerAccountId, user, requested: false, eventAt: [modes] })`.
   It writes the whole snapshot and moves `rest_observed_at` and each listed `<mode>_event_at` to
@@ -195,7 +195,7 @@ answers `aborted` without a call.
   it subscribes.
 - Every writer checks the answer's user id against `broker_user_id` before writing, and goes
   through the domain check.
-- A snapshot after a trade is accepted or settled (#100/#89) calls `refresh(accountId)`.
+- A snapshot after a trade is accepted or settled (#100 after `accepted`, #92 after a reconciliation) calls `refresh(accountId)`.
 
 ## Observed live
 
@@ -234,7 +234,7 @@ answers `aborted` without a call.
 
 ## Boundaries
 
-- #99/#101: the socket writers and the 401 handling. #100/#89: refresh after accepted/settled.
+- #99/#101: the socket writers and the 401 handling. #100: refresh after `accepted`; #92: after a reconciliation (the worker has no `refresh()`; it is the backend balance reconciler).
 - #24: the bot's display, `BackendClient.readTradingAccess`, and the link
   `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`.
 - The money unit is whole currency units (live 2026-10-03, [broker-rest.md](broker-rest.md) →
