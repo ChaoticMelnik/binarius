@@ -41,8 +41,16 @@ export const HANDLER_CALLS = {
   start: { backend: 2, telegram: 4 },
   // /menu: /start's path without a payload
   menu: { backend: 2, telegram: 4 },
-  // the status card's button: answerCallbackQuery, then sendMessage; no backend call
-  demo: { backend: 0, telegram: 2 },
+  // the status card's button (#125): answerCallbackQuery ∥ readPairs — counted the same way as
+  // oauth — then sendMessage with the asset types
+  demo: { backend: 1, telegram: 2 },
+  // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair, a duration, «📊
+  // Анализ»): answerCallbackQuery ∥ readPairs, then editMessageText refused as gone → sendMessage
+  demoGroups: { backend: 1, telegram: 3 },
+  demoPage: { backend: 1, telegram: 3 },
+  demoAsset: { backend: 1, telegram: 3 },
+  demoDuration: { backend: 1, telegram: 3 },
+  demoAnalysis: { backend: 1, telegram: 3 },
   // answerCallbackQuery, then sendMessage asking for the address
   connect: { backend: 0, telegram: 2 },
   // answerCallbackQuery ∥ startLogin, then sendMessage — the parallel pair is counted as

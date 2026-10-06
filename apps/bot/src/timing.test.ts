@@ -17,13 +17,20 @@ import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
   CONNECT_CALLBACK_DATA,
-  DEMO_CALLBACK_DATA,
   LEVEL_CURRENT_CALLBACK_DATA,
   OAUTH_CALLBACK_DATA,
   RESEND_CALLBACK_DATA,
   createBot,
   levelCallbackData,
 } from './bot';
+import {
+  DEMO_CALLBACK_DATA,
+  DEMO_GROUPS_CALLBACK_DATA,
+  demoAnalysisCallbackData,
+  demoAssetCallbackData,
+  demoDurationCallbackData,
+  demoPageCallbackData,
+} from './demo';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCESS_VIEW,
@@ -38,6 +45,9 @@ import {
   LINK_PENDING,
   LINK_REVOKED,
   LOGIN,
+  PAIR_CLOSED,
+  PAIR_EURUSD,
+  PAIRS_RESPONSE,
   PENDING_ACCOUNT_ID,
   USER,
   TEXT_CARD_MESSAGE_ID,
@@ -51,6 +61,7 @@ import {
   accessView,
   accountView,
   brokerBalance,
+  pairsResponse,
   type ApiAnswer,
 } from './testing';
 import {
@@ -89,6 +100,7 @@ interface Branch {
   recordChatMember?: BackendClient['recordChatMember'];
   setNotificationLevel?: BackendClient['setNotificationLevel'];
   readTradingAccess?: BackendClient['readTradingAccess'];
+  readPairs?: BackendClient['readPairs'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -237,6 +249,10 @@ async function observe(branch: Branch): Promise<Calls> {
     readTradingAccess: (telegramUserId) => {
       backend += 1;
       return (branch.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)))(telegramUserId);
+    },
+    readPairs: () => {
+      backend += 1;
+      return (branch.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)))();
     },
   };
   const loginDialog = createLoginDialog();
@@ -456,10 +472,51 @@ function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst:
 const START = homeBranches('/start');
 const MENU = homeBranches('/menu');
 
+const EDIT_REFUSED: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: "Bad Request: message can't be edited",
+};
+
+const EDIT_NOT_MODIFIED: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: message is not modified',
+};
+
+const CATALOG_UNAVAILABLE = () =>
+  Promise.reject(
+    new BackendError(BackendErrorCode.HttpStatus, { status: 503, reason: 'catalog_unavailable' }),
+  );
+const CATALOG_STALE = () => Promise.resolve(pairsResponse({ ageMs: 90_000, fresh: false }));
+const CATALOG_UNREACHABLE = () => Promise.reject(new BackendError(BackendErrorCode.Unreachable));
+
+// The catalog's three failures, each answered with a text and the retry button.
+const catalogBranches = (update: () => Update, telegram: number): Branch[] => [
+  {
+    label: 'the catalog is unavailable',
+    update: update(),
+    readPairs: CATALOG_UNAVAILABLE,
+    expected: { backend: 1, telegram },
+  },
+  {
+    label: 'the catalog is stale',
+    update: update(),
+    readPairs: CATALOG_STALE,
+    expected: { backend: 1, telegram },
+  },
+  {
+    label: 'the catalog read fails',
+    update: update(),
+    readPairs: CATALOG_UNREACHABLE,
+    expected: { backend: 1, telegram },
+  },
+];
+
 const DEMO_WORST_CASE: Branch = {
-  label: 'the query is answered and the text is sent',
+  label: 'the query is answered and the types are sent',
   update: callbackUpdate(DEMO_CALLBACK_DATA),
-  expected: { backend: 0, telegram: 2 },
+  expected: { backend: 1, telegram: 2 },
 };
 
 const DEMO_BRANCHES: readonly Branch[] = [
@@ -470,12 +527,156 @@ const DEMO_BRANCHES: readonly Branch[] = [
   },
   DEMO_WORST_CASE,
   {
-    label: 'answering the query is refused and the text still goes',
+    label: 'answering the query is refused and the types still go',
     update: callbackUpdate(DEMO_CALLBACK_DATA),
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-    expected: { backend: 0, telegram: 2 },
+    expected: { backend: 1, telegram: 2 },
+  },
+  ...catalogBranches(() => callbackUpdate(DEMO_CALLBACK_DATA), 2),
+  // rethrown into bot.catch
+  {
+    label: 'the message fails in transport',
+    update: callbackUpdate(DEMO_CALLBACK_DATA),
+    apiErrors: [
+      [
+        'sendMessage',
+        new HttpError(
+          "Network request for 'sendMessage' failed!",
+          new Error('The operation was aborted due to timeout'),
+        ),
+      ],
+    ],
+    expected: { backend: 1, telegram: 2 },
   },
 ];
+
+// Every demo screen after the first is one message edited in place, so its branches share the
+// edit's outcomes; `forged` is data the pattern matches and the schema refuses.
+function demoScreenBranches(
+  data: string,
+  forged: string | undefined,
+  own: readonly Omit<Branch, 'update'>[],
+): { branches: Branch[]; worst: Branch } {
+  const update = () => callbackUpdate(data);
+  const worst: Branch = {
+    label: 'the edit is refused as gone and the screen is sent anew',
+    update: update(),
+    apiErrors: [['editMessageText', EDIT_REFUSED]],
+    expected: { backend: 1, telegram: 3 },
+  };
+  const branches: Branch[] = [
+    {
+      label: 'the chat is not private',
+      update: callbackUpdate(data, 'group'),
+      expected: { backend: 0, telegram: 0 },
+    },
+    ...(forged === undefined
+      ? []
+      : [
+          {
+            label: 'the data is forged',
+            update: callbackUpdate(forged),
+            expected: { backend: 0, telegram: 1 },
+          },
+        ]),
+    ...catalogBranches(update, 2),
+    { label: 'the screen is edited', update: update(), expected: { backend: 1, telegram: 2 } },
+    {
+      label: 'answering the query is refused and the screen is still edited',
+      update: update(),
+      apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+      expected: { backend: 1, telegram: 2 },
+    },
+    worst,
+    {
+      label: 'the edit is refused as not modified',
+      update: update(),
+      apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
+      expected: { backend: 1, telegram: 2 },
+    },
+    // rethrown into bot.catch
+    {
+      label: 'the edit is refused for an unlisted reason',
+      update: update(),
+      apiErrors: [
+        [
+          'editMessageText',
+          { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
+        ],
+      ],
+      expected: { backend: 1, telegram: 2 },
+    },
+    {
+      label: 'the edit fails in transport',
+      update: update(),
+      apiErrors: [
+        [
+          'editMessageText',
+          new HttpError(
+            "Network request for 'editMessageText' failed!",
+            new Error('The operation was aborted due to timeout'),
+          ),
+        ],
+      ],
+      expected: { backend: 1, telegram: 2 },
+    },
+    ...own.map((branch): Branch => ({ ...branch, update: update() })),
+  ];
+  return { branches, worst };
+}
+
+const onlyPairs =
+  (...pairs: (typeof PAIR_EURUSD)[]) =>
+  () =>
+    Promise.resolve(pairsResponse({ pairs }));
+
+const DEMO_GROUPS = demoScreenBranches(DEMO_GROUPS_CALLBACK_DATA, undefined, [
+  { label: 'the catalog is empty', readPairs: onlyPairs(), expected: { backend: 1, telegram: 2 } },
+]);
+const DEMO_PAGE = demoScreenBranches(demoPageCallbackData('currency', 0), 'demo:t:bond:0', [
+  {
+    label: 'no pair of the type is open',
+    readPairs: onlyPairs(PAIR_CLOSED),
+    expected: { backend: 1, telegram: 2 },
+  },
+]);
+const pairBranches = (
+  extra: readonly Omit<Branch, 'update'>[] = [],
+): readonly Omit<Branch, 'update'>[] => [
+  { label: 'the pair is gone', readPairs: onlyPairs(), expected: { backend: 1, telegram: 2 } },
+  {
+    label: 'the pair is closed',
+    readPairs: onlyPairs({ ...PAIR_EURUSD, scheduledUntil: PAIR_CLOSED.scheduledUntil }),
+    expected: { backend: 1, telegram: 2 },
+  },
+  ...extra,
+];
+const DEMO_ASSET = demoScreenBranches(
+  demoAssetCallbackData(PAIR_EURUSD.id),
+  'demo:a:0',
+  pairBranches([
+    {
+      label: 'the pair admits no duration',
+      readPairs: onlyPairs({ ...PAIR_EURUSD, minTimeframe: 5, maxTimeframe: 30 }),
+      expected: { backend: 1, telegram: 2 },
+    },
+  ]),
+);
+const unsupported = {
+  label: 'the duration no longer fits the pair',
+  readPairs: onlyPairs({ ...PAIR_EURUSD, maxTimeframe: 120 }),
+  expected: { backend: 1, telegram: 2 },
+};
+const DEMO_DURATION = demoScreenBranches(
+  demoDurationCallbackData(PAIR_EURUSD.id, 300),
+  'demo:d:2147483648:300',
+  pairBranches([unsupported]),
+);
+const DEMO_ANALYSIS = demoScreenBranches(
+  demoAnalysisCallbackData(PAIR_EURUSD.id, 300),
+  'demo:an:0:300',
+  pairBranches([unsupported]),
+);
 
 const OAUTH_WORST_CASE: Branch = {
   label: 'the query is answered and the link is sent',
@@ -970,17 +1171,6 @@ const SETTINGS_BRANCHES: readonly Branch[] = [
 ];
 
 const LEVEL_UPDATE = callbackUpdate(levelCallbackData(NotificationLevel.Off));
-const EDIT_REFUSED: ApiError = {
-  ok: false,
-  error_code: 400,
-  description: "Bad Request: message can't be edited",
-};
-
-const EDIT_NOT_MODIFIED: ApiError = {
-  ok: false,
-  error_code: 400,
-  description: 'Bad Request: message is not modified',
-};
 
 // A level pressed: answer ∥ set, then the edit — or, when the edit is refused, a new message.
 const LEVEL_WORST_CASE: Branch = {
@@ -1129,6 +1319,41 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('the demo button', async () => {
     await checkHandler('demo', DEMO_BRANCHES, DEMO_WORST_CASE, HANDLER_CALLS.demo);
+  });
+
+  it('the demo types', async () => {
+    await checkHandler(
+      'demoGroups',
+      DEMO_GROUPS.branches,
+      DEMO_GROUPS.worst,
+      HANDLER_CALLS.demoGroups,
+    );
+  });
+
+  it('a demo page', async () => {
+    await checkHandler('demoPage', DEMO_PAGE.branches, DEMO_PAGE.worst, HANDLER_CALLS.demoPage);
+  });
+
+  it('a demo asset', async () => {
+    await checkHandler('demoAsset', DEMO_ASSET.branches, DEMO_ASSET.worst, HANDLER_CALLS.demoAsset);
+  });
+
+  it('a demo duration', async () => {
+    await checkHandler(
+      'demoDuration',
+      DEMO_DURATION.branches,
+      DEMO_DURATION.worst,
+      HANDLER_CALLS.demoDuration,
+    );
+  });
+
+  it('the demo analysis placeholder', async () => {
+    await checkHandler(
+      'demoAnalysis',
+      DEMO_ANALYSIS.branches,
+      DEMO_ANALYSIS.worst,
+      HANDLER_CALLS.demoAnalysis,
+    );
   });
 
   it('the connect button', async () => {

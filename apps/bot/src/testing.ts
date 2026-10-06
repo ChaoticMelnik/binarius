@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import type { Bot, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
+import type { BackendClient } from './backend-client';
 import {
   BrokerAccountStatus,
   brokerBalanceViewSchema,
@@ -15,6 +16,8 @@ import {
   type ConfirmLoginResponse,
   type EmailSendCodeResponse,
   type LinkedAccountView,
+  type PairsCatalogResponse,
+  type PairView,
   type PendingLinkedAccountView,
   type StartLoginResponse,
   type TradingAccessResponse,
@@ -125,6 +128,86 @@ export const accessView = (patch: Partial<TradingAccessResponse> = {}): TradingA
   ...ACCESS_VIEW,
   ...patch,
 });
+
+// The demo's catalog (#125). PAIR_CLOSED is closed on any clock a test runs at (2100-01-01), so
+// a suite on the real clock sees it closed too; the others have no schedule.
+export const PAIR_EURUSD: PairView = {
+  id: 101,
+  symbol: 'EUR/USD OTC',
+  isOtc: true,
+  type: 'currency',
+  digits: 5,
+  payout: 85,
+  maxPayout: 92,
+  minTimeframe: 60,
+  maxTimeframe: 3600,
+  scheduledUntil: 0,
+};
+export const PAIR_CLOSED: PairView = {
+  id: 404,
+  symbol: 'GBP/USD',
+  isOtc: false,
+  type: 'currency',
+  digits: 5,
+  payout: 80,
+  maxPayout: 88,
+  minTimeframe: 60,
+  maxTimeframe: 3600,
+  scheduledUntil: 4_102_444_800_000,
+};
+export const PAIR_SHORT: PairView = {
+  id: 202,
+  symbol: 'BTC/USD OTC',
+  isOtc: true,
+  type: 'cryptocurrency',
+  digits: 2,
+  payout: 90,
+  maxPayout: 90,
+  minTimeframe: 5,
+  maxTimeframe: 3600,
+  scheduledUntil: 0,
+};
+// a type outside the five the broker lists today, grouped under «📁 Другие»
+export const PAIR_OTHER_TYPE: PairView = {
+  id: 303,
+  symbol: 'US10Y',
+  type: 'bond',
+  digits: 3,
+  payout: 70,
+  maxPayout: 75,
+  minTimeframe: 60,
+  maxTimeframe: 3600,
+  scheduledUntil: 0,
+};
+export const PAIRS_RESPONSE: PairsCatalogResponse = {
+  pairs: [PAIR_EURUSD, PAIR_CLOSED, PAIR_SHORT, PAIR_OTHER_TYPE],
+  fetchedAt: 1_790_000_000_000,
+  ageMs: 1_500,
+  fresh: true,
+};
+export const pairsResponse = (patch: Partial<PairsCatalogResponse> = {}): PairsCatalogResponse => ({
+  ...PAIRS_RESPONSE,
+  ...patch,
+});
+
+// A client where every method the scene does not give rejects, so an unexpected call fails the
+// scene instead of answering with a fixture. A method added to BackendClient adds a line here.
+export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient => {
+  const unused = () => Promise.reject(new Error('not used here'));
+  return {
+    recordStart: unused,
+    readAccount: unused,
+    startLogin: unused,
+    confirmLogin: unused,
+    sendEmailCode: unused,
+    emailLogin: unused,
+    recordChatMember: unused,
+    setNotificationLevel: unused,
+    readTradingAccess: unused,
+    readPairs: unused,
+    ...patch,
+  };
+};
 
 export const EMAIL = 'ada@example.test';
 export const CODE = '123456';

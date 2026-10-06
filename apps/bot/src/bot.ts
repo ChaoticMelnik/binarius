@@ -27,10 +27,17 @@ import {
   type UserStartRequest,
 } from '@binarius/shared';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
-import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
+import {
+  BackendError,
+  BackendErrorCode,
+  backendErrorFields,
+  type BackendClient,
+} from './backend-client';
 import { BOT_COMMANDS } from './commands';
+import { createDemoComposer, DEMO_CALLBACK_DATA } from './demo';
 import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
+import { editRefusal } from './screen';
 import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
 import {
   accountCard,
@@ -54,9 +61,6 @@ import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 export const CONNECT_CALLBACK_DATA = 'connect';
 export const OAUTH_CALLBACK_DATA = 'oauth';
 export const RESEND_CALLBACK_DATA = 'resend';
-// The status card's button (#24). #125 replaces its handler and keeps the data, so a button on an
-// old card leads to the same place.
-export const DEMO_CALLBACK_DATA = 'demo';
 // The /settings buttons (#120): `level:<level>` sets it; the selected one carries
 // `level:current` and only stops the spinner. The longest, `level:reduced`, is 13 bytes.
 export const LEVEL_CALLBACK_PREFIX = 'level:';
@@ -88,6 +92,8 @@ export interface CreateBotOptions {
   telegramApiTimeoutMs?: number;
   // a seam for the tests that start in the middle of the dialog
   loginDialog?: LoginDialog;
+  // the clock the demo compares a pair's schedule with
+  now?: () => number;
 }
 
 export function createBot({
@@ -99,6 +105,7 @@ export function createBot({
   apiRoot,
   telegramApiTimeoutMs = TELEGRAM_API_TIMEOUT_MS,
   loginDialog = createLoginDialog(),
+  now = Date.now,
 }: CreateBotOptions): Bot {
   const bot = new Bot(token, {
     ...(botInfo === undefined ? {} : { botInfo }),
@@ -133,15 +140,6 @@ export function createBot({
     const from = ctx.from;
     if (from === undefined) return;
     await answerHome(ctx, from, startRequestOf(from), '/menu');
-  });
-
-  // Nothing behind the button yet (#125): the query is answered and the text says so, with no
-  // backend call and no state, so a button on an old card answers the same way.
-  privateChats.callbackQuery(DEMO_CALLBACK_DATA, async (ctx) => {
-    await ctx.answerCallbackQuery().catch((error: unknown) => {
-      logAnswerFailure(error);
-    });
-    await replyHtml(ctx, TEXTS.demoSoon);
   });
 
   // /start and /menu: blocked, then a waiting link, then the status card for an active account,
@@ -325,6 +323,10 @@ export function createBot({
   privateChats.command('help', async (ctx) => {
     await replyHtml(ctx, HELP);
   });
+
+  // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries
+  // only, so the private-chat filter covers them and the text handler below never sees them.
+  privateChats.use(createDemoComposer({ backend, logger, now }));
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
     loginDialog.set(ctx.from.id, { step: 'email' });
@@ -818,22 +820,6 @@ function levelKeyboard(current: NotificationLevel): InlineKeyboard {
   return keyboard;
 }
 
-// What a refused editMessageText means, from Telegram's own wording (telegram-bot-api Client.cpp:
-// MESSAGE_NOT_MODIFIED → "message is not modified: …", check_message → "message to edit not
-// found", tdlib's edit_message_text → "message can't be edited"), always as a 400. The
-// description is compared by its lead phrase, since the not-modified tail is free text, and is
-// never logged: telegramErrorFields carries only the method and the code. Anything else is not
-// ours to interpret.
-const EDIT_ALREADY_SHOWN = 'message is not modified';
-const EDIT_TARGET_GONE = ['message to edit not found', "message can't be edited"] as const;
-
-function editRefusal(error: GrammyError): 'shown' | 'gone' | undefined {
-  if (error.error_code !== 400) return undefined;
-  if (error.description.includes(EDIT_ALREADY_SHOWN)) return 'shown';
-  if (EDIT_TARGET_GONE.some((phrase) => error.description.includes(phrase))) return 'gone';
-  return undefined;
-}
-
 function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   for (const account of accounts) {
@@ -907,8 +893,3 @@ const refusedBeforeSending = (error: unknown): boolean =>
   error.code === BackendErrorCode.HttpStatus &&
   error.status !== undefined &&
   error.status < 500;
-
-function backendErrorFields(error: unknown): { backendStatus?: number; backendReason?: string } {
-  if (!(error instanceof BackendError)) return {};
-  return { backendStatus: error.status, backendReason: error.reason };
-}

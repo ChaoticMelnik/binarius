@@ -4,6 +4,7 @@ import {
   safeParseEmailLoginResponse,
   safeParseEmailSendCodeResponse,
   safeParseNotificationLevelResponse,
+  safeParsePairsCatalogResponse,
   safeParseTradingAccessResponse,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
@@ -14,6 +15,7 @@ import {
   type EmailSendCodeResponse,
   type NotificationLevel,
   type NotificationLevelResponse,
+  type PairsCatalogResponse,
   type StartLoginResponse,
   type TelegramChatMemberStatus,
   type TradingAccessResponse,
@@ -73,6 +75,7 @@ export interface BackendClient {
     level: NotificationLevel,
   ): Promise<NotificationLevelResponse>;
   readTradingAccess(telegramUserId: string): Promise<TradingAccessResponse>;
+  readPairs(): Promise<PairsCatalogResponse>;
 }
 
 export interface BackendClientOptions {
@@ -90,14 +93,22 @@ export function createBackendClient({
   // would drop `/api`
   const root = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
 
-  const post = async (path: string, body: unknown): Promise<unknown> => {
+  // a GET sends no body and so no content-type
+  const request = async (
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+  ): Promise<unknown> => {
     const signal = AbortSignal.timeout(timeoutMs);
     let response: Response;
     try {
       response = await fetch(new URL(path, root), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-        body: JSON.stringify(body),
+        method,
+        headers:
+          method === 'POST'
+            ? { 'content-type': 'application/json', authorization: `Bearer ${token}` }
+            : { authorization: `Bearer ${token}` },
+        ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
         signal,
       });
     } catch (error) {
@@ -131,6 +142,7 @@ export function createBackendClient({
     }
     return payload;
   };
+  const post = (path: string, body: unknown) => request('POST', path, body);
 
   return {
     async recordStart(request) {
@@ -193,7 +205,22 @@ export function createBackendClient({
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
     },
+    // the whole answer: `fresh` is the backend's verdict, and the bot keeps no copy of its bound
+    async readPairs() {
+      const parsed = safeParsePairsCatalogResponse(await request('GET', 'trading/pairs'));
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
+    },
   };
+}
+
+// The two fields a log line about a failed backend call carries besides the error's identity.
+export function backendErrorFields(error: unknown): {
+  backendStatus?: number;
+  backendReason?: string;
+} {
+  if (!(error instanceof BackendError)) return {};
+  return { backendStatus: error.status, backendReason: error.reason };
 }
 
 function errorCodeOf(body: unknown): string | undefined {

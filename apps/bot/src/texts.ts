@@ -10,10 +10,12 @@ import {
   TradeMode,
   type LinkBonusGrantView,
   type LinkedAccountView,
+  type PairView,
   type TelegramHtml,
   type TradingAccessResponse,
 } from '@binarius/shared';
 import type { BotCommand } from 'grammy/types';
+import type { DemoAssetGroup, DemoDurationSec } from './demo-catalog';
 import { formatAge, formatCount, formatUsd } from './format';
 
 // in place of an address the broker did not send; a fragment, so it is nested without a second
@@ -164,9 +166,37 @@ ${FEATURE_LINES}`,
   statusNoSnapshot: telegramHtml`⏳ Баланс Binodex ещё не получен — попробуй /menu через минуту.`,
   statusAmbiguous: telegramHtml`⚠️ Подключено несколько аккаунтов Binodex, баланс не выбран — напиши в поддержку: /support`,
   statusHint: telegramHtml`💡 Демо без риска — деньги не нужны.`,
-  // the demo button until #125 runs a session behind it
-  demoSoon: telegramHtml`🎮 <b>Запуск демо пока в разработке</b>
-Баланс и токены уже здесь — загляни позже.`,
+  // The demo's choice of a pair and a duration (#125), assembled by demoPairsScreen,
+  // demoDurationsScreen and demoSummary below. The holes are a group label, a page «2 из 4», the
+  // broker's symbol and its payout printed as it arrives; no profit, accuracy or probability is
+  // promised, and the payout is said to be the size of a win, not its chance.
+  demoGroups: telegramHtml`🎮 <b>Демо-сделка</b>
+Выбери тип актива. Это демо: деньги не нужны.`,
+  demoPairsHeader: (group: string) => telegramHtml`🎮 <b>Демо-сделка</b> · ${group}
+Выбери актив. Число на кнопке — выплата при верном прогнозе, не вероятность.`,
+  demoPage: (page: string) => telegramHtml`Страница ${page}`,
+  demoGroupClosed: (
+    group: string,
+  ) => telegramHtml`🔒 <b>${group}: сейчас всё закрыто по расписанию</b>
+Выбери другой тип актива.`,
+  demoAsset: (symbol: string) => telegramHtml`🎯 Актив: ${symbol}`,
+  demoPayout: (payout: string) =>
+    telegramHtml`💰 Выплата: ${payout}% — размер выигрыша при верном прогнозе, не вероятность.`,
+  demoChooseDuration: telegramHtml`Выбери длительность сделки.`,
+  demoDurationLine: (label: string) => telegramHtml`⏱ Длительность: ${label}`,
+  demoNext: telegramHtml`Дальше — анализ: бот посмотрит на свечи и скажет, есть ли сигнал.`,
+  // after «📊 Анализ» until #126 shows the analysis there
+  demoAnalysisSoon: telegramHtml`📊 <b>Анализ пока в разработке</b>
+Актив и длительность выбраны — анализ появится в следующей версии.`,
+  demoCatalogUnavailable: telegramHtml`⚠️ Каталог активов сейчас недоступен. Попробуй через минуту.`,
+  demoCatalogStale: telegramHtml`⏳ Каталог активов обновляется. Попробуй через минуту.`,
+  demoPairMissing: telegramHtml`❌ Этот актив больше не доступен. Выбери другой.`,
+  demoPairClosed: (symbol: string) =>
+    telegramHtml`🔒 ${symbol} сейчас закрыт по расписанию. Выбери другой актив.`,
+  demoDurationUnsupported: (symbol: string) =>
+    telegramHtml`❌ Эта длительность не подходит для ${symbol}. Выбери другую.`,
+  demoNoDuration: (symbol: string) =>
+    telegramHtml`❌ Для ${symbol} нет подходящей длительности. Выбери другой актив.`,
 } as const satisfies Record<string, TelegramHtml | ((value: string) => TelegramHtml)>;
 
 // The /help message: the three blocks, then one line per command in the menu's order.
@@ -323,8 +353,64 @@ export const LABELS = {
   menuCommand: 'Главное меню',
   // the status card's one button (#24)
   demoButton: '🎮 Запустить демо',
+  // the demo's screens (#125)
+  demoAnalysisButton: '📊 Анализ',
+  demoRetryButton: '🔄 Повторить',
+  demoBackGroupsButton: '↩️ Типы',
+  demoBackPairsButton: '↩️ Активы',
+  demoBackDurationsButton: '↩️ Длительность',
+  demoPrevButton: '◀️',
+  demoNextButton: '▶️',
   supportButton: '💬 Написать в поддержку',
 } as const satisfies Record<string, string | ((value: string | null) => string)>;
+
+// The demo's asset types (#125); ₿ is not Extended_Pictographic, so the crypto group takes 💠.
+export const DEMO_GROUP_LABELS = {
+  currency: '💱 Валюты',
+  commodity: '🛢 Сырьё',
+  stock: '📈 Акции',
+  cryptocurrency: '💠 Криптовалюты',
+  index: '📊 Индексы',
+  other: '📁 Другие',
+} as const satisfies Record<DemoAssetGroup, string>;
+
+export const DEMO_DURATION_LABELS = {
+  60: '⏱ 1 мин',
+  300: '⏱ 5 мин',
+  900: '⏱ 15 мин',
+  1800: '⏱ 30 мин',
+  3600: '⏱ 1 ч',
+} as const satisfies Record<DemoDurationSec, string>;
+
+// a type's button with the count of its open pairs
+export const groupButtonLabel = (group: DemoAssetGroup, openCount: number): string =>
+  `${DEMO_GROUP_LABELS[group]} · ${openCount}`;
+// a data label, like the confirm button's address: no emoji, the symbol as the broker spells it
+// (it already carries «OTC»), the payout printed as it arrives
+export const pairButtonLabel = (symbol: string, payout: number): string =>
+  `${symbol} · ${String(payout)}%`;
+
+// One screen of a type's pairs: the header naming the type, the page line.
+export const demoPairsScreen = (
+  group: DemoAssetGroup,
+  page: number,
+  pageCount: number,
+): TelegramHtml =>
+  telegramHtml`${TEXTS.demoPairsHeader(DEMO_GROUP_LABELS[group])}
+${TEXTS.demoPage(`${page + 1} из ${pageCount}`)}`;
+
+export const demoDurationsScreen = (pair: PairView): TelegramHtml =>
+  telegramHtml`${TEXTS.demoAsset(pair.symbol)}
+${TEXTS.demoPayout(String(pair.payout))}
+
+${TEXTS.demoChooseDuration}`;
+
+export const demoSummary = (pair: PairView, durationSec: DemoDurationSec): TelegramHtml =>
+  telegramHtml`${TEXTS.demoAsset(pair.symbol)}
+${TEXTS.demoDurationLine(DEMO_DURATION_LABELS[durationSec])}
+${TEXTS.demoPayout(String(pair.payout))}
+
+${TEXTS.demoNext}`;
 
 export const levelLabel = (level: NotificationLevel): string => LEVEL_LABELS[level];
 // the label of the level that is selected now, on its button
