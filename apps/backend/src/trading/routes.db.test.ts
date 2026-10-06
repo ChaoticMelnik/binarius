@@ -130,7 +130,9 @@ describe('auth', () => {
   it('rejects both routes without the internal token', async () => {
     const s = await seed();
     expect((await post(body(s.telegramUserId), 'Bearer nope')).statusCode).toBe(401);
-    expect((await get('00000000-0000-0000-0000-000000000000', '1', 'Bearer nope')).statusCode).toBe(401);
+    expect((await get('00000000-0000-0000-0000-000000000000', '1', 'Bearer nope')).statusCode).toBe(
+      401,
+    );
   });
 });
 

@@ -1,4 +1,4 @@
-import type { Context } from 'grammy';
+import type { Api, Context } from 'grammy';
 import type { TelegramHtml } from '@binarius/shared';
 
 // The bot's one send seam for user texts (the backend's is auth/link-notifier.ts): the only place
@@ -10,6 +10,10 @@ import type { TelegramHtml } from '@binarius/shared';
 type ReplyExtra = Omit<NonNullable<Parameters<Context['reply']>[1]>, 'parse_mode' | 'entities'>;
 type EditExtra = Omit<
   NonNullable<Parameters<Context['editMessageText']>[1]>,
+  'parse_mode' | 'entities'
+>;
+type EditByIdExtra = Omit<
+  NonNullable<Parameters<Api['editMessageText']>[3]>,
   'parse_mode' | 'entities'
 >;
 type VideoExtra = Omit<
@@ -27,6 +31,15 @@ export const replyHtml = (ctx: Context, text: TelegramHtml, extra?: ReplyExtra) 
 // On a callback query, grammY edits the message the pressed button is under.
 export const editMessageTextHtml = (ctx: Context, text: TelegramHtml, extra?: EditExtra) =>
   ctx.editMessageText(text.value, { ...extra, parse_mode: 'HTML' });
+
+// Outside an update (the intent tracker, #127): the message named by its chat and id.
+export const editMessageTextByIdHtml = (
+  api: Pick<Api, 'editMessageText'>,
+  chatId: number,
+  messageId: number,
+  text: TelegramHtml,
+  extra?: EditByIdExtra,
+) => api.editMessageText(chatId, messageId, text.value, { ...extra, parse_mode: 'HTML' });
 
 export const replyWithVideoHtml = (
   ctx: Context,

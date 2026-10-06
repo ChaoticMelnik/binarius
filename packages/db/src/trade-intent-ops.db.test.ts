@@ -655,10 +655,14 @@ describe('getTradeIntentView', () => {
       intentRequest(owner.telegramUserId),
       flagOff,
     );
-    expect(await getTradeIntentView(tmp.db, intent.id, BigInt(owner.telegramUserId))).toMatchObject({
-      id: intent.id,
-    });
-    expect(await getTradeIntentView(tmp.db, intent.id, BigInt(other.telegramUserId))).toBeUndefined();
+    expect(await getTradeIntentView(tmp.db, intent.id, BigInt(owner.telegramUserId))).toMatchObject(
+      {
+        id: intent.id,
+      },
+    );
+    expect(
+      await getTradeIntentView(tmp.db, intent.id, BigInt(other.telegramUserId)),
+    ).toBeUndefined();
   });
 });
 
