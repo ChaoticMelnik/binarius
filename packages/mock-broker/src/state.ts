@@ -3,15 +3,15 @@ import {
   TradeAction,
   TradeMode,
   type BinaryPairWire,
-  type BrokerUserWire,
-  type ClosedTradeWire,
+  type BrokerUserWireInput,
+  type ClosedTradeWireInput,
   type OpenTradeRequestWire,
-  type OpenTradeWire,
+  type OpenTradeWireInput,
   type UnixMs,
 } from '@binarius/shared';
 import type { MockSocketPayload } from './encoding';
 import { FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
-import { formatCents, parseCents, percentOf, requireCents } from './money';
+import { parseCents, percentOf, requireCents, wireMoney } from './money';
 import { rawPriceAt, roundTo } from './price';
 
 export const MockTradeStatus = { Open: 'open', Closed: 'closed' } as const;
@@ -30,8 +30,8 @@ export type MockChangeType = (typeof MockChangeType)[keyof typeof MockChangeType
 
 // shared's trade schemas know neither field and zod drops unknown keys, so a parse of a fixture
 // response does not see them (docs/mock-broker.md -> Drift); broker-web reads both
-export type MockOpenTradeWire = OpenTradeWire & { close_timestamp: UnixMs; symbol: string };
-export type MockClosedTradeWire = ClosedTradeWire & { symbol: string };
+export type MockOpenTradeWire = OpenTradeWireInput & { close_timestamp: UnixMs; symbol: string };
+export type MockClosedTradeWire = ClosedTradeWireInput & { symbol: string };
 export type MockTradeWire = MockOpenTradeWire | MockClosedTradeWire;
 
 export type MockChange =
@@ -166,7 +166,7 @@ export interface BrokerState {
   registerUser(seed: MockUserSeed): void;
   revokeToken(token: string): void;
   authenticate(token: string): number | undefined;
-  getUser(id: number): BrokerUserWire;
+  getUser(id: number): BrokerUserWireInput;
   listPairs(): BinaryPairWire[];
   findPair(id: number): BinaryPairWire | undefined;
   updatePair(id: number, patch: { payout?: number; scheduled_until?: number }): void;
@@ -186,9 +186,9 @@ const modeOf = (isDemo: boolean): TradeMode => (isDemo ? TradeMode.Demo : TradeM
 
 function balanceWire({ available, held }: Balance) {
   return {
-    available: formatCents(available),
-    held: formatCents(held),
-    total: formatCents(available + held),
+    available: wireMoney(available),
+    held: wireMoney(held),
+    total: wireMoney(available + held),
   };
 }
 
@@ -197,9 +197,9 @@ function openWire(trade: TradeRecord): MockOpenTradeWire {
     id: trade.id,
     asset_id: trade.assetId,
     action: trade.action,
-    amount: formatCents(trade.amount),
+    amount: wireMoney(trade.amount),
     payout: trade.payout,
-    potential_profit: formatCents(trade.potentialProfit),
+    potential_profit: wireMoney(trade.potentialProfit),
     open_price: trade.openPrice,
     open_timestamp: trade.openTimestamp,
     close_timestamp: trade.closeTimestamp,
@@ -215,13 +215,13 @@ function closedWire(trade: TradeRecord, closePrice: number, profit: bigint): Moc
     id: trade.id,
     asset_id: trade.assetId,
     action: trade.action,
-    amount: formatCents(trade.amount),
+    amount: wireMoney(trade.amount),
     payout: trade.payout,
     open_price: trade.openPrice,
     open_timestamp: trade.openTimestamp,
     close_price: closePrice,
     close_timestamp: trade.closeTimestamp,
-    profit: formatCents(profit),
+    profit: wireMoney(profit),
     is_demo: trade.isDemo,
     source: BrokerTradeSource.Api,
     broker_client_id: null,
@@ -318,7 +318,7 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
       return {
         id: user.id,
         level: { ...user.level },
-        min_trade_amount: formatCents(user.minTradeAmount),
+        min_trade_amount: wireMoney(user.minTradeAmount),
         real: balanceWire(user.balances[TradeMode.Real]),
         demo: balanceWire(user.balances[TradeMode.Demo]),
       };

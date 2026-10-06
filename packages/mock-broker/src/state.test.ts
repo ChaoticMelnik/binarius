@@ -1,5 +1,4 @@
 import {
-  isDecimalString,
   safeParseBinaryPairs,
   safeParseBrokerUser,
   safeParseClosedTrade,
@@ -54,12 +53,12 @@ describe('users', () => {
     expect(user).toEqual({
       id: 1,
       level: { code: 'standard', rank: 1 },
-      min_trade_amount: '1.00',
-      demo: { available: '10000.00', held: '0.00', total: '10000.00' },
-      real: { available: '0.00', held: '0.00', total: '0.00' },
+      min_trade_amount: 1,
+      demo: { available: 10000, held: 0, total: 10000 },
+      real: { available: 0, held: 0, total: 0 },
     });
     expect(safeParseBrokerUser(user).success).toBe(true);
-    for (const value of moneyFields(user)) expect(isDecimalString(value)).toBe(true);
+    for (const value of moneyFields(user)) expect(typeof value).toBe('number');
   });
 
   it('takes the seed over the defaults', () => {
@@ -71,9 +70,9 @@ describe('users', () => {
     }).getUser(1);
     expect(user).toMatchObject({
       level: { code: 'vip', rank: 3 },
-      min_trade_amount: '5.00',
-      demo: { available: '1.50', total: '1.50' },
-      real: { available: '250.25', total: '250.25' },
+      min_trade_amount: 5,
+      demo: { available: 1.5, total: 1.5 },
+      real: { available: 250.25, total: 250.25 },
     });
   });
 
@@ -144,10 +143,10 @@ describe('openTrade', () => {
       id: 1,
       asset_id: EURUSD,
       action: 'up',
-      amount: '3.33',
+      amount: 3.33,
       payout: 85,
       // floor(333 * 85 / 100) = 283 cents
-      potential_profit: '2.83',
+      potential_profit: 2.83,
       is_demo: true,
       source: 'api',
       broker_client_id: null,
@@ -158,12 +157,17 @@ describe('openTrade', () => {
     expect(trade.close_timestamp).toBe(trade.open_timestamp + 120_000);
     expect(trade.open_price).toBe(state.priceAt(EURUSD, trade.open_timestamp));
     expect(safeParseOpenTrade(trade).success).toBe(true);
-    expect(state.getUser(1).demo).toEqual({
-      available: '9996.67',
-      held: '3.33',
-      total: '10000.00',
-    });
-    expect(state.getUser(1).real).toEqual({ available: '0.00', held: '0.00', total: '0.00' });
+    expect(state.getUser(1).demo).toEqual({ available: 9996.67, held: 3.33, total: 10000 });
+    expect(state.getUser(1).real).toEqual({ available: 0, held: 0, total: 0 });
+  });
+
+  // the live probe of 2026-10-03: a 1.5 demo stake leaves fractions in available/held, an integer total
+  it('mirrors the live 1.5 stake', () => {
+    const state = stateWithUser();
+    open(state, { amount: amount('1.5') });
+    const { demo } = state.getUser(1);
+    expect(demo).toEqual({ available: 9998.5, held: 1.5, total: 10000 });
+    expect(Number.isInteger(demo.total)).toBe(true);
   });
 
   // documents why the fixture's own tests check these two fields on the raw body: the day shared
@@ -179,8 +183,8 @@ describe('openTrade', () => {
   it('takes the real balance for is_demo false', () => {
     const state = stateWithUser({ real: { available: '20.00' } });
     open(state, { is_demo: false, amount: amount('20') });
-    expect(state.getUser(1).real).toEqual({ available: '0.00', held: '20.00', total: '20.00' });
-    expect(state.getUser(1).demo.available).toBe('10000.00');
+    expect(state.getUser(1).real).toEqual({ available: 0, held: 20, total: 20 });
+    expect(state.getUser(1).demo.available).toBe(10000);
     expect(state.openTrade(1, request({ is_demo: false, amount: amount('1') }))).toEqual({
       ok: false,
       message: 'Insufficient balance',
@@ -204,14 +208,14 @@ describe('openTrade', () => {
     expect(refusal({ amount: amount('1'), duration: 1 })).toBe('Unsupported duration');
     expect(refusal({ amount: amount('1') })).toBe('Amount is below the minimum');
     expect(refusal({ amount: amount('5.01') })).toBe('Insufficient balance');
-    expect(state.getUser(1).demo).toEqual({ available: '5.00', held: '0.00', total: '5.00' });
+    expect(state.getUser(1).demo).toEqual({ available: 5, held: 0, total: 5 });
   });
 
   it('accepts the boundaries: amount at the minimum and at the whole balance, both duration ends', () => {
     const state = stateWithUser({ demo: { available: '7.00' }, minTradeAmount: '2.00' });
     open(state, { amount: amount('2.00'), duration: 60 });
     open(state, { amount: amount('5.00'), duration: 3600 });
-    expect(state.getUser(1).demo).toEqual({ available: '0.00', held: '7.00', total: '7.00' });
+    expect(state.getUser(1).demo).toEqual({ available: 0, held: 7, total: 7 });
     const longer = state.openTrade(1, request({ amount: amount('2'), duration: 3601 }));
     expect(longer).toEqual({ ok: false, message: 'Unsupported duration' });
     const shorter = state.openTrade(1, request({ amount: amount('2'), duration: 59 }));
@@ -236,7 +240,7 @@ describe('openTrade', () => {
     expect(state.listTrades(1, { limit: 20, offset: 0 })[0]).toMatchObject({
       id: trade.id,
       payout: 85,
-      potential_profit: '8.50',
+      potential_profit: 8.5,
     });
   });
 
@@ -265,11 +269,7 @@ describe('onChange listeners that throw', () => {
     expect(result.ok).toBe(true);
     expect(after).toHaveBeenCalledTimes(1);
     expect(state.listTrades(1, { limit: 20, offset: 0 })).toHaveLength(1);
-    expect(state.getUser(1).demo).toEqual({
-      available: '9990.00',
-      held: '10.00',
-      total: '10000.00',
-    });
+    expect(state.getUser(1).demo).toEqual({ available: 9990, held: 10, total: 10000 });
     expect(state.listenerErrors).toEqual([failure]);
     state.clearListenerErrors();
     expect(state.listenerErrors).toEqual([]);
@@ -292,23 +292,19 @@ describe('settle', () => {
     const state = stateWithUser();
     const trade = open(state, { amount: amount('10') });
     const closed = state.settle(Number(trade.id), { outcome: 'win' });
-    expect(closed).toMatchObject({ id: trade.id, profit: '8.50', symbol: 'EUR/USD' });
+    expect(closed).toMatchObject({ id: trade.id, profit: 8.5, symbol: 'EUR/USD' });
     expect(closed.close_timestamp).toBe(trade.close_timestamp);
     expect(safeParseClosedTrade(closed).success).toBe(true);
-    expect(state.getUser(1).demo).toEqual({
-      available: '10008.50',
-      held: '0.00',
-      total: '10008.50',
-    });
+    expect(state.getUser(1).demo).toEqual({ available: 10008.5, held: 0, total: 10008.5 });
   });
 
   it('keeps the stake on a loss and reports a negative profit', () => {
     const state = stateWithUser();
     const trade = open(state, { amount: amount('10') });
     const closed = state.settle(Number(trade.id), { outcome: 'loss' });
-    expect(closed.profit).toBe('-10.00');
-    expect(isDecimalString(closed.profit)).toBe(true);
-    expect(state.getUser(1).demo).toEqual({ available: '9990.00', held: '0.00', total: '9990.00' });
+    expect(closed.profit).toBe(-10);
+    expect(typeof closed.profit).toBe('number');
+    expect(state.getUser(1).demo).toEqual({ available: 9990, held: 0, total: 9990 });
   });
 
   it.each([

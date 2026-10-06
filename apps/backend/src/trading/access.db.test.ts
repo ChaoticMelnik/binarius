@@ -273,9 +273,8 @@ describe('POST /trading/access → broker', () => {
       'real',
       'restSnapshotAgeSec',
     ]);
-    const wire = broker.users.get(user.mockId);
     expect(body.broker).toMatchObject({
-      demo: { available: `${wire.demo.available}000000`, held: `${wire.demo.held}000000` },
+      demo: { available: '10000.00000000', held: '0.00000000' },
       restSnapshotAgeSec: 0,
       balanceEventAgeSec: null,
       fresh: true,

@@ -33,7 +33,7 @@ await broker.close();
 | --- | --- |
 | `url` | `http://127.0.0.1:<port>`, without the `/v1/broker` prefix; also the Socket.IO URL |
 | `state` | the store behind the routes and the socket (`createBrokerState()`); it announces `state.onChange` events (`trade_opened`, `trade_closed`, `pair_updated`, `token_revoked`) |
-| `users.register(seed)` | a user with a bearer token; defaults: level `standard`/1, `min_trade_amount` `1.00`, demo `10000.00` (#8), real `0.00` |
+| `users.register(seed)` | a user with a bearer token; defaults: level `standard`/1, `min_trade_amount` `1.00`, demo `10000.00` (#8), real `0.00`; the defaults are decimal-string seeds, on the wire they go out as JSON numbers (`1`, `10000`, `0`) |
 | `users.revokeToken(token)` | the token is answered `Invalid token` from then on, and every socket of its user gets `user.disconnect_token_expired` and is dropped |
 | `users.get(id)` | the `GET /user` body |
 | `pairs.list()` / `pairs.update(id, { payout?, scheduled_until? })` | the catalogue, `DEFAULT_PAIRS` unless `options.pairs` is given |
@@ -244,7 +244,7 @@ Every payload except `null` goes through the fixture's payload form ([Payload fo
 | `common.assets_update { asset_id, payout, scheduled_until }` | `pairs.update()`, even with an empty patch | every authenticated socket |
 | `user.disconnect_token_expired` (`null`), then the server drops the socket | `users.revokeToken()` of a known token | every socket of the user |
 
-Money is decimal strings, as on REST (Drift 1 and 6). All 15 server→client events of shared's
+Money is JSON numbers, as on REST and as the live broker sends it (Drift 1 and 6). All 15 server→client events of shared's
 `BrokerServerToClientEvents` are emitted. The last test of `socket.test.ts` triggers each one in a
 single test and fails on a missing one; a type check in the same file fails to compile if
 the contract gains an event that the list does not name.
@@ -340,14 +340,16 @@ checked against socket.io 4.8.4 and Fastify 5.12.5. A second `close()` resolves.
 The fixture follows the shared contract wherever the contract has an answer. Each response is
 checked in the fixture's own tests by shared's `safeParse*` functions. In the places below,
 shared and the live broker (or `binodex/broker-web`) disagreed or shared was silent; items 1–3
-are resolved, 4–5 and 9 remain, and 6–8 are handled on the consumer's side:
+and 6 are resolved, 4–5 and 9 remain, and 7–8 are handled on the consumer's side:
 
-1. **Money form. Resolved 2026-10-02.** The live `GET /v1/broker/user` answers every money field
-   as a JSON integer. Since #98 shared accepts a decimal string or a safe JSON integer
-   (`moneyWireSchema`) and maps both to `DecimalString`. The fixture still sends strings
-   (`"10000.00"`) and does not mirror the live form, because the unit (whole currency units or
-   minor units) is not known yet. Switching the fixture is a follow-up once the unit is
-   confirmed (docs/broker-rest.md → Open items).
+1. **Money form. Resolved 2026-10-06 (#236).** The live broker counts whole currency units and
+   answers a whole amount as a JSON integer and a fractional one as a JSON fraction, both in one
+   object (2026-10-03: `available` 9998.5, `held` 1.5, `total` 10000). Shared accepts a decimal
+   string, a safe JSON integer or a plain JSON fraction of at most 15 significant digits
+   (`moneyWireSchema`) and maps each to `DecimalString`. The fixture keeps bigint cents and sends
+   every money field as a JSON number through `wireMoney` (`money.ts`): `10000`, `9998.5`, never
+   `"10000.00"`. `wireMoney` throws on 10^15 cents or more, so the fixture never sends a number
+   shared refuses.
 2. **Chart request. Resolved in #98.** Shared now takes `interval` only in the string form
    (`CHART_INTERVAL_PATTERN`) and requires `start_time`, as the live broker and the fixture do.
 3. **`{ trades }` envelope. Resolved in #98:** `tradesListWireSchema`.
@@ -359,11 +361,10 @@ are resolved, 4–5 and 9 remain, and 6–8 are handled on the consumer's side:
    as a signal to drop the duplicate check.
 5. **`is_demo`** is optional in broker-web and always present in shared and in the fixture. The
    live trade list was empty on 2026-10-02, so this waits for a live trade.
-6. **Money on the socket.** The live `user.data` carried every money field as a JSON integer. The
-   socket sends decimal strings like REST, and shared parses both forms. Like item 1, it moves
-   to the live form together with REST, in the same follow-up, once the unit is known
-   (docs/broker-rest.md → Open items 1). `balanceWire`, `openWire` and `closedWire` in `state.ts`
-   are the one place to change for both.
+6. **Money on the socket. Resolved 2026-10-06 (#236).** The socket sends the same JSON numbers as
+   REST (`user.data`, `update_balance`, `open_trade.success`, `close_trade.success`), because
+   `balanceWire`, `openWire` and `closedWire` in `state.ts` are the one place money reaches either
+   wire. The trade shapes are assumed, not recorded live (docs/broker-rest.md → Open items 3).
 7. **`user.auth.success` carries one argument, `null`**, where shared's event map says
    `() => void`. The normalizer's `extraArgs` rule does not count that `null`
    (docs/broker-socket.md → `extraArgs`).
@@ -403,5 +404,6 @@ are resolved, 4–5 and 9 remain, and 6–8 are handled on the consumer's side:
   #101.
 - The OAuth endpoints, moving `apps/backend/src/broker/testing/oauth-stub.ts` here, and a `bin`
   or compose service: #105.
-- Changes to `packages/shared`: money, chart and `{trades}` landed in #98; `symbol` and
-  `close_timestamp` (Drift 4) remain. #104 changes nothing in shared (Drift 6-9).
+- Changes to `packages/shared`: money, chart and `{trades}` landed in #98; the fraction branch of
+  `moneyWireSchema` and the number form of the fixture — #236; `symbol` and `close_timestamp`
+  (Drift 4) remain. #104 changes nothing in shared (Drift 6-9).
