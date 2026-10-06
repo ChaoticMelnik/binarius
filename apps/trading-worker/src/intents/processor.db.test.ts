@@ -13,7 +13,7 @@ import {
 } from '@binarius/db';
 import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import type { SubmitResult, TradeExecutor } from './executor';
-import { notConfiguredExecutor } from './executor';
+import { notConfiguredExecutor, realTradingGate } from './executor';
 import { InvalidJobError, processIntentJob, type ProcessorDeps } from './processor';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -119,6 +119,25 @@ describe('processIntentJob', () => {
     });
     expect(await reservedOf(userId)).toBe(0n);
     expect(await ledgerKinds(intentId)).toEqual(['reserve', 'release']);
+  });
+
+  // backend created it with the grant on; this worker runs with it off (#134)
+  it('rejects a real intent at the grant gate and releases the token', async () => {
+    const seed = await seedQueuedIntent(tmp.db, { mode: 'real' }, { realTradingEnabled: true });
+    const intentId = seed.intent.id;
+    const inner = executorOf({ outcome: 'accepted' });
+    const gated = realTradingGate(inner, { realTradingEnabled: false });
+    expect(await processIntentJob(deps(gated), { intentId })).toBe('rejected');
+    const row = await statusOf(intentId);
+    expect(row).toMatchObject({
+      status: 'rejected',
+      lastError: 'real_trading_disabled',
+      tokensReserved: 0n,
+    });
+    expect(row.submittedAt).toBeInstanceOf(Date);
+    expect(await reservedOf(seed.userId)).toBe(0n);
+    expect(await ledgerKinds(intentId)).toEqual(['reserve', 'release']);
+    expect(inner.calls).toBe(0);
   });
 
   it('records an unknown outcome with a reconciliation row and keeps the reserve', async () => {

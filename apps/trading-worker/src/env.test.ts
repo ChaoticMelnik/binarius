@@ -15,7 +15,18 @@ describe('parseEnv', () => {
       intentMaxAgeMs: 60_000,
       submitAckTimeoutMs: 10_000,
       workerConcurrency: 5,
+      realTradingEnabled: false,
     });
+  });
+
+  it('reads REAL_TRADING_ENABLED', () => {
+    expect(parseEnv({ ...valid, REAL_TRADING_ENABLED: 'true' }).realTradingEnabled).toBe(true);
+  });
+
+  it('refuses a REAL_TRADING_ENABLED that is not true or false', () => {
+    expect(() => parseEnv({ ...valid, REAL_TRADING_ENABLED: 'yes' })).toThrow(
+      'Env REAL_TRADING_ENABLED must be one of: true false',
+    );
   });
 
   it('accepts explicit values', () => {

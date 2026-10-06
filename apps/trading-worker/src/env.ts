@@ -3,6 +3,7 @@ import {
   REDIS_URL_RULES,
   parseBoundedIntegerEnv,
   parseLogLevelEnv,
+  parseRealTradingEnabledEnv,
   parseUrlEnv,
   readEnv,
   type EnvSource,
@@ -22,6 +23,7 @@ export interface Env {
   intentMaxAgeMs: number;
   submitAckTimeoutMs: number;
   workerConcurrency: number;
+  realTradingEnabled: boolean;
 }
 
 export function parseEnv(source: EnvSource): Env {
@@ -49,5 +51,6 @@ export function parseEnv(source: EnvSource): Env {
       1,
       MAX_WORKER_CONCURRENCY,
     ),
+    realTradingEnabled: parseRealTradingEnabledEnv(source),
   };
 }

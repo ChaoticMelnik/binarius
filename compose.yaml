@@ -215,6 +215,9 @@ services:
       INTENT_MAX_AGE_MS:
       SUBMIT_ACK_TIMEOUT_MS:
       WORKER_CONCURRENCY:
+      # the trading grant, the same .env value as backend's (see there): real intents reach the
+      # executor only when true, otherwise rejected with real_trading_disabled
+      REAL_TRADING_ENABLED:
     develop:
       watch:
         - path: ./apps/trading-worker/src

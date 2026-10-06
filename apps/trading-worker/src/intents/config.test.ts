@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
+import {
+  composeDurationMs,
+  composeServiceEnvValue,
+  composeServiceValue,
+} from '@binarius/shared/testing';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import {
   COMPOSE_STOP_GRACE_PERIOD_MS,
@@ -35,5 +39,12 @@ describe('timing constants', () => {
     expect(
       composeDurationMs(composeServiceValue(composeYaml, 'trading-worker', 'stop_grace_period')),
     ).toBe(COMPOSE_STOP_GRACE_PERIOD_MS);
+  });
+});
+
+// the same entry under backend is pinned in apps/backend/src/timing.test.ts
+describe('the trading grant', () => {
+  it('forwards REAL_TRADING_ENABLED to the trading-worker without a default of its own', () => {
+    expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'REAL_TRADING_ENABLED')).toBe('');
   });
 });
