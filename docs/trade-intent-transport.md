@@ -28,7 +28,7 @@ bot ──POST /trading/intents──▶ backend ──tx──▶ trade_intents
                                    ◀─────────────────────────────────────┘
                               publisher: pending row ──add(jobId = intent id)──▶ BullMQ trading-intents
                               worker: re-read ──CAS queued→submitting──▶ executor.submit ──▶ CAS submitting→accepted|rejected|unknown
-unknown ──outbox──▶ BullMQ trading-reconciliation ──CAS unknown→reconciling + wake──▶ pass: claim
+unknown ──outbox──▶ BullMQ trading-reconciliation ──CAS unknown→reconciling──▶ pass (next tick): claim
         ──token (backend route) + GETs only──▶ CAS reconciling→accepted(→settled) | rejected | manual_review(+halt)
 bot ──GET /trading/intents/:id?telegramUserId=…──▶ backend ──▶ { intent }   (status, lastError, version)
 ```
@@ -226,26 +226,37 @@ already linked to an intent of the account (`listLinkedBrokerTradeIds`) are drop
 counting, so an earlier trade with the same keys is not a second match.
 
 **Reads.** One token from the backend (`mayRefresh: true`), then the open list, then the closed
-list, each in pages of 50 (`RECONCILE_TRADES_PAGE_SIZE`) up to 2 pages
-(`RECONCILE_MAX_TRADE_PAGES`), in the intent's mode. A list is covered once a page is short or
-its oldest trade is older than the window. The trades are merged by `id`, the closed form winning
-(a trade that closed between the two reads). Each page must be newest first (non-increasing
-`open_timestamp`, also across the seam of two pages); a page that is not answers
-`unavailable/broker_contract`, never `not_found` (the order is the mock's and broker-web's, not
-yet observed live: docs/broker-rest.md → Trades list).
+list, in the intent's mode, each through `readTradePages` (`intents/trade-pages.ts`, the one page
+reader): pages asked with `limit` 50 (`RECONCILE_TRADES_PAGE_SIZE`), up to 2 GETs per list
+(`RECONCILE_MAX_TRADE_PAGES`). A page's length is never the list's end: a list is covered only by
+an empty page or by a page holding a trade older than the window. The next offset is the previous
+one plus the page's length minus one, so every page after the first starts with a trade already
+read. A page that grows in `open_timestamp` (`order`), does not start with a trade read
+(`continuity`), repeats what was read (`no_progress`) or whose first unread trade is newer than the
+previous page's last (`seam`) answers `unavailable/broker_contract`, never `not_found`. A capped or
+ignored `limit` only shortens the reach: `window_not_covered`. The trades are merged by `id`, the
+closed form winning (a trade that closed between the two reads). The order is the mock's and
+broker-web's, not yet observed live (docs/broker-rest.md → Trades list).
 
 **Answers.**
 
-| Candidates | Covered | Window closed by `reconcile_claimed_at` | Answer                                    |
-| ---------- | ------- | --------------------------------------- | ----------------------------------------- |
-| ≥ 2        | any     | any                                     | `ambiguous` → `manual_review` + halt      |
-| any        | no      | any                                     | `unavailable/window_not_covered`          |
-| 1          | yes     | any                                     | `found`                                   |
-| 0          | yes     | no                                      | `unavailable/window_open`                 |
-| 0          | yes     | yes                                     | `not_found` → `rejected`, reserve released |
+A *near match* is an unlinked trade in the window with the intent's asset, action and mode but
+another amount — the one key the broker may round. It is never `found`.
 
-`not_found` needs all three: both lists read without error, every list covered, and the claim's
-database time at or past `submitted_at + 90 s` — usually the second or third attempt. The token
+| Candidates                                    | Covered | Window closed by `reconcile_claimed_at` | Answer                                    |
+| --------------------------------------------- | ------- | --------------------------------------- | ----------------------------------------- |
+| ≥ 2 exact                                     | any     | any                                     | `ambiguous` → `manual_review` + halt      |
+| any                                           | no      | any                                     | `unavailable/window_not_covered`          |
+| 1 exact                                       | yes     | any                                     | `found`                                   |
+| 0 exact                                       | yes     | no                                      | `unavailable/window_open`                 |
+| 0 exact, ≥ 1 near                             | yes     | yes                                     | `ambiguous` → `manual_review` + halt      |
+| 0 exact, the intent's `last_error = trade_mismatch` | yes | yes                                   | `ambiguous` → `manual_review` + halt      |
+| 0 exact, no near match, no ack mismatch       | yes     | yes                                     | `not_found` → `rejected`, reserve released |
+
+`not_found` needs all of: both lists read without error, every list covered, the claim's
+database time at or past `submitted_at + 90 s` (usually the second or third attempt), no near
+match, and an intent the executor did not see mismatch (`trade_mismatch` on the ack path means the
+broker opened a trade for this order, so releasing the reserve would be wrong). The token
 route refusing (`token_unavailable`) or failing (`backend_unavailable`) and every broker error
 (`rate_limited`, `unauthorized` → `token_unavailable`, `rejected`/`contract_violation` →
 `broker_contract`, `unavailable`, `aborted` → `timeout`) answer `unavailable` with a `warn`;
@@ -261,7 +272,7 @@ both columns (the pair CHECK).
 
 **Settlement catch-up.** `listOverdueAcceptedIntents` (open time + duration + 30 s grace by the
 database clock), then per intent the token with `mayRefresh: false`, the closed list (the same
-order check) until the trade or a short page, and `settleClosedTrades` over every closed trade
+page reader) until the trade or the list's end, and `settleClosedTrades` over every closed trade
 read. Each ending:
 
 | Ending                                                              | Account held back for 120 s |
@@ -269,17 +280,22 @@ read. Each ending:
 | `settled`, `already_settled`, `intent_not_accepted` (left the queue) | no                          |
 | trade not in the pages read (still open, or past the cap)           | yes                         |
 | token refused or the backend failing                                | yes, one `warn` per attempt |
-| broker error other than `rate_limited`, page order broken           | yes                         |
+| broker error other than `rate_limited`, inconsistent pages          | yes                         |
 | `rate_limited`                                                      | no; the tick ends           |
 | the attempt's deadline, a throw                                     | yes                         |
-| `stop()` during the attempt                                         | no                          |
+| `stop()` during the attempt, the token fetch included              | no                          |
 
 **Budget.** The broker allows 600 requests a minute per IP and the backend's balance refresh
 takes up to 200 by default. The worker's worst case is 20 × 2 lists × 2 pages × 4 ticks + 20 × 2
-pages × 2 ticks = 400 GETs a minute (`WORKER_BROKER_GETS_PER_MINUTE`, checked at import). The two
-processes share no constant: with `BALANCE_POLL_MAX_PER_MINUTE` above 200 the sum can pass 600 —
-an accepted risk, the broker answers 429 and a tick ends without losing anything. Reconciliation
-then handles at most 80 intents a minute.
+pages × 2 ticks = 400 GETs a minute (`WORKER_BROKER_GETS_PER_MINUTE`, checked at import). It is a
+true bound because both loops tick only on their intervals — the reconciliation job does not start
+a tick, and a tick never overlaps the next. Reconciliation handles at most 80 intents a minute; a
+new `reconciling` intent waits for the next tick (≤ 15 s). A 429 ends a tick and the attempt is
+retried on the lease or the next tick. Its one real cost is a refresh exchange in flight on the
+backend: a 429 on `/user-auth/refresh` is classified `rejected` → `refresh_outcome_unknown` → the
+account is revoked (Rule 12, one attempt). The worker's share keeps its own traffic from driving
+the IP to 429; the sum with the backend's when `BALANCE_POLL_MAX_PER_MINUTE` is above 200 is
+stated, not enforced.
 
 ## Delivery, ACK and timeout semantics
 
@@ -295,7 +311,7 @@ then handles at most 80 intents a minute.
 | `executor.submit`                                                                                                                                 | none                                                                                                                                                                      | `SUBMIT_ACK_TIMEOUT_MS` (10 s), enforced by the processor with `Promise.race`; the executor also receives an `AbortSignal`                                | `realTradingGate` first: a real intent with the flag off → `rejected` (`real_trading_disabled`), the inner executor never called. Then timeout → `unknown` (`executor_timeout`); throw → `unknown` (`executor_error`)                                                    |
 | Outcome write                                                                                                                                     | none                                                                                                                                                                      | —                                                                                                                                                         | `accepted` writes the open `broker_trades` row in the same transaction; a trade that does not match the intent → `unknown` (`trade_mismatch`) + reconciliation row. A database failure here fails the job (dead letter); the intent stays `submitting` until the sweeper |
 | Stale `submitting` (redelivery or sweeper, every 15 s)                                                                                            | —                                                                                                                                                                         | `STALE_SUBMITTING_MS` 60 s ≥ `lockDuration` > max ack timeout                                                                                             | → `unknown` (`stale_submitting`) + reconciliation row                                                                                                                                                                                                                    |
-| Reconciliation job, topic `trading-reconciliation`                                                                                                | `attempts: 1`, as above                                                                                                                                                   | the BullMQ job options above                                                                                                                              | `unknown → reconciling` and a wake of the pass; it never asks the broker. A throw dead-letters with `topic`, and the outbox re-pends the row after 30 s while the intent is still `unknown`                                                                              |
+| Reconciliation job, topic `trading-reconciliation`                                                                                                | `attempts: 1`, as above                                                                                                                                                   | the BullMQ job options above                                                                                                                              | `unknown → reconciling`; the pass takes it on its next tick, within `RECONCILE_TICK_MS`; the job never asks the broker. A throw dead-letters with `topic`, and the outbox re-pends the row after 30 s while the intent is still `unknown`                                                                              |
 | Reconciliation attempt (the pass, every 15 s, at most 20 candidates, one after another)                                                           | after the lease: the claim (`reconcile_claimed_at = now()`, `version + 1`) is the first write and keeps the intent from being a candidate for `RECONCILE_RETRY_MS` (60 s) | `RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s) per `reconcile()` call (the token plus up to four GETs), enforced by the pass with `Promise.race`; the reconciler also receives an `AbortSignal`     | `unavailable`, a deadline or a throw write nothing beyond the claim; `rate_limited` ends the tick. Every outcome is a CAS on `status = reconciling` and the claim's `version`, so an attempt whose lease was re-claimed cannot write                                     |
 | Settlement catch-up (every 30 s, at most 20 overdue intents, one after another)                                                                   | an attempt that does not take its intent out of `accepted` holds the account back for `CATCHUP_STALLED_RETRY_MS` (120 s), in memory                                     | `CATCHUP_ATTEMPT_TIMEOUT_MS` (20 s): the token (`mayRefresh: false`) and up to two closed pages                                                          | `rate_limited` ends the tick and holds nobody; a throw is logged with `errorLogFields` and holds the account. `settleClosedTrades` is idempotent, so a repeat is safe                                     |
 
@@ -303,7 +319,7 @@ Invariants these numbers encode (asserted at import in `apps/trading-worker/src/
 and `apps/backend/src/timing.ts`, and held against `compose.yaml` by tests): worker
 `SUBMIT_ACK_TIMEOUT_MS ≤ 30 s < phase 1 35 s`, `35 s + phase 2 4 s < stop_grace_period 40 s <
 lockDuration 60 s ≤ STALE_SUBMITTING_MS 60 s`; backend `publish deadline 5 s < phase 1 10 s`,
-`10 s + 4 s < stop_grace_period 20 s`; reconciliation `BROKER_REST_TIMEOUT_MS 5 s < attempt 20 s <
+`10 s + 4 s < stop_grace_period 20 s`; reconciliation `BROKER_REST_TIMEOUT_MS 5 s < attempt 30 s <
 lease 60 s`, `attempt 30 s < phase 1 35 s` (phase 1 also waits for `pass.stop()`: the attempt in
 flight plus one outcome write), `tick 15 s ≤ lease 60 s`; #90 adds `token route 7 s + 4 × 5 s <
 attempt 30 s`, `ack cap 30 s < window after 90 s`, `token 7 s + 2 × 5 s < catch-up attempt 20 s <

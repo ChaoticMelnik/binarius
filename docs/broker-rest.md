@@ -195,8 +195,12 @@ these, taken from the fixture and broker-web, not from a live run:
 - **A1 order:** `status=closed` and `status=open` come newest first by `open_timestamp`. The code
   checks every page and the seam between pages; a violation answers `broker_contract`, never
   `not_found`.
-- **A2 `limit`/`offset`:** honoured, with disjoint pages. If ignored, the short-page stop still
-  ends a short history; a longer one answers `window_not_covered`.
+- **A2 `limit`/`offset`:** honoured, with disjoint pages. The code does not depend on it: a
+  page's length is never the list's end (only an empty page is), the next offset is the previous
+  one plus the page's length minus one, and every page after the first must start with a trade
+  already read (`readTradePages`, `apps/trading-worker/src/intents/trade-pages.ts`). A capped or
+  ignored `limit` only shortens the reach of `RECONCILE_MAX_TRADE_PAGES` (`window_not_covered`,
+  never `not_found`); an ignored or skewed `offset` answers `broker_contract`.
 - **A3 `status`:** filters open from closed. If not, the merge by `id` stays correct.
 - **A4 `is_demo`:** filters by mode. The local mode check stays either way.
 - **A5 `open_timestamp`** is Unix milliseconds (the shapes of 2026-10-03 show it).
@@ -204,7 +208,7 @@ these, taken from the fixture and broker-web, not from a live run:
 
 Observed live: not yet. The read-only probe in issue #90's plan (6 GETs, shapes only) confirms
 A1–A6; until it runs, a broker that breaks A1 leaves reconciliation waiting with a `warn` and the
-reserve held.
+reserve held. A2 is no longer a safety condition, only one of reach.
 
 ## Open items
 
