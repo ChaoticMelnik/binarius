@@ -15,10 +15,10 @@ status or age line when the broker balance is missing or old, a hint, and one bu
   `broker` and `brokerUnavailable` both set or both null, `fresh` disagreeing with the ages) is a
   contract violation.
 - `apps/bot/src/format.ts` — `formatUsd`, `formatCount`, `formatAge` ([Formatting](#formatting)).
-- `apps/bot/src/texts.ts` — the `status*` and `demoSoon` entries, `MODE_LABELS`, `modeHeader`,
+- `apps/bot/src/texts.ts` — the `status*` entries, `MODE_LABELS`, `modeHeader`,
   `StatusCardInput`, `statusCard`, `LABELS.menuCommand`, `LABELS.demoButton`.
 - `apps/bot/src/bot.ts` — `/start` and `/menu` on one path (`answerHome`), `sendStatusCard`, the
-  `demo` button (`DEMO_CALLBACK_DATA`), `pinCard`.
+  `demo` button's keyboard (`DEMO_CALLBACK_DATA` from `demo.ts`), `pinCard`.
 - `apps/bot/src/commands.ts` — `/menu` «Главное меню», right after `/start`.
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.start`, `.menu`, `.demo`, and the conjunct
   `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`.
@@ -121,10 +121,11 @@ history but loses its pin; a lost or unpinned account card is replaced by `/star
 
 ## The demo button
 
-`DEMO_CALLBACK_DATA = 'demo'`, label «🎮 Запустить демо». Until #125 runs a demo session behind it,
-the handler answers the query (a refusal is logged and the text still goes) and replies
-`TEXTS.demoSoon`. There is no backend call and no state, so a button on an old card answers the
-same way. #125 replaces the handler and keeps the data.
+`DEMO_CALLBACK_DATA = 'demo'`, label «🎮 Запустить демо». The button opens the asset picker as a
+new message (the card is a photo whose caption cannot be edited into another screen): the asset
+type, the pair, the duration, the summary, each checked on a catalog read at the press
+([bot-demo.md](bot-demo.md)). The bot keeps no state for it, so a button on an old card leads to
+the same place.
 
 ## /menu
 
@@ -138,8 +139,8 @@ the command handlers are registered before the text handler and do not call `nex
 `HANDLER_CALLS.start` and `.menu` are two backend calls (`recordStart`, `readTradingAccess`) and up
 to four Bot API calls (the photo refused, the text, the unpin, the pin): 2 × 5 000 + 4 × 8 000 =
 42 s, under `confirm`'s 45 s, so `HANDLER_BUDGET_MS` and the shutdown budget do not move.
-`HANDLER_CALLS.demo` is two Bot API calls. `timing.test.ts` runs every branch of the three through
-the real handlers.
+`HANDLER_CALLS.demo` is one backend call and two Bot API calls ([bot-demo.md](bot-demo.md)).
+`timing.test.ts` runs every branch of the three through the real handlers.
 
 `TRADING_ACCESS_BUDGET_MS` (4 000, the backend's upper estimate of the route) is at most
 `BACKEND_REQUEST_TIMEOUT_MS` (5 000): the bot waits at least as long as the backend budgets the
@@ -156,7 +157,9 @@ pnpm test --project unit apps/bot/src
 
 ## Boundaries
 
-- **#125 / #130** — the demo session and what the button does then; the callback data stays.
+- **#125** — the asset picker behind the button: [bot-demo.md](bot-demo.md).
+- **#126 / #127 / #130** — the analysis, the demo trade and the session of five; the callback
+  data stays.
 - **#201** — levels and their progress on this card.
 - Real mode — the header reads REAL once a user can trade on real; #134's `realTradingAllowed` is
   the backend's switch, not a user's mode.

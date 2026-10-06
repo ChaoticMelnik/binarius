@@ -32,7 +32,9 @@ routes, the confirmation and the starter pack are described in
   [Email dialog](#email-dialog)), `bot.ts` (the handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
   `lifecycle.ts` (start, the profile registration — the menu, the description, the short
   description — signals, drain), `index.ts` (wiring), and
-  `testing.ts`, the fixtures the suites share.
+  `testing.ts`, the fixtures the suites share; `demo.ts` and `demo-catalog.ts` (the screens
+  behind the demo button and their check on a fresh catalog, [bot-demo.md](bot-demo.md)) and
+  `screen.ts` (how a refused edit of a screen is classified, shared by `/settings` and the demo).
 - `packages/shared/src/link-confirmation.ts` — the texts and the confirm button's callback data
   the bot shares with the backend's push after an OAuth login (#128): the prompt, «✅ Аккаунт
   Binodex подключён!» (sent by the push alone; the bot sends the account card instead), the
@@ -740,8 +742,9 @@ call is capped at 5 s.
 The handler budget is not a sentence about the handlers, it is computed from `HANDLER_CALLS`,
 which declares what each handler does on its longest path: `/start` and `/menu` are two backend
 calls and up to four Bot API calls (the access read, then the status card: the photo refused, the
-text, the unpin, the pin — [bot-menu.md](bot-menu.md)); the demo button is no backend call and two
-Bot API calls; the oauth and resend buttons are one
+text, the unpin, the pin — [bot-menu.md](bot-menu.md)); the demo button is one backend call and two
+Bot API calls, and each demo screen after it one backend call and up to three Bot API calls (the
+query answered, the edit refused, the screen sent anew — [bot-demo.md](bot-demo.md)); the oauth and resend buttons are one
 backend call and two Bot API calls each; the confirm button is one backend call and up to five
 Bot API calls (the query answered, then the account card: the photo refused, the text, the unpin,
 the pin); the connect button is no backend call and two Bot API calls; a `my_chat_member` update
@@ -804,7 +807,8 @@ written only when a step really did run out of time.
   from the state, with the confirm button and texts shared with the bot.
 - **#10** — re-linking an account that belongs to another Telegram user is out of scope:
   `broker_account_taken` is final, and moving an account is a separate support task.
-- **#24** — the status card a connected user gets on `/start` and `/menu`: [bot-menu.md](bot-menu.md).
+- **#24** — the status card a connected user gets on `/start` and `/menu`: [bot-menu.md](bot-menu.md);
+  the demo flow behind its button: [bot-demo.md](bot-demo.md).
 - The bot's name and avatar — set by hand in @BotFather; `setMyName`/`setMyProfilePhoto` are not
   called (owner, 2026-10-02).
 - The staff bot's profile (`apps/backend/src/admin`, `ADMIN_BOT_TOKEN`) — not registered.
