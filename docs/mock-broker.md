@@ -204,7 +204,7 @@ the answer to an incoming event, to a store change, or to a `broker.socket.*` ca
 
 | `broker.socket` member | What it does |
 | --- | --- |
-| `failNext(endpoint, script)` | queues a script for the next `user.auth` (`'auth'`) or the next `open_trade` in either mode (`'openTrade'`) |
+| `failNext(endpoint, script)` | queues a script for the next connection (`'connect'`), the next `user.auth` (`'auth'`) or the next `open_trade` in either mode (`'openTrade'`) |
 | `journal` / `clearJournal()` | every incoming event, without the token or any payload value |
 | `sockets()` | the connected sockets in connection order: `{ id, userId?, subscriptions }`, subscriptions sorted |
 | `disconnect({ userId } \| { socketId })` | the server drops each matching socket (`io server disconnect` at the client); returns how many |
@@ -280,7 +280,10 @@ own. A test drops one with `socket.disconnect(...)` (a server DISCONNECT), `sock
 ### Socket scripts
 
 Each endpoint has its own one-shot FIFO queue, like `rest.failNext`. One `openTrade` queue serves
-both modes. An `auth` script is consumed before validation. An `openTrade` script is consumed
+both modes. A `connect` script is played by the namespace middleware (`io.use`) when the next
+socket connects, before any event: the client gets a `CONNECT_ERROR` packet, so socket.io-client
+emits `connect_error` with the message, sets `active` to `false` and does not reconnect that
+socket; the refused socket never appears in `sockets()` or the journal. An `auth` script is consumed before validation. An `openTrade` script is consumed
 after the auth check and before validation: an unauthenticated `open_trade` is recorded
 `unauthenticated`, gets no answer and leaves the script queued for the next authenticated one.
 REST scripts come before the bearer check instead: they model the edge, and a request carries its
@@ -288,6 +291,7 @@ own credential.
 
 | Endpoint | Script | Effect |
 | --- | --- | --- |
+| `connect` | `{ error: { message } }` | the middleware refuses the connection with this message (`connect_error` at the client) |
 | `auth` | `{ error: { message } }` | `user.auth.error` with this text |
 | `auth` | `{ silent: true }` | no answer |
 | `auth` | `{ disconnect: true }` | the server drops the socket, no answer |

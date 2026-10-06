@@ -251,6 +251,24 @@ describe('auth scripts', () => {
     expect(next.received[0]?.event).toBe(BrokerSocketEvent.UserAuthSuccess);
   });
 
+  it('a connect script refuses the next connection in the middleware, before any event', async () => {
+    broker.socket.failNext('connect', { error: { message: 'scripted refusal' } });
+    const socket = io(broker.url, {
+      transports: ['websocket'],
+      reconnection: false,
+      forceNew: true,
+    });
+    clients.push(socket);
+    const error = await new Promise<Error>((resolve) => socket.once('connect_error', resolve));
+    expect(error.message).toBe('scripted refusal');
+    expect(socket.active).toBe(false);
+    expect(broker.socket.sockets()).toEqual([]);
+    expect(broker.socket.journal).toEqual([]);
+
+    const next = await authed();
+    expect(next.received[0]?.event).toBe(BrokerSocketEvent.UserAuthSuccess);
+  });
+
   it('plays before validation', async () => {
     broker.socket.failNext('auth', { error: { message: 'scripted' } });
     const client = await connectClient();
