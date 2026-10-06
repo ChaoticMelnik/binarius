@@ -1,10 +1,12 @@
-# Signal v1 (issue #132)
+# Signal v1 (issues #132, #133)
 
 `apps/trading-worker/src/signal/` turns a series of candles into a trade direction (`up` or
-`down`) or into a reason why there is none. It does not use an LLM. It is a pure function: it
-reads no clock, no environment and no network, and writes no log. The same candles, `intervalMs`,
-`nowMs` and parameters always give the same decision. Nothing in the worker calls it yet. Fetching
-the candles, keeping a decision journal and wiring the module into the process are #133.
+`down`) or into a reason why there is none. It does not use an LLM. The decider is a pure
+function: it reads no clock, no environment and no network, and writes no log. The same candles,
+`intervalMs`, `nowMs` and parameters always give the same decision. The signal feed (`feed.ts`,
+#133, [Feed and journal](#feed-and-journal-133)) fetches the candles, calls the decider and writes
+one journal line per decision. Nothing in the worker process calls the feed yet: wiring it into
+`index.ts` is #130's.
 
 Nobody has shown that this algorithm makes money. It is a technical baseline: the defaults are not
 tuned and no backtest was run.
@@ -65,7 +67,7 @@ A wrong `intervalMs` or `nowMs` throws a `RangeError`. So do wrong parameters, a
    `maxStaleIntervals × intervalMs` is `stale`. An age exactly equal to it is not stale.
 6. **Count:** fewer than `minClosedCandles` closed candles is `insufficient_candles`.
 
-| `reason` | `detail` | What the caller (#133, #126) does |
+| `reason` | `detail` | What the feed's caller (#130, #126) does |
 |---|---|---|
 | `invalid_candle` | `{ index, problem }`, `problem` one of `CandleProblem`: `non_finite`, `non_positive`, `ohlc_order`, `not_ascending`, `step_mismatch`, `in_future` | logs it as a feed contract problem and does not trade; retrying the same series gives the same answer |
 | `candle_gap` | `{ index, expectedTimestamp, actualTimestamp }`, where `expectedTimestamp` is the first missing start | logs it and does not trade; a re-fetch may fill the gap |
@@ -93,7 +95,8 @@ period 2 `= [3, 4.5]`.
 
 Each indicator runs over the whole closed series the caller supplies, with no trailing window.
 EMA and Wilder values depend on the series length, so a decision can be reproduced only from the
-exact series. For decisions to be comparable, #133 fetches a fixed `limit` and records the series.
+exact series. For decisions to be comparable, the feed fetches `SIGNAL_CHART_LIMIT` (60) candles
+and records the series.
 
 ## Decision
 
@@ -133,7 +136,7 @@ says nothing (owner's decision 2026-10-03).
 `features` is `{ emaFast, emaSlow, emaSlowSlope, rsi, atr, atrPct, lastClose,
 lastCandleTimestamp, closedCandles, trend, momentum }`. Every number in it is finite, and no key is
 ever set to `undefined`. A decision survives `JSON.parse(JSON.stringify(decision))` unchanged, so
-#133 can log it as it is. All codes come from `as const` constants in `codes.ts`: `SignalKind`,
+the feed logs it as it is. All codes come from `as const` constants in `codes.ts`: `SignalKind`,
 `NoSignalReason`, `CandleProblem`, `TrendDirection` and `MomentumDirection`. The direction is
 shared's `TradeAction`.
 
@@ -161,19 +164,136 @@ decisions), ATR% ran from 0.077 to 0.136. If live 1m-5m
 candles fall outside the corridor in ordinary hours, the number in `config.ts` changes, not the
 rule.
 
+## Feed and journal (#133)
+
+`feed.ts` connects the decider to the broker's chart. It fetches through the REST client's
+`getChart` (docs/broker-rest.md), opens no socket and parses no raw payload of its own.
+
+```ts
+const feed = createSignalFeed({ rest, logger }); // decider defaults to createSignalDecider()
+const result = await feed.evaluate({ assetId, interval: '1m' }, { signal });
+```
+
+The intervals are a closed table, `SIGNAL_CHART_INTERVAL_MS` in `feed-config.ts`: `1m`, `5m`,
+`15m`, `30m` and `1h`. The live broker accepted each of them (owner's probe 2026-10-03). An
+interval outside the table is a `RangeError` before any fetch.
+
+### The window
+
+`evaluate` reads the clock once (`nowMs`, `Date.now` unless `now` is passed) and checks it with
+`assertSignalClock` before any broker call. It then requests
+`chartWindow(nowMs, intervalMs, SIGNAL_CHART_LIMIT)`:
+`startTime = floor(nowMs / intervalMs) × intervalMs − (limit − 1) × intervalMs`. That is `limit`
+candle starts ending on the current interval boundary. The last of them is the forming candle,
+which the decider drops. The decision uses the same `nowMs` the window was built from.
+
+`SIGNAL_CHART_LIMIT` is 60 (owner's choice). The window has to leave `minClosedCandles` closed
+candles even after the forming candle and `maxStaleIntervals` late candles are taken out:
+`SIGNAL_CHART_LIMIT − 1 − maxStaleIntervals ≥ minClosedCandles`, which is 60 − 1 − 2 = 57 ≥ 50
+for the defaults. `assertFeedLimit` checks this when `feed-config.ts` is imported (for
+`DEFAULT_SIGNAL_PARAMS`) and again in `createSignalFeed` (for the decider it is given). A decider
+that needs more candles than the window can give is refused at construction with a `RangeError`.
+A gap anywhere in the window is a `candle_gap` refusal, whatever the count.
+
+The feed has no retries, no sleeps and no re-fetch on a data refusal. A refusal is a decision and
+is journaled as one. It holds no mutable state, so concurrent `evaluate` calls for different
+assets are independent. The one REST call is bounded by the client's `BROKER_REST_TIMEOUT_MS`
+(5 s). The caller may pass a shorter `signal`.
+
+### Outcomes
+
+`evaluate` resolves to one of `SignalFeedOutcome`:
+
+- `{ outcome: 'decided', entry }`, with one `info` line `signal decision` (below);
+- `{ outcome: 'fetch_failed', request, code, status?, retryAfterSec? }`, with one `warn` line
+  `signal fetch failed`: `err: { name: 'BrokerRestError', code }`, `status`, `retryAfterSec`, the
+  broker's `detail` (already cut by the client) and the request facts under `signal`. It carries
+  no URL and no token: the chart endpoint takes none.
+
+Any other error, such as a programmer error, is rethrown and logs nothing.
+
+| `code` | Source (docs/broker-rest.md → Errors) | What the caller (#130) does |
+|---|---|---|
+| `unauthorized` | 401. The chart sends no bearer, so this is drift | stops and reports |
+| `rate_limited` | 429, with `retryAfterSec` when `Retry-After` is an integer | waits `retryAfterSec` (or its own backoff), then evaluates again |
+| `rejected` | any other 4xx (an interval or asset the broker refuses) | fixes the request and stops |
+| `unavailable` | 5xx, a failed fetch, the client's 5 s timeout, a body cut mid-flight | may evaluate again later |
+| `contract_violation` | a 2xx that is not JSON, fails `candlesWireSchema` or exceeds 4 MiB; any 3xx | treats it as drift and stops |
+| `aborted` | the caller's own `signal` fired first | nothing: it set the limit itself |
+
+### The journal line
+
+Each decision is one pino `info` line, `msg` `signal decision`, with the whole entry under the
+key `signal`:
+
+| Field | Content |
+|---|---|
+| `assetId`, `interval`, `intervalMs`, `nowMs` | the request and the clock reading the decision used |
+| `fetch` | `{ startTime, limit, rows, durationMs }` |
+| `version` | `SIGNAL_ALGORITHM_VERSION` |
+| `params` | `decider.params`, the frozen parameters |
+| `series` | the candles as received, as tuples `[timestamp, open, high, low, close]` (`volume` is never written) |
+| `decision` | the decision as `decide` returned it |
+
+No key of the entry is a redacted key or an error key of `logOptions`, so the line holds the entry
+unchanged. The line carries everything the decision was computed from, so
+`replaySignalJournalEntry(JSON.parse(line).signal)` computes the same decision again.
+`feed.test.ts` does this on a line read back from a `logOptions` logger. `journal.test.ts` does it
+for a signal, each of the four data refusals and both volatility refusals, one of them from a
+decider with non-default parameters. An entry of another `version` is refused with a `RangeError`:
+v1 code does not re-decide a v2 line. A non-finite price (impossible on the live chart, which is
+JSON) is `null` on the line, and replays as `non_finite` at the same index.
+
+A line is about 5 KB (5 231 bytes live, below). With every price at 17 significant digits, the
+longest a double prints, it is 6 332 bytes. `feed.test.ts` (F9) keeps it under 16 KiB, the line
+size Docker's log copier reads in one piece.
+
+### Probe
+
+`signal-probe` runs one evaluation and exits. The journal line goes to stdout and a one-line
+summary to stderr. It exits 0 on `decided` (a refusal included) and 1 on `fetch_failed`. It reads
+no token and opens no trade.
+
+```bash
+BROKER_API_BASE_URL=https://api.binodex.app ASSET_ID=237831086 pnpm --filter @binarius/trading-worker signal-probe
+```
+
+| Variable | Rule |
+|---|---|
+| `BROKER_API_BASE_URL` | required; https, or http on `127.0.0.1`/`localhost` (a local mock) |
+| `ASSET_ID` | required; an integer from 1 |
+| `INTERVAL` | one of the table's keys; default `1m` |
+| `LOG_LEVEL` | default `info` |
+
+### Observed live (2026-10-06)
+
+- The architect made three public chart GETs (asset 237831086, NZD/USD OTC, `1m`). The rows are
+  5-tuples, strictly ascending and one step apart in all three answers. `start_time` is rounded
+  down to the step. The answer is the rows from that start, capped by `limit`. The forming candle
+  is included. The mock does the same.
+- One `signal-probe` run against the live broker (10:19 UTC, the command above): exit 0,
+  `fetch.rows` 60, 60 tuples of 5 elements, the first starting at `fetch.startTime` and the last on
+  the current minute boundary, 59 closed candles in the decision, a 5 231-byte line. Prices were
+  not recorded.
+- The owner's probe of 2026-10-03: every interval from `1s` to `1d` was accepted, and `limit=6000`
+  over 10 days gave 4 982 rows across exactly 4 999 minutes. The cap is 5 000 rows by `limit`, and
+  the series has gaps (18 missing candles in 5 000). On 1m candles some evaluations will be
+  `candle_gap` refusals. The journal measures how many. A tolerance for gaps would be a change to
+  the #132 parameters.
+
 ## What it is not
 
 - It gives no probability and no confidence score. The decision is the direction or the reason,
   plus the features (owner's decision 2026-10-03).
 - It does no tuning or backtesting and makes no profitability claim.
-- It makes no network calls, writes no logs and contains no user-facing text. The Russian wording
-  of a reason belongs to the bot (#126).
+- The decider makes no network calls, writes no logs and contains no user-facing text (the feed
+  does the fetching and the logging). The Russian wording of a reason belongs to the bot (#126).
 - It does not read volume or price ticks. v1 works from the chart only.
 
 ## Boundaries
 
-- #133: fetching candles (`getChart`), the decision journal, wiring the module into `index.ts` and
-  the env.
-- #126: the user-facing texts. #19: stake size. #130: session orchestration.
+- #130: session orchestration, which evaluates the feed inside a session and wires it into
+  `index.ts`. #100/#101: the broker base URL in the worker's env and compose.
+- #126: the user-facing texts. #19: stake size.
 - `packages/shared` and `packages/db` are not changed. When the first issue carries a decision
   across a process boundary, it moves the decision's wire shape into shared.

@@ -87,10 +87,11 @@ exists, the asset is not scheduled (`scheduled_until > now`), the duration is wi
 most `available`. The bounds are inclusive.
 
 Chart rules: the candles start at `start_time` rounded down to the step and are spaced one step
-apart. No candle starts after now. `limit` defaults to 100, and anything above 5000 is cut to
-5000. A step below 5 s, or a `start_time` below `1e11` (seconds rather than ms), answers `[]`.
-`M` is 30 days. A candle's close equals the next candle's open, and `low <= min(open, close) <=
-max(open, close) <= high`. Every value is rounded to the pair's `digits`.
+apart. No candle starts after now, and the forming candle is included (observed live
+2026-10-06, as is the rounding of `start_time` down to the step). `limit` defaults to 100, and
+anything above 5000 is cut to 5000. A step below 5 s, or a `start_time` below `1e11` (seconds
+rather than ms), answers `[]`. `M` is 30 days. A candle's close equals the next candle's open,
+and `low <= min(open, close) <= max(open, close) <= high`. Every value is rounded to the pair's `digits`.
 
 Every response carries `x-ratelimit-limit` (`options.rateLimit`, default 600),
 `x-ratelimit-remaining` (counted in a fixed 60-second window, never below 0) and
@@ -384,8 +385,9 @@ and 6 are resolved, 4–5 and 9 remain, and 7–8 are handled on the consumer's 
   not confirmed by a trade.
 - The trade list order (newest first) and its default limit of 20 are fixture rules. broker-web
   always passes `limit` and sorts on the client.
-- The chart cap of 5000: the live broker answered `limit=5000` with 4999 rows. Whether that is a
-  cap or the data window is not known.
+- The chart cap of 5000. **Closed 2026-10-03** by the owner's probe (issue #133): `limit=6000`
+  over 10 days gave 4 982 rows across exactly 4 999 minutes, so the cap is by `limit`, not the
+  data window. The live history has gaps inside it; the fixture has none.
 - The status for opening a trade (200) was not observed.
 - Socket: the default payload form `object` is not the live `bytes` (owner decision, #104). A
   consumer's suite that never sets `socketPayload` runs on the less faithful form.
