@@ -7,6 +7,7 @@ import {
   BrokerBalanceUnavailableReason,
   NotificationLevel,
   telegramHtml,
+  TradeAction,
   TradeMode,
   type LinkBonusGrantView,
   type LinkedAccountView,
@@ -43,6 +44,13 @@ export const MODE_LABELS = {
   [TradeMode.Demo]: 'DEMO',
   [TradeMode.Real]: 'REAL',
 } as const satisfies Record<TradeMode, string>;
+
+// A trade's direction in words: the analysis screen's headline and its stake button (#126), and
+// #127's status texts.
+export const ACTION_LABELS = {
+  [TradeAction.Up]: '⬆️ Вверх',
+  [TradeAction.Down]: '⬇️ Вниз',
+} as const satisfies Record<TradeAction, string>;
 
 // Messages are Telegram HTML, sent with parse_mode HTML by send.ts only. Every hole goes through
 // telegramHtml, which escapes it: the address in codeSent is what the user typed, the name on the
@@ -197,6 +205,29 @@ ${FEATURE_LINES}`,
     telegramHtml`❌ Эта длительность не подходит для ${symbol}. Выбери другую.`,
   demoNoDuration: (symbol: string) =>
     telegramHtml`❌ Для ${symbol} нет подходящей длительности. Выбери другой актив.`,
+  // The analysis screen (#126), assembled by analysis.ts. The subject is the symbol and the
+  // duration label; every number in a hole is the backend's answer after analysis.ts's
+  // formatters. Nothing here calls the signal a probability or an accuracy.
+  analyzing: (subject: string) => telegramHtml`⏳ Анализирую ${subject}…`,
+  analysisHeader: (subject: string) => telegramHtml`📊 <b>Анализ: ${subject}</b>`,
+  analysisSignalUp: telegramHtml`📈 <b>Сигнал: ${ACTION_LABELS[TradeAction.Up]}</b>`,
+  analysisSignalDown: telegramHtml`📉 <b>Сигнал: ${ACTION_LABELS[TradeAction.Down]}</b>`,
+  analysisNoSignal: (reason: string) => telegramHtml`⏸ <b>Сигнала нет: ${reason}</b>`,
+  analysisTrend: (value: string) => telegramHtml`📐 Тренд по EMA: ${value}`,
+  analysisMomentum: (value: string) => telegramHtml`⚡ Импульс по RSI: ${value}`,
+  analysisVolatility: (value: string) => telegramHtml`🌊 Волатильность по ATR: ${value}`,
+  analysisCandles: (count: string) => telegramHtml`🕯 Закрытых свечей: ${count}`,
+  analysisLastPrice: (price: string) => telegramHtml`💲 Последняя цена: ${price}`,
+  analysisDisclaimer: telegramHtml`⚠️ Сигнал — не прогноз результата и не гарантия. Это демо: деньги не нужны.`,
+  analysisNoSignalHint: telegramHtml`Без сигнала бот сделку не предлагает. Повтори анализ позже или выбери другой актив.`,
+  analysisDataHint: telegramHtml`Повтори анализ через минуту или выбери другой актив.`,
+  // the hole is the backend's whole-second countdown (retryAfterSec)
+  analysisRateLimited: (seconds: string) =>
+    telegramHtml`⚠️ Брокер ограничил запросы. Попробуй через ${seconds} с.`,
+  analysisUnavailable: telegramHtml`⚠️ Не удалось получить свечи у брокера. Попробуй ещё раз.`,
+  // the stake button until #127 opens the trade; #127 deletes it
+  stakeSoon: telegramHtml`💵 <b>Открытие сделки пока в разработке</b>
+Анализ уже настоящий — кнопка заработает в следующей версии.`,
 } as const satisfies Record<string, TelegramHtml | ((value: string) => TelegramHtml)>;
 
 // The /help message: the three blocks, then one line per command in the menu's order.
@@ -361,6 +392,8 @@ export const LABELS = {
   demoBackDurationsButton: '↩️ Длительность',
   demoPrevButton: '◀️',
   demoNextButton: '▶️',
+  // the analysis screen (#126)
+  repeatAnalysisButton: '🔄 Повторить анализ',
   supportButton: '💬 Написать в поддержку',
 } as const satisfies Record<string, string | ((value: string | null) => string)>;
 
@@ -385,6 +418,9 @@ export const DEMO_DURATION_LABELS = {
 // a type's button with the count of its open pairs
 export const groupButtonLabel = (group: DemoAssetGroup, openCount: number): string =>
   `${DEMO_GROUP_LABELS[group]} · ${openCount}`;
+// the analysis screen's button by the signal's direction (#126)
+export const stakeButtonLabel = (action: TradeAction): string =>
+  `🚀 Открыть сделку: ${ACTION_LABELS[action]}`;
 // a data label, like the confirm button's address: no emoji, the symbol as the broker spells it
 // (it already carries «OTC»), the payout printed as it arrives
 export const pairButtonLabel = (symbol: string, payout: number): string =>
