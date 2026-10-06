@@ -526,8 +526,12 @@ export const TradeMismatchReason = {
 } as const;
 export type TradeMismatchReason = (typeof TradeMismatchReason)[keyof typeof TradeMismatchReason];
 
-// Thrown inside the caller's transaction, which then rolls back: nothing of the acceptance or
-// settlement is written. Carries ids and a code only, nothing the broker sent.
+// Thrown inside the caller's transaction; the caller lets it roll back, and nothing of the
+// acceptance or settlement is written. A four-field mismatch is found before any write, but
+// trade_already_linked can come from a unique violation that has already aborted the
+// transaction: a caller that catches this error writes its follow-up (unknown, manual_review)
+// in a fresh transaction, never in the one that threw. Carries ids and a code only, nothing the
+// broker sent.
 export class TradeIntentMismatchError extends Error {
   constructor(
     readonly reason: TradeMismatchReason,
@@ -601,10 +605,11 @@ export interface MarkAcceptedOptions {
   trade: OpenTrade;
 }
 
-// accepted only together with the broker's open trade: the CAS, then the trade is checked
-// against the row the CAS returned, then the open broker_trades row is written. A lost CAS
-// answers undefined and reads nothing; a mismatch throws TradeIntentMismatchError, and the
-// caller's transaction rolls the CAS back.
+// accepted only together with the broker's open trade: the trade is checked against the intent
+// (mode, asset, action and amount never change after creation, so an unlocked read is enough),
+// then the CAS, then the open broker_trades row is written. A four-field mismatch throws before
+// any write; a lost CAS answers undefined and inserts nothing; a trade already linked throws from
+// the insert, and the caller's transaction rolls the CAS back.
 export async function markIntentAccepted(
   tx: Tx,
   {
@@ -615,6 +620,18 @@ export async function markIntentAccepted(
     trade,
   }: MarkAcceptedOptions,
 ): Promise<TradeIntentRow | undefined> {
+  const [terms] = await tx
+    .select({
+      mode: tradeIntents.mode,
+      assetId: tradeIntents.assetId,
+      action: tradeIntents.action,
+      amount: tradeIntents.amount,
+    })
+    .from(tradeIntents)
+    .where(eq(tradeIntents.id, id));
+  if (terms === undefined) return undefined;
+  const reason = mismatchOf(terms, trade);
+  if (reason !== undefined) throw new TradeIntentMismatchError(reason, id, trade.id);
   const row = await transitionIntent(tx, {
     id,
     from,
@@ -623,8 +640,6 @@ export async function markIntentAccepted(
     patch: { transport },
   });
   if (row === undefined) return undefined;
-  const reason = mismatchOf(row, trade);
-  if (reason !== undefined) throw new TradeIntentMismatchError(reason, id, trade.id);
   await insertTrade(tx, row, trade, {
     status: BrokerTradeStatus.Open,
     potentialProfit: trade.potentialProfit,
@@ -637,13 +652,18 @@ export interface SettleIntentOptions {
   expectedVersion?: number;
   // manual_review: the operator's conclusion with the trade the broker reports closed
   from: typeof TradeIntentStatus.Accepted | typeof TradeIntentStatus.ManualReview;
+  // For a never-linked manual_review intent the row is written under the intent's
+  // broker_account_id, and a ClosedTrade carries no account: the caller takes it from this
+  // account's own closed list (listTrades with the account's own token).
   trade: ClosedTrade;
 }
 
 // → settled: the token is debited whatever the trade's outcome (owner, 2026-10-06), the
 // broker_trades row is closed, or inserted closed for a manual_review intent never linked.
-// The closed trade is checked against the intent on both paths: a close that contradicts what
-// was opened is never settled on, it is answered with a mismatch for a human or reconciliation.
+// On the linked path only the id is checked and the close is applied as received: the row's open
+// fields are the broker's own (written from its open trade) and the close does not overwrite
+// them. The four-field check guards only the insert for a never-linked manual_review intent,
+// which stays parked for the operator on a mismatch.
 export async function settleIntent(
   tx: Tx,
   { id, expectedVersion, from, trade }: SettleIntentOptions,
@@ -665,8 +685,10 @@ export async function settleIntent(
   if (linked !== undefined && linked.brokerTradeId !== trade.id) {
     throw new TradeIntentMismatchError(TradeMismatchReason.TradeAlreadyLinked, id, trade.id);
   }
-  const reason = mismatchOf(current, trade);
-  if (reason !== undefined) throw new TradeIntentMismatchError(reason, id, trade.id);
+  if (linked === undefined) {
+    const reason = mismatchOf(current, trade);
+    if (reason !== undefined) throw new TradeIntentMismatchError(reason, id, trade.id);
+  }
 
   const settled = await transitionIntent(tx, {
     id,
@@ -712,13 +734,13 @@ export type ClosedTradeOutcome =
       result: 'intent_not_accepted';
       intentId: string;
       status: TradeIntentStatus;
-    }
-  // the closed trade contradicts the intent; nothing was written
-  | { brokerTradeId: string; result: 'mismatch'; intentId: string; reason: TradeMismatchReason };
+    };
 
 // The one applier of closed trades: a close_trade.success payload (#101) and a REST closed
 // snapshot (#90). One transaction per trade, so a database error mid-batch leaves the earlier
-// trades applied and propagates; every outcome is idempotent, so the replay is safe.
+// trades applied and propagates; every outcome is idempotent, so the replay is safe. The lookup
+// is by (account, broker trade id), so the linked row always carries the trade's own id and
+// settleIntent cannot answer a mismatch here; any error is a bug or a database failure.
 export async function settleClosedTrades(
   db: Db,
   { brokerAccountId, trades }: { brokerAccountId: string; trades: readonly ClosedTrade[] },
@@ -775,15 +797,10 @@ async function settleClosedTrade(
   const [found] = await link();
   const intentId = classify(found);
   if (typeof intentId !== 'string') return intentId;
-  try {
-    const settled = await db.transaction((tx) =>
-      settleIntent(tx, { id: intentId, from: TradeIntentStatus.Accepted, trade }),
-    );
-    if (settled !== undefined) return { brokerTradeId, result: 'settled', intentId };
-  } catch (error) {
-    if (!(error instanceof TradeIntentMismatchError)) throw error;
-    return { brokerTradeId, result: 'mismatch', intentId, reason: error.reason };
-  }
+  const settled = await db.transaction((tx) =>
+    settleIntent(tx, { id: intentId, from: TradeIntentStatus.Accepted, trade }),
+  );
+  if (settled !== undefined) return { brokerTradeId, result: 'settled', intentId };
   // a concurrent writer won the CAS: report what it left
   const after = classify((await link())[0]);
   return typeof after === 'string'

@@ -827,6 +827,31 @@ describe('markIntentAccepted (#17)', () => {
     },
   );
 
+  // the check runs before the CAS: a caller that catches the error inside its own transaction
+  // still sees the intent submitting there, with nothing written
+  it("refuses a mismatching trade before the CAS, inside the caller's transaction", async () => {
+    const { intent } = await submittingIntent();
+    const seen = await tmp.db.transaction(async (tx) => {
+      const reason = await mismatchOf(
+        markIntentAccepted(tx, {
+          id: intent.id,
+          expectedVersion: intent.version,
+          transport: 'socket',
+          trade: openTradeFor(intent, { assetId: 92 }),
+        }),
+      );
+      const [row] = await tx
+        .select({ status: tradeIntents.status, version: tradeIntents.version })
+        .from(tradeIntents)
+        .where(eq(tradeIntents.id, intent.id));
+      return { reason, row };
+    });
+    expect(seen).toEqual({
+      reason: 'asset',
+      row: { status: 'submitting', version: intent.version },
+    });
+  });
+
   it('compares the amount as a decimal, not as a spelling', async () => {
     const { intent } = await submittingIntent();
     const accepted = await accept(
@@ -901,6 +926,24 @@ describe('settleIntent (#17)', () => {
     expect(await settleRowsOf(intent.id)).toEqual([]);
     expect(await userTokens(userId)).toEqual(before);
     expect(await tradesOf(intent.id)).toMatchObject([{ brokerTradeId: open.id, status: 'open' }]);
+  });
+
+  it("applies a same-id close as received, keeping the row's open fields", async () => {
+    const { intent, open } = await acceptedIntent();
+    const closed = closedTradeFor(open, { amount: '11.00' as DecimalString, action: 'down' });
+    expect(await settle(intent, closed)).toMatchObject({ status: 'settled' });
+    expect(await settleRowsOf(intent.id)).toEqual([{ reservedDelta: -1n, balanceDelta: -1n }]);
+    expect(await tradesOf(intent.id)).toMatchObject([
+      {
+        brokerTradeId: open.id,
+        status: 'closed',
+        closePrice: closed.closePrice,
+        closeTimestampMs: closed.closeTimestamp,
+        profit: '-10.00000000',
+        amount: '10.00000000',
+        action: open.action,
+      },
+    ]);
   });
 
   it('settles a never-linked manual_review intent by inserting the closed trade', async () => {
@@ -983,7 +1026,12 @@ describe('settleClosedTrades (#17)', () => {
       })),
       ...(await settleClosedTrades(tmp.db, {
         brokerAccountId: contradicting.brokerAccountId,
-        trades: [closedTradeFor(contradicting.open, { amount: '11.00' as DecimalString })],
+        trades: [
+          closedTradeFor(contradicting.open, {
+            amount: '11.00' as DecimalString,
+            action: 'down',
+          }),
+        ],
       })),
     ];
     const first = await batch();
@@ -992,13 +1040,13 @@ describe('settleClosedTrades (#17)', () => {
       'not_ours',
       'already_settled',
       'intent_not_accepted',
-      'mismatch',
+      'settled',
     ]);
     expect(first[3]).toMatchObject({ status: 'reconciling' });
-    expect(first[4]).toMatchObject({ reason: 'amount' });
     expect(await findTradeIntent(tmp.db, ours.intent.id)).toMatchObject({ status: 'settled' });
+    // a same-id close is applied as received, whatever its open fields say
     expect(await findTradeIntent(tmp.db, contradicting.intent.id)).toMatchObject({
-      status: 'accepted',
+      status: 'settled',
     });
 
     const replay = await batch();
@@ -1007,20 +1055,39 @@ describe('settleClosedTrades (#17)', () => {
       'not_ours',
       'already_settled',
       'intent_not_accepted',
-      'mismatch',
+      'already_settled',
     ]);
     expect(await settleRowsOf(ours.intent.id)).toHaveLength(1);
+    expect(await settleRowsOf(contradicting.intent.id)).toHaveLength(1);
   });
 
-  it('applies each trade on its own: a mismatch does not stop the rest of the batch', async () => {
+  // One live intent per account (trade_intents_active_account_idx) means one call can settle at
+  // most one intent, so what the per-trade transaction has to guarantee is that a failing settle
+  // writes nothing of itself: profit NaN passes the decimal brand but not broker_trades_profit_check.
+  it('writes nothing of a settle whose last statement fails, and lets the error through', async () => {
     const ours = await acceptedIntent();
-    const closed = closedTradeFor(ours.open);
-    const outcomes = await settleClosedTrades(tmp.db, {
+    const before = await userTokens(ours.userId);
+    const error = await settleClosedTrades(tmp.db, {
       brokerAccountId: ours.brokerAccountId,
-      trades: [{ ...closed, action: 'down' }, closed],
+      trades: [
+        closedTradeFor(openTradeFor(ours.intent)),
+        closedTradeFor(ours.open, { profit: 'NaN' as DecimalString }),
+      ],
+    }).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    expect((error as { cause?: unknown }).cause).toMatchObject({
+      code: '23514',
+      constraint: 'broker_trades_profit_check',
     });
-    expect(outcomes.map((o) => o.result)).toEqual(['mismatch', 'settled']);
-    expect(await findTradeIntent(tmp.db, ours.intent.id)).toMatchObject({ status: 'settled' });
+    expect(await findTradeIntent(tmp.db, ours.intent.id)).toMatchObject({
+      status: 'accepted',
+      tokensReserved: TOKENS_PER_INTENT,
+    });
+    expect(await settleRowsOf(ours.intent.id)).toEqual([]);
+    expect(await userTokens(ours.userId)).toEqual(before);
+    expect(await tradesOf(ours.intent.id)).toMatchObject([{ status: 'open', profit: null }]);
   });
 });
 

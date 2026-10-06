@@ -172,15 +172,18 @@ async function persistOutcome(
       } catch (error) {
         if (!(error instanceof TradeIntentMismatchError)) throw error;
         // the broker opened something we cannot tie to this intent: reconciliation finds out
-        // now instead of after the stale-submitting sweep
-        logger.warn(
-          { intentId: taken.id, brokerTradeId: error.brokerTradeId, mismatch: error.reason },
-          'accepted trade does not match the intent; marked unknown',
-        );
+        // now instead of after the stale-submitting sweep. A fresh transaction: the insert path
+        // of the error has already aborted the one that threw.
         outcome = 'unknown';
         row = await db.transaction((tx) =>
           markIntentUnknown(tx, { ...cas, reason: TradeIntentFailureReason.TradeMismatch }),
         );
+        if (row !== undefined) {
+          logger.warn(
+            { intentId: taken.id, brokerTradeId: error.brokerTradeId, mismatch: error.reason },
+            'accepted trade does not match the intent; marked unknown',
+          );
+        }
       }
       break;
     case 'rejected':
@@ -195,7 +198,7 @@ async function persistOutcome(
   const detail = 'detail' in result ? result.detail?.slice(0, MAX_DETAIL_LENGTH) : undefined;
   if (row === undefined) {
     logger.warn(
-      { intentId: taken.id, outcome: result.outcome, detail },
+      { intentId: taken.id, outcome, detail },
       'executor outcome dropped: the intent moved on while the broker was answering',
     );
     return 'noop';

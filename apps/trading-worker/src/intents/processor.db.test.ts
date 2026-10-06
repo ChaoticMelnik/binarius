@@ -126,7 +126,7 @@ describe('processIntentJob', () => {
   it('turns an accepted trade that does not match the intent into unknown', async () => {
     const { intentId, userId } = await newIntent();
     const lines: string[] = [];
-    const capturing = pino({ level: 'warn' }, { write: (line: string) => void lines.push(line) });
+    const capturing = pino({ level: 'info' }, { write: (line: string) => void lines.push(line) });
     const executor = acceptingExecutor({ id: 'bt-mismatch', assetId: 92 });
     expect(await processIntentJob({ ...deps(executor), logger: capturing }, { intentId })).toBe(
       'unknown',
@@ -142,6 +142,8 @@ describe('processIntentJob', () => {
     const warned = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
     const mismatch = warned.find((entry) => entry.mismatch !== undefined);
     expect(mismatch).toMatchObject({ intentId, brokerTradeId: 'bt-mismatch', mismatch: 'asset' });
+    const recorded = warned.find((entry) => entry.msg === 'intent outcome recorded');
+    expect(recorded).toMatchObject({ intentId, outcome: 'unknown', status: 'unknown' });
   });
 
   it('records a rejection and releases the token', async () => {

@@ -114,13 +114,13 @@ same transaction as the row.
 
 **What the database guarantees.**
 
-| Guarantee                                                                                | Where                                                                                                                                               |
-| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| only the edges of the graph, each bumping `version` by exactly one                       | trigger `trade_intents_transition_guard` (migration 0014); an UPDATE that keeps the status passes, the CAS predicate stays in each writer's `WHERE` |
-| a live intent holds its token, a `rejected`/`settled` one holds none                     | CHECK `trade_intents_terminal_reserve_check` (0013)                                                                                                 |
-| one live intent per account (`reconciling`/`manual_review` included)                     | `trade_intents_active_account_idx`                                                                                                                  |
-| a broker trade links to one intent, an intent to one trade, of the same account and mode | `broker_trades_account_trade_key`, `broker_trades_intent_id_key`, `broker_trades_intent_account_fk`                                                 |
-| one terminal ledger row (`release` or `settle`) per intent                               | `token_ledger_terminal_intent_idx`                                                                                                                  |
+| Guarantee                                                                                          | Where                                                                                                                                                                                                                                                              |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| every UPDATE that changes `status` follows an edge of the graph and bumps `version` by exactly one | trigger `trade_intents_transition_guard` (migration 0014, `BEFORE UPDATE OF status`); an UPDATE that keeps the status passes, the CAS predicate stays in each writer's `WHERE`; an INSERT may carry any status — the creation path inserts `planned` only (stated) |
+| a live intent holds its token, a `rejected`/`settled` one holds none                               | CHECK `trade_intents_terminal_reserve_check` (0013)                                                                                                                                                                                                                |
+| one live intent per account (`reconciling`/`manual_review` included)                               | `trade_intents_active_account_idx`                                                                                                                                                                                                                                 |
+| a broker trade links to one intent, an intent to one trade, of the same account and mode           | `broker_trades_account_trade_key`, `broker_trades_intent_id_key`, `broker_trades_intent_account_fk`                                                                                                                                                                |
+| at most one terminal ledger row (`release` or `settle`) per intent                                 | `token_ledger_terminal_intent_idx`; that one exists is the writers' rule (`rejectIntent`/`settleIntent` read the reserve under lock and write the row when it is > 0)                                                                                              |
 
 The trigger's pairs are a copy of the shared table; the transition grid in
 `packages/db/src/schema.db.test.ts` tries every ordered pair and fails when the two disagree. A
@@ -133,21 +133,27 @@ state (`BrokerSocketState`, #99) is never stored on the intent. A disconnect can
 reconciliation.
 
 **Acceptance carries proof.** `SubmitResult.accepted` is `{ transport, trade: OpenTrade }`, both
-required. `markIntentAccepted` runs the CAS, checks the trade against the intent (`isDemo` against
-`mode`, `assetId`, `action`, `amount` compared as decimals) and inserts the open `broker_trades`
-row; a mismatch, or a trade already linked, throws `TradeIntentMismatchError` and the transaction
-rolls back. The processor then marks the intent `unknown` (`trade_mismatch`) with a
-reconciliation row and logs the intent id, the broker trade id and the reason code.
+required. `markIntentAccepted` checks the trade against the intent (`isDemo` against `mode`,
+`assetId`, `action`, `amount` compared as decimals) before anything is written, then runs the CAS
+and inserts the open `broker_trades` row. A mismatch throws `TradeIntentMismatchError` with the
+intent untouched; a trade already linked throws it from the insert, which has aborted the
+transaction, so a caller writes its follow-up in a fresh one. The processor then marks the intent
+`unknown` (`trade_mismatch`) with a reconciliation row and logs the intent id, the broker trade id
+and the reason code.
 `broker_trades.raw` holds the parsed domain trade, not the broker's bytes: shared's parsers strip
 unknown keys, and no token is in a trade.
 
 **Settlement.** `settleIntent` (from `accepted` or `manual_review`, with a `ClosedTrade`) locks
-`users → trade_intents → broker_trades`, checks the trade against the linked row (same broker
-id) and against the intent (the four fields above), then moves the intent, writes the `settle`
-row and closes the `broker_trades` row — or inserts it closed for a `manual_review` intent never
-linked. `settleClosedTrades(db, { brokerAccountId, trades })` is the one applier of a
-`close_trade.success` payload and of a REST closed snapshot: one transaction per trade, an
-outcome per trade —
+`users → trade_intents → broker_trades`, then moves the intent, writes the `settle` row and
+closes the `broker_trades` row. On the linked path only the broker trade id is checked (another id
+→ `trade_already_linked`) and the close is applied as received: the row's open fields are the
+broker's own and the close does not overwrite them. For a `manual_review` intent never linked, the
+closed trade is checked against the intent (the four fields above) and the row is inserted closed
+under the intent's account; a `ClosedTrade` carries no account, so the caller takes it from that
+account's own closed list. `settleClosedTrades(db, { brokerAccountId, trades })` is the one applier
+of a `close_trade.success` payload and of a REST closed snapshot: one transaction per trade, an
+outcome per trade. It looks a trade up by `(broker_account_id, broker_trade_id)`, so it never
+meets a mismatch —
 
 | Outcome               | Meaning                                                                            | Caller's action                             |
 | --------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------- |
@@ -155,9 +161,11 @@ outcome per trade —
 | `already_settled`     | an earlier pass settled it                                                         | nothing                                     |
 | `not_ours`            | no intent behind this trade (a platform trade, or an acceptance not persisted yet) | ignore; a later snapshot links it           |
 | `intent_not_accepted` | the intent is `reconciling`/`manual_review`                                        | leave to #89/#90/the operator; never settle |
-| `mismatch`            | the closed trade contradicts the intent; nothing written                           | log; reconciliation                         |
 
-A database error propagates; the trades before it stay applied, and a replay is safe.
+A thrown error (a database failure) propagates with nothing of that trade written; the trades
+before it stay applied, and a replay is safe. The polling loop (#90) logs it with `errorLogFields`
+and holds that account back for the tick, as the balance reconciler does for a throwing attempt
+(Architecture Rule 21), so one account cannot block the batch on every pass.
 `listOverdueAcceptedIntents(db, { graceMs, limit })` is the one definition of "accepted past its
 expected close": the broker's open time plus the intent's `duration_sec` plus `graceMs`, against
 the database clock, oldest first.
@@ -179,7 +187,7 @@ entered twice. What resolves an intent left at each stage:
 | `accepted`, closed before the acceptance was persisted | `settleClosedTrades` answered `not_ours`; the catch-up applies the closed snapshot once the intent is overdue                                                              | #90, #101                                    |
 | `unknown`                                              | the `trading-reconciliation` consumer → `reconciling`                                                                                                                      | #89                                          |
 | `reconciling`                                          | #89's pickup at worker start → `accepted` / `rejected` / `manual_review`                                                                                                   | #89                                          |
-| `manual_review`                                        | the operator: `settleIntent` or `rejectIntent` (`manual_rejected`)                                                                                                         | a later issue (the tool)                     |
+| `manual_review`                                        | the operator: `settleIntent` (with the closed trade from that account's own closed list) or `rejectIntent` (`manual_rejected`)                                             | a later issue (the tool)                     |
 
 Until #101 and #90 ship their loops, an `accepted` intent is not self-resolving; no executor
 accepts before then (`notConfiguredExecutor` rejects every intent).
