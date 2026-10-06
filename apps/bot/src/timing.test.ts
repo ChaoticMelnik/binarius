@@ -10,6 +10,7 @@ import {
   OAuthErrorCode,
   TradeAction,
   TRADING_ACCESS_BUDGET_MS,
+  TRADING_SIGNAL_BUDGET_MS,
   UserErrorCode,
   UserStatus,
   type TradingAccessResponse,
@@ -1563,6 +1564,11 @@ describe('the bounds shared with the backend', () => {
   // GET inside its budget as an outage
   it('waits for /trading/access at least as long as the backend budgets the route', () => {
     expect(TRADING_ACCESS_BUDGET_MS).toBeLessThanOrEqual(BACKEND_REQUEST_TIMEOUT_MS);
+  });
+
+  // the same for POST /trading/signal (#126): the analysis would read a slow chart as unavailable
+  it('waits for /trading/signal at least as long as the backend budgets the route', () => {
+    expect(TRADING_SIGNAL_BUDGET_MS).toBeLessThanOrEqual(BACKEND_REQUEST_TIMEOUT_MS);
   });
 });
 

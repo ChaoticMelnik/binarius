@@ -1,4 +1,4 @@
-import { TRADING_ACCESS_BUDGET_MS } from '@binarius/shared';
+import { TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS } from '@binarius/shared';
 
 // Every bound the bot runs under, and what each one bounds. The chain is checked at import, so
 // a constant edited into an impossible order stops the process instead of producing a shutdown
@@ -111,11 +111,13 @@ export const GRAMMY_POLLING_BACKOFF_MS = 3_000;
 // stop_grace_period of the compose service `bot`, kept in step by timing.test.ts.
 export const COMPOSE_STOP_GRACE_PERIOD_MS = 55_000;
 
-// TRADING_ACCESS_BUDGET_MS is the backend's upper estimate of POST /trading/access: waiting at
-// least that long keeps a broker GET inside its budget from reading as an outage here.
+// TRADING_ACCESS_BUDGET_MS and TRADING_SIGNAL_BUDGET_MS are the backend's upper estimates of POST
+// /trading/access and POST /trading/signal (#126): waiting at least that long keeps a broker GET
+// inside its budget from reading as an outage here.
 export const TIMING_CHAIN_HOLDS =
   POLLING_BATCH_LIMIT === 1 &&
   TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
+  TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   POLLING_TIMEOUT_S * 1000 < TELEGRAM_API_TIMEOUT_MS &&
   HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
   TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&

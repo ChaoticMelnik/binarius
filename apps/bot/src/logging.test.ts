@@ -4,16 +4,18 @@ import { BotError, HttpError } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  BrokerRestErrorCode,
   confirmCallbackData,
   logOptions,
   NotificationLevel,
+  SignalFeedOutcome,
   UNNAMED_ERROR_MESSAGE,
   type LogLevel,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { OAUTH_CALLBACK_DATA, createBot, levelCallbackData } from './bot';
-import { DEMO_CALLBACK_DATA, demoAssetCallbackData } from './demo';
+import { DEMO_CALLBACK_DATA, demoAnalysisCallbackData, demoAssetCallbackData } from './demo';
 import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
@@ -27,6 +29,7 @@ import {
   PAIR_EURUSD,
   PAIRS_RESPONSE,
   SIGNAL_DECIDED,
+  SIGNAL_FETCH_FAILED,
   PENDING_ACCOUNT_ID,
   USER,
   USER_VIEW,
@@ -650,6 +653,52 @@ describe('what the bot writes about the demo', () => {
     });
     expect(fieldsOf(lines)).not.toContain(String(USER.id));
     expect(lines.join('')).not.toContain(PAIR_EURUSD.symbol);
+  });
+
+  // #126
+  const analysed = () => callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 60));
+
+  it('names a failed signal call by error, code, status and reason, without the user or a symbol', async () => {
+    const { lines } = await linesFrom({
+      update: analysed(),
+      level: 'trace',
+      evaluateSignal: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, { status: 400, reason: 'validation' }),
+        ),
+    });
+    expect(lineWith(lines, 'signal not evaluated')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 400,
+      backendReason: 'validation',
+    });
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+    expect(lines.join('')).not.toContain(PAIR_EURUSD.symbol);
+  });
+
+  it('names a broker failure behind the signal by its code alone, and says nothing of rate_limited', async () => {
+    const { lines } = await linesFrom({
+      update: analysed(),
+      level: 'trace',
+      evaluateSignal: () =>
+        Promise.resolve({
+          outcome: SignalFeedOutcome.FetchFailed,
+          code: BrokerRestErrorCode.Unauthorized,
+        }),
+    });
+    const line = lineWith(lines, 'signal not evaluated');
+    expect(line).toMatchObject({ level: 40, signalCode: BrokerRestErrorCode.Unauthorized });
+    expect(line).not.toHaveProperty('err');
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+    expect(lines.join('')).not.toContain(PAIR_EURUSD.symbol);
+
+    const limited = await linesFrom({
+      update: analysed(),
+      level: 'trace',
+      evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
+    });
+    expect(limited.lines.join('')).not.toContain('signal not evaluated');
   });
 
   it('writes nothing about a 503 or a stale catalog: the backend logs those itself', async () => {
