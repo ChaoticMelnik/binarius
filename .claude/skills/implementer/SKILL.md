@@ -77,7 +77,7 @@ Run before committing. Every item traces to a review finding (`audits.md`):
 - [ ] No duplicate reads of the same data within one code path
 - [ ] Parallel/structurally similar code paths diffed against each other for a step one has and the other is missing
 - [ ] Every new mutation checked against other in-flight actions on the same entity for an inconsistent-state race
-- [ ] Money/token fields use numeric/integer minor units, never JS float
+- [ ] Money/token fields are `numeric(20,8)`/`bigint` in the DB and `DecimalString` in code, never a JS number — the two wire-boundary exceptions are in Rule 2
 - [ ] Deposit/postback handlers dedupe by postback id and payment_id before crediting anything
 - [ ] **Class, not instance:** whenever a constraint, a rule or a fix changes, search the whole domain for the same construct (grep/codegraph — write the command down) and close every occurrence, not the one named
 - [ ] A framework default the code or a comment relies on (error bodies, redaction, retries, lock modes) was verified by running it

@@ -68,7 +68,7 @@ CI дополнительно проверяет, что изменения сх
 
 ### База данных
 
-PostgreSQL + Drizzle ORM (решение зафиксировано 2026-09-21, см. `.claude/skills/tech-lead/SKILL.md` → Project Architecture Reference для полного стека). Схема — `packages/db`, общая для `apps/backend` и `apps/trading-worker`. Миграции — **forward-only** через `drizzle-kit`, откат — новой миграцией, не редактированием/удалением применённой. `drizzle-kit push` не используется — только миграции файлами. Деньги и токены — `numeric`/целые минимальные единицы в БД и `bigint`/decimal-обёртки в коде, никогда обычный JS `number`/float. Конкретная схема таблиц не определена — проектируется архитектором для первого реального issue.
+PostgreSQL + Drizzle ORM (решение зафиксировано 2026-09-21, см. `.claude/skills/tech-lead/SKILL.md` → Project Architecture Reference для полного стека). Схема — `packages/db`, общая для `apps/backend` и `apps/trading-worker`. Миграции — **forward-only** через `drizzle-kit`, откат — новой миграцией, не редактированием/удалением применённой. `drizzle-kit push` не используется — только миграции файлами. Деньги и токены — `numeric(20,8)`/`bigint` в БД, `DecimalString` в коде, никогда JS `number`/float; две границы, где число допустимо, — Rule 2. Конкретная схема таблиц не определена — проектируется архитектором для первого реального issue.
 
 **Workflow при изменении схемы (`packages/db`):**
 
@@ -111,7 +111,7 @@ PostgreSQL + Drizzle ORM (решение зафиксировано 2026-09-21, 
 - Язык — TypeScript везде (бот, backend, web, worker, общие пакеты), pnpm workspaces monorepo.
 - Пользовательские строки (сообщения бота, ошибки, интерфейс кассы) — русский; код (переменные, функции, комментарии, коммиты) — английский (см. `~/.claude/CLAUDE.md` → Code Language Convention).
 - Валидация входных данных — на границах: Telegram update handlers, HTTP-роуты Fastify, постбэки брокера. Внутренний код доверяет уже провалидированным данным.
-- Деньги/токены — `numeric`/integer minor units, никогда float.
+- Деньги/токены — `numeric(20,8)`/`bigint` в БД, `DecimalString` в коде, никогда JS `number`/float; две границы, где число допустимо (разбор провода брокера, вывод мок-брокера), — Rule 2.
 - Комментарии — только когда WHY не очевиден (см. `~/.claude/CLAUDE.md` → Code & Response Hygiene).
 
 ### CodeGraph

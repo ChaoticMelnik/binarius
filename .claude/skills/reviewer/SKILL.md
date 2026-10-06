@@ -87,7 +87,7 @@ Merge Codex + agent results, collapse duplicates. Discard findings that just res
 
 **Security & data integrity** — no injection classes (SQL/XSS/command); every new route has the appropriate authorization before business logic; input validated at the boundary; OAuth tokens/refresh tokens encrypted at rest and excluded from logs; deposit postbacks verified (signature or other supported server mechanism) before crediting anything.
 
-**Domain invariants** — every item of `.claude/skills/architect/SKILL.md` → "Architecture Rules to Enforce in Every Plan" that the diff touches still holds (that list is the only full copy). Money/tokens use numeric/integer minor units, never float.
+**Domain invariants** — every item of `.claude/skills/architect/SKILL.md` → "Architecture Rules to Enforce in Every Plan" that the diff touches still holds (that list is the only full copy). Money/token fields are `numeric(20,8)`/`bigint` in the DB and `DecimalString` in code, never a JS number — the two wire-boundary exceptions are in Rule 2.
 
 **Code quality** — no debug logging left in production paths; comments only where WHY is non-obvious, and none promising more than the code or DDL does; no new untyped escape hatches; no dead code, no unused imports; a change to what reaches the logs has a test that reads the log itself, not the HTTP response.
 
