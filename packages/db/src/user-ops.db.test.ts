@@ -373,6 +373,23 @@ describe('toUserStartView', () => {
     expect(Object.keys(view.pendingBrokerAccounts[0]!)).toEqual(['id', 'email']);
   });
 
+  // rows stored before #214 may hold a blank address; the button must not read "… для "
+  it.each([[''], [' \t ']])('shows a blank pending address %j as none', async (email) => {
+    const telegramUserId = nextTelegramUserId();
+    const { row } = await start(telegramUserId);
+    const id = await seedBrokerAccount(tmp.db, row.id, { status: BrokerAccountStatus.Pending });
+    await tmp.db.update(brokerAccounts).set({ email }).where(eq(brokerAccounts.id, id));
+
+    const started = await start(telegramUserId);
+    expect(started.pendingBrokerAccounts).toEqual([{ id, email }]);
+    const view = toUserStartView(
+      started.row,
+      started.hasActiveBrokerAccount,
+      started.pendingBrokerAccounts,
+    );
+    expect(view.pendingBrokerAccounts).toEqual([{ id, email: null }]);
+  });
+
   it('carries a null acquisition through as null', async () => {
     const telegramUserId = nextTelegramUserId();
     const { row } = await start(telegramUserId);

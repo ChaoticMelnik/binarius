@@ -1,5 +1,6 @@
 import { desc, eq } from 'drizzle-orm';
 import {
+  addressOrNull,
   BrokerAccountStatus,
   USER_ACCOUNT_LIST_LIMIT,
   type LinkedAccountView,
@@ -41,9 +42,10 @@ export async function readUserAccounts(
 
 // Built key by key, and the id only on a pending row: it is what the confirm button carries, and
 // nothing else needs it. A blank address is no address — "Подключён: " with nothing after it is
-// what the bot would print otherwise. /start's view does not do this yet (#214).
+// what the bot would print otherwise. toUserStartView and toBrokerAccountView call the same
+// addressOrNull (#214).
 export function toLinkedAccountView(row: LinkedAccountRow): LinkedAccountView {
-  const email = row.email === null || row.email.trim() === '' ? null : row.email;
+  const email = addressOrNull(row.email);
   switch (row.status) {
     case BrokerAccountStatus.Pending:
       return { status: row.status, id: row.id, email };

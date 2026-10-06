@@ -1,5 +1,6 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 import {
+  addressOrNull,
   BrokerAccountStatus,
   type PendingBrokerAccountView,
   type UserStartView,
@@ -115,7 +116,10 @@ export function toUserStartView(
     acquisitionSource: row.acquisitionSource,
     acquiredAt: row.acquiredAt === null ? null : row.acquiredAt.toISOString(),
     hasActiveBrokerAccount,
-    pendingBrokerAccounts: pendingBrokerAccounts.map(({ id, email }) => ({ id, email })),
+    pendingBrokerAccounts: pendingBrokerAccounts.map(({ id, email }) => ({
+      id,
+      email: addressOrNull(email),
+    })),
     notificationLevel: row.notificationLevel,
   };
 }

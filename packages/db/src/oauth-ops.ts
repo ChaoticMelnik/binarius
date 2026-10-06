@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, getTableColumns, isNull, sql } from 'drizzle-orm';
 import {
+  addressOrNull,
   AuthRevokedReason,
   BrokerAccountStatus,
   UserStatus,
@@ -409,7 +410,7 @@ export function toBrokerAccountView(row: BrokerAccountRow): BrokerAccountView {
   return {
     id: row.id,
     brokerUserId: row.brokerUserId,
-    email: row.email,
+    email: addressOrNull(row.email),
     isPartnerClient: row.isPartnerClient,
     status: row.status,
     createdAt: row.createdAt.toISOString(),

@@ -190,6 +190,44 @@ describe('linkBrokerAccount', () => {
     ).toHaveLength(1);
   });
 
+  it('stores an address the broker did not give as null', async () => {
+    const tokens = brokerTokens();
+    const result = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_028n,
+      tokens: { ...tokens, user: { ...tokens.user, email: null } },
+      cipher,
+      activate: false,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect((await brokerAccountRow(tmp.db, result.account.id)).email).toBeNull();
+    expect(toBrokerAccountView(result.account).email).toBeNull();
+  });
+
+  it('lets a re-login without an address overwrite the stored one: the latest answer wins', async () => {
+    const first = brokerTokens();
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_029n,
+      tokens: first,
+      cipher,
+      activate: false,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect((await brokerAccountRow(tmp.db, created.account.id)).email).toBe(first.user.email);
+
+    const again = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_029n,
+      tokens: brokerTokens({ user: { ...first.user, email: null } }),
+      cipher,
+      activate: false,
+    });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.account.id).toBe(created.account.id);
+    expect((await brokerAccountRow(tmp.db, created.account.id)).email).toBeNull();
+  });
+
   it('clears an OAuth revocation but never the trading halt', async () => {
     const tokens = brokerTokens();
     const created = await linkBrokerAccount(tmp.db, {
@@ -898,5 +936,27 @@ describe('toBrokerAccountView', () => {
       'status',
     ]);
     expect(JSON.stringify(view)).not.toContain('Enc');
+  });
+
+  // rows stored before #214 may hold a blank address; nothing rewrites them
+  it.each([
+    [700_041n, ''],
+    [700_042n, ' \t '],
+  ])('shows the blank address of a stored row as none (%s, %j)', async (telegramUserId, email) => {
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens: brokerTokens(),
+      cipher,
+      activate: false,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ email })
+      .where(eq(brokerAccounts.id, created.account.id));
+    const row = await brokerAccountRow(tmp.db, created.account.id);
+    expect(row.email).toBe(email);
+    expect(toBrokerAccountView(row).email).toBeNull();
   });
 });
