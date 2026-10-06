@@ -2,10 +2,17 @@ import { MAX_DETAIL_LENGTH } from '@binarius/broker-rest';
 import {
   BrokerSocketEvent,
   errorLogFields,
+  modeEvent,
   priceSubscribeWireSchema,
+  socketOpenTradeRequestWireSchema,
+  toSocketOpenTradeRequestWire,
   userAuthWireSchema,
   type BrokerClientToServerEvents,
   type BrokerServerToClientEvents,
+  type OpenTrade,
+  type OpenTradeFailure,
+  type SocketOpenTradeRequest,
+  type TradeMode,
   type UserAuthWire,
 } from '@binarius/shared';
 import type pino from 'pino';
@@ -76,6 +83,14 @@ export interface BrokerSocketStateChange {
   reason?: string;
 }
 
+export type SocketOpenTradeResult =
+  | { outcome: 'success'; trade: OpenTrade }
+  | { outcome: 'fail'; failures: OpenTradeFailure[] }
+  // nothing was emitted: the client is not ready, or the caller's signal was already aborted
+  | { outcome: 'not_sent'; reason: 'not_ready' | 'aborted'; state: BrokerSocketState }
+  // emitted, and no answer: the session changed state, or the caller aborted while waiting
+  | { outcome: 'unknown'; reason: 'state_changed' | 'aborted'; state: BrokerSocketState };
+
 export type BrokerSocketLogger = Pick<pino.Logger, 'debug' | 'info' | 'warn' | 'error'>;
 
 export interface BrokerSocketClientOptions {
@@ -99,6 +114,13 @@ export interface BrokerSocketClient {
   subscribe(assetIds: readonly number[]): void;
   // the registry, ascending
   subscriptions(): number[];
+  // emits user.<mode>.open_trade only while ready; the answer is the first open_trade event of
+  // that mode on the same connection. At most one command at a time: a second one throws.
+  openTrade(
+    mode: TradeMode,
+    request: SocketOpenTradeRequest,
+    signal: AbortSignal,
+  ): Promise<SocketOpenTradeResult>;
   readonly state: BrokerSocketState;
   // successful auths since the last start()
   readonly connections: number;
@@ -134,6 +156,14 @@ interface Session {
   connection?: Connection;
 }
 
+// the command in flight, tied to the connection it was emitted on
+interface PendingCommand {
+  session: Session;
+  connection: number;
+  mode: TradeMode;
+  settle: (result: SocketOpenTradeResult) => void;
+}
+
 type Delivery =
   | { kind: 'state'; change: BrokerSocketStateChange }
   | { kind: 'event'; session: Session; event: BrokerEvent };
@@ -162,6 +192,7 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
   let connections = 0;
   let session: Session | undefined;
   let starting = false;
+  let pending: PendingCommand | undefined;
 
   // Run-to-completion: every entry point (a socket.io handler, the auth timer, start(), stop())
   // is one unit of work, and listeners hear of it only once the outermost unit has finished. A
@@ -226,10 +257,20 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
     const from = state;
     if (from === to) return;
     state = to;
+    // the emitted command's answer can no longer be told apart from silence: its connection is
+    // gone or going, and a new connection never carries it
+    settleCommand({ outcome: 'unknown', reason: 'state_changed', state: to });
     const change: BrokerSocketStateChange =
       reason === undefined ? { from, to } : { from, to, reason };
     logger.debug(change, 'broker socket state');
     queue.push({ kind: 'state', change });
+  }
+
+  function settleCommand(result: SocketOpenTradeResult) {
+    const command = pending;
+    if (command === undefined) return;
+    pending = undefined;
+    command.settle(result);
   }
 
   // stopped, or replaced by a later start(): its socket's events no longer speak for the client
@@ -395,6 +436,61 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
     transition(to, to === BrokerSocketState.AuthFailed ? 'auth_error' : 'token_expired');
   }
 
+  function answerCommand(current: Session, event: BrokerEvent) {
+    if (
+      pending === undefined ||
+      pending.session !== current ||
+      pending.connection !== current.connection?.ordinal
+    ) {
+      return;
+    }
+    if (event.type === BrokerEventType.OpenTradeSuccess && event.mode === pending.mode) {
+      settleCommand({ outcome: 'success', trade: event.trade });
+    } else if (event.type === BrokerEventType.OpenTradeFail && event.mode === pending.mode) {
+      settleCommand({ outcome: 'fail', failures: event.failures });
+    }
+  }
+
+  // The check and the emit are one synchronous unit: the state the caller is answered by is the
+  // state the command went out in. The only emit of user.<mode>.open_trade.
+  function openTrade(
+    mode: TradeMode,
+    request: SocketOpenTradeRequest,
+    signal: AbortSignal,
+  ): Promise<SocketOpenTradeResult> {
+    const current = session;
+    if (signal.aborted) {
+      return Promise.resolve({ outcome: 'not_sent', reason: 'aborted', state });
+    }
+    const connection = current?.connection;
+    if (current === undefined || connection === undefined || state !== BrokerSocketState.Ready) {
+      return Promise.resolve({ outcome: 'not_sent', reason: 'not_ready', state });
+    }
+    if (pending !== undefined) throw new Error('broker socket open_trade already pending');
+    const payload = socketOpenTradeRequestWireSchema.parse(toSocketOpenTradeRequestWire(request));
+    current.socket.emit(modeEvent(mode, 'open_trade'), payload);
+    logger.debug({ mode, connection: connection.ordinal }, 'broker socket open_trade sent');
+    if (sessionEnded(current) || state !== BrokerSocketState.Ready) {
+      return Promise.resolve({ outcome: 'unknown', reason: 'state_changed', state });
+    }
+    return new Promise((resolve) => {
+      const command: PendingCommand = {
+        session: current,
+        connection: connection.ordinal,
+        mode,
+        settle: (result) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(result);
+        },
+      };
+      function onAbort() {
+        if (pending === command) settleCommand({ outcome: 'unknown', reason: 'aborted', state });
+      }
+      pending = command;
+      signal.addEventListener('abort', onAbort);
+    });
+  }
+
   function dispatch(current: Session, event: BrokerEvent) {
     queue.push({ kind: 'event', session: current, event });
   }
@@ -419,6 +515,7 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
       return;
     }
     const { event } = result;
+    answerCommand(current, event);
     if (result.extraArgs > 0 && firstOnConnection(current, `extra:${name}`)) {
       logger.warn(
         { event: name, extraArgs: result.extraArgs },
@@ -518,6 +615,7 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
       }
     },
     subscriptions: () => registry.all(),
+    openTrade: (mode, request, signal) => unit(() => openTrade(mode, request, signal)),
     get state() {
       return state;
     },
