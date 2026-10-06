@@ -431,7 +431,8 @@ Both are in the internal-token scope, next to `start` and `confirm`. The address
 `emailAddressSchema` (trimmed, then checked, at most 254 characters, case kept on the wire), the
 code `emailLoginCodeSchema` (trimmed, 1-64 characters, any shape — the broker answers a wrong
 shape with `Invalid or expired code` too). Neither the address nor the code is stored or written
-to the log by these routes; `broker_accounts.email` holds what the broker reports, as with OAuth.
+to the log by these routes; `broker_accounts.email` holds what the broker reports, as with OAuth, a blank one as NULL
+(`addressOrNull`, #214).
 
 | Route | Answer | Errors |
 | --- | --- | --- |
