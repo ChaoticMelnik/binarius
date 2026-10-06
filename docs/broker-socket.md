@@ -113,9 +113,18 @@ refresh and the place in `index.ts` are #101's.
 | `subscriptions()` | the registry, ascending |
 | `state`, `connections` | the state below; successful auths since the last `start()` |
 | `onEvent(listener)`, `onState(listener)` | every valid `BrokerEvent`; every state change `{ from, to, reason? }`. Each returns its unsubscribe |
+| `isTerminalBrokerSocketState(state)` | whether `start()` may be called again without `stop()` |
 
-The token lives only in the closure of the current `start()`: it is not a field, never part of a
-state change, an error or a log line.
+A state change is published last in every handler: the auth is sent and the timer armed before
+`authenticating`, the pass is sent before `ready`, the socket is closed before a terminal state,
+and `connect()` has run before `connecting`. A state listener may therefore call `subscribe()`,
+`stop()` or `start()`: a `subscribe()` on `ready` sends only the ids the pass did not, and an event
+whose session a listener ended inside its own state change (a restart on `auth_failed`) is not
+passed to `onEvent` — the state change was.
+
+The credentials are held by the session of the current `start()` for the re-auth after a
+reconnect; `stop()` and the next `start()` drop them. They are never part of a state change, an
+error or a log line.
 
 ### States
 
@@ -124,13 +133,13 @@ state change, an error or a log line.
 | State | Meaning | Left by |
 |---|---|---|
 | `idle` | created, or after `stop()` | `start()` |
-| `connecting` | `start()` called, the first connection not up; `connect_error`s are logged here | `connect` → `authenticating` |
+| `connecting` | `start()` called, the first connection not up; `connect_error`s are logged here | `connect` → `authenticating`; a refused connection → `disconnected_by_server` |
 | `authenticating` | `connect` fired, `user.auth` sent, the auth timer armed | `user.auth.success` → `ready`; the timer → `reconnecting` (`forced close`) |
 | `ready` | authenticated; the registry pass for this connection sent | a transport drop → `reconnecting` |
-| `reconnecting` | the transport dropped (`transport close`, `ping timeout`, `transport error`, `forced close`); socket.io's backoff runs | `connect` → `authenticating` |
+| `reconnecting` | the transport dropped (`transport close`, `ping timeout`, `transport error`, `forced close`); socket.io's backoff runs | `connect` → `authenticating`; a refused connection → `disconnected_by_server` |
 | `auth_failed` | `user.auth.error`, during the handshake or after it | `start()` |
 | `token_expired` | `user.disconnect_token_expired` | `start()` |
-| `disconnected_by_server` | a server DISCONNECT (`io server disconnect`), which socket.io never reconnects after | `start()` |
+| `disconnected_by_server` | the server ended or refused the connection: a DISCONNECT (`io server disconnect`) or a CONNECT_ERROR from the namespace middleware (`connect_error`, `socket.active === false`); socket.io never reconnects after either. The state change's `reason` tells the two apart | `start()` |
 
 The last three are terminal for the current credentials: the client closes the socket itself (so
 the server's drop that follows `token_expired` arrives as `io client disconnect` and changes
@@ -139,8 +148,8 @@ nothing) and waits for `start()`. `stop()` leads to `idle` from any state.
 ### Handshake and the exactly-once pass
 
 ```text
-connect ─ emit user.auth { id, token } ─ arm BROKER_SOCKET_AUTH_TIMEOUT_MS
-user.auth.success ─ disarm ─ ready ─ emit price.subscribe per chunk of registry.all()
+connect ─ emit user.auth { id, token } ─ arm BROKER_SOCKET_AUTH_TIMEOUT_MS ─ authenticating
+user.auth.success ─ disarm ─ emit price.subscribe per chunk of registry.all() ─ ready
 subscribe(ids) while ready ─ emit price.subscribe per chunk of the ids the registry did not hold
 ```
 
@@ -151,27 +160,37 @@ next `user.auth`. Each chunk holds at most `MAX_PRICE_SUBSCRIPTION_ASSETS` (40) 
 is not awaited. The registry deduplicates, so on one connection an id goes out once, in the pass
 or as a later add; after a reconnect the pass sends everything once more. The tests prove it per
 socket id from the fixture's journal: one `user.auth`, then `ceil(n / 40)` `price.subscribe`, all
-`handled`, and the socket's subscriptions equal to `subscriptions()`. A second
+`handled`, and the socket's subscriptions equal to `subscriptions()`; and, through the
+`openSocket` seam, that an id a `ready` listener subscribes goes out once, after the pass. A second
 `user.auth.success` on one connection is logged at `debug` and starts no second pass.
 
 ### Reconnection and timing
 
 socket.io's own reconnection; the client reacts to `connect` (re-auth), `disconnect` (state) and
 `reconnect_attempt` (the `attempt` field). A hung handshake is turned into a transport loss with
-`socket.io.engine.close()`, so the backoff decides when the next attempt runs.
+`socket.io.engine.close()`. socket.io's backoff grows only across consecutive failed attempts
+(`connect_error`); every open and every close reset it, so a broker that accepts and then drops,
+or accepts and never answers `user.auth`, is retried about every `BROKER_SOCKET_RECONNECT_DELAY_MS`
+(plus the auth timeout for a hung handshake), never at the maximum. Escalating that is #101's, if
+observed.
 
 | Constant (`socket-config.ts`) | Bounds | socket.io option |
 |---|---|---|
-| `BROKER_SOCKET_CONNECT_TIMEOUT_MS = 10_000` | one connection attempt | `timeout` |
+| `BROKER_SOCKET_CONNECT_TIMEOUT_MS = 10_000` | the engine open of one attempt (the WebSocket upgrade and the engine.io handshake); the namespace CONNECT after it is not bounded | `timeout` |
 | `BROKER_SOCKET_AUTH_TIMEOUT_MS = 5_000` | `user.auth` sent → `user.auth.success` (live ~50 ms) | the client's timer |
 | `BROKER_SOCKET_RECONNECT_DELAY_MS = 1_000` | the first wait between attempts | `reconnectionDelay` |
 | `BROKER_SOCKET_RECONNECT_DELAY_MAX_MS = 10_000` | the longest wait | `reconnectionDelayMax` |
 | `BROKER_SOCKET_RECONNECT_JITTER = 0.5` | the randomisation of each wait | `randomizationFactor` |
 
-The chain (first wait ≤ longest wait, auth timeout ≤ connect timeout, 0 ≤ jitter ≤ 1) is checked
+The chain (every `*_MS` a positive integer, first wait ≤ longest wait, auth timeout ≤ connect
+timeout, 0 ≤ jitter ≤ 1) is checked
 at import for the defaults and by `resolveBrokerSocketTiming` at construction for a `timing`
 override. Its link to the worker's shutdown budget comes with the client's place in `index.ts`
 (#101).
+
+Not bounded: a namespace CONNECT the server never answers. The client adds no timer for it (it
+would race `Manager.open`'s own); it has not been seen live. It shows as a `start()` whose
+`connect` never fires within `BROKER_SOCKET_CONNECT_TIMEOUT_MS` while no `connect error` is logged.
 
 ### Logs
 
@@ -186,11 +205,13 @@ connection and reset on `connect`.
 | `broker socket connect error` | warn once per outage, then debug | `connect_error` | `attempt`, `err` |
 | `broker socket auth timeout` | warn | the auth timer fires | `connection` |
 | `broker socket auth failed` | warn | `user.auth.error` | `detail`: the broker's text cut to `MAX_DETAIL_LENGTH` |
-| `broker socket token expired`, `broker socket disconnected by server` | warn | those terminal states | — |
+| `broker socket token expired` | warn | that terminal state | — |
+| `broker socket disconnected by server` | warn | that terminal state | `reason` (`io server disconnect` or `connect_error`); `err` for `connect_error` (name and code only, never the server's text) |
 | `broker event problem` | warn once per (event, kind) per connection, then counted | a problem for a name not in `IGNORED_BROKER_EVENTS` | `problem`, `extraArgs` |
 | `broker event with extra arguments` | warn once per event name per connection | a valid event with `extraArgs > 0` | `event`, `extraArgs` |
 | `broker event ignored` | debug | a name in `IGNORED_BROKER_EVENTS` (the live extras under Observed live) | `event` |
 | `broker event listener threw` | warn once per event type per connection | an `onEvent` listener throws; the others still run | `type`, `err` |
+| `broker socket state listener threw` | warn | an `onState` listener throws; the others still run | `to`, `err` |
 | `broker socket state` | debug | every state change | `from`, `to`, `reason` |
 
 `IGNORED_BROKER_EVENTS` holds the same names as the mock's `OBSERVED_EXTRA_EVENTS`; a test keeps
@@ -202,8 +223,8 @@ listener's error text) or the URL, and every `msg` of the table present.
 
 `socket.test.ts` runs against `packages/mock-broker` (`bytes` payloads, the handshake also under
 `object`, `json` and `envelope`), with `cutTransport` for the live drop and `emitRaw` for
-problems. `openSocket` is a seam: one test wraps `io()` to record what the client emits. The
-command at the top of this file runs them.
+problems, and `failNext('connect', …)` for a refused connection. `openSocket` is a seam: two
+tests wrap `io()` to record what the client emits. The command at the top of this file runs them.
 
 ## Payload forms
 
