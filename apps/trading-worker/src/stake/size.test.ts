@@ -337,6 +337,43 @@ describe('stake sizer: limits', () => {
       detail: { amount: '1000000000000', maxStake: '999999999999.99' },
     });
   });
+
+  // the session stop-loss reads the realized loss, not the streak; the balance check reads the
+  // candidate, not the base: each history makes the two operands differ
+  it('S22a a win inside the session: the realized loss stops it although the streak is 0', () => {
+    const decision = createStakeSizer(martingale({ maxSessionLoss: d('3.00') })).next(
+      input({ history: [loss('1.00'), loss('2.18'), win('4.75', '1.00')] }),
+    );
+    expect(decision).toMatchObject({
+      kind: 'stop',
+      reason: 'max_session_loss_exceeded',
+      features: { step: 1, streakLoss: '0', realizedSessionLoss: '2.18' },
+      detail: { amount: '1', realizedSessionLoss: '2.18', maxSessionLoss: '3.00' },
+    });
+  });
+
+  it('S22b a realized loss below the streak lets a stake through that the streak would stop', () => {
+    const decision = createStakeSizer(martingale({ maxSessionLoss: d('2.34') })).next(
+      input({ history: [loss('1.00'), loss('2.18'), win('4.75', '4.03'), loss('1.00')] }),
+    );
+    expect(stakeOf(decision)).toBe('2.18');
+    expect(decision.kind === 'stake' && decision.features).toMatchObject({
+      step: 2,
+      streakLoss: '1',
+      realizedSessionLoss: '0.15',
+    });
+  });
+
+  it('S22c the balance check reads the candidate of step 2, not the base stake', () => {
+    const decision = createStakeSizer(martingale()).next(
+      input({ history: [loss('1.00')], available: d('2.17') }),
+    );
+    expect(decision).toMatchObject({
+      kind: 'stop',
+      reason: 'insufficient_balance',
+      detail: { amount: '2.18', available: '2.17' },
+    });
+  });
 });
 
 describe('stake sizer: contract', () => {

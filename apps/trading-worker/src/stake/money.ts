@@ -86,7 +86,7 @@ export function divCeil(a: bigint, b: bigint): bigint {
 // arithmetic, the same policy as moneyWireSchema; an exponent, a non-finite value, zero or more
 // digits than numeric(8,4) holds is refused, never rounded.
 export function parsePayout(payout: number): bigint | undefined {
-  if (typeof payout !== 'number' || !Number.isFinite(payout)) return undefined;
+  if (!Number.isFinite(payout)) return undefined;
   const match = PAYOUT.exec(String(payout));
   if (match === null) return undefined;
   const [, whole = '0', fraction = ''] = match;
