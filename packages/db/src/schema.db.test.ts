@@ -26,7 +26,7 @@ import {
   tradingSessions,
   users,
 } from './schema/index';
-import type { DecimalString } from '@binarius/shared';
+import { AccountHaltReason, type DecimalString } from '@binarius/shared';
 import { STAFF_LOGIN_CORPUS } from '@binarius/shared/testing';
 // Integration tests: a migrated Postgres named by TEST_DATABASE_URL (README → Test database).
 // Each case runs in one transaction that is rolled back at the end; Postgres aborts a
@@ -617,13 +617,12 @@ describe('trade_intents', () => {
   it('accepts a halt with its reason and lifts both together (#90)', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
-      const halt = (tradingHalted: boolean, haltedReason: 'reconciliation_ambiguous' | 'trade_mismatch' | null) =>
+      const halt = (tradingHalted: boolean, haltedReason: AccountHaltReason | null) =>
         tx
           .update(brokerAccounts)
           .set({ tradingHalted, haltedReason })
           .where(eq(brokerAccounts.id, seed.accountId));
-      await halt(true, 'reconciliation_ambiguous');
-      await halt(true, 'trade_mismatch');
+      for (const reason of Object.values(AccountHaltReason)) await halt(true, reason);
       await halt(false, null);
     });
   });

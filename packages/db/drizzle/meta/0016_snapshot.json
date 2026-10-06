@@ -1,5 +1,5 @@
 {
-  "id": "8a2cde66-3f9e-47c3-92fc-a1165806fe27",
+  "id": "26ad6816-8234-442f-8529-f6e79a68a867",
   "prevId": "5f1ade97-cc5b-4cff-a9e4-ec3a16caaa94",
   "version": "7",
   "dialect": "postgresql",
@@ -326,7 +326,7 @@
         },
         "broker_accounts_halted_reason_check": {
           "name": "broker_accounts_halted_reason_check",
-          "value": "\"broker_accounts\".\"halted_reason\" in ('reconciliation_ambiguous', 'trade_mismatch')"
+          "value": "\"broker_accounts\".\"halted_reason\" in ('reconciliation_ambiguous', 'reconciliation_not_found', 'trade_mismatch')"
         },
         "broker_accounts_halt_reason_pair_check": {
           "name": "broker_accounts_halt_reason_pair_check",

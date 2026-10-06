@@ -142,7 +142,9 @@ describe('contract coverage (issue #6)', () => {
       | 'key_unavailable'
       | 'refresh_needed'
     >();
-    expectTypeOf<AccountHaltReason>().toEqualTypeOf<'reconciliation_ambiguous' | 'trade_mismatch'>();
+    expectTypeOf<AccountHaltReason>().toEqualTypeOf<
+      'reconciliation_ambiguous' | 'reconciliation_not_found' | 'trade_mismatch'
+    >();
   });
 
   it('BrokerBalanceView (issue #137)', () => {
