@@ -20,7 +20,9 @@ export function createAssetSubscriptionRegistry(): AssetSubscriptionRegistry {
     add(input) {
       const invalid = input.find((id) => !isAssetId(id));
       if (invalid !== undefined) {
-        throw new RangeError(`asset id must be a non-negative safe integer, got ${String(invalid)}`);
+        throw new RangeError(
+          `asset id must be a non-negative safe integer, got ${String(invalid)}`,
+        );
       }
       const added: number[] = [];
       for (const id of input) {
