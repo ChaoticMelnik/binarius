@@ -11,6 +11,9 @@ import {
   COMPOSE_STOP_GRACE_PERIOD_MS,
   LOCK_DURATION_MS,
   MAX_SUBMIT_ACK_TIMEOUT_MS,
+  RECONCILE_ATTEMPT_TIMEOUT_MS,
+  RECONCILE_RETRY_MS,
+  RECONCILE_TICK_MS,
   SHUTDOWN_PHASE1_BUDGET_MS,
   SHUTDOWN_PHASE2_BUDGET_MS,
   STALE_SUBMITTING_MS,
@@ -33,6 +36,13 @@ describe('timing constants', () => {
     expect(COMPOSE_STOP_GRACE_PERIOD_MS).toBeLessThan(LOCK_DURATION_MS);
     expect(LOCK_DURATION_MS).toBeLessThanOrEqual(STALE_SUBMITTING_MS);
     expect(BROKER_REST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  it('keep one REST call inside a reconciliation attempt, the attempt inside its lease and phase 1', () => {
+    expect(BROKER_REST_TIMEOUT_MS).toBeLessThan(RECONCILE_ATTEMPT_TIMEOUT_MS);
+    expect(RECONCILE_ATTEMPT_TIMEOUT_MS).toBeLessThan(RECONCILE_RETRY_MS);
+    expect(RECONCILE_ATTEMPT_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(RECONCILE_TICK_MS).toBeLessThanOrEqual(RECONCILE_RETRY_MS);
   });
 
   it('matches the stop_grace_period compose gives the trading-worker service', () => {

@@ -8,10 +8,12 @@ import {
 } from '@binarius/shared';
 import { OutboxTopic } from '@binarius/db';
 import { LOCK_DURATION_MS, MAX_STALLED_COUNT, STALLED_INTERVAL_MS } from './config';
-import { InvalidJobError, type Logger, type ProcessOutcome } from './processor';
+import { InvalidJobError, type Logger } from './processor';
 
 export interface DeadLetter {
   intentId: string | null;
+  // the queue the job came from; both consumers share one dead-letter queue
+  topic: OutboxTopic;
   reason: TradeIntentFailureReason;
   failedAt: string;
 }
@@ -20,9 +22,11 @@ export interface DeadLetterSink {
   add(name: string, data: DeadLetter): Promise<unknown>;
 }
 
-export interface ConsumerDeps {
+export interface ConsumerDeps<Outcome extends string> {
+  // trading-intents (the executor) or trading-reconciliation (#89, the hand-off to the pass)
+  topic: OutboxTopic;
   connection: Redis;
-  processor: (payload: unknown) => Promise<ProcessOutcome>;
+  processor: (payload: unknown) => Promise<Outcome>;
   logger: Logger;
   concurrency: number;
   prefix?: string;
@@ -43,12 +47,14 @@ export interface IntentConsumer {
 export async function deadLetter(
   sink: DeadLetterSink,
   logger: Logger,
+  topic: OutboxTopic,
   job: Job | undefined,
   error: Error,
 ): Promise<void> {
   const payload = tradeIntentJobPayloadSchema.safeParse(job?.data);
   const entry: DeadLetter = {
     intentId: payload.success ? payload.data.intentId : null,
+    topic,
     reason:
       error instanceof InvalidJobError
         ? TradeIntentFailureReason.InvalidJob
@@ -56,7 +62,7 @@ export async function deadLetter(
     failedAt: new Date().toISOString(),
   };
   logger.error(
-    { ...errorLogFields(error), intentId: entry.intentId, reason: entry.reason },
+    { ...errorLogFields(error), intentId: entry.intentId, topic, reason: entry.reason },
     'intent job failed',
   );
   try {
@@ -66,16 +72,17 @@ export async function deadLetter(
   }
 }
 
-export function startIntentConsumer({
+export function startIntentConsumer<Outcome extends string>({
+  topic,
   connection,
   processor,
   logger,
   concurrency,
   prefix,
-}: ConsumerDeps): IntentConsumer {
+}: ConsumerDeps<Outcome>): IntentConsumer {
   const options = prefix === undefined ? {} : { prefix };
   const dlq = new Queue<DeadLetter>(TRADING_INTENTS_DEAD_LETTER_QUEUE, { connection, ...options });
-  const worker = new Worker(OutboxTopic.TradingIntents, (job) => processor(job.data), {
+  const worker = new Worker(topic, (job) => processor(job.data), {
     connection,
     ...options,
     concurrency,
@@ -87,10 +94,12 @@ export function startIntentConsumer({
   const inFlight = new Set<Promise<void>>();
   // job is undefined when a job that stalled too often was removed by removeOnFail
   worker.on('failed', (job, error) => {
-    const write = deadLetter(dlq, logger, job, error).finally(() => inFlight.delete(write));
+    const write = deadLetter(dlq, logger, topic, job, error).finally(() => inFlight.delete(write));
     inFlight.add(write);
   });
-  worker.on('error', (error) => logger.error(errorLogFields(error), 'intent worker error'));
+  worker.on('error', (error) =>
+    logger.error({ ...errorLogFields(error), topic }, 'intent worker error'),
+  );
   return {
     worker,
     dlq,

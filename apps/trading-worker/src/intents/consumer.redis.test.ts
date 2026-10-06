@@ -3,11 +3,17 @@ import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { findTradeIntent } from '@binarius/db';
+import { findTradeIntent, OutboxTopic } from '@binarius/db';
 import { openTradeFor } from '@binarius/shared/testing';
-import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
+import {
+  createTempDatabase,
+  seedQueuedIntent,
+  seedUnknownIntent,
+  type TempDatabase,
+} from '@binarius/db/testing';
 import { deadLetter, startIntentConsumer, type DeadLetter, type IntentConsumer } from './consumer';
 import { InvalidJobError, processIntentJob } from './processor';
+import { processReconciliationJob } from './reconciliation';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 const redisUrl = process.env.REDIS_URL;
@@ -25,17 +31,20 @@ const logger = pino({ level: 'silent' });
 let tmp: TempDatabase;
 let redis: Redis;
 let intents: Queue;
+let reconciliations: Queue;
 
 beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
   redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
   intents = new Queue('trading-intents', { connection: redis, prefix });
+  reconciliations = new Queue('trading-reconciliation', { connection: redis, prefix });
 });
 afterAll(async () => {
   const dlq = new Queue('trading-intents-dead-letter', { connection: redis, prefix });
   await intents.obliterate({ force: true });
+  await reconciliations.obliterate({ force: true });
   await dlq.obliterate({ force: true });
-  await Promise.all([intents.close(), dlq.close()]);
+  await Promise.all([intents.close(), reconciliations.close(), dlq.close()]);
   await redis.quit();
   await tmp.drop();
 });
@@ -55,10 +64,12 @@ function settled(consumer: IntentConsumer, jobId: string): Promise<'completed' |
 }
 
 async function withConsumer<T>(
-  processor: (payload: unknown) => Promise<never> | ReturnType<typeof processIntentJob>,
+  processor: (payload: unknown) => Promise<string>,
   run: (consumer: IntentConsumer) => Promise<T>,
+  topic: OutboxTopic = OutboxTopic.TradingIntents,
 ): Promise<T> {
   const consumer = startIntentConsumer({
+    topic,
     connection: redis,
     processor,
     logger,
@@ -148,7 +159,11 @@ describe('startIntentConsumer', () => {
     expect(outcome).toBe('failed');
     const entries = (await dlqEntries()).filter((entry) => entry.intentId === intentId);
     expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ intentId, reason: 'processing_failed' });
+    expect(entries[0]).toMatchObject({
+      intentId,
+      topic: 'trading-intents',
+      reason: 'processing_failed',
+    });
     expect(JSON.stringify(entries[0])).not.toContain('secret');
     // the job is gone from the intents queue (removeOnFail) and the intent is untouched
     expect(await intents.getJob(intentId)).toBeUndefined();
@@ -172,14 +187,68 @@ describe('startIntentConsumer', () => {
   });
 });
 
+describe('startIntentConsumer on trading-reconciliation (#89)', () => {
+  const jobOptions = (jobId: string) => ({
+    jobId,
+    attempts: 1,
+    removeOnComplete: true,
+    removeOnFail: true,
+  });
+
+  it('hands an unknown intent to the pass', async () => {
+    const intentId = (await seedUnknownIntent(tmp.db)).intent.id;
+    let wakes = 0;
+    const outcome = await withConsumer(
+      (payload) =>
+        processReconciliationJob({ db: tmp.db, logger, wake: () => (wakes += 1) }, payload),
+      async (consumer) => {
+        const done = settled(consumer, intentId);
+        await reconciliations.add('intent', { intentId }, jobOptions(intentId));
+        return done;
+      },
+      OutboxTopic.TradingReconciliation,
+    );
+    expect(outcome).toBe('completed');
+    expect((await findTradeIntent(tmp.db, intentId))?.status).toBe('reconciling');
+    expect(wakes).toBe(1);
+  });
+
+  it('dead-letters a failing reconciliation job with its topic, the intent still unknown', async () => {
+    const intentId = (await seedUnknownIntent(tmp.db)).intent.id;
+    const outcome = await withConsumer(
+      () => Promise.reject(new Error('database gone')),
+      async (consumer) => {
+        const done = settled(consumer, intentId);
+        await reconciliations.add('intent', { intentId }, jobOptions(intentId));
+        await done;
+        await consumer.worker.close();
+        await consumer.drainDeadLetters();
+        return done;
+      },
+      OutboxTopic.TradingReconciliation,
+    );
+    expect(outcome).toBe('failed');
+    const entries = (await dlqEntries()).filter((entry) => entry.intentId === intentId);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        intentId,
+        topic: 'trading-reconciliation',
+        reason: 'processing_failed',
+      }),
+    ]);
+    expect((await findTradeIntent(tmp.db, intentId))?.status).toBe('unknown');
+  });
+});
+
 describe('drainDeadLetters', () => {
   it('lets shutdown wait for a dead-letter write started by a job that failed during close', async () => {
     const intentId = await newIntent();
     const consumer = startIntentConsumer({
+      topic: OutboxTopic.TradingIntents,
       connection: redis,
       // fails only once the drain is under way, so the failed event fires inside close()
       processor: () =>
-        new Promise((_resolve, reject) => setTimeout(() => reject(new Error('late')), 150)),
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('late')), 150)),
       logger,
       concurrency: 1,
       prefix,
@@ -204,7 +273,9 @@ describe('deadLetter', () => {
     const messages: string[] = [];
     const sink = { add: () => Promise.reject(new Error('redis gone')) };
     const quiet = pino({ level: 'error' }, { write: (line: string) => void messages.push(line) });
-    await expect(deadLetter(sink, quiet, undefined, new Error('boom'))).resolves.toBeUndefined();
+    await expect(
+      deadLetter(sink, quiet, OutboxTopic.TradingIntents, undefined, new Error('boom')),
+    ).resolves.toBeUndefined();
     expect(messages.some((line) => line.includes('dlq_publish_failed'))).toBe(true);
   });
 });
