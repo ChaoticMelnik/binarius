@@ -27,9 +27,10 @@ the broker REST client sends to the broker and how it classifies answers is in
 them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md); what
 `/account` shows about a user's Binodex links is in [docs/bot-account.md](docs/bot-account.md);
 how the worker fetches candles, turns them into a direction or into a reason for none, and
-journals each decision is in [docs/signal.md](docs/signal.md); how the backend answers a user's
-token balance and broker balance is in [docs/trading-access.md](docs/trading-access.md); where the
-broker balance snapshot comes from and how fresh it is kept is in
+journals each decision is in [docs/signal.md](docs/signal.md); how the worker sizes the next
+stake and when a session stops is in [docs/stake.md](docs/stake.md); how the backend answers a
+user's token balance and broker balance is in [docs/trading-access.md](docs/trading-access.md);
+where the broker balance snapshot comes from and how fresh it is kept is in
 [docs/broker-balance.md](docs/broker-balance.md).
 
 ## Requirements

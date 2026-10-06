@@ -294,6 +294,6 @@ BROKER_API_BASE_URL=https://api.binodex.app ASSET_ID=237831086 pnpm --filter @bi
 
 - #130: session orchestration, which evaluates the feed inside a session and wires it into
   `index.ts`. #100/#101: the broker base URL in the worker's env and compose.
-- #126: the user-facing texts. #19: stake size.
+- #126: the user-facing texts. Stake size: docs/stake.md.
 - `packages/shared` and `packages/db` are not changed. When the first issue carries a decision
   across a process boundary, it moves the decision's wire shape into shared.
