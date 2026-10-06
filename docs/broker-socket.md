@@ -128,9 +128,15 @@ this section with what it sees.
   test red on purpose.
 - **Money fields in `user.data` are JSON integers**, not decimal strings. Since #98 shared's
   `moneyWireSchema` accepts a decimal string or a safe JSON integer and maps either to a
-  `DecimalString`, so the all-integer shape seen live parses; a fraction is still a `schema`
-  problem (docs/broker-rest.md → Money). The tests here use decimal-string fixtures, and shared's
-  `socket.test.ts` parses the all-integer form.
+  `DecimalString`, so the all-integer shape seen live parses.
+- **2026-10-03 (a 1.5 demo stake, recorded in #137):** `user.demo.update_balance` and
+  `user.real.update_balance` arrive together, in the same millisecond, though only the demo
+  balance changed, as `{ available, held, total }` with money as JSON numbers: an integer when
+  whole, a fraction when fractional, both kinds in one object. Since #236 the fraction branch of
+  `moneyWireSchema` parses them (docs/broker-rest.md → Money); a float artifact or a fraction of
+  16 or more significant digits is a `schema` problem with the field's path. The tests here run
+  both the decimal-string fixtures and the live number form (`liveNumberCases`) through every
+  payload form, and the fixture (`packages/mock-broker`) sends money as JSON numbers.
 - **The `price.update` timestamp unit** (seconds or milliseconds) is still unconfirmed. The value
   is passed through as received, and the consumers normalize it (#17/#19). #99 records the unit.
 

@@ -344,7 +344,7 @@ and 6 are resolved, 4–5 and 9 remain, and 7–8 are handled on the consumer's 
 
 1. **Money form. Resolved 2026-10-06 (#236).** The live broker counts whole currency units and
    answers a whole amount as a JSON integer and a fractional one as a JSON fraction, both in one
-   object (2026-10-03: `available` 9998.5, `held` 1.5, `total` 10000). Shared accepts a decimal
+   object (2026-10-03, after a 1.5 demo stake). Shared accepts a decimal
    string, a safe JSON integer or a plain JSON fraction of at most 15 significant digits
    (`moneyWireSchema`) and maps each to `DecimalString`. The fixture keeps bigint cents and sends
    every money field as a JSON number through `wireMoney` (`money.ts`): `10000`, `9998.5`, never

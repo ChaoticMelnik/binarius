@@ -41,9 +41,11 @@ statement. It outlives a revocation, as the account's last known state.
 
 ## Stored domain
 
-`moneyWireSchema` accepts a sign and any number of digits, because `broker_trades` shares it and a
-profit is signed. Those columns would round a ninth fraction digit silently, fail on a
-thirteenth integer digit, and refuse a sign. So `upsertBalanceSnapshot` checks every value first
+`moneyWireSchema` has three branches: a decimal string of any length with an optional sign, a safe
+JSON integer (up to 16 digits, `9007199254740991`), and a JSON fraction whose `String()` is a plain
+decimal of at most 15 significant digits (#236). Each takes a sign, because `broker_trades` shares
+the schema and a profit is signed. The columns here would round a ninth fraction digit silently, fail on a thirteenth integer
+digit and refuse a sign. So `upsertBalanceSnapshot` checks every value first
 (`balanceSnapshotOutOfDomain`) and runs no statement for one outside the domain. It returns
 `{ written: false, field }` with the value's path (`'real.available'`, `'level.rank'`, …):
 
@@ -235,7 +237,7 @@ answers `aborted` without a call.
 - #99/#101: the socket writers and the 401 handling. #100/#89: refresh after accepted/settled.
 - #24: the bot's display, `BackendClient.readTradingAccess`, and the link
   `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`.
-- The money unit (whole or minor units): [broker-rest.md](broker-rest.md) → Open items. The
-  snapshot stores the string as received and does no arithmetic.
+- The money unit is whole currency units (live 2026-10-03, [broker-rest.md](broker-rest.md) →
+  Money). The snapshot stores the string as received and does no arithmetic.
 - `/health` does not reflect the snapshots. There is no metrics stack: the tick's log line is the
   monitoring surface.

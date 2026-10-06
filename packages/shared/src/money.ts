@@ -3,8 +3,8 @@ import * as z from 'zod';
 // Decimal strings are the form this project sends and stores: a JSON number with a fraction may
 // already have lost precision in JSON.parse. The broker counts whole currency units and answers a
 // whole amount as a JSON integer and a fractional one as a JSON fraction, both in one object
-// (live, 2026-10-03: available 9998.5, held 1.5, total 10000); moneyWireSchema below is the one
-// place such a number becomes money.
+// (live, 2026-10-03, after a 1.5 demo stake); moneyWireSchema below is the one place such a number
+// becomes money.
 export const decimalStringSchema = z
   .string()
   .regex(/^-?\d+(\.\d+)?$/, { error: 'expected a decimal string like "12.50"' })
