@@ -12,7 +12,13 @@ import { unusedAdminDeps } from '../admin/testing';
 import type { AuthRoutesDeps } from '../auth/routes';
 import type { TradingRoutesDeps } from './routes';
 import type { UsersRoutesDeps } from '../users/routes';
-import { fakeCatalog, PAIRS_TEST_TOKEN, unusedBalanceDeps, unusedSignalDeps } from './testing';
+import {
+  fakeCatalog,
+  PAIRS_TEST_TOKEN,
+  unusedAccessTokenDeps,
+  unusedBalanceDeps,
+  unusedSignalDeps,
+} from './testing';
 
 const pair: BinaryPair = {
   id: 101,
@@ -41,6 +47,7 @@ function appWith(view: PairsCatalogView | undefined): FastifyInstance {
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
       realTradingEnabled: false,
+      accessToken: unusedAccessTokenDeps(),
     },
     pairs: { catalog: fakeCatalog(view), internalApiToken: PAIRS_TEST_TOKEN },
     signal: unusedSignalDeps(),

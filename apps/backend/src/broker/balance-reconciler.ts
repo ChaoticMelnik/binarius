@@ -1,7 +1,12 @@
 import { eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import { BrokerRestError, type BrokerRestClient } from '@binarius/broker-rest';
-import { BROKER_BALANCE_SLA_SEC, BrokerRestErrorCode, errorLogFields } from '@binarius/shared';
+import {
+  AccessTokenRefusal,
+  BROKER_BALANCE_SLA_SEC,
+  BrokerRestErrorCode,
+  errorLogFields,
+} from '@binarius/shared';
 import {
   BalanceRefreshError,
   brokerAccounts,
@@ -127,18 +132,18 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
     const token = await deps.accessToken(accountId, { mayRefresh: options.mayRefresh ?? true });
     if (!token.ok) {
       switch (token.reason) {
-        case 'account_not_found':
+        case AccessTokenRefusal.AccountNotFound:
           return { outcome: 'account_not_found', marked: false };
-        case 'refresh_needed':
+        case AccessTokenRefusal.RefreshNeeded:
           return { outcome: 'refresh_needed', marked: false };
-        case 'user_blocked':
+        case AccessTokenRefusal.UserBlocked:
           return { outcome: 'user_blocked', marked: false };
-        case 'account_pending':
+        case AccessTokenRefusal.AccountPending:
           return fail(accountId, BalanceRefreshError.AccountPending);
-        case 'account_revoked':
+        case AccessTokenRefusal.AccountRevoked:
           return fail(accountId, BalanceRefreshError.AccountRevoked);
         // token-service has already logged it
-        case 'key_unavailable':
+        case AccessTokenRefusal.KeyUnavailable:
           return fail(accountId, BalanceRefreshError.KeyUnavailable);
         default:
           return assertExhausted(token);

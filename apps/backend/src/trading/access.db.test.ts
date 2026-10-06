@@ -24,6 +24,7 @@ import { brokerBalanceSnapshots, tokenLedger, users } from '@binarius/db';
 import type { AccessTokenResult } from '../auth/token-service';
 import { createBalanceReconciler, type BalanceReconciler } from '../broker/balance-reconciler';
 import { tradingRoutes } from './routes';
+import { unusedAccessTokenDeps } from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -67,6 +68,7 @@ async function buildAccessApp(
     onIntentQueued: () => {},
     balance: reconciler,
     realTradingEnabled,
+    accessToken: unusedAccessTokenDeps(),
   });
   await built.ready();
   return built;

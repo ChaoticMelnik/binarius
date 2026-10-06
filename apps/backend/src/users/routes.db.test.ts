@@ -11,7 +11,12 @@ import { createTempDatabase, seedBrokerAccount, type TempDatabase } from '@binar
 import { NotificationJobStatus, brokerAccounts, notificationJobs, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
-import { unusedBalanceDeps, unusedPairsDeps, unusedSignalDeps } from '../trading/testing';
+import {
+  unusedAccessTokenDeps,
+  unusedBalanceDeps,
+  unusedPairsDeps,
+  unusedSignalDeps,
+} from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -41,6 +46,7 @@ const testApp = (logs?: { write(line: string): void }) =>
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
       realTradingEnabled: false,
+      accessToken: unusedAccessTokenDeps(),
     },
     auth: {
       db: tmp.db,

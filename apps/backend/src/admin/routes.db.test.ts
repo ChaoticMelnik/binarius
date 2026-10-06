@@ -26,7 +26,12 @@ import {
 import { buildApp } from '../app';
 import { createPasswordQueue } from './password-queue';
 import { stubTelegram, unusedAdminDeps } from './testing';
-import { unusedBalanceDeps, unusedPairsDeps, unusedSignalDeps } from '../trading/testing';
+import {
+  unusedAccessTokenDeps,
+  unusedBalanceDeps,
+  unusedPairsDeps,
+  unusedSignalDeps,
+} from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -70,6 +75,7 @@ const build = (
       onIntentQueued: () => undefined,
       balance: unusedBalanceDeps(),
       realTradingEnabled: false,
+      accessToken: unusedAccessTokenDeps(),
     },
     auth: {
       db: tmp.db,

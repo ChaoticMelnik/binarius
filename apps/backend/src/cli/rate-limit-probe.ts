@@ -2,7 +2,7 @@ import { Pool } from 'pg';
 import { pino } from 'pino';
 import * as z from 'zod';
 import { createDb, createTokenCipher } from '@binarius/db';
-import { logOptions, readEnv } from '@binarius/shared';
+import { AccessTokenRefusal, logOptions, readEnv } from '@binarius/shared';
 import { ensureFreshAccessToken } from '../auth/token-service';
 import { createBrokerOAuthClient } from '../broker/oauth-client';
 import { parseEnv } from '../env';
@@ -35,7 +35,7 @@ try {
   );
   if (!token.ok) {
     const hint =
-      token.reason === 'refresh_needed' ? ' (open the bot balance once, then retry)' : '';
+      token.reason === AccessTokenRefusal.RefreshNeeded ? ' (open the bot balance once, then retry)' : '';
     process.stderr.write(`refused: ${token.reason}${hint}\n`);
     process.exitCode = 1;
   } else {

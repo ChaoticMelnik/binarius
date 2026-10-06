@@ -6,6 +6,7 @@ import { createDb, createTokenCipher } from '@binarius/db';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
 import { createAdminBot } from './admin/telegram';
 import { buildApp } from './app';
+import type { TradingRoutesDeps } from './trading/routes';
 import { createLinkNotifier } from './auth/link-notifier';
 import { INIT_DATA_MAX_AGE_MS } from './auth/oauth-timing';
 import { createInitDataVerifier } from './auth/telegram-init-data';
@@ -99,6 +100,11 @@ const adminBot = createAdminBot({
   },
 });
 
+// One function, two consumers: the worker's token route (#90) and the balance reconciler. The app's
+// logger is read at call time, after buildApp.
+const accessToken: TradingRoutesDeps['accessToken'] = (accountId, options) =>
+  ensureFreshAccessToken({ db, broker, cipher, logger: app.log }, accountId, options);
+
 const app = buildApp({
   checkPostgres: () => pool.query('SELECT 1'),
   checkRedis: () => redis.ping(),
@@ -111,6 +117,7 @@ const app = buildApp({
     // the reconciler needs the app's logger, so it is created after the app
     balance: { refresh: (accountId, options) => balanceReconciler.refresh(accountId, options) },
     realTradingEnabled: env.realTradingEnabled,
+    accessToken,
   },
   pairs: {
     catalog: pairsCatalog,
@@ -153,8 +160,7 @@ const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
 const balanceReconciler = createBalanceReconciler({
   db,
   client: brokerRest,
-  accessToken: (accountId, options) =>
-    ensureFreshAccessToken({ db, broker, cipher, logger: app.log }, accountId, options),
+  accessToken,
   logger: app.log,
   config: {
     intervalMs: env.balanceReconcileIntervalMs,
