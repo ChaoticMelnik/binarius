@@ -29,6 +29,7 @@ export {
 } from './socket';
 export type {
   MockAuthScript,
+  MockConnectScript,
   MockOpenTradeScript,
   MockSocketEndpoint,
   MockSocketScript,

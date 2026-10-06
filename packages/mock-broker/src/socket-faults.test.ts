@@ -4,6 +4,7 @@ import {
   assertSocketScript,
   socketScriptKind,
   type MockAuthScript,
+  type MockConnectScript,
   type MockOpenTradeScript,
   type MockSocketEndpoint,
   type MockSocketScript,
@@ -13,7 +14,8 @@ const queue = () =>
   new FaultQueue<MockSocketEndpoint, MockSocketScript<MockSocketEndpoint>>(assertSocketScript);
 
 describe('socket scripts', () => {
-  it.each<[MockSocketEndpoint, MockAuthScript | MockOpenTradeScript, unknown]>([
+  it.each<[MockSocketEndpoint, MockConnectScript | MockAuthScript | MockOpenTradeScript, unknown]>([
+    ['connect', { error: { message: 'no' } }, { kind: 'error', message: 'no' }],
     ['auth', { error: { message: 'no' } }, { kind: 'error', message: 'no' }],
     ['auth', { silent: true }, { kind: 'silent', open: false }],
     ['auth', { disconnect: true }, { kind: 'disconnect', open: false }],
@@ -45,6 +47,9 @@ describe('socket scripts', () => {
     ['openTrade', { delayMs: -1 }, RangeError],
     ['openTrade', { delayMs: 1.5 }, RangeError],
     ['openTrade', { error: { message: 'x' } }, TypeError],
+    ['connect', { error: {} }, TypeError],
+    ['connect', { silent: true }, TypeError],
+    ['connect', { disconnect: true }, TypeError],
     ['auth', { error: {} }, TypeError],
     ['auth', { silent: true, open: true }, TypeError],
     ['auth', { delayMs: 1 }, TypeError],

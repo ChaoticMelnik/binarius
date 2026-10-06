@@ -262,6 +262,17 @@ export function attachMockSocket(
     return MockSocketOutcome.Unknown;
   }
 
+  // a refused connection never reaches 'connection', so the journal records nothing for it
+  io.use((_socket, next) => {
+    const script = faults.shift('connect');
+    if (script === undefined) {
+      next();
+      return;
+    }
+    const played = socketScriptKind(script);
+    next(played.kind === 'error' ? new Error(played.message) : undefined);
+  });
+
   io.on('connection', (socket) => {
     const connection: Connection = { socket, subscriptions: new Set() };
     connections.set(socket.id, connection);

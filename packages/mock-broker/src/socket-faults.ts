@@ -1,12 +1,16 @@
 import { openTradeFailWireSchema, type OpenTradeFailWire } from '@binarius/shared';
 import { isNonNegativeInteger } from './faults';
 
-export type MockSocketEndpoint = 'auth' | 'openTrade';
+export type MockSocketEndpoint = 'connect' | 'auth' | 'openTrade';
 
 // One scripted answer to the next event on an endpoint. An auth script is consumed before
 // validation; an openTrade script after the auth check (an unauthenticated event leaves it
 // queued), before validation. The shapes exclude each other in the type and at runtime
 // (assertSocketScript), as MockScript does.
+// the namespace middleware refuses the next connection with this message: the client gets a
+// CONNECT_ERROR packet, and socket.io-client gives up on that socket (no reconnection)
+export type MockConnectScript = { error: { message: string } };
+
 export type MockAuthScript =
   // user.auth.error with this text
   | { error: { message: string }; silent?: never; disconnect?: never }
@@ -27,9 +31,11 @@ export type MockOpenTradeScript =
   // are read after the delay
   | ({ delayMs: number } & Omit<NoOpenTradeFields, 'delayMs'> & { open?: never });
 
-export type MockSocketScript<E extends MockSocketEndpoint> = E extends 'auth'
-  ? MockAuthScript
-  : MockOpenTradeScript;
+export type MockSocketScript<E extends MockSocketEndpoint> = E extends 'connect'
+  ? MockConnectScript
+  : E extends 'auth'
+    ? MockAuthScript
+    : MockOpenTradeScript;
 
 export type PlayedSocketScript =
   | { kind: 'error'; message: string }
@@ -39,13 +45,16 @@ export type PlayedSocketScript =
   | { kind: 'delay'; delayMs: number };
 
 const DISCRIMINATORS: Record<MockSocketEndpoint, readonly string[]> = {
+  connect: ['error'],
   auth: ['error', 'silent', 'disconnect'],
   openTrade: ['fail', 'silent', 'disconnect', 'delayMs'],
 };
 
 // the one place a socket script's shape is read: assertSocketScript validates with it, the
 // socket layer plays by it
-export function socketScriptKind(script: MockAuthScript | MockOpenTradeScript): PlayedSocketScript {
+export function socketScriptKind(
+  script: MockConnectScript | MockAuthScript | MockOpenTradeScript,
+): PlayedSocketScript {
   const open = 'open' in script && script.open === true;
   if ('error' in script && script.error !== undefined) {
     return { kind: 'error', message: script.error.message };
@@ -103,7 +112,7 @@ export function assertSocketScript(endpoint: MockSocketEndpoint, script: unknown
           ? (value as { message?: unknown }).message
           : undefined;
       if (typeof message !== 'string') {
-        throw new TypeError('failNext(auth): error is { message: string }');
+        throw new TypeError(`failNext(${endpoint}): error is { message: string }`);
       }
       return;
     }
