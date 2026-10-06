@@ -517,7 +517,8 @@ describe('observation matrix', () => {
     answer: { status: 429, retryAfterSec: 1 },
     delay: { delayMs: 200 },
     hang: { hang: true },
-    delayClose: { delayMs: 3_000 },
+    // outlives the ceiling: a close() that waits for it is red
+    delayClose: { delayMs: 2 * UNIT_WAIT_CEILING_MS },
   };
 
   type Expected = { status: number; message?: string } | 'no answer';

@@ -41,12 +41,13 @@ export async function until(
   options: { intervalMs?: number } = {},
 ): Promise<void> {
   const ceilingMs = waitCeilingMs();
+  const intervalMs = options.intervalMs ?? 10;
   const deadline = Date.now() + ceilingMs;
   while (!(await condition())) {
     if (Date.now() >= deadline) {
       throw new Error(`timed out after ${ceilingMs} ms waiting for ${what}`);
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, options.intervalMs ?? 10));
+    await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
   }
 }
 

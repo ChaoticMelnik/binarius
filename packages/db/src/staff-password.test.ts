@@ -116,7 +116,8 @@ describe('DUMMY_PASSWORD_HASH', () => {
   // It exists to be derived against, so `false` is not enough to check: a malformed string
   // also answers false, in a millisecond, and would give the unknown-login path away by how
   // fast it came back. The derivation is what has to happen, so the case counts the scrypt
-  // call, and the fields are checked to decode to the sizes this module writes.
+  // call, and the fields are checked to decode to the sizes this module writes. The parameters
+  // are read off the call too, so the cost paid is the one the row asks for.
   it('is a hash this module really runs, and matches nothing anyone would type', async () => {
     const [, algorithm, params, salt = '', key = ''] = DUMMY_PASSWORD_HASH.split('$');
     expect([algorithm, params]).toEqual(['scrypt', 'ln=17,r=8,p=1']);
@@ -126,6 +127,7 @@ describe('DUMMY_PASSWORD_HASH', () => {
     derivations.mockClear();
     expect(await verifyPassword(DUMMY_PASSWORD_HASH, PASSWORD)).toBe(false);
     expect(derivations).toHaveBeenCalledTimes(1);
+    expect(derivations.mock.calls[0]?.[3]).toMatchObject({ N: 2 ** 17, r: 8, p: 1 });
 
     expect(await verifyPassword(DUMMY_PASSWORD_HASH, '')).toBe(false);
   });

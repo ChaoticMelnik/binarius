@@ -642,10 +642,11 @@ describe('disconnect', () => {
 describe('close()', () => {
   it('returns at once with a client connected, a socket delay, a REST delay and a REST hang', async () => {
     const client = await authed();
-    broker.socket.failNext('openTrade', { delayMs: 3000 });
+    // both delays outlive the ceiling: a close() that waits for them is red
+    broker.socket.failNext('openTrade', { delayMs: 2 * UNIT_WAIT_CEILING_MS });
     client.socket.emit(ev('demo', 'open_trade'), tradeCommand());
     await until('the delayed open_trade', () => broker.socket.pendingDelays === 1);
-    broker.rest.failNext('user', { delayMs: 3000 });
+    broker.rest.failNext('user', { delayMs: 2 * UNIT_WAIT_CEILING_MS });
     broker.rest.failNext('pairs', { hang: true });
     const delayedRest = fetch(`${broker.url}/v1/broker/user`).catch(() => 'cut');
     const hungRest = fetch(`${broker.url}/v1/broker/pairs/binary`).then((r) => r.status);

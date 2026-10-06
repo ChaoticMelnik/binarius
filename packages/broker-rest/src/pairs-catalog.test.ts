@@ -211,7 +211,16 @@ describe('single flight and stop', () => {
 
 describe('the timer', () => {
   it('refreshes every ttlMs over real HTTP and stops with stop()', async () => {
-    const catalog = catalogOf({ ttlMs: 20, now: Date.now });
+    // counted where the catalog calls the client, so the count at stop() is exact: the interval
+    // callback reaches listPairs synchronously
+    let calls = 0;
+    const counting: Pick<BrokerRestClient, 'listPairs'> = {
+      listPairs: (options) => {
+        calls += 1;
+        return client.listPairs(options);
+      },
+    };
+    const catalog = catalogOf({ client: counting, ttlMs: 20, now: Date.now });
     catalog.start();
     await until('three refreshes', () => pairsRequests().length >= 3);
     const [first] = broker.pairs.list();
@@ -222,10 +231,9 @@ describe('the timer', () => {
       () => catalog.read()?.pairs.find((pair) => pair.id === first.id)?.payout === first.payout + 1,
     );
     catalog.stop();
-    await sleep(30);
-    const settled = pairsRequests().length;
+    const atStop = calls;
     await sleep(100);
-    expect(pairsRequests()).toHaveLength(settled);
+    expect(calls).toBe(atStop);
   });
 
   it('does not tick faster after a second start(), and not at all after stop()', async () => {

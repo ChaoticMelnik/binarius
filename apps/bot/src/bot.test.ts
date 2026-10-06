@@ -1969,16 +1969,16 @@ describe('the Bot API timeout', () => {
       logger: fakeLogger(),
       botInfo: BOT_INFO,
       apiRoot,
-      telegramApiTimeoutMs: 300,
+      telegramApiTimeoutMs: 500,
     });
 
     const at = Date.now();
     const error = await rejectionOf(bot.api.sendMessage(1, 'x'));
     expect(error).toBeInstanceOf(HttpError);
-    // the lower bound is what says the configured 300 ms ended the call; the upper bound
-    // rules out grammY's 500 second default
+    // the lower bound is what says the configured 500 ms ended the call; the upper bound
+    // rules out grammY's 500 second default and a unit slip (500 ms read as 5 s)
     const elapsed = Date.now() - at;
-    expect(elapsed).toBeGreaterThanOrEqual(250);
+    expect(elapsed).toBeGreaterThanOrEqual(450);
     expect(elapsed).toBeLessThan(UNIT_WAIT_CEILING_MS);
   });
 });
