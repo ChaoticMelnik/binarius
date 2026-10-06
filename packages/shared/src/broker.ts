@@ -59,6 +59,7 @@ export const brokerBalanceWireSchema = z.object({
   total: moneyWireSchema,
 });
 export type BrokerBalanceWire = z.infer<typeof brokerBalanceWireSchema>;
+export type BrokerBalanceWireInput = z.input<typeof brokerBalanceWireSchema>;
 
 export interface BrokerBalance {
   available: DecimalString;
@@ -80,6 +81,7 @@ export const brokerUserWireSchema = z.object({
   demo: brokerBalanceWireSchema,
 });
 export type BrokerUserWire = z.infer<typeof brokerUserWireSchema>;
+export type BrokerUserWireInput = z.input<typeof brokerUserWireSchema>;
 
 export interface BrokerUser {
   id: string;
@@ -152,6 +154,7 @@ export const openTradeWireSchema = z.object({
   potential_profit: moneyWireSchema,
 });
 export type OpenTradeWire = z.infer<typeof openTradeWireSchema>;
+export type OpenTradeWireInput = z.input<typeof openTradeWireSchema>;
 
 export const closedTradeWireSchema = z.object({
   ...tradeBaseWireShape,
@@ -160,6 +163,7 @@ export const closedTradeWireSchema = z.object({
   profit: moneyWireSchema,
 });
 export type ClosedTradeWire = z.infer<typeof closedTradeWireSchema>;
+export type ClosedTradeWireInput = z.input<typeof closedTradeWireSchema>;
 
 interface TradeBase {
   id: string;

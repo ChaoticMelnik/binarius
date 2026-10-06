@@ -126,7 +126,9 @@ describe('BrokerUser', () => {
 
   it('exposes a safe balance parser', () => {
     expect(safeParseBrokerBalance(balanceWire).success).toBe(true);
-    expect(safeParseBrokerBalance({ ...balanceWire, held: 10.5 }).success).toBe(false);
+    expect(safeParseBrokerBalance({ ...balanceWire, held: 0.30000000000000004 }).success).toBe(
+      false,
+    );
   });
 
   // the shape GET /v1/broker/user answered live on 2026-10-02: every money field a JSON integer
@@ -150,9 +152,20 @@ describe('BrokerUser', () => {
     expect(money.every(isDecimalString)).toBe(true);
   });
 
+  // the live probe of 2026-10-03 after a 1.5 demo stake: available/held fractions, total an integer
+  it('converts the mixed-form user of the live probe to decimal strings', () => {
+    const user = parseBrokerUser({
+      ...userWire,
+      min_trade_amount: 1,
+      demo: { available: 9998.5, held: 1.5, total: 10000 },
+    });
+    expect(user.minTradeAmount).toBe('1');
+    expect(user.demo).toEqual({ available: '9998.5', held: '1.5', total: '10000' });
+  });
+
   it.each([
-    ['min_trade_amount', 1.5],
-    ['real', { ...balanceWire, total: 10000.5 }],
+    ['min_trade_amount', 1e-7],
+    ['demo', { ...balanceWire, held: 0.30000000000000004 }],
     ['demo', { ...balanceWire, available: 2 ** 53 }],
     ['level', { code: 'standard' }],
   ])('rejects %s=%j', (field, value) => {
@@ -211,9 +224,20 @@ describe('Trades', () => {
     expect(trade).not.toHaveProperty('brokerClientId');
   });
 
+  // the trade response shapes of 2026-10-03 were not recorded: money as JSON numbers is assumed
+  it('converts fractional JSON-number money of an open and a lost closed trade', () => {
+    expect(
+      parseOpenTrade({ ...openTradeWire, amount: 1.5, potential_profit: 1.275 }),
+    ).toMatchObject({ amount: '1.5', potentialProfit: '1.275' });
+    expect(parseClosedTrade({ ...closedTradeWire, amount: 1.5, profit: -1.5 })).toMatchObject({
+      amount: '1.5',
+      profit: '-1.5',
+    });
+  });
+
   it.each([
-    ['amount', 10.5],
-    ['potential_profit', 8.5],
+    ['amount', 0.30000000000000004],
+    ['potential_profit', 1e-7],
     ['action', 'UP'],
     ['source', 5],
     ['open_timestamp', 1790028496.6],
@@ -279,7 +303,7 @@ describe('Trades list', () => {
   it.each([
     { trades: 'x' },
     [],
-    { trades: [{ ...openTradeWire, amount: 10.5 }] },
+    { trades: [{ ...openTradeWire, amount: 0.30000000000000004 }] },
     { trades: [{ ...closedTradeWire, potential_profit: undefined, profit: undefined }] },
   ])('rejects %j', (input) => {
     expect(safeParseTradesList(input).success).toBe(false);
@@ -293,9 +317,12 @@ describe('ChartRequest', () => {
     ).toEqual({ asset_id: 91, interval: '1m', limit: 100, start_time: 1790028496624 });
   });
 
-  it.each(['250ms', '5s', '1m', '1h', '1d', '1w', '1M'])('accepts the live interval %j', (value) => {
-    expect(CHART_INTERVAL_PATTERN.test(value)).toBe(true);
-  });
+  it.each(['250ms', '5s', '1m', '1h', '1d', '1w', '1M'])(
+    'accepts the live interval %j',
+    (value) => {
+      expect(CHART_INTERVAL_PATTERN.test(value)).toBe(true);
+    },
+  );
 
   const wire = { asset_id: 91, interval: '1m', limit: 100, start_time: 1790028496624 };
 

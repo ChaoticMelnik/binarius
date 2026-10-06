@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { idWireSchema, toId } from './ids';
-import { decimalStringSchema, type DecimalString } from './money';
+import { moneyWireSchema, type DecimalString } from './money';
 
 // Partner API (api.binopartner.com/v1). Only the fields issue #6 names are typed; responses are
 // loose objects so unknown keys survive parsing. Fields whose shape #6 does not give stay
@@ -62,7 +62,9 @@ export type PartnerDepositMarkWire = z.infer<typeof partnerDepositMarkWireSchema
 
 export const partnerTraderStatsWireSchema = z.looseObject({
   uid: idWireSchema,
-  balance: decimalStringSchema,
+  // a JSON number here is an assumption: the Partner API was not checked live (#14); a decimal
+  // string is accepted as before
+  balance: moneyWireSchema,
   firstDeposit: partnerDepositMarkWireSchema.nullable().optional(),
   lastDeposit: partnerDepositMarkWireSchema.nullable().optional(),
   // counter names are taken from /stats/overall, not confirmed for the trader endpoint (#14)
