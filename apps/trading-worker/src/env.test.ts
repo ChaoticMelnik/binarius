@@ -4,6 +4,9 @@ import { parseEnv } from './env';
 const valid = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
   REDIS_URL: 'redis://localhost:6379',
+  BACKEND_URL: 'http://backend:3000',
+  INTERNAL_API_TOKEN: 'internal-token-for-tests-0123456789',
+  BROKER_API_BASE_URL: 'https://api.binodex.app',
 };
 
 describe('parseEnv', () => {
@@ -16,6 +19,9 @@ describe('parseEnv', () => {
       submitAckTimeoutMs: 10_000,
       workerConcurrency: 5,
       realTradingEnabled: false,
+      backendUrl: valid.BACKEND_URL,
+      internalApiToken: valid.INTERNAL_API_TOKEN,
+      brokerApiBaseUrl: valid.BROKER_API_BASE_URL,
     });
   });
 
@@ -45,8 +51,28 @@ describe('parseEnv', () => {
     });
   });
 
-  it.each(['DATABASE_URL', 'REDIS_URL'])('rejects missing %s', (name) => {
-    expect(() => parseEnv({ ...valid, [name]: undefined })).toThrow(`Missing required env ${name}`);
+  it.each(['DATABASE_URL', 'REDIS_URL', 'BACKEND_URL', 'INTERNAL_API_TOKEN', 'BROKER_API_BASE_URL'])(
+    'rejects missing %s',
+    (name) => {
+      expect(() => parseEnv({ ...valid, [name]: undefined })).toThrow(
+        `Missing required env ${name}`,
+      );
+    },
+  );
+
+  it.each(['BACKEND_URL', 'INTERNAL_API_TOKEN', 'BROKER_API_BASE_URL'])(
+    'rejects an empty %s',
+    (name) => {
+      expect(() => parseEnv({ ...valid, [name]: '' })).toThrow(name);
+    },
+  );
+
+  it.each([
+    ['BACKEND_URL', 'ftp://backend:3000'],
+    ['BACKEND_URL', 'http://[::1]:3000'],
+    ['BROKER_API_BASE_URL', 'http://api.binodex.app'],
+  ])('rejects %s=%s', (name, value) => {
+    expect(() => parseEnv({ ...valid, [name]: value })).toThrow(name);
   });
 
   it.each([

@@ -58,3 +58,56 @@ describe('the trading grant', () => {
     expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'REAL_TRADING_ENABLED')).toBe('');
   });
 });
+
+// The x-broker-environment anchor's own entries, read the way composeServiceEnvValue reads a
+// service's: a two-space indented key directly under the anchor line.
+function brokerAnchorValue(yaml: string, name: string): string | undefined {
+  const lines = yaml.split('\n');
+  const start = lines.findIndex((line) => line.startsWith('x-broker-environment: &broker-environment'));
+  for (let index = start + 1; start !== -1 && index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (/^\S/.test(line)) break;
+    const match = /^ {2}([A-Z_]+):\s*(.*?)\s*$/.exec(line);
+    if (match !== null && match[1] === name) return match[2];
+  }
+  return undefined;
+}
+
+// the merge line of a service's environment block
+function environmentMerge(yaml: string, service: string): string | undefined {
+  const lines = yaml.split('\n');
+  const start = lines.findIndex((line) => line === `  ${service}:`);
+  const at = lines.findIndex(
+    (line, index) => index > start && line.startsWith('      <<: ') && start !== -1,
+  );
+  return at === -1 ? undefined : lines[at];
+}
+
+// #90: the worker reaches the backend's token route and the broker's REST API
+describe('the worker environment for the token route and the trade lists', () => {
+  it('shares the broker API host with the backend through the broker anchor', () => {
+    expect(brokerAnchorValue(composeYaml, 'BROKER_API_BASE_URL')).toMatch(
+      /^\$\{BROKER_API_BASE_URL:-https:\/\/[^}]+\}$/,
+    );
+    for (const service of ['backend', 'trading-worker']) {
+      expect(environmentMerge(composeYaml, service)).toContain('*broker-environment');
+      // an entry of the service's own would shadow the anchor's
+      expect(composeServiceEnvValue(composeYaml, service, 'BROKER_API_BASE_URL')).toBeUndefined();
+    }
+  });
+
+  it('gives the worker the internal token the backend checks, with no default', () => {
+    const worker = composeServiceEnvValue(composeYaml, 'trading-worker', 'INTERNAL_API_TOKEN');
+    expect(worker).toBe(composeServiceEnvValue(composeYaml, 'backend', 'INTERNAL_API_TOKEN'));
+    expect(worker?.startsWith('${INTERNAL_API_TOKEN:?')).toBe(true);
+  });
+
+  it('points the worker at the backend the bot reaches', () => {
+    expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'BACKEND_URL')).toBe(
+      composeServiceEnvValue(composeYaml, 'bot', 'BACKEND_URL'),
+    );
+    expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'BACKEND_URL')).toBe(
+      'http://backend:3000',
+    );
+  });
+});
