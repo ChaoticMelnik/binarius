@@ -4,6 +4,7 @@ import {
   BrokerBalanceUnavailableReason,
   NotificationLevel,
   plainTextOf,
+  TradeAction,
   TELEGRAM_CAPTION_LIMIT,
   TELEGRAM_MESSAGE_LIMIT,
   USER_ACCOUNT_LIST_LIMIT,
@@ -34,6 +35,7 @@ import {
 import { DEMO_ASSET_GROUPS, DEMO_DURATIONS_SEC } from './demo-catalog';
 import { BOT_COMMANDS } from './commands';
 import {
+  ACTION_LABELS,
   accountCard,
   accountStatus,
   currentLevelLabel,
@@ -51,6 +53,7 @@ import {
   modeHeader,
   PROFILE,
   settingsText,
+  stakeButtonLabel,
   SUPPORT,
   supportUrl,
   statusCard,
@@ -658,4 +661,37 @@ describe('the demo screens', () => {
       expect(Buffer.byteLength(data, 'utf8'), data).toBeLessThanOrEqual(64);
     }
   });
+});
+
+// #126
+describe('the analysis screen texts', () => {
+  const HOSTILE = `<&>_*"`.repeat(11).slice(0, 64);
+  const analysisEntries = Object.entries(TEXTS).filter(
+    ([key]) => key.startsWith('analysis') || key === 'analyzing' || key === 'stakeSoon',
+  );
+
+  // the payout sentence is demoPayout's, outside these entries
+  it.each(analysisEntries)(
+    'calls the signal neither a probability nor an accuracy in %s',
+    (_key, entry) => {
+      const text = plainTextOf(typeof entry === 'function' ? entry(HOSTILE) : entry).toLowerCase();
+      expect(text).not.toContain('вероятност');
+      expect(text).not.toContain('точност');
+    },
+  );
+
+  it('names every trade direction', () => {
+    expect(Object.keys(ACTION_LABELS).sort()).toEqual(Object.values(TradeAction).sort());
+  });
+
+  // not in LABELS, so the LABELS-wide checks above do not see it
+  it.each(Object.values(TradeAction))(
+    'keeps the stake button for %s plain and emoji-led',
+    (action) => {
+      const label = stakeButtonLabel(action);
+      expect(label).toBe(`🚀 Открыть сделку: ${ACTION_LABELS[action]}`);
+      expect(label).not.toMatch(MARKUP_OR_ENTITY);
+      expect(label).toMatch(/^\p{Extended_Pictographic}/u);
+    },
+  );
 });
