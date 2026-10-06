@@ -330,6 +330,33 @@ describe('createSettlementCatchup (#90)', () => {
     expect(await statusOf(a.intent.id)).toBe('accepted');
   });
 
+  // review m5: the source answers an aborted request as backend_unreachable
+  it('does not hold back an account when stop() lands in its token fetch', async () => {
+    const a = await acceptedAtBroker();
+    let entered = false;
+    const original = tokens.accessToken;
+    tokens.accessToken = (accountId, options) => {
+      if (accountId !== a.brokerAccountId) return original(accountId, options);
+      entered = true;
+      return new Promise<AccessTokenOutcome>((resolve) => {
+        options?.signal?.addEventListener('abort', () =>
+          resolve({ ok: false, reason: 'backend_unreachable' }),
+        );
+      });
+    };
+    try {
+      const log = capture();
+      const catchup = catchupOf(log.logger);
+      void catchup.tick();
+      await until('the token fetch to start', () => entered);
+      await catchup.stop();
+      expect(log.line('settlement catch-up tick')).toMatchObject({ overdue: 1, stalled: 0 });
+      expect(log.line('settlement catch-up token unavailable')).toBeUndefined();
+    } finally {
+      tokens.accessToken = original;
+    }
+  });
+
   it('waits for the attempt in flight on stop', async () => {
     const a = await acceptedAtBroker();
     let release!: () => void;
