@@ -39,6 +39,7 @@ const testApp = (logs?: { write(line: string): void }) =>
       internalApiToken: TOKEN,
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
+      realTradingEnabled: false,
     },
     auth: {
       db: tmp.db,

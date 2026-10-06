@@ -41,6 +41,8 @@ export const tradingAccessResponseSchema = z
     tokens: tokenBalanceViewSchema,
     broker: brokerBalanceViewSchema.nullable(),
     brokerUnavailable: brokerBalanceUnavailableReasonSchema.nullable(),
+    // REAL_TRADING_ENABLED of the answering backend, not a property of the user or the account
+    realTradingAllowed: z.boolean(),
   })
   .refine(({ broker, brokerUnavailable }) => (broker === null) === (brokerUnavailable !== null), {
     error: 'broker is null exactly when brokerUnavailable is set',

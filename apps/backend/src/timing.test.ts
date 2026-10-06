@@ -56,6 +56,11 @@ describe('backend shutdown timing', () => {
   it('forwards BROKER_PAIRS_TTL_MS to the backend without a default of its own', () => {
     expect(composeServiceEnvValue(composeYaml, 'backend', 'BROKER_PAIRS_TTL_MS')).toBe('');
   });
+
+  // the same entry under trading-worker is pinned in its intents/config.test.ts
+  it('forwards REAL_TRADING_ENABLED to the backend without a default of its own', () => {
+    expect(composeServiceEnvValue(composeYaml, 'backend', 'REAL_TRADING_ENABLED')).toBe('');
+  });
 });
 
 describe('broker balance timing', () => {

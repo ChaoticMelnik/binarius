@@ -23,6 +23,8 @@ export interface TradingRoutesDeps {
   onIntentQueued: () => void;
   // POST /trading/access refreshes the broker balance through it
   balance: TradingAccessDeps['balance'];
+  // REAL_TRADING_ENABLED: whether a real intent may be created at all (#134)
+  realTradingEnabled: boolean;
 }
 
 const NOT_FOUND_CODES: ReadonlySet<ErrorCode> = new Set([
@@ -37,10 +39,10 @@ const idParamSchema = z.uuid();
 // Registered as an encapsulated plugin so the auth hook covers exactly these routes
 export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
   app,
-  { db, internalApiToken, onIntentQueued, balance },
+  { db, internalApiToken, onIntentQueued, balance, realTradingEnabled },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
-  registerTradingAccess(app, { db, balance });
+  registerTradingAccess(app, { db, balance, realTradingEnabled });
 
   app.post('/trading/intents', async (request, reply) => {
     const parsed = safeParseCreateTradeIntentRequest(request.body);
@@ -49,7 +51,7 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
     }
     let result;
     try {
-      result = await createTradeIntent(db, parsed.data);
+      result = await createTradeIntent(db, parsed.data, { realTradingEnabled });
     } catch (error) {
       if (error instanceof TradeIntentError) {
         return reply.code(statusOf(error.code)).send({ error: error.code });

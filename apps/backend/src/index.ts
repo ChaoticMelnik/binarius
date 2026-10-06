@@ -90,6 +90,7 @@ const app = buildApp({
     onIntentQueued: () => publisher.wake(),
     // the reconciler needs the app's logger, so it is created after the app
     balance: { refresh: (accountId, options) => balanceReconciler.refresh(accountId, options) },
+    realTradingEnabled: env.realTradingEnabled,
   },
   pairs: {
     catalog: pairsCatalog,

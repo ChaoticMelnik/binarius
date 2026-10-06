@@ -5,6 +5,7 @@ import {
   UserStatus,
   TradeIntentFailureReason,
   TradeIntentStatus,
+  TradeMode,
   canTransition,
   type CreateTradeIntentRequest,
   type TradeIntentView,
@@ -51,12 +52,19 @@ export interface CreateTradeIntentResult {
   created: boolean;
 }
 
+// Required, with no default: every creator of intents (the route today, the session
+// orchestrator of #130 tomorrow) names the policy it runs under.
+export interface TradePolicy {
+  realTradingEnabled: boolean;
+}
+
 export async function createTradeIntent(
   db: Db,
   input: CreateTradeIntentRequest,
+  policy: TradePolicy,
 ): Promise<CreateTradeIntentResult> {
   try {
-    return await db.transaction((tx) => createInTransaction(tx, input));
+    return await db.transaction((tx) => createInTransaction(tx, input, policy));
   } catch (error) {
     const constraint = uniqueViolation(error);
     if (constraint === undefined || !REPLAY_CONSTRAINTS.has(constraint)) throw error;
@@ -76,6 +84,7 @@ export async function createTradeIntent(
 async function createInTransaction(
   tx: Tx,
   input: CreateTradeIntentRequest,
+  policy: TradePolicy,
 ): Promise<CreateTradeIntentResult> {
   const tokens = TOKENS_PER_INTENT;
   const user = await findUser(tx, input.telegramUserId);
@@ -85,6 +94,12 @@ async function createInTransaction(
   // or the account revoked in the meantime
   const replay = await findReplay(tx, user.id, input);
   if (replay !== undefined) return replay;
+
+  // after the replay, so a retry still finds an intent created while the grant was on; before
+  // the account and the reserve, so a refusal reads no account and touches no balance
+  if (input.mode === TradeMode.Real && !policy.realTradingEnabled) {
+    throw new TradeIntentError(TradeIntentErrorCode.RealTradingDisabled);
+  }
 
   const brokerAccountId = await resolveAccount(tx, user.id, input.brokerAccountId);
 
