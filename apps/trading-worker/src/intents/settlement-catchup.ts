@@ -1,10 +1,11 @@
+import { BrokerRestError, TradeListStatus, type BrokerRestClient } from '@binarius/broker-rest';
 import {
-  BrokerRestError,
   BrokerRestErrorCode,
-  TradeListStatus,
-  type BrokerRestClient,
-} from '@binarius/broker-rest';
-import { errorLogFields, isClosedTrade, TradeMode, type ClosedTrade } from '@binarius/shared';
+  errorLogFields,
+  isClosedTrade,
+  TradeMode,
+  type ClosedTrade,
+} from '@binarius/shared';
 import {
   listOverdueAcceptedIntents,
   settleClosedTrades,
@@ -13,6 +14,7 @@ import {
 } from '@binarius/db';
 import { isAccessTokenRefusal, type AccessTokenSource } from '../broker/access-token';
 import type { Logger } from './processor';
+import { readTradePages, TradePagesError } from './trade-pages';
 
 // The REST catch-up for accepted intents past their expected close (#90): the main settlement path
 // is close_trade.success (#101); this reads the closed list for the ones it missed and applies it
@@ -61,8 +63,6 @@ export interface CatchupTickSummary {
 
 type Ending = 'settled' | 'left' | 'stalled' | 'rate_limited' | 'stopped';
 
-class PageOrderError extends Error {}
-
 export function createSettlementCatchup({
   db,
   rest,
@@ -84,31 +84,21 @@ export function createSettlementCatchup({
     overdue: OverdueAcceptedIntent,
     signal: AbortSignal,
   ): Promise<{ trades: ClosedTrade[]; pagesRead: number }> {
-    const trades: ClosedTrade[] = [];
-    let previousLast: number | undefined;
-    for (let page = 0; page < config.maxPages; page += 1) {
-      const items = await rest.listTrades(
-        { accessToken },
-        {
-          status: TradeListStatus.Closed,
-          isDemo: overdue.mode === TradeMode.Demo,
-          limit: config.pageSize,
-          offset: page * config.pageSize,
-        },
-        { signal },
-      );
-      for (let index = 0; index < items.length; index += 1) {
-        const stamp = items[index]!.openTimestamp;
-        const before = index === 0 ? previousLast : items[index - 1]!.openTimestamp;
-        if (before !== undefined && stamp > before) throw new PageOrderError();
-      }
-      trades.push(...items.filter(isClosedTrade));
-      if (items.length < config.pageSize || items.some((t) => t.id === overdue.brokerTradeId)) {
-        return { trades, pagesRead: page + 1 };
-      }
-      previousLast = items.at(-1)?.openTimestamp;
-    }
-    return { trades, pagesRead: config.maxPages };
+    const read = await readTradePages(
+      (offset) =>
+        rest.listTrades(
+          { accessToken },
+          {
+            status: TradeListStatus.Closed,
+            isDemo: overdue.mode === TradeMode.Demo,
+            limit: config.pageSize,
+            offset,
+          },
+          { signal },
+        ),
+      { maxPages: config.maxPages, stopAt: (trade) => trade.id === overdue.brokerTradeId },
+    );
+    return { trades: read.trades.filter(isClosedTrade), pagesRead: read.pagesRead };
   }
 
   async function attempt(overdue: OverdueAcceptedIntent, signal: AbortSignal): Promise<Ending> {
@@ -129,8 +119,11 @@ export function createSettlementCatchup({
     try {
       read = await readClosed(token.accessToken, overdue, signal);
     } catch (error) {
-      if (error instanceof PageOrderError) {
-        logger.warn(ids, 'broker trade list is not newest first; catch-up held back');
+      if (error instanceof TradePagesError) {
+        logger.warn(
+          { ...ids, violation: error.violation },
+          'broker trade pages are inconsistent; catch-up held back',
+        );
         return 'stalled';
       }
       if (!(error instanceof BrokerRestError)) throw error;

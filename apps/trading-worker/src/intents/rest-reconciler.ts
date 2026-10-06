@@ -1,13 +1,9 @@
-import {
-  BrokerRestError,
-  BrokerRestErrorCode,
-  TradeListStatus,
-  type BrokerRestClient,
-} from '@binarius/broker-rest';
-import { errorLogFields, TradeMode, type BrokerTrade } from '@binarius/shared';
+import { BrokerRestError, TradeListStatus, type BrokerRestClient } from '@binarius/broker-rest';
+import { BrokerRestErrorCode, errorLogFields, TradeMode, type BrokerTrade } from '@binarius/shared';
 import { normalizeDecimal, type TradeIntentRow } from '@binarius/db';
 import { isAccessTokenRefusal, type AccessTokenSource } from '../broker/access-token';
 import type { Logger } from './processor';
+import { readTradePages, TradePagesError } from './trade-pages';
 import {
   ReconcileUnavailableReason,
   type IntentReconciler,
@@ -46,14 +42,11 @@ export class ReconcilerInputError extends Error {
 }
 
 interface WindowRead {
+  // the list's trades inside the window
   trades: BrokerTrade[];
   // the list was read down past the window's start, or to its end
   covered: boolean;
 }
-
-// a page that breaks the newest-first order the matching relies on (docs/broker-rest.md -> Trades
-// list: assumptions)
-class PageOrderError extends Error {}
 
 const unavailable = (reason: ReconcileUnavailableReason): ReconcileResult => ({
   outcome: 'unavailable',
@@ -85,31 +78,21 @@ export function createRestReconciler({
     windowEnd: number,
     signal: AbortSignal,
   ): Promise<WindowRead> {
-    const trades: BrokerTrade[] = [];
-    let previousLast: number | undefined;
-    for (let page = 0; page < config.maxPages; page += 1) {
-      const items = await rest.listTrades(
-        { accessToken },
-        { status, isDemo, limit: config.pageSize, offset: page * config.pageSize },
-        { signal },
-      );
-      for (let index = 0; index < items.length; index += 1) {
-        const stamp = items[index]!.openTimestamp;
-        const before = index === 0 ? previousLast : items[index - 1]!.openTimestamp;
-        if (before !== undefined && stamp > before) throw new PageOrderError();
-      }
-      for (const trade of items) {
-        if (trade.openTimestamp >= windowStart && trade.openTimestamp <= windowEnd) {
-          trades.push(trade);
-        }
-      }
-      const last = items.at(-1);
-      if (items.length < config.pageSize || (last !== undefined && last.openTimestamp < windowStart)) {
-        return { trades, covered: true };
-      }
-      previousLast = last?.openTimestamp;
-    }
-    return { trades, covered: false };
+    const read = await readTradePages(
+      (offset) =>
+        rest.listTrades(
+          { accessToken },
+          { status, isDemo, limit: config.pageSize, offset },
+          { signal },
+        ),
+      { maxPages: config.maxPages, stopAt: (trade) => trade.openTimestamp < windowStart },
+    );
+    return {
+      trades: read.trades.filter(
+        (trade) => trade.openTimestamp >= windowStart && trade.openTimestamp <= windowEnd,
+      ),
+      covered: read.covered,
+    };
   }
 
   return {
@@ -155,8 +138,11 @@ export function createRestReconciler({
           signal,
         );
       } catch (error) {
-        if (error instanceof PageOrderError) {
-          logger.warn(ids, 'broker trade list is not newest first; nothing concluded');
+        if (error instanceof TradePagesError) {
+          logger.warn(
+            { ...ids, violation: error.violation },
+            'broker trade pages are inconsistent; nothing concluded',
+          );
           return unavailable(ReconcileUnavailableReason.BrokerContract);
         }
         if (!(error instanceof BrokerRestError)) throw error;

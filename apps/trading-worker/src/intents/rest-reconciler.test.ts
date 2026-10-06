@@ -69,10 +69,15 @@ function harness(
     token = { ok: true, accessToken: 'tok' },
     linked = new Set<string>(),
     failOn,
+    cap,
+    maxPages = config.maxPages,
   }: {
     token?: AccessTokenOutcome;
     linked?: Set<string>;
     failOn?: { status: 'open' | 'closed'; error: unknown };
+    // the broker answers at most this many rows whatever the limit (review M1)
+    cap?: number;
+    maxPages?: number;
   } = {},
 ) {
   const requests: { filter: TradeListFilter; signal: AbortSignal | undefined }[] = [];
@@ -92,7 +97,8 @@ function harness(
         }
         const all = (filter.status === 'open' ? lists.open : lists.closed) ?? [];
         const offset = filter.offset ?? 0;
-        return Promise.resolve(all.slice(offset, offset + (filter.limit ?? 20)));
+        const limit = filter.limit ?? 20;
+        return Promise.resolve(all.slice(offset, offset + Math.min(limit, cap ?? limit)));
       },
     },
     tokens: {
@@ -106,7 +112,7 @@ function harness(
       return Promise.resolve(linked);
     },
     logger,
-    config,
+    config: { ...config, maxPages },
   });
   const signal = new AbortController().signal;
   return {
@@ -221,15 +227,48 @@ describe('createRestReconciler: when absence is certain (#90)', () => {
     expect(h.requests.map((r) => r.filter)).toEqual([
       { status: 'open', isDemo: true, limit: PAGE, offset: 0 },
       { status: 'closed', isDemo: true, limit: PAGE, offset: 0 },
-      { status: 'closed', isDemo: true, limit: PAGE, offset: PAGE },
+      { status: 'closed', isDemo: true, limit: PAGE, offset: PAGE - 1 },
     ]);
   });
 
-  it('answers not_found after two pages when the second is short', async () => {
+  it('reads past the window start before answering not_found', async () => {
     const closed = [at(4_000, { assetId: 102 }), at(3_000, { assetId: 102 }), at(2_000, { assetId: 102 }), at(-BEFORE, { assetId: 102 }), old()];
     const h = harness({ open: [], closed });
     expect(await h.run()).toEqual({ outcome: 'not_found' });
-    expect(h.requests).toHaveLength(3);
+    expect(h.requests.filter((r) => r.filter.status === 'closed').map((r) => r.filter.offset)).toEqual([0, 3]);
+  });
+
+  // review M1: a broker that caps the page below the limit must not make a short page the end
+  it('finds the trade behind pages the broker cut short, and never answers not_found for it', async () => {
+    const ours = at(3_000);
+    const closed = [at(5_000, { assetId: 102 }), at(4_000, { assetId: 102 }), ours, at(2_000, { assetId: 102 }), old()];
+    expect(await harness({ open: [], closed }, { cap: 2, maxPages: 4 }).run()).toEqual({
+      outcome: 'found',
+      trade: ours,
+    });
+    expect(await harness({ open: [], closed }, { cap: 2, maxPages: 2 }).run()).toEqual({
+      outcome: 'unavailable',
+      reason: 'window_not_covered',
+    });
+  });
+
+  it('finds the trade behind a page answered one short of the limit', async () => {
+    const ours = at(1_000);
+    const closed = [at(4_000, { assetId: 102 }), at(3_000, { assetId: 102 }), at(2_000, { assetId: 102 }), ours, old()];
+    const h = harness({ open: [], closed }, { cap: PAGE - 1 });
+    expect(await h.run()).toEqual({ outcome: 'found', trade: ours });
+    expect(h.requests.filter((r) => r.filter.status === 'closed')).toHaveLength(2);
+  });
+
+  it('confirms a one-trade open list with an empty page', async () => {
+    const ours = at(2_000);
+    const h = harness({ open: [ours], closed: [] });
+    expect(await h.run()).toEqual({ outcome: 'found', trade: ours });
+    expect(h.requests.map((r) => `${r.filter.status}@${r.filter.offset}`)).toEqual([
+      'open@0',
+      'open@1',
+      'closed@0',
+    ]);
   });
 
   it('stops after one full page whose oldest trade is older than the window', async () => {
@@ -254,20 +293,14 @@ describe('createRestReconciler: when absence is certain (#90)', () => {
     });
   });
 
-  it('refuses a page in ascending order', async () => {
+  // every violation kind is trade-pages.test.ts's; here the one mapping
+  it('answers broker_contract when the pages are inconsistent', async () => {
     const h = harness({ open: [], closed: [old(), at(2_000, { assetId: 102 })] });
     expect(await h.run()).toEqual({ outcome: 'unavailable', reason: 'broker_contract' });
-    expect(h.line('broker trade list is not newest first; nothing concluded')).toBeDefined();
-  });
-
-  it('refuses pages whose seam breaks the order', async () => {
-    const closed = [at(5_000), at(4_000), at(3_000), at(2_000), at(6_000), old()].map((t) => ({
-      ...t,
-      assetId: 102,
-    }));
-    expect(await harness({ open: [], closed }).run()).toEqual({
-      outcome: 'unavailable',
-      reason: 'broker_contract',
+    expect(h.line('broker trade pages are inconsistent; nothing concluded')).toMatchObject({
+      intentId: 'intent-1',
+      brokerAccountId: 'account-1',
+      violation: 'order',
     });
   });
 
