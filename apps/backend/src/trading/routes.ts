@@ -1,10 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
 import * as z from 'zod';
 import {
+  ACCESS_TOKEN_PATH,
   errorIdentity,
   TradeIntentErrorCode,
+  safeParseAccessTokenRequest,
   safeParseCreateTradeIntentRequest,
   telegramUserIdSchema,
+  type AccessTokenRefusal,
   type TradeIntentErrorCode as ErrorCode,
 } from '@binarius/shared';
 import {
@@ -15,6 +18,7 @@ import {
   type Db,
 } from '@binarius/db';
 import { internalBearerAuth } from '../auth/internal';
+import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
 import { registerTradingAccess, type TradingAccessDeps } from './access';
 
 export interface TradingRoutesDeps {
@@ -26,7 +30,22 @@ export interface TradingRoutesDeps {
   balance: TradingAccessDeps['balance'];
   // REAL_TRADING_ENABLED: whether a real intent may be created at all (#134)
   realTradingEnabled: boolean;
+  // POST /trading/accounts/:id/access-token hands the worker a token through it (#90)
+  accessToken: (accountId: string, options: AccessTokenOptions) => Promise<AccessTokenResult>;
 }
+
+type Refusal = Extract<AccessTokenResult, { ok: false }>['reason'];
+
+// annotated by the backend's union and checked against the wire enum: a code added on either side
+// alone fails the typecheck
+const REFUSAL_STATUS: Record<Refusal, 404 | 409> = {
+  account_not_found: 404,
+  user_blocked: 409,
+  account_pending: 409,
+  account_revoked: 409,
+  key_unavailable: 409,
+  refresh_needed: 409,
+} satisfies Record<AccessTokenRefusal, 404 | 409>;
 
 const NOT_FOUND_CODES: ReadonlySet<ErrorCode> = new Set([
   TradeIntentErrorCode.UserNotFound,
@@ -42,7 +61,7 @@ const readIntentQuerySchema = z.object({ telegramUserId: telegramUserIdSchema })
 // Registered as an encapsulated plugin so the auth hook covers exactly these routes
 export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
   app,
-  { db, internalApiToken, onIntentQueued, balance, realTradingEnabled },
+  { db, internalApiToken, onIntentQueued, balance, realTradingEnabled, accessToken },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
   registerTradingAccess(app, { db, balance, realTradingEnabled });
@@ -74,6 +93,19 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
     return reply
       .code(result.created ? 201 : 200)
       .send({ intent: toTradeIntentView(result.intent, parsed.data.telegramUserId) });
+  });
+
+  // Neither body is logged: the answer is a live broker token (docs/binodex-oauth.md -> Refresh).
+  app.post(ACCESS_TOKEN_PATH, async (request, reply) => {
+    const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
+    if (!id.success) return reply.code(404).send({ error: 'account_not_found' });
+    const parsed = safeParseAccessTokenRequest(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
+    }
+    const result = await accessToken(id.data, { mayRefresh: parsed.data.mayRefresh });
+    if (!result.ok) return reply.code(REFUSAL_STATUS[result.reason]).send({ error: result.reason });
+    return reply.send({ accessToken: result.accessToken });
   });
 
   app.get('/trading/intents/:id', async (request, reply) => {

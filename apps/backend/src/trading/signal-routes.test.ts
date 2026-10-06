@@ -22,7 +22,13 @@ import type { AuthRoutesDeps } from '../auth/routes';
 import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
 import type { SignalRoutesDeps } from './signal-routes';
-import { fakeSignalFeed, PAIRS_TEST_TOKEN, unusedBalanceDeps, unusedPairsDeps } from './testing';
+import {
+  fakeSignalFeed,
+  PAIRS_TEST_TOKEN,
+  unusedAccessTokenDeps,
+  unusedBalanceDeps,
+  unusedPairsDeps,
+} from './testing';
 
 const I = SIGNAL_CHART_INTERVAL_MS['1m'];
 const B = Math.floor(1_760_000_000_000 / I) * I;
@@ -71,6 +77,7 @@ function appWith(feed: SignalRoutesDeps['feed']): FastifyInstance {
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
       realTradingEnabled: false,
+      accessToken: unusedAccessTokenDeps(),
     },
     pairs: unusedPairsDeps(),
     signal: { feed, internalApiToken: PAIRS_TEST_TOKEN },

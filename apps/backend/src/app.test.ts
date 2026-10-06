@@ -6,7 +6,12 @@ import type { AuthRoutesDeps } from './auth/routes';
 import type { TradingRoutesDeps } from './trading/routes';
 import type { UsersRoutesDeps } from './users/routes';
 import { unusedAdminDeps } from './admin/testing';
-import { unusedBalanceDeps, unusedPairsDeps, unusedSignalDeps } from './trading/testing';
+import {
+  unusedAccessTokenDeps,
+  unusedBalanceDeps,
+  unusedPairsDeps,
+  unusedSignalDeps,
+} from './trading/testing';
 
 const ok = () => Promise.resolve();
 const down = () => Promise.reject(new Error('down'));
@@ -22,6 +27,7 @@ const unusedTrading: TradingRoutesDeps = {
   onIntentQueued: () => {},
   balance: unusedBalanceDeps(),
   realTradingEnabled: false,
+  accessToken: unusedAccessTokenDeps(),
 };
 
 const unusedAuth: AuthRoutesDeps = {

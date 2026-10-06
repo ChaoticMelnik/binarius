@@ -1,4 +1,5 @@
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
+import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
 import { BROKER_BALANCE_SLA_MS, TRADING_ACCESS_BUDGET_MS } from '@binarius/shared/broker-balance';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
@@ -149,7 +150,11 @@ export const TIMING_CHAIN_HOLDS =
   SIGNAL_FETCH_BUDGET_MS < BROKER_REST_TIMEOUT_MS &&
   SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS &&
   TRADING_SIGNAL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  SIGNAL_CACHE_MAX_TTL_MS < SIGNAL_CHART_INTERVAL_MS['1m'];
+  SIGNAL_CACHE_MAX_TTL_MS < SIGNAL_CHART_INTERVAL_MS['1m'] &&
+  // the worker's token route (#90): its longest path is one exchange under the account's row
+  // lock, and the worker waits ACCESS_TOKEN_ROUTE_BUDGET_MS for it
+  BROKER_HTTP_TIMEOUT_MS < ACCESS_TOKEN_ROUTE_BUDGET_MS &&
+  ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }

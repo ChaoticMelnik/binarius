@@ -19,6 +19,11 @@ export const unusedPairsDeps = (): PairsRoutesDeps => ({
   internalApiToken: PAIRS_TEST_TOKEN,
 });
 
+// for suites that never call POST /trading/accounts/:id/access-token
+export const unusedAccessTokenDeps = (): TradingRoutesDeps['accessToken'] => () => {
+  throw new Error('the access token route is not wired in this test');
+};
+
 // for suites that never call POST /trading/access
 export const unusedBalanceDeps = (): TradingRoutesDeps['balance'] => ({
   refresh: () => {

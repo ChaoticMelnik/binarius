@@ -19,7 +19,12 @@ import {
   unusedAdminDeps,
   type CapturedApi,
 } from './testing';
-import { unusedBalanceDeps, unusedPairsDeps, unusedSignalDeps } from '../trading/testing';
+import {
+  unusedAccessTokenDeps,
+  unusedBalanceDeps,
+  unusedPairsDeps,
+  unusedSignalDeps,
+} from '../trading/testing';
 
 // The whole path, over HTTP and with real cookies: a browser's form reaches apps/web, which
 // calls a listening apps/backend with its bearer, which drives a real grammY bot against a
@@ -68,6 +73,7 @@ beforeAll(async () => {
       onIntentQueued: () => undefined,
       balance: unusedBalanceDeps(),
       realTradingEnabled: false,
+      accessToken: unusedAccessTokenDeps(),
     },
     auth: {
       db: tmp.db,
