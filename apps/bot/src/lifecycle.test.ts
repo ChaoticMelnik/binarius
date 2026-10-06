@@ -64,6 +64,9 @@ function fakeBot() {
 // double cannot quietly model `once` as `on` again.
 const signals = () => new EventEmitter();
 
+// a tracker with nothing in flight: its stop settles at once (#127)
+const idleTracker = () => ({ stop: vi.fn(() => Promise.resolve()) });
+
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
 // the profile calls onStart makes, in order, with the warn line each one's failure writes
@@ -85,7 +88,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const log = fakeLogger();
     const signalSource = signals();
-    runBot({ bot: fake.bot, logger: log, exit: vi.fn(), signalSource });
+    runBot({ tracker: idleTracker(), bot: fake.bot, logger: log, exit: vi.fn(), signalSource });
 
     // Literals on purpose. These constants are what runBot passes, so an assertion written
     // against them proves the keys are there and nothing at all about the values — one update
@@ -135,7 +138,13 @@ describe('runBot', () => {
           release = () => resolve(true);
         }),
     );
-    runBot({ bot: fake.bot, logger: log, exit: vi.fn(), signalSource: signals() });
+    runBot({
+      tracker: idleTracker(),
+      bot: fake.bot,
+      logger: log,
+      exit: vi.fn(),
+      signalSource: signals(),
+    });
 
     const onStart = fake.options[0]?.onStart?.(BOT_INFO);
     await until('setMyCommands', () => fake.api.setMyCommands.mock.calls.length >= 1);
@@ -168,7 +177,7 @@ describe('runBot', () => {
       const log = fakeLogger();
       const exit = vi.fn();
       fake.api[method].mockImplementation(() => Promise.reject(new TypeError('sentinel')));
-      runBot({ bot: fake.bot, logger: log, exit, signalSource: signals() });
+      runBot({ tracker: idleTracker(), bot: fake.bot, logger: log, exit, signalSource: signals() });
 
       await expect(fake.options[0]?.onStart?.(BOT_INFO)).resolves.toBeUndefined();
       expect(log.warn.mock.calls).toEqual([[{ err: { name: 'TypeError' }, method }, message]]);
@@ -186,7 +195,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const log = fakeLogger();
     const exit = vi.fn();
-    runBot({ bot: fake.bot, logger: log, exit, signalSource: signals() });
+    runBot({ tracker: idleTracker(), bot: fake.bot, logger: log, exit, signalSource: signals() });
 
     fake.rejectStart(Object.assign(new Error('Unauthorized'), { name: 'GrammyError' }));
     await until('the exit', () => exit.mock.calls.length >= 1);
@@ -198,7 +207,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const exit = vi.fn();
     const signalSource = signals();
-    runBot({ bot: fake.bot, logger: fakeLogger(), exit, signalSource });
+    runBot({ tracker: idleTracker(), bot: fake.bot, logger: fakeLogger(), exit, signalSource });
 
     signalSource.emit('SIGTERM');
     // Half of "a second signal is ignored" is that there still is a listener to ignore it with:
@@ -225,7 +234,7 @@ describe('runBot', () => {
     const fake = fakeBot();
     const exit = vi.fn();
     const signalSource = signals();
-    runBot({ bot: fake.bot, logger: fakeLogger(), exit, signalSource });
+    runBot({ tracker: idleTracker(), bot: fake.bot, logger: fakeLogger(), exit, signalSource });
 
     signalSource.emit('SIGTERM');
     fake.resolveStop();
@@ -243,7 +252,14 @@ describe('runBot', () => {
     const log = fakeLogger();
     const exit = vi.fn();
     const signalSource = signals();
-    runBot({ bot: fake.bot, logger: log, exit, shutdownBudgetMs: 20, signalSource });
+    runBot({
+      tracker: idleTracker(),
+      bot: fake.bot,
+      logger: log,
+      exit,
+      shutdownBudgetMs: 20,
+      signalSource,
+    });
 
     signalSource.emit('SIGTERM');
     await until('the exit', () => exit.mock.calls.length >= 1);
@@ -260,7 +276,7 @@ describe('runBot', () => {
     const log = fakeLogger();
     const exit = vi.fn();
     const signalSource = signals();
-    runBot({ bot: fake.bot, logger: log, exit, signalSource });
+    runBot({ tracker: idleTracker(), bot: fake.bot, logger: log, exit, signalSource });
 
     signalSource.emit('SIGTERM');
     fake.resolveStop();
@@ -280,7 +296,7 @@ describe('runBot', () => {
     const log = fakeLogger();
     const exit = vi.fn();
     const signalSource = signals();
-    runBot({ bot: fake.bot, logger: log, exit, signalSource });
+    runBot({ tracker: idleTracker(), bot: fake.bot, logger: log, exit, signalSource });
 
     signalSource.emit('SIGTERM');
     fake.rejectStop(Object.assign(new Error('stop died'), { name: 'GrammyError' }));
@@ -292,12 +308,78 @@ describe('runBot', () => {
     expect(errorMessages(log)).toEqual(['shutdown: bot.stop() failed', STEP_LINE]);
   });
 
+  // #127
+  it('stops the intent tracker with the bot and waits for it', async () => {
+    const fake = fakeBot();
+    const exit = vi.fn();
+    const signalSource = signals();
+    let release: () => void = () => {};
+    const tracker = {
+      stop: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      ),
+    };
+    runBot({ tracker, bot: fake.bot, logger: fakeLogger(), exit, signalSource });
+
+    signalSource.emit('SIGTERM');
+    expect(tracker.stop).toHaveBeenCalledTimes(1);
+    fake.resolveStop();
+    fake.resolveStart();
+    await settle();
+    expect(exit).not.toHaveBeenCalled();
+    release();
+    await until('the exit', () => exit.mock.calls.length >= 1);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('names the intent tracker when its stop fails', async () => {
+    const fake = fakeBot();
+    const log = fakeLogger();
+    const exit = vi.fn();
+    const signalSource = signals();
+    const tracker = { stop: vi.fn(() => Promise.reject(new Error('tracker died'))) };
+    runBot({ tracker, bot: fake.bot, logger: log, exit, signalSource });
+
+    signalSource.emit('SIGTERM');
+    fake.resolveStop();
+    fake.resolveStart();
+    await until('the exit', () => exit.mock.calls.length >= 1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errorMessages(log)).toEqual(['shutdown: intent tracker failed', STEP_LINE]);
+  });
+
+  it('blames the budget when the intent tracker never stops', async () => {
+    const fake = fakeBot();
+    const log = fakeLogger();
+    const exit = vi.fn();
+    const signalSource = signals();
+    const tracker = { stop: vi.fn(() => new Promise<void>(() => {})) };
+    runBot({ tracker, bot: fake.bot, logger: log, exit, shutdownBudgetMs: 20, signalSource });
+
+    signalSource.emit('SIGTERM');
+    fake.resolveStop();
+    fake.resolveStart();
+    await until('the exit', () => exit.mock.calls.length >= 1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errorMessages(log)).toEqual([BUDGET_LINE]);
+  });
+
   it('reports the failed step and the overrun separately when both happen', async () => {
     const fake = fakeBot();
     const log = fakeLogger();
     const exit = vi.fn();
     const signalSource = signals();
-    runBot({ bot: fake.bot, logger: log, exit, shutdownBudgetMs: 20, signalSource });
+    runBot({
+      tracker: idleTracker(),
+      bot: fake.bot,
+      logger: log,
+      exit,
+      shutdownBudgetMs: 20,
+      signalSource,
+    });
 
     signalSource.emit('SIGTERM');
     fake.rejectStop(Object.assign(new Error('stop died'), { name: 'GrammyError' }));
@@ -420,7 +502,7 @@ function scene(options: SceneOptions = {}) {
     });
   });
 
-  runBot({ bot, logger: log, exit, signalSource });
+  runBot({ tracker: idleTracker(), bot, logger: log, exit, signalSource });
   running.push({ signalSource, exit });
 
   return {
