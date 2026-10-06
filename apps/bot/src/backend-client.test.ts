@@ -1,6 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { OAuthErrorCode, UserErrorCode, type UserStartRequest } from '@binarius/shared';
+import {
+  OAuthErrorCode,
+  PairsCatalogErrorCode,
+  UserErrorCode,
+  type UserStartRequest,
+} from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
 import {
@@ -14,6 +19,7 @@ import {
   LINK_PENDING,
   LINK_REVOKED,
   LOGIN,
+  PAIRS_RESPONSE,
   PENDING_ACCOUNT_ID,
   closeServer,
   listen,
@@ -25,8 +31,10 @@ import {
 const TOKEN = 'internal-token-for-tests';
 
 interface Capture {
+  method?: string;
   url?: string;
   authorization?: string;
+  contentType?: string;
   body?: string;
 }
 
@@ -45,8 +53,10 @@ async function serve(
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
+      capture.method = request.method;
       capture.url = request.url;
       capture.authorization = request.headers.authorization;
+      capture.contentType = request.headers['content-type'];
       capture.body = Buffer.concat(chunks).toString('utf8');
       handler(request, response, capture.body);
     });
@@ -79,6 +89,8 @@ describe('recordStart', () => {
     const client = createBackendClient({ baseUrl, token: TOKEN });
 
     expect(await client.recordStart(request)).toEqual(view);
+    expect(capture.method).toBe('POST');
+    expect(capture.contentType).toBe('application/json');
     expect(capture.url).toBe('/users/start');
     expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
     expect(JSON.parse(capture.body ?? '')).toEqual(request);
@@ -454,6 +466,65 @@ describe('readTradingAccess', () => {
     expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status: 500 });
     expect((error as BackendError).reason).toBeUndefined();
     expect(JSON.stringify(error)).not.toContain('10000');
+  });
+});
+
+describe('readPairs', () => {
+  it('sends a GET under the bearer with no body and no content-type, and returns the whole answer', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, PAIRS_RESPONSE);
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).readPairs()).toEqual(
+      PAIRS_RESPONSE,
+    );
+    expect(capture.method).toBe('GET');
+    expect(capture.url).toBe('/trading/pairs');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(capture.contentType).toBeUndefined();
+    expect(capture.body).toBe('');
+  });
+
+  // without it a backend older than #125 would read as fresh
+  it('reports an answer without fresh as a contract violation', async () => {
+    const withoutFresh: Partial<typeof PAIRS_RESPONSE> = { ...PAIRS_RESPONSE };
+    delete withoutFresh.fresh;
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, withoutFresh);
+    });
+    const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readPairs());
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('carries a 503 catalog_unavailable as its status and reason', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 503, { error: PairsCatalogErrorCode.Unavailable });
+    });
+    const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readPairs());
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 503,
+      reason: PairsCatalogErrorCode.Unavailable,
+    });
+  });
+
+  it('carries a 500 as its status, without the body', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 500, { message: 'EUR/USD SECRET-BODY' });
+    });
+    const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readPairs());
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status: 500 });
+    expect((error as BackendError).reason).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain('SECRET-BODY');
+  });
+
+  it('gives up on a server that never answers', async () => {
+    const { baseUrl } = await serve(() => {});
+    const started = Date.now();
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN, timeoutMs: 150 }).readPairs(),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.Unreachable });
+    expect(Date.now() - started).toBeLessThan(UNIT_WAIT_CEILING_MS);
   });
 });
 

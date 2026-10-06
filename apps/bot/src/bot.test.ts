@@ -19,7 +19,6 @@ import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
   CONNECT_CALLBACK_DATA,
-  DEMO_CALLBACK_DATA,
   LEVEL_CURRENT_CALLBACK_DATA,
   OAUTH_CALLBACK_DATA,
   RESEND_CALLBACK_DATA,
@@ -27,6 +26,7 @@ import {
   levelCallbackData,
 } from './bot';
 import { BOT_COMMANDS } from './commands';
+import { DEMO_CALLBACK_DATA } from './demo';
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCESS_VIEW,
@@ -116,6 +116,7 @@ function setup(
       options.setNotificationLevel ??
       vi.fn((_telegramUserId: string, level: NotificationLevel) => Promise.resolve({ level })),
     readTradingAccess: options.readTradingAccess ?? vi.fn(() => Promise.resolve(ACCESS_VIEW)),
+    readPairs: vi.fn(() => Promise.reject(new Error('not used here'))),
   };
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
@@ -126,6 +127,7 @@ function setup(
     logger,
     botInfo: BOT_INFO,
     loginDialog: dialog,
+    ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.welcomeVideoFileId === undefined
       ? {}
       : { welcomeVideoFileId: options.welcomeVideoFileId }),
@@ -615,35 +617,6 @@ describe('/menu', () => {
 
     await bot.handleUpdate(textUpdate(CODE));
     expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
-  });
-});
-
-describe('the demo button', () => {
-  it('answers the query and says the demo is coming, without calling the backend', async () => {
-    const { bot, backend, calls } = setup();
-    await bot.handleUpdate(callbackUpdate(DEMO_CALLBACK_DATA));
-    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
-    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.demoSoon.value);
-    for (const call of Object.values(backend)) expect(call).not.toHaveBeenCalled();
-    expect(Buffer.byteLength(DEMO_CALLBACK_DATA, 'utf8')).toBeLessThanOrEqual(64);
-  });
-
-  it('still sends the text when answering the query is refused', async () => {
-    const { bot, calls, logger, apiErrors } = setup();
-    apiErrors.set('answerCallbackQuery', {
-      ok: false as const,
-      error_code: 400,
-      description: 'Bad Request: query is too old and response timeout expired',
-    });
-    await bot.handleUpdate(callbackUpdate(DEMO_CALLBACK_DATA));
-    expect(sentTexts(calls)).toEqual([TEXTS.demoSoon.value]);
-    expect(logger.warn.mock.calls[0]?.[1]).toBe('answering the callback query failed');
-  });
-
-  it('ignores the callback outside a private chat', async () => {
-    const { bot, calls } = setup();
-    await bot.handleUpdate(callbackUpdate(DEMO_CALLBACK_DATA, 'group'));
-    expect(calls).toEqual([]);
   });
 });
 
@@ -1341,6 +1314,7 @@ describe('the account card', () => {
           recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
           setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
           readTradingAccess: vi.fn(() => Promise.reject(new Error('unused'))),
+          readPairs: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -1377,6 +1351,7 @@ describe('the account card', () => {
           recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
           setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
           readTradingAccess: vi.fn(() => Promise.resolve(ACCESS_VIEW)),
+          readPairs: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -2397,6 +2372,7 @@ describe('the Bot API timeout', () => {
         recordChatMember: vi.fn(() => Promise.reject(new Error('unused'))),
         setNotificationLevel: vi.fn(() => Promise.reject(new Error('unused'))),
         readTradingAccess: vi.fn(() => Promise.reject(new Error('unused'))),
+        readPairs: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

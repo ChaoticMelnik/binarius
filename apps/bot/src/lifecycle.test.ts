@@ -372,6 +372,7 @@ function scene(options: SceneOptions = {}) {
     recordChatMember: () => Promise.reject(new Error('not used by these scenes')),
     setNotificationLevel: () => Promise.reject(new Error('not used by these scenes')),
     readTradingAccess: () => Promise.reject(new Error('not used by these scenes')),
+    readPairs: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({
     token: TOKEN,

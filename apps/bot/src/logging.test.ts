@@ -13,6 +13,7 @@ import {
 import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { OAUTH_CALLBACK_DATA, createBot, levelCallbackData } from './bot';
+import { DEMO_CALLBACK_DATA, demoAssetCallbackData } from './demo';
 import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
@@ -23,6 +24,8 @@ import {
   CODE_SENT,
   CONFIRMED,
   LOGIN,
+  PAIR_EURUSD,
+  PAIRS_RESPONSE,
   PENDING_ACCOUNT_ID,
   USER,
   USER_VIEW,
@@ -65,6 +68,7 @@ interface Scenario {
   emailLogin?: BackendClient['emailLogin'];
   setNotificationLevel?: BackendClient['setNotificationLevel'];
   readTradingAccess?: BackendClient['readTradingAccess'];
+  readPairs?: BackendClient['readPairs'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -85,6 +89,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     setNotificationLevel:
       scenario.setNotificationLevel ?? ((_telegramUserId, level) => Promise.resolve({ level })),
     readTradingAccess: scenario.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
+    readPairs: scenario.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)),
   };
   const loginDialog = createLoginDialog();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
@@ -613,6 +618,158 @@ describe('what the bot writes about the settings edit', () => {
       JSON.stringify({ ...parsed(line), time: undefined, pid: undefined }),
     );
     expect(fields.join('')).not.toContain(String(USER.id));
+  });
+});
+
+// #125: the screens carry the broker's symbols, which no line about them needs
+describe('what the bot writes about the demo', () => {
+  const pressed = () => callbackUpdate(demoAssetCallbackData(PAIR_EURUSD.id));
+  // time and pid are numbers that could hold 4242 by chance; every other field is searched
+  const fieldsOf = (lines: readonly string[]) =>
+    lines
+      .map((line) => JSON.stringify({ ...parsed(line), time: undefined, pid: undefined }))
+      .join('');
+
+  it('names a failed catalog read by error, code, status and reason, without the user or a symbol', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate(DEMO_CALLBACK_DATA),
+      level: 'trace',
+      readPairs: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, { status: 404, reason: 'not_found' }),
+        ),
+    });
+    expect(lineWith(lines, 'demo catalog not read')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 404,
+      backendReason: 'not_found',
+    });
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+    expect(lines.join('')).not.toContain(PAIR_EURUSD.symbol);
+  });
+
+  it('writes nothing about a 503 or a stale catalog: the backend logs those itself', async () => {
+    for (const readPairs of [
+      () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, {
+            status: 503,
+            reason: 'catalog_unavailable',
+          }),
+        ),
+      () => Promise.resolve({ ...PAIRS_RESPONSE, fresh: false }),
+    ]) {
+      const { lines } = await linesFrom({ update: pressed(), readPairs });
+      expect(lines).toEqual([]);
+    }
+  });
+
+  it('names the method and the code of an edit refused as gone, and nothing of the screen', async () => {
+    const { lines, calls } = await linesFrom({
+      update: pressed(),
+      level: 'trace',
+      apiErrors: [
+        [
+          'editMessageText',
+          {
+            ok: false,
+            error_code: 400,
+            description: 'Bad Request: message to edit not found SECRET-DESC',
+          },
+        ],
+      ],
+    });
+    expect(lineWith(lines, 'the demo screen was not edited, sending it anew')).toMatchObject({
+      level: 40,
+      err: { name: 'GrammyError' },
+      method: 'editMessageText',
+      telegramErrorCode: 400,
+    });
+    expect(lines.join('')).not.toContain('SECRET-DESC');
+    expect(lines.join('')).not.toContain(PAIR_EURUSD.symbol);
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'editMessageText',
+      'sendMessage',
+    ]);
+  });
+
+  it('writes the not-modified refusal at info with the method and code, not its text', async () => {
+    const { lines } = await linesFrom({
+      update: pressed(),
+      level: 'trace',
+      apiErrors: [
+        [
+          'editMessageText',
+          {
+            ok: false,
+            error_code: 400,
+            description: 'Bad Request: message is not modified SECRET-DESC',
+          },
+        ],
+      ],
+    });
+    expect(lineWith(lines, 'the demo screen already shows this')).toMatchObject({
+      level: 30,
+      method: 'editMessageText',
+      telegramErrorCode: 400,
+    });
+    expect(lines.join('')).not.toContain('SECRET-DESC');
+  });
+
+  it('reports a transport failure by identity, method and update, and drops the token', async () => {
+    const update = pressed();
+    const { lines, calls } = await linesFrom({
+      update,
+      level: 'trace',
+      apiErrors: [
+        [
+          'editMessageText',
+          new HttpError(
+            "Network request for 'editMessageText' failed!",
+            new Error(`request to https://api.telegram.org/bot${TOKEN}/editMessageText failed`),
+          ),
+        ],
+      ],
+    });
+    const logged = lineWith(
+      lines,
+      'the demo screen edit failed in transport, sending nothing more',
+    );
+    expect(logged).toMatchObject({
+      level: 50,
+      err: { name: 'HttpError' },
+      method: 'editMessageText',
+      transportError: { name: 'Error' },
+      updateId: update.update_id,
+    });
+    expect(logged?.err).not.toHaveProperty('message');
+    expect(lineWith(lines, 'update handler failed')).toBeUndefined();
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(lines.join('')).not.toContain('SECRET-TOKEN');
+    expect(lines.join('')).not.toContain(PAIR_EURUSD.symbol);
+  });
+
+  it('names a refused answer by method and code, and still edits the screen', async () => {
+    const { lines, calls } = await linesFrom({
+      update: pressed(),
+      level: 'trace',
+      apiErrors: [
+        [
+          'answerCallbackQuery',
+          { ok: false, error_code: 400, description: 'Bad Request: query is too old SECRET-DESC' },
+        ],
+      ],
+    });
+    expect(lineWith(lines, 'answering the callback query failed')).toMatchObject({
+      level: 40,
+      err: { name: 'GrammyError' },
+      method: 'answerCallbackQuery',
+      telegramErrorCode: 400,
+    });
+    expect(lines.join('')).not.toContain('SECRET-DESC');
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
   });
 });
 

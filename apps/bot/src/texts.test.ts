@@ -18,15 +18,32 @@ import {
   LINK_ACTIVE,
   LINK_PENDING,
   LINK_REVOKED,
+  PAIR_EURUSD,
   PENDING_ACCOUNT_ID,
   brokerBalance,
 } from './testing';
-import { DEMO_CALLBACK_DATA, LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
+import { LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
+import {
+  DEMO_CALLBACK_DATA,
+  DEMO_GROUPS_CALLBACK_DATA,
+  demoAnalysisCallbackData,
+  demoAssetCallbackData,
+  demoDurationCallbackData,
+  demoPageCallbackData,
+} from './demo';
+import { DEMO_ASSET_GROUPS, DEMO_DURATIONS_SEC } from './demo-catalog';
 import { BOT_COMMANDS } from './commands';
 import {
   accountCard,
   accountStatus,
   currentLevelLabel,
+  DEMO_DURATION_LABELS,
+  DEMO_GROUP_LABELS,
+  demoDurationsScreen,
+  demoPairsScreen,
+  demoSummary,
+  groupButtonLabel,
+  pairButtonLabel,
   helpText,
   LABELS,
   levelLabel,
@@ -537,5 +554,108 @@ describe('the status card', () => {
 
   it('keeps the demo button data inside the Bot API 64 bytes', () => {
     expect(Buffer.byteLength(DEMO_CALLBACK_DATA, 'utf8')).toBeLessThanOrEqual(64);
+  });
+});
+
+// #125
+describe('the demo screens', () => {
+  // the longest a hole gets: a 64-character symbol of every character that means something in
+  // HTML or Markdown, a three-digit payout, a four-digit page count, the longest type label
+  const SYMBOL = `<&>_*"`.repeat(11).slice(0, 64);
+  const HOSTILE_PAIR = { ...PAIR_EURUSD, symbol: SYMBOL, payout: 100 };
+  const PAYOUT_SENTENCE = 'при верном прогнозе, не вероятность';
+  const screens = {
+    pairs: demoPairsScreen('cryptocurrency', 9998, 9999),
+    durations: demoDurationsScreen(HOSTILE_PAIR),
+    summary: demoSummary(HOSTILE_PAIR, 3600),
+  };
+
+  it.each(Object.entries(screens))(
+    'keeps the %s screen valid Telegram HTML, inside the message limit',
+    (_name, text) => {
+      expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+    },
+  );
+
+  it.each(Object.entries(screens))(
+    'says once what the payout is on the %s screen',
+    (_name, text) => {
+      expect(plainTextOf(text).split(PAYOUT_SENTENCE)).toHaveLength(2);
+    },
+  );
+
+  it('shows the symbol as the broker spells it, escaped once in the markup', () => {
+    for (const text of [screens.durations, screens.summary]) {
+      expect(plainTextOf(text)).toContain(SYMBOL);
+      expect(text.value).not.toContain('&amp;amp;');
+    }
+  });
+
+  it('lays out the pairs screen: the header with the type, then the page', () => {
+    expect(plainTextOf(demoPairsScreen('currency', 1, 4))).toBe(
+      `🎮 Демо-сделка · 💱 Валюты
+Выбери актив. Число на кнопке — выплата при верном прогнозе, не вероятность.
+Страница 2 из 4`,
+    );
+  });
+
+  it('lays out the summary: the asset, the duration, the payout, then what comes next', () => {
+    expect(plainTextOf(demoSummary(PAIR_EURUSD, 300))).toBe(
+      `🎯 Актив: EUR/USD OTC
+⏱ Длительность: ⏱ 5 мин
+💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность.
+
+Дальше — анализ: бот посмотрит на свечи и скажет, есть ли сигнал.`,
+    );
+  });
+
+  it('names the groups and the durations by the approved labels', () => {
+    expect(DEMO_ASSET_GROUPS.map((group) => DEMO_GROUP_LABELS[group])).toEqual([
+      '💱 Валюты',
+      '🛢 Сырьё',
+      '📈 Акции',
+      '💠 Криптовалюты',
+      '📊 Индексы',
+      '📁 Другие',
+    ]);
+    expect(DEMO_DURATIONS_SEC.map((sec) => DEMO_DURATION_LABELS[sec])).toEqual([
+      '⏱ 1 мин',
+      '⏱ 5 мин',
+      '⏱ 15 мин',
+      '⏱ 30 мин',
+      '⏱ 1 ч',
+    ]);
+    expect(groupButtonLabel('currency', 46)).toBe('💱 Валюты · 46');
+    expect(pairButtonLabel('EUR/USD OTC', 85)).toBe('EUR/USD OTC · 85%');
+  });
+
+  // these buttons are not in LABELS, so the LABELS-wide checks above do not see them
+  it.each([
+    ...DEMO_ASSET_GROUPS.map((group) => groupButtonLabel(group, 0)),
+    ...DEMO_DURATIONS_SEC.map((sec) => DEMO_DURATION_LABELS[sec]),
+  ])('keeps the demo button %s plain, non-empty and starting with an emoji', (label) => {
+    expect(label.trim().length).toBeGreaterThan(0);
+    expect(label).not.toMatch(MARKUP_OR_ENTITY);
+    expect(label).toMatch(/^\p{Extended_Pictographic}/u);
+  });
+
+  it('keeps a pair button plain: a data label with no emoji', () => {
+    const label = pairButtonLabel(PAIR_EURUSD.symbol, PAIR_EURUSD.payout);
+    expect(label).not.toMatch(MARKUP_OR_ENTITY);
+    expect(label).not.toMatch(/\p{Extended_Pictographic}/u);
+  });
+
+  it('keeps the longest data of every demo button inside the Bot API 64 bytes', () => {
+    const MAX_ID = 2_147_483_647;
+    for (const data of [
+      DEMO_CALLBACK_DATA,
+      DEMO_GROUPS_CALLBACK_DATA,
+      demoPageCallbackData('cryptocurrency', 9999),
+      demoAssetCallbackData(MAX_ID),
+      demoDurationCallbackData(MAX_ID, 3600),
+      demoAnalysisCallbackData(MAX_ID, 3600),
+    ]) {
+      expect(Buffer.byteLength(data, 'utf8'), data).toBeLessThanOrEqual(64);
+    }
   });
 });
