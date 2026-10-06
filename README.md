@@ -11,6 +11,7 @@ pnpm workspaces monorepo for the Binarius Telegram trading bot.
 - `packages/db` — Drizzle schema and transactional operations, shared by `apps/backend` and `apps/trading-worker`
 - `packages/shared` — shared types/contracts, consumed by all 4 apps
 - `packages/broker-rest` — the Binodex Broker REST client and the pairs catalog cache, shared by `apps/backend` and `apps/trading-worker`
+- `packages/signal` — Signal module v1 (the decider, the chart feed, its journal and cache), shared by `apps/backend` (`POST /trading/signal`) and `apps/trading-worker`
 - `packages/mock-broker` — test-only Binodex Broker API fixture (REST and Socket.IO), for the broker clients' tests
 
 How a trade order travels from the bot to the worker (PostgreSQL outbox + BullMQ) is described in
@@ -30,8 +31,9 @@ them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md
 what a connected user sees as the bot's home — the status card with the balances and the tokens —
 is in [docs/bot-menu.md](docs/bot-menu.md); what the demo button leads to — the asset, the
 duration and the check on a fresh catalog — is in [docs/bot-demo.md](docs/bot-demo.md);
-how the worker fetches candles, turns them into a direction or into a reason for none, and
-journals each decision is in [docs/signal.md](docs/signal.md); how the worker sizes the next
+how the signal package fetches candles, turns them into a direction or into a reason for none,
+and journals each decision, and how the backend serves it on `POST /trading/signal`, is in
+[docs/signal.md](docs/signal.md); how the worker sizes the next
 stake and when a session stops is in [docs/stake.md](docs/stake.md); how the backend answers a
 user's token balance and broker balance is in [docs/trading-access.md](docs/trading-access.md);
 where the broker balance snapshot comes from and how fresh it is kept is in
