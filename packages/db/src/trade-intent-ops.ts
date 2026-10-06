@@ -1,5 +1,6 @@
-import { and, eq, sql, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, notInArray, sql, type SQL } from 'drizzle-orm';
 import {
+  AccountHaltReason,
   BrokerAccountStatus,
   TradeIntentErrorCode,
   UserStatus,
@@ -237,7 +238,7 @@ async function findReplay(
 
 // numeric(20,8) comes back as '10.00000000' while the request said '10.00': compare the values,
 // not the spellings, without ever going through a float
-function normalizeDecimal(value: string): string {
+export function normalizeDecimal(value: string): string {
   const [integer = '0', fraction = ''] = value.split('.');
   const int = integer.replace(/^0+(?=\d)/, '');
   const frac = fraction.replace(/0+$/, '');
@@ -517,7 +518,8 @@ export async function markIntentUnknown(
 // Lock order for everything below: users → trade_intents → broker_trades (the creation chain
 // users → broker_accounts → trade_intents, with broker_trades as its tail). Settlement does not
 // lock broker_accounts. The reconciliation writer (concludeReconciled, #89) keeps the order; its
-// account halt (#90) locks broker_accounts before markIntentManualReview.
+// account halt (haltAccountForManualReview, #90) takes broker_accounts before the intent and never
+// touches users.
 
 export const TradeMismatchReason = {
   Mode: 'mode',
@@ -926,7 +928,8 @@ export interface MarkManualReviewOptions {
 }
 
 // reconciling → manual_review; the reserve is kept and the account stays blocked by the
-// active-intent index. The explicit halt and the alert are #90's, which locks the account first.
+// active-intent index. The reconciliation pass goes through haltAccountForManualReview, which also
+// halts the account.
 export function markIntentManualReview(
   exec: DbExecutor,
   { id, expectedVersion, reason }: MarkManualReviewOptions,
@@ -940,7 +943,71 @@ export function markIntentManualReview(
   });
 }
 
+export type ManualReviewReason =
+  | typeof TradeIntentFailureReason.ReconciliationAmbiguous
+  | typeof TradeIntentFailureReason.TradeMismatch;
+
+const HALT_REASON_FOR = {
+  [TradeIntentFailureReason.ReconciliationAmbiguous]: AccountHaltReason.ReconciliationAmbiguous,
+  [TradeIntentFailureReason.TradeMismatch]: AccountHaltReason.TradeMismatch,
+} as const satisfies Record<ManualReviewReason, AccountHaltReason>;
+
+export interface HaltForManualReviewOptions {
+  id: string;
+  expectedVersion: number;
+  reason: ManualReviewReason;
+}
+
+// reconciling → manual_review and the account's halt in the caller's transaction (#90). The
+// account row is locked first, FOR NO KEY UPDATE like a creator's: a creator holds users and then
+// waits here, and since the intent is touched only after this lock its INSERT never waits on our
+// uncommitted tuple. users is not locked. A lost CAS writes nothing and returns undefined; a halt
+// on an already halted account overwrites the reason.
+export async function haltAccountForManualReview(
+  tx: Tx,
+  { id, expectedVersion, reason }: HaltForManualReviewOptions,
+): Promise<TradeIntentRow | undefined> {
+  const [account] = await tx
+    .select({ id: brokerAccounts.id })
+    .from(brokerAccounts)
+    .where(
+      eq(
+        brokerAccounts.id,
+        sql`(select ${tradeIntents.brokerAccountId} from ${tradeIntents} where ${tradeIntents.id} = ${id})`,
+      ),
+    )
+    .for('no key update');
+  if (account === undefined) return undefined;
+  const row = await markIntentManualReview(tx, { id, expectedVersion, reason });
+  if (row === undefined) return undefined;
+  await tx
+    .update(brokerAccounts)
+    .set({ tradingHalted: true, haltedReason: HALT_REASON_FOR[reason] })
+    .where(eq(brokerAccounts.id, account.id));
+  return row;
+}
+
 // --- Reads --------------------------------------------------------------------------------------
+
+// Which of these broker trade ids already back an intent of the account: the reconciler drops
+// them before counting candidates, so an earlier trade with the same keys is not a second match.
+export async function listLinkedBrokerTradeIds(
+  exec: DbExecutor,
+  { brokerAccountId, brokerTradeIds }: { brokerAccountId: string; brokerTradeIds: readonly string[] },
+): Promise<Set<string>> {
+  if (brokerTradeIds.length === 0) return new Set();
+  const rows = await exec
+    .select({ brokerTradeId: brokerTrades.brokerTradeId })
+    .from(brokerTrades)
+    .where(
+      and(
+        eq(brokerTrades.brokerAccountId, brokerAccountId),
+        inArray(brokerTrades.brokerTradeId, [...brokerTradeIds]),
+        sql`${brokerTrades.intentId} is not null`,
+      ),
+    );
+  return new Set(rows.map((row) => row.brokerTradeId));
+}
 
 // the one place the "stuck in submitting" predicate is spelled out; markIntentUnknown re-checks
 // it inside its CAS with the same olderThanMs
@@ -971,9 +1038,15 @@ export interface OverdueAcceptedIntent {
 // The one definition of "accepted past its expected close" (#17), for the REST catch-up of #90:
 // the broker's open time plus the intent's duration plus graceMs, against the database clock.
 // Ordered by that expected close, oldest first; graceMs and its chain belong to the polling loop.
+// `exclude` names accounts the caller is holding back, so the head of the queue cannot starve
+// the rest.
 export async function listOverdueAcceptedIntents(
   exec: DbExecutor,
-  { graceMs, limit }: { graceMs: number; limit: number },
+  {
+    graceMs,
+    limit,
+    exclude = [],
+  }: { graceMs: number; limit: number; exclude?: readonly string[] },
 ): Promise<OverdueAcceptedIntent[]> {
   const expectedCloseMs = sql`${brokerTrades.openTimestampMs} + ${tradeIntents.durationSec}::bigint * 1000`;
   return exec
@@ -990,6 +1063,7 @@ export async function listOverdueAcceptedIntents(
         eq(tradeIntents.status, TradeIntentStatus.Accepted),
         eq(brokerTrades.status, BrokerTradeStatus.Open),
         sql`${expectedCloseMs} + ${graceMs}::bigint < (extract(epoch from now()) * 1000)`,
+        exclude.length === 0 ? undefined : notInArray(tradeIntents.brokerAccountId, [...exclude]),
       ),
     )
     .orderBy(expectedCloseMs)

@@ -113,6 +113,13 @@
       "when": 1791290277496,
       "tag": "0015_trade_intent_reconciliation",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791312958935,
+      "tag": "0016_broker_account_halt_reason",
+      "breakpoints": true
     }
   ]
 }

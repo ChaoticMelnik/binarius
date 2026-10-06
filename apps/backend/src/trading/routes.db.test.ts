@@ -1,10 +1,16 @@
 import { eq } from 'drizzle-orm';
+import { AccountHaltReason } from '@binarius/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTempDatabase, seedUserWithAccount, type TempDatabase } from '@binarius/db/testing';
 import { brokerAccounts, findTradeIntent, tradeIntents, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
-import { unusedBalanceDeps, unusedPairsDeps, unusedSignalDeps } from './testing';
+import {
+  unusedAccessTokenDeps,
+  unusedBalanceDeps,
+  unusedPairsDeps,
+  unusedSignalDeps,
+} from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -62,6 +68,7 @@ const appWith = (realTradingEnabled: boolean) =>
       },
       balance: unusedBalanceDeps(),
       realTradingEnabled,
+      accessToken: unusedAccessTokenDeps(),
     },
   });
 
@@ -241,7 +248,7 @@ describe('POST /trading/intents', () => {
 
     await tmp.db
       .update(brokerAccounts)
-      .set({ tradingHalted: true })
+      .set({ tradingHalted: true, haltedReason: AccountHaltReason.ReconciliationAmbiguous })
       .where(eq(brokerAccounts.id, other.brokerAccountId));
     const halted = await post(body(other.telegramUserId));
     expect(halted.statusCode).toBe(409);
@@ -249,7 +256,7 @@ describe('POST /trading/intents', () => {
 
     await tmp.db
       .update(brokerAccounts)
-      .set({ tradingHalted: false, status: 'revoked' })
+      .set({ tradingHalted: false, haltedReason: null, status: 'revoked' })
       .where(eq(brokerAccounts.id, other.brokerAccountId));
     const revoked = await post(
       body(other.telegramUserId, { brokerAccountId: other.brokerAccountId }),

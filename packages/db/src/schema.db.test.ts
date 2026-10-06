@@ -573,6 +573,61 @@ describe('trade_intents', () => {
     });
   });
 
+  // each row breaks exactly one of the two: (true, 'bogus') satisfies the pair, (true, NULL)
+  // satisfies the allowlist (NULL in (...) is NULL, which a CHECK lets through)
+  it('rejects a halt reason outside the allowlist (#90)', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx
+          .update(brokerAccounts)
+          .set({ tradingHalted: true, haltedReason: 'bogus' as never })
+          .where(eq(brokerAccounts.id, seed.accountId)),
+        '23514',
+        'broker_accounts_halted_reason_check',
+      );
+    });
+  });
+
+  it('rejects a halt without a reason and a reason without a halt (#90)', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx
+          .update(brokerAccounts)
+          .set({ tradingHalted: true })
+          .where(eq(brokerAccounts.id, seed.accountId)),
+        '23514',
+        'broker_accounts_halt_reason_pair_check',
+      );
+    });
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx
+          .update(brokerAccounts)
+          .set({ haltedReason: 'trade_mismatch' })
+          .where(eq(brokerAccounts.id, seed.accountId)),
+        '23514',
+        'broker_accounts_halt_reason_pair_check',
+      );
+    });
+  });
+
+  it('accepts a halt with its reason and lifts both together (#90)', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const halt = (tradingHalted: boolean, haltedReason: 'reconciliation_ambiguous' | 'trade_mismatch' | null) =>
+        tx
+          .update(brokerAccounts)
+          .set({ tradingHalted, haltedReason })
+          .where(eq(brokerAccounts.id, seed.accountId));
+      await halt(true, 'reconciliation_ambiguous');
+      await halt(true, 'trade_mismatch');
+      await halt(false, null);
+    });
+  });
+
   it('rejects a second intent with the same client_request_id for the user', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);

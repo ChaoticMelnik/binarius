@@ -165,7 +165,7 @@ export async function linkBrokerAccount(
     if (existing.userId !== user.id) return { ok: false, reason: 'broker_account_taken' };
 
     // id, user_id and broker_user_id stay out of the update: they are key columns, and
-    // trading_halted/halted_reason belong to reconciliation (ARCH-04), not to a re-login
+    // trading_halted/halted_reason belong to reconciliation (#90), not to a re-login
     const [updated] = await tx
       .update(brokerAccounts)
       .set({
@@ -384,7 +384,7 @@ export async function confirmBrokerAccount(
   });
 }
 
-// Only `status` and `auth_revoked_reason`: trading_halted and halted_reason belong to ARCH-04.
+// Only `status` and `auth_revoked_reason`: trading_halted and halted_reason belong to reconciliation (#90).
 export async function revokeAccount(
   tx: Tx,
   accountId: string,
