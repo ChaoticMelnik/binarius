@@ -145,7 +145,7 @@ describe('contract coverage (issue #6)', () => {
     expectTypeOf<OAuthTokens>().toHaveProperty('expiresInSec');
     expectTypeOf<OAuthTokens['user']>().toEqualTypeOf<{
       id: string;
-      email: string;
+      email: string | null;
       isPartnerClient: boolean;
     }>();
     expectTypeOf<RefreshedTokens>().toEqualTypeOf<{

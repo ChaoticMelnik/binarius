@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addressOrNull,
   authRevokedReasonSchema,
   emailAddressSchema,
   emailLoginCodeSchema,
@@ -45,6 +46,12 @@ describe('OAuth token response', () => {
     });
   });
 
+  it.each([[''], [' \t ']])('stores the blank address %j as none', (email) => {
+    expect(
+      parseOAuthTokenResponse({ ...tokenWire, user: { ...tokenWire.user, email } }).user.email,
+    ).toBeNull();
+  });
+
   it.each([
     ['access_token', ''],
     ['expires_in', -1],
@@ -52,6 +59,18 @@ describe('OAuth token response', () => {
     ['user', { id: 7, email: 'x@y' }],
   ])('rejects %s=%j', (field, value) => {
     expect(safeParseOAuthTokenResponse({ ...tokenWire, [field]: value }).success).toBe(false);
+  });
+});
+
+describe('addressOrNull', () => {
+  it.each([
+    [null, null],
+    ['', null],
+    [' \t ', null],
+    [' x@y ', ' x@y '],
+    ['x@y', 'x@y'],
+  ])('turns a blank address into null: %j -> %j', (email, expected) => {
+    expect(addressOrNull(email)).toBe(expected);
   });
 });
 
@@ -126,13 +145,18 @@ describe('login flow contract (issue #9)', () => {
       state: 's',
       expiresAt: '2026-10-01T10:00:00.000Z',
     };
-    expect(startLoginResponseSchema.safeParse(answer)).toMatchObject({ success: true, data: answer });
+    expect(startLoginResponseSchema.safeParse(answer)).toMatchObject({
+      success: true,
+      data: answer,
+    });
     const miniAppUrl = 'https://bot.example/oauth/login?authorize=x';
     expect(startLoginResponseSchema.safeParse({ ...answer, miniAppUrl })).toMatchObject({
       success: true,
       data: { miniAppUrl },
     });
-    expect(startLoginResponseSchema.safeParse({ ...answer, miniAppUrl: 'not a url' }).success).toBe(false);
+    expect(startLoginResponseSchema.safeParse({ ...answer, miniAppUrl: 'not a url' }).success).toBe(
+      false,
+    );
   });
 
   it('parses the callback answer as the account view alone', () => {
