@@ -65,7 +65,10 @@ afterEach(async () => {
 
 describe('GET /trading/pairs', () => {
   it.each([null, 'wrong-token'])('refuses bearer %s with 401', async (token) => {
-    const response = await get(appWith({ pairs: [pair], fetchedAt: 1, ageMs: 0 }), token);
+    const response = await get(
+      appWith({ pairs: [pair], fetchedAt: 1, ageMs: 0, fresh: true }),
+      token,
+    );
     expect(response.statusCode).toBe(401);
     expect(response.json()).toEqual({ error: 'unauthorized' });
   });
@@ -80,7 +83,12 @@ describe('GET /trading/pairs', () => {
     const withoutOtc: BinaryPair = { ...pair };
     delete withoutOtc.isOtc;
     const future = { ...pair, id: 102, spread: 3 } as BinaryPair;
-    const view = { pairs: [pair, withoutOtc, future], fetchedAt: 1_790_000_000_000, ageMs: 1_200 };
+    const view = {
+      pairs: [pair, withoutOtc, future],
+      fetchedAt: 1_790_000_000_000,
+      ageMs: 1_200,
+      fresh: true,
+    };
     const response = await get(appWith(view));
     expect(response.statusCode).toBe(200);
     const body: unknown = response.json();
@@ -89,5 +97,13 @@ describe('GET /trading/pairs', () => {
     const [, second, third] = (body as { pairs: Record<string, unknown>[] }).pairs;
     expect(second).not.toHaveProperty('isOtc');
     expect(third).not.toHaveProperty('spread');
+  });
+
+  it('sends fresh: false through when the cache says so', async () => {
+    const response = await get(
+      appWith({ pairs: [pair], fetchedAt: 1, ageMs: 90_000, fresh: false }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ageMs: 90_000, fresh: false });
   });
 });

@@ -21,6 +21,7 @@ export const pairViewSchema = z.object({
   maxPayout: z.number(),
   minTimeframe: z.int(),
   maxTimeframe: z.int(),
+  // ms since the epoch, read as "not tradable until"; 0 = no restriction
   scheduledUntil: z.number().nonnegative(),
 });
 export type PairView = z.infer<typeof pairViewSchema>;
@@ -30,6 +31,9 @@ export const pairsCatalogResponseSchema = z.object({
   // process clock of the backend, taken after the broker's answer was parsed
   fetchedAt: unixMsSchema,
   ageMs: z.int().nonnegative(),
+  // the cache's own verdict (ageMs within its TTL plus one broker request); required, so a
+  // backend without it cannot be read as fresh
+  fresh: z.boolean(),
 });
 export type PairsCatalogResponse = z.infer<typeof pairsCatalogResponseSchema>;
 
@@ -40,6 +44,7 @@ export interface PairsCatalogView {
   pairs: BinaryPair[];
   fetchedAt: number;
   ageMs: number;
+  fresh: boolean;
 }
 
 export function toPairView(pair: BinaryPair): PairView {
@@ -58,7 +63,12 @@ export function toPairView(pair: BinaryPair): PairView {
 }
 
 export function toPairsCatalogResponse(view: PairsCatalogView): PairsCatalogResponse {
-  return { pairs: view.pairs.map(toPairView), fetchedAt: view.fetchedAt, ageMs: view.ageMs };
+  return {
+    pairs: view.pairs.map(toPairView),
+    fetchedAt: view.fetchedAt,
+    ageMs: view.ageMs,
+    fresh: view.fresh,
+  };
 }
 
 export const safeParsePairsCatalogResponse = (input: unknown) =>

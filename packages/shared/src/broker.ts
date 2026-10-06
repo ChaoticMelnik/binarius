@@ -17,7 +17,7 @@ export const binaryPairWireSchema = z.object({
   max_payout: z.number(),
   min_timeframe: z.int(),
   max_timeframe: z.int(),
-  // unit not confirmed (#8): passed through untouched, 0 means no schedule restriction
+  // ms since the epoch, read as "not tradable until"; 0 = no restriction
   scheduled_until: z.number().nonnegative(),
 });
 export type BinaryPairWire = z.infer<typeof binaryPairWireSchema>;

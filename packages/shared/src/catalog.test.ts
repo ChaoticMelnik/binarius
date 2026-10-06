@@ -38,6 +38,7 @@ const response = (patch: Record<string, unknown> = {}) => ({
   pairs: [pair],
   fetchedAt: 1_790_000_000_000,
   ageMs: 1_500,
+  fresh: true,
   ...patch,
 });
 
@@ -58,6 +59,14 @@ describe('pairsCatalogResponseSchema', () => {
     expect(safeParsePairsCatalogResponse(response({ ageMs: -1 })).success).toBe(false);
     expect(safeParsePairsCatalogResponse(response({ ageMs: 1.5 })).success).toBe(false);
     expect(safeParsePairsCatalogResponse(response({ fetchedAt: 1.5 })).success).toBe(false);
+  });
+
+  it('refuses a body without fresh and a fresh that is not a boolean', () => {
+    const withoutFresh: Record<string, unknown> = response();
+    delete withoutFresh.fresh;
+    expect(safeParsePairsCatalogResponse(withoutFresh).success).toBe(false);
+    expect(safeParsePairsCatalogResponse(response({ fresh: 'yes' })).success).toBe(false);
+    expect(safeParsePairsCatalogResponse(response({ fresh: false })).data?.fresh).toBe(false);
   });
 
   it('strips a key a pair does not declare', () => {
@@ -86,10 +95,20 @@ describe('toPairView', () => {
 });
 
 describe('toPairsCatalogResponse', () => {
-  it('maps every pair through the allowlist and keeps fetchedAt and ageMs', () => {
+  it('maps every pair through the allowlist and keeps fetchedAt, ageMs and fresh', () => {
     const future = { ...pair, id: 102, spread: 3 } as BinaryPair;
-    const body = toPairsCatalogResponse({ pairs: [pair, future], fetchedAt: 10, ageMs: 2 });
-    expect(body).toEqual({ pairs: [pair, { ...pair, id: 102 }], fetchedAt: 10, ageMs: 2 });
+    const body = toPairsCatalogResponse({
+      pairs: [pair, future],
+      fetchedAt: 10,
+      ageMs: 2,
+      fresh: false,
+    });
+    expect(body).toEqual({
+      pairs: [pair, { ...pair, id: 102 }],
+      fetchedAt: 10,
+      ageMs: 2,
+      fresh: false,
+    });
     expect(safeParsePairsCatalogResponse(body).success).toBe(true);
   });
 });

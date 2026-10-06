@@ -278,7 +278,9 @@ describe('contract coverage (issue #6)', () => {
 
   it('Pairs catalog view (issue #138)', () => {
     expectTypeOf<keyof PairView>().toEqualTypeOf<keyof BinaryPair>();
-    expectTypeOf<keyof PairsCatalogView>().toEqualTypeOf<'pairs' | 'fetchedAt' | 'ageMs'>();
+    expectTypeOf<keyof PairsCatalogView>().toEqualTypeOf<
+      'pairs' | 'fetchedAt' | 'ageMs' | 'fresh'
+    >();
   });
 
   it('root index re-exports every module', () => {

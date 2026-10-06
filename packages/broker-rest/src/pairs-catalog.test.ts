@@ -71,6 +71,7 @@ describe('refresh and read', () => {
       pairs: brokerPairs(),
       fetchedAt: START_CLOCK + 2_000,
       ageMs: 0,
+      fresh: true,
     });
     clock += 1_500;
     expect(catalog.read()?.ageMs).toBe(1_500);
@@ -90,7 +91,25 @@ describe('refresh and read', () => {
     client = createBrokerRestClient({ baseUrl: broker.url });
     const catalog = catalogOf();
     expect(await catalog.refresh()).toBe(true);
-    expect(catalog.read()).toEqual({ pairs: [], fetchedAt: START_CLOCK, ageMs: 0 });
+    expect(catalog.read()).toEqual({ pairs: [], fetchedAt: START_CLOCK, ageMs: 0, fresh: true });
+  });
+
+  it('is fresh until ttlMs + BROKER_REST_TIMEOUT_MS old, not one ms later', async () => {
+    const catalog = catalogOf();
+    await catalog.refresh();
+    clock = START_CLOCK + DEFAULT_BROKER_PAIRS_TTL_MS + BROKER_REST_TIMEOUT_MS;
+    expect(catalog.read()?.fresh).toBe(true);
+    clock += 1;
+    expect(catalog.read()).toMatchObject({ fresh: false, ageMs: clock - START_CLOCK });
+  });
+
+  it('measures fresh against its own ttlMs', async () => {
+    const catalog = catalogOf({ ttlMs: MAX_BROKER_PAIRS_TTL_MS });
+    await catalog.refresh();
+    clock = START_CLOCK + MAX_BROKER_PAIRS_TTL_MS + BROKER_REST_TIMEOUT_MS;
+    expect(catalog.read()?.fresh).toBe(true);
+    clock += 1;
+    expect(catalog.read()?.fresh).toBe(false);
   });
 
   it('reports age 0 when the clock went back', async () => {
@@ -147,7 +166,12 @@ describe('a failed refresh', () => {
     clock += 1;
     expect(catalog.read()).toBeUndefined();
     expect(await catalog.refresh()).toBe(true);
-    expect(catalog.read()).toEqual({ pairs: brokerPairs(), fetchedAt: clock, ageMs: 0 });
+    expect(catalog.read()).toEqual({
+      pairs: brokerPairs(),
+      fetchedAt: clock,
+      ageMs: 0,
+      fresh: true,
+    });
   });
 });
 
@@ -280,6 +304,9 @@ describe('constants', () => {
     expect(MIN_BROKER_PAIRS_TTL_MS).toBeLessThanOrEqual(DEFAULT_BROKER_PAIRS_TTL_MS);
     expect(DEFAULT_BROKER_PAIRS_TTL_MS).toBeLessThanOrEqual(MAX_BROKER_PAIRS_TTL_MS);
     expect(MAX_BROKER_PAIRS_TTL_MS).toBeLessThan(BROKER_PAIRS_MAX_STALE_MS);
+    expect(MAX_BROKER_PAIRS_TTL_MS + BROKER_REST_TIMEOUT_MS).toBeLessThan(
+      BROKER_PAIRS_MAX_STALE_MS,
+    );
     expect(PAIRS_CATALOG_CHAIN_HOLDS).toBe(true);
   });
 });
