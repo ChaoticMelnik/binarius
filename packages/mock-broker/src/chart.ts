@@ -22,7 +22,7 @@ export const MIN_CANDLE_STEP_MS = 5_000;
 // below this a start_time is in seconds, which the live broker answers with []
 const MS_EPOCH_THRESHOLD = 1e11;
 export const DEFAULT_CHART_LIMIT = 100;
-// limit=5000 returned 4999 rows live; whether that is a cap or the data window is not known
+// a cap by limit: limit=6000 over 10 days gave 4982 rows across 4999 minutes live (2026-10-03)
 export const MAX_CHART_LIMIT = 5_000;
 
 export type ChartQuery =

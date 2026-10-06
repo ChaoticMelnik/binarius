@@ -4,9 +4,9 @@
 REST API: five calls, one error class, and no state. It has no logger, no counters and no
 retries. The caller passes the access token on every authorized call and decides what to retry
 and what to log. It moved out of `apps/trading-worker` in #138 so the backend and the worker
-share one client. Its first caller is the backend's pairs catalog (docs/pairs-catalog.md).
-Nothing in the worker calls it yet: wiring it into the worker (the base URL in its `env.ts`,
-compose) is #100/#101.
+share one client. Its first caller is the backend's pairs catalog (docs/pairs-catalog.md). In the
+worker, the signal feed (docs/signal.md → Feed and journal) calls `getChart` on a client its
+caller builds. The worker's own base URL (its `env.ts`, compose) is #100/#101's.
 
 ```bash
 pnpm test --project unit packages/broker-rest   # needs no database or Redis
@@ -174,6 +174,15 @@ strings.
   currency units. Only the shapes and these differences were recorded, not the balances.
 - The response shapes of the trade open and of the settled trade were not recorded.
 
+## Observed live (2026-10-06)
+
+- Three public `GET /v1/broker/chart` calls without a token (`interval=1m`): the rows are
+  5-element tuples, strictly ascending. `start_time` is rounded down to the step, and the answer is
+  the rows from that start, capped by `limit`. The forming candle is included: a 5-minute window
+  fetched 40 s into a minute gave 6 rows, the last starting on the current minute boundary.
+- The owner's probe of 2026-10-03 (issue #133): `limit=6000` over 10 days gave 4 982 rows across
+  exactly 4 999 minutes. The cap is 5 000 rows by `limit`, and the history has gaps.
+
 ## Open items
 
 1. **The money unit. Closed 2026-10-03:** whole currency units (Observed live 2026-10-03); the
@@ -196,6 +205,7 @@ strings.
 - #100: the trade executor and the REST fallback decision. #100/#101: the base URL in the
   worker's env and compose.
 - #138: the pairs catalog (docs/pairs-catalog.md), the first caller, in the backend.
+- #133: the signal feed (docs/signal.md), the worker's first caller of `getChart`.
 - #137: `getUser` for the broker balance snapshot (docs/broker-balance.md), in the backend, on
   the same client instance as the catalog.
 - #101: the session manager and 401 handling (refresh and revocation). Retries on
