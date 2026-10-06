@@ -51,9 +51,9 @@ import {
 } from './texts';
 
 // The demo's screens (#125, docs/bot-demo.md): the asset types, one type's pairs by page, the
-// durations of a pair, the summary, and the analysis behind «📊 Анализ» (#126). The bot keeps no state for them: what the
-// user chose travels in the callback data, so a restart, an old message and a second device all
-// lead to the same screen, and every screen reads the catalog anew.
+// durations of a pair, the summary, and the analysis behind «📊 Анализ» (#126). The bot keeps no
+// state for them: what the user chose travels in the callback data, so a restart, an old message
+// and a second device all lead to the same screen, and every screen reads the catalog anew.
 
 // The status card's button (#24): a new message, since it sits under a photo caption that
 // editMessageText cannot edit. Kept as `demo`, so a button on an old card leads here too.
