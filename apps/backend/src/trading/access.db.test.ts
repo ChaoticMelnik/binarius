@@ -55,13 +55,17 @@ const createReconciler = () =>
     config: { intervalMs: 60_000, maxPerMinute: 200 },
   });
 
-async function buildAccessApp(reconciler: BalanceReconciler): Promise<FastifyInstance> {
+async function buildAccessApp(
+  reconciler: BalanceReconciler,
+  realTradingEnabled = false,
+): Promise<FastifyInstance> {
   const built = Fastify();
   await built.register(tradingRoutes, {
     db: tmp.db,
     internalApiToken: TOKEN,
     onIntentQueued: () => {},
     balance: reconciler,
+    realTradingEnabled,
   });
   await built.ready();
   return built;
@@ -140,7 +144,13 @@ describe('POST /trading/access', () => {
     const first = await access({ telegramUserId: seed.telegramUserId });
     expect(first.statusCode).toBe(200);
     const body = first.json();
-    expect(Object.keys(body).sort()).toEqual(['broker', 'brokerUnavailable', 'status', 'tokens']);
+    expect(Object.keys(body).sort()).toEqual([
+      'broker',
+      'brokerUnavailable',
+      'realTradingAllowed',
+      'status',
+      'tokens',
+    ]);
     expect(Object.keys(body.tokens).sort()).toEqual(['available', 'balance', 'reserved']);
     // the seeded account has no token here, so the broker side is unavailable
     expect(body).toEqual({
@@ -148,6 +158,7 @@ describe('POST /trading/access', () => {
       tokens: { balance: '5', reserved: '0', available: '5' },
       broker: null,
       brokerUnavailable: 'broker_unavailable',
+      realTradingAllowed: false,
     });
     expect(safeParseTradingAccessResponse(body).success).toBe(true);
 
@@ -169,6 +180,7 @@ describe('POST /trading/access', () => {
       tokens: { balance: '2', reserved: '0', available: '2' },
       broker: null,
       brokerUnavailable: 'no_account',
+      realTradingAllowed: false,
     });
   });
 
@@ -253,8 +265,30 @@ describe('POST /trading/access → broker', () => {
       tokens: { balance: '4', reserved: '0', available: '4' },
       broker: null,
       brokerUnavailable: 'no_account',
+      realTradingAllowed: false,
     });
     expect(userGets()).toBe(0);
+  });
+
+  // the field is this process's REAL_TRADING_ENABLED: the same user, another backend
+  it('answers realTradingAllowed from the process flag', async () => {
+    const user = await seedUser(tmp.db, { balance: 4n });
+    const onApp = await buildAccessApp(balance, true);
+    try {
+      const response = await post(
+        '/trading/access',
+        { telegramUserId: user.telegramUserId },
+        undefined,
+        onApp,
+      );
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        realTradingAllowed: true,
+        brokerUnavailable: 'no_account',
+      });
+    } finally {
+      await onApp.close();
+    }
   });
 
   it('fetches a first snapshot, then serves it from the database while it is fresh', async () => {

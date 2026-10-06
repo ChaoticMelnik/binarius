@@ -68,6 +68,7 @@ const build = (
       internalApiToken: 'internal',
       onIntentQueued: () => undefined,
       balance: unusedBalanceDeps(),
+      realTradingEnabled: false,
     },
     auth: {
       db: tmp.db,

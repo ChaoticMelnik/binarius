@@ -37,6 +37,7 @@ beforeAll(async () => {
       internalApiToken: TOKEN,
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
+      realTradingEnabled: false,
     },
     auth: {
       db: tmp.db,

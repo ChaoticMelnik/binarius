@@ -21,6 +21,7 @@ const unusedTrading: TradingRoutesDeps = {
   internalApiToken: 'internal-token-for-tests',
   onIntentQueued: () => {},
   balance: unusedBalanceDeps(),
+  realTradingEnabled: false,
 };
 
 const unusedAuth: AuthRoutesDeps = {

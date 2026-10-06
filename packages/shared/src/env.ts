@@ -127,6 +127,18 @@ export function parseLogLevelEnv(raw: string, name: string): LogLevel {
   return parseEnumEnv(raw, name, LOG_LEVELS);
 }
 
+const BOOLEAN_VALUES = ['true', 'false'] as const;
+
+export function parseBooleanEnv(raw: string, name: string): boolean {
+  return parseEnumEnv(raw, name, BOOLEAN_VALUES) === 'true';
+}
+
+// The Binodex trading grant (#134). backend and trading-worker both read it through this one
+// function, so the name, the default and the accepted spellings cannot drift between the two.
+export function parseRealTradingEnabledEnv(source: EnvSource): boolean {
+  return parseBooleanEnv(readEnv(source, 'REAL_TRADING_ENABLED', 'false'), 'REAL_TRADING_ENABLED');
+}
+
 // These values are pasted from .env straight into a URL, a header or a payload, where a stray
 // space or newline fails far from here and names nothing: a Bot API 404, a refused file id, a
 // bearer that never matches.

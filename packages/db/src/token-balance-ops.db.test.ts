@@ -17,7 +17,14 @@ import { LINK_BONUS_TOKENS } from './link-bonus-ops';
 import { confirmBrokerAccount } from './oauth-ops';
 import { TokenLedgerKind, tokenLedger, users } from './schema/index';
 import { readTokenBalance, toTradingAccessView } from './token-balance-ops';
-import { TOKENS_PER_INTENT, createTradeIntent, rejectIntent } from './trade-intent-ops';
+import {
+  TOKENS_PER_INTENT,
+  createTradeIntent,
+  rejectIntent,
+  type TradePolicy,
+} from './trade-intent-ops';
+
+const flagOff: TradePolicy = { realTradingEnabled: false };
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -97,6 +104,7 @@ describe('readTokenBalance', () => {
     const { intent } = await createTradeIntent(
       tmp.db,
       intentRequest(user.telegramUserId, { brokerAccountId }),
+      flagOff,
     );
 
     const reserved = await read(user);
@@ -150,7 +158,7 @@ describe('readTokenBalance', () => {
     let settled = false;
     const creates = Promise.all(
       accounts.map((brokerAccountId) =>
-        createTradeIntent(tmp.db, intentRequest(user.telegramUserId, { brokerAccountId })),
+        createTradeIntent(tmp.db, intentRequest(user.telegramUserId, { brokerAccountId }), flagOff),
       ),
     ).finally(() => (settled = true));
     // keeps reading until the last reserve committed, then once more after it

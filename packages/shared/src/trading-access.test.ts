@@ -7,6 +7,7 @@ const body = (tokens: Record<string, unknown>, status: unknown = UserStatus.Acti
   tokens,
   broker: null,
   brokerUnavailable: 'no_account',
+  realTradingAllowed: false,
 });
 
 const view = {
@@ -115,7 +116,13 @@ describe('the broker section', () => {
   const tokens = canonical;
 
   it('accepts a snapshot with no reason', () => {
-    const input = { status: UserStatus.Active, tokens, broker: view, brokerUnavailable: null };
+    const input = {
+      status: UserStatus.Active,
+      tokens,
+      broker: view,
+      brokerUnavailable: null,
+      realTradingAllowed: false,
+    };
     const parsed = safeParseTradingAccessResponse(input);
     expect(parsed.success && parsed.data).toEqual(input);
   });
@@ -127,6 +134,7 @@ describe('the broker section', () => {
     const parsed = safeParseTradingAccessResponse({
       status: UserStatus.Active,
       tokens,
+      realTradingAllowed: false,
       ...section,
     });
     expect(parsed.success).toBe(false);
@@ -143,7 +151,27 @@ describe('the broker section', () => {
       tokens,
       broker: { ...view, brokerAccountId: 'x', lastRefreshError: 'unavailable' },
       brokerUnavailable: null,
+      realTradingAllowed: false,
     });
     expect(parsed.success && parsed.data.broker).toEqual(view);
+  });
+});
+
+describe('realTradingAllowed', () => {
+  it('accepts true', () => {
+    const input = { ...body(canonical), realTradingAllowed: true };
+    const parsed = safeParseTradingAccessResponse(input);
+    expect(parsed.success && parsed.data).toEqual(input);
+  });
+
+  it('refuses a body without it', () => {
+    const input: Record<string, unknown> = body(canonical);
+    delete input.realTradingAllowed;
+    expect(safeParseTradingAccessResponse(input).success).toBe(false);
+  });
+
+  it('refuses the string false', () => {
+    const input = { ...body(canonical), realTradingAllowed: 'false' };
+    expect(safeParseTradingAccessResponse(input).success).toBe(false);
   });
 });

@@ -26,6 +26,8 @@ import { TRADING_ACCESS_REFRESH_BUDGET_MS } from '../timing';
 export interface TradingAccessDeps {
   db: Db;
   balance: Pick<BalanceReconciler, 'refresh'>;
+  // REAL_TRADING_ENABLED of this process, answered as realTradingAllowed
+  realTradingEnabled: boolean;
 }
 
 type BrokerSection =
@@ -158,6 +160,10 @@ export function registerTradingAccess(app: FastifyInstance, deps: TradingAccessD
     if (section === 'not_found') {
       return reply.code(404).send({ error: TradeIntentErrorCode.BrokerAccountNotFound });
     }
-    return reply.send({ ...toTradingAccessView(snapshot), ...section });
+    return reply.send({
+      ...toTradingAccessView(snapshot),
+      ...section,
+      realTradingAllowed: deps.realTradingEnabled,
+    });
   });
 }

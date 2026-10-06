@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTempDatabase, seedUserWithAccount, type TempDatabase } from '@binarius/db/testing';
-import { brokerAccounts, findTradeIntent, users } from '@binarius/db';
+import { brokerAccounts, findTradeIntent, tradeIntents, users } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
 import { unusedBalanceDeps, unusedPairsDeps } from './testing';
@@ -20,10 +20,11 @@ let wakeThrows = false;
 let probeUserId: string | undefined;
 let probe: Promise<string | undefined> | undefined;
 let app: ReturnType<typeof buildApp>;
+// the same database behind a backend running with REAL_TRADING_ENABLED=true
+let appOn: ReturnType<typeof buildApp>;
 
-beforeAll(async () => {
-  tmp = await createTempDatabase(baseUrl);
-  app = buildApp({
+const appWith = (realTradingEnabled: boolean) =>
+  buildApp({
     pairs: unusedPairsDeps(),
     admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),
@@ -59,12 +60,18 @@ beforeAll(async () => {
         if (wakeThrows) throw new Error('publisher down');
       },
       balance: unusedBalanceDeps(),
+      realTradingEnabled,
     },
   });
-  await app.ready();
+
+beforeAll(async () => {
+  tmp = await createTempDatabase(baseUrl);
+  app = appWith(false);
+  appOn = appWith(true);
+  await Promise.all([app.ready(), appOn.ready()]);
 });
 afterAll(async () => {
-  await app.close();
+  await Promise.all([app.close(), appOn.close()]);
   await tmp.drop();
 });
 
@@ -82,8 +89,8 @@ const body = (telegramUserId: string, patch: Record<string, unknown> = {}) => ({
   ...patch,
 });
 
-const post = (payload: unknown, authorization = `Bearer ${token}`) =>
-  app.inject({
+const post = (payload: unknown, authorization = `Bearer ${token}`, target = app) =>
+  target.inject({
     method: 'POST',
     url: '/trading/intents',
     headers: { authorization, 'content-type': 'application/json' },
@@ -246,6 +253,41 @@ describe('POST /trading/intents', () => {
     const blocked = await post(body(s.telegramUserId));
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json()).toEqual({ error: 'user_blocked' });
+  });
+});
+
+describe('POST /trading/intents: the real-mode grant (#134)', () => {
+  const reservedOf = async (userId: string) =>
+    (await tmp.db.select({ v: users.tokenReserved }).from(users).where(eq(users.id, userId)))[0]!.v;
+
+  it('answers 409 real_trading_disabled with the flag off and creates nothing', async () => {
+    const s = await seed();
+    wakes = [];
+    const response = await post(body(s.telegramUserId, { mode: 'real' }));
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'real_trading_disabled' });
+    expect(
+      await tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, s.userId)),
+    ).toEqual([]);
+    expect(await reservedOf(s.userId)).toBe(0n);
+    expect(wakes).toEqual([]);
+  });
+
+  it('creates a real intent with the flag on', async () => {
+    const s = await seed();
+    const response = await post(body(s.telegramUserId, { mode: 'real' }), undefined, appOn);
+    expect(response.statusCode).toBe(201);
+    expect(response.json().intent.mode).toBe('real');
+  });
+
+  it('replays with the flag off what was created with it on', async () => {
+    const s = await seed();
+    const payload = body(s.telegramUserId, { mode: 'real' });
+    const created = await post(payload, undefined, appOn);
+    expect(created.statusCode).toBe(201);
+    const replayed = await post(payload);
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json().intent.id).toBe(created.json().intent.id);
   });
 });
 

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { TransactionRollbackError, eq, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { canTransition, staffLoginSchema } from '@binarius/shared';
+import { TradeIntentFailureReason, canTransition, staffLoginSchema } from '@binarius/shared';
 import { createDb, type Db } from './client';
 import {
   AuditAction,
@@ -305,6 +305,36 @@ describe('enum and uniqueness constraints', () => {
       );
     });
   });
+
+  // every member of the constant, on each table: a migration that lags the constant fails here
+  it.each(Object.values(TradeIntentFailureReason))(
+    'accepts last_error %s on trade_intents',
+    async (lastError) => {
+      await rolledBack(async (tx) => {
+        const seed = await seedAccount(tx);
+        const [row] = await tx
+          .insert(tradeIntents)
+          .values(intent(seed, 'r1', { lastError }))
+          .returning();
+        expect(row!.lastError).toBe(lastError);
+      });
+    },
+  );
+
+  it.each(Object.values(TradeIntentFailureReason))(
+    'accepts last_error %s on outbox_events',
+    async (lastError) => {
+      await rolledBack(async (tx) => {
+        const seed = await seedAccount(tx);
+        const [row] = await tx.insert(tradeIntents).values(intent(seed, 'r1')).returning();
+        const [event] = await tx
+          .insert(outboxEvents)
+          .values({ intentId: row!.id, payload: { intent_id: row!.id }, lastError })
+          .returning();
+        expect(event!.lastError).toBe(lastError);
+      });
+    },
+  );
 
   // the corpus that proves this CHECK and startPayloadSchema agree row by row lives in
   // user-ops.db.test.ts; here one observation of each, for the coverage gate

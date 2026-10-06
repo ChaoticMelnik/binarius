@@ -89,6 +89,9 @@ export const TradeIntentFailureReason = {
   InvalidJob: 'invalid_job',
   // the job itself failed (database unreachable while persisting an outcome); DLQ only
   ProcessingFailed: 'processing_failed',
+  // a real intent reached the worker while REAL_TRADING_ENABLED=false there (#134,
+  // realTradingGate); nothing was sent to the broker
+  RealTradingDisabled: 'real_trading_disabled',
 } as const;
 export type TradeIntentFailureReason =
   (typeof TradeIntentFailureReason)[keyof typeof TradeIntentFailureReason];
@@ -106,6 +109,8 @@ export const TradeIntentErrorCode = {
   InsufficientTokens: 'insufficient_tokens',
   ActiveIntentExists: 'active_intent_exists',
   ClientRequestIdConflict: 'client_request_id_conflict',
+  // mode real while this backend runs with REAL_TRADING_ENABLED=false (#134, createInTransaction)
+  RealTradingDisabled: 'real_trading_disabled',
 } as const;
 export type TradeIntentErrorCode = (typeof TradeIntentErrorCode)[keyof typeof TradeIntentErrorCode];
 

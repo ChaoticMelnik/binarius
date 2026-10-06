@@ -15,7 +15,7 @@ import { brokerAccounts, staff, users } from './schema/index';
 import { StaffStatus } from './schema/staff';
 import { hashPassword, type ScryptParams } from './staff-password';
 import type { BrokerAccountRow } from './oauth-ops';
-import { createTradeIntent, type TradeIntentRow } from './trade-intent-ops';
+import { createTradeIntent, type TradeIntentRow, type TradePolicy } from './trade-intent-ops';
 
 export interface TempDatabase {
   url: string;
@@ -184,12 +184,14 @@ export function intentRequest(
 }
 
 // a queued intent for a fresh user + account: the starting point of every worker/publisher case
+// A real intent needs an explicit { realTradingEnabled: true }: the default is production's.
 export async function seedQueuedIntent(
   db: Db,
   patch: Partial<CreateTradeIntentRequest> = {},
+  policy: TradePolicy = { realTradingEnabled: false },
 ): Promise<SeededAccount & { intent: TradeIntentRow }> {
   const seed = await seedUserWithAccount(db);
-  const { intent } = await createTradeIntent(db, intentRequest(seed.telegramUserId, patch));
+  const { intent } = await createTradeIntent(db, intentRequest(seed.telegramUserId, patch), policy);
   return { ...seed, intent };
 }
 
