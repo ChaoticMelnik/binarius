@@ -32,8 +32,14 @@ export interface RefreshedTokens {
 }
 
 export interface OAuthTokens extends RefreshedTokens {
-  user: { id: string; email: string; isPartnerClient: boolean };
+  user: { id: string; email: string | null; isPartnerClient: boolean };
 }
+
+// A blank address is no address: '' and whitespace only. Anything else stays as the broker sent
+// it, /account's rule since #185. The same function runs in the db projections for rows stored
+// before #214.
+export const addressOrNull = (email: string | null): string | null =>
+  email === null || email.trim() === '' ? null : email;
 
 export function toRefreshedTokens(wire: RefreshTokenResponseWire): RefreshedTokens {
   return {
@@ -49,7 +55,7 @@ export function toOAuthTokens(wire: OAuthTokenResponseWire): OAuthTokens {
     ...toRefreshedTokens(wire),
     user: {
       id: toId(wire.user.id),
-      email: wire.user.email,
+      email: addressOrNull(wire.user.email),
       isPartnerClient: wire.user.is_partner_client,
     },
   };
