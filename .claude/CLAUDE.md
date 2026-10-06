@@ -116,4 +116,4 @@ PostgreSQL + Drizzle ORM (решение зафиксировано 2026-09-21, 
 
 ### CodeGraph
 
-Настроен (`codegraph init -i` выполнен 2026-09-21). Общий гайд по выбору инструмента и оговорка про ненадёжность `codegraph_callers`/`codegraph_impact` для `obj.method()`-вызовов и передачи функций по ссылке — в `~/.claude/CLAUDE.md` → CodeGraph. Проектных подтверждений этой оговорки в этом репозитории пока нет — кода почти нет (индекс: 1 файл, 18 nodes, 17 edges на момент настройки), появятся по мере разработки.
+Настроен (`codegraph init -i` выполнен 2026-09-21). Общий гайд по выбору инструмента и оговорка про ненадёжность `codegraph_callers`/`codegraph_impact` для `obj.method()`-вызовов и передачи функций по ссылке — в `~/.claude/CLAUDE.md` → CodeGraph. Проектное подтверждение (2026-10-06, архитектор #17, индекс 194 файла): `codegraph_callers` вернул ноль вызовов для каждой операции домена `trade_intents` (`transitionIntent`, `markIntentUnknown`, `rejectIntent`, `markIntentAccepted`, `canTransition`, `TERMINAL_TRADE_INTENT_STATUSES`), хотя вызовы есть — охват домена делается grep'ом, ноль callers не доказывает отсутствие вызовов.
