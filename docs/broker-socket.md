@@ -115,16 +115,23 @@ refresh and the place in `index.ts` are #101's.
 | `onEvent(listener)`, `onState(listener)` | every valid `BrokerEvent`; every state change `{ from, to, reason? }`. Each returns its unsubscribe |
 | `isTerminalBrokerSocketState(state)` | whether `start()` may be called again without `stop()` |
 
-A state change is published last in every handler: the auth is sent and the timer armed before
-`authenticating`, the pass is sent before `ready`, the socket is closed before a terminal state,
-and `connect()` has run before `connecting`. A state listener may therefore call `subscribe()`,
-`stop()` or `start()`: a `subscribe()` on `ready` sends only the ids the pass did not, and an event
-whose session a listener ended inside its own state change (a restart on `auth_failed`) is not
-passed to `onEvent` — the state change was.
-
 The credentials are held by the session of the current `start()` for the re-auth after a
 reconnect; `stop()` and the next `start()` drop them. They are never part of a state change, an
 error or a log line.
+
+### Listeners
+
+State changes and events are delivered when the client's current unit of work (a socket.io
+event, the auth timer, `start()`, `stop()`) has finished, through one queue in the order they
+happened, each to every listener registered when its delivery begins, in registration order. A
+listener may call `stop()`, `start()` or `subscribe()`: the effect is immediate, and the
+notifications it causes follow the one being delivered, so every listener sees every change in
+causal order and, once the deliveries are done, the last change it saw is the client's state. A `subscribe()` on `ready` sends
+only the ids the pass did not. An event is delivered only while its session is current: when a
+listener stops or restarts the client, the delivery of that session's event ends for the
+remaining listeners, and an event whose session ended before its delivery began is not delivered
+at all. `state` and `connections` are current values at read time, which a listener holding an
+older change must expect.
 
 ### States
 
@@ -133,17 +140,18 @@ error or a log line.
 | State | Meaning | Left by |
 |---|---|---|
 | `idle` | created, or after `stop()` | `start()` |
-| `connecting` | `start()` called, the first connection not up; `connect_error`s are logged here | `connect` → `authenticating`; a refused connection → `disconnected_by_server` |
-| `authenticating` | `connect` fired, `user.auth` sent, the auth timer armed | `user.auth.success` → `ready`; the timer → `reconnecting` (`forced close`) |
-| `ready` | authenticated; the registry pass for this connection sent | a transport drop → `reconnecting` |
-| `reconnecting` | the transport dropped (`transport close`, `ping timeout`, `transport error`, `forced close`); socket.io's backoff runs | `connect` → `authenticating`; a refused connection → `disconnected_by_server` |
+| `connecting` | `start()` called, the first connection not up; `connect_error`s are logged here | `connect` → `authenticating`; a refused connection (`connect_error` with `active === false`) → `disconnected_by_server` |
+| `authenticating` | `connect` fired, `user.auth` sent, the auth timer armed | `user.auth.success` → `ready`; the timer or a transport drop → `reconnecting`; `user.auth.error` → `auth_failed`; `user.disconnect_token_expired` → `token_expired`; a server DISCONNECT → `disconnected_by_server` |
+| `ready` | authenticated; the registry pass for this connection sent | a transport drop → `reconnecting`; `user.auth.error` → `auth_failed`; `user.disconnect_token_expired` → `token_expired`; a server DISCONNECT → `disconnected_by_server` |
+| `reconnecting` | the transport dropped (`transport close`, `ping timeout`, `transport error`, `forced close`); socket.io's backoff runs | `connect` → `authenticating`; a refused connection (`connect_error` with `active === false`) → `disconnected_by_server` |
 | `auth_failed` | `user.auth.error`, during the handshake or after it | `start()` |
 | `token_expired` | `user.disconnect_token_expired` | `start()` |
 | `disconnected_by_server` | the server ended or refused the connection: a DISCONNECT (`io server disconnect`) or a CONNECT_ERROR from the namespace middleware (`connect_error`, `socket.active === false`); socket.io never reconnects after either. The state change's `reason` tells the two apart | `start()` |
 
 The last three are terminal for the current credentials: the client closes the socket itself (so
 the server's drop that follows `token_expired` arrives as `io client disconnect` and changes
-nothing) and waits for `start()`. `stop()` leads to `idle` from any state.
+nothing) and waits for `start()`. Each is reached from every live state its trigger can arrive
+in, as the column lists; `stop()` leads to `idle` from any state.
 
 ### Handshake and the exactly-once pass
 
@@ -153,8 +161,9 @@ user.auth.success ─ disarm ─ emit price.subscribe per chunk of registry.all(
 subscribe(ids) while ready ─ emit price.subscribe per chunk of the ids the registry did not hold
 ```
 
-`user.auth` is emitted only on `connect`, `price.subscribe` only in `ready`. Nothing is emitted in
-any other state: socket.io buffers an emit made while disconnected and flushes it ahead of the
+`user.auth` is emitted only on `connect`; `price.subscribe` only after `user.auth.success` — the
+pass right away, before the state is published as `ready`, and from `subscribe()` while `ready`.
+Nothing is emitted in any other state: socket.io buffers an emit made while disconnected and flushes it ahead of the
 next `user.auth`. Each chunk holds at most `MAX_PRICE_SUBSCRIPTION_ASSETS` (40) ids
 (`chunkAssets`) and is parsed with `priceSubscribeWireSchema` before the emit. `price.subscribed`
 is not awaited. The registry deduplicates, so on one connection an id goes out once, in the pass
@@ -182,11 +191,11 @@ observed.
 | `BROKER_SOCKET_RECONNECT_DELAY_MAX_MS = 10_000` | the longest wait | `reconnectionDelayMax` |
 | `BROKER_SOCKET_RECONNECT_JITTER = 0.5` | the randomisation of each wait | `randomizationFactor` |
 
-The chain (every `*_MS` a positive integer, first wait ≤ longest wait, auth timeout ≤ connect
-timeout, 0 ≤ jitter ≤ 1) is checked
-at import for the defaults and by `resolveBrokerSocketTiming` at construction for a `timing`
-override. Its link to the worker's shutdown budget comes with the client's place in `index.ts`
-(#101).
+The chain (every `*_MS` an integer in `[1, MAX_TIMER_MS]` — `2^31 - 1`, Node's `setTimeout`
+limit, past which a delay fires after 1 ms — first wait ≤ longest wait, auth timeout ≤ connect
+timeout, 0 ≤ jitter < 1, since at 1 a wait could shrink to 0) is checked at import for the
+defaults and by `resolveBrokerSocketTiming` at construction for a `timing` override. Its link
+to the worker's shutdown budget comes with the client's place in `index.ts` (#101).
 
 Not bounded: a namespace CONNECT the server never answers. The client adds no timer for it (it
 would race `Manager.open`'s own); it has not been seen live. It shows as a `start()` whose
@@ -223,8 +232,19 @@ listener's error text) or the URL, and every `msg` of the table present.
 
 `socket.test.ts` runs against `packages/mock-broker` (`bytes` payloads, the handshake also under
 `object`, `json` and `envelope`), with `cutTransport` for the live drop and `emitRaw` for
-problems, and `failNext('connect', …)` for a refused connection. `openSocket` is a seam: two
-tests wrap `io()` to record what the client emits. The command at the top of this file runs them.
+problems, and `failNext('connect', …)` for a refused connection. Re-entering listeners are
+registered ahead of the recorders, so the order other listeners see is what is asserted.
+
+`openSocket` is a seam for tests. Its contract: the returned socket is a socket.io-client
+`Socket` or a wrapper that keeps its timing — `connect()` and `emit()` return before any event is
+delivered, `disconnect()` raises `disconnect` synchronously, and `onAny`/`on`/`io.on` behave as
+socket.io-client's. A wrapper that re-enters the client from inside these calls is refused (a
+`start()` from inside `openSocket` throws `already started`) or ended (a `stop()` from inside an
+`emit` ends the session without an orphan socket or a stray timer); that is all the client
+promises for it. The client is `connecting` when it calls `connect()`, and re-checks its session
+after every call into the socket. The seam's tests wrap `io()` to record the emits, to observe
+the state at `connect()`, and to re-enter the client. The command at the top of this file runs
+them.
 
 ## Payload forms
 
