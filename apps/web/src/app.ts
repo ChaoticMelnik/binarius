@@ -29,7 +29,7 @@ export interface WebAppDeps {
   logDestination?: DestinationStream;
 }
 
-export const ADMIN_CSP = [
+const ADMIN_CSP = [
   "default-src 'none'",
   "style-src 'self'",
   "form-action 'self'",

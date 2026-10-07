@@ -19,7 +19,7 @@ import { OAUTH_TEXTS } from './texts';
 // The admin pages' policy plus what a Mini App needs: Telegram's SDK, a fetch to this origin, and
 // being framed by Telegram Web — the one parent origin the SDK itself trusts. No X-Frame-Options
 // beside it: a browser that honours both would let DENY override frame-ancestors.
-export const MINI_APP_CSP = [
+const MINI_APP_CSP = [
   "default-src 'none'",
   "script-src 'self' https://telegram.org",
   "connect-src 'self'",
@@ -101,7 +101,11 @@ export const oauthRoutes: FastifyPluginAsync<OAuthRoutesOptions> = async (
     }
     // The callback must come back to this origin: the launch data the SDK stored lives here.
     // Compared parsed, because the backend sends the spelling registered with the broker byte
-    // for byte: host case and a default port do not matter, anything else in the URL does.
+    // for byte. Parsing folds scheme and host case, a default port, dot-segments, "\", tabs and
+    // newlines and `https:host`, so any spelling of this origin's callback passes. The backend's
+    // own value can differ from callbackHref only by scheme and host case and a default port (its
+    // env parse refuses the rest); a hand-made spelling still lands on this callback, and the
+    // broker refuses any spelling other than the registered one.
     if (redirectHrefOf(url.searchParams.get('redirect_uri')) !== callbackHref) {
       return { reason: 'redirect_uri' };
     }
