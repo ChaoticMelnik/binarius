@@ -24,7 +24,7 @@ TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius \
 | Client | `BrokerSocketClient` ([broker-socket.md](broker-socket.md)) | one per session; the taint after an aborted command |
 | Token | `AccessTokenSource` (`broker/access-token.ts`) | `POST /trading/accounts/:id/access-token` on the backend, always `mayRefresh: false` |
 | Composition | `apps/trading-worker/src/index.ts` | built only when `env.brokerWsUrl` is set; otherwise `noTradeSessions` |
-| Probe | `apps/trading-worker/src/cli/socket-probe.ts` | the two-socket check the rollout waits for ([broker-socket.md → Observed live](broker-socket.md#observed-live)) |
+| Probe | `apps/trading-worker/src/cli/socket-probe.ts`, `socket-probe-verdict.ts` | the two-socket check the rollout waits for; exit 0 only on its safe verdict ([broker-socket.md → Observed live](broker-socket.md#observed-live)) |
 
 ## The candidates
 
@@ -250,11 +250,12 @@ the compose stack runs without sessions unless it points at the broker itself.
 
 ## Rollout
 
-`BROKER_WS_URL` stays unset on the pilot until the two-socket probe
-([broker-socket.md → Observed live](broker-socket.md#observed-live)) shows that `open_trade`
-answers reach only the socket that sent the command, with a run that exercised the below-minimum
-command too (an account whose `min_trade_amount` is 0.01 or less skips it, and that run leaves
-the `fail` broadcast unverified). Then:
+`BROKER_WS_URL` stays unset on the pilot until a run of the two-socket probe
+([broker-socket.md → Observed live](broker-socket.md#observed-live)) prints
+`verdict: answers go to the sender; BROKER_WS_URL may be set` and exits 0. A `broadcast` or an
+`inconclusive` verdict (exit 1) keeps it unset; an account whose `min_trade_amount` is 0.01 or
+less is always `inconclusive` (the below-minimum command cannot be sent), so the probe runs on an
+account with a higher minimum. Then:
 
 ```bash
 # BROKER_WS_URL=https://broker-ws.binodex.app in .env, then
