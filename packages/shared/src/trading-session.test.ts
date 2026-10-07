@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import { PairsCatalogErrorCode } from './catalog';
 import { decimalStringSchema } from './money';
 import {
   DEFAULT_SESSION_TRADES,
   MAX_SESSION_TRADES,
   TRADING_SESSION_SETTINGS_VERSION,
+  TradingSessionErrorCode,
+  TradingSessionStatus,
   TradingSessionStopReason,
+  safeParseCreateTradingSessionRequest,
+  safeParseReadTradingSessionQuery,
+  safeParseStopTradingSessionRequest,
+  safeParseTradingSessionRefusal,
+  safeParseTradingSessionResponse,
   safeParseTradingSessionSettings,
+  sessionFitsDeadline,
   stakeSettingsFor,
   tradingSessionStopReasonSchema,
 } from './trading-session';
@@ -100,5 +109,109 @@ describe('stakeSettingsFor', () => {
         }).success,
       ).toBe(true);
     }
+  });
+});
+
+describe('createTradingSessionRequestSchema', () => {
+  const request = { telegramUserId: '42', assetId: 101, durationSec: 60 };
+
+  it('defaults trades to DEFAULT_SESSION_TRADES and keeps an explicit value', () => {
+    const parsed = safeParseCreateTradingSessionRequest(request);
+    expect(parsed.success && parsed.data.trades).toBe(DEFAULT_SESSION_TRADES);
+    const explicit = safeParseCreateTradingSessionRequest({ ...request, trades: 7 });
+    expect(explicit.success && explicit.data.trades).toBe(7);
+  });
+
+  it('refuses trades outside the settings bounds, an extra key, a bad id and a fractional asset', () => {
+    const refusedRequest = (input: unknown) =>
+      safeParseCreateTradingSessionRequest(input).success === false;
+    expect(refusedRequest({ ...request, trades: 0 })).toBe(true);
+    expect(refusedRequest({ ...request, trades: MAX_SESSION_TRADES + 1 })).toBe(true);
+    expect(refusedRequest({ ...request, mode: 'demo' })).toBe(true);
+    expect(refusedRequest({ ...request, brokerAccountId: 'nope' })).toBe(true);
+    expect(refusedRequest({ ...request, assetId: 1.5 })).toBe(true);
+    expect(refusedRequest({ ...request, telegramUserId: 42 })).toBe(true);
+  });
+
+  it('reads the query and the stop body', () => {
+    expect(safeParseReadTradingSessionQuery({ telegramUserId: '42' }).success).toBe(true);
+    expect(safeParseReadTradingSessionQuery({}).success).toBe(false);
+    expect(safeParseStopTradingSessionRequest({ telegramUserId: '42' }).success).toBe(true);
+    expect(safeParseStopTradingSessionRequest({ telegramUserId: '42', x: 1 }).success).toBe(false);
+  });
+});
+
+describe('sessionFitsDeadline', () => {
+  it.each([
+    [5, 60, true],
+    [5, 300, true],
+    [5, 900, false],
+    [20, 60, true],
+    [20, 61, false],
+  ])('%i trades of %i s -> %s', (trades, durationSec, fits) => {
+    expect(sessionFitsDeadline(trades, durationSec)).toBe(fits);
+  });
+});
+
+const view = {
+  id: '00000000-0000-4000-8000-000000000001',
+  mode: 'demo',
+  status: TradingSessionStatus.Active,
+  stopReason: null,
+  settings,
+  startedAt: '2026-10-07T10:00:00.000Z',
+  endedAt: null,
+  trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0 },
+  lastIntent: null,
+};
+
+describe('tradingSessionViewSchema', () => {
+  it('accepts the view, null settings and a stopped session', () => {
+    expect(safeParseTradingSessionResponse({ session: view }).success).toBe(true);
+    expect(safeParseTradingSessionResponse({ session: { ...view, settings: null } }).success).toBe(
+      true,
+    );
+    expect(
+      safeParseTradingSessionResponse({
+        session: {
+          ...view,
+          status: TradingSessionStatus.Stopped,
+          stopReason: TradingSessionStopReason.UserStopped,
+          endedAt: '2026-10-07T10:05:00.000Z',
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('refuses an extra key and a missing tied counter', () => {
+    expect(safeParseTradingSessionResponse({ session: { ...view, userId: 'x' } }).success).toBe(
+      false,
+    );
+    const withoutTied: Partial<typeof view.trades> = { ...view.trades };
+    delete withoutTied.tied;
+    expect(
+      safeParseTradingSessionResponse({ session: { ...view, trades: withoutTied } }).success,
+    ).toBe(false);
+  });
+});
+
+describe('tradingSessionRefusalSchema', () => {
+  it('carries a session only on active_session_exists', () => {
+    const active = TradingSessionErrorCode.ActiveSessionExists;
+    expect(safeParseTradingSessionRefusal({ error: active, session: view }).success).toBe(true);
+    expect(safeParseTradingSessionRefusal({ error: active, session: null }).success).toBe(true);
+    expect(safeParseTradingSessionRefusal({ error: active }).success).toBe(false);
+    expect(
+      safeParseTradingSessionRefusal({ error: TradingSessionErrorCode.UserNotFound }).success,
+    ).toBe(true);
+    expect(
+      safeParseTradingSessionRefusal({ error: TradingSessionErrorCode.UserNotFound, session: null })
+        .success,
+    ).toBe(false);
+    expect(safeParseTradingSessionRefusal({ error: 'validation' }).success).toBe(false);
+  });
+
+  it('spells catalog_unavailable as the pairs route does', () => {
+    expect(TradingSessionErrorCode.CatalogUnavailable).toBe(PairsCatalogErrorCode.Unavailable);
   });
 });

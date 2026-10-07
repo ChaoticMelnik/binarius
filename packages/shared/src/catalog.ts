@@ -26,6 +26,16 @@ export const pairViewSchema = z.object({
 });
 export type PairView = z.infer<typeof pairViewSchema>;
 
+// The bot's offer and the session start route read a pair the same way (#283). scheduledUntil
+// is the mock broker's reading, which refuses an order only while scheduled_until > now.
+export const isPairOpen = (pair: { scheduledUntil: number }, nowMs: number): boolean =>
+  pair.scheduledUntil === 0 || pair.scheduledUntil <= nowMs;
+
+export const pairAcceptsDuration = (
+  pair: { minTimeframe: number; maxTimeframe: number },
+  durationSec: number,
+): boolean => durationSec >= pair.minTimeframe && durationSec <= pair.maxTimeframe;
+
 export const pairsCatalogResponseSchema = z.object({
   pairs: z.array(pairViewSchema),
   // process clock of the backend, taken after the broker's answer was parsed
