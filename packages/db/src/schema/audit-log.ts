@@ -7,7 +7,8 @@ export type AuditActorType = (typeof AuditActorType)[keyof typeof AuditActorType
 
 // Every action this table accepts. The CHECK is built from this object, so an action a writer
 // invents is refused by the database rather than landing as a row nothing can query by. A new
-// action ships with its own migration (#34 extends the list the same way).
+// action ships with its own migration (the admin pages, #107 and its siblings, extend it the same
+// way).
 //
 // Names are snake_case and nothing else: sqlLiteralList inlines only [a-z0-9_-], so a dotted
 // name would be refused at import rather than reaching the DDL.
@@ -32,6 +33,10 @@ export const AuditAction = {
   // a client bot text overridden / reset to its default (#299)
   BotTextSaved: 'bot_text_saved',
   BotTextReset: 'bot_text_reset',
+  // admin read pages (#107)
+  OverviewViewed: 'overview_viewed',
+  UsersViewed: 'users_viewed',
+  UserViewed: 'user_viewed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
@@ -44,6 +49,7 @@ export const AuditEntityType = {
   StaffSession: 'staff_session',
   TradingSwitch: 'trading_switch',
   BotText: 'bot_text',
+  User: 'user',
 } as const;
 export type AuditEntityType = (typeof AuditEntityType)[keyof typeof AuditEntityType];
 
