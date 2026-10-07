@@ -1,4 +1,10 @@
-import { PairsCatalogErrorCode, type PairsCatalogResponse, type PairView } from '@binarius/shared';
+import {
+  PairsCatalogErrorCode,
+  isPairOpen,
+  pairAcceptsDuration,
+  type PairsCatalogResponse,
+  type PairView,
+} from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 
 // The demo's choice of a pair and a duration, checked against a catalog read at the press
@@ -26,10 +32,8 @@ export const DEMO_PAGE_SIZE = 12;
 export const groupOf = (type: string): DemoAssetGroup =>
   DEMO_ASSET_GROUPS.find((group) => group !== 'other' && group === type) ?? 'other';
 
-// scheduledUntil is ms since the epoch read as "not tradable until", 0 = no restriction — the
-// mock broker's reading, which refuses an order only while scheduled_until > now.
-export const isOpen = (pair: PairView, nowMs: number): boolean =>
-  pair.scheduledUntil === 0 || pair.scheduledUntil <= nowMs;
+// the session start route reads a pair the same way (#283)
+export const isOpen: (pair: PairView, nowMs: number) => boolean = isPairOpen;
 
 export const pairsOf = (catalog: PairsCatalogResponse, group: DemoAssetGroup): PairView[] =>
   catalog.pairs.filter((pair) => groupOf(pair.type) === group);
@@ -69,7 +73,7 @@ export function pageIndexOf(pairs: readonly PairView[], assetId: number): number
 }
 
 export const durationOptions = (pair: PairView): DemoDurationSec[] =>
-  DEMO_DURATIONS_SEC.filter((sec) => pair.minTimeframe <= sec && sec <= pair.maxTimeframe);
+  DEMO_DURATIONS_SEC.filter((sec) => pairAcceptsDuration(pair, sec));
 
 export type DemoPairCheck =
   | { ok: true; pair: PairView }
@@ -104,11 +108,7 @@ export function checkDemoTrade(
   // the duration arrives from callback data: one outside the table is refused even where the
   // pair's range would admit it (#125 review m5)
   const demoDuration = DEMO_DURATIONS_SEC.find((sec) => sec === durationSec);
-  if (
-    demoDuration === undefined ||
-    demoDuration < pair.minTimeframe ||
-    demoDuration > pair.maxTimeframe
-  ) {
+  if (demoDuration === undefined || !pairAcceptsDuration(pair, demoDuration)) {
     return { ok: false, reason: 'duration_unsupported', pair };
   }
   return { ok: true, pair, durationSec: demoDuration };
