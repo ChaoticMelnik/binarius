@@ -90,7 +90,7 @@ as the scale — `'1.00000000'` → `{ '1', 0 }`, `'0.50000000'` → `{ '0.5', 1
 | Operation | Statement | Notes |
 |---|---|---|
 | `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings })` | one transaction | reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`), then `broker_accounts` `FOR NO KEY UPDATE` (`account_revoked`, `account_not_confirmed` for `pending`, `account_halted`), then reads the trading switch without a lock (`trading_paused` while it is closed or its row is missing, #144); the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a `TradingSessionDbErrorCode`, not a wire contract: the start route maps each one ([Routes](#routes)) |
-| `checkTradingSessionStart(db, { telegramUserId, brokerAccountId? })` | plain selects, no lock | the start route's refusals, the first that applies wins: the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
+| `checkTradingSessionStart(db, { telegramUserId, brokerAccountId? })` | plain selects, no lock | the start route's refusals, the first that applies wins: the trading switch (`trading_paused` while it is closed, #144), the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
 | `readTradingSessionView(db, id, telegramUserId)` | three selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined`; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`. `settings` that fail v1 read as `null` with `planned: 0` |
 | `readActiveTradingSessionView(db, brokerAccountId, telegramUserId)` | two reads | the account's active session as its owner sees it; `undefined` when none, or when it ended between the reads |
 | `listRunnableSessions(db, { limit, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw |
@@ -140,14 +140,14 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 |---|---|---|
 | 1 | the body | 400 `validation` |
 | 2 | `sessionFitsDeadline(trades, durationSec)`: `trades × (durationSec + 120 s)` within `SESSION_MAX_DURATION_MS` (1 h) | 409 `session_too_long` |
-| 3 | `checkTradingSessionStart` | 404 `user_not_found` / `broker_account_not_found`; 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_revoked`, `account_halted`, `insufficient_tokens`, `active_session_exists` |
+| 3 | `checkTradingSessionStart` | 409 `trading_paused` first; 404 `user_not_found` / `broker_account_not_found`; 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_revoked`, `account_halted`, `insufficient_tokens`, `active_session_exists` |
 | 4 | the pairs cache: missing or not `fresh` | 503 `catalog_unavailable` (the string `GET /trading/pairs` answers) |
 | 4 | the pair absent, `!isPairOpen(pair, now)`, or `!pairAcceptsDuration(pair, durationSec)` | 409 `pair_unavailable` |
 | 5 | `touchBalanceRequested`, then the stored balance snapshot, of any age (the sizer checks the balance before every trade) | — |
 | 5a | no snapshot and the access token expires within `ACCESS_SKEW_MS`: the refresh runs in the background | 409 `balance_unavailable` at once; the caller retries |
 | 5b | no snapshot: `balance.refresh` awaited for at most `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s), then a re-read | 409 `balance_unavailable` when still none |
 | 6 | settings v1 with `stake = stakeSettingsFor(minTradeAmount)` | — |
-| 7 | `createTradingSession(…, mode: demo)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists` |
+| 7 | `createTradingSession(…, mode: demo)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused` |
 | 8 | 201 `{ session }` | — |
 
 - **The view on `active_session_exists`.** A second start — a double press, or a retry after a
@@ -155,7 +155,9 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
   `session`, so the caller learns what exists from the answer rather than from the code. `null`
   when that session ended before it was read.
 - **The race between steps 3 and 7.** The creation transaction re-checks the user, the account
-  (status, halt) and the one active session under its locks, so each of those refusals is atomic.
+  (status, halt) and the one active session under its locks, and reads the trading switch, so a
+  switch closed in between still refuses with `trading_paused`; a close committed after the
+  insert is #287's `stopPausedSessions` sweep.
   **The tokens are checked only in step 3** (stated): a reserve that takes the last token in
   between leaves a session whose first attempt stops `account_unavailable` (#287).
 - **A refused start may already have written refresh state:** steps 5–5b move
@@ -205,6 +207,8 @@ dc() {
 dc down -v
 dc up --build --wait backend
 dc exec -T backend pnpm db:migrate
+# a fresh database starts with trading closed (docs/kill-switch.md)
+dc exec -T backend pnpm --filter @binarius/backend kill-switch off
 INTERNAL_API_TOKEN="$(dc exec -T backend printenv INTERNAL_API_TOKEN)"
 api() {
   printf 'Authorization: Bearer %s\n' "$INTERNAL_API_TOKEN" |

@@ -32,6 +32,8 @@ import {
   brokerAccounts,
   brokerBalanceSnapshots,
   createTradeIntent,
+  openTrading,
+  stopTrading,
   tradeIntents,
   tradingSessions,
   upsertBalanceSnapshot,
@@ -139,7 +141,6 @@ function appWith(
       internalApiToken: PAIRS_TEST_TOKEN,
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
-      realTradingEnabled: false,
       accessToken: unusedAccessTokenDeps(),
     } satisfies TradingRoutesDeps,
     pairs: unusedPairsDeps(),
@@ -488,6 +489,40 @@ describe('POST /trading/sessions', () => {
     },
   );
 
+  it('R13 a closed trading switch is 409 trading_paused before any broker call', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    await stopTrading(tmp.db, { source: 'operator', reason: 'test' });
+    try {
+      const before = await sessionCount();
+      const response = await start(appWith({ refresh: () => Promise.resolve() }), bodyFor(seed));
+      await expectRefusal(response, 409, 'trading_paused', before);
+      expect(refreshCalls).toEqual([]);
+      expect(catalogReads).toBe(0);
+    } finally {
+      await openTrading(tmp.db);
+    }
+  });
+
+  it('R14 a switch closed between the check and the insert answers trading_paused from the transaction', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    let racerRows = 0;
+    try {
+      const response = await start(
+        appWith({
+          refresh: async (accountId) => {
+            await snapshotFor(accountId);
+            await stopTrading(tmp.db, { source: 'operator', reason: 'test' });
+            racerRows = await sessionCount();
+          },
+        }),
+        bodyFor(seed),
+      );
+      await expectRefusal(response, 409, 'trading_paused', racerRows);
+    } finally {
+      await openTrading(tmp.db);
+    }
+  });
+
   it('L1 a background refresh failure logs the error identity, not its text', async () => {
     const user = await seedUser(tmp.db);
     await seedBrokerAccount(tmp.db, user.userId, { accessTokenExpiresAt: new Date() });
@@ -601,7 +636,6 @@ describe('POST /trading/sessions/:id/stop', () => {
         durationSec: 60,
         clientRequestId: `session:${seed.sessionId}:1`,
       },
-      { realTradingEnabled: false },
       { id: seed.sessionId },
     );
     const response = await stop(appWith(), seed.sessionId, {
