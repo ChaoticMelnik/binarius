@@ -27,7 +27,8 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
   mounts #127's `createDemoTradeComposer` (the stake press) right after it.
 - `apps/bot/src/analysis.ts` — the analysis screen as a pure function (#126): `analysisScreen`,
   `analysisUnavailableScreen`, `analysisSubject`, `NO_SIGNAL_REASON_TEXT`, `TREND_WORDS`,
-  `MOMENTUM_WORDS`, `VOLATILITY_WORDS`, `formatPrice`, `formatRsi`, `formatAtrPct`.
+  `MOMENTUM_WORDS`, `VOLATILITY_WORDS` (maps to catalog keys, [bot-texts.md](bot-texts.md)),
+  `formatPrice`, `formatRsi`, `formatAtrPct`.
 - `apps/bot/src/screen.ts` — `editRefusal`, the classification of a refused edit, shared with
   `/settings`.
 - `apps/bot/src/backend-client.ts` — `readPairs()`: a `GET trading/pairs` under the bearer with
@@ -39,7 +40,8 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
   `demoDurationsScreen`, `demoSummary`, `DEMO_GROUP_LABELS`, `DEMO_DURATION_LABELS`,
   `groupButtonLabel`, `pairButtonLabel`, and the `demo*Button` labels; the `analysis*`,
   `analyzing` entries, `ACTION_LABELS`, `stakeButtonLabel` and
-  `LABELS.repeatAnalysisButton` (#126).
+  `LABELS.repeatAnalysisButton` (#126); the texts are catalog entries
+  ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.demo`, `.demoGroups`, `.demoPage`, `.demoAsset`,
   `.demoDuration`, `.demoAnalysis`; the link
   `TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`.
