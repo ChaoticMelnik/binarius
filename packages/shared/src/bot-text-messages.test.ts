@@ -70,6 +70,20 @@ describe('the assembled messages', () => {
     );
   });
 
+  // a plain text is escaped and shown as written: markup and entities count as characters
+  it('G5 measures a plain label at the length it is shown', () => {
+    const intent = message('intentStatus');
+    const base = estimateBotTextMessage(intent, defaultBotTextSource);
+    const widest = Math.max(
+      BOT_TEXT_CATALOG.actionUp.source.length,
+      BOT_TEXT_CATALOG.actionDown.source.length,
+    );
+    const tags = withTexts({ actionUp: '<b></b>'.repeat(9) });
+    const entities = withTexts({ actionDown: '&amp;'.repeat(12) });
+    expect(estimateBotTextMessage(intent, tags) - base).toBe(63 - widest);
+    expect(estimateBotTextMessage(intent, entities) - base).toBe(60 - widest);
+  });
+
   it('reads the labels a width is made of as keys of the message', () => {
     expect(botTextMessageKeys(message('intentStatus'))).toContain('actionUp');
     expect(botTextMessageKeys(message('settings'))).toEqual(

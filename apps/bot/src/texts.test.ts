@@ -3,6 +3,7 @@ import {
   BOT_TEXT_CATALOG,
   BotTextKind,
   defaultBotTextSource,
+  escapeTelegramHtml,
   type BotTextKey,
   BrokerAccountStatus,
   BrokerBalanceUnavailableReason,
@@ -286,7 +287,9 @@ describe('texts', () => {
     it('says the address is unknown, escaped once, for a link without one', () => {
       const text = accountStatus([{ status: BrokerAccountStatus.Revoked, email: null }]);
       expect(plainTextOf(text)).toContain('⚠️ Подключение отозвано: адрес неизвестен');
-      expect(text.value).toContain(TEXTS.accountUnknownAddress.value);
+      expect(text.value).toContain(
+        escapeTelegramHtml(BOT_TEXT_CATALOG.accountUnknownAddress.source),
+      );
       expect(text.value).not.toContain('&amp;');
     });
 

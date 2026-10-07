@@ -1,6 +1,10 @@
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BOT_TEXTS_PATH, botTextOverridesResponseSchema } from '@binarius/shared';
+import {
+  BOT_TEXT_OVERRIDES_MAX,
+  BOT_TEXTS_PATH,
+  botTextOverridesResponseSchema,
+} from '@binarius/shared';
 import { createTempDatabase, seedStaff, type TempDatabase } from '@binarius/db/testing';
 import { botTextOverrides } from '@binarius/db';
 import { botTextsRoutes } from './routes';
@@ -53,5 +57,24 @@ describe('GET /bot-texts', () => {
         { key: 'welcome', source: 'Привет', version: expect.any(Number) },
       ],
     });
+  });
+
+  // rows inserted by hand past the wire schema's cap must not stop the bot's refresh (#299 review)
+  it('answers at most BOT_TEXT_OVERRIDES_MAX rows, the first by key', async () => {
+    await tmp.db.delete(botTextOverrides);
+    await tmp.db.insert(botTextOverrides).values(
+      Array.from({ length: BOT_TEXT_OVERRIDES_MAX + 1 }, (_, i) => ({
+        key: `k${String(i).padStart(4, '0')}`,
+        source: 'x',
+      })),
+    );
+    const response = await app.inject({
+      method: 'GET',
+      url: BOT_TEXTS_PATH,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const { overrides } = botTextOverridesResponseSchema.parse(response.json());
+    expect(overrides).toHaveLength(BOT_TEXT_OVERRIDES_MAX);
+    expect(overrides.at(-1)?.key).toBe('k0999');
   });
 });

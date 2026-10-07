@@ -292,10 +292,10 @@ export const BOT_TEXT_CATALOG = {
     `⚠️ Подключение отозвано: {email}`,
     { arg: email },
   ),
-  accountUnknownAddress: html(
+  accountUnknownAddress: plain(
     g.Account,
     '/account: вместо адреса, который брокер не прислал.',
-    `адрес неизвестен`,
+    'адрес неизвестен',
   ),
 
   // ---- Главное меню и статус ----------------------------------------------------------------

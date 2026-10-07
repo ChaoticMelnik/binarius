@@ -10,7 +10,10 @@ import { staff } from './staff';
 
 // A version from a sequence rather than +1: a reset deletes the row, and +1 would hand the next
 // save the version a stale form read before the reset.
-export const botTextOverrideVersionSeq = pgSequence('bot_text_override_version_seq');
+// Capped at 2^53 - 1, so every version is exact as the JS number the column reads it into.
+export const botTextOverrideVersionSeq = pgSequence('bot_text_override_version_seq', {
+  maxValue: Number.MAX_SAFE_INTEGER,
+});
 
 export const botTextOverrides = pgTable(
   'bot_text_overrides',

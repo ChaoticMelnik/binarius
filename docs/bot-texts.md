@@ -111,8 +111,9 @@ escaped value, the empty one included.
 **Every rendered text is checked again.** The views build html through `telegramHtmlTemplate`,
 which renders the holes as `telegramHtml` does — strings escaped, `TelegramHtml` nested — and runs
 `telegramHtmlProblems` over the assembled text on every call, throwing `InvalidTelegramTemplate`
-(its `name` only, no text) when Telegram would refuse it. That catches what a check of the static
-parts cannot see, such as a `TelegramHtml` argument that puts an `<a>` inside an `<a>`. The callers
+(its `name` only, no text) when Telegram would refuse it. An html view takes its argument as a
+string only (the type, and `InvalidBotText` at run time for anything else), so html reaches html
+only through a declared fragment, which the validator renders and checks (#299). The callers
 do not catch it: it would mean a catalog default that the tests let through, or an override that
 skipped the resolver ([Loading](#loading)). A source whose text does not parse against its key
 throws `InvalidBotText`, also by name only.
@@ -142,7 +143,7 @@ messages](#assembled-messages).
 
 `createBotTexts(source)` returns `{ html, plain }`: one getter per key, reading
 `source.sourceOf(key)` on every access. A static html key gives `TelegramHtml`, an html key with
-an argument `(value: string | TelegramHtml) => TelegramHtml`; plain keys give `string` and
+an argument `(value: string) => TelegramHtml`; plain keys give `string` and
 `(value: string) => string`. The types follow each entry's kind and argument
 (`bot-texts.typecheck.ts` is the oracle). A getter returns the same object or function while the
 key's text and its fragments' texts are unchanged — the suites compare texts with `toBe` — and
@@ -236,7 +237,8 @@ version }` only) within `BACKEND_REQUEST_TIMEOUT_MS`, the backend from the datab
 the backend's push, without a restart. A failed load keeps the last applied set — the defaults
 until the first success — and logs a `warn` by error identity; a rejected row is logged once per
 change of the rejected set, by key, version and reason, never with its text. Both processes stop
-the refresher on shutdown.
+the refresher on shutdown. Both read the first `BOT_TEXT_OVERRIDES_MAX` (1000) rows by key, the
+most the bot's wire schema takes; only rows inserted by hand can reach it.
 
 ## The CLI
 
@@ -269,6 +271,8 @@ key with an argument does not compile without a width.
 
 Widths from a schema are enforced there (an address entered by the user 254, a USD amount 20, a
 count 25, an int4 asset id or duration). The rest are stated assumptions in `BOT_TEXT_WIDTHS`: a
-broker's address ≤ 254, a symbol ≤ 64, at most 10 accounts on `/account`, a session's counters ≤
-999, the analysis numbers. A value past one of them lengthens a message by a few characters, and
+broker's address ≤ 254, a symbol ≤ 64, a session's counters ≤ 999, the analysis numbers. The
+`/account` list is enforced: the backend answers at most `USER_ACCOUNT_LIST_LIMIT` (10) links.
+A plain label is measured as written, markup and entities included: it is escaped and shown
+literally. A value past one of them lengthens a message by a few characters, and
 Telegram refuses the message only if that crosses its limit.

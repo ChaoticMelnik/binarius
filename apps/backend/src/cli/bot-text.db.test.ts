@@ -3,7 +3,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BOT_TEXT_CATALOG } from '@binarius/shared';
 import { auditLog, botTextOverrides } from '@binarius/db';
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
-import { decodeBotTextFile, parseBotTextArgs, runBotTextCli } from './bot-text';
+import {
+  decodeBotTextFile,
+  parseBotTextArgs,
+  readAtMost,
+  runBotTextCli,
+  streamAtMost,
+} from './bot-text';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -81,6 +87,44 @@ describe('decodeBotTextFile', () => {
   it('refuses a file that is not UTF-8 or is too large', () => {
     expect(() => decodeBotTextFile(new Uint8Array([0xc3, 0x28]))).toThrow('UTF-8');
     expect(() => decodeBotTextFile(new Uint8Array(4 * 16_384 + 1))).toThrow('байт');
+  });
+});
+
+describe('reading at most one byte over the cap (#299 review)', () => {
+  async function* endless() {
+    for (;;) yield new Uint8Array(4096).fill(0x61);
+  }
+  const refused = async (
+    io: { readFile?: typeof readAtMost; readStdin?: (max: number) => Promise<Uint8Array> },
+    file: string,
+  ) => {
+    const err: string[] = [];
+    const unused = () => Promise.reject(new Error('not used'));
+    const code = await runBotTextCli(
+      ['set', 'welcome', '--file', file],
+      { DATABASE_URL: tmp.url },
+      {
+        out: () => undefined,
+        err: (line) => err.push(line),
+        readFile: io.readFile ?? unused,
+        readStdin: io.readStdin ?? unused,
+      },
+    );
+    return { code, err };
+  };
+
+  it('refuses a stdin that never ends', async () => {
+    expect(await refused({ readStdin: (max) => streamAtMost(endless(), max) }, '-')).toEqual({
+      code: 1,
+      err: ['Файл больше 65536 байт.'],
+    });
+  });
+
+  it('refuses /dev/zero', async () => {
+    expect(await refused({ readFile: readAtMost }, '/dev/zero')).toEqual({
+      code: 1,
+      err: ['Файл больше 65536 байт.'],
+    });
   });
 });
 

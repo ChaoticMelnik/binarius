@@ -52,8 +52,8 @@ the order the backend sent them (newest first). The header follows the best link
 
 Each line is `accountLineActive`, `accountLinePending` or `accountLineRevoked` with the address;
 an address the broker did not send, or sent blank, is «адрес неизвестен» (`accountUnknownAddress`,
-a fragment nested without a second escape). The address is a hole of `telegramHtml`, escaped once. The texts
-are the ones the owner approved on 2026-10-03, verbatim.
+a plain text escaped as data, like the address it stands in for). The address is a hole of
+`telegramHtml`, escaped once. The texts are the ones the owner approved on 2026-10-03, verbatim.
 
 ## The keyboard
 

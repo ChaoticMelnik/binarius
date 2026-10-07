@@ -1,4 +1,4 @@
-CREATE SEQUENCE "public"."bot_text_override_version_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START WITH 1 CACHE 1;--> statement-breakpoint
+CREATE SEQUENCE "public"."bot_text_override_version_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 9007199254740991 START WITH 1 CACHE 1;--> statement-breakpoint
 CREATE TABLE "bot_text_overrides" (
 	"key" text PRIMARY KEY NOT NULL,
 	"source" text NOT NULL,

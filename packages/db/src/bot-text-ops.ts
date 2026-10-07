@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   BOT_TEXT_CATALOG,
+  BOT_TEXT_OVERRIDES_MAX,
   BOT_TEXT_SOURCE_MAX,
   BotTextProblemCode,
   BotTextRejectionCode,
@@ -22,8 +23,11 @@ import type { DbExecutor, Tx } from './trade-intent-ops';
 
 export type BotTextOverrideRecord = typeof botTextOverrides.$inferSelect;
 
+// The first BOT_TEXT_OVERRIDES_MAX by key: the bot's wire schema takes no more, so the route and
+// the backend's loader read the same rows. The writer cannot get near it (one row per catalog key);
+// only rows inserted by hand can.
 export const listBotTextOverrides = (db: DbExecutor): Promise<BotTextOverrideRecord[]> =>
-  db.select().from(botTextOverrides).orderBy(botTextOverrides.key);
+  db.select().from(botTextOverrides).orderBy(botTextOverrides.key).limit(BOT_TEXT_OVERRIDES_MAX);
 
 export interface BotTextActor {
   type: AuditActorType;
