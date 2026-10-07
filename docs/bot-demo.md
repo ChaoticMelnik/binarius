@@ -209,6 +209,14 @@ key (#127): the same button pressed again replays its trade, the button of a new
 new one. The press is #127's ([bot-demo-trade.md](bot-demo-trade.md)); data the schema refuses
 (`demo:stake:0:60:up:0123456789ab`) only stops the spinner.
 
+Since #297 the signal is asked for together with `POST /trading/access`, and the label names the
+amount the press would trade: «🚀 Открыть сделку: ⬆️ Вверх · $5.00», the saved demo stake or the
+broker's minimum. The data gains `:<fingerprint>`, 6 hex of that amount's `sha256`, and «💵 Сумма»
+(`stk:o:a:<assetId>:<sec>`) stands in the same row. A failed access read only drops the amount from
+the label (`warn` `trading access not read for the stake label`); the signal still decides the
+screen. The picker and the press's fingerprint check are in
+[bot-demo-trade.md → The stake](bot-demo-trade.md#the-stake-297).
+
 ## Edits
 
 `editOrReply` edits the message the pressed button is under, and classifies every refusal
@@ -259,7 +267,7 @@ and `TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` is checked at impor
 - **#258** — `POST /trading/signal`, its cache and the decider ([signal.md](signal.md)).
 - **#127** — the stake button's press, the intent and its status (`intent:` buttons):
   [bot-demo-trade.md](bot-demo-trade.md). It runs `readDemoTrade` again at the press, with the
-  amount `broker.minTradeAmount`.
+  saved demo stake or `broker.minTradeAmount` (#297).
 - **#284** — the demo session of five trades in the bot: the button, status and stop
   ([bot-session.md](bot-session.md)); the worker half is shipped (#287,
   [trading-session.md](trading-session.md)).

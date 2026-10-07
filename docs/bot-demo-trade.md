@@ -1,7 +1,7 @@
 # The demo trade: the stake press and the intent's status (issue #127)
 
-The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Открыть сделку: ⬆️ Вверх»
-on a signal. Pressing it creates a demo intent through `POST /trading/intents`
+The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Открыть сделку: ⬆️ Вверх ·
+$1.00» on a signal, with «💵 Сумма» beside it ([The stake](#the-stake-297)). Pressing it creates a demo intent through `POST /trading/intents`
 ([trade-intent-transport.md](trade-intent-transport.md)) and sends one status message. The message
 follows the intent's real status, read through `GET /trading/intents/:id`. It never marks the trade
 open because the button was pressed: «✅ Сделка открыта у брокера.» comes only from `accepted`.
@@ -20,8 +20,11 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   deadlineMs, maxEntries?, now? })` → `{ track, stop, size }`. Also `TRACKER_STOP_STATUSES`,
   `INTENT_TRACKER_MAX_ENTRIES` and `INTENT_NOT_FOUND`. `index.ts` builds one and hands it to
   `createBot` and to `runBot`.
-- `apps/bot/src/demo.ts` — the stake button's data `demo:stake:<assetId>:<sec>:<up|down>:<nonce>`,
-  `newStakeNonce`, `STAKE_CALLBACK_PATTERN` and `stakeDataOf`.
+- `apps/bot/src/demo.ts` — the stake button's data
+  `demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>`, `newStakeNonce`,
+  `stakeFingerprint`, `effectiveStake`, `STAKE_CALLBACK_PATTERN` and `stakeDataOf`.
+- `apps/bot/src/stake-picker.ts` — `createStakePicker({ backend, logger, dialog,
+  connectKeyboard })` → `{ composer, onStakeText }`: the stake picker (#297).
 - `apps/bot/src/backend-client.ts` — `createIntent(request)` → the intent; a 201 and a 200 replay
   read the same, since the bot treats them the same. `readIntent(id, telegramUserId)` →
   `GET trading/intents/<id>?telegramUserId=<id>`. Both parse `intent` with
@@ -38,10 +41,11 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
-demo:stake:<assetId>:<sec>:<up|down>:<nonce>
+demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
   bot → answerCallbackQuery ∥ GET /trading/pairs (readDemoTrade) ∥ POST /trading/access
-  bot → POST /trading/intents { telegramUserId, mode: demo, assetId, amount: broker.minTradeAmount,
-                                action, durationSec, clientRequestId: demo:<telegramUserId>:<nonce> }
+  bot → POST /trading/intents { telegramUserId, mode: demo, assetId,
+                                amount: demoStake ?? broker.minTradeAmount, action, durationSec,
+                                clientRequestId: demo:<telegramUserId>:<nonce> }
   bot → sendMessage: the status, with «🔄 Обновить статус» (intent:<id>)
   tracker: after 1 s, then every 3 s → GET /trading/intents/<id>?telegramUserId=<id>
            → editMessageText of that message when the status changes
@@ -63,9 +67,16 @@ The checks run in this order, and the first one that fails answers:
    depends on the reason: `no_account` gets `accountNone` with the connect buttons,
    `ambiguous_account` gets `statusAmbiguous`, and any other reason gets
    «⏳ Баланс Binodex ещё не получен…».
-3. **The intent.** The amount is the broker's `minTradeAmount` string exactly as the backend sent
-   it. The bot never computes it (Rule 2). A session's stake comes from the sizer in the worker instead (#287,
-   [trading-session.md](trading-session.md)); the single trade keeps this source.
+3. **The fingerprint.** The amount is the user's saved demo stake (`access.demoStake`), or the
+   broker's `minTradeAmount` without one, a string exactly as the backend sent it. The bot never
+   computes it (Rule 2). The button carries the first 6 hex of `sha256` of the amount its label
+   showed. When the amount in effect now has another fingerprint — the stake was saved or reset
+   since the render, the broker moved its minimum, the label had no amount, or the button is
+   older than #297 and has none — the bot answers «⚠️ Сумма сделки изменилась — открой анализ
+   заново.» with «↩️ Назад к анализу», and nothing is created.
+4. **The intent.** `POST /trading/intents` with that amount. The backend checks it against the
+   account's stored snapshot (Rule 29). A session's stake comes from the same saved stake
+   ([trading-session.md](trading-session.md)); the sizer in the worker sizes each of its trades.
 
 ## Idempotency
 
@@ -93,13 +104,78 @@ Every 4xx is answered before a row is committed, so a 4xx means nothing was crea
 | 409 `account_halted` | «⛔ Торговля по аккаунту остановлена — напиши в поддержку: /support» |
 | 409 `insufficient_tokens` | «🪙 Не хватает токенов для сделки.» |
 | 409 `active_intent_exists` | «⏳ Предыдущая сделка ещё не завершена…» |
-| 409 `client_request_id_conflict` | «⚠️ Эта кнопка уже использована…» (the same button with a changed `minTradeAmount`) |
+| 409 `client_request_id_conflict` | «⚠️ Эта кнопка уже использована…» (the same button with a changed amount; the fingerprint normally refuses it first) |
 | 409 `trading_paused` | «⏸ Торговля временно приостановлена, попробуйте позже.» (the global switch, [kill-switch.md](kill-switch.md)) |
+| 409 `balance_unavailable` | «⏳ Баланс Binodex ещё не получен…» (no snapshot to check the amount against) |
+| 409 `stake_below_minimum` | «⚠️ Минимальная ставка брокера сейчас $X…», X from this press's access read, + «💵 Сумма» |
+| 409 `insufficient_demo_balance` | «⚠️ На демо-счёте недостаточно средств для этой суммы…» + «💵 Сумма» |
+| 409 `stake_precision` | «⚠️ В сумме слишком много знаков после запятой…» + «💵 Сумма» (the minimum's scale changed after the save) |
 | 404 `user_not_found`, 400 `validation`, any other 4xx | `unavailable`; `warn` `trade intent not created` |
 | 5xx, no answer, a broken 2xx body | the outcome is unknown: one more `createIntent` with the same key; if that also fails this way, «⚠️ Не удалось узнать, принята ли заявка…» and `warn` `trade intent not created` |
 
 The refusals are an exhaustive `Record<TradeIntentErrorCode, …>`, so a code added to the contract
 fails `tsc` in `demo-trade.ts`.
+
+## The stake (#297)
+
+The user's demo stake is `users.demo_stake`: `NULL` means the broker's minimum at each trade,
+which is what every user had before. One stake serves the single trade and the session.
+
+**The picker** (`stake-picker.ts`) opens from «💵 Сумма» beside the stake button, from «💵 Изменить»
+in /settings ([bot-menu.md](bot-menu.md)) and from the stake refusals. It edits the message it was
+opened from:
+
+```text
+💵 Сумма демо-сделки
+Сейчас: $5.00                         (or «минимальная ставка брокера ($1.00)»)
+Минимум брокера: $1.00
+Доступно: $9 990.00
+[$1.00] [$2.00] [$5.00 ✅] [$10.00]    minTradeAmount × 1, 2, 5, 10, only those <= available
+[✏️ Своя сумма]
+[🔁 Минимальная брокера]               only while a stake is saved
+[↩️ Назад к анализу | ↩️ Назад к настройкам]
+```
+
+The presets and the input syntax come from `packages/shared/src/demo-stake.ts`, bigint at scale 8.
+No preset fits → «На демо-счёте недостаточно средств даже для минимальной ставки.», custom and back
+only. An access refusal shows the stake press's texts (blocked, no account with the connect
+buttons, two accounts, no balance yet) with the way back.
+
+| Callback (≤ 45 bytes) | Action |
+| --- | --- |
+| `stk:o:<origin>` | open: read access, edit to the picker; also ends a stake input step |
+| `stk:s:<amount>:<origin>` | a preset: save exactly this amount |
+| `stk:z:<origin>` | reset to the broker minimum (`amount: null`) |
+| `stk:c:<origin>` | custom: the input step, the prompt in place with «↩️ Назад» → `stk:o:<origin>` |
+
+`<origin>` is `s` (/settings, way back `settings`) or `a:<assetId>:<sec>` (way back
+`demo:an:<assetId>:<sec>`, a fresh analysis with a new nonce).
+
+**The custom input** is a step of the login dialog store (`login-dialog.ts`): one entry per user,
+so the email login and the stake input replace each other. `parseDemoStakeInput` takes digits with
+one `,` or `.` («2,50», «1.5», «01.5» → `1.5`); «abc», «-5», «0», «1 000», «1e3» get «❌ Введи
+сумму числом…» and the step stays. A restart drops the step, as for the login. The result of a
+typed amount is a new message.
+
+**The save** is `POST /trading/demo-stake` ([trading-access.md](trading-access.md#post-tradingdemo-stake-297)).
+What its answer does:
+
+| Answer | Source | Message | The input step |
+| --- | --- | --- | --- |
+| 200 | saved | «✅ Сумма: $5.00» / «✅ Сумма: минимальная ставка брокера» + back | ended |
+| 409 `stake_precision` | refused before the write | «❌ Не больше N знаков после запятой.» (`limits.scale`) + «💵 Сумма» + back | kept, TTL anew |
+| 409 `stake_below_minimum` | refused before the write | «⚠️ Минимальная ставка брокера сейчас $X…» + «💵 Сумма» + back | kept |
+| 409 `insufficient_demo_balance` | refused before the write | «⚠️ На демо-счёте доступно $Y…» + «💵 Сумма» + back | kept |
+| 409 `balance_unavailable` | refused before the write | «⏳ Баланс Binodex ещё не получен…» + back | kept |
+| 404 `user_not_found` | no users row | `unavailable`, `warn` `demo stake not saved` | ended |
+| 400 `validation`, any other 4xx | the bot's own bug | `unavailable`, `error` `demo stake not saved` | ended |
+| no answer, 5xx, a broken body | unknown: the UPDATE may have committed | «⚠️ Не удалось сохранить сумму…» + «💵 Сумма» + back, `warn` `demo stake save outcome unknown` | kept |
+
+The save overwrites with the same value, so a retry is harmless, and the picker's «Сейчас:» line
+shows what is saved. The bot never infers the saved state from a failure.
+
+Amounts print with `formatStake`: every fraction digit, at least two («$5.00», «$0.005»). The
+status line of an intent and a session's stake use it too; balances keep `formatUsd`.
 
 ## The status message
 
@@ -169,7 +245,10 @@ gets `warn` and nothing more. This press never starts tracking.
   message. That is 36 s.
 - `HANDLER_CALLS.intentRefresh` = 2 backend calls and 3 Bot API calls: the edit refused as gone,
   then sent anew. That is 34 s.
-- Both stay below `confirm`'s 45 s, so the shutdown budget does not move.
+- The picker (#297): `stakePickerOpen`, `stakePreset`, `stakeReset` and `settingsShow` are 1 / 3
+  (29 s), `stakeCustom` 0 / 3 (24 s), `stakeText` 1 / 1 (13 s).
+- `HANDLER_CALLS.demoAnalysis` is 3 / 4 = 47 s since #297 (the access read for the label), the
+  longest path; the chain still holds below `SHUTDOWN_BUDGET_MS` (50 s), with 3 s to spare.
 - `INTENT_TRACK_FIRST_POLL_MS` = 1 s, `INTENT_TRACK_POLL_MS` = 3 s, `INTENT_TRACK_DEADLINE_MS` =
   120 s. The deadline is the worker's `INTENT_MAX_AGE_MS` (60 s) plus `SUBMIT_ACK_TIMEOUT_MS`
   (10 s), with room. That relation is stated, not checked, because the worker's constants cannot
@@ -186,6 +265,9 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
 
 - `trade intent not created`
 - `trade intent status not read` (with `intentId` when the tracker writes it)
+- `trading access not read for the stake label`, `trading access not read for the stake picker`,
+  `demo stake save outcome unknown` (`warn`), `demo stake not saved` (`warn` for
+  `user_not_found`, `error` otherwise) — #297
 - `trade intent message not edited` (with `intentId` when the tracker writes it)
 
 ## Boundaries

@@ -79,6 +79,12 @@ stored minimum of 0 is valid in the snapshot but gives `baseStake '0'`, which v1
 route answers `balance_unavailable` and the CLI `zero_min_trade_amount`, both before writing (#130
 review n1).
 
+The start route takes the user's saved demo stake (#297, `users.demo_stake`) through
+`demoStakeSettings(demoStake, minTradeAmount)`: `NULL` gives `stakeSettingsFor(minTradeAmount)`
+exactly as before; a saved stake gives `{ baseStake: its canonical spelling, stakeScale: max(2,
+scale(minimum), scale(stake)) }`, so a stake saved under a finer minimum stays on the grid the
+sizer steps on. The CLI `session-start` keeps the broker minimum.
+
 ## Stop reasons
 
 | Reason | Meaning | Writer |
@@ -156,7 +162,8 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 | 5 | `touchBalanceRequested`, then the stored balance snapshot, of any age (the sizer checks the balance before every trade) | — |
 | 5a | no snapshot and the access token expires within `ACCESS_SKEW_MS`: the refresh runs in the background | 409 `balance_unavailable` at once; the caller retries |
 | 5b | no snapshot: `balance.refresh` awaited for at most `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s), then a re-read | 409 `balance_unavailable` when still none |
-| 6 | settings v1 with `stake = stakeSettingsFor(minTradeAmount)` | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which v1 refuses), with a `warn` line |
+| 6a | `checkDemoStake(demoStake ?? minTradeAmount, { minTradeAmount, demoAvailable })` on the same snapshot (#297) | 409 `stake_precision`, `stake_below_minimum` or `insufficient_demo_balance`; without a saved stake, a minimum above the demo balance is refused here rather than as `stake_stop` on the first trade |
+| 6 | settings v1 with `stake = demoStakeSettings(demoStake, minTradeAmount)` | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which v1 refuses), with a `warn` line |
 | 7 | `createTradingSession(…, mode: demo)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` (unreachable: the route passes `demo`) |
 | 8 | 201 `{ session }` | — |
 
