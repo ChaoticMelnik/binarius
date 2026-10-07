@@ -62,6 +62,7 @@ import {
   accountView,
   brokerBalance,
   userView,
+  stubSessionTracker,
   stubTracker,
   stubText,
   stubTextSource,
@@ -125,12 +126,16 @@ function setup(
     evaluateSignal: vi.fn(() => Promise.reject(new Error('not used here'))),
     createIntent: vi.fn(() => Promise.reject(new Error('not used here'))),
     readIntent: vi.fn(() => Promise.reject(new Error('not used here'))),
+    startSession: vi.fn(() => Promise.reject(new Error('not used here'))),
+    readSession: vi.fn(() => Promise.reject(new Error('not used here'))),
+    stopSession: vi.fn(() => Promise.reject(new Error('not used here'))),
   };
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
   if (options.dialog !== undefined) dialog.set(USER.id, options.dialog);
   const bot = createBot({
     intentTracker: stubTracker(),
+    sessionTracker: stubSessionTracker(),
     token: '123456:AA-bot-token',
     backend,
     logger,
@@ -1313,6 +1318,7 @@ describe('the account card', () => {
       const logger = fakeLogger();
       const bot = createBot({
         intentTracker: stubTracker(),
+        sessionTracker: stubSessionTracker(),
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1328,6 +1334,9 @@ describe('the account card', () => {
           evaluateSignal: vi.fn(() => Promise.reject(new Error('unused'))),
           createIntent: vi.fn(() => Promise.reject(new Error('unused'))),
           readIntent: vi.fn(() => Promise.reject(new Error('unused'))),
+          startSession: vi.fn(() => Promise.reject(new Error('unused'))),
+          readSession: vi.fn(() => Promise.reject(new Error('unused'))),
+          stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -1354,6 +1363,7 @@ describe('the account card', () => {
       const logger = fakeLogger();
       const bot = createBot({
         intentTracker: stubTracker(),
+        sessionTracker: stubSessionTracker(),
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.resolve(userView({ hasActiveBrokerAccount: true }))),
@@ -1369,6 +1379,9 @@ describe('the account card', () => {
           evaluateSignal: vi.fn(() => Promise.reject(new Error('unused'))),
           createIntent: vi.fn(() => Promise.reject(new Error('unused'))),
           readIntent: vi.fn(() => Promise.reject(new Error('unused'))),
+          startSession: vi.fn(() => Promise.reject(new Error('unused'))),
+          readSession: vi.fn(() => Promise.reject(new Error('unused'))),
+          stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -2378,6 +2391,7 @@ describe('the Bot API timeout', () => {
 
     const bot = createBot({
       intentTracker: stubTracker(),
+      sessionTracker: stubSessionTracker(),
       token: '123456:AA-bot-token',
       // no handler runs in this test: the call under test is bot.api.sendMessage itself
       backend: {
@@ -2394,6 +2408,9 @@ describe('the Bot API timeout', () => {
         evaluateSignal: vi.fn(() => Promise.reject(new Error('unused'))),
         createIntent: vi.fn(() => Promise.reject(new Error('unused'))),
         readIntent: vi.fn(() => Promise.reject(new Error('unused'))),
+        startSession: vi.fn(() => Promise.reject(new Error('unused'))),
+        readSession: vi.fn(() => Promise.reject(new Error('unused'))),
+        stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

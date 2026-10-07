@@ -11,9 +11,12 @@ import {
   NotificationLevel,
   telegramHtml,
   TradeAction,
+  TRADE_INTENT_TRANSITIONS,
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
+  TradingSessionStatus,
+  TradingSessionStopReason,
   type BotHtmlKey,
   type BotPlainKey,
   type BotPlainTexts,
@@ -27,6 +30,7 @@ import {
   type TelegramHtml,
   type TradeIntentView,
   type TradingAccessResponse,
+  type TradingSessionView,
 } from '@binarius/shared';
 import type { BotCommand } from 'grammy/types';
 import type { DemoAssetGroup, DemoDurationSec } from './demo-catalog';
@@ -353,6 +357,116 @@ ${TEXTS.intentDeadline}`,
 ${TEXTS.intentTrade(trade)}
 
 ${statusLineOfIntent(view)}${tail}`;
+}
+
+// A demo session's stop reasons but completed, by key (#284). kill_switch reads the single
+// trade's own refusal of the closed switch.
+const SESSION_STOP_LINES = {
+  [TradingSessionStopReason.ManualReview]: 'sessionStopManualReview',
+  [TradingSessionStopReason.RejectedTwice]: 'sessionStopRejectedTwice',
+  [TradingSessionStopReason.Timeout]: 'sessionStopTimeout',
+  [TradingSessionStopReason.StakeStop]: 'sessionStopStakeStop',
+  [TradingSessionStopReason.AccountUnavailable]: 'sessionStopAccountUnavailable',
+  [TradingSessionStopReason.PairUnavailable]: 'sessionStopPairUnavailable',
+  [TradingSessionStopReason.BalanceUnavailable]: 'sessionStopBalanceUnavailable',
+  [TradingSessionStopReason.InvalidSettings]: 'sessionStopInvalidSettings',
+  [TradingSessionStopReason.UserStopped]: 'sessionStopUserStopped',
+  [TradingSessionStopReason.KillSwitch]: 'tradingPaused',
+} as const satisfies Record<
+  Exclude<TradingSessionStopReason, typeof TradingSessionStopReason.Completed>,
+  BotStaticHtmlKey
+>;
+
+// «сделка», «сделки» or «сделок» after the number
+export function pluralTrades(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return plain.sessionTradeOne;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return plain.sessionTradeFew;
+  return plain.sessionTradeMany;
+}
+const tradesCount = (count: number): string => `${String(count)} ${pluralTrades(count)}`;
+
+// the analysis screen's session button, with the number of trades it starts
+export const sessionStartButtonLabel = (trades: number): string =>
+  plain.sessionStartButton(tradesCount(trades));
+
+// A trade with an outgoing edge in the shared graph: it can still settle or be rejected, so the
+// session's counters can still move (manual_review included).
+export const sessionIntentLive = (intent: TradeIntentView | null): intent is TradeIntentView =>
+  intent !== null && TRADE_INTENT_TRANSITIONS[intent.status].length > 0;
+
+// What the session message shows of a session; nothing else of the view.
+export type SessionStatusView = Pick<
+  TradingSessionView,
+  'status' | 'stopReason' | 'settings' | 'trades' | 'lastIntent'
+>;
+
+// a hole holding an array is joined without a separator, so the newlines are written here
+const joinLines = ([first, ...rest]: readonly TelegramHtml[]): TelegramHtml =>
+  rest.reduce(
+    (joined, line) => telegramHtml`${joined}
+${line}`,
+    first ?? telegramHtml``,
+  );
+
+// «3 в плюс, 1 в минус», with «в ноль» only when a trade tied
+const scoreOf = ({ won, lost, tied }: TradingSessionView['trades']): string =>
+  [
+    plain.sessionWon(String(won)),
+    plain.sessionLost(String(lost)),
+    ...(tied > 0 ? [plain.sessionTied(String(tied))] : []),
+  ].join(', ');
+const resultOf = (trades: TradingSessionView['trades']): string =>
+  `${tradesCount(trades.settled)} — ${scoreOf(trades)}`;
+
+// The demo session's one message (#284, docs/bot-session.md): the header and the settings, then
+// a live session's trade number, score and the last trade's status, or a stopped session's
+// reason and result. `symbol` is null when the catalog could not say.
+export function sessionStatusText(
+  symbol: string | null,
+  view: SessionStatusView,
+  { deadline = false }: { deadline?: boolean } = {},
+): TelegramHtml {
+  const { settings, trades, lastIntent } = view;
+  if (settings === null) {
+    return telegramHtml`${TEXTS.sessionHeader}
+
+${TEXTS.sessionSettingsUnavailable}`;
+  }
+  const asset =
+    symbol === null
+      ? plain.intentAssetFallback(String(settings.assetId))
+      : symbol.slice(0, INTENT_SYMBOL_LIMIT);
+  const line = [
+    asset,
+    durationLabelOf(settings.durationSec),
+    plain.intentStake(formatUsd(settings.stake.baseStake)),
+  ].join(' · ');
+  const head = [TEXTS.sessionHeader, TEXTS.sessionSettings(line)];
+  const body: TelegramHtml[] = [];
+  if (view.status !== TradingSessionStatus.Stopped) {
+    const step = Math.min(trades.settled + 1, trades.planned);
+    head.push(TEXTS.sessionStep(`${String(step)} из ${String(trades.planned)}`));
+    if (trades.settled > 0) head.push(TEXTS.sessionScore(scoreOf(trades)));
+    body.push(
+      sessionIntentLive(lastIntent) ? statusLineOfIntent(lastIntent) : TEXTS.sessionWaitingSignal,
+    );
+  } else if (view.stopReason === TradingSessionStopReason.Completed) {
+    body.push(TEXTS.sessionCompleted(resultOf(trades)));
+  } else {
+    if (view.stopReason !== null) body.push(textOf(SESSION_STOP_LINES[view.stopReason]));
+    if (trades.settled > 0) body.push(TEXTS.sessionTotal(resultOf(trades)));
+    if (sessionIntentLive(lastIntent)) {
+      body.push(statusLineOfIntent(lastIntent), TEXTS.sessionOpenTradePlaysOut);
+    }
+  }
+  // stopped with no reason is what the CHECKs refuse; the view's schema still allows it
+  if (body.length === 0) body.push(TEXTS.sessionStatusUnavailable);
+  if (deadline) body.push(TEXTS.sessionDeadline);
+  return telegramHtml`${joinLines(head)}
+
+${joinLines(body)}`;
 }
 
 // Button labels and the command descriptions: Telegram does not parse them, so they are plain

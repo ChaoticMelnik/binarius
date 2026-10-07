@@ -3,7 +3,9 @@ import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from '
 import {
   BrokerRestErrorCode,
   createTradeIntentRequestSchema,
+  DEFAULT_SESSION_TRADES,
   errorLogFields,
+  sessionFitsDeadline,
   intervalForDuration,
   SignalFeedOutcome,
   TradeAction,
@@ -46,6 +48,7 @@ import {
   groupButtonLabel,
   LABELS,
   pairButtonLabel,
+  sessionStartButtonLabel,
   stakeButtonLabel,
   TEXTS,
   DEMO_GROUP_LABELS,
@@ -79,6 +82,16 @@ export const stakeCallbackData = (
   action: TradeAction,
   nonce: string,
 ): string => `${STAKE_CALLBACK_PREFIX}${assetId}:${durationSec}:${action}:${nonce}`;
+// The analysis screen's session button (#284, trading-session.ts). No nonce, by the owner's
+// decision: an old button starts a new session once the previous one has ended, and while one is
+// active the backend answers with it. The longest, `demo:sess:2147483647:3600`, is 25 bytes.
+const SESSION_START_PREFIX = 'demo:sess:';
+export const sessionStartCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
+  `${SESSION_START_PREFIX}${assetId}:${durationSec}`;
+// The button shows only where a session of DEFAULT_SESSION_TRADES fits the worker's deadline
+// (today 1 and 5 min); the handler checks again, so an old or forged datum starts nothing.
+export const sessionFits = (durationSec: number): boolean =>
+  sessionFitsDeadline(DEFAULT_SESSION_TRADES, durationSec);
 // 48 bits: unique among one user's own renders is all it needs, since the key is per user
 export const newStakeNonce = (): string => randomBytes(6).toString('hex');
 
@@ -91,6 +104,10 @@ const DEMO_DURATION_PATTERN = new RegExp(`^demo:d:(\\d{1,10}):(${DURATIONS})$`);
 const DEMO_ANALYSIS_PATTERN = new RegExp(`^demo:an:(\\d{1,10}):(${DURATIONS})$`);
 export const STAKE_CALLBACK_PATTERN = new RegExp(
   `^${STAKE_CALLBACK_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')}):([0-9a-f]{12})$`,
+);
+
+export const SESSION_START_PATTERN = new RegExp(
+  `^${SESSION_START_PREFIX}(\\d{1,10}):(${DURATIONS})$`,
 );
 
 // The shape #127 sends, so what the bot carries is what the backend accepts.
@@ -128,6 +145,20 @@ export function stakeDataOf(match: RegExpMatchArray | string): StakeData | undef
     return undefined;
   }
   return { assetId, durationSec, action, nonce };
+}
+
+// The session button's data from a SESSION_START_PATTERN match, undefined when forged or when
+// the duration does not fit a session.
+export function sessionStartDataOf(
+  match: RegExpMatchArray | string,
+): { assetId: number; durationSec: DemoDurationSec } | undefined {
+  if (typeof match === 'string') return undefined;
+  const assetId = assetIdOf(match[1]);
+  const durationSec = durationOf(match[2]);
+  if (assetId === undefined || durationSec === undefined || !sessionFits(durationSec)) {
+    return undefined;
+  }
+  return { assetId, durationSec };
 }
 
 export interface DemoComposerDeps {
@@ -251,7 +282,7 @@ export function createDemoComposer<C extends Context>({
     return analysisScreen({ pair, durationSec, response });
   }
 
-  // the stake button on a signal only, then «🔄 Повторить анализ» and the way back
+  // the stake and session buttons on a signal only, then «🔄 Повторить анализ» and the way back
   function analysisKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
@@ -265,6 +296,16 @@ export function createDemoComposer<C extends Context>({
           stakeCallbackData(assetId, durationSec, screen.stake, newStakeNonce()),
         )
         .row();
+      // its own row: the session's trades follow the orchestrator's signal at each trade, not
+      // this screen's direction
+      if (sessionFits(durationSec)) {
+        keyboard
+          .text(
+            sessionStartButtonLabel(DEFAULT_SESSION_TRADES),
+            sessionStartCallbackData(assetId, durationSec),
+          )
+          .row();
+      }
     }
     return keyboard
       .text(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(assetId, durationSec))

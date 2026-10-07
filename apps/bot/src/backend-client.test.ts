@@ -6,8 +6,10 @@ import {
   TradeAction,
   TradeIntentErrorCode,
   TradeMode,
+  TradingSessionErrorCode,
   UserErrorCode,
   type CreateTradeIntentRequest,
+  type CreateTradingSessionRequest,
   type UserStartRequest,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
@@ -30,6 +32,8 @@ import {
   SIGNAL_DECIDED,
   SIGNAL_DECISION,
   SIGNAL_FETCH_FAILED,
+  SESSION_ID,
+  SESSION_VIEW,
   closeServer,
   listen,
   accountView,
@@ -729,6 +733,161 @@ describe('readIntent', () => {
       createBackendClient({ baseUrl, token: TOKEN }).readIntent(INTENT_ID, '4242'),
     );
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+// #284
+describe('startSession', () => {
+  const sessionRequest: CreateTradingSessionRequest = {
+    telegramUserId: '4242',
+    assetId: 101,
+    durationSec: 60,
+    trades: 5,
+  };
+  const startWith = async (status: number, body: unknown) => {
+    const served = await serve((_request, reply) => {
+      json(reply, status, body);
+    });
+    return {
+      ...served,
+      start: () =>
+        createBackendClient({ baseUrl: served.baseUrl, token: TOKEN }).startSession(sessionRequest),
+    };
+  };
+
+  it('posts the request under the bearer; 201 returns the session as started', async () => {
+    const { start, capture } = await startWith(201, { session: SESSION_VIEW });
+    expect(await start()).toEqual({ started: SESSION_VIEW });
+    expect(capture.method).toBe('POST');
+    expect(capture.url).toBe('/trading/sessions');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual(sessionRequest);
+  });
+
+  it.each([
+    ['no session', { intent: SESSION_VIEW }],
+    ['a status outside the enum', { session: { ...SESSION_VIEW, status: 'running' } }],
+  ])('reports a 201 with %s as a contract violation', async (_name, body) => {
+    const { start } = await startWith(201, body);
+    expect(await rejectionOf(start())).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('returns the active session a 409 active_session_exists carries', async () => {
+    const { start } = await startWith(409, {
+      error: TradingSessionErrorCode.ActiveSessionExists,
+      session: SESSION_VIEW,
+    });
+    expect(await start()).toEqual({ active: SESSION_VIEW });
+  });
+
+  it('returns null when the active session ended before the backend read it', async () => {
+    const { start } = await startWith(409, {
+      error: TradingSessionErrorCode.ActiveSessionExists,
+      session: null,
+    });
+    expect(await start()).toEqual({ active: null });
+  });
+
+  // the code alone is not the contract: the outcome is not known, so the caller retries
+  it.each([
+    ['a session that is not a view', { error: 'active_session_exists', session: 'x' }],
+    ['no session at all', { error: 'active_session_exists' }],
+  ])('reports a 409 active_session_exists with %s as a contract violation', async (_n, body) => {
+    const { start } = await startWith(409, body);
+    expect(await rejectionOf(start())).toMatchObject({
+      code: BackendErrorCode.ContractViolation,
+      status: 409,
+    });
+  });
+
+  it.each([
+    [409, TradingSessionErrorCode.InsufficientTokens],
+    [503, TradingSessionErrorCode.CatalogUnavailable],
+    [404, TradingSessionErrorCode.BrokerAccountNotFound],
+  ])('carries a %i %s as its status and reason', async (status, reason) => {
+    const { start } = await startWith(status, { error: reason });
+    expect(await rejectionOf(start())).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status,
+      reason,
+    });
+  });
+
+  it('carries a 500 as its status, without the body', async () => {
+    const { start } = await startWith(500, { message: 'SECRET-BODY', session: SESSION_VIEW });
+    const error = await rejectionOf(start());
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status: 500 });
+    expect((error as BackendError).reason).toBeUndefined();
+  });
+});
+
+describe('readSession', () => {
+  it('sends a GET of the id with the owner in the query, and returns the view', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { session: SESSION_VIEW });
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).readSession(SESSION_ID, '4242'),
+    ).toEqual(SESSION_VIEW);
+    expect(capture.method).toBe('GET');
+    expect(capture.url).toBe(`/trading/sessions/${SESSION_ID}?telegramUserId=4242`);
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(capture.contentType).toBeUndefined();
+  });
+
+  it('keeps an id that is not a path segment inside its segment', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 404, { error: 'not_found' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readSession('../x?y', '4242'),
+    );
+    expect(capture.url).toBe('/trading/sessions/..%2Fx%3Fy?telegramUserId=4242');
+    expect(error).toMatchObject({ status: 404, reason: 'not_found' });
+  });
+
+  it('reports a broken body as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { session: { ...SESSION_VIEW, trades: null } });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readSession(SESSION_ID, '4242'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+describe('stopSession', () => {
+  it('posts the owner to the stop path and returns the view', async () => {
+    const stopped = {
+      ...SESSION_VIEW,
+      status: 'stopped',
+      stopReason: 'user_stopped',
+      endedAt: SESSION_VIEW.startedAt,
+    };
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { session: stopped });
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).stopSession(SESSION_ID, '4242'),
+    ).toEqual(stopped);
+    expect(capture.method).toBe('POST');
+    expect(capture.url).toBe(`/trading/sessions/${SESSION_ID}/stop`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
+  });
+
+  it('carries a 409 session_not_active as its reason', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 409, { error: TradingSessionErrorCode.SessionNotActive });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).stopSession(SESSION_ID, '4242'),
+    );
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 409,
+      reason: TradingSessionErrorCode.SessionNotActive,
+    });
   });
 });
 

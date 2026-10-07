@@ -36,9 +36,11 @@ import {
 import { BOT_COMMANDS } from './commands';
 import { createDemoComposer, DEMO_CALLBACK_DATA } from './demo';
 import { createDemoTradeComposer } from './demo-trade';
+import { createTradingSessionComposer } from './trading-session';
 import type { IntentTracker } from './intent-tracker';
 import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
+import type { SessionTracker } from './session-tracker';
 import { editRefusal } from './screen';
 import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
 import {
@@ -96,6 +98,8 @@ export interface CreateBotOptions {
   now?: () => number;
   // follows each demo trade's status message (#127); required, so no test arms timers unasked
   intentTracker: Pick<IntentTracker, 'track'>;
+  // follows each demo session's status message (#284); required for the same reason
+  sessionTracker: Pick<SessionTracker, 'track'>;
 }
 
 export function createBot({
@@ -109,6 +113,7 @@ export function createBot({
   loginDialog = createLoginDialog(),
   now = Date.now,
   intentTracker,
+  sessionTracker,
 }: CreateBotOptions): Bot {
   const bot = new Bot(token, {
     ...(botInfo === undefined ? {} : { botInfo }),
@@ -338,6 +343,16 @@ export function createBot({
       logger,
       now,
       intentTracker,
+      connectKeyboard: welcomeKeyboard,
+    }),
+  );
+
+  // the session button under the analysis and the buttons under the session's status (#284)
+  privateChats.use(
+    createTradingSessionComposer({
+      backend,
+      logger,
+      sessionTracker,
       connectKeyboard: welcomeKeyboard,
     }),
   );

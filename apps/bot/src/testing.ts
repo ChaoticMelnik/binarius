@@ -8,6 +8,7 @@ import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
 import type { BackendClient } from './backend-client';
 import type { IntentTracker } from './intent-tracker';
+import type { SessionTracker } from './session-tracker';
 import {
   BrokerAccountStatus,
   brokerBalanceViewSchema,
@@ -21,6 +22,7 @@ import {
   TradeAction,
   TradeIntentStatus,
   TradeMode,
+  tradingSessionViewSchema,
   tradingSignalResponseSchema,
   TrendDirection,
   UserStatus,
@@ -37,6 +39,7 @@ import {
   type StartLoginResponse,
   type TradeIntentView,
   type TradingAccessResponse,
+  type TradingSessionView,
   type TradingSignalResponse,
   type UserAccountView,
   type UserStartView,
@@ -310,6 +313,31 @@ export const intentView = (patch: Partial<TradeIntentView> = {}): TradeIntentVie
   ...patch,
 });
 
+// A demo session as POST /trading/sessions answers it right after creation (#284): active, no
+// trade yet, the broker's minimum stake.
+export const SESSION_ID = '9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+export const SESSION_VIEW: TradingSessionView = tradingSessionViewSchema.parse({
+  id: SESSION_ID,
+  mode: TradeMode.Demo,
+  status: 'active',
+  stopReason: null,
+  settings: {
+    version: 1,
+    assetId: PAIR_EURUSD.id,
+    durationSec: 60,
+    trades: 5,
+    stake: { baseStake: '1', stakeScale: 0 },
+  },
+  startedAt: '2026-10-07T10:00:00.000Z',
+  endedAt: null,
+  trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0 },
+  lastIntent: null,
+});
+export const sessionView = (patch: Partial<TradingSessionView> = {}): TradingSessionView => ({
+  ...SESSION_VIEW,
+  ...patch,
+});
+
 // A client where every method the scene does not give rejects, so an unexpected call fails the
 // scene instead of answering with a fixture. A method added to BackendClient adds a line here.
 export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient => {
@@ -328,12 +356,19 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     evaluateSignal: unused,
     createIntent: unused,
     readIntent: unused,
+    startSession: unused,
+    readSession: unused,
+    stopSession: unused,
     ...patch,
   };
 };
 
 // a tracker that arms no timer: what every bot built in a test gets unless it asserts on tracking
 export const stubTracker = (): { track: Mock<IntentTracker['track']> } => ({ track: vi.fn() });
+// the same for the demo sessions' tracker (#284)
+export const stubSessionTracker = (): { track: Mock<SessionTracker['track']> } => ({
+  track: vi.fn(),
+});
 
 export const EMAIL = 'ada@example.test';
 export const CODE = '123456';
