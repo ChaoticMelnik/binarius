@@ -98,12 +98,12 @@ PostgreSQL + Drizzle ORM (решение зафиксировано 2026-09-21, 
   2. Деньги/токены — `bigint`/`numeric` string-mode + `DecimalString`, никогда JS `number`.
   3. `token_ledger` и `audit_log` — append-only, включая TRUNCATE (триггеры).
   4. Владение строк — композитными FK, не проверками в коде.
-  5. Порядок блокировок `users → broker_accounts → trade_intents`, `broker_accounts` — `FOR NO KEY UPDATE`.
+  5. Порядок блокировок `users → broker_accounts → trading_sessions → trade_intents`, `broker_accounts` — `FOR NO KEY UPDATE`.
   6. Переходы `trade_intents` — только CAS внутри UPDATE, возраст — по часам БД.
   7. Идемпотентность — unique-индексы `(user_id, client_request_id)`, один нетерминальный intent на аккаунт, outbox `(topic, intent_id)`.
   8. Ошибки логируются именем и кодом (`errorIdentity`/`errorLogFields`); ESLint ловит это частично, логгер (`logOptions`) сводит четыре ключа ошибки верхнего уровня к whitelist и не копирует `err.message` в `msg` — вложенный ключ, format-аргумент и явное сообщение не покрыты (Architecture Rules п.8); redact-пути не чистят строки.
   9. OAuth: state — хеш и одноразовый CAS, новый аккаунт — `pending` до подтверждения, заблокированный пользователь не доходит до брокера, refresh — одна попытка, сбой → revocation; обмен — по действию пользователя или при сверке intent'а (#90), не по таймеру.
-  10. bot → backend — общий bearer, сравнение за постоянное время; внутренний API доверенный.
+  10. bot → backend — общий bearer, сравнение за постоянное время; внутренний API доверенный, но чтение и остановка сессий и заявок проверяют владельца по `telegramUserId`, чужой id неотличим от отсутствующего (404).
 
 ### Конвенции кода
 

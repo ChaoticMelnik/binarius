@@ -1953,3 +1953,174 @@ PR #305 смержен через rebase (4 коммита, голова `e26a7f
 1. **Архитектор прогоняет планируемый ESLint-запрет на реальных файлах репозитория** — **внедрено в #308: .claude/skills/architect/SKILL.md → Step 4**
 2. **Minor m1, m2, m4, m5** — **вынесено в #307**
 3. **m3 — перепроверка хозяев при сохранении фрагмента** — **вынесено в #299** (issuecomment-6037524740)
+
+---
+
+## Волна «торговая сессия» — общие наблюдения (2026-10-07)
+
+Одна сессия tech-lead провела #101, #130 (часть 1a; 1b → #287), #144, #283, #287, #284. Общее:
+- **Fable исчерпан на середине волны.** Архитектор #101 упал на лимите; новый цикл #101 дописан на Opus по решению владельца. Раунды исправлений #130, #287, #284 ушли исполнителю без Plan Update архитектора — каждый раз по явному ответу владельца.
+- **Codex:** план #101 проверен (`task-muxmjcx5-igbc4o`, `task-muxtaxqb-j71hd9`); полные прогоны по PR — #101 круги 1-2, #130 круг 2 (`task-muxxahjx-23a642`), #144 (`task-muxz5rhu-z1mvw7`), #283 (`task-muy03x1j-t92cyt`). #287 и #284 Codex не видел ни разу (лимит, затем пропуск владельцем); #101 круг 3 — пропуск владельцем.
+- **Планы писались до мержа соседей** (#130 — до #101, #283/#144/#287/#284 — до #288/#144): исполнители ловили расхождения на clarify (коллизия имён, `telegramUserId`, `policy`, wire-коды). Правило Step 4 (конфликты против всей доски) уже внедрено в #280.
+- **Порядок мержа менялся по решениям владельца:** #144 → #283 → #287 → #284 (409 `trading_paused` перешёл в #283).
+- **Real-торговля после #144 открыта по умолчанию** — решение владельца (Plan Update #144), явно повторено в вопросе о мерже.
+
+### Process improvement proposals (волна)
+
+1. **Больше 4 вопросов clarify — второй вызов `AskUserQuestion`, не дефолт** — **внедрено в #312: `.claude/skills/tech-lead/SKILL.md` → Clarify relay**
+2. **Модель архитектора недоступна — владелец выбирает между Opus и исправлениями без Plan Update; не по умолчанию** — **внедрено в #312: `.claude/skills/tech-lead/SKILL.md` → Phase 4, iteration 1**
+3. **Задания Codex ключуются по рабочему каталогу: ревьюер возвращает id и маркер, tech-lead перехеширует по маркеру** — **внедрено в #312: `.claude/skills/tech-lead/SKILL.md` → Whole-feature pass — check**
+4. **Памятка CLAUDE.md: `trading_sessions` в цепочке блокировок (п.5), чтение по владельцу (п.10)** — **внедрено в #312: `.claude/CLAUDE.md` → Планирование задач**
+5. **Бюджет Codex на волну (с волны «первая демосделка»)** — **открыто (2026-10-07, владелец)**
+
+---
+
+## #101 — ARCH-01: менеджер сессий и сквозной сценарий на mock-брокере (2026-10-07)
+
+PR #282 смержен через rebase (голова `c92d09d`), 3293 строки без snapshot (превышения приняты владельцем: 3313 → 3706 → ~3245). **Три круга ревью — лимит; новый цикл со сменой подхода (проба вынесена в #285).**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + план | Спавн `fable`: 7 вопросов; Codex plan review `task-muxmjcx5-igbc4o` (8 Major + 4 Minor, все учтены). Решения владельца: `mayRefresh: false`; принятый риск 2 → #281. |
+| Implementer | Clarify ×3 + код | 5 + 5 + 4 вопроса; m4 из ревью #100 закрыт (T1 падает на старом клиенте). |
+| Reviewer | Iteration 1 | Codex `task-muxq86os-m6kmhm`: M1 (проба выдаёт «можно» без проверки) + 5 Minor → Todo. |
+| Reviewer | Iteration 2 | Codex `task-muxsr8ji-6fpytv`: M1 того же класса (непрерывность сокета B) → смена подхода (b): проба → #285. |
+| Architect | Новый цикл | Черновики на Fable, Codex re-check `task-muxtaxqb-j71hd9`; Fable упал на лимите → доделано на Opus по решению владельца. |
+| Reviewer | Iteration 3 | 0 Blocker/Major, 3 Minor; Codex упал на лимите → пропуск владельцем. |
+| Tech Lead | Merge / Done | Заметка о мерже на лимите кругов; Minor → #286; фаза REST-эха → #285. |
+
+### Review iterations: 3 (лимит)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Проба выдаёт безопасный вердикт без проверки стороны A | Major → исправлен | unverified-claim | План описывал чтение пробы человеком, не машинный вердикт | Architect plan (D7) |
+| Непрерывность сокета B не входила в вердикт | Major → вынесено | instance-vs-class | Исправлен экземпляр (A), не класс «вердикт из неполных данных» | Architect Plan Update → смена подхода |
+| m1-m3 круга 3 (шаг деплоя `BROKER_WS_URL`, риск 4 шире, чистки) | Minor | other | — | → #286 |
+
+### Process improvement proposals
+
+1. **Двухсокетная проба отдельной задачей** — **вынесено в #285**
+2. **Minor третьего круга** — **вынесено в #286**
+3. **Брокер отверг токен раньше срока backend** — **вынесено в #281**
+
+---
+
+## #130 — Оркестрация демо-сессии, часть 1a: слой данных trading_sessions (2026-10-07)
+
+PR #288 смержен через rebase (голова `d47642a`), +1665 строк, миграция 0018. **Два круга ревью.** Часть 1b → #287 (разрез по линии плана на контрольной точке, решение владельца).
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План (другая сессия) | Codex plan review `task-muxr1xes-cc1fxo`; запасной разрез 1a/1b. |
+| Implementer | Clarify + код | 5 вопросов; PLAN DEFECT (имена #101) — механическое переименование по решению владельца; контрольная точка → разрез. |
+| Reviewer | Iteration 1 | Codex пропущен владельцем; 8 Minor → исправлены все по решению владельца, без Plan Update (Fable исчерпан). |
+| Reviewer | Iteration 2 | Codex `task-muxxahjx-23a642`, маркер перехеширован; 0 Blocker/Major, 7 Minor. |
+| Tech Lead | Merge / Done | n1 → #287, остальное → #296. |
+
+### Review iterations: 2
+
+### Process improvement proposals
+
+1. **Часть 1b** — **вынесено в #287**
+2. **Minor второго круга** — **вынесено в #296**
+
+---
+
+## #144 — Kill switch новых заявок (2026-10-07)
+
+PR #298 смержен через rebase (голова `a0fac2e`), +1732/−584, миграции 0019/0020. **Один круг ревью с Codex, чистый.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План (другая сессия, Opus) | Codex plan review; Plan Update (по умолчанию открыто — demo и real). |
+| Implementer | Clarify + код | 5 вопросов; PD1 (`policy` в `createSessionIntent`) правлен здесь; 409 отдан #283; проверка только тестами (решение владельца). |
+| Reviewer | Iteration 1 | Codex `task-muxz5rhu-z1mvw7`, маркер перехеширован; 0 Blocker/Major, 6 Minor. Real открыт по умолчанию — записанное решение владельца, явно в вопросе о мерже. |
+| Tech Lead | Merge / Done | m1 (отсечка real в слое сессий) → #283; остальное → #302. |
+
+### Review iterations: 1
+
+### Process improvement proposals
+
+1. **Отсечка не-демо в `createTradingSession`** — **вынесено в #283** (сделано в PR #303)
+2. **Minor** — **вынесено в #302**
+
+---
+
+## #283 — Торговые сессии: роуты backend (2026-10-07)
+
+PR #303 смержен через rebase (голова `07e0d2a`), +2096 строк. **Один круг ревью с Codex, чистый.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План (другая сессия, Opus) | Codex plan review. |
+| Implementer | Clarify + код | 5 вопросов; PD1-PD4 механически; контрольная точка до #144, затем rebase, 409 `trading_paused`, отсечка не-демо, ноль-минимум → 409; локальный прогон в отдельном compose-проекте. |
+| Reviewer | Iteration 1 | Codex `task-muy03x1j-t92cyt`, маркер перехеширован; 0 Blocker/Major, 7 Minor. |
+| Tech Lead | Merge / Done | Minor → #304. |
+
+### Review iterations: 1
+
+### Process improvement proposals
+
+1. **Minor** — **вынесено в #304**
+
+---
+
+## #287 — Торговая сессия, часть 1b: оркестратор и CLI session-start (2026-10-07)
+
+PR #306 смержен через rebase (голова `9252b5f`), +2983 строки. **Три круга ревью — лимит; Codex не отработал ни разу.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План (другая сессия, Opus) | Codex plan review; дополнения (stake-sizer `nowMs`, PD1, n1). |
+| Implementer | Clarify ×3 + код | Стек на #283, rebase после мержа; один PR при любом размере (решение владельца). |
+| Reviewer | Iteration 1 | Codex на лимите; M1 (просроченная сессия сверх лимита свипа получает сделку) + 9 Minor → исправлены без Plan Update. |
+| Reviewer | Iteration 2 | Codex pending; M1 (верхний регистр `ACCOUNT_ID`) + 3 Minor; владелец: «не ждать Codex, исправлять». |
+| Reviewer | Iteration 3 | Codex пропущен владельцем; 0 Blocker/Major, 2 Minor. |
+| Tech Lead | Merge / Done | Заметка о мерже на лимите кругов; Minor → #310. |
+
+### Review iterations: 3 (лимит)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Сделка после дедлайна сверх лимита свипа | Major → исправлен | instance-vs-class | Дедлайн проверялся только в свипе с лимитом | Architect plan |
+| Верхний регистр `ACCOUNT_ID` | Major → исправлен | other | Регрессия исправления m1 круга 1 | Implementer (fix round) |
+
+### Process improvement proposals
+
+1. **Minor третьего круга** — **вынесено в #310**
+
+---
+
+## #284 — Бот: кнопка «Сессия из 5 сделок», статус и остановка (2026-10-07)
+
+PR #309 смержен через rebase (голова `215e8e7`), +3101 строка (лимит ~3500 по решению владельца). **Два круга ревью; Codex пропущен владельцем.**
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | План (другая сессия, Opus) | — |
+| Implementer | Clarify + код | 4 вопроса задано, 5-й (проверка в Telegram) передан дефолтом — отклонение tech-lead (→ предложение 1 волны). Тексты сразу в каталог (#240 смержен раньше). |
+| Reviewer | Iteration 1 | Codex на лимите; M1 (ложный текст остановленной сессии на ручной проверке) + 3 Minor → исправлены без Plan Update. |
+| Reviewer | Iteration 2 | 0 Blocker/Major, 4 Minor; Codex пропущен владельцем; LGTM — tech-lead. |
+| Tech Lead | Merge / Done | Rebase после #287 (конфликт в двух строках docs); Minor → #311. |
+
+### Review iterations: 2
+
+### Process improvement proposals
+
+1. **Minor второго круга** — **вынесено в #311**
