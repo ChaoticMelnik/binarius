@@ -40,7 +40,6 @@ import {
   SWEEP_INTERVAL_MS,
 } from './intents/config';
 import { startIntentConsumer } from './intents/consumer';
-import { buildExecutor } from './intents/executor';
 import { processIntentJob } from './intents/processor';
 import { createReconciliationPass, processReconciliationJob } from './intents/reconciliation';
 import { createRestReconciler } from './intents/rest-reconciler';
@@ -69,7 +68,7 @@ const tokens = createBackendAccessTokenSource({
 });
 
 // The broker sessions only with BROKER_WS_URL set (docs/broker-session.md); unset, every order
-// goes over REST. The gate stays the outermost layer (#134).
+// goes over REST.
 const sessions =
   env.brokerWsUrl === undefined
     ? undefined
@@ -89,15 +88,12 @@ const sessions =
         config: SESSION_MANAGER_CONFIG,
       });
 
-const executor = buildExecutor(
-  env,
-  createTradeCommandExecutor({
-    sessions: sessions ?? noTradeSessions,
-    rest: brokerRest,
-    tokens,
-    logger,
-  }),
-);
+const executor = createTradeCommandExecutor({
+  sessions: sessions ?? noTradeSessions,
+  rest: brokerRest,
+  tokens,
+  logger,
+});
 
 const consumer = startIntentConsumer({
   topic: OutboxTopic.TradingIntents,

@@ -5,7 +5,6 @@ import {
   parseBoundedIntegerEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
-  parseRealTradingEnabledEnv,
   parseUrlEnv,
   readEnv,
   type EnvSource,
@@ -35,7 +34,6 @@ export interface Env {
   intentMaxAgeMs: number;
   submitAckTimeoutMs: number;
   workerConcurrency: number;
-  realTradingEnabled: boolean;
   // the token route (#90): the worker holds no broker credentials of its own
   backendUrl: string;
   internalApiToken: string;
@@ -71,7 +69,6 @@ export function parseEnv(source: EnvSource): Env {
       1,
       MAX_WORKER_CONCURRENCY,
     ),
-    realTradingEnabled: parseRealTradingEnabledEnv(source),
     backendUrl: parseUrlEnv(readEnv(source, 'BACKEND_URL'), 'BACKEND_URL', BACKEND_URL_RULES),
     internalApiToken: parseInternalTokenEnv(
       readEnv(source, 'INTERNAL_API_TOKEN'),

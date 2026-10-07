@@ -18,7 +18,6 @@ describe('parseEnv', () => {
       intentMaxAgeMs: 60_000,
       submitAckTimeoutMs: 10_000,
       workerConcurrency: 5,
-      realTradingEnabled: false,
       backendUrl: valid.BACKEND_URL,
       internalApiToken: valid.INTERNAL_API_TOKEN,
       brokerApiBaseUrl: valid.BROKER_API_BASE_URL,
@@ -32,16 +31,6 @@ describe('parseEnv', () => {
       expect(parseEnv({ ...valid, BROKER_WS_URL: value }).brokerWsUrl).toBe(value);
     },
   );
-
-  it('reads REAL_TRADING_ENABLED', () => {
-    expect(parseEnv({ ...valid, REAL_TRADING_ENABLED: 'true' }).realTradingEnabled).toBe(true);
-  });
-
-  it('refuses a REAL_TRADING_ENABLED that is not true or false', () => {
-    expect(() => parseEnv({ ...valid, REAL_TRADING_ENABLED: 'yes' })).toThrow(
-      'Env REAL_TRADING_ENABLED must be one of: true false',
-    );
-  });
 
   it('accepts explicit values', () => {
     const env = parseEnv({

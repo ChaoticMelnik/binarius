@@ -100,9 +100,11 @@ describe('the session manager in the shutdown budget (#101)', () => {
   });
 });
 
-describe('the trading grant', () => {
-  it('forwards REAL_TRADING_ENABLED to the trading-worker without a default of its own', () => {
-    expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'REAL_TRADING_ENABLED')).toBe('');
+describe('the trading switch (#144)', () => {
+  it('no longer forwards REAL_TRADING_ENABLED to the trading-worker', () => {
+    expect(
+      composeServiceEnvValue(composeYaml, 'trading-worker', 'REAL_TRADING_ENABLED'),
+    ).toBeUndefined();
   });
 });
 

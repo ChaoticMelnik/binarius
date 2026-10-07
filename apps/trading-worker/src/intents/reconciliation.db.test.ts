@@ -253,9 +253,9 @@ describe('the reconciliation pass: outcomes', () => {
       ['brokerAccountId', 'hostname', 'intentId', 'level', 'msg', 'pid', 'reason', 'time'].sort(),
     );
     // the halt stops new intents for the account
-    const refused = await createTradeIntent(tmp.db, intentRequest(telegramUserId), {
-      realTradingEnabled: false,
-    }).catch((error: unknown) => error);
+    const refused = await createTradeIntent(tmp.db, intentRequest(telegramUserId)).catch(
+      (error: unknown) => error,
+    );
     expect(refused).toBeInstanceOf(TradeIntentError);
     expect((refused as TradeIntentError).code).toBe('account_halted');
   });

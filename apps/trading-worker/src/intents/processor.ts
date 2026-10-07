@@ -11,6 +11,7 @@ import {
   markIntentUnknown,
   rejectExpiredIntent,
   rejectIntent,
+  rejectPausedIntent,
   takeIntent,
   TradeIntentMismatchError,
   type Db,
@@ -83,8 +84,8 @@ async function handleQueued(deps: ProcessorDeps, intent: TradeIntentRow): Promis
     maxAgeMs: config.intentMaxAgeMs,
   });
   if (taken === undefined) {
-    // the same CAS refused: either the intent is too old (then this one succeeds) or someone
-    // else moved it (then this one is a no-op too)
+    // the same CAS refused: the intent is too old (the expiry succeeds), the trading switch is
+    // closed (the paused rejection succeeds), or someone else moved it (both are no-ops)
     const expired = await db.transaction((tx) =>
       rejectExpiredIntent(tx, {
         id: intent.id,
@@ -98,6 +99,15 @@ async function handleQueued(deps: ProcessorDeps, intent: TradeIntentRow): Promis
         'intent expired before submission',
       );
       return 'expired';
+    }
+    // after the expiry, so an old intent keeps its own reason; at this version the take refused
+    // for the switch alone (docs/kill-switch.md)
+    const paused = await db.transaction((tx) =>
+      rejectPausedIntent(tx, { id: intent.id, expectedVersion: intent.version }),
+    );
+    if (paused !== undefined) {
+      logger.warn({ intentId: intent.id }, 'intent rejected: trading paused');
+      return 'rejected';
     }
     logger.info({ intentId: intent.id }, 'duplicate intent job, intent already taken');
     return 'noop';

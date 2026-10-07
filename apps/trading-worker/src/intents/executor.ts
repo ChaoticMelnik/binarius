@@ -1,11 +1,5 @@
-import {
-  TradeIntentFailureReason,
-  TradeMode,
-  type OpenTrade,
-  type TradeTransport,
-} from '@binarius/shared';
-import type { TradeIntentRow, TradePolicy } from '@binarius/db';
-import type { Env } from '../env';
+import type { OpenTrade, TradeIntentFailureReason, TradeTransport } from '@binarius/shared';
+import type { TradeIntentRow } from '@binarius/db';
 
 export type SubmitResult =
   | { outcome: 'accepted'; transport: TradeTransport; trade: OpenTrade }
@@ -26,27 +20,4 @@ export type SubmitResult =
 // that in `detail` of an explicit `unknown` result instead.
 export interface TradeExecutor {
   submit(intent: TradeIntentRow, signal: AbortSignal): Promise<SubmitResult>;
-}
-
-// The outermost layer over any executor (#134): with the grant off,
-// a real intent is rejected without the inner executor being called. `rejected`, because nothing
-// was sent to the broker.
-export function realTradingGate(inner: TradeExecutor, policy: TradePolicy): TradeExecutor {
-  return {
-    submit: async (intent, signal) => {
-      if (intent.mode === TradeMode.Real && !policy.realTradingEnabled) {
-        return { outcome: 'rejected', reason: TradeIntentFailureReason.RealTradingDisabled };
-      }
-      return inner.submit(intent, signal);
-    },
-  };
-}
-
-// The worker's one production composition and the one place the parsed env becomes a policy:
-// the gate stays outside the trade command executor (#134 review, Minor 2).
-export function buildExecutor(
-  env: Pick<Env, 'realTradingEnabled'>,
-  inner: TradeExecutor,
-): TradeExecutor {
-  return realTradingGate(inner, { realTradingEnabled: env.realTradingEnabled });
 }

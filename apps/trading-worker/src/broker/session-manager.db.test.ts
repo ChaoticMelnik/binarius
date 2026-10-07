@@ -38,8 +38,6 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
-import { parseEnv } from '../env';
-import { buildExecutor } from '../intents/executor';
 import { processIntentJob, type ProcessorDeps } from '../intents/processor';
 import { createTradeCommandExecutor } from '../intents/trade-command-executor';
 import type { AccessTokenOutcome } from './access-token';
@@ -54,7 +52,7 @@ import { BrokerSocketState } from './socket';
 
 // The end-to-end scenario of #101 on the mock broker: connect → auth → subscribe → price → open
 // success/fail → close → balance, through the production composition (the session manager as
-// the executor's TradeSessionSource, buildExecutor around it, processIntentJob) and the
+// the executor's TradeSessionSource, processIntentJob) and the
 // production writers. Every oracle is the persisted state.
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -161,21 +159,12 @@ afterAll(async () => {
 });
 
 const executor = () =>
-  buildExecutor(
-    parseEnv({
-      DATABASE_URL: baseUrl,
-      REDIS_URL: 'redis://localhost:6379',
-      BACKEND_URL: 'http://backend:3000',
-      INTERNAL_API_TOKEN: 'internal-token-for-tests-0123456789',
-      BROKER_API_BASE_URL: 'https://api.binodex.app',
-    }),
-    createTradeCommandExecutor({
-      sessions: manager,
-      rest: createBrokerRestClient({ baseUrl: broker.url }),
-      tokens: { accessToken: () => Promise.resolve({ ok: true, accessToken: TOKEN }) },
-      logger,
-    }),
-  );
+  createTradeCommandExecutor({
+    sessions: manager,
+    rest: createBrokerRestClient({ baseUrl: broker.url }),
+    tokens: { accessToken: () => Promise.resolve({ ok: true, accessToken: TOKEN }) },
+    logger,
+  });
 
 const deps = (submitAckTimeoutMs = 5_000): ProcessorDeps => ({
   db: tmp.db,
@@ -188,7 +177,6 @@ async function newIntent(patch: Parameters<typeof intentRequest>[1] = {}) {
   const { intent } = await createTradeIntent(
     tmp.db,
     intentRequest(telegramUserId, { assetId: EURUSD, amount: '1.50' as DecimalString, ...patch }),
-    { realTradingEnabled: false },
   );
   return intent;
 }
