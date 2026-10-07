@@ -61,6 +61,8 @@ Never assume file contents — Read first. If CodeGraph is set up, use it for si
 
 Follow the plan's steps in order. When the plan says to create issues (follow-ups, splits), use `/github` → "Create an issue" and then "Add issue to Project #2" — `gh issue create` alone leaves the issue off the board. Stack conventions (`.claude/CLAUDE.md` → Конвенции кода / `.claude/skills/tech-lead/SKILL.md` → Project Architecture Reference): TypeScript everywhere, pnpm workspaces, Drizzle for schema/migrations (use the `drizzle-orm-patterns` skill when touching `packages/db`), Vitest for unit/integration tests (use the `vitest-testing` skill), русские пользовательские строки / английский код. Comments: only when WHY is non-obvious — never describe WHAT the code does.
 
+Format only the files you change (`prettier --write <files>`), never the whole repo: the tree is not prettier-clean, and a repo-wide pass in #107 reflowed untouched code in `apps/backend` and `apps/web`, which took a separate revert commit.
+
 ### Step 5: Run the project's check command
 
 ```bash
