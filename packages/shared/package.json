@@ -93,6 +93,10 @@
       "types": "./src/signal.ts",
       "default": "./src/signal.ts"
     },
+    "./trading-session": {
+      "types": "./src/trading-session.ts",
+      "default": "./src/trading-session.ts"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"

@@ -19,3 +19,4 @@ export * from './link-confirmation';
 export * from './telegram-html';
 export * from './catalog';
 export * from './signal';
+export * from './trading-session';
