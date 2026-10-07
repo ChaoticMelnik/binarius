@@ -2197,5 +2197,5 @@ PR #323 смержен через rebase (6 коммитов, голова `5e1a
 
 ### Process improvement proposals
 
-1. **Implementer форматирует только изменённые файлы** — **внедрено в #<PR>: .claude/skills/implementer/SKILL.md → Step 4**
+1. **Implementer форматирует только изменённые файлы** — **внедрено в #325: .claude/skills/implementer/SKILL.md → Step 4**
 2. **Minor m1-m4** — **вынесено в #324**
