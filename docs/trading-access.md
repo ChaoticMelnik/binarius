@@ -142,8 +142,8 @@ If 55432, 56379 or 53000 is taken, change it in `dc` (and 53000 in `access`).
 | `real` / `demo` `{ available, held, total }` | decimal strings as stored, scale 8 (`'10000.00000000'`); the bot formats them |
 | `minTradeAmount` | decimal string, scale 8 |
 | `level { code, rank }` | the broker's level |
-| `restSnapshotAgeSec` | whole seconds since the last REST write, by the database clock |
-| `balanceEventAgeSec` | since the newest socket balance event; null until #99/#101 write one |
+| `restSnapshotAgeSec` | whole seconds since the last full snapshot — a REST read or a session's `user.data` (#101) — by the database clock |
+| `balanceEventAgeSec` | since the newest socket balance event; null until a session wrote one |
 | `fresh` | the newest of the two ages is at most `BROKER_BALANCE_SLA_SEC` (60) |
 
 What the route does, in order:

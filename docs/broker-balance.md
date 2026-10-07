@@ -4,11 +4,11 @@ The backend keeps the last balance the broker reported for each broker account, 
 is. `POST /trading/access` shows it to the bot ([trading-access.md](trading-access.md) → Broker
 balance). Issue #137, with its table and operations from #235.
 
-Today the REST call is the only source: `GET /v1/broker/user`, through the REST client
-([broker-rest.md](broker-rest.md)). It runs when the bot asks about an account and on a
-background tick over the accounts in work. The socket events (`user.data`,
-`user.<mode>.update_balance`) are a second source once #99/#101 exist; the contract for them is
-below.
+Two sources write it. The REST call, `GET /v1/broker/user` through the REST client
+([broker-rest.md](broker-rest.md)), runs when the bot asks about an account and on a background
+tick over the accounts in work. The socket events (`user.data`, `user.<mode>.update_balance`)
+come from the worker's broker sessions ([broker-session.md](broker-session.md), #101) when
+`BROKER_WS_URL` is set; [The socket writers](#the-socket-writers-101) below.
 
 ## Components
 
@@ -16,7 +16,7 @@ below.
 | --- | --- | --- |
 | Table | `packages/db/src/schema/broker-balance-snapshots.ts`, migration 0011 | one row per broker account; `BalanceRefreshError` |
 | Operations | `packages/db/src/balance-snapshot-ops.ts` | the only writers and readers of the table, `toBrokerBalanceView` |
-| Contract | `packages/shared/src/broker-balance.ts` | `BROKER_BALANCE_SLA_SEC`, `TRADING_ACCESS_BUDGET_MS`, `BrokerBalanceUnavailableReason`, `brokerBalanceViewSchema` |
+| Contract | `packages/shared/src/broker-balance.ts` | `BROKER_BALANCE_SLA_SEC`, `TRADING_ACCESS_BUDGET_MS`, `BALANCE_WATCH_WINDOW_MS` (shared with the worker's session candidates), `BrokerBalanceUnavailableReason`, `brokerBalanceViewSchema` |
 | Reconciler | `apps/backend/src/broker/balance-reconciler.ts` | `refresh()`, `tick()`, `start()`, `stop()` |
 | Route | `apps/backend/src/trading/access.ts` | the `broker` section of `POST /trading/access` |
 | Constants | `apps/backend/src/timing.ts` | the interval, the per-minute ceiling, the windows, the route budget, and the chain between them |
@@ -30,8 +30,8 @@ below.
 | --- | --- |
 | `real_available`, `real_held`, `real_total`, `demo_*`, `min_trade_amount` | `numeric(20,8)`, `>= 0`, as the broker sent them. `total = available + held` is not checked: that is a rule of the mock's fixtures, not something observed live |
 | `level_code`, `level_rank` | the broker's level; `level_rank` is `numeric(8,4)`, `>= 0` |
-| `rest_observed_at` | database time of the last REST write |
-| `real_event_at`, `demo_event_at` | database time of the last socket event per mode; NULL until #99/#101 write one |
+| `rest_observed_at` | database time of the last full snapshot: a REST write or a session's `user.data` |
+| `real_event_at`, `demo_event_at` | database time of the last socket event per mode; NULL until a session wrote one |
 | `last_requested_at` | database time the bot last asked about this account |
 | `last_refresh_error`, `last_refresh_failed_at` | the last failure's code (`BalanceRefreshError`) and time, set together; a successful write clears both |
 
@@ -108,8 +108,10 @@ route it reaches the opaque 500. In the tick it is logged as
 Only the error's name and code are logged: a drizzle error carries the whole statement and the
 row's values.
 
-401 with a token we believed valid is recorded as `unauthorized` and retried. A forced refresh or
-a revocation on it is #101's.
+401 with a token we believed valid is recorded as `unauthorized` and retried. Nobody forces a
+refresh or revokes on it: the token is exchanged on the user's next action (Rule 12). The
+worker's sessions hold a refused token back ([broker-session.md → The token](broker-session.md#the-token));
+a token the broker refuses before its stored expiry is accepted risk 2 of #101, filed as #281.
 
 ## The background tick
 
@@ -183,22 +185,27 @@ the flights to finish. A token exchange in progress (a route refresh) is not abo
 covered by `BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`. A `refresh()` after `stop()`
 answers `aborted` without a call.
 
-## Contract for the socket writers (#99/#101, #92)
+## The socket writers (#101)
 
-The writers land in #101, on top of #99's socket client (docs/broker-socket.md → Client), which
-delivers `user_data` and `balance_update` events and writes nothing itself.
+The worker's session manager ([broker-session.md](broker-session.md)) writes what a session hears,
+on top of #99's socket client, which writes nothing itself:
 
-- **`user.data`**: `upsertBalanceSnapshot(db, { brokerAccountId, user, requested: false, eventAt: [modes] })`.
-  It writes the whole snapshot and moves `rest_observed_at` and each listed `<mode>_event_at` to
-  `now()`.
-- **`user.<mode>.update_balance`**: `applyBalanceEvent(db, { brokerAccountId, mode, balance })`,
-  not implemented yet because nothing calls it. It moves the three amounts of that mode and
-  `<mode>_event_at` on an existing row, and inserts nothing, because the event carries neither
-  the other mode nor `min_trade_amount`. So a session takes a REST snapshot (`refresh()`) before
-  it subscribes.
-- Every writer checks the answer's user id against `broker_user_id` before writing, and goes
-  through the domain check.
-- A snapshot after a trade is accepted or settled (#101's session writer after `accepted`, #92 after a reconciliation) calls `refresh(accountId)`. The trade command executor (#100) writes nothing.
+- **`user.data`** (the first event of every connection): `upsertBalanceSnapshot(db,
+  { brokerAccountId, user, requested: false, eventAt: [demo, real] })`. It writes the whole
+  snapshot and moves `rest_observed_at` and both `<mode>_event_at` to `now()`. No REST GET is made
+  at session start: `user.data` is the snapshot.
+- **`user.<mode>.update_balance`**: `applyBalanceEvent(db, { brokerAccountId, mode, balance })`.
+  It moves the three amounts of that mode and `<mode>_event_at` on an existing row and nothing
+  else (`rest_observed_at`, the other mode, `min_trade_amount`, the level, `last_requested_at` and
+  the refresh error stay), and inserts nothing, because the event carries neither the other mode
+  nor `min_trade_amount`: no row → `{ written: false, reason: 'no_snapshot' }`. An amount outside
+  the stored domain → `{ written: false, reason: 'out_of_domain', field }` before any statement.
+- The identity gate: `update_balance` carries no user id, so the manager writes it only after the
+  connection's `user.data` carried the account's `broker_user_id`; a `user.data` with another id
+  ends the session in its handler and nothing more of that connection is written.
+- No `refresh()` after `accepted`: the `update_balance` the broker sends before
+  `open_trade.success` is the snapshot after the trade. #92 (after a reconciliation) is the
+  backend's. The trade command executor (#100) writes nothing.
 
 ## Observed live
 
@@ -237,7 +244,7 @@ delivers `user_data` and `balance_update` events and writes nothing itself.
 
 ## Boundaries
 
-- #99/#101: the socket writers, the 401 handling and the refresh after `accepted`; #92: after a reconciliation (the worker has no `refresh()`; it is the backend balance reconciler).
+- #101: the socket writers above, implemented. #92: a snapshot after a reconciliation (the worker has no `refresh()`; it is the backend balance reconciler).
 - The bot's display, `BackendClient.readTradingAccess` and the link
   `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`: [bot-menu.md](bot-menu.md).
 - The money unit is whole currency units (live 2026-10-03, [broker-rest.md](broker-rest.md) →

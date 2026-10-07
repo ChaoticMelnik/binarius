@@ -103,8 +103,8 @@ supported form. Shared decodes the top level only, so it fails as `schema` too.
 ## Client (#99)
 
 `createBrokerSocketClient({ url, logger, timing?, openSocket? })` in `socket.ts`. One client holds
-one socket for one set of credentials at a time; one client per broker account, the token
-refresh and the place in `index.ts` are #101's.
+one socket for one set of credentials at a time. The session manager
+([broker-session.md](broker-session.md), #101) holds one per broker account in work.
 
 | Member | What it does |
 |---|---|
@@ -112,7 +112,7 @@ refresh and the place in `index.ts` are #101's.
 | `stop()` | closes the socket and forgets the credentials; synchronous, a no-op when idle. The registry stays |
 | `subscribe(assetIds)` | adds to the registry; the ids that are new go out at once when `ready`, otherwise with the next pass |
 | `subscriptions()` | the registry, ascending |
-| `openTrade(mode, request, signal)` | the trade command (#100, [below](#the-trade-command-100)): emits `user.<mode>.open_trade` only while `ready` and answers with the first `open_trade.success`/`.fail` of that mode on the same connection |
+| `openTrade(mode, request, signal)` | the trade command (#100, [below](#the-trade-command-100)): emits `user.<mode>.open_trade` only while `ready` on an untainted connection, and answers with the first `open_trade.fail` of that mode, or the first `open_trade.success` of that mode whose asset, action and amount are the command's, on the same connection |
 | `state`, `connections` | the state below; successful auths since the last `start()` |
 | `onEvent(listener)`, `onState(listener)` | every valid `BrokerEvent`; every state change `{ from, to, reason? }`. Each returns its unsubscribe |
 | `isTerminalBrokerSocketState(state)` | whether `start()` may be called again without `stop()` |
@@ -181,9 +181,9 @@ socket id from the fixture's journal: one `user.auth`, then `ceil(n / 40)` `pric
 
 | `outcome` | When | Emitted? |
 |---|---|---|
-| `success` (`trade`) | the first `user.<mode>.open_trade.success` on the connection the command went out on | yes |
+| `success` (`trade`) | the first `user.<mode>.open_trade.success` on the connection the command went out on whose asset, action and amount are the command's | yes |
 | `fail` (`failures`) | the first `user.<mode>.open_trade.fail` there | yes |
-| `not_sent` (`reason: not_ready`, `state`) | the client is not `ready`: no session, or any other state | no |
+| `not_sent` (`reason: not_ready`, `state`) | the client is not `ready` (no session, or any other state), or the connection is tainted (below) | no |
 | `not_sent` (`reason: aborted`, `state`) | the caller's signal was already aborted | no |
 | `unknown` (`reason: state_changed`, `state`) | any state change while waiting: `ready → reconnecting` (a transport drop), a terminal state, `idle` (`stop()`) | yes |
 | `unknown` (`reason: aborted`, `state`) | the caller's signal aborted while waiting | yes |
@@ -194,19 +194,40 @@ socket id from the fixture's journal: one `user.auth`, then `ceil(n / 40)` `pric
   as a subscription chunk does. `user.<mode>.open_trade` is the client's third emit, after
   `user.auth` and `price.subscribe`, and the only one carrying a command.
 - Correlation: the command carries no id the broker echoes, so the answer is the first
-  `open_trade.success`/`.fail` of the command's mode on the same connection after the emit. At
-  most one command waits per client — a second `openTrade()` while one waits throws
-  (`broker socket open_trade already pending`); the active-intent index (one non-terminal intent
-  per account) makes that unreachable in production. `update_balance` (the fixture sends it
-  first), the other mode's answers, problems and ignored events are not an answer. The answering
-  event is still dispatched to the listeners.
+  `open_trade.fail` of the command's mode, or the first `open_trade.success` of that mode whose
+  `assetId`, `action` and amount (compared by value, `normalizeDecimal`) are the command's, on the
+  same connection after the emit. A success with other terms is not the answer: the command keeps
+  waiting, the event is dispatched to the listeners as every event is, and the client writes
+  `broker socket open_trade answer mismatch` with the first term that differs (`field`: `asset`,
+  `action` or `amount`; no values). A `fail` carries nothing to check. At most one command waits
+  per client — a second `openTrade()` while one waits throws (`broker socket open_trade already
+  pending`); the active-intent index (one non-terminal intent per account) makes that unreachable
+  in production. `update_balance` (the fixture sends it first), the other mode's answers,
+  problems and ignored events are not an answer. The answering event is still dispatched to the
+  listeners.
+- The taint (#101, the m4 finding of the #100 review). A command that ends without its answer
+  while its connection is alive — the caller's signal aborted while waiting, the processor's
+  deadline included — leaves an answer that may still come on that connection, and a late
+  `fail` cannot be told from the next command's own by content. So the abort marks the
+  connection `tainted`, the client writes `broker socket connection tainted` (`connection`) and
+  drops it with `socket.io.engine.close()`, the transport-loss mechanism of the auth timeout:
+  `reconnecting` (`forced close`) → `authenticating` → `ready` on a new connection, whose answers
+  a late answer of the old one can no longer reach. Until that `ready`, `openTrade()` answers
+  `not_sent`/`not_ready` — the executor's REST case. engine.io closes at once when its write
+  buffer is empty and after draining it otherwise; the flag covers the window before
+  `disconnect` either way. `socket.test.ts` proves it twice: with the real drop (two connections,
+  one `user.auth` each, the next command answered by its own event) and with `engine.close`
+  replaced through the `openSocket` seam by a recorder that keeps the connection open, so the late
+  `fail` arrives and is shown to answer nothing (without the flag it answers the next command —
+  the money bug of m4).
 - A state change ends the wait at once: the command is never emitted again on a new connection,
   and an answer on a new connection is never matched to it. An emit made after the transport died
   but before socket.io noticed is buffered and then dropped with the send buffer on `disconnect`
   (the subscription case above), so it never reaches the broker on the next connection either;
   the caller sees `unknown` for it, which is the safe reading.
-- The client writes `broker socket open_trade sent` at `debug` (`mode`, `connection`) and nothing
-  about the answer; no amount, no broker text. The executor logs the outcome.
+- The client writes `broker socket open_trade sent` at `debug` (`mode`, `connection`), the two
+  warns above, and nothing else about the answer; no amount, no broker text. The executor logs
+  the outcome.
 
 ### Reconnection and timing
 
@@ -215,8 +236,8 @@ socket.io's own reconnection; the client reacts to `connect` (re-auth), `disconn
 `socket.io.engine.close()`. socket.io's backoff grows only across consecutive failed attempts
 (`connect_error`); every open and every close reset it, so a broker that accepts and then drops,
 or accepts and never answers `user.auth`, is retried about every `BROKER_SOCKET_RECONNECT_DELAY_MS`
-(plus the auth timeout for a hung handshake), never at the maximum. Escalating that is #101's, if
-observed.
+(plus the auth timeout for a hung handshake), never at the maximum. It is not escalated: nothing
+of the kind has been observed.
 
 | Constant (`socket-config.ts`) | Bounds | socket.io option |
 |---|---|---|
@@ -230,7 +251,8 @@ The chain (every `*_MS` an integer in `[1, MAX_TIMER_MS]` — `2^31 - 1`, Node's
 limit, past which a delay fires after 1 ms — first wait ≤ longest wait, auth timeout ≤ connect
 timeout, 0 ≤ jitter < 1, since at 1 a wait could shrink to 0) is checked at import for the
 defaults and by `resolveBrokerSocketTiming` at construction for a `timing` override. Its link
-to the worker's shutdown budget comes with the client's place in `index.ts` (#101).
+to the worker's shutdown budget is in `intents/config.ts`: `BROKER_SOCKET_CONNECT_TIMEOUT_MS <
+SHUTDOWN_PHASE1_BUDGET_MS` ([broker-session.md → Constants](broker-session.md#constants)).
 
 Not bounded: a namespace CONNECT the server never answers. The client adds no timer for it (it
 would race `Manager.open`'s own); it has not been seen live. It shows as a `start()` whose
@@ -258,6 +280,8 @@ connection and reset on `connect`.
 | `broker socket state listener threw` | warn | an `onState` listener throws; the others still run | `to`, `err` |
 | `broker socket state` | debug | every state change | `from`, `to`, `reason` |
 | `broker socket open_trade sent` | debug | each command emitted | `mode`, `connection` |
+| `broker socket connection tainted` | warn | a command aborted while waiting on a live connection; the client drops it | `connection` |
+| `broker socket open_trade answer mismatch` | warn | a success of the command's mode whose terms are not the command's | `connection`, `mode`, `field` (`asset`, `action`, `amount`) |
 
 `IGNORED_BROKER_EVENTS` holds the same names as the mock's `OBSERVED_EXTRA_EVENTS`; a test keeps
 the two equal. `socket.test.ts` reads the log itself: a pino sink built from `logOptions('debug')`
@@ -334,6 +358,26 @@ Node 22 (the 2026-10-03 one is recorded in #99).
   lived 28 s and 93 s until the probe closed them, with a price subscription active. Its cause is
   unknown; the client reconnects after it and resends its subscriptions.
 
+- **Pending: the two-socket probe (#101).** Whether the live broker sends an `open_trade`
+  answer to every socket of a user, or only to the sender, has not been observed. Until it is, a
+  cross-socket answer is an accepted risk ([broker-session.md → Accepted risks](broker-session.md#accepted-risks)).
+  The owner runs the probe on the pilot (`apps/trading-worker/src/cli/socket-probe.ts`; two
+  sockets A and B on one account, two demo commands from A, event types per socket):
+
+  ```bash
+  docker compose exec -T -e ACCOUNT_ID=<broker_accounts.id> -e BROKER_WS_URL=https://broker-ws.binodex.app \
+    trading-worker pnpm --filter @binarius/trading-worker socket-probe
+  ```
+
+  The rollout rule: `open_trade_success` and `open_trade_fail` on A only → the answers go to the
+  sender, `BROKER_WS_URL` may be set. Any `open_trade_*` on B → the broker broadcasts answers;
+  `BROKER_WS_URL` stays unset until a correlation the broadcast cannot defeat exists. When the
+  account's `min_trade_amount` is 0.01 or less the probe skips the below-minimum command
+  (`fail-проба пропущена: minTradeAmount <= 0.01`): that run verifies the success broadcast only,
+  the `fail` broadcast stays unverified, and a probe on an account with a higher minimum is still
+  needed before `BROKER_WS_URL` is set. `balance_update` on both sockets is expected either way.
+  The result goes here.
+
 ## Boundaries
 
 - `packages/shared` (decoder, schemas, event maps, `modeEvent`) is used as it is and not changed
@@ -343,9 +387,7 @@ Node 22 (the 2026-10-03 one is recorded in #99).
 - #99: the Socket.IO client above. It writes nothing to the database.
 - #100: `openTrade()` on the client ([The trade command](#the-trade-command-100)) and the trade
   command executor on top of it ([trade-executor.md](trade-executor.md)).
-- #101: the session manager on top of the client: one client per account, the token refresh after
-  `token_expired`/`auth_failed`, the balance writers from `user.data`/`update_balance`,
-  `BROKER_WS_URL`, the place in `index.ts` and the shutdown order, and the end-to-end mock
-  scenario.
+- #101: the taint and the field check above, and the session manager on top of the client
+  ([broker-session.md](broker-session.md)).
 - #104: the Socket.IO side of `packages/mock-broker`. The normalizer's tests use literal wire
   fixtures; the client's run against that package.

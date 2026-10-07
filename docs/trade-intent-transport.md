@@ -17,6 +17,7 @@ delivery channel that can be rebuilt from the database.
 | Reconciliation | `apps/trading-worker/src/intents/reconciliation.ts`               | `trading-reconciliation` jobs hand `unknown` intents to the pass, which asks the `IntentReconciler` port (#89) |
 | REST reconciler | `apps/trading-worker/src/intents/rest-reconciler.ts`             | the port's implementation: the broker's open and closed lists matched against the intent (#90)                 |
 | Catch-up       | `apps/trading-worker/src/intents/settlement-catchup.ts`           | settles `accepted` intents past their expected close from the closed list (#90)                                |
+| Session manager | `apps/trading-worker/src/broker/session-manager.ts`              | one broker socket session per account in work when `BROKER_WS_URL` is set; `close_trade.success` → `settleClosedTrades` (#101, [broker-session.md](broker-session.md)) |
 | Token route    | `apps/backend/src/trading/routes.ts` → `POST /trading/accounts/:id/access-token` | the worker's only way to a broker access token (#90); the worker holds no broker credentials   |
 | Real-mode gate | `packages/db` → `createInTransaction`; worker → `realTradingGate` | `REAL_TRADING_ENABLED` (#134): no real intent is created or sent while it is not `true`                        |
 
@@ -206,16 +207,17 @@ entered twice. What resolves an intent left at each stage:
 | `planned`/`reserved`                                   | cannot persist: created and queued in one transaction                                                                                                                      | #42                                          |
 | `queued`                                               | the publisher's lost-job sweep, or `expired` at take                                                                                                                       | #42 (in `main`)                              |
 | `submitting`                                           | the stale sweep → `unknown` (`stale_submitting`)                                                                                                                           | #42 (in `main`)                              |
-| `accepted`                                             | `close_trade.success` → `settleClosedTrades`; the REST catch-up `listOverdueAcceptedIntents` + `listTrades(closed)` + `settleClosedTrades`; the REST pass at session start | #101 (socket, session start), #90 (catch-up) |
+| `accepted`                                             | `close_trade.success` → `settleClosedTrades` (the session's writer); the REST catch-up `listOverdueAcceptedIntents` + `listTrades(closed)` + `settleClosedTrades` for a close the session missed or dropped at stop | #101 (socket), #90 (catch-up) |
 | `accepted`, closed before the acceptance was persisted | `settleClosedTrades` answered `not_ours`; the catch-up applies the closed snapshot once the intent is overdue                                                              | #90, #101                                    |
 | `unknown`                                              | the `trading-reconciliation` job (`processReconciliationJob`) → `reconciling`                                                                                              | #89                                          |
 | `reconciling`                                          | the reconciliation pass: first tick at worker start, then every 15 s; a claim is a 60 s lease → `accepted` / `settled` / `manual_review` (`rejected` only through #274)  | #89 (the pass), #90 (the reconciler)         |
 | `manual_review`                                        | the operator: `settleIntent` (with the closed trade from that account's own closed list) or `rejectIntent` (`manual_rejected`)                                             | a later issue (the tool)                     |
 
-The catch-up (#90) resolves an `accepted` intent from the closed list once it is overdue;
-`close_trade.success` (#101) will be the main path. The trade command executor (#100,
-[trade-executor.md](trade-executor.md)) accepts; until #101 every intent reaches the broker over
-REST (`rest_fallback`).
+With `BROKER_WS_URL` set, `close_trade.success` on the account's session (#101) is the main path
+and the catch-up (#90) resolves from the closed list what the session missed, once the intent is
+overdue. Without it there is no session: every intent reaches the broker over REST
+(`rest_fallback`, the trade command executor, [trade-executor.md](trade-executor.md)) and the
+catch-up settles every one.
 
 ## Reconciliation matching (#90)
 
@@ -386,6 +388,7 @@ Worker (optional, code defaults in `apps/trading-worker/src/env.ts`):
 | `INTENT_MAX_AGE_MS`     | 60000   | 1000–600000                                                                                |
 | `SUBMIT_ACK_TIMEOUT_MS` | 10000   | 500–30000 (`MAX_SUBMIT_ACK_TIMEOUT_MS`, below the shutdown budget and the stale threshold) |
 | `WORKER_CONCURRENCY`    | 5       | 1–100                                                                                      |
+| `BROKER_WS_URL`         | none    | `https://` or `wss://`; unset → no broker sessions, every order over REST; empty → the worker does not start (#101, [broker-session.md](broker-session.md)) |
 
 Fixed constants and why they relate the way they do: `apps/trading-worker/src/intents/config.ts`
 — among them the reconciliation pass's `RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s),
@@ -416,9 +419,9 @@ its reserve. The name, the default and the parsing live in `parseRealTradingEnab
   after `unknown` (the executor side is proven in #100, [trade-executor.md](trade-executor.md) →
   The two-cases rule). **#92**: the broker balance check after a reconciliation and a
   DLQ for unprocessable events.
-- **#101** feeds `close_trade.success` into `settleClosedTrades`, runs the REST closed pass at
-  session start and replaces `noTradeSessions` with the session manager, so the socket path runs
-  in production. The operator tool for `manual_review` is a later issue.
+- **#101** (shipped): the session manager feeds `close_trade.success` into `settleClosedTrades` and
+  takes `noTradeSessions`' place when `BROKER_WS_URL` is set ([broker-session.md](broker-session.md)).
+  The operator tool for `manual_review` is a later issue.
 - Real-mode eligibility: **#134** the grant gate
   (this document); **#135** what a revoked grant does to running sessions; **#21/#121** starting
   real mode from the bot; **#144** the kill switch, a separate operational flag. Country
