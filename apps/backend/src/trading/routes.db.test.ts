@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   closeTradingSwitch,
   createTempDatabase,
+  seedBalanceSnapshot,
   seedUserWithAccount,
   type TempDatabase,
 } from '@binarius/db/testing';
@@ -87,7 +88,12 @@ afterAll(async () => {
 });
 
 let seq = 0;
-const seed = (balance = 5n) => seedUserWithAccount(tmp.db, { balance });
+// with a snapshot (min 1, demo 10000): the route checks a demo amount against it (#297)
+const seed = async (balance = 5n) => {
+  const seeded = await seedUserWithAccount(tmp.db, { balance });
+  await seedBalanceSnapshot(tmp.db, seeded.brokerAccountId);
+  return seeded;
+};
 
 const body = (telegramUserId: string, patch: Record<string, unknown> = {}) => ({
   telegramUserId,
@@ -313,6 +319,38 @@ describe('POST /trading/intents: the global trading switch (#144)', () => {
     const replayed = await post(payload);
     expect(replayed.statusCode).toBe(200);
     expect(replayed.json().intent.id).toBe(created.json().intent.id);
+  });
+});
+
+describe('POST /trading/intents: the demo-stake bounds (#297)', () => {
+  const intentsOf = (userId: string) =>
+    tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, userId));
+
+  it.each([
+    ['0.5', 'stake_below_minimum'],
+    ['10000.01', 'insufficient_demo_balance'],
+    ['1.001', 'stake_precision'],
+  ])('answers 409 for a demo amount of %s with %s and creates nothing', async (amount, code) => {
+    const s = await seed();
+    wakes = [];
+    const response = await post(body(s.telegramUserId, { amount }));
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: code });
+    expect(await intentsOf(s.userId)).toEqual([]);
+    expect(wakes).toEqual([]);
+  });
+
+  it('answers 409 balance_unavailable for an account without a snapshot', async () => {
+    const s = await seedUserWithAccount(tmp.db, { balance: 5n });
+    const response = await post(body(s.telegramUserId));
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'balance_unavailable' });
+    expect(await intentsOf(s.userId)).toEqual([]);
+  });
+
+  it('creates the amount equal to the demo balance', async () => {
+    const s = await seed();
+    expect((await post(body(s.telegramUserId, { amount: '10000' }))).statusCode).toBe(201);
   });
 });
 

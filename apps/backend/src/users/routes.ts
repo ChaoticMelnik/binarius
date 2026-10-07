@@ -92,7 +92,7 @@ export const usersRoutes: FastifyPluginAsync<UsersRoutesDeps> = async (
       { notificationLevel: set.level, canceledJobs: set.canceledJobs },
       'notification level set',
     );
-    return reply.send({ level: set.level });
+    return reply.send({ level: set.level, demoStake: set.demoStake });
   });
 
   // What the bot's /account shows; reads only. An unknown user is a 404 of its own code, so the
