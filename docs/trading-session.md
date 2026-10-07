@@ -103,13 +103,13 @@ review n1).
 | `checkTradingSessionStart(db, { telegramUserId, brokerAccountId? })` | plain selects, no lock | the start route's refusals, the first that applies wins: the trading switch (`trading_paused` while it is closed, #144), the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
 | `readTradingSessionView(db, id, telegramUserId)` | three selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined`; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`. `settings` that fail v1 read as `null` with `planned: 0` |
 | `readActiveTradingSessionView(db, brokerAccountId, telegramUserId)` | two reads | the account's active session as its owner sees it; `undefined` when none, or when it ended between the reads |
-| `listRunnableSessions(db, { limit, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw |
+| `listRunnableSessions(db, { limit, maxDurationMs, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, within the deadline (`started_at >= now() − maxDurationMs`, the expiry sweep's boundary on the database clock, so a session the capped sweep left over is never listed), and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw |
 | `stopExpiredSessions(db, { maxDurationMs, limit })` | one UPDATE | `started_at < now() − maxDurationMs` → `stopped`/`timeout` |
 | `stopHaltedSessions(db, { limit })` | one UPDATE | the account `trading_halted`, or an intent of the session in `manual_review` → `stopped`/`manual_review` |
 | `stopPausedSessions(db, { limit })` | one UPDATE | every active session while the trading switch is closed (`not tradingOpenSql`) → `stopped`/`kill_switch` (#144); only a person starts one again. The orchestrator's tick runs it first |
 | `stopTradingSession(db, { id, reason })` | one UPDATE | CAS on `status = active`: a second stop finds nothing and the first reason stays |
 | `markSessionDecision(db, { id })` | one UPDATE | `last_decision_at = now()` on an active session |
-| `readSessionHistory(db, sessionId)` | two selects | the owner's `telegram_user_id` and the session's own intents in creation order with `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
+| `readSessionHistory(db, sessionId, { maxDurationMs })` | two selects | the owner's `telegram_user_id`, `expired` (the same deadline boundary, database clock, at this read) and the session's own intents in creation order with `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
 | `createSessionIntent(db, input)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below |
 
 Every stop writes `ended_at`, `last_decision_at` and `updated_at` as `now()`; every UPDATE that
@@ -209,20 +209,26 @@ three UPDATEs that match nothing and one indexed scan. There is no env variable.
 **The tick** (every `TRADING_SESSION_TICK_MS`, one at a time, the first at `start()`), in this
 order:
 
-1. `stopPausedSessions` → `stopped`/`kill_switch` while the trading switch is closed. It runs first,
-   so a closed switch stops a session before any signal call (`orchestrator.db.test.ts` K1).
+1. `stopPausedSessions` → `stopped`/`kill_switch` while the trading switch is closed (at most
+   `TRADING_SESSION_BATCH_SIZE` per tick). It runs first, so a switch closed before the tick stops
+   a session before its signal call (`orchestrator.db.test.ts` K1). A switch closed during a tick
+   does not interrupt it: an attempt under way, or a later one in the same batch, still calls the
+   signal, and its intent creation refuses `trading_paused` → `kill_switch` (K2). A tick runs its
+   attempts one after another, so it can take far longer than `TRADING_SESSION_TICK_MS`.
 2. `stopExpiredSessions` with `SESSION_MAX_DURATION_MS` → `timeout`, even with a live intent (E7).
 3. `stopHaltedSessions` → `manual_review` (E6).
 4. The in-memory hold-backs whose time has passed are dropped.
-5. `listRunnableSessions({ limit: TRADING_SESSION_BATCH_SIZE, exclude: <held back> })`.
+5. `listRunnableSessions({ limit: TRADING_SESSION_BATCH_SIZE, maxDurationMs, exclude: <held back> })`:
+   a session past the deadline is never listed, even when more expired than the sweep's cap (E7b).
 6. One attempt per runnable session, one after another. Each runs under
    `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (a race, as in the settlement catch-up: the race bounds the
    tick's wait, not a statement; a statement that outlives it still lands, and the next attempt
    reads its result).
 7. One `debug` line `trading session tick`.
 
-A throw out of steps 1–5 is one `error` line, `trading session tick failed`; the next tick runs as
-usual. Every sweep carries `status = 'active'` in its WHERE, so a session stopped by one writer
+A throw out of steps 1–5, or out of an ending's write after an attempt (`stopTradingSession`,
+`markSessionDecision`), is one `error` line, `trading session tick failed`; the rest of that tick's
+batch is skipped and the next tick runs as usual. Every sweep carries `status = 'active'` in its WHERE, so a session stopped by one writer
 keeps the first reason.
 
 **The attempt.** The first row that applies is the ending:
@@ -231,6 +237,7 @@ keeps the first reason.
 |---|---|---|
 | `settings` (`safeParseTradingSessionSettings`), the sizer from `{ strategy: 'fixed', ...stake }` | fails | stop `invalid_settings` |
 | `readSessionHistory` | the row is gone (a race with a delete) | hold back `TRADING_SESSION_RETRY_MS` |
+| | `expired`: the deadline passed since the scan (database clock) | stop `timeout`, before any backend call (E7c) |
 | | an intent of the session is live (a race with the scan) | reschedule |
 | | settled intents ≥ `settings.trades` | stop `completed` (E1) |
 | | the last two intents are `rejected` | stop `rejected_twice` (E2) |
@@ -266,6 +273,10 @@ The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code adde
 - **The step comes from the database.** The step is the session's intents + 1 and the request key
   `session:<id>:<step>`, so a new process continues where the old one stopped (E8), and a repeated
   step is a replay.
+- **The deadline.** The scan never lists an expired session, and the attempt stops one whose
+  deadline passed after the scan before any backend call. The residual window is one attempt: a
+  deadline that passes after the history read, during the backend calls, still lets that attempt
+  create its intent, at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) past the deadline (stated).
 - **Clocks.** The deadline and the order key are the database's. The hold-backs, the candle boundary
   and the sizer's `nowMs` are the worker's; `nowMs` is clamped to `started_at`, because the sizer
   throws when the clock is behind the session's start (E11).
@@ -333,34 +344,38 @@ line is in it with its level.
 | `trading session intent created` | info | `step`, `intentId`, `action` |
 | `trading session attempt timed out` | warn | the attempt passed `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
 | `trading session attempt failed` | error | a throw in the attempt (`errorLogFields`); not on the stop signal |
-| `trading session tick failed` | error | a throw in a sweep or the scan (`errorLogFields`) |
+| `trading session tick failed` | error | a throw in a sweep, the scan or an ending's write (`errorLogFields`); the rest of the batch is skipped |
 | `trading session tick` | debug | `{ runnable, attempted, created, held, stopped }` |
 
 ## The CLI
 
 ```bash
 docker compose exec -T -e TELEGRAM_USER_ID=REPLACE_WITH_TG_ID -e ASSET_ID=REPLACE_WITH_PAIR_ID \
-  trading-worker pnpm --filter @binarius/trading-worker session-start
+  trading-worker pnpm --filter @binarius/trading-worker --fail-if-no-match session-start
 ```
 
-(REPLACE_WITH_TG_ID: the user's Telegram id; REPLACE_WITH_PAIR_ID: the pair's id from
+`--fail-if-no-match` turns a filter that matches nothing (a wrong package name, a checkout without
+the script) into exit 1; pnpm's own errors stay visible, so a refusal of the CLI is never confused
+with one of pnpm. (REPLACE_WITH_TG_ID: the user's Telegram id; REPLACE_WITH_PAIR_ID: the pair's id from
 `GET /trading/pairs`.)
 
 | Env | Rule |
 |---|---|
 | `DATABASE_URL` | the worker's own (set in its container) |
 | `TELEGRAM_USER_ID` | required, a positive integer |
-| `ACCOUNT_ID` | optional, a uuid; needed only when the user has more than one active account |
+| `ACCOUNT_ID` | optional, a uuid; needed only when the user has more than one active account. It must be one of the user's accounts as `readUserAccounts` lists them (the 10 newest); another user's id and an unknown one are both `account_not_found`, before anything of that account is read. An own account older than the 10 newest is not found either (accepted) |
 | `ASSET_ID` | required, 1 – int4 max |
 | `DURATION_SEC` | default 60, 1 – int4 max |
 | `TRADES` | default `DEFAULT_SESSION_TRADES` (5), 1 – 20 |
 
-Steps: the user's accounts (`readUserAccounts`); without `ACCOUNT_ID` the only active one, two or
-more → refused with each `<id> <status>` on stderr (no email); the balance snapshot (none → refused:
+Steps: the user's accounts (`readUserAccounts`); with `ACCOUNT_ID` that one if it is in the list,
+else `account_not_found`; without it the only active one, two or more → refused with each `<id> <status>` on stderr (no email); the balance snapshot (none → refused:
 open the trade screen in the bot once, `POST /trading/access` writes it); `planSessionStart`
 (`sessionFitsDeadline` → `session_too_long`; a minimum of 0 → `zero_min_trade_amount`; settings v1
 from `stakeSettingsFor`); `createTradingSession(…, mode: demo)`. The session id goes to stdout,
-exit 0. Every refusal is one Russian line on stderr, exit 1, nothing written; a
+exit 0. Every refusal goes to stderr with exit 1 and writes nothing: one Russian line, except the
+two-accounts refusal (a Russian line, then one `<id> <status>` line per account) and an env error
+(one English line naming the variable, as every env check of the repository prints). A
 `TradingSessionError` is mapped by `SESSION_START_REFUSALS`
 (`satisfies Record<TradingSessionDbErrorCode, string>`). Any other failure is the one door:
 `Не удалось создать сессию: <name> <code>`, with the query to re-read the account's sessions,
@@ -472,11 +487,11 @@ commit;
 SQL
 ASSET="$(api GET /trading/pairs | head -1 | node -e '
   const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
-  const p = c.pairs.find((x) => x.scheduledUntil <= Date.now() && x.minTimeframe <= 60 && 60 <= x.maxTimeframe);
-  process.stdout.write(String(p.id));')"
+  const p = c.pairs.find((x) => x.scheduledUntil <= Date.now() && x.minTimeframe <= 60 && 120 <= x.maxTimeframe);
+  process.stdout.write(String(p.id));')"   # takes both durations used below, 60 and 120 s
 start() {
   dc exec -T -e TELEGRAM_USER_ID=1 -e ASSET_ID="$ASSET" "$@" trading-worker \
-    pnpm --silent --filter @binarius/trading-worker session-start
+    pnpm --filter @binarius/trading-worker --fail-if-no-match session-start
 }
 start -e TRADES=2   # prints the session id
 # each no_signal waits for the next minute, so this can take a few minutes
@@ -486,11 +501,12 @@ dc logs trading-worker | grep -E 'trading session|trade command refused'
 # expect: "trading session intent created" step 1 and 2, each "trade command refused"
 # stage token, then "trading session stopped" reason rejected_twice
 # the kill switch: a start while it is closed is refused, a running session stops on the next tick
-dc exec -T backend pnpm --silent --filter @binarius/backend kill-switch on --reason 'local check'
-start; echo "exit $?"   # «Торговля остановлена — сессия не создана», exit 1
-dc exec -T backend pnpm --silent --filter @binarius/backend kill-switch off
+dc exec -T backend pnpm --filter @binarius/backend --fail-if-no-match kill-switch on --reason 'local check'
+start; echo "exit $?"   # «Торговля остановлена — сессия не создана», then pnpm's
+                        # ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL line for the script's exit 1; exit 1
+dc exec -T backend pnpm --filter @binarius/backend --fail-if-no-match kill-switch off
 start -e DURATION_SEC=120
-dc exec -T backend pnpm --silent --filter @binarius/backend kill-switch on --reason 'local check'
+dc exec -T backend pnpm --filter @binarius/backend --fail-if-no-match kill-switch on --reason 'local check'
 sleep 7
 dc exec -T postgres psql -U binarius -d binarius -c \
   'select status, stop_reason from trading_sessions order by created_at'
@@ -506,7 +522,7 @@ over REST and settles through the settlement catch-up, so one trade takes about 
 ```bash
 # 0. the account needs a balance snapshot: open the trade screen in the bot once
 docker compose exec -T -e TELEGRAM_USER_ID=REPLACE_WITH_TG_ID -e ASSET_ID=REPLACE_WITH_PAIR_ID \
-  trading-worker pnpm --silent --filter @binarius/trading-worker session-start
+  trading-worker pnpm --filter @binarius/trading-worker --fail-if-no-match session-start
 docker compose logs -f trading-worker | grep -E 'trading session|intent outcome recorded|trade command'
 # expect: one intent at a time at min_trade_amount in the signal's direction, or "waits for the
 # next candle"; the session ends "trading session completed" after five settled trades, or
@@ -530,7 +546,13 @@ that takes 60 s.) `ACCOUNT_ID` is needed only with more than one active account.
 4. **One container.** The hold-backs live in memory and two workers would attempt the same session;
    the step key makes the second a replay or a `client_request_id_conflict` (reschedule), never a
    second trade on the step. The lease is #93.
-5. **A real session row trades.** `createTradingSession` refuses anything but demo, but the
+5. **An intent up to one attempt past the deadline.** The scan and the history read guard the
+   deadline on the database clock; a deadline that passes during the attempt's backend calls lets
+   that attempt create its intent, at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) late.
+   Falsifiable: an intent whose `created_at` is after its session's `started_at + 1 h`.
+6. **The CLI sees the user's 10 newest accounts.** An own `ACCOUNT_ID` older than those is refused
+   `account_not_found`, like a foreign one.
+7. **A real session row trades.** `createTradingSession` refuses anything but demo, but the
    orchestrator runs any active row, sized against the mode's balance (E9a). Only a hand-written row
    can be real.
 
