@@ -291,12 +291,13 @@ from `AccountHaltReason`, in one transaction. After the commit one line
 source for #69). A lost CAS writes and alerts nothing. Only an operator lifts the halt, writing
 both columns (the pair CHECK).
 
-**Settlement catch-up.** `listOverdueAcceptedIntents` (open time + duration + 30 s grace by the
-database clock), then per intent the token with `mayRefresh: false`, the closed list (the same
+**Settlement catch-up.** `listOverdueAcceptedIntents` (open time + duration + 10 s grace by the
+database clock; every 5 s, at most 3 intents a tick — sized in #313 for the demo's 5 and 15 s
+trades, which settle 10-15 s after their close while no close event arrives), then per intent the token with `mayRefresh: false`, the closed list (the same
 page reader) until the trade or the list's end, and `settleClosedTrades` over every closed trade
 read. Each ending:
 
-| Ending                                                              | Account held back for 120 s |
+| Ending                                                              | Account held back for 30 s  |
 | ------------------------------------------------------------------- | --------------------------- |
 | `settled`, `already_settled`, `intent_not_accepted` (left the queue) | no                          |
 | trade not in the pages read (still open, or past the cap)           | yes                         |
@@ -307,11 +308,14 @@ read. Each ending:
 | `stop()` during the attempt, the token fetch included              | no                          |
 
 **Budget.** The broker allows 600 requests a minute per IP and the backend's balance refresh
-takes up to 200 by default. The worker's worst case is 20 × 2 lists × 2 pages × 4 ticks + 20 × 2
-pages × 2 ticks = 400 GETs a minute (`WORKER_BROKER_GETS_PER_MINUTE`, checked at import). It is a
+takes up to 200 by default. The worker's worst case is 20 × 2 lists × 2 pages × 4 ticks + 3 × 2
+pages × 12 ticks = 392 GETs a minute, at most `WORKER_BROKER_GETS_PER_MINUTE` (400; checked at
+import, with a whole number of ticks a minute for both loops). It is a
 true bound because both loops tick only on their intervals — the reconciliation job does not start
 a tick, and a tick never overlaps the next. Reconciliation handles at most 80 intents a minute; a
-new `reconciling` intent waits for the next tick (≤ 15 s). A 429 ends a tick and the attempt is
+new `reconciling` intent waits for the next tick (≤ 15 s). The catch-up settles at most 36 intents
+a minute (accepted, #313): when the `settlement catch-up tick` line shows `overdue` at 3 tick after
+tick, the lever is part of the reconciliation's share, in a new issue. A 429 ends a tick and the attempt is
 retried on the lease or the next tick. Its one real cost is a refresh exchange in flight on the
 backend: a 429 on `/user-auth/refresh` is classified `rejected` → `refresh_outcome_unknown` → the
 account is revoked (Rule 12, one attempt). The worker's share keeps its own traffic from driving
@@ -334,7 +338,7 @@ stated, not enforced.
 | Stale `submitting` (redelivery or sweeper, every 15 s)                                                                                            | —                                                                                                                                                                         | `STALE_SUBMITTING_MS` 60 s ≥ `lockDuration` > max ack timeout                                                                                             | → `unknown` (`stale_submitting`) + reconciliation row                                                                                                                                                                                                                    |
 | Reconciliation job, topic `trading-reconciliation`                                                                                                | `attempts: 1`, as above                                                                                                                                                   | the BullMQ job options above                                                                                                                              | `unknown → reconciling`; the pass takes it on its next tick, within `RECONCILE_TICK_MS`; the job never asks the broker. A throw dead-letters with `topic`, and the outbox re-pends the row after 30 s while the intent is still `unknown`                                                                              |
 | Reconciliation attempt (the pass, every 15 s, at most 20 candidates, one after another)                                                           | after the lease: the claim (`reconcile_claimed_at = now()`, `version + 1`) is the first write and keeps the intent from being a candidate for `RECONCILE_RETRY_MS` (60 s) | `RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s) per `reconcile()` call (the token plus up to four GETs), enforced by the pass with `Promise.race`; the reconciler also receives an `AbortSignal`     | `unavailable`, a deadline or a throw write nothing beyond the claim; `rate_limited` ends the tick. Every outcome is a CAS on `status = reconciling` and the claim's `version`, so an attempt whose lease was re-claimed cannot write                                     |
-| Settlement catch-up (every 30 s, at most 20 overdue intents, one after another)                                                                   | an attempt that does not take its intent out of `accepted` holds the account back for `CATCHUP_STALLED_RETRY_MS` (120 s), in memory                                     | `CATCHUP_ATTEMPT_TIMEOUT_MS` (20 s): the token (`mayRefresh: false`) and up to two closed pages                                                          | `rate_limited` ends the tick and holds nobody; a throw is logged with `errorLogFields` and holds the account. `settleClosedTrades` is idempotent, so a repeat is safe                                     |
+| Settlement catch-up (every 5 s, at most 3 overdue intents, one after another)                                                                     | an attempt that does not take its intent out of `accepted` holds the account back for `CATCHUP_STALLED_RETRY_MS` (30 s), in memory                                      | `CATCHUP_ATTEMPT_TIMEOUT_MS` (20 s): the token (`mayRefresh: false`) and up to two closed pages                                                          | `rate_limited` ends the tick and holds nobody; a throw is logged with `errorLogFields` and holds the account. `settleClosedTrades` is idempotent, so a repeat is safe                                     |
 
 Invariants these numbers encode (asserted at import in `apps/trading-worker/src/intents/config.ts`
 and `apps/backend/src/timing.ts`, and held against `compose.yaml` by tests): worker
@@ -344,7 +348,7 @@ lockDuration 60 s ≤ STALE_SUBMITTING_MS 60 s`; backend `publish deadline 5 s <
 lease 60 s`, `attempt 30 s < phase 1 35 s` (phase 1 also waits for `pass.stop()`: the attempt in
 flight plus one outcome write), `tick 15 s ≤ lease 60 s`; #90 adds `token route 7 s + 4 × 5 s <
 attempt 30 s`, `ack cap 30 s < window after 90 s`, `token 7 s + 2 × 5 s < catch-up attempt 20 s <
-phase 1 35 s` (`catchup.stop()` runs alongside `pass.stop()`), `catch-up tick 30 s < hold 120 s`,
+phase 1 35 s` (`catchup.stop()` runs alongside `pass.stop()`), `catch-up tick 5 s < hold 30 s`, `BROKER_REST_TIMEOUT_MS 5 s < catch-up grace 10 s`,
 and on the backend `exchange 5 s < token route 7 s < phase 1 10 s`. No live worker can still be inside its ack deadline when a
 redelivery or the sweeper calls its intent unknown; a routine deploy never kills a submit or a
 publish mid-flight; and the broker command is never sent twice — a redelivered job only checks

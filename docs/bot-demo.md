@@ -60,11 +60,12 @@ demo:a:<assetId>          (a pair, «↩️ Длительность»)  → the
 demo:d:<assetId>:<sec>    (a duration)       → readDemoTrade, then the summary with «📊 Анализ»
 demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить анализ»)
   bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade
-  bot  → editMessageText: «⏳ Анализирую EUR/USD OTC · ⏱ 1 мин…», no keyboard
+  bot  → editMessageText: «⏳ Анализирую EUR/USD OTC · ⏱ 15 с…», no keyboard
   bot  → POST /trading/signal { assetId, interval: intervalForDuration(sec) }
   bot  → editMessageText: the analysis screen with its keyboard
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>  (the stake button) → the trade, bot-demo-trade.md
 demo:sess:<assetId>:<sec>                     (the session button) → the session, bot-session.md
+demo:d|an|stake|sess and stk:… with a <sec> of before #313 → the keyboard removed, nothing sent
 ```
 
 Each press after the first answers the query and reads the catalog at the same time, then
@@ -73,14 +74,24 @@ cannot be turned into another screen, so it sends a new message. The bot keeps n
 demo: what the user chose travels in the callback data, so a restart, an old message and a second
 device lead to the same screen.
 
-The callback data is at most 44 bytes (`demo:stake:2147483647:3600:down:0123456789ab`), inside the
-Bot API 64.
+The callback data is at most 49 bytes (`demo:stake:2147483647:15:down:0123456789ab:0a1b2c`), inside
+the Bot API 64.
 `<group>` is one of `DEMO_ASSET_GROUPS`, never the broker's own string; `<page>` is up to four
 digits; `<assetId>` is up to ten digits, parsed by `createTradeIntentRequestSchema.shape.assetId`
 (a positive int4, what #127 sends); `<sec>` is one of `DEMO_DURATIONS_SEC`, written into the
 pattern, so `demo:an:101:120` and `demo:stake:101:120:up:0123456789ab` match nothing; `<up|down>`
-is a `TradeAction`; `<nonce>` is 12 lowercase hex characters. Data that matches a pattern but fails its check (`demo:a:0`, `demo:t:bond:0`)
-stops the spinner and sends nothing; data that matches no pattern is not answered at all.
+is a `TradeAction`; `<nonce>` is 12 lowercase hex characters. Data that matches a pattern but fails
+its check (`demo:a:0`, `demo:t:bond:0`) stops the spinner and sends nothing; data that matches no
+pattern is not answered at all.
+
+**Old duration buttons (#313).** The set was 60/300/900/1800/3600 s before #313
+(`LEGACY_DEMO_DURATIONS_SEC`). Every shape that carries a duration — `demo:d`, `demo:an`,
+`demo:stake` with or without its fingerprint, `demo:sess`, and the picker's `stk:o|s|z|c` with an
+`a:<assetId>:<sec>` origin — has a legacy pattern built from the same builder over that list.
+Pressing one answers the query and removes the message's keyboard (`editMessageReplyMarkup` with
+no markup), so the old screen cannot be pressed again; no text is sent. A refused removal (the
+message not modified or gone) is logged at `info` with `telegramErrorFields` and changes nothing.
+Any other duration still matches no pattern.
 
 ## The check
 
@@ -104,10 +115,19 @@ A pair is open when `scheduledUntil` is 0 or not after now (`isOpen`): the broke
 milliseconds since the epoch, read as "not tradable until" — the mock broker's reading, which
 refuses an order only while `scheduled_until > now`. The durations a pair admits are
 `DEMO_DURATIONS_SEC` within `[minTimeframe, maxTimeframe]`, both ends included (`durationOptions`).
+`DEMO_DURATIONS_SEC` is 5 and 15 s (owner, 2026-10-07, #313), and the broker's `min_timeframe` is
+5 or 60 s, so a pair with 60 accepts neither.
+
+**Pairs are filtered in advance (#313).** `pairsOf` keeps only the pairs with at least one
+duration of the set, and every screen reads through it: a type whose pairs all refuse 5 and 15 s
+has no button, a page lists only the pairs that accept one, and a type's count counts only them.
 
 `demo:a` checks the pair too (`checkDemoPair`), since it can close between the page and the
-press, and an empty catalog reads as `catalog_unavailable` on the types screen: there is nothing
-to choose from.
+press. An old pair button of a pair the pages no longer list falls to «❌ Для {symbol} нет
+подходящей длительности…» with the way back to page 0. An empty catalog reads as
+`catalog_unavailable` on the types screen: there is nothing to choose from. A catalog with pairs
+but none that accepts 5 or 15 s says «Сейчас нет активов для коротких сделок.» (`demoNoShortPairs`)
+with «🔄 Повторить» on the types.
 
 ## Fresh
 
@@ -124,21 +144,22 @@ not a fresh catalog.
 
 - **Types.** One button per type the catalog holds, two per row, in the order of
   `DEMO_ASSET_GROUPS`: 💱 Валюты, 🛢 Сырьё, 📈 Акции, 💠 Криптовалюты, 📊 Индексы, 📁 Другие (any
-  broker type outside the five). A type with no pair at all has no button; a type with pairs but
-  none open shows «· 0» and its press says «🔒 {type}: сейчас всё закрыто по расписанию».
+  broker type outside the five). A type with no pair that accepts a demo duration has no button; a
+  type with such pairs but none open shows «· 0» and its press says «🔒 {type}: сейчас всё закрыто
+  по расписанию».
 - **Pairs.** `DEMO_PAGE_SIZE` = 12 open pairs, two per row, sorted by symbol in code-unit order
   (ties by id), each «EUR/USD OTC · 85%» — the broker's symbol (it carries «OTC» itself) and its
   payout as it arrives. Then one row: «◀️» when a page before exists, «↩️ Типы», «▶️» when a page
   after exists. A page beyond the end (the catalog shrank) is the last page. Closed pairs are not
   listed.
-- **Durations.** The admitted durations of `⏱ 1 мин`, `⏱ 5 мин`, `⏱ 15 мин`, `⏱ 30 мин`, `⏱ 1 ч`,
-  three per row, then «↩️ Активы» (the pair's type, the page it is listed on) and «↩️ Типы». A
-  pair that admits none says so, with the two back buttons.
+- **Durations.** The admitted durations of `⏱ 5 с` and `⏱ 15 с`, in one row, then «↩️ Активы»
+  (the pair's type, the page it is listed on) and «↩️ Типы». A pair that admits none says so, with
+  the two back buttons.
 - **Summary.** «📊 Анализ», then «↩️ Длительность» and «↩️ Типы».
 - **Analysis.** On a signal, «🚀 Открыть сделку: ⬆️ Вверх» (or «⬇️ Вниз») alone in the first row,
   and under it «🚀 Сессия из 5 сделок» alone in its row where `sessionFitsDeadline(5, sec)` holds —
-  at 1 and 5 min (#284, [bot-session.md](bot-session.md#the-button)); then «🔄 Повторить анализ»
-  (the same `demo:an` data); then «↩️ Длительность» and «↩️ Типы».
+  at every duration of the set (#284, [bot-session.md](bot-session.md#the-button)); then
+  «🔄 Повторить анализ» (the same `demo:an` data); then «↩️ Длительность» and «↩️ Типы».
   «⏳ Анализирую…» has no keyboard, so «📊 Анализ» cannot be pressed twice while the signal is
   asked for.
 
@@ -163,7 +184,9 @@ for. On `ok` the summary becomes «⏳ Анализирую {symbol} · {duratio
 `evaluateSignal(assetId, intervalForDuration(sec))` asks the backend's `POST /trading/signal`
 ([signal.md](signal.md#post-tradingsignal-258)), then the screen replaces «⏳». The interval is
 the longest table candle not above the duration; on `DEMO_DURATIONS_SEC` it is the duration
-itself (`analysis.test.ts` A1 breaks when the two tables part).
+itself: a 5 s trade is analysed on `5s` candles and a 15 s trade on `15s`, never on `1m` (#313;
+`analysis.test.ts` A1 breaks when the two tables part, and `signal.test.ts` S3 when either falls
+back to `1m`).
 
 Where «⏳» went decides where the result goes (`editOrReply`'s outcome):
 
@@ -180,7 +203,7 @@ The screen (`analysisScreen`) is built from this press's pair and the answer onl
 |---|---|---|---|
 | `decided`, `signal` | «📈 Сигнал: ⬆️ Вверх» / «📉 Сигнал: ⬇️ Вниз» | the feature lines, the payout, «⚠️ Сигнал — не прогноз результата и не гарантия…» | yes, by the decision's action |
 | `decided`, a rule refusal (`volatility_too_low`, `volatility_too_high`, `trend_flat`, `rsi_neutral`, `trend_momentum_disagree`) | «⏸ Сигнала нет: {reason in words}» | the feature lines, «Без сигнала бот сделку не предлагает…» | no |
-| `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) | «⏸ Сигнала нет: {reason in words}» | «Повтори анализ через минуту…»; no feature line, the decision carries none | no |
+| `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) | «⏸ Сигнала нет: {reason in words}» | «Повтори анализ через несколько секунд…»; no feature line, the decision carries none | no |
 | `fetch_failed` `rate_limited` with `retryAfterSec` | «⚠️ Брокер ограничил запросы. Попробуй через N с.» | — | no |
 | any other `fetch_failed`, `rate_limited` without `retryAfterSec` | «⚠️ Не удалось получить свечи у брокера…»; `warn` `signal not evaluated` with `signalCode` (not for `rate_limited`) | — | no |
 | `evaluateSignal` threw (unreachable, a timeout, a non-2xx, a broken body) | the same; `warn` `signal not evaluated` with the error | — | no |
@@ -241,7 +264,9 @@ backend call and up to three Bot API calls (the edit refused as gone, then the m
 anew): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is two backend calls and up to four Bot API
 calls — «⏳» refused as gone and sent anew, the signal, the result sent; or «⏳» edited, the
 signal, the result's edit refused as gone and sent anew: 2 × 5 000 + 4 × 8 000 = 42 s.
-`.stakePlaceholder` is the answer and one message. All are under `confirm`'s 45 s, so
+`.stakePlaceholder` is the answer and one message. `.legacyDuration` (#313, an old duration
+button) is no backend call and two Bot API calls, the answer and the keyboard's removal: 16 s.
+All are under `confirm`'s 45 s, so
 `HANDLER_BUDGET_MS`, the shutdown budget and the compose grace period do not move. The answer and
 the read run together and are counted as sequential, as for oauth. `timing.test.ts` runs every
 terminal branch of the seven through the real handlers. The pairs route reads the cache in

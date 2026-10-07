@@ -55,8 +55,9 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 ## The button
 
 - It is drawn only on a signal, in its own row under the stake button, and only where
-  `sessionFits(durationSec)` holds: 5 × (60 + 120) s and 5 × (300 + 120) s fit the worker's hour,
-  15 min, 30 min and 1 h do not. The label is built from `DEFAULT_SESSION_TRADES` with
+  `sessionFits(durationSec)` holds: 5 × (5 + 120) s and 5 × (15 + 120) s fit the worker's hour, so
+  after #313 every duration of the set has the button; the guard stays, in the keyboard and in
+  `sessionStartDataOf`, so a datum that does not fit starts nothing. The label is built from `DEFAULT_SESSION_TRADES` with
   `pluralTrades`, and the request sends the same number, so the label, the check and the request
   cannot disagree.
 - The session's trades do not follow this screen's direction: the orchestrator asks for a signal
@@ -78,7 +79,7 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 | 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_halted` | the same | the single trade's texts |
 | 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.» |
 | 409 `trading_paused` | the same ([kill-switch.md](kill-switch.md)) | «⏸ Торговля временно приостановлена, попробуйте позже.» |
-| 409 `session_too_long` | the same; reachable only if `sessionFits` and the backend drift apart | «⏱ Сессия на этой длительности не уложится в час — выбери 1 или 5 мин.» |
+| 409 `session_too_long` | the same; reachable only if `sessionFits` and the backend drift apart | «⏱ Сессия на этой длительности не уложится в час.» |
 | 409 `balance_unavailable` | the same (no snapshot, or a zero minimum) | «⏳ Баланс Binodex ещё не получен — попробуй через минуту.» |
 | 409 `pair_unavailable` | the same | «⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.» |
 | 409 `stake_precision`, `stake_below_minimum`, `insufficient_demo_balance` | the same: the saved demo stake against the snapshot (#297) | the single trade's texts, without naming the minimum (this press reads no access), + «💵 Сумма» → `stk:o:a:<assetId>:<sec>` |
@@ -109,7 +110,7 @@ the same 404 `not_found`.
 
 ```text
 🎮 Демо-сессия
-📈 EUR/USD OTC · ⏱ 1 мин · ставка $1.00
+📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00
 🔢 Сделка 3 из 5
 📊 Счёт: 1 в плюс, 1 в минус             (from the first settled trade; «в ноль» only when tied > 0)
 
@@ -199,8 +200,8 @@ One entry per session id, in process memory, like the intent tracker
   gone and sent anew: 39 s.
 - All stay below the longest path (`start`/`menu`, 42 s), so `HANDLER_BUDGET_MS` and the shutdown
   budget do not move. `timing.test.ts` runs every terminal branch of the three.
-- `SESSION_TRACK_FIRST_POLL_MS` = 3 s, `SESSION_TRACK_POLL_MS` = 10 s (a trade lasts at least a
-  minute), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
+- `SESSION_TRACK_FIRST_POLL_MS` = 3 s, `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
+  cycle is at least the worker's catch-up grace, 10 s), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
   `SESSION_TRACK_DRAIN_MS` = 5 s + 8 s.
 - The chain at import adds `TRADING_SESSION_START_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
   link #283 left to the bot), first poll < poll < deadline, `SESSION_MAX_DURATION_MS <
@@ -235,7 +236,7 @@ The bot's presses are covered by `trading-session.test.ts`, `session-tracker.tes
 `demo.test.ts` and `timing.test.ts` against the real handlers; they need no services. The routes
 the bot calls are run end to end by [trading-session.md → Running it locally](trading-session.md#running-it-locally).
 That a started session trades and its counters move needs #287's orchestrator in the worker.
-The steps in Telegram — «🎮 Запустить демо», a pair, 1 min, «📊 Анализ», «🚀 Сессия из 5 сделок»,
+The steps in Telegram — «🎮 Запустить демо», a pair, 15 s, «📊 Анализ», «🚀 Сессия из 5 сделок»,
 the status moving, «⏹ Остановить сессию» — need a bot token of its own, which no runtime check of
 this issue used.
 

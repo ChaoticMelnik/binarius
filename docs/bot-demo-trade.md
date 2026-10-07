@@ -180,7 +180,7 @@ status line of an intent and a session's stake use it too; balances keep `format
 ## The status message
 
 `intentStatusText(symbol, view, { deadline? })` builds the message from four parts: a header, the
-trade line (`EUR/USD OTC · ⬆️ Вверх · ⏱ 1 мин · ставка $1.00`, the symbol capped at 64 characters),
+trade line (`EUR/USD OTC · ⬆️ Вверх · ⏱ 15 с · ставка $1.00`, the symbol capped at 64 characters),
 a blank line, and the status line. The status line is chosen by `view.status`, or by
 `view.lastError` when the status is `rejected`:
 
