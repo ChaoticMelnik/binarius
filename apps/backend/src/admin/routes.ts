@@ -6,6 +6,7 @@ import {
   errorIdentity,
   errorLogFields,
   safeParseAdminConfirmRequest,
+  safeParseAdminIntentsQuery,
   safeParseAdminLoginRequest,
   safeParseAdminUsersQuery,
   STAFF_SESSION_TOKEN_PATTERN,
@@ -21,10 +22,12 @@ import {
   endStaffSession,
   failChallengeDelivery,
   findStaffForLogin,
+  listIntentsForAdmin,
   listLiveStaffSessions,
   listUsersForAdmin,
   markChallengePromptSent,
   readAdminOverview,
+  readIntentForAdmin,
   readUserForAdmin,
   recordLoginLockout,
   recordLoginRefusal,
@@ -37,6 +40,7 @@ import {
   STAFF_SESSION_IDLE_MS,
   toAdminBrokerAccountView,
   toAdminOverview,
+  toAdminTradeIntentView,
   toAdminUserDetail,
   toAdminUserListItem,
   verifyPassword,
@@ -467,6 +471,85 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
           action: AuditAction.UserViewed,
           entity: { type: AuditEntityType.User, id: userId },
           payload: { path, result: 'found', userId },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
+    if (answer === null) {
+      return reply.code(404).send({ error: AdminErrorCode.NotFound });
+    }
+    return reply.send(answer);
+  });
+
+  // --- Intents (#108, docs/admin-pages.md) -------------------------------------------------------
+
+  app.get('/admin/intents', async (request, reply) => {
+    // before the session: a query outside the schema costs no transaction and leaves no row
+    const parsed = safeParseAdminIntentsQuery(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+    }
+    const { status, mode, user, session, cursor } = parsed.data;
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const page = await listIntentsForAdmin(tx, {
+        filters: { status, mode, userId: user, tradingSessionId: session },
+        cursor,
+        limit: ADMIN_PAGE_SIZE,
+      });
+      return {
+        result: {
+          me: meOf(ctx),
+          intents: page.rows.map(toAdminTradeIntentView),
+          nextCursor: page.nextCursor,
+        },
+        audit: {
+          action: AuditAction.IntentsViewed,
+          payload: {
+            path: '/admin/intents',
+            ...(status === undefined ? {} : { status }),
+            ...(mode === undefined ? {} : { mode }),
+            ...(user === undefined ? {} : { userId: user }),
+            // not `sessionId`: in staff_sessions_viewed that names a staff session
+            ...(session === undefined ? {} : { tradingSessionId: session }),
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  app.get('/admin/intents/:id', async (request, reply) => {
+    const intentId = (request.params as { id?: unknown }).id;
+    const path = '/admin/intents/:id';
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      // inside the session, as the user card does: the attempt leaves a row, and an id that is
+      // not a uuid is arbitrary input, so it is not recorded
+      if (typeof intentId !== 'string' || !UUID_PATTERN.test(intentId)) {
+        return {
+          result: null,
+          audit: { action: AuditAction.IntentViewed, payload: { path, result: 'not_found' } },
+        };
+      }
+      const row = await readIntentForAdmin(tx, intentId);
+      if (row === undefined) {
+        return {
+          result: null,
+          audit: {
+            action: AuditAction.IntentViewed,
+            payload: { path, result: 'not_found', intentId },
+          },
+        };
+      }
+      return {
+        result: { me: meOf(ctx), intent: toAdminTradeIntentView(row) },
+        audit: {
+          action: AuditAction.IntentViewed,
+          entity: { type: AuditEntityType.TradeIntent, id: intentId },
+          payload: { path, result: 'found', intentId },
         },
       };
     });

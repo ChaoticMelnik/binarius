@@ -5,7 +5,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   ADMIN_SEARCH_MAX_LENGTH,
   AdminErrorCode,
+  adminIntentResponseSchema,
+  adminIntentsResponseSchema,
   adminOverviewResponseSchema,
+  adminTradeIntentViewSchema,
   adminUserResponseSchema,
   adminUsersResponseSchema,
   staffSessionsResponseSchema,
@@ -22,6 +25,7 @@ import {
   StaffLoginChallengeStatus,
   staffSessions,
   StaffStatus,
+  tradeIntents,
   hashPassword,
   resetStaffPassword,
   verifyPassword,
@@ -29,7 +33,9 @@ import {
 import {
   createTempDatabase,
   seedBrokerAccount,
+  seedQueuedIntent,
   seedStaff,
+  seedTradingSession,
   seedUser,
   TEST_STAFF_PASSWORD,
   type SeededStaff,
@@ -871,34 +877,34 @@ describe('a disabled account', () => {
   });
 });
 
+const auditCount = async () =>
+  (await tmp.db.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0;
+
+const lastEntry = async (staffId: string) => {
+  const [row] = await tmp.db
+    .select({
+      action: auditLog.action,
+      actorType: auditLog.actorType,
+      entityType: auditLog.entityType,
+      entityId: auditLog.entityId,
+      payload: auditLog.payload,
+    })
+    .from(auditLog)
+    .where(eq(auditLog.actorId, staffId))
+    .orderBy(sql`${auditLog.createdAt} desc, ${auditLog.id} desc`)
+    .limit(1);
+  return row;
+};
+
+// one more row for this staff member, and only one
+const readOnce = async (staffId: string, url: string, token: string) => {
+  const before = (await entriesFor(staffId)).length;
+  const response = await withSession('GET', url, token);
+  expect((await entriesFor(staffId)).length).toBe(before + 1);
+  return response;
+};
+
 describe('the read pages (#107)', () => {
-  const auditCount = async () =>
-    (await tmp.db.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0;
-
-  const lastEntry = async (staffId: string) => {
-    const [row] = await tmp.db
-      .select({
-        action: auditLog.action,
-        actorType: auditLog.actorType,
-        entityType: auditLog.entityType,
-        entityId: auditLog.entityId,
-        payload: auditLog.payload,
-      })
-      .from(auditLog)
-      .where(eq(auditLog.actorId, staffId))
-      .orderBy(sql`${auditLog.createdAt} desc, ${auditLog.id} desc`)
-      .limit(1);
-    return row;
-  };
-
-  // one more row for this staff member, and only one
-  const readOnce = async (staffId: string, url: string, token: string) => {
-    const before = (await entriesFor(staffId)).length;
-    const response = await withSession('GET', url, token);
-    expect((await entriesFor(staffId)).length).toBe(before + 1);
-    return response;
-  };
-
   // A user created by the OAuth login carries only its Telegram id; its account was never
   // revoked, halted or rotated and has no address.
   const seedBareUserWithAccount = async () => {
@@ -1119,6 +1125,184 @@ describe('the read pages (#107)', () => {
     await withSession('POST', '/admin/auth/logout', token);
 
     expect((await withSession('GET', '/admin/users', token)).statusCode).toBe(401);
+  });
+});
+
+describe('the intents pages (#108)', () => {
+  // a queued intent of a fresh user, attached to a session of its account
+  const seedIntentInSession = async () => {
+    const seeded = await seedQueuedIntent(tmp.db);
+    const session = await seedTradingSession(tmp.db, seeded.brokerAccountId);
+    await tmp.db
+      .update(tradeIntents)
+      .set({ tradingSessionId: session.id })
+      .where(eq(tradeIntents.id, seeded.intent.id));
+    return { ...seeded, tradingSessionId: session.id };
+  };
+
+  const INTENT_KEYS = Object.keys(adminTradeIntentViewSchema.shape).sort();
+
+  it.each(['/admin/intents', '/admin/intents/00000000-0000-4000-8000-00000000000a'])(
+    'refuses %s without a live session and writes nothing',
+    async (url) => {
+      const before = await auditCount();
+      for (const headers of [BEARER, { ...BEARER, 'x-staff-session': 'a'.repeat(43) }]) {
+        const response = await app.inject({ method: 'GET', url, headers });
+        expect([response.statusCode, response.json()]).toEqual([
+          401,
+          { error: AdminErrorCode.SessionInvalid },
+        ]);
+      }
+      expect(await auditCount()).toBe(before);
+    },
+  );
+
+  it('lists with exactly the wire keys and records only the filters it was given', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const target = await seedIntentInSession();
+
+    const response = await readOnce(
+      seeded.staffId,
+      `/admin/intents?status=active&user=${target.userId}&utm_source=mail`,
+      token,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<{ intents: Record<string, unknown>[] }>();
+    expect(Object.keys(raw)).toEqual(['me', 'intents', 'nextCursor']);
+    expect(Object.keys(raw.intents[0] ?? {}).sort()).toEqual(INTENT_KEYS);
+    expect(response.body).not.toMatch(/Enc|Hash|KeyId|_enc|_hash|key_id/);
+    const body = adminIntentsResponseSchema.parse(raw);
+    expect(body.intents.map((i) => i.id)).toEqual([target.intent.id]);
+    expect(body.intents[0]).toMatchObject({
+      userId: target.userId,
+      telegramUserId: target.telegramUserId,
+      tradingSessionId: target.tradingSessionId,
+    });
+    expect(body.nextCursor).toBeNull();
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.IntentsViewed,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: '/admin/intents', status: 'active', userId: target.userId },
+    });
+  });
+
+  it('filters by trading session and records it as tradingSessionId', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const target = await seedIntentInSession();
+    const newer = await seedIntentInSession();
+
+    const response = await readOnce(
+      seeded.staffId,
+      `/admin/intents?session=${target.tradingSessionId}&mode=demo&cursor=${newer.intent.id}`,
+      token,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = adminIntentsResponseSchema.parse(response.json());
+    expect(body.intents.map((i) => i.id)).toEqual([target.intent.id]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/intents',
+      mode: 'demo',
+      tradingSessionId: target.tradingSessionId,
+      cursor: newer.intent.id,
+    });
+  });
+
+  it.each([
+    ['an unknown status', 'status=bogus'],
+    ['an empty status', 'status='],
+    ['a session that is not a uuid', 'session=x'],
+    ['a user of blanks', 'user=%20'],
+    ['a cursor that is not a uuid', 'cursor=bad'],
+    ['status twice', 'status=queued&status=settled'],
+  ])('refuses %s with 400 before the session, writing nothing', async (_label, query) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const before = await auditCount();
+
+    const response = await withSession('GET', `/admin/intents?${query}`, token);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('answers the card with exactly its wire keys and names the intent', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const target = await seedIntentInSession();
+
+    const response = await readOnce(seeded.staffId, `/admin/intents/${target.intent.id}`, token);
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<{ intent: object }>();
+    expect(Object.keys(raw)).toEqual(['me', 'intent']);
+    expect(Object.keys(raw.intent).sort()).toEqual(INTENT_KEYS);
+    expect(response.body).not.toMatch(/Enc|Hash|KeyId|_enc|_hash|key_id/);
+    const body = adminIntentResponseSchema.parse(raw);
+    expect(body.intent).toMatchObject({
+      id: target.intent.id,
+      userId: target.userId,
+      tradingSessionId: target.tradingSessionId,
+      reconcileClaimedAt: null,
+    });
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.IntentViewed,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.TradeIntent,
+      entityId: target.intent.id,
+      payload: { path: '/admin/intents/:id', result: 'found', intentId: target.intent.id },
+    });
+  });
+
+  it('records an id that is not a uuid as a miss, without repeating it', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+
+    const response = await readOnce(seeded.staffId, '/admin/intents/not-a-uuid', token);
+
+    expect([response.statusCode, response.json()]).toEqual([
+      404,
+      { error: AdminErrorCode.NotFound },
+    ]);
+    const entry = await lastEntry(seeded.staffId);
+    expect(entry).toMatchObject({ action: AuditAction.IntentViewed, entityId: null });
+    expect(entry?.payload).toEqual({ path: '/admin/intents/:id', result: 'not_found' });
+  });
+
+  it('records a uuid with no row as a miss that names the id', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const missing = randomUUID();
+
+    const response = await readOnce(seeded.staffId, `/admin/intents/${missing}`, token);
+
+    expect(response.statusCode).toBe(404);
+    const entry = await lastEntry(seeded.staffId);
+    expect(entry).toMatchObject({ action: AuditAction.IntentViewed, entityId: null });
+    expect(entry?.payload).toEqual({
+      path: '/admin/intents/:id',
+      result: 'not_found',
+      intentId: missing,
+    });
+  });
+
+  it('refuses the next read once the session has ended', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const target = await seedQueuedIntent(tmp.db);
+    const card = `/admin/intents/${target.intent.id}`;
+    expect((await withSession('GET', '/admin/intents', token)).statusCode).toBe(200);
+    expect((await withSession('GET', card, token)).statusCode).toBe(200);
+    await withSession('POST', '/admin/auth/logout', token);
+
+    expect((await withSession('GET', '/admin/intents', token)).statusCode).toBe(401);
+    expect((await withSession('GET', card, token)).statusCode).toBe(401);
   });
 });
 
