@@ -12,6 +12,7 @@ import {
 import {
   BalanceRefreshError,
   readBalanceSnapshot,
+  readDemoStake,
   readTokenBalance,
   resolveBalanceAccount,
   toBrokerBalanceView,
@@ -164,6 +165,8 @@ export function registerTradingAccess(app: FastifyInstance, deps: TradingAccessD
       ...toTradingAccessView(snapshot),
       ...section,
       tradingOpen: isTradingOpen(await readTradingSwitch(deps.db)),
+      // the users row was read above and is never deleted
+      demoStake: (await readDemoStake(deps.db, telegramUserId)) ?? null,
     });
   });
 }

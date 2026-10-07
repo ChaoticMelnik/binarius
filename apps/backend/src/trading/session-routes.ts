@@ -12,7 +12,8 @@ import {
   safeParseReadTradingSessionQuery,
   safeParseStopTradingSessionRequest,
   sessionFitsDeadline,
-  stakeSettingsFor,
+  checkDemoStake,
+  demoStakeSettings,
   tradingSessionSettingsSchema,
   type TradingSessionErrorCode as ErrorCode,
 } from '@binarius/shared';
@@ -22,6 +23,7 @@ import {
   createTradingSession,
   readActiveTradingSessionView,
   readBalanceSnapshot,
+  readDemoStake,
   readTradingSessionView,
   stopTradingSession,
   touchBalanceRequested,
@@ -60,6 +62,9 @@ const STATUS_OF = {
   balance_unavailable: 409,
   pair_unavailable: 409,
   session_not_active: 409,
+  stake_precision: 409,
+  stake_below_minimum: 409,
+  insufficient_demo_balance: 409,
   catalog_unavailable: 503,
 } as const satisfies Record<ErrorCode, 404 | 409 | 503>;
 
@@ -167,6 +172,15 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       if (snapshot === undefined) return refuse(reply, TradingSessionErrorCode.BalanceUnavailable);
     }
 
+    // the user's saved stake, or the broker's minimum without one (#297), checked against the
+    // same snapshot before any row is written
+    const demoStake = (await readDemoStake(db, BigInt(telegramUserId))) ?? null;
+    const stakeRefusal = checkDemoStake(demoStake ?? snapshot.minTradeAmount, {
+      minTradeAmount: snapshot.minTradeAmount,
+      demoAvailable: snapshot.demo.available,
+    });
+    if (stakeRefusal !== null) return refuse(reply, stakeRefusal);
+
     // a stored min_trade_amount of 0 is valid and gives baseStake '0', which settings v1 refuse:
     // the snapshot offers no stake to trade with, the same answer as no snapshot
     const stakeSettings = tradingSessionSettingsSchema.safeParse({
@@ -174,7 +188,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       assetId,
       durationSec,
       trades,
-      stake: stakeSettingsFor(snapshot.minTradeAmount),
+      stake: demoStakeSettings(demoStake, snapshot.minTradeAmount),
     });
     if (!stakeSettings.success) {
       request.log.warn({ accountId: brokerAccountId }, 'balance snapshot gives no session stake');

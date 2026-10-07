@@ -33,6 +33,7 @@ import {
   brokerBalanceSnapshots,
   createTradeIntent,
   openTrading,
+  setDemoStake,
   stopTrading,
   tradeIntents,
   tradingSessions,
@@ -501,6 +502,44 @@ describe('POST /trading/sessions', () => {
     await expectRefusal(response, 409, 'balance_unavailable', before);
     expect(lines.some((line) => line.includes('balance snapshot gives no session stake'))).toBe(
       true,
+    );
+  });
+
+  it('R16 takes the saved demo stake and widens the scale (#297)', async () => {
+    const seed = await seedReady();
+    await setDemoStake(tmp.db, BigInt(seed.telegramUserId), decimalStringSchema.parse('2.50'));
+    const response = await start(appWith(), bodyFor(seed));
+    expect(response.statusCode).toBe(201);
+    expect(sessionOf(response).settings?.stake).toEqual({ baseStake: '2.5', stakeScale: 2 });
+  });
+
+  it.each([
+    ['0.5', 'stake_below_minimum'],
+    ['10000.01', 'insufficient_demo_balance'],
+    ['1.001', 'stake_precision'],
+  ])('R17 a saved stake of %s is 409 %s and writes no session (#297)', async (stake, error) => {
+    const seed = await seedReady();
+    await setDemoStake(tmp.db, BigInt(seed.telegramUserId), decimalStringSchema.parse(stake));
+    const before = await sessionCount();
+    await expectRefusal(await start(appWith(), bodyFor(seed)), 409, error, before);
+  });
+
+  it('R18 without a saved stake, a minimum above the demo balance is 409 (#297)', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    await upsertBalanceSnapshot(tmp.db, {
+      brokerAccountId: seed.brokerAccountId,
+      user: {
+        ...brokerUser,
+        demo: { ...brokerUser.demo, available: decimalStringSchema.parse('0.5') },
+      },
+      requested: false,
+    });
+    const before = await sessionCount();
+    await expectRefusal(
+      await start(appWith(), bodyFor(seed)),
+      409,
+      'insufficient_demo_balance',
+      before,
     );
   });
 

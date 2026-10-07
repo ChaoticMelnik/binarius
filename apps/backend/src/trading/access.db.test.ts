@@ -10,12 +10,14 @@ import {
   UserErrorCode,
   UserStatus,
   safeParseTradingAccessResponse,
+  type DecimalString,
 } from '@binarius/shared';
 import { INTEGRATION_WAIT_CEILING_MS, until } from '@binarius/shared/testing';
 import {
   closeTradingSwitch,
   createTempDatabase,
   intentRequest,
+  seedBalanceSnapshot,
   seedBrokerAccount,
   seedUser,
   seedUserWithAccount,
@@ -24,6 +26,7 @@ import {
 import {
   brokerBalanceSnapshots,
   openTrading,
+  setDemoStake,
   tokenLedger,
   tradingSwitch,
   users,
@@ -153,6 +156,7 @@ describe('POST /trading/access', () => {
     expect(Object.keys(body).sort()).toEqual([
       'broker',
       'brokerUnavailable',
+      'demoStake',
       'status',
       'tokens',
       'tradingOpen',
@@ -165,9 +169,12 @@ describe('POST /trading/access', () => {
       broker: null,
       brokerUnavailable: 'broker_unavailable',
       tradingOpen: true,
+      demoStake: null,
     });
     expect(safeParseTradingAccessResponse(body).success).toBe(true);
 
+    // the route checks a demo amount against the account's snapshot (#297)
+    await seedBalanceSnapshot(tmp.db, seed.brokerAccountId);
     const created = await post('/trading/intents', intentRequest(seed.telegramUserId));
     expect(created.statusCode).toBe(201);
     const second = await access({ telegramUserId: seed.telegramUserId });
@@ -187,6 +194,7 @@ describe('POST /trading/access', () => {
       broker: null,
       brokerUnavailable: 'no_account',
       tradingOpen: true,
+      demoStake: null,
     });
   });
 
@@ -264,8 +272,18 @@ describe('POST /trading/access → broker', () => {
       broker: null,
       brokerUnavailable: 'no_account',
       tradingOpen: true,
+      demoStake: null,
     });
     expect(userGets()).toBe(0);
+  });
+
+  it('answers the saved demo stake canonically, null without one (#297)', async () => {
+    const user = await seedUser(tmp.db, { balance: 4n });
+    const ask = async () =>
+      (await access({ telegramUserId: user.telegramUserId })).json() as { demoStake: unknown };
+    expect((await ask()).demoStake).toBeNull();
+    await setDemoStake(tmp.db, BigInt(user.telegramUserId), '2.50' as DecimalString);
+    expect((await ask()).demoStake).toBe('2.5');
   });
 
   // the field is the trading_switch row (#144), read on every request
