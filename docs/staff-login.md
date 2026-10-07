@@ -95,8 +95,9 @@ and every admin request performed under a live session writes a row in `audit_lo
 transaction as the thing it records: no row, no data (`runAsStaff`, `startLoginChallenge`,
 `completeLogin`, the Telegram CASes). Refusals before that point leave no row: a route ceiling
 (429), a malformed body (400), a full scrypt queue (429), a session token of the wrong shape or a
-session that is not live (401), and a session id that is not a uuid, which `apps/web` refuses
-before the backend is asked. The actions are a closed list (`AuditAction`, enforced
+session that is not live (401), a session id that is not a uuid, which `apps/web` refuses
+before the backend is asked, and a search query outside its schema (400), which `apps/web` also
+refuses before asking. The actions are a closed list (`AuditAction`, enforced
 by `audit_log_action_check`), and the payloads hold only named keys — never a password, a code,
 a token, a raw error object, or the login someone typed for an account that does not exist.
 
@@ -114,6 +115,12 @@ a token, a raw error object, or the login someone typed for an account that does
 | sessions listed | `staff_sessions_viewed` |
 | session revoked, or a revoke that found nothing | `staff_session_revoked` |
 | logout | `staff_logout` |
+| overview opened | `overview_viewed` |
+| users listed or searched | `users_viewed` |
+| user card opened, or an id that found nothing | `user_viewed` |
+
+The read pages behind the session, and what each of their rows carries, are in
+[admin-pages.md](admin-pages.md).
 
 ## Limits
 
