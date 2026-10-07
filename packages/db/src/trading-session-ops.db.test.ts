@@ -271,6 +271,25 @@ describe('createTradingSession', () => {
     );
   });
 
+  it('C6 refuses a real session before it reads anything, and writes no row', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    await sessionFailsWith(
+      createTradingSession(tmp.db, {
+        telegramUserId: seed.telegramUserId,
+        brokerAccountId: seed.brokerAccountId,
+        mode: TradeMode.Real,
+        settings: sessionSettings(),
+      }),
+      TradingSessionDbErrorCode.ModeNotAllowed,
+    );
+    expect(
+      await tmp.db
+        .select()
+        .from(tradingSessions)
+        .where(eq(tradingSessions.brokerAccountId, seed.brokerAccountId)),
+    ).toEqual([]);
+  });
+
   it('C4 refuses a halted account, a blocked user and an unknown id', async () => {
     const user = await seedUser(tmp.db);
     const halted = await seedBrokerAccount(tmp.db, user.userId, {

@@ -108,6 +108,9 @@ export const TradingSessionErrorCode = {
   InsufficientTokens: 'insufficient_tokens',
   // the global trading switch is closed (#144, docs/kill-switch.md)
   TradingPaused: 'trading_paused',
+  // createTradingSession refuses a non-demo mode; the start route only creates demo sessions,
+  // so it answers this only if that changes
+  ModeNotAllowed: 'mode_not_allowed',
   ActiveSessionExists: 'active_session_exists',
   SessionTooLong: 'session_too_long',
   BalanceUnavailable: 'balance_unavailable',
