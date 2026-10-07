@@ -207,7 +207,8 @@ dc() {
 dc down -v
 dc up --build --wait backend
 dc exec -T backend pnpm db:migrate
-# a fresh database starts with trading closed (docs/kill-switch.md)
+# the start needs the trading switch open (docs/kill-switch.md); a fresh database already has
+# it open, and the command then prints «Торговля уже открыта»
 dc exec -T backend pnpm --filter @binarius/backend kill-switch off
 INTERNAL_API_TOKEN="$(dc exec -T backend printenv INTERNAL_API_TOKEN)"
 api() {
