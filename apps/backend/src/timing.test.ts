@@ -3,7 +3,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
-import { BROKER_BALANCE_SLA_MS, TRADING_ACCESS_BUDGET_MS } from '@binarius/shared/broker-balance';
+import {
+  BALANCE_WATCH_WINDOW_MS,
+  BROKER_BALANCE_SLA_MS,
+  TRADING_ACCESS_BUDGET_MS,
+} from '@binarius/shared/broker-balance';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import { SIGNAL_CHART_INTERVAL_MS, TRADING_SIGNAL_BUDGET_MS } from '@binarius/shared/signal';
 import {
@@ -15,7 +19,6 @@ import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
 import {
   BALANCE_STALLED_RETRY_MS,
-  BALANCE_WATCH_WINDOW_MS,
   BROKER_RATE_LIMIT_PER_MINUTE,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   LINK_PUSH_TELEGRAM_API_TIMEOUT_MS,

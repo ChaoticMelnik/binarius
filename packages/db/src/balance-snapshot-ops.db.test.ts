@@ -10,8 +10,10 @@ import {
 } from '@binarius/shared';
 import { INTEGRATION_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import {
+  applyBalanceEvent,
   balanceSnapshotOutOfDomain,
   listBalanceRefreshCandidates,
+  listSessionCandidates,
   readBalanceSnapshot,
   recordBalanceRefreshFailure,
   resolveBalanceAccount,
@@ -22,7 +24,7 @@ import {
   type BalanceSnapshotRead,
 } from './balance-snapshot-ops';
 import type { Db } from './client';
-import { BalanceRefreshError, brokerBalanceSnapshots } from './schema/index';
+import { BalanceRefreshError, brokerAccounts, brokerBalanceSnapshots } from './schema/index';
 import {
   createTempDatabase,
   seedBrokerAccount,
@@ -288,6 +290,90 @@ describe('the stored domain', () => {
   });
 });
 
+describe('applyBalanceEvent', () => {
+  const balance = (available: string, held: string, total: string) => ({
+    available: money(available),
+    held: money(held),
+    total: money(total),
+  });
+
+  async function withSnapshot() {
+    const { accountId } = await seedAccount();
+    await upsertBalanceSnapshot(tmp.db, {
+      brokerAccountId: accountId,
+      user: brokerUser(),
+      requested: true,
+    });
+    await recordBalanceRefreshFailure(tmp.db, accountId, BalanceRefreshError.RateLimited);
+    await shift(accountId, 'updated_at', '-1 hour');
+    return accountId;
+  }
+
+  it.each([TradeMode.Demo, TradeMode.Real])(
+    'moves the %s amounts and event time, and nothing else',
+    async (mode) => {
+      const accountId = await withSnapshot();
+      const before = (await snapshotRow(accountId))!.row;
+      expect(
+        await applyBalanceEvent(tmp.db, {
+          brokerAccountId: accountId,
+          mode,
+          balance: balance('98.5', '1.5', '100'),
+        }),
+      ).toEqual({ written: true });
+      const after = (await snapshotRow(accountId))!.row;
+      const moved =
+        mode === TradeMode.Demo
+          ? {
+              demoAvailable: '98.50000000',
+              demoHeld: '1.50000000',
+              demoTotal: '100.00000000',
+              demoEventAt: expect.any(Date),
+            }
+          : {
+              realAvailable: '98.50000000',
+              realHeld: '1.50000000',
+              realTotal: '100.00000000',
+              realEventAt: expect.any(Date),
+            };
+      expect(after).toEqual({ ...before, ...moved, updatedAt: expect.any(Date) });
+      expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+      expect(before.demoEventAt).toBeNull();
+      expect(before.realEventAt).toBeNull();
+    },
+  );
+
+  it('inserts nothing for an account without a snapshot', async () => {
+    const { accountId } = await seedAccount();
+    expect(
+      await applyBalanceEvent(tmp.db, {
+        brokerAccountId: accountId,
+        mode: TradeMode.Demo,
+        balance: balance('1', '0', '1'),
+      }),
+    ).toEqual({ written: false, reason: 'no_snapshot' });
+    expect(await snapshotRow(accountId)).toBeUndefined();
+  });
+
+  it.each<[string, ReturnType<typeof balance>, string]>([
+    ['an exponent', balance('1e3', '0', '1'), 'available'],
+    ['a sign', balance('1', '-1', '1'), 'held'],
+    ['thirteen integer digits', balance('1', '0', '1000000000000'), 'total'],
+    ['nine fraction digits', balance('1.123456789', '0', '1'), 'available'],
+  ])('refuses %s and leaves the row as it was', async (_label, value, field) => {
+    const accountId = await withSnapshot();
+    const before = (await snapshotRow(accountId))!.row;
+    expect(
+      await applyBalanceEvent(tmp.db, {
+        brokerAccountId: accountId,
+        mode: TradeMode.Demo,
+        balance: value,
+      }),
+    ).toEqual({ written: false, reason: 'out_of_domain', field });
+    expect((await snapshotRow(accountId))!.row).toEqual(before);
+  });
+});
+
 describe('recordBalanceRefreshFailure and touchBalanceRequested', () => {
   it('records a failure with its time on an existing snapshot', async () => {
     const { accountId } = await seedAccount();
@@ -487,6 +573,89 @@ describe('the accounts in work', () => {
       }),
     ).toEqual([askedNewer, askedOlder]);
   });
+});
+
+// A database of its own, for the same reason as the accounts in work above.
+describe('listSessionCandidates', () => {
+  let own: TempDatabase;
+  beforeAll(async () => {
+    own = await createTempDatabase(baseUrl);
+  });
+  afterAll(() => own.drop());
+
+  const WINDOW_MS = 600_000;
+  const list = (exclude?: readonly string[]) =>
+    listSessionCandidates(own.db, {
+      watchWindowMs: WINDOW_MS,
+      ...(exclude === undefined ? {} : { exclude }),
+    });
+
+  async function asked(by: string, patch: Parameters<typeof seedBrokerAccount>[2] = {}) {
+    const { accountId } = await seedAccount(own.db, patch);
+    await upsertBalanceSnapshot(own.db, {
+      brokerAccountId: accountId,
+      user: brokerUser(),
+      requested: true,
+    });
+    await shift(accountId, 'last_requested_at', by, own.db);
+    return accountId;
+  }
+
+  it('lists the accounts in work with their broker user ids, by id', async () => {
+    expect(await list()).toEqual([]);
+
+    // in: a queued intent and no snapshot; asked a minute ago, with a token that needs an exchange
+    const withIntent = await seedQueuedIntent(own.db);
+    const askedRecently = await asked('-1 minute', {
+      brokerUserId: 'broker-asked',
+      accessTokenExpiresAt: new Date(Date.now() + 30_000),
+    });
+
+    // out: asked 11 minutes ago with an ended intent; pending; revoked; a blocked user
+    const ended = await seedQueuedIntent(own.db);
+    await own.db.transaction((tx) =>
+      rejectIntent(tx, {
+        id: ended.intent.id,
+        from: 'queued',
+        reason: TradeIntentFailureReason.Expired,
+      }),
+    );
+    await upsertBalanceSnapshot(own.db, {
+      brokerAccountId: ended.brokerAccountId,
+      user: brokerUser(),
+      requested: true,
+    });
+    await shift(ended.brokerAccountId, 'last_requested_at', '-11 minutes', own.db);
+    await asked('-1 minute', { status: BrokerAccountStatus.Pending });
+    await asked('-1 minute', { status: BrokerAccountStatus.Revoked });
+    const blocked = await seedUser(own.db, { status: UserStatus.Blocked });
+    const blockedAccount = await seedBrokerAccount(own.db, blocked.userId);
+    await upsertBalanceSnapshot(own.db, {
+      brokerAccountId: blockedAccount,
+      user: brokerUser(),
+      requested: true,
+    });
+
+    const expected = [
+      {
+        id: withIntent.brokerAccountId,
+        brokerUserId: await brokerUserIdOf(withIntent.brokerAccountId),
+      },
+      { id: askedRecently, brokerUserId: 'broker-asked' },
+    ].sort((a, b) => (a.id < b.id ? -1 : 1));
+    expect(await list()).toEqual(expected);
+    expect(await list([withIntent.brokerAccountId])).toEqual([
+      { id: askedRecently, brokerUserId: 'broker-asked' },
+    ]);
+  });
+
+  async function brokerUserIdOf(accountId: string) {
+    const [row] = await own.db
+      .select({ brokerUserId: brokerAccounts.brokerUserId })
+      .from(brokerAccounts)
+      .where(eq(brokerAccounts.id, accountId));
+    return row!.brokerUserId;
+  }
 });
 
 describe('resolveBalanceAccount', () => {

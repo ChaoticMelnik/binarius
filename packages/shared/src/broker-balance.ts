@@ -9,6 +9,10 @@ import { decimalStringSchema } from './money';
 export const BROKER_BALANCE_SLA_SEC = 60;
 export const BROKER_BALANCE_SLA_MS = BROKER_BALANCE_SLA_SEC * 1000;
 
+// The window after the bot's last question in which an account counts as in work without an
+// open intent; one value for the backend balance tick and the worker's session candidates.
+export const BALANCE_WATCH_WINDOW_MS = 600_000;
+
 // Upper estimate of POST /trading/access: one bounded broker GET plus database latency. It lives
 // here because the bot sizes its request timeout above it (#24) and the backend's own budget for
 // that GET sits below it.

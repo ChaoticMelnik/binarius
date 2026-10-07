@@ -1,7 +1,11 @@
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
-import { BROKER_BALANCE_SLA_MS, TRADING_ACCESS_BUDGET_MS } from '@binarius/shared/broker-balance';
+import {
+  BALANCE_WATCH_WINDOW_MS,
+  BROKER_BALANCE_SLA_MS,
+  TRADING_ACCESS_BUDGET_MS,
+} from '@binarius/shared/broker-balance';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import { SIGNAL_CHART_INTERVAL_MS, TRADING_SIGNAL_BUDGET_MS } from '@binarius/shared/signal';
 import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
@@ -91,9 +95,6 @@ export const DEFAULT_BALANCE_POLL_PER_MINUTE = 200;
 
 // GETs of one tick in flight at once.
 export const BALANCE_POLL_CONCURRENCY = 4;
-
-// How long after the bot's last request an account stays watched without an open intent.
-export const BALANCE_WATCH_WINDOW_MS = 600_000;
 
 // How long a tick leaves alone an account whose attempt left nothing in its row to move it
 // down the queue (no snapshot to mark, or a token that needs an exchange).
