@@ -70,8 +70,9 @@ export type TradingSessionStopReason =
 export const tradingSessionStopReasonSchema = z.enum(TradingSessionStopReason);
 
 // The fixed stake of a session from the account's min_trade_amount: the canonical spelling
-// (normalizeDecimal) and its own fraction length as the scale, so every valid numeric(20,8)
-// minimum passes assertStakeParams.
+// (normalizeDecimal) and its own fraction length as the scale, so every positive numeric(20,8)
+// minimum passes assertStakeParams. A minimum of 0 gives baseStake '0', which settings v1 refuse:
+// the start route answers balance_unavailable and the CLI zero_min_trade_amount (#130 n1).
 export function stakeSettingsFor(minTradeAmount: DecimalString): {
   baseStake: DecimalString;
   stakeScale: number;

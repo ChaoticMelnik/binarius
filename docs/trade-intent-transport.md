@@ -436,7 +436,8 @@ without a restart ([kill-switch.md](kill-switch.md)).
   travels in a button's callback data ([GET /trading/intents/:id](#get-tradingintentsid-127));
   a notification dedupe key (#29) should be derived from the intent id and status.
 - `trading_session_id` is set only by `createSessionIntent` (#130, [trading-session.md](trading-session.md));
-  the route's and the bot's single trades keep `NULL`. The orchestrator that calls it is #287.
+  the route's and the bot's single trades keep `NULL`. The orchestrator that calls it is
+  `apps/trading-worker/src/trading-session/orchestrator.ts` (#287).
   A session is started, read and stopped through `POST /trading/sessions`,
   `GET /trading/sessions/:id` and `POST /trading/sessions/:id/stop` (#283,
   [trading-session.md → Routes](trading-session.md#routes)), behind the same internal bearer.
