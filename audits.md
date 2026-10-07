@@ -1882,3 +1882,39 @@ PR #266 смержен через rebase (4 коммита, голова `b016b5
 
 1. **m4 — обязательное условие включения сокета** — **вынесено в #101** (issuecomment-6025803167)
 2. **Minor m1-m3, m5** — **вынесено в #278**
+
+---
+
+## #197 — Web: формулировки проверки origin и redirect_uri, директивы CSP админки в тесте (2026-10-07)
+
+PR #289 смержен через rebase (4 коммита, голова `c89ed35`), +~190 строк, без миграций. Объём расширен по ответам владельца: та же проверка написания для `BROKER_OAUTH_REDIRECT_URI` (backend), `MINI_APP_CSP` закреплён литералом наравне с `ADMIN_CSP`.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Модель | Fable-спавн упал на 429 (недельный лимит); план и Plan Update на Opus — решение владельца 2026-10-07 «Opus для всех до сброса». |
+| Architect | Clarify + план | 4 вопроса; Codex plan review пропущен на лимите (job task-muxv1nzp-37ctyj) по решению владельца 2026-10-06. Plan Update на PLAN DEFECT D1 (испорченная регулярка) и Plan Update после круга 1 без Codex. |
+| Implementer | Clarify ×2 + код | 4 + 4 вопроса; поймал D1 по сырому телу комментария. Внутрикодовые мутации круга 1 заблокированы классификатором, не обходились; закрыты ревьюером. |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6034606143). |
+| Reviewer | Iteration 1 | 0 Blocker/Major, 4 Minor; мутации и runtime прогнаны. Codex на лимите (task-muxvrwxh-mevkoy) — пропуск. #197 переведён в Todo из-за одних Minor — по ошибочной инструкции tech-lead'а. |
+| Reviewer | Iteration 2 | 0 Blocker/Major, 2 Minor; Cf-мутация в репозитории. Codex на лимите (task-muxwiwsb-g7pf6r) — пропуск. |
+| Tech Lead | Merge / Done | Комментарий ready-to-merge — tech-lead (Codex пропущен). `AskUserQuestion` → rebase + удалить ветку, мерж без Codex подтверждён владельцем явно. Minor круга 2 → #294 по решению владельца. |
+
+### Review iterations: 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| D1: `\u00XX` в плане превратились в caret-нотацию, регулярка отказывала A-Z | Plan defect | unverified-claim | Опубликованное тело комментария не перечитано | Architect Step 8; поймано на Implementer Step 0 |
+| m1 (круг 1): комментарий и docs обещали «только регистр и порт по умолчанию» | Minor → исправлен | unverified-claim | Формулировка не прогнана на вариантах написания хоста | Architect plan (m1 самого issue) |
+| m2 (круг 1): символы Cf проходили проверку | Minor → исправлен (решение владельца) | instance-vs-class | Класс «невидимые символы» сведён к `\s` + Cc | Architect plan |
+| m3, m4 (круг 1): устаревший комментарий compose.yaml, переносы | Minor → исправлены | single-source | Поиск устаревшего текста пропустил compose | Architect plan |
+| Reviewer-спавн получил «Todo и на Minor» | Process | other | Инструкция tech-lead'а пересказала Severity Guide неверно | Tech Lead Phase 3 |
+| m1-r2, m2-r2: default-ignorable вне Cf; формулировки | Minor | instance-vs-class | — | → #294 |
+
+### Process improvement proposals
+
+1. **Архитектор перечитывает опубликованный план и пишет управляющие символы как `\x`** — **внедрено в #<PR>: .claude/skills/architect/SKILL.md → Step 8**
+2. **Minor круга 2** — **вынесено в #294**
