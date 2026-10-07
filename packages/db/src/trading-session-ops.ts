@@ -394,7 +394,8 @@ export type TradingSessionStartRefusal =
   | typeof TradingSessionErrorCode.AccountRevoked
   | typeof TradingSessionErrorCode.AccountHalted
   | typeof TradingSessionErrorCode.ActiveSessionExists
-  | typeof TradingSessionErrorCode.InsufficientTokens;
+  | typeof TradingSessionErrorCode.InsufficientTokens
+  | typeof TradingSessionErrorCode.TradingPaused;
 
 export type TradingSessionStartCheck =
   | { ok: true; brokerAccountId: string; accessTokenExpiresAt: Date }
@@ -406,12 +407,16 @@ const refused = (code: TradingSessionStartRefusal): TradingSessionStartCheck => 
 });
 
 // The start route's refusals before it calls the broker for a balance (#283). Plain reads with no
-// lock, the first refusal wins; createTradingSession re-checks the user, the account and the one
-// active session under its locks, the tokens only here (docs/trading-session.md -> Routes).
+// lock, the first refusal wins; createTradingSession re-checks the switch, the user, the account
+// and the one active session, the tokens only here (docs/trading-session.md -> Routes).
+// The closed switch first, as createInTransaction checks it before the user's account.
 export async function checkTradingSessionStart(
   db: Db,
   { telegramUserId, brokerAccountId }: { telegramUserId: string; brokerAccountId?: string },
 ): Promise<TradingSessionStartCheck> {
+  if (!isTradingOpen(await readTradingSwitch(db))) {
+    return refused(TradingSessionErrorCode.TradingPaused);
+  }
   const [user] = await db
     .select({
       id: users.id,

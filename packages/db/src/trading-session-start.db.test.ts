@@ -33,6 +33,7 @@ import {
   takeIntent,
   type TradeIntentRow,
 } from './trade-intent-ops';
+import { openTrading, stopTrading } from './trading-switch-ops';
 import {
   checkTradingSessionStart,
   createSessionIntent,
@@ -102,6 +103,24 @@ describe('checkTradingSessionStart', () => {
     const result = await check(seed.telegramUserId);
     expect(result).toMatchObject({ ok: true, brokerAccountId: seed.brokerAccountId });
     expect(result.ok && result.accessTokenExpiresAt).toBeInstanceOf(Date);
+  });
+
+  it('E0 a closed trading switch refuses first, before the user and the account', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    await stopTrading(tmp.db, { source: 'operator', reason: 'test' });
+    try {
+      expect(await check(seed.telegramUserId)).toEqual({
+        ok: false,
+        code: TradingSessionErrorCode.TradingPaused,
+      });
+      expect(await check('999999999')).toEqual({
+        ok: false,
+        code: TradingSessionErrorCode.TradingPaused,
+      });
+    } finally {
+      await openTrading(tmp.db);
+    }
+    expect((await check(seed.telegramUserId)).ok).toBe(true);
   });
 
   it('E1 an unknown user', async () => {

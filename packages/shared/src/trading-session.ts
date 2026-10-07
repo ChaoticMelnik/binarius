@@ -106,6 +106,8 @@ export const TradingSessionErrorCode = {
   AccountHalted: 'account_halted',
   UserBlocked: 'user_blocked',
   InsufficientTokens: 'insufficient_tokens',
+  // the global trading switch is closed (#144, docs/kill-switch.md)
+  TradingPaused: 'trading_paused',
   ActiveSessionExists: 'active_session_exists',
   SessionTooLong: 'session_too_long',
   BalanceUnavailable: 'balance_unavailable',

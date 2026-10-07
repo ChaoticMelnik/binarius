@@ -358,6 +358,7 @@ describe('contract coverage (issue #6)', () => {
       | 'account_halted'
       | 'user_blocked'
       | 'insufficient_tokens'
+      | 'trading_paused'
       | 'active_session_exists'
       | 'session_too_long'
       | 'balance_unavailable'

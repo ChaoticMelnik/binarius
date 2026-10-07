@@ -208,6 +208,9 @@ describe('tradingSessionRefusalSchema', () => {
       safeParseTradingSessionRefusal({ error: TradingSessionErrorCode.UserNotFound, session: null })
         .success,
     ).toBe(false);
+    expect(
+      safeParseTradingSessionRefusal({ error: TradingSessionErrorCode.TradingPaused }).success,
+    ).toBe(true);
     expect(safeParseTradingSessionRefusal({ error: 'validation' }).success).toBe(false);
   });
 
