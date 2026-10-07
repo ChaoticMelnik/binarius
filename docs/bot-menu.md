@@ -160,7 +160,8 @@ pnpm test --project unit apps/bot/src
 
 - **#125** — the asset picker behind the button: [bot-demo.md](bot-demo.md).
 - **#126** — the analysis behind «📊 Анализ»: [bot-demo.md](bot-demo.md#the-analysis).
-- **#127 / #284** — the demo trade and the session of five; the callback data stays.
+- **#127 / #284** — the demo trade and the session of five ([bot-demo-trade.md](bot-demo-trade.md),
+  [bot-session.md](bot-session.md)); the callback data stays.
 - **#201** — levels and their progress on this card.
 - Real mode — the header reads REAL once a user can trade on real; #144's `tradingOpen` is
   the backend's switch, not a user's mode.

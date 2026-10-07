@@ -34,7 +34,9 @@ what a connected user sees as the bot's home — the status card with the balanc
 is in [docs/bot-menu.md](docs/bot-menu.md); what the demo button leads to — the asset, the
 duration, the check on a fresh catalog and the analysis screen — is in
 [docs/bot-demo.md](docs/bot-demo.md); how the stake button opens a demo trade and its status
-message follows the intent is in [docs/bot-demo-trade.md](docs/bot-demo-trade.md); where every
+message follows the intent is in [docs/bot-demo-trade.md](docs/bot-demo-trade.md); how the session
+button starts a demo session of five trades, follows it in one message and stops it is in
+[docs/bot-session.md](docs/bot-session.md); where every
 client bot text is written, how its template and validator work and what stays in code is in
 [docs/bot-texts.md](docs/bot-texts.md);
 how the signal package fetches candles, turns them into a direction or into a reason for none,

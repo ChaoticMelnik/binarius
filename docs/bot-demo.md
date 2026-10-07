@@ -64,6 +64,7 @@ demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить ан
   bot  → POST /trading/signal { assetId, interval: intervalForDuration(sec) }
   bot  → editMessageText: the analysis screen with its keyboard
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>  (the stake button) → the trade, bot-demo-trade.md
+demo:sess:<assetId>:<sec>                     (the session button) → the session, bot-session.md
 ```
 
 Each press after the first answers the query and reads the catalog at the same time, then
@@ -134,8 +135,10 @@ not a fresh catalog.
   three per row, then «↩️ Активы» (the pair's type, the page it is listed on) and «↩️ Типы». A
   pair that admits none says so, with the two back buttons.
 - **Summary.** «📊 Анализ», then «↩️ Длительность» and «↩️ Типы».
-- **Analysis.** On a signal, «🚀 Открыть сделку: ⬆️ Вверх» (or «⬇️ Вниз») alone in the first row;
-  then «🔄 Повторить анализ» (the same `demo:an` data); then «↩️ Длительность» and «↩️ Типы».
+- **Analysis.** On a signal, «🚀 Открыть сделку: ⬆️ Вверх» (or «⬇️ Вниз») alone in the first row,
+  and under it «🚀 Сессия из 5 сделок» alone in its row where `sessionFitsDeadline(5, sec)` holds —
+  at 1 and 5 min (#284, [bot-session.md](bot-session.md#the-button)); then «🔄 Повторить анализ»
+  (the same `demo:an` data); then «↩️ Длительность» and «↩️ Типы».
   «⏳ Анализирую…» has no keyboard, so «📊 Анализ» cannot be pressed twice while the signal is
   asked for.
 
@@ -257,7 +260,8 @@ and `TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` is checked at impor
 - **#127** — the stake button's press, the intent and its status (`intent:` buttons):
   [bot-demo-trade.md](bot-demo-trade.md). It runs `readDemoTrade` again at the press, with the
   amount `broker.minTradeAmount`.
-- **#284** — the demo session of five trades in the bot; the worker half is shipped (#287,
+- **#284** — the demo session of five trades in the bot: the button, status and stop
+  ([bot-session.md](bot-session.md)); the worker half is shipped (#287,
   [trading-session.md](trading-session.md)).
 - **#24** — the status card and its button ([bot-menu.md](bot-menu.md)).
 - No `/demo` command, and no check of the user at entry: a blocked or revoked user is refused by

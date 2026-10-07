@@ -194,6 +194,7 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
 - **#100** — the executor; until it is deployed, every intent is `rejected / executor_not_configured`.
 - **#90 / #101 / #29** — the trade's close and result, and the notification after `accepted`. The
   tracker stops at `accepted`.
-- **#284** — the session of five in the bot; its worker half is shipped (#287,
-  [trading-session.md](trading-session.md)). The single trade's stake stays the broker's minimum.
+- **#284** — the session of five in the bot: [bot-session.md](bot-session.md); its worker half is
+  shipped (#287, [trading-session.md](trading-session.md)). The single trade's stake stays the
+  broker's minimum.
 - **#121** — real mode.

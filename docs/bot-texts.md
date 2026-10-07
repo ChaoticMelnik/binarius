@@ -37,8 +37,8 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
   a message, a command description or the profile. Telegram never parses a plain text, so it is
   never escaped.
 - **group** — the screen or scenario the admin section lists it under: `start`, `card`,
-  `account`, `menu`, `settings`, `support`, `help`, `demo`, `analysis`, `trade`, `buttons`,
-  `commands`, `profile`. `buttons` is exactly the bot's `LABELS` buttons plus
+  `account`, `menu`, `settings`, `support`, `help`, `demo`, `analysis`, `trade`, `session`,
+  `buttons`, `commands`, `profile`. `buttons` is exactly the bot's `LABELS` buttons plus
   `confirmButtonNoEmail`, `commands` the `*Command` descriptions; a label shown on one screen
   only (the levels, the asset types, the durations, the directions) sits in that screen's group.
   `bot-texts.test.ts` pins both lists.
