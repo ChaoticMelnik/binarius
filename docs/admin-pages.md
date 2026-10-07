@@ -3,7 +3,9 @@
 Read-only pages for support and debugging, behind the staff login ([staff-login.md](staff-login.md)).
 They change nothing: no page here writes to a table other than `staff_sessions` (the session touch)
 and `audit_log` (the record of the view). #107 adds the overview, the user list with search, and
-the user card; #108–#110 add their sections and pages through the same mechanism.
+the user card; #108 adds the intents list and the intent card; the trading sessions, the trading
+section of the user card and the breakdown of the overview by status are #330; #109–#110 add their
+sections and pages through the same mechanism.
 
 ## Mechanism
 
@@ -21,7 +23,7 @@ backend under the staff session:
 4. `web` checks the answer against its strict schema (`packages/shared/src/admin.ts`): a key the
    contract does not name is a contract violation (500), not a silently dropped field.
 
-The read functions (`packages/db/src/admin-read-ops.ts`) take a `Tx`, not a `Db`, so the compiler
+The read functions (`packages/db/src/admin-read-ops.ts`, `admin-trading-ops.ts`) take a `Tx`, not a `Db`, so the compiler
 refuses a call outside a transaction. That a route's transaction is the one `asStaff` opens — and
 so writes its row — is enforced by review only (see Boundaries).
 
@@ -36,11 +38,12 @@ How `web` acts on a backend answer:
 | 401 `unauthorized` | our own bearer was refused: 500, cookie kept |
 | 400 `validation` | `web` checked the query first, so the contract drifted: 500 |
 | 404 `not_found` (user card) | 404 «Пользователь не найден»; the row is already written |
+| 404 `not_found` (intent card) | 404 «Заявка не найдена»; the row is already written |
 | anything else | 500, cookie kept, the error logged by name and code |
 
 ## Pages
 
-Every page has the same nav (Сводка | Пользователи | Сессии) and the account block
+Every page has the same nav (Сводка | Пользователи | Сессии | Заявки) and the account block
 («login — Выйти»). The login shown is the one in the `me` of the backend answer the page was built
 from; a page rendered without asking the backend (a refused search) shows no account block.
 `GET /admin` redirects to `/admin/overview`; after a login the landing page is still
@@ -54,7 +57,7 @@ One `SELECT` with subqueries, so all the numbers come from one snapshot and agre
   counted once), and «active now»;
 - trades: `trade_intents` rows, total and today, any status — what was created through the bot and
   the trading sessions. `broker_trades` holds only the trades the broker accepted and is not
-  counted here; the breakdown by status is #108.
+  counted here; the breakdown by status is #330.
 
 **«Today» starts at 00:00 UTC by the database clock**
 (`date_trunc('day', now() at time zone 'UTC') at time zone 'UTC'`), whatever the session time zone.
@@ -118,8 +121,42 @@ The `users` row and its `broker_accounts`, newest first. Sections:
   status, revocation reason, halt and its reason, token expiry and rotation, created and updated.
   The ciphertexts, the key id and the refresh-token hash are never selected.
 
+Under the main section, «Заявки пользователя →» opens the intents list filtered by this user — also
+for a user without broker accounts.
+
 The user and the accounts are two `SELECT`s without a shared snapshot: an account linked in between
 may or may not show, and either answer was true at its moment.
+
+### Intents — `GET /admin/intents?status=&mode=&user=&session=&cursor=`
+
+`trade_intents`, newest first, `ADMIN_PAGE_SIZE` per page, keyset on `(created_at, id)` as on the
+users page: one `SELECT` joined to `users` for the Telegram id. Each row links to the intent card
+and, by its Telegram id, to the user card. Statuses, modes, directions and failure reasons are
+printed as their codes.
+
+**Filters are exact matches**, each optional, all of them combined:
+
+| Parameter | Matches |
+|---|---|
+| `status` | one `TradeIntentStatus`, or `active` — every status that is not terminal, i.e. all but `settled` and `rejected` (`TERMINAL_TRADE_INTENT_STATUSES`, the same set the one-live-intent-per-account index uses) |
+| `mode` | `demo` or `real` |
+| `user` | the user's id (a uuid) |
+| `session` | `trade_intents.trading_session_id` (a uuid) |
+
+A `user` or `session` with no intents gives an empty page, not an error. **The cursor positions, it
+does not filter**: the next page starts after the cursor row's `(created_at, id)` whether or not
+that row passes the filters, and an id with no row gives an empty page. The form, the next and
+first links, the redirect and the request to the backend all go through `adminIntentsSearchParams`
+(`packages/shared/src/admin.ts`), in the order `status, mode, user, session, cursor`.
+
+### Intent card — `GET /admin/intents/:id`
+
+Every key of the intent's wire view: the 17 fields the bot sees (`GET /trading/intents/:id`) plus
+three only staff navigate by — `userId` (a link to the user card), `tradingSessionId` (with
+«Заявки этой сессии →», the list filtered by that session) and `reconcileClaimedAt`: when the
+reconciliation pass last took the intent (its lease, #89); empty — never. `brokerAccountId` is
+text. An empty value is shown as «—». The card reads any user's intent: it is behind the staff
+session, not the bot's owner-scoped read.
 
 ## Audit actions
 
@@ -133,6 +170,10 @@ named and bounded; nothing else is recorded.
 | user card, found | `user_viewed` | `user`, the id | `{ path: '/admin/users/:id', result: 'found', userId }` |
 | user card, a uuid with no row | `user_viewed` | — | `{ path, result: 'not_found', userId }` |
 | user card, an id that is not a uuid (direct backend call) | `user_viewed` | — | `{ path, result: 'not_found' }` — arbitrary input is not recorded |
+| intents | `intents_viewed` | — | `{ path: '/admin/intents', status?, mode?, userId?, tradingSessionId?, cursor? }` — a key only when the parameter was given; `tradingSessionId` rather than `sessionId`, which names a staff session in `staff_sessions_viewed` |
+| intent card, found | `intent_viewed` | `trade_intent`, the id | `{ path: '/admin/intents/:id', result: 'found', intentId }` |
+| intent card, a uuid with no row | `intent_viewed` | — | `{ path, result: 'not_found', intentId }` |
+| intent card, an id that is not a uuid (direct backend call) | `intent_viewed` | — | `{ path, result: 'not_found' }` |
 
 ## Boundaries
 
@@ -141,10 +182,13 @@ What `web` refuses before asking the backend, with no row:
 - a session cookie of the wrong shape → cleared, 302 to login;
 - a search query outside the schema (too long, a control character, `q` given twice) → 400 with
   the form and the message, whatever the cursor says;
-- a cursor that is not a uuid → 302 to the same search without it;
-- a card id that is not a uuid → 404.
+- an intents filter outside the schema (an unknown status or mode, a `user` or `session` that is
+  not a uuid — a value of blanks included —, a parameter given twice) → 400 with the form and the
+  message, whatever the cursor says;
+- a cursor that is not a uuid → 302 to the same search or filters without it;
+- a user or intent card id that is not a uuid → 404.
 
-An empty `q=` (an emptied search box) is no query: the whole list. Unknown query keys (`utm_*`, a
+An empty value (`q=`, or `status=` from the form's empty option) is no parameter: the whole list. Unknown query keys (`utm_*`, a
 bookmark's leftovers) are dropped on both sides.
 
 What the backend refuses before the session, with no row: a bad bearer (401 `unauthorized`), a
@@ -162,7 +206,9 @@ around these reads directly is caught only in review.
   `ADMIN_ACTIVE_WINDOW_MINUTES` for «active now» — all in `packages/shared/src/admin.ts`.
 - No rate ceiling on these reads, as on `/admin/sessions`: `web` is a trusted process behind the
   bearer, and the sessions are staff sessions.
-- `users` and `trade_intents` have no index on `created_at`; the list and the overview scan them.
+- `users` and `trade_intents` have no index on `created_at`; the lists and the overview scan them.
+  The intents filters `user` and `session` use `trade_intents_user_id_idx` and
+  `trade_intents_session_id_idx`; the order is still a sort.
   Assumed: up to 100 000 users and 1 000 000 intents on the pilot. If `explain analyze` of the list
   or the overview passes 200 ms at those sizes, add a `(created_at, id)` index in its own migration.
 - The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most three
@@ -192,12 +238,40 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `ada@example.com` (found despite the case), `seed-broker-1` and `1`. The name shows as
    `Ada <b>`, as text. Open the card: the account, the address, «минимальная ставка брокера».
    Search for 257 characters: 400, the form, no «Выйти».
+   Then give the user two finished intents, one of them in a stopped trading session. Only terminal
+   rows, with no reserve: nothing has to be written to `token_ledger`, the account is not «in work»
+   for any process, and nothing moves these rows:
+   ```bash
+   docker compose exec -T postgres psql -U binarius -d binarius <<'SQL'
+   with a as (select id, user_id from broker_accounts where broker_user_id = 'seed-broker-1'),
+   s as (
+     insert into trading_sessions (broker_account_id, mode, status, stop_reason, ended_at, settings)
+     select id, 'demo', 'stopped', 'rejected_twice', now(),
+       '{"version":1,"assetId":1,"durationSec":60,"trades":5,"stake":{"baseStake":"1","stakeScale":0}}'
+     from a returning id)
+   insert into trade_intents (broker_account_id, user_id, trading_session_id, mode, asset_id, amount,
+     action, duration_sec, client_request_id, status, tokens_reserved, last_error)
+   select a.id, a.user_id, s.id, 'demo', 1, '1.00000000'::numeric, 'up', 60, 'seed-1', 'rejected', 0,
+     'broker_rejected' from a, s
+   union all
+   select a.id, a.user_id, null::uuid, 'demo', 1, '2.00000000'::numeric, 'down', 60, 'seed-<b>',
+     'rejected', 0, 'expired' from a;
+   SQL
+   ```
+   Open «Заявки»: two rows, newest first. `?status=active` — «Заявок нет» (both are finished);
+   `?status=rejected&mode=demo` — both. The card of `seed-1`: «Заявки этой сессии →» lists one row.
+   The card of `seed-<b>`: the request id as text, no session and no session link. The user card:
+   «Заявки пользователя →» lists both. `?status=bogus` — 400, the form, no «Выйти»;
+   `/admin/intents/not-a-uuid` — 404.
 6. Check what was written:
    ```bash
    docker compose exec postgres psql -U binarius -d binarius \
      -c "select action, entity_type, payload from audit_log order by created_at desc limit 8"
    ```
-   Among them: `user_viewed` with entity `user`, three `users_viewed` with `q` and `by` =
-   `telegram_user_id`, `broker_user_id` and `email`, one `users_viewed` with only `path`, and
-   `overview_viewed`. The refused 257-character search wrote nothing.
+   Raise the limit to see the whole walk. Among the rows: `user_viewed` with entity `user`, three
+   `users_viewed` with `q` and `by` = `telegram_user_id`, `broker_user_id` and `email`, one
+   `users_viewed` with only `path`, and `overview_viewed`; `intents_viewed` with `status`, `mode`,
+   `tradingSessionId` or `userId` — each only on its own request — and `intent_viewed` with entity
+   `trade_intent`. The refused 257-character search, `?status=bogus` and the card id that is not a
+   uuid wrote nothing.
 7. `docker compose down -v` when done.
