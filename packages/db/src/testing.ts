@@ -13,6 +13,7 @@ import {
   type CreateTradeIntentRequest,
   type DecimalString,
   type TradingSessionSettings,
+  TradingSwitchSource,
 } from '@binarius/shared';
 import { brokerAccounts, staff, tradingSessions, users } from './schema/index';
 import { StaffStatus } from './schema/staff';
@@ -23,8 +24,8 @@ import {
   markIntentUnknown,
   takeIntent,
   type TradeIntentRow,
-  type TradePolicy,
 } from './trade-intent-ops';
+import { tradingSwitch } from './schema/trading-switch';
 
 export interface TempDatabase {
   url: string;
@@ -41,7 +42,11 @@ const NAME_PATTERN = /^binarius_test_(\d+)_[0-9a-f]{8}$/;
 // One migrated database per test file: integration tests commit for real (append-only tables
 // cannot be cleaned afterwards) and may open concurrent transactions. Requires CREATEDB on the
 // role in DATABASE_URL — the compose/CI role is a superuser.
-export async function createTempDatabase(baseUrl: string): Promise<TempDatabase> {
+// `migrate` defaults to the full folder; a migration test passes a partial one (#144 S6)
+export async function createTempDatabase(
+  baseUrl: string,
+  migrate: (pool: Pool) => Promise<void> = runMigrations,
+): Promise<TempDatabase> {
   const name = `${PREFIX}${Date.now()}_${randomBytes(4).toString('hex')}`;
   await withAdmin(baseUrl, async (admin) => {
     await reapOrphans(admin);
@@ -50,7 +55,7 @@ export async function createTempDatabase(baseUrl: string): Promise<TempDatabase>
   const url = withDatabase(baseUrl, name);
   const pool = new Pool({ connectionString: url });
   try {
-    await runMigrations(pool);
+    await migrate(pool);
   } catch (error) {
     await pool.end();
     await withAdmin(baseUrl, (admin) => dropDatabase(admin, name));
@@ -194,15 +199,21 @@ export function intentRequest(
 }
 
 // a queued intent for a fresh user + account: the starting point of every worker/publisher case
-// A real intent needs an explicit { realTradingEnabled: true }: the default is production's.
 export async function seedQueuedIntent(
   db: Db,
   patch: Partial<CreateTradeIntentRequest> = {},
-  policy: TradePolicy = { realTradingEnabled: false },
 ): Promise<SeededAccount & { intent: TradeIntentRow }> {
   const seed = await seedUserWithAccount(db);
-  const { intent } = await createTradeIntent(db, intentRequest(seed.telegramUserId, patch), policy);
+  const { intent } = await createTradeIntent(db, intentRequest(seed.telegramUserId, patch));
   return { ...seed, intent };
+}
+
+// The migrated database has trading open (#144). This closes it without an audit row, so tests
+// that count audit rows are unaffected; the switch's own tests use stopTrading instead.
+export async function closeTradingSwitch(db: Db): Promise<void> {
+  await db
+    .update(tradingSwitch)
+    .set({ tradingEnabled: false, source: TradingSwitchSource.Operator, reason: 'test' });
 }
 
 // an unknown intent with its reconciliation outbox row: the starting point of every

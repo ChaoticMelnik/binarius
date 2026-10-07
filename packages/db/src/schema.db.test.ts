@@ -24,6 +24,7 @@ import {
   tokenLedger,
   tradeIntents,
   tradingSessions,
+  tradingSwitch,
   users,
 } from './schema/index';
 import { AccountHaltReason, TradingSessionStopReason, type DecimalString } from '@binarius/shared';
@@ -2435,6 +2436,103 @@ describe('trading_sessions (#130)', () => {
         '23505',
         'trading_sessions_active_account_idx',
       );
+    });
+  });
+});
+
+describe('trading_switch (#144)', () => {
+  // Every case starts from a known row of its own inside its rolled-back transaction: the
+  // database may be shared with a local stack whose operator ran kill-switch.
+  const reset = async (tx: Tx) => {
+    await tx.delete(tradingSwitch);
+    await tx.insert(tradingSwitch).values({ tradingEnabled: true, source: 'migration' });
+  };
+  const notNull = async (query: Promise<unknown>) => {
+    const error = await query.then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    expect(caught(error)).toMatchObject({ code: '23502' });
+  };
+
+  it('rejects a second row: id false by the singleton CHECK, id true by the key', async () => {
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      await rejectsWith(
+        tx.insert(tradingSwitch).values({ id: false, tradingEnabled: true, source: 'operator' }),
+        '23514',
+        'trading_switch_singleton_check',
+      );
+    });
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      await rejectsWith(
+        tx.insert(tradingSwitch).values({ tradingEnabled: true, source: 'operator' }),
+        '23505',
+        'trading_switch_pkey',
+      );
+    });
+  });
+
+  it.each([
+    ['id', { id: null }],
+    ['trading_enabled', { tradingEnabled: null }],
+    ['source', { source: null }],
+  ])('rejects a NULL %s', async (_column, patch) => {
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      await notNull(tx.update(tradingSwitch).set(patch as never));
+    });
+  });
+
+  it('rejects a source outside the list', async () => {
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      await rejectsWith(
+        tx.update(tradingSwitch).set({ source: 'circuit' as never }),
+        '23514',
+        'trading_switch_source_check',
+      );
+    });
+  });
+
+  it('rejects a closed row without a reason and accepts an open one without', async () => {
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      await tx.update(tradingSwitch).set({ tradingEnabled: true, source: 'operator', reason: null });
+      await rejectsWith(
+        tx.update(tradingSwitch).set({ tradingEnabled: false }),
+        '23514',
+        'trading_switch_stop_reason_check',
+      );
+    });
+  });
+
+  it.each([
+    ['empty', ''],
+    ['201 characters', 'x'.repeat(201)],
+  ])('rejects a %s reason', async (_label, reason) => {
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      await rejectsWith(
+        tx.update(tradingSwitch).set({ tradingEnabled: false, source: 'operator', reason }),
+        '23514',
+        'trading_switch_reason_length_check',
+      );
+    });
+  });
+
+  it.each([
+    ['1 character', 'x'],
+    ['200 characters', 'я'.repeat(200)],
+  ])('accepts a %s reason on a closed row', async (_label, reason) => {
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      const [row] = await tx
+        .update(tradingSwitch)
+        .set({ tradingEnabled: false, source: 'operator', reason })
+        .returning();
+      expect(row!.reason).toBe(reason);
     });
   });
 });
