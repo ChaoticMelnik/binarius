@@ -31,11 +31,13 @@ export const users = pgTable(
     acquiredAt: timestamp('acquired_at', { withTimezone: true }),
     // When the bot learned it cannot reach this user (#119): a `kicked` chat-member update or a
     // 403 on a send. NULL = deliverable. Independent of `status`, which is the admin block.
-    // Read only through deliverable() (delivery-ops.ts).
+    // A sender reads it only through deliverable() (delivery-ops.ts); the admin user card (#107)
+    // shows it.
     telegramBlockedAt: timestamp('telegram_blocked_at', { withTimezone: true }),
     // The user's choice in /settings (#120), a preference rather than a deliverability fact:
     // written only by setNotificationLevel; a sender reads it only through deliverable() or
-    // acceptsMailing(), and /users/start shows it to /settings.
+    // acceptsMailing(); /users/start shows it to /settings and the admin user card (#107)
+    // displays it.
     notificationLevel: text('notification_level')
       .$type<NotificationLevel>()
       .notNull()

@@ -15,3 +15,4 @@ export * from './account-ops';
 export * from './staff-password';
 export * from './staff-ops';
 export * from './bot-text-ops';
+export * from './admin-read-ops';
