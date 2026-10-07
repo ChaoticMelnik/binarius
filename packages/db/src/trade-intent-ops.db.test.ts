@@ -1,5 +1,5 @@
 import { and, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
   TradeIntentFailureReason,
@@ -16,6 +16,7 @@ import {
   until,
 } from '@binarius/shared/testing';
 import {
+  closeTradingSwitch,
   createTempDatabase,
   intentRequest,
   seedBrokerAccount,
@@ -53,7 +54,6 @@ import {
   uniqueViolation,
   type ManualReviewReason,
   type TradeIntentRow,
-  type TradePolicy,
 } from './trade-intent-ops';
 import {
   brokerAccounts,
@@ -61,8 +61,10 @@ import {
   outboxEvents,
   tokenLedger,
   tradeIntents,
+  tradingSwitch,
   users,
 } from './schema/index';
+import { openTrading } from './trading-switch-ops';
 
 // Integration tests on a temporary migrated database (README → Database). Rows are committed
 // for real: concurrency cases need separate connections, and token_ledger is append-only.
@@ -74,8 +76,6 @@ if (baseUrl === undefined || baseUrl === '') {
 }
 
 const MAX_AGE_MS = 60_000;
-const flagOff: TradePolicy = { realTradingEnabled: false };
-const flagOn: TradePolicy = { realTradingEnabled: true };
 
 let tmp: TempDatabase;
 beforeAll(async () => {
@@ -125,7 +125,7 @@ describe('createTradeIntent', () => {
   it('reserves a token and queues the intent in one go', async () => {
     const s = await seedUserWithAccount(tmp.db);
     const input = intentRequest(s.telegramUserId);
-    const { intent, created } = await createTradeIntent(tmp.db, input, flagOff);
+    const { intent, created } = await createTradeIntent(tmp.db, input);
 
     expect(created).toBe(true);
     expect(intent).toMatchObject({
@@ -159,14 +159,13 @@ describe('createTradeIntent', () => {
   it('replays the same request without reserving twice', async () => {
     const s = await seedUserWithAccount(tmp.db);
     const input = intentRequest(s.telegramUserId);
-    const first = await createTradeIntent(tmp.db, input, flagOff);
+    const first = await createTradeIntent(tmp.db, input);
     const second = await createTradeIntent(
       tmp.db,
       {
         ...input,
         amount: '10.000' as DecimalString,
       },
-      flagOff,
     );
 
     expect(second.created).toBe(false);
@@ -179,25 +178,25 @@ describe('createTradeIntent', () => {
   it('replays after the account was revoked and after a second account appeared', async () => {
     const s = await seedUserWithAccount(tmp.db);
     const input = intentRequest(s.telegramUserId);
-    const first = await createTradeIntent(tmp.db, input, flagOff);
+    const first = await createTradeIntent(tmp.db, input);
 
     await tmp.db
       .update(brokerAccounts)
       .set({ status: 'revoked' })
       .where(eq(brokerAccounts.id, s.brokerAccountId));
-    expect((await createTradeIntent(tmp.db, input, flagOff)).intent.id).toBe(first.intent.id);
+    expect((await createTradeIntent(tmp.db, input)).intent.id).toBe(first.intent.id);
 
     await seedBrokerAccount(tmp.db, s.userId);
     await seedBrokerAccount(tmp.db, s.userId);
-    expect((await createTradeIntent(tmp.db, input, flagOff)).intent.id).toBe(first.intent.id);
+    expect((await createTradeIntent(tmp.db, input)).intent.id).toBe(first.intent.id);
   });
 
   it('rejects a reused clientRequestId with different parameters', async () => {
     const s = await seedUserWithAccount(tmp.db);
     const input = intentRequest(s.telegramUserId);
-    await createTradeIntent(tmp.db, input, flagOff);
+    await createTradeIntent(tmp.db, input);
     await failsWith(
-      createTradeIntent(tmp.db, { ...input, action: 'down' }, flagOff),
+      createTradeIntent(tmp.db, { ...input, action: 'down' }),
       'client_request_id_conflict',
     );
   });
@@ -206,17 +205,17 @@ describe('createTradeIntent', () => {
     const s = await seedUserWithAccount(tmp.db);
     const other = await seedBrokerAccount(tmp.db, s.userId);
     const input = intentRequest(s.telegramUserId, { brokerAccountId: s.brokerAccountId });
-    const first = await createTradeIntent(tmp.db, input, flagOff);
+    const first = await createTradeIntent(tmp.db, input);
 
     await failsWith(
-      createTradeIntent(tmp.db, { ...input, brokerAccountId: other }, flagOff),
+      createTradeIntent(tmp.db, { ...input, brokerAccountId: other }),
       'client_request_id_conflict',
     );
     // without an account the retry is a replay whatever account the original used
     const withoutAccount = intentRequest(s.telegramUserId, {
       clientRequestId: input.clientRequestId,
     });
-    expect((await createTradeIntent(tmp.db, withoutAccount, flagOff)).intent.id).toBe(
+    expect((await createTradeIntent(tmp.db, withoutAccount)).intent.id).toBe(
       first.intent.id,
     );
     expect(await tokenReservedOf(s.userId)).toBe(TOKENS_PER_INTENT);
@@ -226,7 +225,7 @@ describe('createTradeIntent', () => {
   it('refuses without available tokens and writes nothing', async () => {
     const s = await seedUserWithAccount(tmp.db, { balance: 0n });
     await failsWith(
-      createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff),
+      createTradeIntent(tmp.db, intentRequest(s.telegramUserId)),
       'insufficient_tokens',
     );
     expect(await tokenReservedOf(s.userId)).toBe(0n);
@@ -240,9 +239,9 @@ describe('createTradeIntent', () => {
 
   it('counts already reserved tokens against the balance', async () => {
     const s = await seedUserWithAccount(tmp.db, { balance: 1n });
-    await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff);
+    await createTradeIntent(tmp.db, intentRequest(s.telegramUserId));
     await failsWith(
-      createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff),
+      createTradeIntent(tmp.db, intentRequest(s.telegramUserId)),
       // the active-intent index would also refuse; the token guard runs first
       'insufficient_tokens',
     );
@@ -252,7 +251,7 @@ describe('createTradeIntent', () => {
     const user = await seedUser(tmp.db, { status: 'blocked' });
     await seedBrokerAccount(tmp.db, user.userId);
     await failsWith(
-      createTradeIntent(tmp.db, intentRequest(user.telegramUserId), flagOff),
+      createTradeIntent(tmp.db, intentRequest(user.telegramUserId)),
       'user_blocked',
     );
     expect(await tokenReservedOf(user.userId)).toBe(0n);
@@ -260,9 +259,9 @@ describe('createTradeIntent', () => {
 
   it('allows one active intent per account', async () => {
     const s = await seedUserWithAccount(tmp.db);
-    await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff);
+    await createTradeIntent(tmp.db, intentRequest(s.telegramUserId));
     await failsWith(
-      createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff),
+      createTradeIntent(tmp.db, intentRequest(s.telegramUserId)),
       'active_intent_exists',
     );
     expect(await tokenReservedOf(s.userId)).toBe(TOKENS_PER_INTENT);
@@ -277,7 +276,7 @@ describe('createTradeIntent', () => {
     const user = await seedUser(tmp.db);
     const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId, patch);
     await failsWith(
-      createTradeIntent(tmp.db, intentRequest(user.telegramUserId, { brokerAccountId }), flagOff),
+      createTradeIntent(tmp.db, intentRequest(user.telegramUserId, { brokerAccountId })),
       code,
     );
     expect(await tokenReservedOf(user.userId)).toBe(0n);
@@ -292,11 +291,11 @@ describe('createTradeIntent', () => {
 
     // named explicitly, and picked automatically: both paths have to answer the same way
     await failsWith(
-      createTradeIntent(tmp.db, intentRequest(user.telegramUserId, { brokerAccountId }), flagOff),
+      createTradeIntent(tmp.db, intentRequest(user.telegramUserId, { brokerAccountId })),
       'account_not_confirmed',
     );
     await failsWith(
-      createTradeIntent(tmp.db, intentRequest(user.telegramUserId), flagOff),
+      createTradeIntent(tmp.db, intentRequest(user.telegramUserId)),
       'account_not_confirmed',
     );
 
@@ -310,13 +309,13 @@ describe('createTradeIntent', () => {
 
   it('classifies lookups: unknown user, no account, foreign account, ambiguous account', async () => {
     await failsWith(
-      createTradeIntent(tmp.db, intentRequest('999999999'), flagOff),
+      createTradeIntent(tmp.db, intentRequest('999999999')),
       'user_not_found',
     );
 
     const lonely = await seedUser(tmp.db);
     await failsWith(
-      createTradeIntent(tmp.db, intentRequest(lonely.telegramUserId), flagOff),
+      createTradeIntent(tmp.db, intentRequest(lonely.telegramUserId)),
       'broker_account_not_found',
     );
 
@@ -325,7 +324,6 @@ describe('createTradeIntent', () => {
       createTradeIntent(
         tmp.db,
         intentRequest(lonely.telegramUserId, { brokerAccountId: other.brokerAccountId }),
-        flagOff,
       ),
       'broker_account_not_found',
     );
@@ -333,7 +331,7 @@ describe('createTradeIntent', () => {
     const twoAccounts = await seedUserWithAccount(tmp.db);
     await seedBrokerAccount(tmp.db, twoAccounts.userId);
     await failsWith(
-      createTradeIntent(tmp.db, intentRequest(twoAccounts.telegramUserId), flagOff),
+      createTradeIntent(tmp.db, intentRequest(twoAccounts.telegramUserId)),
       'ambiguous_broker_account',
     );
     expect(
@@ -343,7 +341,6 @@ describe('createTradeIntent', () => {
           intentRequest(twoAccounts.telegramUserId, {
             brokerAccountId: twoAccounts.brokerAccountId,
           }),
-          flagOff,
         )
       ).created,
     ).toBe(true);
@@ -353,7 +350,7 @@ describe('createTradeIntent', () => {
     const s = await seedUserWithAccount(tmp.db);
     const input = intentRequest(s.telegramUserId);
     const results = await Promise.all(
-      Array.from({ length: 4 }, () => createTradeIntent(tmp.db, input, flagOff)),
+      Array.from({ length: 4 }, () => createTradeIntent(tmp.db, input)),
     );
     const ids = new Set(results.map((r) => r.intent.id));
     expect(ids.size).toBe(1);
@@ -366,7 +363,7 @@ describe('createTradeIntent', () => {
     const s = await seedUserWithAccount(tmp.db);
     const settled = await Promise.allSettled(
       Array.from({ length: 4 }, () =>
-        createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff),
+        createTradeIntent(tmp.db, intentRequest(s.telegramUserId)),
       ),
     );
     const fulfilled = settled.filter((r) => r.status === 'fulfilled');
@@ -388,7 +385,6 @@ describe('createTradeIntent', () => {
         createTradeIntent(
           tmp.db,
           intentRequest(s.telegramUserId, { clientRequestId, brokerAccountId }),
-          flagOff,
         ),
       ),
     );
@@ -414,7 +410,7 @@ describe('createTradeIntent', () => {
   it('does not deadlock a rejection against a concurrent creation on the same account', async () => {
     const s = await seedUserWithAccount(tmp.db, { balance: 100n });
     for (let round = 0; round < 20; round += 1) {
-      const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff);
+      const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId));
       const taken = (await take(intent))!;
       const [rejection, creation] = await Promise.allSettled([
         tmp.db.transaction((tx) =>
@@ -425,7 +421,7 @@ describe('createTradeIntent', () => {
             reason: TradeIntentFailureReason.BrokerRejected,
           }),
         ),
-        createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff),
+        createTradeIntent(tmp.db, intentRequest(s.telegramUserId)),
       ]);
       expect(rejection.status).toBe('fulfilled');
       if (creation.status === 'rejected') {
@@ -470,7 +466,7 @@ describe('transitions', () => {
 
   it('takes a fresh queued intent and refuses a stale version', async () => {
     const s = await seedUserWithAccount(tmp.db);
-    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff);
+    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId));
     expect(await take({ id: intent.id, version: intent.version - 1 })).toBeUndefined();
     const taken = await take(intent);
     expect(taken).toMatchObject({ status: 'submitting', version: intent.version + 1 });
@@ -480,7 +476,7 @@ describe('transitions', () => {
 
   it('expires an old queued intent on the database clock and releases the token', async () => {
     const s = await seedUserWithAccount(tmp.db);
-    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff);
+    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId));
     const expire = () =>
       tmp.db.transaction((tx) =>
         rejectExpiredIntent(tx, {
@@ -507,7 +503,7 @@ describe('transitions', () => {
 
   it('rejects a submitting intent once, releasing the reserve exactly once', async () => {
     const s = await seedUserWithAccount(tmp.db);
-    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff);
+    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId));
     const taken = (await take(intent))!;
     const rejected = await tmp.db.transaction((tx) =>
       rejectIntent(tx, {
@@ -539,13 +535,13 @@ describe('transitions', () => {
 
     // the account is free again
     expect(
-      (await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff)).created,
+      (await createTradeIntent(tmp.db, intentRequest(s.telegramUserId))).created,
     ).toBe(true);
   });
 
   it('refuses to release below the cached reserve instead of desynchronizing', async () => {
     const s = await seedUserWithAccount(tmp.db);
-    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff);
+    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId));
     await tmp.db.update(users).set({ tokenReserved: 0n }).where(eq(users.id, s.userId));
     await expect(
       tmp.db.transaction((tx) =>
@@ -563,7 +559,7 @@ describe('transitions', () => {
 
   it('marks unknown once with a single reconciliation row, honoring the age guard', async () => {
     const s = await seedUserWithAccount(tmp.db);
-    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId), flagOff);
+    const { intent } = await createTradeIntent(tmp.db, intentRequest(s.telegramUserId));
     const taken = (await take(intent))!;
 
     await expect(
@@ -604,10 +600,10 @@ describe('transitions', () => {
     const stale = await seedUserWithAccount(tmp.db);
     const fresh = await seedUserWithAccount(tmp.db);
     const staleIntent = (await take(
-      (await createTradeIntent(tmp.db, intentRequest(stale.telegramUserId), flagOff)).intent,
+      (await createTradeIntent(tmp.db, intentRequest(stale.telegramUserId))).intent,
     ))!;
     const freshIntent = (await take(
-      (await createTradeIntent(tmp.db, intentRequest(fresh.telegramUserId), flagOff)).intent,
+      (await createTradeIntent(tmp.db, intentRequest(fresh.telegramUserId))).intent,
     ))!;
     await ageSubmission(staleIntent.id, 120_000);
     const listed = await listStaleSubmittingIntents(tmp.db, {
@@ -624,7 +620,7 @@ describe('getTradeIntentView', () => {
   it('maps the row to the wire shape with nullable fields and string bigints', async () => {
     const s = await seedUserWithAccount(tmp.db);
     const input = intentRequest(s.telegramUserId);
-    const { intent } = await createTradeIntent(tmp.db, input, flagOff);
+    const { intent } = await createTradeIntent(tmp.db, input);
     const view = await getTradeIntentView(tmp.db, intent.id, BigInt(s.telegramUserId));
     expect(view).toEqual({
       id: intent.id,
@@ -660,7 +656,6 @@ describe('getTradeIntentView', () => {
     const { intent } = await createTradeIntent(
       tmp.db,
       intentRequest(owner.telegramUserId),
-      flagOff,
     );
     expect(await getTradeIntentView(tmp.db, intent.id, BigInt(owner.telegramUserId))).toMatchObject(
       {
@@ -673,19 +668,19 @@ describe('getTradeIntentView', () => {
   });
 });
 
-describe('createTradeIntent: the real-mode grant (#134)', () => {
+describe('createTradeIntent: the global trading switch (#144)', () => {
   const real = (telegramUserId: string, patch: Parameters<typeof intentRequest>[1] = {}) =>
     intentRequest(telegramUserId, { mode: TradeMode.Real, ...patch });
 
   const userLedger = (userId: string) =>
     tmp.db.select().from(tokenLedger).where(eq(tokenLedger.userId, userId));
 
-  it('refuses a real intent with the flag off and leaves no trace', async () => {
+  afterEach(() => openTrading(tmp.db));
+
+  it('P1 refuses a demo intent while closed and leaves no trace', async () => {
     const s = await seedUserWithAccount(tmp.db);
-    await failsWith(
-      createTradeIntent(tmp.db, real(s.telegramUserId), flagOff),
-      'real_trading_disabled',
-    );
+    await closeTradingSwitch(tmp.db);
+    await failsWith(createTradeIntent(tmp.db, intentRequest(s.telegramUserId)), 'trading_paused');
     expect(
       await tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, s.userId)),
     ).toEqual([]);
@@ -693,46 +688,53 @@ describe('createTradeIntent: the real-mode grant (#134)', () => {
     expect(await userLedger(s.userId)).toEqual([]);
   });
 
-  it('creates a real intent with the flag on', async () => {
+  it('P2 refuses a real intent while closed', async () => {
     const s = await seedUserWithAccount(tmp.db);
-    const { intent, created } = await createTradeIntent(tmp.db, real(s.telegramUserId), flagOn);
-    expect(created).toBe(true);
-    expect(intent).toMatchObject({ mode: 'real', status: 'queued' });
+    await closeTradingSwitch(tmp.db);
+    await failsWith(createTradeIntent(tmp.db, real(s.telegramUserId)), 'trading_paused');
   });
 
-  it('replays a real intent created while on after the flag went off', async () => {
+  it('P3 replays an intent created while open after the switch closed', async () => {
     const s = await seedUserWithAccount(tmp.db);
-    const input = real(s.telegramUserId);
-    const first = await createTradeIntent(tmp.db, input, flagOn);
-    const again = await createTradeIntent(tmp.db, input, flagOff);
+    const input = intentRequest(s.telegramUserId);
+    const first = await createTradeIntent(tmp.db, input);
+    await closeTradingSwitch(tmp.db);
+    const again = await createTradeIntent(tmp.db, input);
     expect(again.created).toBe(false);
     expect(again.intent.id).toBe(first.intent.id);
   });
 
-  // the gate runs before resolveAccount: a foreign account would otherwise answer
+  // the switch is read before resolveAccount: a foreign account would otherwise answer
   // broker_account_not_found
   it('refuses before reading the account', async () => {
     const lonely = await seedUser(tmp.db);
     const other = await seedUserWithAccount(tmp.db);
+    await closeTradingSwitch(tmp.db);
     await failsWith(
       createTradeIntent(
         tmp.db,
-        real(lonely.telegramUserId, { brokerAccountId: other.brokerAccountId }),
-        flagOff,
+        intentRequest(lonely.telegramUserId, { brokerAccountId: other.brokerAccountId }),
       ),
-      'real_trading_disabled',
+      'trading_paused',
     );
   });
 
-  it('leaves demo alone with the flag off', async () => {
-    const s = await seedUserWithAccount(tmp.db);
-    const { intent, created } = await createTradeIntent(
-      tmp.db,
-      intentRequest(s.telegramUserId),
-      flagOff,
+  it('P4 creates demo and real intents while open', async () => {
+    const demo = await seedUserWithAccount(tmp.db);
+    const realSeed = await seedUserWithAccount(tmp.db);
+    expect((await createTradeIntent(tmp.db, intentRequest(demo.telegramUserId))).intent).toMatchObject(
+      { mode: 'demo', status: 'queued' },
     );
-    expect(created).toBe(true);
-    expect(intent.mode).toBe('demo');
+    expect((await createTradeIntent(tmp.db, real(realSeed.telegramUserId))).intent).toMatchObject({
+      mode: 'real',
+      status: 'queued',
+    });
+  });
+
+  it('refuses while the row is missing (fail-closed)', async () => {
+    const s = await seedUserWithAccount(tmp.db);
+    await tmp.db.delete(tradingSwitch);
+    await failsWith(createTradeIntent(tmp.db, intentRequest(s.telegramUserId)), 'trading_paused');
   });
 });
 
@@ -909,7 +911,6 @@ describe('markIntentAccepted (#17)', () => {
         await createTradeIntent(
           tmp.db,
           intentRequest(first.telegramUserId, { brokerAccountId: first.brokerAccountId }),
-          flagOff,
         )
       ).intent,
     ))!;
@@ -1423,7 +1424,6 @@ describe('concludeReconciled (#89)', () => {
       const created = await createTradeIntent(
         tmp.db,
         intentRequest(first.telegramUserId, { brokerAccountId: first.brokerAccountId }),
-        flagOff,
       );
       const taken = (await take(created.intent))!;
       return {

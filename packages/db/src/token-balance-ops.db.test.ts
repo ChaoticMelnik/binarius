@@ -33,10 +33,7 @@ import {
   settleIntent,
   startReconciling,
   takeIntent,
-  type TradePolicy,
 } from './trade-intent-ops';
-
-const flagOff: TradePolicy = { realTradingEnabled: false };
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -116,7 +113,6 @@ describe('readTokenBalance', () => {
     const { intent } = await createTradeIntent(
       tmp.db,
       intentRequest(user.telegramUserId, { brokerAccountId }),
-      flagOff,
     );
 
     const reserved = await read(user);
@@ -146,7 +142,6 @@ describe('readTokenBalance', () => {
     const { intent } = await createTradeIntent(
       tmp.db,
       intentRequest(user.telegramUserId, { brokerAccountId }),
-      flagOff,
     );
     expect(await read(user)).toMatchObject({ balance: 7n, reserved: 1n });
     await expectCacheEqualsLedger(user);
@@ -182,7 +177,6 @@ describe('readTokenBalance', () => {
     const { intent } = await createTradeIntent(
       tmp.db,
       intentRequest(user.telegramUserId, { brokerAccountId }),
-      flagOff,
     );
     const taken = (await takeIntent(tmp.db, {
       id: intent.id,
@@ -246,7 +240,7 @@ describe('readTokenBalance', () => {
     let settled = false;
     const creates = Promise.all(
       accounts.map((brokerAccountId) =>
-        createTradeIntent(tmp.db, intentRequest(user.telegramUserId, { brokerAccountId }), flagOff),
+        createTradeIntent(tmp.db, intentRequest(user.telegramUserId, { brokerAccountId })),
       ),
     ).finally(() => (settled = true));
     // keeps reading until the last reserve committed, then once more after it

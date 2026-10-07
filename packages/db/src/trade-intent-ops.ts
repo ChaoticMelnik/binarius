@@ -25,6 +25,7 @@ import { TokenLedgerKind, tokenLedger } from './schema/token-ledger';
 import { tradeIntents } from './schema/trade-intents';
 import { TradingSessionStatus, tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
+import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-switch-ops';
 
 export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 export type DbExecutor = Db | Tx;
@@ -77,20 +78,13 @@ export interface CreateTradeIntentResult {
   created: boolean;
 }
 
-// Required, with no default: every creator of intents (the route today, the session
-// orchestrator of #287 tomorrow) names the policy it runs under.
-export interface TradePolicy {
-  realTradingEnabled: boolean;
-}
-
 export async function createTradeIntent(
   db: Db,
   input: CreateTradeIntentRequest,
-  policy: TradePolicy,
   session?: IntentSession,
 ): Promise<CreateTradeIntentResult> {
   try {
-    return await db.transaction((tx) => createInTransaction(tx, input, policy, session));
+    return await db.transaction((tx) => createInTransaction(tx, input, session));
   } catch (error) {
     const constraint = uniqueViolation(error);
     if (constraint === undefined || !REPLAY_CONSTRAINTS.has(constraint)) throw error;
@@ -111,7 +105,6 @@ export async function createTradeIntent(
 async function createInTransaction(
   tx: Tx,
   input: CreateTradeIntentRequest,
-  policy: TradePolicy,
   session: IntentSession | undefined,
 ): Promise<CreateTradeIntentResult> {
   const tokens = TOKENS_PER_INTENT;
@@ -123,10 +116,12 @@ async function createInTransaction(
   const replay = await findReplay(tx, user.id, input);
   if (replay !== undefined) return replay;
 
-  // after the replay, so a retry still finds an intent created while the grant was on; before
-  // the account and the reserve, so a refusal reads no account and touches no balance
-  if (input.mode === TradeMode.Real && !policy.realTradingEnabled) {
-    throw new TradeIntentError(TradeIntentErrorCode.RealTradingDisabled);
+  // after the replay, so a retry still finds an intent created while trading was open; before
+  // the account and the reserve, so a refusal reads no account and touches no balance. Any mode:
+  // one switch for demo and real (#144). A plain read: a kill-switch commit after it does not
+  // stop this creation, and takeIntent's predicate refuses the intent instead (the window).
+  if (!isTradingOpen(await readTradingSwitch(tx))) {
+    throw new TradeIntentError(TradeIntentErrorCode.TradingPaused);
   }
 
   const brokerAccountId = await resolveAccount(tx, user.id, input.brokerAccountId);
@@ -368,7 +363,9 @@ export interface TakeIntentOptions {
   maxAgeMs: number;
 }
 
-// queued → submitting, refused for an intent older than maxAgeMs (database clock)
+// queued → submitting, refused for an intent older than maxAgeMs (database clock) and while the
+// global trading switch is closed (#144): the fence sits before submitting, so a paused intent
+// is rejected plainly and never becomes unknown (Rule 15)
 export function takeIntent(
   exec: DbExecutor,
   { id, expectedVersion, maxAgeMs }: TakeIntentOptions,
@@ -379,7 +376,7 @@ export function takeIntent(
     to: TradeIntentStatus.Submitting,
     expectedVersion,
     patch: { submittedAt: sql`now()` },
-    where: sql`${tradeIntents.createdAt} >= ${millisecondsAgo(maxAgeMs)}`,
+    where: and(sql`${tradeIntents.createdAt} >= ${millisecondsAgo(maxAgeMs)}`, tradingOpenSql),
   });
 }
 
@@ -461,6 +458,27 @@ export function rejectExpiredIntent(
     expectedVersion,
     reason: TradeIntentFailureReason.Expired,
     where: sql`${tradeIntents.createdAt} < ${millisecondsAgo(maxAgeMs)}`,
+  });
+}
+
+export interface RejectPausedOptions {
+  id: string;
+  expectedVersion: number;
+}
+
+// After takeIntent refused an unexpired intent. No switch predicate on purpose: a switch reopened
+// between the refused take and this statement would otherwise leave the intent queued with its
+// job already consumed, holding the account's live-intent slot with nothing to move it. The
+// version CAS keeps it safe: at this version the take refused for the switch alone.
+export function rejectPausedIntent(
+  tx: Tx,
+  { id, expectedVersion }: RejectPausedOptions,
+): Promise<TradeIntentRow | undefined> {
+  return rejectIntent(tx, {
+    id,
+    from: TradeIntentStatus.Queued,
+    expectedVersion,
+    reason: TradeIntentFailureReason.TradingPaused,
   });
 }
 
