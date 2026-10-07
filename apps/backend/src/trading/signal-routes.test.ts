@@ -76,7 +76,6 @@ function appWith(feed: SignalRoutesDeps['feed']): FastifyInstance {
       internalApiToken: PAIRS_TEST_TOKEN,
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
-      realTradingEnabled: false,
       accessToken: unusedAccessTokenDeps(),
     },
     pairs: unusedPairsDeps(),

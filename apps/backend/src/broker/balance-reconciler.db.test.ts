@@ -330,9 +330,7 @@ describe('tick', () => {
 
   const withIntent = async (patch: Parameters<typeof linked>[1] = {}) => {
     const account = await linked(own.db, patch);
-    await createTradeIntent(own.db, intentRequest(account.telegramUserId), {
-      realTradingEnabled: false,
-    });
+    await createTradeIntent(own.db, intentRequest(account.telegramUserId));
     return account;
   };
 

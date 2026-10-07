@@ -66,9 +66,10 @@ describe('backend shutdown timing', () => {
     expect(composeServiceEnvValue(composeYaml, 'backend', 'BROKER_PAIRS_TTL_MS')).toBe('');
   });
 
-  // the same entry under trading-worker is pinned in its intents/config.test.ts
-  it('forwards REAL_TRADING_ENABLED to the backend without a default of its own', () => {
-    expect(composeServiceEnvValue(composeYaml, 'backend', 'REAL_TRADING_ENABLED')).toBe('');
+  // #144: trading is the trading_switch row now; a REAL_TRADING_ENABLED left in .env reaches no
+  // process (docs/kill-switch.md -> Deploy). The trading-worker side is in intents/config.test.ts.
+  it('no longer forwards REAL_TRADING_ENABLED to the backend', () => {
+    expect(composeServiceEnvValue(composeYaml, 'backend', 'REAL_TRADING_ENABLED')).toBeUndefined();
   });
 });
 

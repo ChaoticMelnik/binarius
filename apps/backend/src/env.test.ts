@@ -36,7 +36,6 @@ describe('parseEnv', () => {
       brokerPairsTtlMs: 30_000,
       balanceReconcileIntervalMs: 60_000,
       balancePollMaxPerMinute: 200,
-      realTradingEnabled: false,
       brokerOauthRedirectUri: valid.BROKER_OAUTH_REDIRECT_URI,
       brokerPartnerRef: valid.BROKER_PARTNER_REF,
       tokenEncryptionKey: Buffer.from(KEY, 'base64'),
@@ -63,16 +62,6 @@ describe('parseEnv', () => {
     expect(env.brokerPairsTtlMs).toBe(45_000);
     expect(env.logLevel).toBe('debug');
     expect(env.healthTimeoutMs).toBe(2500);
-  });
-
-  it('reads REAL_TRADING_ENABLED', () => {
-    expect(parseEnv({ ...valid, REAL_TRADING_ENABLED: 'true' }).realTradingEnabled).toBe(true);
-  });
-
-  it('refuses a REAL_TRADING_ENABLED that is not true or false', () => {
-    expect(() => parseEnv({ ...valid, REAL_TRADING_ENABLED: 'yes' })).toThrow(
-      'Env REAL_TRADING_ENABLED must be one of: true false',
-    );
   });
 
   it('accepts the postgresql and rediss schemes', () => {

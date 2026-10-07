@@ -131,7 +131,6 @@ const testApp = (auth: AuthRoutesDeps, logs?: { write(line: string): void }) =>
       internalApiToken: TOKEN,
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
-      realTradingEnabled: false,
       accessToken: unusedAccessTokenDeps(),
     },
     auth,

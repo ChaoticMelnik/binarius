@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "staff": "tsx src/cli/staff.ts",
+    "kill-switch": "tsx src/cli/kill-switch.ts",
     "rate-limit-probe": "tsx src/cli/rate-limit-probe.ts"
   },
   "dependencies": {

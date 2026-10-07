@@ -34,7 +34,6 @@ function appWith(answer: AccessTokenResult): FastifyInstance {
       internalApiToken: PAIRS_TEST_TOKEN,
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
-      realTradingEnabled: false,
       accessToken: (accountId, options) => {
         calls.push({ accountId, options });
         return Promise.resolve(answer);

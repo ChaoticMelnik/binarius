@@ -43,7 +43,6 @@ beforeAll(async () => {
       internalApiToken: TOKEN,
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
-      realTradingEnabled: false,
       accessToken: unusedAccessTokenDeps(),
     },
     auth: {

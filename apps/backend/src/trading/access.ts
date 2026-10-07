@@ -16,6 +16,8 @@ import {
   resolveBalanceAccount,
   toBrokerBalanceView,
   toTradingAccessView,
+  isTradingOpen,
+  readTradingSwitch,
   touchBalanceRequested,
   type Db,
 } from '@binarius/db';
@@ -26,8 +28,6 @@ import { TRADING_ACCESS_REFRESH_BUDGET_MS } from '../timing';
 export interface TradingAccessDeps {
   db: Db;
   balance: Pick<BalanceReconciler, 'refresh'>;
-  // REAL_TRADING_ENABLED of this process, answered as realTradingAllowed
-  realTradingEnabled: boolean;
 }
 
 type BrokerSection =
@@ -163,7 +163,7 @@ export function registerTradingAccess(app: FastifyInstance, deps: TradingAccessD
     return reply.send({
       ...toTradingAccessView(snapshot),
       ...section,
-      realTradingAllowed: deps.realTradingEnabled,
+      tradingOpen: isTradingOpen(await readTradingSwitch(deps.db)),
     });
   });
 }
