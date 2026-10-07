@@ -16,3 +16,4 @@ export * from './trading-switch';
 export * from './staff';
 export * from './staff-login-challenges';
 export * from './staff-sessions';
+export * from './bot-text-overrides';

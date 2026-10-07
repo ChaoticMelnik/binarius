@@ -21,6 +21,7 @@ import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
 import { tradingSessionRoutes, type TradingSessionRoutesDeps } from './trading/session-routes';
 import { signalRoutes, type SignalRoutesDeps } from './trading/signal-routes';
 import { usersRoutes, type UsersRoutesDeps } from './users/routes';
+import { botTextsRoutes } from './bot-texts/routes';
 
 type DependencyCheck = () => Promise<unknown>;
 
@@ -201,6 +202,7 @@ export function buildApp({
   void app.register(signalRoutes, signal);
   void app.register(authRoutes, auth);
   void app.register(usersRoutes, users);
+  void app.register(botTextsRoutes, users);
   void app.register(adminRoutes, admin);
 
   // Fastify's default handler echoes error.message; for a DrizzleQueryError that is the SQL

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
+import { BOT_TEXTS_REFRESH_MS } from '@binarius/shared';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import {
   BALANCE_WATCH_WINDOW_MS,
@@ -20,6 +21,7 @@ import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
 import {
   BALANCE_STALLED_RETRY_MS,
+  BOT_TEXTS_LOAD_BUDGET_MS,
   BROKER_RATE_LIMIT_PER_MINUTE,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   LINK_PUSH_TELEGRAM_API_TIMEOUT_MS,
@@ -104,6 +106,11 @@ describe('broker balance timing', () => {
     expect(SIGNAL_FETCH_BUDGET_MS).toBeLessThan(TRADING_SIGNAL_BUDGET_MS);
     expect(TRADING_SIGNAL_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(SIGNAL_CACHE_MAX_TTL_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS['1m']);
+  });
+
+  it('ends a bot texts load before the next one starts and inside phase 1', () => {
+    expect(BOT_TEXTS_LOAD_BUDGET_MS).toBeLessThan(BOT_TEXTS_REFRESH_MS);
+    expect(BOT_TEXTS_LOAD_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   it.each(['BALANCE_RECONCILE_INTERVAL_MS', 'BALANCE_POLL_MAX_PER_MINUTE'])(

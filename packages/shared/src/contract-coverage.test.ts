@@ -33,6 +33,8 @@ import * as admin from './admin';
 import * as broker from './broker';
 import * as botTextTemplate from './bot-text-template';
 import * as botTexts from './bot-texts';
+import * as botTextMessages from './bot-text-messages';
+import * as botTextOverrides from './bot-text-overrides';
 import * as brokerBalance from './broker-balance';
 import * as catalog from './catalog';
 import * as demoStake from './demo-stake';
@@ -404,6 +406,8 @@ describe('contract coverage (issue #6)', () => {
       tradingSession,
       botTextTemplate,
       botTexts,
+      botTextMessages,
+      botTextOverrides,
     };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {

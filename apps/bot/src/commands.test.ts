@@ -65,6 +65,7 @@ describe('the command menu', () => {
       readSession: () => Promise.reject(new Error('not used here')),
       stopSession: () => Promise.reject(new Error('not used here')),
       setDemoStake: () => Promise.reject(new Error('not used here')),
+      readBotTexts: () => Promise.reject(new Error('not used here')),
     };
     const bot = createBot({
       intentTracker: stubTracker(),

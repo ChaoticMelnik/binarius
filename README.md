@@ -259,3 +259,18 @@ docker compose exec backend pnpm --filter @binarius/backend kill-switch off
 
 What each command prints, what a closed switch does to queued intents and sessions, and the
 deploy note are in [docs/kill-switch.md](docs/kill-switch.md).
+
+## Bot texts
+
+The client bot's texts can be overridden without a deploy: the bot and the backend's push apply a
+saved text within 35 s. The same migrated database as above; `show` prints the text alone, so its
+output is the file `set` takes back:
+
+```bash
+docker compose exec -T backend pnpm -s --filter @binarius/backend bot-text show welcome > welcome.txt
+docker compose exec -T backend pnpm --filter @binarius/backend bot-text set welcome --file - < welcome.txt
+docker compose exec backend pnpm --filter @binarius/backend bot-text reset welcome
+docker compose exec backend pnpm --filter @binarius/backend bot-text list
+```
+
+What the writer refuses and how the texts are loaded: [docs/bot-texts.md](docs/bot-texts.md).

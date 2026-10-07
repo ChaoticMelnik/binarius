@@ -544,6 +544,45 @@ describe('readTradingAccess', () => {
   });
 });
 
+describe('readBotTexts (#299)', () => {
+  const OVERRIDES = { overrides: [{ key: 'welcome', source: 'Привет', version: 3 }] };
+
+  it('C1 sends a GET to /bot-texts under the bearer and returns the rows', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, OVERRIDES);
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).readBotTexts()).toEqual(
+      OVERRIDES.overrides,
+    );
+    expect(capture.method).toBe('GET');
+    expect(capture.url).toBe('/bot-texts');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it.each([
+    [
+      'a field the allowlist does not have',
+      { overrides: [{ ...OVERRIDES.overrides[0], updatedAt: 'x' }] },
+    ],
+    ['a malformed key', { overrides: [{ key: 'Welcome', source: 'x', version: 1 }] }],
+    ['no list', {}],
+  ])('C2 reports %s as a contract violation', async (_label, body) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, body);
+    });
+    const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readBotTexts());
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('C3 carries a failed status as an error', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 503, {});
+    });
+    const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readBotTexts());
+    expect(error).toMatchObject({ status: 503 });
+  });
+});
+
 describe('readPairs', () => {
   it('sends a GET under the bearer with no body and no content-type, and returns the whole answer', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {

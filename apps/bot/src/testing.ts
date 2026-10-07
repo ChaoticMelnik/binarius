@@ -365,6 +365,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     readSession: unused,
     stopSession: unused,
     setDemoStake: unused,
+    readBotTexts: unused,
     ...patch,
   };
 };
