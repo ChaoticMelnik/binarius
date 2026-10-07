@@ -238,7 +238,7 @@ process.once('SIGTERM', (signal) => void shutdown(signal));
 process.once('SIGINT', (signal) => void shutdown(signal));
 
 logger.info(
-  { concurrency: env.workerConcurrency, sessions: sessions !== undefined, tradingSessions: true },
+  { concurrency: env.workerConcurrency, sessions: sessions !== undefined },
   'trading-worker started',
 );
 // after the consumers: the first tick picks up the reconciling intents a dead process left

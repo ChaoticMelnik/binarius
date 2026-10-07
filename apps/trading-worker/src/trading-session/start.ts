@@ -29,9 +29,12 @@ export function pickSessionAccount(
   accountId?: string,
 ): AccountPick {
   if (accountId !== undefined) {
-    return accounts.some((account) => account.id === accountId)
-      ? { ok: true, brokerAccountId: accountId }
-      : { ok: false, reason: 'account_not_found' };
+    // pg answers uuids in lower case while UUID_PATTERN accepts either; the listed spelling goes on
+    const wanted = accountId.toLowerCase();
+    const own = accounts.find((account) => account.id.toLowerCase() === wanted);
+    return own === undefined
+      ? { ok: false, reason: 'account_not_found' }
+      : { ok: true, brokerAccountId: own.id };
   }
   const active = accounts.filter((account) => account.status === BrokerAccountStatus.Active);
   if (active.length === 1) return { ok: true, brokerAccountId: active[0]!.id };

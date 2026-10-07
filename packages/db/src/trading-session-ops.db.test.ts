@@ -499,7 +499,7 @@ describe('listRunnableSessions', () => {
     expect(listed.map((s) => s.id)).not.toContain(stopped.session.id);
     expect(listed.find((s) => s.id === bad.id)).toMatchObject({ settings: {}, mode: 'demo' });
   });
-  it('R4 never lists a session past the deadline, on the database clock (#287 review M1)', async () => {
+  it('R4 never lists a session past the deadline (#287 review M1)', async () => {
     const old = await seedUserWithAccount(tmp.db);
     const expired = await seedTradingSession(tmp.db, old.brokerAccountId, {
       startedAt: new Date(Date.now() - 2 * HOUR_MS),
@@ -665,7 +665,7 @@ describe('readSessionHistory', () => {
       }),
     ).toBeUndefined();
   });
-  it('H2 flags a session past the deadline by the database clock (#287 review M1)', async () => {
+  it('H2 flags a session past the deadline (#287 review M1)', async () => {
     const old = await seedUserWithAccount(tmp.db);
     const expired = await seedTradingSession(tmp.db, old.brokerAccountId, {
       startedAt: new Date(Date.now() - 2 * HOUR_MS),
