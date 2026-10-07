@@ -1,5 +1,9 @@
 import * as z from 'zod';
 
+// numeric(20,8), the domain of every money column and of tradeAmountSchema (trading.ts)
+export const NUMERIC_INTEGER_DIGITS = 12;
+export const NUMERIC_FRACTION_DIGITS = 8;
+
 // Decimal strings are the form this project sends and stores: a JSON number with a fraction may
 // already have lost precision in JSON.parse. The broker counts whole currency units and answers a
 // whole amount as a JSON integer and a fractional one as a JSON fraction, both in one object

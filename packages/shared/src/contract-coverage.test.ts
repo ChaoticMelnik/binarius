@@ -35,6 +35,7 @@ import * as botTextTemplate from './bot-text-template';
 import * as botTexts from './bot-texts';
 import * as brokerBalance from './broker-balance';
 import * as catalog from './catalog';
+import * as demoStake from './demo-stake';
 import * as env from './env';
 import * as ids from './ids';
 import * as linkConfirmation from './link-confirmation';
@@ -133,6 +134,7 @@ describe('contract coverage (issue #6)', () => {
         | 'broker_unavailable'
         | null;
       tradingOpen: boolean;
+      demoStake: DecimalString | null;
     }>();
   });
 
@@ -369,6 +371,9 @@ describe('contract coverage (issue #6)', () => {
       | 'catalog_unavailable'
       | 'not_found'
       | 'session_not_active'
+      | 'stake_precision'
+      | 'stake_below_minimum'
+      | 'insufficient_demo_balance'
     >();
   });
 
@@ -394,6 +399,7 @@ describe('contract coverage (issue #6)', () => {
       linkConfirmation,
       telegramHtml,
       catalog,
+      demoStake,
       signal,
       tradingSession,
       botTextTemplate,

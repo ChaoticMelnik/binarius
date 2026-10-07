@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { decimalScale, DEMO_STAKE_MIN_SCALE, DemoStakeRefusal } from './demo-stake';
 import { decimalStringSchema, normalizeDecimal, type DecimalString } from './money';
 import {
   createTradeIntentRequestSchema,
@@ -82,6 +83,24 @@ export function stakeSettingsFor(minTradeAmount: DecimalString): {
   return { baseStake: decimalStringSchema.parse(canonical), stakeScale: fraction.length };
 }
 
+// The session's stake from the user's saved demo stake (#297). NULL keeps stakeSettingsFor's
+// answer exactly; a saved stake also widens the scale by its own fraction length, so a stake
+// saved under a finer minimum stays on the grid that settings v1 and the sizer use.
+export function demoStakeSettings(
+  demoStake: DecimalString | null,
+  minTradeAmount: DecimalString,
+): { baseStake: DecimalString; stakeScale: number } {
+  if (demoStake === null) return stakeSettingsFor(minTradeAmount);
+  return {
+    baseStake: decimalStringSchema.parse(normalizeDecimal(demoStake)),
+    stakeScale: Math.max(
+      DEMO_STAKE_MIN_SCALE,
+      decimalScale(minTradeAmount),
+      decimalScale(demoStake),
+    ),
+  };
+}
+
 // The worker's deadline for a session (started_at + this, on the database clock) and the start
 // route's refusal of a session that cannot fit it (docs/trading-session.md -> Routes).
 export const SESSION_MAX_DURATION_MS = 3_600_000;
@@ -120,6 +139,10 @@ export const TradingSessionErrorCode = {
   CatalogUnavailable: 'catalog_unavailable',
   NotFound: 'not_found',
   SessionNotActive: 'session_not_active',
+  // the session's stake against the account's snapshot (#297, checkDemoStake)
+  StakePrecision: DemoStakeRefusal.Precision,
+  StakeBelowMinimum: DemoStakeRefusal.BelowMinimum,
+  InsufficientDemoBalance: DemoStakeRefusal.AboveAvailable,
 } as const;
 export type TradingSessionErrorCode =
   (typeof TradingSessionErrorCode)[keyof typeof TradingSessionErrorCode];

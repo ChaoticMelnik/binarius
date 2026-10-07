@@ -8,6 +8,7 @@ const body = (tokens: Record<string, unknown>, status: unknown = UserStatus.Acti
   broker: null,
   brokerUnavailable: 'no_account',
   tradingOpen: false,
+  demoStake: null,
 });
 
 const view = {
@@ -122,6 +123,7 @@ describe('the broker section', () => {
       broker: view,
       brokerUnavailable: null,
       tradingOpen: false,
+      demoStake: null,
     };
     const parsed = safeParseTradingAccessResponse(input);
     expect(parsed.success && parsed.data).toEqual(input);
@@ -135,6 +137,7 @@ describe('the broker section', () => {
       status: UserStatus.Active,
       tokens,
       tradingOpen: false,
+      demoStake: null,
       ...section,
     });
     expect(parsed.success).toBe(false);
@@ -152,6 +155,7 @@ describe('the broker section', () => {
       broker: { ...view, brokerAccountId: 'x', lastRefreshError: 'unavailable' },
       brokerUnavailable: null,
       tradingOpen: false,
+      demoStake: null,
     });
     expect(parsed.success && parsed.data.broker).toEqual(view);
   });
@@ -173,5 +177,20 @@ describe('tradingOpen', () => {
   it('refuses the string false', () => {
     const input = { ...body(canonical), tradingOpen: 'false' };
     expect(safeParseTradingAccessResponse(input).success).toBe(false);
+  });
+});
+
+describe('demoStake', () => {
+  it('accepts a decimal string or null', () => {
+    const input = { ...body(canonical), demoStake: '2.5' };
+    const parsed = safeParseTradingAccessResponse(input);
+    expect(parsed.success && parsed.data).toEqual(input);
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['a number', 2.5],
+  ])('refuses a body with it %s', (_label, demoStake) => {
+    expect(safeParseTradingAccessResponse({ ...body(canonical), demoStake }).success).toBe(false);
   });
 });

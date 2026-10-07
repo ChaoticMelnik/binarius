@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { decimalStringSchema } from './money';
 import { telegramUserIdSchema } from './trading';
 
 // Lives here rather than in packages/db, like BrokerAccountStatus: the bot types a user's status
@@ -60,6 +61,8 @@ export const userStartViewSchema = z.object({
   // newest first
   pendingBrokerAccounts: z.array(pendingBrokerAccountViewSchema),
   notificationLevel: notificationLevelSchema,
+  // the saved demo stake, canonical; null = the broker's minimum at each trade (#297)
+  demoStake: decimalStringSchema.nullable(),
 });
 export type UserStartView = z.infer<typeof userStartViewSchema>;
 
@@ -102,7 +105,11 @@ export const notificationLevelRequestSchema = z.object({
 });
 export type NotificationLevelRequest = z.infer<typeof notificationLevelRequestSchema>;
 
-export const notificationLevelResponseSchema = z.object({ level: notificationLevelSchema });
+// demoStake: /settings re-renders its stake line from this answer (#297)
+export const notificationLevelResponseSchema = z.object({
+  level: notificationLevelSchema,
+  demoStake: decimalStringSchema.nullable(),
+});
 export type NotificationLevelResponse = z.infer<typeof notificationLevelResponseSchema>;
 
 export const safeParseNotificationLevelRequest = (input: unknown) =>

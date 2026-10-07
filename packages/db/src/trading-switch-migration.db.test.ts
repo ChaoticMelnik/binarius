@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb } from './client';
 import { runMigrations } from './migrate';
 import { outboxEvents, tradeIntents } from './schema/index';
-import { createTempDatabase, seedUserWithAccount, type TempDatabase } from './testing';
+import { createTempDatabase, seedBrokerAccount, type TempDatabase } from './testing';
 
 // S6 (#144): migration 0019 moves rows that carry real_trading_disabled to trading_paused before
 // it adds the CHECKs without the old value. The database is migrated to 0018 from a copy of the
@@ -47,7 +47,14 @@ afterAll(async () => {
 
 describe('migration 0019', () => {
   it('S6 rewrites real_trading_disabled to trading_paused on both tables', async () => {
-    const seed = await seedUserWithAccount(tmp.db);
+    // the users row through SQL: the drizzle schema names every column it has today, and a
+    // column added after 0018 (users.demo_stake, #297) does not exist in this database yet
+    const { rows } = await tmp.pool.query<{ id: string }>(
+      'insert into users (telegram_user_id) values ($1) returning id',
+      [900_019],
+    );
+    const userId = rows[0]!.id;
+    const seed = { userId, brokerAccountId: await seedBrokerAccount(tmp.db, userId) };
     const [intent] = await tmp.db
       .insert(tradeIntents)
       .values({

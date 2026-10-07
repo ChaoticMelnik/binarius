@@ -148,6 +148,13 @@
       "when": 1791367631700,
       "tag": "0020_trading_switch_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791384771282,
+      "tag": "0021_demo_stake",
+      "breakpoints": true
     }
   ]
 }

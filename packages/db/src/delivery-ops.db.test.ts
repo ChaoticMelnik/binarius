@@ -197,7 +197,7 @@ describe('setNotificationLevel', () => {
     const user = await seedUser(tmp.db);
     expect(await levelOf(user.userId)).toBe(NotificationLevel.All);
     for (const level of Object.values(NotificationLevel)) {
-      expect(await setLevel(user, level)).toEqual({ level, canceledJobs: 0 });
+      expect(await setLevel(user, level)).toEqual({ level, demoStake: null, canceledJobs: 0 });
       expect(await levelOf(user.userId)).toBe(level);
     }
   });

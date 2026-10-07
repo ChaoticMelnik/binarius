@@ -26,6 +26,7 @@ import {
   type TradeIntentRow,
 } from './trade-intent-ops';
 import { tradingSwitch } from './schema/trading-switch';
+import { upsertBalanceSnapshot } from './balance-snapshot-ops';
 
 export interface TempDatabase {
   url: string;
@@ -214,6 +215,31 @@ export async function closeTradingSwitch(db: Db): Promise<void> {
   await db
     .update(tradingSwitch)
     .set({ tradingEnabled: false, source: TradingSwitchSource.Operator, reason: 'test' });
+}
+
+// The account's balance snapshot with the two numbers the demo-stake bounds read (#297); the
+// rest is a fixed broker user. Written through the real writer, so the domain checks apply.
+export async function seedBalanceSnapshot(
+  db: Db,
+  brokerAccountId: string,
+  {
+    minTradeAmount = '1',
+    demoAvailable = '10000',
+  }: { minTradeAmount?: string; demoAvailable?: string } = {},
+): Promise<void> {
+  const money = (value: string) => value as DecimalString;
+  const written = await upsertBalanceSnapshot(db, {
+    brokerAccountId,
+    requested: false,
+    user: {
+      id: 'broker-user',
+      level: { code: 'standard', rank: 1 },
+      minTradeAmount: money(minTradeAmount),
+      real: { available: money('100'), held: money('0'), total: money('100') },
+      demo: { available: money(demoAvailable), held: money('0'), total: money(demoAvailable) },
+    },
+  });
+  if (!written.written) throw new Error(`balance snapshot out of domain: ${written.field}`);
 }
 
 // an unknown intent with its reconciliation outbox row: the starting point of every

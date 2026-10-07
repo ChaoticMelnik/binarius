@@ -749,6 +749,38 @@ describe('trade_intents', () => {
   });
 });
 
+describe('users.demo_stake (#297)', () => {
+  it.each([['0'], ['-1'], ['NaN'], ['0.000000001']])('rejects %s', async (value) => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(users).values({ telegramUserId: 990_101n, demoStake: value as DecimalString }),
+        '23514',
+        'users_demo_stake_check',
+      );
+    });
+  });
+
+  it.each([[null], ['0.00000001'], ['999999999999.99999999']])('accepts %s', async (value) => {
+    await rolledBack(async (tx) => {
+      const [row] = await tx
+        .insert(users)
+        .values({ telegramUserId: 990_102n, demoStake: value as DecimalString | null })
+        .returning({ demoStake: users.demoStake });
+      expect(row?.demoStake ?? null).toBe(value === null ? null : value);
+    });
+  });
+
+  it('defaults to NULL, the broker minimum', async () => {
+    await rolledBack(async (tx) => {
+      const [row] = await tx
+        .insert(users)
+        .values({ telegramUserId: 990_103n })
+        .returning({ demoStake: users.demoStake });
+      expect(row?.demoStake).toBeNull();
+    });
+  });
+});
+
 describe('users and token_ledger', () => {
   it('rejects a negative balance', async () => {
     await rolledBack(async (tx) => {
