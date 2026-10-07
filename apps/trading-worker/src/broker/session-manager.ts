@@ -76,7 +76,7 @@ export interface BrokerSessionManager extends TradeSessionSource {
   // the timer, the start pool, every client, then the write in flight per account within
   // stopBudgetMs; the writes queued behind it are dropped
   stop(): Promise<void>;
-  // the running client of the account: tests and the probe
+  // the running client of the account, verified or not: tests
   clientFor(accountId: string): BrokerSocketClient | undefined;
   // running + starting
   readonly size: number;
@@ -551,7 +551,12 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     },
     tick,
     stop,
-    sessionFor: (accountId) => clientFor(accountId),
+    // the executor gets the client only once this connection's user.data matched the account;
+    // until then its command goes over REST (the executor's no-session case)
+    sessionFor(accountId) {
+      const entry = entries.get(accountId);
+      return entry?.kind === 'running' && entry.verified ? entry.client : undefined;
+    },
     clientFor,
     get size() {
       return entries.size;
