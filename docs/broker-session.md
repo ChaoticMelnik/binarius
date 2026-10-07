@@ -245,7 +245,7 @@ present.
   throws on the refresh path; U14 the log scan.
 - `session-manager.db.test.ts` (integration, `TEST_DATABASE_URL`): the end-to-end scenario on
   the mock broker with the production composition — `listSessionCandidates`, the production
-  writers, `buildExecutor(parseEnv(…), createTradeCommandExecutor({ sessions: manager, … }))`,
+  writers, `createTradeCommandExecutor({ sessions: manager, … })`,
   `processIntentJob`. E1 connect → auth (the snapshot from `user.data`), E2 subscribe → price, E3
   open success (accepted over the socket, `update_balance` moves the demo amounts), E4 close →
   balance (`close_trade.success` settles the intent), E5 open fail (below the minimum), E6 a late

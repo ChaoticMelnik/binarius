@@ -75,8 +75,8 @@ const CREATE_REFUSALS = {
   [TradeIntentErrorCode.ActiveIntentExists]: { text: TEXTS.stakeActiveIntent },
   // the same button pressed with other parameters: minTradeAmount changed between two presses
   [TradeIntentErrorCode.ClientRequestIdConflict]: { text: TEXTS.stakeButtonUsed },
-  // demo never reaches the real-mode gate
-  [TradeIntentErrorCode.RealTradingDisabled]: { text: TEXTS.unavailable, log: true },
+  // the global trading switch is closed (#144): demo and real alike
+  [TradeIntentErrorCode.TradingPaused]: { text: TEXTS.tradingPaused },
 } as const satisfies Record<TradeIntentErrorCode, Refusal>;
 
 const isCreateRefusal = (reason: string | undefined): reason is TradeIntentErrorCode =>

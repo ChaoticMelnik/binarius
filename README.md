@@ -240,3 +240,18 @@ The Telegram ID is the one the staff bot answers with when the person sends it `
 runs on `ADMIN_BOT_TOKEN`, which is a **second** bot from @BotFather, not `TELEGRAM_BOT_TOKEN`.
 The whole flow, the trust boundaries and the audit trail are in
 [docs/staff-login.md](docs/staff-login.md).
+
+## Trading switch
+
+One switch stops new trades for demo and real together without a restart; trades already open,
+reconciliation and settlement go on. A fresh database starts open. The same migrated database
+as above:
+
+```bash
+docker compose exec backend pnpm --filter @binarius/backend kill-switch status
+docker compose exec backend pnpm --filter @binarius/backend kill-switch on --reason "инцидент брокера"
+docker compose exec backend pnpm --filter @binarius/backend kill-switch off
+```
+
+What each command prints, what a closed switch does to queued intents and sessions, and the
+deploy note are in [docs/kill-switch.md](docs/kill-switch.md).

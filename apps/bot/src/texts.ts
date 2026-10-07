@@ -245,7 +245,8 @@ ${FEATURE_LINES}`,
   intentRejectedPublishFailed: telegramHtml`⚠️ Заявка не дошла до исполнителя. Токен возвращён.`,
   intentRejectedNotFound: telegramHtml`❌ Брокер сделку не открыл. Токен возвращён.`,
   intentRejectedManual: telegramHtml`❌ Сделка отклонена при ручной проверке. Токен возвращён.`,
-  intentRejectedRealDisabled: telegramHtml`⚠️ Реальная торговля отключена. Токен возвращён.`,
+  // the global trading switch (#144), owner's wording 2026-10-07
+  intentRejectedPaused: telegramHtml`⏸ Торговля временно приостановлена, попробуйте позже. Токен возвращён.`,
   intentRejected: telegramHtml`❌ Сделка не открыта. Токен возвращён.`,
   // under a live status once the tracker stops polling
   intentDeadline: telegramHtml`⏳ Сделка всё ещё обрабатывается — нажми «🔄 Обновить статус» чуть позже.`,
@@ -253,6 +254,8 @@ ${FEATURE_LINES}`,
   // The stake press refused before or by POST /trading/intents (#127)
   stakeBalanceMissing: telegramHtml`⏳ Баланс Binodex ещё не получен — попробуй через минуту.`,
   stakeActiveIntent: telegramHtml`⏳ Предыдущая сделка ещё не завершена. Дождись её результата.`,
+  // the global trading switch (#144), owner's wording 2026-10-07
+  tradingPaused: telegramHtml`⏸ Торговля временно приостановлена, попробуйте позже.`,
   stakeButtonUsed: telegramHtml`⚠️ Эта кнопка уже использована. Открой анализ заново.`,
   stakeInsufficientTokens: telegramHtml`🪙 Не хватает токенов для сделки.`,
   stakeAccountNotConfirmed: telegramHtml`⏳ Привязка Binodex ждёт подтверждения — открой /account.`,
@@ -340,7 +343,7 @@ function bonusOf(grant: LinkBonusGrantView | null): TelegramHtml | null {
 }
 
 // Only what the card prints reaches it: `status` is branched on before a card exists, and
-// realTradingAllowed is the backend's switch, not the user's mode.
+// tradingOpen is the backend's switch, not the user's mode.
 export type StatusCardInput = Pick<
   TradingAccessResponse,
   'tokens' | 'broker' | 'brokerUnavailable'
@@ -417,7 +420,7 @@ const REJECTED_LINES = {
   [TradeIntentFailureReason.PublishFailed]: TEXTS.intentRejectedPublishFailed,
   [TradeIntentFailureReason.ReconciliationNotFound]: TEXTS.intentRejectedNotFound,
   [TradeIntentFailureReason.ManualRejected]: TEXTS.intentRejectedManual,
-  [TradeIntentFailureReason.RealTradingDisabled]: TEXTS.intentRejectedRealDisabled,
+  [TradeIntentFailureReason.TradingPaused]: TEXTS.intentRejectedPaused,
   [TradeIntentFailureReason.ExecutorTimeout]: TEXTS.intentRejected,
   [TradeIntentFailureReason.ExecutorError]: TEXTS.intentRejected,
   [TradeIntentFailureReason.StaleSubmitting]: TEXTS.intentRejected,

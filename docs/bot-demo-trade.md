@@ -93,7 +93,8 @@ Every 4xx is answered before a row is committed, so a 4xx means nothing was crea
 | 409 `insufficient_tokens` | «🪙 Не хватает токенов для сделки.» |
 | 409 `active_intent_exists` | «⏳ Предыдущая сделка ещё не завершена…» |
 | 409 `client_request_id_conflict` | «⚠️ Эта кнопка уже использована…» (the same button with a changed `minTradeAmount`) |
-| 404 `user_not_found`, 409 `real_trading_disabled`, 400 `validation`, any other 4xx | `unavailable`; `warn` `trade intent not created` |
+| 409 `trading_paused` | «⏸ Торговля временно приостановлена, попробуйте позже.» (the global switch, [kill-switch.md](kill-switch.md)) |
+| 404 `user_not_found`, 400 `validation`, any other 4xx | `unavailable`; `warn` `trade intent not created` |
 | 5xx, no answer, a broken 2xx body | the outcome is unknown: one more `createIntent` with the same key; if that also fails this way, «⚠️ Не удалось узнать, принята ли заявка…» and `warn` `trade intent not created` |
 
 The refusals are an exhaustive `Record<TradeIntentErrorCode, …>`, so a code added to the contract
@@ -115,7 +116,7 @@ a blank line, and the status line. The status line is chosen by `view.status`, o
 | unknown, reconciling | 🔎 Результат сделки уточняется у брокера. Токен пока зарезервирован. |
 | manual_review | 🛠 Сделка на ручной проверке — напиши в поддержку: /support |
 | rejected / executor_not_configured | ⚠️ Сделка не отправлена: исполнение сделок ещё не подключено. Токен возвращён. |
-| rejected / expired, broker_rejected, publish_failed, reconciliation_not_found, manual_rejected, real_trading_disabled | each has its own line, ending «Токен возвращён.» |
+| rejected / expired, broker_rejected, publish_failed, reconciliation_not_found, manual_rejected, trading_paused | each has its own line, ending «Токен возвращён.» (`trading_paused`: «⏸ Торговля временно приостановлена, попробуйте позже. Токен возвращён.») |
 | rejected / any other reason, or none | ❌ Сделка не открыта. Токен возвращён. |
 
 Both maps are exhaustive (`satisfies Record<…>`). `texts.test.ts` checks that «открыта» appears

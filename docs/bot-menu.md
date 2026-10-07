@@ -57,7 +57,7 @@ bot caches nothing; every `/start` and `/menu` reads the route again.
 At most one of the three status lines is printed.
 
 - **Mode.** `modeHeader(mode)` prints `MODE_LABELS[mode]`. The bot passes `TradeMode.Demo`: no
-  user trades on real yet, and `realTradingAllowed` is the backend's switch, not the user's mode,
+  user trades on real yet, and `tradingOpen` is the backend's switch, not the user's mode,
   so it is not read. The issue that brings real mode passes the user's mode and changes nothing
   in `texts.ts`.
 - **Balances.** `broker.real.available` and `broker.demo.available` — what can be staked now;
@@ -161,7 +161,7 @@ pnpm test --project unit apps/bot/src
 - **#126** — the analysis behind «📊 Анализ»: [bot-demo.md](bot-demo.md#the-analysis).
 - **#127 / #284** — the demo trade and the session of five; the callback data stays.
 - **#201** — levels and their progress on this card.
-- Real mode — the header reads REAL once a user can trade on real; #134's `realTradingAllowed` is
+- Real mode — the header reads REAL once a user can trade on real; #144's `tradingOpen` is
   the backend's switch, not a user's mode.
 - A «🔄 Обновить» button that edits the caption in place, and a menu button on the account card —
   not asked; `/menu` sends a new card.

@@ -811,6 +811,18 @@ describe('the demo trade status', () => {
       ),
     );
     expect(byBroker).toContain('Брокер отклонил сделку');
+    const paused = plainTextOf(
+      intentStatusText(
+        'X',
+        intentView({
+          status: TradeIntentStatus.Rejected,
+          lastError: TradeIntentFailureReason.TradingPaused,
+        }),
+      ),
+    );
+    expect(paused).toContain(
+      '⏸ Торговля временно приостановлена, попробуйте позже. Токен возвращён.',
+    );
   });
 
   it.each(LIVE)('keeps %s a live status, with no claim that the token came back', (status) => {
