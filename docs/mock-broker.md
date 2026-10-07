@@ -416,7 +416,7 @@ and 6 are resolved, 4–5 and 9 remain, and 7–8 are handled on the consumer's 
 - Socket.IO on the same server and store landed in #104; `cutTransport` and `emitRaw` in #99,
   with the `BrokerSocketClient` and its subscriptions (docs/broker-socket.md → Client). The trade
   command executor landed in #100 (docs/trade-executor.md); the session manager and the
-  end-to-end scenario are #101.
+  end-to-end scenario landed in #101 (docs/broker-session.md).
 - The OAuth endpoints, moving `apps/backend/src/broker/testing/oauth-stub.ts` here, and a `bin`
   or compose service: #105.
 - Changes to `packages/shared`: money, chart and `{trades}` landed in #98; the fraction branch of

@@ -53,7 +53,7 @@ bot; the class and `MAX_DETAIL_LENGTH` stay here.
 
 | `code` | From | What it means | For `openTrade` | For a GET |
 |---|---|---|---|---|
-| `unauthorized` | 401 | the broker refused before acting | did not open | a new token (#101) |
+| `unauthorized` | 401 | the broker refused before acting | did not open | a new token on the user's next action (Rule 12) |
 | `rate_limited` | 429; `retryAfterSec` from an integer `Retry-After` | refused before acting | did not open | wait, the caller decides |
 | `rejected` | any other 4xx | refused before acting; `detail` says why | did not open | fix the request |
 | `unavailable` | 5xx; `fetch` failed (network, DNS, TLS); our own timeout; a 2xx body cut mid-flight | **outcome unknown** | may have opened: `unknown` | the caller may retry |
@@ -245,7 +245,7 @@ without a candidate is parked for the operator and the reserve is held (#274).
   `POST /trading/signal` is its first caller of `getChart`.
 - #137: `getUser` for the broker balance snapshot (docs/broker-balance.md), in the backend, on
   the same client instance as the catalog.
-- #101: the session manager and 401 handling (refresh and revocation). Retries on
-  `rate_limited`/`unavailable` belong to the callers.
+- #101: the session manager (docs/broker-session.md); the worker never acts on a REST 401.
+  Retries on `rate_limited`/`unavailable` belong to the callers.
 - #104: the Socket.IO side of `packages/mock-broker`. #104/#236: the fixture, which sends money as
   JSON numbers since #236, is used here as published.

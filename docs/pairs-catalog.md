@@ -13,7 +13,7 @@ pnpm test --project unit packages/broker-rest packages/shared/src/catalog.test.t
 
 - `packages/broker-rest/src/pairs-catalog.ts` — `createPairsCatalog`, its constants and
   `PAIRS_CATALOG_CHAIN_HOLDS`. It lives beside the REST client (docs/broker-rest.md) so the
-  worker can build the same module later (#101) rather than a copy.
+  worker can build the same module later rather than a copy.
 - `packages/shared/src/catalog.ts` — the contract: `TRADING_PAIRS_PATH`, `PairsCatalogErrorCode`,
   `pairViewSchema` and `pairsCatalogResponseSchema`, the structural `PairsCatalogView` the cache
   hands out, and the allowlisted mapping `toPairView`/`toPairsCatalogResponse`.
@@ -121,9 +121,9 @@ when the error has them. The line holds neither the base URL nor any of the resp
 
 ## Boundaries
 
-- #99/#101: the socket's `common.assets_list`/`common.assets_update` as a source of updates, the
-  catalog instance in the worker, `BROKER_API_BASE_URL` in the worker's env, and the `refresh()`
-  call on reconnect.
+- Not taken by #99/#101 and still open: the socket's `common.assets_list`/`common.assets_update`
+  as a source of updates, the catalog instance in the worker, and the `refresh()` call on
+  reconnect. `BROKER_API_BASE_URL` is in the worker's env since #90.
 - The bot's client for `GET /trading/pairs` and the asset picker: docs/bot-demo.md (#125).
 - #136/#137: `POST /trading/access` and its broker section.
 - Not done anywhere yet: the catalog in `/health`, `GET /trading/pairs/:id`, backoff on 429/5xx.

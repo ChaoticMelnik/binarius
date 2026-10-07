@@ -18,7 +18,7 @@ pnpm test --project integration apps/trading-worker/src/intents/processor.db.tes
 | Part | Where | What |
 |---|---|---|
 | `buildExecutor(env, inner)` | `intents/executor.ts` | the worker's one production composition: `realTradingGate` outside the trade command executor (#134). With `REAL_TRADING_ENABLED` off a real intent is `rejected`/`real_trading_disabled` and the inner executor is never called (`executor.test.ts`, through `parseEnv`) |
-| `TradeSessionSource` | `broker/trade-session.ts` | `sessionFor(brokerAccountId)` → the account's live socket client or `undefined`. Production runs `noTradeSessions` (always `undefined`) until #101's session manager |
+| `TradeSessionSource` | `broker/trade-session.ts` | `sessionFor(brokerAccountId)` → the account's live socket client or `undefined`. Production: the session manager ([broker-session.md](broker-session.md), #101) when `BROKER_WS_URL` is set, `noTradeSessions` (always `undefined`) otherwise |
 | `BrokerSocketClient.openTrade` | `broker/socket.ts` | the socket command and its correlation ([broker-socket.md](broker-socket.md) → The trade command) |
 | `AccessTokenSource` | `broker/access-token.ts` | the account's broker token for the REST path (#90: `createBackendAccessTokenSource` over the backend's internal route; the backend refreshes when needed). `ok: false` for every expected failure, a refusal or the backend unavailable; a throw is a bug |
 | `BrokerRestClient.openTrade` | `packages/broker-rest` | the REST fallback ([broker-rest.md](broker-rest.md) → Errors) |
@@ -32,7 +32,8 @@ them.
 
 1. **Socket**, when the account has a session: `openTrade(intent.mode, request, signal)`.
 2. **REST**, only when nothing was emitted: no session for the account, or the session answered
-   `not_sent`/`not_ready` (any state but `ready`). `transport` is then `rest_fallback`.
+   `not_sent`/`not_ready` (any state but `ready`, or a connection tainted by an aborted command
+   until its replacement is `ready`). `transport` is then `rest_fallback`.
 
 After an emit the answer is the socket's or `unknown`. The executor never follows an emit with a
 POST, never sends the order twice and never retries; what happened to an `unknown` order is
@@ -45,13 +46,15 @@ test that proves each (`trade-command-executor.test.ts`):
 
 | Stage | Outcome | Test |
 |---|---|---|
-| before send (no session, or a session not `ready`) | one REST POST, `rest_fallback` | S3, S4 |
+| before send (no session, a session not `ready`, or a tainted connection) | one REST POST, `rest_fallback` | S3, S4, S9 |
 | after send, before any answer (the transport drops) | `unknown`, no REST request, nothing re-emitted on the next connection | S5 |
 | before the success (the server drops the socket; the trade did open) | `unknown`, no REST request | S6 |
 | after the success | `accepted` | S7 |
 
 S5, S6 and S8 (abort while waiting) also assert that the socket journal holds one `open_trade`
-and the REST journal no POST: the ban on a second open.
+and the REST journal no POST: the ban on a second open. S9 aborts a command and submits the next
+one at once, with the connection kept open through the client's `openSocket` seam: the second
+goes over REST, the socket journal still holds one `open_trade`.
 
 ## Outcomes
 
@@ -100,8 +103,9 @@ line below and finds no `SECRET-` sentinel and no broker host.
    fallback succeeds; if the cause is the answer's shape, a `broker event problem` with
    `kind: schema` on `user.demo.open_trade.success` at `is_demo` (optional in broker-web, absent
    from the live `close_trade.success`). The fix would be the shared schema, not the executor.
-2. Until #101 every intent travels over REST (`rest_fallback`); the socket path runs only in
-   tests. The `transport` column shows it per intent.
+2. Without `BROKER_WS_URL` every intent travels over REST (`rest_fallback`) and the socket path
+   runs only in tests; with it, an account in work has a session ([broker-session.md](broker-session.md)).
+   The `transport` column shows it per intent.
 3. **The token fetch and the POST can outlast the submit deadline** (owner, 2026-10-06). The
    token route's budget is 7 s (`ACCESS_TOKEN_ROUTE_BUDGET_MS`: one broker token exchange of up
    to 5 s, #90) and the REST call's 5 s (`BROKER_REST_TIMEOUT_MS`); together 12 s against the
@@ -110,12 +114,14 @@ line below and finds no `SECRET-` sentinel and no broker host.
    the budget runs out the processor writes `executor_timeout`/`unknown` and reconciliation
    decides; a fetch cut before the POST sent nothing, so the reconciler finds no trade and parks
    the intent in `manual_review` with the account halted (no `not_found` in `main`, #274).
-4. A late `open_trade.success` of an earlier command on the same connection could be matched to
-   a new command only after the earlier intent was concluded by reconciliation and a new one
-   emitted on that connection. The field match in `markIntentAccepted` and
-   `broker_trades_account_trade_key` catch a trade already linked; an unlinked one with equal
-   terms would be accepted for the wrong intent. Nothing in the command ties an answer to a
-   request.
+4. A late answer of an earlier command on the same connection is closed by #101: a command that
+   ends without its answer taints its connection and the client drops it, and a `success` is the
+   answer only with the command's asset, action and amount ([broker-socket.md → The trade
+   command](broker-socket.md#the-trade-command-100)). What stays open is an answer on another
+   socket of the same user — a manual order in broker-web, if the live broker sends answers to
+   every socket: a `fail` would reject our intent while our order may be open, and a `success`
+   with equal terms would link the manual trade. The two-socket probe decides whether
+   `BROKER_WS_URL` may be set (broker-socket.md → Observed live).
 5. Every token failure is `broker_rejected` (owner: one new code); the log names the stage and
    the reason.
 6. The broker's `fail` and REST `detail` texts are logged cut to 200 characters; an amount the
@@ -125,7 +131,7 @@ line below and finds no `SECRET-` sentinel and no broker host.
 
 - **#90**: the token source and its backend route, `BROKER_API_BASE_URL`, `BACKEND_URL`,
   `INTERNAL_API_TOKEN`, the REST client in `index.ts`, the reconciler and the catch-up.
-- **#101**: one socket session per account (replaces `noTradeSessions`), the token refresh on
-  `token_expired`/`auth_failed`, the balance writers and the `refresh()` after `accepted`.
+- **#101**: implemented — the session manager ([broker-session.md](broker-session.md)) and the
+  taint; no `refresh()` after `accepted` (the `update_balance` before `open_trade.success` is it).
 - **#91**: the "REST only before send" rule and the four stages are proven here.
 - The operator tool for `manual_review` and the bot's trade flow are later issues.
