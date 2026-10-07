@@ -299,6 +299,14 @@ const userWire = (id: number) => ({
   real: { available: '0', held: '0', total: '0' },
   demo: { available: '100.00', held: '0', total: '100.00' },
 });
+// the user.data of broker user 1, as the normalizer hands it over
+const USER_1 = {
+  id: '1',
+  level: { code: 'standard', rank: 1 },
+  minTradeAmount: '1.00',
+  real: { available: '0', held: '0', total: '0' },
+  demo: { available: '100.00', held: '0', total: '100.00' },
+} as Extract<BrokerEvent, { type: 'user_data' }>['user'];
 const balanceWire = (available: string) => ({ available, held: '0', total: available });
 const closedWire = (id: number) => ({
   id,
@@ -705,13 +713,7 @@ describe('sessionFor, stop() and the tick', () => {
     expect(client.state).toBe(BrokerSocketState.Ready);
     expect(h.manager.clientFor('acc-1')).toBe(client);
     expect(h.manager.sessionFor('acc-1')).toBeUndefined();
-    const user = {
-      id: '1',
-      level: { code: 'standard', rank: 1 },
-      minTradeAmount: '1.00',
-      real: { available: '0', held: '0', total: '0' },
-      demo: { available: '100.00', held: '0', total: '100.00' },
-    } as Extract<BrokerEvent, { type: 'user_data' }>['user'];
+    const user = USER_1;
     client.hear({ type: 'user_data', user });
     expect(h.manager.sessionFor('acc-1')).toBe(client);
     client.fire(BrokerSocketState.Reconnecting);
@@ -722,6 +724,66 @@ describe('sessionFor, stop() and the tick', () => {
     client.hear({ type: 'user_data', user });
     expect(h.manager.sessionFor('acc-1')).toBe(client);
   });
+
+  it.each([BrokerSocketState.TokenExpired, BrokerSocketState.AuthFailed])(
+    'U11c %s: no session while the refresh runs, and none until the new connection is verified',
+    async (terminal) => {
+      const fakes = fakeClients();
+      const tokens: ((outcome: AccessTokenOutcome) => void)[] = [];
+      const h = harness({
+        openClient: fakes.openClient,
+        tokens: () => {
+          const token = deferred<AccessTokenOutcome>();
+          tokens.push(token.resolve);
+          return token.promise;
+        },
+      });
+      h.state.candidates = [candidate(1)];
+      await h.manager.tick();
+      await until('the first fetch', () => tokens.length === 1);
+      tokens[0]!({ ok: true, accessToken: 'SECRET-1' });
+      await until('the client', () => fakes.made.length === 1);
+      const client = fakes.made[0]!;
+      client.hear({ type: 'user_data', user: USER_1 });
+      expect(h.manager.sessionFor('acc-1')).toBe(client);
+
+      client.fire(terminal);
+      expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+      expect(h.manager.clientFor('acc-1')).toBe(client);
+      await until('the refresh fetch', () => tokens.length === 2);
+      tokens[1]!({ ok: true, accessToken: 'SECRET-2' });
+      await until('the restart', () => client.starts.length === 2);
+      client.fire(BrokerSocketState.Authenticating);
+      client.fire(BrokerSocketState.Ready);
+      expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+      client.hear({ type: 'user_data', user: USER_1 });
+      expect(h.manager.sessionFor('acc-1')).toBe(client);
+    },
+  );
+
+  it.each([
+    ['manager.stop()', (h: Harness) => h.manager.stop()],
+    ['a direct client.stop()', (h: Harness) => h.manager.clientFor('acc-1')!.stop()],
+  ])(
+    'U11d a listener that re-enters sessionFor on idle after %s gets no session',
+    async (_label, stop) => {
+      const fakes = fakeClients();
+      const h = harness({ openClient: fakes.openClient });
+      h.state.candidates = [candidate(1)];
+      await h.manager.tick();
+      await until('the client', () => fakes.made.length === 1);
+      const client = fakes.made[0]!;
+      client.hear({ type: 'user_data', user: USER_1 });
+      expect(h.manager.sessionFor('acc-1')).toBe(client);
+      const seenOnIdle: unknown[] = [];
+      client.onState((change) => {
+        if (change.to === BrokerSocketState.Idle) seenOnIdle.push(h.manager.sessionFor('acc-1'));
+      });
+      await stop(h);
+      expect(seenOnIdle).toEqual([undefined]);
+      expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+    },
+  );
 
   it('U17a a token source that throws: the start failed line by name, dropped, held back', async () => {
     const h = harness({

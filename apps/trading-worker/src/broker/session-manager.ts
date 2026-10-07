@@ -306,15 +306,21 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     const accountId = entry.candidate.id;
     if (!isCurrent(accountId, entry)) return;
     switch (change.to) {
+      // a new connection proves its identity again; a stopped client has no connection to use
+      // (an external stop() is not supported: the entry stays without a session until it goes
+      // idle among the candidates)
       case BrokerSocketState.Connecting:
       case BrokerSocketState.Reconnecting:
       case BrokerSocketState.Authenticating:
-        // a new connection proves its identity again
+      case BrokerSocketState.Idle:
         entry.verified = false;
         entry.warned.clear();
         return;
+      // the client closed its socket: no session while the token is fetched again
       case BrokerSocketState.TokenExpired:
       case BrokerSocketState.AuthFailed:
+        entry.verified = false;
+        entry.warned.clear();
         if (!entry.refreshing) void refresh(entry, change.to);
         return;
       case BrokerSocketState.DisconnectedByServer:
@@ -322,7 +328,6 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
         drop(accountId, config.retryMs);
         return;
       case BrokerSocketState.Ready:
-      case BrokerSocketState.Idle:
         return;
     }
   }

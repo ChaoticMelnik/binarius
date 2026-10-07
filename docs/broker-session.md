@@ -71,8 +71,9 @@ session start failed` and holds the account back `SESSION_RETRY_MS`.
 | State | Manager |
 |---|---|
 | `connecting`, `reconnecting`, `authenticating` | the connection is new: it is unverified until its `user.data` ([The identity gate](#the-identity-gate)) |
-| `ready`, `idle` | nothing |
-| `token_expired`, `auth_failed` | one token fetch (single-flight per entry: a second terminal state during it is ignored). A token different from the session's → `start()` on the same client at once. The same token → `broker session token unchanged` (`accountId`, `sessionState`), dropped, held back `SESSION_RETRY_MS`. A non-`ok` answer → [The token](#the-token) |
+| `idle` | unverified: a stopped client has no connection. An external `client.stop()` (outside the manager) is not supported: the entry stays, without a session, until its account leaves the candidates and the idle grace closes it |
+| `ready` | nothing |
+| `token_expired`, `auth_failed` | unverified at once (the client closed its socket), then one token fetch (single-flight per entry: a second terminal state during it is ignored). A token different from the session's → `start()` on the same client at once. The same token → `broker session token unchanged` (`accountId`, `sessionState`), dropped, held back `SESSION_RETRY_MS`. A non-`ok` answer → [The token](#the-token) |
 | `disconnected_by_server` | `broker session closed` (`reason: disconnected_by_server`), dropped, held back `SESSION_RETRY_MS` |
 
 "Dropped" means `client.stop()` and the entry deleted: the account is a plain candidate again
@@ -236,7 +237,9 @@ present.
   session counted; U4/U5 the token answers and their hold-backs; U6/U6b/U7 `token_expired` and
   `auth_failed` with the same and with a new token; U8 `disconnected_by_server`; U9/U9b/U9c the
   identity gate (a burst with a foreign `user.data`, a reconnect); U10 a throwing writer; U11
-  `sessionFor` (U11b: only for a verified connection, again after a reconnect); U12/U12b `stop()` and its budget; U13 single-flight and a failing scan; U15 a tick
+  `sessionFor` (U11b: only for a verified connection, again after a reconnect; U11c: none during
+  the refresh after `token_expired`/`auth_failed`; U11d: none on `idle`, for a listener that
+  re-enters during the stop); U12/U12b `stop()` and its budget; U13 single-flight and a failing scan; U15 a tick
   returns while its starts are pending; U16 a candidate gone while starting; U17a/U17b
   `broker session start failed` from a throwing token source and from a client whose `start()`
   throws on the refresh path; U14 the log scan.
