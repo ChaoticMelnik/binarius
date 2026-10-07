@@ -78,24 +78,26 @@ as the scale — `'1.00000000'` → `{ '1', 0 }`, `'0.50000000'` → `{ '0.5', 1
 | `balance_unavailable` | no balance snapshot row for the account | #287 |
 | `invalid_settings` | settings fail the schema or the sizer's parameter rules | #287 |
 | `user_stopped` | the stop route | #283 |
+| `kill_switch` | the global trading switch is closed ([kill-switch.md](kill-switch.md)) | `stopPausedSessions` (#144), run by #287's tick |
 
 ## Operations
 
 | Operation | Statement | Notes |
 |---|---|---|
-| `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings })` | one transaction | reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`), then `broker_accounts` `FOR NO KEY UPDATE` (`account_not_active` unless `active`, `account_halted`); no account → `account_not_found`; the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a db-local code, not a wire contract |
+| `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings })` | one transaction | reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`), then `broker_accounts` `FOR NO KEY UPDATE` (`account_not_active` unless `active`, `account_halted`), then reads the trading switch without a lock (`trading_paused` while it is closed or its row is missing, #144); no account → `account_not_found`; the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a db-local code, not a wire contract |
 | `listRunnableSessions(db, { limit, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw |
 | `stopExpiredSessions(db, { maxDurationMs, limit })` | one UPDATE | `started_at < now() − maxDurationMs` → `stopped`/`timeout` |
 | `stopHaltedSessions(db, { limit })` | one UPDATE | the account `trading_halted`, or an intent of the session in `manual_review` → `stopped`/`manual_review` |
+| `stopPausedSessions(db, { limit })` | one UPDATE | every active session while the trading switch is closed (`not tradingOpenSql`) → `stopped`/`kill_switch` (#144); only a person starts one again. Nothing calls it before #287's tick |
 | `stopTradingSession(db, { id, reason })` | one UPDATE | CAS on `status = active`: a second stop finds nothing and the first reason stays |
 | `markSessionDecision(db, { id })` | one UPDATE | `last_decision_at = now()` on an active session |
 | `readSessionHistory(db, sessionId)` | two selects | the owner's `telegram_user_id` and the session's own intents in creation order with `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
-| `createSessionIntent(db, input, policy)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below |
+| `createSessionIntent(db, input)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below |
 
 Every stop writes `ended_at`, `last_decision_at` and `updated_at` as `now()`; every UPDATE that
 changes `status` carries `status = 'active'` in its WHERE.
 
-**The session lock.** `createTradeIntent(db, input, policy, session?)` takes an optional session;
+**The session lock.** `createTradeIntent(db, input, session?)` takes an optional session;
 with one, `createInTransaction` locks the session row `FOR NO KEY UPDATE` with the account, the
 intent's mode and `status = active` after the account lock and before the insert, and throws
 `TradingSessionNotActiveError` when no such row exists — the transaction rolls back with its reserve.
@@ -121,5 +123,5 @@ account and mode.
 - #131: restart recovery; #135: `grant_revoked` as a stop reason; #93: the lease for more than one
   worker container.
 - Real sessions: the schema and the operations take `mode`; a real session would trade under
-  Rule 22's gate. No writer creates one.
+  Rule 22's switch, the same one as demo (#144). No writer creates one.
 - The invariant is Architecture Rules → "Торговая сессия" in `.claude/skills/architect/SKILL.md`.

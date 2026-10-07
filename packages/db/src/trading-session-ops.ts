@@ -22,8 +22,8 @@ import {
   millisecondsAgo,
   uniqueViolation,
   type CreateTradeIntentResult,
-  type TradePolicy,
 } from './trade-intent-ops';
+import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-switch-ops';
 
 // The session orchestrator's operations (#130; the orchestrator is #287; docs/trading-session.md). Lock order: the creator
 // takes users → broker_accounts, as intent creation does; the stops and the decision mark lock
@@ -38,6 +38,8 @@ export const TradingSessionErrorCode = {
   AccountHalted: 'account_halted',
   UserNotActive: 'user_not_active',
   ActiveSessionExists: 'active_session_exists',
+  // the global trading switch is closed (#144)
+  TradingPaused: 'trading_paused',
 } as const;
 export type TradingSessionErrorCode =
   (typeof TradingSessionErrorCode)[keyof typeof TradingSessionErrorCode];
@@ -94,6 +96,10 @@ export async function createTradingSession(
       }
       if (locked.tradingHalted) {
         throw new TradingSessionError(TradingSessionErrorCode.AccountHalted);
+      }
+      // a plain read (Rule 5): a kill-switch commit after it is caught by stopPausedSessions
+      if (!isTradingOpen(await readTradingSwitch(tx))) {
+        throw new TradingSessionError(TradingSessionErrorCode.TradingPaused);
       }
       const [row] = await tx
         .insert(tradingSessions)
@@ -196,6 +202,29 @@ export async function stopExpiredSessions(
         sql`${tradingSessions.id} in (
           select ${tradingSessions.id} from ${tradingSessions}
            where ${active} and ${tradingSessions.startedAt} < ${millisecondsAgo(maxDurationMs)}
+           limit ${limit}
+        )`,
+      ),
+    )
+    .returning(stoppedColumns);
+}
+
+// Every active session while the global trading switch is closed (#144); the orchestrator's tick
+// (#287) runs it. Only a person starts a stopped session again.
+export async function stopPausedSessions(
+  db: Db,
+  { limit }: { limit: number },
+): Promise<StoppedSession[]> {
+  const active = eq(tradingSessions.status, TradingSessionStatus.Active);
+  return db
+    .update(tradingSessions)
+    .set(stoppedBy(TradingSessionStopReason.KillSwitch))
+    .where(
+      and(
+        active,
+        sql`${tradingSessions.id} in (
+          select ${tradingSessions.id} from ${tradingSessions}
+           where ${active} and not ${tradingOpenSql}
            limit ${limit}
         )`,
       ),
@@ -322,7 +351,6 @@ export interface CreateSessionIntentInput {
 export async function createSessionIntent(
   db: Db,
   input: CreateSessionIntentInput,
-  policy: TradePolicy,
 ): Promise<CreateTradeIntentResult> {
   return createTradeIntent(
     db,
@@ -336,7 +364,6 @@ export async function createSessionIntent(
       durationSec: input.durationSec,
       clientRequestId: `session:${input.sessionId}:${input.step}`,
     },
-    policy,
     { id: input.sessionId },
   );
 }
