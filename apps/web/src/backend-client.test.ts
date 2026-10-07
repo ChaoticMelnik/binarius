@@ -1,7 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { SAMPLE_ME, SAMPLE_OVERVIEW, SAMPLE_USER, SAMPLE_USER_ID } from './admin/testing';
+import {
+  SAMPLE_INTENT,
+  SAMPLE_INTENT_RESPONSE,
+  SAMPLE_INTENTS,
+  SAMPLE_ME,
+  SAMPLE_OVERVIEW,
+  SAMPLE_SESSION_ID,
+  SAMPLE_USER,
+  SAMPLE_USER_ID,
+} from './admin/testing';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
 
 const TOKEN = 'admin-web-token-for-tests';
@@ -189,6 +198,76 @@ describe('the read calls (#107)', () => {
     };
     const { client } = await prefixed(leaked);
     const error = await rejectionOf(client.user(SESSION, SAMPLE_USER_ID));
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+describe('the intents calls (#108)', () => {
+  const SESSION = 's'.repeat(43);
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+
+  const prefixed = async (body: unknown, status = 200) => {
+    const served = await serve((response) => {
+      json(response, status, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+
+  it('asks for the list with only the filters given, in the schema order, under the prefix', async () => {
+    const { client, captured } = await prefixed(SAMPLE_INTENTS);
+    expect(
+      await client.intents(SESSION, {
+        cursor: CURSOR,
+        session: SAMPLE_SESSION_ID,
+        status: 'active',
+      }),
+    ).toEqual(SAMPLE_INTENTS);
+    expect(captured.url).toBe(
+      `/api/admin/intents?status=active&session=${SAMPLE_SESSION_ID}&cursor=${CURSOR}`,
+    );
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+  });
+
+  it('sends no query string for no filters', async () => {
+    const { client, captured } = await prefixed(SAMPLE_INTENTS);
+    await client.intents(SESSION, {});
+    expect(captured.url).toBe('/api/admin/intents');
+  });
+
+  it('asks for the card under the prefix', async () => {
+    const { client, captured } = await prefixed(SAMPLE_INTENT_RESPONSE);
+    expect(await client.intent(SESSION, SAMPLE_INTENT.id)).toEqual(SAMPLE_INTENT_RESPONSE);
+    expect(captured.url).toBe(`/api/admin/intents/${SAMPLE_INTENT.id}`);
+  });
+
+  it('carries a missing card as the backend answered it', async () => {
+    const { client } = await prefixed({ error: 'not_found' }, 404);
+    const error = await rejectionOf(client.intent(SESSION, SAMPLE_INTENT.id));
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: 'not_found',
+    });
+  });
+
+  it.each([
+    ['a list row', { ...SAMPLE_INTENTS, intents: [{ ...SAMPLE_INTENT, accessTokenEnc: 'x' }] }],
+    ['the list', { ...SAMPLE_INTENTS, extra: 1 }],
+  ])('refuses %s with a key the contract does not name', async (_label, body) => {
+    const { client } = await prefixed(body);
+    const error = await rejectionOf(client.intents(SESSION, {}));
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('refuses a card with a key the contract does not name', async () => {
+    const { client } = await prefixed({
+      ...SAMPLE_INTENT_RESPONSE,
+      intent: { ...SAMPLE_INTENT, settings: {} },
+    });
+    const error = await rejectionOf(client.intent(SESSION, SAMPLE_INTENT.id));
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });

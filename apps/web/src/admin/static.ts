@@ -6,7 +6,7 @@ main { max-width: 60rem; margin: 0 auto; padding: var(--gap); }
 h1 { font-size: 1.4rem; }
 form.stack { display: grid; gap: var(--gap); max-width: 22rem; }
 label { display: grid; gap: 0.25rem; }
-input { font: inherit; padding: 0.5rem; }
+input, select { font: inherit; padding: 0.5rem; }
 button { font: inherit; padding: 0.5rem 1rem; cursor: pointer; }
 p.error { color: #b00020; font-weight: 600; }
 table { border-collapse: collapse; width: 100%; }

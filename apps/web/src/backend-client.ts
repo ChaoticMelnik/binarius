@@ -1,5 +1,8 @@
 import {
+  adminIntentsSearchParams,
   adminUsersSearchParams,
+  safeParseAdminIntentResponse,
+  safeParseAdminIntentsResponse,
   safeParseAdminOverviewResponse,
   safeParseAdminUserResponse,
   safeParseAdminUsersResponse,
@@ -11,6 +14,9 @@ import {
   safeParseStaffSessionsResponse,
   type AdminConfirmRequest,
   type AdminConfirmResponse,
+  type AdminIntentResponse,
+  type AdminIntentsQuery,
+  type AdminIntentsResponse,
   type AdminLoginRequest,
   type AdminLoginResponse,
   type AdminOverviewResponse,
@@ -70,6 +76,8 @@ export interface BackendClient {
   overview(token: string): Promise<AdminOverviewResponse>;
   users(token: string, query: AdminUsersQuery): Promise<AdminUsersResponse>;
   user(token: string, userId: string): Promise<AdminUserResponse>;
+  intents(token: string, query: AdminIntentsQuery): Promise<AdminIntentsResponse>;
+  intent(token: string, intentId: string): Promise<AdminIntentResponse>;
   /** the backend's public OAuth callback; carries no bearer */
   oauthCallback(request: OAuthCallbackRequest): Promise<OAuthCallbackResponse>;
 }
@@ -184,6 +192,17 @@ export function createBackendClient({
       return parsed(
         safeParseAdminUserResponse,
         await call('GET', `admin/users/${encodeURIComponent(userId)}`, { session }),
+      );
+    },
+    async intents(session, query) {
+      const params = adminIntentsSearchParams(query);
+      const path = params.size > 0 ? `admin/intents?${params}` : 'admin/intents';
+      return parsed(safeParseAdminIntentsResponse, await call('GET', path, { session }));
+    },
+    async intent(session, intentId) {
+      return parsed(
+        safeParseAdminIntentResponse,
+        await call('GET', `admin/intents/${encodeURIComponent(intentId)}`, { session }),
       );
     },
     // The route is public on the backend and checks no bearer; this one opens /admin/*, and a

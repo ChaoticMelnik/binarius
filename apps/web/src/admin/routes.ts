@@ -4,6 +4,7 @@ import {
   AdminErrorCode,
   CLIENT_USER_AGENT_MAX_LENGTH,
   errorLogFields,
+  safeParseAdminIntentsQuery,
   safeParseAdminUsersQuery,
   STAFF_PASSWORD_MAX_LENGTH,
   STAFF_SESSION_TOKEN_PATTERN,
@@ -16,6 +17,9 @@ import { BackendError, BackendErrorCode, type BackendClient } from '../backend-c
 import { noticePage } from '../pages';
 import {
   confirmPage,
+  intentPage,
+  intentsHref,
+  intentsPage,
   loginPage,
   overviewPage,
   sessionsPage,
@@ -183,6 +187,61 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         const answered = outcome(error);
         if (answered?.status === 404 && answered.code === AdminErrorCode.NotFound) {
           return sendHtml(reply, 404, noticePage(TEXTS.userNotFoundTitle, TEXTS.userNotFoundBody));
+        }
+        throw error;
+      }
+    }),
+  );
+
+  app.get('/admin/intents', async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const query = compactQuery(request.query);
+      // the filters first, without the cursor, as on the users list: refused filters are a 400
+      // whatever the cursor says, and the redirect below carries only parsed values
+      const parsed = safeParseAdminIntentsQuery({ ...query, cursor: undefined });
+      if (!parsed.success) {
+        return sendHtml(
+          reply,
+          400,
+          intentsPage([], { filters: {}, nextCursor: null, message: TEXTS.badFilter }),
+        );
+      }
+      const filters = parsed.data;
+      const cursor = query.cursor;
+      if (cursor !== undefined && (typeof cursor !== 'string' || !UUID_PATTERN.test(cursor))) {
+        return reply.redirect(intentsHref(filters), 302);
+      }
+      const { me, intents, nextCursor } = await backend.intents(token, { ...filters, cursor });
+      return sendHtml(
+        reply,
+        200,
+        intentsPage(intents, { filters, cursor, nextCursor, login: me.login }),
+      );
+    }),
+  );
+
+  app.get('/admin/intents/:id', async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const { id } = request.params as { id: string };
+      // a shape it cannot be is refused here, before the backend is asked (see revoke below)
+      if (!UUID_PATTERN.test(id)) {
+        return sendHtml(
+          reply,
+          404,
+          noticePage(TEXTS.intentNotFoundTitle, TEXTS.intentNotFoundBody),
+        );
+      }
+      try {
+        const { me, intent } = await backend.intent(token, id);
+        return sendHtml(reply, 200, intentPage(intent, me.login));
+      } catch (error) {
+        const answered = outcome(error);
+        if (answered?.status === 404 && answered.code === AdminErrorCode.NotFound) {
+          return sendHtml(
+            reply,
+            404,
+            noticePage(TEXTS.intentNotFoundTitle, TEXTS.intentNotFoundBody),
+          );
         }
         throw error;
       }

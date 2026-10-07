@@ -41,6 +41,8 @@ beforeEach(() => {
     overview: unused,
     users: unused,
     user: unused,
+    intents: unused,
+    intent: unused,
     oauthCallback: (request) => {
       forwarded.push(request);
       return answer();
