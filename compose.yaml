@@ -301,8 +301,9 @@ services:
       # the origin the pages are served from: a POST's Origin header must equal it, and the
       # broker redirects back to it. Change it together with WEB_PORT below: the two defaults
       # are tied by apps/web/src/timing.test.ts, because a mismatch makes every form submission
-      # a 403. Nothing after the host or port — no trailing `/`, `?` or `#`: the redirect default
-      # above is this value plus a path.
+      # a 403. Spelled exactly scheme://host[:port] - no whitespace, control or invisible format
+      # characters, `/`, `?`, `#`, `\`, `%`, `@` or dot-segments (.env.example -> WEB_PUBLIC_URL):
+      # the redirect default above is this value plus a path.
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://127.0.0.1:3001}
       BROKER_OAUTH_AUTHORIZE_URL: *broker-authorize-url
     ports:
