@@ -274,9 +274,11 @@ The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code adde
   `session:<id>:<step>`, so a new process continues where the old one stopped (E8), and a repeated
   step is a replay.
 - **The deadline.** The scan never lists an expired session, and the attempt stops one whose
-  deadline passed after the scan before any backend call. The residual window is one attempt: a
-  deadline that passes after the history read, during the backend calls, still lets that attempt
-  create its intent, at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) past the deadline (stated).
+  deadline passed after the scan before any backend call. The residual window: a deadline that
+  passes after the history read, during the backend calls, still lets that attempt create its
+  intent. The creation *starts* at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) after the
+  deadline; the creating transaction itself, its lock waits included, has no time bound (no
+  `statement_timeout` or `lock_timeout`), so its commit can land later (stated).
 - **Clocks.** The deadline and the order key are the database's. The hold-backs, the candle boundary
   and the sizer's `nowMs` are the worker's; `nowMs` is clamped to `started_at`, because the sizer
   throws when the clock is behind the session's start (E11).
@@ -363,7 +365,7 @@ with one of pnpm. (REPLACE_WITH_TG_ID: the user's Telegram id; REPLACE_WITH_PAIR
 |---|---|
 | `DATABASE_URL` | the worker's own (set in its container) |
 | `TELEGRAM_USER_ID` | required, a positive integer |
-| `ACCOUNT_ID` | optional, a uuid; needed only when the user has more than one active account. It must be one of the user's accounts as `readUserAccounts` lists them (the 10 newest); another user's id and an unknown one are both `account_not_found`, before anything of that account is read. An own account older than the 10 newest is not found either (accepted) |
+| `ACCOUNT_ID` | optional, a uuid; needed only when the user has more than one active account. It must be one of the user's accounts as `readUserAccounts` lists them (the 10 newest), compared without case; the listed (lower-case) spelling is what `createTradingSession` gets; another user's id and an unknown one are both `account_not_found`, before anything of that account is read. An own account older than the 10 newest is not found either (accepted) |
 | `ASSET_ID` | required, 1 – int4 max |
 | `DURATION_SEC` | default 60, 1 – int4 max |
 | `TRADES` | default `DEFAULT_SESSION_TRADES` (5), 1 – 20 |
@@ -546,9 +548,10 @@ that takes 60 s.) `ACCOUNT_ID` is needed only with more than one active account.
 4. **One container.** The hold-backs live in memory and two workers would attempt the same session;
    the step key makes the second a replay or a `client_request_id_conflict` (reschedule), never a
    second trade on the step. The lease is #93.
-5. **An intent up to one attempt past the deadline.** The scan and the history read guard the
-   deadline on the database clock; a deadline that passes during the attempt's backend calls lets
-   that attempt create its intent, at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) late.
+5. **An intent past the deadline.** The scan and the history read guard the deadline on the
+   database clock; a deadline that passes during the attempt's backend calls lets that attempt
+   create its intent. The creation starts at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) late;
+   its transaction's lock waits are not time-bounded.
    Falsifiable: an intent whose `created_at` is after its session's `started_at + 1 h`.
 6. **The CLI sees the user's 10 newest accounts.** An own `ACCOUNT_ID` older than those is refused
    `account_not_found`, like a foreign one.
