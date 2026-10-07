@@ -543,6 +543,11 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     if (result === 'overrun') logger.warn({ pending }, 'broker session stop budget exceeded');
   }
 
+  function clientFor(accountId: string): BrokerSocketClient | undefined {
+    const entry = entries.get(accountId);
+    return entry?.kind === 'running' ? entry.client : undefined;
+  }
+
   return {
     start() {
       if (stopping.signal.aborted || timer !== undefined) return;
@@ -562,9 +567,4 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       return entries.size;
     },
   };
-
-  function clientFor(accountId: string): BrokerSocketClient | undefined {
-    const entry = entries.get(accountId);
-    return entry?.kind === 'running' ? entry.client : undefined;
-  }
 }
