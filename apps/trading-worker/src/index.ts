@@ -46,6 +46,9 @@ import { createRestReconciler } from './intents/rest-reconciler';
 import { createSettlementCatchup } from './intents/settlement-catchup';
 import { startSweeper } from './intents/sweeper';
 import { createTradeCommandExecutor } from './intents/trade-command-executor';
+import { createBackendPairsSource, createBackendSignalSource } from './trading-session/backend';
+import { TRADING_SESSION_CONFIG } from './trading-session/config';
+import { createSessionOrchestrator } from './trading-session/orchestrator';
 
 const env = parseEnv(process.env);
 
@@ -165,6 +168,15 @@ const catchup = createSettlementCatchup({
   },
 });
 
+// the demo sessions (docs/trading-session.md): their signal and pairs come from the backend
+const tradingSessions = createSessionOrchestrator({
+  db,
+  signals: createBackendSignalSource({ baseUrl: env.backendUrl, token: env.internalApiToken }),
+  pairs: createBackendPairsSource({ baseUrl: env.backendUrl, token: env.internalApiToken }),
+  logger,
+  config: TRADING_SESSION_CONFIG,
+});
+
 const sweeper = startSweeper({
   db,
   logger,
@@ -179,7 +191,8 @@ let shuttingDown = false;
 // dead-letter writes those jobs may have started — in that order, or a `failed` event fired
 // by the drain would register its write after the wait — and stops the reconciliation pass
 // (its attempt in flight plus one outcome write) and the settlement catch-up (its attempt in
-// flight). The broker sessions stop after the intents drain, so our own shutdown never cuts a
+// flight), and the trading session orchestrator (its attempt in flight; an attempt cut by the
+// stop writes nothing). The broker sessions stop after the intents drain, so our own shutdown never cuts a
 // submit waiting on its socket; their stop is bounded by SESSION_STOP_BUDGET_MS. Phase 2 closes the connections and runs
 // only if phase 1 finished cleanly: closing them under an outcome write would abort it. A
 // drain that overruns or fails exits hard; the intent stays submitting (the sweeper resolves
@@ -200,6 +213,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
         reconciliationConsumer.worker.close().then(() => reconciliationConsumer.drainDeadLetters()),
       () => pass.stop(),
       () => catchup.stop(),
+      () => tradingSessions.stop(),
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
@@ -224,10 +238,11 @@ process.once('SIGTERM', (signal) => void shutdown(signal));
 process.once('SIGINT', (signal) => void shutdown(signal));
 
 logger.info(
-  { concurrency: env.workerConcurrency, sessions: sessions !== undefined },
+  { concurrency: env.workerConcurrency, sessions: sessions !== undefined, tradingSessions: true },
   'trading-worker started',
 );
 // after the consumers: the first tick picks up the reconciling intents a dead process left
 pass.start();
 catchup.start();
+tradingSessions.start();
 sessions?.start();
