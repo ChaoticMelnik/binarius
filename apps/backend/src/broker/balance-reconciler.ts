@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { BrokerRestError, type BrokerRestClient } from '@binarius/broker-rest';
 import {
   AccessTokenRefusal,
+  BALANCE_WATCH_WINDOW_MS,
   BROKER_BALANCE_SLA_SEC,
   BrokerRestErrorCode,
   errorLogFields,
@@ -21,11 +22,7 @@ import {
   type AccessTokenOptions,
   type AccessTokenResult,
 } from '../auth/token-service';
-import {
-  BALANCE_POLL_CONCURRENCY,
-  BALANCE_STALLED_RETRY_MS,
-  BALANCE_WATCH_WINDOW_MS,
-} from '../timing';
+import { BALANCE_POLL_CONCURRENCY, BALANCE_STALLED_RETRY_MS } from '../timing';
 
 // The REST side of the broker balance snapshot (docs/broker-balance.md): one refresh per account
 // at a time, called by POST /trading/access and by a background tick over the accounts in work.

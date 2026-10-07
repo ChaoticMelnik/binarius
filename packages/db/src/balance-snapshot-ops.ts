@@ -4,6 +4,7 @@ import {
   TradeMode,
   UserStatus,
   isBalanceFresh,
+  type BrokerBalance,
   type BrokerBalanceView,
   type BrokerUser,
 } from '@binarius/shared';
@@ -27,12 +28,13 @@ import { millisecondsAgo } from './trade-intent-ops';
 // is never locked while users, broker_accounts or trade_intents are (lock order users →
 // broker_accounts → trade_intents is unaffected). Times are the database clock at the statement.
 //
-// Contract for the writers that come later. The REST refresh (#137) and the socket's user.data
-// (#99/#101) both write through upsertBalanceSnapshot; user.data passes the modes it carries in
-// `eventAt`. A user.<mode>.update_balance event updates only that mode's three amounts and
-// <mode>_event_at on an existing row, and inserts nothing (it carries neither the other mode nor
-// min_trade_amount): whoever adds it starts a session with a REST snapshot first. Each writer
-// checks that the broker's user id is the account's broker_user_id before it writes.
+// The writers. The REST refresh (#137) and the socket's user.data (the worker's session manager,
+// #101) both write the full snapshot through upsertBalanceSnapshot; user.data passes both modes
+// in `eventAt`. A user.<mode>.update_balance event goes through applyBalanceEvent: only that
+// mode's three amounts and <mode>_event_at on an existing row, nothing inserted (it carries
+// neither the other mode nor min_trade_amount); the session's user.data, the first event of every
+// connection, writes the row it needs. The session manager writes a socket event only after the
+// connection's user.data carried the account's broker_user_id (docs/broker-session.md).
 
 export type BalanceSnapshotWrite = { written: true } | { written: false; field: string };
 
@@ -49,8 +51,15 @@ const LEVEL_CODE_SHAPE = new RegExp(`^[^\\p{Cc}]{1,${LEVEL_CODE_MAX_LENGTH}}$`, 
 // integer digits and refuse a sign, so a value outside them is refused before the statement and
 // named by its path. The rank is checked by its decimal form: a range check on the number lets
 // 9999.99995 round up to an overflow and 1e-7 round down to 0.
+function amountsOutOfDomain(amounts: readonly [string, string][]): string | undefined {
+  for (const [field, value] of amounts) {
+    if (!MONEY_SHAPE.test(value)) return field;
+  }
+  return undefined;
+}
+
 export function balanceSnapshotOutOfDomain(user: BrokerUser): string | undefined {
-  const amounts: [string, string][] = [
+  const amount = amountsOutOfDomain([
     ['real.available', user.real.available],
     ['real.held', user.real.held],
     ['real.total', user.real.total],
@@ -58,10 +67,8 @@ export function balanceSnapshotOutOfDomain(user: BrokerUser): string | undefined
     ['demo.held', user.demo.held],
     ['demo.total', user.demo.total],
     ['minTradeAmount', user.minTradeAmount],
-  ];
-  for (const [field, value] of amounts) {
-    if (!MONEY_SHAPE.test(value)) return field;
-  }
+  ]);
+  if (amount !== undefined) return amount;
   if (!LEVEL_RANK_SHAPE.test(String(user.level.rank))) return 'level.rank';
   if (!LEVEL_CODE_SHAPE.test(user.level.code)) return 'level.code';
   return undefined;
@@ -127,6 +134,55 @@ export async function upsertBalanceSnapshot(
       },
     });
   return { written: true };
+}
+
+export type BalanceEventWrite =
+  | { written: true }
+  | { written: false; reason: 'out_of_domain'; field: string }
+  | { written: false; reason: 'no_snapshot' };
+
+export interface ApplyBalanceEventInput {
+  brokerAccountId: string;
+  mode: TradeMode;
+  balance: BrokerBalance;
+}
+
+// user.<mode>.update_balance: the mode's three amounts and its event time on the existing row.
+// The REST columns (rest_observed_at, the refresh error), the other mode, min_trade_amount, the
+// level and last_requested_at describe other sources and stay.
+export async function applyBalanceEvent(
+  db: Db,
+  { brokerAccountId, mode, balance }: ApplyBalanceEventInput,
+): Promise<BalanceEventWrite> {
+  const field = amountsOutOfDomain([
+    ['available', balance.available],
+    ['held', balance.held],
+    ['total', balance.total],
+  ]);
+  if (field !== undefined) return { written: false, reason: 'out_of_domain', field };
+
+  const t = brokerBalanceSnapshots;
+  const now = sql`now()`;
+  const set =
+    mode === TradeMode.Real
+      ? {
+          realAvailable: balance.available,
+          realHeld: balance.held,
+          realTotal: balance.total,
+          realEventAt: now,
+        }
+      : {
+          demoAvailable: balance.available,
+          demoHeld: balance.held,
+          demoTotal: balance.total,
+          demoEventAt: now,
+        };
+  const rows = await db
+    .update(t)
+    .set({ ...set, updatedAt: now })
+    .where(eq(t.brokerAccountId, brokerAccountId))
+    .returning({ id: t.brokerAccountId });
+  return rows.length === 0 ? { written: false, reason: 'no_snapshot' } : { written: true };
 }
 
 // false when the account has no snapshot yet: a failure alone does not create one
@@ -274,6 +330,40 @@ export async function listBalanceRefreshCandidates(
     )
     .limit(limit);
   return rows.map((row) => row.id);
+}
+
+export interface SessionCandidate {
+  id: string;
+  brokerUserId: string;
+}
+
+export interface SessionCandidatesOptions {
+  watchWindowMs: number;
+  // accounts the caller holds back for now
+  exclude?: readonly string[];
+}
+
+// The accounts the worker keeps a broker session for: the balance tick's "in work". No limit:
+// the caller must see every account in work to tell a running session's account from an idle
+// one, and caps in memory. No token-expiry filter: the caller asks for the token with
+// mayRefresh: false and holds back an account whose token needs an exchange.
+export async function listSessionCandidates(
+  db: Db,
+  { watchWindowMs, exclude = [] }: SessionCandidatesOptions,
+): Promise<SessionCandidate[]> {
+  return db
+    .select({ id: brokerAccounts.id, brokerUserId: brokerAccounts.brokerUserId })
+    .from(brokerAccounts)
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .leftJoin(brokerBalanceSnapshots, eq(brokerBalanceSnapshots.brokerAccountId, brokerAccounts.id))
+    .where(
+      and(
+        activeAccountOfActiveUser,
+        inWork(watchWindowMs),
+        notInArray(brokerAccounts.id, [...exclude]),
+      ),
+    )
+    .orderBy(brokerAccounts.id);
 }
 
 export interface WatchedBalancesSummary {
