@@ -101,11 +101,14 @@ export const oauthRoutes: FastifyPluginAsync<OAuthRoutesOptions> = async (
     }
     // The callback must come back to this origin: the launch data the SDK stored lives here.
     // Compared parsed, because the backend sends the spelling registered with the broker byte
-    // for byte. Parsing folds scheme and host case, a default port, dot-segments, "\", tabs and
-    // newlines and `https:host`, so any spelling of this origin's callback passes. The backend's
-    // own value can differ from callbackHref only by scheme and host case and a default port (its
-    // env parse refuses the rest); a hand-made spelling still lands on this callback, and the
-    // broker refuses any spelling other than the registered one.
+    // for byte. Parsing folds scheme and host case, a default or zero-padded port, IPv4
+    // shorthand, IDNA mapping of the host, dot-segments, "\", tabs and newlines and `https:host`,
+    // so most spellings of this origin's callback pass; a percent-encoded path does not, it stays
+    // encoded. The backend's startup check refuses dot-segments, "\", "%", "@", whitespace,
+    // control and format characters and anything after the path, so its value can differ from
+    // callbackHref only in how the host and port are spelled: case, a default or zero-padded
+    // port, IPv4 shorthand, IDNA mapping. Whatever passes lands on this origin's callback, and
+    // the broker refuses any spelling other than the registered one.
     if (redirectHrefOf(url.searchParams.get('redirect_uri')) !== callbackHref) {
       return { reason: 'redirect_uri' };
     }

@@ -79,16 +79,21 @@ export function parseLoopbackOrHttpsUrlEnv(raw: string, name: string): string {
 
 // The raw spelling of an origin, optionally followed by one fixed path: `scheme://host[:port]`
 // then `path`, nothing else. It is checked on the raw string because URL parsing hides exactly
-// what matters here — it strips leading and trailing spaces and control characters and every
-// tab and newline, folds dot-segments and "\", and reads `https:host` as `https://host` — while
-// the raw string is what compose concatenates and what the backend sends to the broker.
-// Host case, an upper-case scheme and a default port pass: they do not change what is reached.
-const SPACE_OR_CONTROL = /[\s\p{Cc}]/u;
+// what matters here - it strips leading and trailing spaces and control characters and every
+// tab and newline, folds dot-segments and "\", and reads `https:host` as `https://host` - while
+// the raw string is what compose concatenates and what the backend sends to the broker. Format
+// characters such as U+200B and U+00AD are invisible paste artefacts that IDNA deletes from the
+// host, so they are refused with the whitespace. Scheme and host case, a default or zero-padded
+// port, IPv4 shorthand and IDNA-mapped host characters pass: the regex checks the shape, not the
+// canonical form, and none of them changes what is reached.
+const SPACE_CONTROL_OR_FORMAT = /[\s\p{Cc}\p{Cf}]/u;
 const BARE_ORIGIN_SPELLING = /^https?:\/\/[^/?#\\%@:]+(?::\d+)?$/i;
 
 export function assertOriginSpelling(raw: string, name: string, path: string): void {
-  if (SPACE_OR_CONTROL.test(raw)) {
-    throw new Error(`Env ${name} must not contain whitespace or control characters`);
+  if (SPACE_CONTROL_OR_FORMAT.test(raw)) {
+    throw new Error(
+      `Env ${name} must not contain whitespace, control or invisible format characters`,
+    );
   }
   const origin = raw.slice(0, raw.length - path.length);
   if (raw.endsWith(path) && BARE_ORIGIN_SPELLING.test(origin)) return;

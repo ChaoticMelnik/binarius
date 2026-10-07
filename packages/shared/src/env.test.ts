@@ -223,9 +223,10 @@ describe('parseOriginEnv', () => {
     '\thttps://admin.example',
     'https://admin.ex\tample',
     'https://admin.example\x01',
-  ])('refuses %j, which carries whitespace or a control character', (raw) => {
+    'https://admin\u200b.example',
+  ])('refuses %j, which carries whitespace, a control or a format character', (raw) => {
     expect(() => parseOriginEnv(raw, 'WEB_PUBLIC_URL')).toThrow(
-      'Env WEB_PUBLIC_URL must not contain whitespace or control characters',
+      'Env WEB_PUBLIC_URL must not contain whitespace, control or invisible format characters',
     );
   });
 

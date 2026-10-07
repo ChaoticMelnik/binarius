@@ -298,9 +298,10 @@ describe('broker OAuth configuration', () => {
     'https://bot.example/oauth/callback\r',
     ' https://bot.example/oauth/callback',
     'https://bot.example/oauth/callback\x01',
-  ])('rejects the redirect %j, which carries whitespace or a control character', (value) => {
+    'https://bot\u200b.example/oauth/callback',
+  ])('rejects the redirect %j, which carries whitespace, a control or a format character', (value) => {
     expect(() => parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: value })).toThrow(
-      'Env BROKER_OAUTH_REDIRECT_URI must not contain whitespace or control characters',
+      'Env BROKER_OAUTH_REDIRECT_URI must not contain whitespace, control or invisible format characters',
     );
   });
 
