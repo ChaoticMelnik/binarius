@@ -256,19 +256,21 @@ describe('the stake picker', () => {
 });
 
 describe('saving a stake', () => {
-  it('saves a preset and shows it with the way back', async () => {
+  it.each([
+    ['a preset', stakePresetCallbackData('5', ANALYSIS), '5', '$5.00', BACK_ANALYSIS],
+    [
+      'the reset',
+      stakeResetCallbackData(SETTINGS),
+      null,
+      'минимальная ставка брокера',
+      BACK_SETTINGS,
+    ],
+  ])('saves %s and shows it with the way back', async (_case, data, amount, label, back) => {
     const { press, calls, setDemoStake } = setup();
-    await press(stakePresetCallbackData('5', ANALYSIS));
-    expect(setDemoStake.mock.calls).toEqual([[String(USER.id), '5']]);
-    expect(lastPayload(calls)?.text).toBe(TEXTS.stakeSaved('$5.00').value);
-    expect(rowsOf(lastPayload(calls))).toEqual([BACK_ANALYSIS]);
-  });
-
-  it('resets to the broker minimum and names it so', async () => {
-    const { press, calls, setDemoStake } = setup();
-    await press(stakeResetCallbackData(SETTINGS));
-    expect(setDemoStake.mock.calls).toEqual([[String(USER.id), null]]);
-    expect(lastPayload(calls)?.text).toBe(TEXTS.stakeSaved('минимальная ставка брокера').value);
+    await press(data);
+    expect(setDemoStake.mock.calls).toEqual([[String(USER.id), amount]]);
+    expect(lastPayload(calls)?.text).toBe(TEXTS.stakeSaved(label).value);
+    expect(rowsOf(lastPayload(calls))).toEqual([back]);
   });
 
   it.each([
