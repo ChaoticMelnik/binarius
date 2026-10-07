@@ -22,6 +22,7 @@ import { BrokerTradeStatus, brokerTrades } from './schema/broker-trades';
 import { OutboxTopic, outboxEvents } from './schema/outbox-events';
 import { TokenLedgerKind, tokenLedger } from './schema/token-ledger';
 import { tradeIntents } from './schema/trade-intents';
+import { TradingSessionStatus, tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
 
 export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -53,6 +54,22 @@ export function uniqueViolation(error: unknown): string | undefined {
   return typeof cause.constraint === 'string' ? cause.constraint : undefined;
 }
 
+// The session named by createSessionIntent is no longer active (stopped between the
+// orchestrator's scan and the insert). Not a TradeIntentErrorCode: the route never passes a
+// session, so its callers never see it.
+export class TradingSessionNotActiveError extends Error {
+  constructor(readonly sessionId: string) {
+    super('trading session is not active');
+    this.name = 'TradingSessionNotActiveError';
+  }
+}
+
+// the session an intent belongs to (trade_intents.trading_session_id); only the orchestrator
+// passes one
+export interface IntentSession {
+  id: string;
+}
+
 export interface CreateTradeIntentResult {
   intent: TradeIntentRow;
   created: boolean;
@@ -68,9 +85,10 @@ export async function createTradeIntent(
   db: Db,
   input: CreateTradeIntentRequest,
   policy: TradePolicy,
+  session?: IntentSession,
 ): Promise<CreateTradeIntentResult> {
   try {
-    return await db.transaction((tx) => createInTransaction(tx, input, policy));
+    return await db.transaction((tx) => createInTransaction(tx, input, policy, session));
   } catch (error) {
     const constraint = uniqueViolation(error);
     if (constraint === undefined || !REPLAY_CONSTRAINTS.has(constraint)) throw error;
@@ -85,12 +103,14 @@ export async function createTradeIntent(
   }
 }
 
-// Lock order is users → broker_accounts (the reserve UPDATE, then FOR NO KEY UPDATE); every
-// other writer touching both tables must keep it.
+// Lock order is users → broker_accounts (the reserve UPDATE, then FOR NO KEY UPDATE) →
+// trading_sessions (a session intent only); every other writer touching these tables must keep
+// it. The session writers (trading-session-ops.ts) lock session rows and nothing after them.
 async function createInTransaction(
   tx: Tx,
   input: CreateTradeIntentRequest,
   policy: TradePolicy,
+  session: IntentSession | undefined,
 ): Promise<CreateTradeIntentResult> {
   const tokens = TOKENS_PER_INTENT;
   const user = await findUser(tx, input.telegramUserId);
@@ -153,6 +173,23 @@ async function createInTransaction(
     throw new TradeIntentError(accountErrorFor(fresh?.status));
   }
 
+  // a session stopped after the orchestrator's scan gets no intent; the lock holds a concurrent
+  // stop until this transaction commits
+  if (session !== undefined) {
+    const active = await tx
+      .select({ id: tradingSessions.id })
+      .from(tradingSessions)
+      .where(
+        and(
+          eq(tradingSessions.id, session.id),
+          eq(tradingSessions.brokerAccountId, brokerAccountId),
+          eq(tradingSessions.status, TradingSessionStatus.Active),
+        ),
+      )
+      .for('no key update');
+    if (active.length === 0) throw new TradingSessionNotActiveError(session.id);
+  }
+
   const [planned] = await tx
     .insert(tradeIntents)
     .values({
@@ -164,6 +201,7 @@ async function createInTransaction(
       action: input.action,
       durationSec: input.durationSec,
       clientRequestId: input.clientRequestId,
+      tradingSessionId: session?.id ?? null,
       status: TradeIntentStatus.Planned,
       tokensReserved: tokens,
     })
@@ -516,7 +554,7 @@ export async function markIntentUnknown(
 
 // --- Acceptance and settlement (#17) ----------------------------------------------------------
 // Lock order for everything below: users → trade_intents → broker_trades (the creation chain
-// users → broker_accounts → trade_intents, with broker_trades as its tail). Settlement does not
+// users → broker_accounts → trading_sessions → trade_intents, with broker_trades as its tail). Settlement does not
 // lock broker_accounts. The reconciliation writer (concludeReconciled, #89) keeps the order; its
 // account halt (haltAccountForManualReview, #90) takes broker_accounts before the intent and never
 // touches users.
@@ -995,7 +1033,10 @@ export async function haltAccountForManualReview(
 // them before counting candidates, so an earlier trade with the same keys is not a second match.
 export async function listLinkedBrokerTradeIds(
   exec: DbExecutor,
-  { brokerAccountId, brokerTradeIds }: { brokerAccountId: string; brokerTradeIds: readonly string[] },
+  {
+    brokerAccountId,
+    brokerTradeIds,
+  }: { brokerAccountId: string; brokerTradeIds: readonly string[] },
 ): Promise<Set<string>> {
   if (brokerTradeIds.length === 0) return new Set();
   const rows = await exec
@@ -1044,11 +1085,7 @@ export interface OverdueAcceptedIntent {
 // the rest.
 export async function listOverdueAcceptedIntents(
   exec: DbExecutor,
-  {
-    graceMs,
-    limit,
-    exclude = [],
-  }: { graceMs: number; limit: number; exclude?: readonly string[] },
+  { graceMs, limit, exclude = [] }: { graceMs: number; limit: number; exclude?: readonly string[] },
 ): Promise<OverdueAcceptedIntent[]> {
   const expectedCloseMs = sql`${brokerTrades.openTimestampMs} + ${tradeIntents.durationSec}::bigint * 1000`;
   return exec

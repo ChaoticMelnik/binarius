@@ -3,6 +3,7 @@ export * from './client';
 export * from './migrate';
 export * from './crypto';
 export * from './trade-intent-ops';
+export * from './trading-session-ops';
 export * from './oauth-ops';
 export * from './link-bonus-ops';
 export * from './token-balance-ops';

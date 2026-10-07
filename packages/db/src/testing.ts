@@ -12,8 +12,9 @@ import {
   UserStatus,
   type CreateTradeIntentRequest,
   type DecimalString,
+  type TradingSessionSettings,
 } from '@binarius/shared';
-import { brokerAccounts, staff, users } from './schema/index';
+import { brokerAccounts, staff, tradingSessions, users } from './schema/index';
 import { StaffStatus } from './schema/staff';
 import { hashPassword, type ScryptParams } from './staff-password';
 import type { BrokerAccountRow } from './oauth-ops';
@@ -226,6 +227,38 @@ export async function seedUnknownIntent(
   );
   if (intent === undefined) throw new Error('seedUnknownIntent: unknown failed');
   return { ...seed, intent };
+}
+
+// settings v1 of the mock broker's EUR/USD (id 101, min_timeframe 60) at its min_trade_amount
+export const sessionSettings = (
+  patch: Partial<TradingSessionSettings> = {},
+): TradingSessionSettings => ({
+  version: 1,
+  assetId: 101,
+  durationSec: 60,
+  trades: 5,
+  stake: { baseStake: '1' as DecimalString, stakeScale: 0 },
+  ...patch,
+});
+
+// A session row written directly, past createTradingSession's checks: a suite can seed settings
+// no writer would (`{}`), a real session, or an old started_at.
+export async function seedTradingSession(
+  db: Db,
+  brokerAccountId: string,
+  patch: { settings?: unknown; mode?: TradeMode; startedAt?: Date } = {},
+): Promise<typeof tradingSessions.$inferSelect> {
+  const [row] = await db
+    .insert(tradingSessions)
+    .values({
+      brokerAccountId,
+      mode: patch.mode ?? TradeMode.Demo,
+      settings: (patch.settings ?? sessionSettings()) as TradingSessionSettings,
+      ...(patch.startedAt === undefined ? {} : { startedAt: patch.startedAt }),
+    })
+    .returning();
+  if (row === undefined) throw new Error('seedTradingSession: insert returned no row');
+  return row;
 }
 
 // --- Staff fixtures ---------------------------------------------------------------------------
