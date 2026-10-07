@@ -1,11 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OAUTH_CALLBACK_BODY_LIMIT_BYTES, type OAuthCallbackRequest } from '@binarius/shared';
-import { ADMIN_CSP, buildWebApp } from '../app';
+import { buildWebApp } from '../app';
 import { BackendError, BackendErrorCode, type BackendClient } from '../backend-client';
 import { OAUTH_CLIENT_JS } from './client';
 import { TELEGRAM_SDK_URL } from './pages';
-import { MINI_APP_CSP } from './routes';
 import { OAUTH_TEXTS } from './texts';
 
 const ORIGIN = 'https://binarius.example';
@@ -99,8 +98,9 @@ describe('the Mini App pages headers', () => {
     ['a refused login link', () => loginWith('nope')],
   ])('%s may be framed by Telegram Web and by nothing else', async (_label, request) => {
     const response = await request();
-    expect(response.headers['content-security-policy']).toBe(MINI_APP_CSP);
-    expect(MINI_APP_CSP).toContain('frame-ancestors https://web.telegram.org');
+    expect(response.headers['content-security-policy']).toBe(
+      "default-src 'none'; script-src 'self' https://telegram.org; connect-src 'self'; style-src 'self'; form-action 'none'; frame-ancestors https://web.telegram.org; base-uri 'none'",
+    );
     expect(response.headers['x-frame-options']).toBeUndefined();
     expect(response.headers['x-content-type-options']).toBe('nosniff');
     expect(response.headers['referrer-policy']).toBe('no-referrer');
@@ -111,14 +111,14 @@ describe('the Mini App pages headers', () => {
   // the admin pages keep their exact policy: the Mini App's is per route, not a loosening
   it('leaves the admin pages unframeable', async () => {
     const response = await app.inject({ method: 'GET', url: '/admin/login' });
-    expect(response.headers['content-security-policy']).toBe(ADMIN_CSP);
-    expect(ADMIN_CSP).toContain("frame-ancestors 'none'");
+    expect(response.headers['content-security-policy']).toBe(
+      "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    );
     expect(response.headers['x-frame-options']).toBe('DENY');
   });
 
-  it('allows the Telegram SDK and this origin as script sources, and nothing inline', () => {
-    expect(MINI_APP_CSP).toContain("script-src 'self' https://telegram.org;");
-    expect(MINI_APP_CSP).not.toContain('unsafe-inline');
+  // the policy above allows https://telegram.org as the only script origin besides this one
+  it('loads the Telegram SDK from the script origin the policy allows', () => {
     expect(new URL(TELEGRAM_SDK_URL).origin).toBe('https://telegram.org');
   });
 });
