@@ -2,11 +2,12 @@ import { BrokerRestError, TradeListStatus, type BrokerRestClient } from '@binari
 import {
   BrokerRestErrorCode,
   errorLogFields,
+  normalizeDecimal,
   TradeIntentFailureReason,
   TradeMode,
   type BrokerTrade,
 } from '@binarius/shared';
-import { normalizeDecimal, type TradeIntentRow } from '@binarius/db';
+import type { TradeIntentRow } from '@binarius/db';
 import { isAccessTokenRefusal, type AccessTokenSource } from '../broker/access-token';
 import type { Logger } from './processor';
 import { readTradePages, TradePagesError } from './trade-pages';

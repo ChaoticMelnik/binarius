@@ -1,5 +1,5 @@
 {
-  "id": "ab028855-fb80-4002-91fb-f4d4f0b8054d",
+  "id": "51217aa9-f475-4816-96be-3fb2517535a0",
   "prevId": "2f44694f-8644-4de4-bfe6-7ef54095c577",
   "version": "7",
   "dialect": "postgresql",
@@ -949,19 +949,20 @@
           "name": "trading_sessions_runnable_idx",
           "columns": [
             {
-              "expression": "status",
+              "expression": "last_decision_at",
               "isExpression": false,
               "asc": true,
-              "nulls": "last"
+              "nulls": "first"
             },
             {
-              "expression": "last_decision_at",
+              "expression": "created_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             }
           ],
           "isUnique": false,
+          "where": "\"trading_sessions\".\"status\" = 'active'",
           "concurrently": false,
           "method": "btree",
           "with": {}

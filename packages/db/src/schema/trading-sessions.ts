@@ -69,6 +69,9 @@ export const tradingSessions = pgTable(
     uniqueIndex('trading_sessions_active_account_idx')
       .on(t.brokerAccountId)
       .where(sql`${t.status} = ${literal(TradingSessionStatus.Active)}`),
-    index('trading_sessions_runnable_idx').on(t.status, t.lastDecisionAt),
+    // the runnable scan's predicate and order, so the scan reads it in order and stops at its limit
+    index('trading_sessions_runnable_idx')
+      .on(t.lastDecisionAt.asc().nullsFirst(), t.createdAt)
+      .where(sql`${t.status} = ${literal(TradingSessionStatus.Active)}`),
   ],
 );

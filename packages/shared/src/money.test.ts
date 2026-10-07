@@ -3,6 +3,7 @@ import {
   decimalStringSchema,
   isDecimalString,
   moneyWireSchema,
+  normalizeDecimal,
   positiveDecimalStringSchema,
 } from './money';
 
@@ -45,9 +46,12 @@ describe('moneyWireSchema', () => {
     expect(isDecimalString(parsed)).toBe(true);
   });
 
-  it.each(['0', '12.50', '-3', '100000000000000000000'])('passes the string %j through', (value) => {
-    expect(moneyWireSchema.parse(value)).toBe(value);
-  });
+  it.each(['0', '12.50', '-3', '100000000000000000000'])(
+    'passes the string %j through',
+    (value) => {
+      expect(moneyWireSchema.parse(value)).toBe(value);
+    },
+  );
 
   it.each([
     [1.5, '1.5'],
@@ -88,5 +92,20 @@ describe('moneyWireSchema', () => {
     ['1.5000000000000001', '1.5'],
   ])('accepts the JSON text %s as %j after JSON.parse rounded it', (text, expected) => {
     expect(moneyWireSchema.parse(JSON.parse(text))).toBe(expected);
+  });
+});
+
+describe('normalizeDecimal', () => {
+  it.each([
+    ['10.00000000', '10'],
+    ['1.50000000', '1.5'],
+    ['0.00000001', '0.00000001'],
+    ['007.10', '7.1'],
+    ['1.00', '1'],
+    ['12.34500000', '12.345'],
+    ['0', '0'],
+    ['0.0', '0'],
+  ])('%s -> %s', (value, canonical) => {
+    expect(normalizeDecimal(value)).toBe(canonical);
   });
 });

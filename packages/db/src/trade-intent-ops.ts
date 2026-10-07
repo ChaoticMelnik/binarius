@@ -9,6 +9,7 @@ import {
   TradeMode,
   canTransition,
   isClosedTrade,
+  normalizeDecimal,
   type BrokerTrade,
   type ClosedTrade,
   type CreateTradeIntentRequest,
@@ -54,8 +55,9 @@ export function uniqueViolation(error: unknown): string | undefined {
   return typeof cause.constraint === 'string' ? cause.constraint : undefined;
 }
 
-// The session named by createSessionIntent is no longer active (stopped between the
-// orchestrator's scan and the insert). Not a TradeIntentErrorCode: the route never passes a
+// The session named by createSessionIntent is not an active session of this account and mode
+// (stopped between the orchestrator's scan and the insert, or named with other terms; the
+// session/account/mode FK would otherwise refuse the insert with a raw 23503). Not a TradeIntentErrorCode: the route never passes a
 // session, so its callers never see it.
 export class TradingSessionNotActiveError extends Error {
   constructor(readonly sessionId: string) {
@@ -183,6 +185,7 @@ async function createInTransaction(
         and(
           eq(tradingSessions.id, session.id),
           eq(tradingSessions.brokerAccountId, brokerAccountId),
+          eq(tradingSessions.mode, input.mode),
           eq(tradingSessions.status, TradingSessionStatus.Active),
         ),
       )
@@ -272,15 +275,6 @@ async function findReplay(
     normalizeDecimal(row.amount) === normalizeDecimal(input.amount);
   if (!same) throw new TradeIntentError(TradeIntentErrorCode.ClientRequestIdConflict);
   return { intent: row, created: false };
-}
-
-// numeric(20,8) comes back as '10.00000000' while the request said '10.00': compare the values,
-// not the spellings, without ever going through a float
-export function normalizeDecimal(value: string): string {
-  const [integer = '0', fraction = ''] = value.split('.');
-  const int = integer.replace(/^0+(?=\d)/, '');
-  const frac = fraction.replace(/0+$/, '');
-  return frac === '' ? int : `${int}.${frac}`;
 }
 
 async function resolveAccount(
@@ -554,8 +548,8 @@ export async function markIntentUnknown(
 
 // --- Acceptance and settlement (#17) ----------------------------------------------------------
 // Lock order for everything below: users → trade_intents → broker_trades (the creation chain
-// users → broker_accounts → trading_sessions → trade_intents, with broker_trades as its tail). Settlement does not
-// lock broker_accounts. The reconciliation writer (concludeReconciled, #89) keeps the order; its
+// users → broker_accounts → trading_sessions → trade_intents, with broker_trades as its tail).
+// Settlement does not lock broker_accounts. The reconciliation writer (concludeReconciled, #89) keeps the order; its
 // account halt (haltAccountForManualReview, #90) takes broker_accounts before the intent and never
 // touches users.
 
@@ -1033,10 +1027,7 @@ export async function haltAccountForManualReview(
 // them before counting candidates, so an earlier trade with the same keys is not a second match.
 export async function listLinkedBrokerTradeIds(
   exec: DbExecutor,
-  {
-    brokerAccountId,
-    brokerTradeIds,
-  }: { brokerAccountId: string; brokerTradeIds: readonly string[] },
+  { brokerAccountId, brokerTradeIds }: { brokerAccountId: string; brokerTradeIds: readonly string[] },
 ): Promise<Set<string>> {
   if (brokerTradeIds.length === 0) return new Set();
   const rows = await exec
@@ -1085,7 +1076,11 @@ export interface OverdueAcceptedIntent {
 // the rest.
 export async function listOverdueAcceptedIntents(
   exec: DbExecutor,
-  { graceMs, limit, exclude = [] }: { graceMs: number; limit: number; exclude?: readonly string[] },
+  {
+    graceMs,
+    limit,
+    exclude = [],
+  }: { graceMs: number; limit: number; exclude?: readonly string[] },
 ): Promise<OverdueAcceptedIntent[]> {
   const expectedCloseMs = sql`${brokerTrades.openTimestampMs} + ${tradeIntents.durationSec}::bigint * 1000`;
   return exec

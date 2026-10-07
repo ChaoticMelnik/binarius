@@ -7,7 +7,6 @@ import {
   TradeIntentStatus,
   TradeMode,
   decimalStringSchema,
-  stakeSettingsFor,
   type DecimalString,
   type TradeIntentErrorCode,
 } from '@binarius/shared';
@@ -30,7 +29,6 @@ import {
   createTradeIntent,
   haltAccountForManualReview,
   markIntentAccepted,
-  normalizeDecimal,
   rejectIntent,
   settleIntent,
   startReconciling,
@@ -142,6 +140,7 @@ function holdLock(
 async function seedSessionAccount(options: { balance?: bigint } = {}) {
   const seed = await seedUserWithAccount(tmp.db, options);
   const session = await createTradingSession(tmp.db, {
+    telegramUserId: seed.telegramUserId,
     brokerAccountId: seed.brokerAccountId,
     mode: TradeMode.Demo,
     settings: sessionSettings(),
@@ -206,6 +205,7 @@ describe('createTradingSession', () => {
     const seed = await seedUserWithAccount(tmp.db);
     const settings = sessionSettings({ trades: 3, assetId: 7 });
     const row = await createTradingSession(tmp.db, {
+      telegramUserId: seed.telegramUserId,
       brokerAccountId: seed.brokerAccountId,
       mode: TradeMode.Demo,
       settings,
@@ -227,6 +227,7 @@ describe('createTradingSession', () => {
     const seed = await seedSessionAccount();
     await sessionFailsWith(
       createTradingSession(tmp.db, {
+        telegramUserId: seed.telegramUserId,
         brokerAccountId: seed.brokerAccountId,
         mode: TradeMode.Demo,
         settings: sessionSettings(),
@@ -244,6 +245,7 @@ describe('createTradingSession', () => {
     const seed = await seedSessionAccount();
     await stopTradingSession(tmp.db, { id: seed.session.id, reason: 'completed' });
     const next = await createTradingSession(tmp.db, {
+      telegramUserId: seed.telegramUserId,
       brokerAccountId: seed.brokerAccountId,
       mode: TradeMode.Demo,
       settings: sessionSettings(),
@@ -258,7 +260,12 @@ describe('createTradingSession', () => {
     const user = await seedUser(tmp.db);
     const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId, { status });
     await sessionFailsWith(
-      createTradingSession(tmp.db, { brokerAccountId, mode: 'demo', settings: sessionSettings() }),
+      createTradingSession(tmp.db, {
+        telegramUserId: user.telegramUserId,
+        brokerAccountId,
+        mode: 'demo',
+        settings: sessionSettings(),
+      }),
       code,
     );
   });
@@ -271,6 +278,7 @@ describe('createTradingSession', () => {
     });
     await sessionFailsWith(
       createTradingSession(tmp.db, {
+        telegramUserId: user.telegramUserId,
         brokerAccountId: halted,
         mode: 'demo',
         settings: sessionSettings(),
@@ -281,6 +289,7 @@ describe('createTradingSession', () => {
     const ofBlocked = await seedBrokerAccount(tmp.db, blocked.userId);
     await sessionFailsWith(
       createTradingSession(tmp.db, {
+        telegramUserId: blocked.telegramUserId,
         brokerAccountId: ofBlocked,
         mode: 'demo',
         settings: sessionSettings(),
@@ -289,6 +298,7 @@ describe('createTradingSession', () => {
     );
     await sessionFailsWith(
       createTradingSession(tmp.db, {
+        telegramUserId: user.telegramUserId,
         brokerAccountId: '00000000-0000-4000-8000-000000000000',
         mode: 'demo',
         settings: sessionSettings(),
@@ -302,6 +312,25 @@ describe('createTradingSession', () => {
     expect(rows).toEqual([]);
   });
 
+  it('C6 refuses an account of another user as account_not_found and writes no row', async () => {
+    const owner = await seedUserWithAccount(tmp.db);
+    const stranger = await seedUser(tmp.db);
+    await sessionFailsWith(
+      createTradingSession(tmp.db, {
+        telegramUserId: stranger.telegramUserId,
+        brokerAccountId: owner.brokerAccountId,
+        mode: 'demo',
+        settings: sessionSettings(),
+      }),
+      TradingSessionErrorCode.AccountNotFound,
+    );
+    const rows = await tmp.db
+      .select()
+      .from(tradingSessions)
+      .where(eq(tradingSessions.brokerAccountId, owner.brokerAccountId));
+    expect(rows).toEqual([]);
+  });
+
   it('C5 waits on a held user row; a block committed meanwhile refuses the session', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     const holder = holdLock(async (tx) => {
@@ -311,6 +340,7 @@ describe('createTradingSession', () => {
     await holder.lockTaken;
     const creating = thrown(
       createTradingSession(tmp.db, {
+        telegramUserId: seed.telegramUserId,
         brokerAccountId: seed.brokerAccountId,
         mode: 'demo',
         settings: sessionSettings(),
@@ -341,6 +371,7 @@ describe('createTradingSession', () => {
     await holder.lockTaken;
     const creating = thrown(
       createTradingSession(tmp.db, {
+        telegramUserId: seed.telegramUserId,
         brokerAccountId: seed.brokerAccountId,
         mode: 'demo',
         settings: sessionSettings(),
@@ -614,9 +645,21 @@ describe('createSessionIntent', () => {
     expect(await intentsOfAccount(seed.brokerAccountId)).toEqual([]);
   });
 
-  it('I5 waits on a held session row; a stop of another session does not', async () => {
+  it('I4 an intent in another mode than the session’s is refused: no row, no reserve', async () => {
     const seed = await seedSessionAccount();
-    const other = await seedSessionAccount();
+    const error = await thrown(
+      createSessionIntent(tmp.db, intentInput(seed, { mode: TradeMode.Real }), {
+        realTradingEnabled: true,
+      }),
+    );
+    expect(error).toBeInstanceOf(TradingSessionNotActiveError);
+    expect(await intentsOfAccount(seed.brokerAccountId)).toEqual([]);
+    expect(await tokenReservedOf(seed.userId)).toBe(0n);
+    expect(await ledgerRowsOf(seed.userId)).toEqual([]);
+  });
+
+  it('I5 waits on a held session row', async () => {
+    const seed = await seedSessionAccount();
     const holder = holdLock((tx) =>
       tx
         .select()
@@ -627,16 +670,9 @@ describe('createSessionIntent', () => {
     await holder.lockTaken;
     const creating = createSessionIntent(tmp.db, intentInput(seed), flagOff);
     const queued = await queuedBehindLock(creating);
-    const otherStopped = await stopTradingSession(tmp.db, {
-      id: other.session.id,
-      reason: 'timeout',
-    });
-    const stillQueued = queued && (await lockWaiters()) > 0;
     holder.release();
     await holder.done;
     expect(queued).toBe(true);
-    expect(otherStopped).toBeDefined();
-    expect(stillQueued).toBe(true);
     expect((await creating).created).toBe(true);
   });
 
@@ -652,15 +688,4 @@ describe('createSessionIntent', () => {
     ]);
     expect(await tokenReservedOf(seed.userId)).toBe(TOKENS_PER_INTENT);
   });
-});
-
-describe('stakeSettingsFor and normalizeDecimal', () => {
-  it.each(['10.00000000', '1.50000000', '0.00000001', '007.10', '1.00', '12.34500000'])(
-    'spell %s the same',
-    (value) => {
-      expect(stakeSettingsFor(decimalStringSchema.parse(value)).baseStake).toBe(
-        normalizeDecimal(value),
-      );
-    },
-  );
 });

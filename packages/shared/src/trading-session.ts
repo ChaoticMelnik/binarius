@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { decimalStringSchema, type DecimalString } from './money';
+import { decimalStringSchema, normalizeDecimal, type DecimalString } from './money';
 import { createTradeIntentRequestSchema, tradeAmountSchema } from './trading';
 
 // trading_sessions.settings, version 1 (docs/trading-session.md -> Settings). The column is
@@ -54,16 +54,13 @@ export type TradingSessionStopReason =
 export const tradingSessionStopReasonSchema = z.enum(TradingSessionStopReason);
 
 // The fixed stake of a session from the account's min_trade_amount: the canonical spelling
-// (normalizeDecimal in @binarius/db, repeated because shared cannot import db; a db test holds
-// the two equal) and its own fraction length as the scale, so every valid numeric(20,8) minimum
-// passes assertStakeParams.
+// (normalizeDecimal) and its own fraction length as the scale, so every valid numeric(20,8)
+// minimum passes assertStakeParams.
 export function stakeSettingsFor(minTradeAmount: DecimalString): {
   baseStake: DecimalString;
   stakeScale: number;
 } {
-  const [integer = '0', fraction = ''] = minTradeAmount.split('.');
-  const int = integer.replace(/^0+(?=\d)/, '');
-  const frac = fraction.replace(/0+$/, '');
-  const canonical = frac === '' ? int : `${int}.${frac}`;
-  return { baseStake: decimalStringSchema.parse(canonical), stakeScale: frac.length };
+  const canonical = normalizeDecimal(minTradeAmount);
+  const [, fraction = ''] = canonical.split('.');
+  return { baseStake: decimalStringSchema.parse(canonical), stakeScale: fraction.length };
 }

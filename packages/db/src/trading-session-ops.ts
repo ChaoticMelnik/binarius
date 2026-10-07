@@ -50,6 +50,8 @@ export class TradingSessionError extends Error {
 }
 
 export interface CreateTradingSessionInput {
+  // the owner the caller acts for: an account of another user is account_not_found
+  telegramUserId: string;
   brokerAccountId: string;
   mode: TradeMode;
   settings: TradingSessionSettings;
@@ -64,7 +66,13 @@ export async function createTradingSession(
       const [account] = await tx
         .select({ userId: brokerAccounts.userId })
         .from(brokerAccounts)
-        .where(eq(brokerAccounts.id, input.brokerAccountId));
+        .innerJoin(users, eq(users.id, brokerAccounts.userId))
+        .where(
+          and(
+            eq(brokerAccounts.id, input.brokerAccountId),
+            eq(users.telegramUserId, BigInt(input.telegramUserId)),
+          ),
+        );
       if (account === undefined) {
         throw new TradingSessionError(TradingSessionErrorCode.AccountNotFound);
       }
@@ -147,7 +155,7 @@ export async function listRunnableSessions(
            where ${tradeIntents.brokerAccountId} = ${tradingSessions.brokerAccountId}
              and ${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})
         )`,
-        notInArray(tradingSessions.id, [...exclude]),
+        exclude.length === 0 ? undefined : notInArray(tradingSessions.id, [...exclude]),
       ),
     )
     .orderBy(sql`${tradingSessions.lastDecisionAt} asc nulls first`, asc(tradingSessions.createdAt))
@@ -309,9 +317,6 @@ export interface CreateSessionIntentInput {
   durationSec: number;
 }
 
-export const sessionClientRequestId = (sessionId: string, step: number): string =>
-  `session:${sessionId}:${step}`;
-
 // createTradeIntent's own path: the step key makes a repeat a replay, and the session row is
 // locked after the account (TradingSessionNotActiveError when it is no longer active)
 export async function createSessionIntent(
@@ -329,7 +334,7 @@ export async function createSessionIntent(
       amount: input.amount,
       action: input.action,
       durationSec: input.durationSec,
-      clientRequestId: sessionClientRequestId(input.sessionId, input.step),
+      clientRequestId: `session:${input.sessionId}:${input.step}`,
     },
     policy,
     { id: input.sessionId },
