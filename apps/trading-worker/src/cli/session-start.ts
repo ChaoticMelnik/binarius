@@ -17,6 +17,7 @@ import {
   readEnv,
   telegramUserIdSchema,
   TradeMode,
+  UUID_PATTERN,
 } from '@binarius/shared';
 import {
   pickSessionAccount,
@@ -30,7 +31,6 @@ import {
 const EXIT_OK = 0;
 const EXIT_FAILED = 1;
 const INT4_MAX = 2_147_483_647;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface CliEnv {
   databaseUrl: string;
@@ -47,7 +47,7 @@ export function parseSessionStartEnv(source: NodeJS.ProcessEnv): CliEnv {
     throw new Error('Env TELEGRAM_USER_ID must be a positive integer');
   }
   const accountId = source.ACCOUNT_ID;
-  if (accountId !== undefined && !UUID.test(accountId)) {
+  if (accountId !== undefined && !UUID_PATTERN.test(accountId)) {
     throw new Error('Env ACCOUNT_ID must be a uuid');
   }
   return {
@@ -69,6 +69,12 @@ export function parseSessionStartEnv(source: NodeJS.ProcessEnv): CliEnv {
     ),
   };
 }
+
+const ACCOUNT_PICK_REFUSALS = {
+  account_not_found: SESSION_START_REFUSALS.account_not_found,
+  account_not_confirmed: SESSION_START_REFUSALS.account_not_confirmed,
+  no_active_account: 'У пользователя нет активного аккаунта брокера',
+} as const;
 
 const PLAN_REFUSALS = {
   session_too_long: 'Сессия не уложится в час: уменьшите TRADES или DURATION_SEC',
@@ -105,11 +111,7 @@ export async function runSessionStartCli(
         err('У пользователя несколько активных аккаунтов — укажите ACCOUNT_ID:');
         for (const account of pick.accounts) err(`${account.id} ${account.status}`);
       } else {
-        err(
-          pick.reason === 'account_not_confirmed'
-            ? 'Аккаунт брокера ещё не подтверждён в боте'
-            : 'У пользователя нет активного аккаунта брокера',
-        );
+        err(ACCOUNT_PICK_REFUSALS[pick.reason]);
       }
       return EXIT_FAILED;
     }

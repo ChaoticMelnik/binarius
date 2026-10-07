@@ -46,11 +46,10 @@ describe('pickSessionAccount (#287)', () => {
     expect(pickSessionAccount([])).toEqual({ ok: false, reason: 'no_active_account' });
   });
 
-  it('takes ACCOUNT_ID as given: the owner check is createTradingSession’s', () => {
-    expect(pickSessionAccount([{ id: A, status: BrokerAccountStatus.Active }], C)).toEqual({
-      ok: true,
-      brokerAccountId: C,
-    });
+  it('C7 takes ACCOUNT_ID only when it is one of the user’s accounts (review m1)', () => {
+    const own = [{ id: A, status: BrokerAccountStatus.Active }];
+    expect(pickSessionAccount(own, A)).toEqual({ ok: true, brokerAccountId: A });
+    expect(pickSessionAccount(own, C)).toEqual({ ok: false, reason: 'account_not_found' });
   });
 });
 

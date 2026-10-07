@@ -160,9 +160,10 @@ export function createSettlementCatchup({
     return 'stalled';
   }
 
-  // The deadline is enforced here, as in the reconciliation pass: an attempt that ignores its
-  // signal cannot hold the tick past it. Kept as a copy rather than a shared helper: the two differ
-  // in their result type and in what they log, and two callers do not earn the abstraction.
+  // The deadline is enforced here, as in the reconciliation pass and the trading session
+  // orchestrator: an attempt that ignores its signal cannot hold the tick past it. Kept as a copy
+  // in each of the three rather than a shared helper: each has its own result type, its own lines
+  // and its own handling of the stop signal, so a helper would take all three as parameters.
   function attemptWithDeadline(overdue: OverdueAcceptedIntent): Promise<Ending> {
     const deadline = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
