@@ -110,7 +110,8 @@ export const TRADING_ACCESS_REFRESH_BUDGET_MS = 3_000;
 // docs/signal.md -> Budgets. The one chart GET the route may wait for: the cache's own deadline on
 // every fetch, below the REST client's timeout so that this, not the client, ends a slow chart.
 export const SIGNAL_FETCH_BUDGET_MS = 3_000;
-// The longest the cache holds an answer. Below the shortest interval, or it would never bind.
+// The longest the cache holds an answer. Below 1m, or it would never bind on a minute candle; on
+// the 5s and 15s candles (#313) the candle's end binds first.
 export const SIGNAL_CACHE_MAX_TTL_MS = 30_000;
 
 // --- Bot text overrides (#299) ------------------------------------------------------------------
@@ -157,7 +158,7 @@ export const TIMING_CHAIN_HOLDS =
   TRADING_ACCESS_REFRESH_BUDGET_MS < TRADING_SESSION_START_BUDGET_MS &&
   TRADING_SESSION_START_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // the chart GET inside the signal route, the route inside what the bot waits for (#126), and
-  // inside phase 1; the hold's cap below the shortest candle
+  // inside phase 1; the hold's cap below the 1m candle
   SIGNAL_FETCH_BUDGET_MS < BROKER_REST_TIMEOUT_MS &&
   SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS &&
   TRADING_SIGNAL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&

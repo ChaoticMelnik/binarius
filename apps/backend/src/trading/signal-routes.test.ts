@@ -117,6 +117,14 @@ describe('POST /trading/signal', () => {
     expect(calls).toHaveLength(0);
   });
 
+  // #313: the demo's 5 and 15 s trades ask their own sub-minute candle
+  it.each(['5s', '15s'])('R3b passes a %s request to the feed', async (interval) => {
+    const { feed, calls } = fakeSignalFeed(decidedEvaluation);
+    const response = await post(appWith(feed), { assetId: 202, interval });
+    expect(response.statusCode).toBe(200);
+    expect(calls).toStrictEqual([{ assetId: 202, interval }]);
+  });
+
   it.each([
     { assetId: 101 },
     { assetId: 101, interval: '2m' },
