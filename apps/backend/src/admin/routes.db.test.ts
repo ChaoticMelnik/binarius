@@ -1,9 +1,19 @@
+import { randomUUID } from 'node:crypto';
 import { asc, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AdminErrorCode, staffSessionsResponseSchema } from '@binarius/shared';
+import {
+  ADMIN_SEARCH_MAX_LENGTH,
+  AdminErrorCode,
+  adminOverviewResponseSchema,
+  adminUserResponseSchema,
+  adminUsersResponseSchema,
+  staffSessionsResponseSchema,
+} from '@binarius/shared';
 import {
   AuditAction,
+  AuditActorType,
+  AuditEntityType,
   auditLog,
   confirmChallengeFromTelegram,
   markChallengeCodeSent,
@@ -18,7 +28,9 @@ import {
 } from '@binarius/db';
 import {
   createTempDatabase,
+  seedBrokerAccount,
   seedStaff,
+  seedUser,
   TEST_STAFF_PASSWORD,
   type SeededStaff,
   type TempDatabase,
@@ -152,6 +164,9 @@ describe('the narrow bearer', () => {
     ['GET', '/admin/sessions'],
     ['POST', '/admin/sessions/00000000-0000-4000-8000-00000000000a/revoke'],
     ['POST', '/admin/auth/logout'],
+    ['GET', '/admin/overview'],
+    ['GET', '/admin/users'],
+    ['GET', '/admin/users/00000000-0000-4000-8000-00000000000a'],
   ])('refuses %s %s without it', async (method, url) => {
     const response = await app.inject({ method: method as 'GET' | 'POST', url, payload: {} });
     expect([response.statusCode, response.json()]).toEqual([
@@ -853,6 +868,257 @@ describe('a disabled account', () => {
       .where(eq(staff.id, seeded.staffId));
 
     expect((await withSession('GET', '/admin/sessions', token)).statusCode).toBe(401);
+  });
+});
+
+describe('the read pages (#107)', () => {
+  const auditCount = async () =>
+    (await tmp.db.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0;
+
+  const lastEntry = async (staffId: string) => {
+    const [row] = await tmp.db
+      .select({
+        action: auditLog.action,
+        actorType: auditLog.actorType,
+        entityType: auditLog.entityType,
+        entityId: auditLog.entityId,
+        payload: auditLog.payload,
+      })
+      .from(auditLog)
+      .where(eq(auditLog.actorId, staffId))
+      .orderBy(sql`${auditLog.createdAt} desc, ${auditLog.id} desc`)
+      .limit(1);
+    return row;
+  };
+
+  // one more row for this staff member, and only one
+  const readOnce = async (staffId: string, url: string, token: string) => {
+    const before = (await entriesFor(staffId)).length;
+    const response = await withSession('GET', url, token);
+    expect((await entriesFor(staffId)).length).toBe(before + 1);
+    return response;
+  };
+
+  // A user created by the OAuth login carries only its Telegram id; its account was never
+  // revoked, halted or rotated and has no address.
+  const seedBareUserWithAccount = async () => {
+    const user = await seedUser(tmp.db);
+    const brokerUserId = `b107-${randomUUID()}`;
+    const accountId = await seedBrokerAccount(tmp.db, user.userId, { brokerUserId });
+    return { ...user, brokerUserId, accountId };
+  };
+
+  it.each(['/admin/overview', '/admin/users', '/admin/users/00000000-0000-4000-8000-00000000000a'])(
+    'refuses %s without a live session and writes nothing',
+    async (url) => {
+      const before = await auditCount();
+      for (const headers of [BEARER, { ...BEARER, 'x-staff-session': 'a'.repeat(43) }]) {
+        const response = await app.inject({ method: 'GET', url, headers });
+        expect([response.statusCode, response.json()]).toEqual([
+          401,
+          { error: AdminErrorCode.SessionInvalid },
+        ]);
+      }
+      expect(await auditCount()).toBe(before);
+    },
+  );
+
+  it('answers the overview with exactly its wire keys and records the read', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+
+    const response = await readOnce(seeded.staffId, '/admin/overview', token);
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<Record<string, Record<string, unknown>>>();
+    expect(Object.keys(raw)).toEqual(['me', 'overview']);
+    expect(Object.keys(raw.overview ?? {})).toEqual([
+      'users',
+      'intents',
+      'activeWindowMinutes',
+      'dayStartsAt',
+      'asOf',
+    ]);
+    const body = adminOverviewResponseSchema.parse(raw);
+    expect(body.me).toMatchObject({ staffId: seeded.staffId, login: seeded.login });
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.OverviewViewed,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: '/admin/overview' },
+    });
+  });
+
+  it('finds a user by broker id, drops unknown query keys and records q and by', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const target = await seedBareUserWithAccount();
+
+    const response = await readOnce(
+      seeded.staffId,
+      `/admin/users?q=${encodeURIComponent(target.brokerUserId)}&utm_source=mail`,
+      token,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<{ users: Record<string, unknown>[] }>();
+    expect(Object.keys(raw)).toEqual(['me', 'users', 'nextCursor']);
+    expect(Object.keys(raw.users[0] ?? {})).toEqual([
+      'id',
+      'telegramUserId',
+      'displayName',
+      'status',
+      'tokenBalance',
+      'createdAt',
+      'updatedAt',
+    ]);
+    const body = adminUsersResponseSchema.parse(raw);
+    expect(body.users.map((u) => u.id)).toEqual([target.userId]);
+    expect(body.users[0]?.displayName).toBeNull();
+    expect(body.nextCursor).toBeNull();
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/users',
+      q: target.brokerUserId,
+      by: 'broker_user_id',
+    });
+  });
+
+  it('records the cursor it was given', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db);
+
+    const response = await readOnce(seeded.staffId, `/admin/users?cursor=${userId}`, token);
+
+    expect(response.statusCode).toBe(200);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/users',
+      cursor: userId,
+    });
+  });
+
+  it.each([
+    ['q over the limit', `q=${'a'.repeat(ADMIN_SEARCH_MAX_LENGTH + 1)}`],
+    ['a control character', 'q=a%07b'],
+    ['a cursor that is not a uuid', 'cursor=bad'],
+    ['q twice', 'q=a&q=b'],
+  ])('refuses %s with 400 before the session, writing nothing', async (_label, query) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const before = await auditCount();
+
+    const response = await withSession('GET', `/admin/users?${query}`, token);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('answers the card with exactly its wire keys, nulls included, and names the user', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const target = await seedBareUserWithAccount();
+
+    const response = await readOnce(seeded.staffId, `/admin/users/${target.userId}`, token);
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<{ user: object; brokerAccounts: object[] }>();
+    expect(Object.keys(raw)).toEqual(['me', 'user', 'brokerAccounts']);
+    expect(Object.keys(raw.user)).toEqual([
+      'id',
+      'telegramUserId',
+      'displayName',
+      'languageCode',
+      'status',
+      'acquisitionSource',
+      'acquiredAt',
+      'telegramBlockedAt',
+      'notificationLevel',
+      'demoStake',
+      'tokens',
+      'createdAt',
+      'updatedAt',
+    ]);
+    expect(Object.keys(raw.brokerAccounts[0] ?? {})).toEqual([
+      'id',
+      'brokerUserId',
+      'email',
+      'isPartnerClient',
+      'status',
+      'authRevokedReason',
+      'tradingHalted',
+      'haltedReason',
+      'accessTokenExpiresAt',
+      'tokenRotatedAt',
+      'createdAt',
+      'updatedAt',
+    ]);
+    expect(response.body).not.toMatch(/Enc|Hash|KeyId|_enc|_hash|key_id/);
+    const body = adminUserResponseSchema.parse(raw);
+    expect(body.user).toMatchObject({
+      displayName: null,
+      languageCode: null,
+      acquisitionSource: null,
+      acquiredAt: null,
+      telegramBlockedAt: null,
+      demoStake: null,
+    });
+    expect(body.brokerAccounts[0]).toMatchObject({
+      id: target.accountId,
+      email: null,
+      authRevokedReason: null,
+      haltedReason: null,
+      tokenRotatedAt: null,
+    });
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.UserViewed,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.User,
+      entityId: target.userId,
+      payload: { path: '/admin/users/:id', result: 'found', userId: target.userId },
+    });
+  });
+
+  it('records an id that is not a uuid as a miss, without repeating it', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+
+    const response = await readOnce(seeded.staffId, '/admin/users/not-a-uuid', token);
+
+    expect([response.statusCode, response.json()]).toEqual([
+      404,
+      { error: AdminErrorCode.NotFound },
+    ]);
+    const entry = await lastEntry(seeded.staffId);
+    expect(entry).toMatchObject({ action: AuditAction.UserViewed, entityId: null });
+    expect(entry?.payload).toEqual({ path: '/admin/users/:id', result: 'not_found' });
+  });
+
+  it('records a uuid with no row as a miss that names the id', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const missing = randomUUID();
+
+    const response = await readOnce(seeded.staffId, `/admin/users/${missing}`, token);
+
+    expect(response.statusCode).toBe(404);
+    const entry = await lastEntry(seeded.staffId);
+    expect(entry).toMatchObject({ action: AuditAction.UserViewed, entityId: null });
+    expect(entry?.payload).toEqual({
+      path: '/admin/users/:id',
+      result: 'not_found',
+      userId: missing,
+    });
+  });
+
+  it('refuses the next read once the session has ended', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    expect((await withSession('GET', '/admin/users', token)).statusCode).toBe(200);
+    await withSession('POST', '/admin/auth/logout', token);
+
+    expect((await withSession('GET', '/admin/users', token)).statusCode).toBe(401);
   });
 });
 
