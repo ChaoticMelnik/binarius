@@ -24,7 +24,7 @@ TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius \
 | Client | `BrokerSocketClient` ([broker-socket.md](broker-socket.md)) | one per session; the taint after an aborted command |
 | Token | `AccessTokenSource` (`broker/access-token.ts`) | `POST /trading/accounts/:id/access-token` on the backend, always `mayRefresh: false` |
 | Composition | `apps/trading-worker/src/index.ts` | built only when `env.brokerWsUrl` is set; otherwise `noTradeSessions` |
-| Probe | `apps/trading-worker/src/cli/socket-probe.ts`, `socket-probe-verdict.ts` | the two-socket check the rollout waits for; exit 0 only on its safe verdict ([broker-socket.md → Observed live](broker-socket.md#observed-live)) |
+| Probe | #285 | the two-socket check the rollout waits for; not part of this issue |
 
 ## The candidates
 
@@ -258,12 +258,10 @@ the compose stack runs without sessions unless it points at the broker itself.
 
 ## Rollout
 
-`BROKER_WS_URL` stays unset on the pilot until a run of the two-socket probe
-([broker-socket.md → Observed live](broker-socket.md#observed-live)) prints
-`verdict: answers go to the sender; BROKER_WS_URL may be set` and exits 0. A `broadcast` or an
-`inconclusive` verdict (exit 1) keeps it unset; an account whose `min_trade_amount` is 0.01 or
-less is always `inconclusive` (the below-minimum command cannot be sent), so the probe runs on an
-account with a higher minimum. Then:
+`BROKER_WS_URL` stays unset on the pilot until the two-socket probe of #285 is merged and has
+printed its safe verdict (`answers go to the sender`, exit 0) on the pilot — the conditions of
+that verdict are listed in #285 ([broker-socket.md → Observed live](broker-socket.md#observed-live)).
+Then:
 
 ```bash
 # BROKER_WS_URL=https://broker-ws.binodex.app in .env, then
@@ -291,7 +289,7 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
 4. **A cross-socket answer**: if the live broker sends `open_trade.*` to every socket of the user,
    a `fail` for a manual broker-web order would reject our intent while our order may be open, and
    a `success` with equal terms would link the manual trade. Not closable without an answer field;
-   the probe decides, and a positive result keeps `BROKER_WS_URL` unset.
+   the probe of #285 decides, and until it has run `BROKER_WS_URL` stays unset.
 5. **One worker container**: two would open two sessions per account. `compose.yaml` runs one;
    #93's lease is the fix.
 6. **A revocation or a block reaches the session only through the candidates**, within 65 s; until

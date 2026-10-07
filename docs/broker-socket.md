@@ -358,37 +358,13 @@ Node 22 (the 2026-10-03 one is recorded in #99).
   lived 28 s and 93 s until the probe closed them, with a price subscription active. Its cause is
   unknown; the client reconnects after it and resends its subscriptions.
 
-- **Pending: the two-socket probe (#101).** Whether the live broker sends an `open_trade`
+- **Pending: the two-socket probe (#285).** Whether the live broker sends an `open_trade`
   answer to every socket of a user, or only to the sender, has not been observed. Until it is, a
   cross-socket answer is an accepted risk ([broker-session.md → Accepted risks](broker-session.md#accepted-risks)).
-  The owner runs the probe on the pilot (`apps/trading-worker/src/cli/socket-probe.ts`; two
-  sockets A and B on one account, two demo commands from A, event types per socket;
-  `REPLACE_WITH_ID` is the `broker_accounts.id` uuid, substitute it):
-
-  ```bash
-  docker compose exec -T -e ACCOUNT_ID=REPLACE_WITH_ID -e BROKER_WS_URL=https://broker-ws.binodex.app \
-    trading-worker pnpm --filter @binarius/trading-worker socket-probe
-  ```
-
-  The probe ends with one verdict line (`socket-probe-verdict.ts`, every path in
-  `socket-probe-verdict.test.ts`) and exits 0 only on the first:
-
-  - `verdict: answers go to the sender; BROKER_WS_URL may be set` — only when command 1 answered
-    `success`, command 2 was sent and answered `fail`, A heard at least one `open_trade_success`
-    and one `open_trade_fail`, and B heard no `open_trade_*`. B's silence means something only
-    when A was answered both ways.
-  - `verdict: the broker broadcasts answers (B heard success=<n> fail=<m>); keep BROKER_WS_URL
-    unset` — B heard any `open_trade_*`, whatever A did. `BROKER_WS_URL` stays unset until a
-    correlation the broadcast cannot defeat exists.
-  - `verdict: inconclusive: <what is missing>; keep BROKER_WS_URL unset` — everything else: a
-    command timed out (the connection is then tainted and command 2 is not sent), was refused or
-    not sent, the broker accepted the below-minimum order, or A did not hear both answers. An
-    account whose `min_trade_amount` is 0.01 or less gives `inconclusive: command 2 skipped:
-    min_trade_amount <= 0.01`; run it on an account with a higher minimum. The minimum is compared
-    with 0.01 exactly (`compareDecimal`), so 0.015 is not skipped.
-
-  Exit code 0 only on `answers go to the sender`; any other run keeps `BROKER_WS_URL` unset.
-  `balance_update` on both sockets is expected either way. The result goes here.
+  The probe is #285: two sockets on one account, both verified by `user.data`, demo commands from
+  each, a continuity check on both sockets, one verdict line, exit 0 only on the safe verdict; the
+  conditions of that verdict are listed in #285. Until it has run on the pilot `BROKER_WS_URL`
+  stays unset. The result goes here.
 
 ## Boundaries
 
