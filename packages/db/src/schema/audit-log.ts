@@ -26,16 +26,20 @@ export const AuditAction = {
   StaffSessionsViewed: 'staff_sessions_viewed',
   StaffSessionRevoked: 'staff_session_revoked',
   StaffLogout: 'staff_logout',
+  // the kill-switch CLI (#144): trading_switch closed / opened
+  TradingStopped: 'trading_stopped',
+  TradingResumed: 'trading_resumed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
 // `entity_type` is deliberately free text — it names whatever the action touched, and the set
-// grows with every feature — but the three this feature writes are spelled once here rather
-// than at each of its call sites.
+// grows with every feature — but the ones the writers use are spelled once here rather than at
+// each of their call sites.
 export const AuditEntityType = {
   Staff: 'staff',
   StaffLoginChallenge: 'staff_login_challenge',
   StaffSession: 'staff_session',
+  TradingSwitch: 'trading_switch',
 } as const;
 export type AuditEntityType = (typeof AuditEntityType)[keyof typeof AuditEntityType];
 

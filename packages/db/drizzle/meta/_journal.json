@@ -134,6 +134,20 @@
       "when": 1791364392005,
       "tag": "0018_trading_session_orchestration",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791367622514,
+      "tag": "0019_trading_switch",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791367631700,
+      "tag": "0020_trading_switch_seed",
+      "breakpoints": true
     }
   ]
 }
