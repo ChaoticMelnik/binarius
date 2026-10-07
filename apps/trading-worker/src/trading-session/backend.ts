@@ -106,7 +106,8 @@ export function createBackendSignalSource({
         signal,
       );
       if (answer === undefined) return unavailable(BackendUnavailable.BackendUnreachable);
-      if (answer.status !== 200) return unavailable(BackendUnavailable.BackendStatus, answer.status);
+      if (answer.status !== 200)
+        return unavailable(BackendUnavailable.BackendStatus, answer.status);
       const parsed = safeParseTradingSignalResponse(parseJson(answer.text));
       return parsed.success
         ? { ok: true, response: parsed.data }
@@ -124,7 +125,10 @@ export function createBackendPairsSource({
     async read({ signal } = {}) {
       const answer = await call(
         new URL(TRADING_PAIRS_PATH, baseUrl),
-        { method: 'GET', headers: { authorization: `Bearer ${token}`, accept: 'application/json' } },
+        {
+          method: 'GET',
+          headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+        },
         timeoutMs,
         signal,
       );
@@ -135,7 +139,8 @@ export function createBackendPairsSource({
           ? { ok: false, reason: PairsCatalogErrorCode.Unavailable }
           : unavailable(BackendUnavailable.BackendStatus, answer.status);
       }
-      if (answer.status !== 200) return unavailable(BackendUnavailable.BackendStatus, answer.status);
+      if (answer.status !== 200)
+        return unavailable(BackendUnavailable.BackendStatus, answer.status);
       const parsed = safeParsePairsCatalogResponse(parseJson(answer.text));
       return parsed.success
         ? { ok: true, catalog: parsed.data }
