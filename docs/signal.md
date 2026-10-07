@@ -8,7 +8,7 @@ no log. The same candles, `intervalMs`, `nowMs` and parameters always give the s
 signal feed (`feed.ts`, #133, [Feed and journal](#feed-and-journal-133)) fetches the candles,
 calls the decider and writes one journal line per decision. Its first caller is the backend's
 `POST /trading/signal` (#258, [below](#post-tradingsignal-258)), through a cache. Nothing in the
-worker process calls the feed yet: wiring it into the worker's `index.ts` is #130's.
+worker process calls the feed yet: the session orchestrator (#287) will ask `POST /trading/signal`.
 
 Nobody has shown that this algorithm makes money. It is a technical baseline: the defaults are not
 tuned and no backtest was run.
@@ -69,7 +69,7 @@ A wrong `intervalMs` or `nowMs` throws a `RangeError`. So do wrong parameters, a
    `maxStaleIntervals × intervalMs` is `stale`. An age exactly equal to it is not stale.
 6. **Count:** fewer than `minClosedCandles` closed candles is `insufficient_candles`.
 
-| `reason` | `detail` | What the feed's caller (#130, #126) does |
+| `reason` | `detail` | What the feed's caller (#287, #126) does |
 |---|---|---|
 | `invalid_candle` | `{ index, problem }`, `problem` one of `CandleProblem`: `non_finite`, `non_positive`, `ohlc_order`, `not_ascending`, `step_mismatch`, `in_future` | logs it as a feed contract problem and does not trade; retrying the same series gives the same answer |
 | `candle_gap` | `{ index, expectedTimestamp, actualTimestamp }`, where `expectedTimestamp` is the first missing start | logs it and does not trade; a re-fetch may fill the gap |
@@ -218,7 +218,7 @@ assets are independent. The one REST call is bounded by the client's `BROKER_RES
 
 Any other error, such as a programmer error, is rethrown and logs nothing.
 
-| `code` | Source (docs/broker-rest.md → Errors) | What the caller (#130) does |
+| `code` | Source (docs/broker-rest.md → Errors) | What the caller (#287) does |
 |---|---|---|
 | `unauthorized` | 401. The chart sends no bearer, so this is drift | stops and reports |
 | `rate_limited` | 429, with `retryAfterSec` when `Retry-After` is an integer | waits `retryAfterSec` (or its own backoff), then evaluates again |
@@ -383,8 +383,8 @@ request in flight) and `SIGNAL_CACHE_MAX_TTL_MS < 60 000`; `timing.test.ts` asse
 
 ## Boundaries
 
-- #130: session orchestration, which evaluates the feed inside a session and wires it into
-  `index.ts`. #90: the broker base URL in the worker's env and compose.
+- #287: session orchestration, which asks `POST /trading/signal` inside a session
+  (docs/trading-session.md). #90: the broker base URL in the worker's env and compose.
 - #126: the analysis screen and its texts in the bot, on `POST /trading/signal`
   ([bot-demo.md](bot-demo.md#the-analysis)). #127: the stake button's press and the intent status. Stake size: docs/stake.md.
 - The decision's wire shape and codes are in `packages/shared/src/signal.ts` (#258).

@@ -138,7 +138,7 @@ describe('createTradeIntent', () => {
       amount: '10.00000000',
       lastError: null,
       submittedAt: null,
-      // the route's path names no session (#130's orchestrator is the only one that does)
+      // the route's path names no session (#287's orchestrator is the only one that does)
       tradingSessionId: null,
       transport: null,
     });

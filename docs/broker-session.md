@@ -318,6 +318,6 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
   single-flight refresh across processes, #96 the emergency stop.
 - ARCH-05: #87 the load stand, #88 degradation.
 - #92 (a balance check after a reconciliation, DLQ), #274 (`not_found`), #275 (429 on refresh),
-  #130 (the demo session on `trading_sessions`), #278, #279, #281 (risk 2).
+  #287 (the session orchestrator on `trading_sessions`, docs/trading-session.md), #278, #279, #281 (risk 2).
 - `price.update` has no consumer in production: the signal feed reads the REST chart; E2 proves
   the subscription pipe only.
