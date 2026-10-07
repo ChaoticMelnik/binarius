@@ -82,7 +82,7 @@ describe('session-start (#287)', () => {
       settings: {
         version: 1,
         assetId: 101,
-        durationSec: 60,
+        durationSec: 15,
         trades: 3,
         stake: { baseStake: '1', stakeScale: 0 },
       },

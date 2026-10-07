@@ -37,7 +37,8 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //     alongside pass.stop() (closeAll runs the steps at once)
 //   BROKER_REST_TIMEOUT_MS < CATCHUP_GRACE_MS; CATCHUP_TICK_MS < CATCHUP_STALLED_RETRY_MS — a
 //     held-back account misses at least one tick
-//   the worst case of broker GETs a minute ≤ WORKER_BROKER_GETS_PER_MINUTE (below)
+//   the worst case of broker GETs a minute ≤ WORKER_BROKER_GETS_PER_MINUTE (below), with
+//     60_000 / CATCHUP_TICK_MS and 60_000 / RECONCILE_TICK_MS whole ticks a minute
 // The session manager (#101, broker/session-config.ts) adds these:
 //   MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS — the manager
 //     stops after the intents consumer drained, inside the same phase-1 step
@@ -78,14 +79,18 @@ export const RECONCILE_WINDOW_AFTER_MS = 90_000;
 export const RECONCILE_TRADES_PAGE_SIZE = 50;
 export const RECONCILE_MAX_TRADE_PAGES = 2;
 
-// The settlement catch-up (#90): accepted intents past their expected close + the grace
-export const CATCHUP_TICK_MS = 30_000;
-export const CATCHUP_GRACE_MS = 30_000;
-export const CATCHUP_BATCH_SIZE = 20;
+// The settlement catch-up (#90): accepted intents past their expected close + the grace. Sized
+// for the demo's 5 and 15 s trades (#313): with no close event a trade settles 10-15 s after its
+// close, and the batch is cut to 3 so that the shorter tick keeps the GET budget below.
+export const CATCHUP_TICK_MS = 5_000;
+export const CATCHUP_GRACE_MS = 10_000;
+export const CATCHUP_BATCH_SIZE = 3;
 export const CATCHUP_TRADES_PAGE_SIZE = 50;
 export const CATCHUP_MAX_TRADE_PAGES = 2;
 export const CATCHUP_ATTEMPT_TIMEOUT_MS = 20_000;
-export const CATCHUP_STALLED_RETRY_MS = 120_000;
+// asking 10 s after the close can find the trade still open at the broker; a longer hold-back
+// would make the user wait minutes for a 5 s trade
+export const CATCHUP_STALLED_RETRY_MS = 30_000;
 
 // The broker allows 600 requests a minute per IP (BROKER_RATE_LIMIT_PER_MINUTE in
 // apps/backend/src/timing.ts); the backend's balance refresh takes up to 200 by default. The worker
@@ -121,6 +126,8 @@ export const TIMING_CHAIN_HOLDS =
   CATCHUP_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_REST_TIMEOUT_MS < CATCHUP_GRACE_MS &&
   CATCHUP_TICK_MS < CATCHUP_STALLED_RETRY_MS &&
+  Number.isInteger(60_000 / CATCHUP_TICK_MS) &&
+  Number.isInteger(60_000 / RECONCILE_TICK_MS) &&
   WORKER_BROKER_GETS_WORST_CASE <= WORKER_BROKER_GETS_PER_MINUTE &&
   MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&

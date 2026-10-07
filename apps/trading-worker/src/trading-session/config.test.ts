@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SESSION_MAX_DURATION_MS,
   SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_SHORTEST_INTERVAL_MS,
   TRADING_SIGNAL_BUDGET_MS,
 } from '@binarius/shared';
 import { MAX_TIMER_MS } from '../broker/socket-config';
@@ -24,7 +25,7 @@ describe('the trading session constants', () => {
       TRADING_SESSION_ATTEMPT_TIMEOUT_MS,
     );
     expect(TRADING_SESSION_TICK_MS).toBeLessThan(TRADING_SESSION_RETRY_MS);
-    expect(TRADING_SESSION_CANDLE_SLACK_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS['1m']);
+    expect(TRADING_SESSION_CANDLE_SLACK_MS).toBeLessThan(SIGNAL_SHORTEST_INTERVAL_MS);
     expect(TRADING_SESSION_RETRY_MS).toBeLessThan(SESSION_MAX_DURATION_MS);
     // the deadline is the shared one the start route and the CLI check against
     expect(TRADING_SESSION_CONFIG.maxDurationMs).toBe(SESSION_MAX_DURATION_MS);
@@ -33,7 +34,10 @@ describe('the trading session constants', () => {
   it.each<[string, Partial<SessionOrchestratorConfig>]>([
     ['an attempt that cannot hold both calls', { attemptTimeoutMs: 8_000 }],
     ['a hold-back no longer than a tick', { retryMs: TRADING_SESSION_TICK_MS }],
-    ['a candle slack of a whole 1m candle', { candleSlackMs: SIGNAL_CHART_INTERVAL_MS['1m'] }],
+    [
+      'a candle slack of a whole shortest candle',
+      { candleSlackMs: SIGNAL_CHART_INTERVAL_MS['5s'] },
+    ],
     ['a retry as long as the deadline', { retryMs: SESSION_MAX_DURATION_MS }],
     ['a fractional tick', { tickMs: 1.5 }],
     ['a wait past the timer limit', { maxDurationMs: MAX_TIMER_MS + 1 }],

@@ -15,6 +15,15 @@ import {
 } from '@binarius/db';
 import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import type { AccessTokenOutcome, AccessTokenOptions } from '../broker/access-token';
+import {
+  CATCHUP_ATTEMPT_TIMEOUT_MS,
+  CATCHUP_BATCH_SIZE,
+  CATCHUP_GRACE_MS,
+  CATCHUP_MAX_TRADE_PAGES,
+  CATCHUP_STALLED_RETRY_MS,
+  CATCHUP_TICK_MS,
+  CATCHUP_TRADES_PAGE_SIZE,
+} from './config';
 import { createSettlementCatchup, type SettlementCatchupConfig } from './settlement-catchup';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -106,10 +115,15 @@ async function tickOnce(logger: pino.Logger, config: Partial<SettlementCatchupCo
 let brokerUserId = 20_000;
 
 // an accepted intent whose trade the mock broker opened; overdue unless `overdue: false`
-async function acceptedAtBroker({ overdue = true, ageMs = 10 * 60_000 } = {}) {
+async function acceptedAtBroker({
+  overdue = true,
+  ageMs = 10 * 60_000,
+  assetId = 101,
+  durationSec = 60,
+} = {}) {
   const token = `catchup-token-${++brokerUserId}`;
   broker.users.register({ id: brokerUserId, accessToken: token });
-  const seed = await seedQueuedIntent(tmp.db, { assetId: 101 });
+  const seed = await seedQueuedIntent(tmp.db, { assetId, durationSec });
   tokenAnswers.set(seed.brokerAccountId, { ok: true, accessToken: token });
   const taken = (await takeIntent(tmp.db, {
     id: seed.intent.id,
@@ -118,7 +132,7 @@ async function acceptedAtBroker({ overdue = true, ageMs = 10 * 60_000 } = {}) {
   }))!;
   const trade = await createBrokerRestClient({ baseUrl: broker.url }).openTrade(
     { accessToken: token },
-    { assetId: 101, amount: '10.00' as DecimalString, action: 'up', durationSec: 60, isDemo: true },
+    { assetId, amount: '10.00' as DecimalString, action: 'up', durationSec, isDemo: true },
   );
   const intent = (await tmp.db.transaction((tx) =>
     markIntentAccepted(tx, {
@@ -181,12 +195,53 @@ describe('createSettlementCatchup (#90)', () => {
     expect(log.line('settlement catch-up tick')).toBeUndefined();
   });
 
+  // #313: the demo's 5 and 15 s trades on pair 202 (min_timeframe 5), with the worker's own
+  // constants: overdue grace + a second past the close, one tick settles; inside the grace, not
+  const productionConfig: SettlementCatchupConfig = {
+    tickMs: CATCHUP_TICK_MS,
+    graceMs: CATCHUP_GRACE_MS,
+    batchSize: CATCHUP_BATCH_SIZE,
+    pageSize: CATCHUP_TRADES_PAGE_SIZE,
+    maxPages: CATCHUP_MAX_TRADE_PAGES,
+    attemptTimeoutMs: CATCHUP_ATTEMPT_TIMEOUT_MS,
+    stalledRetryMs: CATCHUP_STALLED_RETRY_MS,
+  };
+  it.each([5, 15])(
+    'settles a %i s trade one tick after its close plus the grace, not inside the grace',
+    async (durationSec) => {
+      const early = await acceptedAtBroker({
+        assetId: 202,
+        durationSec,
+        ageMs: durationSec * 1000 + CATCHUP_GRACE_MS - 3_000,
+      });
+      const due = await acceptedAtBroker({
+        assetId: 202,
+        durationSec,
+        ageMs: durationSec * 1000 + CATCHUP_GRACE_MS + 1_000,
+      });
+      broker.trades.settle(Number(early.trade.id), { outcome: 'win' });
+      broker.trades.settle(Number(due.trade.id), { outcome: 'loss' });
+      const log = capture();
+      await tickOnce(log.logger, productionConfig);
+      expect(await statusOf(due.intent.id)).toBe('settled');
+      expect(await ledgerKinds(due.intent.id)).toEqual(['reserve', 'settle']);
+      expect(askedFor(early.brokerAccountId)).toBe(0);
+      expect(await statusOf(early.intent.id)).toBe('accepted');
+    },
+  );
+
   it('applies the other closed trades of the page as well, idempotently', async () => {
     const a = await acceptedAtBroker();
     // a platform trade of the same broker user: no intent behind it
     const platform = await createBrokerRestClient({ baseUrl: broker.url }).openTrade(
       { accessToken: a.token },
-      { assetId: 101, amount: '5.00' as DecimalString, action: 'down', durationSec: 60, isDemo: true },
+      {
+        assetId: 101,
+        amount: '5.00' as DecimalString,
+        action: 'down',
+        durationSec: 60,
+        isDemo: true,
+      },
     );
     broker.trades.settle(Number(platform.id), { outcome: 'loss' });
     broker.trades.settle(Number(a.trade.id), { outcome: 'loss' });
@@ -204,7 +259,13 @@ describe('createSettlementCatchup (#90)', () => {
     for (let i = 0; i < 2; i += 1) {
       const later = await client.openTrade(
         { accessToken: a.token },
-        { assetId: 101, amount: '5.00' as DecimalString, action: 'down', durationSec: 60, isDemo: true },
+        {
+          assetId: 101,
+          amount: '5.00' as DecimalString,
+          action: 'down',
+          durationSec: 60,
+          isDemo: true,
+        },
       );
       broker.trades.settle(Number(later.id), { outcome: 'loss' });
     }
