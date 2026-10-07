@@ -50,6 +50,8 @@ describe('pickSessionAccount (#287)', () => {
     const own = [{ id: A, status: BrokerAccountStatus.Active }];
     expect(pickSessionAccount(own, A)).toEqual({ ok: true, brokerAccountId: A });
     expect(pickSessionAccount(own, C)).toEqual({ ok: false, reason: 'account_not_found' });
+    // pg answers uuids in lower case; the pick hands on the listed spelling
+    expect(pickSessionAccount(own, A.toUpperCase())).toEqual({ ok: true, brokerAccountId: A });
   });
 });
 

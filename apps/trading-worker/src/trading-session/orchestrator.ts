@@ -8,6 +8,7 @@ import {
   stopHaltedSessions,
   stopPausedSessions,
   stopTradingSession,
+  TERMINAL_TRADE_INTENT_STATUSES,
   touchBalanceRequested,
   TradeIntentError,
   TradingSessionNotActiveError,
@@ -104,15 +105,7 @@ const CREATE_REFUSALS = {
   [TradeIntentErrorCode.ClientRequestIdConflict]: { kind: 'reschedule' },
 } as const satisfies Record<TradeIntentErrorCode, CreateRefusal>;
 
-const LIVE = new Set<string>([
-  TradeIntentStatus.Planned,
-  TradeIntentStatus.Reserved,
-  TradeIntentStatus.Queued,
-  TradeIntentStatus.Submitting,
-  TradeIntentStatus.Accepted,
-  TradeIntentStatus.Unknown,
-  TradeIntentStatus.Reconciling,
-]);
+const TERMINAL = new Set<string>(TERMINAL_TRADE_INTENT_STATUSES);
 
 // the sizer's view of the session's intents; a settled intent without its trade's profit and a
 // manual_review one have no result the sizer can use
@@ -205,7 +198,7 @@ export function createSessionOrchestrator({
     }
     // the scan skips expired sessions; this catches one whose deadline passed since the scan
     if (history.expired) return { kind: 'stop', reason: TradingSessionStopReason.Timeout };
-    if (history.intents.some((intent) => LIVE.has(intent.status))) {
+    if (history.intents.some((intent) => !TERMINAL.has(intent.status))) {
       logger.info(ids, 'trading session has a live intent');
       return { kind: 'reschedule' };
     }

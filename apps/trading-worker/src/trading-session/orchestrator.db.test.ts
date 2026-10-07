@@ -520,10 +520,15 @@ describe('the attempt and the sequence (#287)', () => {
 
   it('E7c a deadline that passes after the scan stops the session before any backend call', async () => {
     const earlier = await seedSession();
-    // its deadline passes while the first session's attempt waits on the signal
-    const later = await seedSession({
-      startedAt: new Date(Date.now() - SESSION_MAX_DURATION_MS + 500),
-    });
+    const later = await seedSession();
+    // on the database clock: the deadline 1.5 s ahead, passing while the first session's attempt
+    // waits on the signal, well inside its attempt timeout
+    await tmp.db
+      .update(tradingSessions)
+      .set({
+        startedAt: sql`now() - make_interval(secs => ${(SESSION_MAX_DURATION_MS - 1_500) / 1000})`,
+      })
+      .where(eq(tradingSessions.id, later.session.id));
     const signals = signalsOf(async () => {
       await until(
         'the later deadline on the database clock',
@@ -534,14 +539,24 @@ describe('the attempt and the sequence (#287)', () => {
       );
       return { ok: true, response: signalAnswer(TradeAction.Up) };
     });
-    const orchestrator = orchestratorOf({ signals });
+    const orchestrator = orchestratorOf({ signals, config: { attemptTimeoutMs: 5_000 } });
     await orchestrator.tick();
+    // both were listed by the scan, so the stop below is the attempt's, not the sweep's
+    expect(lines.filter((line) => line.msg === 'trading session tick').at(-1)).toMatchObject({
+      runnable: 2,
+      attempted: 2,
+      created: 1,
+      stopped: 1,
+    });
     expect(signals.calls).toHaveLength(1);
     expect(await intentsOf(earlier.session.id)).toHaveLength(1);
     expect(await sessionRow(later.session.id)).toMatchObject({
       status: TradingSessionStatus.Stopped,
       stopReason: TradingSessionStopReason.Timeout,
     });
+    expect(linesOf(later.session.id)).toContainEqual(
+      expect.objectContaining({ msg: 'trading session stopped', reason: 'timeout' }),
+    );
     expect(await intentsOf(later.session.id)).toEqual([]);
     await orchestrator.stop();
   });

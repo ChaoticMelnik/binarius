@@ -11,6 +11,7 @@ import {
   DATABASE_URL_RULES,
   DEFAULT_SESSION_TRADES,
   errorLogFields,
+  INT4_MAX,
   MAX_SESSION_TRADES,
   parseBoundedIntegerEnv,
   parseUrlEnv,
@@ -30,7 +31,6 @@ import {
 // The orchestrator in the running worker picks the session up on its next tick.
 const EXIT_OK = 0;
 const EXIT_FAILED = 1;
-const INT4_MAX = 2_147_483_647;
 
 interface CliEnv {
   databaseUrl: string;

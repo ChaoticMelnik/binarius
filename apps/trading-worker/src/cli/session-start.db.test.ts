@@ -104,6 +104,20 @@ describe('session-start (#287)', () => {
     expect(await sessionsOf(second)).toHaveLength(1);
   });
 
+  it('accepts the own ACCOUNT_ID in upper case and stores the canonical id (review round 2 M1)', async () => {
+    const user = await seedUser(tmp.db);
+    await account(user.userId);
+    const brokerAccountId = await account(user.userId);
+    const result = await run({
+      TELEGRAM_USER_ID: user.telegramUserId,
+      ACCOUNT_ID: brokerAccountId.toUpperCase(),
+    });
+    expect(result.err).toEqual([]);
+    expect(result.code).toBe(0);
+    const [session] = await sessionsOf(brokerAccountId);
+    expect(session?.brokerAccountId).toBe(brokerAccountId);
+  });
+
   it("refuses another user's ACCOUNT_ID as account_not_found", async () => {
     const owner = await seedUser(tmp.db);
     const brokerAccountId = await account(owner.userId);

@@ -127,7 +127,7 @@ export const TradeIntentErrorCode = {
 } as const;
 export type TradeIntentErrorCode = (typeof TradeIntentErrorCode)[keyof typeof TradeIntentErrorCode];
 
-const INT4_MAX = 2_147_483_647;
+export const INT4_MAX = 2_147_483_647;
 const INT8_MAX = 9_223_372_036_854_775_807n;
 const NUMERIC_INTEGER_DIGITS = 12;
 const NUMERIC_FRACTION_DIGITS = 8;
