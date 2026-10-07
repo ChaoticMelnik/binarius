@@ -1,7 +1,8 @@
 import * as z from 'zod';
+import { adminIntentStatusFilterSchema, adminTradeIntentViewSchema } from './admin-trading';
 import { decimalStringSchema } from './money';
 import { accountHaltReasonSchema, authRevokedReasonSchema, BrokerAccountStatus } from './oauth';
-import { telegramUserIdSchema, tokenCountSchema } from './trading';
+import { telegramUserIdSchema, tokenCountSchema, tradeModeSchema } from './trading';
 import { tokenBalanceViewSchema } from './trading-access';
 import { notificationLevelSchema, userStatusSchema } from './users';
 
@@ -250,6 +251,41 @@ export const adminOverviewResponseSchema = z.strictObject({
 });
 export type AdminOverviewResponse = z.infer<typeof adminOverviewResponseSchema>;
 
+// --- Intents (#108) -----------------------------------------------------------------------------
+
+// Exact-match filters; the key order is the order adminIntentsSearchParams writes them in.
+// Unknown keys are stripped, as on the users list.
+export const adminIntentsQuerySchema = z.object({
+  status: adminIntentStatusFilterSchema.optional(),
+  mode: tradeModeSchema.optional(),
+  user: z.string().regex(UUID_PATTERN).optional(),
+  session: z.string().regex(UUID_PATTERN).optional(),
+  cursor: z.string().regex(UUID_PATTERN).optional(),
+});
+export type AdminIntentsQuery = z.infer<typeof adminIntentsQuerySchema>;
+
+export function adminIntentsSearchParams(query: AdminIntentsQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of Object.keys(adminIntentsQuerySchema.shape) as (keyof AdminIntentsQuery)[]) {
+    const value = query[key];
+    if (value !== undefined) params.set(key, value);
+  }
+  return params;
+}
+
+export const adminIntentsResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  intents: z.array(adminTradeIntentViewSchema).max(ADMIN_PAGE_SIZE),
+  nextCursor: z.string().regex(UUID_PATTERN).nullable(),
+});
+export type AdminIntentsResponse = z.infer<typeof adminIntentsResponseSchema>;
+
+export const adminIntentResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  intent: adminTradeIntentViewSchema,
+});
+export type AdminIntentResponse = z.infer<typeof adminIntentResponseSchema>;
+
 export const safeParseAdminLoginRequest = (input: unknown) =>
   adminLoginRequestSchema.safeParse(input);
 export const safeParseAdminConfirmRequest = (input: unknown) =>
@@ -270,3 +306,9 @@ export const safeParseAdminUserResponse = (input: unknown) =>
   adminUserResponseSchema.safeParse(input);
 export const safeParseAdminOverviewResponse = (input: unknown) =>
   adminOverviewResponseSchema.safeParse(input);
+export const safeParseAdminIntentsQuery = (input: unknown) =>
+  adminIntentsQuerySchema.safeParse(input);
+export const safeParseAdminIntentsResponse = (input: unknown) =>
+  adminIntentsResponseSchema.safeParse(input);
+export const safeParseAdminIntentResponse = (input: unknown) =>
+  adminIntentResponseSchema.safeParse(input);

@@ -30,6 +30,7 @@ import type { TradingSessionRefusal, TradingSessionView } from './trading-sessio
 import * as accessToken from './access-token';
 import * as account from './account';
 import * as admin from './admin';
+import * as adminTrading from './admin-trading';
 import * as broker from './broker';
 import * as botTextTemplate from './bot-text-template';
 import * as botTexts from './bot-texts';
@@ -384,6 +385,7 @@ describe('contract coverage (issue #6)', () => {
       accessToken,
       account,
       admin,
+      adminTrading,
       money,
       time,
       ids,
