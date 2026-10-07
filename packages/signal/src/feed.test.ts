@@ -103,6 +103,35 @@ describe('createSignalFeed', () => {
     expect(lines[0]).not.toContain(broker.url);
   });
 
+  // #313: the demo's 5 and 15 s trades are analysed on their own candles; the window still
+  // counts candles, so it spans SIGNAL_CHART_LIMIT steps of the short interval
+  it.each(['5s', '15s'] as const)(
+    'F2b on the mock broker a %s evaluation asks %s candles and is decided',
+    async (interval) => {
+      const step = SIGNAL_CHART_INTERVAL_MS[interval];
+      const now = Math.floor(T / step) * step + 2_000;
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(now);
+      const feed = createSignalFeed({
+        rest: createBrokerRestClient({ baseUrl: broker.url }),
+        logger: sink(),
+      });
+
+      const entry = decided(await feed.evaluate({ assetId: 202, interval }));
+
+      const { startTime } = chartWindow(now, step, SIGNAL_CHART_LIMIT);
+      expect(broker.rest.journal[0]?.query).toMatchObject({
+        asset_id: '202',
+        interval,
+        start_time: String(startTime),
+      });
+      expect(entry.series).toHaveLength(SIGNAL_CHART_LIMIT);
+      expect((entry.series.at(-1)?.[0] ?? 0) - (entry.series.at(-2)?.[0] ?? 0)).toBe(step);
+      expect(entry.series.at(-1)?.[0]).toBe(Math.floor(now / step) * step);
+      expect(parsedLines()[0]).toMatchObject({ msg: 'signal decision', signal: { interval } });
+    },
+  );
+
   it.each([
     {
       script: { status: 429, retryAfterSec: 7 },

@@ -77,13 +77,7 @@ export interface BotTextMeasure {
 }
 
 const w = BOT_TEXT_WIDTHS;
-const durations = [
-  'demoDuration60',
-  'demoDuration300',
-  'demoDuration900',
-  'demoDuration1800',
-  'demoDuration3600',
-] as const satisfies readonly BotPlainKey[];
+const durations = ['demoDuration5', 'demoDuration15'] as const satisfies readonly BotPlainKey[];
 const groups = [
   'demoGroupCurrency',
   'demoGroupCommodity',

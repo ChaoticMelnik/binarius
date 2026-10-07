@@ -62,7 +62,7 @@ const g = BotTextGroup;
 const caption = { limit: TELEGRAM_CAPTION_LIMIT };
 const email = { name: 'email', sample: 'ada@example.com' } as const;
 const symbol = { name: 'symbol', sample: 'EUR/USD OTC' } as const;
-const subject = { name: 'subject', sample: 'EUR/USD OTC · ⏱ 1 мин' } as const;
+const subject = { name: 'subject', sample: 'EUR/USD OTC · ⏱ 15 с' } as const;
 
 export const BOT_TEXT_CATALOG = {
   // ---- Вход и подключение -------------------------------------------------------------------
@@ -462,7 +462,7 @@ export const BOT_TEXT_CATALOG = {
     'Демо: строка выбранной длительности.',
     `⏱ Длительность: {label}`,
     {
-      arg: { name: 'label', sample: '⏱ 1 мин' },
+      arg: { name: 'label', sample: '⏱ 15 с' },
     },
   ),
   demoNext: html(
@@ -474,6 +474,11 @@ export const BOT_TEXT_CATALOG = {
     g.Demo,
     'Демо: каталог активов недоступен.',
     `⚠️ Каталог активов сейчас недоступен. Попробуй через минуту.`,
+  ),
+  demoNoShortPairs: html(
+    g.Demo,
+    'Демо: в каталоге нет активов, принимающих 5 или 15 секунд.',
+    `Сейчас нет активов для коротких сделок.`,
   ),
   demoCatalogStale: html(
     g.Demo,
@@ -525,15 +530,8 @@ export const BOT_TEXT_CATALOG = {
     '📊 Индексы',
   ),
   demoGroupOther: plain(g.Demo, 'Демо: прочие активы, на кнопке и в заголовке.', '📁 Другие'),
-  demoDuration60: plain(g.Demo, 'Демо: длительность 1 минута, на кнопке и в строках.', '⏱ 1 мин'),
-  demoDuration300: plain(g.Demo, 'Демо: длительность 5 минут, на кнопке и в строках.', '⏱ 5 мин'),
-  demoDuration900: plain(g.Demo, 'Демо: длительность 15 минут, на кнопке и в строках.', '⏱ 15 мин'),
-  demoDuration1800: plain(
-    g.Demo,
-    'Демо: длительность 30 минут, на кнопке и в строках.',
-    '⏱ 30 мин',
-  ),
-  demoDuration3600: plain(g.Demo, 'Демо: длительность 1 час, на кнопке и в строках.', '⏱ 1 ч'),
+  demoDuration5: plain(g.Demo, 'Демо: длительность 5 секунд, на кнопке и в строках.', '⏱ 5 с'),
+  demoDuration15: plain(g.Demo, 'Демо: длительность 15 секунд, на кнопке и в строках.', '⏱ 15 с'),
 
   // ---- Анализ -------------------------------------------------------------------------------
   analyzing: html(g.Analysis, 'Анализ: пока бот ждёт ответа.', `⏳ Анализирую {subject}…`, {
@@ -593,7 +591,7 @@ export const BOT_TEXT_CATALOG = {
   analysisDataHint: html(
     g.Analysis,
     'Анализ: подсказка, когда данных по свечам недостаточно.',
-    `Повтори анализ через минуту или выбери другой актив.`,
+    `Повтори анализ через несколько секунд или выбери другой актив.`,
   ),
   analysisRateLimited: html(
     g.Analysis,
@@ -708,7 +706,7 @@ export const BOT_TEXT_CATALOG = {
     g.Trade,
     'Сделка: строка с активом, направлением, длительностью и ставкой.',
     `📈 {line}`,
-    { arg: { name: 'line', sample: 'EUR/USD OTC · ⬆️ Вверх · ⏱ 1 мин · ставка $1.00' } },
+    { arg: { name: 'line', sample: 'EUR/USD OTC · ⬆️ Вверх · ⏱ 15 с · ставка $1.00' } },
   ),
   intentAssetFallback: plain(
     g.Trade,
@@ -908,7 +906,7 @@ export const BOT_TEXT_CATALOG = {
     g.Session,
     'Сессия: строка с активом, длительностью и ставкой.',
     `📈 {line}`,
-    { arg: { name: 'line', sample: 'EUR/USD OTC · ⏱ 1 мин · ставка $1.00' } },
+    { arg: { name: 'line', sample: 'EUR/USD OTC · ⏱ 15 с · ставка $1.00' } },
   ),
   sessionStep: html(g.Session, 'Сессия: номер текущей сделки из всех.', `🔢 Сделка {step}`, {
     arg: { name: 'step', sample: '3 из 5' },
@@ -1002,7 +1000,7 @@ export const BOT_TEXT_CATALOG = {
   sessionTooLong: html(
     g.Session,
     'Кнопка сессии: сессия на этой длительности не уложится в час.',
-    `⏱ Сессия на этой длительности не уложится в час — выбери 1 или 5 мин.`,
+    `⏱ Сессия на этой длительности не уложится в час.`,
   ),
   sessionPairUnavailable: html(
     g.Session,

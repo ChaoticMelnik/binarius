@@ -6,6 +6,8 @@ import {
   RULE_REFUSAL_REASONS,
   safeParseTradingSignalRequest,
   safeParseTradingSignalResponse,
+  SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_SHORTEST_INTERVAL_MS,
   signalDecisionSchema,
   type DataRefusalReason,
   type RuleRefusalReason,
@@ -103,8 +105,12 @@ describe('signalDecisionSchema', () => {
 
 describe('intervalForDuration', () => {
   it.each([
-    [5, '1m'],
-    [59, '1m'],
+    [1, '5s'],
+    [4, '5s'],
+    [5, '5s'],
+    [14, '5s'],
+    [15, '15s'],
+    [59, '15s'],
     [60, '1m'],
     [61, '1m'],
     [299, '1m'],
@@ -119,6 +125,17 @@ describe('intervalForDuration', () => {
     [7200, '1h'],
   ])('S3 %i s -> %s', (durationSec, interval) => {
     expect(intervalForDuration(durationSec)).toBe(interval);
+  });
+
+  // the owner's rule (#313): the demo's short trades never fall back to a minute candle
+  it.each([5, 15])('S3 a %i s trade is analysed on a sub-minute candle', (durationSec) => {
+    const interval = intervalForDuration(durationSec);
+    expect(interval).not.toBe('1m');
+    expect(SIGNAL_CHART_INTERVAL_MS[interval]).toBe(durationSec * 1000);
+  });
+
+  it('S3 the shortest interval is 5s', () => {
+    expect(SIGNAL_SHORTEST_INTERVAL_MS).toBe(5_000);
   });
 
   it.each([0, -60, 1.5, Number.NaN])('S3 refuses %s', (durationSec) => {
