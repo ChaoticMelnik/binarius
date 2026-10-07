@@ -127,6 +127,13 @@
       "when": 1791321202657,
       "tag": "0017_broker_unavailable",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791362542441,
+      "tag": "0018_trading_session_orchestration",
+      "breakpoints": true
     }
   ]
 }
