@@ -216,6 +216,12 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     reason: `${DURATION} (retryMs plus a margin: the case asserts that a longer hold-back is still on after it)`,
   },
   {
+    file: 'apps/trading-worker/src/broker/session-manager.db.test.ts',
+    form: 'F4',
+    match: 'await quiet();',
+    reason: `${NEGATIVE} (QUIET_MS, past the longest reconnection delay of the test timing: no snapshot write and no user.auth may follow)`,
+  },
+  {
     file: 'apps/backend/src/trading/access.db.test.ts',
     form: 'F3',
     match: 'toBeLessThan(TRADING_ACCESS_BUDGET_MS)',
