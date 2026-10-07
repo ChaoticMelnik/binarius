@@ -37,6 +37,9 @@ export const AuditAction = {
   OverviewViewed: 'overview_viewed',
   UsersViewed: 'users_viewed',
   UserViewed: 'user_viewed',
+  // admin intents pages (#108)
+  IntentsViewed: 'intents_viewed',
+  IntentViewed: 'intent_viewed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
@@ -50,6 +53,7 @@ export const AuditEntityType = {
   TradingSwitch: 'trading_switch',
   BotText: 'bot_text',
   User: 'user',
+  TradeIntent: 'trade_intent',
 } as const;
 export type AuditEntityType = (typeof AuditEntityType)[keyof typeof AuditEntityType];
 
