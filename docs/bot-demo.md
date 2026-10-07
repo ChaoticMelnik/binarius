@@ -255,7 +255,7 @@ and `TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` is checked at impor
 - **#127** — the stake button's press, the intent and its status (`intent:` buttons):
   [bot-demo-trade.md](bot-demo-trade.md). It runs `readDemoTrade` again at the press, with the
   amount `broker.minTradeAmount`.
-- **#130** — the demo session of five trades.
+- **#287 / #284** — the demo session of five trades (worker / bot).
 - **#24** — the status card and its button ([bot-menu.md](bot-menu.md)).
 - No `/demo` command, and no check of the user at entry: a blocked or revoked user is refused by
   the backend when the intent is created (#127).

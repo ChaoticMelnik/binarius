@@ -3,8 +3,8 @@
 `apps/trading-worker/src/stake/` decides the amount of the next trade in a session, or stops the
 session with a reason. It is a pure function: it reads no clock, no environment, no network and no
 database, and writes no log. The same parameters and input always give the same decision. Nothing
-in the worker calls it yet. Reading the history and the balance snapshot, the env, the
-`trading_sessions.settings` shape and wiring the module into a session are #130.
+in the worker calls it yet. The `trading_sessions.settings` shape and the session's history read are in place
+(#130, [trading-session.md](trading-session.md)); wiring the module into a session is #287.
 
 Two strategies exist. `fixed` sends the same stake every time and is the default. `martingale` is
 a bounded Martingale: after each loss the next stake recovers the loss of the streak plus the
@@ -31,7 +31,7 @@ carries `version` (`STAKE_ALGORITHM_VERSION`, `'v1'`) but not the parameters, so
 
 ## Inputs
 
-| Field | Type | Source (#130) |
+| Field | Type | Source (#287) |
 |---|---|---|
 | `history` | `readonly SessionTrade[]` | the session's trades in creation order |
 | `payout` | number | `BinaryPair.payout` of the pair about to be traded; `fixed` does not read it |
@@ -42,7 +42,7 @@ carries `version` (`STAKE_ALGORITHM_VERSION`, `'v1'`) but not the parameters, so
 `SessionTrade` is the module's own shape, so the module does not depend on the `trade_intents`
 statuses:
 
-| `kind` | Fields | #130 maps from |
+| `kind` | Fields | #287 maps from |
 |---|---|---|
 | `settled` | `stake`, `profit` (signed: `< 0` loss, `0` tie, `> 0` win) | `settled`, with `broker_trades.profit` |
 | `rejected` | — | `rejected`: the order certainly never opened |
@@ -99,7 +99,7 @@ of any size or the start of the history ends the walk; `realizedSessionLoss = ma
 over every settled trade; `sessionElapsedMs = nowMs - sessionStartedAtMs`; `step = 1` for `fixed`
 and `consecutiveLosses + 1` for `martingale`.
 
-| Code | Source | What the caller (#130) does |
+| Code | Source | What the caller (#287) does |
 |---|---|---|
 | `unresolved_trade` | a trade without a result | the session waits until reconciliation (#89) gives a result; no new stake is issued, which guards against counting a trade twice |
 | `invalid_amount`, `invalid_trade`, `invalid_payout` | the data contract (a database row or the pairs catalog) | stops the session and logs a contract problem; the same data gives the same answer |
@@ -107,7 +107,7 @@ and `consecutiveLosses + 1` for `martingale`.
 | `below_min_trade_amount` | the account's broker minimum (`GET /broker/user`) | ends the session; the broker would answer 400 `Amount is below the minimum` |
 | `insufficient_balance` | the mode's balance in the snapshot | ends the session; the broker would answer 400 `Insufficient balance` |
 
-Any `stop` ends the session in #130. `StopReason` is closed, so a code outside this table cannot be
+Any `stop` ends the session in #287. `StopReason` is closed, so a code outside this table cannot be
 returned.
 
 ## Formula
@@ -209,12 +209,12 @@ trades only, and an unresolved trade stops the sizer, so the pre-check never und
 - It does not wire itself into a session, read the database or the env, or log.
 - It makes no backtest, no tuning and no profitability claim. A Martingale raises the stake after
   every loss; its limits bound the damage, they do not remove it.
-- It contains no user-facing text. The Russian wording of a stop reason belongs to #126/#130.
+- It contains no user-facing text. The Russian wording of a stop reason belongs to #126/#284.
 
 ## Boundaries
 
-- #130: the session (history from `trade_intents`/`broker_trades`, the balance snapshot, the env,
-  `trading_sessions.settings`, the decision journal).
+- #130: `trading_sessions.settings` v1 and the history read `readSessionHistory`
+  ([trading-session.md](trading-session.md)). #287: the orchestrator that feeds them to the sizer.
 - #89: the result of an unresolved trade.
 - `packages/shared` and `packages/db` are not changed. The bigint arithmetic moves to shared with a
   second consumer.

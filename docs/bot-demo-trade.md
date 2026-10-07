@@ -64,7 +64,7 @@ The checks run in this order, and the first one that fails answers:
    `ambiguous_account` gets `statusAmbiguous`, and any other reason gets
    «⏳ Баланс Binodex ещё не получен…».
 3. **The intent.** The amount is the broker's `minTradeAmount` string exactly as the backend sent
-   it. The bot never computes it (Rule 2). The stake sizer (#130) will replace this source later.
+   it. The bot never computes it (Rule 2). The stake sizer (#287) will replace this source later.
 
 ## Idempotency
 
@@ -192,6 +192,6 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
 - **#100** — the executor; until it is deployed, every intent is `rejected / executor_not_configured`.
 - **#90 / #101 / #29** — the trade's close and result, and the notification after `accepted`. The
   tracker stops at `accepted`.
-- **#130** — the stake chosen by the sizer and the session of five; today the stake is the broker's
+- **#287 / #284** — the stake chosen by the sizer and the session of five (worker / bot); today the stake is the broker's
   minimum.
 - **#121** — real mode.

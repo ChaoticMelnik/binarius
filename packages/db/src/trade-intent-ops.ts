@@ -76,7 +76,7 @@ export interface CreateTradeIntentResult {
 }
 
 // Required, with no default: every creator of intents (the route today, the session
-// orchestrator of #130 tomorrow) names the policy it runs under.
+// orchestrator of #287 tomorrow) names the policy it runs under.
 export interface TradePolicy {
   realTradingEnabled: boolean;
 }

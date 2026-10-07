@@ -21,7 +21,7 @@ export const TradingSessionStatus = {
 } as const;
 export type TradingSessionStatus = (typeof TradingSessionStatus)[keyof typeof TradingSessionStatus];
 
-// The session orchestrator's table (#130, docs/trading-session.md). `settings` is typed for the
+// The session orchestrator's table (#130; the orchestrator is #287; docs/trading-session.md). `settings` is typed for the
 // writers only: $type has no runtime effect, so the orchestrator parses the column at read.
 export const tradingSessions = pgTable(
   'trading_sessions',

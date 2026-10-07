@@ -24,7 +24,7 @@ import {
   PERCENT_DIVISOR,
 } from './money';
 
-// #130 maps trade_intents/broker_trades into this shape; the module does not know their statuses
+// #287 maps trade_intents/broker_trades into this shape; the module does not know their statuses
 export type SessionTrade =
   // profit is signed: < 0 a loss, 0 a tie, > 0 a win
   | { kind: typeof SessionTradeKind.Settled; stake: DecimalString; profit: DecimalString }

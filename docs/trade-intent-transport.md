@@ -54,6 +54,12 @@ bot ──GET /trading/intents/:id?telegramUserId=…──▶ backend ──▶
    `token_balance - token_reserved >= 1`); zero rows → 409 `user_blocked` or `insufficient_tokens`.
 5. Lock the account with `FOR NO KEY UPDATE` and the predicates `status = active`,
    `trading_halted = false`; zero rows → 409 `account_revoked`, `account_not_confirmed` (linked but not confirmed in the bot, see docs/binodex-oauth.md) or `account_halted`.
+5a. **A session intent only** (`createSessionIntent`, #130): lock the session row `FOR NO KEY
+   UPDATE` with `broker_account_id` = the account and `status = active`; zero rows →
+   `TradingSessionNotActiveError` (no wire code: the route never names a session), the reserve
+   rolls back. The insert below carries `trading_session_id`; the request key is
+   `session:<session id>:<step>`, so a repeated step is a replay
+   ([trading-session.md](trading-session.md)).
 6. Insert the intent (`planned`, `tokens_reserved = 1`), the ledger `reserve` row, move it to
    `reserved`, insert the outbox row, move it to `queued`, commit.
 7. After the commit the publisher is woken; a failed wake only logs (the poll picks the row up).
@@ -68,9 +74,9 @@ intended reaction.
 row, no reserve, no wake. The caller (#121) tells the user real mode is unavailable and offers
 demo; retrying is pointless until the deployment's configuration changes.
 
-**Lock order is `users` → `broker_accounts` → `trade_intents`, for every writer.** Creation
-takes the user row (reserve `UPDATE`), then the account (`FOR NO KEY UPDATE`), then inserts the
-intent; a rejection takes the user row (`FOR NO KEY UPDATE`) before it locks the intent it
+**Lock order is `users` → `broker_accounts` → `trading_sessions` → `trade_intents`, for every
+writer.** Creation takes the user row (reserve `UPDATE`), then the account (`FOR NO KEY UPDATE`),
+then — a session intent only — the session row (`FOR NO KEY UPDATE`), then inserts the intent; a rejection takes the user row (`FOR NO KEY UPDATE`) before it locks the intent it
 releases. The intent-first order deadlocked against a creation whose `INSERT` was waiting on
 the active-intent index while holding the user row. OAuth linking, revocation and ARCH-04 must
 keep the same order.
@@ -434,7 +440,8 @@ its reserve. The name, the default and the parsing live in `parseRealTradingEnab
   `GET /trading/intents/:id` is the status source, scoped by the owner since #127 because the id
   travels in a button's callback data ([GET /trading/intents/:id](#get-tradingintentsid-127));
   a notification dedupe key (#29) should be derived from the intent id and status.
-- `trading_session_id` stays `NULL` until #20 links intents to sessions.
+- `trading_session_id` is set only by `createSessionIntent` (#130, [trading-session.md](trading-session.md));
+  the route's and the bot's single trades keep `NULL`. The orchestrator that calls it is #287.
 
 ## Running it locally
 

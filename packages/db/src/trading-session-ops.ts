@@ -25,7 +25,7 @@ import {
   type TradePolicy,
 } from './trade-intent-ops';
 
-// The session orchestrator's operations (#130, docs/trading-session.md). Lock order: the creator
+// The session orchestrator's operations (#130; the orchestrator is #287; docs/trading-session.md). Lock order: the creator
 // takes users → broker_accounts, as intent creation does; the stops and the decision mark lock
 // session rows and nothing after them, so they never wait on a lock a creator holds while it
 // waits on theirs.
