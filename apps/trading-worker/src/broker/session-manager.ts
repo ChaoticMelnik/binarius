@@ -121,7 +121,6 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   const stopping = new AbortController();
   let startQueue: SessionCandidate[] = [];
   let workers = 0;
-  let stopped = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let ticking: Promise<void> | undefined;
 
@@ -335,12 +334,11 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     try {
       outcome = await fetchToken(accountId);
     } catch (error) {
-      if (stopped || !isCurrent(accountId, entry)) return;
-      logger.error({ accountId, ...errorLogFields(error) }, 'broker session start failed');
-      drop(accountId, config.retryMs);
+      if (stopping.signal.aborted || !isCurrent(accountId, entry)) return;
+      startFailed(accountId, error);
       return;
     }
-    if (stopped || !isCurrent(accountId, entry)) return;
+    if (stopping.signal.aborted || !isCurrent(accountId, entry)) return;
     entry.refreshing = false;
     if (!outcome.ok) {
       drop(accountId, holdBackFor(accountId, outcome));
@@ -353,14 +351,20 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     }
     entry.token = outcome.accessToken;
     entry.verified = false;
+    startClient(entry, outcome.accessToken);
+  }
+
+  // a throw out of a token source or a client's start() is a bug by contract
+  function startFailed(accountId: string, error: unknown) {
+    logger.error({ accountId, ...errorLogFields(error) }, 'broker session start failed');
+    drop(accountId, config.retryMs);
+  }
+
+  function startClient(entry: RunningEntry, accessToken: string) {
     try {
-      entry.client.start({
-        brokerUserId: entry.candidate.brokerUserId,
-        accessToken: outcome.accessToken,
-      });
+      entry.client.start({ brokerUserId: entry.candidate.brokerUserId, accessToken });
     } catch (error) {
-      logger.error({ accountId, ...errorLogFields(error) }, 'broker session start failed');
-      drop(accountId, config.retryMs);
+      startFailed(entry.candidate.id, error);
     }
   }
 
@@ -372,12 +376,11 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     try {
       outcome = await fetchToken(accountId);
     } catch (error) {
-      if (stopped || !isCurrent(accountId, starting)) return;
-      logger.error({ accountId, ...errorLogFields(error) }, 'broker session start failed');
-      drop(accountId, config.retryMs);
+      if (stopping.signal.aborted || !isCurrent(accountId, starting)) return;
+      startFailed(accountId, error);
       return;
     }
-    if (stopped || !isCurrent(accountId, starting)) return;
+    if (stopping.signal.aborted || !isCurrent(accountId, starting)) return;
     if (!outcome.ok) {
       drop(accountId, holdBackFor(accountId, outcome));
       return;
@@ -398,22 +401,14 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     entries.set(accountId, entry);
     entry.client.onEvent((event) => onEvent(entry, event));
     entry.client.onState((change) => onState(entry, change));
-    try {
-      entry.client.start({
-        brokerUserId: candidate.brokerUserId,
-        accessToken: outcome.accessToken,
-      });
-    } catch (error) {
-      logger.error({ accountId, ...errorLogFields(error) }, 'broker session start failed');
-      drop(accountId, config.retryMs);
-    }
+    startClient(entry, outcome.accessToken);
   }
 
   async function worker() {
     workers += 1;
     try {
       for (let next = startQueue.shift(); next !== undefined; next = startQueue.shift()) {
-        if (stopped) return;
+        if (stopping.signal.aborted) return;
         if (entries.has(next.id) || heldBack.has(next.id)) continue;
         await startOne(next);
       }
@@ -423,7 +418,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   }
 
   function startWorkers() {
-    while (!stopped && workers < config.startConcurrency && startQueue.length > 0) void worker();
+    while (!stopping.signal.aborted && workers < config.startConcurrency && startQueue.length > 0)
+      void worker();
   }
 
   async function runTick() {
@@ -441,7 +437,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       logger.error(errorLogFields(error), 'broker session tick failed');
       return;
     }
-    if (stopped) return;
+    if (stopping.signal.aborted) return;
 
     const present = new Set(candidates.map((candidate) => candidate.id));
     const at = Date.now();
@@ -492,7 +488,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   }
 
   function tick(): Promise<void> {
-    if (stopped) return Promise.resolve();
+    if (stopping.signal.aborted) return Promise.resolve();
     ticking ??= runTick()
       .catch((error: unknown) => {
         logger.error(errorLogFields(error), 'broker session tick failed');
@@ -504,8 +500,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   }
 
   async function stop() {
-    if (stopped) return;
-    stopped = true;
+    if (stopping.signal.aborted) return;
     if (timer !== undefined) clearInterval(timer);
     timer = undefined;
     stopping.abort();
@@ -545,7 +540,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
 
   return {
     start() {
-      if (stopped || timer !== undefined) return;
+      if (stopping.signal.aborted || timer !== undefined) return;
       void tick();
       timer = setInterval(() => void tick(), config.tickMs);
     },

@@ -23,6 +23,7 @@ import {
   type BrokerSocketClient,
   type SocketOpenTradeResult,
 } from '../broker/socket';
+import { BACKEND_URL_RULES, BROKER_WS_URL_RULES } from '../env';
 import {
   compareDecimal,
   renderVerdict,
@@ -53,14 +54,8 @@ const BELOW_MINIMUM = decimalStringSchema.parse('0.01');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const env = process.env;
-const url = parseUrlEnv(readEnv(env, 'BROKER_WS_URL'), 'BROKER_WS_URL', {
-  protocols: ['https:', 'wss:'],
-  allowIpv6Literal: false,
-});
-const backendUrl = parseUrlEnv(readEnv(env, 'BACKEND_URL'), 'BACKEND_URL', {
-  protocols: ['http:', 'https:'],
-  allowIpv6Literal: false,
-});
+const url = parseUrlEnv(readEnv(env, 'BROKER_WS_URL'), 'BROKER_WS_URL', BROKER_WS_URL_RULES);
+const backendUrl = parseUrlEnv(readEnv(env, 'BACKEND_URL'), 'BACKEND_URL', BACKEND_URL_RULES);
 const internalToken = parseInternalTokenEnv(
   readEnv(env, 'INTERNAL_API_TOKEN'),
   'INTERNAL_API_TOKEN',
