@@ -106,84 +106,86 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     }
   };
 
-  app.post('/admin/auth/login', { bodyLimit: ADMIN_BODY_LIMIT_BYTES }, async (request, reply) => {
-    if (loginCeiling.take().over) {
-      return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
-    }
-    const parsed = safeParseAdminLoginRequest(request.body);
-    if (!parsed.success) {
-      return reply
-        .code(400)
-        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
-    }
-    const { login, password, ip, userAgent } = parsed.data;
-
-    const staff = await findStaffForLogin(deps.db, login);
-    if (staff === undefined || staff.status !== StaffStatus.Active) {
-      if (unknownLogins.take(login.toLowerCase())) {
+  app.post(
+    '/admin/auth/login',
+    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      if (loginCeiling.take().over) {
         return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
       }
-      // the same derivation a live account costs, so the answer does not say which it was
-      const spent = await hash(DUMMY_PASSWORD_HASH, password);
-      if (spent === 'refused') {
+      const parsed = safeParseAdminLoginRequest(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+      }
+      const { login, password, ip, userAgent } = parsed.data;
+
+      const staff = await findStaffForLogin(deps.db, login);
+      if (staff === undefined || staff.status !== StaffStatus.Active) {
+        if (unknownLogins.take(login.toLowerCase())) {
+          return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+        }
+        // the same derivation a live account costs, so the answer does not say which it was
+        const spent = await hash(DUMMY_PASSWORD_HASH, password);
+        if (spent === 'refused') {
+          return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+        }
+        await recordLoginRefusal(deps.db, {
+          staffId: staff?.id ?? null,
+          reason: staff === undefined ? 'unknown_login' : 'disabled',
+          ip,
+        });
+        return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
+      }
+
+      // null unless a lockout is running right now, by the database's clock (findStaffForLogin)
+      if (staff.lockedUntil !== null) {
+        await recordLoginLockout(deps.db, { staffId: staff.id, ip, lockedUntil: staff.lockedUntil });
         return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
       }
-      await recordLoginRefusal(deps.db, {
-        staffId: staff?.id ?? null,
-        reason: staff === undefined ? 'unknown_login' : 'disabled',
-        ip,
-      });
-      return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
-    }
 
-    // null unless a lockout is running right now, by the database's clock (findStaffForLogin)
-    if (staff.lockedUntil !== null) {
-      await recordLoginLockout(deps.db, { staffId: staff.id, ip, lockedUntil: staff.lockedUntil });
-      return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
-    }
+      const correct = await hash(staff.passwordHash, password);
+      if (correct === 'refused') {
+        return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+      }
+      if (!correct) {
+        await registerPasswordFailure(deps.db, {
+          staffId: staff.id,
+          passwordHash: staff.passwordHash,
+          ip,
+        });
+        return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
+      }
 
-    const correct = await hash(staff.passwordHash, password);
-    if (correct === 'refused') {
-      return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
-    }
-    if (!correct) {
-      await registerPasswordFailure(deps.db, {
+      // The hash the derivation above ran against, re-checked inside the transaction: about
+      // 250 ms passed, and a reset, a disable or a lockout in that window has to win.
+      const started = await startLoginChallenge(deps.db, {
         staffId: staff.id,
         passwordHash: staff.passwordHash,
         ip,
+        userAgent,
       });
-      return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
-    }
-
-    // The hash the derivation above ran against, re-checked inside the transaction: about
-    // 250 ms passed, and a reset, a disable or a lockout in that window has to win.
-    const started = await startLoginChallenge(deps.db, {
-      staffId: staff.id,
-      passwordHash: staff.passwordHash,
-      ip,
-      userAgent,
-    });
-    if (!started.ok) {
-      return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
-    }
-
-    // `deliverPrompt` runs for two reasons: an invitation is owed, or polling is down and the
-    // fail-closed gate inside it has to run even though nothing is owed — a reused challenge is
-    // otherwise five minutes of waiting for a button that cannot arrive.
-    if (started.sendPrompt || !deps.telegram.isPolling()) {
-      const delivered = await deliverPrompt(started.challengeId, staff, { ip, userAgent });
-      // 'closed' means the challenge is gone and nobody can be waiting on it. 'moved on' means
-      // the button was pressed while the message was in flight: the code is already on its way
-      // to the same person, so answering 503 would be a lie about a challenge that is alive.
-      if (delivered === 'closed') {
-        return reply.code(503).send({ error: AdminErrorCode.TelegramUnavailable });
+      if (!started.ok) {
+        return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
       }
-    }
-    return reply.send({
-      challengeId: started.challengeId,
-      expiresAt: started.expiresAt.toISOString(),
-    });
-  });
+
+      // `deliverPrompt` runs for two reasons: an invitation is owed, or polling is down and the
+      // fail-closed gate inside it has to run even though nothing is owed — a reused challenge is
+      // otherwise five minutes of waiting for a button that cannot arrive.
+      if (started.sendPrompt || !deps.telegram.isPolling()) {
+        const delivered = await deliverPrompt(started.challengeId, staff, { ip, userAgent });
+        // 'closed' means the challenge is gone and nobody can be waiting on it. 'moved on' means
+        // the button was pressed while the message was in flight: the code is already on its way
+        // to the same person, so answering 503 would be a lie about a challenge that is alive.
+        if (delivered === 'closed') {
+          return reply.code(503).send({ error: AdminErrorCode.TelegramUnavailable });
+        }
+      }
+      return reply.send({
+        challengeId: started.challengeId,
+        expiresAt: started.expiresAt.toISOString(),
+      });
+    },
+  );
 
   // Outside the transaction that created the challenge: a Bot API call must not be held open
   // across a commit. A process that dies between the two leaves prompt_sent_at NULL, and the
@@ -230,36 +232,38 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     return 'sent';
   }
 
-  app.post('/admin/auth/confirm', { bodyLimit: ADMIN_BODY_LIMIT_BYTES }, async (request, reply) => {
-    if (confirmCeiling.take().over) {
-      return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
-    }
-    const parsed = safeParseAdminConfirmRequest(request.body);
-    if (!parsed.success) {
-      return reply
-        .code(400)
-        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
-    }
-    const { challengeId, code, ip, userAgent } = parsed.data;
-    const completed = await completeLogin(deps.db, { challengeId, code, ip, userAgent });
-    if (completed.ok) {
-      return reply.send({
-        sessionToken: completed.sessionToken,
-        expiresAt: completed.expiresAt.toISOString(),
-      });
-    }
-    // 401 while attempts remain, 410 on the last one: telling someone to retry a challenge
-    // that the same call just exhausted costs them one more round trip to find out
-    if (completed.reason === 'wrong_code' && completed.exhausted !== true) {
-      return reply.code(401).send({ error: AdminErrorCode.InvalidCode });
-    }
-    if (completed.reason === 'awaiting_telegram') {
-      return reply.code(409).send({ error: AdminErrorCode.AwaitingTelegram });
-    }
-    // every other reason — expired, denied, exhausted, failed, completed, a disabled owner,
-    // an id nobody was issued — is one answer: this attempt is over, start again
-    return reply.code(410).send({ error: AdminErrorCode.ChallengeUnavailable });
-  });
+  app.post(
+    '/admin/auth/confirm',
+    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      if (confirmCeiling.take().over) {
+        return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+      }
+      const parsed = safeParseAdminConfirmRequest(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+      }
+      const { challengeId, code, ip, userAgent } = parsed.data;
+      const completed = await completeLogin(deps.db, { challengeId, code, ip, userAgent });
+      if (completed.ok) {
+        return reply.send({
+          sessionToken: completed.sessionToken,
+          expiresAt: completed.expiresAt.toISOString(),
+        });
+      }
+      // 401 while attempts remain, 410 on the last one: telling someone to retry a challenge
+      // that the same call just exhausted costs them one more round trip to find out
+      if (completed.reason === 'wrong_code' && completed.exhausted !== true) {
+        return reply.code(401).send({ error: AdminErrorCode.InvalidCode });
+      }
+      if (completed.reason === 'awaiting_telegram') {
+        return reply.code(409).send({ error: AdminErrorCode.AwaitingTelegram });
+      }
+      // every other reason — expired, denied, exhausted, failed, completed, a disabled owner,
+      // an id nobody was issued — is one answer: this attempt is over, start again
+      return reply.code(410).send({ error: AdminErrorCode.ChallengeUnavailable });
+    },
+  );
 
   /** The session token, checked for shape before the database is asked anything. */
   const tokenOf = (request: { headers: Record<string, unknown> }): string | undefined => {
