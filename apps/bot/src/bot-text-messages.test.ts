@@ -9,6 +9,8 @@ import {
   botTextMessageKeys,
   defaultBotTextSource,
   estimateBotTextMessage,
+  botTextChangeProblems,
+  resolveBotTextOverrides,
   INT4_MAX,
   LinkBonusSkipReason,
   MomentumDirection,
@@ -62,6 +64,7 @@ import {
   LABELS,
   setBotTextSource,
   statusCard,
+  TEXTS,
   type StatusCardInput,
 } from './texts';
 
@@ -327,6 +330,33 @@ describe('the assembled messages, against the real assembly', () => {
     expect(formatUsd('0')).toHaveLength(W.zeroUsd);
     expect(formatCount(COUNT)).toHaveLength(W.count);
     expect(COUNT).toHaveLength(W.rawCount);
+  });
+
+  it.each(['intentStatus', 'analysisSignal', 'analysisNoSignal'])(
+    'M5 estimates %s exactly with markup and entities in the labels',
+    (id) => {
+      const texts = { actionUp: '<b></b>'.repeat(9), actionDown: '&amp;'.repeat(12) };
+      const message = ASSEMBLED.find((m) => m.id === id)!;
+      setBotTextSource(recording(texts).source);
+      const real = Math.max(...REAL[id]!().map(lengthOf));
+      expect(real).toBe(estimateBotTextMessage(message, recording(texts).source));
+    },
+  );
+
+  // two overrides, each valid on its own, must not break /account for an unknown address
+  it('V11 renders an overridden account line with an overridden unknown address', () => {
+    const line = { key: 'accountLineActive', source: '✅ Подключён: <code>{email}</code>' };
+    const unknown = { key: 'accountUnknownAddress', source: '<b>адрес неизвестен</b>' };
+    const resolved = resolveBotTextOverrides([line, unknown]);
+    expect([...resolved.texts.keys()].sort()).toEqual([
+      'accountLineActive',
+      'accountUnknownAddress',
+    ]);
+    expect(botTextChangeProblems(unknown.key, unknown.source, [line])).toEqual([]);
+    setBotTextSource(resolved.source);
+    expect(TEXTS.accountLineActive(null).value).toBe(
+      '✅ Подключён: <code>&lt;b&gt;адрес неизвестен&lt;/b&gt;</code>',
+    );
   });
 
   it.each(['intentStatus', 'analysisSignal', 'analysisNoSignal'])(

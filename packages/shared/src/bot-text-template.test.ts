@@ -148,10 +148,13 @@ describe('createBotTextViews', () => {
     expect(plain.plainHost).toBe(`${HOSTILE}!`);
   });
 
-  it('escapes a string argument and nests a TelegramHtml one', () => {
+  // #299 V12: html goes into html only through a declared fragment, which the validator checks
+  it('escapes a string argument; a non-string argument throws InvalidBotText', () => {
     const { html, plain } = createBotTextViews(CATALOG, sourceOf({ msg: '{v}, {v}' }));
     expect(html.msg(HOSTILE).value).toBe('&lt;&amp;&gt;&quot;, &lt;&amp;&gt;&quot;');
-    expect(html.msg(telegramHtml`<i>${'&'}</i>`).value).toBe('<i>&amp;</i>, <i>&amp;</i>');
+    expect(() => html.msg(telegramHtml`<i>${'&'}</i>` as unknown as string)).toThrow(
+      InvalidBotText,
+    );
     expect(plain.line(HOSTILE)).toBe(HOSTILE);
   });
 

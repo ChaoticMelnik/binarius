@@ -11,7 +11,9 @@ import {
   type BotTextOverrideRow,
   type BotTextRejection,
 } from './bot-text-overrides';
+import { BOT_TEXT_MESSAGES, estimateBotTextMessage } from './bot-text-messages';
 import { BOT_TEXT_CATALOG, type BotTextKey } from './bot-texts';
+import { TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
 
 const row = (key: string, source: string, version = 1): BotTextOverrideRow => ({
   key,
@@ -124,6 +126,22 @@ describe('resolveBotTextOverrides', () => {
       connectButton: BotTextRejectionCode.MessageOverflow,
       welcome: BotTextRejectionCode.Invalid,
     });
+  });
+
+  it('V13 counts a plain label with markup at the length it is shown', () => {
+    const intent = BOT_TEXT_MESSAGES.find((m) => m.id === 'intentStatus')!;
+    const base = estimateBotTextMessage(intent, resolveBotTextOverrides([]).source);
+    // 30 characters below the limit on its own; the label adds 63 shown characters
+    const filler = 'я'.repeat(TELEGRAM_MESSAGE_LIMIT - 30 - base - 1);
+    const deadline = row('intentDeadline', `${BOT_TEXT_CATALOG.intentDeadline.source}\n${filler}`);
+    const action = row('actionUp', '<b></b>'.repeat(9));
+    expect(accepted([deadline])).toEqual(['intentDeadline']);
+    expect(accepted([action])).toEqual(['actionUp']);
+    expect(codes([deadline, action])).toEqual({
+      intentDeadline: BotTextRejectionCode.MessageOverflow,
+      actionUp: BotTextRejectionCode.MessageOverflow,
+    });
+    expect(botTextChangeProblems('actionUp', action.source, [deadline])).not.toEqual([]);
   });
 
   it('V9 rejects nothing with no overrides', () => {

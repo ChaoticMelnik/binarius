@@ -2619,6 +2619,14 @@ describe('bot_text_overrides (#299)', () => {
     });
   });
 
+  // every version stays exact as the JS number the column is read into (#299 review)
+  it('caps the version sequence at Number.MAX_SAFE_INTEGER', async () => {
+    const { rows } = await pool.query<{ seqmax: string }>(
+      `select seqmax::text from pg_sequence where seqrelid = 'bot_text_override_version_seq'::regclass`,
+    );
+    expect(rows).toEqual([{ seqmax: String(Number.MAX_SAFE_INTEGER) }]);
+  });
+
   it('gives every write a new version from the sequence', async () => {
     await rolledBack(async (tx) => {
       const [first] = await save(tx);

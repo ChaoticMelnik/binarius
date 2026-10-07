@@ -102,8 +102,10 @@ export type BotHtmlKeyOf<C> = {
 }[KeyOf<C>];
 export type BotPlainKeyOf<C> = Exclude<KeyOf<C>, BotHtmlKeyOf<C>>;
 export type BotHtmlTextsOf<C> = {
+  // a string only: html is nested into html through declared fragments, which the validator
+  // renders and checks; a TelegramHtml argument would go in unchecked (#299)
   readonly [K in BotHtmlKeyOf<C>]: C[K] extends { arg: string }
-    ? (value: string | TelegramHtml) => TelegramHtml
+    ? (value: string) => TelegramHtml
     : TelegramHtml;
 };
 export type BotPlainTextsOf<C> = {
@@ -324,9 +326,14 @@ export function createBotTextViews<C extends BotTextCatalog>(
     const holesWith = (value: unknown): unknown[] =>
       parsed.names.map((name) => (name === entry.arg ? value : fragments.get(name)));
     if (entry.kind === BotTextKind.Html) {
-      const render = (value?: string | TelegramHtml): TelegramHtml =>
+      const render = (value?: string): TelegramHtml =>
         telegramHtmlTemplate(parsed.statics, holesWith(value) as TelegramHtmlHole[]);
-      return entry.arg === undefined ? render() : (value: string | TelegramHtml) => render(value);
+      if (entry.arg === undefined) return render();
+      // the type says string; a cast or a JS caller could still pass a TelegramHtml
+      return (value: string) => {
+        if (typeof value !== 'string') throw new InvalidBotText();
+        return render(value);
+      };
     }
     const render = (value?: string): string =>
       assemble(parsed, (name) => String(name === entry.arg ? value : fragments.get(name))).text;

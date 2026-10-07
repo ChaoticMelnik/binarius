@@ -114,12 +114,12 @@ export const ACTION_LABELS = labelsOf({
 const NOT_IN_TEXTS = ['cardGreetingNoName', 'featureLines', 'oauthLoginFailed'] as const;
 type TextKey = Exclude<BotHtmlKey, (typeof NOT_IN_TEXTS)[number]>;
 
-// in place of an address the broker did not send; a fragment, so it is nested without a second
-// escape
+// in place of an address the broker did not send; plain, escaped as data like the address it
+// stands in for
 const lineWithAddress =
   (key: 'accountLineActive' | 'accountLinePending' | 'accountLineRevoked') =>
   (email: string | null): TelegramHtml =>
-    html[key](email ?? html.accountUnknownAddress);
+    html[key](email ?? plain.accountUnknownAddress);
 
 export const TEXTS = facadeOf(
   html,

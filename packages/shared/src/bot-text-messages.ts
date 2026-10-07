@@ -1,3 +1,4 @@
+import { USER_ACCOUNT_LIST_LIMIT } from './account';
 import { BotTextKind, type BotTextSource } from './bot-text-template';
 import {
   BOT_TEXT_CATALOG,
@@ -58,8 +59,8 @@ export const BOT_TEXT_WIDTHS = {
   candles: 5,
   // durationLabelOf's fallback on an int4 duration: ⏱ 2147483647 с
   durationFallback: 14,
-  // the /account lines: at most this many links per user
-  accountLines: 10,
+  // the /account lines: POST /users/account answers at most this many links
+  accountLines: USER_ACCOUNT_LIST_LIMIT,
   // a session's counters: sessionFitsDeadline starts at most 60 trades
   sessionCount: 3,
 } as const;
@@ -492,14 +493,13 @@ export const BOT_TEXT_MESSAGES: readonly BotTextMessage[] = [
 
 function measureOf(lookup: BotTextSource<BotTextKey>): BotTextMeasure {
   const { html, plain } = createBotTexts(lookup);
+  // an html text is measured after entities parsing; a plain one is escaped and shown as written
   const length = (key: BotTextKey, argWidth = 0): number => {
-    const view: unknown =
-      BOT_TEXT_CATALOG[key].kind === BotTextKind.Html
-        ? html[key as BotHtmlKey]
-        : plain[key as BotPlainKey];
+    const isHtml = BOT_TEXT_CATALOG[key].kind === BotTextKind.Html;
+    const view: unknown = isHtml ? html[key as BotHtmlKey] : plain[key as BotPlainKey];
     const value =
       typeof view === 'function' ? (view as (arg: string) => unknown)('x'.repeat(argWidth)) : view;
-    return plainTextOf(String(value)).length;
+    return isHtml ? plainTextOf(String(value)).length : String(value).length;
   };
   return { length, longest: (...keys) => Math.max(...keys.map((key) => length(key))) };
 }

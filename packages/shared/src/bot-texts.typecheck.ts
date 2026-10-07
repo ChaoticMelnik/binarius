@@ -8,7 +8,6 @@ const { html, plain } = createBotTexts(defaultBotTextSource);
 
 export const staticHtml: TelegramHtml = html.welcome;
 export const htmlWithString: TelegramHtml = html.codeSent('ada@example.com');
-export const htmlWithHtml: TelegramHtml = html.accountLineActive(telegramHtml`адрес`);
 export const staticPlain: string = plain.connectButton;
 export const plainWithString: string = plain.confirmButton('ada@example.com');
 
@@ -18,5 +17,7 @@ export const callStatic = html.welcome('x');
 export const plainOnHtml = html.connectButton;
 // @ts-expect-error an argument is text, never null: the caller decides what null reads as (TS2345)
 export const nullArgument = html.codeSent(null);
+// @ts-expect-error a TelegramHtml argument would nest unchecked html; nesting goes through declared fragments (TS2345)
+export const htmlWithHtml = html.accountLineActive(telegramHtml`адрес`);
 // @ts-expect-error a plain text is never parsed, so it takes no TelegramHtml (TS2345)
 export const htmlIntoPlain = plain.confirmButton(telegramHtml`x`);

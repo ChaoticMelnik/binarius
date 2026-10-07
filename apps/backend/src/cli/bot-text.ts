@@ -1,5 +1,4 @@
-import { readFile } from 'node:fs/promises';
-import { buffer } from 'node:stream/consumers';
+import { open } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { Pool } from 'pg';
@@ -50,8 +49,9 @@ const APPLIED_WITHIN_S = 35;
 export interface BotTextIo {
   out(line: string): void;
   err(line: string): void;
-  readFile(path: string): Promise<Uint8Array>;
-  readStdin(): Promise<Uint8Array>;
+  // at most `maxBytes`: one byte over the cap is enough to refuse, and the rest is never read
+  readFile(path: string, maxBytes: number): Promise<Uint8Array>;
+  readStdin(maxBytes: number): Promise<Uint8Array>;
 }
 
 type Parsed =
@@ -113,6 +113,38 @@ export function parseBotTextArgs(argv: readonly string[]): Parsed {
   }
   if (values.file === undefined) throw new UsageError('нужен --file <путь> или --file -');
   return { command, key, file: values.file, ...(version === undefined ? {} : { version }) };
+}
+
+// A path like /dev/zero or a pipe with no end is read only as far as the cap needs.
+export async function readAtMost(path: string, maxBytes: number): Promise<Uint8Array> {
+  const handle = await open(path, 'r');
+  try {
+    const bytes = Buffer.alloc(maxBytes);
+    let total = 0;
+    while (total < maxBytes) {
+      const { bytesRead } = await handle.read(bytes, total, maxBytes - total, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    return bytes.subarray(0, total);
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function streamAtMost(
+  stream: AsyncIterable<Uint8Array>,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  // leaving the loop early closes the stream
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+    total += chunk.length;
+    if (total >= maxBytes) break;
+  }
+  return Buffer.concat(chunks).subarray(0, maxBytes);
 }
 
 // Strict UTF-8, no BOM, LF line ends, and the one trailing newline an editor adds taken off.
@@ -205,7 +237,9 @@ export async function runBotTextCli(
   if (parsed.command === 'set') {
     try {
       fileText = decodeBotTextFile(
-        await (parsed.file === '-' ? io.readStdin() : io.readFile(parsed.file)),
+        await (parsed.file === '-'
+          ? io.readStdin(FILE_MAX_BYTES + 1)
+          : io.readFile(parsed.file, FILE_MAX_BYTES + 1)),
       );
     } catch (error) {
       io.err(
@@ -277,8 +311,8 @@ if (entrypoint !== undefined && import.meta.url === pathToFileURL(entrypoint).hr
   const code = await runBotTextCli(process.argv.slice(2), process.env, {
     out: (line) => process.stdout.write(`${line}\n`),
     err: (line) => process.stderr.write(`${line}\n`),
-    readFile: (path) => readFile(path),
-    readStdin: () => buffer(process.stdin),
+    readFile: readAtMost,
+    readStdin: (maxBytes) => streamAtMost(process.stdin, maxBytes),
   });
   process.exit(code);
 }
