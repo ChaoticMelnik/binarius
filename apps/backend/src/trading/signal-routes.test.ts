@@ -28,6 +28,7 @@ import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
   unusedPairsDeps,
+  unusedSessionDeps,
 } from './testing';
 
 const I = SIGNAL_CHART_INTERVAL_MS['1m'];
@@ -79,6 +80,7 @@ function appWith(feed: SignalRoutesDeps['feed']): FastifyInstance {
       accessToken: unusedAccessTokenDeps(),
     },
     pairs: unusedPairsDeps(),
+    sessions: unusedSessionDeps(),
     signal: { feed, internalApiToken: PAIRS_TEST_TOKEN },
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
     users: { db: {} as UsersRoutesDeps['db'], internalApiToken: PAIRS_TEST_TOKEN },

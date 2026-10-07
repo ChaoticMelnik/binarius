@@ -10,6 +10,7 @@ import {
 } from '@binarius/shared/broker-balance';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import { SIGNAL_CHART_INTERVAL_MS, TRADING_SIGNAL_BUDGET_MS } from '@binarius/shared/signal';
+import { TRADING_SESSION_START_BUDGET_MS } from '@binarius/shared/trading-session';
 import {
   composeDurationMs,
   composeServiceEnvValue,
@@ -91,6 +92,11 @@ describe('broker balance timing', () => {
   it('fits the route GET inside the route budget and the budget inside phase 1', () => {
     expect(TRADING_ACCESS_REFRESH_BUDGET_MS).toBeLessThan(TRADING_ACCESS_BUDGET_MS);
     expect(TRADING_ACCESS_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  it('fits the balance GET inside the session start budget and the budget inside phase 1', () => {
+    expect(TRADING_ACCESS_REFRESH_BUDGET_MS).toBeLessThan(TRADING_SESSION_START_BUDGET_MS);
+    expect(TRADING_SESSION_START_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   it('ends the signal route chart GET by its own budget, inside the route budget and phase 1', () => {

@@ -122,6 +122,12 @@ const app = buildApp({
     catalog: pairsCatalog,
     internalApiToken: env.internalApiToken,
   },
+  sessions: {
+    db,
+    catalog: pairsCatalog,
+    balance: { refresh: (accountId, options) => balanceReconciler.refresh(accountId, options) },
+    internalApiToken: env.internalApiToken,
+  },
   signal: {
     feed: signalFeed,
     internalApiToken: env.internalApiToken,

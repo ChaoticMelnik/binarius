@@ -15,6 +15,7 @@ import {
   unusedBalanceDeps,
   unusedPairsDeps,
   unusedSignalDeps,
+  unusedSessionDeps,
 } from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -35,6 +36,7 @@ let app: ReturnType<typeof buildApp>;
 const appWith = () =>
   buildApp({
     pairs: unusedPairsDeps(),
+    sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
     admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),

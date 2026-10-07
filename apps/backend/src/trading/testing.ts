@@ -5,6 +5,7 @@ import type { PairsCatalogView } from '@binarius/shared';
 import type { SignalEvaluation } from '@binarius/signal';
 import type { PairsRoutesDeps } from './pairs-routes';
 import type { TradingRoutesDeps } from './routes';
+import type { TradingSessionRoutesDeps } from './session-routes';
 import type { SignalRoutesDeps } from './signal-routes';
 
 export const PAIRS_TEST_TOKEN = 'internal-token-for-tests';
@@ -50,5 +51,13 @@ export const unusedSignalDeps = (): SignalRoutesDeps => ({
       throw new Error('the signal feed is not wired in this test');
     },
   },
+  internalApiToken: PAIRS_TEST_TOKEN,
+});
+
+// for suites that never call the /trading/sessions routes
+export const unusedSessionDeps = (): TradingSessionRoutesDeps => ({
+  db: {} as TradingSessionRoutesDeps['db'],
+  catalog: fakeCatalog(undefined),
+  balance: unusedBalanceDeps(),
   internalApiToken: PAIRS_TEST_TOKEN,
 });
