@@ -2,9 +2,10 @@
 
 `apps/trading-worker/src/stake/` decides the amount of the next trade in a session, or stops the
 session with a reason. It is a pure function: it reads no clock, no environment, no network and no
-database, and writes no log. The same parameters and input always give the same decision. Nothing
-in the worker calls it yet. The `trading_sessions.settings` shape and the session's history read are in place
-(#130, [trading-session.md](trading-session.md)); wiring the module into a session is #287.
+database, and writes no log. The same parameters and input always give the same decision. Its
+caller is the session orchestrator (#287, `trading-session/orchestrator.ts`,
+[trading-session.md](trading-session.md)), which builds `{ strategy: 'fixed', ...settings.stake }`
+from `trading_sessions.settings` v1 and feeds it the session's history (#130).
 
 Two strategies exist. `fixed` sends the same stake every time and is the default. `martingale` is
 a bounded Martingale: after each loss the next stake recovers the loss of the streak plus the
@@ -31,22 +32,22 @@ carries `version` (`STAKE_ALGORITHM_VERSION`, `'v1'`) but not the parameters, so
 
 ## Inputs
 
-| Field | Type | Source (#287) |
+| Field | Type | Source (the orchestrator, #287) |
 |---|---|---|
 | `history` | `readonly SessionTrade[]` | the session's trades in creation order |
 | `payout` | number | `BinaryPair.payout` of the pair about to be traded; `fixed` does not read it |
 | `minTradeAmount` | `DecimalString` | `broker_balance_snapshots.min_trade_amount` of the account |
 | `available` | `DecimalString` | `broker_balance_snapshots.<mode>_available` |
-| `sessionStartedAtMs`, `nowMs` | number | the caller's clock |
+| `sessionStartedAtMs`, `nowMs` | number | the session's `started_at` (database clock); the worker's clock, clamped to `started_at` so a worker clock behind the database's never throws (`orchestrator.db.test.ts` E11) |
 
 `SessionTrade` is the module's own shape, so the module does not depend on the `trade_intents`
 statuses:
 
-| `kind` | Fields | #287 maps from |
+| `kind` | Fields | The orchestrator (#287) maps from |
 |---|---|---|
 | `settled` | `stake`, `profit` (signed: `< 0` loss, `0` tie, `> 0` win) | `settled`, with `broker_trades.profit` |
 | `rejected` | — | `rejected`: the order certainly never opened |
-| `unresolved` | — | `accepted`, `unknown`, `reconciling`, `manual_review` and any status without a result |
+| `unresolved` | — | `manual_review`, a `settled` intent without its trade's profit, and any status without a result; a live intent never reaches the sizer, the attempt reschedules first |
 
 ## Data policy
 
@@ -99,15 +100,15 @@ of any size or the start of the history ends the walk; `realizedSessionLoss = ma
 over every settled trade; `sessionElapsedMs = nowMs - sessionStartedAtMs`; `step = 1` for `fixed`
 and `consecutiveLosses + 1` for `martingale`.
 
-| Code | Source | What the caller (#287) does |
+| Code | Source | What the orchestrator (#287) does |
 |---|---|---|
-| `unresolved_trade` | a trade without a result | the session waits until reconciliation (#89) gives a result; no new stake is issued, which guards against counting a trade twice |
+| `unresolved_trade` | a trade without a result | a live intent never gets here: the attempt reschedules until it is terminal (reconciliation, #89, gives an `unknown` one its result). What reaches the sizer — `manual_review`, a `settled` intent without its profit — stops the session as `stake_stop`; no new stake is issued, which guards against counting a trade twice |
 | `invalid_amount`, `invalid_trade`, `invalid_payout` | the data contract (a database row or the pairs catalog) | stops the session and logs a contract problem; the same data gives the same answer |
 | `session_duration_exceeded`, `max_steps_exceeded`, `max_stake_exceeded`, `max_session_loss_exceeded` | a martingale limit | ends the session with the reason |
 | `below_min_trade_amount` | the account's broker minimum (`GET /broker/user`) | ends the session; the broker would answer 400 `Amount is below the minimum` |
 | `insufficient_balance` | the mode's balance in the snapshot | ends the session; the broker would answer 400 `Insufficient balance` |
 
-Any `stop` ends the session in #287. `StopReason` is closed, so a code outside this table cannot be
+Any `stop` ends the session as `stake_stop`, with the code in the log line (#287). `StopReason` is closed, so a code outside this table cannot be
 returned.
 
 ## Formula
@@ -214,7 +215,8 @@ trades only, and an unresolved trade stops the sizer, so the pre-check never und
 ## Boundaries
 
 - #130: `trading_sessions.settings` v1 and the history read `readSessionHistory`
-  ([trading-session.md](trading-session.md)). #287: the orchestrator that feeds them to the sizer.
+  ([trading-session.md](trading-session.md)). #287: the orchestrator that feeds them to the sizer
+  (shipped).
 - #89: the result of an unresolved trade.
 - `packages/shared` and `packages/db` are not changed. The bigint arithmetic moves to shared with a
   second consumer.

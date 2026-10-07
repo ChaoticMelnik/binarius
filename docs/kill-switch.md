@@ -13,7 +13,9 @@ While the switch is closed:
 - a queued intent whose job arrives is rejected with `trading_paused`, its token released, and
   nothing reaches the broker;
 - `createTradingSession` refuses with `trading_paused`, and `stopPausedSessions` stops every
-  active session with `stop_reason = kill_switch` (the orchestrator's tick, #287, calls it);
+  active session with `stop_reason = kill_switch` (the orchestrator's tick calls it first, so
+  a closed switch stops every session within one `TRADING_SESSION_TICK_MS` and before any signal
+  call; [trading-session.md](trading-session.md));
 - trades already open, the broker sockets, reconciliation, settlement catch-up, the balance tick
   and the signal route go on as before.
 

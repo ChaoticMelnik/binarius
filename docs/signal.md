@@ -7,8 +7,9 @@ LLM. The decider is a pure function: it reads no clock, no environment and no ne
 no log. The same candles, `intervalMs`, `nowMs` and parameters always give the same decision. The
 signal feed (`feed.ts`, #133, [Feed and journal](#feed-and-journal-133)) fetches the candles,
 calls the decider and writes one journal line per decision. Its first caller is the backend's
-`POST /trading/signal` (#258, [below](#post-tradingsignal-258)), through a cache. Nothing in the
-worker process calls the feed yet: the session orchestrator (#287) will ask `POST /trading/signal`.
+`POST /trading/signal` (#258, [below](#post-tradingsignal-258)), through a cache. The worker never
+calls the feed itself: the session orchestrator (#287, [trading-session.md](trading-session.md))
+asks `POST /trading/signal`.
 
 Nobody has shown that this algorithm makes money. It is a technical baseline: the defaults are not
 tuned and no backtest was run.
@@ -383,7 +384,7 @@ request in flight) and `SIGNAL_CACHE_MAX_TTL_MS < 60 000`; `timing.test.ts` asse
 
 ## Boundaries
 
-- #287: session orchestration, which asks `POST /trading/signal` inside a session
+- #287 (shipped): session orchestration, which asks `POST /trading/signal` inside a session
   (docs/trading-session.md). #90: the broker base URL in the worker's env and compose.
 - #126: the analysis screen and its texts in the bot, on `POST /trading/signal`
   ([bot-demo.md](bot-demo.md#the-analysis)). #127: the stake button's press and the intent status. Stake size: docs/stake.md.
