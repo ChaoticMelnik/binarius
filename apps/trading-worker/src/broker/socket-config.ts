@@ -38,7 +38,7 @@ export const DEFAULT_BROKER_SOCKET_TIMING: Readonly<BrokerSocketTiming> = {
 // waits to 32 bits
 export const MAX_TIMER_MS = 2 ** 31 - 1;
 
-const isTimerMs = (value: number) =>
+export const isTimerMs = (value: number) =>
   Number.isSafeInteger(value) && value >= 1 && value <= MAX_TIMER_MS;
 
 export function brokerSocketTimingHolds(timing: BrokerSocketTiming): boolean {

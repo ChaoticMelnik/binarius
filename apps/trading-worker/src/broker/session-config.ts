@@ -1,5 +1,5 @@
 import { BALANCE_WATCH_WINDOW_MS } from '@binarius/shared/broker-balance';
-import { MAX_TIMER_MS } from './socket-config';
+import { isTimerMs } from './socket-config';
 
 // The session manager's constants (docs/broker-session.md → Constants), each bounding one thing:
 //   SESSION_TICK_MS            — the candidate scan interval: one query and the bookkeeping; the
@@ -51,8 +51,6 @@ export const SESSION_MANAGER_CONFIG: Readonly<SessionManagerConfig> = {
   watchWindowMs: BALANCE_WATCH_WINDOW_MS,
 };
 
-const isTimerMs = (value: number) =>
-  Number.isSafeInteger(value) && value >= 1 && value <= MAX_TIMER_MS;
 const isCount = (value: number) => Number.isSafeInteger(value) && value >= 1;
 
 export function sessionManagerConfigHolds(config: SessionManagerConfig): boolean {
