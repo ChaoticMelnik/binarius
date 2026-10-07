@@ -16,7 +16,7 @@ import {
   type BackendClient,
   type StartSessionResult,
 } from './backend-client';
-import { SESSION_START_PATTERN, sessionStartDataOf } from './demo';
+import { SESSION_START_PATTERN, sessionStartDataOf, stakeMenuCallbackData } from './demo';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
@@ -59,6 +59,8 @@ export interface TradingSessionDeps {
 interface Refusal {
   text: BotStaticHtmlKey;
   connect?: true;
+  // «💵 Сумма» under the text: a refusal of the saved stake itself (#297)
+  stakeMenu?: true;
   // a refusal the bot never provokes: a bug, or a backend this bot does not know
   log?: true;
 }
@@ -88,6 +90,14 @@ export const START_REFUSALS = {
   // answers of the read and stop routes, not of the start
   [TradingSessionErrorCode.NotFound]: { text: 'unavailable', log: true },
   [TradingSessionErrorCode.SessionNotActive]: { text: 'unavailable', log: true },
+  // the saved stake against the account's snapshot (#297): the texts of the stake press, but the
+  // session press reads no access, so the minimum is not named — the picker shows it
+  [TradingSessionErrorCode.StakePrecision]: { text: 'stakePrecision', stakeMenu: true },
+  [TradingSessionErrorCode.StakeBelowMinimum]: { text: 'stakeBelowBrokerMinimum', stakeMenu: true },
+  [TradingSessionErrorCode.InsufficientDemoBalance]: {
+    text: 'stakeAboveAvailable',
+    stakeMenu: true,
+  },
 } as const satisfies Record<TradingSessionErrorCode, Refusal>;
 
 const isStartRefusal = (reason: string | undefined): reason is TradingSessionErrorCode =>
@@ -153,7 +163,7 @@ export function createTradingSessionComposer<C extends Context>({
     let started = await start(request);
     if (!started.ok && started.unknown) started = await start(request);
     if (!started.ok) {
-      await replyStartFailure(ctx, started);
+      await replyStartFailure(ctx, started, data);
       return;
     }
     const { result } = started;
@@ -225,6 +235,7 @@ export function createTradingSessionComposer<C extends Context>({
   async function replyStartFailure(
     ctx: Context,
     failure: Extract<StartOutcome, { ok: false }>,
+    { assetId, durationSec }: NonNullable<ReturnType<typeof sessionStartDataOf>>,
   ): Promise<void> {
     const reason = failure.error instanceof BackendError ? failure.error.reason : undefined;
     const known =
@@ -241,11 +252,16 @@ export function createTradingSessionComposer<C extends Context>({
         'trading session not started',
       );
     }
-    await replyHtml(
-      ctx,
-      textOf(refusal.text),
-      refusal.connect === true ? { reply_markup: connectKeyboard() } : {},
-    );
+    const reply_markup =
+      refusal.connect === true
+        ? connectKeyboard()
+        : refusal.stakeMenu === true
+          ? new InlineKeyboard().text(
+              LABELS.stakeMenuButton,
+              stakeMenuCallbackData(assetId, durationSec),
+            )
+          : undefined;
+    await replyHtml(ctx, textOf(refusal.text), reply_markup === undefined ? {} : { reply_markup });
   }
 
   // a missing or foreign id is told as such; anything else is logged

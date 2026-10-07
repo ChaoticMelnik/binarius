@@ -11,6 +11,7 @@ import {
   type CreateTradeIntentRequest,
   type CreateTradingSessionRequest,
   type UserStartRequest,
+  type DecimalString,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
@@ -389,11 +390,11 @@ describe('recordChatMember', () => {
 describe('setNotificationLevel', () => {
   it('posts the id and the level under the bearer and returns the answer', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {
-      json(reply, 200, { level: 'off' });
+      json(reply, 200, { level: 'off', demoStake: '2.5' });
     });
     expect(
       await createBackendClient({ baseUrl, token: TOKEN }).setNotificationLevel('4242', 'off'),
-    ).toEqual({ level: 'off' });
+    ).toEqual({ level: 'off', demoStake: '2.5' });
     expect(capture.url).toBe('/users/notification-level');
     expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
     expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', level: 'off' });
@@ -401,7 +402,7 @@ describe('setNotificationLevel', () => {
 
   it('reports an unknown level in the answer as a contract violation', async () => {
     const { baseUrl } = await serve((_request, reply) => {
-      json(reply, 200, { level: 'daily' });
+      json(reply, 200, { level: 'daily', demoStake: null });
     });
     const error = await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN }).setNotificationLevel('4242', 'reduced'),
@@ -421,6 +422,67 @@ describe('setNotificationLevel', () => {
       status: 404,
       reason: UserErrorCode.UserNotFound,
     });
+  });
+});
+
+describe('setDemoStake (#297)', () => {
+  const LIMITS = { minTradeAmount: '1', demoAvailable: '50', scale: 2 };
+
+  it.each([['2.5'], [null]])(
+    'posts %s under the bearer and returns the saved stake',
+    async (amount) => {
+      const { baseUrl, capture } = await serve((_request, reply) => {
+        json(reply, 200, { demoStake: amount });
+      });
+      expect(
+        await createBackendClient({ baseUrl, token: TOKEN }).setDemoStake(
+          '4242',
+          amount as DecimalString | null,
+        ),
+      ).toEqual({ saved: amount });
+      expect(capture.url).toBe('/trading/demo-stake');
+      expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+      expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', amount });
+    },
+  );
+
+  it('returns a bounds refusal with its limits', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 409, { error: 'stake_below_minimum', limits: LIMITS });
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).setDemoStake(
+        '4242',
+        '0.5' as DecimalString,
+      ),
+    ).toEqual({ refused: { error: 'stake_below_minimum', limits: LIMITS } });
+  });
+
+  it.each([
+    ['a bounds refusal without its limits', 409, { error: 'stake_precision' }],
+    ['a 200 without the stake', 200, {}],
+  ])('reports %s as a contract violation', async (_case, status, body) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, status, body);
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).setDemoStake('4242', '5' as DecimalString),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation, status });
+  });
+
+  it.each([
+    [409, 'balance_unavailable'],
+    [404, 'user_not_found'],
+    [400, 'validation'],
+  ])('throws a %i %s with its reason and nothing else of the body', async (status, reason) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, status, { error: reason, limits: LIMITS, issues: ['x'] });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).setDemoStake('4242', '5' as DecimalString),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status, reason });
   });
 });
 

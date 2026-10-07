@@ -19,6 +19,14 @@ export function formatUsd(amount: string): string {
   return `${negative && !zero ? '-' : ''}$${groupDigits(whole)}.${cents}`;
 }
 
+// A stake (#297): every fraction digit it has, at least two, so a stake of 0.005 is not shown
+// as $0.00. '5' → '$5.00', '0.005' → '$0.005', '1000.5' → '$1 000.50'
+export function formatStake(amount: string): string {
+  const [whole = '0', fraction = ''] = amount.split('.');
+  const digits = fraction.replace(/0+$/, '').padEnd(2, '0');
+  return `$${groupDigits(whole)}.${digits}`;
+}
+
 export const formatCount = (count: string): string => groupDigits(count);
 
 // whole seconds under a minute, whole minutes (floor) from one

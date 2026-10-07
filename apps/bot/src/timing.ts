@@ -56,13 +56,27 @@ export const HANDLER_CALLS = {
   demoAsset: { backend: 1, telegram: 3 },
   demoDuration: { backend: 1, telegram: 3 },
   // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs, the «⏳» edit refused as gone →
-  // sendMessage, evaluateSignal, the result by sendMessage; or «⏳» edited, evaluateSignal, the
-  // result's edit refused as gone → sendMessage. Both are 2 / 4.
-  demoAnalysis: { backend: 2, telegram: 4 },
+  // sendMessage, evaluateSignal ∥ readTradingAccess (the stake label, #297) — counted as
+  // sequential, as in oauth — the result by sendMessage; or «⏳» edited, the two reads, the
+  // result's edit refused as gone → sendMessage. Both are 3 / 4.
+  demoAnalysis: { backend: 3, telegram: 4 },
   // the stake button (#127): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — the reads
   // counted as sequential, as in oauth — then createIntent and its one retry on an unknown
-  // outcome, then sendMessage
+  // outcome, then sendMessage; a fingerprint mismatch (#297) sends one message instead
   stake: { backend: 4, telegram: 2 },
+  // the stake picker (#297, stake-picker.ts) opened, a preset and the reset: answerCallbackQuery
+  // ∥ readTradingAccess or setDemoStake — counted as sequential — then editMessageText refused as
+  // gone → sendMessage
+  stakePickerOpen: { backend: 1, telegram: 3 },
+  stakePreset: { backend: 1, telegram: 3 },
+  stakeReset: { backend: 1, telegram: 3 },
+  // «✏️ Своя сумма»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
+  stakeCustom: { backend: 0, telegram: 3 },
+  // a text on the stake step: setDemoStake, then sendMessage
+  stakeText: { backend: 1, telegram: 1 },
+  // the picker's way back to /settings: answerCallbackQuery ∥ recordStart — counted as
+  // sequential — then editMessageText refused as gone → sendMessage
+  settingsShow: { backend: 1, telegram: 3 },
   // «🔄 Обновить статус» (#127): answerCallbackQuery ∥ readIntent ∥ readPairs — counted the same
   // way — then editMessageText refused as gone → sendMessage
   intentRefresh: { backend: 2, telegram: 3 },

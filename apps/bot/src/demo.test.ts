@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   BrokerRestErrorCode,
   createTradeIntentRequestSchema,
+  decimalStringSchema,
   PairsCatalogErrorCode,
   SignalFeedOutcome,
   TradeAction,
@@ -26,10 +27,13 @@ import {
   STAKE_CALLBACK_PATTERN,
   stakeCallbackData,
   stakeDataOf,
+  stakeFingerprint,
+  stakeMenuCallbackData,
 } from './demo';
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
+  ACCESS_VIEW,
   BOT_INFO,
   PAIR_CLOSED,
   PAIR_EURUSD,
@@ -40,8 +44,10 @@ import {
   SIGNAL_DECIDED,
   SIGNAL_FETCH_FAILED,
   SIGNAL_NO_SIGNAL,
+  STAKE_FINGERPRINT,
   TEXT_CARD_MESSAGE_ID,
   USER,
+  accessView,
   callbackUpdate,
   captureApi,
   fakeBackend,
@@ -78,6 +84,7 @@ function setup(
   options: {
     readPairs?: BackendClient['readPairs'];
     evaluateSignal?: BackendClient['evaluateSignal'];
+    readTradingAccess?: BackendClient['readTradingAccess'];
     dialog?: LoginDialogState;
     dialogClock?: { at: number };
   } = {},
@@ -94,7 +101,11 @@ function setup(
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     token: '123456:AA-bot-token',
-    backend: fakeBackend({ readPairs, evaluateSignal }),
+    backend: fakeBackend({
+      readPairs,
+      evaluateSignal,
+      readTradingAccess: options.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
+    }),
     logger,
     botInfo: BOT_INFO,
     loginDialog,
@@ -431,6 +442,60 @@ describe('the analysis', () => {
   const DATA = demoAnalysisCallbackData(PAIR_EURUSD.id, 60);
   const REPEAT = button(LABELS.repeatAnalysisButton, DATA);
   const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 60));
+  const STAKE_MENU = button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 60));
+  const stakeRowOf = (calls: readonly ApiCall[]) => rowsOf(edits(calls).at(-1)?.payload)[0];
+
+  // #297: the label and the fingerprint are the amount the press would trade
+  it('labels the stake button with the saved stake and fingerprints it', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () =>
+        Promise.resolve(accessView({ demoStake: decimalStringSchema.parse('2.5') })),
+    });
+    await press(DATA);
+    const [stake, menu] = stakeRowOf(calls) ?? [];
+    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '2.5'));
+    expect(stake?.text).toContain('$2.50');
+    const match = STAKE_CALLBACK_PATTERN.exec(stake?.callback_data ?? '');
+    expect(stakeDataOf(match ?? '')?.fingerprint).toBe(
+      stakeFingerprint(decimalStringSchema.parse('2.5')),
+    );
+    expect(stakeDataOf(match ?? '')?.fingerprint).not.toBe(STAKE_FINGERPRINT);
+    expect(menu).toEqual(STAKE_MENU);
+  });
+
+  it('drops the amount, not the button, when access cannot say it', async () => {
+    const { press, calls, logger } = setup({
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await press(DATA);
+    const [stake, menu] = stakeRowOf(calls) ?? [];
+    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up));
+    const match = STAKE_CALLBACK_PATTERN.exec(stake?.callback_data ?? '');
+    expect(stakeDataOf(match ?? '')?.fingerprint).toBe(stakeFingerprint(null));
+    expect(menu).toEqual(STAKE_MENU);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'trading access not read for the stake label',
+    ]);
+  });
+
+  it('draws no amount without a broker snapshot', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () =>
+        Promise.resolve(accessView({ broker: null, brokerUnavailable: 'refreshing' })),
+    });
+    await press(DATA);
+    expect(stakeRowOf(calls)?.[0]?.text).toBe(stakeButtonLabel(TradeAction.Up));
+  });
+
+  it('fingerprints the canonical amount, so a spelling never decides a mismatch', () => {
+    expect(stakeFingerprint(decimalStringSchema.parse('5.00000000'))).toBe(
+      stakeFingerprint(decimalStringSchema.parse('5')),
+    );
+    expect(stakeFingerprint(decimalStringSchema.parse('5'))).not.toBe(
+      stakeFingerprint(decimalStringSchema.parse('5.01')),
+    );
+    expect(stakeFingerprint(null)).toMatch(/^[0-9a-f]{6}$/);
+  });
   const resultOf = (response = SIGNAL_DECIDED) =>
     analysisScreen({ pair: PAIR_EURUSD, durationSec: 60, response }).text.value;
   const edits = (calls: readonly ApiCall[]) =>
@@ -446,8 +511,11 @@ describe('the analysis', () => {
     // without a keyboard the edit removes the summary's, so «📊 Анализ» cannot be pressed twice
     expect(waiting?.payload.reply_markup).toBeUndefined();
     expect(result?.payload.text).toBe(resultOf());
-    const [[stake], ...rest] = rowsOf(result?.payload);
-    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up));
+    const [[stake, menu], ...rest] = rowsOf(result?.payload);
+    // the amount the press trades: no saved stake, so the broker's minimum (#297)
+    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '1.00000000'));
+    expect(stake?.text).toContain('$1.00');
+    expect(menu).toEqual(STAKE_MENU);
     // the nonce is drawn per render (#127); everything before it is the pressed pair
     const match = STAKE_CALLBACK_PATTERN.exec(stake?.callback_data ?? '');
     expect(stakeDataOf(match ?? '')).toEqual({
@@ -455,6 +523,7 @@ describe('the analysis', () => {
       durationSec: 60,
       action: TradeAction.Up,
       nonce: expect.stringMatching(/^[0-9a-f]{12}$/),
+      fingerprint: STAKE_FINGERPRINT,
     });
     expect(rest).toEqual([[SESSION], [REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
     expect(readPairs).toHaveBeenCalledTimes(1);
@@ -541,9 +610,26 @@ describe('the analysis', () => {
     },
   );
 
+  // a button from before #297 has no fingerprint: matched, so its press is refused with a text
+  // rather than left spinning; a malformed one is not matched
+  it('reads a stake datum with and without a fingerprint, and refuses a malformed one', () => {
+    const old = stakeDataOf(STAKE_CALLBACK_PATTERN.exec('demo:stake:101:60:up:0123456789ab') ?? '');
+    expect(old).toMatchObject({ nonce: '0123456789ab', fingerprint: undefined });
+    for (const fingerprint of ['a0b1c', 'A0B1C2', 'a0b1c2d']) {
+      expect(
+        STAKE_CALLBACK_PATTERN.exec(`demo:stake:101:60:up:0123456789ab:${fingerprint}`),
+      ).toBeNull();
+    }
+    expect(
+      Buffer.byteLength(
+        stakeCallbackData(2_147_483_647, 3600, TradeAction.Down, 'f'.repeat(12), 'f'.repeat(6)),
+      ),
+    ).toBe(51);
+  });
+
   it("carries stake data #127's request schema accepts", () => {
     for (const action of Object.values(TradeAction)) {
-      const data = stakeCallbackData(2_147_483_647, 3600, action, 'ffffffffffff');
+      const data = stakeCallbackData(2_147_483_647, 3600, action, 'ffffffffffff', 'a0b1c2');
       const match = STAKE_CALLBACK_PATTERN.exec(data);
       expect(match, data).not.toBeNull();
       const parsed = stakeDataOf(match as RegExpMatchArray);
@@ -552,6 +638,7 @@ describe('the analysis', () => {
         durationSec: 3600,
         action,
         nonce: 'ffffffffffff',
+        fingerprint: 'a0b1c2',
       });
       const shape = createTradeIntentRequestSchema.shape;
       expect(shape.assetId.safeParse(parsed?.assetId).success).toBe(true);

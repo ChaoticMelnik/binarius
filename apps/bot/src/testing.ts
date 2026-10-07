@@ -7,6 +7,7 @@ import type { Bot, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
 import type { BackendClient } from './backend-client';
+import { stakeFingerprint } from './demo';
 import type { IntentTracker } from './intent-tracker';
 import type { SessionTracker } from './session-tracker';
 import {
@@ -87,6 +88,7 @@ export const USER_VIEW: UserStartView = {
   hasActiveBrokerAccount: false,
   pendingBrokerAccounts: [],
   notificationLevel: NotificationLevel.All,
+  demoStake: null,
 };
 
 export const userView = (patch: Partial<UserStartView> = {}): UserStartView => ({
@@ -159,6 +161,7 @@ export const ACCESS_VIEW: TradingAccessResponse = {
   broker: BROKER_BALANCE,
   brokerUnavailable: null,
   tradingOpen: true,
+  demoStake: null,
 };
 export const accessView = (patch: Partial<TradingAccessResponse> = {}): TradingAccessResponse => ({
   ...ACCESS_VIEW,
@@ -289,6 +292,8 @@ export const SIGNAL_FETCH_FAILED: TradingSignalResponse = tradingSignalResponseS
 // broker's minimum stake, the key the stake button's fixed nonce gives.
 export const INTENT_ID = '7c1e9f2a-4b3d-4e5f-8a6b-9c0d1e2f3a4b';
 export const STAKE_NONCE = '0123456789ab';
+// the fingerprint of the amount ACCESS_VIEW trades: no saved stake, the broker's minimum (#297)
+export const STAKE_FINGERPRINT = stakeFingerprint(BROKER_BALANCE.minTradeAmount);
 export const INTENT_VIEW: TradeIntentView = {
   id: INTENT_ID,
   brokerAccountId: '5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a',
@@ -359,6 +364,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     startSession: unused,
     readSession: unused,
     stopSession: unused,
+    setDemoStake: unused,
     ...patch,
   };
 };

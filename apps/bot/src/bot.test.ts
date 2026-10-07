@@ -120,7 +120,9 @@ function setup(
     recordChatMember: options.recordChatMember ?? vi.fn(() => Promise.resolve({ recorded: true })),
     setNotificationLevel:
       options.setNotificationLevel ??
-      vi.fn((_telegramUserId: string, level: NotificationLevel) => Promise.resolve({ level })),
+      vi.fn((_telegramUserId: string, level: NotificationLevel) =>
+        Promise.resolve({ level, demoStake: null }),
+      ),
     readTradingAccess: options.readTradingAccess ?? vi.fn(() => Promise.resolve(ACCESS_VIEW)),
     readPairs: vi.fn(() => Promise.reject(new Error('not used here'))),
     evaluateSignal: vi.fn(() => Promise.reject(new Error('not used here'))),
@@ -129,6 +131,7 @@ function setup(
     startSession: vi.fn(() => Promise.reject(new Error('not used here'))),
     readSession: vi.fn(() => Promise.reject(new Error('not used here'))),
     stopSession: vi.fn(() => Promise.reject(new Error('not used here'))),
+    setDemoStake: vi.fn(() => Promise.reject(new Error('not used here'))),
   };
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
@@ -1337,6 +1340,7 @@ describe('the account card', () => {
           startSession: vi.fn(() => Promise.reject(new Error('unused'))),
           readSession: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
+          setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -1382,6 +1386,7 @@ describe('the account card', () => {
           startSession: vi.fn(() => Promise.reject(new Error('unused'))),
           readSession: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
+          setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -2055,6 +2060,8 @@ describe('a user blocking or unblocking the bot (#119)', () => {
 // #120
 describe('/settings', () => {
   // the keyboard /settings shows when `current` is selected
+  // the demo stake's picker under the levels (#297)
+  const stakeRow = [{ text: LABELS.settingsStakeButton, callback_data: 'stk:o:s' }];
   const levelButtons = (current: NotificationLevel) =>
     Object.values(NotificationLevel).map((level) =>
       level === current
@@ -2075,10 +2082,10 @@ describe('/settings', () => {
       });
       const sends = calls.filter((call) => call.method === 'sendMessage');
       expect(sends).toHaveLength(1);
-      expect(sends[0]?.payload.text).toBe(settingsText(notificationLevel).value);
+      expect(sends[0]?.payload.text).toBe(settingsText(notificationLevel, null).value);
       expect(
         (sends[0]?.payload.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard,
-      ).toEqual([levelButtons(notificationLevel)]);
+      ).toEqual([levelButtons(notificationLevel), stakeRow]);
     },
   );
 
@@ -2133,21 +2140,24 @@ describe('/settings', () => {
       expect(edit).toMatchObject({
         chat_id: USER.id,
         message_id: message.message_id,
-        text: settingsText(NotificationLevel.Off).value,
+        text: settingsText(NotificationLevel.Off, null).value,
         parse_mode: 'HTML',
       });
       expect((edit?.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard).toEqual([
         levelButtons(NotificationLevel.Off),
+        stakeRow,
       ]);
     });
 
     it('renders the level the backend answered with', async () => {
       const { bot, calls } = setup({
-        setNotificationLevel: vi.fn(() => Promise.resolve({ level: NotificationLevel.Reduced })),
+        setNotificationLevel: vi.fn(() =>
+          Promise.resolve({ level: NotificationLevel.Reduced, demoStake: null }),
+        ),
       });
       await bot.handleUpdate(press(NotificationLevel.Off));
       expect(sentPayload(calls, 'editMessageText')?.text).toBe(
-        settingsText(NotificationLevel.Reduced).value,
+        settingsText(NotificationLevel.Reduced, null).value,
       );
     });
 
@@ -2190,7 +2200,7 @@ describe('/settings', () => {
 
         const edit = sentPayload(calls, 'editMessageText');
         const message = sentPayload(calls, 'sendMessage');
-        expect(message?.text).toBe(settingsText(NotificationLevel.Reduced).value);
+        expect(message?.text).toBe(settingsText(NotificationLevel.Reduced, null).value);
         expect(message?.reply_markup).toEqual(edit?.reply_markup);
         expect(logger.warn).toHaveBeenCalledTimes(1);
         expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
@@ -2265,7 +2275,7 @@ describe('/settings', () => {
       await bot.handleUpdate(press(NotificationLevel.All));
 
       expect(sentPayload(calls, 'editMessageText')?.text).toBe(
-        settingsText(NotificationLevel.All).value,
+        settingsText(NotificationLevel.All, null).value,
       );
       expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
     });
@@ -2411,6 +2421,7 @@ describe('the Bot API timeout', () => {
         startSession: vi.fn(() => Promise.reject(new Error('unused'))),
         readSession: vi.fn(() => Promise.reject(new Error('unused'))),
         stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
+        setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

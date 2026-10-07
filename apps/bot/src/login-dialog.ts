@@ -1,12 +1,18 @@
-// The email login dialog of each Telegram user: waiting for an address, then for the code sent
-// to it. In process memory by the owner's decision (#162): a restart drops the step and the user
-// presses the button again. The address lives here and nowhere else in the bot — never logged —
-// and leaves with the entry.
+import type { StakeOrigin } from './stake-picker';
+
+// The text dialog of each Telegram user: the email login — waiting for an address, then for the
+// code sent to it — or a typed demo stake (#297, stake-picker.ts). One entry per user, so the
+// login and the stake input exclude each other: opening one replaces the other. The module keeps
+// the login's name. In process memory by the owner's decision (#162): a restart drops the step
+// and the user presses the button again. The address lives here and nowhere else in the bot —
+// never logged — and leaves with the entry.
 
 export const LOGIN_DIALOG_TTL_MS = 10 * 60_000;
 export const LOGIN_DIALOG_MAX_ENTRIES = 10_000;
 
-export type LoginDialogState = { step: 'email' } | { step: 'code'; email: string };
+export type LoginDialogState =
+  { step: 'email' } | { step: 'code'; email: string } | { step: 'stake'; origin: StakeOrigin };
+export type LoginStep = Exclude<LoginDialogState['step'], 'stake'>;
 
 export interface LoginDialog {
   get(telegramUserId: number): LoginDialogState | undefined;

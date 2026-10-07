@@ -153,7 +153,7 @@ describe('texts', () => {
     );
 
     it('names the selected level in bold', () => {
-      expect(settingsText(NotificationLevel.Reduced).value).toContain(
+      expect(settingsText(NotificationLevel.Reduced, null).value).toContain(
         'Сейчас выбрано: <b>🔕 Реже</b>',
       );
     });
@@ -1104,6 +1104,13 @@ describe('the facades over the catalog', () => {
         'sessionRefreshButton',
         'sessionStopButton',
         'settingsCommand',
+        'settingsStakeButton',
+        'stakeBackAnalysisButton',
+        'stakeBackButton',
+        'stakeBackSettingsButton',
+        'stakeCustomButton',
+        'stakeMenuButton',
+        'stakeResetButton',
         'startCommand',
         'supportButton',
         'supportCommand',

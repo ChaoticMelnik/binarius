@@ -34,7 +34,7 @@ import {
 } from '@binarius/shared';
 import type { BotCommand } from 'grammy/types';
 import type { DemoAssetGroup, DemoDurationSec } from './demo-catalog';
-import { formatAge, formatCount, formatUsd } from './format';
+import { formatAge, formatCount, formatStake, formatUsd } from './format';
 
 // The texts live in the catalog (packages/shared/src/bot-texts.ts, docs/bot-texts.md). This file
 // is the bot's view of it: TEXTS, LABELS, PROFILE and the label maps keep the names and
@@ -344,7 +344,7 @@ export function intentStatusText(
     asset,
     ACTION_LABELS[view.action],
     durationLabelOf(view.durationSec),
-    plain.intentStake(formatUsd(view.amount)),
+    plain.intentStake(formatStake(view.amount)),
   ].join(' · ');
   const tail = deadline
     ? [
@@ -445,7 +445,7 @@ ${TEXTS.sessionSettingsUnavailable}`;
   const line = [
     asset,
     durationLabelOf(settings.durationSec),
-    plain.intentStake(formatUsd(settings.stake.baseStake)),
+    plain.intentStake(formatStake(settings.stake.baseStake)),
   ].join(' · ');
   const head = [TEXTS.sessionHeader, TEXTS.sessionSettings(line)];
   const body: TelegramHtml[] = [];
@@ -516,9 +516,12 @@ export const DEMO_DURATION_LABELS = labelsOf({
 // a type's button with the count of its open pairs
 export const groupButtonLabel = (group: DemoAssetGroup, openCount: number): string =>
   `${DEMO_GROUP_LABELS[group]} · ${openCount}`;
-// the analysis screen's button by the signal's direction (#126)
-export const stakeButtonLabel = (action: TradeAction): string =>
-  plain.stakeButton(ACTION_LABELS[action]);
+// the analysis screen's button by the signal's direction (#126), with the amount it trades when
+// known (#297)
+export const stakeButtonLabel = (action: TradeAction, amount: string | null = null): string =>
+  plain.stakeButton(
+    amount === null ? ACTION_LABELS[action] : `${ACTION_LABELS[action]} · ${formatStake(amount)}`,
+  );
 // a data label, like the confirm button's address: no emoji, the symbol as the broker spells it
 // (it already carries «OTC»), the payout printed as it arrives
 export const pairButtonLabel = (symbol: string, payout: number): string =>
@@ -549,8 +552,40 @@ ${TEXTS.demoNext}`;
 export const levelLabel = (level: NotificationLevel): string => LEVEL_LABELS[level];
 // the label of the level that is selected now, on its button
 export const currentLevelLabel = (level: NotificationLevel): string => `${levelLabel(level)} ✅`;
-export const settingsText = (level: NotificationLevel): TelegramHtml =>
-  TEXTS.settings(levelLabel(level));
+// the saved demo stake, or what stands in for it (#297)
+export const stakeLabel = (stake: string | null): string =>
+  stake === null ? plain.stakeMinimumLabel : formatStake(stake);
+export const settingsText = (level: NotificationLevel, demoStake: string | null): TelegramHtml =>
+  telegramHtml`${TEXTS.settings(levelLabel(level))}
+
+${TEXTS.settingsStake(stakeLabel(demoStake))}`;
+
+// The stake picker (#297, stake-picker.ts): the saved stake, or the broker's minimum named as
+// such, then the two bounds the backend checks it against.
+export function stakePickerText({
+  stake,
+  minTradeAmount,
+  demoAvailable,
+  presets,
+}: {
+  stake: string | null;
+  minTradeAmount: string;
+  demoAvailable: string;
+  presets: number;
+}): TelegramHtml {
+  const current =
+    stake === null
+      ? `${plain.stakeMinimumLabel} (${formatStake(minTradeAmount)})`
+      : formatStake(stake);
+  const lines = [
+    TEXTS.stakePickerCurrent(current),
+    TEXTS.stakePickerMinimum(formatStake(minTradeAmount)),
+    TEXTS.stakePickerAvailable(formatStake(demoAvailable)),
+    ...(presets === 0 ? [TEXTS.stakePickerNoPresets] : []),
+  ];
+  return telegramHtml`${TEXTS.stakePickerHeader}
+${joinLines(lines)}`;
+}
 
 // Where /support leads (#120). A temporary personal account: #220 replaces it, and this is the one
 // line to change.

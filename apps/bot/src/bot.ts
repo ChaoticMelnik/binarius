@@ -21,6 +21,7 @@ import {
   UserErrorCode,
   UserStatus,
   type BotStaticHtmlKey,
+  type DecimalString,
   type EmailSendCodeResponse,
   type LinkedAccountView,
   type PendingBrokerAccountView,
@@ -38,10 +39,16 @@ import { createDemoComposer, DEMO_CALLBACK_DATA } from './demo';
 import { createDemoTradeComposer } from './demo-trade';
 import { createTradingSessionComposer } from './trading-session';
 import type { IntentTracker } from './intent-tracker';
-import { createLoginDialog, type LoginDialog, type LoginDialogState } from './login-dialog';
+import {
+  createLoginDialog,
+  type LoginDialog,
+  type LoginDialogState,
+  type LoginStep,
+} from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
 import type { SessionTracker } from './session-tracker';
 import { editRefusal } from './screen';
+import { createStakePicker, SETTINGS_CALLBACK_DATA, stakeOpenCallbackData } from './stake-picker';
 import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml } from './send';
 import {
   accountCard,
@@ -287,9 +294,33 @@ export function createBot({
       await replyHtml(ctx, TEXTS.blocked);
       return;
     }
-    await replyHtml(ctx, settingsText(user.notificationLevel), {
+    await replyHtml(ctx, settingsText(user.notificationLevel, user.demoStake), {
       reply_markup: levelKeyboard(user.notificationLevel),
     });
+  });
+
+  // The stake picker's way back (#297): /settings' own read, then the message in place of the
+  // picker.
+  privateChats.callbackQuery(SETTINGS_CALLBACK_DATA, async (ctx) => {
+    // independent, as in oauth
+    const [answered, read] = await Promise.allSettled([
+      ctx.answerCallbackQuery(),
+      backend.recordStart(startRequestOf(ctx.from)),
+    ]);
+    if (answered.status === 'rejected') logAnswerFailure(answered.reason);
+    if (read.status === 'rejected') {
+      logger.warn(
+        { ...errorLogFields(read.reason), ...backendErrorFields(read.reason) },
+        '/settings not read',
+      );
+      await replyHtml(ctx, TEXTS.unavailable);
+      return;
+    }
+    if (read.value.status === UserStatus.Blocked) {
+      await replyHtml(ctx, TEXTS.blocked);
+      return;
+    }
+    await showSettings(ctx, read.value.notificationLevel, read.value.demoStake);
   });
 
   privateChats.callbackQuery(LEVEL_CALLBACK_PATTERN, async (ctx) => {
@@ -311,7 +342,7 @@ export function createBot({
       await replyHtml(ctx, TEXTS.unavailable);
       return;
     }
-    await showLevel(ctx, set.value.level);
+    await showSettings(ctx, set.value.level, set.value.demoStake);
   });
 
   privateChats.callbackQuery(LEVEL_CURRENT_CALLBACK_DATA, async (ctx) => {
@@ -346,6 +377,16 @@ export function createBot({
       connectKeyboard: welcomeKeyboard,
     }),
   );
+
+  // «💵 Сумма» under the analysis, in /settings and under the stake refusals (#297); its typed
+  // amount arrives through the text handler below
+  const stakePicker = createStakePicker({
+    backend,
+    logger,
+    dialog: loginDialog,
+    connectKeyboard: welcomeKeyboard,
+  });
+  privateChats.use(stakePicker.composer);
 
   // the session button under the analysis and the buttons under the session's status (#284)
   privateChats.use(
@@ -441,8 +482,8 @@ export function createBot({
       await ctx.answerCallbackQuery().catch((error: unknown) => {
         logAnswerFailure(error);
       });
-      // no address yet, or no dialog at all: there is nothing to send a code to
-      await replyHtml(ctx, state === undefined ? TEXTS.codeRequestStale : TEXTS.emailPrompt);
+      // no address yet, or no login at all: there is nothing to send a code to
+      await replyHtml(ctx, state?.step === 'email' ? TEXTS.emailPrompt : TEXTS.codeRequestStale);
       return;
     }
     // independent, as in confirm
@@ -482,6 +523,12 @@ export function createBot({
     if (from === undefined || text.startsWith('/')) return;
     const state = loginDialog.get(from.id);
     if (state === undefined) return;
+
+    // a typed demo stake (#297): an address typed now is a stake too, refused as invalid
+    if (state.step === 'stake') {
+      await stakePicker.onStakeText(ctx, state.origin, text);
+      return;
+    }
 
     if (state.step === 'email') {
       const email = emailAddressSchema.safeParse(text);
@@ -524,7 +571,7 @@ export function createBot({
     ctx: Context,
     id: number,
     email: string,
-    step: LoginDialogState['step'],
+    step: LoginStep,
     sent: PromiseSettledResult<EmailSendCodeResponse>,
   ): Promise<void> {
     if (sent.status === 'fulfilled') {
@@ -688,8 +735,12 @@ export function createBot({
   // keyboard anew; any other refusal goes to bot.catch with nothing sent, the keyboard on screen
   // being the retry. A transport failure leaves the edit unknown and sends nothing more; anything
   // else is a bug.
-  async function showLevel(ctx: Context, level: NotificationLevel): Promise<void> {
-    const text = settingsText(level);
+  async function showSettings(
+    ctx: Context,
+    level: NotificationLevel,
+    demoStake: DecimalString | null,
+  ): Promise<void> {
+    const text = settingsText(level, demoStake);
     const reply_markup = levelKeyboard(level);
     try {
       await editMessageTextHtml(ctx, text, { reply_markup });
@@ -839,14 +890,17 @@ function accountKeyboard(accounts: readonly LinkedAccountView[]): InlineKeyboard
   return connect ? addConnectButtons(keyboard) : keyboard;
 }
 
-// one row of the three levels; the selected one is marked and does nothing when pressed
+// one row of the three levels, the selected one marked and doing nothing when pressed; then the
+// demo stake's picker (#297)
 function levelKeyboard(current: NotificationLevel): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   for (const level of Object.values(NotificationLevel)) {
     if (level === current) keyboard.text(currentLevelLabel(level), LEVEL_CURRENT_CALLBACK_DATA);
     else keyboard.text(levelLabel(level), levelCallbackData(level));
   }
-  return keyboard;
+  return keyboard
+    .row()
+    .text(LABELS.settingsStakeButton, stakeOpenCallbackData({ kind: 'settings' }));
 }
 
 function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineKeyboard {
@@ -879,7 +933,7 @@ interface Refusal {
 // already sent stays good, which is why a refused «🔄 Запросить код ещё раз» keeps the code step.
 // Anything not listed is either a refusal before the letter (a sub-500 status) or an unknown
 // outcome (replyToSendCode).
-const SEND_CODE_REFUSALS: Record<LoginDialogState['step'], Partial<Record<string, Refusal>>> = {
+const SEND_CODE_REFUSALS: Record<LoginStep, Partial<Record<string, Refusal>>> = {
   email: {
     [OAuthErrorCode.InvalidEmail]: { text: 'emailRefused', dialog: { step: 'email' } },
     [OAuthErrorCode.TooManyRequests]: { text: 'sendCodeBusy', dialog: 'keep' },
