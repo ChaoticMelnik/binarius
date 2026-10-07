@@ -47,6 +47,8 @@ export const TradingSessionStopReason = {
   InvalidSettings: 'invalid_settings',
   // the stop route of #283; nothing in the worker writes it
   UserStopped: 'user_stopped',
+  // the global trading switch is closed (#144, stopPausedSessions)
+  KillSwitch: 'kill_switch',
 } as const;
 export type TradingSessionStopReason =
   (typeof TradingSessionStopReason)[keyof typeof TradingSessionStopReason];

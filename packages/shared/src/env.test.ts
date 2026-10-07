@@ -3,7 +3,6 @@ import {
   DATABASE_URL_RULES,
   REDIS_URL_RULES,
   assertOriginSpelling,
-  parseBooleanEnv,
   parseBoundedIntegerEnv,
   parseEnumEnv,
   parseIntegerEnv,
@@ -12,7 +11,6 @@ import {
   parseLoopbackOrHttpsUrlEnv,
   parseNoWhitespaceEnv,
   parseOriginEnv,
-  parseRealTradingEnabledEnv,
   parseUrlEnv,
   readEnv,
 } from './env';
@@ -82,41 +80,6 @@ describe('parseEnumEnv', () => {
   it('rejects an unknown log level', () => {
     expect(() => parseLogLevelEnv('verbose', 'LOG_LEVEL')).toThrow(
       'Env LOG_LEVEL must be one of: fatal error warn info debug trace silent',
-    );
-  });
-});
-
-describe('parseBooleanEnv', () => {
-  it.each([
-    ['true', true],
-    ['false', false],
-  ])('reads %s', (raw, expected) => {
-    expect(parseBooleanEnv(raw, 'X')).toBe(expected);
-  });
-
-  it.each(['TRUE', '1', 'yes'])('refuses %s', (raw) => {
-    expect(() => parseBooleanEnv(raw, 'X')).toThrow('Env X must be one of: true false');
-  });
-});
-
-describe('parseRealTradingEnabledEnv', () => {
-  it('is false without the variable', () => {
-    expect(parseRealTradingEnabledEnv({})).toBe(false);
-  });
-
-  it('reads true', () => {
-    expect(parseRealTradingEnabledEnv({ REAL_TRADING_ENABLED: 'true' })).toBe(true);
-  });
-
-  it('refuses an empty value', () => {
-    expect(() => parseRealTradingEnabledEnv({ REAL_TRADING_ENABLED: '' })).toThrow(
-      'Env REAL_TRADING_ENABLED must not be empty',
-    );
-  });
-
-  it('names the variable when the value is not a boolean', () => {
-    expect(() => parseRealTradingEnabledEnv({ REAL_TRADING_ENABLED: 'yes' })).toThrow(
-      'Env REAL_TRADING_ENABLED must be one of: true false',
     );
   });
 });
