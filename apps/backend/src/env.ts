@@ -3,6 +3,7 @@ import {
   DATABASE_URL_RULES,
   REDIS_URL_RULES,
   HTTPS_ONLY_RULES,
+  assertOriginSpelling,
   parseBoundedIntegerEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
@@ -120,7 +121,9 @@ export function parseEnv(source: EnvSource): Env {
 // The broker redirects to apps/web's callback page, and the backend derives the Mini App's login
 // page from this URI's origin, so a path other than OAUTH_CALLBACK_PATH would send every login to
 // a page nothing serves. The redirect target is a local page during development; it never leaves
-// the machine.
+// the machine. The value is sent to the broker byte for byte and the broker compares it with the
+// registered spelling, so the raw string is held to the bare spelling as well: URL parsing would
+// otherwise pass a trailing "\r" from a CRLF .env, a query or a dot-segment as the same path.
 function parseRedirectUri(source: EnvSource): string {
   const value = parseLoopbackOrHttpsUrlEnv(
     readEnv(source, 'BROKER_OAUTH_REDIRECT_URI'),
@@ -131,6 +134,7 @@ function parseRedirectUri(source: EnvSource): string {
       `Env BROKER_OAUTH_REDIRECT_URI must end with ${OAUTH_CALLBACK_PATH}, the page apps/web serves`,
     );
   }
+  assertOriginSpelling(value, 'BROKER_OAUTH_REDIRECT_URI', OAUTH_CALLBACK_PATH);
   return value;
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DATABASE_URL_RULES,
   REDIS_URL_RULES,
+  assertOriginSpelling,
   parseBooleanEnv,
   parseBoundedIntegerEnv,
   parseEnumEnv,
@@ -15,6 +16,7 @@ import {
   parseUrlEnv,
   readEnv,
 } from './env';
+import { OAUTH_CALLBACK_PATH } from './oauth';
 
 describe('readEnv', () => {
   it('returns the value or the fallback', () => {
@@ -176,14 +178,17 @@ describe('parseLoopbackOrHttpsUrlEnv', () => {
   });
 });
 
+const ACCEPTED_ORIGIN_ROWS = [
+  ['https://Admin.Example', 'https://admin.example'],
+  ['https://admin.example', 'https://admin.example'],
+  ['HTTPS://admin.example', 'https://admin.example'],
+  ['http://127.0.0.1:3001', 'http://127.0.0.1:3001'],
+  ['http://localhost:3001', 'http://localhost:3001'],
+  ['https://admin.example:443', 'https://admin.example'],
+] as const;
+
 describe('parseOriginEnv', () => {
-  it.each([
-    ['https://Admin.Example', 'https://admin.example'],
-    ['https://admin.example', 'https://admin.example'],
-    ['http://127.0.0.1:3001', 'http://127.0.0.1:3001'],
-    ['http://localhost:3001', 'http://localhost:3001'],
-    ['https://admin.example:443', 'https://admin.example'],
-  ])('normalises %s to %s', (raw, origin) => {
+  it.each(ACCEPTED_ORIGIN_ROWS)('normalises %s to %s', (raw, origin) => {
     expect(parseOriginEnv(raw, 'WEB_PUBLIC_URL')).toBe(origin);
   });
 
@@ -208,19 +213,58 @@ describe('parseOriginEnv', () => {
     );
   });
 
-  // each normalises away in URL.origin, and each breaks compose's `${WEB_PUBLIC_URL}/oauth/callback`
+  // URL parsing strips these, so they are visible only in the raw value
+  it.each([
+    'https://admin.example ',
+    'https://admin.example\t',
+    'https://admin.example\r',
+    'https://admin.example\n',
+    ' https://admin.example',
+    '\thttps://admin.example',
+    'https://admin.ex\tample',
+    'https://admin.example\x01',
+  ])('refuses %j, which carries whitespace or a control character', (raw) => {
+    expect(() => parseOriginEnv(raw, 'WEB_PUBLIC_URL')).toThrow(
+      'Env WEB_PUBLIC_URL must not contain whitespace or control characters',
+    );
+  });
+
+  // each normalises away in URL.origin, yet breaks or changes compose's
+  // `${WEB_PUBLIC_URL}/oauth/callback`
   it.each([
     'https://admin.example/',
     'http://127.0.0.1:3001/',
     'https://admin.example?',
     'https://admin.example#',
     'https://admin.example\\',
-    'https://admin.example ',
-  ])('refuses %j, which a path cannot be appended to', (raw) => {
+    'https://admin.example/..',
+    'https://admin.example/.',
+    'https:admin.example',
+    'https:/admin.example',
+    'https:\\\\admin.example',
+    'https://admin%2eexample',
+    'https://@admin.example',
+    'https://admin.example:',
+  ])('refuses %j, which is not spelled scheme://host[:port]', (raw) => {
     expect(() => parseOriginEnv(raw, 'WEB_PUBLIC_URL')).toThrow(
-      'Env WEB_PUBLIC_URL must be a bare origin: appending a path to it must stay on that path (no trailing "/", "?", "#", "\\" or whitespace); compose appends /oauth/callback to it',
+      'Env WEB_PUBLIC_URL must be spelled scheme://host[:port] and nothing else (no "/", "?", "#", "\\", "%", "@" or dot-segments): compose appends /oauth/callback to it',
     );
   });
+
+  // compose builds the default BROKER_OAUTH_REDIRECT_URI as `${WEB_PUBLIC_URL}/oauth/callback`:
+  // every accepted origin must concatenate into a redirect the backend accepts, on this origin
+  it.each(ACCEPTED_ORIGIN_ROWS.map(([raw]) => raw))(
+    '%s concatenates into an accepted redirect on the same origin',
+    (raw) => {
+      const redirect = raw + OAUTH_CALLBACK_PATH;
+      expect(() =>
+        assertOriginSpelling(redirect, 'BROKER_OAUTH_REDIRECT_URI', OAUTH_CALLBACK_PATH),
+      ).not.toThrow();
+      expect(new URL(redirect).href).toBe(
+        parseOriginEnv(raw, 'WEB_PUBLIC_URL') + OAUTH_CALLBACK_PATH,
+      );
+    },
+  );
 });
 
 // The helper's contract, stated next to it. The oracles that carry weight are the callers' own

@@ -292,12 +292,40 @@ describe('broker OAuth configuration', () => {
     );
   });
 
-  it('accepts a redirect whose path is exactly the callback page', () => {
-    expect(
-      parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: 'https://bot.example/oauth/callback' })
-        .brokerOauthRedirectUri,
-    ).toBe('https://bot.example/oauth/callback');
+  // URL parsing strips these, so the path check alone passes them and the broker gets them raw
+  it.each([
+    'https://bot.example/oauth/callback\t',
+    'https://bot.example/oauth/callback\r',
+    ' https://bot.example/oauth/callback',
+    'https://bot.example/oauth/callback\x01',
+  ])('rejects the redirect %j, which carries whitespace or a control character', (value) => {
+    expect(() => parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: value })).toThrow(
+      'Env BROKER_OAUTH_REDIRECT_URI must not contain whitespace or control characters',
+    );
   });
+
+  // each parses to the callback path, yet is not the spelling the broker compares against
+  it.each([
+    'https://bot.example/x/../oauth/callback',
+    'https:bot.example/oauth/callback',
+    'https://bot.example\\oauth\\callback',
+    'https://bot.example/oauth/callback?x=1',
+    'https://bot.example/oauth/callback#x',
+    'https://u:p@bot.example/oauth/callback',
+  ])('rejects the redirect %j, which is not spelled scheme://host[:port]/oauth/callback', (value) => {
+    expect(() => parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: value })).toThrow(
+      'Env BROKER_OAUTH_REDIRECT_URI must be spelled scheme://host[:port]/oauth/callback and nothing else (no query, fragment, "\\", "%", "@" or dot-segments): the backend sends it to the broker byte for byte',
+    );
+  });
+
+  it.each(['https://bot.example/oauth/callback', 'https://Bot.Example:443/oauth/callback'])(
+    'accepts the redirect %s, whose path is exactly the callback page, unchanged',
+    (value) => {
+      expect(parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: value }).brokerOauthRedirectUri).toBe(
+        value,
+      );
+    },
+  );
 
   // the redirect target during development is a page on this machine, which no proxy sees
   it.each(['http://127.0.0.1:3000/oauth/callback', 'http://localhost:3000/oauth/callback'])(
