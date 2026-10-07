@@ -196,9 +196,10 @@ finishes on its own path.
 
 ### For #284
 
-- The bot's request timeout must be at least `TRADING_SESSION_START_BUDGET_MS`; the link belongs
-  to the bot's timing chain, which #284 extends when it adds the caller.
+- The bot's request timeout must be at least `TRADING_SESSION_START_BUDGET_MS`; the link is in the
+  bot's timing chain (`apps/bot/src/timing.ts`).
 - `sessionFitsDeadline` is exported so the bot can hide a start the route would refuse.
+- The bot's side — the button, the status message, the stop — is [bot-session.md](bot-session.md).
 
 ## The orchestrator
 
@@ -565,7 +566,7 @@ that takes 60 s.) `ACCOUNT_ID` is needed only with more than one active account.
   socket on the pilot (`BROKER_WS_URL`); until then every session trade goes over REST and settles
   through the settlement catch-up.
 - #283 (shipped): the backend routes (start, status, stop — the writer of `user_stopped`); #284:
-  the bot.
+  the bot ([bot-session.md](bot-session.md)).
 - #131: restart recovery; #135: `grant_revoked` as a stop reason; #93: the lease for more than one
   worker container.
 - Real sessions: the schema takes `mode`, and `createTradingSession` refuses anything but `demo`
