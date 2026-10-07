@@ -56,7 +56,7 @@ export function parseSessionStartEnv(source: NodeJS.ProcessEnv): CliEnv {
     ...(accountId === undefined ? {} : { accountId }),
     assetId: parseBoundedIntegerEnv(readEnv(source, 'ASSET_ID'), 'ASSET_ID', 1, INT4_MAX),
     durationSec: parseBoundedIntegerEnv(
-      readEnv(source, 'DURATION_SEC', '60'),
+      readEnv(source, 'DURATION_SEC', '15'),
       'DURATION_SEC',
       1,
       INT4_MAX,

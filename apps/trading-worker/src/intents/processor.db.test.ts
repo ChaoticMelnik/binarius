@@ -289,6 +289,36 @@ describe('processIntentJob', () => {
     }
   });
 
+  // #313: the demo's 5 and 15 s trades on 202, the mock pair whose min_timeframe is 5
+  it.each([5, 15])(
+    'opens a %i s trade over REST on a pair that accepts it',
+    async (durationSec) => {
+      const broker = await startMockBroker({ socketPayload: MockSocketPayload.Bytes });
+      try {
+        broker.users.register({ id: 1, accessToken: 'SECRET-TOKEN-of-user-1' });
+        const seed = await seedQueuedIntent(tmp.db, { assetId: 202, durationSec });
+        const executor = createTradeCommandExecutor({
+          sessions: noTradeSessions,
+          rest: createBrokerRestClient({ baseUrl: broker.url }),
+          tokens: {
+            accessToken: async () => ({ ok: true, accessToken: 'SECRET-TOKEN-of-user-1' }),
+          },
+          logger,
+        });
+        expect(
+          await processIntentJob(deps(executor, { submitAckTimeoutMs: 5_000 }), {
+            intentId: seed.intent.id,
+          }),
+        ).toBe('accepted');
+        const [opened] = broker.trades.list(1);
+        expect(opened && opened.close_timestamp - opened.open_timestamp).toBe(durationSec * 1000);
+        expect(await tradesOf(seed.intent.id)).toMatchObject([{ assetId: 202 }]);
+      } finally {
+        await broker.close();
+      }
+    },
+  );
+
   it('records a rejection and releases the token', async () => {
     const { intentId, userId } = await newIntent();
     expect(await processIntentJob(deps(rejectingExecutor()), { intentId })).toBe('rejected');

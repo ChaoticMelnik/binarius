@@ -46,7 +46,7 @@ import { noTradeSessions } from '../broker/trade-session';
 import { processIntentJob } from '../intents/processor';
 import { createTradeCommandExecutor } from '../intents/trade-command-executor';
 import type { PairsOutcome, PairsSource, SignalOutcome, SignalSource } from './backend';
-import type { SessionOrchestratorConfig } from './config';
+import { TRADING_SESSION_CANDLE_SLACK_MS, type SessionOrchestratorConfig } from './config';
 import { createSessionOrchestrator } from './orchestrator';
 import { eurUsd, fetchFailedAnswer, noSignalAnswer, signalAnswer } from './testing';
 
@@ -332,6 +332,56 @@ describe('the attempt and the sequence (#287)', () => {
     expect(await intentsOf(seed.session.id)).toHaveLength(5);
     expect(signals.calls).toEqual(Array(5).fill({ assetId: 101, interval: '1m' }));
     expect(lines.filter((line) => line.code === 'active_intent_exists')).toEqual([]);
+    await orchestrator.stop();
+  });
+
+  // #313: the demo's short trades on 202 (the mock pair with min_timeframe 5), analysed on their
+  // own sub-minute candle
+  const aapl = eurUsd({ id: 202, symbol: 'AAPL', type: 'stock', minTimeframe: 5 });
+  it.each([
+    [5, '5s'],
+    [15, '15s'],
+  ])(
+    'E1b a %i s session asks %s candles and trades step after step',
+    async (durationSec, interval) => {
+      const seed = await seedSession({
+        settings: sessionSettings({ assetId: 202, durationSec, trades: 2 }),
+      });
+      const signals = signalsOf();
+      const orchestrator = orchestratorOf({ signals, pairs: pairsOf(fresh([aapl])) });
+      const first = await tradeOnce(orchestrator, seed);
+      expect(first).toMatchObject({ assetId: 202, durationSec });
+      const second = await tradeOnce(orchestrator, seed);
+      expect(second.clientRequestId).toBe(`session:${seed.session.id}:2`);
+      await orchestrator.tick();
+      expect((await sessionRow(seed.session.id)).stopReason).toBe(
+        TradingSessionStopReason.Completed,
+      );
+      expect(signals.calls).toEqual(Array(2).fill({ assetId: 202, interval }));
+      await orchestrator.stop();
+    },
+  );
+
+  it('E4b no_signal on a 5 s session waits for the next 5 s boundary plus the slack', async () => {
+    const seed = await seedSession({ settings: sessionSettings({ assetId: 202, durationSec: 5 }) });
+    const signals = signalsOf({ ok: true, response: noSignalAnswer() });
+    const orchestrator = orchestratorOf({
+      signals,
+      pairs: pairsOf(fresh([aapl])),
+      config: { candleSlackMs: TRADING_SESSION_CANDLE_SLACK_MS },
+    });
+    const step = 5_000;
+    clock = Math.floor(Date.now() / step) * step + 1_000;
+    await orchestrator.tick();
+    expect(signals.calls).toEqual([{ assetId: 202, interval: '5s' }]);
+    // the next boundary is 4 s away, plus the 2 s slack
+    advance(5_900);
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(1);
+    advance(200);
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(2);
+    expect(await intentsOf(seed.session.id)).toEqual([]);
     await orchestrator.stop();
   });
 

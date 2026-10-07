@@ -80,6 +80,14 @@ describe('timing constants', () => {
         CATCHUP_BATCH_SIZE * CATCHUP_MAX_TRADE_PAGES * (60_000 / CATCHUP_TICK_MS),
     );
     expect(WORKER_BROKER_GETS_WORST_CASE).toBeLessThanOrEqual(WORKER_BROKER_GETS_PER_MINUTE);
+    expect(Number.isInteger(60_000 / CATCHUP_TICK_MS)).toBe(true);
+    expect(Number.isInteger(60_000 / RECONCILE_TICK_MS)).toBe(true);
+  });
+
+  // #313: a 5 s trade with no close event settles by grace + one tick, not minutes later
+  it('settles a short trade within 15 s of its close and retries a held-back one within 30 s', () => {
+    expect(CATCHUP_GRACE_MS + CATCHUP_TICK_MS).toBeLessThanOrEqual(15_000);
+    expect(CATCHUP_STALLED_RETRY_MS).toBeLessThanOrEqual(30_000);
   });
 
   it('matches the stop_grace_period compose gives the trading-worker service', () => {

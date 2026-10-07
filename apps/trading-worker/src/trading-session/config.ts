@@ -1,6 +1,6 @@
 import {
   SESSION_MAX_DURATION_MS,
-  SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_SHORTEST_INTERVAL_MS,
   TRADING_SIGNAL_BUDGET_MS,
 } from '@binarius/shared';
 import { isTimerMs } from '../broker/socket-config';
@@ -23,14 +23,14 @@ import { isTimerMs } from '../broker/socket-config';
 //                                         cannot fit it (sessionFitsDeadline)
 // The chain: both backend calls fit one attempt (PAIRS + SIGNAL_BUDGET < ATTEMPT); a held-back
 // session skips at least one tick (TICK < RETRY); the candle wait never skips a candle
-// (SLACK < the 1m interval); RETRY < MAX_DURATION; every *_MS is an integer in [1, MAX_TIMER_MS].
+// (SLACK < the shortest interval, 5s since #313); RETRY < MAX_DURATION; every *_MS is an integer in [1, MAX_TIMER_MS].
 // The link to the shutdown budget is in intents/config.ts.
 export const TRADING_SESSION_TICK_MS = 5_000;
 const TRADING_SESSION_BATCH_SIZE = 200;
 export const TRADING_SESSION_ATTEMPT_TIMEOUT_MS = 10_000;
 export const TRADING_SESSION_PAIRS_TIMEOUT_MS = 4_000;
 export const TRADING_SESSION_RETRY_MS = 60_000;
-export const TRADING_SESSION_CANDLE_SLACK_MS = 5_000;
+export const TRADING_SESSION_CANDLE_SLACK_MS = 2_000;
 
 export interface SessionOrchestratorConfig {
   tickMs: number;
@@ -65,7 +65,7 @@ export function sessionOrchestratorConfigHolds(
     config.batchSize >= 1 &&
     pairsTimeoutMs + TRADING_SIGNAL_BUDGET_MS < config.attemptTimeoutMs &&
     config.tickMs < config.retryMs &&
-    config.candleSlackMs < SIGNAL_CHART_INTERVAL_MS['1m'] &&
+    config.candleSlackMs < SIGNAL_SHORTEST_INTERVAL_MS &&
     config.retryMs < config.maxDurationMs
   );
 }
