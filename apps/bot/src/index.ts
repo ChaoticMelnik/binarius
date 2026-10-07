@@ -5,10 +5,14 @@ import { createBot } from './bot';
 import { parseEnv } from './env';
 import { createIntentTracker } from './intent-tracker';
 import { runBot } from './lifecycle';
+import { createSessionTracker } from './session-tracker';
 import {
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
+  SESSION_TRACK_DEADLINE_MS,
+  SESSION_TRACK_FIRST_POLL_MS,
+  SESSION_TRACK_POLL_MS,
 } from './timing';
 
 const env = parseEnv(process.env);
@@ -25,12 +29,27 @@ const intentTracker = createIntentTracker({
   deadlineMs: INTENT_TRACK_DEADLINE_MS,
 });
 
+const sessionTracker = createSessionTracker({
+  backend,
+  logger,
+  firstPollMs: SESSION_TRACK_FIRST_POLL_MS,
+  pollMs: SESSION_TRACK_POLL_MS,
+  deadlineMs: SESSION_TRACK_DEADLINE_MS,
+});
+
 const bot = createBot({
   token: env.telegramBotToken,
   backend,
   logger,
   welcomeVideoFileId: env.welcomeVideoFileId,
   intentTracker,
+  sessionTracker,
 });
 
-runBot({ bot, tracker: intentTracker, logger, exit: (code) => process.exit(code) });
+runBot({
+  bot,
+  tracker: intentTracker,
+  sessionTracker,
+  logger,
+  exit: (code) => process.exit(code),
+});

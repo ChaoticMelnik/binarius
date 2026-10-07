@@ -104,6 +104,8 @@ describe('the bot texts catalog', () => {
         'refreshIntentButton',
         'repeatAnalysisButton',
         'resendButton',
+        'sessionRefreshButton',
+        'sessionStopButton',
         'supportButton',
       ].sort(),
     );

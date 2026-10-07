@@ -55,6 +55,7 @@ import {
   textUpdate,
   type ApiAnswer,
   type ApiCall,
+  stubSessionTracker,
   stubTracker,
 } from './testing';
 import { settingsText, TEXTS } from './texts';
@@ -114,11 +115,15 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     evaluateSignal: scenario.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
     createIntent: scenario.createIntent ?? (() => Promise.resolve(INTENT_VIEW)),
     readIntent: scenario.readIntent ?? (() => Promise.resolve(INTENT_VIEW)),
+    startSession: () => Promise.reject(new Error('not used by these scenes')),
+    readSession: () => Promise.reject(new Error('not used by these scenes')),
+    stopSession: () => Promise.reject(new Error('not used by these scenes')),
   };
   const loginDialog = createLoginDialog();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
   const bot = createBot({
     intentTracker: stubTracker(),
+    sessionTracker: stubSessionTracker(),
     token: TOKEN,
     backend,
     logger,
@@ -1083,6 +1088,7 @@ describe('what the bot writes when a drain step fails', () => {
     runBot({
       bot,
       tracker: { stop: () => Promise.resolve() },
+      sessionTracker: { stop: () => Promise.resolve() },
       logger,
       exit: vi.fn(),
       signals: ['SIGTERM'],
@@ -1138,6 +1144,7 @@ describe('what the bot writes when a part of the profile is not registered', () 
       runBot({
         bot,
         tracker: { stop: () => Promise.resolve() },
+        sessionTracker: { stop: () => Promise.resolve() },
         logger,
         exit: vi.fn(),
         signals: ['SIGTERM'],

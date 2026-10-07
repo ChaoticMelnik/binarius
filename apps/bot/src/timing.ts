@@ -1,4 +1,9 @@
-import { TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS } from '@binarius/shared';
+import {
+  SESSION_MAX_DURATION_MS,
+  TRADING_ACCESS_BUDGET_MS,
+  TRADING_SESSION_START_BUDGET_MS,
+  TRADING_SIGNAL_BUDGET_MS,
+} from '@binarius/shared';
 
 // Every bound the bot runs under, and what each one bounds. The chain is checked at import, so
 // a constant edited into an impossible order stops the process instead of producing a shutdown
@@ -61,6 +66,15 @@ export const HANDLER_CALLS = {
   // «🔄 Обновить статус» (#127): answerCallbackQuery ∥ readIntent ∥ readPairs — counted the same
   // way — then editMessageText refused as gone → sendMessage
   intentRefresh: { backend: 2, telegram: 3 },
+  // «🚀 Сессия из 5 сделок» (#284): answerCallbackQuery ∥ readPairs — counted as sequential, as
+  // in oauth — then startSession and its one retry on an unknown outcome, then sendMessage
+  sessionStart: { backend: 3, telegram: 2 },
+  // the session's «🔄 Обновить»: answerCallbackQuery ∥ readSession ∥ readPairs — counted the same
+  // way — then editMessageText refused as gone → sendMessage
+  sessionRefresh: { backend: 2, telegram: 3 },
+  // «⏹ Остановить сессию»: answerCallbackQuery ∥ stopSession ∥ readPairs, readSession after a
+  // 409 session_not_active, then editMessageText refused as gone → sendMessage
+  sessionStop: { backend: 3, telegram: 3 },
   // answerCallbackQuery, then sendMessage asking for the address
   connect: { backend: 0, telegram: 2 },
   // answerCallbackQuery ∥ startLogin, then sendMessage — the parallel pair is counted as
@@ -130,13 +144,25 @@ export const INTENT_TRACK_DEADLINE_MS = 120_000;
 // by this constant.
 export const INTENT_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS;
 
-// TRADING_ACCESS_BUDGET_MS and TRADING_SIGNAL_BUDGET_MS are the backend's upper estimates of POST
-// /trading/access and POST /trading/signal (#126): waiting at least that long keeps a broker GET
+// The demo session's status tracker (#284, session-tracker.ts), polling between updates like the
+// intent tracker. A session's trade lasts at least a minute, so a poll every 10 s is enough to
+// follow it and bounds the load. The deadline is the worker's session deadline, imported and so
+// checked below, plus the last trade's settle (SESSION_SETTLE_SLACK_SEC) with room.
+export const SESSION_TRACK_FIRST_POLL_MS = 3_000;
+export const SESSION_TRACK_POLL_MS = 10_000;
+export const SESSION_TRACK_DEADLINE_MS = SESSION_MAX_DURATION_MS + 600_000;
+// one readSession plus one edit, what sessionTracker.stop() can be waiting for
+export const SESSION_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS;
+
+// TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS and TRADING_SESSION_START_BUDGET_MS are the
+// backend's upper estimates of POST /trading/access, POST /trading/signal (#126) and POST
+// /trading/sessions (#283): waiting at least that long keeps a broker GET
 // inside its budget from reading as an outage here.
 export const TIMING_CHAIN_HOLDS =
   POLLING_BATCH_LIMIT === 1 &&
   TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
+  TRADING_SESSION_START_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   POLLING_TIMEOUT_S * 1000 < TELEGRAM_API_TIMEOUT_MS &&
   HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
   TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
@@ -145,6 +171,10 @@ export const TIMING_CHAIN_HOLDS =
   INTENT_TRACK_FIRST_POLL_MS < INTENT_TRACK_POLL_MS &&
   INTENT_TRACK_POLL_MS < INTENT_TRACK_DEADLINE_MS &&
   INTENT_TRACK_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
+  SESSION_TRACK_FIRST_POLL_MS < SESSION_TRACK_POLL_MS &&
+  SESSION_TRACK_POLL_MS < SESSION_TRACK_DEADLINE_MS &&
+  SESSION_MAX_DURATION_MS < SESSION_TRACK_DEADLINE_MS &&
+  SESSION_TRACK_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
   SHUTDOWN_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error(

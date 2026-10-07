@@ -9,6 +9,7 @@ import {
   captureApi,
   fakeLogger,
   textUpdate,
+  stubSessionTracker,
   stubTracker,
 } from './testing';
 
@@ -60,9 +61,13 @@ describe('the command menu', () => {
       evaluateSignal: () => Promise.reject(new Error('not used here')),
       createIntent: () => Promise.reject(new Error('not used here')),
       readIntent: () => Promise.reject(new Error('not used here')),
+      startSession: () => Promise.reject(new Error('not used here')),
+      readSession: () => Promise.reject(new Error('not used here')),
+      stopSession: () => Promise.reject(new Error('not used here')),
     };
     const bot = createBot({
       intentTracker: stubTracker(),
+      sessionTracker: stubSessionTracker(),
       token: '123456:AA-bot-token',
       backend,
       logger: fakeLogger(),

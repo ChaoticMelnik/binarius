@@ -15,6 +15,8 @@ import {
   TELEGRAM_MESSAGE_LIMIT,
   USER_ACCOUNT_LIST_LIMIT,
   TradeMode,
+  TradingSessionStatus,
+  TradingSessionStopReason,
   type BrokerBalanceView,
   type DecimalString,
   type LinkBonusGrantView,
@@ -30,6 +32,8 @@ import {
   PENDING_ACCOUNT_ID,
   brokerBalance,
   intentView,
+  sessionView,
+  SESSION_VIEW,
   stubText,
   stubTextSource,
 } from './testing';
@@ -64,6 +68,9 @@ import {
   MODE_LABELS,
   modeHeader,
   PROFILE,
+  pluralTrades,
+  sessionStartButtonLabel,
+  sessionStatusText,
   setBotTextSource,
   settingsText,
   stakeButtonLabel,
@@ -839,6 +846,180 @@ describe('the demo trade status', () => {
   });
 });
 
+// #284
+describe('the demo session status', () => {
+  const settled = (patch: Partial<typeof SESSION_VIEW.trades>) => ({
+    ...SESSION_VIEW.trades,
+    ...patch,
+  });
+  const stopped = (stopReason: TradingSessionStopReason, patch = {}) =>
+    sessionView({
+      status: TradingSessionStatus.Stopped,
+      stopReason,
+      endedAt: '2026-10-07T10:30:00.000Z',
+      ...patch,
+    });
+  const plainOf = (...args: Parameters<typeof sessionStatusText>) =>
+    plainTextOf(sessionStatusText(...args));
+
+  it('lays out a live session with its trade number, score and the last trade', () => {
+    const view = sessionView({
+      trades: settled({ settled: 2, won: 1, lost: 1 }),
+      lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
+    });
+    expect(plainOf('EUR/USD OTC', view)).toBe(
+      [
+        '🎮 Демо-сессия',
+        '📈 EUR/USD OTC · ⏱ 1 мин · ставка $1.00',
+        '🔢 Сделка 3 из 5',
+        '📊 Счёт: 1 в плюс, 1 в минус',
+        '',
+        '✅ Сделка открыта у брокера.',
+      ].join('\n'),
+    );
+  });
+
+  it('waits for a signal while no trade is open, with no score before the first settle', () => {
+    expect(plainOf('X', SESSION_VIEW)).toBe(
+      [
+        '🎮 Демо-сессия',
+        '📈 X · ⏱ 1 мин · ставка $1.00',
+        '🔢 Сделка 1 из 5',
+        '',
+        '🔎 Ждём сигнал для следующей сделки…',
+      ].join('\n'),
+    );
+    const afterSettle = sessionView({
+      trades: settled({ settled: 1, won: 1 }),
+      lastIntent: intentView({ status: TradeIntentStatus.Settled }),
+    });
+    expect(plainOf('X', afterSettle)).toContain('🔎 Ждём сигнал для следующей сделки…');
+  });
+
+  it('names a tie only when a trade tied', () => {
+    const completed = (tied: number) =>
+      stopped(TradingSessionStopReason.Completed, {
+        trades: settled({ settled: 5, won: 3, lost: 2 - tied, tied }),
+      });
+    expect(plainOf('X', completed(0))).toContain(
+      '🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус',
+    );
+    expect(plainOf('X', completed(0))).not.toContain('в ноль');
+    expect(plainOf('X', completed(1))).toContain(
+      '🏁 Сессия завершена: 5 сделок — 3 в плюс, 1 в минус, 1 в ноль',
+    );
+  });
+
+  it("shows a stopped session's reason, its result, and an open trade that plays out", () => {
+    const view = stopped(TradingSessionStopReason.UserStopped, {
+      trades: settled({ settled: 2, won: 2 }),
+      lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
+    });
+    expect(plainOf('X', view).split('\n').slice(3)).toEqual([
+      '⏹ Сессия остановлена по твоей команде.',
+      '📊 Итог: 2 сделки — 2 в плюс, 0 в минус',
+      '✅ Сделка открыта у брокера.',
+      '⏳ Открытая сделка доиграет до конца.',
+    ]);
+    const closed = stopped(TradingSessionStopReason.UserStopped, {
+      lastIntent: intentView({ status: TradeIntentStatus.Settled }),
+    });
+    expect(plainOf('X', closed).split('\n').slice(3)).toEqual([
+      '⏹ Сессия остановлена по твоей команде.',
+    ]);
+  });
+
+  // the owner's wording for both sources of manual_review: a trade or the account (#284 clarify)
+  it('asks for support on manual review', () => {
+    expect(plainOf('X', stopped(TradingSessionStopReason.ManualReview))).toContain(
+      '🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support',
+    );
+  });
+
+  it('reads the switch refusal of the single trade for a session the kill switch stopped', () => {
+    expect(plainOf('X', stopped(TradingSessionStopReason.KillSwitch))).toContain(
+      plainTextOf(TEXTS.tradingPaused),
+    );
+  });
+
+  it('says the settings are unreadable instead of throwing on a hand-written row', () => {
+    expect(plainOf('X', sessionView({ settings: null }))).toBe(
+      [
+        '🎮 Демо-сессия',
+        '',
+        '⚠️ Настройки сессии не прочитаны — напиши в поддержку: /support',
+      ].join('\n'),
+    );
+  });
+
+  it('names the asset by its id without a symbol, and adds the deadline hint only when asked', () => {
+    expect(plainOf(null, SESSION_VIEW)).toContain(
+      `📈 актив #${String(SESSION_VIEW.settings?.assetId)} · `,
+    );
+    const hint = plainTextOf(TEXTS.sessionDeadline);
+    expect(hint).toContain(`«${LABELS.sessionRefreshButton}»`);
+    expect(plainOf('X', SESSION_VIEW)).not.toContain(hint);
+    expect(plainOf('X', SESSION_VIEW, { deadline: true }).endsWith(`\n${hint}`)).toBe(true);
+  });
+
+  it.each(Object.values(TradingSessionStopReason))(
+    'renders a session stopped by %s as valid Telegram HTML with the widest holes',
+    (stopReason) => {
+      const widest = stopped(stopReason, {
+        settings: {
+          ...SESSION_VIEW.settings,
+          durationSec: 2_147_483_647,
+          trades: 20,
+          stake: { baseStake: '999999999999.99999999', stakeScale: 8 },
+        },
+        trades: { planned: 20, settled: 20, rejected: 20, won: 20, lost: 20, tied: 20 },
+        lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
+      });
+      for (const deadline of [false, true]) {
+        const text = sessionStatusText(`<&>"`.repeat(20), widest, { deadline });
+        expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+      }
+    },
+  );
+
+  it('renders a live session with the longest rejected line as valid Telegram HTML', () => {
+    const view = sessionView({
+      trades: { planned: 20, settled: 19, rejected: 20, won: 19, lost: 0, tied: 0 },
+      lastIntent: intentView({
+        status: TradeIntentStatus.Rejected,
+        lastError: TradeIntentFailureReason.ExecutorNotConfigured,
+      }),
+    });
+    expect(
+      telegramTextProblems(sessionStatusText('S'.repeat(100), view, { deadline: true })),
+    ).toEqual([]);
+  });
+
+  it.each([
+    [1, 'сделка'],
+    [2, 'сделки'],
+    [4, 'сделки'],
+    [5, 'сделок'],
+    [11, 'сделок'],
+    [12, 'сделок'],
+    [14, 'сделок'],
+    [20, 'сделок'],
+    [21, 'сделка'],
+    [22, 'сделки'],
+    [111, 'сделок'],
+  ])('says %i %s', (count, word) => {
+    expect(pluralTrades(count)).toBe(word);
+  });
+
+  // not in LABELS, so the LABELS-wide checks above do not see it
+  it('labels the session button plain and emoji-led, with the number of trades', () => {
+    const label = sessionStartButtonLabel(5);
+    expect(label).toBe('🚀 Сессия из 5 сделок');
+    expect(label).not.toMatch(MARKUP_OR_ENTITY);
+    expect(label).toMatch(/^\p{Extended_Pictographic}/u);
+  });
+});
+
 // TEXTS and LABELS are views of the catalog that keep the names they had before it (#240): a
 // key added to them is a text or a label the bot never had under that name.
 describe('the facades over the catalog', () => {
@@ -875,6 +1056,8 @@ describe('the facades over the catalog', () => {
         'refreshIntentButton',
         'repeatAnalysisButton',
         'resendButton',
+        'sessionRefreshButton',
+        'sessionStopButton',
         'settingsCommand',
         'startCommand',
         'supportButton',
@@ -905,6 +1088,19 @@ describe('the text source', () => {
       }),
     );
     expect(text.value).toContain(stubText('intentRejectedByBroker'));
+  });
+
+  it('shows a session stop line from the source in place', () => {
+    setBotTextSource(stubTextSource('sessionStopTimeout'));
+    const text = sessionStatusText(
+      'X',
+      sessionView({
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.Timeout,
+        endedAt: '2026-10-07T11:00:00.000Z',
+      }),
+    );
+    expect(text.value).toContain(stubText('sessionStopTimeout'));
   });
 
   it('labels a level from the source in place', () => {

@@ -20,6 +20,9 @@ import {
   demoAssetCallbackData,
   demoDurationCallbackData,
   demoPageCallbackData,
+  SESSION_START_PATTERN,
+  sessionStartCallbackData,
+  sessionStartDataOf,
   STAKE_CALLBACK_PATTERN,
   stakeCallbackData,
   stakeDataOf,
@@ -48,6 +51,7 @@ import {
   pairsResponse,
   rejectionOf,
   type ApiCall,
+  stubSessionTracker,
   stubTracker,
 } from './testing';
 import {
@@ -55,6 +59,7 @@ import {
   demoPairsScreen,
   demoSummary,
   LABELS,
+  sessionStartButtonLabel,
   stakeButtonLabel,
   TEXTS,
 } from './texts';
@@ -87,6 +92,7 @@ function setup(
   if (options.dialog !== undefined) loginDialog.set(USER.id, options.dialog);
   const bot = createBot({
     intentTracker: stubTracker(),
+    sessionTracker: stubSessionTracker(),
     token: '123456:AA-bot-token',
     backend: fakeBackend({ readPairs, evaluateSignal }),
     logger,
@@ -424,6 +430,7 @@ describe('the summary and «📊 Анализ»', () => {
 describe('the analysis', () => {
   const DATA = demoAnalysisCallbackData(PAIR_EURUSD.id, 60);
   const REPEAT = button(LABELS.repeatAnalysisButton, DATA);
+  const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 60));
   const resultOf = (response = SIGNAL_DECIDED) =>
     analysisScreen({ pair: PAIR_EURUSD, durationSec: 60, response }).text.value;
   const edits = (calls: readonly ApiCall[]) =>
@@ -449,7 +456,7 @@ describe('the analysis', () => {
       action: TradeAction.Up,
       nonce: expect.stringMatching(/^[0-9a-f]{12}$/),
     });
-    expect(rest).toEqual([[REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
+    expect(rest).toEqual([[SESSION], [REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
     expect(readPairs).toHaveBeenCalledTimes(1);
     expect(evaluateSignal.mock.calls).toEqual([[PAIR_EURUSD.id, '1m']]);
   });
@@ -554,6 +561,39 @@ describe('the analysis', () => {
     }
   });
 
+  // #284: a session of five fits the worker's hour at 1 and 5 min only
+  it.each([
+    [60, true],
+    [300, true],
+    [900, false],
+    [1800, false],
+    [3600, false],
+  ] as const)('offers the session at %i s on a signal: %s', async (durationSec, shown) => {
+    const { press, calls } = setup();
+    await press(demoAnalysisCallbackData(PAIR_EURUSD.id, durationSec));
+    const session = button(
+      sessionStartButtonLabel(5),
+      sessionStartCallbackData(PAIR_EURUSD.id, durationSec),
+    );
+    const rows = rowsOf(edits(calls).at(-1)?.payload);
+    expect(rows.some((row) => row.length === 1 && row[0]?.text === session.text)).toBe(shown);
+    if (shown) expect(rows[1]).toEqual([session]);
+  });
+
+  it('keeps the longest session datum inside the Bot API limit and reads it back', () => {
+    const data = sessionStartCallbackData(2_147_483_647, 300);
+    expect(data).toBe('demo:sess:2147483647:300');
+    expect(Buffer.byteLength(sessionStartCallbackData(2_147_483_647, 3600), 'utf8')).toBe(25);
+    expect(sessionStartDataOf(SESSION_START_PATTERN.exec(data) ?? '')).toEqual({
+      assetId: 2_147_483_647,
+      durationSec: 300,
+    });
+    // a datum for a duration that does not fit is refused by the reader, not only hidden
+    const tooLong = SESSION_START_PATTERN.exec(sessionStartCallbackData(PAIR_EURUSD.id, 900));
+    expect(tooLong).not.toBeNull();
+    expect(sessionStartDataOf(tooLong ?? '')).toBeUndefined();
+  });
+
   it.each([
     ['a rule refusal', SIGNAL_NO_SIGNAL],
     ['a data refusal', SIGNAL_DATA_REFUSAL],
@@ -614,7 +654,7 @@ describe('the analysis', () => {
     const [waiting, result] = calls.filter((call) => call.method === 'sendMessage');
     expect(waiting?.payload.text).toBe(TEXTS.analyzing('EUR/USD OTC · ⏱ 1 мин').value);
     expect(result?.payload.text).toBe(resultOf());
-    expect(rowsOf(result?.payload)[1]).toEqual([REPEAT]);
+    expect(rowsOf(result?.payload)[2]).toEqual([REPEAT]);
   });
 
   it('asks for no signal and sends nothing more when «⏳» fails in transport', async () => {

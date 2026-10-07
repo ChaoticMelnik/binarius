@@ -7,6 +7,8 @@ import {
   safeParsePairsCatalogResponse,
   safeParseTradeIntentView,
   safeParseTradingAccessResponse,
+  safeParseTradingSessionRefusal,
+  safeParseTradingSessionResponse,
   safeParseTradingSignalResponse,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
@@ -14,6 +16,7 @@ import {
   type ChatMemberResponse,
   type ConfirmLoginResponse,
   type CreateTradeIntentRequest,
+  type CreateTradingSessionRequest,
   type EmailLoginResponse,
   type EmailSendCodeResponse,
   type NotificationLevel,
@@ -24,7 +27,9 @@ import {
   type TelegramChatMemberStatus,
   type TradeIntentView,
   type TradingAccessResponse,
+  type TradingSessionView,
   type TradingSignalResponse,
+  TradingSessionErrorCode,
   type UserAccountView,
   type UserStartRequest,
   type UserStartView,
@@ -87,7 +92,17 @@ export interface BackendClient {
   createIntent(request: CreateTradeIntentRequest): Promise<TradeIntentView>;
   // scoped by the owner: another user's id is the same 404 not_found as a missing one
   readIntent(id: string, telegramUserId: string): Promise<TradeIntentView>;
+  // a new session, or the account's active one: the 409 active_session_exists carries it, so a
+  // retry after a lost answer learns what the first request created (#283); null when that
+  // session ended before the backend read it
+  startSession(request: CreateTradingSessionRequest): Promise<StartSessionResult>;
+  // both scoped by the owner like readIntent
+  readSession(id: string, telegramUserId: string): Promise<TradingSessionView>;
+  stopSession(id: string, telegramUserId: string): Promise<TradingSessionView>;
 }
+
+export type StartSessionResult =
+  { started: TradingSessionView } | { active: TradingSessionView | null };
 
 export interface BackendClientOptions {
   baseUrl: string;
@@ -105,11 +120,11 @@ export function createBackendClient({
   const root = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
 
   // a GET sends no body and so no content-type
-  const request = async (
+  const send = async (
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
-  ): Promise<unknown> => {
+  ): Promise<{ ok: boolean; status: number; payload: unknown }> => {
     const signal = AbortSignal.timeout(timeoutMs);
     let response: Response;
     try {
@@ -145,16 +160,24 @@ export function createBackendClient({
       payload = undefined;
     }
 
-    if (!response.ok) {
-      throw new BackendError(BackendErrorCode.HttpStatus, {
-        status: response.status,
-        reason: errorCodeOf(payload),
-      });
-    }
+    return { ok: response.ok, status: response.status, payload };
+  };
+  const request = async (
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+  ): Promise<unknown> => {
+    const { ok, status, payload } = await send(method, path, body);
+    if (!ok) throw httpStatusError(status, payload);
     return payload;
   };
   const post = (path: string, body: unknown) => request('POST', path, body);
   const get = (path: string) => request('GET', path);
+  const sessionOf = (payload: unknown): TradingSessionView => {
+    const parsed = safeParseTradingSessionResponse(payload);
+    if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+    return parsed.data.session;
+  };
   const intentOf = (payload: unknown): TradeIntentView => {
     const parsed = safeParseTradeIntentView((payload as { intent?: unknown } | null)?.intent);
     if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
@@ -243,6 +266,30 @@ export function createBackendClient({
       const query = new URLSearchParams({ telegramUserId });
       return intentOf(await get(`trading/intents/${encodeURIComponent(id)}?${query.toString()}`));
     },
+    // Only the parsed view and the error code leave this method, as from request(): the 409's body
+    // is read for its session alone.
+    async startSession(sessionRequest) {
+      const { ok, status, payload } = await send('POST', 'trading/sessions', sessionRequest);
+      if (ok) return { started: sessionOf(payload) };
+      if (errorCodeOf(payload) !== TradingSessionErrorCode.ActiveSessionExists) {
+        throw httpStatusError(status, payload);
+      }
+      // the code without the contract's body: the outcome is not known, like a broken 2xx
+      const parsed = safeParseTradingSessionRefusal(payload);
+      if (!parsed.success || parsed.data.error !== TradingSessionErrorCode.ActiveSessionExists) {
+        throw new BackendError(BackendErrorCode.ContractViolation, { status });
+      }
+      return { active: parsed.data.session };
+    },
+    async readSession(id, telegramUserId) {
+      const query = new URLSearchParams({ telegramUserId });
+      return sessionOf(await get(`trading/sessions/${encodeURIComponent(id)}?${query.toString()}`));
+    },
+    async stopSession(id, telegramUserId) {
+      return sessionOf(
+        await post(`trading/sessions/${encodeURIComponent(id)}/stop`, { telegramUserId }),
+      );
+    },
   };
 }
 
@@ -254,6 +301,9 @@ export function backendErrorFields(error: unknown): {
   if (!(error instanceof BackendError)) return {};
   return { backendStatus: error.status, backendReason: error.reason };
 }
+
+const httpStatusError = (status: number, payload: unknown): BackendError =>
+  new BackendError(BackendErrorCode.HttpStatus, { status, reason: errorCodeOf(payload) });
 
 function errorCodeOf(body: unknown): string | undefined {
   const code = (body as { error?: unknown } | null | undefined)?.error;

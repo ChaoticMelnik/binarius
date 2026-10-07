@@ -28,6 +28,7 @@ export const BotTextGroup = {
   Demo: 'demo',
   Analysis: 'analysis',
   Trade: 'trade',
+  Session: 'session',
   Buttons: 'buttons',
   Commands: 'commands',
   Profile: 'profile',
@@ -45,6 +46,7 @@ export const BOT_TEXT_GROUP_TITLES = {
   [BotTextGroup.Demo]: 'Демо: выбор актива',
   [BotTextGroup.Analysis]: 'Анализ',
   [BotTextGroup.Trade]: 'Демо-сделка',
+  [BotTextGroup.Session]: 'Демо-сессия',
   [BotTextGroup.Buttons]: 'Кнопки',
   [BotTextGroup.Commands]: 'Команды: описания',
   [BotTextGroup.Profile]: 'Профиль бота',
@@ -609,6 +611,12 @@ export const BOT_TEXT_CATALOG = {
     '🚀 Открыть сделку: {action}',
     { arg: { name: 'action', sample: '⬆️ Вверх' } },
   ),
+  sessionStartButton: plain(
+    g.Analysis,
+    'Анализ: кнопка запуска демо-сессии, с числом сделок.',
+    '🚀 Сессия из {trades}',
+    { arg: { name: 'trades', sample: '5 сделок' } },
+  ),
   noSignalVolatilityTooLow: plain(
     g.Analysis,
     'Анализ: причина «нет сигнала» — низкая волатильность.',
@@ -810,6 +818,159 @@ export const BOT_TEXT_CATALOG = {
     `⚠️ Не удалось узнать, принята ли заявка. Нажми кнопку сделки ещё раз — вторая сделка от этого не откроется.`,
   ),
 
+  // ---- Демо-сессия --------------------------------------------------------------------------
+  sessionHeader: html(g.Session, 'Сессия: заголовок сообщения статуса.', `🎮 <b>Демо-сессия</b>`),
+  sessionSettings: html(
+    g.Session,
+    'Сессия: строка с активом, длительностью и ставкой.',
+    `📈 {line}`,
+    { arg: { name: 'line', sample: 'EUR/USD OTC · ⏱ 1 мин · ставка $1.00' } },
+  ),
+  sessionStep: html(g.Session, 'Сессия: номер текущей сделки из всех.', `🔢 Сделка {step}`, {
+    arg: { name: 'step', sample: '3 из 5' },
+  }),
+  sessionScore: html(
+    g.Session,
+    'Сессия: счёт закрытых сделок, пока сессия идёт.',
+    `📊 Счёт: {score}`,
+    {
+      arg: { name: 'score', sample: '1 в плюс, 1 в минус, 1 в ноль' },
+    },
+  ),
+  sessionWon: plain(g.Session, 'Сессия: число сделок в плюс, в счёте и итоге.', '{count} в плюс', {
+    arg: { name: 'count', sample: '3' },
+  }),
+  sessionLost: plain(
+    g.Session,
+    'Сессия: число сделок в минус, в счёте и итоге.',
+    '{count} в минус',
+    {
+      arg: { name: 'count', sample: '2' },
+    },
+  ),
+  sessionTied: plain(
+    g.Session,
+    'Сессия: число сделок в ноль; показывается, только когда такие есть.',
+    '{count} в ноль',
+    { arg: { name: 'count', sample: '1' } },
+  ),
+  sessionTradeOne: plain(g.Session, 'Сессия: слово после числа 1, 21, 31… («1 сделка»).', 'сделка'),
+  sessionTradeFew: plain(
+    g.Session,
+    'Сессия: слово после числа 2–4, 22–24… («3 сделки»).',
+    'сделки',
+  ),
+  sessionTradeMany: plain(
+    g.Session,
+    'Сессия: слово после остальных чисел («5 сделок», «11 сделок»).',
+    'сделок',
+  ),
+  sessionWaitingSignal: html(
+    g.Session,
+    'Сессия: пока следующая сделка не открыта.',
+    `🔎 Ждём сигнал для следующей сделки…`,
+  ),
+  sessionCompleted: html(
+    g.Session,
+    'Сессия: итог, когда все сделки сыграны.',
+    `🏁 Сессия завершена: {result}`,
+    { arg: { name: 'result', sample: '5 сделок — 3 в плюс, 2 в минус' } },
+  ),
+  sessionTotal: html(g.Session, 'Сессия: итог под причиной остановки.', `📊 Итог: {result}`, {
+    arg: { name: 'result', sample: '3 сделки — 2 в плюс, 1 в минус' },
+  }),
+  sessionOpenTradePlaysOut: html(
+    g.Session,
+    'Сессия остановлена, а последняя сделка ещё идёт.',
+    `⏳ Открытая сделка доиграет до конца.`,
+  ),
+  sessionSettingsUnavailable: html(
+    g.Session,
+    'Сессия: настройки сессии не прочитаны.',
+    `⚠️ Настройки сессии не прочитаны — напиши в поддержку: /support`,
+  ),
+  sessionDeadline: html(
+    g.Session,
+    'Сессия: под статусом, когда бот перестал его обновлять, с названием кнопки обновления.',
+    `⏳ Сессия ещё идёт — нажми «{sessionRefreshButton}», чтобы увидеть ход.`,
+    { fragments: { sessionRefreshButton: 'sessionRefreshButton' } },
+  ),
+  sessionStatusUnavailable: html(
+    g.Session,
+    'Сессия: статус недоступен.',
+    `⚠️ Статус сессии недоступен.`,
+  ),
+  sessionJustEnded: html(
+    g.Session,
+    'Кнопка сессии: прошлая сессия закончилась в момент нажатия.',
+    `⏳ Предыдущая сессия только что завершилась. Нажми кнопку ещё раз.`,
+  ),
+  sessionOutcomeUnknown: html(
+    g.Session,
+    'Кнопка сессии: неизвестно, запущена ли сессия.',
+    `⚠️ Не удалось узнать, запущена ли сессия. Нажми кнопку сессии ещё раз — вторая сессия от этого не запустится.`,
+  ),
+  sessionInsufficientTokens: html(
+    g.Session,
+    'Кнопка сессии: не хватает токенов.',
+    `🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.`,
+  ),
+  sessionTooLong: html(
+    g.Session,
+    'Кнопка сессии: сессия на этой длительности не уложится в час.',
+    `⏱ Сессия на этой длительности не уложится в час — выбери 1 или 5 мин.`,
+  ),
+  sessionPairUnavailable: html(
+    g.Session,
+    'Кнопка сессии: пара недоступна.',
+    `⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.`,
+  ),
+  sessionStopManualReview: html(
+    g.Session,
+    'Сессия остановлена: сделка или аккаунт на ручной проверке.',
+    `🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support`,
+  ),
+  sessionStopRejectedTwice: html(
+    g.Session,
+    'Сессия остановлена: две сделки подряд не открылись.',
+    `❌ Сессия остановлена: две сделки подряд не открылись.`,
+  ),
+  sessionStopTimeout: html(
+    g.Session,
+    'Сессия остановлена: истёк час на сессию.',
+    `⏱ Сессия остановлена: истёк час на сессию.`,
+  ),
+  sessionStopStakeStop: html(
+    g.Session,
+    'Сессия остановлена: ставку не удалось подобрать.',
+    `⚠️ Сессия остановлена: ставку не удалось подобрать — проверь демобаланс в /account.`,
+  ),
+  sessionStopAccountUnavailable: html(
+    g.Session,
+    'Сессия остановлена: новую сделку открыть нельзя (токены, аккаунт).',
+    `⚠️ Сессия остановлена: новую сделку открыть нельзя — проверь токены и аккаунт в /account.`,
+  ),
+  sessionStopPairUnavailable: html(
+    g.Session,
+    'Сессия остановлена: пара закрылась или не принимает длительность.',
+    `⚠️ Сессия остановлена: пара закрылась или не принимает эту длительность.`,
+  ),
+  sessionStopBalanceUnavailable: html(
+    g.Session,
+    'Сессия остановлена: баланс брокера не получен.',
+    `⚠️ Сессия остановлена: баланс Binodex не получен.`,
+  ),
+  sessionStopInvalidSettings: html(
+    g.Session,
+    'Сессия остановлена: ошибка настроек.',
+    `⚠️ Сессия остановлена из-за ошибки настроек — напиши в поддержку: /support`,
+  ),
+  sessionStopUserStopped: html(
+    g.Session,
+    'Сессия остановлена кнопкой пользователя.',
+    `⏹ Сессия остановлена по твоей команде.`,
+  ),
+
   // ---- Кнопки -------------------------------------------------------------------------------
   confirmButton: plain(
     g.Buttons,
@@ -862,6 +1023,12 @@ export const BOT_TEXT_CATALOG = {
     '🔄 Обновить статус',
   ),
   supportButton: plain(g.Buttons, '/support: кнопка чата с поддержкой.', '💬 Написать в поддержку'),
+  sessionRefreshButton: plain(
+    g.Buttons,
+    'Сессия: кнопка обновления статуса; её название цитирует текст о долгой сессии.',
+    '🔄 Обновить',
+  ),
+  sessionStopButton: plain(g.Buttons, 'Сессия: кнопка остановки сессии.', '⏹ Остановить сессию'),
 
   // ---- Команды: описания (без emoji) --------------------------------------------------------
   startCommand: plain(g.Commands, 'Описание /start в меню команд и в /help.', 'Начать', {

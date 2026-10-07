@@ -48,6 +48,7 @@ import {
   stubTextSource,
   messageAnswer,
   pairsResponse,
+  stubSessionTracker,
   stubTracker,
   type ApiCall,
 } from './testing';
@@ -93,6 +94,7 @@ function setup(
     loginDialog,
     now: () => NOW,
     intentTracker,
+    sessionTracker: stubSessionTracker(),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));

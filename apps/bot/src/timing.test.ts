@@ -10,7 +10,12 @@ import {
   OAuthErrorCode,
   TradeAction,
   TradeIntentErrorCode,
+  SESSION_MAX_DURATION_MS,
   TRADING_ACCESS_BUDGET_MS,
+  TRADING_SESSION_START_BUDGET_MS,
+  TradingSessionErrorCode,
+  TradingSessionStatus,
+  TradingSessionStopReason,
   TRADING_SIGNAL_BUDGET_MS,
   UserErrorCode,
   UserStatus,
@@ -33,9 +38,11 @@ import {
   demoAssetCallbackData,
   demoDurationCallbackData,
   demoPageCallbackData,
+  sessionStartCallbackData,
   stakeCallbackData,
 } from './demo';
 import { intentCallbackData } from './demo-trade';
+import { sessionRefreshCallbackData, sessionStopCallbackData } from './trading-session';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCESS_VIEW,
@@ -75,6 +82,9 @@ import {
   brokerBalance,
   pairsResponse,
   type ApiAnswer,
+  SESSION_VIEW,
+  sessionView,
+  stubSessionTracker,
   stubTracker,
 } from './testing';
 import {
@@ -86,6 +96,10 @@ import {
   INTENT_TRACK_DRAIN_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
+  SESSION_TRACK_DEADLINE_MS,
+  SESSION_TRACK_DRAIN_MS,
+  SESSION_TRACK_FIRST_POLL_MS,
+  SESSION_TRACK_POLL_MS,
   SHUTDOWN_BUDGET_MS,
   TELEGRAM_API_TIMEOUT_MS,
 } from './timing';
@@ -123,6 +137,9 @@ interface Branch {
   evaluateSignal?: BackendClient['evaluateSignal'];
   createIntent?: BackendClient['createIntent'];
   readIntent?: BackendClient['readIntent'];
+  startSession?: BackendClient['startSession'];
+  readSession?: BackendClient['readSession'];
+  stopSession?: BackendClient['stopSession'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -290,11 +307,24 @@ async function observe(branch: Branch): Promise<Calls> {
       backend += 1;
       return (branch.readIntent ?? (() => Promise.resolve(INTENT_VIEW)))(id, telegramUserId);
     },
+    startSession: (request) => {
+      backend += 1;
+      return (branch.startSession ?? (() => Promise.resolve({ started: SESSION_VIEW })))(request);
+    },
+    readSession: (id, telegramUserId) => {
+      backend += 1;
+      return (branch.readSession ?? (() => Promise.resolve(SESSION_VIEW)))(id, telegramUserId);
+    },
+    stopSession: (id, telegramUserId) => {
+      backend += 1;
+      return (branch.stopSession ?? (() => Promise.resolve(STOPPED_SESSION)))(id, telegramUserId);
+    },
   };
   const loginDialog = createLoginDialog();
   if (branch.dialog !== undefined) loginDialog.set(USER.id, branch.dialog);
   const bot = createBot({
     intentTracker: stubTracker(),
+    sessionTracker: stubSessionTracker(),
     token: '123456:AA-bot-token',
     backend: client,
     logger: fakeLogger(),
@@ -966,6 +996,193 @@ const INTENT_REFRESH_BRANCHES: readonly Branch[] = [
     ],
     expected: { backend: 2, telegram: 2 },
   },
+];
+
+// the session button, its refresh and its stop (#284)
+const STOPPED_SESSION = sessionView({
+  status: TradingSessionStatus.Stopped,
+  stopReason: TradingSessionStopReason.UserStopped,
+  endedAt: '2026-10-07T10:05:00.000Z',
+});
+const sessionStartUpdate = (chatType?: string) =>
+  callbackUpdate(sessionStartCallbackData(PAIR_EURUSD.id, 60), chatType);
+const sessionHttpError = (status: number, reason: string) =>
+  new BackendError(BackendErrorCode.HttpStatus, { status, reason });
+const SESSION_START_WORST_CASE: Branch = {
+  label: 'the outcome is unknown, the retry learns the session, and the status is sent',
+  update: sessionStartUpdate(),
+  startSession: (() => {
+    let first = true;
+    return () => {
+      if (!first) return Promise.resolve({ active: SESSION_VIEW });
+      first = false;
+      return Promise.reject(new BackendError(BackendErrorCode.Unreachable));
+    };
+  })(),
+  expected: { backend: 3, telegram: 2 },
+};
+const SESSION_START_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: sessionStartUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the data is forged',
+    update: callbackUpdate('demo:sess:0:60'),
+    expected: { backend: 0, telegram: 1 },
+  },
+  {
+    label: 'the duration does not fit a session',
+    update: callbackUpdate(`demo:sess:${String(PAIR_EURUSD.id)}:900`),
+    expected: { backend: 0, telegram: 1 },
+  },
+  {
+    label: 'the session is started and the status is sent',
+    update: sessionStartUpdate(),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'a session is already active and is shown',
+    update: sessionStartUpdate(),
+    startSession: () => Promise.resolve({ active: SESSION_VIEW }),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the active session ended before it was read',
+    update: sessionStartUpdate(),
+    startSession: () => Promise.resolve({ active: null }),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the backend refuses the session',
+    update: sessionStartUpdate(),
+    startSession: () =>
+      Promise.reject(sessionHttpError(409, TradingSessionErrorCode.InsufficientTokens)),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the catalog is unavailable to the backend, which is not retried',
+    update: sessionStartUpdate(),
+    startSession: () =>
+      Promise.reject(sessionHttpError(503, TradingSessionErrorCode.CatalogUnavailable)),
+    expected: { backend: 2, telegram: 2 },
+  },
+  SESSION_START_WORST_CASE,
+  {
+    label: 'the outcome stays unknown after the retry',
+    update: sessionStartUpdate(),
+    startSession: () =>
+      Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
+    expected: { backend: 3, telegram: 2 },
+  },
+  {
+    label: 'answering the query is refused and the status still goes',
+    update: sessionStartUpdate(),
+    apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+    expected: { backend: 2, telegram: 2 },
+  },
+];
+
+const sessionRefreshUpdate = (chatType?: string) =>
+  callbackUpdate(sessionRefreshCallbackData(SESSION_VIEW.id), chatType);
+const SESSION_REFRESH_WORST_CASE: Branch = {
+  label: 'the message is gone and the status is sent anew',
+  update: sessionRefreshUpdate(),
+  apiErrors: [['editMessageText', EDIT_GONE]],
+  expected: { backend: 2, telegram: 3 },
+};
+const SESSION_REFRESH_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: sessionRefreshUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the id is not a uuid',
+    update: callbackUpdate('session:not-a-uuid'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the session is not found',
+    update: sessionRefreshUpdate(),
+    readSession: () => Promise.reject(sessionHttpError(404, 'not_found')),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the read fails',
+    update: sessionRefreshUpdate(),
+    readSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the status is edited in place',
+    update: sessionRefreshUpdate(),
+    expected: { backend: 2, telegram: 2 },
+  },
+  SESSION_REFRESH_WORST_CASE,
+  {
+    label: 'the edit fails in transport',
+    update: sessionRefreshUpdate(),
+    apiErrors: [
+      [
+        'editMessageText',
+        new HttpError("Network request for 'editMessageText' failed!", new Error('aborted')),
+      ],
+    ],
+    expected: { backend: 2, telegram: 2 },
+  },
+];
+
+const sessionStopUpdate = (chatType?: string) =>
+  callbackUpdate(sessionStopCallbackData(SESSION_VIEW.id), chatType);
+const notActive = () =>
+  Promise.reject(sessionHttpError(409, TradingSessionErrorCode.SessionNotActive));
+const SESSION_STOP_WORST_CASE: Branch = {
+  label: 'the session had ended, it is read, and the message is gone',
+  update: sessionStopUpdate(),
+  stopSession: notActive,
+  readSession: () => Promise.resolve(STOPPED_SESSION),
+  apiErrors: [['editMessageText', EDIT_GONE]],
+  expected: { backend: 3, telegram: 3 },
+};
+const SESSION_STOP_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: sessionStopUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the id is not a uuid',
+    update: callbackUpdate('session:stop:not-a-uuid'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the session is stopped and edited in place',
+    update: sessionStopUpdate(),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the session is not found',
+    update: sessionStopUpdate(),
+    stopSession: () => Promise.reject(sessionHttpError(404, 'not_found')),
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the session had ended and its final view is edited in place',
+    update: sessionStopUpdate(),
+    stopSession: notActive,
+    readSession: () => Promise.resolve(STOPPED_SESSION),
+    expected: { backend: 3, telegram: 2 },
+  },
+  {
+    label: 'the session had ended and the read fails',
+    update: sessionStopUpdate(),
+    stopSession: notActive,
+    readSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 3, telegram: 2 },
+  },
+  SESSION_STOP_WORST_CASE,
 ];
 
 const OAUTH_WORST_CASE: Branch = {
@@ -1659,6 +1876,33 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     );
   });
 
+  it('the session button', async () => {
+    await checkHandler(
+      'sessionStart',
+      SESSION_START_BRANCHES,
+      SESSION_START_WORST_CASE,
+      HANDLER_CALLS.sessionStart,
+    );
+  });
+
+  it("the session's refresh button", async () => {
+    await checkHandler(
+      'sessionRefresh',
+      SESSION_REFRESH_BRANCHES,
+      SESSION_REFRESH_WORST_CASE,
+      HANDLER_CALLS.sessionRefresh,
+    );
+  });
+
+  it("the session's stop button", async () => {
+    await checkHandler(
+      'sessionStop',
+      SESSION_STOP_BRANCHES,
+      SESSION_STOP_WORST_CASE,
+      HANDLER_CALLS.sessionStop,
+    );
+  });
+
   it('the connect button', async () => {
     await checkHandler('connect', CONNECT_BRANCHES, CONNECT_WORST_CASE, HANDLER_CALLS.connect);
   });
@@ -1720,7 +1964,31 @@ describe("the demo trade tracker's bounds", () => {
   });
 });
 
+// #284: restated for the same reason
+describe("the demo session tracker's bounds", () => {
+  it('polls first sooner than between polls, and stops long after both', () => {
+    expect(SESSION_TRACK_FIRST_POLL_MS).toBeLessThan(SESSION_TRACK_POLL_MS);
+    expect(SESSION_TRACK_POLL_MS).toBeLessThan(SESSION_TRACK_DEADLINE_MS);
+  });
+
+  // the worker's deadline is imported, so the relation is checked, not stated
+  it("follows a session past the worker's deadline for it", () => {
+    expect(SESSION_MAX_DURATION_MS).toBeLessThan(SESSION_TRACK_DEADLINE_MS);
+  });
+
+  it('drains one read and one edit inside the shutdown budget', () => {
+    expect(SESSION_TRACK_DRAIN_MS).toBe(BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS);
+    expect(SESSION_TRACK_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+  });
+});
+
 describe('the bounds shared with the backend', () => {
+  // the same for POST /trading/sessions (#283): a start inside its budget must not read as an
+  // outage and be retried
+  it('waits for /trading/sessions at least as long as the backend budgets the route', () => {
+    expect(TRADING_SESSION_START_BUDGET_MS).toBeLessThanOrEqual(BACKEND_REQUEST_TIMEOUT_MS);
+  });
+
   // the backend's upper estimate of POST /trading/access: a shorter wait here would read a broker
   // GET inside its budget as an outage
   it('waits for /trading/access at least as long as the backend budgets the route', () => {
