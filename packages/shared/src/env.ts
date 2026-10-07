@@ -77,18 +77,37 @@ export function parseLoopbackOrHttpsUrlEnv(raw: string, name: string): string {
   return value;
 }
 
+// The raw spelling of an origin, optionally followed by one fixed path: `scheme://host[:port]`
+// then `path`, nothing else. It is checked on the raw string because URL parsing hides exactly
+// what matters here — it strips leading and trailing spaces and control characters and every
+// tab and newline, folds dot-segments and "\", and reads `https:host` as `https://host` — while
+// the raw string is what compose concatenates and what the backend sends to the broker.
+// Host case, an upper-case scheme and a default port pass: they do not change what is reached.
+const SPACE_OR_CONTROL = /[\s\p{Cc}]/u;
+const BARE_ORIGIN_SPELLING = /^https?:\/\/[^/?#\\%@:]+(?::\d+)?$/i;
+
+export function assertOriginSpelling(raw: string, name: string, path: string): void {
+  if (SPACE_OR_CONTROL.test(raw)) {
+    throw new Error(`Env ${name} must not contain whitespace or control characters`);
+  }
+  const origin = raw.slice(0, raw.length - path.length);
+  if (raw.endsWith(path) && BARE_ORIGIN_SPELLING.test(origin)) return;
+  throw new Error(
+    path === ''
+      ? `Env ${name} must be spelled scheme://host[:port] and nothing else (no "/", "?", "#", "\\", "%", "@" or dot-segments): compose appends /oauth/callback to it`
+      : `Env ${name} must be spelled scheme://host[:port]${path} and nothing else (no query, fragment, "\\", "%", "@" or dot-segments): the backend sends it to the broker byte for byte`,
+  );
+}
+
 // An origin, for comparing against a browser's `Origin` header and for deciding whether a
 // cookie may be marked Secure. The value is normalised through `URL.origin` — the header is
 // normalised too, so `https://Admin.Example` and `https://admin.example:443` are one origin — and
 // anything an origin cannot carry is refused rather than silently dropped: a path, a query, a
 // fragment or credentials in the variable means it was meant to be something else.
 //
-// The raw value must also take a path appended as text: compose builds the default
-// BROKER_OAUTH_REDIRECT_URI as `${WEB_PUBLIC_URL}/oauth/callback`. A trailing "/", "?", "#", "\"
-// or whitespace all normalise away here yet break that concatenation, so the rule is checked by
-// doing the concatenation rather than by listing characters.
-const ORIGIN_PROBE_PATH = '/probe';
-
+// The raw value must also be spelled as a bare origin: compose builds the default
+// BROKER_OAUTH_REDIRECT_URI as `${WEB_PUBLIC_URL}/oauth/callback`, and a trailing "/", "?", "#",
+// "\" or whitespace — all of which normalise away in URL.origin — would break that concatenation.
 export function parseOriginEnv(raw: string, name: string): string {
   const value = parseLoopbackOrHttpsUrlEnv(raw, name);
   const url = new URL(value);
@@ -98,17 +117,7 @@ export function parseOriginEnv(raw: string, name: string): string {
   if (url.username !== '' || url.password !== '') {
     throw new Error(`Env ${name} must not carry credentials`);
   }
-  let appended: string | undefined;
-  try {
-    appended = new URL(raw + ORIGIN_PROBE_PATH).href;
-  } catch {
-    appended = undefined;
-  }
-  if (appended !== url.origin + ORIGIN_PROBE_PATH) {
-    throw new Error(
-      `Env ${name} must be a bare origin: appending a path to it must stay on that path (no trailing "/", "?", "#", "\\" or whitespace); compose appends /oauth/callback to it`,
-    );
-  }
+  assertOriginSpelling(raw, name, '');
   return url.origin;
 }
 
