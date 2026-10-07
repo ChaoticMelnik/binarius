@@ -39,7 +39,7 @@ import {
   START_REFUSALS,
 } from './trading-session';
 
-const START = sessionStartCallbackData(PAIR_EURUSD.id, 60);
+const START = sessionStartCallbackData(PAIR_EURUSD.id, 5);
 const REFRESH = sessionRefreshCallbackData(SESSION_ID);
 const STOP = sessionStopCallbackData(SESSION_ID);
 
@@ -122,7 +122,7 @@ const CONNECT_ROWS = [
   [button(LABELS.oauthButton, OAUTH_CALLBACK_DATA)],
 ];
 const STAKE_MENU_ROWS = [
-  [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 60))],
+  [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5))],
 ];
 const EDIT_GONE: ApiError = {
   ok: false,
@@ -137,7 +137,7 @@ describe('the session button', () => {
 
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
     expect(startSession.mock.calls).toEqual([
-      [{ telegramUserId: String(USER.id), assetId: PAIR_EURUSD.id, durationSec: 60, trades: 5 }],
+      [{ telegramUserId: String(USER.id), assetId: PAIR_EURUSD.id, durationSec: 5, trades: 5 }],
     ]);
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(statusOf(SESSION_VIEW));
@@ -305,8 +305,8 @@ describe('the session button', () => {
   });
 
   it.each([
-    ['a forged asset id', 'demo:sess:0:60'],
-    ['a duration that does not fit', `demo:sess:${String(PAIR_EURUSD.id)}:900`],
+    ['a forged asset id', 'demo:sess:0:5'],
+    ['an asset id past int4', 'demo:sess:2147483648:15'],
   ])('only stops the spinner for %s', async (_case, data) => {
     const { press, calls, startSession, readPairs } = setup();
     await press(data);

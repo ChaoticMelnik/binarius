@@ -20,8 +20,19 @@ import {
   type BackendClient,
   type SetDemoStakeResult,
 } from './backend-client';
-import { assetIdOf, demoAnalysisCallbackData, durationOf, STAKE_PICKER_PREFIX } from './demo';
-import { DEMO_DURATIONS_SEC, type DemoDurationSec } from './demo-catalog';
+import {
+  assetIdOf,
+  demoAnalysisCallbackData,
+  durationAlternation,
+  durationOf,
+  removeLegacyKeyboard,
+  STAKE_PICKER_PREFIX,
+} from './demo';
+import {
+  DEMO_DURATIONS_SEC,
+  LEGACY_DEMO_DURATIONS_SEC,
+  type DemoDurationSec,
+} from './demo-catalog';
 import type { LoginDialog } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
@@ -45,7 +56,7 @@ export const SETTINGS_CALLBACK_DATA = 'settings';
 const originData = (origin: StakeOrigin): string =>
   origin.kind === 'settings' ? 's' : `a:${origin.assetId}:${origin.durationSec}`;
 
-// Bot API allows 1-64 bytes; the longest, `stk:s:999999999999.99999999:a:2147483647:3600`, is 45.
+// Bot API allows 1-64 bytes; the longest, `stk:s:999999999999.99999999:a:2147483647:15`, is 43.
 export const stakeOpenCallbackData = (origin: StakeOrigin): string =>
   `${STAKE_PICKER_PREFIX}o:${originData(origin)}`;
 export const stakePresetCallbackData = (amount: string, origin: StakeOrigin): string =>
@@ -55,13 +66,22 @@ export const stakeResetCallbackData = (origin: StakeOrigin): string =>
 export const stakeCustomCallbackData = (origin: StakeOrigin): string =>
   `${STAKE_PICKER_PREFIX}c:${originData(origin)}`;
 
-const ORIGIN = `(s|a:\\d{1,10}:(?:${DEMO_DURATIONS_SEC.join('|')}))`;
-const STAKE_OPEN_PATTERN = new RegExp(`^${STAKE_PICKER_PREFIX}o:${ORIGIN}$`);
-const STAKE_PRESET_PATTERN = new RegExp(
-  `^${STAKE_PICKER_PREFIX}s:(\\d{1,12}(?:\\.\\d{1,8})?):${ORIGIN}$`,
+// The four shapes over an origin; the legacy origin (#313) is an analysis of a duration from
+// before #313 only, since /settings carries none.
+const pickerPatterns = (origin: string) => ({
+  open: new RegExp(`^${STAKE_PICKER_PREFIX}o:${origin}$`),
+  preset: new RegExp(`^${STAKE_PICKER_PREFIX}s:(\\d{1,12}(?:\\.\\d{1,8})?):${origin}$`),
+  reset: new RegExp(`^${STAKE_PICKER_PREFIX}z:${origin}$`),
+  custom: new RegExp(`^${STAKE_PICKER_PREFIX}c:${origin}$`),
+});
+const PICKER = pickerPatterns(`(s|a:\\d{1,10}:(?:${durationAlternation(DEMO_DURATIONS_SEC)}))`);
+const STAKE_OPEN_PATTERN = PICKER.open;
+const STAKE_PRESET_PATTERN = PICKER.preset;
+const STAKE_RESET_PATTERN = PICKER.reset;
+const STAKE_CUSTOM_PATTERN = PICKER.custom;
+const LEGACY_PICKER_PATTERNS = Object.values(
+  pickerPatterns(`(a:\\d{1,10}:(?:${durationAlternation(LEGACY_DEMO_DURATIONS_SEC)}))`),
 );
-const STAKE_RESET_PATTERN = new RegExp(`^${STAKE_PICKER_PREFIX}z:${ORIGIN}$`);
-const STAKE_CUSTOM_PATTERN = new RegExp(`^${STAKE_PICKER_PREFIX}c:${ORIGIN}$`);
 
 // undefined when forged: the asset id the backend would refuse, or a malformed origin
 export function stakeOriginOf(raw: string | undefined): StakeOrigin | undefined {
@@ -118,6 +138,8 @@ export function createStakePicker<C extends Context>({
   onStakeText: (ctx: Context, origin: StakeOrigin, text: string) => Promise<void>;
 } {
   const composer = new Composer<C>();
+
+  composer.callbackQuery(LEGACY_PICKER_PATTERNS, (ctx) => removeLegacyKeyboard(ctx, logger));
 
   // also the custom input's «↩️ Назад», so it ends a stake step left open
   composer.callbackQuery(STAKE_OPEN_PATTERN, async (ctx) => {

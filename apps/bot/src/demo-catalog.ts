@@ -23,9 +23,12 @@ export const DEMO_ASSET_GROUPS = [
 ] as const;
 export type DemoAssetGroup = (typeof DEMO_ASSET_GROUPS)[number];
 
-// The Signal v1 interval table (owner, 2026-10-06), filtered per pair by its own range.
-export const DEMO_DURATIONS_SEC = [60, 300, 900, 1800, 3600] as const;
+// 5 and 15 s only (owner, 2026-10-07, #313), filtered per pair by its own range; each is analysed
+// on its own sub-minute candle (intervalForDuration).
+export const DEMO_DURATIONS_SEC = [5, 15] as const;
 export type DemoDurationSec = (typeof DEMO_DURATIONS_SEC)[number];
+// the set before #313: only to recognise a button drawn with one (demo.ts, the legacy handler)
+export const LEGACY_DEMO_DURATIONS_SEC = [60, 300, 900, 1800, 3600] as const;
 
 export const DEMO_PAGE_SIZE = 12;
 
@@ -35,8 +38,13 @@ export const groupOf = (type: string): DemoAssetGroup =>
 // the session start route reads a pair the same way (#283)
 export const isOpen: (pair: PairView, nowMs: number) => boolean = isPairOpen;
 
+export const durationOptions = (pair: PairView): DemoDurationSec[] =>
+  DEMO_DURATIONS_SEC.filter((sec) => pairAcceptsDuration(pair, sec));
+
+// only the pairs that accept a demo duration (#313): a type, a page and a count never show a pair
+// the user could not trade
 export const pairsOf = (catalog: PairsCatalogResponse, group: DemoAssetGroup): PairView[] =>
-  catalog.pairs.filter((pair) => groupOf(pair.type) === group);
+  catalog.pairs.filter((pair) => groupOf(pair.type) === group && durationOptions(pair).length > 0);
 
 // sorted by symbol in code-unit order, ties by id, so a page holds the same pairs on every read
 // of the same catalog
@@ -71,9 +79,6 @@ export function pageIndexOf(pairs: readonly PairView[], assetId: number): number
   const index = pairs.findIndex((pair) => pair.id === assetId);
   return index === -1 ? 0 : Math.floor(index / DEMO_PAGE_SIZE);
 }
-
-export const durationOptions = (pair: PairView): DemoDurationSec[] =>
-  DEMO_DURATIONS_SEC.filter((sec) => pairAcceptsDuration(pair, sec));
 
 export type DemoPairCheck =
   | { ok: true; pair: PairView }

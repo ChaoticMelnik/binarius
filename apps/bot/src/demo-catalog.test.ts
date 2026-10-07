@@ -9,6 +9,7 @@ import {
   groupOf,
   isOpen,
   openPairsOf,
+  pairsOf,
   pageIndexOf,
   pageOf,
   readDemoCatalog,
@@ -17,6 +18,7 @@ import {
 import {
   PAIR_CLOSED,
   PAIR_EURUSD,
+  PAIR_MINUTE_ONLY,
   PAIR_OTHER_TYPE,
   PAIR_SHORT,
   PAIRS_RESPONSE,
@@ -78,6 +80,15 @@ describe('openPairsOf', () => {
   it('lists an unknown type under other', () => {
     expect(openPairsOf(PAIRS_RESPONSE, 'other', NOW)).toEqual([PAIR_OTHER_TYPE]);
   });
+
+  // #313: a pair that accepts neither 5 nor 15 s is never listed, open or not
+  it('leaves out a pair that accepts no demo duration', () => {
+    expect(PAIRS_RESPONSE.pairs).toContain(PAIR_MINUTE_ONLY);
+    expect(openPairsOf(PAIRS_RESPONSE, 'currency', NOW)).toEqual([PAIR_EURUSD]);
+    expect(pairsOf(PAIRS_RESPONSE, 'currency')).toEqual([PAIR_EURUSD, PAIR_CLOSED]);
+    const narrow = { ...PAIR_EURUSD, id: 8, minTimeframe: 10, maxTimeframe: 15 };
+    expect(pairsOf(pairsResponse({ pairs: [narrow] }), 'currency')).toEqual([narrow]);
+  });
 });
 
 describe('pageOf', () => {
@@ -116,36 +127,28 @@ describe('pageIndexOf', () => {
 describe('durationOptions', () => {
   it.each([
     [5, 3600, [...DEMO_DURATIONS_SEC]],
-    [60, 3600, [...DEMO_DURATIONS_SEC]],
-    [120, 900, [300, 900]],
-    [5, 30, []],
+    [1, 15, [5, 15]],
+    [5, 10, [5]],
+    [10, 3600, [15]],
+    [6, 14, []],
+    [60, 3600, []],
   ])('admits for min %i and max %i exactly %j', (minTimeframe, maxTimeframe, expected) => {
     expect(durationOptions({ ...PAIR_EURUSD, minTimeframe, maxTimeframe })).toEqual(expected);
   });
 });
 
 describe('checkDemoTrade', () => {
-  const pair = { ...PAIR_EURUSD, minTimeframe: 300, maxTimeframe: 1800 };
+  const pair = { ...PAIR_EURUSD, minTimeframe: 10, maxTimeframe: 15 };
   const catalog = pairsResponse({ pairs: [pair] });
 
   // the durations around the range are the table's, so the range is what refuses them
   it('admits a duration on either end of the range, and nothing outside it', () => {
-    expect(checkDemoTrade(catalog, pair.id, 300, NOW)).toEqual({
+    expect(checkDemoTrade(catalog, pair.id, 15, NOW)).toEqual({
       ok: true,
       pair,
-      durationSec: 300,
+      durationSec: 15,
     });
-    expect(checkDemoTrade(catalog, pair.id, 1800, NOW)).toEqual({
-      ok: true,
-      pair,
-      durationSec: 1800,
-    });
-    expect(checkDemoTrade(catalog, pair.id, 60, NOW)).toEqual({
-      ok: false,
-      reason: 'duration_unsupported',
-      pair,
-    });
-    expect(checkDemoTrade(catalog, pair.id, 3600, NOW)).toEqual({
+    expect(checkDemoTrade(catalog, pair.id, 5, NOW)).toEqual({
       ok: false,
       reason: 'duration_unsupported',
       pair,
@@ -154,16 +157,18 @@ describe('checkDemoTrade', () => {
 
   // #125 review m5: the duration comes from callback data
   it("refuses a duration outside the demo's table even where the pair's range admits it", () => {
-    const wide = { ...PAIR_EURUSD, minTimeframe: 60, maxTimeframe: 3600 };
-    expect(checkDemoTrade(pairsResponse({ pairs: [wide] }), wide.id, 120, NOW)).toEqual({
-      ok: false,
-      reason: 'duration_unsupported',
-      pair: wide,
-    });
+    const wide = { ...PAIR_EURUSD, minTimeframe: 5, maxTimeframe: 3600 };
+    for (const durationSec of [10, 60, 300]) {
+      expect(checkDemoTrade(pairsResponse({ pairs: [wide] }), wide.id, durationSec, NOW)).toEqual({
+        ok: false,
+        reason: 'duration_unsupported',
+        pair: wide,
+      });
+    }
   });
 
   it('refuses an id the catalog does not hold', () => {
-    expect(checkDemoTrade(catalog, 999, 300, NOW)).toEqual({ ok: false, reason: 'pair_missing' });
+    expect(checkDemoTrade(catalog, 999, 15, NOW)).toEqual({ ok: false, reason: 'pair_missing' });
   });
 
   it('refuses a closed pair before looking at the duration', () => {
@@ -230,17 +235,18 @@ describe('readDemoTrade', () => {
   it('checks the pair on the clock taken after the read, against that catalog', async () => {
     const now = vi.fn(() => NOW);
     expect(
-      await readDemoTrade({ readPairs: () => Promise.resolve(PAIRS_RESPONSE) }, 101, 300, now),
-    ).toEqual({ ok: true, pair: PAIR_EURUSD, durationSec: 300, catalog: PAIRS_RESPONSE });
+      await readDemoTrade({ readPairs: () => Promise.resolve(PAIRS_RESPONSE) }, 101, 15, now),
+    ).toEqual({ ok: true, pair: PAIR_EURUSD, durationSec: 15, catalog: PAIRS_RESPONSE });
     expect(now).toHaveBeenCalledTimes(1);
   });
 
   it('never reaches the pair check with a stale catalog', async () => {
     const stale = pairsResponse({ fresh: false, pairs: [] });
     const now = vi.fn(() => NOW);
-    expect(await readDemoTrade({ readPairs: () => Promise.resolve(stale) }, 101, 300, now)).toEqual(
-      { ok: false, reason: 'catalog_stale' },
-    );
+    expect(await readDemoTrade({ readPairs: () => Promise.resolve(stale) }, 101, 15, now)).toEqual({
+      ok: false,
+      reason: 'catalog_stale',
+    });
     expect(now).not.toHaveBeenCalled();
   });
 
@@ -248,7 +254,7 @@ describe('readDemoTrade', () => {
     const read = await readDemoTrade(
       { readPairs: () => Promise.resolve(PAIRS_RESPONSE) },
       PAIR_CLOSED.id,
-      300,
+      15,
       () => NOW,
     );
     expect(read).toEqual({

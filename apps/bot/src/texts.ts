@@ -506,11 +506,8 @@ export const DEMO_GROUP_LABELS = labelsOf({
 } as const satisfies Record<DemoAssetGroup, StaticPlainKey>);
 
 export const DEMO_DURATION_LABELS = labelsOf({
-  60: 'demoDuration60',
-  300: 'demoDuration300',
-  900: 'demoDuration900',
-  1800: 'demoDuration1800',
-  3600: 'demoDuration3600',
+  5: 'demoDuration5',
+  15: 'demoDuration15',
 } as const satisfies Record<DemoDurationSec, StaticPlainKey>);
 
 // a type's button with the count of its open pairs

@@ -684,7 +684,7 @@ describe('what the bot writes about the demo', () => {
   });
 
   // #126
-  const analysed = () => callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 60));
+  const analysed = () => callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
 
   it('names a failed signal call by error, code, status and reason, without the user or a symbol', async () => {
     const { lines } = await linesFrom({
@@ -1211,7 +1211,7 @@ describe('what the bot writes about a demo trade', () => {
   };
   const staked = () =>
     callbackUpdate(
-      stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+      stakeCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
     );
 
   it('names an intent not created by error, code, status and reason only', async () => {
