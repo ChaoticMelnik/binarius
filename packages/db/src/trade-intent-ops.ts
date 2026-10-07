@@ -7,6 +7,7 @@ import {
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
+  TradingSessionStatus,
   canTransition,
   isClosedTrade,
   normalizeDecimal,
@@ -23,7 +24,7 @@ import { BrokerTradeStatus, brokerTrades } from './schema/broker-trades';
 import { OutboxTopic, outboxEvents } from './schema/outbox-events';
 import { TokenLedgerKind, tokenLedger } from './schema/token-ledger';
 import { tradeIntents } from './schema/trade-intents';
-import { TradingSessionStatus, tradingSessions } from './schema/trading-sessions';
+import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
 import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-switch-ops';
 
@@ -272,19 +273,29 @@ async function findReplay(
   return { intent: row, created: false };
 }
 
-async function resolveAccount(
+export type TradingAccountRefusal =
+  | typeof TradeIntentErrorCode.BrokerAccountNotFound
+  | typeof TradeIntentErrorCode.AccountNotConfirmed
+  | typeof TradeIntentErrorCode.AmbiguousBrokerAccount;
+
+export type TradingAccountResolution =
+  { ok: true; brokerAccountId: string } | { ok: false; code: TradingAccountRefusal };
+
+// The account a trade or a session runs on: the named one if it is the user's, else the user's
+// only active account. Its status beyond that is the caller's check.
+export async function resolveTradingAccount(
   exec: DbExecutor,
   userId: string,
   brokerAccountId: string | undefined,
-): Promise<string> {
+): Promise<TradingAccountResolution> {
   if (brokerAccountId !== undefined) {
     const [account] = await exec
       .select({ id: brokerAccounts.id })
       .from(brokerAccounts)
       .where(and(eq(brokerAccounts.id, brokerAccountId), eq(brokerAccounts.userId, userId)));
     if (account === undefined)
-      throw new TradeIntentError(TradeIntentErrorCode.BrokerAccountNotFound);
-    return account.id;
+      return { ok: false, code: TradeIntentErrorCode.BrokerAccountNotFound };
+    return { ok: true, brokerAccountId: account.id };
   }
   const accounts = await exec
     .select({ id: brokerAccounts.id, status: brokerAccounts.status })
@@ -294,14 +305,25 @@ async function resolveAccount(
   if (only === undefined) {
     // "no account" and "an account nobody confirmed yet" need different answers: the second one
     // tells the user to finish the login they already started
-    throw new TradeIntentError(
-      accounts.some((a) => a.status === BrokerAccountStatus.Pending)
+    return {
+      ok: false,
+      code: accounts.some((a) => a.status === BrokerAccountStatus.Pending)
         ? TradeIntentErrorCode.AccountNotConfirmed
         : TradeIntentErrorCode.BrokerAccountNotFound,
-    );
+    };
   }
-  if (more.length > 0) throw new TradeIntentError(TradeIntentErrorCode.AmbiguousBrokerAccount);
-  return only.id;
+  if (more.length > 0) return { ok: false, code: TradeIntentErrorCode.AmbiguousBrokerAccount };
+  return { ok: true, brokerAccountId: only.id };
+}
+
+async function resolveAccount(
+  exec: DbExecutor,
+  userId: string,
+  brokerAccountId: string | undefined,
+): Promise<string> {
+  const resolved = await resolveTradingAccount(exec, userId, brokerAccountId);
+  if (!resolved.ok) throw new TradeIntentError(resolved.code);
+  return resolved.brokerAccountId;
 }
 
 function accountErrorFor(status: BrokerAccountStatus | undefined): TradeIntentErrorCode {
@@ -1045,7 +1067,10 @@ export async function haltAccountForManualReview(
 // them before counting candidates, so an earlier trade with the same keys is not a second match.
 export async function listLinkedBrokerTradeIds(
   exec: DbExecutor,
-  { brokerAccountId, brokerTradeIds }: { brokerAccountId: string; brokerTradeIds: readonly string[] },
+  {
+    brokerAccountId,
+    brokerTradeIds,
+  }: { brokerAccountId: string; brokerTradeIds: readonly string[] },
 ): Promise<Set<string>> {
   if (brokerTradeIds.length === 0) return new Set();
   const rows = await exec
@@ -1094,11 +1119,7 @@ export interface OverdueAcceptedIntent {
 // the rest.
 export async function listOverdueAcceptedIntents(
   exec: DbExecutor,
-  {
-    graceMs,
-    limit,
-    exclude = [],
-  }: { graceMs: number; limit: number; exclude?: readonly string[] },
+  { graceMs, limit, exclude = [] }: { graceMs: number; limit: number; exclude?: readonly string[] },
 ): Promise<OverdueAcceptedIntent[]> {
   const expectedCloseMs = sql`${brokerTrades.openTimestampMs} + ${tradeIntents.durationSec}::bigint * 1000`;
   return exec

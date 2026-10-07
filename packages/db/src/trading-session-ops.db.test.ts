@@ -39,7 +39,7 @@ import {
 } from './trade-intent-ops';
 import {
   TradingSessionError,
-  TradingSessionErrorCode,
+  TradingSessionDbErrorCode,
   createSessionIntent,
   createTradingSession,
   listRunnableSessions,
@@ -89,7 +89,7 @@ async function thrown(promise: Promise<unknown>): Promise<unknown> {
   );
 }
 
-async function sessionFailsWith(promise: Promise<unknown>, code: TradingSessionErrorCode) {
+async function sessionFailsWith(promise: Promise<unknown>, code: TradingSessionDbErrorCode) {
   const error = await thrown(promise);
   expect(error).toBeInstanceOf(TradingSessionError);
   expect((error as TradingSessionError).code).toBe(code);
@@ -233,7 +233,7 @@ describe('createTradingSession', () => {
         mode: TradeMode.Demo,
         settings: sessionSettings(),
       }),
-      TradingSessionErrorCode.ActiveSessionExists,
+      TradingSessionDbErrorCode.ActiveSessionExists,
     );
     const rows = await tmp.db
       .select()
@@ -255,8 +255,8 @@ describe('createTradingSession', () => {
   });
 
   it.each([
-    ['pending', TradingSessionErrorCode.AccountNotActive],
-    ['revoked', TradingSessionErrorCode.AccountNotActive],
+    ['pending', TradingSessionDbErrorCode.AccountNotConfirmed],
+    ['revoked', TradingSessionDbErrorCode.AccountRevoked],
   ] as const)('C4 refuses a %s account', async (status, code) => {
     const user = await seedUser(tmp.db);
     const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId, { status });
@@ -284,7 +284,7 @@ describe('createTradingSession', () => {
         mode: 'demo',
         settings: sessionSettings(),
       }),
-      TradingSessionErrorCode.AccountHalted,
+      TradingSessionDbErrorCode.AccountHalted,
     );
     const blocked = await seedUser(tmp.db, { status: 'blocked' });
     const ofBlocked = await seedBrokerAccount(tmp.db, blocked.userId);
@@ -295,7 +295,7 @@ describe('createTradingSession', () => {
         mode: 'demo',
         settings: sessionSettings(),
       }),
-      TradingSessionErrorCode.UserNotActive,
+      TradingSessionDbErrorCode.UserNotActive,
     );
     await sessionFailsWith(
       createTradingSession(tmp.db, {
@@ -304,7 +304,7 @@ describe('createTradingSession', () => {
         mode: 'demo',
         settings: sessionSettings(),
       }),
-      TradingSessionErrorCode.AccountNotFound,
+      TradingSessionDbErrorCode.AccountNotFound,
     );
     const rows = await tmp.db
       .select()
@@ -323,7 +323,7 @@ describe('createTradingSession', () => {
         mode: 'demo',
         settings: sessionSettings(),
       }),
-      TradingSessionErrorCode.AccountNotFound,
+      TradingSessionDbErrorCode.AccountNotFound,
     );
     const rows = await tmp.db
       .select()
@@ -353,7 +353,7 @@ describe('createTradingSession', () => {
     expect(queued).toBe(true);
     const error = await creating;
     expect(error).toBeInstanceOf(TradingSessionError);
-    expect((error as TradingSessionError).code).toBe(TradingSessionErrorCode.UserNotActive);
+    expect((error as TradingSessionError).code).toBe(TradingSessionDbErrorCode.UserNotActive);
     const rows = await tmp.db
       .select()
       .from(tradingSessions)
@@ -383,7 +383,7 @@ describe('createTradingSession', () => {
     await holder.done;
     expect(queued).toBe(true);
     const error = await creating;
-    expect((error as TradingSessionError).code).toBe(TradingSessionErrorCode.AccountHalted);
+    expect((error as TradingSessionError).code).toBe(TradingSessionDbErrorCode.AccountHalted);
   });
 });
 
@@ -399,7 +399,7 @@ describe('createTradingSession: the global trading switch (#144)', () => {
           mode: TradeMode.Demo,
           settings: sessionSettings(),
         }),
-        TradingSessionErrorCode.TradingPaused,
+        TradingSessionDbErrorCode.TradingPaused,
       );
     } finally {
       await openTrading(tmp.db);

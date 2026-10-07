@@ -10,16 +10,14 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { TradeMode, TradingSessionStopReason, type TradingSessionSettings } from '@binarius/shared';
+import {
+  TradeMode,
+  TradingSessionStatus,
+  TradingSessionStopReason,
+  type TradingSessionSettings,
+} from '@binarius/shared';
 import { createdAt, id, inList, literal, updatedAt } from './columns';
 import { brokerAccounts } from './broker-accounts';
-
-export const TradingSessionStatus = {
-  Active: 'active',
-  Paused: 'paused',
-  Stopped: 'stopped',
-} as const;
-export type TradingSessionStatus = (typeof TradingSessionStatus)[keyof typeof TradingSessionStatus];
 
 // The session orchestrator's table (#130; the orchestrator is #287; docs/trading-session.md). `settings` is typed for the
 // writers only: $type has no runtime effect, so the orchestrator parses the column at read.
