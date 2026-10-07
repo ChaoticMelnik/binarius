@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import { MockSocketPayload, startMockBroker } from '@binarius/mock-broker';
 import { TradeIntentFailureReason, type OpenTrade } from '@binarius/shared';
@@ -9,6 +9,7 @@ import {
   brokerTrades,
   findTradeIntent,
   markIntentUnknown,
+  openTrading,
   outboxEvents,
   takeIntent,
   tokenLedger,
@@ -16,11 +17,14 @@ import {
   users,
   type TradeIntentRow,
 } from '@binarius/db';
-import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
+import {
+  closeTradingSwitch,
+  createTempDatabase,
+  seedQueuedIntent,
+  type TempDatabase,
+} from '@binarius/db/testing';
 import { noTradeSessions } from '../broker/trade-session';
-import { parseEnv } from '../env';
 import type { SubmitResult, TradeExecutor } from './executor';
-import { buildExecutor, realTradingGate } from './executor';
 import { InvalidJobError, processIntentJob, type ProcessorDeps } from './processor';
 import { createTradeCommandExecutor } from './trade-command-executor';
 
@@ -101,6 +105,103 @@ const topicsOf = async (intentId: string) =>
     .map((r) => r.topic)
     .sort();
 
+describe('processIntentJob: the global trading switch (#144)', () => {
+  afterEach(() => openTrading(tmp.db));
+
+  const capture = () => {
+    const lines: string[] = [];
+    const sink = pino({ level: 'info' }, { write: (line: string) => void lines.push(line) });
+    return {
+      sink,
+      entries: () => lines.map((line) => JSON.parse(line) as Record<string, unknown>),
+    };
+  };
+
+  it('W1 rejects a queued intent while closed, releases the token, never calls the executor', async () => {
+    const { intentId, userId } = await newIntent();
+    await closeTradingSwitch(tmp.db);
+    const executor = acceptingExecutor();
+    const log = capture();
+    expect(await processIntentJob({ ...deps(executor), logger: log.sink }, { intentId })).toBe(
+      'rejected',
+    );
+    expect(executor.calls).toBe(0);
+    const row = await statusOf(intentId);
+    expect(row).toMatchObject({
+      status: 'rejected',
+      lastError: 'trading_paused',
+      tokensReserved: 0n,
+    });
+    expect(row.submittedAt).toBeNull();
+    expect(await reservedOf(userId)).toBe(0n);
+    expect(await ledgerKinds(intentId)).toEqual(['reserve', 'release']);
+    expect(log.entries()).toContainEqual(
+      expect.objectContaining({ level: 40, intentId, msg: 'intent rejected: trading paused' }),
+    );
+  });
+
+  it('W2 an expired intent while closed keeps its own reason', async () => {
+    const { intentId } = await newIntent();
+    await tmp.db
+      .update(tradeIntents)
+      .set({ createdAt: sql`now() - interval '2 minutes'` })
+      .where(eq(tradeIntents.id, intentId));
+    await closeTradingSwitch(tmp.db);
+    expect(await processIntentJob(deps(acceptingExecutor()), { intentId })).toBe('expired');
+    expect((await statusOf(intentId)).lastError).toBe('expired');
+  });
+
+  it('W3 submits as usual while open', async () => {
+    const { intentId } = await newIntent();
+    expect(await processIntentJob(deps(acceptingExecutor()), { intentId })).toBe('accepted');
+  });
+
+  // The take refused while closed, then the switch reopened before the rejection: the intent is
+  // still rejected, never left queued with its job consumed. The db wrapper reopens the switch
+  // on the first transaction the processor opens after the refused take.
+  it('W5 a switch reopened between the refused take and the rejection still rejects', async () => {
+    const { intentId } = await newIntent();
+    await closeTradingSwitch(tmp.db);
+    let reopened = false;
+    const db = new Proxy(tmp.db, {
+      get(target, property) {
+        const value = Reflect.get(target, property) as unknown;
+        if (property === 'transaction') {
+          return async (...args: Parameters<typeof target.transaction>) => {
+            if (!reopened) {
+              reopened = true;
+              await openTrading(target);
+            }
+            return target.transaction(...args);
+          };
+        }
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    const executor = acceptingExecutor();
+    expect(await processIntentJob({ ...deps(executor), db }, { intentId })).toBe('rejected');
+    expect(reopened).toBe(true);
+    expect(executor.calls).toBe(0);
+    expect(await statusOf(intentId)).toMatchObject({
+      status: 'rejected',
+      lastError: 'trading_paused',
+    });
+  });
+
+  // the window (docs/kill-switch.md): an intent taken before the switch closed is finished
+  it('W4 closed after the take: the outcome is persisted as usual', async () => {
+    const { intentId } = await newIntent();
+    const executor = executorOf(async (intent) => {
+      await closeTradingSwitch(tmp.db);
+      return { outcome: 'accepted', transport: 'socket', trade: openTradeFor(intent) };
+    });
+    expect(await processIntentJob(deps(executor), { intentId })).toBe('accepted');
+    expect((await statusOf(intentId)).status).toBe('accepted');
+  });
+});
+
 describe('processIntentJob', () => {
   it('rejects a malformed payload and a missing intent as invalid jobs', async () => {
     await expect(
@@ -161,23 +262,14 @@ describe('processIntentJob', () => {
       broker.users.register({ id: 1, accessToken: 'SECRET-TOKEN-of-user-1' });
       // 101 is a pair of the fixture; the seed's default asset is not
       const seed = await seedQueuedIntent(tmp.db, { assetId: 101 });
-      const executor = buildExecutor(
-        parseEnv({
-          DATABASE_URL: baseUrl,
-          REDIS_URL: 'redis://localhost:6379',
-          BACKEND_URL: 'http://backend:3000',
-          INTERNAL_API_TOKEN: 'internal-token-for-tests-0123456789',
-          BROKER_API_BASE_URL: 'https://api.binodex.app',
-        }),
-        createTradeCommandExecutor({
-          sessions: noTradeSessions,
-          rest: createBrokerRestClient({ baseUrl: broker.url }),
-          tokens: {
-            accessToken: async () => ({ ok: true, accessToken: 'SECRET-TOKEN-of-user-1' }),
-          },
-          logger,
-        }),
-      );
+      const executor = createTradeCommandExecutor({
+        sessions: noTradeSessions,
+        rest: createBrokerRestClient({ baseUrl: broker.url }),
+        tokens: {
+          accessToken: async () => ({ ok: true, accessToken: 'SECRET-TOKEN-of-user-1' }),
+        },
+        logger,
+      });
       expect(
         await processIntentJob(deps(executor, { submitAckTimeoutMs: 5_000 }), {
           intentId: seed.intent.id,
@@ -207,25 +299,6 @@ describe('processIntentJob', () => {
     });
     expect(await reservedOf(userId)).toBe(0n);
     expect(await ledgerKinds(intentId)).toEqual(['reserve', 'release']);
-  });
-
-  // backend created it with the grant on; this worker runs with it off (#134)
-  it('rejects a real intent at the grant gate and releases the token', async () => {
-    const seed = await seedQueuedIntent(tmp.db, { mode: 'real' }, { realTradingEnabled: true });
-    const intentId = seed.intent.id;
-    const inner = acceptingExecutor();
-    const gated = realTradingGate(inner, { realTradingEnabled: false });
-    expect(await processIntentJob(deps(gated), { intentId })).toBe('rejected');
-    const row = await statusOf(intentId);
-    expect(row).toMatchObject({
-      status: 'rejected',
-      lastError: 'real_trading_disabled',
-      tokensReserved: 0n,
-    });
-    expect(row.submittedAt).toBeInstanceOf(Date);
-    expect(await reservedOf(seed.userId)).toBe(0n);
-    expect(await ledgerKinds(intentId)).toEqual(['reserve', 'release']);
-    expect(inner.calls).toBe(0);
   });
 
   it('records an unknown outcome with a reconciliation row and keeps the reserve', async () => {
