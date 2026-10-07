@@ -167,14 +167,20 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       if (snapshot === undefined) return refuse(reply, TradingSessionErrorCode.BalanceUnavailable);
     }
 
-    // the snapshot's domain is numeric(20,8), stakeSettingsFor's; a throw is a bug and a 500
-    const settings = tradingSessionSettingsSchema.parse({
+    // a stored min_trade_amount of 0 is valid and gives baseStake '0', which settings v1 refuse:
+    // the snapshot offers no stake to trade with, the same answer as no snapshot
+    const stakeSettings = tradingSessionSettingsSchema.safeParse({
       version: 1,
       assetId,
       durationSec,
       trades,
       stake: stakeSettingsFor(snapshot.minTradeAmount),
     });
+    if (!stakeSettings.success) {
+      request.log.warn({ accountId: brokerAccountId }, 'balance snapshot gives no session stake');
+      return refuse(reply, TradingSessionErrorCode.BalanceUnavailable);
+    }
+    const settings = stakeSettings.data;
 
     let created;
     try {
