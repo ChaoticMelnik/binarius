@@ -723,6 +723,57 @@ describe('sessionFor, stop() and the tick', () => {
     expect(h.manager.sessionFor('acc-1')).toBe(client);
   });
 
+  it('U17a a token source that throws: the start failed line by name, dropped, held back', async () => {
+    const h = harness({
+      tokens: () => Promise.reject(new TypeError(`token source broke on ${tokenOf(1)}`)),
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the line', () => h.logs('broker session start failed').length === 1);
+    expect(h.logs('broker session start failed')).toEqual([
+      expect.objectContaining({
+        level: LEVEL.error,
+        accountId: 'acc-1',
+        err: expect.objectContaining({ name: 'TypeError' }),
+      }),
+    ]);
+    expect(h.manager.size).toBe(0);
+    await h.manager.tick();
+    expect(h.tokenCalls).toHaveLength(1);
+    expect(h.candidateCalls.at(-1)).toEqual(['acc-1']);
+    await tickUntil(h, 'the retry after the hold-back', () => h.tokenCalls.length === 2);
+  });
+
+  it('U17b a client whose start() throws on the refresh path: the same line, dropped, held back', async () => {
+    const fakes = fakeClients();
+    let issued = 0;
+    const h = harness({
+      openClient: fakes.openClient,
+      tokens: () => Promise.resolve({ ok: true, accessToken: `SECRET-${(issued += 1)}` }),
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the client', () => fakes.made.length === 1);
+    const client = fakes.made[0]!;
+    client.start = () => {
+      throw new Error('start refused');
+    };
+    client.fire(BrokerSocketState.TokenExpired);
+    await until('the line', () => h.logs('broker session start failed').length === 1);
+    expect(h.logs('broker session start failed')).toEqual([
+      expect.objectContaining({
+        level: LEVEL.error,
+        accountId: 'acc-1',
+        err: expect.objectContaining({ name: 'Error' }),
+      }),
+    ]);
+    expect(h.manager.size).toBe(0);
+    expect(client.stops).toBe(1);
+    await h.manager.tick();
+    expect(fakes.made).toHaveLength(1);
+    await tickUntil(h, 'a new client after the hold-back', () => fakes.made.length === 2);
+  });
+
   it('U12 stop() closes every socket, aborts a token fetch, drops the queued writes and keeps its budget', async () => {
     const write = deferred<BalanceSnapshotWrite>();
     let signal: AbortSignal | undefined;
@@ -881,6 +932,7 @@ describe('logs', () => {
       'closed trade not applied',
       'broker session writes dropped at stop',
       'broker session stop budget exceeded',
+      'broker session start failed',
     ]) {
       expect(messages, msg).toContain(msg);
     }

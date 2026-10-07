@@ -224,8 +224,9 @@ redacted key).
 | `broker session stop budget exceeded` | warn | `pending` |
 
 `session-manager.test.ts` U14 reads every line its cases wrote through a `logOptions('debug')`
-sink: no `SECRET-` sentinel, no amount the fixture spells, no broker host, and every `msg` above
-but `broker session start failed` (a bug path) present.
+sink: no `SECRET-` sentinel (U17a's thrown error carries one in its message, which
+`errorLogFields` leaves out), no amount the fixture spells, no broker host, and every `msg` above
+present.
 
 ## Tests
 
@@ -236,7 +237,9 @@ but `broker session start failed` (a bug path) present.
   `auth_failed` with the same and with a new token; U8 `disconnected_by_server`; U9/U9b/U9c the
   identity gate (a burst with a foreign `user.data`, a reconnect); U10 a throwing writer; U11
   `sessionFor` (U11b: only for a verified connection, again after a reconnect); U12/U12b `stop()` and its budget; U13 single-flight and a failing scan; U15 a tick
-  returns while its starts are pending; U16 a candidate gone while starting; U14 the log scan.
+  returns while its starts are pending; U16 a candidate gone while starting; U17a/U17b
+  `broker session start failed` from a throwing token source and from a client whose `start()`
+  throws on the refresh path; U14 the log scan.
 - `session-manager.db.test.ts` (integration, `TEST_DATABASE_URL`): the end-to-end scenario on
   the mock broker with the production composition — `listSessionCandidates`, the production
   writers, `buildExecutor(parseEnv(…), createTradeCommandExecutor({ sessions: manager, … }))`,
