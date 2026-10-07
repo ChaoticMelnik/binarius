@@ -104,7 +104,7 @@ describe('contract coverage (issue #6)', () => {
         | 'stale_submitting'
         | 'invalid_job'
         | 'processing_failed'
-        | 'real_trading_disabled'
+        | 'trading_paused'
         | 'trade_mismatch'
         | 'manual_rejected'
         | 'reconciliation_not_found'
@@ -129,7 +129,7 @@ describe('contract coverage (issue #6)', () => {
         | 'refreshing'
         | 'broker_unavailable'
         | null;
-      realTradingAllowed: boolean;
+      tradingOpen: boolean;
     }>();
   });
 

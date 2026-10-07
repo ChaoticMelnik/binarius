@@ -89,9 +89,9 @@ export const TradeIntentFailureReason = {
   InvalidJob: 'invalid_job',
   // the job itself failed (database unreachable while persisting an outcome); DLQ only
   ProcessingFailed: 'processing_failed',
-  // a real intent reached the worker while REAL_TRADING_ENABLED=false there (#134,
-  // realTradingGate); nothing was sent to the broker
-  RealTradingDisabled: 'real_trading_disabled',
+  // a queued intent found the global trading switch closed at take time (#144,
+  // rejectPausedIntent); nothing was sent to the broker and the reserve is released
+  TradingPaused: 'trading_paused',
   // the executor's accepted trade disagrees with the intent (mode, asset, action, amount) or is
   // already linked to another intent (#17); from the executor the intent goes to unknown for
   // reconciliation, from the reconciliation pass to manual_review (#89)
@@ -122,8 +122,8 @@ export const TradeIntentErrorCode = {
   InsufficientTokens: 'insufficient_tokens',
   ActiveIntentExists: 'active_intent_exists',
   ClientRequestIdConflict: 'client_request_id_conflict',
-  // mode real while this backend runs with REAL_TRADING_ENABLED=false (#134, createInTransaction)
-  RealTradingDisabled: 'real_trading_disabled',
+  // the global trading switch is closed (#144, createInTransaction): any mode, nothing reserved
+  TradingPaused: 'trading_paused',
 } as const;
 export type TradeIntentErrorCode = (typeof TradeIntentErrorCode)[keyof typeof TradeIntentErrorCode];
 
