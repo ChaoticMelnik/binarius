@@ -214,10 +214,11 @@ on top of #99's socket client, which writes nothing itself:
 - **Not verified:** whether authorized calls count against the same per-IP window or a per-token
   one. A 429 on `GET /v1/broker/user` under 500 calls a minute from one IP would mean the window is
   shared or smaller, and the ceiling should come down. The check, run on the pilot by the owner
-  with one active account's id (the token is decrypted inside the container and never printed):
+  with one active account's id (the token is decrypted inside the container and never printed;
+  `REPLACE_WITH_ID` is the `broker_accounts.id` uuid, substitute it):
 
   ```bash
-  docker compose exec -T -e ACCOUNT_ID=<broker_accounts.id> backend \
+  docker compose exec -T -e ACCOUNT_ID=REPLACE_WITH_ID backend \
     pnpm --filter @binarius/backend rate-limit-probe
   ```
 

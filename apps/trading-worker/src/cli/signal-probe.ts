@@ -16,7 +16,8 @@ import { pino } from 'pino';
 // One chart fetch and one decision through the signal feed: the journal line on stdout, a summary
 // on stderr; exit 0 on a decision (a refusal included), 1 on fetch_failed. The chart endpoint is
 // public: no token is read or sent, and no trade is opened (docs/signal.md → Feed and journal).
-// BROKER_API_BASE_URL=https://api.binodex.app ASSET_ID=<id> pnpm signal-probe
+// BROKER_API_BASE_URL=https://api.binodex.app ASSET_ID=REPLACE_WITH_ID pnpm signal-probe
+// (REPLACE_WITH_ID: the asset id; substitute it)
 
 const env = process.env;
 const baseUrl = parseLoopbackOrHttpsUrlEnv(
