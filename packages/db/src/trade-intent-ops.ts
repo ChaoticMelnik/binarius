@@ -9,6 +9,7 @@ import {
   TradeMode,
   TradingSessionStatus,
   canTransition,
+  checkDemoStake,
   isClosedTrade,
   normalizeDecimal,
   type BrokerTrade,
@@ -20,6 +21,7 @@ import {
 } from '@binarius/shared';
 import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
+import { brokerBalanceSnapshots } from './schema/broker-balance-snapshots';
 import { BrokerTradeStatus, brokerTrades } from './schema/broker-trades';
 import { OutboxTopic, outboxEvents } from './schema/outbox-events';
 import { TokenLedgerKind, tokenLedger } from './schema/token-ledger';
@@ -74,6 +76,13 @@ export interface IntentSession {
   id: string;
 }
 
+export interface CreateTradeIntentOptions {
+  // Only POST /trading/intents passes it (#297, stated): the demo stake's bounds against the
+  // account's stored snapshot. The orchestrator's session intents rely on the sizer (Rule 23); a
+  // future non-session creator of demo intents must pass it too.
+  checkDemoStake?: true;
+}
+
 export interface CreateTradeIntentResult {
   intent: TradeIntentRow;
   created: boolean;
@@ -83,9 +92,10 @@ export async function createTradeIntent(
   db: Db,
   input: CreateTradeIntentRequest,
   session?: IntentSession,
+  options?: CreateTradeIntentOptions,
 ): Promise<CreateTradeIntentResult> {
   try {
-    return await db.transaction((tx) => createInTransaction(tx, input, session));
+    return await db.transaction((tx) => createInTransaction(tx, input, session, options));
   } catch (error) {
     const constraint = uniqueViolation(error);
     if (constraint === undefined || !REPLAY_CONSTRAINTS.has(constraint)) throw error;
@@ -107,6 +117,7 @@ async function createInTransaction(
   tx: Tx,
   input: CreateTradeIntentRequest,
   session: IntentSession | undefined,
+  options: CreateTradeIntentOptions | undefined,
 ): Promise<CreateTradeIntentResult> {
   const tokens = TOKENS_PER_INTENT;
   const user = await findUser(tx, input.telegramUserId);
@@ -126,6 +137,23 @@ async function createInTransaction(
   }
 
   const brokerAccountId = await resolveAccount(tx, user.id, input.brokerAccountId);
+
+  // after the replay, so a retry after a committed trade that spent the balance gets its intent
+  // back; before the reserve, so a refusal writes nothing. A plain read with no row lock: the
+  // snapshot's writers are not in the lock order (Rule 5), and a stored snapshot of any age serves
+  // (#297)
+  if (input.mode === TradeMode.Demo && options?.checkDemoStake === true) {
+    const [snapshot] = await tx
+      .select({
+        minTradeAmount: brokerBalanceSnapshots.minTradeAmount,
+        demoAvailable: brokerBalanceSnapshots.demoAvailable,
+      })
+      .from(brokerBalanceSnapshots)
+      .where(eq(brokerBalanceSnapshots.brokerAccountId, brokerAccountId));
+    if (snapshot === undefined) throw new TradeIntentError(TradeIntentErrorCode.BalanceUnavailable);
+    const refusal = checkDemoStake(input.amount, snapshot);
+    if (refusal !== null) throw new TradeIntentError(refusal);
+  }
 
   const reserved = await tx
     .update(users)

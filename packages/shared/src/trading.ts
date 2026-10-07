@@ -1,5 +1,10 @@
 import * as z from 'zod';
-import { positiveDecimalStringSchema } from './money';
+import { DemoStakeRefusal } from './demo-stake';
+import {
+  NUMERIC_FRACTION_DIGITS,
+  NUMERIC_INTEGER_DIGITS,
+  positiveDecimalStringSchema,
+} from './money';
 
 export const TradeMode = { Demo: 'demo', Real: 'real' } as const;
 export type TradeMode = (typeof TradeMode)[keyof typeof TradeMode];
@@ -124,13 +129,17 @@ export const TradeIntentErrorCode = {
   ClientRequestIdConflict: 'client_request_id_conflict',
   // the global trading switch is closed (#144, createInTransaction): any mode, nothing reserved
   TradingPaused: 'trading_paused',
+  // the demo-stake bounds (#297), checked only for POST /trading/intents; balance_unavailable:
+  // the account has no balance snapshot to check against
+  BalanceUnavailable: 'balance_unavailable',
+  StakePrecision: DemoStakeRefusal.Precision,
+  StakeBelowMinimum: DemoStakeRefusal.BelowMinimum,
+  InsufficientDemoBalance: DemoStakeRefusal.AboveAvailable,
 } as const;
 export type TradeIntentErrorCode = (typeof TradeIntentErrorCode)[keyof typeof TradeIntentErrorCode];
 
 export const INT4_MAX = 2_147_483_647;
 const INT8_MAX = 9_223_372_036_854_775_807n;
-const NUMERIC_INTEGER_DIGITS = 12;
-const NUMERIC_FRACTION_DIGITS = 8;
 
 const int4PositiveSchema = z.int().positive().max(INT4_MAX);
 

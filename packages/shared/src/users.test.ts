@@ -31,6 +31,7 @@ const view = (patch: Record<string, unknown> = {}) => ({
   hasActiveBrokerAccount: false,
   pendingBrokerAccounts: [],
   notificationLevel: NotificationLevel.All,
+  demoStake: null,
   ...patch,
 });
 
@@ -162,6 +163,8 @@ describe('userStartResponseSchema', () => {
     ['pendingBrokerAccounts is absent', { user: { ...view(), pendingBrokerAccounts: undefined } }],
     ['notificationLevel is absent', { user: { ...view(), notificationLevel: undefined } }],
     ['notificationLevel is unknown', { user: view({ notificationLevel: 'daily' }) }],
+    ['demoStake is absent', { user: { ...view(), demoStake: undefined } }],
+    ['demoStake is a number', { user: view({ demoStake: 5 }) }],
     [
       'a pending account id is not a uuid',
       { user: view({ pendingBrokerAccounts: [{ id: 'broker-1', email: null }] }) },
@@ -240,8 +243,14 @@ describe('notificationLevelRequestSchema', () => {
 
 describe('notificationLevelResponseSchema', () => {
   it('accepts a level and refuses a body without one or with an unknown one', () => {
-    expect(safeParseNotificationLevelResponse({ level: NotificationLevel.Off }).success).toBe(true);
-    expect(safeParseNotificationLevelResponse({}).success).toBe(false);
-    expect(safeParseNotificationLevelResponse({ level: 'daily' }).success).toBe(false);
+    const ok = (level: unknown, demoStake: unknown = null) =>
+      safeParseNotificationLevelResponse({ level, demoStake }).success;
+    expect(ok(NotificationLevel.Off)).toBe(true);
+    expect(ok(NotificationLevel.Off, '5')).toBe(true);
+    expect(ok(undefined)).toBe(false);
+    expect(ok('daily')).toBe(false);
+    expect(safeParseNotificationLevelResponse({ level: NotificationLevel.Off }).success).toBe(
+      false,
+    );
   });
 });

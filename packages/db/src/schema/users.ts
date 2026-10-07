@@ -1,7 +1,16 @@
 import { sql } from 'drizzle-orm';
 import { bigint, check, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 import { NotificationLevel, START_PAYLOAD_PATTERN, UserStatus } from '@binarius/shared';
-import { createdAt, id, inList, sqlTextLiteral, tokenAmount, updatedAt } from './columns';
+import {
+  createdAt,
+  id,
+  inList,
+  money,
+  nullablePositiveNumeric,
+  sqlTextLiteral,
+  tokenAmount,
+  updatedAt,
+} from './columns';
 
 // token_balance / token_reserved are caches of token_ledger sums, updated in the same
 // transaction as the ledger row; available tokens = token_balance - token_reserved.
@@ -31,6 +40,9 @@ export const users = pgTable(
       .$type<NotificationLevel>()
       .notNull()
       .default(NotificationLevel.All),
+    // The user's demo stake (#297): NULL = the broker's minimum at each trade. Written only by
+    // setDemoStake; its bounds are checked by checkDemoStake (@binarius/shared), not here.
+    demoStake: money('demo_stake'),
     tokenBalance: tokenAmount('token_balance'),
     tokenReserved: tokenAmount('token_reserved'),
     createdAt: createdAt(),
@@ -54,6 +66,7 @@ export const users = pgTable(
       'users_acquisition_pair_check',
       sql`(${t.acquisitionSource} is null) = (${t.acquiredAt} is null)`,
     ),
+    nullablePositiveNumeric('users_demo_stake_check', t.demoStake),
     check('users_token_balance_check', sql`${t.tokenBalance} >= 0`),
     check(
       'users_token_reserved_check',

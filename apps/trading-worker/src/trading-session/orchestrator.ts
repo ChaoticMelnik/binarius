@@ -103,6 +103,24 @@ const CREATE_REFUSALS = {
   [TradeIntentErrorCode.ActiveIntentExists]: { kind: 'reschedule' },
   // the step key exists with other terms: the next attempt reads that intent in the history
   [TradeIntentErrorCode.ClientRequestIdConflict]: { kind: 'reschedule' },
+  // the demo-stake bounds (#297): only POST /trading/intents asks for them, so a session intent
+  // never gets these; were it to, they mean what the sizer's own stop means
+  [TradeIntentErrorCode.BalanceUnavailable]: {
+    kind: 'stop',
+    reason: TradingSessionStopReason.BalanceUnavailable,
+  },
+  [TradeIntentErrorCode.StakePrecision]: {
+    kind: 'stop',
+    reason: TradingSessionStopReason.StakeStop,
+  },
+  [TradeIntentErrorCode.StakeBelowMinimum]: {
+    kind: 'stop',
+    reason: TradingSessionStopReason.StakeStop,
+  },
+  [TradeIntentErrorCode.InsufficientDemoBalance]: {
+    kind: 'stop',
+    reason: TradingSessionStopReason.StakeStop,
+  },
 } as const satisfies Record<TradeIntentErrorCode, CreateRefusal>;
 
 const TERMINAL = new Set<string>(TERMINAL_TRADE_INTENT_STATUSES);

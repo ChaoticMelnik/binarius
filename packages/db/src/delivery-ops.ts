@@ -1,10 +1,11 @@
 import { and, eq, sql, type SQL } from 'drizzle-orm';
-import { NotificationLevel } from '@binarius/shared';
+import { NotificationLevel, type DecimalString } from '@binarius/shared';
 import type { Db } from './client';
 import { literal } from './schema/columns';
 import { NotificationJobStatus, notificationJobs } from './schema/notification-jobs';
 import { users } from './schema/users';
 import type { Tx } from './trade-intent-ops';
+import { canonicalStake } from './user-ops';
 
 // Whether the bot may mail a user at all, as a predicate over `users`: reachable (#119) and not
 // opted out (#120). A sender puts it — or acceptsMailing(), which includes it — in its claim
@@ -83,16 +84,18 @@ export async function setNotificationLevel(
   db: Db,
   telegramUserId: bigint,
   level: NotificationLevel,
-): Promise<{ level: NotificationLevel; canceledJobs: number } | undefined> {
+): Promise<
+  { level: NotificationLevel; demoStake: DecimalString | null; canceledJobs: number } | undefined
+> {
   return db.transaction(async (tx) => {
     const [row] = await tx
       .update(users)
       .set({ notificationLevel: level })
       .where(eq(users.telegramUserId, telegramUserId))
-      .returning({ id: users.id, level: users.notificationLevel });
+      .returning({ id: users.id, level: users.notificationLevel, demoStake: users.demoStake });
     if (row === undefined) return undefined;
     const canceledJobs =
       level === NotificationLevel.Off ? await cancelPendingNotificationJobs(tx, row.id) : 0;
-    return { level: row.level, canceledJobs };
+    return { level: row.level, demoStake: canonicalStake(row.demoStake), canceledJobs };
   });
 }

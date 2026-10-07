@@ -19,6 +19,7 @@ import {
   closeTradingSwitch,
   createTempDatabase,
   intentRequest,
+  seedBalanceSnapshot,
   seedBrokerAccount,
   seedQueuedIntent,
   seedUnknownIntent,
@@ -735,6 +736,94 @@ describe('createTradeIntent: the global trading switch (#144)', () => {
     const s = await seedUserWithAccount(tmp.db);
     await tmp.db.delete(tradingSwitch);
     await failsWith(createTradeIntent(tmp.db, intentRequest(s.telegramUserId)), 'trading_paused');
+  });
+});
+
+describe('createTradeIntent: the demo-stake bounds (#297)', () => {
+  const checked = { checkDemoStake: true } as const;
+  const amount = (value: string) => value as DecimalString;
+
+  async function refusedWithoutTrace(
+    seed: { userId: string; telegramUserId: string },
+    input: ReturnType<typeof intentRequest>,
+    code: string,
+  ) {
+    await failsWith(createTradeIntent(tmp.db, input, undefined, checked), code);
+    expect(
+      await tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, seed.userId)),
+    ).toEqual([]);
+    expect(await tokenReservedOf(seed.userId)).toBe(0n);
+    expect(
+      await tmp.db.select().from(tokenLedger).where(eq(tokenLedger.userId, seed.userId)),
+    ).toEqual([]);
+  }
+
+  it('B1 without the option creates a demo intent with no snapshot, as before', async () => {
+    const s = await seedUserWithAccount(tmp.db);
+    expect((await createTradeIntent(tmp.db, intentRequest(s.telegramUserId))).created).toBe(true);
+  });
+
+  it('B2 refuses balance_unavailable without a snapshot', async () => {
+    const s = await seedUserWithAccount(tmp.db);
+    await refusedWithoutTrace(s, intentRequest(s.telegramUserId), 'balance_unavailable');
+  });
+
+  it.each([
+    ['0.99', 'stake_below_minimum'],
+    ['50.01', 'insufficient_demo_balance'],
+    ['1.234', 'stake_precision'],
+  ])('B3 refuses %s with %s and leaves no trace', async (value, code) => {
+    const s = await seedUserWithAccount(tmp.db);
+    await seedBalanceSnapshot(tmp.db, s.brokerAccountId, {
+      minTradeAmount: '1',
+      demoAvailable: '50',
+    });
+    await refusedWithoutTrace(s, intentRequest(s.telegramUserId, { amount: amount(value) }), code);
+  });
+
+  it.each([['1'], ['1.5'], ['50']])(
+    'B4 creates %s inside the bounds, both ends included',
+    async (value) => {
+      const s = await seedUserWithAccount(tmp.db);
+      await seedBalanceSnapshot(tmp.db, s.brokerAccountId, {
+        minTradeAmount: '1',
+        demoAvailable: '50',
+      });
+      const { created } = await createTradeIntent(
+        tmp.db,
+        intentRequest(s.telegramUserId, { amount: amount(value) }),
+        undefined,
+        checked,
+      );
+      expect(created).toBe(true);
+    },
+  );
+
+  it('B5 does not check a real intent', async () => {
+    const s = await seedUserWithAccount(tmp.db);
+    const input = intentRequest(s.telegramUserId, { mode: TradeMode.Real });
+    expect((await createTradeIntent(tmp.db, input, undefined, checked)).created).toBe(true);
+  });
+
+  it('B6 replays a committed intent after the balance dropped below its amount', async () => {
+    const s = await seedUserWithAccount(tmp.db);
+    await seedBalanceSnapshot(tmp.db, s.brokerAccountId, { demoAvailable: '10' });
+    const input = intentRequest(s.telegramUserId, { amount: amount('10') });
+    const first = await createTradeIntent(tmp.db, input, undefined, checked);
+    await seedBalanceSnapshot(tmp.db, s.brokerAccountId, { demoAvailable: '0' });
+    const again = await createTradeIntent(tmp.db, input, undefined, checked);
+    expect(again.created).toBe(false);
+    expect(again.intent.id).toBe(first.intent.id);
+  });
+
+  it('B7 answers trading_paused before the bounds', async () => {
+    const s = await seedUserWithAccount(tmp.db);
+    await closeTradingSwitch(tmp.db);
+    try {
+      await refusedWithoutTrace(s, intentRequest(s.telegramUserId), 'trading_paused');
+    } finally {
+      await openTrading(tmp.db);
+    }
   });
 });
 

@@ -2,6 +2,9 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import {
   addressOrNull,
   BrokerAccountStatus,
+  decimalStringSchema,
+  normalizeDecimal,
+  type DecimalString,
   type PendingBrokerAccountView,
   type UserStartView,
 } from '@binarius/shared';
@@ -11,7 +14,13 @@ import { users } from './schema/users';
 
 export type UserStartRow = Pick<
   typeof users.$inferSelect,
-  'id' | 'telegramUserId' | 'status' | 'acquisitionSource' | 'acquiredAt' | 'notificationLevel'
+  | 'id'
+  | 'telegramUserId'
+  | 'status'
+  | 'acquisitionSource'
+  | 'acquiredAt'
+  | 'notificationLevel'
+  | 'demoStake'
 >;
 
 export interface RecordUserStartInput {
@@ -71,6 +80,7 @@ export async function recordUserStart(
         acquisitionSource: users.acquisitionSource,
         acquiredAt: users.acquiredAt,
         notificationLevel: users.notificationLevel,
+        demoStake: users.demoStake,
       });
     if (row === undefined) throw new Error('users upsert returned no row');
 
@@ -121,5 +131,40 @@ export function toUserStartView(
       email: addressOrNull(email),
     })),
     notificationLevel: row.notificationLevel,
+    demoStake: canonicalStake(row.demoStake),
   };
+}
+
+// numeric(20,8) answers '5.00000000'; the wire carries '5'
+export const canonicalStake = (value: DecimalString | null): DecimalString | null =>
+  value === null ? null : decimalStringSchema.parse(normalizeDecimal(value));
+
+// The user's demo stake (#297), the only writer of users.demo_stake: one autocommit UPDATE of
+// the users row, no other table and no lock beyond the row's own, so the lock order is untouched.
+// The bounds are the caller's (POST /trading/demo-stake, checkDemoStake); the column's CHECK only
+// refuses a value <= 0. users.status is not read: the stake is a preference, and a blocked
+// user's trades are refused at creation. No users row → undefined.
+export async function setDemoStake(
+  db: Db,
+  telegramUserId: bigint,
+  amount: DecimalString | null,
+): Promise<{ demoStake: DecimalString | null } | undefined> {
+  const [row] = await db
+    .update(users)
+    .set({ demoStake: amount })
+    .where(eq(users.telegramUserId, telegramUserId))
+    .returning({ demoStake: users.demoStake });
+  return row === undefined ? undefined : { demoStake: canonicalStake(row.demoStake) };
+}
+
+// canonical; null = the broker's minimum; undefined = no users row
+export async function readDemoStake(
+  db: Db,
+  telegramUserId: bigint,
+): Promise<DecimalString | null | undefined> {
+  const [row] = await db
+    .select({ demoStake: users.demoStake })
+    .from(users)
+    .where(eq(users.telegramUserId, telegramUserId));
+  return row === undefined ? undefined : canonicalStake(row.demoStake);
 }
