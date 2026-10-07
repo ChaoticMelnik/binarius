@@ -55,7 +55,7 @@ bot ──GET /trading/intents/:id?telegramUserId=…──▶ backend ──▶
 5. Lock the account with `FOR NO KEY UPDATE` and the predicates `status = active`,
    `trading_halted = false`; zero rows → 409 `account_revoked`, `account_not_confirmed` (linked but not confirmed in the bot, see docs/binodex-oauth.md) or `account_halted`.
 5a. **A session intent only** (`createSessionIntent`, #130): lock the session row `FOR NO KEY
-   UPDATE` with `broker_account_id` = the account and `status = active`; zero rows →
+   UPDATE` with `broker_account_id` = the account, `mode` = the intent's and `status = active`; zero rows →
    `TradingSessionNotActiveError` (no wire code: the route never names a session), the reserve
    rolls back. The insert below carries `trading_session_id`; the request key is
    `session:<session id>:<step>`, so a repeated step is a replay
