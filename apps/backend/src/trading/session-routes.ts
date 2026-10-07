@@ -54,6 +54,7 @@ const STATUS_OF = {
   user_blocked: 409,
   insufficient_tokens: 409,
   trading_paused: 409,
+  mode_not_allowed: 409,
   active_session_exists: 409,
   session_too_long: 409,
   balance_unavailable: 409,
@@ -72,6 +73,7 @@ const DB_CODE_TO_WIRE = {
   user_not_active: TradingSessionErrorCode.UserBlocked,
   active_session_exists: TradingSessionErrorCode.ActiveSessionExists,
   trading_paused: TradingSessionErrorCode.TradingPaused,
+  mode_not_allowed: TradingSessionErrorCode.ModeNotAllowed,
 } as const satisfies Record<TradingSessionDbErrorCode, ErrorCode>;
 
 const idParamSchema = z.uuid();

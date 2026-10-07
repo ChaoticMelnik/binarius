@@ -3,13 +3,13 @@ import {
   BrokerAccountStatus,
   TradingSessionErrorCode,
   TradeIntentStatus,
+  TradeMode,
   TradingSessionStatus,
   TradingSessionStopReason,
   UserStatus,
   type DecimalString,
   type TradeAction,
   type TradeIntentFailureReason,
-  type TradeMode,
   type TradingSessionSettings,
   type TradingSessionView,
   safeParseTradingSessionSettings,
@@ -51,6 +51,8 @@ export const TradingSessionDbErrorCode = {
   ActiveSessionExists: 'active_session_exists',
   // the global trading switch is closed (#144)
   TradingPaused: 'trading_paused',
+  // sessions are demo only: nothing else fences a real session's intents (#144 review m1)
+  ModeNotAllowed: 'mode_not_allowed',
 } as const;
 export type TradingSessionDbErrorCode =
   (typeof TradingSessionDbErrorCode)[keyof typeof TradingSessionDbErrorCode];
@@ -74,6 +76,9 @@ export async function createTradingSession(
   db: Db,
   input: CreateTradingSessionInput,
 ): Promise<TradingSessionRow> {
+  if (input.mode !== TradeMode.Demo) {
+    throw new TradingSessionError(TradingSessionDbErrorCode.ModeNotAllowed);
+  }
   try {
     return await db.transaction(async (tx) => {
       const [account] = await tx
