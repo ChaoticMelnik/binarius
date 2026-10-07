@@ -13,6 +13,7 @@ import {
   resolveBotTextOverrides,
   INT4_MAX,
   LinkBonusSkipReason,
+  NotificationLevel,
   MomentumDirection,
   NoSignalReason,
   plainTextOf,
@@ -42,7 +43,7 @@ import {
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
 import { BOT_COMMANDS } from './commands';
 import { DEMO_DURATIONS_SEC, type DemoAssetGroup, type DemoDurationSec } from './demo-catalog';
-import { formatCount, formatUsd } from './format';
+import { formatCount, formatStake, formatUsd } from './format';
 import {
   brokerBalance,
   intentView,
@@ -63,6 +64,8 @@ import {
   sessionStatusText,
   LABELS,
   setBotTextSource,
+  settingsText,
+  stakePickerText,
   statusCard,
   TEXTS,
   type StatusCardInput,
@@ -76,6 +79,8 @@ const W = BOT_TEXT_WIDTHS;
 const x = (width: number) => 'x'.repeat(width);
 const COUNT = '9223372036854775807';
 const USD = '-999999999999.99999999' as DecimalString;
+// a stake, the broker's minimum and the demo balance are unsigned money() values (#297)
+const STAKE = '999999999999.99999999' as DecimalString;
 const lengthOf = (text: TelegramHtml) => plainTextOf(text).length;
 
 const pair: PairView = { ...PAIR_EURUSD, symbol: x(W.symbol), payout: 999_999 };
@@ -202,7 +207,7 @@ const sessionTexts = (
                     ...SESSION_VIEW.settings!,
                     assetId: INT4_MAX,
                     durationSec,
-                    stake: { baseStake: USD, stakeScale: 8 },
+                    stake: { baseStake: STAKE, stakeScale: 8 },
                   },
                   trades: { planned: N, settled, rejected: 0, won: N, lost: N, tied: N },
                   lastIntent,
@@ -270,7 +275,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
           intentViews.map((view) =>
             intentStatusText(
               symbol,
-              intentView({ ...view, action, durationSec, amount: USD, assetId: 9_999_999_999 }),
+              intentView({ ...view, action, durationSec, amount: STAKE, assetId: 9_999_999_999 }),
               { deadline: true },
             ),
           ),
@@ -287,6 +292,16 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   sessionCompleted: () =>
     sessionTexts(TradingSessionStatus.Stopped, [TradingSessionStopReason.Completed]),
   sessionStopped: () => sessionTexts(TradingSessionStatus.Stopped, [...STOP_REASONS, null]),
+  settings: () =>
+    Object.values(NotificationLevel).flatMap((level) =>
+      [null, STAKE].map((stake) => settingsText(level, stake)),
+    ),
+  stakePicker: () =>
+    [null, STAKE].flatMap((stake) =>
+      [0, 1].map((presets) =>
+        stakePickerText({ stake, minTradeAmount: STAKE, demoAvailable: STAKE, presets }),
+      ),
+    ),
   demoSummary: () =>
     DEMO_DURATIONS_SEC.map((durationSec: DemoDurationSec) => demoSummary(pair, durationSec)),
 };
@@ -327,6 +342,7 @@ describe('the assembled messages, against the real assembly', () => {
 
   it('M3 takes the widths of the formatters at the edge of their domains', () => {
     expect(formatUsd(USD)).toHaveLength(W.usd);
+    expect(formatStake(STAKE)).toHaveLength(W.stake);
     expect(formatUsd('0')).toHaveLength(W.zeroUsd);
     expect(formatCount(COUNT)).toHaveLength(W.count);
     expect(COUNT).toHaveLength(W.rawCount);

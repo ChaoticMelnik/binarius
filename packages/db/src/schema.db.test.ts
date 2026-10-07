@@ -28,7 +28,12 @@ import {
   tradingSwitch,
   users,
 } from './schema/index';
-import { AccountHaltReason, TradingSessionStopReason, type DecimalString } from '@binarius/shared';
+import {
+  AccountHaltReason,
+  TradingSessionStopReason,
+  botTextOverrideSchema,
+  type DecimalString,
+} from '@binarius/shared';
 import { STAFF_LOGIN_CORPUS } from '@binarius/shared/testing';
 // Integration tests: a migrated Postgres named by TEST_DATABASE_URL (README → Test database).
 // Each case runs in one transaction that is rolled back at the end; Postgres aborts a
@@ -2625,6 +2630,42 @@ describe('bot_text_overrides (#299)', () => {
       `select seqmax::text from pg_sequence where seqrelid = 'bot_text_override_version_seq'::regclass`,
     );
     expect(rows).toEqual([{ seqmax: String(Number.MAX_SAFE_INTEGER) }]);
+  });
+
+  // every row the table takes passes the bot's wire schema, and every row the table refuses fails
+  // it, so no hand-inserted row can stop the bot's refresh (#299 review round 2)
+  const EMOJI = '\u{1F600}';
+  it.each([
+    ['ASCII 16384', { source: 'x'.repeat(16_384) }],
+    ['ASCII 16385', { source: 'x'.repeat(16_385) }],
+    ['8192 astral (16384 UTF-16)', { source: EMOJI.repeat(8_192) }],
+    ['8193 astral (16386 UTF-16)', { source: EMOJI.repeat(8_193) }],
+    ['16382 + astral (16384 UTF-16)', { source: 'x'.repeat(16_382) + EMOJI }],
+    ['16383 + astral (16385 UTF-16)', { source: 'x'.repeat(16_383) + EMOJI }],
+    ['an empty source', { source: '' }],
+    ['version 0', { version: 0 }],
+    ['version -5', { version: -5 }],
+    ['version 2^53', { version: Number.MAX_SAFE_INTEGER + 1 }],
+    ['version 1', { version: 1 }],
+    ['version 2^53 - 1', { version: Number.MAX_SAFE_INTEGER }],
+  ])('agrees with the bot wire schema on %s', async (_label, patch) => {
+    const row = { key: `p${randomUUID().slice(0, 8)}`, source: 'x', version: 1, ...patch };
+    const schemaTakes = botTextOverrideSchema.safeParse(row).success;
+    let refusedBy: string | undefined;
+    await rolledBack(async (tx) => {
+      // as text: 2^53 is exact as a JS number, but the driver is not asked to say so
+      await tx
+        .execute(
+          sql`insert into bot_text_overrides (key, source, version) values (${row.key}, ${row.source}, ${String(row.version)}::bigint)`,
+        )
+        .catch((error: unknown) => {
+          const { code, constraint } = caught(error) as { code?: string; constraint?: string };
+          expect(code).toBe('23514');
+          refusedBy = constraint;
+        });
+    });
+    expect(refusedBy === undefined).toBe(schemaTakes);
+    if (refusedBy !== undefined) observed.add(refusedBy);
   });
 
   it('gives every write a new version from the sequence', async () => {

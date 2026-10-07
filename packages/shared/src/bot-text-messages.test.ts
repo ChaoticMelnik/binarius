@@ -87,7 +87,14 @@ describe('the assembled messages', () => {
   it('reads the labels a width is made of as keys of the message', () => {
     expect(botTextMessageKeys(message('intentStatus'))).toContain('actionUp');
     expect(botTextMessageKeys(message('settings'))).toEqual(
-      new Set(['settings', 'levelAll', 'levelReduced', 'levelOff']),
+      new Set([
+        'settings',
+        'levelAll',
+        'levelReduced',
+        'levelOff',
+        'settingsStake',
+        'stakeMinimumLabel',
+      ]),
     );
   });
 });
