@@ -1,7 +1,13 @@
 import {
+  ADMIN_INTENTS_ACTIVE_FILTER,
+  adminIntentsSearchParams,
   adminUsersSearchParams,
+  TradeIntentStatus,
+  TradeMode,
   type AdminBrokerAccountView,
+  type AdminIntentsQuery,
   type AdminOverview,
+  type AdminTradeIntentView,
   type AdminUserDetail,
   type AdminUserListItem,
   type AdminUsersQuery,
@@ -79,12 +85,13 @@ const yesNo = (value: boolean): string => (value ? TEXTS.yes : TEXTS.no);
 
 // The pages a staff session opens, in nav order. The read pages that follow #107 append their
 // keys here; a page outside the nav passes no `active`.
-export type AdminNavKey = 'overview' | 'users' | 'sessions';
+export type AdminNavKey = 'overview' | 'users' | 'sessions' | 'intents';
 
 const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview },
   { key: 'users', href: '/admin/users', label: TEXTS.navUsers },
   { key: 'sessions', href: '/admin/sessions', label: TEXTS.navSessions },
+  { key: 'intents', href: '/admin/intents', label: TEXTS.navIntents },
 ];
 
 /**
@@ -327,6 +334,7 @@ export const userPage = (
         <dt>${TEXTS.fieldAvailable}</dt>
         <dd>${user.tokens.available}</dd>
       </dl>
+      <p><a href="${intentsHref({ user: user.id })}">${TEXTS.userIntentsAll}</a></p>
       <h2>${TEXTS.userBrokerAccounts}</h2>
       ${
         brokerAccounts.length === 0
@@ -352,4 +360,175 @@ export const userPage = (
               </tbody>
             </table>`
       }`,
+  });
+
+/** The intents list URL, through the same serializer as usersHref. */
+export const intentsHref = (query: AdminIntentsQuery): string => {
+  const params = adminIntentsSearchParams(query);
+  return params.size > 0 ? `/admin/intents?${params}` : '/admin/intents';
+};
+
+// Statuses, modes and failure reasons are printed as their codes: a Russian label for each would
+// be a second copy of the constant, and the reader is support looking things up.
+const code = (value: string | null): SafeHtml | string =>
+  value === null ? TEXTS.none : html`<code>${value}</code>`;
+
+const option = (value: string, label: string, selected: string | undefined): SafeHtml =>
+  html`<option value="${value}" ${value === selected ? html` selected` : ''}>${label}</option>`;
+
+const intentRow = (intent: AdminTradeIntentView): SafeHtml =>
+  html`<tr>
+    <td><a href="/admin/intents/${intent.id}">${intent.id}</a></td>
+    <td><a href="/admin/users/${intent.userId}">${intent.telegramUserId}</a></td>
+    <td>${code(intent.mode)}</td>
+    <td>${code(intent.status)}</td>
+    <td>${code(intent.action)}</td>
+    <td>${intent.amount}</td>
+    <td>${intent.assetId}</td>
+    <td>${intent.durationSec}</td>
+    <td>${when(intent.createdAt)}</td>
+    <td>${code(intent.lastError)}</td>
+  </tr>`;
+
+export const intentsPage = (
+  intents: readonly AdminTradeIntentView[],
+  options: {
+    filters: Omit<AdminIntentsQuery, 'cursor'>;
+    cursor?: string;
+    nextCursor: string | null;
+    login?: string;
+    message?: string;
+  },
+): SafeHtml => {
+  const { filters } = options;
+  return adminShell({
+    title: TEXTS.intentsTitle,
+    active: 'intents',
+    login: options.login,
+    body: html`<h1>${TEXTS.intentsHeading}</h1>
+      ${error(options.message)}
+      <form class="search" method="get" action="/admin/intents">
+        <label
+          >${TEXTS.intentsFilterStatus}
+          <select name="status">
+            ${option('', TEXTS.intentsFilterAny, filters.status ?? '')}
+            ${option(ADMIN_INTENTS_ACTIVE_FILTER, TEXTS.intentsActive, filters.status)}
+            ${Object.values(TradeIntentStatus).map((s) => option(s, s, filters.status))}
+          </select>
+        </label>
+        <label
+          >${TEXTS.intentsFilterMode}
+          <select name="mode">
+            ${option('', TEXTS.intentsFilterAny, filters.mode ?? '')}
+            ${Object.values(TradeMode).map((m) => option(m, m, filters.mode))}
+          </select>
+        </label>
+        <label
+          >${TEXTS.intentsFilterUser}
+          <input name="user" value="${filters.user ?? ''}" autocomplete="off" />
+        </label>
+        <label
+          >${TEXTS.intentsFilterSession}
+          <input name="session" value="${filters.session ?? ''}" autocomplete="off" />
+        </label>
+        <button type="submit">${TEXTS.intentsFilterSubmit}</button>
+      </form>
+      <p class="hint">${TEXTS.intentsFilterHint}</p>
+      ${
+        intents.length === 0
+          ? html`<p>${TEXTS.intentsEmpty}</p>`
+          : html`<table>
+              <thead>
+                <tr>
+                  <th>${TEXTS.columnIntentId}</th>
+                  <th>${TEXTS.columnTelegramId}</th>
+                  <th>${TEXTS.columnMode}</th>
+                  <th>${TEXTS.columnStatus}</th>
+                  <th>${TEXTS.columnDirection}</th>
+                  <th>${TEXTS.columnAmount}</th>
+                  <th>${TEXTS.columnAsset}</th>
+                  <th>${TEXTS.columnDuration}</th>
+                  <th>${TEXTS.columnUserCreatedAt}</th>
+                  <th>${TEXTS.columnLastError}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${intents.map(intentRow)}
+              </tbody>
+            </table>`
+      }
+      <p class="pager">
+        ${
+          options.cursor !== undefined || intents.length === 0
+            ? html`<a href="${intentsHref(filters)}">${TEXTS.intentsFirst}</a>`
+            : ''
+        }
+        ${
+          options.nextCursor === null
+            ? ''
+            : html`<a href="${intentsHref({ ...filters, cursor: options.nextCursor })}"
+                >${TEXTS.intentsNext}</a
+              >`
+        }
+      </p>`,
+  });
+};
+
+export const intentPage = (intent: AdminTradeIntentView, login: string): SafeHtml =>
+  adminShell({
+    title: TEXTS.intentTitle,
+    active: 'intents',
+    login,
+    body: html`<h1>${TEXTS.intentTitle} ${intent.id}</h1>
+      <dl>
+        <dt>${TEXTS.fieldId}</dt>
+        <dd>${intent.id}</dd>
+        <dt>${TEXTS.columnStatus}</dt>
+        <dd>${code(intent.status)}</dd>
+        <dt>${TEXTS.columnMode}</dt>
+        <dd>${code(intent.mode)}</dd>
+        <dt>${TEXTS.columnDirection}</dt>
+        <dd>${code(intent.action)}</dd>
+        <dt>${TEXTS.columnAmount}</dt>
+        <dd>${intent.amount}</dd>
+        <dt>${TEXTS.columnAsset}</dt>
+        <dd>${intent.assetId}</dd>
+        <dt>${TEXTS.columnDuration}</dt>
+        <dd>${intent.durationSec}</dd>
+        <dt>${TEXTS.fieldUserId}</dt>
+        <dd><a href="/admin/users/${intent.userId}">${intent.userId}</a></dd>
+        <dt>${TEXTS.columnTelegramId}</dt>
+        <dd>${intent.telegramUserId}</dd>
+        <dt>${TEXTS.fieldBrokerAccountId}</dt>
+        <dd>${intent.brokerAccountId}</dd>
+        <dt>${TEXTS.fieldTradingSessionId}</dt>
+        <dd>
+          ${
+            intent.tradingSessionId === null
+              ? TEXTS.none
+              : html`${intent.tradingSessionId}
+                  <a href="${intentsHref({ session: intent.tradingSessionId })}"
+                    >${TEXTS.intentsOfSession}</a
+                  >`
+          }
+        </dd>
+        <dt>${TEXTS.fieldClientRequestId}</dt>
+        <dd>${intent.clientRequestId}</dd>
+        <dt>${TEXTS.fieldVersion}</dt>
+        <dd>${intent.version}</dd>
+        <dt>${TEXTS.fieldTokensReserved}</dt>
+        <dd>${intent.tokensReserved}</dd>
+        <dt>${TEXTS.fieldTransport}</dt>
+        <dd>${code(intent.transport)}</dd>
+        <dt>${TEXTS.columnLastError}</dt>
+        <dd>${code(intent.lastError)}</dd>
+        <dt>${TEXTS.columnUserCreatedAt}</dt>
+        <dd>${when(intent.createdAt)}</dd>
+        <dt>${TEXTS.fieldSubmittedAt}</dt>
+        <dd>${whenOrNone(intent.submittedAt)}</dd>
+        <dt>${TEXTS.fieldReconcileClaimedAt}</dt>
+        <dd>${whenOrNone(intent.reconcileClaimedAt)}</dd>
+        <dt>${TEXTS.columnUpdatedAt}</dt>
+        <dd>${when(intent.updatedAt)}</dd>
+      </dl>`,
   });

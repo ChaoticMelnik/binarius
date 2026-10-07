@@ -6,6 +6,7 @@ import {
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
   UNNAMED_ERROR_MESSAGE,
+  type AdminIntentsQuery,
   type AdminUsersQuery,
   type StaffSessionView,
 } from '@binarius/shared';
@@ -13,9 +14,13 @@ import { buildWebApp } from './app';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { SESSION_COOKIE, CHALLENGE_COOKIE } from './admin/routes';
 import {
+  SAMPLE_INTENT,
+  SAMPLE_INTENT_RESPONSE,
+  SAMPLE_INTENTS,
   SAMPLE_LIST_ITEM,
   SAMPLE_ME,
   SAMPLE_OVERVIEW,
+  SAMPLE_SESSION_ID,
   SAMPLE_USER,
   SAMPLE_USER_ID,
 } from './admin/testing';
@@ -56,6 +61,8 @@ interface Calls {
   overview: unknown[];
   users: [string, AdminUsersQuery][];
   user: unknown[][];
+  intents: [string, AdminIntentsQuery][];
+  intent: unknown[][];
 }
 
 let calls: Calls;
@@ -72,6 +79,8 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     overview: [],
     users: [],
     user: [],
+    intents: [],
+    intent: [],
   };
   lines = [];
   const client: BackendClient = {
@@ -106,6 +115,14 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     user: async (token, id) => {
       calls.user.push([token, id]);
       return SAMPLE_USER;
+    },
+    intents: async (token, query) => {
+      calls.intents.push([token, query]);
+      return SAMPLE_INTENTS;
+    },
+    intent: async (token, id) => {
+      calls.intent.push([token, id]);
+      return SAMPLE_INTENT_RESPONSE;
     },
     oauthCallback: async () => {
       throw new Error('the admin pages never forward an OAuth callback');
@@ -672,6 +689,225 @@ describe('the read pages (#107)', () => {
     expect(response.statusCode).toBe(500);
     expect(cookieOf(response, SESSION_COOKIE)).toBeUndefined();
   });
+});
+
+describe('the intents pages (#108)', () => {
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+  const USER = SAMPLE_USER_ID;
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+
+  // the href of the link whose text is `label`, as a browser would read it back
+  const hrefOf = (body: string, label: string): string | undefined => {
+    const match = new RegExp(`<a href="([^"]*)"\\s*>\\s*${label}\\s*</a`).exec(body);
+    return match?.[1]?.replaceAll('&amp;', '&');
+  };
+
+  it.each(['/admin/intents', `/admin/intents/${SAMPLE_INTENT.id}`])(
+    '%s marks Заявки as the current page and carries the login',
+    async (url) => {
+      const response = await get(url, withCookie);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatch(/<a href="\/admin\/intents"\s+aria-current="page"/);
+      for (const href of ['/admin/overview', '/admin/users', '/admin/sessions']) {
+        expect(response.body).toContain(`<a href="${href}"`);
+      }
+      expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+    },
+  );
+
+  it('asks for the whole list when every field of the form was left empty', async () => {
+    const response = await get('/admin/intents?status=&mode=&user=&session=', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(calls.intents).toEqual([[TOKEN, {}]]);
+  });
+
+  it('carries every filter and the cursor through the next link, and keeps them in the form', async () => {
+    await app.close();
+    app = build({
+      intents: (token, query) => {
+        calls.intents.push([token, query]);
+        return Promise.resolve({ ...SAMPLE_INTENTS, nextCursor: CURSOR });
+      },
+    });
+    const filters = { status: 'active', mode: 'real', user: USER, session: SAMPLE_SESSION_ID };
+
+    const first = await get(`/admin/intents?${new URLSearchParams(filters)}`, withCookie);
+    expect(first.body).toMatch(/<option value="active"\s+selected/);
+    expect(first.body).toMatch(/<option value="real"\s+selected/);
+    expect(first.body).toContain(`name="user" value="${USER}"`);
+    expect(first.body).toContain(`name="session" value="${SAMPLE_SESSION_ID}"`);
+    const next = hrefOf(first.body, TEXTS.intentsNext);
+    expect(next).toBe(`/admin/intents?${new URLSearchParams({ ...filters, cursor: CURSOR })}`);
+    const second = await get(next ?? '', withCookie);
+
+    expect(calls.intents.map(([, query]) => query)).toEqual([
+      filters,
+      { ...filters, cursor: CURSOR },
+    ]);
+    expect(hrefOf(second.body, TEXTS.intentsFirst)).toBe(
+      `/admin/intents?${new URLSearchParams(filters)}`,
+    );
+  });
+
+  it('drops a malformed cursor and keeps the filters', async () => {
+    const response = await get('/admin/intents?cursor=bad&status=queued', withCookie);
+
+    expect([response.statusCode, response.headers.location]).toEqual([
+      302,
+      '/admin/intents?status=queued',
+    ]);
+    expect(calls.intents).toEqual([]);
+  });
+
+  it.each([
+    ['an unknown status, even with a bad cursor', 'cursor=bad&status=bogus'],
+    ['a user of blanks', 'user=%20'],
+    ['a session of blanks', 'session=%20'],
+    ['a user that is not a uuid', 'user=4242'],
+    ['status twice', 'status=queued&status=settled'],
+  ])('refuses %s with the form, before the backend is asked', async (_label, query) => {
+    const response = await get(`/admin/intents?${query}`, withCookie);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers.location).toBeUndefined();
+    expect(calls.intents).toEqual([]);
+    expect(response.body).toContain(TEXTS.badFilter);
+    expect(response.body).toContain('action="/admin/intents"');
+    // no answer from the backend, so no login to show: the account block is left out
+    expect(response.body).toContain('<nav');
+    expect(response.body).not.toContain('action="/admin/logout"');
+  });
+
+  it('lists an intent with links to its card and its user', async () => {
+    const response = await get('/admin/intents', withCookie);
+
+    expect(response.body).toContain(`<a href="/admin/intents/${SAMPLE_INTENT.id}">`);
+    expect(response.body).toContain(`<a href="/admin/users/${USER}">4242</a>`);
+    expect(response.body).toContain('<code>broker_rejected</code>');
+    expect(response.body).not.toContain(TEXTS.intentsNext);
+  });
+
+  it('says so when there are no intents', async () => {
+    await app.close();
+    app = build({ intents: () => Promise.resolve({ ...SAMPLE_INTENTS, intents: [] }) });
+
+    const response = await get(`/admin/intents?session=${SAMPLE_SESSION_ID}`, withCookie);
+
+    expect(response.body).toContain(TEXTS.intentsEmpty);
+    expect(hrefOf(response.body, TEXTS.intentsFirst)).toBe(
+      `/admin/intents?session=${SAMPLE_SESSION_ID}`,
+    );
+  });
+
+  it('renders the card: every field, the user, and the intents of its session', async () => {
+    const response = await get(`/admin/intents/${SAMPLE_INTENT.id}`, withCookie);
+
+    expect(calls.intent).toEqual([[TOKEN, SAMPLE_INTENT.id]]);
+    expect(response.body.match(/<dt>/g)).toHaveLength(Object.keys(SAMPLE_INTENT).length);
+    expect(response.body).toContain(`<a href="/admin/users/${USER}">${USER}</a>`);
+    expect(hrefOf(response.body, TEXTS.intentsOfSession)).toBe(
+      `/admin/intents?session=${SAMPLE_SESSION_ID}`,
+    );
+    expect(response.body).toContain(SAMPLE_INTENT.brokerAccountId);
+  });
+
+  it('prints none for every null, offers no session link without a session, and escapes text', async () => {
+    await app.close();
+    app = build({
+      intent: () =>
+        Promise.resolve({
+          ...SAMPLE_INTENT_RESPONSE,
+          intent: {
+            ...SAMPLE_INTENT,
+            clientRequestId: 'a<b>',
+            transport: null,
+            submittedAt: null,
+            lastError: null,
+            tradingSessionId: null,
+            reconcileClaimedAt: null,
+          },
+        }),
+    });
+
+    const response = await get(`/admin/intents/${SAMPLE_INTENT.id}`, withCookie);
+
+    expect(response.body.match(/<dd>\s*—\s*<\/dd>/g)).toHaveLength(5);
+    expect(response.body).not.toContain(TEXTS.intentsOfSession);
+    expect(response.body).toContain('a&lt;b&gt;');
+    expect(response.body).not.toContain('a<b>');
+  });
+
+  it("links the user card to the user's intents, with accounts and without", async () => {
+    const intentsOfUser = `/admin/intents?user=${USER}`;
+    expect(hrefOf((await get(`/admin/users/${USER}`, withCookie)).body, TEXTS.userIntentsAll)).toBe(
+      intentsOfUser,
+    );
+
+    await app.close();
+    app = build({ user: () => Promise.resolve({ ...SAMPLE_USER, brokerAccounts: [] }) });
+    const bare = await get(`/admin/users/${USER}`, withCookie);
+    expect(bare.body).toContain(TEXTS.userNoAccounts);
+    expect(hrefOf(bare.body, TEXTS.userIntentsAll)).toBe(intentsOfUser);
+  });
+
+  it('answers an id that is not a uuid with 404, before the backend is asked', async () => {
+    const response = await get('/admin/intents/not-a-uuid', withCookie);
+
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toContain(TEXTS.intentNotFoundTitle);
+    expect(calls.intent).toEqual([]);
+  });
+
+  it('answers an intent the backend did not find with 404', async () => {
+    await app.close();
+    app = build({ intent: () => Promise.reject(httpFailure(404, AdminErrorCode.NotFound)) });
+
+    const response = await get(`/admin/intents/${SAMPLE_INTENT.id}`, withCookie);
+
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toContain(TEXTS.intentNotFoundTitle);
+    expect(cookieOf(response, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it.each(['/admin/intents', `/admin/intents/${SAMPLE_INTENT.id}`])(
+    '%s drops a session the backend no longer knows',
+    async (url) => {
+      await app.close();
+      const gone = () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid));
+      app = build({ intents: gone, intent: gone });
+
+      const response = await get(url, withCookie);
+
+      expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+      expect(cookieOf(response, SESSION_COOKIE)?.value).toBe('');
+    },
+  );
+
+  it.each(['/admin/intents', `/admin/intents/${SAMPLE_INTENT.id}`])(
+    '%s treats a failure of its own as a 500 and keeps the cookie',
+    async (url) => {
+      await app.close();
+      const failed = () => Promise.reject(httpFailure(500));
+      app = build({ intents: failed, intent: failed });
+
+      const response = await get(url, withCookie);
+
+      expect(response.statusCode).toBe(500);
+      expect(cookieOf(response, SESSION_COOKIE)).toBeUndefined();
+    },
+  );
+
+  it.each(['/admin/intents', `/admin/intents/${SAMPLE_INTENT.id}`])(
+    '%s treats a malformed session cookie as none, before the backend is asked',
+    async (url) => {
+      const response = await get(url, { [SESSION_COOKIE]: 'not-a-session-token' });
+
+      expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+      expect([calls.intents, calls.intent]).toEqual([[], []]);
+    },
+  );
 });
 
 describe('revoking', () => {
