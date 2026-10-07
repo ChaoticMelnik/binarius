@@ -1,7 +1,9 @@
-import { and, asc, eq, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, notInArray, sql } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
+  TradingSessionErrorCode,
   TradeIntentStatus,
+  TradingSessionStatus,
   TradingSessionStopReason,
   UserStatus,
   type DecimalString,
@@ -9,19 +11,25 @@ import {
   type TradeIntentFailureReason,
   type TradeMode,
   type TradingSessionSettings,
+  type TradingSessionView,
+  safeParseTradingSessionSettings,
 } from '@binarius/shared';
 import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
 import { brokerTrades } from './schema/broker-trades';
 import { literal, sqlLiteralList } from './schema/columns';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
-import { TradingSessionStatus, tradingSessions } from './schema/trading-sessions';
+import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
 import {
+  TOKENS_PER_INTENT,
   createTradeIntent,
   millisecondsAgo,
+  resolveTradingAccount,
+  toTradeIntentView,
   uniqueViolation,
   type CreateTradeIntentResult,
+  type DbExecutor,
 } from './trade-intent-ops';
 import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-switch-ops';
 
@@ -32,20 +40,23 @@ import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-swit
 
 export type TradingSessionRow = typeof tradingSessions.$inferSelect;
 
-export const TradingSessionErrorCode = {
+// createTradingSession's refusals; the start route maps each to its wire code
+// (TradingSessionErrorCode in shared)
+export const TradingSessionDbErrorCode = {
   AccountNotFound: 'account_not_found',
-  AccountNotActive: 'account_not_active',
+  AccountRevoked: 'account_revoked',
+  AccountNotConfirmed: 'account_not_confirmed',
   AccountHalted: 'account_halted',
   UserNotActive: 'user_not_active',
   ActiveSessionExists: 'active_session_exists',
   // the global trading switch is closed (#144)
   TradingPaused: 'trading_paused',
 } as const;
-export type TradingSessionErrorCode =
-  (typeof TradingSessionErrorCode)[keyof typeof TradingSessionErrorCode];
+export type TradingSessionDbErrorCode =
+  (typeof TradingSessionDbErrorCode)[keyof typeof TradingSessionDbErrorCode];
 
 export class TradingSessionError extends Error {
-  constructor(readonly code: TradingSessionErrorCode) {
+  constructor(readonly code: TradingSessionDbErrorCode) {
     super(code);
     this.name = 'TradingSessionError';
   }
@@ -76,7 +87,7 @@ export async function createTradingSession(
           ),
         );
       if (account === undefined) {
-        throw new TradingSessionError(TradingSessionErrorCode.AccountNotFound);
+        throw new TradingSessionError(TradingSessionDbErrorCode.AccountNotFound);
       }
       // a lock, not a read: a block committed between a read and the insert would leave an
       // active session for a blocked user
@@ -85,21 +96,27 @@ export async function createTradingSession(
         .from(users)
         .where(and(eq(users.id, account.userId), eq(users.status, UserStatus.Active)))
         .for('no key update');
-      if (user.length === 0) throw new TradingSessionError(TradingSessionErrorCode.UserNotActive);
+      if (user.length === 0) throw new TradingSessionError(TradingSessionDbErrorCode.UserNotActive);
       const [locked] = await tx
         .select({ status: brokerAccounts.status, tradingHalted: brokerAccounts.tradingHalted })
         .from(brokerAccounts)
         .where(eq(brokerAccounts.id, input.brokerAccountId))
         .for('no key update');
-      if (locked?.status !== BrokerAccountStatus.Active) {
-        throw new TradingSessionError(TradingSessionErrorCode.AccountNotActive);
+      if (locked === undefined) {
+        throw new TradingSessionError(TradingSessionDbErrorCode.AccountNotFound);
+      }
+      if (locked.status === BrokerAccountStatus.Revoked) {
+        throw new TradingSessionError(TradingSessionDbErrorCode.AccountRevoked);
+      }
+      if (locked.status === BrokerAccountStatus.Pending) {
+        throw new TradingSessionError(TradingSessionDbErrorCode.AccountNotConfirmed);
       }
       if (locked.tradingHalted) {
-        throw new TradingSessionError(TradingSessionErrorCode.AccountHalted);
+        throw new TradingSessionError(TradingSessionDbErrorCode.AccountHalted);
       }
       // a plain read (Rule 5): a kill-switch commit after it is caught by stopPausedSessions
       if (!isTradingOpen(await readTradingSwitch(tx))) {
-        throw new TradingSessionError(TradingSessionErrorCode.TradingPaused);
+        throw new TradingSessionError(TradingSessionDbErrorCode.TradingPaused);
       }
       const [row] = await tx
         .insert(tradingSessions)
@@ -114,7 +131,7 @@ export async function createTradingSession(
     });
   } catch (error) {
     if (uniqueViolation(error) === 'trading_sessions_active_account_idx') {
-      throw new TradingSessionError(TradingSessionErrorCode.ActiveSessionExists);
+      throw new TradingSessionError(TradingSessionDbErrorCode.ActiveSessionExists);
     }
     throw error;
   }
@@ -366,4 +383,177 @@ export async function createSessionIntent(
     },
     { id: input.sessionId },
   );
+}
+
+export type TradingSessionStartRefusal =
+  | typeof TradingSessionErrorCode.UserNotFound
+  | typeof TradingSessionErrorCode.UserBlocked
+  | typeof TradingSessionErrorCode.BrokerAccountNotFound
+  | typeof TradingSessionErrorCode.AmbiguousBrokerAccount
+  | typeof TradingSessionErrorCode.AccountNotConfirmed
+  | typeof TradingSessionErrorCode.AccountRevoked
+  | typeof TradingSessionErrorCode.AccountHalted
+  | typeof TradingSessionErrorCode.ActiveSessionExists
+  | typeof TradingSessionErrorCode.InsufficientTokens;
+
+export type TradingSessionStartCheck =
+  | { ok: true; brokerAccountId: string; accessTokenExpiresAt: Date }
+  | { ok: false; code: TradingSessionStartRefusal; activeSessionId?: string };
+
+const refused = (code: TradingSessionStartRefusal): TradingSessionStartCheck => ({
+  ok: false,
+  code,
+});
+
+// The start route's refusals before it calls the broker for a balance (#283). Plain reads with no
+// lock, the first refusal wins; createTradingSession re-checks the user, the account and the one
+// active session under its locks, the tokens only here (docs/trading-session.md -> Routes).
+export async function checkTradingSessionStart(
+  db: Db,
+  { telegramUserId, brokerAccountId }: { telegramUserId: string; brokerAccountId?: string },
+): Promise<TradingSessionStartCheck> {
+  const [user] = await db
+    .select({
+      id: users.id,
+      status: users.status,
+      balance: users.tokenBalance,
+      reserved: users.tokenReserved,
+    })
+    .from(users)
+    .where(eq(users.telegramUserId, BigInt(telegramUserId)));
+  if (user === undefined) return refused(TradingSessionErrorCode.UserNotFound);
+  if (user.status === UserStatus.Blocked) return refused(TradingSessionErrorCode.UserBlocked);
+
+  const resolved = await resolveTradingAccount(db, user.id, brokerAccountId);
+  if (!resolved.ok) return refused(resolved.code);
+
+  const [account] = await db
+    .select({
+      status: brokerAccounts.status,
+      tradingHalted: brokerAccounts.tradingHalted,
+      accessTokenExpiresAt: brokerAccounts.accessTokenExpiresAt,
+    })
+    .from(brokerAccounts)
+    .where(eq(brokerAccounts.id, resolved.brokerAccountId));
+  // resolveTradingAccount just read this row, and broker_accounts rows are never deleted
+  if (account === undefined) return refused(TradingSessionErrorCode.BrokerAccountNotFound);
+  if (account.status === BrokerAccountStatus.Revoked) {
+    return refused(TradingSessionErrorCode.AccountRevoked);
+  }
+  if (account.status === BrokerAccountStatus.Pending) {
+    return refused(TradingSessionErrorCode.AccountNotConfirmed);
+  }
+  if (account.tradingHalted) return refused(TradingSessionErrorCode.AccountHalted);
+
+  const activeSessionId = await activeSessionOf(db, resolved.brokerAccountId);
+  if (activeSessionId !== undefined) {
+    return { ok: false, code: TradingSessionErrorCode.ActiveSessionExists, activeSessionId };
+  }
+
+  if (user.balance - user.reserved < TOKENS_PER_INTENT) {
+    return refused(TradingSessionErrorCode.InsufficientTokens);
+  }
+  return {
+    ok: true,
+    brokerAccountId: resolved.brokerAccountId,
+    accessTokenExpiresAt: account.accessTokenExpiresAt,
+  };
+}
+
+async function activeSessionOf(exec: DbExecutor, brokerAccountId: string) {
+  const [row] = await exec
+    .select({ id: tradingSessions.id })
+    .from(tradingSessions)
+    .where(
+      and(
+        eq(tradingSessions.brokerAccountId, brokerAccountId),
+        eq(tradingSessions.status, TradingSessionStatus.Active),
+      ),
+    );
+  return row?.id;
+}
+
+const SETTLED = literal(TradeIntentStatus.Settled);
+
+// The session as the owner's bot sees it (#283). Scoped by the owner: another user's session and
+// a missing id are both undefined (Rule 13). The row, the counters and the last intent come from
+// one REPEATABLE READ snapshot, so the counters never disagree with lastIntent.
+export async function readTradingSessionView(
+  db: Db,
+  id: string,
+  telegramUserId: string,
+): Promise<TradingSessionView | undefined> {
+  return db.transaction(
+    async (tx) => {
+      const [session] = await tx
+        .select({
+          id: tradingSessions.id,
+          mode: tradingSessions.mode,
+          status: tradingSessions.status,
+          stopReason: tradingSessions.stopReason,
+          settings: sql<unknown>`${tradingSessions.settings}`,
+          startedAt: tradingSessions.startedAt,
+          endedAt: tradingSessions.endedAt,
+        })
+        .from(tradingSessions)
+        .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
+        .innerJoin(users, eq(users.id, brokerAccounts.userId))
+        .where(and(eq(tradingSessions.id, id), eq(users.telegramUserId, BigInt(telegramUserId))));
+      if (session === undefined) return undefined;
+
+      // a settled intent always has its broker trade (settleIntent writes both); one without it
+      // would count in settled and in none of won/lost/tied
+      const [counts] = await tx
+        .select({
+          settled: sql<number>`count(*) filter (where ${tradeIntents.status} = ${SETTLED})::int`,
+          rejected: sql<number>`count(*) filter (where ${tradeIntents.status} = ${literal(TradeIntentStatus.Rejected)})::int`,
+          won: sql<number>`count(*) filter (where ${tradeIntents.status} = ${SETTLED} and ${brokerTrades.profit} > 0)::int`,
+          lost: sql<number>`count(*) filter (where ${tradeIntents.status} = ${SETTLED} and ${brokerTrades.profit} < 0)::int`,
+          tied: sql<number>`count(*) filter (where ${tradeIntents.status} = ${SETTLED} and ${brokerTrades.profit} = 0)::int`,
+        })
+        .from(tradeIntents)
+        .leftJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+        .where(eq(tradeIntents.tradingSessionId, id));
+
+      const [last] = await tx
+        .select()
+        .from(tradeIntents)
+        .where(eq(tradeIntents.tradingSessionId, id))
+        .orderBy(desc(tradeIntents.createdAt), desc(tradeIntents.id))
+        .limit(1);
+
+      const parsed = safeParseTradingSessionSettings(session.settings);
+      const settings = parsed.success ? parsed.data : null;
+      return {
+        id: session.id,
+        mode: session.mode,
+        status: session.status,
+        stopReason: session.stopReason ?? null,
+        settings,
+        startedAt: session.startedAt.toISOString(),
+        endedAt: session.endedAt === null ? null : session.endedAt.toISOString(),
+        trades: {
+          planned: settings === null ? 0 : settings.trades,
+          settled: counts?.settled ?? 0,
+          rejected: counts?.rejected ?? 0,
+          won: counts?.won ?? 0,
+          lost: counts?.lost ?? 0,
+          tied: counts?.tied ?? 0,
+        },
+        lastIntent: last === undefined ? null : toTradeIntentView(last, telegramUserId),
+      };
+    },
+    { isolationLevel: 'repeatable read', accessMode: 'read only' },
+  );
+}
+
+// the account's active session as its owner sees it; undefined when none, or when it ended
+// between the two reads
+export async function readActiveTradingSessionView(
+  db: Db,
+  brokerAccountId: string,
+  telegramUserId: string,
+): Promise<TradingSessionView | undefined> {
+  const id = await activeSessionOf(db, brokerAccountId);
+  return id === undefined ? undefined : readTradingSessionView(db, id, telegramUserId);
 }
