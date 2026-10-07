@@ -1,8 +1,8 @@
 import { Api, InlineKeyboard } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
-import { confirmCallbackData, LINK_LABELS, LINK_TEXTS, type TelegramHtml } from '@binarius/shared';
+import { confirmButtonLabel, confirmCallbackData, type TelegramHtml } from '@binarius/shared';
 import { LINK_PUSH_TELEGRAM_API_TIMEOUT_MS } from '../timing';
-import { AUTH_TEXTS } from './texts';
+import { CLIENT_LABELS, CLIENT_TEXTS } from './texts';
 
 // What the push after POST /auth/binodex/callback tells the Telegram user who started the login.
 export const LinkPushKind = {
@@ -33,21 +33,21 @@ export function linkPushMessage(outcome: LinkPushOutcome): LinkPushMessage {
   switch (outcome.kind) {
     case LinkPushKind.Pending:
       return {
-        text: LINK_TEXTS.confirmPrompt,
+        text: CLIENT_TEXTS.confirmPrompt,
         reply_markup: new InlineKeyboard().text(
-          LINK_LABELS.confirmButton(outcome.account.email),
+          confirmButtonLabel(CLIENT_LABELS, outcome.account.email),
           confirmCallbackData(outcome.account.id),
         ),
       };
     case LinkPushKind.Active:
-      return { text: LINK_TEXTS.linkedActive };
+      return { text: CLIENT_TEXTS.linkedActive };
     case LinkPushKind.Blocked:
-      return { text: LINK_TEXTS.blocked };
+      return { text: CLIENT_TEXTS.blocked };
     case LinkPushKind.Taken:
-      return { text: LINK_TEXTS.accountTaken };
+      return { text: CLIENT_TEXTS.accountTaken };
     case LinkPushKind.ExchangeFailed:
     case LinkPushKind.Mismatch:
-      return { text: AUTH_TEXTS.oauthLoginFailed };
+      return { text: CLIENT_TEXTS.oauthLoginFailed };
   }
 }
 

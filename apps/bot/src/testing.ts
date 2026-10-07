@@ -40,7 +40,23 @@ import {
   type TradingSignalResponse,
   type UserAccountView,
   type UserStartView,
+  BOT_TEXT_CATALOG,
+  BotTextKind,
+  defaultBotTextSource,
+  type BotTextKey,
+  type BotTextSource,
 } from '@binarius/shared';
+
+// A text source for the tests of the source swap (#240): the named keys read a marked text of
+// their own kind, with the argument where the key has one; every other key its default.
+export const stubText = (key: BotTextKey): string => {
+  const entry = BOT_TEXT_CATALOG[key];
+  const marked = `ЗАГЛУШКА ${key}${entry.arg === undefined ? '' : ` {${entry.arg}}`}`;
+  return entry.kind === BotTextKind.Html ? `<b>${marked}</b>` : marked;
+};
+export const stubTextSource = (...keys: BotTextKey[]): BotTextSource<BotTextKey> => ({
+  sourceOf: (key) => (keys.includes(key) ? stubText(key) : defaultBotTextSource.sourceOf(key)),
+});
 
 export const BOT_INFO: UserFromGetMe = {
   id: 1,

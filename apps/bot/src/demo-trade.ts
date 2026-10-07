@@ -8,6 +8,7 @@ import {
   type CreateTradeIntentRequest,
   type DecimalString,
   type PairView,
+  type BotStaticHtmlKey,
   type TelegramHtml,
   type TradeIntentView,
   type TradingAccessResponse,
@@ -29,7 +30,7 @@ import { INTENT_NOT_FOUND, TRACKER_STOP_STATUSES, type IntentTracker } from './i
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
-import { intentStatusText, LABELS, TEXTS } from './texts';
+import { intentStatusText, LABELS, TEXTS, textOf } from './texts';
 
 // The demo trade (#127, docs/bot-demo-trade.md): the stake button under the analysis screen
 // creates an intent through POST /trading/intents, one status message follows it (the tracker),
@@ -53,7 +54,7 @@ export interface DemoTradeDeps {
 }
 
 interface Refusal {
-  text: TelegramHtml;
+  text: BotStaticHtmlKey;
   connect?: true;
   // a refusal the bot never provokes: a bug, or a backend this bot does not know
   log?: true;
@@ -64,19 +65,19 @@ interface Refusal {
 // Exhaustive: a code added to the contract fails tsc here.
 const CREATE_REFUSALS = {
   // the access read a moment ago found the users row: a backend that contradicts itself
-  [TradeIntentErrorCode.UserNotFound]: { text: TEXTS.unavailable, log: true },
-  [TradeIntentErrorCode.UserBlocked]: { text: TEXTS.blocked },
-  [TradeIntentErrorCode.BrokerAccountNotFound]: { text: TEXTS.accountNone, connect: true },
-  [TradeIntentErrorCode.AmbiguousBrokerAccount]: { text: TEXTS.statusAmbiguous },
-  [TradeIntentErrorCode.AccountRevoked]: { text: TEXTS.accountRevoked, connect: true },
-  [TradeIntentErrorCode.AccountNotConfirmed]: { text: TEXTS.stakeAccountNotConfirmed },
-  [TradeIntentErrorCode.AccountHalted]: { text: TEXTS.stakeAccountHalted },
-  [TradeIntentErrorCode.InsufficientTokens]: { text: TEXTS.stakeInsufficientTokens },
-  [TradeIntentErrorCode.ActiveIntentExists]: { text: TEXTS.stakeActiveIntent },
+  [TradeIntentErrorCode.UserNotFound]: { text: 'unavailable', log: true },
+  [TradeIntentErrorCode.UserBlocked]: { text: 'blocked' },
+  [TradeIntentErrorCode.BrokerAccountNotFound]: { text: 'accountNone', connect: true },
+  [TradeIntentErrorCode.AmbiguousBrokerAccount]: { text: 'statusAmbiguous' },
+  [TradeIntentErrorCode.AccountRevoked]: { text: 'accountRevoked', connect: true },
+  [TradeIntentErrorCode.AccountNotConfirmed]: { text: 'stakeAccountNotConfirmed' },
+  [TradeIntentErrorCode.AccountHalted]: { text: 'stakeAccountHalted' },
+  [TradeIntentErrorCode.InsufficientTokens]: { text: 'stakeInsufficientTokens' },
+  [TradeIntentErrorCode.ActiveIntentExists]: { text: 'stakeActiveIntent' },
   // the same button pressed with other parameters: minTradeAmount changed between two presses
-  [TradeIntentErrorCode.ClientRequestIdConflict]: { text: TEXTS.stakeButtonUsed },
+  [TradeIntentErrorCode.ClientRequestIdConflict]: { text: 'stakeButtonUsed' },
   // the global trading switch is closed (#144): demo and real alike
-  [TradeIntentErrorCode.TradingPaused]: { text: TEXTS.tradingPaused },
+  [TradeIntentErrorCode.TradingPaused]: { text: 'tradingPaused' },
 } as const satisfies Record<TradeIntentErrorCode, Refusal>;
 
 const isCreateRefusal = (reason: string | undefined): reason is TradeIntentErrorCode =>
@@ -228,7 +229,7 @@ export function createDemoTradeComposer<C extends Context>({
     const refusal: Refusal =
       !failure.unknown && isCreateRefusal(reason)
         ? CREATE_REFUSALS[reason]
-        : { text: failure.unknown ? TEXTS.stakeOutcomeUnknown : TEXTS.unavailable, log: true };
+        : { text: failure.unknown ? 'stakeOutcomeUnknown' : 'unavailable', log: true };
     if (refusal.log === true) {
       logger.warn(
         { ...errorLogFields(failure.error), ...backendErrorFields(failure.error) },
@@ -237,7 +238,7 @@ export function createDemoTradeComposer<C extends Context>({
     }
     await replyHtml(
       ctx,
-      refusal.text,
+      textOf(refusal.text),
       refusal.connect === true ? { reply_markup: connectKeyboard() } : {},
     );
   }

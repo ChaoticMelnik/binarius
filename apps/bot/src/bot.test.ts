@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BrokerBalanceUnavailableReason,
   confirmCallbackData,
+  defaultBotTextSource,
   NotificationLevel,
   OAuthErrorCode,
   plainTextOf,
@@ -62,6 +63,8 @@ import {
   brokerBalance,
   userView,
   stubTracker,
+  stubText,
+  stubTextSource,
 } from './testing';
 import {
   accountCard,
@@ -69,6 +72,7 @@ import {
   helpText,
   LABELS,
   levelLabel,
+  setBotTextSource,
   settingsText,
   statusCard,
   TEXTS,
@@ -2405,5 +2409,54 @@ describe('the Bot API timeout', () => {
     const elapsed = Date.now() - at;
     expect(elapsed).toBeGreaterThanOrEqual(450);
     expect(elapsed).toBeLessThan(UNIT_WAIT_CEILING_MS);
+  });
+});
+
+// Every text is read when it is sent, so a source swapped after the bot module loaded reaches
+// each of these: one test per place that used to hold a text in a module constant (#240).
+describe('the text source', () => {
+  afterEach(() => setBotTextSource(defaultBotTextSource));
+
+  it('answers /help from the source in place', async () => {
+    setBotTextSource(stubTextSource('helpAbout'));
+    const { bot, calls } = setup({ recordStart: unreachable(), readAccount: unreachable() });
+    await bot.handleUpdate(textUpdate('/help'));
+    expect(sentPayload(calls, 'sendMessage')?.text).toContain(stubText('helpAbout'));
+  });
+
+  it('refuses a confirmation with the source in place', async () => {
+    setBotTextSource(stubTextSource('confirmAlreadyDone'));
+    const { bot, calls } = setup({ confirmLogin: refused(409, OAuthErrorCode.AccountNotPending) });
+    await bot.handleUpdate(callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID)));
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(stubText('confirmAlreadyDone'));
+  });
+
+  it('refuses an address with the source in place', async () => {
+    setBotTextSource(stubTextSource('emailRefused'));
+    const { bot, calls } = setup({
+      dialog: { step: 'email' },
+      sendEmailCode: refused(400, OAuthErrorCode.InvalidEmail),
+    });
+    await bot.handleUpdate(textUpdate(EMAIL));
+    expect(sentTexts(calls)).toEqual([stubText('emailRefused')]);
+  });
+
+  it('refuses a code with the source in place', async () => {
+    setBotTextSource(stubTextSource('tooManyCodeAttempts'));
+    const { bot, calls } = setup({
+      dialog: ON_CODE_STEP,
+      emailLogin: refused(429, OAuthErrorCode.TooManyAttempts),
+    });
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(sentTexts(calls)).toEqual([stubText('tooManyCodeAttempts')]);
+  });
+
+  it('labels the /start buttons from the source in place', async () => {
+    setBotTextSource(stubTextSource('connectButton'));
+    const { bot, calls } = setup();
+    await bot.handleUpdate(startUpdate('/start'));
+    expect(inlineButtons(sentPayload(calls, 'sendMessage'))[0]?.text).toBe(
+      stubText('connectButton'),
+    );
   });
 });

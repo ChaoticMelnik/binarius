@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+  BOT_TEXT_CATALOG,
+  BotTextKind,
+  defaultBotTextSource,
+  type BotTextKey,
   BrokerAccountStatus,
   BrokerBalanceUnavailableReason,
   NotificationLevel,
@@ -26,6 +30,8 @@ import {
   PENDING_ACCOUNT_ID,
   brokerBalance,
   intentView,
+  stubText,
+  stubTextSource,
 } from './testing';
 import { LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
 import {
@@ -58,6 +64,7 @@ import {
   MODE_LABELS,
   modeHeader,
   PROFILE,
+  setBotTextSource,
   settingsText,
   stakeButtonLabel,
   SUPPORT,
@@ -829,5 +836,102 @@ describe('the demo trade status', () => {
     expect(plainTextOf(intentStatusText('X', intentView({ status })))).not.toContain(
       'Токен возвращён',
     );
+  });
+});
+
+// TEXTS and LABELS are views of the catalog that keep the names they had before it (#240): a
+// key added to them is a text or a label the bot never had under that name.
+describe('the facades over the catalog', () => {
+  it('gives TEXTS every html key of the catalog but the three it reaches through other entries', () => {
+    const htmlKeys = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
+      (key) => BOT_TEXT_CATALOG[key].kind === BotTextKind.Html,
+    );
+    expect(Object.keys(TEXTS).sort()).toEqual(
+      htmlKeys
+        .filter((key) => !['cardGreetingNoName', 'featureLines', 'oauthLoginFailed'].includes(key))
+        .sort(),
+    );
+  });
+
+  it('gives LABELS the labels it had', () => {
+    expect(Object.keys(LABELS).sort()).toEqual(
+      [
+        'accountCommand',
+        'changeEmailButton',
+        'confirmButton',
+        'connectButton',
+        'demoAnalysisButton',
+        'demoBackDurationsButton',
+        'demoBackGroupsButton',
+        'demoBackPairsButton',
+        'demoButton',
+        'demoNextButton',
+        'demoPrevButton',
+        'demoRetryButton',
+        'helpCommand',
+        'loginButton',
+        'menuCommand',
+        'oauthButton',
+        'refreshIntentButton',
+        'repeatAnalysisButton',
+        'resendButton',
+        'settingsCommand',
+        'startCommand',
+        'supportButton',
+        'supportCommand',
+      ].sort(),
+    );
+  });
+});
+
+// Every map from a value to its text is read when a text is built, so a source swapped after the
+// module loaded reaches it: one test per map that used to hold the texts themselves (#240).
+describe('the text source', () => {
+  afterEach(() => setBotTextSource(defaultBotTextSource));
+
+  it('shows a live status line from the source in place', () => {
+    setBotTextSource(stubTextSource('intentAccepted'));
+    const text = intentStatusText('X', intentView({ status: TradeIntentStatus.Accepted }));
+    expect(text.value).toContain(stubText('intentAccepted'));
+  });
+
+  it('shows a rejection line from the source in place', () => {
+    setBotTextSource(stubTextSource('intentRejectedByBroker'));
+    const text = intentStatusText(
+      'X',
+      intentView({
+        status: TradeIntentStatus.Rejected,
+        lastError: TradeIntentFailureReason.BrokerRejected,
+      }),
+    );
+    expect(text.value).toContain(stubText('intentRejectedByBroker'));
+  });
+
+  it('labels a level from the source in place', () => {
+    setBotTextSource(stubTextSource('levelAll'));
+    expect(levelLabel(NotificationLevel.All)).toBe(stubText('levelAll'));
+  });
+
+  it('labels a direction from the source in place', () => {
+    setBotTextSource(stubTextSource('actionUp'));
+    expect(ACTION_LABELS[TradeAction.Up]).toBe(stubText('actionUp'));
+  });
+
+  it('labels an asset type from the source in place', () => {
+    setBotTextSource(stubTextSource('demoGroupCurrency'));
+    expect(DEMO_GROUP_LABELS.currency).toBe(stubText('demoGroupCurrency'));
+  });
+
+  it('labels a duration from the source in place', () => {
+    setBotTextSource(stubTextSource('demoDuration60'));
+    expect(DEMO_DURATION_LABELS[60]).toBe(stubText('demoDuration60'));
+  });
+
+  it('reads the profile from the source in place', () => {
+    setBotTextSource(stubTextSource('profileDescription', 'profileShortDescription'));
+    expect(PROFILE).toEqual({
+      description: stubText('profileDescription'),
+      shortDescription: stubText('profileShortDescription'),
+    });
   });
 });
