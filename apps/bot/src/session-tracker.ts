@@ -24,7 +24,7 @@ import { sessionIntentLive, sessionStatusText, TEXTS } from './texts';
 export const SESSION_NOT_FOUND = 'not_found';
 
 // the intent tracker's bound: the oldest entry goes first, its message keeping the refresh button
-export const SESSION_TRACKER_MAX_ENTRIES = 10_000;
+const SESSION_TRACKER_MAX_ENTRIES = 10_000;
 
 // Where following a session ends: stopped, and its last trade can no longer move the counters. A
 // stopped session whose trade is still open is followed until that trade settles; a last trade in
@@ -104,6 +104,9 @@ export function createSessionTracker({
   let stopping = false;
 
   const live = (entry: Entry): boolean => !stopping && entries.get(entry.sessionId) === entry;
+  // Still the entry of its id: not replaced by a retarget, evicted or finished. stop() clears the
+  // map only after the drain, so during it an attempt in flight still counts as current.
+  const current = (entry: Entry): boolean => entries.get(entry.sessionId) === entry;
 
   const finish = (entry: Entry): void => {
     clearTimeout(entry.timer);
@@ -185,17 +188,18 @@ export function createSessionTracker({
       }
       entry.readFailures += 1;
       if (notFound) {
-        // polling cannot fix a missing or foreign id
-        await editTo(entry, TEXTS.sessionStatusUnavailable, SESSION_NOT_FOUND);
+        // polling cannot fix a missing or foreign id; a replaced entry leaves the old message be
+        if (current(entry)) await editTo(entry, TEXTS.sessionStatusUnavailable, SESSION_NOT_FOUND);
         finish(entry);
         return;
       }
       await next(entry);
       return;
     }
-    // a replaced, evicted or finished entry renders nothing; during stop() the attempt in flight
-    // still renders what it read, as in the intent tracker
-    if (!live(entry) && !stopping) return;
+    // A replaced, evicted or finished entry renders nothing, during stop() too; a current entry's
+    // attempt that stop() drains still renders what it read, as in the intent tracker. An edit
+    // already sent when the session moved can still land: the one edit the contract allows.
+    if (!current(entry)) return;
     entry.view = view;
     const key = renderKey(view);
     if (key !== entry.rendered) {

@@ -396,8 +396,12 @@ export const sessionStartButtonLabel = (trades: number): string =>
 export const sessionIntentLive = (intent: TradeIntentView | null): intent is TradeIntentView =>
   intent !== null && TRADE_INTENT_TRANSITIONS[intent.status].length > 0;
 
+// A trade the worker carries to its end without a person: live, and not on manual review.
+const intentPlaysOut = (intent: TradeIntentView | null): intent is TradeIntentView =>
+  sessionIntentLive(intent) && intent.status !== TradeIntentStatus.ManualReview;
+
 // What the session message shows of a session; nothing else of the view.
-export type SessionStatusView = Pick<
+type SessionStatusView = Pick<
   TradingSessionView,
   'status' | 'stopReason' | 'settings' | 'trades' | 'lastIntent'
 >;
@@ -457,13 +461,20 @@ ${TEXTS.sessionSettingsUnavailable}`;
   } else {
     if (view.stopReason !== null) body.push(textOf(SESSION_STOP_LINES[view.stopReason]));
     if (trades.settled > 0) body.push(TEXTS.sessionTotal(resultOf(trades)));
-    if (sessionIntentLive(lastIntent)) {
-      body.push(statusLineOfIntent(lastIntent), TEXTS.sessionOpenTradePlaysOut);
+    // manual_review's stop line already says it and points at /support: one text for both of its
+    // sources (owner, #284 clarify), so the trade's own review line is not repeated under it
+    const reviewRepeated =
+      view.stopReason === TradingSessionStopReason.ManualReview &&
+      lastIntent?.status === TradeIntentStatus.ManualReview;
+    if (sessionIntentLive(lastIntent) && !reviewRepeated) {
+      body.push(statusLineOfIntent(lastIntent));
     }
+    if (intentPlaysOut(lastIntent)) body.push(TEXTS.sessionOpenTradePlaysOut);
   }
   // stopped with no reason is what the CHECKs refuse; the view's schema still allows it
   if (body.length === 0) body.push(TEXTS.sessionStatusUnavailable);
-  if (deadline) body.push(TEXTS.sessionDeadline);
+  // «ещё идёт» is about a session that runs: a stopped one gets its plain final status
+  if (deadline && view.status !== TradingSessionStatus.Stopped) body.push(TEXTS.sessionDeadline);
   return telegramHtml`${joinLines(head)}
 
 ${joinLines(body)}`;

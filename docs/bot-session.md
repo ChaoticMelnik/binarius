@@ -120,7 +120,12 @@ the same 404 `not_found`.
   сделки…».
 - **Completed**: «🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус».
 - **Stopped for another reason**: the reason's line, then «📊 Итог: …» when a trade settled, then
-  the last trade's line and «⏳ Открытая сделка доиграет до конца.» while it is still live.
+  the last trade's line while it is live, and «⏳ Открытая сделка доиграет до конца.» only when the
+  worker carries it to its end without a person (live and not `manual_review`). Under the
+  `manual_review` stop a trade on manual review gets no line of its own: the stop line already says
+  it and points at /support (one text for both sources, owner's decision).
+- **The deadline hint** («⏳ Сессия ещё идёт…») goes only under a session that is not stopped; a
+  stopped one gets its plain final status.
 - **`settings: null`** (a hand-written row): the header and «⚠️ Настройки сессии не прочитаны —
   напиши в поддержку: /support».
 - The symbol is capped at 64 characters; without a catalog «актив #<id>» stands in. The stake is
@@ -153,10 +158,10 @@ view they show, so the stop button goes away when the session stops.
   resumes. 404 → «⚠️ Статус сессии недоступен.»; any other failure → `unavailable` and `warn`
   `trading session status not read`.
 - **Stop** stops at once, with no confirmation (owner's decision); the reply is the stopped view in
-  place, with «⏳ Открытая сделка доиграет до конца.» while its trade is open. 409
-  `session_not_active` reads the session and shows how it ended. 404 → «⚠️ Статус сессии
-  недоступен.»; any other failure → `unavailable` and `warn` `trading session not stopped`. It is
-  not retried: the refresh button shows the truth, and a second stop is harmless.
+  place, with «⏳ Открытая сделка доиграет до конца.» while its trade is open and not on manual
+  review. 409 `session_not_active` reads the session and shows how it ended. 404 → «⚠️ Статус
+  сессии недоступен.»; any other failure → `unavailable` and `warn` `trading session not stopped`.
+  It is not retried: the refresh button shows the truth, and a second stop is harmless.
 
 ## The tracker
 
@@ -164,8 +169,9 @@ One entry per session id, in process memory, like the intent tracker
 ([bot-demo-trade.md](bot-demo-trade.md#the-tracker)), with these differences:
 
 - **Retargeting.** `track()` of an id already tracked replaces its entry: the next change is drawn
-  on the new message, and the old message is not edited again. An attempt already in flight keeps
-  the target it started with, so at most one more edit can land on the old message. The deadline
+  on the new message, and the old message is not edited again. A read in flight when the session
+  moves draws nothing on the old message, a 404 included, and during `stop()` too; only an edit
+  already sent can still land there, so at most one more edit. The deadline
   keeps counting from the first `track()`.
 - **Done** is `status === stopped` and the last trade can no longer move
   (`TRADE_INTENT_TRANSITIONS[status]` is empty: settled or rejected, or no trade). A stopped session
@@ -174,8 +180,8 @@ One entry per session id, in process memory, like the intent tracker
 - **The render key** is `status|stopReason|planned|settled|won|lost|tied|lastIntent.id|
   lastIntent.status|lastIntent.lastError`; the message is edited only when it changes.
 - Past `SESSION_TRACK_DEADLINE_MS`: one last edit, not retried — «⏳ Сессия ещё идёт — нажми
-  «🔄 Обновить», чтобы увидеть ход.» under a session still followed, the final status for a done one
-  whose edit never landed.
+  «🔄 Обновить», чтобы увидеть ход.» under a session that is not stopped, the final status otherwise
+  (a done one whose edit never landed, or a stopped one whose last trade is still on manual review).
 - 404 `not_found` → «⚠️ Статус сессии недоступен.», stop. Any other read failure: `warn` once per
   entry, retried until the deadline. Gone → stop. Anything else thrown → `error` `trading session
   tracking failed`, stop.
@@ -218,7 +224,8 @@ id or the symbol.
 3. **Poll load.** One `GET /trading/sessions/:id` per tracked session every 10 s: at most 1 000
    requests a second at 10 000 entries, ≤ 300 at the pilot's 1–3k sessions.
 4. **Retargeting** can leave one more edit on the old message.
-5. **A last trade in `manual_review`** keeps its entry polling to the deadline.
+5. **A last trade in `manual_review`** keeps its entry polling to the deadline; the message then
+   keeps the stopped session's final status.
 6. **No profit sum**, only won/lost/tied counts: the view has no sum (#283).
 
 ## Running it locally

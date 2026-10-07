@@ -202,13 +202,17 @@ describe('the session tracker', () => {
     expect(tracker.size()).toBe(0);
   });
 
-  it('lets an attempt already in flight land at most one edit on the old message', async () => {
+  // Review m2: the read in flight belongs to the replaced entry, which renders nothing; and after
+  // a full poll the old entry is still silent, so it is not polling on.
+  it('draws nothing on the old message from a read in flight when the session moves', async () => {
     let release: (view: TradingSessionView) => void = () => {};
     const slow = () =>
       new Promise<TradingSessionView>((resolve) => {
         release = resolve;
       });
-    const { tracker, request, target } = setup({ script: [slow, stoppedClosed] });
+    const { tracker, readSession, request, target } = setup({
+      script: [slow, stoppedOpen, stoppedClosed],
+    });
     const old = target();
     const fresh = target();
     tracker.track(request({ edit: old.edit }));
@@ -216,10 +220,91 @@ describe('the session tracker', () => {
     tracker.track(request({ edit: fresh.edit }));
     release(trading);
     await vi.advanceTimersByTimeAsync(0);
-    expect(old.edits.length).toBeLessThanOrEqual(1);
+    expect(old.edits).toEqual([]);
+    await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
+    expect(old.edits).toEqual([]);
+    expect(texts(fresh.edits)).toEqual([shown(stoppedOpen), shown(stoppedClosed)]);
+    // the old entry's one read and the new entry's two: nothing polls for the old message
+    await vi.advanceTimersByTimeAsync(POLL * 3);
+    expect(readSession).toHaveBeenCalledTimes(3);
+  });
+
+  // the one edit the contract allows: it was already sent when the session moved
+  it('lets an edit already in flight land on the old message, and nothing after it', async () => {
+    let finishEdit: () => void = () => {};
+    const { tracker, readSession, request, target } = setup({
+      script: [trading, stoppedOpen, stoppedClosed],
+    });
+    const old = target();
+    const heldEdit = vi.fn<SessionTrackRequest['edit']>((text) => {
+      old.edits.push(text);
+      return new Promise((resolve) => {
+        finishEdit = () => resolve(true);
+      });
+    });
+    const fresh = target();
+    tracker.track(request({ edit: heldEdit }));
     await vi.advanceTimersByTimeAsync(FIRST);
-    expect(texts(fresh.edits)).toEqual([shown(stoppedClosed)]);
-    expect(old.edits.length).toBeLessThanOrEqual(1);
+    expect(texts(old.edits)).toEqual([shown(trading)]);
+    tracker.track(request({ edit: fresh.edit, view: trading }));
+    finishEdit();
+    await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
+    expect(texts(old.edits)).toEqual([shown(trading)]);
+    expect(texts(fresh.edits)).toEqual([shown(stoppedOpen), shown(stoppedClosed)]);
+    await vi.advanceTimersByTimeAsync(POLL * 3);
+    expect(readSession).toHaveBeenCalledTimes(3);
+  });
+
+  // review m3: a replaced entry's 404 is not drawn on the old message either
+  it('draws no 404 on the old message when the session moved during the read', async () => {
+    let fail: (error: Error) => void = () => {};
+    const slow = () =>
+      new Promise<TradingSessionView>((_resolve, reject) => {
+        fail = reject;
+      });
+    const { tracker, request, target } = setup({ script: [slow, trading] });
+    const old = target();
+    const fresh = target();
+    tracker.track(request({ edit: old.edit }));
+    await vi.advanceTimersByTimeAsync(FIRST);
+    tracker.track(request({ edit: fresh.edit }));
+    fail(new BackendError(BackendErrorCode.HttpStatus, { status: 404, reason: SESSION_NOT_FOUND }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(old.edits).toEqual([]);
+    expect(tracker.size()).toBe(1);
+  });
+
+  // review m3: stop() drains the replaced entry's read, which still draws nothing
+  it('draws nothing on the old message from a read stop() drains after the session moved', async () => {
+    let release: (view: TradingSessionView) => void = () => {};
+    const slow = () =>
+      new Promise<TradingSessionView>((resolve) => {
+        release = resolve;
+      });
+    const { tracker, request, target } = setup({ script: [slow] });
+    const old = target();
+    tracker.track(request({ edit: old.edit }));
+    await vi.advanceTimersByTimeAsync(FIRST);
+    tracker.track(request({ edit: target().edit }));
+    const stopping = tracker.stop();
+    release(trading);
+    await stopping;
+    expect(old.edits).toEqual([]);
+  });
+
+  // review Major 1: a session stopped on manual review is not «ещё идёт» at the deadline
+  it('gives a stopped session its plain final status at the deadline', async () => {
+    const reviewed = sessionView({
+      ...stoppedWith(live(TradeIntentStatus.ManualReview)),
+      stopReason: TradingSessionStopReason.ManualReview,
+    });
+    const { tracker, request, target } = setup({ script: [reviewed] });
+    const { edits, edit } = target();
+    tracker.track(request({ edit }));
+    await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
+    expect(tracker.size()).toBe(0);
+    expect(edits.at(-1)?.value).toBe(shown(reviewed));
+    expect(edits.at(-1)?.value).not.toContain(TEXTS.sessionDeadline.value);
   });
 
   it('points at the refresh button past the deadline for a live session', async () => {
