@@ -2167,3 +2167,35 @@ PR #316 смержен через rebase на лимите кругов (3 ко�
 
 1. **Архитектор учитывает рост открытого множества от параллельных задач в оценке размера** — **внедрено в #322: .claude/skills/architect/SKILL.md → Step 4a**
 2. **Minor r1 4-5 и Minor r3** — **вынесено в #317** (issuecomment-6042781356)
+
+---
+
+## #107 — Админка: просмотр пользователей и журналирование просмотров (2026-10-07)
+
+PR #323 смержен через rebase (6 коммитов, голова `5e1addf`), 2568 добавленных строк без снапшота, миграция 0023. Задача перенята этой сессией: In Progress с планом от 2026-10-06, но без ветки и PR; владелец подтвердил.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Перенятие | Проверено: ни ветки, ни PR, ни worktree, все сессии простаивают; `AskUserQuestion` → забрать с Plan Update. |
+| Architect | Plan Update ×2 | Opus (решение владельца 2026-10-07). Сверка с main и соседями волны: устаревшие места, дефект (один `usersHref` и для ссылки, и для запроса к backend), контракты хелперов для #78/#79/#300; второй — `URLSearchParams` в shared (поймано implementer'ом). Codex пропущен на лимите (task-muye48w0-5lrsdh). Заметки на #109/#110. |
+| Implementer | Clarify + код | 4 вопроса (1 — дефект плана). 41 мутация, compose в отдельном проекте со своими портами. Общий `prettier` по репозиторию — откат отдельным коммитом. |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6044193783). |
+| Reviewer | Iteration 1 | 0 Blocker/Major, 4 Minor; Codex пропущен на лимите (task-muyfxrlu-vr2kpw). |
+| Tech Lead | Merge / Done | Ready-to-merge — tech-lead (Codex пропущен); владелец явно подтвердил мерж без Codex. Minor → #324. Миграции main применены к общей тестовой БД. |
+
+### Review iterations: 1
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| `URLSearchParams` из shared не компилируется (`types: []`); тот же дефект у #109/#110 | Plan defect | unverified-claim | Контракт не прогнан `tsc` с настройками пакета | Architect Plan Update; поймано на Implementer Step 0 |
+| Общий `prettier` переформатировал чужой код | Process | other | Репозиторий не prettier-clean | Implementer Step 4 |
+| m1-m4 (поиск из пробелов, тест поиска с курсором, docs навигации, тест «сегодня») | Minor | other | — | → #324 |
+
+### Process improvement proposals
+
+1. **Implementer форматирует только изменённые файлы** — **внедрено в #<PR>: .claude/skills/implementer/SKILL.md → Step 4**
+2. **Minor m1-m4** — **вынесено в #324**
