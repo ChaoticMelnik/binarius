@@ -369,14 +369,25 @@ Node 22 (the 2026-10-03 one is recorded in #99).
     trading-worker pnpm --filter @binarius/trading-worker socket-probe
   ```
 
-  The rollout rule: `open_trade_success` and `open_trade_fail` on A only → the answers go to the
-  sender, `BROKER_WS_URL` may be set. Any `open_trade_*` on B → the broker broadcasts answers;
-  `BROKER_WS_URL` stays unset until a correlation the broadcast cannot defeat exists. When the
-  account's `min_trade_amount` is 0.01 or less the probe skips the below-minimum command
-  (`fail-проба пропущена: minTradeAmount <= 0.01`): that run verifies the success broadcast only,
-  the `fail` broadcast stays unverified, and a probe on an account with a higher minimum is still
-  needed before `BROKER_WS_URL` is set. `balance_update` on both sockets is expected either way.
-  The result goes here.
+  The probe ends with one verdict line (`socket-probe-verdict.ts`, every path in
+  `socket-probe-verdict.test.ts`) and exits 0 only on the first:
+
+  - `verdict: answers go to the sender; BROKER_WS_URL may be set` — only when command 1 answered
+    `success`, command 2 was sent and answered `fail`, A heard at least one `open_trade_success`
+    and one `open_trade_fail`, and B heard no `open_trade_*`. B's silence means something only
+    when A was answered both ways.
+  - `verdict: the broker broadcasts answers (B heard success=<n> fail=<m>); keep BROKER_WS_URL
+    unset` — B heard any `open_trade_*`, whatever A did. `BROKER_WS_URL` stays unset until a
+    correlation the broadcast cannot defeat exists.
+  - `verdict: inconclusive: <what is missing>; keep BROKER_WS_URL unset` — everything else: a
+    command timed out (the connection is then tainted and command 2 is not sent), was refused or
+    not sent, the broker accepted the below-minimum order, or A did not hear both answers. An
+    account whose `min_trade_amount` is 0.01 or less gives `inconclusive: command 2 skipped:
+    min_trade_amount <= 0.01`; run it on an account with a higher minimum. The minimum is compared
+    with 0.01 exactly (`compareDecimal`), so 0.015 is not skipped.
+
+  Exit code 0 only on `answers go to the sender`; any other run keeps `BROKER_WS_URL` unset.
+  `balance_update` on both sockets is expected either way. The result goes here.
 
 ## Boundaries
 

@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { pino } from 'pino';
-import { brokerAccounts, createDb, normalizeDecimal } from '@binarius/db';
+import { brokerAccounts, createDb } from '@binarius/db';
 import {
   DATABASE_URL_RULES,
   decimalStringSchema,
@@ -23,12 +23,21 @@ import {
   type BrokerSocketClient,
   type SocketOpenTradeResult,
 } from '../broker/socket';
+import {
+  compareDecimal,
+  renderVerdict,
+  verdict,
+  type HeardAnswers,
+  type ProbeOutcomes,
+} from './socket-probe-verdict';
 
 // The two-socket probe of #101 (docs/broker-socket.md → Observed live): does the live broker send
 // an open_trade answer to every socket of a user, or only to the one that sent the command?
 // Two sockets, A and B, authenticate with the same account's token; A sends two DEMO commands —
 // one at min_trade_amount (expected success) and one below it (expected fail) — and the probe
-// prints which event types each socket heard. Only event types, counts and trade ids are printed:
+// prints which event types each socket heard and one verdict line (socket-probe-verdict.ts); the
+// exit code is 0 only when the verdict is that answers go to the sender. Only event types, counts,
+// trade ids, the outcomes and the verdict are printed:
 // no token, no URL, no payload. The token is taken with mayRefresh: false (never an exchange).
 // The demo trade it opens is not linked to any intent (not_ours for the catch-up); a running
 // worker session of the same account applies the update_balance it causes.
@@ -107,11 +116,15 @@ function describeOutcome(result: SocketOpenTradeResult): string {
   }
 }
 
-// whole cents of a decimal string: a comparison without a float
-function cents(value: string): bigint {
-  const [integer = '0', fraction = ''] = normalizeDecimal(value).split('.');
-  return BigInt(integer) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
-}
+const detailOf = (result: SocketOpenTradeResult) =>
+  result.outcome === 'not_sent' || result.outcome === 'unknown'
+    ? `${result.reason}, ${result.state}`
+    : undefined;
+
+const answersOf = (recorder: Recorder): HeardAnswers => ({
+  openTradeSuccess: recorder.types.get(BrokerEventType.OpenTradeSuccess) ?? 0,
+  openTradeFail: recorder.types.get(BrokerEventType.OpenTradeFail) ?? 0,
+});
 
 const pool = new Pool({ connectionString: databaseUrl });
 const clients: BrokerSocketClient[] = [];
@@ -158,12 +171,19 @@ try {
         AbortSignal.timeout(COMMAND_TIMEOUT_MS),
       );
 
-    say(`command 1 (demo, min_trade_amount): ${describeOutcome(await command(minimum))}`);
-    if (cents(minimum) > cents(BELOW_MINIMUM)) {
-      say(`command 2 (demo, below the minimum): ${describeOutcome(await command(BELOW_MINIMUM))}`);
+    const outcomes: ProbeOutcomes = { command1: 'not_run', command2: 'not_run', detail: {} };
+    const first = await command(minimum);
+    outcomes.command1 = first.outcome;
+    outcomes.detail!.command1 = detailOf(first);
+    say(`command 1 (demo, min_trade_amount): ${describeOutcome(first)}`);
+    if (compareDecimal(minimum, BELOW_MINIMUM) > 0) {
+      const second = await command(BELOW_MINIMUM);
+      outcomes.command2 = second.outcome;
+      outcomes.detail!.command2 = detailOf(second);
+      say(`command 2 (demo, below the minimum): ${describeOutcome(second)}`);
     } else {
-      say('fail-проба пропущена: minTradeAmount <= 0.01');
-      say('the fail broadcast is not verified by this run');
+      outcomes.command2 = 'skipped';
+      say('command 2 (demo, below the minimum): skipped, min_trade_amount <= 0.01');
     }
 
     await pause(PROBE_WINDOW_MS);
@@ -173,14 +193,9 @@ try {
       say(`${type} | ${heardA.types.get(type) ?? 0} | ${heardB.types.get(type) ?? 0}`);
     }
     say(`trade ids heard: A [${heardA.tradeIds.join(', ')}], B [${heardB.tradeIds.join(', ')}]`);
-    const broadcast =
-      (heardB.types.get(BrokerEventType.OpenTradeSuccess) ?? 0) +
-      (heardB.types.get(BrokerEventType.OpenTradeFail) ?? 0);
-    say(
-      broadcast === 0
-        ? 'B heard no open_trade answer: the answers go to the sender'
-        : 'B heard an open_trade answer: the broker broadcasts answers; keep BROKER_WS_URL unset',
-    );
+    const result = verdict(outcomes, answersOf(heardA), answersOf(heardB));
+    say(renderVerdict(result));
+    process.exitCode = result.kind === 'sender_only' ? 0 : 1;
   }
 } finally {
   for (const client of clients) client.stop();
