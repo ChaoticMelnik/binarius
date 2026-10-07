@@ -3,6 +3,8 @@ import type { BinaryPair } from './broker';
 import {
   PairsCatalogErrorCode,
   TRADING_PAIRS_PATH,
+  isPairOpen,
+  pairAcceptsDuration,
   safeParsePairsCatalogResponse,
   toPairView,
   toPairsCatalogResponse,
@@ -110,5 +112,23 @@ describe('toPairsCatalogResponse', () => {
       fresh: false,
     });
     expect(safeParsePairsCatalogResponse(body).success).toBe(true);
+  });
+});
+
+describe('pair predicates', () => {
+  const now = 1_000_000;
+
+  it('isPairOpen: no restriction, the boundary, and a future time', () => {
+    expect(isPairOpen({ scheduledUntil: 0 }, now)).toBe(true);
+    expect(isPairOpen({ scheduledUntil: now }, now)).toBe(true);
+    expect(isPairOpen({ scheduledUntil: now + 1 }, now)).toBe(false);
+  });
+
+  it('pairAcceptsDuration: both bounds inside, one second outside each', () => {
+    const range = { minTimeframe: 60, maxTimeframe: 3600 };
+    expect(pairAcceptsDuration(range, 60)).toBe(true);
+    expect(pairAcceptsDuration(range, 3600)).toBe(true);
+    expect(pairAcceptsDuration(range, 59)).toBe(false);
+    expect(pairAcceptsDuration(range, 3601)).toBe(false);
   });
 });

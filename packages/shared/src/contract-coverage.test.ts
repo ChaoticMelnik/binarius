@@ -26,6 +26,7 @@ import type { TradeIntent, TradeIntentView } from './trading';
 import type { AccessTokenRefusal, AccessTokenRequest, AccessTokenResponse } from './access-token';
 import type { AccountHaltReason } from './oauth';
 import type { TradingAccessResponse } from './trading-access';
+import type { TradingSessionRefusal, TradingSessionView } from './trading-session';
 import * as accessToken from './access-token';
 import * as account from './account';
 import * as admin from './admin';
@@ -323,6 +324,47 @@ describe('contract coverage (issue #6)', () => {
       | 'unavailable'
       | 'contract_violation'
       | 'aborted'
+    >();
+  });
+
+  it('Trading session view and refusal (issue #283)', () => {
+    expectTypeOf<keyof TradingSessionView>().toEqualTypeOf<
+      | 'id'
+      | 'mode'
+      | 'status'
+      | 'stopReason'
+      | 'settings'
+      | 'startedAt'
+      | 'endedAt'
+      | 'trades'
+      | 'lastIntent'
+    >();
+    expectTypeOf<TradingSessionView['status']>().toEqualTypeOf<'active' | 'paused' | 'stopped'>();
+    expectTypeOf<TradingSessionView['trades']>().toEqualTypeOf<{
+      planned: number;
+      settled: number;
+      rejected: number;
+      won: number;
+      lost: number;
+      tied: number;
+    }>();
+    expectTypeOf<TradingSessionView['lastIntent']>().toEqualTypeOf<TradeIntentView | null>();
+    expectTypeOf<TradingSessionRefusal['error']>().toEqualTypeOf<
+      | 'user_not_found'
+      | 'broker_account_not_found'
+      | 'ambiguous_broker_account'
+      | 'account_not_confirmed'
+      | 'account_revoked'
+      | 'account_halted'
+      | 'user_blocked'
+      | 'insufficient_tokens'
+      | 'active_session_exists'
+      | 'session_too_long'
+      | 'balance_unavailable'
+      | 'pair_unavailable'
+      | 'catalog_unavailable'
+      | 'not_found'
+      | 'session_not_active'
     >();
   });
 

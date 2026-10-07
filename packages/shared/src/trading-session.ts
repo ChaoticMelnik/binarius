@@ -1,6 +1,12 @@
 import * as z from 'zod';
 import { decimalStringSchema, normalizeDecimal, type DecimalString } from './money';
-import { createTradeIntentRequestSchema, tradeAmountSchema } from './trading';
+import {
+  createTradeIntentRequestSchema,
+  telegramUserIdSchema,
+  tradeAmountSchema,
+  tradeIntentViewSchema,
+  tradeModeSchema,
+} from './trading';
 
 // trading_sessions.settings, version 1 (docs/trading-session.md -> Settings). The column is
 // checked at read, not at write: a row written by hand is a boundary too.
@@ -25,6 +31,14 @@ export type TradingSessionSettings = z.infer<typeof tradingSessionSettingsSchema
 
 export const safeParseTradingSessionSettings = (input: unknown) =>
   tradingSessionSettingsSchema.safeParse(input);
+
+export const TradingSessionStatus = {
+  Active: 'active',
+  Paused: 'paused',
+  Stopped: 'stopped',
+} as const;
+export type TradingSessionStatus = (typeof TradingSessionStatus)[keyof typeof TradingSessionStatus];
+export const tradingSessionStatusSchema = z.enum(TradingSessionStatus);
 
 export const TradingSessionStopReason = {
   // settled trades reached settings.trades
@@ -66,3 +80,107 @@ export function stakeSettingsFor(minTradeAmount: DecimalString): {
   const [, fraction = ''] = canonical.split('.');
   return { baseStake: decimalStringSchema.parse(canonical), stakeScale: fraction.length };
 }
+
+// The worker's deadline for a session (started_at + this, on the database clock) and the start
+// route's refusal of a session that cannot fit it (docs/trading-session.md -> Routes).
+export const SESSION_MAX_DURATION_MS = 3_600_000;
+// per trade on top of its duration: the catch-up tick plus the settle grace (a trade settles
+// about 90-120 s after it opens while no close event arrives)
+export const SESSION_SETTLE_SLACK_SEC = 120;
+
+export const sessionFitsDeadline = (trades: number, durationSec: number): boolean =>
+  trades * (durationSec + SESSION_SETTLE_SLACK_SEC) * 1000 <= SESSION_MAX_DURATION_MS;
+
+// upper estimate of POST /trading/sessions: one bounded broker balance request plus statements;
+// the bot's request timeout must not be shorter (#284)
+export const TRADING_SESSION_START_BUDGET_MS = 4_000;
+
+export const TRADING_SESSIONS_PATH = '/trading/sessions';
+
+export const TradingSessionErrorCode = {
+  UserNotFound: 'user_not_found',
+  BrokerAccountNotFound: 'broker_account_not_found',
+  AmbiguousBrokerAccount: 'ambiguous_broker_account',
+  AccountNotConfirmed: 'account_not_confirmed',
+  AccountRevoked: 'account_revoked',
+  AccountHalted: 'account_halted',
+  UserBlocked: 'user_blocked',
+  InsufficientTokens: 'insufficient_tokens',
+  ActiveSessionExists: 'active_session_exists',
+  SessionTooLong: 'session_too_long',
+  BalanceUnavailable: 'balance_unavailable',
+  PairUnavailable: 'pair_unavailable',
+  // the string of PairsCatalogErrorCode.Unavailable: the same cache answers both routes
+  CatalogUnavailable: 'catalog_unavailable',
+  NotFound: 'not_found',
+  SessionNotActive: 'session_not_active',
+} as const;
+export type TradingSessionErrorCode =
+  (typeof TradingSessionErrorCode)[keyof typeof TradingSessionErrorCode];
+
+export const createTradingSessionRequestSchema = z.strictObject({
+  telegramUserId: telegramUserIdSchema,
+  brokerAccountId: z.uuid().optional(),
+  assetId: tradingSessionSettingsSchema.shape.assetId,
+  durationSec: tradingSessionSettingsSchema.shape.durationSec,
+  trades: tradingSessionSettingsSchema.shape.trades.default(DEFAULT_SESSION_TRADES),
+});
+export type CreateTradingSessionRequest = z.infer<typeof createTradingSessionRequestSchema>;
+
+export const readTradingSessionQuerySchema = z.object({ telegramUserId: telegramUserIdSchema });
+export const stopTradingSessionRequestSchema = z.strictObject({
+  telegramUserId: telegramUserIdSchema,
+});
+
+const countSchema = z.int().min(0);
+
+// won/lost/tied by the sign of the linked broker trade's profit
+export const tradingSessionTradesSchema = z.strictObject({
+  planned: countSchema,
+  settled: countSchema,
+  rejected: countSchema,
+  won: countSchema,
+  lost: countSchema,
+  tied: countSchema,
+});
+
+export const tradingSessionViewSchema = z.strictObject({
+  id: z.uuid(),
+  mode: tradeModeSchema,
+  status: tradingSessionStatusSchema,
+  stopReason: tradingSessionStopReasonSchema.nullable(),
+  // null only for a row whose settings fail v1, which only a hand-written row can
+  settings: tradingSessionSettingsSchema.nullable(),
+  startedAt: z.iso.datetime({ offset: true }),
+  endedAt: z.iso.datetime({ offset: true }).nullable(),
+  trades: tradingSessionTradesSchema,
+  lastIntent: tradeIntentViewSchema.nullable(),
+});
+export type TradingSessionView = z.infer<typeof tradingSessionViewSchema>;
+
+export const tradingSessionResponseSchema = z.strictObject({ session: tradingSessionViewSchema });
+export type TradingSessionResponse = z.infer<typeof tradingSessionResponseSchema>;
+
+const { ActiveSessionExists, ...plainRefusals } = TradingSessionErrorCode;
+
+// active_session_exists carries the account's active session, so a retry after a timeout learns
+// what the first request created; null when that session ended before it was read
+export const tradingSessionRefusalSchema = z.union([
+  z.strictObject({
+    error: z.literal(ActiveSessionExists),
+    session: tradingSessionViewSchema.nullable(),
+  }),
+  z.strictObject({ error: z.enum(plainRefusals) }),
+]);
+export type TradingSessionRefusal = z.infer<typeof tradingSessionRefusalSchema>;
+
+export const safeParseCreateTradingSessionRequest = (input: unknown) =>
+  createTradingSessionRequestSchema.safeParse(input);
+export const safeParseReadTradingSessionQuery = (input: unknown) =>
+  readTradingSessionQuerySchema.safeParse(input);
+export const safeParseStopTradingSessionRequest = (input: unknown) =>
+  stopTradingSessionRequestSchema.safeParse(input);
+export const safeParseTradingSessionResponse = (input: unknown) =>
+  tradingSessionResponseSchema.safeParse(input);
+export const safeParseTradingSessionRefusal = (input: unknown) =>
+  tradingSessionRefusalSchema.safeParse(input);
