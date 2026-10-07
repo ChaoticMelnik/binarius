@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   escapeTelegramHtml,
+  InvalidTelegramTemplate,
   plainTextOf,
   TELEGRAM_CAPTION_LIMIT,
   TELEGRAM_MESSAGE_LIMIT,
   telegramHtml,
   telegramHtmlProblems,
+  telegramHtmlTagRanges,
+  telegramHtmlTemplate,
   type TelegramHtml,
 } from './telegram-html';
 
@@ -199,6 +202,49 @@ describe('plainTextOf', () => {
   it('gives back exactly what went through a hole', () => {
     const hostile = `<&>_*"'`;
     expect(plainTextOf(telegramHtml`<b>${hostile}</b>`)).toBe(hostile);
+  });
+});
+
+describe('telegramHtmlTemplate', () => {
+  it('escapes a string hole exactly as telegramHtml does with the same statics', () => {
+    const hostile = `<&>"`;
+    expect(telegramHtmlTemplate(['<b>', '</b> и ', '.'], [hostile, hostile]).value).toBe(
+      telegramHtml`<b>${hostile}</b> и ${hostile}.`.value,
+    );
+  });
+
+  it('nests a TelegramHtml hole without escaping it a second time', () => {
+    const inner = telegramHtml`<i>${'&'}</i>`;
+    expect(telegramHtmlTemplate(['<b>', '</b>'], [inner]).value).toBe('<b><i>&amp;</i></b>');
+  });
+
+  it('refuses statics Telegram would refuse, and says nothing but its name', () => {
+    let thrown: unknown;
+    try {
+      telegramHtmlTemplate(['<b>', ''], ['x']);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(InvalidTelegramTemplate);
+    expect((thrown as Error).name).toBe('InvalidTelegramTemplate');
+    expect((thrown as Error).message).toBe('');
+  });
+
+  // valid statics, valid hole: only the assembled text shows <a> inside <a>
+  it('refuses a TelegramHtml hole that breaks the nesting of valid statics', () => {
+    const link = telegramHtml`<a href="https://f.test">x</a>`;
+    expect(() => telegramHtmlTemplate(['<a href="https://e.test">', '</a>'], [link])).toThrow(
+      InvalidTelegramTemplate,
+    );
+  });
+});
+
+describe('telegramHtmlTagRanges', () => {
+  it('gives the offsets of every tag and nothing else', () => {
+    expect(telegramHtmlTagRanges('a<b>c</b> <x &amp;')).toEqual([
+      [1, 4],
+      [5, 9],
+    ]);
   });
 });
 

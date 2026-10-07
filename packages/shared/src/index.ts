@@ -21,3 +21,4 @@ export * from './catalog';
 export * from './signal';
 export * from './trading-session';
 export * from './trading-switch';
+export * from './bot-text-template';

@@ -72,6 +72,31 @@ function render(value: unknown): string {
   return Array.isArray(value) ? value.map(renderOne).join('') : renderOne(value);
 }
 
+// Only `name`, never the text: a template is editable data (docs/bot-texts.md), and rule 8 keeps
+// what reaches an error to its identity.
+export class InvalidTelegramTemplate extends Error {
+  override readonly name = 'InvalidTelegramTemplate';
+}
+
+/**
+ * The second way in, for a template that is data rather than a literal in code (the bot texts
+ * catalog). Holes are rendered as by `telegramHtml`; the static parts are not the author's code,
+ * so the assembled text is run through `telegramHtmlProblems` on every call and refused whole
+ * when Telegram would refuse it — a check of the statics alone misses a nested TelegramHtml hole
+ * that breaks the nesting rules. Imported by bot-text-template.ts only (ESLint).
+ */
+export function telegramHtmlTemplate(
+  statics: readonly string[],
+  holes: readonly TelegramHtmlHole[],
+): TelegramHtmlValue {
+  let out = statics[0] ?? '';
+  for (let index = 0; index < holes.length; index += 1) {
+    out += render(holes[index]) + (statics[index + 1] ?? '');
+  }
+  if (telegramHtmlProblems(out).length > 0) throw new InvalidTelegramTemplate();
+  return new TelegramHtmlValue(out);
+}
+
 type AttributeRule = 'required' | 'optional';
 
 // tag → the attributes it may carry; anything not listed is refused. Looked up by own property
@@ -225,6 +250,14 @@ function openingTagProblems(name: string, attributes: string, open: readonly str
 }
 
 const TAG_ANYWHERE = new RegExp(TAG.source, 'g');
+
+// Where the tags of `value` are, as [start, end) offsets: the same TAG the tokenizer uses, so an
+// offset inside one of these ranges is inside a tag as telegramHtmlProblems reads it.
+export function telegramHtmlTagRanges(value: string): (readonly [number, number])[] {
+  return [...value.matchAll(TAG_ANYWHERE)].map(
+    (match) => [match.index, match.index + match[0].length] as const,
+  );
+}
 const ENTITY_ANYWHERE = new RegExp(ENTITY.source, 'g');
 const NAMED_ENTITIES: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"' };
 
