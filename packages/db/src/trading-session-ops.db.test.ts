@@ -13,6 +13,7 @@ import {
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import { brokerAccounts, tokenLedger, tradeIntents, tradingSessions, users } from './schema/index';
 import {
+  closeTradingSwitch,
   createTempDatabase,
   seedBrokerAccount,
   seedTradingSession,
@@ -35,7 +36,6 @@ import {
   takeIntent,
   transitionIntent,
   type TradeIntentRow,
-  type TradePolicy,
 } from './trade-intent-ops';
 import {
   TradingSessionError,
@@ -47,9 +47,11 @@ import {
   readSessionHistory,
   stopExpiredSessions,
   stopHaltedSessions,
+  stopPausedSessions,
   stopTradingSession,
   type CreateSessionIntentInput,
 } from './trading-session-ops';
+import { openTrading } from './trading-switch-ops';
 
 // Integration tests on a temporary migrated database (README → Database), rows committed for
 // real: the lock cases need separate connections.
@@ -60,7 +62,6 @@ if (baseUrl === undefined || baseUrl === '') {
   );
 }
 
-const flagOff: TradePolicy = { realTradingEnabled: false };
 const HOUR_MS = 3_600_000;
 
 let tmp: TempDatabase;
@@ -386,30 +387,52 @@ describe('createTradingSession', () => {
   });
 });
 
+describe('createTradingSession: the global trading switch (#144)', () => {
+  it('C7 refuses while trading is closed and writes no row', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    await closeTradingSwitch(tmp.db);
+    try {
+      await sessionFailsWith(
+        createTradingSession(tmp.db, {
+          telegramUserId: seed.telegramUserId,
+          brokerAccountId: seed.brokerAccountId,
+          mode: TradeMode.Demo,
+          settings: sessionSettings(),
+        }),
+        TradingSessionErrorCode.TradingPaused,
+      );
+    } finally {
+      await openTrading(tmp.db);
+    }
+    expect(
+      await tmp.db
+        .select()
+        .from(tradingSessions)
+        .where(eq(tradingSessions.brokerAccountId, seed.brokerAccountId)),
+    ).toEqual([]);
+  });
+});
+
 describe('listRunnableSessions', () => {
   it('R1 lists a session with no intent or only terminal ones, not one whose account has a live intent', async () => {
     const empty = await seedSessionAccount();
     const finished = await seedSessionAccount();
-    const { intent: done } = await createSessionIntent(tmp.db, intentInput(finished), flagOff);
+    const { intent: done } = await createSessionIntent(tmp.db, intentInput(finished));
     await reject(done);
     const live = await seedSessionAccount();
-    await createSessionIntent(tmp.db, intentInput(live), flagOff);
+    await createSessionIntent(tmp.db, intentInput(live));
     // a bot trade (no session) on the account holds the session as the index would
     const bot = await seedSessionAccount();
-    await createTradeIntent(
-      tmp.db,
-      {
-        telegramUserId: bot.telegramUserId,
-        brokerAccountId: bot.brokerAccountId,
-        mode: 'demo',
-        assetId: 101,
-        amount: decimalStringSchema.parse('1'),
-        action: 'up',
-        durationSec: 60,
-        clientRequestId: `bot-${bot.session.id}`,
-      },
-      flagOff,
-    );
+    await createTradeIntent(tmp.db, {
+      telegramUserId: bot.telegramUserId,
+      brokerAccountId: bot.brokerAccountId,
+      mode: 'demo',
+      assetId: 101,
+      amount: decimalStringSchema.parse('1'),
+      action: 'up',
+      durationSec: 60,
+      clientRequestId: `bot-${bot.session.id}`,
+    });
     const ids = (await listRunnableSessions(tmp.db, { limit: 1000 })).map((s) => s.id);
     expect(ids).toEqual(expect.arrayContaining([empty.session.id, finished.session.id]));
     expect(ids).not.toContain(live.session.id);
@@ -510,7 +533,7 @@ describe('the stop sweeps', () => {
 
   it('S2 the manual_review intent alone: the account un-halted by an operator', async () => {
     const seed = await seedSessionAccount();
-    const { intent } = await createSessionIntent(tmp.db, intentInput(seed), flagOff);
+    const { intent } = await createSessionIntent(tmp.db, intentInput(seed));
     const taken = (await takeIntent(tmp.db, {
       id: intent.id,
       expectedVersion: intent.version,
@@ -535,15 +558,49 @@ describe('the stop sweeps', () => {
   });
 });
 
+describe('stopPausedSessions (#144)', () => {
+  it('S3 stops nothing while open, then every active session with kill_switch once closed', async () => {
+    const live = await seedSessionAccount();
+    const done = await seedSessionAccount();
+    await stopTradingSession(tmp.db, { id: done.session.id, reason: 'completed' });
+
+    expect((await stopPausedSessions(tmp.db, { limit: 1000 })).map((s) => s.id)).not.toContain(
+      live.session.id,
+    );
+    expect((await sessionOf(live.session.id))!.status).toBe('active');
+
+    await closeTradingSwitch(tmp.db);
+    try {
+      const stopped = await stopPausedSessions(tmp.db, { limit: 1000 });
+      expect(stopped).toContainEqual({
+        id: live.session.id,
+        brokerAccountId: live.brokerAccountId,
+      });
+      expect(stopped.map((s) => s.id)).not.toContain(done.session.id);
+      expect((await stopPausedSessions(tmp.db, { limit: 1000 })).map((s) => s.id)).not.toContain(
+        live.session.id,
+      );
+    } finally {
+      await openTrading(tmp.db);
+    }
+    expect(await sessionOf(live.session.id)).toMatchObject({
+      status: 'stopped',
+      stopReason: 'kill_switch',
+      endedAt: expect.any(Date),
+    });
+    // a session another writer stopped first keeps its reason
+    expect((await sessionOf(done.session.id))!.stopReason).toBe('completed');
+  });
+});
+
 describe('readSessionHistory', () => {
   it('H1 returns the session intents in creation order with the linked profit and the owner', async () => {
     const seed = await seedSessionAccount();
-    const { intent: first } = await createSessionIntent(tmp.db, intentInput(seed), flagOff);
+    const { intent: first } = await createSessionIntent(tmp.db, intentInput(seed));
     await settle(first, '0.82');
     const { intent: second } = await createSessionIntent(
       tmp.db,
       intentInput(seed, { step: 2, action: TradeAction.Down }),
-      flagOff,
     );
     const history = await readSessionHistory(tmp.db, seed.session.id);
     expect(history).toEqual({
@@ -596,7 +653,7 @@ describe('stopTradingSession and markSessionDecision', () => {
 describe('createSessionIntent', () => {
   it('I1 creates a queued intent of the session with the step key, the reserve and the outbox row', async () => {
     const seed = await seedSessionAccount();
-    const { intent, created } = await createSessionIntent(tmp.db, intentInput(seed), flagOff);
+    const { intent, created } = await createSessionIntent(tmp.db, intentInput(seed));
     expect(created).toBe(true);
     expect(intent).toMatchObject({
       status: 'queued',
@@ -609,8 +666,8 @@ describe('createSessionIntent', () => {
 
   it('I2 the same step with the same terms replays the row and reserves once', async () => {
     const seed = await seedSessionAccount();
-    const first = await createSessionIntent(tmp.db, intentInput(seed), flagOff);
-    const again = await createSessionIntent(tmp.db, intentInput(seed), flagOff);
+    const first = await createSessionIntent(tmp.db, intentInput(seed));
+    const again = await createSessionIntent(tmp.db, intentInput(seed));
     expect(again).toEqual({ intent: first.intent, created: false });
     expect(await intentsOfAccount(seed.brokerAccountId)).toHaveLength(1);
     expect(await tokenReservedOf(seed.userId)).toBe(TOKENS_PER_INTENT);
@@ -618,9 +675,9 @@ describe('createSessionIntent', () => {
 
   it('I3 the next step while the first is live is refused by the active-intent index', async () => {
     const seed = await seedSessionAccount();
-    await createSessionIntent(tmp.db, intentInput(seed), flagOff);
+    await createSessionIntent(tmp.db, intentInput(seed));
     await intentFailsWith(
-      createSessionIntent(tmp.db, intentInput(seed, { step: 2 }), flagOff),
+      createSessionIntent(tmp.db, intentInput(seed, { step: 2 })),
       'active_intent_exists',
     );
   });
@@ -628,7 +685,7 @@ describe('createSessionIntent', () => {
   it('I4 a stopped session gets no intent, no reserve and no ledger row', async () => {
     const seed = await seedSessionAccount();
     await stopTradingSession(tmp.db, { id: seed.session.id, reason: 'user_stopped' });
-    const error = await thrown(createSessionIntent(tmp.db, intentInput(seed), flagOff));
+    const error = await thrown(createSessionIntent(tmp.db, intentInput(seed)));
     expect(error).toBeInstanceOf(TradingSessionNotActiveError);
     expect(await intentsOfAccount(seed.brokerAccountId)).toEqual([]);
     expect(await tokenReservedOf(seed.userId)).toBe(0n);
@@ -639,7 +696,7 @@ describe('createSessionIntent', () => {
     const seed = await seedSessionAccount();
     const other = await seedSessionAccount();
     const error = await thrown(
-      createSessionIntent(tmp.db, intentInput(seed, { sessionId: other.session.id }), flagOff),
+      createSessionIntent(tmp.db, intentInput(seed, { sessionId: other.session.id })),
     );
     expect(error).toBeInstanceOf(TradingSessionNotActiveError);
     expect(await intentsOfAccount(seed.brokerAccountId)).toEqual([]);
@@ -648,9 +705,7 @@ describe('createSessionIntent', () => {
   it('I4 an intent in another mode than the session’s is refused: no row, no reserve', async () => {
     const seed = await seedSessionAccount();
     const error = await thrown(
-      createSessionIntent(tmp.db, intentInput(seed, { mode: TradeMode.Real }), {
-        realTradingEnabled: true,
-      }),
+      createSessionIntent(tmp.db, intentInput(seed, { mode: TradeMode.Real })),
     );
     expect(error).toBeInstanceOf(TradingSessionNotActiveError);
     expect(await intentsOfAccount(seed.brokerAccountId)).toEqual([]);
@@ -668,7 +723,7 @@ describe('createSessionIntent', () => {
         .for('no key update'),
     );
     await holder.lockTaken;
-    const creating = createSessionIntent(tmp.db, intentInput(seed), flagOff);
+    const creating = createSessionIntent(tmp.db, intentInput(seed));
     const queued = await queuedBehindLock(creating);
     holder.release();
     await holder.done;
@@ -678,9 +733,9 @@ describe('createSessionIntent', () => {
 
   it('I6 the same step with another action is a request-id conflict; the first row stands', async () => {
     const seed = await seedSessionAccount();
-    const first = await createSessionIntent(tmp.db, intentInput(seed), flagOff);
+    const first = await createSessionIntent(tmp.db, intentInput(seed));
     await intentFailsWith(
-      createSessionIntent(tmp.db, intentInput(seed, { action: TradeAction.Down }), flagOff),
+      createSessionIntent(tmp.db, intentInput(seed, { action: TradeAction.Down })),
       'client_request_id_conflict',
     );
     expect(await intentsOfAccount(seed.brokerAccountId)).toEqual([
