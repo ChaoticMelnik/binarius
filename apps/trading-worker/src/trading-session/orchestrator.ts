@@ -49,16 +49,15 @@ export interface SessionOrchestratorDeps {
   pairs: PairsSource;
   logger: Logger;
   config: SessionOrchestratorConfig;
-  // the sizer's clock and the hold-backs; tests pass a controllable one
+  // the sizer's clock and the hold-backs, not the deadline (the database's)
   now?: () => number;
 }
 
 export interface SessionOrchestrator {
-  // one tick at once, then every tickMs
   start(): void;
-  // resolves when the tick (the running one, if any) ends; never rejects
+  // never rejects
   tick(): Promise<void>;
-  // stops the timer, aborts the attempt's backend call and waits for the running tick
+  // aborts the attempt's backend call and waits for the running tick
   stop(): Promise<void>;
 }
 
@@ -147,15 +146,23 @@ export function createSessionOrchestrator({
   let timer: ReturnType<typeof setInterval> | undefined;
   let running: Promise<void> | undefined;
 
-  function logStops(rows: StoppedSession[], reason: TradingSessionStopReason): void {
-    for (const row of rows) {
-      const ids = { sessionId: row.id, brokerAccountId: row.brokerAccountId };
-      if (reason === TradingSessionStopReason.ManualReview) {
-        logger.error(ids, 'trading session stopped for manual review');
-      } else {
-        logger.warn({ ...ids, reason }, 'trading session stopped');
-      }
+  function logStop(
+    row: StoppedSession,
+    reason: TradingSessionStopReason,
+    fields: Record<string, unknown> = {},
+  ): void {
+    const ids = { sessionId: row.id, brokerAccountId: row.brokerAccountId };
+    if (reason === TradingSessionStopReason.ManualReview) {
+      logger.error({ ...ids, ...fields }, 'trading session stopped for manual review');
+    } else if (reason === TradingSessionStopReason.Completed) {
+      logger.info({ ...ids, reason, ...fields }, 'trading session completed');
+    } else {
+      logger.warn({ ...ids, reason, ...fields }, 'trading session stopped');
     }
+  }
+
+  function logStops(rows: StoppedSession[], reason: TradingSessionStopReason): void {
+    for (const row of rows) logStop(row, reason);
   }
 
   function sizerOf(settings: TradingSessionSettings): StakeSizer {
@@ -189,11 +196,15 @@ export function createSessionOrchestrator({
       };
     }
 
-    const history = await readSessionHistory(db, session.id);
+    const history = await readSessionHistory(db, session.id, {
+      maxDurationMs: config.maxDurationMs,
+    });
     if (history === undefined) {
       logger.warn(ids, 'trading session vanished');
       return { kind: 'hold', ms: config.retryMs };
     }
+    // the scan skips expired sessions; this catches one whose deadline passed since the scan
+    if (history.expired) return { kind: 'stop', reason: TradingSessionStopReason.Timeout };
     if (history.intents.some((intent) => LIVE.has(intent.status))) {
       logger.info(ids, 'trading session has a live intent');
       return { kind: 'reschedule' };
@@ -359,7 +370,11 @@ export function createSessionOrchestrator({
         if (stopping.signal.aborted) return { kind: 'stopped' };
         if (error instanceof AttemptAborted) return { kind: 'failed' };
         logger.error(
-          { ...errorLogFields(error), sessionId: session.id },
+          {
+            ...errorLogFields(error),
+            sessionId: session.id,
+            brokerAccountId: session.brokerAccountId,
+          },
           'trading session attempt failed',
         );
         return { kind: 'failed' };
@@ -371,24 +386,10 @@ export function createSessionOrchestrator({
     heldUntil.set(sessionId, now() + Math.max(ms, config.tickMs));
 
   async function apply(session: RunnableSession, ending: Ending): Promise<void> {
-    const ids = { sessionId: session.id, brokerAccountId: session.brokerAccountId };
     switch (ending.kind) {
       case 'stop': {
         const row = await stopTradingSession(db, { id: session.id, reason: ending.reason });
-        if (row === undefined) return;
-        if (ending.reason === TradingSessionStopReason.ManualReview) {
-          logger.error({ ...ids, ...ending.fields }, 'trading session stopped for manual review');
-        } else if (ending.reason === TradingSessionStopReason.Completed) {
-          logger.info(
-            { ...ids, reason: ending.reason, ...ending.fields },
-            'trading session completed',
-          );
-        } else {
-          logger.warn(
-            { ...ids, reason: ending.reason, ...ending.fields },
-            'trading session stopped',
-          );
-        }
+        if (row !== undefined) logStop(session, ending.reason, ending.fields);
         return;
       }
       case 'hold':
@@ -423,6 +424,7 @@ export function createSessionOrchestrator({
     for (const [id, until] of heldUntil) if (until <= tickAt) heldUntil.delete(id);
     const runnable = await listRunnableSessions(db, {
       limit: config.batchSize,
+      maxDurationMs: config.maxDurationMs,
       exclude: [...heldUntil.keys()],
     });
     const summary = { runnable: runnable.length, attempted: 0, created: 0, held: 0, stopped: 0 };

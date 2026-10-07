@@ -24,6 +24,7 @@ import {
   createDb,
   createSessionIntent,
   openTrading,
+  readSessionHistory,
   settleClosedTrades,
   stopTradingSession,
   tradeIntents,
@@ -491,6 +492,60 @@ describe('the attempt and the sequence (#287)', () => {
     await orchestrator.stop();
   });
 
+  it('E7b sessions past the deadline beyond the sweep cap get no trade (review M1)', async () => {
+    const startedAt = new Date(Date.now() - 61 * 60_000);
+    const first = await seedSession({ startedAt });
+    const second = await seedSession({ startedAt });
+    const signals = signalsOf();
+    const orchestrator = orchestratorOf({ signals, config: { batchSize: 1 } });
+    await orchestrator.tick();
+    expect(await intentsOf(first.session.id)).toEqual([]);
+    expect(await intentsOf(second.session.id)).toEqual([]);
+    expect(signals.calls).toHaveLength(0);
+    // the capped sweep stopped one; the scan never listed the other, the next sweep stops it
+    const statuses = [
+      (await sessionRow(first.session.id)).status,
+      (await sessionRow(second.session.id)).status,
+    ].sort();
+    expect(statuses).toEqual([TradingSessionStatus.Active, TradingSessionStatus.Stopped]);
+    await orchestrator.tick();
+    for (const seed of [first, second]) {
+      expect(await sessionRow(seed.session.id)).toMatchObject({
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.Timeout,
+      });
+    }
+    await orchestrator.stop();
+  });
+
+  it('E7c a deadline that passes after the scan stops the session before any backend call', async () => {
+    const earlier = await seedSession();
+    // its deadline passes while the first session's attempt waits on the signal
+    const later = await seedSession({
+      startedAt: new Date(Date.now() - SESSION_MAX_DURATION_MS + 500),
+    });
+    const signals = signalsOf(async () => {
+      await until(
+        'the later deadline on the database clock',
+        async () =>
+          (await readSessionHistory(tmp.db, later.session.id, {
+            maxDurationMs: SESSION_MAX_DURATION_MS,
+          }))!.expired,
+      );
+      return { ok: true, response: signalAnswer(TradeAction.Up) };
+    });
+    const orchestrator = orchestratorOf({ signals });
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(1);
+    expect(await intentsOf(earlier.session.id)).toHaveLength(1);
+    expect(await sessionRow(later.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Timeout,
+    });
+    expect(await intentsOf(later.session.id)).toEqual([]);
+    await orchestrator.stop();
+  });
+
   it('E8 a new orchestrator continues from the database: step 3 after two settled', async () => {
     const seed = await seedSession();
     const first = orchestratorOf();
@@ -759,7 +814,11 @@ describe('failures that write no ending (#287)', () => {
     expect(signals.calls).toHaveLength(1);
     expect((await sessionRow(seed.session.id)).lastDecisionAt).toBeNull();
     expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ level: 50, msg: 'trading session attempt failed' }),
+      expect.objectContaining({
+        level: 50,
+        msg: 'trading session attempt failed',
+        brokerAccountId: seed.brokerAccountId,
+      }),
     );
     advance(2_000);
     await orchestrator.tick();
@@ -814,6 +873,15 @@ describe('L1 the log lines (#287)', () => {
     expect(rows.filter((row) => !row.race && !seen.has(row.msg)).map((row) => row.msg)).toEqual([]);
     const levels: Record<string, number> = { debug: 20, info: 30, warn: 40, error: 50 };
     const ours = lines.filter((line) => String(line.msg).startsWith('trading session'));
+    const tickLines = new Set(['trading session tick', 'trading session tick failed']);
+    for (const line of ours.filter((l) => !tickLines.has(String(l.msg)))) {
+      expect(line, String(line.msg)).toEqual(
+        expect.objectContaining({
+          sessionId: expect.any(String),
+          brokerAccountId: expect.any(String),
+        }),
+      );
+    }
     for (const line of ours) {
       const row = rows.find((r) => r.msg === line.msg);
       expect(row, String(line.msg)).toBeDefined();

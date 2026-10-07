@@ -154,16 +154,24 @@ export interface RunnableSession {
 
 export interface RunnableSessionsOptions {
   limit: number;
+  // the session deadline (stopExpiredSessions' own): a session past it is never runnable
+  maxDurationMs: number;
   // the sessions the caller holds back in memory
   exclude?: readonly string[];
 }
 
-// Active sessions whose account has no live intent — trade_intents_active_account_idx's own
-// predicate, so a bot trade on the account holds the session as the index would. The least
-// recently decided first, never-decided before all.
+// started_at + maxDurationMs passed, on the database clock: stopExpiredSessions stops these, the
+// scan skips them and the history flags them, all with the same boundary
+const pastDeadline = (maxDurationMs: number) =>
+  sql`${tradingSessions.startedAt} < ${millisecondsAgo(maxDurationMs)}`;
+
+// Active sessions within the deadline whose account has no live intent —
+// trade_intents_active_account_idx's own predicate, so a bot trade on the account holds the
+// session as the index would. The deadline predicate keeps a session the capped expiry sweep left
+// over from a new trade. The least recently decided first, never-decided before all.
 export async function listRunnableSessions(
   db: Db,
-  { limit, exclude = [] }: RunnableSessionsOptions,
+  { limit, maxDurationMs, exclude = [] }: RunnableSessionsOptions,
 ): Promise<RunnableSession[]> {
   return db
     .select({
@@ -178,6 +186,7 @@ export async function listRunnableSessions(
     .where(
       and(
         eq(tradingSessions.status, TradingSessionStatus.Active),
+        sql`not ${pastDeadline(maxDurationMs)}`,
         sql`not exists (
           select 1 from ${tradeIntents}
            where ${tradeIntents.brokerAccountId} = ${tradingSessions.brokerAccountId}
@@ -223,7 +232,7 @@ export async function stopExpiredSessions(
         active,
         sql`${tradingSessions.id} in (
           select ${tradingSessions.id} from ${tradingSessions}
-           where ${active} and ${tradingSessions.startedAt} < ${millisecondsAgo(maxDurationMs)}
+           where ${active} and ${pastDeadline(maxDurationMs)}
            limit ${limit}
         )`,
       ),
@@ -301,6 +310,8 @@ export interface SessionHistoryIntent {
 
 export interface SessionHistory {
   telegramUserId: string;
+  // started_at + maxDurationMs passed, on the database clock at this read
+  expired: boolean;
   intents: SessionHistoryIntent[];
 }
 
@@ -309,9 +320,13 @@ export interface SessionHistory {
 export async function readSessionHistory(
   db: Db,
   sessionId: string,
+  { maxDurationMs }: { maxDurationMs: number },
 ): Promise<SessionHistory | undefined> {
   const [owner] = await db
-    .select({ telegramUserId: users.telegramUserId })
+    .select({
+      telegramUserId: users.telegramUserId,
+      expired: sql<boolean>`${pastDeadline(maxDurationMs)}`,
+    })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
     .innerJoin(users, eq(users.id, brokerAccounts.userId))
@@ -329,7 +344,7 @@ export async function readSessionHistory(
     .leftJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
     .where(eq(tradeIntents.tradingSessionId, sessionId))
     .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id));
-  return { telegramUserId: owner.telegramUserId.toString(), intents };
+  return { telegramUserId: owner.telegramUserId.toString(), expired: owner.expired, intents };
 }
 
 // CAS on status = active: a second stop finds nothing and the first reason stays

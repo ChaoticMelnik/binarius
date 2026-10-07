@@ -452,7 +452,9 @@ describe('listRunnableSessions', () => {
       durationSec: 60,
       clientRequestId: `bot-${bot.session.id}`,
     });
-    const ids = (await listRunnableSessions(tmp.db, { limit: 1000 })).map((s) => s.id);
+    const ids = (await listRunnableSessions(tmp.db, { limit: 1000, maxDurationMs: HOUR_MS })).map(
+      (s) => s.id,
+    );
     expect(ids).toEqual(expect.arrayContaining([empty.session.id, finished.session.id]));
     expect(ids).not.toContain(live.session.id);
     expect(ids).not.toContain(bot.session.id);
@@ -472,11 +474,17 @@ describe('listRunnableSessions', () => {
       .set({ lastDecisionAt: sql`now() - interval '2 minutes'` })
       .where(eq(tradingSessions.id, b.session.id));
     const mine = new Set([a.session.id, b.session.id, c.session.id, d.session.id]);
-    const order = (await listRunnableSessions(tmp.db, { limit: 1000 }))
+    const order = (await listRunnableSessions(tmp.db, { limit: 1000, maxDurationMs: HOUR_MS }))
       .map((s) => s.id)
       .filter((id) => mine.has(id));
     expect(order).toEqual([c.session.id, d.session.id, b.session.id, a.session.id]);
-    const excluded = (await listRunnableSessions(tmp.db, { limit: 1000, exclude: [c.session.id] }))
+    const excluded = (
+      await listRunnableSessions(tmp.db, {
+        limit: 1000,
+        maxDurationMs: HOUR_MS,
+        exclude: [c.session.id],
+      })
+    )
       .map((s) => s.id)
       .filter((id) => mine.has(id));
     expect(excluded).toEqual([d.session.id, b.session.id, a.session.id]);
@@ -487,9 +495,24 @@ describe('listRunnableSessions', () => {
     await stopTradingSession(tmp.db, { id: stopped.session.id, reason: 'timeout' });
     const raw = await seedUserWithAccount(tmp.db);
     const bad = await seedTradingSession(tmp.db, raw.brokerAccountId, { settings: {} });
-    const listed = await listRunnableSessions(tmp.db, { limit: 1000 });
+    const listed = await listRunnableSessions(tmp.db, { limit: 1000, maxDurationMs: HOUR_MS });
     expect(listed.map((s) => s.id)).not.toContain(stopped.session.id);
     expect(listed.find((s) => s.id === bad.id)).toMatchObject({ settings: {}, mode: 'demo' });
+  });
+  it('R4 never lists a session past the deadline, on the database clock (#287 review M1)', async () => {
+    const old = await seedUserWithAccount(tmp.db);
+    const expired = await seedTradingSession(tmp.db, old.brokerAccountId, {
+      startedAt: new Date(Date.now() - 2 * HOUR_MS),
+    });
+    const recent = await seedUserWithAccount(tmp.db);
+    const within = await seedTradingSession(tmp.db, recent.brokerAccountId, {
+      startedAt: new Date(Date.now() - HOUR_MS + 60_000),
+    });
+    const ids = (await listRunnableSessions(tmp.db, { limit: 1000, maxDurationMs: HOUR_MS })).map(
+      (s) => s.id,
+    );
+    expect(ids).toContain(within.id);
+    expect(ids).not.toContain(expired.id);
   });
 });
 
@@ -621,9 +644,10 @@ describe('readSessionHistory', () => {
       tmp.db,
       intentInput(seed, { step: 2, action: TradeAction.Down }),
     );
-    const history = await readSessionHistory(tmp.db, seed.session.id);
+    const history = await readSessionHistory(tmp.db, seed.session.id, { maxDurationMs: HOUR_MS });
     expect(history).toEqual({
       telegramUserId: seed.telegramUserId,
+      expired: false,
       intents: [
         {
           id: first.id,
@@ -636,8 +660,23 @@ describe('readSessionHistory', () => {
       ],
     });
     expect(
-      await readSessionHistory(tmp.db, '00000000-0000-4000-8000-000000000000'),
+      await readSessionHistory(tmp.db, '00000000-0000-4000-8000-000000000000', {
+        maxDurationMs: HOUR_MS,
+      }),
     ).toBeUndefined();
+  });
+  it('H2 flags a session past the deadline by the database clock (#287 review M1)', async () => {
+    const old = await seedUserWithAccount(tmp.db);
+    const expired = await seedTradingSession(tmp.db, old.brokerAccountId, {
+      startedAt: new Date(Date.now() - 2 * HOUR_MS),
+    });
+    const fresh = await seedSessionAccount();
+    expect(
+      (await readSessionHistory(tmp.db, expired.id, { maxDurationMs: HOUR_MS }))!.expired,
+    ).toBe(true);
+    expect(
+      (await readSessionHistory(tmp.db, fresh.session.id, { maxDurationMs: HOUR_MS }))!.expired,
+    ).toBe(false);
   });
 });
 

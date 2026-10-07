@@ -17,16 +17,22 @@ import { assertStakeParams } from '../stake/config';
 
 export type AccountPick =
   | { ok: true; brokerAccountId: string }
-  | { ok: false; reason: 'no_active_account' | 'account_not_confirmed' }
+  | { ok: false; reason: 'no_active_account' | 'account_not_confirmed' | 'account_not_found' }
   | { ok: false; reason: 'ambiguous_account'; accounts: { id: string; status: string }[] };
 
-// With ACCOUNT_ID the caller's id is taken as it is: createTradingSession checks the owner itself.
-// Without it, the user's only active account; the list carries no email (not needed to choose).
+// With ACCOUNT_ID, only one of the user's own accounts, before anything of the account is read: a
+// foreign or unknown id is the same account_not_found. The list is readUserAccounts' 10 newest, so
+// an own account older than those is not found either (accepted). Without ACCOUNT_ID, the user's
+// only active account; the list carries no email (not needed to choose).
 export function pickSessionAccount(
   accounts: readonly { id: string; status: string }[],
   accountId?: string,
 ): AccountPick {
-  if (accountId !== undefined) return { ok: true, brokerAccountId: accountId };
+  if (accountId !== undefined) {
+    return accounts.some((account) => account.id === accountId)
+      ? { ok: true, brokerAccountId: accountId }
+      : { ok: false, reason: 'account_not_found' };
+  }
   const active = accounts.filter((account) => account.status === BrokerAccountStatus.Active);
   if (active.length === 1) return { ok: true, brokerAccountId: active[0]!.id };
   if (active.length > 1) {

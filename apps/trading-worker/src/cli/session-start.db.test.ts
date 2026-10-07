@@ -120,6 +120,29 @@ describe('session-start (#287)', () => {
     expect(await sessionsOf(brokerAccountId)).toEqual([]);
   });
 
+  it.each([
+    ['without a snapshot', { snapshot: false }],
+    ['with a zero minimum', { minTradeAmount: '0.00' }],
+  ])(
+    "gives another user's account %s the same account_not_found, nothing about it (review m1)",
+    async (_label, options) => {
+      const owner = await seedUser(tmp.db);
+      const brokerAccountId = await account(owner.userId, options);
+      const stranger = await seedUser(tmp.db);
+      await account(stranger.userId);
+      const result = await run({
+        TELEGRAM_USER_ID: stranger.telegramUserId,
+        ACCOUNT_ID: brokerAccountId,
+      });
+      expect(result).toMatchObject({
+        code: 1,
+        out: [],
+        err: [SESSION_START_REFUSALS.account_not_found],
+      });
+      expect(await sessionsOf(brokerAccountId)).toEqual([]);
+    },
+  );
+
   it('refuses while trading is paused', async () => {
     const user = await seedUser(tmp.db);
     const brokerAccountId = await account(user.userId);
