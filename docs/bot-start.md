@@ -39,11 +39,14 @@ routes, the confirmation and the starter pack are described in
   refresh button and the tracker that follows a demo trade's status, [bot-demo-trade.md](bot-demo-trade.md)) and
   `screen.ts` (how a refused edit of a screen is classified, shared by `/settings`, the demo and
   the demo trade).
-- `packages/shared/src/link-confirmation.ts` — the texts and the confirm button's callback data
-  the bot shares with the backend's push after an OAuth login (#128): the prompt, «✅ Аккаунт
-  Binodex подключён!» (sent by the push alone; the bot sends the account card instead), the
-  blocked and the account-taken texts (`LINK_TEXTS`), the button label
-  (`LINK_LABELS`), and the pattern the bot recognises the button by.
+- `packages/shared/src/bot-texts.ts` — the catalog of every client bot text, the bot's and the
+  backend push's alike ([bot-texts.md](bot-texts.md)); `bot-text-template.ts` beside it renders
+  and validates them.
+- `packages/shared/src/link-confirmation.ts` — the confirm button's callback data the bot shares
+  with the backend's push after an OAuth login (#128), the pattern the bot recognises the button
+  by, and `confirmButtonLabel`, the label with the account's address or without one. The prompt,
+  «✅ Аккаунт Binodex подключён!» (sent by the push alone; the bot sends the account card
+  instead), the blocked and the account-taken texts are catalog entries.
 - `packages/shared/src/telegram-html.ts` — Telegram HTML for every text a user receives
   ([Texts](#texts)).
 
@@ -519,11 +522,12 @@ Answers: `200 { level }` — the stored level — `400 { error: 'validation', is
 
 ## Texts
 
-Every text a Telegram user receives is Telegram HTML, sent with `parse_mode: 'HTML'`: `TEXTS` in
-`apps/bot/src/texts.ts`, `LINK_TEXTS` in `packages/shared/src/link-confirmation.ts` (spread into
-`TEXTS`; the backend's push sends them too) and `AUTH_TEXTS` in `apps/backend/src/auth/texts.ts`
-(the push alone). The staff bot (`apps/backend/src/admin`) stays plain text, addressed with «вы»
-(the owner's decision of 2026-10-02).
+Every text a Telegram user receives is Telegram HTML, sent with `parse_mode: 'HTML'`. The texts
+are the bot texts catalog's (`packages/shared/src/bot-texts.ts`, [bot-texts.md](bot-texts.md)):
+the bot reads them as `TEXTS` in `apps/bot/src/texts.ts`, the backend's push as `CLIENT_TEXTS` in
+`apps/backend/src/auth/texts.ts`, both rendered from the same entries when a message is built. The
+staff bot (`apps/backend/src/admin`) stays plain text, addressed with «вы» (the owner's decision
+of 2026-10-02).
 
 **The module.** `packages/shared/src/telegram-html.ts` holds `telegramHtml`, a tagged template that
 escapes every hole (`&`, `<`, `>` and `"` — the three the Bot API requires in text, and the quote so
@@ -544,15 +548,15 @@ method held in a variable. The list is `RAW_TELEGRAM_SEND_METHODS` in `eslint.co
 Bot API method that takes parsed text and every grammY alias of one, derived from
 `@grammyjs/types` 5.0.0 and grammy 1.46.0 by the two commands in the comment above it.
 
-**Labels are plain.** Button labels and the command descriptions (`LABELS`, `LINK_LABELS`) are not
-parsed by Telegram, so they are plain strings and are never escaped: «✅ Подтвердить: <email>»
-shows the broker's email as it is, `&` included. The same holds for the bot's description and
-short description (`PROFILE`, [Bot profile](#bot-profile)): plain, line breaks kept as written,
-their limits held by `texts.test.ts`.
+**Labels are plain.** Button labels and the command descriptions (`LABELS`, the backend's
+`CLIENT_LABELS`) are not parsed by Telegram, so they are plain strings and are never escaped:
+«✅ Подтвердить: <email>» shows the broker's email as it is, `&` included. The same holds for the
+bot's description and short description (`PROFILE`, [Bot profile](#bot-profile)): plain, line
+breaks kept as written, their limits held by `texts.test.ts` and the catalog entries' limits.
 
-**Checked by tests.** Next to each constant (`texts.test.ts`, `link-confirmation.test.ts`,
-`link-notifier.test.ts`), every text goes through `telegramTextProblems`
-(`@binarius/shared/testing`), which must report nothing. It runs `telegramHtmlProblems`, which
+**Checked by tests.** Every catalog default goes through `botTextProblems` in `bot-texts.test.ts`
+([bot-texts.md](bot-texts.md)), and every entry of `TEXTS` through `telegramTextProblems`
+(`@binarius/shared/testing`) in `texts.test.ts`; both must report nothing. The second runs `telegramHtmlProblems`, which
 fails any text with a tag or an attribute Telegram does not list, a tag left open or closed out of
 order, a nested blockquote, a tag inside `pre` or `code` other than `code` directly in `pre`, one of
 `a`, `tg-emoji`, `tg-time`, `pre`, `code` inside another of them, or a bare `<`, `>`, `&`. Where the
@@ -607,14 +611,15 @@ plugin — and is rethrown into `bot.catch` unchanged rather than reported as on
   bot  → one message: what the bot does, how to connect, the commands; no backend call
 ```
 
-The message is `helpText(BOT_COMMANDS)` in `apps/bot/src/texts.ts`, built once when `bot.ts` is
-loaded and sent through `replyHtml` with no buttons. Three blocks, one blank line apart:
+The message is `helpText(BOT_COMMANDS)` in `apps/bot/src/texts.ts`, built on every `/help` (so it
+reads the catalog's texts as they are then) and sent through `replyHtml` with no buttons. Three
+blocks, one blank line apart:
 
-- `TEXTS.helpAbout` — the header and the three feature lines, `FEATURE_LINES`, the same fragment
-  the account card nests, so the two copies cannot drift (`PROFILE.description` keeps its own plain
-  copy, which Telegram does not parse);
-- `TEXTS.helpConnect` — `/start` and the two ways to connect, each button quoted by its exact
-  label;
+- `TEXTS.helpAbout` — the header and the three feature lines, the catalog's `featureLines`
+  fragment, the same one the account card nests, so the two copies cannot drift
+  (`profileDescription` keeps its own plain copy, which Telegram does not parse);
+- `TEXTS.helpConnect` — `/start` and the two ways to connect, each button quoted by its label
+  through the `connectButton` and `oauthButton` fragments;
 - `TEXTS.helpCommands` and one `/<command> — <description>` line per entry of `BOT_COMMANDS`, in
   the menu's order, with no emoji. `texts.ts` cannot import the list (`commands.ts` imports
   `LABELS` from it), so `bot.ts` passes it in. Both holes of a line are escaped; Telegram shows
@@ -679,9 +684,9 @@ so the handler is unchanged.
 
 Two texts describe the bot before anyone talks to it. The **description** is the «Что умеет этот
 бот?» block an empty chat shows before Start; the **short description** is the line on the bot's
-profile page and in the preview of a shared link to it. Both are `PROFILE` in
-`apps/bot/src/texts.ts`, the only place they are written, and follow the [Style](#texts) of the
-other texts. Telegram parses neither, so they are plain and never escaped, and line breaks are kept
+profile page and in the preview of a shared link to it. Both are written once, as the catalog's
+`profileDescription` and `profileShortDescription` ([bot-texts.md](bot-texts.md)), read by
+`PROFILE` in `apps/bot/src/texts.ts`, and follow the [Style](#texts) of the other texts. Telegram parses neither, so they are plain and never escaped, and line breaks are kept
 as written. The Bot API bounds the description at 512 and the short description at 120 characters,
 counted here in UTF-16 code units (`String#length`, the unit `commands.test.ts` counts in).
 `texts.test.ts` holds both limits against the texts themselves, refuses an empty text (an empty

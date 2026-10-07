@@ -16,7 +16,8 @@ status or age line when the broker balance is missing or old, a hint, and one bu
   contract violation.
 - `apps/bot/src/format.ts` — `formatUsd`, `formatCount`, `formatAge` ([Formatting](#formatting)).
 - `apps/bot/src/texts.ts` — the `status*` entries, `MODE_LABELS`, `modeHeader`,
-  `StatusCardInput`, `statusCard`, `LABELS.menuCommand`, `LABELS.demoButton`.
+  `StatusCardInput`, `statusCard`, `LABELS.menuCommand`, `LABELS.demoButton`; the texts are
+  catalog entries ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/bot.ts` — `/start` and `/menu` on one path (`answerHome`), `sendStatusCard`, the
   `demo` button's keyboard (`DEMO_CALLBACK_DATA` from `demo.ts`), `pinCard`.
 - `apps/bot/src/commands.ts` — `/menu` «Главное меню», right after `/start`.

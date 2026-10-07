@@ -16,7 +16,8 @@ recorded — `/start`, `/menu` and `/settings`, all through `POST /users/start`
 - `apps/backend/src/users/routes.ts` — `POST /users/account`, in the same encapsulated plugin as
   `POST /users/start`, so the same internal bearer hook covers it.
 - `apps/bot/src/` — `backend-client.ts` (`readAccount`), `texts.ts` (the `account*` entries,
-  `accountStatus`, `LABELS.accountCommand`), `bot.ts` (the handler, `accountKeyboard`,
+  `accountStatus`, `LABELS.accountCommand`; the texts are catalog entries,
+  [bot-texts.md](bot-texts.md)), `bot.ts` (the handler, `accountKeyboard`,
   `addConnectButtons`), `commands.ts` (the menu entry), `timing.ts` (`HANDLER_CALLS.account`).
 
 ## Sequence

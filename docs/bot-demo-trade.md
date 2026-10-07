@@ -29,7 +29,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 - `apps/bot/src/send.ts` — `editMessageTextByIdHtml`, the tracker's edit, which runs outside any
   update.
 - `apps/bot/src/texts.ts` — `intentStatusText`, the `intent*` and `stake*` entries of `TEXTS`,
-  and `LABELS.refreshIntentButton`.
+  and `LABELS.refreshIntentButton`; the texts are catalog entries ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.stake`, `.intentRefresh` and the four
   `INTENT_TRACK_*` constants ([Timing](#timing)).
 - `apps/backend/src/trading/routes.ts` and `packages/db/src/trade-intent-ops.ts` — the read
