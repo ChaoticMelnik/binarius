@@ -31,6 +31,7 @@ import * as accessToken from './access-token';
 import * as account from './account';
 import * as admin from './admin';
 import * as broker from './broker';
+import * as botTextTemplate from './bot-text-template';
 import * as brokerBalance from './broker-balance';
 import * as catalog from './catalog';
 import * as env from './env';
@@ -394,6 +395,7 @@ describe('contract coverage (issue #6)', () => {
       catalog,
       signal,
       tradingSession,
+      botTextTemplate,
     };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {
