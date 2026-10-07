@@ -104,8 +104,9 @@ export function demoStakeSettings(
 // The worker's deadline for a session (started_at + this, on the database clock) and the start
 // route's refusal of a session that cannot fit it (docs/trading-session.md -> Routes).
 export const SESSION_MAX_DURATION_MS = 3_600_000;
-// per trade on top of its duration: the catch-up tick plus the settle grace (a trade settles
-// about 90-120 s after it opens while no close event arrives)
+// per trade on top of its duration: with no close event a trade settles CATCHUP_GRACE_MS (10 s)
+// to + CATCHUP_TICK_MS (5 s) after its close, and a held-back attempt adds up to
+// CATCHUP_STALLED_RETRY_MS (30 s); 120 keeps room (stated: shared cannot import the worker)
 export const SESSION_SETTLE_SLACK_SEC = 120;
 
 export const sessionFitsDeadline = (trades: number, durationSec: number): boolean =>

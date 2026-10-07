@@ -8,13 +8,13 @@ const withParams = (patch: Partial<SignalParams>): SignalParams => ({
   ...patch,
 });
 
-const UNIT_MS = { m: 60_000, h: 3_600_000 } as const;
+const UNIT_MS = { s: 1_000, m: 60_000, h: 3_600_000 } as const;
 
 describe('signal feed config', () => {
   it('K1 every interval is its label in milliseconds', () => {
-    expect(SIGNAL_INTERVALS).toEqual(['1m', '5m', '15m', '30m', '1h']);
+    expect(SIGNAL_INTERVALS).toEqual(['5s', '15s', '1m', '5m', '15m', '30m', '1h']);
     for (const label of SIGNAL_INTERVALS) {
-      const match = /^(\d+)(m|h)$/.exec(label);
+      const match = /^(\d+)(s|m|h)$/.exec(label);
       if (match === null) throw new Error(`unexpected label ${label}`);
       const [, count, unit] = match as unknown as [string, string, keyof typeof UNIT_MS];
       expect(SIGNAL_CHART_INTERVAL_MS[label], label).toBe(Number(count) * UNIT_MS[unit]);

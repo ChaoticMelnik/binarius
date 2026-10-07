@@ -143,6 +143,8 @@ describe('createTradingSessionRequestSchema', () => {
 
 describe('sessionFitsDeadline', () => {
   it.each([
+    [5, 5, true],
+    [5, 15, true],
     [5, 60, true],
     [5, 300, true],
     [5, 900, false],

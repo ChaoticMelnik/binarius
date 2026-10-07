@@ -81,8 +81,11 @@ export type SignalParams = z.infer<typeof signalParamsSchema>;
 
 // --- Intervals --------------------------------------------------------------------------------
 
-// every entry was accepted by the live broker (owner's probe 2026-10-03, docs/signal.md)
+// every entry was accepted by the live broker (owner's probe 2026-10-03: every interval from 1s
+// to 1d, docs/signal.md); 5s and 15s analyse the demo's 5 and 15 s trades (#313)
 export const SIGNAL_CHART_INTERVAL_MS = {
+  '5s': 5_000,
+  '15s': 15_000,
   '1m': 60_000,
   '5m': 300_000,
   '15m': 900_000,
@@ -99,11 +102,17 @@ export const SIGNAL_INTERVALS = Object.keys(SIGNAL_CHART_INTERVAL_MS) as [
 
 export const signalIntervalSchema = z.enum(SIGNAL_INTERVALS);
 
+const SHORTEST_INTERVAL = SIGNAL_INTERVALS.reduce((shortest, interval) =>
+  SIGNAL_CHART_INTERVAL_MS[interval] < SIGNAL_CHART_INTERVAL_MS[shortest] ? interval : shortest,
+);
+export const SIGNAL_SHORTEST_INTERVAL_MS: number = SIGNAL_CHART_INTERVAL_MS[SHORTEST_INTERVAL];
+
 const INTERVALS_LONGEST_FIRST = SIGNAL_INTERVALS.map(
   (interval) => [interval, SIGNAL_CHART_INTERVAL_MS[interval]] as const,
 ).sort(([, a], [, b]) => b - a);
 
-// The longest candle that fits in the trade's duration; below a minute, the shortest (#126).
+// The longest candle that fits in the trade's duration; below the shortest candle, the shortest
+// (#126). A 5 or 15 s trade is analysed on its own sub-minute candle, never on 1m (#313).
 export function intervalForDuration(durationSec: number): SignalInterval {
   if (!Number.isInteger(durationSec) || durationSec <= 0) {
     throw new RangeError(
@@ -111,7 +120,7 @@ export function intervalForDuration(durationSec: number): SignalInterval {
     );
   }
   const fitting = INTERVALS_LONGEST_FIRST.find(([, ms]) => ms <= durationSec * 1000);
-  return fitting === undefined ? '1m' : fitting[0];
+  return fitting === undefined ? SHORTEST_INTERVAL : fitting[0];
 }
 
 // --- The decision -----------------------------------------------------------------------------
