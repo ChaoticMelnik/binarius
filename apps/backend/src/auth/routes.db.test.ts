@@ -7,7 +7,6 @@ import {
   confirmLoginResponseSchema,
   emailLoginResponseSchema,
   INIT_DATA_MAX_LENGTH,
-  LINK_TEXTS,
 } from '@binarius/shared';
 import {
   LINK_BONUS_TOKENS,
@@ -42,7 +41,7 @@ import { createLinkNotifier } from './link-notifier';
 import { INIT_DATA_MAX_AGE_MS } from './oauth-timing';
 import { createInitDataVerifier } from './telegram-init-data';
 import { signInitData } from './testing/init-data';
-import { AUTH_TEXTS } from './texts';
+import { CLIENT_TEXTS } from './texts';
 import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
@@ -691,7 +690,7 @@ describe('the Telegram proof on the callback', () => {
     expect(stub.tokenRequests).toBe(before);
     expect(await accountsOf(`broker-${owner}`)).toEqual([]);
     expect(pushesTo(owner).map((push) => [push.text, push.reply_markup])).toEqual([
-      [AUTH_TEXTS.oauthLoginFailed.value, undefined],
+      [CLIENT_TEXTS.oauthLoginFailed.value, undefined],
     ]);
     expect(pushesTo(other)).toEqual([]);
   });
@@ -949,7 +948,7 @@ describe('the push after the callback', () => {
 
     const pushes = pushesTo(telegram);
     expect(pushes).toHaveLength(1);
-    expect(pushes[0]?.text).toBe(LINK_TEXTS.confirmPrompt.value);
+    expect(pushes[0]?.text).toBe(CLIENT_TEXTS.confirmPrompt.value);
     expect(pushes[0]?.parse_mode).toBe('HTML');
     expect(inlineButtons(pushes[0])).toEqual([
       {
@@ -986,7 +985,7 @@ describe('the push after the callback', () => {
 
     const pushes = pushesTo(telegram);
     expect(pushes).toHaveLength(2);
-    expect(pushes[1]?.text).toBe(LINK_TEXTS.confirmPrompt.value);
+    expect(pushes[1]?.text).toBe(CLIENT_TEXTS.confirmPrompt.value);
     expect(inlineButtons(pushes[1])).toHaveLength(1);
   });
 
@@ -1002,7 +1001,7 @@ describe('the push after the callback', () => {
       expect(again.response.statusCode).toBe(200);
       const pushes = pushesTo(telegram);
       expect(pushes).toHaveLength(2);
-      expect(pushes[1]?.text).toBe(LINK_TEXTS.linkedActive.value);
+      expect(pushes[1]?.text).toBe(CLIENT_TEXTS.linkedActive.value);
       expect(pushes[1]?.reply_markup).toBeUndefined();
     },
   );
@@ -1016,7 +1015,7 @@ describe('the push after the callback', () => {
     expect(response.statusCode).toBe(409);
 
     expect(pushesTo(intruder).map((push) => [push.text, push.reply_markup])).toEqual([
-      [LINK_TEXTS.accountTaken.value, undefined],
+      [CLIENT_TEXTS.accountTaken.value, undefined],
     ]);
     // the owner heard only about their own login
     expect(pushesTo(owner)).toHaveLength(1);
@@ -1033,7 +1032,7 @@ describe('the push after the callback', () => {
     });
     expect(response.statusCode).toBe(409);
     expect(pushesTo(seeded.telegramUserId).map((push) => push.text)).toEqual([
-      LINK_TEXTS.blocked.value,
+      CLIENT_TEXTS.blocked.value,
     ]);
   });
 
@@ -1044,7 +1043,7 @@ describe('the push after the callback', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: 'invalid_code' });
     expect(pushesTo(telegram).map((push) => push.text)).toEqual([
-      AUTH_TEXTS.oauthLoginFailed.value,
+      CLIENT_TEXTS.oauthLoginFailed.value,
     ]);
   });
 
@@ -1064,7 +1063,7 @@ describe('the push after the callback', () => {
       await instance.close();
     }
     expect(pushesTo(telegram).map((push) => push.text)).toEqual([
-      AUTH_TEXTS.oauthLoginFailed.value,
+      CLIENT_TEXTS.oauthLoginFailed.value,
     ]);
   });
 

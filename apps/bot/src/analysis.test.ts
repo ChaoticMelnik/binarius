@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   BrokerRestErrorCode,
+  defaultBotTextSource,
+  type BotTextKey,
   CandleProblem,
   DATA_REFUSAL_REASONS,
   intervalForDuration,
@@ -39,8 +41,10 @@ import {
   SIGNAL_NO_SIGNAL,
   SIGNAL_PARAMS,
   signalDecided,
+  stubText,
+  stubTextSource,
 } from './testing';
-import { TEXTS } from './texts';
+import { setBotTextSource, TEXTS } from './texts';
 
 const head = { version: SIGNAL_ALGORITHM_VERSION } as const;
 const signalOf = (action: TradeAction, features = SIGNAL_FEATURES) =>
@@ -243,5 +247,27 @@ describe('the analysis screen', () => {
     expect(
       telegramTextProblems(analysisUnavailableScreen(pair, 3600).text, TELEGRAM_MESSAGE_LIMIT),
     ).toEqual([]);
+  });
+});
+
+// Every word map and the headlines are read when a screen is built, so a source swapped after the
+// module loaded reaches them: one test per map that used to hold the words themselves (#240).
+describe('the text source', () => {
+  afterEach(() => setBotTextSource(defaultBotTextSource));
+
+  const screenWith = (key: BotTextKey, response: TradingSignalResponse) => {
+    setBotTextSource(stubTextSource(key));
+    return analysisScreen({ pair: PAIR_EURUSD, durationSec: 60, response }).text.value;
+  };
+
+  it.each<[string, BotTextKey, TradingSignalResponse]>([
+    ['the headline', 'analysisSignalUp', SIGNAL_DECIDED],
+    ['the reason', 'noSignalRsiNeutral', SIGNAL_NO_SIGNAL],
+    ['the trend word', 'trendUp', SIGNAL_DECIDED],
+    ['the momentum word', 'momentumUp', SIGNAL_DECIDED],
+    ['the volatility word', 'volatilityNormal', SIGNAL_DECIDED],
+    ['the EMA relation', 'emaAbove', SIGNAL_DECIDED],
+  ])('shows %s from the source in place', (_name, key, response) => {
+    expect(screenWith(key, response)).toContain(stubText(key));
   });
 });

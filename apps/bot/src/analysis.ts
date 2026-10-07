@@ -7,6 +7,8 @@ import {
   telegramHtml,
   TradeAction,
   TrendDirection,
+  type BotPlainKey,
+  type BotStaticHtmlKey,
   type PairView,
   type SignalFeatures,
   type SignalParams,
@@ -14,51 +16,56 @@ import {
   type TradingSignalResponse,
 } from '@binarius/shared';
 import type { DemoDurationSec } from './demo-catalog';
-import { DEMO_DURATION_LABELS, TEXTS } from './texts';
+import { DEMO_DURATION_LABELS, labelsOf, TEXTS, textOf } from './texts';
 
 // The analysis screen (#126, docs/bot-demo.md): pure, from the pair read at the press and the
 // backend's answer. Every number on it is the answer's — a feature, or a period from `params` —
-// or the pair's payout; nothing is the bot's own. Which buttons go under it is demo.ts's.
+// or the pair's payout; nothing is the bot's own. Which buttons go under it is demo.ts's. The
+// words are catalog keys (bot-texts.ts), read when a screen is built.
 
 // `satisfies Record<NoSignalReason, …>`: a reason added to shared's constant fails tsc here.
-export const NO_SIGNAL_REASON_TEXT = {
-  [NoSignalReason.VolatilityTooLow]: 'волатильность слишком низкая',
-  [NoSignalReason.VolatilityTooHigh]: 'волатильность слишком высокая',
-  [NoSignalReason.TrendFlat]: 'тренд не определён',
-  [NoSignalReason.RsiNeutral]: 'импульс нейтральный',
-  [NoSignalReason.TrendMomentumDisagree]: 'тренд и импульс расходятся',
-  [NoSignalReason.InsufficientCandles]: 'данных по свечам пока недостаточно',
-  [NoSignalReason.CandleGap]: 'в свечах есть пропуск',
-  [NoSignalReason.Stale]: 'свечи брокера отстают',
-  [NoSignalReason.InvalidCandle]: 'свечи пришли с ошибкой',
-} as const satisfies Record<NoSignalReason, string>;
+export const NO_SIGNAL_REASON_TEXT = labelsOf({
+  [NoSignalReason.VolatilityTooLow]: 'noSignalVolatilityTooLow',
+  [NoSignalReason.VolatilityTooHigh]: 'noSignalVolatilityTooHigh',
+  [NoSignalReason.TrendFlat]: 'noSignalTrendFlat',
+  [NoSignalReason.RsiNeutral]: 'noSignalRsiNeutral',
+  [NoSignalReason.TrendMomentumDisagree]: 'noSignalTrendMomentumDisagree',
+  [NoSignalReason.InsufficientCandles]: 'noSignalInsufficientCandles',
+  [NoSignalReason.CandleGap]: 'noSignalCandleGap',
+  [NoSignalReason.Stale]: 'noSignalStale',
+  [NoSignalReason.InvalidCandle]: 'noSignalInvalidCandle',
+} as const satisfies Record<NoSignalReason, BotPlainKey>);
 
-export const TREND_WORDS = {
-  [TrendDirection.Up]: 'вверх',
-  [TrendDirection.Down]: 'вниз',
-  [TrendDirection.Flat]: 'не определён',
-} as const satisfies Record<TrendDirection, string>;
+export const TREND_WORDS = labelsOf({
+  [TrendDirection.Up]: 'trendUp',
+  [TrendDirection.Down]: 'trendDown',
+  [TrendDirection.Flat]: 'trendFlat',
+} as const satisfies Record<TrendDirection, BotPlainKey>);
 
-export const MOMENTUM_WORDS = {
-  [MomentumDirection.Up]: 'вверх',
-  [MomentumDirection.Down]: 'вниз',
-  [MomentumDirection.Neutral]: 'нейтральный',
-} as const satisfies Record<MomentumDirection, string>;
+export const MOMENTUM_WORDS = labelsOf({
+  [MomentumDirection.Up]: 'momentumUp',
+  [MomentumDirection.Down]: 'momentumDown',
+  [MomentumDirection.Neutral]: 'momentumNeutral',
+} as const satisfies Record<MomentumDirection, BotPlainKey>);
 
 // Told by the refusal, not by comparing ATR% with bounds: the decider checks volatility first,
 // so any later rule refusal and a signal both had it inside the bounds.
-export const VOLATILITY_WORDS = {
-  normal: 'в норме',
-  low: 'слишком низкая',
-  high: 'слишком высокая',
-} as const;
+export const VOLATILITY_WORDS = labelsOf({
+  normal: 'volatilityNormal',
+  low: 'volatilityLow',
+  high: 'volatilityHigh',
+} as const);
 
-const EMA_RELATION_WORDS = { above: 'выше', below: 'ниже', equal: 'равна' } as const;
+const EMA_RELATION_WORDS = labelsOf({
+  above: 'emaAbove',
+  below: 'emaBelow',
+  equal: 'emaEqual',
+} as const);
 
 const SIGNAL_HEADLINES = {
-  [TradeAction.Up]: TEXTS.analysisSignalUp,
-  [TradeAction.Down]: TEXTS.analysisSignalDown,
-} as const satisfies Record<TradeAction, TelegramHtml>;
+  [TradeAction.Up]: 'analysisSignalUp',
+  [TradeAction.Down]: 'analysisSignalDown',
+} as const satisfies Record<TradeAction, BotStaticHtmlKey>;
 
 // toFixed throws outside 0-100; the broker's digits are 2-7 today, and a value outside a sane
 // range is printed at the nearest bound rather than failing the screen
@@ -106,7 +113,7 @@ ${body}`,
     const features = featureLines(decision.features, params, pair, VOLATILITY_WORDS.normal);
     return {
       text: telegramHtml`${header}
-${SIGNAL_HEADLINES[decision.action]}
+${textOf(SIGNAL_HEADLINES[decision.action])}
 
 ${features}
 ${TEXTS.demoPayout(String(pair.payout))}

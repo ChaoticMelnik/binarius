@@ -1,6 +1,6 @@
 import { HttpError } from 'grammy';
 import type { ApiError } from 'grammy/types';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BrokerBalanceUnavailableReason,
   PairsCatalogErrorCode,
@@ -9,6 +9,7 @@ import {
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
+  defaultBotTextSource,
   UserStatus,
   type PairsCatalogResponse,
   type TelegramHtml,
@@ -43,12 +44,14 @@ import {
   fakeBackend,
   fakeLogger,
   intentView,
+  stubText,
+  stubTextSource,
   messageAnswer,
   pairsResponse,
   stubTracker,
   type ApiCall,
 } from './testing';
-import { intentStatusText, LABELS, TEXTS } from './texts';
+import { intentStatusText, LABELS, setBotTextSource, TEXTS } from './texts';
 
 const NOW = 1_790_000_000_000;
 const STAKE = stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, STAKE_NONCE);
@@ -269,6 +272,20 @@ describe('the stake button', () => {
       expect(intentTracker.track).not.toHaveBeenCalled();
     },
   );
+
+  // the refusal names its text by key and reads it when it answers (#240)
+  describe('with another text source', () => {
+    afterEach(() => setBotTextSource(defaultBotTextSource));
+
+    it('answers a refusal from the source in place', async () => {
+      setBotTextSource(stubTextSource('stakeInsufficientTokens'));
+      const { press, calls } = setup({
+        createIntent: () => Promise.reject(httpError(409, TradeIntentErrorCode.InsufficientTokens)),
+      });
+      await press(STAKE);
+      expect(payloadOf(calls, 'sendMessage')?.text).toBe(stubText('stakeInsufficientTokens'));
+    });
+  });
 
   it.each([
     ['user_not_found', httpError(404, TradeIntentErrorCode.UserNotFound)],

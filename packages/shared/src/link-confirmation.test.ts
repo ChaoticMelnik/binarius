@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { createBotTexts, defaultBotTextSource } from './bot-texts';
 import {
   CONFIRM_CALLBACK_PATTERN,
+  confirmButtonLabel,
   confirmCallbackData,
-  LINK_LABELS,
-  LINK_TEXTS,
 } from './link-confirmation';
-import { telegramTextProblems } from './testing';
+
+const { plain } = createBotTexts(defaultBotTextSource);
 
 const ACCOUNT_ID = '0b7e3a52-8c1d-4f6e-9a2b-3c4d5e6f7a8b';
 
@@ -30,22 +31,14 @@ describe('link confirmation', () => {
     expect(CONFIRM_CALLBACK_PATTERN.test(data)).toBe(false);
   });
 
-  // The validator is what stands between a typo in a tag and a refused message.
-  it.each(Object.entries(LINK_TEXTS))(
-    'keeps %s valid Telegram HTML, inside the limit, non-empty, with no padded line',
-    (_key, text) => {
-      expect(telegramTextProblems(text)).toEqual([]);
-    },
-  );
-
   it('labels the confirm button with the email, or without one when the broker sent none', () => {
-    expect(LINK_LABELS.confirmButton('ada@example.test')).toBe('✅ Подтвердить: ada@example.test');
-    expect(LINK_LABELS.confirmButton(null)).toBe('✅ Подтвердить привязку');
+    expect(confirmButtonLabel(plain, 'ada@example.test')).toBe('✅ Подтвердить: ada@example.test');
+    expect(confirmButtonLabel(plain, null)).toBe('✅ Подтвердить привязку');
   });
 
   // a label is not parsed by Telegram: an entity in it would be shown literally
   it("puts the broker's email into the label as it is, unescaped", () => {
-    expect(LINK_LABELS.confirmButton('a&b<c>_*@example.test')).toBe(
+    expect(confirmButtonLabel(plain, 'a&b<c>_*@example.test')).toBe(
       '✅ Подтвердить: a&b<c>_*@example.test',
     );
   });

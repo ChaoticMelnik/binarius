@@ -162,4 +162,31 @@ export default tseslint.config(
       'no-restricted-syntax': ['error', ...LOG_ERROR_RULES, RAW_TELEGRAM_SEND],
     },
   },
+  {
+    // telegramHtmlTemplate takes statics that are data, so it is the bot texts catalog's alone
+    // (#240, docs/bot-texts.md); everything else writes telegramHtml. The rule refuses a named
+    // import, a namespace import and an `export *` of either module, so the root barrel is
+    // ignored; tests are out of scope, and a dynamic import() is not caught — the function
+    // checks its result on every call.
+    files: ['apps/**/src/**/*.ts', 'packages/**/src/**/*.ts'],
+    ignores: [
+      '**/*.test.ts',
+      'packages/shared/src/bot-text-template.ts',
+      'packages/shared/src/index.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/telegram-html', '@binarius/shared'],
+              importNames: ['telegramHtmlTemplate'],
+              message: 'Only bot-text-template.ts builds TelegramHtml from a data template.',
+            },
+          ],
+        },
+      ],
+    },
+  },
 );

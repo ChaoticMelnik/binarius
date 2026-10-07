@@ -20,10 +20,10 @@ import {
   userStartRequestSchema,
   UserErrorCode,
   UserStatus,
+  type BotStaticHtmlKey,
   type EmailSendCodeResponse,
   type LinkedAccountView,
   type PendingBrokerAccountView,
-  type TelegramHtml,
   type UserStartRequest,
 } from '@binarius/shared';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
@@ -52,6 +52,7 @@ import {
   statusCard,
   supportUrl,
   TEXTS,
+  textOf,
   type AccountCardInput,
 } from './texts';
 import { TELEGRAM_API_TIMEOUT_MS } from './timing';
@@ -72,9 +73,6 @@ export const LEVEL_CURRENT_CALLBACK_DATA = `${LEVEL_CALLBACK_PREFIX}current`;
 const LEVEL_CALLBACK_PATTERN = new RegExp(
   `^${LEVEL_CALLBACK_PREFIX}(${Object.values(NotificationLevel).join('|')})$`,
 );
-
-// built once: the list is a constant, and the menu (lifecycle.ts) reads the same one
-const HELP = helpText(BOT_COMMANDS);
 
 interface RichSend {
   send: () => Promise<Message>;
@@ -326,7 +324,7 @@ export function createBot({
 
   // No backend call, like /support: the same answer for everyone, during an outage too (#184).
   privateChats.command('help', async (ctx) => {
-    await replyHtml(ctx, HELP);
+    await replyHtml(ctx, helpText(BOT_COMMANDS));
   });
 
   // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries
@@ -414,7 +412,7 @@ export function createBot({
     const refusal =
       error instanceof BackendError ? CONFIRM_REFUSALS[error.reason ?? ''] : undefined;
     if (refusal !== undefined) {
-      await replyHtml(ctx, refusal);
+      await replyHtml(ctx, textOf(refusal));
       return;
     }
     logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, 'login not confirmed');
@@ -531,7 +529,7 @@ export function createBot({
     // already sent is still good, so its buttons stay under the text.
     if (refusedBeforeSending(error)) {
       await replyWithRefusal(ctx, id, {
-        text: TEXTS.unavailable,
+        text: 'unavailable',
         dialog: 'keep',
         ...(step === 'code' ? { codeKeyboard: true as const } : {}),
       });
@@ -549,7 +547,7 @@ export function createBot({
     else if (refusal.dialog !== 'keep') loginDialog.set(id, refusal.dialog);
     await replyHtml(
       ctx,
-      refusal.text,
+      textOf(refusal.text),
       refusal.codeKeyboard === true ? { reply_markup: codeKeyboard() } : {},
     );
   }
@@ -845,16 +843,16 @@ function confirmKeyboard(accounts: readonly PendingBrokerAccountView[]): InlineK
 }
 
 // the refusals the user can act on; anything else is an outage to them
-const CONFIRM_REFUSALS: Partial<Record<string, TelegramHtml>> = {
-  [OAuthErrorCode.BrokerAccountNotFound]: TEXTS.confirmNotFound,
-  [OAuthErrorCode.AccountNotPending]: TEXTS.confirmAlreadyDone,
-  [OAuthErrorCode.UserBlocked]: TEXTS.blocked,
+const CONFIRM_REFUSALS: Partial<Record<string, BotStaticHtmlKey>> = {
+  [OAuthErrorCode.BrokerAccountNotFound]: 'confirmNotFound',
+  [OAuthErrorCode.AccountNotPending]: 'confirmAlreadyDone',
+  [OAuthErrorCode.UserBlocked]: 'blocked',
 };
 
 // What a refusal says and what it does to the dialog: end it, keep it as it is (its TTL too), or
 // move it to the given state. `codeKeyboard` puts the code step's buttons under the text.
 interface Refusal {
-  text: TelegramHtml;
+  text: BotStaticHtmlKey;
   dialog: 'end' | 'keep' | LoginDialogState;
   codeKeyboard?: true;
 }
@@ -868,24 +866,24 @@ interface Refusal {
 // outcome (replyToSendCode).
 const SEND_CODE_REFUSALS: Record<LoginDialogState['step'], Partial<Record<string, Refusal>>> = {
   email: {
-    [OAuthErrorCode.InvalidEmail]: { text: TEXTS.emailRefused, dialog: { step: 'email' } },
-    [OAuthErrorCode.TooManyRequests]: { text: TEXTS.sendCodeBusy, dialog: 'keep' },
-    [OAuthErrorCode.TooManyAttempts]: { text: TEXTS.tooManyCodeRequests, dialog: 'end' },
-    [OAuthErrorCode.UserBlocked]: { text: TEXTS.blocked, dialog: 'end' },
+    [OAuthErrorCode.InvalidEmail]: { text: 'emailRefused', dialog: { step: 'email' } },
+    [OAuthErrorCode.TooManyRequests]: { text: 'sendCodeBusy', dialog: 'keep' },
+    [OAuthErrorCode.TooManyAttempts]: { text: 'tooManyCodeRequests', dialog: 'end' },
+    [OAuthErrorCode.UserBlocked]: { text: 'blocked', dialog: 'end' },
   },
   code: {
-    [OAuthErrorCode.InvalidEmail]: { text: TEXTS.emailRefused, dialog: { step: 'email' } },
+    [OAuthErrorCode.InvalidEmail]: { text: 'emailRefused', dialog: { step: 'email' } },
     [OAuthErrorCode.TooManyRequests]: {
-      text: TEXTS.resendRefused,
+      text: 'resendRefused',
       dialog: 'keep',
       codeKeyboard: true,
     },
     [OAuthErrorCode.TooManyAttempts]: {
-      text: TEXTS.resendRefused,
+      text: 'resendRefused',
       dialog: 'keep',
       codeKeyboard: true,
     },
-    [OAuthErrorCode.UserBlocked]: { text: TEXTS.blocked, dialog: 'end' },
+    [OAuthErrorCode.UserBlocked]: { text: 'blocked', dialog: 'end' },
   },
 };
 
@@ -893,10 +891,10 @@ const SEND_CODE_REFUSALS: Record<LoginDialogState['step'], Partial<Record<string
 // answer turns into it on the retry. too_many_requests is the route's ceiling, refused before
 // the broker saw the code, so the code is still good and the step stays.
 const LOGIN_REFUSALS: Partial<Record<string, Refusal>> = {
-  [OAuthErrorCode.TooManyAttempts]: { text: TEXTS.tooManyCodeAttempts, dialog: 'end' },
-  [OAuthErrorCode.TooManyRequests]: { text: TEXTS.loginBusy, dialog: 'keep', codeKeyboard: true },
-  [OAuthErrorCode.UserBlocked]: { text: TEXTS.blocked, dialog: 'end' },
-  [OAuthErrorCode.BrokerAccountTaken]: { text: TEXTS.accountTaken, dialog: 'end' },
+  [OAuthErrorCode.TooManyAttempts]: { text: 'tooManyCodeAttempts', dialog: 'end' },
+  [OAuthErrorCode.TooManyRequests]: { text: 'loginBusy', dialog: 'keep', codeKeyboard: true },
+  [OAuthErrorCode.UserBlocked]: { text: 'blocked', dialog: 'end' },
+  [OAuthErrorCode.BrokerAccountTaken]: { text: 'accountTaken', dialog: 'end' },
 };
 
 // The backend answers a 4xx on send-code only before the broker is called, or for the broker's

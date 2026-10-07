@@ -2,11 +2,16 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { GrammyError, HttpError } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LINK_TEXTS } from '@binarius/shared';
-import { telegramTextProblems, UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
+import { defaultBotTextSource } from '@binarius/shared';
+import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { captureApi, inlineButtons, sentPayload } from '../admin/testing';
-import { createLinkNotifier, LinkPushKind, type LinkPushOutcome } from './link-notifier';
-import { AUTH_TEXTS } from './texts';
+import {
+  createLinkNotifier,
+  LinkPushKind,
+  linkPushMessage,
+  type LinkPushOutcome,
+} from './link-notifier';
+import { CLIENT_TEXTS, setBotTextSource } from './texts';
 
 const TOKEN = '123456:AA-link-push-token';
 const ACCOUNT_ID = '0b7e3a52-8c1d-4f6e-9a2b-3c4d5e6f7a8b';
@@ -25,13 +30,20 @@ async function listen(server: Server): Promise<string> {
   return `http://127.0.0.1:${port}`;
 }
 
-describe("the backend's own texts", () => {
-  it.each(Object.entries(AUTH_TEXTS))(
-    'keeps %s valid Telegram HTML, inside the limit, non-empty, with no padded line',
-    (_key, text) => {
-      expect(telegramTextProblems(text)).toEqual([]);
-    },
-  );
+// The texts are the catalog's (bot-texts.test.ts checks every default); what is checked here is
+// that a push reads the source when it is built, so an override source reaches it.
+describe('the text source', () => {
+  afterEach(() => setBotTextSource(defaultBotTextSource));
+
+  it('builds a push from the source in place at the moment it is built', () => {
+    setBotTextSource({
+      sourceOf: (key) =>
+        key === 'blocked' ? '<b>ЗАГЛУШКА blocked</b>' : defaultBotTextSource.sourceOf(key),
+    });
+    expect(linkPushMessage({ kind: LinkPushKind.Blocked }).text.value).toBe(
+      '<b>ЗАГЛУШКА blocked</b>',
+    );
+  });
 });
 
 describe('the link push message', () => {
@@ -51,7 +63,7 @@ describe('the link push message', () => {
       kind: LinkPushKind.Pending,
       account: { id: ACCOUNT_ID, email: 'ada@example.test' },
     });
-    expect(payload?.text).toBe(LINK_TEXTS.confirmPrompt.value);
+    expect(payload?.text).toBe(CLIENT_TEXTS.confirmPrompt.value);
     expect(inlineButtons(payload)).toEqual([
       { text: '✅ Подтвердить: ada@example.test', callback_data: `confirm:${ACCOUNT_ID}` },
     ]);
@@ -75,15 +87,15 @@ describe('the link push message', () => {
     expect(inlineButtons(payload)).toEqual([
       { text: `✅ Подтвердить: ${email}`, callback_data: `confirm:${ACCOUNT_ID}` },
     ]);
-    expect(payload?.text).toBe(LINK_TEXTS.confirmPrompt.value);
+    expect(payload?.text).toBe(CLIENT_TEXTS.confirmPrompt.value);
   });
 
   it.each([
-    [LinkPushKind.Active, LINK_TEXTS.linkedActive],
-    [LinkPushKind.Blocked, LINK_TEXTS.blocked],
-    [LinkPushKind.Taken, LINK_TEXTS.accountTaken],
-    [LinkPushKind.ExchangeFailed, AUTH_TEXTS.oauthLoginFailed],
-    [LinkPushKind.Mismatch, AUTH_TEXTS.oauthLoginFailed],
+    [LinkPushKind.Active, CLIENT_TEXTS.linkedActive],
+    [LinkPushKind.Blocked, CLIENT_TEXTS.blocked],
+    [LinkPushKind.Taken, CLIENT_TEXTS.accountTaken],
+    [LinkPushKind.ExchangeFailed, CLIENT_TEXTS.oauthLoginFailed],
+    [LinkPushKind.Mismatch, CLIENT_TEXTS.oauthLoginFailed],
   ] as const)('sends %s as text alone, with no button', async (kind, text) => {
     const payload = await sent({ kind });
     expect(payload?.text).toBe(text.value);
