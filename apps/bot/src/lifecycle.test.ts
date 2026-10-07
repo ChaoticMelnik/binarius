@@ -92,6 +92,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: log,
       exit: vi.fn(),
@@ -149,6 +150,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: log,
       exit: vi.fn(),
@@ -189,6 +191,7 @@ describe('runBot', () => {
       runBot({
         tracker: idleTracker(),
         sessionTracker: idleTracker(),
+        botTexts: idleTracker(),
         bot: fake.bot,
         logger: log,
         exit,
@@ -214,6 +217,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: log,
       exit,
@@ -233,6 +237,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: fakeLogger(),
       exit,
@@ -267,6 +272,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: fakeLogger(),
       exit,
@@ -292,6 +298,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: log,
       exit,
@@ -317,6 +324,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: log,
       exit,
@@ -344,6 +352,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: log,
       exit,
@@ -377,6 +386,7 @@ describe('runBot', () => {
     runBot({
       tracker,
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: fakeLogger(),
       exit,
@@ -403,6 +413,7 @@ describe('runBot', () => {
     runBot({
       tracker,
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: log,
       exit,
@@ -426,6 +437,7 @@ describe('runBot', () => {
     runBot({
       tracker,
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: log,
       exit,
@@ -458,6 +470,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker,
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: fakeLogger(),
       exit,
@@ -475,6 +488,29 @@ describe('runBot', () => {
     expect(exit).toHaveBeenCalledWith(0);
   });
 
+  // #299
+  it('S1 names the bot texts refresher when its stop fails', async () => {
+    const fake = fakeBot();
+    const log = fakeLogger();
+    const exit = vi.fn();
+    const signalSource = signals();
+    runBot({
+      tracker: idleTracker(),
+      sessionTracker: idleTracker(),
+      botTexts: { stop: vi.fn(() => Promise.reject(new Error('refresher died'))) },
+      bot: fake.bot,
+      logger: log,
+      exit,
+      signalSource,
+    });
+    signalSource.emit('SIGTERM');
+    fake.resolveStop();
+    fake.resolveStart();
+    await until('the exit', () => exit.mock.calls.length >= 1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errorMessages(log)).toEqual(['shutdown: bot texts failed', STEP_LINE]);
+  });
+
   it('names the session tracker when its stop fails, and blames the budget when it never stops', async () => {
     const failing = fakeBot();
     const log = fakeLogger();
@@ -483,6 +519,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: { stop: vi.fn(() => Promise.reject(new Error('tracker died'))) },
+      botTexts: idleTracker(),
       bot: failing.bot,
       logger: log,
       exit,
@@ -502,6 +539,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: { stop: vi.fn(() => new Promise<void>(() => {})) },
+      botTexts: idleTracker(),
       bot: stuck.bot,
       logger: stuckLog,
       exit: stuckExit,
@@ -524,6 +562,7 @@ describe('runBot', () => {
     runBot({
       tracker: idleTracker(),
       sessionTracker: idleTracker(),
+      botTexts: idleTracker(),
       bot: fake.bot,
       logger: log,
       exit,
@@ -613,6 +652,7 @@ function scene(options: SceneOptions = {}) {
     readSession: () => Promise.reject(new Error('not used by these scenes')),
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
     setDemoStake: () => Promise.reject(new Error('not used by these scenes')),
+    readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({
     intentTracker: stubTracker(),
@@ -660,6 +700,7 @@ function scene(options: SceneOptions = {}) {
   runBot({
     tracker: idleTracker(),
     sessionTracker: idleTracker(),
+    botTexts: idleTracker(),
     bot,
     logger: log,
     exit,

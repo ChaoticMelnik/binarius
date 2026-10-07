@@ -1,6 +1,7 @@
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
+import { BOT_TEXTS_REFRESH_MS } from '@binarius/shared';
 import {
   BALANCE_WATCH_WINDOW_MS,
   BROKER_BALANCE_SLA_MS,
@@ -112,6 +113,11 @@ export const SIGNAL_FETCH_BUDGET_MS = 3_000;
 // The longest the cache holds an answer. Below the shortest interval, or it would never bind.
 export const SIGNAL_CACHE_MAX_TTL_MS = 30_000;
 
+// --- Bot text overrides (#299) ------------------------------------------------------------------
+// docs/bot-texts.md → Loading. One SELECT of bot_text_overrides; a slower one counts as failed and
+// the push keeps the texts it had. The SELECT itself is bounded by the pool's query_timeout.
+export const BOT_TEXTS_LOAD_BUDGET_MS = 3_000;
+
 // the broker call is the other bounded operation phase 1 can be waiting on: a login handler
 // holds no lock, but a refresh does, and its transaction must fit in the budget
 export const TIMING_CHAIN_HOLDS =
@@ -159,7 +165,10 @@ export const TIMING_CHAIN_HOLDS =
   // the worker's token route (#90): its longest path is one exchange under the account's row
   // lock, and the worker waits ACCESS_TOKEN_ROUTE_BUDGET_MS for it
   BROKER_HTTP_TIMEOUT_MS < ACCESS_TOKEN_ROUTE_BUDGET_MS &&
-  ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS;
+  ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // a load ends before the next one starts, and inside phase 1
+  BOT_TEXTS_LOAD_BUDGET_MS < BOT_TEXTS_REFRESH_MS &&
+  BOT_TEXTS_LOAD_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }

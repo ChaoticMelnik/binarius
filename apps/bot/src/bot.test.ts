@@ -132,6 +132,7 @@ function setup(
     readSession: vi.fn(() => Promise.reject(new Error('not used here'))),
     stopSession: vi.fn(() => Promise.reject(new Error('not used here'))),
     setDemoStake: vi.fn(() => Promise.reject(new Error('not used here'))),
+    readBotTexts: vi.fn(() => Promise.reject(new Error('not used here'))),
   };
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
@@ -1341,6 +1342,7 @@ describe('the account card', () => {
           readSession: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
           setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
+          readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -1387,6 +1389,7 @@ describe('the account card', () => {
           readSession: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
           setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
+          readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
         botInfo: BOT_INFO,
@@ -2422,6 +2425,7 @@ describe('the Bot API timeout', () => {
         readSession: vi.fn(() => Promise.reject(new Error('unused'))),
         stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
         setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
+        readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),
       botInfo: BOT_INFO,

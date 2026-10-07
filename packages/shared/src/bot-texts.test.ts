@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { BOT_TEXT_KEY_PATTERN } from './bot-text-overrides';
 import { BotTextKind, parseBotTextTemplate } from './bot-text-template';
 import {
   BOT_TEXT_CATALOG,
@@ -21,7 +22,7 @@ describe('the bot texts catalog', () => {
 
   // a key is a permanent id: part 2 stores overrides under it
   it.each(ENTRIES)('spells the key %s as an id', (key) => {
-    expect(key).toMatch(/^[a-z][a-zA-Z0-9]{0,63}$/);
+    expect(key).toMatch(BOT_TEXT_KEY_PATTERN);
   });
 
   it.each(ENTRIES)('gives %s a sample exactly when it takes an argument', (_key, entry) => {

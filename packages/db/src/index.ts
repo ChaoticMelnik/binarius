@@ -14,3 +14,4 @@ export * from './delivery-ops';
 export * from './account-ops';
 export * from './staff-password';
 export * from './staff-ops';
+export * from './bot-text-ops';

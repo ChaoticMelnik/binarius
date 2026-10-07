@@ -29,6 +29,8 @@ export interface RunBotOptions {
   tracker: Pick<IntentTracker, 'stop'>;
   // the demo sessions' status tracker (#284), drained the same way
   sessionTracker: Pick<SessionTracker, 'stop'>;
+  // the text overrides' refresher (#299): its load in flight waited for
+  botTexts: { stop(): Promise<void> };
   logger: Logger;
   exit: (code: number) => void;
   shutdownBudgetMs?: number;
@@ -44,6 +46,7 @@ export function runBot({
   bot,
   tracker,
   sessionTracker,
+  botTexts,
   logger,
   exit,
   shutdownBudgetMs = SHUTDOWN_BUDGET_MS,
@@ -132,6 +135,7 @@ export function runBot({
       step('polling loop', () => started),
       step('intent tracker', () => tracker.stop()),
       step('session tracker', () => sessionTracker.stop()),
+      step('bot texts', () => botTexts.stop()),
     ];
 
     void closeAll(steps, shutdownBudgetMs).then((drained) => {

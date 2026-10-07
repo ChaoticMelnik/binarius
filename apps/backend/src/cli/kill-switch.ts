@@ -156,7 +156,8 @@ export async function runKillSwitchCli(
   }
 }
 
-function formatFailure(error: unknown): string {
+// name and code only (Rule 8); bot-text.ts reports its failures the same way
+export function formatFailure(error: unknown): string {
   const { err, cause } = errorLogFields(error);
   const one = ({ name, code }: { name: string; code?: string }) =>
     code === undefined ? name : `${name} ${code}`;

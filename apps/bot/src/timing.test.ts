@@ -13,6 +13,7 @@ import {
   SESSION_MAX_DURATION_MS,
   TRADING_ACCESS_BUDGET_MS,
   TRADING_SESSION_START_BUDGET_MS,
+  BOT_TEXTS_REFRESH_MS,
   TradingSessionErrorCode,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -329,6 +330,7 @@ async function observe(branch: Branch): Promise<Calls> {
         amount,
       );
     },
+    readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
   };
   const loginDialog = createLoginDialog();
   if (branch.dialog !== undefined) loginDialog.set(USER.id, branch.dialog);
@@ -2110,6 +2112,13 @@ describe("the demo session tracker's bounds", () => {
   it('drains one read and one edit inside the shutdown budget', () => {
     expect(SESSION_TRACK_DRAIN_MS).toBe(BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS);
     expect(SESSION_TRACK_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+  });
+});
+
+describe('the text overrides (#299)', () => {
+  it('ends a load before the next one starts and inside the shutdown budget', () => {
+    expect(BACKEND_REQUEST_TIMEOUT_MS).toBeLessThan(BOT_TEXTS_REFRESH_MS);
+    expect(BACKEND_REQUEST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
   });
 });
 

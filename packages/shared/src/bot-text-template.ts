@@ -112,7 +112,7 @@ export type BotPlainTextsOf<C> = {
     : string;
 };
 
-// Where a key's current text comes from: the catalog's default, or (part 2) an override.
+// Where a key's current text comes from: the catalog's default, or an override (#299).
 export interface BotTextSource<K extends string = string> {
   sourceOf(key: K): string;
 }

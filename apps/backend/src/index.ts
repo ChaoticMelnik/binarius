@@ -1,13 +1,19 @@
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
-import { closeAll, errorLogFields } from '@binarius/shared';
+import {
+  BOT_TEXTS_REFRESH_MS,
+  closeAll,
+  createBotTextRefresher,
+  errorLogFields,
+} from '@binarius/shared';
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
-import { createDb, createTokenCipher } from '@binarius/db';
+import { createDb, createTokenCipher, listBotTextOverrides } from '@binarius/db';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
 import { createAdminBot } from './admin/telegram';
 import { buildApp } from './app';
 import type { TradingRoutesDeps } from './trading/routes';
 import { createLinkNotifier } from './auth/link-notifier';
+import { setBotTextSource } from './auth/texts';
 import { INIT_DATA_MAX_AGE_MS } from './auth/oauth-timing';
 import { createInitDataVerifier } from './auth/telegram-init-data';
 import { ensureFreshAccessToken } from './auth/token-service';
@@ -17,6 +23,7 @@ import { parseEnv } from './env';
 import { createBullmqPublisher } from './outbox/bullmq';
 import { OutboxPublisher } from './outbox/publisher';
 import {
+  BOT_TEXTS_LOAD_BUDGET_MS,
   SHUTDOWN_PHASE1_BUDGET_MS,
   SHUTDOWN_PHASE2_BUDGET_MS,
   SIGNAL_CACHE_MAX_TTL_MS,
@@ -173,6 +180,15 @@ const balanceReconciler = createBalanceReconciler({
   },
 });
 
+// the push's texts with their overrides (docs/bot-texts.md → Loading)
+const botTexts = createBotTextRefresher({
+  load: () => listBotTextOverrides(db),
+  intervalMs: BOT_TEXTS_REFRESH_MS,
+  budgetMs: BOT_TEXTS_LOAD_BUDGET_MS,
+  apply: setBotTextSource,
+  logger: app.log,
+});
+
 // an unhandled 'error' on either client would crash the process instead of degrading /health
 pool.on('error', (error) => app.log.error(errorLogFields(error), 'postgres pool error'));
 redis.on('error', (error) => app.log.warn(errorLogFields(error), 'redis connection error'));
@@ -197,6 +213,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => adminBot.stop(),
       () => Promise.resolve(pairsCatalog.stop()),
       () => balanceReconciler.stop(),
+      () => botTexts.stop(),
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
@@ -234,6 +251,7 @@ if (!shuttingDown) {
 if (!shuttingDown) {
   publisher.start();
   balanceReconciler.start();
+  botTexts.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();

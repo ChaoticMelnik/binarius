@@ -12,6 +12,7 @@ import { createDb, type Db } from './client';
 import {
   AuditAction,
   auditLog,
+  botTextOverrides,
   brokerAccounts,
   brokerBalanceSnapshots,
   brokerTrades,
@@ -2378,15 +2379,13 @@ describe('trading_sessions (#130)', () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       await rejectsWith(
-        tx
-          .insert(tradingSessions)
-          .values(
-            session(seed.accountId, {
-              status: 'stopped',
-              stopReason: 'bogus',
-              endedAt: new Date(),
-            }),
-          ),
+        tx.insert(tradingSessions).values(
+          session(seed.accountId, {
+            status: 'stopped',
+            stopReason: 'bogus',
+            endedAt: new Date(),
+          }),
+        ),
         '23514',
         'trading_sessions_stop_reason_check',
       );
@@ -2531,7 +2530,9 @@ describe('trading_switch (#144)', () => {
   it('rejects a closed row without a reason and accepts an open one without', async () => {
     await rolledBack(async (tx) => {
       await reset(tx);
-      await tx.update(tradingSwitch).set({ tradingEnabled: true, source: 'operator', reason: null });
+      await tx
+        .update(tradingSwitch)
+        .set({ tradingEnabled: true, source: 'operator', reason: null });
       await rejectsWith(
         tx.update(tradingSwitch).set({ tradingEnabled: false }),
         '23514',
@@ -2565,6 +2566,68 @@ describe('trading_switch (#144)', () => {
         .set({ tradingEnabled: false, source: 'operator', reason })
         .returning();
       expect(row!.reason).toBe(reason);
+    });
+  });
+});
+
+describe('bot_text_overrides (#299)', () => {
+  // the rows are this case's own: the table may hold a local stack's overrides
+  const save = (tx: Tx, patch: Partial<typeof botTextOverrides.$inferInsert> = {}) =>
+    tx
+      .insert(botTextOverrides)
+      .values({ key: `k${randomUUID().slice(0, 8)}`, source: 'x', ...patch })
+      .returning();
+
+  it.each(['a', 'welcome', 'cardBody', `a${'b'.repeat(63)}`])('accepts the key %s', async (key) => {
+    await rolledBack(async (tx) => {
+      await tx.delete(botTextOverrides).where(eq(botTextOverrides.key, key));
+      await expect(save(tx, { key })).resolves.toHaveLength(1);
+    });
+  });
+
+  it.each(['A', '1a', 'a_b', 'a-b', '', `a${'b'.repeat(64)}`, 'a\n'])(
+    'refuses the key %j',
+    async (key) => {
+      await rolledBack(async (tx) => {
+        await rejectsWith(save(tx, { key }), '23514', 'bot_text_overrides_key_check');
+      });
+    },
+  );
+
+  it.each([
+    ['empty', ''],
+    ['16385 characters', 'я'.repeat(16_385)],
+  ])('refuses a %s source', async (_label, source) => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(save(tx, { source }), '23514', 'bot_text_overrides_source_length_check');
+    });
+  });
+
+  it('accepts a source of 16384 characters', async () => {
+    await rolledBack(async (tx) => {
+      await expect(save(tx, { source: 'я'.repeat(16_384) })).resolves.toHaveLength(1);
+    });
+  });
+
+  it('refuses an editor that does not exist', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        save(tx, { updatedByStaffId: randomUUID() }),
+        '23503',
+        'bot_text_overrides_updated_by_staff_id_staff_id_fk',
+      );
+    });
+  });
+
+  it('gives every write a new version from the sequence', async () => {
+    await rolledBack(async (tx) => {
+      const [first] = await save(tx);
+      const [second] = await tx
+        .update(botTextOverrides)
+        .set({ version: sql`nextval('bot_text_override_version_seq')` })
+        .where(eq(botTextOverrides.key, first!.key))
+        .returning();
+      expect(second!.version).toBeGreaterThan(first!.version);
     });
   });
 });

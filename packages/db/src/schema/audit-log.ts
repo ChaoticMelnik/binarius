@@ -29,6 +29,9 @@ export const AuditAction = {
   // the kill-switch CLI (#144): trading_switch closed / opened
   TradingStopped: 'trading_stopped',
   TradingResumed: 'trading_resumed',
+  // a client bot text overridden / reset to its default (#299)
+  BotTextSaved: 'bot_text_saved',
+  BotTextReset: 'bot_text_reset',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
@@ -40,6 +43,7 @@ export const AuditEntityType = {
   StaffLoginChallenge: 'staff_login_challenge',
   StaffSession: 'staff_session',
   TradingSwitch: 'trading_switch',
+  BotText: 'bot_text',
 } as const;
 export type AuditEntityType = (typeof AuditEntityType)[keyof typeof AuditEntityType];
 

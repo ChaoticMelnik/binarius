@@ -1,12 +1,14 @@
 import pino from 'pino';
-import { logOptions } from '@binarius/shared';
-import { createBackendClient } from './backend-client';
+import { BOT_TEXTS_REFRESH_MS, createBotTextRefresher, logOptions } from '@binarius/shared';
+import { backendErrorFields, createBackendClient } from './backend-client';
 import { createBot } from './bot';
 import { parseEnv } from './env';
 import { createIntentTracker } from './intent-tracker';
 import { runBot } from './lifecycle';
 import { createSessionTracker } from './session-tracker';
+import { setBotTextSource } from './texts';
 import {
+  BACKEND_REQUEST_TIMEOUT_MS,
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
@@ -37,6 +39,17 @@ const sessionTracker = createSessionTracker({
   deadlineMs: SESSION_TRACK_DEADLINE_MS,
 });
 
+// the texts with their overrides, from the first load on (docs/bot-texts.md → Loading)
+const botTexts = createBotTextRefresher({
+  load: () => backend.readBotTexts(),
+  intervalMs: BOT_TEXTS_REFRESH_MS,
+  budgetMs: BACKEND_REQUEST_TIMEOUT_MS,
+  apply: setBotTextSource,
+  logger,
+  failureFields: backendErrorFields,
+});
+botTexts.start();
+
 const bot = createBot({
   token: env.telegramBotToken,
   backend,
@@ -50,6 +63,7 @@ runBot({
   bot,
   tracker: intentTracker,
   sessionTracker,
+  botTexts,
   logger,
   exit: (code) => process.exit(code),
 });

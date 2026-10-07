@@ -121,6 +121,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     readSession: () => Promise.reject(new Error('not used by these scenes')),
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
     setDemoStake: () => Promise.reject(new Error('not used by these scenes')),
+    readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
   };
   const loginDialog = createLoginDialog();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
@@ -1092,6 +1093,7 @@ describe('what the bot writes when a drain step fails', () => {
       bot,
       tracker: { stop: () => Promise.resolve() },
       sessionTracker: { stop: () => Promise.resolve() },
+      botTexts: { stop: () => Promise.resolve() },
       logger,
       exit: vi.fn(),
       signals: ['SIGTERM'],
@@ -1148,6 +1150,7 @@ describe('what the bot writes when a part of the profile is not registered', () 
         bot,
         tracker: { stop: () => Promise.resolve() },
         sessionTracker: { stop: () => Promise.resolve() },
+        botTexts: { stop: () => Promise.resolve() },
         logger,
         exit: vi.fn(),
         signals: ['SIGTERM'],

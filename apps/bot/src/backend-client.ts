@@ -8,6 +8,9 @@ import {
   safeParseEmailSendCodeResponse,
   safeParseNotificationLevelResponse,
   safeParsePairsCatalogResponse,
+  BOT_TEXTS_PATH,
+  botTextOverridesResponseSchema,
+  type BotTextOverride,
   safeParseTradeIntentView,
   safeParseTradingAccessResponse,
   safeParseTradingSessionRefusal,
@@ -107,6 +110,8 @@ export interface BackendClient {
   // the saved stake, or a bounds refusal with the limits it was checked against (#297); any other
   // failure throws as from every method
   setDemoStake(telegramUserId: string, amount: DecimalString | null): Promise<SetDemoStakeResult>;
+  // every text override, as stored: the refresher resolves them (#299)
+  readBotTexts(): Promise<BotTextOverride[]>;
 }
 
 export type SetDemoStakeResult =
@@ -257,6 +262,11 @@ export function createBackendClient({
       );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
+    },
+    async readBotTexts() {
+      const parsed = botTextOverridesResponseSchema.safeParse(await get(BOT_TEXTS_PATH.slice(1)));
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.overrides;
     },
     // the whole answer: `fresh` is the backend's verdict, and the bot keeps no copy of its bound
     async readPairs() {
