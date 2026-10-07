@@ -362,10 +362,11 @@ Node 22 (the 2026-10-03 one is recorded in #99).
   answer to every socket of a user, or only to the sender, has not been observed. Until it is, a
   cross-socket answer is an accepted risk ([broker-session.md → Accepted risks](broker-session.md#accepted-risks)).
   The owner runs the probe on the pilot (`apps/trading-worker/src/cli/socket-probe.ts`; two
-  sockets A and B on one account, two demo commands from A, event types per socket):
+  sockets A and B on one account, two demo commands from A, event types per socket;
+  `REPLACE_WITH_ID` is the `broker_accounts.id` uuid, substitute it):
 
   ```bash
-  docker compose exec -T -e ACCOUNT_ID=<broker_accounts.id> -e BROKER_WS_URL=https://broker-ws.binodex.app \
+  docker compose exec -T -e ACCOUNT_ID=REPLACE_WITH_ID -e BROKER_WS_URL=https://broker-ws.binodex.app \
     trading-worker pnpm --filter @binarius/trading-worker socket-probe
   ```
 

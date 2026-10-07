@@ -42,8 +42,9 @@ import {
 // The demo trade it opens is not linked to any intent (not_ours for the catch-up); a running
 // worker session of the same account applies the update_balance it causes.
 //
-// docker compose exec -T -e ACCOUNT_ID=<broker_accounts.id> -e BROKER_WS_URL=https://broker-ws.binodex.app \
+// docker compose exec -T -e ACCOUNT_ID=REPLACE_WITH_ID -e BROKER_WS_URL=https://broker-ws.binodex.app \
 //   trading-worker pnpm --filter @binarius/trading-worker socket-probe
+// (REPLACE_WITH_ID: the broker_accounts.id uuid; substitute it)
 
 const COMMAND_TIMEOUT_MS = 10_000;
 const PROBE_WINDOW_MS = 15_000;

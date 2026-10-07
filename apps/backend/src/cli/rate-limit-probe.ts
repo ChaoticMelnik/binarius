@@ -12,7 +12,8 @@ import { parseEnv } from '../env';
 // (docs/broker-balance.md → Observed live). The token comes from ensureFreshAccessToken with
 // mayRefresh: false, so an account that is not active, of a blocked user, or whose token needs an
 // exchange is refused, and nothing is ever exchanged. The token is never printed.
-// Run inside the backend container: ACCOUNT_ID=<broker_accounts.id> pnpm rate-limit-probe
+// Run inside the backend container, with REPLACE_WITH_ID substituted by the broker_accounts.id
+// uuid: ACCOUNT_ID=REPLACE_WITH_ID pnpm rate-limit-probe
 
 const env = parseEnv(process.env);
 const accountId = z.uuid().parse(readEnv(process.env, 'ACCOUNT_ID'));
