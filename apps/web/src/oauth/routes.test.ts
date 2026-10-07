@@ -38,6 +38,9 @@ beforeEach(() => {
     sessions: unused,
     revoke: unused,
     logout: unused,
+    overview: unused,
+    users: unused,
+    user: unused,
     oauthCallback: (request) => {
       forwarded.push(request);
       return answer();
