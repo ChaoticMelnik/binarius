@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ADMIN_ACTIVE_WINDOW_MINUTES,
   ADMIN_LOGIN_BUDGET_MS,
+  ADMIN_PAGE_SIZE,
+  ADMIN_SEARCH_MAX_LENGTH,
+  adminMeSchema,
+  adminOverviewResponseSchema,
+  adminUserResponseSchema,
+  adminUsersQuerySchema,
+  adminUsersResponseSchema,
+  adminUsersSearchParams,
   adminConfirmRequestSchema,
   adminConfirmResponseSchema,
   adminLoginRequestSchema,
   logoutResponseSchema,
   revokeSessionResponseSchema,
+  safeParseAdminUsersQuery,
   STAFF_LOGIN_PATTERN,
   STAFF_PASSWORD_MAX_LENGTH,
   STAFF_SESSION_TOKEN_PATTERN,
@@ -182,5 +192,221 @@ describe('ADMIN_LOGIN_BUDGET_MS', () => {
       ADMIN_LOGIN_BUDGET_MS,
       'both chains compare against this number — the backend fits inside it (admin/timing.test.ts), apps/web waits longer than it (apps/web/src/timing.test.ts). Change it together with them.',
     ).toBe(6_000);
+  });
+});
+
+const CURSOR = '00000000-0000-4000-8000-0000000000aa';
+const ME = {
+  staffId: '00000000-0000-4000-8000-000000000002',
+  login: 'ada',
+  sessionId: '00000000-0000-4000-8000-000000000003',
+};
+const AT = '2026-10-07T08:00:00.000Z';
+
+describe('adminUsersQuerySchema', () => {
+  it('takes neither key as an empty query', () => {
+    expect(adminUsersQuerySchema.parse({})).toEqual({});
+  });
+
+  it('trims before it measures, so blanks are refused', () => {
+    expect(adminUsersQuerySchema.safeParse({ q: '   ' }).success).toBe(false);
+    expect(adminUsersQuerySchema.parse({ q: '  ada  ' })).toEqual({ q: 'ada' });
+  });
+
+  it('bounds q at ADMIN_SEARCH_MAX_LENGTH', () => {
+    const at = adminUsersQuerySchema.safeParse({ q: 'a'.repeat(ADMIN_SEARCH_MAX_LENGTH) });
+    const over = adminUsersQuerySchema.safeParse({ q: 'a'.repeat(ADMIN_SEARCH_MAX_LENGTH + 1) });
+    expect([ADMIN_SEARCH_MAX_LENGTH, at.success, over.success]).toEqual([256, true, false]);
+  });
+
+  it.each([
+    ['a bell', 'a\x07b'],
+    ['a zero-width space', 'a\u200bb'],
+    ['an array', ['a', 'b']],
+  ])('refuses q with %s', (_label, q) => {
+    expect(adminUsersQuerySchema.safeParse({ q }).success).toBe(false);
+  });
+
+  it('accepts LIKE metacharacters and cyrillic as plain text', () => {
+    expect(adminUsersQuerySchema.parse({ q: '50%_д@x' })).toEqual({ q: '50%_д@x' });
+  });
+
+  it('refuses a cursor that is not a uuid', () => {
+    expect(adminUsersQuerySchema.safeParse({ cursor: 'bad' }).success).toBe(false);
+  });
+
+  it('strips keys it does not declare', () => {
+    expect(adminUsersQuerySchema.parse({ q: 'a', utm_source: 'x' })).toEqual({ q: 'a' });
+  });
+});
+
+describe('adminUsersSearchParams', () => {
+  it('round-trips a query through its own serialization', () => {
+    const query = { q: 'a&b+c#д', cursor: CURSOR };
+    const params = adminUsersSearchParams(query);
+    expect(String(params)).toBe(`q=a%26b%2Bc%23%D0%B4&cursor=${CURSOR}`);
+    expect(safeParseAdminUsersQuery(Object.fromEntries(params)).data).toEqual(query);
+  });
+
+  it('writes keys in the schema order, whatever order the caller used', () => {
+    expect([...adminUsersSearchParams({ cursor: CURSOR, q: 'x' })].map(([k]) => k)).toEqual([
+      'q',
+      'cursor',
+    ]);
+  });
+
+  it('writes nothing for an empty query', () => {
+    expect(adminUsersSearchParams({}).size).toBe(0);
+  });
+});
+
+describe('admin read responses', () => {
+  const listItem = {
+    id: '00000000-0000-4000-8000-000000000010',
+    telegramUserId: '4242',
+    displayName: 'Ada',
+    status: 'active',
+    tokenBalance: '5',
+    createdAt: AT,
+    updatedAt: AT,
+  };
+  const users = { me: ME, users: [listItem], nextCursor: CURSOR };
+
+  const account = {
+    id: '00000000-0000-4000-8000-000000000020',
+    brokerUserId: 'broker-7',
+    email: 'ada@example.com',
+    isPartnerClient: true,
+    status: 'active',
+    authRevokedReason: 'refresh_expired',
+    tradingHalted: true,
+    haltedReason: 'trade_mismatch',
+    accessTokenExpiresAt: AT,
+    tokenRotatedAt: AT,
+    createdAt: AT,
+    updatedAt: AT,
+  };
+  const detail = {
+    id: listItem.id,
+    telegramUserId: '4242',
+    displayName: 'Ada',
+    languageCode: 'ru',
+    status: 'active',
+    acquisitionSource: 'ads',
+    acquiredAt: AT,
+    telegramBlockedAt: AT,
+    notificationLevel: 'all',
+    demoStake: '1.5',
+    tokens: { balance: '5', reserved: '2', available: '3' },
+    createdAt: AT,
+    updatedAt: AT,
+  };
+  const user = { me: ME, user: detail, brokerAccounts: [account] };
+
+  const overview = {
+    me: ME,
+    overview: {
+      users: { total: 3, today: 1, blocked: 0, withActiveBrokerAccount: 1, activeNow: 2 },
+      intents: { total: 4, today: 0 },
+      activeWindowMinutes: ADMIN_ACTIVE_WINDOW_MINUTES,
+      dayStartsAt: '2026-10-07T00:00:00.000Z',
+      asOf: AT,
+    },
+  };
+
+  it('accept their samples', () => {
+    expect(adminUsersResponseSchema.safeParse(users).success).toBe(true);
+    expect(adminUserResponseSchema.safeParse(user).success).toBe(true);
+    expect(adminOverviewResponseSchema.safeParse(overview).success).toBe(true);
+  });
+
+  // a user created by the OAuth login has only its Telegram id; an account may never have been
+  // revoked, halted or rotated
+  it('accept every nullable column as null', () => {
+    const bare = {
+      ...detail,
+      displayName: null,
+      languageCode: null,
+      acquisitionSource: null,
+      acquiredAt: null,
+      telegramBlockedAt: null,
+      demoStake: null,
+    };
+    const fresh = {
+      ...account,
+      email: null,
+      authRevokedReason: null,
+      tradingHalted: false,
+      haltedReason: null,
+      tokenRotatedAt: null,
+    };
+    expect(
+      adminUserResponseSchema.safeParse({ me: ME, user: bare, brokerAccounts: [fresh] }).success,
+    ).toBe(true);
+    expect(
+      adminUsersResponseSchema.safeParse({ ...users, users: [{ ...listItem, displayName: null }] })
+        .success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ['the users response', { ...users, extra: 1 }, adminUsersResponseSchema],
+    ['me', { ...users, me: { ...ME, extra: 1 } }, adminUsersResponseSchema],
+    ['a list row', { ...users, users: [{ ...listItem, extra: 1 }] }, adminUsersResponseSchema],
+    ['the user response', { ...user, extra: 1 }, adminUserResponseSchema],
+    ['the user', { ...user, user: { ...detail, accessTokenEnc: 'x' } }, adminUserResponseSchema],
+    [
+      'an account',
+      { ...user, brokerAccounts: [{ ...account, refreshTokenHash: 'x' }] },
+      adminUserResponseSchema,
+    ],
+    ['the overview response', { ...overview, extra: 1 }, adminOverviewResponseSchema],
+    [
+      'the overview',
+      { ...overview, overview: { ...overview.overview, extra: 1 } },
+      adminOverviewResponseSchema,
+    ],
+    [
+      'the overview users',
+      {
+        ...overview,
+        overview: { ...overview.overview, users: { ...overview.overview.users, extra: 1 } },
+      },
+      adminOverviewResponseSchema,
+    ],
+  ] as const)('refuse an extra key in %s', (_label, body, schema) => {
+    expect(schema.safeParse(body).success).toBe(false);
+  });
+
+  it('refuse tokens whose available is not balance - reserved', () => {
+    const bad = {
+      ...user,
+      user: { ...detail, tokens: { balance: '5', reserved: '2', available: '5' } },
+    };
+    expect(adminUserResponseSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it('refuse an active window other than the constant', () => {
+    expect(ADMIN_ACTIVE_WINDOW_MINUTES).toBe(15);
+    const bad = { ...overview, overview: { ...overview.overview, activeWindowMinutes: 14 } };
+    expect(adminOverviewResponseSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it('refuse a negative count', () => {
+    const bad = {
+      ...overview,
+      overview: { ...overview.overview, intents: { total: -1, today: 0 } },
+    };
+    expect(adminOverviewResponseSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it('refuse a next cursor that is not a uuid, and a page over ADMIN_PAGE_SIZE', () => {
+    expect(adminUsersResponseSchema.safeParse({ ...users, nextCursor: 'bad' }).success).toBe(false);
+    const over = Array.from({ length: ADMIN_PAGE_SIZE + 1 }, () => listItem);
+    expect(adminUsersResponseSchema.safeParse({ ...users, users: over }).success).toBe(false);
+  });
+
+  it('share the sessions response me', () => {
+    expect(staffSessionsResponseSchema.shape.me).toBe(adminMeSchema);
   });
 });

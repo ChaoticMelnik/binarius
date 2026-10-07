@@ -1,4 +1,9 @@
 import * as z from 'zod';
+import { decimalStringSchema } from './money';
+import { accountHaltReasonSchema, authRevokedReasonSchema, BrokerAccountStatus } from './oauth';
+import { telegramUserIdSchema, tokenCountSchema } from './trading';
+import { tokenBalanceViewSchema } from './trading-access';
+import { notificationLevelSchema, userStatusSchema } from './users';
 
 // How long the backend may hold POST /admin/auth/login: the wait for a slot in the scrypt
 // queue, the KDF itself, and the one Telegram call that follows. It lives here rather than in
@@ -100,8 +105,17 @@ export const staffSessionViewSchema = z.object({
 });
 export type StaffSessionView = z.infer<typeof staffSessionViewSchema>;
 
+// Who is asking: every response under a staff session carries it, so web prints the login from
+// the answer it just got and keeps it nowhere else.
+export const adminMeSchema = z.object({
+  staffId: z.uuid(),
+  login: z.string(),
+  sessionId: z.uuid(),
+});
+export type AdminMe = z.infer<typeof adminMeSchema>;
+
 export const staffSessionsResponseSchema = z.object({
-  me: z.object({ staffId: z.uuid(), login: z.string(), sessionId: z.uuid() }),
+  me: adminMeSchema,
   sessions: z.array(staffSessionViewSchema),
 });
 export type StaffSessionsResponse = z.infer<typeof staffSessionsResponseSchema>;
@@ -116,6 +130,126 @@ export type RevokeSessionResponse = z.infer<typeof revokeSessionResponseSchema>;
 export const logoutResponseSchema = z.object({ loggedOut: z.literal(true) });
 export type LogoutResponse = z.infer<typeof logoutResponseSchema>;
 
+// --- Read pages (#107) --------------------------------------------------------------------------
+
+export const ADMIN_PAGE_SIZE = 50;
+// covers a 254-character address (RFC 5321); also bounds `q` in the durable audit payload
+export const ADMIN_SEARCH_MAX_LENGTH = 256;
+// "active now" = the users row changed within this window: a proxy, not presence
+export const ADMIN_ACTIVE_WINDOW_MINUTES = 15;
+
+const isoDateTime = z.iso.datetime({ offset: true });
+const adminStrictMeSchema = z.strictObject(adminMeSchema.shape);
+
+// Unknown keys (utm_*, a bookmark's leftovers) are stripped, not refused: only q and cursor
+// outside their shape are a 400.
+export const adminUsersQuerySchema = z.object({
+  q: z
+    .string()
+    .trim()
+    .min(1)
+    .max(ADMIN_SEARCH_MAX_LENGTH)
+    .regex(/^[^\p{C}]+$/u, { error: 'control or invisible characters are not searchable' })
+    .optional(),
+  cursor: z.string().regex(UUID_PATTERN).optional(),
+});
+export type AdminUsersQuery = z.infer<typeof adminUsersQuerySchema>;
+
+// The one serialization of the list query: web's links and redirects and its request to the
+// backend all go through it, in the schema's key order, so `q = 'a&b'` stays one parameter.
+export function adminUsersSearchParams(query: AdminUsersQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of Object.keys(adminUsersQuerySchema.shape) as (keyof AdminUsersQuery)[]) {
+    const value = query[key];
+    if (value !== undefined) params.set(key, value);
+  }
+  return params;
+}
+
+// The views below are strict: a key the backend grew is a contract violation on web, not a
+// silently stripped field.
+export const adminUserListItemSchema = z.strictObject({
+  id: z.uuid(),
+  telegramUserId: telegramUserIdSchema,
+  displayName: z.string().nullable(),
+  status: userStatusSchema,
+  tokenBalance: tokenCountSchema,
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime,
+});
+export type AdminUserListItem = z.infer<typeof adminUserListItemSchema>;
+
+export const adminUsersResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  users: z.array(adminUserListItemSchema).max(ADMIN_PAGE_SIZE),
+  nextCursor: z.string().regex(UUID_PATTERN).nullable(),
+});
+export type AdminUsersResponse = z.infer<typeof adminUsersResponseSchema>;
+
+// No ciphertext, key id or refresh-token hash: those never leave the backend.
+export const adminBrokerAccountViewSchema = z.strictObject({
+  id: z.uuid(),
+  brokerUserId: z.string(),
+  email: z.string().nullable(),
+  isPartnerClient: z.boolean(),
+  status: z.enum(BrokerAccountStatus),
+  authRevokedReason: authRevokedReasonSchema.nullable(),
+  tradingHalted: z.boolean(),
+  haltedReason: accountHaltReasonSchema.nullable(),
+  accessTokenExpiresAt: isoDateTime,
+  tokenRotatedAt: isoDateTime.nullable(),
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime,
+});
+export type AdminBrokerAccountView = z.infer<typeof adminBrokerAccountViewSchema>;
+
+export const adminUserDetailSchema = z.strictObject({
+  id: z.uuid(),
+  telegramUserId: telegramUserIdSchema,
+  displayName: z.string().nullable(),
+  languageCode: z.string().nullable(),
+  status: userStatusSchema,
+  acquisitionSource: z.string().nullable(),
+  acquiredAt: isoDateTime.nullable(),
+  telegramBlockedAt: isoDateTime.nullable(),
+  notificationLevel: notificationLevelSchema,
+  // null = the broker's minimum (#297)
+  demoStake: decimalStringSchema.nullable(),
+  tokens: tokenBalanceViewSchema,
+  createdAt: isoDateTime,
+  updatedAt: isoDateTime,
+});
+export type AdminUserDetail = z.infer<typeof adminUserDetailSchema>;
+
+export const adminUserResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  user: adminUserDetailSchema,
+  brokerAccounts: z.array(adminBrokerAccountViewSchema),
+});
+export type AdminUserResponse = z.infer<typeof adminUserResponseSchema>;
+
+const countSchema = z.int().nonnegative();
+export const adminOverviewSchema = z.strictObject({
+  users: z.strictObject({
+    total: countSchema,
+    today: countSchema,
+    blocked: countSchema,
+    withActiveBrokerAccount: countSchema,
+    activeNow: countSchema,
+  }),
+  intents: z.strictObject({ total: countSchema, today: countSchema }),
+  activeWindowMinutes: z.literal(ADMIN_ACTIVE_WINDOW_MINUTES),
+  dayStartsAt: isoDateTime,
+  asOf: isoDateTime,
+});
+export type AdminOverview = z.infer<typeof adminOverviewSchema>;
+
+export const adminOverviewResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  overview: adminOverviewSchema,
+});
+export type AdminOverviewResponse = z.infer<typeof adminOverviewResponseSchema>;
+
 export const safeParseAdminLoginRequest = (input: unknown) =>
   adminLoginRequestSchema.safeParse(input);
 export const safeParseAdminConfirmRequest = (input: unknown) =>
@@ -129,3 +263,10 @@ export const safeParseStaffSessionsResponse = (input: unknown) =>
 export const safeParseRevokeSessionResponse = (input: unknown) =>
   revokeSessionResponseSchema.safeParse(input);
 export const safeParseLogoutResponse = (input: unknown) => logoutResponseSchema.safeParse(input);
+export const safeParseAdminUsersQuery = (input: unknown) => adminUsersQuerySchema.safeParse(input);
+export const safeParseAdminUsersResponse = (input: unknown) =>
+  adminUsersResponseSchema.safeParse(input);
+export const safeParseAdminUserResponse = (input: unknown) =>
+  adminUserResponseSchema.safeParse(input);
+export const safeParseAdminOverviewResponse = (input: unknown) =>
+  adminOverviewResponseSchema.safeParse(input);
