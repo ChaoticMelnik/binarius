@@ -78,8 +78,10 @@ session start failed` and holds the account back `SESSION_RETRY_MS`.
 "Dropped" means `client.stop()` and the entry deleted: the account is a plain candidate again
 once its hold-back is over, and nothing terminal stays in the map.
 
-`sessionFor(accountId)` is the client of a `running` entry, `undefined` otherwise (starting, held
-back, unknown). The client itself answers `not_sent`/`not_ready` in any state but `ready` and on
+`sessionFor(accountId)` is the client of a `running` entry whose current connection is verified
+([The identity gate](#the-identity-gate)), `undefined` otherwise (starting, held back, unknown, or
+a connection whose `user.data` has not matched yet — the executor then sends the order over REST).
+`clientFor()` returns the running client verified or not, for tests. The client itself answers `not_sent`/`not_ready` in any state but `ready` and on
 a tainted connection, which the executor sends over REST.
 
 ## The token
@@ -103,7 +105,8 @@ here.
 
 `update_balance` and `close_trade.success` carry no user id, and a connection is `ready` on
 `user.auth.success`, before `user.data`. So a connection is unverified until its `user.data`
-arrives:
+arrives, and nothing uses an unverified connection: `sessionFor()` returns `undefined` for it (the
+order goes over REST) and its id-less events are not written:
 
 - `user.data` with the account's `broker_user_id` → verified; its snapshot is queued.
 - `user.data` with another id → `error` `broker session user mismatch` (`accountId`, `expected`,
@@ -139,8 +142,10 @@ The executor sends a command over `sessionFor(accountId)`. A command that ends w
 while its connection is alive taints that connection: the client drops it and answers
 `not_sent`/`not_ready` until the next `ready`, and a `success` answers only with the command's
 asset, action and amount ([broker-socket.md → The trade command](broker-socket.md#the-trade-command-100)).
-The manager does nothing for it: the reconnect is socket.io's, and the new connection passes the
-identity gate like any other.
+The manager does nothing for it: the reconnect is socket.io's, and the new connection proves its
+identity again before anything uses it — `sessionFor()` hands the client to the executor, and the
+writers accept events, only after that connection's `user.data` matched the account; until then
+the executor's command goes over REST.
 
 ## Start and shutdown
 
@@ -230,7 +235,7 @@ but `broker session start failed` (a bug path) present.
   session counted; U4/U5 the token answers and their hold-backs; U6/U6b/U7 `token_expired` and
   `auth_failed` with the same and with a new token; U8 `disconnected_by_server`; U9/U9b/U9c the
   identity gate (a burst with a foreign `user.data`, a reconnect); U10 a throwing writer; U11
-  `sessionFor`; U12/U12b `stop()` and its budget; U13 single-flight and a failing scan; U15 a tick
+  `sessionFor` (U11b: only for a verified connection, again after a reconnect); U12/U12b `stop()` and its budget; U13 single-flight and a failing scan; U15 a tick
   returns while its starts are pending; U16 a candidate gone while starting; U14 the log scan.
 - `session-manager.db.test.ts` (integration, `TEST_DATABASE_URL`): the end-to-end scenario on
   the mock broker with the production composition — `listSessionCandidates`, the production

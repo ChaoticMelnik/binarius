@@ -335,7 +335,11 @@ describe('the session scenario on the mock broker', () => {
         reason: TradeIntentFailureReason.ReconciliationNotFound,
       }),
     );
-    await until('the new connection', () => client()?.connections === 2);
+    // the next intent goes over the socket only once the new connection's user.data verified it
+    await until(
+      'the new connection, verified',
+      () => client()?.connections === 2 && manager.sessionFor(accountId) !== undefined,
+    );
     const heardBefore = heard.length;
     const next = await newIntent();
     expect(await processIntentJob(deps(), { intentId: next.id })).toBe('accepted');

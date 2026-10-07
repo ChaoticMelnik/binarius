@@ -241,12 +241,14 @@ interface FakeClient extends BrokerSocketClient {
   starts: string[];
   stops: number;
   fire(to: BrokerSocketState): void;
+  hear(event: BrokerEvent): void;
 }
 
 function fakeClients() {
   const made: FakeClient[] = [];
   const openClient = (): BrokerSocketClient => {
     const stateListeners = new Set<(change: BrokerSocketStateChange) => void>();
+    const eventListeners = new Set<(event: BrokerEvent) => void>();
     let state: BrokerSocketState = BrokerSocketState.Idle;
     const publish = (to: BrokerSocketState) => {
       const change = { from: state, to };
@@ -257,6 +259,9 @@ function fakeClients() {
       starts: [],
       stops: 0,
       fire: publish,
+      hear(event) {
+        for (const listener of [...eventListeners]) listener(event);
+      },
       start(credentials) {
         client.starts.push(credentials.accessToken);
         publish(BrokerSocketState.Ready);
@@ -272,7 +277,10 @@ function fakeClients() {
         return state;
       },
       connections: 1,
-      onEvent: () => () => undefined,
+      onEvent(listener) {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
       onState(listener) {
         stateListeners.add(listener);
         return () => stateListeners.delete(listener);
@@ -685,6 +693,34 @@ describe('sessionFor, stop() and the tick', () => {
     token.resolve(await grant('acc-1'));
     await until('running', () => h.manager.sessionFor('acc-1') !== undefined);
     expect(h.manager.sessionFor('acc-1')).toBe(h.manager.clientFor('acc-1'));
+  });
+
+  it('U11b sessionFor hands out a connection only once its user.data matched the account', async () => {
+    const fakes = fakeClients();
+    const h = harness({ openClient: fakes.openClient });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the client', () => fakes.made.length === 1);
+    const client = fakes.made[0]!;
+    expect(client.state).toBe(BrokerSocketState.Ready);
+    expect(h.manager.clientFor('acc-1')).toBe(client);
+    expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+    const user = {
+      id: '1',
+      level: { code: 'standard', rank: 1 },
+      minTradeAmount: '1.00',
+      real: { available: '0', held: '0', total: '0' },
+      demo: { available: '100.00', held: '0', total: '100.00' },
+    } as Extract<BrokerEvent, { type: 'user_data' }>['user'];
+    client.hear({ type: 'user_data', user });
+    expect(h.manager.sessionFor('acc-1')).toBe(client);
+    client.fire(BrokerSocketState.Reconnecting);
+    expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+    client.fire(BrokerSocketState.Authenticating);
+    client.fire(BrokerSocketState.Ready);
+    expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+    client.hear({ type: 'user_data', user });
+    expect(h.manager.sessionFor('acc-1')).toBe(client);
   });
 
   it('U12 stop() closes every socket, aborts a token fetch, drops the queued writes and keeps its budget', async () => {
