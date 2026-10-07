@@ -1775,52 +1775,26 @@ const LEVEL_BRANCHES: readonly Branch[] = [
   },
 ];
 
-// The stake picker (#297): each press is answer ∥ one backend call, then an edit in place.
-const STAKE_OPEN_UPDATE = callbackUpdate('stk:o:s');
-const STAKE_OPEN_WORST_CASE: Branch = {
-  label: 'the edit is refused as gone and the picker is sent anew',
-  update: STAKE_OPEN_UPDATE,
-  apiErrors: [['editMessageText', EDIT_REFUSED]],
-  expected: { backend: 1, telegram: 3 },
-};
-const STAKE_OPEN_BRANCHES: readonly Branch[] = [
-  {
-    label: 'the chat is not private',
-    update: callbackUpdate('stk:o:s', 'group'),
-    expected: { backend: 0, telegram: 0 },
-  },
-  {
-    label: 'the origin is forged',
-    update: callbackUpdate('stk:o:a:0:300'),
-    expected: { backend: 0, telegram: 1 },
-  },
-  {
-    label: 'the picker is edited in',
-    update: STAKE_OPEN_UPDATE,
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the access read fails',
-    update: STAKE_OPEN_UPDATE,
-    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the edit is refused as not modified',
-    update: STAKE_OPEN_UPDATE,
-    apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
-    expected: { backend: 1, telegram: 2 },
-  },
-  STAKE_OPEN_WORST_CASE,
-];
-
-const stakeSaveBranches = (data: string, forged: string): { branches: Branch[]; worst: Branch } => {
+// The stake picker (#297) and its way back to /settings: each press is answer ∥ at most one
+// backend call, then an edit in place — refused as gone, the screen is sent anew (the worst case).
+// `extra` are the further terminal branches, each ending in the edit.
+const pickerBranches = (
+  data: string,
+  backend: number,
+  { forged, extra = [] }: { forged?: string; extra?: [string, Partial<Branch>][] },
+): { branches: Branch[]; worst: Branch } => {
   const worst: Branch = {
-    label: 'the edit is refused as gone and the answer is sent anew',
+    label: 'the edit is refused as gone and the screen is sent anew',
     update: callbackUpdate(data),
     apiErrors: [['editMessageText', EDIT_REFUSED]],
-    expected: { backend: 1, telegram: 3 },
+    expected: { backend, telegram: 3 },
   };
+  const edited = (label: string, patch: Partial<Branch> = {}): Branch => ({
+    label,
+    update: callbackUpdate(data),
+    expected: { backend, telegram: 2 },
+    ...patch,
+  });
   return {
     worst,
     branches: [
@@ -1829,119 +1803,75 @@ const stakeSaveBranches = (data: string, forged: string): { branches: Branch[]; 
         update: callbackUpdate(data, 'group'),
         expected: { backend: 0, telegram: 0 },
       },
-      {
-        label: 'the data is forged',
-        update: callbackUpdate(forged),
-        expected: { backend: 0, telegram: 1 },
-      },
-      {
-        label: 'the stake is saved',
-        update: callbackUpdate(data),
-        expected: { backend: 1, telegram: 2 },
-      },
-      {
-        label: 'the stake is refused with its limits',
-        update: callbackUpdate(data),
-        setDemoStake: () =>
-          Promise.resolve({
-            refused: {
-              error: 'stake_below_minimum' as const,
-              limits: {
-                minTradeAmount: decimalStringSchema.parse('10'),
-                demoAvailable: decimalStringSchema.parse('100'),
-                scale: 2,
-              },
+      ...(forged === undefined
+        ? []
+        : [
+            {
+              label: 'the data is forged',
+              update: callbackUpdate(forged),
+              expected: { backend: 0, telegram: 1 },
             },
-          }),
-        expected: { backend: 1, telegram: 2 },
-      },
-      {
-        label: 'the outcome is unknown',
-        update: callbackUpdate(data),
-        setDemoStake: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-        expected: { backend: 1, telegram: 2 },
-      },
+          ]),
+      edited('the screen is edited in'),
+      ...extra.map(([label, patch]) => edited(label, patch)),
       worst,
     ],
   };
 };
-const STAKE_PRESET = stakeSaveBranches('stk:s:5:s', 'stk:s:0:s');
-const STAKE_RESET = stakeSaveBranches('stk:z:s', 'stk:z:a:0:300');
-
-const STAKE_CUSTOM_WORST_CASE: Branch = {
-  label: 'the prompt edit is refused as gone and the prompt is sent anew',
-  update: callbackUpdate('stk:c:s'),
-  apiErrors: [['editMessageText', EDIT_REFUSED]],
-  expected: { backend: 0, telegram: 3 },
-};
-const STAKE_CUSTOM_BRANCHES: readonly Branch[] = [
-  {
-    label: 'the origin is forged',
-    update: callbackUpdate('stk:c:a:0:300'),
-    expected: { backend: 0, telegram: 1 },
-  },
-  {
-    label: 'the prompt is edited in',
-    update: callbackUpdate('stk:c:s'),
-    expected: { backend: 0, telegram: 2 },
-  },
-  STAKE_CUSTOM_WORST_CASE,
+const stakeRefused = () =>
+  Promise.resolve({
+    refused: {
+      error: 'stake_below_minimum' as const,
+      limits: {
+        minTradeAmount: decimalStringSchema.parse('10'),
+        demoAvailable: decimalStringSchema.parse('100'),
+        scale: 2,
+      },
+    },
+  });
+const SAVE_EXTRA: [string, Partial<Branch>][] = [
+  ['the stake is refused with its limits', { setDemoStake: stakeRefused }],
+  ['the outcome is unknown', { setDemoStake: unreachable }],
 ];
+const STAKE_OPEN = pickerBranches('stk:o:s', 1, {
+  forged: 'stk:o:a:0:300',
+  extra: [
+    ['the access read fails', { readTradingAccess: unreachable }],
+    [
+      'the edit is refused as not modified',
+      { apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]] },
+    ],
+  ],
+});
+const STAKE_PRESET = pickerBranches('stk:s:5:s', 1, { forged: 'stk:s:0:s', extra: SAVE_EXTRA });
+const STAKE_RESET = pickerBranches('stk:z:s', 1, { forged: 'stk:z:a:0:300', extra: SAVE_EXTRA });
+const STAKE_CUSTOM = pickerBranches('stk:c:s', 0, { forged: 'stk:c:a:0:300' });
+const SETTINGS_SHOW = pickerBranches('settings', 1, {
+  extra: [
+    ['the read fails', { recordStart: unreachable }],
+    [
+      'the user is blocked',
+      { recordStart: () => Promise.resolve({ ...USER_VIEW, status: UserStatus.Blocked }) },
+    ],
+  ],
+});
 
 const ON_STAKE_STEP: LoginDialogState = { step: 'stake', origin: { kind: 'settings' } };
-const STAKE_TEXT_WORST_CASE: Branch = {
-  label: 'the typed stake is saved',
-  update: textUpdate('5'),
+const stakeText = (label: string, text: string, expected: Calls, patch: Partial<Branch> = {}) => ({
+  label,
+  update: textUpdate(text),
   dialog: ON_STAKE_STEP,
-  expected: { backend: 1, telegram: 1 },
-};
+  expected,
+  ...patch,
+});
+const STAKE_TEXT_WORST_CASE: Branch = stakeText('the typed stake is saved', '5', {
+  backend: 1,
+  telegram: 1,
+});
 const STAKE_TEXT_BRANCHES: readonly Branch[] = [
-  {
-    label: 'the text is not an amount',
-    update: textUpdate('abc'),
-    dialog: ON_STAKE_STEP,
-    expected: { backend: 0, telegram: 1 },
-  },
-  {
-    label: 'the save fails',
-    update: textUpdate('5'),
-    dialog: ON_STAKE_STEP,
-    setDemoStake: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 1, telegram: 1 },
-  },
+  stakeText('the text is not an amount', 'abc', { backend: 0, telegram: 1 }),
+  stakeText('the save fails', '5', { backend: 1, telegram: 1 }, { setDemoStake: unreachable }),
   STAKE_TEXT_WORST_CASE,
-];
-
-const SETTINGS_SHOW_WORST_CASE: Branch = {
-  label: 'the edit is refused as gone and /settings is sent anew',
-  update: callbackUpdate('settings'),
-  apiErrors: [['editMessageText', EDIT_REFUSED]],
-  expected: { backend: 1, telegram: 3 },
-};
-const SETTINGS_SHOW_BRANCHES: readonly Branch[] = [
-  {
-    label: 'the chat is not private',
-    update: callbackUpdate('settings', 'group'),
-    expected: { backend: 0, telegram: 0 },
-  },
-  {
-    label: '/settings is edited in',
-    update: callbackUpdate('settings'),
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the read fails',
-    update: callbackUpdate('settings'),
-    recordStart: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the user is blocked',
-    update: callbackUpdate('settings'),
-    recordStart: () => Promise.resolve({ ...USER_VIEW, status: UserStatus.Blocked }),
-    expected: { backend: 1, telegram: 2 },
-  },
-  SETTINGS_SHOW_WORST_CASE,
 ];
 
 const LEVEL_CURRENT_WORST_CASE: Branch = {
@@ -1998,58 +1928,15 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     );
   });
 
-  it('the stake picker', async () => {
-    await checkHandler(
-      'stakePickerOpen',
-      STAKE_OPEN_BRANCHES,
-      STAKE_OPEN_WORST_CASE,
-      HANDLER_CALLS.stakePickerOpen,
-    );
-  });
-
-  it('a stake preset', async () => {
-    await checkHandler(
-      'stakePreset',
-      STAKE_PRESET.branches,
-      STAKE_PRESET.worst,
-      HANDLER_CALLS.stakePreset,
-    );
-  });
-
-  it('the stake reset', async () => {
-    await checkHandler(
-      'stakeReset',
-      STAKE_RESET.branches,
-      STAKE_RESET.worst,
-      HANDLER_CALLS.stakeReset,
-    );
-  });
-
-  it('the custom stake button', async () => {
-    await checkHandler(
-      'stakeCustom',
-      STAKE_CUSTOM_BRANCHES,
-      STAKE_CUSTOM_WORST_CASE,
-      HANDLER_CALLS.stakeCustom,
-    );
-  });
-
-  it('a text on the stake step', async () => {
-    await checkHandler(
-      'stakeText',
-      STAKE_TEXT_BRANCHES,
-      STAKE_TEXT_WORST_CASE,
-      HANDLER_CALLS.stakeText,
-    );
-  });
-
-  it("the picker's way back to /settings", async () => {
-    await checkHandler(
-      'settingsShow',
-      SETTINGS_SHOW_BRANCHES,
-      SETTINGS_SHOW_WORST_CASE,
-      HANDLER_CALLS.settingsShow,
-    );
+  it.each([
+    ['stakePickerOpen', STAKE_OPEN],
+    ['stakePreset', STAKE_PRESET],
+    ['stakeReset', STAKE_RESET],
+    ['stakeCustom', STAKE_CUSTOM],
+    ['stakeText', { branches: STAKE_TEXT_BRANCHES, worst: STAKE_TEXT_WORST_CASE }],
+    ['settingsShow', SETTINGS_SHOW],
+  ] as const)('the stake picker (#297): %s', async (handler, { branches, worst }) => {
+    await checkHandler(handler, branches, worst, HANDLER_CALLS[handler]);
   });
 
   it('/support', async () => {
