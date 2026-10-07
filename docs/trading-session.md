@@ -319,11 +319,12 @@ refuses → `contract_violation`. The body text never enters a result (`backend.
 | `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` | 10 000 | one attempt: both backend calls and the statements |
 | `TRADING_SESSION_PAIRS_TIMEOUT_MS` | 4 000 | the pairs GET |
 | `TRADING_SESSION_RETRY_MS` | 60 000 | a hold-back after a transient failure or a throw |
-| `TRADING_SESSION_CANDLE_SLACK_MS` | 5 000 | how long after a candle boundary the signal is asked again. The backend's signal cache keeps a decision until the boundary on its own clock; both processes run on one host, so the two boundaries agree within the slack |
+| `TRADING_SESSION_CANDLE_SLACK_MS` | 2 000 | how long after a candle boundary the signal is asked again. The backend's signal cache keeps a decision until the boundary on its own clock; both processes run on one host, so the two boundaries agree within the slack |
 | `SESSION_MAX_DURATION_MS` (shared) | 3 600 000 | the deadline from `started_at`; the start route and the CLI refuse a session that cannot fit it (`sessionFitsDeadline`) |
 
 `TRADING_SESSION_CHAIN_HOLDS` is checked at import (`config.test.ts` restates it):
-`PAIRS + TRADING_SIGNAL_BUDGET_MS < ATTEMPT`, `TICK < RETRY`, `CANDLE_SLACK < 1m`,
+`PAIRS + TRADING_SIGNAL_BUDGET_MS < ATTEMPT`, `TICK < RETRY`, `CANDLE_SLACK <
+SIGNAL_SHORTEST_INTERVAL_MS` (5 000 since #313: the wait never skips a 5 s candle),
 `RETRY < SESSION_MAX_DURATION_MS`, every value a timer-safe integer. The worker chain
 (`intents/config.ts`) adds `TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`: phase 1
 runs its steps at once, so the orchestrator's stop has to fit it on its own.
@@ -375,7 +376,7 @@ with one of pnpm. (REPLACE_WITH_TG_ID: the user's Telegram id; REPLACE_WITH_PAIR
 | `TELEGRAM_USER_ID` | required, a positive integer |
 | `ACCOUNT_ID` | optional, a uuid; needed only when the user has more than one active account. It must be one of the user's accounts as `readUserAccounts` lists them (the 10 newest), compared without case; the listed (lower-case) spelling is what `createTradingSession` gets; another user's id and an unknown one are both `account_not_found`, before anything of that account is read. An own account older than the 10 newest is not found either (accepted) |
 | `ASSET_ID` | required, 1 – int4 max |
-| `DURATION_SEC` | default 60, 1 – int4 max |
+| `DURATION_SEC` | default 15 (#313: the demo's set is 5 and 15 s), 1 – int4 max |
 | `TRADES` | default `DEFAULT_SESSION_TRADES` (5), 1 – 20 |
 
 Steps: the user's accounts (`readUserAccounts`); with `ACCOUNT_ID` that one if it is in the list,
@@ -497,14 +498,14 @@ commit;
 SQL
 ASSET="$(api GET /trading/pairs | head -1 | node -e '
   const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
-  const p = c.pairs.find((x) => x.scheduledUntil <= Date.now() && x.minTimeframe <= 60 && 120 <= x.maxTimeframe);
-  process.stdout.write(String(p.id));')"   # takes both durations used below, 60 and 120 s
+  const p = c.pairs.find((x) => x.scheduledUntil <= Date.now() && x.minTimeframe <= 15 && 120 <= x.maxTimeframe);
+  process.stdout.write(String(p.id));')"   # takes both durations used below, 15 and 120 s
 start() {
   dc exec -T -e TELEGRAM_USER_ID=1 -e ASSET_ID="$ASSET" "$@" trading-worker \
     pnpm --filter @binarius/trading-worker --fail-if-no-match session-start
 }
 start -e TRADES=2   # prints the session id
-# each no_signal waits for the next minute, so this can take a few minutes
+# each no_signal waits for the next 15 s candle
 until dc exec -T postgres psql -U binarius -d binarius -tA -c \
   "select count(*) from trading_sessions where status = 'stopped'" | grep -qx 1; do sleep 10; done
 dc logs trading-worker | grep -E 'trading session|trade command refused'
@@ -527,7 +528,7 @@ dc down -v   # this project's containers and volume only
 ## The owner's pilot step
 
 After deploy, on the pilot, for an account with a real Binodex login (until #285 every trade goes
-over REST and settles through the settlement catch-up, so one trade takes about two minutes):
+over REST and settles through the settlement catch-up, 10-15 s after its close since #313):
 
 ```bash
 # 0. the account needs a balance snapshot: open the trade screen in the bot once
@@ -541,7 +542,7 @@ docker compose logs -f trading-worker | grep -E 'trading session|intent outcome 
 ```
 
 (REPLACE_WITH_TG_ID: your Telegram id; REPLACE_WITH_PAIR_ID: an open pair from `GET /trading/pairs`
-that takes 60 s.) `ACCOUNT_ID` is needed only with more than one active account.
+that takes 15 s, the default `DURATION_SEC`.) `ACCOUNT_ID` is needed only with more than one active account.
 
 ## Accepted risks (#287)
 

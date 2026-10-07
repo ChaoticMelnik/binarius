@@ -182,8 +182,13 @@ const result = await feed.evaluate({ assetId, interval: '1m' }, { signal });
 ```
 
 The intervals are a closed table, `SIGNAL_CHART_INTERVAL_MS` in `packages/shared/src/signal.ts`:
-`1m`, `5m`, `15m`, `30m` and `1h`. The live broker accepted each of them (owner's probe
-2026-10-03). An interval outside the table is a `RangeError` before any fetch.
+`5s`, `15s`, `1m`, `5m`, `15m`, `30m` and `1h`. The live broker accepted each of them (owner's
+probe 2026-10-03: every interval from `1s` to `1d`). `5s` and `15s` (#313) analyse the demo's 5
+and 15 s trades; no separate probe was made for them (owner, 2026-10-07): the first live analysis
+after the deploy checks them, through [the post-deploy check](#the-post-deploy-check-313).
+Signal v1's parameters are unchanged on them: every window counts candles, so 60 candles × 5 s is
+a 5-minute window and `maxStaleIntervals` 2 lets the last closed `5s` candle be 10 s old. An
+interval outside the table is a `RangeError` before any fetch.
 
 ### The window
 
@@ -269,8 +274,30 @@ BROKER_API_BASE_URL=https://api.binodex.app ASSET_ID=237831086 pnpm --filter @bi
 |---|---|
 | `BROKER_API_BASE_URL` | required; https, or http on `127.0.0.1`/`localhost` (a local mock) |
 | `ASSET_ID` | required; an integer from 1 |
-| `INTERVAL` | one of the table's keys; default `1m` |
+| `INTERVAL` | one of the table's keys (`5s` and `15s` included); default `1m` |
 | `LOG_LEVEL` | default `info` |
+
+### The post-deploy check (#313)
+
+Each `POST /trading/signal` on a `5s`/`15s` key writes one `signal decision` line through the
+backend's logger; `signal.interval`, `signal.decision.kind` and `signal.decision.reason` give the
+rate of each outcome. After the deploy, on the pilot (before it was written here, the filter after
+`docker compose logs` ran over the feed's lines on the mock broker, `5s`/`15s`/`1m` on pairs
+101/202/303: the six sub-minute lines counted, the three `1m` lines left out):
+
+```bash
+docker compose logs --no-log-prefix --since 1h backend | grep -F '"msg":"signal decision"' \
+  | jq -c 'select(.signal.interval | IN("5s","15s")) | [.signal.interval, .signal.decision.kind, (.signal.decision.reason // "signal")]' \
+  | sort | uniq -c
+```
+
+- `stale` on every pair: the broker publishes sub-minute candles late (the last closed candle
+  older than `maxStaleIntervals` × interval = 10 s / 30 s).
+- `candle_gap`: holes in the series, as the 1m history has ([Observed live](#observed-live-2026-10-06)).
+- `volatility_too_low`: ATR% under `minAtrPct` 0.001 %.
+
+Any of them is a question on the #132 parameters for the owner — never a minute candle: a 5 or
+15 s trade is analysed on its own candle only.
 
 ### Observed live (2026-10-06)
 
@@ -319,8 +346,9 @@ fields; the journal series never leaves the backend's log.
 | 400, 401, 500, a timeout, a broken body | shows the analysis as unavailable and logs `warn` `signal not evaluated` with the error |
 
 `intervalForDuration(durationSec)` (shared) picks the interval for a trade's duration: the longest
-table interval not above it, `1m` below a minute. `durationSec` must be a positive integer; anything
-else is a `RangeError`.
+table interval not above it, the shortest (`5s`) below it. A 5 s trade gets `5s` and a 15 s trade
+`15s`, never `1m` (#313; `signal.test.ts` S3 fails otherwise). `durationSec` must be a positive
+integer; anything else is a `RangeError`.
 
 The backend writes the feed's lines through its own logger: one `signal decision` line per fetch,
 one `signal fetch failed` line per failed fetch, nothing on a cache hit. The route adds no line of
@@ -347,8 +375,8 @@ feed, keyed by `${assetId}:${interval}`:
 - The hold is computed from the entry's `nowMs`, the clock reading taken before the fetch: a fetch
   that crossed a boundary is not held into the next candle. Every request in one candle gets the
   same closed candles anyway; the forming one is dropped.
-- At most `maxEntries` (`SIGNAL_CACHE_MAX_ENTRIES`, 1 024; the live catalog is 144 pairs × 5
-  intervals) keys are held; an insert beyond it drops the oldest. Expired entries go on read.
+- At most `maxEntries` (`SIGNAL_CACHE_MAX_ENTRIES`, 1 024; the live catalog is 144 pairs × 7
+  intervals = 1 008) keys are held; an insert beyond it drops the oldest. Expired entries go on read.
   Failures are never held, so an unknown asset id costs a GET and no entry.
 - The clock is the process clock (`now`, `Date.now` by default). A backward jump extends a hold by
   the jump, a forward one shortens it. No timer: nothing to stop at shutdown.
@@ -356,9 +384,11 @@ feed, keyed by `${assetId}:${interval}`:
 `cache.test.ts` (C1–C11) pins the table's rows, the shared fetch, the deadline, the bound and a
 backward clock jump.
 
-So the broker sees at most two chart GETs per key per minute (one per hold of up to 30 s) and one
-per 429 window. The first fetch in a candle is that candle's answer for every user, for at most
-30 s.
+So the broker sees at most two chart GETs per `1m`-or-longer key per minute (one per hold of up to
+30 s) and one per 429 window. On `5s` and `15s` the candle's end binds first: up to 12 and 4 GETs
+a minute per key while users ask for it. Chart GETs are demand-driven and outside the worker's
+budgeted share, as before. The first fetch in a candle is that candle's answer for every user, for
+at most 30 s.
 
 ### Budgets
 
@@ -366,7 +396,7 @@ per 429 window. The first fetch in a candle is that candle's answer for every us
 |---|---|---|---|
 | `SIGNAL_FETCH_BUDGET_MS` | 3 000 | `apps/backend/src/timing.ts` | the one chart GET (the cache's `fetchBudgetMs`); below `BROKER_REST_TIMEOUT_MS` (5 000), so it is this budget that ends a slow chart |
 | `TRADING_SIGNAL_BUDGET_MS` | 4 000 | `packages/shared/src/signal.ts` | the whole answer; the bot waits at least this long (`TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` in `apps/bot/src/timing.ts`, #126) |
-| `SIGNAL_CACHE_MAX_TTL_MS` | 30 000 | `apps/backend/src/timing.ts` | the longest hold; below the 1m interval, or it would never bind |
+| `SIGNAL_CACHE_MAX_TTL_MS` | 30 000 | `apps/backend/src/timing.ts` | the longest hold; below the 1m interval, or it would never bind there (on `5s`/`15s` the candle's end binds) |
 
 The backend's `TIMING_CHAIN_HOLDS` checks at import that `SIGNAL_FETCH_BUDGET_MS <
 BROKER_REST_TIMEOUT_MS`, `SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS`,
