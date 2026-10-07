@@ -1,8 +1,9 @@
 import { BrokerRestError, MAX_DETAIL_LENGTH, type BrokerRestClient } from '@binarius/broker-rest';
-import { normalizeDecimal, type TradeIntentRow } from '@binarius/db';
+import type { TradeIntentRow } from '@binarius/db';
 import {
   BrokerRestErrorCode,
   decimalStringSchema,
+  normalizeDecimal,
   TradeIntentFailureReason,
   TradeMode,
   TradeTransport,

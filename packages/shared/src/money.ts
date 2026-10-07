@@ -47,6 +47,16 @@ export const positiveDecimalStringSchema = decimalStringSchema.refine(
   { error: 'expected a positive amount' },
 );
 
+// numeric(20,8) comes back as '10.00000000' while a request said '10.00': compare the values,
+// not the spellings, without ever going through a float. Leading zeros and trailing fraction
+// zeros are stripped.
+export function normalizeDecimal(value: string): string {
+  const [integer = '0', fraction = ''] = value.split('.');
+  const int = integer.replace(/^0+(?=\d)/, '');
+  const frac = fraction.replace(/0+$/, '');
+  return frac === '' ? int : `${int}.${frac}`;
+}
+
 export function isDecimalString(value: unknown): value is DecimalString {
   return decimalStringSchema.safeParse(value).success;
 }

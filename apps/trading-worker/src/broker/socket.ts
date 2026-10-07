@@ -1,7 +1,7 @@
 import { MAX_DETAIL_LENGTH } from '@binarius/broker-rest';
-import { normalizeDecimal } from '@binarius/db';
 import {
   BrokerSocketEvent,
+  normalizeDecimal,
   errorLogFields,
   modeEvent,
   priceSubscribeWireSchema,

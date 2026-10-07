@@ -2320,11 +2320,6 @@ describe('broker_balance_snapshots', () => {
   });
 });
 
-// The gate is the last test in the file, not an afterAll: as a test it is excluded by a
-// name filter along with everything else, so debugging one case does not produce a red file
-// about the constraints that run did not touch. It must run last, which
-// `sequence.shuffle: false` in vitest.config.ts pins for the default run; passing
-// `--sequence.shuffle` explicitly overrides that and fails this gate — the safe direction.
 describe('trading_sessions (#130)', () => {
   const session = (accountId: string, patch: Record<string, unknown> = {}) => ({
     brokerAccountId: accountId,
@@ -2444,6 +2439,11 @@ describe('trading_sessions (#130)', () => {
   });
 });
 
+// The gate is the last test in the file, not an afterAll: as a test it is excluded by a
+// name filter along with everything else, so debugging one case does not produce a red file
+// about the constraints that run did not touch. It must run last, which
+// `sequence.shuffle: false` in vitest.config.ts pins for the default run; passing
+// `--sequence.shuffle` explicitly overrides that and fails this gate — the safe direction.
 // A constraint counts as covered only when a test actually observed the database enforcing
 // it — the helpers register after their assertion passes, and the two catalog tests (composite
 // FK targets, simple FKs implied by a composite) register only after their own assertions. Textual matching was the previous bar and it accepted a name
