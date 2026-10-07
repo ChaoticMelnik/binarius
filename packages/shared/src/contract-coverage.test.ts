@@ -47,6 +47,7 @@ import * as telegramHtml from './telegram-html';
 import * as time from './time';
 import * as trading from './trading';
 import * as tradingAccess from './trading-access';
+import * as tradingSession from './trading-session';
 import * as users from './users';
 
 // every field issue #6 lists, on the domain type it belongs to
@@ -348,6 +349,7 @@ describe('contract coverage (issue #6)', () => {
       telegramHtml,
       catalog,
       signal,
+      tradingSession,
     };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {
