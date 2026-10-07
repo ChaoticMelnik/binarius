@@ -1,4 +1,5 @@
 import { MAX_DETAIL_LENGTH } from '@binarius/broker-rest';
+import { normalizeDecimal } from '@binarius/db';
 import {
   BrokerSocketEvent,
   errorLogFields,
@@ -114,8 +115,11 @@ export interface BrokerSocketClient {
   subscribe(assetIds: readonly number[]): void;
   // the registry, ascending
   subscriptions(): number[];
-  // emits user.<mode>.open_trade only while ready; the answer is the first open_trade event of
-  // that mode on the same connection. At most one command at a time: a second one throws.
+  // emits user.<mode>.open_trade only while ready on an untainted connection; the answer is the
+  // first open_trade.fail of that mode, or the first open_trade.success of that mode with the
+  // command's asset, action and amount, on the same connection. A command aborted while waiting
+  // taints its connection: the client drops it and takes no command until the next ready. At
+  // most one command at a time: a second one throws.
   openTrade(
     mode: TradeMode,
     request: SocketOpenTradeRequest,
@@ -143,6 +147,8 @@ interface Connection {
   attempt: number;
   counters: Counters;
   warned: Set<string>;
+  // a command ended here without its answer: a late answer may still come on this connection
+  tainted: boolean;
 }
 
 interface Session {
@@ -161,6 +167,7 @@ interface PendingCommand {
   session: Session;
   connection: number;
   mode: TradeMode;
+  request: SocketOpenTradeRequest;
   settle: (result: SocketOpenTradeResult) => void;
 }
 
@@ -180,6 +187,17 @@ const newCounters = (): Counters => ({
     [BrokerEventProblemKind.Schema]: 0,
   },
 });
+
+// the first term of the command a success does not carry; undefined when it is the command's
+function mismatchedField(
+  trade: OpenTrade,
+  request: SocketOpenTradeRequest,
+): 'asset' | 'action' | 'amount' | undefined {
+  if (trade.assetId !== request.assetId) return 'asset';
+  if (trade.action !== request.action) return 'action';
+  if (normalizeDecimal(trade.amount) !== normalizeDecimal(request.amount)) return 'amount';
+  return undefined;
+}
 
 export function createBrokerSocketClient(options: BrokerSocketClientOptions): BrokerSocketClient {
   const timing = resolveBrokerSocketTiming(options.timing);
@@ -333,6 +351,7 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
       attempt: current.reconnectAttempt,
       counters: newCounters(),
       warned: new Set(),
+      tainted: false,
     };
     current.reconnectAttempt = 0;
     current.socket.emit(BrokerSocketEvent.UserAuth, current.auth);
@@ -445,7 +464,15 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
       return;
     }
     if (event.type === BrokerEventType.OpenTradeSuccess && event.mode === pending.mode) {
-      settleCommand({ outcome: 'success', trade: event.trade });
+      const field = mismatchedField(event.trade, pending.request);
+      if (field === undefined) {
+        settleCommand({ outcome: 'success', trade: event.trade });
+      } else {
+        logger.warn(
+          { connection: pending.connection, mode: pending.mode, field },
+          'broker socket open_trade answer mismatch',
+        );
+      }
     } else if (event.type === BrokerEventType.OpenTradeFail && event.mode === pending.mode) {
       settleCommand({ outcome: 'fail', failures: event.failures });
     }
@@ -463,7 +490,12 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
       return Promise.resolve({ outcome: 'not_sent', reason: 'aborted', state });
     }
     const connection = current?.connection;
-    if (current === undefined || connection === undefined || state !== BrokerSocketState.Ready) {
+    if (
+      current === undefined ||
+      connection === undefined ||
+      connection.tainted ||
+      state !== BrokerSocketState.Ready
+    ) {
       return Promise.resolve({ outcome: 'not_sent', reason: 'not_ready', state });
     }
     if (pending !== undefined) throw new Error('broker socket open_trade already pending');
@@ -478,13 +510,25 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
         session: current,
         connection: connection.ordinal,
         mode,
+        request,
         settle: (result) => {
           signal.removeEventListener('abort', onAbort);
           resolve(result);
         },
       };
       function onAbort() {
-        if (pending === command) settleCommand({ outcome: 'unknown', reason: 'aborted', state });
+        if (pending !== command) return;
+        settleCommand({ outcome: 'unknown', reason: 'aborted', state });
+        const owner = command.session;
+        const live = owner.connection;
+        if (sessionEnded(owner) || live?.ordinal !== command.connection) return;
+        // A late answer of this command would answer the next one: the connection takes no
+        // command until it is replaced. engine.io's close is a transport loss to socket.io, whose
+        // backoff reconnects; with packets still in its write buffer engine.io drains them first
+        // and `disconnect` comes later, so the flag covers the window until it does.
+        live.tainted = true;
+        logger.warn({ connection: command.connection }, 'broker socket connection tainted');
+        owner.socket.io.engine.close();
       }
       pending = command;
       signal.addEventListener('abort', onAbort);
