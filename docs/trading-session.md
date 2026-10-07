@@ -1,7 +1,7 @@
 # Trading sessions (issue #130)
 
-A trading session is a run of up to `settings.trades` demo trades on one broker account, one
-trade at a time. #130 lays the data layer: the `trading_sessions` table with its constraints, the
+A trading session is a run of up to `settings.trades` trades on one broker account, one trade at
+a time, in the session's `mode` (the first writer, #287's CLI, creates demo sessions). #130 lays the data layer: the `trading_sessions` table with its constraints, the
 `settings` contract and the stop reasons in `packages/shared`, and the database operations the
 session orchestrator calls. The orchestrator itself (the worker's tick, the signal and pairs
 calls, the stake sizer, the `session-start` CLI and the owner's pilot step) is **#287**; nothing in
@@ -38,7 +38,9 @@ pnpm test --project integration packages/db/src/trading-session-ops.db.test.ts p
   `trading_sessions_stop_reason_pair_check` (`(status = 'stopped') = (stop_reason is not null)`)
   and `trading_sessions_ended_at_pair_check` (the same for `ended_at`). One combined CHECK would
   accept `paused`/reason/no end and `active`/no reason/an end, since `false = false` holds.
-- `trading_sessions_runnable_idx (status, last_decision_at)` serves the scan.
+- `trading_sessions_runnable_idx (last_decision_at asc nulls first, created_at) where status =
+  'active'` has the scan's predicate and order, so the scan reads it in order and stops at its
+  limit (no sort step).
 - A session intent ties to its session through the existing composite FK
   `trade_intents_session_account_fk (trading_session_id, broker_account_id, mode)`: a demo session
   cannot parent a real intent, nor an intent of another account.
@@ -81,8 +83,8 @@ as the scale — `'1.00000000'` → `{ '1', 0 }`, `'0.50000000'` → `{ '0.5', 1
 
 | Operation | Statement | Notes |
 |---|---|---|
-| `createTradingSession(db, { brokerAccountId, mode, settings })` | one transaction | reads the account's user, locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`), then `broker_accounts` `FOR NO KEY UPDATE` (`account_not_active` unless `active`, `account_halted`); no account → `account_not_found`; the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a db-local code, not a wire contract |
-| `listRunnableSessions(db, { limit, exclude })` | one select | `active`, and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw |
+| `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings })` | one transaction | reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`), then `broker_accounts` `FOR NO KEY UPDATE` (`account_not_active` unless `active`, `account_halted`); no account → `account_not_found`; the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a db-local code, not a wire contract |
+| `listRunnableSessions(db, { limit, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw |
 | `stopExpiredSessions(db, { maxDurationMs, limit })` | one UPDATE | `started_at < now() − maxDurationMs` → `stopped`/`timeout` |
 | `stopHaltedSessions(db, { limit })` | one UPDATE | the account `trading_halted`, or an intent of the session in `manual_review` → `stopped`/`manual_review` |
 | `stopTradingSession(db, { id, reason })` | one UPDATE | CAS on `status = active`: a second stop finds nothing and the first reason stays |
@@ -94,16 +96,22 @@ Every stop writes `ended_at`, `last_decision_at` and `updated_at` as `now()`; ev
 changes `status` carries `status = 'active'` in its WHERE.
 
 **The session lock.** `createTradeIntent(db, input, policy, session?)` takes an optional session;
-with one, `createInTransaction` locks the session row `FOR NO KEY UPDATE` with the account and
-`status = active` after the account lock and before the insert, and throws
-`TradingSessionNotActiveError` when the row is gone — the transaction rolls back with its reserve.
+with one, `createInTransaction` locks the session row `FOR NO KEY UPDATE` with the account, the
+intent's mode and `status = active` after the account lock and before the insert, and throws
+`TradingSessionNotActiveError` when no such row exists — the transaction rolls back with its reserve.
 A stop committed after the orchestrator read the session therefore never gets an intent, and a
 stop that arrives during the insert waits for the commit. The route never passes a session; its
 intents keep `trading_session_id` NULL.
 
 **Lock order** (Rule 5): `users → broker_accounts → trading_sessions → trade_intents`. The stops
-and the decision mark lock session rows and nothing after them, so they never hold a lock a
-creator waits for while waiting on one it holds.
+and the decision mark are single UPDATEs of `trading_sessions` that take no lock on another
+table, so they never hold a lock a creator waits for while waiting on one it holds (stated: no
+test holds a lock against them).
+
+The session argument is public: `createTradeIntent` is exported from `@binarius/db`, and nothing
+but convention keeps callers other than `createSessionIntent` from passing one (stated). The
+lock still applies to any caller, so such an intent is always tied to an active session of its
+account and mode.
 
 ## Boundaries
 
