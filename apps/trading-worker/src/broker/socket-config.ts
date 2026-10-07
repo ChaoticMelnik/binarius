@@ -10,8 +10,8 @@
 //   BROKER_SOCKET_RECONNECT_JITTER       — the randomisation of each wait (`randomizationFactor`)
 // The chain: every *_MS is an integer in [1, MAX_TIMER_MS], the first wait does not exceed the
 // longest one, a handshake is not allowed longer than a connection attempt, and the jitter is in
-// [0, 1) — at 1 a wait could shrink to 0. The link to the worker's shutdown budget comes with the
-// client's place in index.ts (#101).
+// [0, 1) — at 1 a wait could shrink to 0. The link to the worker's shutdown budget is in
+// intents/config.ts.
 export const BROKER_SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 export const BROKER_SOCKET_AUTH_TIMEOUT_MS = 5_000;
 export const BROKER_SOCKET_RECONNECT_DELAY_MS = 1_000;

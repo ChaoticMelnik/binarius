@@ -62,7 +62,8 @@ const unavailable = (reason: ReconcileUnavailableReason): ReconcileResult => ({
 
 const REST_ERROR_REASON: Record<BrokerRestErrorCode, ReconcileUnavailableReason> = {
   [BrokerRestErrorCode.RateLimited]: ReconcileUnavailableReason.RateLimited,
-  // 401 on a token the backend just handed out; refreshing on it is #101's
+  // 401 on a token the backend just handed out; nobody refreshes on it (Rule 12): the user's
+  // next action exchanges the token
   [BrokerRestErrorCode.Unauthorized]: ReconcileUnavailableReason.TokenUnavailable,
   [BrokerRestErrorCode.Rejected]: ReconcileUnavailableReason.BrokerContract,
   [BrokerRestErrorCode.ContractViolation]: ReconcileUnavailableReason.BrokerContract,
