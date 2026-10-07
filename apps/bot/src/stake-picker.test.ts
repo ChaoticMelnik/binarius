@@ -45,7 +45,7 @@ interface Button {
 }
 
 const SETTINGS: StakeOrigin = { kind: 'settings' };
-const ANALYSIS: StakeOrigin = { kind: 'analysis', assetId: 101, durationSec: 60 };
+const ANALYSIS: StakeOrigin = { kind: 'analysis', assetId: 101, durationSec: 5 };
 const ON_STAKE_STEP: LoginDialogState = { step: 'stake', origin: SETTINGS };
 const d = (value: string): DecimalString => decimalStringSchema.parse(value);
 
@@ -91,7 +91,7 @@ const button = (text: string, callback_data: string): Button => ({ text, callbac
 const preset = (amount: string, label: string, origin: StakeOrigin = SETTINGS) =>
   button(label, stakePresetCallbackData(amount, origin));
 const BACK_SETTINGS = [button(LABELS.stakeBackSettingsButton, SETTINGS_CALLBACK_DATA)];
-const BACK_ANALYSIS = [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(101, 60))];
+const BACK_ANALYSIS = [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(101, 5))];
 const CUSTOM = (origin: StakeOrigin = SETTINGS) => [
   button(LABELS.stakeCustomButton, stakeCustomCallbackData(origin)),
 ];
@@ -230,7 +230,7 @@ describe('the stake picker', () => {
     ]);
   });
 
-  it.each(['stk:o:a:0:60', 'stk:o:a:101:61', 'stk:s:0:s', 'stk:z:a:0:60', 'stk:c:a:0:60'])(
+  it.each(['stk:o:a:0:5', 'stk:o:a:101:6', 'stk:s:0:s', 'stk:z:a:0:5', 'stk:c:a:0:5'])(
     'stops the spinner and calls nothing for the forged %s',
     async (data) => {
       const { press, calls, readTradingAccess, setDemoStake } = setup();
@@ -238,19 +238,19 @@ describe('the stake picker', () => {
       expect(readTradingAccess).not.toHaveBeenCalled();
       expect(setDemoStake).not.toHaveBeenCalled();
       expect(calls.map((call) => call.method)).toEqual(
-        data === 'stk:o:a:101:61' ? [] : ['answerCallbackQuery'],
+        data === 'stk:o:a:101:6' ? [] : ['answerCallbackQuery'],
       );
     },
   );
 
   it('keeps every picker datum inside the Bot API 64 bytes and reads its origin back', () => {
-    const longest: StakeOrigin = { kind: 'analysis', assetId: 2_147_483_647, durationSec: 3600 };
+    const longest: StakeOrigin = { kind: 'analysis', assetId: 2_147_483_647, durationSec: 15 };
     const data = stakePresetCallbackData('999999999999.99999999', longest);
-    expect(Buffer.byteLength(data, 'utf8')).toBe(45);
-    expect(stakeMenuCallbackData(101, 60)).toBe(stakeOpenCallbackData(ANALYSIS));
-    expect(stakeOriginOf('a:2147483647:3600')).toEqual(longest);
+    expect(Buffer.byteLength(data, 'utf8')).toBe(43);
+    expect(stakeMenuCallbackData(101, 5)).toBe(stakeOpenCallbackData(ANALYSIS));
+    expect(stakeOriginOf('a:2147483647:15')).toEqual(longest);
     expect(stakeOriginOf('s')).toEqual(SETTINGS);
-    expect(stakeOriginOf('a:0:60')).toBeUndefined();
+    expect(stakeOriginOf('a:0:5')).toBeUndefined();
     expect(stakeOriginOf('x')).toBeUndefined();
   });
 });

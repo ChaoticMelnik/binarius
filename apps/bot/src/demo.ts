@@ -28,6 +28,7 @@ import {
   DEMO_ASSET_GROUPS,
   DEMO_DURATIONS_SEC,
   durationOptions,
+  LEGACY_DEMO_DURATIONS_SEC,
   groupOf,
   openPairsOf,
   pageIndexOf,
@@ -78,7 +79,7 @@ export const demoAnalysisCallbackData = (assetId: number, durationSec: DemoDurat
 // is drawn once per analysis render and is the trade's idempotency key: the same button pressed
 // again replays its intent, a new render allows a new trade. The fingerprint is the amount the
 // label shows (#297): the press refuses when the amount in effect now is another one. The longest,
-// `demo:stake:2147483647:3600:down:0123456789ab:0a1b2c`, is 51 bytes.
+// `demo:stake:2147483647:15:down:0123456789ab:0a1b2c`, is 49 bytes.
 const STAKE_CALLBACK_PREFIX = 'demo:stake:';
 export const stakeCallbackData = (
   assetId: number,
@@ -107,12 +108,13 @@ export const stakeMenuCallbackData = (assetId: number, durationSec: DemoDuration
   `${STAKE_PICKER_PREFIX}o:a:${assetId}:${durationSec}`;
 // The analysis screen's session button (#284, trading-session.ts). No nonce, by the owner's
 // decision: an old button starts a new session once the previous one has ended, and while one is
-// active the backend answers with it. The longest, `demo:sess:2147483647:3600`, is 25 bytes.
+// active the backend answers with it. The longest, `demo:sess:2147483647:15`, is 23 bytes.
 const SESSION_START_PREFIX = 'demo:sess:';
 export const sessionStartCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
   `${SESSION_START_PREFIX}${assetId}:${durationSec}`;
 // The button shows only where a session of DEFAULT_SESSION_TRADES fits the worker's deadline
-// (today 1 and 5 min); the handler checks again, so an old or forged datum starts nothing.
+// (after #313 every duration of DEMO_DURATIONS_SEC: 5 × (15 + 120) s ≤ 1 h); the handler checks
+// again, so an old or forged datum starts nothing.
 export const sessionFits = (durationSec: number): boolean =>
   sessionFitsDeadline(DEFAULT_SESSION_TRADES, durationSec);
 // 48 bits: unique among one user's own renders is all it needs, since the key is per user
@@ -120,20 +122,56 @@ export const newStakeNonce = (): string => randomBytes(6).toString('hex');
 
 // A group is matched loosely and checked against DEMO_ASSET_GROUPS in the handler, so a forged
 // one stops the spinner like a forged id; a duration is one of DEMO_DURATIONS_SEC by the pattern.
-const DURATIONS = DEMO_DURATIONS_SEC.join('|');
+// Each duration-carrying shape is built from an alternation, so the legacy patterns (#313) are
+// the same shapes over LEGACY_DEMO_DURATIONS_SEC.
+export const durationAlternation = (durations: readonly number[]): string => durations.join('|');
+const DURATIONS = durationAlternation(DEMO_DURATIONS_SEC);
+const LEGACY_DURATIONS = durationAlternation(LEGACY_DEMO_DURATIONS_SEC);
 const DEMO_PAGE_PATTERN = /^demo:t:([a-z]{1,16}):(\d{1,4})$/;
 const DEMO_ASSET_PATTERN = /^demo:a:(\d{1,10})$/;
-const DEMO_DURATION_PATTERN = new RegExp(`^demo:d:(\\d{1,10}):(${DURATIONS})$`);
-const DEMO_ANALYSIS_PATTERN = new RegExp(`^demo:an:(\\d{1,10}):(${DURATIONS})$`);
+const demoDurationPattern = (durations: string) =>
+  new RegExp(`^demo:d:(\\d{1,10}):(${durations})$`);
+const demoAnalysisPattern = (durations: string) =>
+  new RegExp(`^demo:an:(\\d{1,10}):(${durations})$`);
 // the fingerprint is optional: a button from before #297 has none and is refused as changed,
 // not left spinning
-export const STAKE_CALLBACK_PATTERN = new RegExp(
-  `^${STAKE_CALLBACK_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')}):([0-9a-f]{12})(?::([0-9a-f]{6}))?$`,
-);
+const stakeCallbackPattern = (durations: string) =>
+  new RegExp(
+    `^${STAKE_CALLBACK_PREFIX}(\\d{1,10}):(${durations}):(${Object.values(TradeAction).join('|')}):([0-9a-f]{12})(?::([0-9a-f]{6}))?$`,
+  );
+const sessionStartPattern = (durations: string) =>
+  new RegExp(`^${SESSION_START_PREFIX}(\\d{1,10}):(${durations})$`);
+const DEMO_DURATION_PATTERN = demoDurationPattern(DURATIONS);
+const DEMO_ANALYSIS_PATTERN = demoAnalysisPattern(DURATIONS);
+export const STAKE_CALLBACK_PATTERN = stakeCallbackPattern(DURATIONS);
+export const SESSION_START_PATTERN = sessionStartPattern(DURATIONS);
+const LEGACY_DURATION_PATTERNS = [
+  demoDurationPattern(LEGACY_DURATIONS),
+  demoAnalysisPattern(LEGACY_DURATIONS),
+  stakeCallbackPattern(LEGACY_DURATIONS),
+  sessionStartPattern(LEGACY_DURATIONS),
+];
 
-export const SESSION_START_PATTERN = new RegExp(
-  `^${SESSION_START_PREFIX}(\\d{1,10}):(${DURATIONS})$`,
-);
+// A button drawn before #313 with a duration the demo no longer offers: the spinner stops and the
+// message loses its keyboard, so the old screen cannot be pressed again; nothing is sent. A
+// refusal of the edit (not modified, the message gone) changes nothing for the user.
+export async function removeLegacyKeyboard(ctx: Context, logger: Logger): Promise<void> {
+  await ctx.answerCallbackQuery().catch((error: unknown) => {
+    logger.warn(
+      { ...errorLogFields(error), ...telegramErrorFields(error, 'answerCallbackQuery') },
+      'answering the callback query failed',
+    );
+  });
+  try {
+    await ctx.editMessageReplyMarkup();
+  } catch (error) {
+    if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
+    logger.info(
+      { ...errorLogFields(error), ...telegramErrorFields(error, 'editMessageReplyMarkup') },
+      'the keyboard of an old duration button was not removed',
+    );
+  }
+}
 
 // The shape #127 sends, so what the bot carries is what the backend accepts.
 export const assetIdOf = (raw: string | undefined): number | undefined => {
@@ -199,6 +237,8 @@ export function createDemoComposer<C extends Context>({
   now,
 }: DemoComposerDeps): Composer<C> {
   const composer = new Composer<C>();
+
+  composer.callbackQuery(LEGACY_DURATION_PATTERNS, (ctx) => removeLegacyKeyboard(ctx, logger));
 
   composer.callbackQuery(DEMO_CALLBACK_DATA, async (ctx) => {
     const read = await answerAnd(ctx, readDemoCatalog(backend));
@@ -473,13 +513,14 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // The types present in the catalog, each with its count of open pairs; a type with no pair at
-  // all has no button. An empty catalog has nothing to choose from, so it reads as unavailable.
+  // The types present in the catalog, each with its count of open pairs; a type with no pair
+  // that accepts a demo duration has no button. An empty catalog has nothing to choose from, so it
+  // reads as unavailable; a catalog whose pairs all refuse 5 and 15 s says so (#313).
   function groupsScreen(catalog: PairsCatalogResponse): DemoScreen {
     const present = DEMO_ASSET_GROUPS.filter((group) => pairsOf(catalog, group).length > 0);
     if (present.length === 0) {
       return {
-        text: TEXTS.demoCatalogUnavailable,
+        text: catalog.pairs.length === 0 ? TEXTS.demoCatalogUnavailable : TEXTS.demoNoShortPairs,
         keyboard: new InlineKeyboard().text(LABELS.demoRetryButton, DEMO_GROUPS_CALLBACK_DATA),
       };
     }
@@ -522,7 +563,7 @@ export function createDemoComposer<C extends Context>({
     return { text: demoPairsScreen(group, page, pageCount), keyboard };
   }
 
-  // The durations the pair admits, in rows of three, then the way back to its page and to the
+  // The durations the pair admits, in one row, then the way back to its page and to the
   // types. The pair is checked again here: it can close between two presses.
   function assetScreen(catalog: PairsCatalogResponse, assetId: number): DemoScreen {
     const checked = checkDemoPair(catalog, assetId, now());
@@ -537,8 +578,7 @@ export function createDemoComposer<C extends Context>({
       return { text: TEXTS.demoNoDuration(pair.symbol), keyboard: backToPairs(catalog, pair) };
     }
     const keyboard = new InlineKeyboard();
-    options.forEach((sec, index) => {
-      if (index > 0 && index % 3 === 0) keyboard.row();
+    options.forEach((sec) => {
       keyboard.text(DEMO_DURATION_LABELS[sec], demoDurationCallbackData(pair.id, sec));
     });
     keyboard.row();

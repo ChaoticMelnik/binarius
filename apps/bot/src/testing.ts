@@ -169,7 +169,8 @@ export const accessView = (patch: Partial<TradingAccessResponse> = {}): TradingA
 });
 
 // The demo's catalog (#125). PAIR_CLOSED is closed on any clock a test runs at (2100-01-01), so
-// a suite on the real clock sees it closed too; the others have no schedule.
+// a suite on the real clock sees it closed too; the others have no schedule. PAIR_MINUTE_ONLY
+// accepts no demo duration (#313: 5 and 15 s) and is never listed.
 export const PAIR_EURUSD: PairView = {
   id: 101,
   symbol: 'EUR/USD OTC',
@@ -178,7 +179,7 @@ export const PAIR_EURUSD: PairView = {
   digits: 5,
   payout: 85,
   maxPayout: 92,
-  minTimeframe: 60,
+  minTimeframe: 5,
   maxTimeframe: 3600,
   scheduledUntil: 0,
 };
@@ -190,7 +191,7 @@ export const PAIR_CLOSED: PairView = {
   digits: 5,
   payout: 80,
   maxPayout: 88,
-  minTimeframe: 60,
+  minTimeframe: 5,
   maxTimeframe: 3600,
   scheduledUntil: 4_102_444_800_000,
 };
@@ -214,12 +215,24 @@ export const PAIR_OTHER_TYPE: PairView = {
   digits: 3,
   payout: 70,
   maxPayout: 75,
+  minTimeframe: 5,
+  maxTimeframe: 3600,
+  scheduledUntil: 0,
+};
+export const PAIR_MINUTE_ONLY: PairView = {
+  id: 505,
+  symbol: 'AUD/CAD',
+  isOtc: false,
+  type: 'currency',
+  digits: 5,
+  payout: 82,
+  maxPayout: 88,
   minTimeframe: 60,
   maxTimeframe: 3600,
   scheduledUntil: 0,
 };
 export const PAIRS_RESPONSE: PairsCatalogResponse = {
-  pairs: [PAIR_EURUSD, PAIR_CLOSED, PAIR_SHORT, PAIR_OTHER_TYPE],
+  pairs: [PAIR_EURUSD, PAIR_CLOSED, PAIR_SHORT, PAIR_OTHER_TYPE, PAIR_MINUTE_ONLY],
   fetchedAt: 1_790_000_000_000,
   ageMs: 1_500,
   fresh: true,
@@ -302,7 +315,7 @@ export const INTENT_VIEW: TradeIntentView = {
   assetId: PAIR_EURUSD.id,
   amount: BROKER_BALANCE.minTradeAmount,
   action: TradeAction.Up,
-  durationSec: 60,
+  durationSec: 15,
   clientRequestId: `demo:${USER.id}:${STAKE_NONCE}`,
   createdAt: '2026-10-06T10:00:00.000Z',
   status: TradeIntentStatus.Queued,
@@ -329,7 +342,7 @@ export const SESSION_VIEW: TradingSessionView = tradingSessionViewSchema.parse({
   settings: {
     version: 1,
     assetId: PAIR_EURUSD.id,
-    durationSec: 60,
+    durationSec: 15,
     trades: 5,
     stake: { baseStake: '1', stakeScale: 0 },
   },

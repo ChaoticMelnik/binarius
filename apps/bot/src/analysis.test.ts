@@ -74,7 +74,7 @@ const dataRefusalOf = (reason: DataRefusalReason) =>
   signalDecided({ ...head, kind: SignalKind.NoSignal, ...DATA_DETAILS[reason] } as SignalDecision);
 
 const screenOf = (response: TradingSignalResponse, pair = PAIR_EURUSD) =>
-  analysisScreen({ pair, durationSec: 60, response });
+  analysisScreen({ pair, durationSec: 5, response });
 const linesOf = (response: TradingSignalResponse, pair = PAIR_EURUSD) =>
   plainTextOf(screenOf(response, pair).text).split('\n');
 const FEATURE_PREFIXES = ['📐 Тренд по EMA:', '⚡ Импульс по RSI:', '🌊 Волатильность по ATR:'];
@@ -96,8 +96,8 @@ describe('the analysis screen', () => {
     const text = plainTextOf(screenOf(SIGNAL_DECIDED).text);
     const numbers = (text.match(/\d+(?:\.\d+)?/g) ?? []).sort();
     const expected = [
-      // the header's duration label, «⏱ 1 мин»
-      '1',
+      // the header's duration label, «⏱ 5 с»
+      '5',
       String(SIGNAL_PARAMS.emaFast),
       formatPrice(SIGNAL_FEATURES.emaFast, PAIR_EURUSD.digits),
       String(SIGNAL_PARAMS.emaSlow),
@@ -115,7 +115,7 @@ describe('the analysis screen', () => {
 
   it('lays out a signal: the header, the headline, the features, the payout, the disclaimer', () => {
     expect(plainTextOf(screenOf(SIGNAL_DECIDED).text)).toBe(
-      `📊 Анализ: EUR/USD OTC · ⏱ 1 мин
+      `📊 Анализ: EUR/USD OTC · ⏱ 5 с
 📈 Сигнал: ⬆️ Вверх
 
 📐 Тренд по EMA: вверх — EMA7 1.08542 выше EMA25 1.08511
@@ -192,7 +192,7 @@ describe('the analysis screen', () => {
     ]) {
       expect(screenOf(response).stake).toBeNull();
     }
-    expect(analysisUnavailableScreen(PAIR_EURUSD, 60).stake).toBeNull();
+    expect(analysisUnavailableScreen(PAIR_EURUSD, 5).stake).toBeNull();
   });
 
   // A7
@@ -239,13 +239,13 @@ describe('the analysis screen', () => {
       SIGNAL_FETCH_FAILED,
     ];
     for (const response of responses) {
-      const { text } = analysisScreen({ pair, durationSec: 3600, response });
+      const { text } = analysisScreen({ pair, durationSec: 15, response });
       expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
       expect(plainTextOf(text)).toContain(pair.symbol);
       expect(text.value).not.toContain('&amp;amp;');
     }
     expect(
-      telegramTextProblems(analysisUnavailableScreen(pair, 3600).text, TELEGRAM_MESSAGE_LIMIT),
+      telegramTextProblems(analysisUnavailableScreen(pair, 15).text, TELEGRAM_MESSAGE_LIMIT),
     ).toEqual([]);
   });
 });
@@ -257,7 +257,7 @@ describe('the text source', () => {
 
   const screenWith = (key: BotTextKey, response: TradingSignalResponse) => {
     setBotTextSource(stubTextSource(key));
-    return analysisScreen({ pair: PAIR_EURUSD, durationSec: 60, response }).text.value;
+    return analysisScreen({ pair: PAIR_EURUSD, durationSec: 5, response }).text.value;
   };
 
   it.each<[string, BotTextKey, TradingSignalResponse]>([

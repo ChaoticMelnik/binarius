@@ -6,6 +6,7 @@ import {
   createTradeIntentRequestSchema,
   decimalStringSchema,
   PairsCatalogErrorCode,
+  plainTextOf,
   SignalFeedOutcome,
   TradeAction,
   type PairsCatalogResponse,
@@ -37,6 +38,7 @@ import {
   BOT_INFO,
   PAIR_CLOSED,
   PAIR_EURUSD,
+  PAIR_MINUTE_ONLY,
   PAIR_OTHER_TYPE,
   PAIR_SHORT,
   PAIRS_RESPONSE,
@@ -162,7 +164,8 @@ describe('the demo button', () => {
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(TEXTS.demoGroups.value);
-    // GBP/USD is closed, so the currencies count one; no commodity, stock or index in the catalog
+    // GBP/USD is closed and AUD/CAD accepts no demo duration (#313), so the currencies count one;
+    // no commodity, stock or index in the catalog
     expect(rowsOf(sent)).toEqual([
       [
         button('💱 Валюты · 1', demoPageCallbackData('currency', 0)),
@@ -209,6 +212,26 @@ describe('the demo button', () => {
 
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(TEXTS.demoCatalogUnavailable.value);
+    expect(rowsOf(sent)).toEqual([[button(LABELS.demoRetryButton, DEMO_GROUPS_CALLBACK_DATA)]]);
+  });
+
+  // #313: only the pairs that accept 5 or 15 s are listed
+  it('gives no button to a type whose pairs all refuse the demo durations', async () => {
+    const minuteStock = { ...PAIR_MINUTE_ONLY, id: 606, symbol: 'AAPL', type: 'stock' };
+    const { press, calls } = setup({ readPairs: catalogOf(PAIR_EURUSD, minuteStock) });
+    await press(DEMO_CALLBACK_DATA);
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual([
+      [button('💱 Валюты · 1', demoPageCallbackData('currency', 0))],
+    ]);
+  });
+
+  it('says there is no pair for short trades when no pair accepts them, with the retry', async () => {
+    const { press, calls } = setup({ readPairs: catalogOf(PAIR_MINUTE_ONLY) });
+    await press(DEMO_CALLBACK_DATA);
+
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(TEXTS.demoNoShortPairs.value);
+    expect(plainTextOf(TEXTS.demoNoShortPairs)).toBe('Сейчас нет активов для коротких сделок.');
     expect(rowsOf(sent)).toEqual([[button(LABELS.demoRetryButton, DEMO_GROUPS_CALLBACK_DATA)]]);
   });
 
@@ -308,7 +331,7 @@ describe('the types and their pages', () => {
 });
 
 describe('a pair and its durations', () => {
-  it('shows the durations the pair admits in rows of three, then the way back', async () => {
+  it('shows exactly «⏱ 5 с» and «⏱ 15 с» in one row, then the way back', async () => {
     const { press, calls } = setup();
     await press(demoAssetCallbackData(PAIR_EURUSD.id));
 
@@ -316,36 +339,29 @@ describe('a pair and its durations', () => {
     expect(edited?.text).toBe(demoDurationsScreen(PAIR_EURUSD).value);
     expect(rowsOf(edited)).toEqual([
       [
-        button('⏱ 1 мин', demoDurationCallbackData(101, 60)),
-        button('⏱ 5 мин', demoDurationCallbackData(101, 300)),
-        button('⏱ 15 мин', demoDurationCallbackData(101, 900)),
-      ],
-      [
-        button('⏱ 30 мин', demoDurationCallbackData(101, 1800)),
-        button('⏱ 1 ч', demoDurationCallbackData(101, 3600)),
+        button('⏱ 5 с', demoDurationCallbackData(101, 5)),
+        button('⏱ 15 с', demoDurationCallbackData(101, 15)),
       ],
       [BACK_EURUSD_PAGE, BACK_GROUPS],
     ]);
   });
 
   it('leaves out the durations outside the pair range, and leads back to its page', async () => {
-    const narrow = { ...PAIR_EURUSD, symbol: 'ZAR/USD OTC', minTimeframe: 120, maxTimeframe: 900 };
+    const narrow = { ...PAIR_EURUSD, symbol: 'ZAR/USD OTC', minTimeframe: 10, maxTimeframe: 900 };
     const { press, calls } = setup({ readPairs: catalogOf(...MANY, narrow) });
     await press(demoAssetCallbackData(narrow.id));
 
     // «ZAR/USD OTC» sorts after P00 … P24, so it is the second item of page 2
     expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
-      [
-        button('⏱ 5 мин', demoDurationCallbackData(101, 300)),
-        button('⏱ 15 мин', demoDurationCallbackData(101, 900)),
-      ],
+      [button('⏱ 15 с', demoDurationCallbackData(101, 15))],
       [button(LABELS.demoBackPairsButton, demoPageCallbackData('currency', 2)), BACK_GROUPS],
     ]);
   });
 
+  // an old pair button of a pair the pages no longer list (#313): the way back is page 0
   it('says so when the pair admits none of the durations', async () => {
     const { press, calls } = setup({
-      readPairs: catalogOf({ ...PAIR_SHORT, minTimeframe: 5, maxTimeframe: 30 }),
+      readPairs: catalogOf({ ...PAIR_SHORT, minTimeframe: 30, maxTimeframe: 3600 }),
     });
     await press(demoAssetCallbackData(PAIR_SHORT.id));
 
@@ -377,12 +393,12 @@ describe('a pair and its durations', () => {
 describe('the summary and «📊 Анализ»', () => {
   it('shows the summary with «📊 Анализ» and the way back', async () => {
     const { press, calls } = setup();
-    await press(demoDurationCallbackData(PAIR_EURUSD.id, 300));
+    await press(demoDurationCallbackData(PAIR_EURUSD.id, 15));
 
     const edited = payloadOf(calls, 'editMessageText');
-    expect(edited?.text).toBe(demoSummary(PAIR_EURUSD, 300).value);
+    expect(edited?.text).toBe(demoSummary(PAIR_EURUSD, 15).value);
     expect(rowsOf(edited)).toEqual([
-      [button(LABELS.demoAnalysisButton, demoAnalysisCallbackData(101, 300))],
+      [button(LABELS.demoAnalysisButton, demoAnalysisCallbackData(101, 15))],
       [BACK_EURUSD_DURATIONS, BACK_GROUPS],
     ]);
   });
@@ -394,12 +410,12 @@ describe('the summary and «📊 Анализ»', () => {
     const { press, calls, readPairs, evaluateSignal } = setup({
       readPairs: () => (reads.shift() ?? catalogOf())(),
     });
-    await press(demoDurationCallbackData(PAIR_EURUSD.id, 300));
-    await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 300));
+    await press(demoDurationCallbackData(PAIR_EURUSD.id, 15));
+    await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
 
     const edits = calls.filter((call) => call.method === 'editMessageText');
     expect(edits.map((call) => call.payload.text)).toEqual([
-      demoSummary(PAIR_EURUSD, 300).value,
+      demoSummary(PAIR_EURUSD, 15).value,
       TEXTS.demoPairClosed(PAIR_EURUSD.symbol).value,
     ]);
     expect(evaluateSignal).not.toHaveBeenCalled();
@@ -410,7 +426,7 @@ describe('the summary and «📊 Анализ»', () => {
     const { press, calls } = setup({
       readPairs: () => Promise.resolve(pairsResponse({ ageMs: 90_000, fresh: false })),
     });
-    const data = demoDurationCallbackData(PAIR_EURUSD.id, 300);
+    const data = demoDurationCallbackData(PAIR_EURUSD.id, 15);
     await press(data);
 
     const edited = payloadOf(calls, 'editMessageText');
@@ -419,8 +435,8 @@ describe('the summary and «📊 Анализ»', () => {
   });
 
   it('refuses an old duration button the pair no longer admits', async () => {
-    const { press, calls } = setup({ readPairs: catalogOf({ ...PAIR_EURUSD, maxTimeframe: 120 }) });
-    await press(demoDurationCallbackData(PAIR_EURUSD.id, 300));
+    const { press, calls } = setup({ readPairs: catalogOf({ ...PAIR_EURUSD, maxTimeframe: 10 }) });
+    await press(demoDurationCallbackData(PAIR_EURUSD.id, 15));
 
     const edited = payloadOf(calls, 'editMessageText');
     expect(edited?.text).toBe(TEXTS.demoDurationUnsupported(PAIR_EURUSD.symbol).value);
@@ -429,7 +445,7 @@ describe('the summary and «📊 Анализ»', () => {
 
   it('refuses a pair gone from the catalog', async () => {
     const { press, calls } = setup({ readPairs: catalogOf(PAIR_SHORT) });
-    await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 300));
+    await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
 
     const edited = payloadOf(calls, 'editMessageText');
     expect(edited?.text).toBe(TEXTS.demoPairMissing.value);
@@ -439,10 +455,10 @@ describe('the summary and «📊 Анализ»', () => {
 
 // #126
 describe('the analysis', () => {
-  const DATA = demoAnalysisCallbackData(PAIR_EURUSD.id, 60);
+  const DATA = demoAnalysisCallbackData(PAIR_EURUSD.id, 5);
   const REPEAT = button(LABELS.repeatAnalysisButton, DATA);
-  const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 60));
-  const STAKE_MENU = button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 60));
+  const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 5));
+  const STAKE_MENU = button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5));
   const stakeRowOf = (calls: readonly ApiCall[]) => rowsOf(edits(calls).at(-1)?.payload)[0];
 
   // #297: the label and the fingerprint are the amount the press would trade
@@ -497,7 +513,7 @@ describe('the analysis', () => {
     expect(stakeFingerprint(null)).toMatch(/^[0-9a-f]{6}$/);
   });
   const resultOf = (response = SIGNAL_DECIDED) =>
-    analysisScreen({ pair: PAIR_EURUSD, durationSec: 60, response }).text.value;
+    analysisScreen({ pair: PAIR_EURUSD, durationSec: 5, response }).text.value;
   const edits = (calls: readonly ApiCall[]) =>
     calls.filter((call) => call.method === 'editMessageText');
 
@@ -507,7 +523,7 @@ describe('the analysis', () => {
 
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'editMessageText']);
     const [waiting, result] = edits(calls);
-    expect(waiting?.payload.text).toBe(TEXTS.analyzing('EUR/USD OTC · ⏱ 1 мин').value);
+    expect(waiting?.payload.text).toBe(TEXTS.analyzing('EUR/USD OTC · ⏱ 5 с').value);
     // without a keyboard the edit removes the summary's, so «📊 Анализ» cannot be pressed twice
     expect(waiting?.payload.reply_markup).toBeUndefined();
     expect(result?.payload.text).toBe(resultOf());
@@ -520,22 +536,20 @@ describe('the analysis', () => {
     const match = STAKE_CALLBACK_PATTERN.exec(stake?.callback_data ?? '');
     expect(stakeDataOf(match ?? '')).toEqual({
       assetId: PAIR_EURUSD.id,
-      durationSec: 60,
+      durationSec: 5,
       action: TradeAction.Up,
       nonce: expect.stringMatching(/^[0-9a-f]{12}$/),
       fingerprint: STAKE_FINGERPRINT,
     });
     expect(rest).toEqual([[SESSION], [REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
     expect(readPairs).toHaveBeenCalledTimes(1);
-    expect(evaluateSignal.mock.calls).toEqual([[PAIR_EURUSD.id, '1m']]);
+    expect(evaluateSignal.mock.calls).toEqual([[PAIR_EURUSD.id, '5s']]);
   });
 
+  // #313: a short trade's analysis runs on its own sub-minute candle, never on 1m
   it.each([
-    [60, '1m'],
-    [300, '5m'],
-    [900, '15m'],
-    [1800, '30m'],
-    [3600, '1h'],
+    [5, '5s'],
+    [15, '15s'],
   ] as const)('asks for the candles of a %i s trade at %s', async (durationSec, interval) => {
     const { press, evaluateSignal } = setup();
     await press(demoAnalysisCallbackData(PAIR_EURUSD.id, durationSec));
@@ -543,21 +557,21 @@ describe('the analysis', () => {
   });
 
   it('covers every demo duration in the table above', () => {
-    expect(DEMO_DURATIONS_SEC).toEqual([60, 300, 900, 1800, 3600]);
+    expect(DEMO_DURATIONS_SEC).toEqual([5, 15]);
   });
 
   // the acceptance criterion: the screen is built from the pair read at this press
   it('prints the payout of the catalog read at this press, not the one the summary showed', async () => {
     const reads = [catalogOf(PAIR_EURUSD), catalogOf({ ...PAIR_EURUSD, payout: 70 })];
     const { press, calls } = setup({ readPairs: () => (reads.shift() ?? catalogOf())() });
-    await press(demoDurationCallbackData(PAIR_EURUSD.id, 60));
+    await press(demoDurationCallbackData(PAIR_EURUSD.id, 5));
     await press(DATA);
 
     const result = edits(calls).at(-1)?.payload.text;
     expect(result).toBe(
       analysisScreen({
         pair: { ...PAIR_EURUSD, payout: 70 },
-        durationSec: 60,
+        durationSec: 5,
         response: SIGNAL_DECIDED,
       }).text.value,
     );
@@ -566,7 +580,7 @@ describe('the analysis', () => {
 
   it('asks for no signal and shows no «⏳» on a closed pair', async () => {
     const { press, calls, evaluateSignal } = setup({ readPairs: catalogOf(PAIR_CLOSED) });
-    await press(demoAnalysisCallbackData(PAIR_CLOSED.id, 60));
+    await press(demoAnalysisCallbackData(PAIR_CLOSED.id, 5));
 
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     expect(payloadOf(calls, 'editMessageText')?.text).toBe(
@@ -606,36 +620,36 @@ describe('the analysis', () => {
   it.each(['0123456789a', '0123456789AB', 'AbCdEf012345', 'ASNFZ4mrze8=', '0123456789abc'])(
     'refuses the nonce %s',
     (nonce) => {
-      expect(STAKE_CALLBACK_PATTERN.exec(`demo:stake:101:60:up:${nonce}`)).toBeNull();
+      expect(STAKE_CALLBACK_PATTERN.exec(`demo:stake:101:5:up:${nonce}`)).toBeNull();
     },
   );
 
   // a button from before #297 has no fingerprint: matched, so its press is refused with a text
   // rather than left spinning; a malformed one is not matched
   it('reads a stake datum with and without a fingerprint, and refuses a malformed one', () => {
-    const old = stakeDataOf(STAKE_CALLBACK_PATTERN.exec('demo:stake:101:60:up:0123456789ab') ?? '');
+    const old = stakeDataOf(STAKE_CALLBACK_PATTERN.exec('demo:stake:101:5:up:0123456789ab') ?? '');
     expect(old).toMatchObject({ nonce: '0123456789ab', fingerprint: undefined });
     for (const fingerprint of ['a0b1c', 'A0B1C2', 'a0b1c2d']) {
       expect(
-        STAKE_CALLBACK_PATTERN.exec(`demo:stake:101:60:up:0123456789ab:${fingerprint}`),
+        STAKE_CALLBACK_PATTERN.exec(`demo:stake:101:5:up:0123456789ab:${fingerprint}`),
       ).toBeNull();
     }
     expect(
       Buffer.byteLength(
-        stakeCallbackData(2_147_483_647, 3600, TradeAction.Down, 'f'.repeat(12), 'f'.repeat(6)),
+        stakeCallbackData(2_147_483_647, 15, TradeAction.Down, 'f'.repeat(12), 'f'.repeat(6)),
       ),
-    ).toBe(51);
+    ).toBe(49);
   });
 
   it("carries stake data #127's request schema accepts", () => {
     for (const action of Object.values(TradeAction)) {
-      const data = stakeCallbackData(2_147_483_647, 3600, action, 'ffffffffffff', 'a0b1c2');
+      const data = stakeCallbackData(2_147_483_647, 15, action, 'ffffffffffff', 'a0b1c2');
       const match = STAKE_CALLBACK_PATTERN.exec(data);
       expect(match, data).not.toBeNull();
       const parsed = stakeDataOf(match as RegExpMatchArray);
       expect(parsed).toEqual({
         assetId: 2_147_483_647,
-        durationSec: 3600,
+        durationSec: 15,
         action,
         nonce: 'ffffffffffff',
         fingerprint: 'a0b1c2',
@@ -648,13 +662,10 @@ describe('the analysis', () => {
     }
   });
 
-  // #284: a session of five fits the worker's hour at 1 and 5 min only
+  // #284: a session of five fits the worker's hour at every duration of the set (#313)
   it.each([
-    [60, true],
-    [300, true],
-    [900, false],
-    [1800, false],
-    [3600, false],
+    [5, true],
+    [15, true],
   ] as const)('offers the session at %i s on a signal: %s', async (durationSec, shown) => {
     const { press, calls } = setup();
     await press(demoAnalysisCallbackData(PAIR_EURUSD.id, durationSec));
@@ -668,17 +679,15 @@ describe('the analysis', () => {
   });
 
   it('keeps the longest session datum inside the Bot API limit and reads it back', () => {
-    const data = sessionStartCallbackData(2_147_483_647, 300);
-    expect(data).toBe('demo:sess:2147483647:300');
-    expect(Buffer.byteLength(sessionStartCallbackData(2_147_483_647, 3600), 'utf8')).toBe(25);
+    const data = sessionStartCallbackData(2_147_483_647, 15);
+    expect(data).toBe('demo:sess:2147483647:15');
+    expect(Buffer.byteLength(data, 'utf8')).toBe(23);
     expect(sessionStartDataOf(SESSION_START_PATTERN.exec(data) ?? '')).toEqual({
       assetId: 2_147_483_647,
-      durationSec: 300,
+      durationSec: 15,
     });
-    // a datum for a duration that does not fit is refused by the reader, not only hidden
-    const tooLong = SESSION_START_PATTERN.exec(sessionStartCallbackData(PAIR_EURUSD.id, 900));
-    expect(tooLong).not.toBeNull();
-    expect(sessionStartDataOf(tooLong ?? '')).toBeUndefined();
+    // a datum from before #313 is not a session datum: the legacy handler takes it
+    expect(SESSION_START_PATTERN.exec(`demo:sess:${String(PAIR_EURUSD.id)}:300`)).toBeNull();
   });
 
   it.each([
@@ -706,7 +715,7 @@ describe('the analysis', () => {
     await press(DATA);
 
     expect(edits(calls).at(-1)?.payload.text).toBe(
-      analysisUnavailableScreen(PAIR_EURUSD, 60).text.value,
+      analysisUnavailableScreen(PAIR_EURUSD, 5).text.value,
     );
     expect(logger.warn.mock.calls).toEqual([
       [{ signalCode: BrokerRestErrorCode.Unavailable }, 'signal not evaluated'],
@@ -722,7 +731,7 @@ describe('the analysis', () => {
     await press(DATA);
 
     const result = edits(calls).at(-1)?.payload;
-    expect(result?.text).toBe(analysisUnavailableScreen(PAIR_EURUSD, 60).text.value);
+    expect(result?.text).toBe(analysisUnavailableScreen(PAIR_EURUSD, 5).text.value);
     expect(rowsOf(result)).toEqual([[REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
     expect(logger.warn.mock.calls.map((call) => call[1])).toEqual(['signal not evaluated']);
   });
@@ -739,7 +748,7 @@ describe('the analysis', () => {
       'sendMessage',
     ]);
     const [waiting, result] = calls.filter((call) => call.method === 'sendMessage');
-    expect(waiting?.payload.text).toBe(TEXTS.analyzing('EUR/USD OTC · ⏱ 1 мин').value);
+    expect(waiting?.payload.text).toBe(TEXTS.analyzing('EUR/USD OTC · ⏱ 5 с').value);
     expect(result?.payload.text).toBe(resultOf());
     expect(rowsOf(result?.payload)[2]).toEqual([REPEAT]);
   });
@@ -856,8 +865,8 @@ describe('demo data the bot did not draw', () => {
     'demo:a:0',
     'demo:a:2147483648',
     'demo:t:bond:0',
-    'demo:d:0:300',
-    'demo:an:2147483648:300',
+    'demo:d:0:15',
+    'demo:an:2147483648:15',
   ])('stops the spinner on %s and sends nothing', async (data) => {
     const { press, calls, readPairs } = setup();
     await press(data);
@@ -870,8 +879,11 @@ describe('demo data the bot did not draw', () => {
     'demo:d:101:120',
     'demo:an:101:120',
     'demo:stake:101:120:up:0123456789ab',
-    'demo:stake:101:60:sideways:0123456789ab',
-    'demo:stake:101:60:up',
+    'demo:stake:101:5:sideways:0123456789ab',
+    'demo:stake:101:5:up',
+    'demo:sess:101:120',
+    'stk:o:a:101:120',
+    'stk:o:s:300',
     'demo:t:currency:-1',
     'demo:x',
   ])('does not answer %s at all: no demo pattern matches it', async (data) => {
@@ -880,6 +892,49 @@ describe('demo data the bot did not draw', () => {
     expect(calls).toEqual([]);
     expect(readPairs).not.toHaveBeenCalled();
     expect(evaluateSignal).not.toHaveBeenCalled();
+  });
+});
+
+// #313: the durations of before (60/300/900/1800/3600) in every shape that carries one
+describe('a button with a duration the demo no longer offers', () => {
+  const LEGACY = [60, 300, 900, 1800, 3600].flatMap((sec) => [
+    `demo:d:101:${String(sec)}`,
+    `demo:an:101:${String(sec)}`,
+    `demo:stake:101:${String(sec)}:up:0123456789ab`,
+    `demo:stake:101:${String(sec)}:down:0123456789ab:a0b1c2`,
+    `demo:sess:101:${String(sec)}`,
+    `stk:o:a:101:${String(sec)}`,
+    `stk:s:2.5:a:101:${String(sec)}`,
+    `stk:z:a:101:${String(sec)}`,
+    `stk:c:a:101:${String(sec)}`,
+  ]);
+
+  it.each(LEGACY)('%s: stops the spinner, removes the keyboard, sends nothing', async (data) => {
+    const { press, calls, readPairs, evaluateSignal, logger } = setup();
+    await press(data);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
+    expect(payloadOf(calls, 'editMessageReplyMarkup')?.reply_markup).toBeUndefined();
+    expect(readPairs).not.toHaveBeenCalled();
+    expect(evaluateSignal).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('logs a refused removal at info and sends nothing', async () => {
+    const { press, calls, apiErrors, logger } = setup();
+    apiErrors.set('editMessageReplyMarkup', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: message is not modified',
+    });
+    await press('demo:an:101:300');
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
+    expect(logger.info.mock.calls.map((call) => call[1])).toEqual([
+      'the keyboard of an old duration button was not removed',
+    ]);
+    expect(logger.info.mock.calls[0]?.[0]).toMatchObject({
+      method: 'editMessageReplyMarkup',
+      telegramErrorCode: 400,
+    });
   });
 });
 

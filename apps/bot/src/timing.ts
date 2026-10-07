@@ -56,6 +56,8 @@ export const HANDLER_CALLS = {
   demoPage: { backend: 1, telegram: 3 },
   demoAsset: { backend: 1, telegram: 3 },
   demoDuration: { backend: 1, telegram: 3 },
+  // a button with a duration from before #313: answerCallbackQuery, then editMessageReplyMarkup
+  legacyDuration: { backend: 0, telegram: 2 },
   // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs, the «⏳» edit refused as gone →
   // sendMessage, evaluateSignal ∥ readTradingAccess (the stake label, #297) — counted as
   // sequential, as in oauth — the result by sendMessage; or «⏳» edited, the two reads, the
@@ -160,9 +162,10 @@ export const INTENT_TRACK_DEADLINE_MS = 120_000;
 export const INTENT_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS;
 
 // The demo session's status tracker (#284, session-tracker.ts), polling between updates like the
-// intent tracker. A session's trade lasts at least a minute, so a poll every 10 s is enough to
-// follow it and bounds the load. The deadline is the worker's session deadline, imported and so
-// checked below, plus the last trade's settle (SESSION_SETTLE_SLACK_SEC) with room.
+// intent tracker. A trade's open-to-settle cycle is at least the worker's catch-up grace (10 s),
+// so a poll every 10 s is enough to follow it and bounds the load. The deadline is the worker's
+// session deadline, imported and so checked below, plus the last trade's settle
+// (SESSION_SETTLE_SLACK_SEC) with room.
 export const SESSION_TRACK_FIRST_POLL_MS = 3_000;
 export const SESSION_TRACK_POLL_MS = 10_000;
 export const SESSION_TRACK_DEADLINE_MS = SESSION_MAX_DURATION_MS + 600_000;

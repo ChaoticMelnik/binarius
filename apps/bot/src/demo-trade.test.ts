@@ -60,7 +60,7 @@ import {
 import { intentStatusText, LABELS, setBotTextSource, TEXTS } from './texts';
 
 const NOW = 1_790_000_000_000;
-const STAKE = stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT);
+const STAKE = stakeCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT);
 const REFRESH = intentCallbackData(INTENT_ID);
 
 interface Button {
@@ -134,7 +134,7 @@ const CONNECT_ROWS = [
 ];
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
 const STAKE_MENU_ROWS = [
-  [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 60))],
+  [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5))],
 ];
 const BACK_DURATIONS = button(
   LABELS.demoBackDurationsButton,
@@ -181,7 +181,7 @@ describe('the stake button', () => {
           // the backend's string as received, never computed
           amount: ACCESS_VIEW.broker?.minTradeAmount,
           action: TradeAction.Up,
-          durationSec: 60,
+          durationSec: 5,
           clientRequestId: `demo:${USER.id}:${STAKE_NONCE}`,
         },
       ],
@@ -237,7 +237,7 @@ describe('the stake button', () => {
   it('keys a button of another render by its own nonce', async () => {
     const { press, createIntent } = setup();
     await press(
-      stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, 'aaaaaaaaaaaa', STAKE_FINGERPRINT),
+      stakeCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, 'aaaaaaaaaaaa', STAKE_FINGERPRINT),
     );
     expect(createIntent.mock.calls[0]?.[0].clientRequestId).toBe(`demo:${USER.id}:aaaaaaaaaaaa`);
   });
@@ -299,7 +299,7 @@ describe('the stake button', () => {
     const saved = (demoStake: string) => () =>
       Promise.resolve(accessView({ demoStake: decimalStringSchema.parse(demoStake) }));
     const stakeFor = (fingerprint: string) =>
-      stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, STAKE_NONCE, fingerprint);
+      stakeCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, STAKE_NONCE, fingerprint);
 
     it('trades the saved stake, not the broker minimum', async () => {
       const { press, createIntent } = setup({ readTradingAccess: saved('2.5') });
@@ -328,7 +328,7 @@ describe('the stake button', () => {
       [
         'from before the fingerprint',
         () => Promise.resolve(ACCESS_VIEW),
-        `demo:stake:${PAIR_EURUSD.id}:60:up:${STAKE_NONCE}`,
+        `demo:stake:${PAIR_EURUSD.id}:5:up:${STAKE_NONCE}`,
       ],
     ])('refuses a button %s and creates nothing', async (_case, readTradingAccess, data) => {
       const { press, calls, createIntent, logger } = setup({ readTradingAccess });
@@ -337,7 +337,7 @@ describe('the stake button', () => {
       const sent = payloadOf(calls, 'sendMessage');
       expect(sent?.text).toBe(TEXTS.stakeAmountChanged.value);
       expect(rowsOf(sent)).toEqual([
-        [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 60))],
+        [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5))],
       ]);
       expect(warnings(logger)).toEqual([]);
     });
@@ -458,14 +458,14 @@ describe('the stake button', () => {
     [
       'the pair is closed',
       catalogOf({ pairs: [PAIR_CLOSED] }),
-      stakeCallbackData(PAIR_CLOSED.id, 60, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+      stakeCallbackData(PAIR_CLOSED.id, 5, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
       TEXTS.demoPairClosed(PAIR_CLOSED.symbol),
       [[BACK_GROUPS]],
     ],
     [
       "the duration is outside the pair's bounds",
-      catalogOf({ pairs: [{ ...PAIR_EURUSD, maxTimeframe: 60 }] }),
-      stakeCallbackData(PAIR_EURUSD.id, 300, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+      catalogOf({ pairs: [{ ...PAIR_EURUSD, maxTimeframe: 10 }] }),
+      stakeCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
       TEXTS.demoDurationUnsupported(PAIR_EURUSD.symbol),
       [[BACK_DURATIONS, BACK_GROUPS]],
     ],
@@ -545,7 +545,7 @@ describe('the stake button', () => {
     expect(createIntent).not.toHaveBeenCalled();
   });
 
-  it.each(['demo:stake:0:60:up:0123456789ab', 'demo:stake:2147483648:60:up:0123456789ab'])(
+  it.each(['demo:stake:0:5:up:0123456789ab', 'demo:stake:2147483648:5:up:0123456789ab'])(
     'only stops the spinner on forged data %s',
     async (data) => {
       const { press, calls, readPairs, readTradingAccess, createIntent } = setup();

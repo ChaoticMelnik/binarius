@@ -739,19 +739,19 @@ const DEMO_ASSET = demoScreenBranches(
   pairBranches([
     {
       label: 'the pair admits no duration',
-      readPairs: onlyPairs({ ...PAIR_EURUSD, minTimeframe: 5, maxTimeframe: 30 }),
+      readPairs: onlyPairs({ ...PAIR_EURUSD, minTimeframe: 30, maxTimeframe: 3600 }),
       expected: { backend: 1, telegram: 2 },
     },
   ]),
 );
 const unsupported = {
   label: 'the duration no longer fits the pair',
-  readPairs: onlyPairs({ ...PAIR_EURUSD, maxTimeframe: 120 }),
+  readPairs: onlyPairs({ ...PAIR_EURUSD, maxTimeframe: 10 }),
   expected: { backend: 1, telegram: 2 },
 };
 const DEMO_DURATION = demoScreenBranches(
-  demoDurationCallbackData(PAIR_EURUSD.id, 300),
-  'demo:d:2147483648:300',
+  demoDurationCallbackData(PAIR_EURUSD.id, 15),
+  'demo:d:2147483648:15',
   pairBranches([unsupported]),
 );
 // «📊 Анализ» (#126): the check, «⏳» edited in place of the summary, the signal, the result in
@@ -760,7 +760,7 @@ const EDIT_TRANSPORT = new HttpError(
   "Network request for 'editMessageText' failed!",
   new Error('The operation was aborted due to timeout'),
 );
-const analysisUpdate = () => callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 300));
+const analysisUpdate = () => callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 15));
 const DEMO_ANALYSIS_WORST_CASE: Branch = {
   label: '«⏳» is refused as gone and sent anew, then the result is sent',
   update: analysisUpdate(),
@@ -772,12 +772,12 @@ const DEMO_ANALYSIS = {
   branches: [
     {
       label: 'the chat is not private',
-      update: callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 300), 'group'),
+      update: callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 15), 'group'),
       expected: { backend: 0, telegram: 0 },
     },
     {
       label: 'the data is forged',
-      update: callbackUpdate('demo:an:0:300'),
+      update: callbackUpdate('demo:an:0:15'),
       expected: { backend: 0, telegram: 1 },
     },
     ...catalogBranches(analysisUpdate, 2),
@@ -869,7 +869,7 @@ const DEMO_ANALYSIS = {
 // the stake button (#127)
 const stakeUpdate = (chatType?: string) =>
   callbackUpdate(
-    stakeCallbackData(PAIR_EURUSD.id, 300, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+    stakeCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
     chatType,
   );
 const createFails = (error: BackendError) => () => Promise.reject(error);
@@ -894,7 +894,7 @@ const STAKE_BRANCHES: readonly Branch[] = [
   },
   {
     label: 'the data is forged',
-    update: callbackUpdate('demo:stake:0:300:up:0123456789ab'),
+    update: callbackUpdate('demo:stake:0:15:up:0123456789ab'),
     expected: { backend: 0, telegram: 1 },
   },
   {
@@ -912,7 +912,7 @@ const STAKE_BRANCHES: readonly Branch[] = [
   {
     label: 'the pair is closed',
     update: callbackUpdate(
-      stakeCallbackData(PAIR_CLOSED.id, 300, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+      stakeCallbackData(PAIR_CLOSED.id, 15, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
     ),
     expected: { backend: 2, telegram: 2 },
   },
@@ -1028,7 +1028,7 @@ const STOPPED_SESSION = sessionView({
   endedAt: '2026-10-07T10:05:00.000Z',
 });
 const sessionStartUpdate = (chatType?: string) =>
-  callbackUpdate(sessionStartCallbackData(PAIR_EURUSD.id, 60), chatType);
+  callbackUpdate(sessionStartCallbackData(PAIR_EURUSD.id, 5), chatType);
 const sessionHttpError = (status: number, reason: string) =>
   new BackendError(BackendErrorCode.HttpStatus, { status, reason });
 const SESSION_START_WORST_CASE: Branch = {
@@ -1052,12 +1052,7 @@ const SESSION_START_BRANCHES: readonly Branch[] = [
   },
   {
     label: 'the data is forged',
-    update: callbackUpdate('demo:sess:0:60'),
-    expected: { backend: 0, telegram: 1 },
-  },
-  {
-    label: 'the duration does not fit a session',
-    update: callbackUpdate(`demo:sess:${String(PAIR_EURUSD.id)}:900`),
+    update: callbackUpdate('demo:sess:0:5'),
     expected: { backend: 0, telegram: 1 },
   },
   {
@@ -1836,7 +1831,7 @@ const SAVE_EXTRA: [string, Partial<Branch>][] = [
   ['the outcome is unknown', { setDemoStake: unreachable }],
 ];
 const STAKE_OPEN = pickerBranches('stk:o:s', 1, {
-  forged: 'stk:o:a:0:300',
+  forged: 'stk:o:a:0:15',
   extra: [
     ['the access read fails', { readTradingAccess: unreachable }],
     [
@@ -1846,8 +1841,8 @@ const STAKE_OPEN = pickerBranches('stk:o:s', 1, {
   ],
 });
 const STAKE_PRESET = pickerBranches('stk:s:5:s', 1, { forged: 'stk:s:0:s', extra: SAVE_EXTRA });
-const STAKE_RESET = pickerBranches('stk:z:s', 1, { forged: 'stk:z:a:0:300', extra: SAVE_EXTRA });
-const STAKE_CUSTOM = pickerBranches('stk:c:s', 0, { forged: 'stk:c:a:0:300' });
+const STAKE_RESET = pickerBranches('stk:z:s', 1, { forged: 'stk:z:a:0:15', extra: SAVE_EXTRA });
+const STAKE_CUSTOM = pickerBranches('stk:c:s', 0, { forged: 'stk:c:a:0:15' });
 const SETTINGS_SHOW = pickerBranches('settings', 1, {
   extra: [
     ['the read fails', { recordStart: unreachable }],
@@ -1912,7 +1907,42 @@ const HELP_BRANCHES: readonly Branch[] = [
   HELP_WORST_CASE,
 ];
 
+// #313: a button drawn with a duration from before the short set
+const LEGACY_DURATION_REMOVED: Branch = {
+  label: 'the keyboard is removed',
+  update: callbackUpdate('demo:an:101:300'),
+  expected: { backend: 0, telegram: 2 },
+};
+const LEGACY_DURATION_BRANCHES: Branch[] = [
+  LEGACY_DURATION_REMOVED,
+  {
+    label: 'a stake picker datum of the old set',
+    update: callbackUpdate('stk:o:a:101:60'),
+    expected: { backend: 0, telegram: 2 },
+  },
+  {
+    label: 'the removal is refused',
+    update: callbackUpdate('demo:sess:101:900'),
+    apiErrors: [
+      [
+        'editMessageReplyMarkup',
+        { ok: false, error_code: 400, description: 'Bad Request: message to edit not found' },
+      ],
+    ],
+    expected: { backend: 0, telegram: 2 },
+  },
+];
+
 describe('what the handlers do, against what HANDLER_CALLS declares', () => {
+  it('a button with a removed duration', async () => {
+    await checkHandler(
+      'legacyDuration',
+      LEGACY_DURATION_BRANCHES,
+      LEGACY_DURATION_REMOVED,
+      HANDLER_CALLS.legacyDuration,
+    );
+  });
+
   it('/settings', async () => {
     await checkHandler('settings', SETTINGS_BRANCHES, SETTINGS_WORST_CASE, HANDLER_CALLS.settings);
   });

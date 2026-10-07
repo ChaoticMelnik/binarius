@@ -595,7 +595,7 @@ describe('the demo screens', () => {
   const screens = {
     pairs: demoPairsScreen('cryptocurrency', 9998, 9999),
     durations: demoDurationsScreen(HOSTILE_PAIR),
-    summary: demoSummary(HOSTILE_PAIR, 3600),
+    summary: demoSummary(HOSTILE_PAIR, 15),
   };
 
   it.each(Object.entries(screens))(
@@ -628,9 +628,9 @@ describe('the demo screens', () => {
   });
 
   it('lays out the summary: the asset, the duration, the payout, then what comes next', () => {
-    expect(plainTextOf(demoSummary(PAIR_EURUSD, 300))).toBe(
+    expect(plainTextOf(demoSummary(PAIR_EURUSD, 15))).toBe(
       `🎯 Актив: EUR/USD OTC
-⏱ Длительность: ⏱ 5 мин
+⏱ Длительность: ⏱ 15 с
 💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность.
 
 Дальше — анализ: бот посмотрит на свечи и скажет, есть ли сигнал.`,
@@ -646,13 +646,7 @@ describe('the demo screens', () => {
       '📊 Индексы',
       '📁 Другие',
     ]);
-    expect(DEMO_DURATIONS_SEC.map((sec) => DEMO_DURATION_LABELS[sec])).toEqual([
-      '⏱ 1 мин',
-      '⏱ 5 мин',
-      '⏱ 15 мин',
-      '⏱ 30 мин',
-      '⏱ 1 ч',
-    ]);
+    expect(DEMO_DURATIONS_SEC.map((sec) => DEMO_DURATION_LABELS[sec])).toEqual(['⏱ 5 с', '⏱ 15 с']);
     expect(groupButtonLabel('currency', 46)).toBe('💱 Валюты · 46');
     expect(pairButtonLabel('EUR/USD OTC', 85)).toBe('EUR/USD OTC · 85%');
   });
@@ -680,8 +674,8 @@ describe('the demo screens', () => {
       DEMO_GROUPS_CALLBACK_DATA,
       demoPageCallbackData('cryptocurrency', 9999),
       demoAssetCallbackData(MAX_ID),
-      demoDurationCallbackData(MAX_ID, 3600),
-      demoAnalysisCallbackData(MAX_ID, 3600),
+      demoDurationCallbackData(MAX_ID, 15),
+      demoAnalysisCallbackData(MAX_ID, 15),
     ]) {
       expect(Buffer.byteLength(data, 'utf8'), data).toBeLessThanOrEqual(64);
     }
@@ -774,12 +768,19 @@ describe('the demo trade status', () => {
     expect(plainTextOf(text)).toBe(
       [
         '🎮 Демо-сделка',
-        '📈 EUR/<USD> · ⬆️ Вверх · ⏱ 1 мин · ставка $1.00',
+        '📈 EUR/<USD> · ⬆️ Вверх · ⏱ 15 с · ставка $1.00',
         '',
         '⏳ Заявка создана и ждёт отправки брокеру…',
       ].join('\n'),
     );
     expect(text.value).toContain('EUR/&lt;USD&gt;');
+  });
+
+  // #313: an intent created before the deploy keeps its duration, labelled by the fallback
+  it('labels a duration outside the demo set by the fallback', () => {
+    expect(plainTextOf(intentStatusText('EUR/USD', intentView({ durationSec: 60 })))).toContain(
+      ' · ⏱ 60 с · ',
+    );
   });
 
   it('caps the symbol and stands the asset id in for a missing one', () => {
@@ -873,7 +874,7 @@ describe('the demo session status', () => {
     expect(plainOf('EUR/USD OTC', view)).toBe(
       [
         '🎮 Демо-сессия',
-        '📈 EUR/USD OTC · ⏱ 1 мин · ставка $1.00',
+        '📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00',
         '🔢 Сделка 3 из 5',
         '📊 Счёт: 1 в плюс, 1 в минус',
         '',
@@ -886,7 +887,7 @@ describe('the demo session status', () => {
     expect(plainOf('X', SESSION_VIEW)).toBe(
       [
         '🎮 Демо-сессия',
-        '📈 X · ⏱ 1 мин · ставка $1.00',
+        '📈 X · ⏱ 15 с · ставка $1.00',
         '🔢 Сделка 1 из 5',
         '',
         '🔎 Ждём сигнал для следующей сделки…',
@@ -1174,8 +1175,8 @@ describe('the text source', () => {
   });
 
   it('labels a duration from the source in place', () => {
-    setBotTextSource(stubTextSource('demoDuration60'));
-    expect(DEMO_DURATION_LABELS[60]).toBe(stubText('demoDuration60'));
+    setBotTextSource(stubTextSource('demoDuration15'));
+    expect(DEMO_DURATION_LABELS[15]).toBe(stubText('demoDuration15'));
   });
 
   it('reads the profile from the source in place', () => {
