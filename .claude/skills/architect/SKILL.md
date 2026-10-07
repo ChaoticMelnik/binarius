@@ -160,6 +160,8 @@ Ask for findings only — missing domain entities, skipped edge cases, wrong own
 
 Post the final plan as an issue comment (`/github` skill), then move the issue to **In Progress**.
 
+Before the hand-off, read the stored body back (`gh api repos/ChaoticMelnik/binarius/issues/comments/<id> --jq .body`) and diff it against the local file — the same for a Plan Update. In the plan's code blocks, write control characters as `\x` escapes: a `\u00XX` escape in the local file came back in #197's plan as caret notation, which turned `[\s\x00-\x1f\x7f]` into a class that refused A-Z; only the implementer's clarify round caught it.
+
 ---
 
 ## Workflow — Issue Returned from Review
