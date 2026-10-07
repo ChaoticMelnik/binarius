@@ -18,6 +18,7 @@ import { adminRoutes, type AdminRoutesDeps } from './admin/routes';
 import { authRoutes, type AuthRoutesDeps } from './auth/routes';
 import { pairsRoutes, type PairsRoutesDeps } from './trading/pairs-routes';
 import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
+import { tradingSessionRoutes, type TradingSessionRoutesDeps } from './trading/session-routes';
 import { signalRoutes, type SignalRoutesDeps } from './trading/signal-routes';
 import { usersRoutes, type UsersRoutesDeps } from './users/routes';
 
@@ -30,6 +31,7 @@ export interface AppDeps {
   checkTimeoutMs: number;
   trading: TradingRoutesDeps;
   pairs: PairsRoutesDeps;
+  sessions: TradingSessionRoutesDeps;
   signal: SignalRoutesDeps;
   auth: AuthRoutesDeps;
   users: UsersRoutesDeps;
@@ -134,6 +136,7 @@ export function buildApp({
   checkTimeoutMs,
   trading,
   pairs,
+  sessions,
   signal,
   auth,
   users,
@@ -194,6 +197,7 @@ export function buildApp({
 
   void app.register(tradingRoutes, trading);
   void app.register(pairsRoutes, pairs);
+  void app.register(tradingSessionRoutes, sessions);
   void app.register(signalRoutes, signal);
   void app.register(authRoutes, auth);
   void app.register(usersRoutes, users);

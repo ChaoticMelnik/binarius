@@ -48,6 +48,7 @@ import {
   unusedBalanceDeps,
   unusedPairsDeps,
   unusedSignalDeps,
+  unusedSessionDeps,
 } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -118,6 +119,7 @@ const telegramId = () => String(800_000 + ++seq);
 const testApp = (auth: AuthRoutesDeps, logs?: { write(line: string): void }) =>
   buildApp({
     pairs: unusedPairsDeps(),
+    sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
     admin: unusedAdminDeps(),
     checkPostgres: () => Promise.resolve(),

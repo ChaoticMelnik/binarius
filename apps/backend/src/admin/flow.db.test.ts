@@ -24,6 +24,7 @@ import {
   unusedBalanceDeps,
   unusedPairsDeps,
   unusedSignalDeps,
+  unusedSessionDeps,
 } from '../trading/testing';
 
 // The whole path, over HTTP and with real cookies: a browser's form reaches apps/web, which
@@ -62,6 +63,7 @@ beforeAll(async () => {
 
   backend = buildApp({
     pairs: unusedPairsDeps(),
+    sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),

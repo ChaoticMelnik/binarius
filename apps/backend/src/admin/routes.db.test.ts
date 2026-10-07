@@ -31,6 +31,7 @@ import {
   unusedBalanceDeps,
   unusedPairsDeps,
   unusedSignalDeps,
+  unusedSessionDeps,
 } from '../trading/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -63,6 +64,7 @@ const build = (
   derivations = 0;
   return buildApp({
     pairs: unusedPairsDeps(),
+    sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
