@@ -1,7 +1,17 @@
 import { sql } from 'drizzle-orm';
-import { index, jsonb, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
-import { TradeMode } from '@binarius/shared';
-import { createdAt, id, inList, updatedAt } from './columns';
+import {
+  check,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
+import { TradeMode, TradingSessionStopReason, type TradingSessionSettings } from '@binarius/shared';
+import { createdAt, id, inList, literal, updatedAt } from './columns';
 import { brokerAccounts } from './broker-accounts';
 
 export const TradingSessionStatus = {
@@ -11,7 +21,8 @@ export const TradingSessionStatus = {
 } as const;
 export type TradingSessionStatus = (typeof TradingSessionStatus)[keyof typeof TradingSessionStatus];
 
-// skeleton (#7): settings firm up with the session orchestration issue (#20)
+// The session orchestrator's table (#130, docs/trading-session.md). `settings` is typed for the
+// writers only: $type has no runtime effect, so the orchestrator parses the column at read.
 export const tradingSessions = pgTable(
   'trading_sessions',
   {
@@ -25,11 +36,14 @@ export const tradingSessions = pgTable(
       .notNull()
       .default(TradingSessionStatus.Active),
     settings: jsonb('settings')
-      .$type<Record<string, unknown>>()
+      .$type<TradingSessionSettings>()
       .notNull()
       .default(sql`'{}'::jsonb`),
+    stopReason: text('stop_reason').$type<TradingSessionStopReason>(),
     startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
     endedAt: timestamp('ended_at', { withTimezone: true }),
+    // the order key of the runnable scan; NULL until the first attempt reached an ending
+    lastDecisionAt: timestamp('last_decision_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -40,5 +54,21 @@ export const tradingSessions = pgTable(
     index('trading_sessions_account_status_idx').on(t.brokerAccountId, t.status),
     inList('trading_sessions_mode_check', t.mode, TradeMode),
     inList('trading_sessions_status_check', t.status, TradingSessionStatus),
+    inList('trading_sessions_stop_reason_check', t.stopReason, TradingSessionStopReason),
+    // Two CHECKs, not one: a single `(stopped) = (reason and end)` accepts paused/reason/NULL and
+    // active/NULL/now, because false = false holds. Each pair alone pins its column to `stopped`.
+    check(
+      'trading_sessions_stop_reason_pair_check',
+      sql`(${t.status} = ${literal(TradingSessionStatus.Stopped)}) = (${t.stopReason} is not null)`,
+    ),
+    check(
+      'trading_sessions_ended_at_pair_check',
+      sql`(${t.status} = ${literal(TradingSessionStatus.Stopped)}) = (${t.endedAt} is not null)`,
+    ),
+    check('trading_sessions_settings_object_check', sql`jsonb_typeof(${t.settings}) = 'object'`),
+    uniqueIndex('trading_sessions_active_account_idx')
+      .on(t.brokerAccountId)
+      .where(sql`${t.status} = ${literal(TradingSessionStatus.Active)}`),
+    index('trading_sessions_runnable_idx').on(t.status, t.lastDecisionAt),
   ],
 );

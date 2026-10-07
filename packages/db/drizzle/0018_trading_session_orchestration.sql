@@ -1,0 +1,8 @@
+ALTER TABLE "trading_sessions" ADD COLUMN "stop_reason" text;--> statement-breakpoint
+ALTER TABLE "trading_sessions" ADD COLUMN "last_decision_at" timestamp with time zone;--> statement-breakpoint
+CREATE UNIQUE INDEX "trading_sessions_active_account_idx" ON "trading_sessions" USING btree ("broker_account_id") WHERE "trading_sessions"."status" = 'active';--> statement-breakpoint
+CREATE INDEX "trading_sessions_runnable_idx" ON "trading_sessions" USING btree ("status","last_decision_at");--> statement-breakpoint
+ALTER TABLE "trading_sessions" ADD CONSTRAINT "trading_sessions_stop_reason_check" CHECK ("trading_sessions"."stop_reason" in ('completed', 'manual_review', 'rejected_twice', 'timeout', 'stake_stop', 'account_unavailable', 'pair_unavailable', 'balance_unavailable', 'invalid_settings', 'user_stopped'));--> statement-breakpoint
+ALTER TABLE "trading_sessions" ADD CONSTRAINT "trading_sessions_stop_reason_pair_check" CHECK (("trading_sessions"."status" = 'stopped') = ("trading_sessions"."stop_reason" is not null));--> statement-breakpoint
+ALTER TABLE "trading_sessions" ADD CONSTRAINT "trading_sessions_ended_at_pair_check" CHECK (("trading_sessions"."status" = 'stopped') = ("trading_sessions"."ended_at" is not null));--> statement-breakpoint
+ALTER TABLE "trading_sessions" ADD CONSTRAINT "trading_sessions_settings_object_check" CHECK (jsonb_typeof("trading_sessions"."settings") = 'object');

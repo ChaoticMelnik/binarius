@@ -26,7 +26,7 @@ import {
   tradingSessions,
   users,
 } from './schema/index';
-import { AccountHaltReason, type DecimalString } from '@binarius/shared';
+import { AccountHaltReason, TradingSessionStopReason, type DecimalString } from '@binarius/shared';
 import { STAFF_LOGIN_CORPUS } from '@binarius/shared/testing';
 // Integration tests: a migrated Postgres named by TEST_DATABASE_URL (README → Test database).
 // Each case runs in one transaction that is rolled back at the end; Postgres aborts a
@@ -2325,6 +2325,125 @@ describe('broker_balance_snapshots', () => {
 // about the constraints that run did not touch. It must run last, which
 // `sequence.shuffle: false` in vitest.config.ts pins for the default run; passing
 // `--sequence.shuffle` explicitly overrides that and fails this gate — the safe direction.
+describe('trading_sessions (#130)', () => {
+  const session = (accountId: string, patch: Record<string, unknown> = {}) => ({
+    brokerAccountId: accountId,
+    mode: 'demo' as const,
+    ...patch,
+  });
+
+  it.each(Object.values(TradingSessionStopReason))(
+    'accepts stop_reason %s on a stopped row with ended_at',
+    async (stopReason) => {
+      await rolledBack(async (tx) => {
+        const seed = await seedAccount(tx);
+        const [row] = await tx
+          .insert(tradingSessions)
+          .values(session(seed.accountId, { status: 'stopped', stopReason, endedAt: new Date() }))
+          .returning();
+        expect(row!.stopReason).toBe(stopReason);
+      });
+    },
+  );
+
+  it('rejects an unknown stop_reason', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx
+          .insert(tradingSessions)
+          .values(
+            session(seed.accountId, {
+              status: 'stopped',
+              stopReason: 'bogus',
+              endedAt: new Date(),
+            }),
+          ),
+        '23514',
+        'trading_sessions_stop_reason_check',
+      );
+    });
+  });
+
+  it.each([
+    ['active', null, false],
+    ['stopped', 'completed', true],
+  ] as const)('accepts %s / %s / ended_at %s', async (status, stopReason, ended) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradingSessions)
+        .values(session(seed.accountId, { status, stopReason, endedAt: ended ? new Date() : null }))
+        .returning();
+      expect(row!.status).toBe(status);
+    });
+  });
+
+  // the six rows of the plan's D2 table: each refused row names the CHECK that refuses it
+  it.each([
+    ['stopped', null, true, 'trading_sessions_stop_reason_pair_check'],
+    ['stopped', 'completed', false, 'trading_sessions_ended_at_pair_check'],
+    ['paused', 'timeout', false, 'trading_sessions_stop_reason_pair_check'],
+    ['active', null, true, 'trading_sessions_ended_at_pair_check'],
+    ['active', 'completed', false, 'trading_sessions_stop_reason_pair_check'],
+    ['paused', null, true, 'trading_sessions_ended_at_pair_check'],
+  ] as const)(
+    'rejects %s / %s / ended_at %s by %s',
+    async (status, stopReason, ended, constraint) => {
+      await rolledBack(async (tx) => {
+        const seed = await seedAccount(tx);
+        await rejectsWith(
+          tx
+            .insert(tradingSessions)
+            .values(
+              session(seed.accountId, { status, stopReason, endedAt: ended ? new Date() : null }),
+            ),
+          '23514',
+          constraint,
+        );
+      });
+    },
+  );
+
+  it('accepts the empty default object', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx.insert(tradingSessions).values(session(seed.accountId)).returning();
+      expect(row!.settings).toEqual({});
+    });
+  });
+
+  it.each(['[]', 'null', '1'])('rejects settings %s', async (json) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.execute(
+          sql`insert into trading_sessions (broker_account_id, mode, settings) values (${seed.accountId}, 'demo', ${json}::jsonb)`,
+        ),
+        '23514',
+        'trading_sessions_settings_object_check',
+      );
+    });
+  });
+
+  it('rejects a second active session of the account and accepts any number of stopped ones', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const stopped = { status: 'stopped', stopReason: 'completed', endedAt: new Date() };
+      await tx.insert(tradingSessions).values(session(seed.accountId, stopped));
+      await tx.insert(tradingSessions).values(session(seed.accountId, stopped));
+      await tx.insert(tradingSessions).values(session(seed.accountId));
+      const other = await seedAccount(tx);
+      await tx.insert(tradingSessions).values(session(other.accountId));
+      await rejectsWith(
+        tx.insert(tradingSessions).values(session(seed.accountId)),
+        '23505',
+        'trading_sessions_active_account_idx',
+      );
+    });
+  });
+});
+
 // A constraint counts as covered only when a test actually observed the database enforcing
 // it — the helpers register after their assertion passes, and the two catalog tests (composite
 // FK targets, simple FKs implied by a composite) register only after their own assertions. Textual matching was the previous bar and it accepted a name
