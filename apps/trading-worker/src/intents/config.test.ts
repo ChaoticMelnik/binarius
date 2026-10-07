@@ -8,6 +8,8 @@ import {
 } from '@binarius/shared/testing';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
+import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
+import { BROKER_SOCKET_CONNECT_TIMEOUT_MS } from '../broker/socket-config';
 import {
   CATCHUP_ATTEMPT_TIMEOUT_MS,
   CATCHUP_BATCH_SIZE,
@@ -87,6 +89,17 @@ describe('timing constants', () => {
 });
 
 // the same entry under backend is pinned in apps/backend/src/timing.test.ts
+describe('the session manager in the shutdown budget (#101)', () => {
+  it('stops after the drain inside phase 1, and nothing it cannot cut outlasts phase 1', () => {
+    expect(MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS).toBeLessThan(
+      SHUTDOWN_PHASE1_BUDGET_MS,
+    );
+    expect(BROKER_SOCKET_CONNECT_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(ACCESS_TOKEN_ROUTE_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(SESSION_TICK_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+});
+
 describe('the trading grant', () => {
   it('forwards REAL_TRADING_ENABLED to the trading-worker without a default of its own', () => {
     expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'REAL_TRADING_ENABLED')).toBe('');
@@ -97,7 +110,9 @@ describe('the trading grant', () => {
 // service's: a two-space indented key directly under the anchor line.
 function brokerAnchorValue(yaml: string, name: string): string | undefined {
   const lines = yaml.split('\n');
-  const start = lines.findIndex((line) => line.startsWith('x-broker-environment: &broker-environment'));
+  const start = lines.findIndex((line) =>
+    line.startsWith('x-broker-environment: &broker-environment'),
+  );
   for (let index = start + 1; start !== -1 && index < lines.length; index += 1) {
     const line = lines[index] ?? '';
     if (/^\S/.test(line)) break;
@@ -134,6 +149,13 @@ describe('the worker environment for the token route and the trade lists', () =>
     const worker = composeServiceEnvValue(composeYaml, 'trading-worker', 'INTERNAL_API_TOKEN');
     expect(worker).toBe(composeServiceEnvValue(composeYaml, 'backend', 'INTERNAL_API_TOKEN'));
     expect(worker?.startsWith('${INTERNAL_API_TOKEN:?')).toBe(true);
+  });
+
+  it('forwards BROKER_WS_URL valueless, so an unset variable leaves the sessions off', () => {
+    expect(brokerAnchorValue(composeYaml, 'BROKER_WS_URL')).toBe('');
+    for (const service of ['backend', 'trading-worker']) {
+      expect(composeServiceEnvValue(composeYaml, service, 'BROKER_WS_URL')).toBeUndefined();
+    }
   });
 
   it('points the worker at the backend the bot reaches', () => {

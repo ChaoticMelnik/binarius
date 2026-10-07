@@ -224,7 +224,7 @@ export interface BalanceSnapshotRead {
   minTradeAmount: BrokerUser['minTradeAmount'];
   level: BrokerUser['level'];
   restSnapshotAgeSec: number;
-  // NULL until a socket writer (#99/#101) has recorded an event for either mode
+  // NULL until a session's writer (#101) has recorded an event for either mode
   balanceEventAgeSec: number | null;
   lastRefreshError: BalanceRefreshError | null;
 }

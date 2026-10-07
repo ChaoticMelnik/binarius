@@ -22,8 +22,16 @@ describe('parseEnv', () => {
       backendUrl: valid.BACKEND_URL,
       internalApiToken: valid.INTERNAL_API_TOKEN,
       brokerApiBaseUrl: valid.BROKER_API_BASE_URL,
+      brokerWsUrl: undefined,
     });
   });
+
+  it.each(['https://broker-ws.binodex.app', 'wss://broker-ws.binodex.app/socket'])(
+    'reads BROKER_WS_URL=%s',
+    (value) => {
+      expect(parseEnv({ ...valid, BROKER_WS_URL: value }).brokerWsUrl).toBe(value);
+    },
+  );
 
   it('reads REAL_TRADING_ENABLED', () => {
     expect(parseEnv({ ...valid, REAL_TRADING_ENABLED: 'true' }).realTradingEnabled).toBe(true);
@@ -51,14 +59,15 @@ describe('parseEnv', () => {
     });
   });
 
-  it.each(['DATABASE_URL', 'REDIS_URL', 'BACKEND_URL', 'INTERNAL_API_TOKEN', 'BROKER_API_BASE_URL'])(
-    'rejects missing %s',
-    (name) => {
-      expect(() => parseEnv({ ...valid, [name]: undefined })).toThrow(
-        `Missing required env ${name}`,
-      );
-    },
-  );
+  it.each([
+    'DATABASE_URL',
+    'REDIS_URL',
+    'BACKEND_URL',
+    'INTERNAL_API_TOKEN',
+    'BROKER_API_BASE_URL',
+  ])('rejects missing %s', (name) => {
+    expect(() => parseEnv({ ...valid, [name]: undefined })).toThrow(`Missing required env ${name}`);
+  });
 
   it.each(['BACKEND_URL', 'INTERNAL_API_TOKEN', 'BROKER_API_BASE_URL'])(
     'rejects an empty %s',
@@ -71,6 +80,10 @@ describe('parseEnv', () => {
     ['BACKEND_URL', 'ftp://backend:3000'],
     ['BACKEND_URL', 'http://[::1]:3000'],
     ['BROKER_API_BASE_URL', 'http://api.binodex.app'],
+    ['BROKER_WS_URL', ''],
+    ['BROKER_WS_URL', 'http://broker-ws.binodex.app'],
+    ['BROKER_WS_URL', 'ws://broker-ws.binodex.app'],
+    ['BROKER_WS_URL', 'wss://[::1]:443'],
   ])('rejects %s=%s', (name, value) => {
     expect(() => parseEnv({ ...valid, [name]: value })).toThrow(name);
   });

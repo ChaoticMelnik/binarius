@@ -7,5 +7,6 @@ export interface TradeSessionSource {
   sessionFor(brokerAccountId: string): TradeSession | undefined;
 }
 
-// until #101's session manager: no account has a socket, so every intent goes over REST
+// without BROKER_WS_URL there is no session manager: no account has a socket, so every intent
+// goes over REST
 export const noTradeSessions: TradeSessionSource = { sessionFor: () => undefined };

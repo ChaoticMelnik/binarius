@@ -17,8 +17,8 @@ import type { Logger } from './processor';
 import { readTradePages, TradePagesError } from './trade-pages';
 
 // The REST catch-up for accepted intents past their expected close (#90): the main settlement path
-// is close_trade.success (#101); this reads the closed list for the ones it missed and applies it
-// through settleClosedTrades. It runs on a timer, so it never asks the backend to exchange a token
+// is close_trade.success (the broker sessions, #101, with BROKER_WS_URL set); this reads the
+// closed list for the ones it missed and applies it through settleClosedTrades. It runs on a timer, so it never asks the backend to exchange a token
 // (mayRefresh: false). Every attempt that does not take its intent out of `accepted` holds the
 // account back for stalledRetryMs, so the head of the queue cannot starve the rest
 // (docs/trade-intent-transport.md -> Reconciliation matching -> Settlement catch-up).

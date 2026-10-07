@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "signal-probe": "tsx src/cli/signal-probe.ts"
+    "signal-probe": "tsx src/cli/signal-probe.ts",
+    "socket-probe": "tsx src/cli/socket-probe.ts"
   },
   "dependencies": {
     "@binarius/broker-rest": "workspace:*",

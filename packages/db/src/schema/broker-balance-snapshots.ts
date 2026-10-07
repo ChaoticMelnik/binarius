@@ -48,7 +48,7 @@ export const brokerBalanceSnapshots = pgTable(
       mode: 'number',
     }).notNull(),
     restObservedAt: timestamp('rest_observed_at', { withTimezone: true }).notNull(),
-    // set by the socket writers (#99/#101); NULL until one of them runs
+    // set by the session manager's writers (#101); NULL until one of them runs
     realEventAt: timestamp('real_event_at', { withTimezone: true }),
     demoEventAt: timestamp('demo_event_at', { withTimezone: true }),
     lastRequestedAt: timestamp('last_requested_at', { withTimezone: true }),

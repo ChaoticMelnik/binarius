@@ -20,6 +20,7 @@ const MIN_SUBMIT_ACK_TIMEOUT_MS = 500;
 const MAX_WORKER_CONCURRENCY = 100;
 // the backend is reached over the compose network in plain http, as the bot reaches it
 const BACKEND_URL_RULES: UrlEnvRules = { protocols: ['http:', 'https:'], allowIpv6Literal: false };
+const BROKER_WS_URL_RULES: UrlEnvRules = { protocols: ['https:', 'wss:'], allowIpv6Literal: false };
 
 export interface Env {
   databaseUrl: string;
@@ -34,6 +35,9 @@ export interface Env {
   internalApiToken: string;
   // the broker REST API the reconciler and the settlement catch-up read trades from
   brokerApiBaseUrl: string;
+  // the broker Socket.IO server; set, the worker keeps broker sessions (docs/broker-session.md),
+  // unset, every order goes over REST
+  brokerWsUrl: string | undefined;
 }
 
 export function parseEnv(source: EnvSource): Env {
@@ -72,5 +76,10 @@ export function parseEnv(source: EnvSource): Env {
       'BROKER_API_BASE_URL',
       HTTPS_ONLY_RULES,
     ),
+    // readEnv refuses '', while an absent variable leaves the sessions off
+    brokerWsUrl:
+      source.BROKER_WS_URL === undefined
+        ? undefined
+        : parseUrlEnv(readEnv(source, 'BROKER_WS_URL'), 'BROKER_WS_URL', BROKER_WS_URL_RULES),
   };
 }

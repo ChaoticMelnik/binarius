@@ -1,5 +1,7 @@
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
+import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
+import { BROKER_SOCKET_CONNECT_TIMEOUT_MS } from '../broker/socket-config';
 
 // The worker's time constants form one chain, and every link has a reason:
 //   SUBMIT_ACK_TIMEOUT_MS ≤ MAX_SUBMIT_ACK_TIMEOUT_MS  — env cap on how long one submit may wait
@@ -35,6 +37,14 @@ import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 //   BROKER_REST_TIMEOUT_MS < CATCHUP_GRACE_MS; CATCHUP_TICK_MS < CATCHUP_STALLED_RETRY_MS — a
 //     held-back account misses at least one tick
 //   the worst case of broker GETs a minute ≤ WORKER_BROKER_GETS_PER_MINUTE (below)
+// The session manager (#101, broker/session-config.ts) adds these:
+//   MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS — the manager
+//     stops after the intents consumer drained, inside the same phase-1 step
+//   BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS and ACCESS_TOKEN_ROUTE_BUDGET_MS
+//     < SHUTDOWN_PHASE1_BUDGET_MS — a connection attempt or a token fetch that stop() could not
+//     cut still ends inside phase 1 (stop() aborts the fetches and closes the clients at once:
+//     the worst case, not the normal one)
+//   SESSION_TICK_MS < SHUTDOWN_PHASE1_BUDGET_MS — the scan in flight ends inside phase 1
 export const MAX_SUBMIT_ACK_TIMEOUT_MS = 30_000;
 export const SHUTDOWN_PHASE1_BUDGET_MS = 35_000;
 export const SHUTDOWN_PHASE2_BUDGET_MS = 4_000;
@@ -107,7 +117,11 @@ export const TIMING_CHAIN_HOLDS =
   CATCHUP_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_REST_TIMEOUT_MS < CATCHUP_GRACE_MS &&
   CATCHUP_TICK_MS < CATCHUP_STALLED_RETRY_MS &&
-  WORKER_BROKER_GETS_WORST_CASE <= WORKER_BROKER_GETS_PER_MINUTE;
+  WORKER_BROKER_GETS_WORST_CASE <= WORKER_BROKER_GETS_PER_MINUTE &&
+  MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  SESSION_TICK_MS < SHUTDOWN_PHASE1_BUDGET_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('trading-worker timing constants are out of order (see intents/config.ts)');
 }

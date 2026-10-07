@@ -3,8 +3,18 @@ import { Pool } from 'pg';
 import pino from 'pino';
 import { errorLogFields, closeAll, logOptions } from '@binarius/shared';
 import { createBrokerRestClient } from '@binarius/broker-rest';
-import { createDb, listLinkedBrokerTradeIds, OutboxTopic } from '@binarius/db';
+import {
+  applyBalanceEvent,
+  createDb,
+  listLinkedBrokerTradeIds,
+  listSessionCandidates,
+  OutboxTopic,
+  settleClosedTrades,
+  upsertBalanceSnapshot,
+} from '@binarius/db';
 import { createBackendAccessTokenSource } from './broker/access-token';
+import { SESSION_MANAGER_CONFIG } from './broker/session-config';
+import { createBrokerSessionManager } from './broker/session-manager';
 import { noTradeSessions } from './broker/trade-session';
 import { parseEnv } from './env';
 import {
@@ -58,10 +68,35 @@ const tokens = createBackendAccessTokenSource({
   token: env.internalApiToken,
 });
 
-// #101 replaces noTradeSessions with the session manager; the gate stays the outermost layer (#134)
+// The broker sessions only with BROKER_WS_URL set (docs/broker-session.md); unset, every order
+// goes over REST. The gate stays the outermost layer (#134).
+const sessions =
+  env.brokerWsUrl === undefined
+    ? undefined
+    : createBrokerSessionManager({
+        url: env.brokerWsUrl,
+        candidates: (options) => listSessionCandidates(db, options),
+        tokens,
+        writers: {
+          snapshot: (brokerAccountId, user, modes) =>
+            upsertBalanceSnapshot(db, { brokerAccountId, user, requested: false, eventAt: modes }),
+          balanceEvent: (brokerAccountId, mode, balance) =>
+            applyBalanceEvent(db, { brokerAccountId, mode, balance }),
+          closedTrades: (brokerAccountId, trades) =>
+            settleClosedTrades(db, { brokerAccountId, trades }),
+        },
+        logger,
+        config: SESSION_MANAGER_CONFIG,
+      });
+
 const executor = buildExecutor(
   env,
-  createTradeCommandExecutor({ sessions: noTradeSessions, rest: brokerRest, tokens, logger }),
+  createTradeCommandExecutor({
+    sessions: sessions ?? noTradeSessions,
+    rest: brokerRest,
+    tokens,
+    logger,
+  }),
 );
 
 const consumer = startIntentConsumer({
@@ -117,7 +152,7 @@ const reconciliationConsumer = startIntentConsumer({
   processor: (payload) => processReconciliationJob({ db, logger }, payload),
 });
 
-// accepted intents whose close_trade.success never arrived (#101 is the main path)
+// accepted intents whose close_trade.success never arrived or was dropped at a session's stop
 const catchup = createSettlementCatchup({
   db,
   rest: brokerRest,
@@ -148,7 +183,8 @@ let shuttingDown = false;
 // dead-letter writes those jobs may have started — in that order, or a `failed` event fired
 // by the drain would register its write after the wait — and stops the reconciliation pass
 // (its attempt in flight plus one outcome write) and the settlement catch-up (its attempt in
-// flight). Phase 2 closes the connections and runs
+// flight). The broker sessions stop after the intents drain, so our own shutdown never cuts a
+// submit waiting on its socket; their stop is bounded by SESSION_STOP_BUDGET_MS. Phase 2 closes the connections and runs
 // only if phase 1 finished cleanly: closing them under an outcome write would abort it. A
 // drain that overruns or fails exits hard; the intent stays submitting (the sweeper resolves
 // it after the restart) or reconciling (the pass takes it again once its lease lapses).
@@ -159,7 +195,11 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   sweeper.stop();
   const drained = await closeAll(
     [
-      () => consumer.worker.close().then(() => consumer.drainDeadLetters()),
+      () =>
+        consumer.worker
+          .close()
+          .then(() => consumer.drainDeadLetters())
+          .then(() => sessions?.stop()),
       () =>
         reconciliationConsumer.worker.close().then(() => reconciliationConsumer.drainDeadLetters()),
       () => pass.stop(),
@@ -187,7 +227,11 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
 process.once('SIGTERM', (signal) => void shutdown(signal));
 process.once('SIGINT', (signal) => void shutdown(signal));
 
-logger.info({ concurrency: env.workerConcurrency }, 'trading-worker started');
+logger.info(
+  { concurrency: env.workerConcurrency, sessions: sessions !== undefined },
+  'trading-worker started',
+);
 // after the consumers: the first tick picks up the reconciling intents a dead process left
 pass.start();
 catchup.start();
+sessions?.start();
