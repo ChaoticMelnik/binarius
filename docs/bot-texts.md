@@ -192,7 +192,11 @@ Data and identifiers, not texts (decision on the issue's plan, approved by the o
    module constant.
 3. `pnpm check`: `bot-texts.test.ts` validates the default, and the facade tests in `texts.test.ts`
    name the keys `TEXTS` and `LABELS` hold — a new html entry joins `TEXTS`, a new button needs the
-   lists in `bot-texts.test.ts` and `texts.test.ts`.
+   lists in `bot-texts.test.ts` and `texts.test.ts`. A new html entry with an argument does not
+   compile without a width in `BOT_TEXT_ARG_WIDTHS` ([Assembled messages](#assembled-messages)).
+4. A new assembly of several texts gets a description in `BOT_TEXT_MESSAGES` and a builder in
+   `apps/bot/src/bot-text-messages.test.ts`. Nothing finds a new assembly on its own: this step is
+   the only thing that puts it under the writer's and the loaders' bound.
 
 ## Overrides
 
@@ -237,8 +241,14 @@ version }` only) within `BACKEND_REQUEST_TIMEOUT_MS`, the backend from the datab
 the backend's push, without a restart. A failed load keeps the last applied set — the defaults
 until the first success — and logs a `warn` by error identity; a rejected row is logged once per
 change of the rejected set, by key, version and reason, never with its text. Both processes stop
-the refresher on shutdown. Both read the first `BOT_TEXT_OVERRIDES_MAX` (1000) rows by key, the
-most the bot's wire schema takes; only rows inserted by hand can reach it.
+the refresher on shutdown.
+
+The table's CHECKs are the bot's wire schema bounds, field for field: the key's pattern, the
+source's length in code points (as zod's `max` counts a string, and as `char_length` does), the
+version 1..2^53−1, and 1000 rows through the read's `limit` (`listBotTextOverrides`, first by
+key). So no row in the table, hand-inserted SQL included, fails the bot's parse of
+`GET /bot-texts`; a row that passes them and fails the resolver is rejected and shows the default
+in both processes. `schema.db.test.ts` holds the two sides equal on their boundary rows.
 
 ## The CLI
 
@@ -262,17 +272,19 @@ CLI points at `show`.
 
 A key's limit is checked with its sample. `BOT_TEXT_MESSAGES` describes what that cannot bound:
 each message the bot builds from several keys (the account and status cards, `/help`, `/account`,
-the analysis screens, the trade and session status, the demo screens), and each html key whose
+the analysis screens, the trade and session status, the demo screens, `/settings` with the
+stake line and the stake picker), and each html key whose
 argument is in no such message. `estimateBotTextMessage` adds up the parts at the widest value of
 every argument (`BOT_TEXT_ARG_WIDTHS`), labels read from the texts in effect, so a longer
 override of a label widens the line it goes into. `apps/bot/src/bot-text-messages.test.ts` holds
 every description equal to the real assembly on the defaults and to the keys it reads; a new html
 key with an argument does not compile without a width.
 
-Widths from a schema are enforced there (an address entered by the user 254, a USD amount 20, a
-count 25, an int4 asset id or duration). The rest are stated assumptions in `BOT_TEXT_WIDTHS`: a
-broker's address ≤ 254, a symbol ≤ 64, a session's counters ≤ 999, the analysis numbers. The
-`/account` list is enforced: the backend answers at most `USER_ACCOUNT_LIST_LIMIT` (10) links.
-A plain label is measured as written, markup and entities included: it is escaped and shown
-literally. A value past one of them lengthens a message by a few characters, and
-Telegram refuses the message only if that crosses its limit.
+Widths from a schema are enforced there: an address entered by the user 254, a USD amount 20, a
+stake 25 (`formatStake` over an unsigned `numeric(20,8)`: the demo stake, the broker's minimum and
+the demo balance), a count 25, an int4 asset id or duration, and the `/account` list, which the
+backend answers with at most `USER_ACCOUNT_LIST_LIMIT` (10) links. The rest are stated
+assumptions in `BOT_TEXT_WIDTHS`: a broker's address ≤ 254, a symbol ≤ 64, a session's counters
+≤ 999, the analysis numbers. A value past one of them lengthens a message by a few characters,
+and Telegram refuses the message only if that crosses its limit. A plain label is measured as
+written, markup and entities included: it is escaped and shown literally.

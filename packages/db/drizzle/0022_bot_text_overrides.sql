@@ -6,7 +6,8 @@ CREATE TABLE "bot_text_overrides" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_by_staff_id" uuid,
 	CONSTRAINT "bot_text_overrides_key_check" CHECK ("bot_text_overrides"."key" ~ '^[a-z][a-zA-Z0-9]{0,63}$'),
-	CONSTRAINT "bot_text_overrides_source_length_check" CHECK (char_length("bot_text_overrides"."source") between 1 and 16384)
+	CONSTRAINT "bot_text_overrides_source_length_check" CHECK (char_length("bot_text_overrides"."source") between 1 and 16384),
+	CONSTRAINT "bot_text_overrides_version_check" CHECK ("bot_text_overrides"."version" between 1 and 9007199254740991)
 );
 --> statement-breakpoint
 ALTER TABLE "audit_log" DROP CONSTRAINT "audit_log_action_check";--> statement-breakpoint

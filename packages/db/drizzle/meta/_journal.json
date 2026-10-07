@@ -155,6 +155,13 @@
       "when": 1791384771282,
       "tag": "0021_demo_stake",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791391543316,
+      "tag": "0022_bot_text_overrides",
+      "breakpoints": true
     }
   ]
 }

@@ -33,6 +33,11 @@ export const BOT_TEXT_WIDTHS = {
   usd: 20,
   // formatUsd('0'), both amounts of a card with no balance
   zeroUsd: 5,
+  // formatStake over an unsigned numeric(20,8): $999 999 999 999.99999999 — the demo stake, the
+  // broker's minimum and the demo balance are all money() columns their writers keep unsigned (#297)
+  stake: 25,
+  // the broker's stake scale: at most numeric(20,8)'s 8 fraction digits
+  stakeDigits: 1,
   // formatCount over a bigint: 9 223 372 036 854 775 807
   count: 25,
   // a bigint printed as it arrives: the link bonus
@@ -114,7 +119,8 @@ const tradeLine = (m: BotTextMeasure, action: number) =>
   action +
   Math.max(m.longest(...durations), w.durationFallback) +
   SEPARATOR +
-  m.length('intentStake', w.usd);
+  m.length('intentStake', w.stake);
+const stakeLabel = (m: BotTextMeasure) => Math.max(w.stake, m.length('stakeMinimumLabel'));
 // «3 в плюс, 1 в минус, 1 в ноль»
 const score = (m: BotTextMeasure) =>
   m.length('sessionWon', w.sessionCount) +
@@ -183,6 +189,17 @@ export const BOT_TEXT_ARG_WIDTHS: Readonly<Record<BotHtmlArgKey, (m: BotTextMeas
   sessionScore: score,
   sessionCompleted: result,
   sessionTotal: result,
+  // stakeLabel: the saved stake, or the minimum's label (texts.ts)
+  settingsStake: stakeLabel,
+  stakeSaved: stakeLabel,
+  // stakePickerText: the saved stake, or «label (minimum)»
+  stakePickerCurrent: (m) =>
+    Math.max(w.stake, m.length('stakeMinimumLabel') + ' ('.length + w.stake + ')'.length),
+  stakePickerMinimum: () => w.stake,
+  stakePickerAvailable: () => w.stake,
+  stakeBelowMinimum: () => w.stake,
+  stakeAboveAvailableAmount: () => w.stake,
+  stakePrecisionDigits: () => w.stakeDigits,
 };
 
 // A literal string, a key's text, the longest of several sequences, or one repeated.
@@ -392,6 +409,29 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       anyOf(...intentStatusLines),
       '\n\n',
       k('intentDeadline'),
+    ],
+  },
+  {
+    id: 'settings',
+    title: '/settings',
+    limit: TELEGRAM_MESSAGE_LIMIT,
+    body: [k('settings'), '\n\n', k('settingsStake')],
+  },
+  {
+    id: 'stakePicker',
+    title: 'Экран суммы',
+    limit: TELEGRAM_MESSAGE_LIMIT,
+    body: [
+      k('stakePickerHeader'),
+      '\n',
+      k('stakePickerCurrent'),
+      '\n',
+      k('stakePickerMinimum'),
+      '\n',
+      k('stakePickerAvailable'),
+      // only when no preset fits the bounds
+      '\n',
+      k('stakePickerNoPresets'),
     ],
   },
   {

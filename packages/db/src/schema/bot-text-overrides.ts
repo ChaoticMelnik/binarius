@@ -34,9 +34,16 @@ export const botTextOverrides = pgTable(
       'bot_text_overrides_key_check',
       sql`${t.key} ~ ${sqlTextLiteral(BOT_TEXT_KEY_PATTERN.source, 'BOT_TEXT_KEY_PATTERN')}`,
     ),
+    // code points, as the bot's wire schema counts a string (zod's max) — so every CHECK here is
+    // that schema's bound, field for field, and no row in the table fails the bot's parse
     check(
       'bot_text_overrides_source_length_check',
       sql`char_length(${t.source}) between 1 and ${sql.raw(String(BOT_TEXT_SOURCE_MAX))}`,
+    ),
+    // z.int().positive(): 1..2^53 - 1
+    check(
+      'bot_text_overrides_version_check',
+      sql`${t.version} between 1 and ${sql.raw(String(Number.MAX_SAFE_INTEGER))}`,
     ),
   ],
 );
