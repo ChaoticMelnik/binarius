@@ -936,6 +936,51 @@ describe('the demo session status', () => {
     );
   });
 
+  // Review Major 1: stopped on manual review with the trade itself on review — the owner's one
+  // text, no second /support line, no «доиграет», and no «ещё идёт» at the deadline.
+  it.each([false, true])(
+    'shows a session stopped with its trade on manual review as the one stop line (deadline %s)',
+    (deadline) => {
+      const view = stopped(TradingSessionStopReason.ManualReview, {
+        lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
+      });
+      expect(plainOf('X', view, { deadline }).split('\n').slice(3)).toEqual([
+        '🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support',
+      ]);
+    },
+  );
+
+  it('names a trade on review under another stop reason, without saying it plays out', () => {
+    const view = stopped(TradingSessionStopReason.UserStopped, {
+      lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
+    });
+    expect(plainOf('X', view).split('\n').slice(3)).toEqual([
+      '⏹ Сессия остановлена по твоей команде.',
+      '🛠 Сделка на ручной проверке — напиши в поддержку: /support',
+    ]);
+  });
+
+  it.each([TradeIntentStatus.Queued, TradeIntentStatus.Accepted, TradeIntentStatus.Unknown])(
+    'says a %s trade of a stopped session plays out',
+    (status) => {
+      const view = stopped(TradingSessionStopReason.Timeout, {
+        lastIntent: intentView({ status }),
+      });
+      expect(plainOf('X', view)).toContain('⏳ Открытая сделка доиграет до конца.');
+    },
+  );
+
+  // every stopped path, completed included: the deadline hint says the session still runs
+  it.each(Object.values(TradingSessionStopReason))(
+    'adds no deadline hint to a session stopped by %s',
+    (stopReason) => {
+      for (const status of [TradeIntentStatus.Accepted, TradeIntentStatus.ManualReview]) {
+        const view = stopped(stopReason, { lastIntent: intentView({ status }) });
+        expect(plainOf('X', view, { deadline: true })).toBe(plainOf('X', view));
+      }
+    },
+  );
+
   it('reads the switch refusal of the single trade for a session the kill switch stopped', () => {
     expect(plainOf('X', stopped(TradingSessionStopReason.KillSwitch))).toContain(
       plainTextOf(TEXTS.tradingPaused),
