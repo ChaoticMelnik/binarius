@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
+import { SAMPLE_ME, SAMPLE_OVERVIEW, SAMPLE_USER, SAMPLE_USER_ID } from './admin/testing';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
 
 const TOKEN = 'admin-web-token-for-tests';
@@ -128,5 +129,66 @@ describe('the admin calls', () => {
     await createBackendClient({ baseUrl, token: TOKEN }).logout('t'.repeat(43));
     expect(captured.url).toBe('/admin/auth/logout');
     expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+});
+
+describe('the read calls (#107)', () => {
+  const SESSION = 's'.repeat(43);
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+
+  // a base URL with a path prefix: every path the client sends must stay relative to it
+  const prefixed = async (body: unknown, status = 200) => {
+    const served = await serve((response) => {
+      json(response, status, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+
+  it('asks for the list with the query percent-encoded, under the prefix', async () => {
+    const { client, captured } = await prefixed({ me: SAMPLE_ME, users: [], nextCursor: null });
+    await client.users(SESSION, { q: 'a&b+c#д', cursor: CURSOR });
+    expect(captured.url).toBe(`/api/admin/users?q=a%26b%2Bc%23%D0%B4&cursor=${CURSOR}`);
+    expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+  });
+
+  it('sends no query string for an empty query', async () => {
+    const { client, captured } = await prefixed({ me: SAMPLE_ME, users: [], nextCursor: null });
+    await client.users(SESSION, {});
+    expect(captured.url).toBe('/api/admin/users');
+  });
+
+  it('asks for the card and the overview under the prefix', async () => {
+    const card = await prefixed(SAMPLE_USER);
+    expect(await card.client.user(SESSION, SAMPLE_USER_ID)).toEqual(SAMPLE_USER);
+    expect(card.captured.url).toBe(`/api/admin/users/${SAMPLE_USER_ID}`);
+
+    const overview = await prefixed(SAMPLE_OVERVIEW);
+    expect(await overview.client.overview(SESSION)).toEqual(SAMPLE_OVERVIEW);
+    expect(overview.captured.url).toBe('/api/admin/overview');
+  });
+
+  it('carries a missing card as the backend answered it', async () => {
+    const { client } = await prefixed({ error: 'not_found' }, 404);
+    const error = await rejectionOf(client.user(SESSION, SAMPLE_USER_ID));
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: 'not_found',
+    });
+  });
+
+  // the views are strict: a column the backend started sending is not silently dropped
+  it('refuses a card with a key the contract does not name', async () => {
+    const leaked = {
+      ...SAMPLE_USER,
+      brokerAccounts: [{ ...SAMPLE_USER.brokerAccounts[0], accessTokenEnc: 'x' }],
+    };
+    const { client } = await prefixed(leaked);
+    const error = await rejectionOf(client.user(SESSION, SAMPLE_USER_ID));
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });

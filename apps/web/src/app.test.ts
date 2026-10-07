@@ -1,15 +1,24 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  ADMIN_SEARCH_MAX_LENGTH,
   AdminErrorCode,
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
   UNNAMED_ERROR_MESSAGE,
+  type AdminUsersQuery,
   type StaffSessionView,
 } from '@binarius/shared';
 import { buildWebApp } from './app';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { SESSION_COOKIE, CHALLENGE_COOKIE } from './admin/routes';
+import {
+  SAMPLE_LIST_ITEM,
+  SAMPLE_ME,
+  SAMPLE_OVERVIEW,
+  SAMPLE_USER,
+  SAMPLE_USER_ID,
+} from './admin/testing';
 import { TEXTS } from './admin/texts';
 
 const ORIGIN = 'http://127.0.0.1:3001';
@@ -44,6 +53,9 @@ interface Calls {
   sessions: unknown[];
   revoke: unknown[][];
   logout: unknown[];
+  overview: unknown[];
+  users: [string, AdminUsersQuery][];
+  user: unknown[][];
 }
 
 let calls: Calls;
@@ -51,7 +63,16 @@ let lines: string[];
 let app: FastifyInstance;
 
 const build = (backend: Partial<BackendClient> = {}, secureCookies = false): FastifyInstance => {
-  calls = { login: [], confirm: [], sessions: [], revoke: [], logout: [] };
+  calls = {
+    login: [],
+    confirm: [],
+    sessions: [],
+    revoke: [],
+    logout: [],
+    overview: [],
+    users: [],
+    user: [],
+  };
   lines = [];
   const client: BackendClient = {
     login: async (request) => {
@@ -73,6 +94,18 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     logout: async (token) => {
       calls.logout.push(token);
       return { loggedOut: true };
+    },
+    overview: async (token) => {
+      calls.overview.push(token);
+      return SAMPLE_OVERVIEW;
+    },
+    users: async (token, query) => {
+      calls.users.push([token, query]);
+      return { me: SAMPLE_ME, users: [SAMPLE_LIST_ITEM], nextCursor: null };
+    },
+    user: async (token, id) => {
+      calls.user.push([token, id]);
+      return SAMPLE_USER;
     },
     oauthCallback: async () => {
       throw new Error('the admin pages never forward an OAuth callback');
@@ -451,6 +484,196 @@ describe('the sessions page', () => {
   });
 });
 
+describe('the read pages (#107)', () => {
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+
+  // the href of the link whose text is `label`, as a browser would read it back
+  const hrefOf = (body: string, label: string): string | undefined => {
+    const match = new RegExp(`<a href="([^"]*)"\\s*>\\s*${label}\\s*</a`).exec(body);
+    return match?.[1]?.replaceAll('&amp;', '&');
+  };
+
+  it.each([
+    ['/admin/overview', 'overview'],
+    ['/admin/users', 'users'],
+    [`/admin/users/${SAMPLE_USER_ID}`, 'user'],
+    ['/admin/sessions', 'sessions'],
+  ])('%s carries the nav and the login from the answer', async (url) => {
+    const response = await get(url, withCookie);
+
+    expect(response.statusCode).toBe(200);
+    for (const href of ['/admin/overview', '/admin/users', '/admin/sessions']) {
+      expect(response.body).toContain(`<a href="${href}"`);
+    }
+    expect(response.body).toContain('<nav');
+    expect(response.body).toContain('action="/admin/logout"');
+    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+  });
+
+  it.each(['/admin/overview', '/admin/users', `/admin/users/${SAMPLE_USER_ID}`])(
+    '%s treats a malformed session cookie as none, before the backend is asked',
+    async (url) => {
+      const response = await get(url, { [SESSION_COOKIE]: 'not-a-session-token' });
+
+      expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+      expect(cookieOf(response, SESSION_COOKIE)?.value).toBe('');
+      expect([calls.overview, calls.users, calls.user]).toEqual([[], [], []]);
+    },
+  );
+
+  it('prints the active window the answer carries, with the proxy caption', async () => {
+    await app.close();
+    app = build({
+      overview: () =>
+        Promise.resolve({
+          ...SAMPLE_OVERVIEW,
+          overview: { ...SAMPLE_OVERVIEW.overview, activeWindowMinutes: 42 as 15 },
+        }),
+    });
+
+    const response = await get('/admin/overview', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain(TEXTS.overviewActiveNowHint(42));
+  });
+
+  it('carries q and the cursor through the next link, encoded once', async () => {
+    await app.close();
+    app = build({
+      users: (token, query) => {
+        calls.users.push([token, query]);
+        return Promise.resolve({ me: SAMPLE_ME, users: [SAMPLE_LIST_ITEM], nextCursor: CURSOR });
+      },
+    });
+
+    const first = await get(`/admin/users?q=${encodeURIComponent('a&b+c#д')}`, withCookie);
+    const next = hrefOf(first.body, TEXTS.usersNext);
+    expect(next).toBe(`/admin/users?q=a%26b%2Bc%23%D0%B4&cursor=${CURSOR}`);
+    await get(next ?? '', withCookie);
+
+    expect(calls.users.map(([, query]) => query)).toEqual([
+      { q: 'a&b+c#д' },
+      { q: 'a&b+c#д', cursor: CURSOR },
+    ]);
+    expect(hrefOf((await get(next ?? '', withCookie)).body, TEXTS.usersFirst)).toBe(
+      '/admin/users?q=a%26b%2Bc%23%D0%B4',
+    );
+  });
+
+  it('shows no next link without a cursor', async () => {
+    const response = await get('/admin/users', withCookie);
+    expect(response.body).not.toContain(TEXTS.usersNext);
+  });
+
+  it('drops a malformed cursor and keeps the search', async () => {
+    const response = await get('/admin/users?cursor=bad&q=a%26b', withCookie);
+
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/users?q=a%26b']);
+    expect(calls.users).toEqual([]);
+    await get(response.headers.location as string, withCookie);
+    expect(calls.users).toEqual([[TOKEN, { q: 'a&b' }]]);
+  });
+
+  it('asks for the whole list when the search box was emptied', async () => {
+    await get('/admin/users?q=', withCookie);
+    expect(calls.users).toEqual([[TOKEN, {}]]);
+  });
+
+  it.each([
+    [
+      'q over the limit, even with a bad cursor',
+      `cursor=bad&q=${'a'.repeat(ADMIN_SEARCH_MAX_LENGTH + 1)}`,
+    ],
+    ['a control character', 'q=a%07b'],
+    ['q twice', 'q=a&q=b'],
+  ])('refuses %s with the form, before the backend is asked', async (_label, query) => {
+    const response = await get(`/admin/users?${query}`, withCookie);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers.location).toBeUndefined();
+    expect(calls.users).toEqual([]);
+    expect(response.body).toContain(TEXTS.badSearch);
+    expect(response.body).toContain('<form class="search"');
+    // no answer from the backend, so no login to show: the account block is left out
+    expect(response.body).toContain('<nav');
+    expect(response.body).not.toContain('action="/admin/logout"');
+  });
+
+  it('escapes a display name that is markup, in the list and on the card', async () => {
+    await app.close();
+    const name = '<script>alert(1)</script>';
+    app = build({
+      users: () =>
+        Promise.resolve({
+          me: SAMPLE_ME,
+          users: [{ ...SAMPLE_LIST_ITEM, displayName: name }],
+          nextCursor: null,
+        }),
+      user: () =>
+        Promise.resolve({ ...SAMPLE_USER, user: { ...SAMPLE_USER.user, displayName: name } }),
+    });
+
+    for (const url of ['/admin/users', `/admin/users/${SAMPLE_USER_ID}`]) {
+      const body = (await get(url, withCookie)).body;
+      expect(body).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+      expect(body).not.toContain(name);
+    }
+  });
+
+  it('renders the card: tokens, the default stake and the account', async () => {
+    const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+
+    expect(calls.user).toEqual([[TOKEN, SAMPLE_USER_ID]]);
+    expect(response.body).toContain(TEXTS.demoStakeDefault);
+    expect(response.body).toContain('broker-7');
+    expect(response.body).toContain(`<dd>${SAMPLE_USER.user.tokens.available}</dd>`);
+  });
+
+  it('answers an id that is not a uuid with 404, before the backend is asked', async () => {
+    const response = await get('/admin/users/not-a-uuid', withCookie);
+
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toContain(TEXTS.userNotFoundTitle);
+    expect(calls.user).toEqual([]);
+  });
+
+  it('answers a user the backend did not find with 404', async () => {
+    await app.close();
+    app = build({ user: () => Promise.reject(httpFailure(404, AdminErrorCode.NotFound)) });
+
+    const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toContain(TEXTS.userNotFoundTitle);
+    expect(cookieOf(response, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it('drops a session the backend no longer knows', async () => {
+    await app.close();
+    app = build({ users: () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)) });
+
+    const response = await get('/admin/users', withCookie);
+
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(response, SESSION_COOKIE)?.value).toBe('');
+  });
+
+  it.each([
+    ['an unreachable backend', new BackendError(BackendErrorCode.Unreachable)],
+    ['a refused bearer', httpFailure(401, AdminErrorCode.Unauthorized)],
+    ['a refused query', httpFailure(400, AdminErrorCode.Validation)],
+  ])('treats %s as our own failure and keeps the cookie', async (_label, failure) => {
+    await app.close();
+    app = build({ user: () => Promise.reject(failure) });
+
+    const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+
+    expect(response.statusCode).toBe(500);
+    expect(cookieOf(response, SESSION_COOKIE)).toBeUndefined();
+  });
+});
+
 describe('revoking', () => {
   it('goes back to the list after revoking someone else’s session', async () => {
     const response = await post(
@@ -610,9 +833,9 @@ describe('what reaches the log', () => {
 });
 
 describe('the pages that are not routes', () => {
-  it('redirects the bare prefix to the list', async () => {
+  it('redirects the bare prefix to the overview', async () => {
     const response = await get('/admin');
-    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/sessions']);
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/overview']);
   });
 
   it('answers an unknown path with a page rather than JSON', async () => {

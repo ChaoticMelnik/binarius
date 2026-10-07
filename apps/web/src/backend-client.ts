@@ -1,4 +1,8 @@
 import {
+  adminUsersSearchParams,
+  safeParseAdminOverviewResponse,
+  safeParseAdminUserResponse,
+  safeParseAdminUsersResponse,
   safeParseOAuthCallbackResponse,
   safeParseAdminConfirmResponse,
   safeParseAdminLoginResponse,
@@ -9,6 +13,10 @@ import {
   type AdminConfirmResponse,
   type AdminLoginRequest,
   type AdminLoginResponse,
+  type AdminOverviewResponse,
+  type AdminUserResponse,
+  type AdminUsersQuery,
+  type AdminUsersResponse,
   type LogoutResponse,
   type OAuthCallbackRequest,
   type OAuthCallbackResponse,
@@ -59,6 +67,9 @@ export interface BackendClient {
   sessions(token: string): Promise<StaffSessionsResponse>;
   revoke(token: string, sessionId: string): Promise<RevokeSessionResponse>;
   logout(token: string): Promise<LogoutResponse>;
+  overview(token: string): Promise<AdminOverviewResponse>;
+  users(token: string, query: AdminUsersQuery): Promise<AdminUsersResponse>;
+  user(token: string, userId: string): Promise<AdminUserResponse>;
   /** the backend's public OAuth callback; carries no bearer */
   oauthCallback(request: OAuthCallbackRequest): Promise<OAuthCallbackResponse>;
 }
@@ -156,6 +167,24 @@ export function createBackendClient({
     },
     async logout(session) {
       return parsed(safeParseLogoutResponse, await call('POST', 'admin/auth/logout', { session }));
+    },
+    async overview(session) {
+      return parsed(
+        safeParseAdminOverviewResponse,
+        await call('GET', 'admin/overview', { session }),
+      );
+    },
+    // relative, like every path here, and serialized by the same helper web's links use
+    async users(session, query) {
+      const params = adminUsersSearchParams(query);
+      const path = params.size > 0 ? `admin/users?${params}` : 'admin/users';
+      return parsed(safeParseAdminUsersResponse, await call('GET', path, { session }));
+    },
+    async user(session, userId) {
+      return parsed(
+        safeParseAdminUserResponse,
+        await call('GET', `admin/users/${encodeURIComponent(userId)}`, { session }),
+      );
     },
     // The route is public on the backend and checks no bearer; this one opens /admin/*, and a
     // token sent where nothing needs it is only a place for it to leak from.

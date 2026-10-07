@@ -14,4 +14,13 @@ th, td { border-bottom: 1px solid #8884; padding: 0.4rem 0.6rem; text-align: lef
 td.agent { max-width: 22rem; overflow-wrap: anywhere; }
 tr.current { font-weight: 600; }
 .bar { display: flex; gap: var(--gap); align-items: baseline; justify-content: space-between; }
+nav { display: flex; gap: var(--gap); flex-wrap: wrap; }
+nav a[aria-current="page"] { font-weight: 600; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem var(--gap); }
+dt { color: #888; }
+dd { margin: 0; overflow-wrap: anywhere; }
+p.hint { color: #888; font-size: 0.9rem; }
+form.search { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; }
+form.search input { min-width: 18rem; }
+.pager { display: flex; gap: var(--gap); }
 `;
