@@ -171,6 +171,20 @@ const DEMO_OPEN_TRADE = 'user.demo.open_trade';
 const openTradeRecords = () =>
   broker.socket.journal.filter((record) => record.event.endsWith('.open_trade'));
 
+// a user.demo.open_trade.success payload; the default carries REQUEST's terms
+const successWire = (overrides: Record<string, unknown>) => ({
+  id: 9001,
+  asset_id: EURUSD,
+  action: TradeAction.Up,
+  amount: AMOUNT,
+  payout: 85,
+  open_price: 1.1,
+  open_timestamp: 1_790_028_496_624,
+  is_demo: true,
+  potential_profit: '11.36',
+  ...overrides,
+});
+
 // the command's promise with a flag that says whether it has answered yet
 function track(promise: Promise<SocketOpenTradeResult>) {
   const tracked = { settled: false, promise };
@@ -1009,7 +1023,7 @@ describe('openTrade', () => {
     });
   });
 
-  it('answers unknown on abort while waiting; the late answer is matched to nothing', async () => {
+  it('answers unknown on abort while waiting; the dropped connection never carries the late answer', async () => {
     const h = harness();
     h.client.start(CREDENTIALS);
     await ready(h);
@@ -1023,14 +1037,162 @@ describe('openTrade', () => {
       reason: 'aborted',
       state: BrokerSocketState.Ready,
     });
-    await until('the late answer', () =>
-      typesOf(h.events).includes(BrokerEventType.OpenTradeSuccess),
-    );
-    // the waiter was cleared: the next command is accepted and answered by its own event
+    await ready(h, 2);
+    // the order opened at the broker all the same: the half of m4 reconciliation handles
+    await until('the late trade at the broker', () => broker.trades.list(1).length === 1);
     broker.socket.failNext('openTrade', { fail: [{ message: 'second' }] });
     expect(await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal)).toEqual(
       { outcome: 'fail', failures: [{ message: 'second' }] },
     );
+    expect(typesOf(h.events)).not.toContain(BrokerEventType.OpenTradeSuccess);
+  });
+
+  describe('a command that ended without its answer', () => {
+    // the real socket, its engine.close() recorded and not run: a broker slow to notice the drop,
+    // so a late answer of the aborted command can still arrive on its connection
+    function keepConnectionOpen() {
+      const closes: number[] = [];
+      const openSocket = (url: string, options: BrokerSocketOptions): BrokerSocket => {
+        const socket: BrokerSocket = io(url, options);
+        socket.io.on('open', () => {
+          socket.io.engine.close = () => {
+            closes.push(Date.now());
+            return socket.io.engine;
+          };
+        });
+        return socket;
+      };
+      return { closes, openSocket };
+    }
+
+    it('a late fail of the aborted command never answers the next one (m4)', async () => {
+      const kept = keepConnectionOpen();
+      const h = harness({ openSocket: kept.openSocket });
+      h.client.start(CREDENTIALS);
+      await ready(h);
+      // EUR/USD min_timeframe is 60: the store refuses the first command once its delay is over
+      broker.socket.failNext('openTrade', { delayMs: 50 });
+      broker.socket.failNext('openTrade', { silent: true });
+      const controller = new AbortController();
+      const first = h.client.openTrade(
+        TradeMode.Demo,
+        { ...REQUEST, durationSec: 1 },
+        controller.signal,
+      );
+      await until('the command on the broker', () => openTradeRecords().length === 1);
+      controller.abort();
+      expect(await first).toEqual({
+        outcome: 'unknown',
+        reason: 'aborted',
+        state: BrokerSocketState.Ready,
+      });
+      const second = track(
+        h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
+      );
+      await until('the late fail', () => typesOf(h.events).includes(BrokerEventType.OpenTradeFail));
+      await until('the second command answered', () => second.settled);
+      expect(await second.promise).toEqual({
+        outcome: 'not_sent',
+        reason: 'not_ready',
+        state: BrokerSocketState.Ready,
+      });
+      expect(openTradeRecords()).toHaveLength(1);
+      expect(kept.closes).toHaveLength(1);
+      expect(h.logs('broker socket connection tainted')).toEqual([
+        expect.objectContaining({ level: LEVEL.warn, connection: 1 }),
+      ]);
+    });
+
+    it('drops the tainted connection; the next one answers its own command', async () => {
+      const h = harness();
+      h.client.start(CREDENTIALS);
+      await ready(h);
+      broker.socket.failNext('openTrade', { delayMs: 50 });
+      const controller = new AbortController();
+      const first = h.client.openTrade(
+        TradeMode.Demo,
+        { ...REQUEST, durationSec: 1 },
+        controller.signal,
+      );
+      await until('the command on the broker', () => openTradeRecords().length === 1);
+      controller.abort();
+      await first;
+      await ready(h, 2);
+      expect(h.states.map(({ to, reason }) => ({ to, reason })).slice(2)).toEqual([
+        { to: BrokerSocketState.Ready, reason: undefined },
+        { to: BrokerSocketState.Reconnecting, reason: 'forced close' },
+        { to: BrokerSocketState.Authenticating, reason: undefined },
+        { to: BrokerSocketState.Ready, reason: undefined },
+      ]);
+      const sockets = bySocket();
+      expect(sockets).toHaveLength(2);
+      for (const records of sockets) {
+        expect(
+          records.filter((record) => record.event === BrokerSocketEvent.UserAuth),
+        ).toHaveLength(1);
+      }
+      broker.socket.failNext('openTrade', { fail: [{ message: 'second' }] });
+      expect(
+        await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
+      ).toEqual({ outcome: 'fail', failures: [{ message: 'second' }] });
+      expect(h.logs('broker socket connection tainted')).toEqual([
+        expect.objectContaining({ level: LEVEL.warn, connection: 1 }),
+      ]);
+    });
+  });
+
+  describe('a success is the answer only with the command terms', () => {
+    it.each([
+      ['asset', { asset_id: AAPL }],
+      ['action', { action: TradeAction.Down }],
+      ['amount', { amount: '13.38' }],
+    ])(
+      'keeps waiting on a success with another %s, and warns without values',
+      async (field, wire) => {
+        const h = harness();
+        h.client.start(CREDENTIALS);
+        await ready(h);
+        broker.socket.failNext('openTrade', { silent: true });
+        const command = track(
+          h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
+        );
+        await until('the command on the broker', () => openTradeRecords().length === 1);
+        broker.socket.emitRaw({ userId: 1 }, 'user.demo.open_trade.success', successWire(wire));
+        await until('the foreign success', () =>
+          typesOf(h.events).includes(BrokerEventType.OpenTradeSuccess),
+        );
+        expect(command.settled).toBe(false);
+        expect(h.logs('broker socket open_trade answer mismatch')).toEqual([
+          expect.objectContaining({
+            level: LEVEL.warn,
+            connection: 1,
+            mode: TradeMode.Demo,
+            field,
+          }),
+        ]);
+        broker.socket.emitRaw({ userId: 1 }, 'user.demo.open_trade.success', successWire({}));
+        expect(await command.promise).toEqual({
+          outcome: 'success',
+          trade: expect.objectContaining({ id: '9001', assetId: EURUSD, amount: AMOUNT }),
+        });
+      },
+    );
+
+    it('takes a success whose amount differs only in its spelling', async () => {
+      const h = harness();
+      h.client.start(CREDENTIALS);
+      await ready(h);
+      broker.socket.failNext('openTrade', { silent: true });
+      const command = h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal);
+      await until('the command on the broker', () => openTradeRecords().length === 1);
+      broker.socket.emitRaw(
+        { userId: 1 },
+        'user.demo.open_trade.success',
+        successWire({ amount: '13.3700' }),
+      );
+      expect(await command).toEqual(expect.objectContaining({ outcome: 'success' }));
+      expect(h.logs('broker socket open_trade answer mismatch')).toEqual([]);
+    });
   });
 
   it('is not answered by the other mode, only by its own', async () => {
@@ -1079,6 +1241,22 @@ describe('logs', () => {
     expect(await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal)).toEqual(
       expect.objectContaining({ outcome: 'success' }),
     );
+    broker.socket.failNext('openTrade', { silent: true });
+    const controller = new AbortController();
+    const foreign = h.client.openTrade(TradeMode.Demo, REQUEST, controller.signal);
+    await until('the second command on the broker', () => openTradeRecords().length === 2);
+    broker.socket.emitRaw(
+      { userId: 1 },
+      'user.demo.open_trade.success',
+      successWire({ asset_id: AAPL }),
+    );
+    await until(
+      'the mismatch',
+      () => h.logs('broker socket open_trade answer mismatch').length > 0,
+    );
+    controller.abort();
+    await foreign;
+    await ready(h, 2);
     broker.socket.emitRaw(
       { userId: 1 },
       BrokerSocketEvent.PriceUpdate,
@@ -1088,7 +1266,7 @@ describe('logs', () => {
     broker.socket.emitRaw({ userId: 1 }, 'user.unheard.of', TOKEN);
     broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.PriceUpdate, [EURUSD, 1, 1], TOKEN);
     broker.socket.cutTransport({ userId: 1 });
-    await ready(h, 2);
+    await ready(h, 3);
     broker.users.revokeToken(TOKEN);
     await until('token_expired', () => h.client.state === BrokerSocketState.TokenExpired);
 
@@ -1134,6 +1312,8 @@ describe('logs', () => {
       'broker event listener threw',
       'broker socket state listener threw',
       'broker socket open_trade sent',
+      'broker socket open_trade answer mismatch',
+      'broker socket connection tainted',
     ]) {
       expect(messages, msg).toContain(msg);
     }

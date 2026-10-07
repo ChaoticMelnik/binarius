@@ -9,6 +9,7 @@ import {
 import { logOptions, TradeAction, TradeMode } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import pino from 'pino';
+import { io } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
   AccessTokenOptions,
@@ -19,7 +20,9 @@ import { BrokerEventType } from '../broker/events';
 import {
   BrokerSocketState,
   createBrokerSocketClient,
+  type BrokerSocket,
   type BrokerSocketClient,
+  type BrokerSocketClientOptions,
 } from '../broker/socket';
 import type { TradeSessionSource } from '../broker/trade-session';
 import { createTradeCommandExecutor } from './trade-command-executor';
@@ -83,8 +86,16 @@ function tokenSource(outcome: () => Promise<AccessTokenOutcome>) {
 const grantingTokens = () => tokenSource(async () => ({ ok: true, accessToken: TOKEN }));
 
 // a started socket client for the account, ready unless `until` says otherwise
-async function sessionFor(state: BrokerSocketState = BrokerSocketState.Ready) {
-  const client = createBrokerSocketClient({ url: broker.url, logger: logger(), timing: TIMING });
+async function sessionFor(
+  state: BrokerSocketState = BrokerSocketState.Ready,
+  openSocket?: BrokerSocketClientOptions['openSocket'],
+) {
+  const client = createBrokerSocketClient({
+    url: broker.url,
+    logger: logger(),
+    timing: TIMING,
+    ...(openSocket === undefined ? {} : { openSocket }),
+  });
   clients.push(client);
   client.start({ brokerUserId: '1', accessToken: TOKEN });
   await until(state, () => client.state === state);
@@ -194,6 +205,33 @@ describe('over the socket', () => {
     expect(await submit).toEqual({ outcome: 'unknown', reason: 'broker_unavailable' });
     await until('the late trade', () => broker.trades.list(1).length === 1);
     expectSentOnceOverSocket();
+  });
+
+  it('S9 the connection an aborted command tainted takes no command: the next one goes over REST', async () => {
+    // engine.close() recorded and not run, so the connection stays ready and only the taint
+    // keeps the next command off it
+    const client = await sessionFor(BrokerSocketState.Ready, (url, options) => {
+      const socket: BrokerSocket = io(url, options);
+      socket.io.on('open', () => {
+        socket.io.engine.close = () => socket.io.engine;
+      });
+      return socket;
+    });
+    broker.socket.failNext('openTrade', { delayMs: 50 });
+    const controller = new AbortController();
+    const first = executor(client).submit(intentOf(), controller.signal);
+    await until('the command on the broker', () => socketOpens().length === 1);
+    controller.abort();
+    expect(await first).toEqual({ outcome: 'unknown', reason: 'broker_unavailable' });
+    const second = await executor(client).submit(intentOf(), signal());
+    expect(second).toEqual(
+      expect.objectContaining({ outcome: 'accepted', transport: 'rest_fallback' }),
+    );
+    expect(logs('trade command falls back to rest')).toEqual([
+      expect.objectContaining({ sessionState: BrokerSocketState.Ready }),
+    ]);
+    expect(socketOpens()).toHaveLength(1);
+    expect(restOpens()).toHaveLength(1);
   });
 
   it('a signal already aborted sends nothing anywhere', async () => {
