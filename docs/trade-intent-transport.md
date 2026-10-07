@@ -50,6 +50,14 @@ bot ──GET /trading/intents/:id?telegramUserId=…──▶ backend ──▶
 3. Resolve the broker account: the given `brokerAccountId` must belong to the user (404
    `broker_account_not_found`), or the user's single active account (0 → 404, more than one →
    409 `ambiguous_broker_account`).
+3a. **The demo-stake bounds (#297)**, only for a `demo` intent and only when the caller passes
+   `{ checkDemoStake: true }` — today `POST /trading/intents` alone (stated; the orchestrator's
+   session intents rely on the sizer, Rule 23). One plain `select` of the resolved account's
+   `broker_balance_snapshots` row, no lock, any age: none → 409 `balance_unavailable`; otherwise
+   `checkDemoStake(amount, { minTradeAmount, demoAvailable })` → 409 `stake_precision`,
+   `stake_below_minimum` or `insufficient_demo_balance`. After the replay, so a retry after a
+   committed trade that spent the balance gets its intent back; before the reserve, so a refusal
+   writes nothing.
 4. Reserve one token with a guarded update on `users` (`status = active`,
    `token_balance - token_reserved >= 1`); zero rows → 409 `user_blocked` or `insufficient_tokens`.
 5. Lock the account with `FOR NO KEY UPDATE` and the predicates `status = active`,

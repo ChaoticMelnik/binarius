@@ -345,6 +345,7 @@ Answers: `200 { user }`, `400 { error: 'validation', issues }`, `401 { error: 'u
 | `hasActiveBrokerAccount` | any of the user's accounts is `active`                                   |
 | `pendingBrokerAccounts`  | links waiting for confirmation, newest first, each `{ id, email }` only — `email` may be `null` |
 | `notificationLevel`      | `all`, `reduced` or `off` (`NotificationLevel`); what `/settings` shows   |
+| `demoStake`              | the saved demo stake, canonical decimal string, or `null` for the broker's minimum (#297) |
 
 Every field the bot derives is checked against this same schema before it is sent, `displayName`
 included: the joined name goes through `userStartRequestSchema.shape.displayName`, and when it
@@ -443,9 +444,14 @@ cancels what is pending, and nothing else changes for the user.
 ```text
 /settings
   bot  → POST /users/start (the recheck request: id, name, language; no payload)
-  bot  → blocked: the blocked text; otherwise the levels message, the selected level marked ✅
+  bot  → blocked: the blocked text; otherwise the levels message, the selected level marked ✅,
+         then «💵 Сумма демо-сделки: $5.00» (or «минимальная ставка брокера») and a row
+         «💵 Изменить» → stk:o:s, the stake picker (#297, bot-demo-trade.md → The stake)
+settings (the picker's «↩️ Назад к настройкам»)
+  bot  → answerCallbackQuery ∥ POST /users/start, then the /settings message edited in place
 a level pressed (level:all, level:reduced, level:off)
   bot  → answerCallbackQuery ∥ POST /users/notification-level { telegramUserId, level }
+         → { level, demoStake }, so the edit keeps the stake line
   back → setNotificationLevel: the users row updated; for `off`, in the same transaction, the
          user's `pending` notification_jobs → `canceled` (lock order users → notification_jobs)
   bot  → the message edited in place from the answer's level; refused as not modified:
