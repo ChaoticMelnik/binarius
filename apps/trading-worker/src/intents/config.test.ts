@@ -10,6 +10,7 @@ import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
 import { BROKER_SOCKET_CONNECT_TIMEOUT_MS } from '../broker/socket-config';
+import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 import {
   CATCHUP_ATTEMPT_TIMEOUT_MS,
   CATCHUP_BATCH_SIZE,
@@ -97,6 +98,10 @@ describe('the session manager in the shutdown budget (#101)', () => {
     expect(BROKER_SOCKET_CONNECT_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(ACCESS_TOKEN_ROUTE_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(SESSION_TICK_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  it('keep the trading session attempt inside phase 1 (#287)', () => {
+    expect(TRADING_SESSION_ATTEMPT_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 });
 

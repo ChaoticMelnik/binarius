@@ -2,6 +2,7 @@ import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
 import { BROKER_SOCKET_CONNECT_TIMEOUT_MS } from '../broker/socket-config';
+import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 
 // The worker's time constants form one chain, and every link has a reason:
 //   SUBMIT_ACK_TIMEOUT_MS ≤ MAX_SUBMIT_ACK_TIMEOUT_MS  — env cap on how long one submit may wait
@@ -45,6 +46,9 @@ import { BROKER_SOCKET_CONNECT_TIMEOUT_MS } from '../broker/socket-config';
 //     cut still ends inside phase 1 (stop() aborts the fetches and closes the clients at once:
 //     the worst case, not the normal one)
 //   SESSION_TICK_MS < SHUTDOWN_PHASE1_BUDGET_MS — the scan in flight ends inside phase 1
+// The trading session orchestrator (#287, trading-session/config.ts) adds one:
+//   TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS — phase 1 waits for its stop()
+//     alongside the other steps: one attempt at most
 export const MAX_SUBMIT_ACK_TIMEOUT_MS = 30_000;
 export const SHUTDOWN_PHASE1_BUDGET_MS = 35_000;
 export const SHUTDOWN_PHASE2_BUDGET_MS = 4_000;
@@ -121,7 +125,8 @@ export const TIMING_CHAIN_HOLDS =
   MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  SESSION_TICK_MS < SHUTDOWN_PHASE1_BUDGET_MS;
+  SESSION_TICK_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('trading-worker timing constants are out of order (see intents/config.ts)');
 }
