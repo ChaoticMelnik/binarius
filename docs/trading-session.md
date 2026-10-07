@@ -146,7 +146,7 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 | 5 | `touchBalanceRequested`, then the stored balance snapshot, of any age (the sizer checks the balance before every trade) | — |
 | 5a | no snapshot and the access token expires within `ACCESS_SKEW_MS`: the refresh runs in the background | 409 `balance_unavailable` at once; the caller retries |
 | 5b | no snapshot: `balance.refresh` awaited for at most `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s), then a re-read | 409 `balance_unavailable` when still none |
-| 6 | settings v1 with `stake = stakeSettingsFor(minTradeAmount)` | — |
+| 6 | settings v1 with `stake = stakeSettingsFor(minTradeAmount)` | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which v1 refuses), with a `warn` line |
 | 7 | `createTradingSession(…, mode: demo)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` (unreachable: the route passes `demo`) |
 | 8 | 201 `{ session }` | — |
 

@@ -489,6 +489,21 @@ describe('POST /trading/sessions', () => {
     },
   );
 
+  it('R15 a snapshot with a zero minimum is 409 balance_unavailable, not a 500', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    await upsertBalanceSnapshot(tmp.db, {
+      brokerAccountId: seed.brokerAccountId,
+      user: { ...brokerUser, minTradeAmount: decimalStringSchema.parse('0.00000000') },
+      requested: false,
+    });
+    const before = await sessionCount();
+    const response = await start(appWith(), bodyFor(seed));
+    await expectRefusal(response, 409, 'balance_unavailable', before);
+    expect(lines.some((line) => line.includes('balance snapshot gives no session stake'))).toBe(
+      true,
+    );
+  });
+
   it('R13 a closed trading switch is 409 trading_paused before any broker call', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     await stopTrading(tmp.db, { source: 'operator', reason: 'test' });
