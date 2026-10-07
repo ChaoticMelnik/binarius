@@ -19,6 +19,7 @@ import {
   TRADING_SIGNAL_BUDGET_MS,
   UserErrorCode,
   UserStatus,
+  decimalStringSchema,
   type TradingAccessResponse,
 } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
@@ -66,6 +67,7 @@ import {
   SIGNAL_FETCH_FAILED,
   SIGNAL_NO_SIGNAL,
   PENDING_ACCOUNT_ID,
+  STAKE_FINGERPRINT,
   STAKE_NONCE,
   USER,
   TEXT_CARD_MESSAGE_ID,
@@ -140,6 +142,7 @@ interface Branch {
   startSession?: BackendClient['startSession'];
   readSession?: BackendClient['readSession'];
   stopSession?: BackendClient['stopSession'];
+  setDemoStake?: BackendClient['setDemoStake'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -282,7 +285,7 @@ async function observe(branch: Branch): Promise<Calls> {
     },
     setNotificationLevel: (telegramUserId, level) => {
       backend += 1;
-      return (branch.setNotificationLevel ?? (() => Promise.resolve({ level })))(
+      return (branch.setNotificationLevel ?? (() => Promise.resolve({ level, demoStake: null })))(
         telegramUserId,
         level,
       );
@@ -318,6 +321,13 @@ async function observe(branch: Branch): Promise<Calls> {
     stopSession: (id, telegramUserId) => {
       backend += 1;
       return (branch.stopSession ?? (() => Promise.resolve(STOPPED_SESSION)))(id, telegramUserId);
+    },
+    setDemoStake: (telegramUserId, amount) => {
+      backend += 1;
+      return (branch.setDemoStake ?? ((_id, saved) => Promise.resolve({ saved })))(
+        telegramUserId,
+        amount,
+      );
     },
   };
   const loginDialog = createLoginDialog();
@@ -753,7 +763,7 @@ const DEMO_ANALYSIS_WORST_CASE: Branch = {
   label: '«⏳» is refused as gone and sent anew, then the result is sent',
   update: analysisUpdate(),
   apiErrors: [['editMessageText', EDIT_REFUSED]],
-  expected: { backend: 2, telegram: 4 },
+  expected: { backend: 3, telegram: 4 },
 };
 const DEMO_ANALYSIS = {
   worst: DEMO_ANALYSIS_WORST_CASE,
@@ -776,20 +786,20 @@ const DEMO_ANALYSIS = {
     {
       label: '«⏳» and the result are edited',
       update: analysisUpdate(),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'answering the query is refused and the analysis still goes',
       update: analysisUpdate(),
       apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     DEMO_ANALYSIS_WORST_CASE,
     {
       label: '«⏳» and the result are refused as not modified',
       update: analysisUpdate(),
       apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     // rethrown into bot.catch
     {
@@ -813,44 +823,53 @@ const DEMO_ANALYSIS = {
       label: 'the result edit is refused as gone and the result is sent anew',
       update: analysisUpdate(),
       failSecondEdit: EDIT_REFUSED,
-      expected: { backend: 2, telegram: 4 },
+      expected: { backend: 3, telegram: 4 },
     },
     {
       label: 'the result edit fails in transport',
       update: analysisUpdate(),
       failSecondEdit: EDIT_TRANSPORT,
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
+    },
+    {
+      label: 'the access read for the stake label fails',
+      update: analysisUpdate(),
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the signal call fails',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the broker rate-limits the candles',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the decision is a rule refusal',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the decision is a data refusal',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_DATA_REFUSAL),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
   ] satisfies Branch[],
 };
 
 // the stake button (#127)
 const stakeUpdate = (chatType?: string) =>
-  callbackUpdate(stakeCallbackData(PAIR_EURUSD.id, 300, TradeAction.Up, STAKE_NONCE), chatType);
+  callbackUpdate(
+    stakeCallbackData(PAIR_EURUSD.id, 300, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+    chatType,
+  );
 const createFails = (error: BackendError) => () => Promise.reject(error);
 const STAKE_WORST_CASE: Branch = {
   label: 'the outcome is unknown, the retry creates it, and the status is sent',
@@ -890,7 +909,9 @@ const STAKE_BRANCHES: readonly Branch[] = [
   },
   {
     label: 'the pair is closed',
-    update: callbackUpdate(stakeCallbackData(PAIR_CLOSED.id, 300, TradeAction.Up, STAKE_NONCE)),
+    update: callbackUpdate(
+      stakeCallbackData(PAIR_CLOSED.id, 300, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+    ),
     expected: { backend: 2, telegram: 2 },
   },
   {
@@ -1754,6 +1775,175 @@ const LEVEL_BRANCHES: readonly Branch[] = [
   },
 ];
 
+// The stake picker (#297): each press is answer ∥ one backend call, then an edit in place.
+const STAKE_OPEN_UPDATE = callbackUpdate('stk:o:s');
+const STAKE_OPEN_WORST_CASE: Branch = {
+  label: 'the edit is refused as gone and the picker is sent anew',
+  update: STAKE_OPEN_UPDATE,
+  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  expected: { backend: 1, telegram: 3 },
+};
+const STAKE_OPEN_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate('stk:o:s', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the origin is forged',
+    update: callbackUpdate('stk:o:a:0:300'),
+    expected: { backend: 0, telegram: 1 },
+  },
+  {
+    label: 'the picker is edited in',
+    update: STAKE_OPEN_UPDATE,
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the access read fails',
+    update: STAKE_OPEN_UPDATE,
+    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the edit is refused as not modified',
+    update: STAKE_OPEN_UPDATE,
+    apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
+    expected: { backend: 1, telegram: 2 },
+  },
+  STAKE_OPEN_WORST_CASE,
+];
+
+const stakeSaveBranches = (data: string, forged: string): { branches: Branch[]; worst: Branch } => {
+  const worst: Branch = {
+    label: 'the edit is refused as gone and the answer is sent anew',
+    update: callbackUpdate(data),
+    apiErrors: [['editMessageText', EDIT_REFUSED]],
+    expected: { backend: 1, telegram: 3 },
+  };
+  return {
+    worst,
+    branches: [
+      {
+        label: 'the chat is not private',
+        update: callbackUpdate(data, 'group'),
+        expected: { backend: 0, telegram: 0 },
+      },
+      {
+        label: 'the data is forged',
+        update: callbackUpdate(forged),
+        expected: { backend: 0, telegram: 1 },
+      },
+      {
+        label: 'the stake is saved',
+        update: callbackUpdate(data),
+        expected: { backend: 1, telegram: 2 },
+      },
+      {
+        label: 'the stake is refused with its limits',
+        update: callbackUpdate(data),
+        setDemoStake: () =>
+          Promise.resolve({
+            refused: {
+              error: 'stake_below_minimum' as const,
+              limits: {
+                minTradeAmount: decimalStringSchema.parse('10'),
+                demoAvailable: decimalStringSchema.parse('100'),
+                scale: 2,
+              },
+            },
+          }),
+        expected: { backend: 1, telegram: 2 },
+      },
+      {
+        label: 'the outcome is unknown',
+        update: callbackUpdate(data),
+        setDemoStake: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+        expected: { backend: 1, telegram: 2 },
+      },
+      worst,
+    ],
+  };
+};
+const STAKE_PRESET = stakeSaveBranches('stk:s:5:s', 'stk:s:0:s');
+const STAKE_RESET = stakeSaveBranches('stk:z:s', 'stk:z:a:0:300');
+
+const STAKE_CUSTOM_WORST_CASE: Branch = {
+  label: 'the prompt edit is refused as gone and the prompt is sent anew',
+  update: callbackUpdate('stk:c:s'),
+  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  expected: { backend: 0, telegram: 3 },
+};
+const STAKE_CUSTOM_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the origin is forged',
+    update: callbackUpdate('stk:c:a:0:300'),
+    expected: { backend: 0, telegram: 1 },
+  },
+  {
+    label: 'the prompt is edited in',
+    update: callbackUpdate('stk:c:s'),
+    expected: { backend: 0, telegram: 2 },
+  },
+  STAKE_CUSTOM_WORST_CASE,
+];
+
+const ON_STAKE_STEP: LoginDialogState = { step: 'stake', origin: { kind: 'settings' } };
+const STAKE_TEXT_WORST_CASE: Branch = {
+  label: 'the typed stake is saved',
+  update: textUpdate('5'),
+  dialog: ON_STAKE_STEP,
+  expected: { backend: 1, telegram: 1 },
+};
+const STAKE_TEXT_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the text is not an amount',
+    update: textUpdate('abc'),
+    dialog: ON_STAKE_STEP,
+    expected: { backend: 0, telegram: 1 },
+  },
+  {
+    label: 'the save fails',
+    update: textUpdate('5'),
+    dialog: ON_STAKE_STEP,
+    setDemoStake: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 1 },
+  },
+  STAKE_TEXT_WORST_CASE,
+];
+
+const SETTINGS_SHOW_WORST_CASE: Branch = {
+  label: 'the edit is refused as gone and /settings is sent anew',
+  update: callbackUpdate('settings'),
+  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  expected: { backend: 1, telegram: 3 },
+};
+const SETTINGS_SHOW_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate('settings', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: '/settings is edited in',
+    update: callbackUpdate('settings'),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the read fails',
+    update: callbackUpdate('settings'),
+    recordStart: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the user is blocked',
+    update: callbackUpdate('settings'),
+    recordStart: () => Promise.resolve({ ...USER_VIEW, status: UserStatus.Blocked }),
+    expected: { backend: 1, telegram: 2 },
+  },
+  SETTINGS_SHOW_WORST_CASE,
+];
+
 const LEVEL_CURRENT_WORST_CASE: Branch = {
   label: 'the selected level is pressed',
   update: callbackUpdate(LEVEL_CURRENT_CALLBACK_DATA),
@@ -1805,6 +1995,60 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
       [LEVEL_CURRENT_WORST_CASE],
       LEVEL_CURRENT_WORST_CASE,
       HANDLER_CALLS.levelCurrent,
+    );
+  });
+
+  it('the stake picker', async () => {
+    await checkHandler(
+      'stakePickerOpen',
+      STAKE_OPEN_BRANCHES,
+      STAKE_OPEN_WORST_CASE,
+      HANDLER_CALLS.stakePickerOpen,
+    );
+  });
+
+  it('a stake preset', async () => {
+    await checkHandler(
+      'stakePreset',
+      STAKE_PRESET.branches,
+      STAKE_PRESET.worst,
+      HANDLER_CALLS.stakePreset,
+    );
+  });
+
+  it('the stake reset', async () => {
+    await checkHandler(
+      'stakeReset',
+      STAKE_RESET.branches,
+      STAKE_RESET.worst,
+      HANDLER_CALLS.stakeReset,
+    );
+  });
+
+  it('the custom stake button', async () => {
+    await checkHandler(
+      'stakeCustom',
+      STAKE_CUSTOM_BRANCHES,
+      STAKE_CUSTOM_WORST_CASE,
+      HANDLER_CALLS.stakeCustom,
+    );
+  });
+
+  it('a text on the stake step', async () => {
+    await checkHandler(
+      'stakeText',
+      STAKE_TEXT_BRANCHES,
+      STAKE_TEXT_WORST_CASE,
+      HANDLER_CALLS.stakeText,
+    );
+  });
+
+  it("the picker's way back to /settings", async () => {
+    await checkHandler(
+      'settingsShow',
+      SETTINGS_SHOW_BRANCHES,
+      SETTINGS_SHOW_WORST_CASE,
+      HANDLER_CALLS.settingsShow,
     );
   });
 

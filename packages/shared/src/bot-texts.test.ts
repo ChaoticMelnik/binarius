@@ -106,6 +106,13 @@ describe('the bot texts catalog', () => {
         'resendButton',
         'sessionRefreshButton',
         'sessionStopButton',
+        'settingsStakeButton',
+        'stakeBackAnalysisButton',
+        'stakeBackButton',
+        'stakeBackSettingsButton',
+        'stakeCustomButton',
+        'stakeMenuButton',
+        'stakeResetButton',
         'supportButton',
       ].sort(),
     );

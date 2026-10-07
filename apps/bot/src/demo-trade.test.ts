@@ -9,6 +9,7 @@ import {
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
+  decimalStringSchema,
   defaultBotTextSource,
   UserStatus,
   type PairsCatalogResponse,
@@ -21,8 +22,11 @@ import { createBot, CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA } from './bot';
 import {
   DEMO_CALLBACK_DATA,
   DEMO_GROUPS_CALLBACK_DATA,
+  demoAnalysisCallbackData,
   demoAssetCallbackData,
   stakeCallbackData,
+  stakeFingerprint,
+  stakeMenuCallbackData,
 } from './demo';
 import { intentCallbackData } from './demo-trade';
 import type { IntentTrackRequest } from './intent-tracker';
@@ -35,6 +39,7 @@ import {
   PAIR_CLOSED,
   PAIR_EURUSD,
   PAIRS_RESPONSE,
+  STAKE_FINGERPRINT,
   STAKE_NONCE,
   TEXT_CARD_MESSAGE_ID,
   USER,
@@ -55,7 +60,7 @@ import {
 import { intentStatusText, LABELS, setBotTextSource, TEXTS } from './texts';
 
 const NOW = 1_790_000_000_000;
-const STAKE = stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, STAKE_NONCE);
+const STAKE = stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT);
 const REFRESH = intentCallbackData(INTENT_ID);
 
 interface Button {
@@ -128,6 +133,9 @@ const CONNECT_ROWS = [
   [button(LABELS.oauthButton, OAUTH_CALLBACK_DATA)],
 ];
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
+const STAKE_MENU_ROWS = [
+  [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 60))],
+];
 const BACK_DURATIONS = button(
   LABELS.demoBackDurationsButton,
   demoAssetCallbackData(PAIR_EURUSD.id),
@@ -228,7 +236,9 @@ describe('the stake button', () => {
 
   it('keys a button of another render by its own nonce', async () => {
     const { press, createIntent } = setup();
-    await press(stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, 'aaaaaaaaaaaa'));
+    await press(
+      stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, 'aaaaaaaaaaaa', STAKE_FINGERPRINT),
+    );
     expect(createIntent.mock.calls[0]?.[0].clientRequestId).toBe(`demo:${USER.id}:aaaaaaaaaaaa`);
   });
 
@@ -259,6 +269,15 @@ describe('the stake button', () => {
     [TradeIntentErrorCode.ActiveIntentExists, 409, TEXTS.stakeActiveIntent, []],
     [TradeIntentErrorCode.ClientRequestIdConflict, 409, TEXTS.stakeButtonUsed, []],
     [TradeIntentErrorCode.TradingPaused, 409, TEXTS.tradingPaused, []],
+    [TradeIntentErrorCode.BalanceUnavailable, 409, TEXTS.stakeBalanceMissing, []],
+    [TradeIntentErrorCode.StakePrecision, 409, TEXTS.stakePrecision, STAKE_MENU_ROWS],
+    [
+      TradeIntentErrorCode.StakeBelowMinimum,
+      409,
+      TEXTS.stakeBelowMinimum('$1.00'),
+      STAKE_MENU_ROWS,
+    ],
+    [TradeIntentErrorCode.InsufficientDemoBalance, 409, TEXTS.stakeAboveAvailable, STAKE_MENU_ROWS],
   ] as const)(
     'answers %s with its text, asks once, and logs nothing',
     async (reason, status, text: TelegramHtml, rows: readonly Button[][]) => {
@@ -274,6 +293,70 @@ describe('the stake button', () => {
       expect(intentTracker.track).not.toHaveBeenCalled();
     },
   );
+
+  // #297: the amount is the saved stake, and the button only trades the amount it showed
+  describe('the saved stake', () => {
+    const saved = (demoStake: string) => () =>
+      Promise.resolve(accessView({ demoStake: decimalStringSchema.parse(demoStake) }));
+    const stakeFor = (fingerprint: string) =>
+      stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, STAKE_NONCE, fingerprint);
+
+    it('trades the saved stake, not the broker minimum', async () => {
+      const { press, createIntent } = setup({ readTradingAccess: saved('2.5') });
+      await press(stakeFor(stakeFingerprint(decimalStringSchema.parse('2.5'))));
+      expect(createIntent.mock.calls[0]?.[0].amount).toBe('2.5');
+    });
+
+    it('trades the broker minimum without a saved stake', async () => {
+      const { press, createIntent } = setup();
+      await press(STAKE);
+      expect(createIntent.mock.calls[0]?.[0].amount).toBe('1.00000000');
+    });
+
+    it.each([
+      ['drawn for the minimum, the stake saved since', saved('2.5'), STAKE],
+      [
+        'drawn for a stake, reset since',
+        () => Promise.resolve(ACCESS_VIEW),
+        stakeFor(stakeFingerprint(decimalStringSchema.parse('2.5'))),
+      ],
+      [
+        'drawn without an amount',
+        () => Promise.resolve(ACCESS_VIEW),
+        stakeFor(stakeFingerprint(null)),
+      ],
+      [
+        'from before the fingerprint',
+        () => Promise.resolve(ACCESS_VIEW),
+        `demo:stake:${PAIR_EURUSD.id}:60:up:${STAKE_NONCE}`,
+      ],
+    ])('refuses a button %s and creates nothing', async (_case, readTradingAccess, data) => {
+      const { press, calls, createIntent, logger } = setup({ readTradingAccess });
+      await press(data);
+      expect(createIntent).not.toHaveBeenCalled();
+      const sent = payloadOf(calls, 'sendMessage');
+      expect(sent?.text).toBe(TEXTS.stakeAmountChanged.value);
+      expect(rowsOf(sent)).toEqual([
+        [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 60))],
+      ]);
+      expect(warnings(logger)).toEqual([]);
+    });
+
+    it('names the minimum of this press when the backend refuses the stake below it', async () => {
+      const { press, calls } = setup({
+        readTradingAccess: () =>
+          Promise.resolve(
+            accessView({
+              demoStake: decimalStringSchema.parse('2'),
+              broker: { ...ACCESS_VIEW.broker!, minTradeAmount: decimalStringSchema.parse('5') },
+            }),
+          ),
+        createIntent: () => Promise.reject(httpError(409, TradeIntentErrorCode.StakeBelowMinimum)),
+      });
+      await press(stakeFor(stakeFingerprint(decimalStringSchema.parse('2'))));
+      expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.stakeBelowMinimum('$5.00').value);
+    });
+  });
 
   // the refusal names its text by key and reads it when it answers (#240)
   describe('with another text source', () => {
@@ -375,14 +458,14 @@ describe('the stake button', () => {
     [
       'the pair is closed',
       catalogOf({ pairs: [PAIR_CLOSED] }),
-      stakeCallbackData(PAIR_CLOSED.id, 60, TradeAction.Up, STAKE_NONCE),
+      stakeCallbackData(PAIR_CLOSED.id, 60, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
       TEXTS.demoPairClosed(PAIR_CLOSED.symbol),
       [[BACK_GROUPS]],
     ],
     [
       "the duration is outside the pair's bounds",
       catalogOf({ pairs: [{ ...PAIR_EURUSD, maxTimeframe: 60 }] }),
-      stakeCallbackData(PAIR_EURUSD.id, 300, TradeAction.Up, STAKE_NONCE),
+      stakeCallbackData(PAIR_EURUSD.id, 300, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
       TEXTS.demoDurationUnsupported(PAIR_EURUSD.symbol),
       [[BACK_DURATIONS, BACK_GROUPS]],
     ],

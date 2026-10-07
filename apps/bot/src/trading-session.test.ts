@@ -10,7 +10,7 @@ import {
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot, CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA } from './bot';
-import { sessionStartCallbackData } from './demo';
+import { sessionStartCallbackData, stakeMenuCallbackData } from './demo';
 import type { SessionTrackRequest } from './session-tracker';
 import {
   BOT_INFO,
@@ -121,6 +121,9 @@ const CONNECT_ROWS = [
   [button(LABELS.connectButton, CONNECT_CALLBACK_DATA)],
   [button(LABELS.oauthButton, OAUTH_CALLBACK_DATA)],
 ];
+const STAKE_MENU_ROWS = [
+  [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 60))],
+];
 const EDIT_GONE: ApiError = {
   ok: false,
   error_code: 400,
@@ -192,14 +195,32 @@ describe('the session button', () => {
       startSession: () => Promise.reject(httpError(status, code)),
     });
     await press(START);
-    const refusal: { text: Parameters<typeof textOf>[0]; connect?: true; log?: true } =
-      START_REFUSALS[code];
+    const refusal: {
+      text: Parameters<typeof textOf>[0];
+      connect?: true;
+      stakeMenu?: true;
+      log?: true;
+    } = START_REFUSALS[code];
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(textOf(refusal.text).value);
-    expect(rowsOf(sent)).toEqual(refusal.connect === true ? CONNECT_ROWS : []);
+    expect(rowsOf(sent)).toEqual(
+      refusal.connect === true ? CONNECT_ROWS : refusal.stakeMenu === true ? STAKE_MENU_ROWS : [],
+    );
     expect(startSession).toHaveBeenCalledTimes(1);
     expect(sessionTracker.track).not.toHaveBeenCalled();
     expect(warnings(logger)).toEqual(refusal.log === true ? ['trading session not started'] : []);
+  });
+
+  // #297: the saved stake refused against the snapshot; the picker opens from the same analysis
+  it('answers the three stake refusals with «💵 Сумма» for the pressed pair', () => {
+    for (const code of [
+      TradingSessionErrorCode.StakePrecision,
+      TradingSessionErrorCode.StakeBelowMinimum,
+      TradingSessionErrorCode.InsufficientDemoBalance,
+    ]) {
+      expect(START_REFUSALS[code], code).toMatchObject({ stakeMenu: true });
+    }
+    expect(STAKE_MENU_ROWS[0]?.[0]?.callback_data).toMatch(/^stk:o:a:\d+:\d+$/);
   });
 
   it('answers the closed switch and the missing tokens with their own texts', () => {

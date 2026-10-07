@@ -1,17 +1,20 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
   BrokerRestErrorCode,
   createTradeIntentRequestSchema,
   DEFAULT_SESSION_TRADES,
   errorLogFields,
+  normalizeDecimal,
   sessionFitsDeadline,
   intervalForDuration,
   SignalFeedOutcome,
   TradeAction,
+  type DecimalString,
   type PairsCatalogResponse,
   type PairView,
   type TelegramHtml,
+  type TradingAccessResponse,
 } from '@binarius/shared';
 import {
   analysisScreen,
@@ -73,15 +76,35 @@ export const demoAnalysisCallbackData = (assetId: number, durationSec: DemoDurat
   `demo:an:${assetId}:${durationSec}`;
 // The analysis screen's button (#126); the press opens the trade (#127, demo-trade.ts). The nonce
 // is drawn once per analysis render and is the trade's idempotency key: the same button pressed
-// again replays its intent, a new render allows a new trade. The longest,
-// `demo:stake:2147483647:3600:down:0123456789ab`, is 44 bytes.
+// again replays its intent, a new render allows a new trade. The fingerprint is the amount the
+// label shows (#297): the press refuses when the amount in effect now is another one. The longest,
+// `demo:stake:2147483647:3600:down:0123456789ab:0a1b2c`, is 51 bytes.
 const STAKE_CALLBACK_PREFIX = 'demo:stake:';
 export const stakeCallbackData = (
   assetId: number,
   durationSec: DemoDurationSec,
   action: TradeAction,
   nonce: string,
-): string => `${STAKE_CALLBACK_PREFIX}${assetId}:${durationSec}:${action}:${nonce}`;
+  fingerprint: string,
+): string => `${STAKE_CALLBACK_PREFIX}${assetId}:${durationSec}:${action}:${nonce}:${fingerprint}`;
+// 24 bits of the canonical amount; null (no amount to show) hashes '', so a button drawn without
+// an amount never matches one with it
+export const stakeFingerprint = (amount: DecimalString | null): string =>
+  createHash('sha256')
+    .update(amount === null ? '' : normalizeDecimal(amount))
+    .digest('hex')
+    .slice(0, 6);
+// The amount a stake press trades (#297): the saved demo stake, or the broker's minimum without
+// one; null when access has no broker snapshot to say it.
+export const effectiveStake = (
+  access: Pick<TradingAccessResponse, 'broker' | 'demoStake'>,
+): DecimalString | null =>
+  access.broker === null ? null : (access.demoStake ?? access.broker.minTradeAmount);
+// «💵 Сумма» beside the stake button, and under the stake refusals: the picker (stake-picker.ts)
+// opened from the analysis, whose way back is that analysis
+export const STAKE_PICKER_PREFIX = 'stk:';
+export const stakeMenuCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
+  `${STAKE_PICKER_PREFIX}o:a:${assetId}:${durationSec}`;
 // The analysis screen's session button (#284, trading-session.ts). No nonce, by the owner's
 // decision: an old button starts a new session once the previous one has ended, and while one is
 // active the backend answers with it. The longest, `demo:sess:2147483647:3600`, is 25 bytes.
@@ -102,8 +125,10 @@ const DEMO_PAGE_PATTERN = /^demo:t:([a-z]{1,16}):(\d{1,4})$/;
 const DEMO_ASSET_PATTERN = /^demo:a:(\d{1,10})$/;
 const DEMO_DURATION_PATTERN = new RegExp(`^demo:d:(\\d{1,10}):(${DURATIONS})$`);
 const DEMO_ANALYSIS_PATTERN = new RegExp(`^demo:an:(\\d{1,10}):(${DURATIONS})$`);
+// the fingerprint is optional: a button from before #297 has none and is refused as changed,
+// not left spinning
 export const STAKE_CALLBACK_PATTERN = new RegExp(
-  `^${STAKE_CALLBACK_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')}):([0-9a-f]{12})$`,
+  `^${STAKE_CALLBACK_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')}):([0-9a-f]{12})(?::([0-9a-f]{6}))?$`,
 );
 
 export const SESSION_START_PATTERN = new RegExp(
@@ -111,11 +136,11 @@ export const SESSION_START_PATTERN = new RegExp(
 );
 
 // The shape #127 sends, so what the bot carries is what the backend accepts.
-const assetIdOf = (raw: string | undefined): number | undefined => {
+export const assetIdOf = (raw: string | undefined): number | undefined => {
   const parsed = createTradeIntentRequestSchema.shape.assetId.safeParse(Number(raw));
   return parsed.success ? parsed.data : undefined;
 };
-const durationOf = (raw: string | undefined): DemoDurationSec | undefined =>
+export const durationOf = (raw: string | undefined): DemoDurationSec | undefined =>
   DEMO_DURATIONS_SEC.find((sec) => String(sec) === raw);
 const groupOfData = (raw: string | undefined): DemoAssetGroup | undefined =>
   DEMO_ASSET_GROUPS.find((group) => group === raw);
@@ -127,6 +152,7 @@ export interface StakeData {
   durationSec: DemoDurationSec;
   action: TradeAction;
   nonce: string;
+  fingerprint: string | undefined;
 }
 
 // The stake button's data from a STAKE_CALLBACK_PATTERN match, undefined when forged.
@@ -144,7 +170,7 @@ export function stakeDataOf(match: RegExpMatchArray | string): StakeData | undef
   ) {
     return undefined;
   }
-  return { assetId, durationSec, action, nonce };
+  return { assetId, durationSec, action, nonce, fingerprint: match[5] };
 }
 
 // The session button's data from a SESSION_START_PATTERN match, undefined when forged or when
@@ -162,7 +188,7 @@ export function sessionStartDataOf(
 }
 
 export interface DemoComposerDeps {
-  backend: Pick<BackendClient, 'readPairs' | 'evaluateSignal'>;
+  backend: Pick<BackendClient, 'readPairs' | 'evaluateSignal' | 'readTradingAccess'>;
   logger: Logger;
   now: () => number;
 }
@@ -253,8 +279,11 @@ export function createDemoComposer<C extends Context>({
       TEXTS.analyzing(analysisSubject(read.pair, durationSec)),
     );
     if (waiting === 'unknown') return;
-    const screen = await evaluate(read.pair, durationSec);
-    const keyboard = analysisKeyboard(assetId, durationSec, screen);
+    const [screen, amount] = await Promise.all([
+      evaluate(read.pair, durationSec),
+      stakeAmount(ctx.from.id),
+    ]);
+    const keyboard = analysisKeyboard(assetId, durationSec, screen, amount);
     // «⏳» went as a new message: the result follows it rather than editing the summary again
     if (waiting === 'sent') await replyHtml(ctx, screen.text, { reply_markup: keyboard });
     else await editOrReply(ctx, screen.text, keyboard);
@@ -282,19 +311,41 @@ export function createDemoComposer<C extends Context>({
     return analysisScreen({ pair, durationSec, response });
   }
 
+  // The amount for the stake button's label (#297). A failed read only drops the amount: the
+  // signal decides the screen, and the press reads access again anyway.
+  async function stakeAmount(telegramUserId: number): Promise<DecimalString | null> {
+    try {
+      return effectiveStake(await backend.readTradingAccess(String(telegramUserId)));
+    } catch (error) {
+      logger.warn(
+        { ...errorLogFields(error), ...backendErrorFields(error) },
+        'trading access not read for the stake label',
+      );
+      return null;
+    }
+  }
+
   // the stake and session buttons on a signal only, then «🔄 Повторить анализ» and the way back
   function analysisKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
     screen: AnalysisScreen,
+    amount: DecimalString | null,
   ): InlineKeyboard {
     const keyboard = new InlineKeyboard();
     if (screen.stake !== null) {
       keyboard
         .text(
-          stakeButtonLabel(screen.stake),
-          stakeCallbackData(assetId, durationSec, screen.stake, newStakeNonce()),
+          stakeButtonLabel(screen.stake, amount),
+          stakeCallbackData(
+            assetId,
+            durationSec,
+            screen.stake,
+            newStakeNonce(),
+            stakeFingerprint(amount),
+          ),
         )
+        .text(LABELS.stakeMenuButton, stakeMenuCallbackData(assetId, durationSec))
         .row();
       // its own row: the session's trades follow the orchestrator's signal at each trade, not
       // this screen's direction

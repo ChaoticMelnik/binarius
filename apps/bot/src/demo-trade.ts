@@ -21,10 +21,16 @@ import {
 } from './backend-client';
 import {
   DEMO_GROUPS_CALLBACK_DATA,
+  demoAnalysisCallbackData,
   demoAssetCallbackData,
+  effectiveStake,
   STAKE_CALLBACK_PATTERN,
   stakeDataOf,
+  stakeFingerprint,
+  stakeMenuCallbackData,
+  type StakeData,
 } from './demo';
+import { formatStake } from './format';
 import { readDemoTrade, type DemoTradeRead } from './demo-catalog';
 import { INTENT_NOT_FOUND, TRACKER_STOP_STATUSES, type IntentTracker } from './intent-tracker';
 import { telegramErrorFields, type Logger } from './logging';
@@ -56,6 +62,8 @@ export interface DemoTradeDeps {
 interface Refusal {
   text: BotStaticHtmlKey;
   connect?: true;
+  // «💵 Сумма» under the text: a refusal of the amount itself (#297)
+  stakeMenu?: true;
   // a refusal the bot never provokes: a bug, or a backend this bot does not know
   log?: true;
 }
@@ -74,10 +82,17 @@ const CREATE_REFUSALS = {
   [TradeIntentErrorCode.AccountHalted]: { text: 'stakeAccountHalted' },
   [TradeIntentErrorCode.InsufficientTokens]: { text: 'stakeInsufficientTokens' },
   [TradeIntentErrorCode.ActiveIntentExists]: { text: 'stakeActiveIntent' },
-  // the same button pressed with other parameters: minTradeAmount changed between two presses
+  // the same button pressed with other parameters: the amount changed between two presses, which
+  // the fingerprint normally refuses first
   [TradeIntentErrorCode.ClientRequestIdConflict]: { text: 'stakeButtonUsed' },
   // the global trading switch is closed (#144): demo and real alike
   [TradeIntentErrorCode.TradingPaused]: { text: 'tradingPaused' },
+  // the demo-stake bounds against the account's snapshot (#297); stake_below_minimum names the
+  // minimum when this press's access read had it (replyCreateFailure)
+  [TradeIntentErrorCode.BalanceUnavailable]: { text: 'stakeBalanceMissing' },
+  [TradeIntentErrorCode.StakePrecision]: { text: 'stakePrecision', stakeMenu: true },
+  [TradeIntentErrorCode.StakeBelowMinimum]: { text: 'stakeBelowBrokerMinimum', stakeMenu: true },
+  [TradeIntentErrorCode.InsufficientDemoBalance]: { text: 'stakeAboveAvailable', stakeMenu: true },
 } as const satisfies Record<TradeIntentErrorCode, Refusal>;
 
 const isCreateRefusal = (reason: string | undefined): reason is TradeIntentErrorCode =>
@@ -111,8 +126,9 @@ export function createDemoTradeComposer<C extends Context>({
   const composer = new Composer<C>();
 
   // The order of the checks: the catalog read at this press (the pair can close or vanish
-  // between the analysis and the press), the access (the amount is the broker's minimum stake
-  // from its snapshot, a string as the backend sent it — never computed, Rule 2), then the POST.
+  // between the analysis and the press), the access (the amount is the saved demo stake, or the
+  // broker's minimum from its snapshot without one, a string as the backend sent it — never
+  // computed, Rule 2), the button's fingerprint against that amount (#297), then the POST.
   // The key is the button's own nonce: the same button pressed again — a double tap, an old
   // message, a press after a restart — replays the same intent and never opens a second trade
   // (trade_intents_user_request_idx), while every analysis render draws a new nonce.
@@ -134,12 +150,23 @@ export function createDemoTradeComposer<C extends Context>({
     }
     const amount = await amountOf(ctx, access);
     if (amount === undefined) return;
+    // a button drawn for another amount, or before the fingerprint existed: the user would trade
+    // an amount the label did not show
+    if (stake.fingerprint !== stakeFingerprint(amount.amount)) {
+      await replyHtml(ctx, TEXTS.stakeAmountChanged, {
+        reply_markup: new InlineKeyboard().text(
+          LABELS.stakeBackAnalysisButton,
+          demoAnalysisCallbackData(stake.assetId, stake.durationSec),
+        ),
+      });
+      return;
+    }
 
     const request: CreateTradeIntentRequest = {
       telegramUserId,
       mode: TradeMode.Demo,
       assetId: stake.assetId,
-      amount,
+      amount: amount.amount,
       action: stake.action,
       durationSec: stake.durationSec,
       clientRequestId: `demo:${telegramUserId}:${stake.nonce}`,
@@ -149,7 +176,7 @@ export function createDemoTradeComposer<C extends Context>({
     let created = await create(request);
     if (!created.ok && created.unknown) created = await create(request);
     if (!created.ok) {
-      await replyCreateFailure(ctx, created);
+      await replyCreateFailure(ctx, created, stake, amount.minTradeAmount);
       return;
     }
     await sendStatus(ctx, trade.pair, created.intent);
@@ -192,11 +219,12 @@ export function createDemoTradeComposer<C extends Context>({
     }
   }
 
-  // the stake as the broker's snapshot gives it, or undefined once the refusal was sent
+  // the stake and the broker's minimum it is checked against, or undefined once the refusal was
+  // sent
   async function amountOf(
     ctx: Context,
     access: Settled<TradingAccessResponse>,
-  ): Promise<DecimalString | undefined> {
+  ): Promise<{ amount: DecimalString; minTradeAmount: DecimalString } | undefined> {
     if (!access.ok) {
       logger.warn(
         { ...errorLogFields(access.error), ...backendErrorFields(access.error) },
@@ -210,7 +238,10 @@ export function createDemoTradeComposer<C extends Context>({
       await replyHtml(ctx, TEXTS.blocked);
       return undefined;
     }
-    if (broker !== null) return broker.minTradeAmount;
+    const amount = effectiveStake(access.value);
+    if (broker !== null && amount !== null) {
+      return { amount, minTradeAmount: broker.minTradeAmount };
+    }
     if (brokerUnavailable === BrokerBalanceUnavailableReason.NoAccount) {
       await replyHtml(ctx, TEXTS.accountNone, { reply_markup: connectKeyboard() });
     } else if (brokerUnavailable === BrokerBalanceUnavailableReason.AmbiguousAccount) {
@@ -224,6 +255,8 @@ export function createDemoTradeComposer<C extends Context>({
   async function replyCreateFailure(
     ctx: Context,
     failure: Extract<CreateOutcome, { ok: false }>,
+    stake: StakeData,
+    minTradeAmount: DecimalString,
   ): Promise<void> {
     const reason = failure.error instanceof BackendError ? failure.error.reason : undefined;
     const refusal: Refusal =
@@ -236,11 +269,20 @@ export function createDemoTradeComposer<C extends Context>({
         'trade intent not created',
       );
     }
-    await replyHtml(
-      ctx,
-      textOf(refusal.text),
-      refusal.connect === true ? { reply_markup: connectKeyboard() } : {},
-    );
+    const text =
+      !failure.unknown && reason === TradeIntentErrorCode.StakeBelowMinimum
+        ? TEXTS.stakeBelowMinimum(formatStake(minTradeAmount))
+        : textOf(refusal.text);
+    const reply_markup =
+      refusal.connect === true
+        ? connectKeyboard()
+        : refusal.stakeMenu === true
+          ? new InlineKeyboard().text(
+              LABELS.stakeMenuButton,
+              stakeMenuCallbackData(stake.assetId, stake.durationSec),
+            )
+          : undefined;
+    await replyHtml(ctx, text, reply_markup === undefined ? {} : { reply_markup });
   }
 
   // #125's texts as a new message under the analysis, with the way back only: a «🔄 Повторить»

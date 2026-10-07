@@ -1,5 +1,8 @@
 import {
+  DemoStakeRefusal,
   safeParseChatMemberResponse,
+  safeParseDemoStakeRefusal,
+  safeParseSetDemoStakeResponse,
   safeParseConfirmLoginResponse,
   safeParseEmailLoginResponse,
   safeParseEmailSendCodeResponse,
@@ -17,6 +20,8 @@ import {
   type ConfirmLoginResponse,
   type CreateTradeIntentRequest,
   type CreateTradingSessionRequest,
+  type DecimalString,
+  type DemoStakeRefusalBody,
   type EmailLoginResponse,
   type EmailSendCodeResponse,
   type NotificationLevel,
@@ -99,7 +104,15 @@ export interface BackendClient {
   // both scoped by the owner like readIntent
   readSession(id: string, telegramUserId: string): Promise<TradingSessionView>;
   stopSession(id: string, telegramUserId: string): Promise<TradingSessionView>;
+  // the saved stake, or a bounds refusal with the limits it was checked against (#297); any other
+  // failure throws as from every method
+  setDemoStake(telegramUserId: string, amount: DecimalString | null): Promise<SetDemoStakeResult>;
 }
+
+export type SetDemoStakeResult =
+  { saved: DecimalString | null } | { refused: Extract<DemoStakeRefusalBody, { limits: unknown }> };
+
+const DEMO_STAKE_REFUSALS: ReadonlySet<string> = new Set(Object.values(DemoStakeRefusal));
 
 export type StartSessionResult =
   { started: TradingSessionView } | { active: TradingSessionView | null };
@@ -280,6 +293,27 @@ export function createBackendClient({
         throw new BackendError(BackendErrorCode.ContractViolation, { status });
       }
       return { active: parsed.data.session };
+    },
+    // Only the parsed body and the error code leave this method, as from request(): a bounds 409
+    // is read for its limits alone.
+    async setDemoStake(telegramUserId, amount) {
+      const { ok, status, payload } = await send('POST', 'trading/demo-stake', {
+        telegramUserId,
+        amount,
+      });
+      if (ok) {
+        const parsed = safeParseSetDemoStakeResponse(payload);
+        if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation, { status });
+        return { saved: parsed.data.demoStake };
+      }
+      if (status !== 409 || !DEMO_STAKE_REFUSALS.has(errorCodeOf(payload) ?? '')) {
+        throw httpStatusError(status, payload);
+      }
+      const parsed = safeParseDemoStakeRefusal(payload);
+      if (!parsed.success || !('limits' in parsed.data)) {
+        throw new BackendError(BackendErrorCode.ContractViolation, { status });
+      }
+      return { refused: parsed.data };
     },
     async readSession(id, telegramUserId) {
       const query = new URLSearchParams({ telegramUserId });

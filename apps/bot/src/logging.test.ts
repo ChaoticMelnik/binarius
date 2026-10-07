@@ -43,6 +43,7 @@ import {
   SIGNAL_DECIDED,
   SIGNAL_FETCH_FAILED,
   PENDING_ACCOUNT_ID,
+  STAKE_FINGERPRINT,
   STAKE_NONCE,
   USER,
   USER_VIEW,
@@ -109,7 +110,8 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     emailLogin: scenario.emailLogin ?? (() => Promise.resolve(CONFIRMED)),
     recordChatMember: () => Promise.reject(new Error('not used by these scenes')),
     setNotificationLevel:
-      scenario.setNotificationLevel ?? ((_telegramUserId, level) => Promise.resolve({ level })),
+      scenario.setNotificationLevel ??
+      ((_telegramUserId, level) => Promise.resolve({ level, demoStake: null })),
     readTradingAccess: scenario.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
     readPairs: scenario.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)),
     evaluateSignal: scenario.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
@@ -118,6 +120,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     startSession: () => Promise.reject(new Error('not used by these scenes')),
     readSession: () => Promise.reject(new Error('not used by these scenes')),
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
+    setDemoStake: () => Promise.reject(new Error('not used by these scenes')),
   };
   const loginDialog = createLoginDialog();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
@@ -571,7 +574,7 @@ describe('what the bot writes about the settings edit', () => {
       'editMessageText',
       'sendMessage',
     ]);
-    expect(calls[2]?.payload.text).toBe(settingsText(NotificationLevel.Off).value);
+    expect(calls[2]?.payload.text).toBe(settingsText(NotificationLevel.Off, null).value);
   });
 
   it('writes the not-modified refusal at info with the method and code, not its text', async () => {
@@ -1204,7 +1207,9 @@ describe('what the bot writes about a demo trade', () => {
     expect(lines.join('')).not.toContain('$');
   };
   const staked = () =>
-    callbackUpdate(stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, STAKE_NONCE));
+    callbackUpdate(
+      stakeCallbackData(PAIR_EURUSD.id, 60, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
+    );
 
   it('names an intent not created by error, code, status and reason only', async () => {
     const { lines } = await linesFrom({
