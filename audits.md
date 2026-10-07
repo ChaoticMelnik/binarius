@@ -2124,3 +2124,46 @@ PR #309 смержен через rebase (голова `215e8e7`), +3101 стр�
 ### Process improvement proposals
 
 1. **Minor второго круга** — **вынесено в #311**
+
+---
+
+## #299 — Тексты клиентского бота: переопределения в БД, применение в боте и backend, CLI (часть 2 #240) (2026-10-07)
+
+PR #316 смержен через rebase на лимите кругов (3 коммита, голова `6026590`), 3446 добавленных строк без снапшотов — разовое исключение владельца (2026-10-07: ~3150 → ~3400 → ~3430), миграция 0022.
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Модель | Opus вместо Fable — решение владельца 2026-10-07 «Opus для всех до сброса». |
+| Architect | Clarify + план | 7 вопросов (решения #240 не переспрашивались); владелец выбрал один PR ~2,8k вместо разбиения. Codex plan review пропущен на лимите (task-muy3dkeq-1xpv8b). |
+| Implementer | Clarify + код | 5 вопросов; стоп-правило 3000 сработало на 2975 строках без docs — владелец дал исключение. 55 мутаций, живая проверка процессов. |
+| Tech Lead | Phase 3 | Аудит опубликован (issuecomment-6041111828). |
+| Reviewer | Iteration 1 | Codex task-muy9md4k-lw5krz: 2 Major (html-фрагмент вне объявленных фрагментов ломает /account; оценка длины занижает plain-тексты) + 5 Minor. |
+| Architect | Plan Update 1 | Без Codex; оба Major как класс; Minor 1-3 в PR, 4-5 → #317 после «да» владельца. |
+| Reviewer | Iteration 2 | Codex пропущен (лимит). Major: в main смержен #297 — конфликт миграции и Rule 29, экраны ставки вне оценки длины; Minor: строка с неверной версией останавливает загрузку в боте. |
+| Tech Lead | Phase 4, iteration 2 | `AskUserQuestion` о смене подхода → (c) re-plan на текущем main. |
+| Architect | Plan Update 2 (новый цикл) | Codex пропущен (лимит, task-muybs6su-rmj6ve). Ошибочная посылка: CHECK длины в UTF-16 — zod 4.6.5 считает code points. |
+| Implementer | Цикл 2 | Rebase + force-with-lease в фиче-ветку (решение владельца); UTF-16 CHECK не построен, расхождение доказано пробой и записано в PR — Plan Update не запрошен. |
+| Reviewer | Iteration 3 (последний) | Весь PR; 0 Blocker/Major, 1 Minor; вывод implementer'а про zod подтверждён. Codex пропущен (лимит). |
+| Tech Lead | Merge / Done | Без LGTM (лимит кругов), заметка о мерже; владелец явно подтвердил мерж без Codex по финальной голове. Minor → #317 по решению владельца (вместо новой задачи). Миграции main применены к общей тестовой БД. |
+
+### Review iterations: 3 (лимит)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| M1: `accountUnknownAddress` (html) вкладывается в html-текст вне объявленных фрагментов → /account падает | Major → исправлен как класс | instance-vs-class | Проверка хозяев (m3) покрыла объявленные фрагменты, но не аргументы-тексты | Architect plan |
+| M2: оценка длины считает plain-тексты как html | Major → исправлен | unverified-claim | Тест M4 только на `x`, не мог упасть | Architect plan / Implementer тесты |
+| M3 (r2): #297 в main — миграция, Rule 29, экраны ставки вне оценки | Major → исправлен новым циклом | env-parity | План исчерпывал каталог, который параллельно расширяли #284 и #297 | Architect Step 4a |
+| UTF-16 CHECK на ложной посылке о zod | Plan defect → не построен | unverified-claim | Поведение библиотеки не проверено пробой | Architect Plan Update 2; поймано implementer'ом |
+| Minor r1 1-3 | Minor → исправлены | other | — | — |
+| Minor r1 4-5 | Minor | other | — | → #317 |
+| Minor r2: строка с неверной версией останавливает загрузку в боте | Minor → исправлен (CHECK) | other | — | — |
+| Minor r3: писатель мерит длину в UTF-16 | Minor | other | — | → #317 |
+
+### Process improvement proposals
+
+1. **Архитектор учитывает рост открытого множества от параллельных задач в оценке размера** — **внедрено в #<PR>: .claude/skills/architect/SKILL.md → Step 4a**
+2. **Minor r1 4-5 и Minor r3** — **вынесено в #317** (issuecomment-6042781356)
