@@ -1,10 +1,13 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  ADMIN_ACTIVE_WINDOW_MINUTES,
+  ADMIN_PAGE_SIZE,
   AdminErrorCode,
   errorIdentity,
   errorLogFields,
   safeParseAdminConfirmRequest,
   safeParseAdminLoginRequest,
+  safeParseAdminUsersQuery,
   STAFF_SESSION_TOKEN_PATTERN,
   UUID_PATTERN,
   type StaffSessionView,
@@ -12,13 +15,17 @@ import {
 import {
   AuditAction,
   AuditEntityType,
+  classifyUserSearch,
   completeLogin,
   DUMMY_PASSWORD_HASH,
   endStaffSession,
   failChallengeDelivery,
   findStaffForLogin,
   listLiveStaffSessions,
+  listUsersForAdmin,
   markChallengePromptSent,
+  readAdminOverview,
+  readUserForAdmin,
   recordLoginLockout,
   recordLoginRefusal,
   registerPasswordFailure,
@@ -28,9 +35,16 @@ import {
   StaffStatus,
   startLoginChallenge,
   STAFF_SESSION_IDLE_MS,
+  toAdminBrokerAccountView,
+  toAdminOverview,
+  toAdminUserDetail,
+  toAdminUserListItem,
   verifyPassword,
   type Db,
+  type StaffActionResult,
+  type StaffContext,
   type StaffSessionRow,
+  type Tx,
 } from '@binarius/db';
 import { internalBearerAuth } from '../auth/internal';
 import { createKeyedWindow, createWindow } from '../auth/rate-window';
@@ -92,86 +106,84 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     }
   };
 
-  app.post(
-    '/admin/auth/login',
-    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
-    async (request, reply) => {
-      if (loginCeiling.take().over) {
+  app.post('/admin/auth/login', { bodyLimit: ADMIN_BODY_LIMIT_BYTES }, async (request, reply) => {
+    if (loginCeiling.take().over) {
+      return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+    }
+    const parsed = safeParseAdminLoginRequest(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+    }
+    const { login, password, ip, userAgent } = parsed.data;
+
+    const staff = await findStaffForLogin(deps.db, login);
+    if (staff === undefined || staff.status !== StaffStatus.Active) {
+      if (unknownLogins.take(login.toLowerCase())) {
         return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
       }
-      const parsed = safeParseAdminLoginRequest(request.body);
-      if (!parsed.success) {
-        return reply.code(400).send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
-      }
-      const { login, password, ip, userAgent } = parsed.data;
-
-      const staff = await findStaffForLogin(deps.db, login);
-      if (staff === undefined || staff.status !== StaffStatus.Active) {
-        if (unknownLogins.take(login.toLowerCase())) {
-          return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
-        }
-        // the same derivation a live account costs, so the answer does not say which it was
-        const spent = await hash(DUMMY_PASSWORD_HASH, password);
-        if (spent === 'refused') {
-          return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
-        }
-        await recordLoginRefusal(deps.db, {
-          staffId: staff?.id ?? null,
-          reason: staff === undefined ? 'unknown_login' : 'disabled',
-          ip,
-        });
-        return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
-      }
-
-      // null unless a lockout is running right now, by the database's clock (findStaffForLogin)
-      if (staff.lockedUntil !== null) {
-        await recordLoginLockout(deps.db, { staffId: staff.id, ip, lockedUntil: staff.lockedUntil });
+      // the same derivation a live account costs, so the answer does not say which it was
+      const spent = await hash(DUMMY_PASSWORD_HASH, password);
+      if (spent === 'refused') {
         return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
       }
+      await recordLoginRefusal(deps.db, {
+        staffId: staff?.id ?? null,
+        reason: staff === undefined ? 'unknown_login' : 'disabled',
+        ip,
+      });
+      return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
+    }
 
-      const correct = await hash(staff.passwordHash, password);
-      if (correct === 'refused') {
-        return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
-      }
-      if (!correct) {
-        await registerPasswordFailure(deps.db, {
-          staffId: staff.id,
-          passwordHash: staff.passwordHash,
-          ip,
-        });
-        return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
-      }
+    // null unless a lockout is running right now, by the database's clock (findStaffForLogin)
+    if (staff.lockedUntil !== null) {
+      await recordLoginLockout(deps.db, { staffId: staff.id, ip, lockedUntil: staff.lockedUntil });
+      return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+    }
 
-      // The hash the derivation above ran against, re-checked inside the transaction: about
-      // 250 ms passed, and a reset, a disable or a lockout in that window has to win.
-      const started = await startLoginChallenge(deps.db, {
+    const correct = await hash(staff.passwordHash, password);
+    if (correct === 'refused') {
+      return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+    }
+    if (!correct) {
+      await registerPasswordFailure(deps.db, {
         staffId: staff.id,
         passwordHash: staff.passwordHash,
         ip,
-        userAgent,
       });
-      if (!started.ok) {
-        return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
-      }
+      return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
+    }
 
-      // `deliverPrompt` runs for two reasons: an invitation is owed, or polling is down and the
-      // fail-closed gate inside it has to run even though nothing is owed — a reused challenge is
-      // otherwise five minutes of waiting for a button that cannot arrive.
-      if (started.sendPrompt || !deps.telegram.isPolling()) {
-        const delivered = await deliverPrompt(started.challengeId, staff, { ip, userAgent });
-        // 'closed' means the challenge is gone and nobody can be waiting on it. 'moved on' means
-        // the button was pressed while the message was in flight: the code is already on its way
-        // to the same person, so answering 503 would be a lie about a challenge that is alive.
-        if (delivered === 'closed') {
-          return reply.code(503).send({ error: AdminErrorCode.TelegramUnavailable });
-        }
+    // The hash the derivation above ran against, re-checked inside the transaction: about
+    // 250 ms passed, and a reset, a disable or a lockout in that window has to win.
+    const started = await startLoginChallenge(deps.db, {
+      staffId: staff.id,
+      passwordHash: staff.passwordHash,
+      ip,
+      userAgent,
+    });
+    if (!started.ok) {
+      return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
+    }
+
+    // `deliverPrompt` runs for two reasons: an invitation is owed, or polling is down and the
+    // fail-closed gate inside it has to run even though nothing is owed — a reused challenge is
+    // otherwise five minutes of waiting for a button that cannot arrive.
+    if (started.sendPrompt || !deps.telegram.isPolling()) {
+      const delivered = await deliverPrompt(started.challengeId, staff, { ip, userAgent });
+      // 'closed' means the challenge is gone and nobody can be waiting on it. 'moved on' means
+      // the button was pressed while the message was in flight: the code is already on its way
+      // to the same person, so answering 503 would be a lie about a challenge that is alive.
+      if (delivered === 'closed') {
+        return reply.code(503).send({ error: AdminErrorCode.TelegramUnavailable });
       }
-      return reply.send({
-        challengeId: started.challengeId,
-        expiresAt: started.expiresAt.toISOString(),
-      });
-    },
-  );
+    }
+    return reply.send({
+      challengeId: started.challengeId,
+      expiresAt: started.expiresAt.toISOString(),
+    });
+  });
 
   // Outside the transaction that created the challenge: a Bot API call must not be held open
   // across a commit. A process that dies between the two leaves prompt_sent_at NULL, and the
@@ -218,38 +230,36 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     return 'sent';
   }
 
-  app.post(
-    '/admin/auth/confirm',
-    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
-    async (request, reply) => {
-      if (confirmCeiling.take().over) {
-        return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
-      }
-      const parsed = safeParseAdminConfirmRequest(request.body);
-      if (!parsed.success) {
-        return reply.code(400).send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
-      }
-      const { challengeId, code, ip, userAgent } = parsed.data;
-      const completed = await completeLogin(deps.db, { challengeId, code, ip, userAgent });
-      if (completed.ok) {
-        return reply.send({
-          sessionToken: completed.sessionToken,
-          expiresAt: completed.expiresAt.toISOString(),
-        });
-      }
-      // 401 while attempts remain, 410 on the last one: telling someone to retry a challenge
-      // that the same call just exhausted costs them one more round trip to find out
-      if (completed.reason === 'wrong_code' && completed.exhausted !== true) {
-        return reply.code(401).send({ error: AdminErrorCode.InvalidCode });
-      }
-      if (completed.reason === 'awaiting_telegram') {
-        return reply.code(409).send({ error: AdminErrorCode.AwaitingTelegram });
-      }
-      // every other reason — expired, denied, exhausted, failed, completed, a disabled owner,
-      // an id nobody was issued — is one answer: this attempt is over, start again
-      return reply.code(410).send({ error: AdminErrorCode.ChallengeUnavailable });
-    },
-  );
+  app.post('/admin/auth/confirm', { bodyLimit: ADMIN_BODY_LIMIT_BYTES }, async (request, reply) => {
+    if (confirmCeiling.take().over) {
+      return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+    }
+    const parsed = safeParseAdminConfirmRequest(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+    }
+    const { challengeId, code, ip, userAgent } = parsed.data;
+    const completed = await completeLogin(deps.db, { challengeId, code, ip, userAgent });
+    if (completed.ok) {
+      return reply.send({
+        sessionToken: completed.sessionToken,
+        expiresAt: completed.expiresAt.toISOString(),
+      });
+    }
+    // 401 while attempts remain, 410 on the last one: telling someone to retry a challenge
+    // that the same call just exhausted costs them one more round trip to find out
+    if (completed.reason === 'wrong_code' && completed.exhausted !== true) {
+      return reply.code(401).send({ error: AdminErrorCode.InvalidCode });
+    }
+    if (completed.reason === 'awaiting_telegram') {
+      return reply.code(409).send({ error: AdminErrorCode.AwaitingTelegram });
+    }
+    // every other reason — expired, denied, exhausted, failed, completed, a disabled owner,
+    // an id nobody was issued — is one answer: this attempt is over, start again
+    return reply.code(410).send({ error: AdminErrorCode.ChallengeUnavailable });
+  });
 
   /** The session token, checked for shape before the database is asked anything. */
   const tokenOf = (request: { headers: Record<string, unknown> }): string | undefined => {
@@ -258,93 +268,101 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     return header;
   };
 
-  app.get('/admin/sessions', async (request, reply) => {
+  /**
+   * The one way into runAsStaff: a token of the wrong shape or a session that is not live is a
+   * 401 with no row; otherwise the work and its audit row share one transaction. `undefined`
+   * means the 401 is already sent.
+   */
+  const asStaff = async <T>(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    fn: (tx: Tx, ctx: StaffContext) => Promise<StaffActionResult<T>>,
+  ): Promise<T | undefined> => {
     const token = tokenOf(request);
     if (token === undefined) {
-      return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
+      await reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
+      return undefined;
     }
-    const answer = await runAsStaff(
-      deps.db,
-      { token, idleMs },
-      async (tx, ctx) => {
-        const rows = await listLiveStaffSessions(tx, idleMs);
-        return {
-          result: {
-            me: { staffId: ctx.staffId, login: ctx.login, sessionId: ctx.sessionId },
-            sessions: rows.map((row) => toStaffSessionView(row, ctx.sessionId)),
-          },
-          audit: {
-            action: AuditAction.StaffSessionsViewed,
-            payload: { path: '/admin/sessions', sessionId: ctx.sessionId },
-          },
-        };
-      },
-    );
+    const answer = await runAsStaff(deps.db, { token, idleMs }, fn);
     if (answer === undefined) {
       request.log.info('a staff session was refused');
-      return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
+      await reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
     }
+    return answer;
+  };
+
+  const meOf = (ctx: StaffContext) => ({
+    staffId: ctx.staffId,
+    login: ctx.login,
+    sessionId: ctx.sessionId,
+  });
+
+  app.get('/admin/sessions', async (request, reply) => {
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const rows = await listLiveStaffSessions(tx, idleMs);
+      return {
+        result: {
+          me: meOf(ctx),
+          sessions: rows.map((row) => toStaffSessionView(row, ctx.sessionId)),
+        },
+        audit: {
+          action: AuditAction.StaffSessionsViewed,
+          payload: { path: '/admin/sessions', sessionId: ctx.sessionId },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
     return reply.send(answer);
   });
 
   app.post('/admin/sessions/:id/revoke', async (request, reply) => {
-    const token = tokenOf(request);
-    if (token === undefined) {
-      return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
-    }
     const targetSessionId = (request.params as { id?: unknown }).id;
-    const answer = await runAsStaff(
-      deps.db,
-      { token, idleMs },
-      async (tx, ctx) => {
-        // Inside the session check, not in front of it: an id that is not a uuid is
-        // indistinguishable from one nobody was issued, and both deserve the same row. The id
-        // itself stays out of the payload here — it is arbitrary input, the same reason the
-        // login someone typed for an account that does not exist is never recorded.
-        if (typeof targetSessionId !== 'string' || !UUID_PATTERN.test(targetSessionId)) {
-          return {
-            result: { revoked: false, current: false },
-            audit: {
-              action: AuditAction.StaffSessionRevoked,
-              payload: { result: 'not_found', current: false },
-            },
-          };
-        }
-        const revoked = await revokeStaffSession(tx, {
-          sessionId: targetSessionId,
-          byStaffId: ctx.staffId,
-          idleMs,
-        });
-        const current = targetSessionId === ctx.sessionId;
-        if (revoked === undefined) {
-          // the truthful entry: an attempt happened, a revocation did not, so there is no
-          // entity to name
-          return {
-            result: { revoked: false, current: false },
-            audit: {
-              action: AuditAction.StaffSessionRevoked,
-              payload: { result: 'not_found', targetSessionId, current: false },
-            },
-          };
-        }
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      // Inside the session check, not in front of it: an id that is not a uuid is
+      // indistinguishable from one nobody was issued, and both deserve the same row. The id
+      // itself stays out of the payload here — it is arbitrary input, the same reason the
+      // login someone typed for an account that does not exist is never recorded.
+      if (typeof targetSessionId !== 'string' || !UUID_PATTERN.test(targetSessionId)) {
         return {
-          result: { revoked: true, current },
+          result: { revoked: false, current: false },
           audit: {
             action: AuditAction.StaffSessionRevoked,
-            entity: { type: AuditEntityType.StaffSession, id: targetSessionId },
-            payload: {
-              result: 'revoked',
-              targetSessionId,
-              targetStaffId: revoked.staffId,
-              current,
-            },
+            payload: { result: 'not_found', current: false },
           },
         };
-      },
-    );
-    if (answer === undefined) {
-      return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
-    }
+      }
+      const revoked = await revokeStaffSession(tx, {
+        sessionId: targetSessionId,
+        byStaffId: ctx.staffId,
+        idleMs,
+      });
+      const current = targetSessionId === ctx.sessionId;
+      if (revoked === undefined) {
+        // the truthful entry: an attempt happened, a revocation did not, so there is no
+        // entity to name
+        return {
+          result: { revoked: false, current: false },
+          audit: {
+            action: AuditAction.StaffSessionRevoked,
+            payload: { result: 'not_found', targetSessionId, current: false },
+          },
+        };
+      }
+      return {
+        result: { revoked: true, current },
+        audit: {
+          action: AuditAction.StaffSessionRevoked,
+          entity: { type: AuditEntityType.StaffSession, id: targetSessionId },
+          payload: {
+            result: 'revoked',
+            targetSessionId,
+            targetStaffId: revoked.staffId,
+            current,
+          },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
     if (!answer.revoked) {
       return reply.code(404).send({ error: AdminErrorCode.NotFound });
     }
@@ -352,27 +370,105 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   });
 
   app.post('/admin/auth/logout', async (request, reply) => {
-    const token = tokenOf(request);
-    if (token === undefined) {
-      return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      await endStaffSession(tx, ctx.sessionId, ctx.staffId);
+      return {
+        result: { loggedOut: true as const },
+        audit: {
+          action: AuditAction.StaffLogout,
+          entity: { type: AuditEntityType.StaffSession, id: ctx.sessionId },
+          payload: {},
+        },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  // --- Read pages (#107, docs/admin-pages.md) ---------------------------------------------------
+
+  app.get('/admin/overview', async (request, reply) => {
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const row = await readAdminOverview(tx, { activeWindowMinutes: ADMIN_ACTIVE_WINDOW_MINUTES });
+      return {
+        result: { me: meOf(ctx), overview: toAdminOverview(row, ADMIN_ACTIVE_WINDOW_MINUTES) },
+        audit: { action: AuditAction.OverviewViewed, payload: { path: '/admin/overview' } },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  app.get('/admin/users', async (request, reply) => {
+    // before the session: a query outside the schema costs no transaction and leaves no row
+    const parsed = safeParseAdminUsersQuery(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
     }
-    const answer = await runAsStaff(
-      deps.db,
-      { token, idleMs },
-      async (tx, ctx) => {
-        await endStaffSession(tx, ctx.sessionId, ctx.staffId);
+    const { q, cursor } = parsed.data;
+    const search = q === undefined ? undefined : classifyUserSearch(q);
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const page = await listUsersForAdmin(tx, { search, cursor, limit: ADMIN_PAGE_SIZE });
+      return {
+        result: {
+          me: meOf(ctx),
+          users: page.rows.map(toAdminUserListItem),
+          nextCursor: page.nextCursor,
+        },
+        audit: {
+          action: AuditAction.UsersViewed,
+          payload: {
+            path: '/admin/users',
+            ...(search === undefined ? {} : { q: search.value, by: search.by }),
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  app.get('/admin/users/:id', async (request, reply) => {
+    const userId = (request.params as { id?: unknown }).id;
+    const path = '/admin/users/:id';
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      // inside the session, as revoke does: the attempt leaves a row, and an id that is not a
+      // uuid is arbitrary input, so it is not recorded
+      if (typeof userId !== 'string' || !UUID_PATTERN.test(userId)) {
         return {
-          result: { loggedOut: true as const },
+          result: null,
+          audit: { action: AuditAction.UserViewed, payload: { path, result: 'not_found' } },
+        };
+      }
+      const card = await readUserForAdmin(tx, userId);
+      if (card === undefined) {
+        return {
+          result: null,
           audit: {
-            action: AuditAction.StaffLogout,
-            entity: { type: AuditEntityType.StaffSession, id: ctx.sessionId },
-            payload: {},
+            action: AuditAction.UserViewed,
+            payload: { path, result: 'not_found', userId },
           },
         };
-      },
-    );
-    if (answer === undefined) {
-      return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
+      }
+      return {
+        result: {
+          me: meOf(ctx),
+          user: toAdminUserDetail(card.user),
+          brokerAccounts: card.brokerAccounts.map(toAdminBrokerAccountView),
+        },
+        audit: {
+          action: AuditAction.UserViewed,
+          entity: { type: AuditEntityType.User, id: userId },
+          payload: { path, result: 'found', userId },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
+    if (answer === null) {
+      return reply.code(404).send({ error: AdminErrorCode.NotFound });
     }
     return reply.send(answer);
   });
