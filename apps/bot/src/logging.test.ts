@@ -1206,16 +1206,16 @@ describe('what the bot writes about a demo trade', () => {
       createIntent: () =>
         Promise.reject(
           new BackendError(BackendErrorCode.HttpStatus, {
-            status: 409,
-            reason: TradeIntentErrorCode.RealTradingDisabled,
+            status: 404,
+            reason: TradeIntentErrorCode.UserNotFound,
           }),
         ),
     });
     expect(lineWith(lines, 'trade intent not created')).toMatchObject({
       level: 40,
       err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
-      backendStatus: 409,
-      backendReason: TradeIntentErrorCode.RealTradingDisabled,
+      backendStatus: 404,
+      backendReason: TradeIntentErrorCode.UserNotFound,
     });
     noUserNoTrade(lines);
     expect(lines.join('')).not.toContain(STAKE_NONCE);

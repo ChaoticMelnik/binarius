@@ -440,7 +440,7 @@ describe('readTradingAccess', () => {
     ],
     ['both broker and brokerUnavailable are set', { brokerUnavailable: 'refreshing' }],
     ['fresh disagrees with the ages', { broker: { ...BROKER_BALANCE, fresh: false } }],
-    ['realTradingAllowed is missing', { realTradingAllowed: undefined }],
+    ['tradingOpen is missing', { tradingOpen: undefined }],
   ])('reports a body where %s as a contract violation', async (_case, patch) => {
     const { baseUrl } = await serve((_request, reply) => {
       json(reply, 200, { ...ACCESS_VIEW, ...patch });

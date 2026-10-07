@@ -139,7 +139,7 @@ export const ACCESS_VIEW: TradingAccessResponse = {
   tokens: { balance: '5', reserved: '0', available: '5' },
   broker: BROKER_BALANCE,
   brokerUnavailable: null,
-  realTradingAllowed: false,
+  tradingOpen: true,
 };
 export const accessView = (patch: Partial<TradingAccessResponse> = {}): TradingAccessResponse => ({
   ...ACCESS_VIEW,

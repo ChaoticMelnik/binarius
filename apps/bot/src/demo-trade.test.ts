@@ -253,6 +253,7 @@ describe('the stake button', () => {
     [TradeIntentErrorCode.InsufficientTokens, 409, TEXTS.stakeInsufficientTokens, []],
     [TradeIntentErrorCode.ActiveIntentExists, 409, TEXTS.stakeActiveIntent, []],
     [TradeIntentErrorCode.ClientRequestIdConflict, 409, TEXTS.stakeButtonUsed, []],
+    [TradeIntentErrorCode.TradingPaused, 409, TEXTS.tradingPaused, []],
   ] as const)(
     'answers %s with its text, asks once, and logs nothing',
     async (reason, status, text: TelegramHtml, rows: readonly Button[][]) => {
@@ -271,7 +272,6 @@ describe('the stake button', () => {
 
   it.each([
     ['user_not_found', httpError(404, TradeIntentErrorCode.UserNotFound)],
-    ['real_trading_disabled', httpError(409, TradeIntentErrorCode.RealTradingDisabled)],
     ['validation', httpError(400, 'validation')],
     ['a bare 404', httpError(404)],
     ['a 401', httpError(401)],
