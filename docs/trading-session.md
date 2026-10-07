@@ -190,6 +190,35 @@ finishes on its own path.
   to the bot's timing chain, which #284 extends when it adds the caller.
 - `sessionFitsDeadline` is exported so the bot can hide a start the route would refuse.
 
+## Logs
+
+Every line of the orchestrator carries `sessionId` and `brokerAccountId`, except the tick's own
+two. No line carries an access token, a URL or an amount; `stake_stop`'s `detail` is the sizer's
+echo of its limits (`minTradeAmount`, `available`, the candidate). `orchestrator.db.test.ts` L1
+reads this table: every row not marked "race" is produced by a case, and every `trading session …`
+line is in it with its level.
+
+| msg | level | When |
+|---|---|---|
+| `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `code` (`account_unavailable`, `kill_switch` from the attempt), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`) |
+| `trading session stopped for manual review` | error | the halt sweep, or `account_halted` from the attempt (`code`) |
+| `trading session completed` | info | settled trades reached `settings.trades` (`settled`) |
+| `trading session vanished` | warn | a race: the row was gone between the scan and the history |
+| `trading session has a live intent` | info | a race: the history shows a live intent the scan did not |
+| `trading session pairs unavailable` | warn | `catalog_unavailable`, a backend failure (`reason`, `status`), or `reason: 'stale'` |
+| `trading session waits for the pair to open` | info | `scheduledUntil` is ahead (`assetId`) |
+| `trading session signal unavailable` | warn | the signal call failed (`reason`, `status`) |
+| `trading session signal fetch failed` | warn | the backend answered `fetch_failed` (`code`, `retryAfterSec`) |
+| `trading session waits for the next candle` | info | `no_signal` (`reason`) |
+| `trading session intent refused` | warn | `active_intent_exists` or `client_request_id_conflict` (`step`, `code`) |
+| `trading session stopped meanwhile` | info | `TradingSessionNotActiveError`: another writer stopped it during the attempt |
+| `trading session step replayed` | info | `createSessionIntent` answered `created: false` (`step`, `intentId`) |
+| `trading session intent created` | info | `step`, `intentId`, `action` |
+| `trading session attempt timed out` | warn | the attempt passed `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
+| `trading session attempt failed` | error | a throw in the attempt (`errorLogFields`); not on the stop signal |
+| `trading session tick failed` | error | a throw in a sweep or the scan (`errorLogFields`) |
+| `trading session tick` | debug | `{ runnable, attempted, created, held, stopped }` |
+
 ## Running it locally
 
 In a compose project of its own, so neither the `binarius` stack nor its volume is touched; both
