@@ -13,6 +13,7 @@ import {
 } from '@binarius/shared';
 import { INTEGRATION_WAIT_CEILING_MS, until } from '@binarius/shared/testing';
 import {
+  closeTradingSwitch,
   createTempDatabase,
   intentRequest,
   seedBrokerAccount,
@@ -20,7 +21,13 @@ import {
   seedUserWithAccount,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { brokerBalanceSnapshots, tokenLedger, users } from '@binarius/db';
+import {
+  brokerBalanceSnapshots,
+  openTrading,
+  tokenLedger,
+  tradingSwitch,
+  users,
+} from '@binarius/db';
 import type { AccessTokenResult } from '../auth/token-service';
 import { createBalanceReconciler, type BalanceReconciler } from '../broker/balance-reconciler';
 import { tradingRoutes } from './routes';
@@ -57,17 +64,13 @@ const createReconciler = () =>
     config: { intervalMs: 60_000, maxPerMinute: 200 },
   });
 
-async function buildAccessApp(
-  reconciler: BalanceReconciler,
-  realTradingEnabled = false,
-): Promise<FastifyInstance> {
+async function buildAccessApp(reconciler: BalanceReconciler): Promise<FastifyInstance> {
   const built = Fastify();
   await built.register(tradingRoutes, {
     db: tmp.db,
     internalApiToken: TOKEN,
     onIntentQueued: () => {},
     balance: reconciler,
-    realTradingEnabled,
     accessToken: unusedAccessTokenDeps(),
   });
   await built.ready();
@@ -150,9 +153,9 @@ describe('POST /trading/access', () => {
     expect(Object.keys(body).sort()).toEqual([
       'broker',
       'brokerUnavailable',
-      'realTradingAllowed',
       'status',
       'tokens',
+      'tradingOpen',
     ]);
     expect(Object.keys(body.tokens).sort()).toEqual(['available', 'balance', 'reserved']);
     // the seeded account has no token here, so the broker side is unavailable
@@ -161,7 +164,7 @@ describe('POST /trading/access', () => {
       tokens: { balance: '5', reserved: '0', available: '5' },
       broker: null,
       brokerUnavailable: 'broker_unavailable',
-      realTradingAllowed: false,
+      tradingOpen: true,
     });
     expect(safeParseTradingAccessResponse(body).success).toBe(true);
 
@@ -183,7 +186,7 @@ describe('POST /trading/access', () => {
       tokens: { balance: '2', reserved: '0', available: '2' },
       broker: null,
       brokerUnavailable: 'no_account',
-      realTradingAllowed: false,
+      tradingOpen: true,
     });
   });
 
@@ -260,30 +263,26 @@ describe('POST /trading/access → broker', () => {
       tokens: { balance: '4', reserved: '0', available: '4' },
       broker: null,
       brokerUnavailable: 'no_account',
-      realTradingAllowed: false,
+      tradingOpen: true,
     });
     expect(userGets()).toBe(0);
   });
 
-  // the field is this process's REAL_TRADING_ENABLED: the same user, another backend
-  it('answers realTradingAllowed from the process flag', async () => {
+  // the field is the trading_switch row (#144), read on every request
+  it('answers tradingOpen from the switch row in both states', async () => {
     const user = await seedUser(tmp.db, { balance: 4n });
-    const onApp = await buildAccessApp(balance, true);
+    const ask = async () =>
+      (await access({ telegramUserId: user.telegramUserId })).json() as { tradingOpen: boolean };
+    expect((await ask()).tradingOpen).toBe(true);
+    await closeTradingSwitch(tmp.db);
     try {
-      const response = await post(
-        '/trading/access',
-        { telegramUserId: user.telegramUserId },
-        undefined,
-        onApp,
-      );
-      expect(response.statusCode).toBe(200);
-      expect(response.json()).toMatchObject({
-        realTradingAllowed: true,
-        brokerUnavailable: 'no_account',
-      });
+      expect((await ask()).tradingOpen).toBe(false);
+      await tmp.db.delete(tradingSwitch);
+      expect((await ask()).tradingOpen).toBe(false);
     } finally {
-      await onApp.close();
+      await openTrading(tmp.db);
     }
+    expect((await ask()).tradingOpen).toBe(true);
   });
 
   it('fetches a first snapshot, then serves it from the database while it is fresh', async () => {

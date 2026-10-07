@@ -9,7 +9,6 @@ import {
   parseLogLevelEnv,
   parseLoopbackOrHttpsUrlEnv,
   parseNoWhitespaceEnv,
-  parseRealTradingEnabledEnv,
   parseUrlEnv,
   readEnv,
   type EnvSource,
@@ -55,7 +54,6 @@ export interface Env {
   brokerPairsTtlMs: number;
   balanceReconcileIntervalMs: number;
   balancePollMaxPerMinute: number;
-  realTradingEnabled: boolean;
   brokerOauthRedirectUri: string;
   brokerPartnerRef: string;
   tokenEncryptionKey: Buffer;
@@ -110,7 +108,6 @@ export function parseEnv(source: EnvSource): Env {
       MIN_BALANCE_POLL_PER_MINUTE,
       MAX_BALANCE_POLL_PER_MINUTE,
     ),
-    realTradingEnabled: parseRealTradingEnabledEnv(source),
     brokerOauthRedirectUri: parseRedirectUri(source),
     brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),
     ...parseBotTokens(source),
