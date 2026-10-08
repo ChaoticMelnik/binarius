@@ -244,7 +244,7 @@ Every payload except `null` goes through the fixture's payload form ([Payload fo
 | `user.<mode>.open_trade.success` / `.fail` | `open_trade` | the sender |
 | `user.<mode>.update_balance { available, held, total }` | a trade opened or settled in that mode, over REST or the socket | every socket of the user |
 | `user.<mode>.close_trade.success { trades: [closed] }` | `trades.settle()`, before that mode's `update_balance` | every socket of the user |
-| `common.assets_update { asset_id, payout, scheduled_until }` | `pairs.update()`, even with an empty patch | every authenticated socket |
+| `common.assets_update [{ asset_id, payout, scheduled_until }]` (the live array form, #368; one patch an update) | `pairs.update()`, even with an empty patch | every authenticated socket |
 | `user.disconnect_token_expired` (`null`), then the server drops the socket | `users.revokeToken()` of a known token | every socket of the user |
 
 Money is JSON numbers, as on REST and as the live broker sends it (Drift 1 and 6). All 15 server→client events of shared's
@@ -267,7 +267,8 @@ without trades; docs/broker-socket.md → Observed live):
 | `price.update` as one array `[assetId, price, ms]` | observed; the third element is milliseconds (observed 2026-10-03, docs/broker-socket.md → Observed live), `atMs` here |
 | every payload a Node `Buffer` | observed: the `bytes` form |
 | `is_otc` on every pair of `common.assets_list` | observed; every `DEFAULT_PAIRS` entry carries it |
-| `user.auth.error`, `user.disconnect_token_expired`, `open_trade.success/.fail`, `update_balance`, `close_trade.success`, `common.assets_update` | not observed: from shared and broker-web (#8). The texts are the REST texts; a client classifies by the event, never by the text |
+| `common.assets_update` as an array of patches | observed (the pilot after #354, #368); the live broker batched 8 pairs, the fixture sends one an update |
+| `user.auth.error`, `user.disconnect_token_expired`, `open_trade.success/.fail`, `update_balance`, `close_trade.success` | not observed: from shared and broker-web (#8). The texts are the REST texts; a client classifies by the event, never by the text |
 | `update_balance` before `open_trade.success`, `close_trade.success` before `update_balance` | fixture rules (the store announces a change before the socket answers) |
 | ack callbacks never called, websocket only, no idle drop | fixture rules |
 | an `open_trade` accepted before a token revocation still opens after a `delayMs` | fixture rule: the command was accepted under a valid session, and the store does not check tokens. For a client this is the "outcome unknown" case: it hears `disconnect_token_expired`, and the order may still have opened |

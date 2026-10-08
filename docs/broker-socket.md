@@ -41,7 +41,7 @@ name that is not in the map (for example the client→server `user.demo.open_tra
 | `user.disconnect_token_expired` | `token_expired` | none |
 | `price.update` | `price_update` | `update: PriceUpdate` (timestamp as received) |
 | `common.assets_list` | `assets_list` | `pairs: BinaryPair[]` |
-| `common.assets_update` | `assets_update` | `update: AssetsUpdate` |
+| `common.assets_update` | `assets_update` | `updates: AssetsUpdate[]` (#368: the payload is an array of patches) |
 | `user.data` | `user_data` | `user: BrokerUser` |
 | `user.{demo,real}.open_trade.success` | `open_trade_success` | `mode`, `trade: OpenTrade` |
 | `user.{demo,real}.open_trade.fail` | `open_trade_fail` | `mode`, `failures: OpenTradeFailure[]` |
@@ -362,8 +362,12 @@ Node 22 (the 2026-10-03 one is recorded in #99).
   `user.demo.close_trade.success` at `trades.0.is_demo`, both `invalid_type`. The mode is in the
   event name only. Before #354 every socket `open_trade.success` was a `schema` problem, so a socket
   command waited out its timeout as `unknown` and tainted the connection. `common.assets_update`
-  was refused at its root in the same runs; its shape is not recorded yet (#368 takes it from the
-  `shape` field the problem line carries since #354).
+  was refused at its root in the same runs.
+- **`common.assets_update` is an array of patches** `[{ asset_id, payout, scheduled_until }]`, all
+  three fields present (the pilot run after #354, `0a997ef`, one event of 8 patches; recorded in
+  #285). Since #368 shared's `assetsUpdateWireSchema` is that array with all three fields required
+  and extra keys allowed, and the `id` alias of #8 is gone. The normalizer gives one
+  `assets_update` event carrying every patch. No consumer reads it yet.
 - **The 2026-10-02 drop after ~16.7 s (`transport close`) did not recur** on 2026-10-03: two runs
   lived 28 s and 93 s until the probe closed them, with a price subscription active. Its cause is
   unknown; the client reconnects after it and resends its subscriptions.
