@@ -26,8 +26,11 @@ import {
   type LinkedAccountView,
   type PendingBrokerAccountView,
   type UserStartRequest,
+  COMMAND_RETRY_PATTERN,
   CONNECT_CALLBACK_DATA,
   DEMO_CALLBACK_DATA,
+  MENU_CALLBACK_DATA,
+  RETRY_COMMANDS,
   supportUrl,
 } from '@binarius/shared';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
@@ -157,13 +160,39 @@ export function createBot({
     await answerHome(ctx, from, startRequestOf(from), '/menu');
   });
 
-  // /start and /menu: blocked, then a waiting link, then the status card for an active account,
-  // otherwise the welcome. `command` only names the warn line.
+  // «🏠 В меню» (#350): /menu's path, but the card is not pinned. The answer and the pin would put
+  // the path at the shutdown budget (timing.ts); the card pinned stays the last /start or /menu.
+  privateChats.callbackQuery(MENU_CALLBACK_DATA, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(logAnswerFailure);
+    await answerHome(ctx, ctx.from, startRequestOf(ctx.from), 'the menu button', { pin: false });
+  });
+
+  // «🔄 Повторить» under a command's failure (#350): the command again
+  privateChats.callbackQuery(COMMAND_RETRY_PATTERN, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(logAnswerFailure);
+    const command = RETRY_COMMANDS.find((name) => name === ctx.match[1]);
+    switch (command) {
+      case 'account':
+        await showAccount(ctx, ctx.from);
+        return;
+      case 'settings':
+        await showSettingsCommand(ctx, ctx.from);
+        return;
+      case undefined:
+        return;
+      default:
+        return command satisfies never;
+    }
+  });
+
+  // /start, /menu and «🏠 В меню»: blocked, then a waiting link, then the status card for an
+  // active account, otherwise the welcome. `command` only names the warn line.
   async function answerHome(
     ctx: Context,
     from: User,
     request: UserStartRequest,
-    command: '/start' | '/menu',
+    command: '/start' | '/menu' | 'the menu button',
+    { pin }: { pin: boolean } = { pin: true },
   ): Promise<void> {
     let user;
     try {
@@ -190,7 +219,7 @@ export function createBot({
       return;
     }
     if (user.hasActiveBrokerAccount) {
-      await sendStatusCard(ctx, from);
+      await sendStatusCard(ctx, from, pin);
       return;
     }
     await sendWelcome(ctx);
@@ -198,7 +227,7 @@ export function createBot({
 
   // The numbers are read on every /start and /menu and cached nowhere, so the card is at most
   // the backend's freshness SLA old or says how old it is (docs/bot-menu.md).
-  async function sendStatusCard(ctx: Context, from: User): Promise<void> {
+  async function sendStatusCard(ctx: Context, from: User, pin: boolean): Promise<void> {
     let access;
     try {
       access = await backend.readTradingAccess(String(from.id));
@@ -238,7 +267,7 @@ export function createBot({
       },
       () => replyHtml(ctx, card, { reply_markup }),
     );
-    if (sent === undefined) return;
+    if (sent === undefined || !pin) return;
     await pinCard(ctx, sent.message_id, 'the status card');
   }
 
@@ -247,7 +276,10 @@ export function createBot({
   privateChats.command('account', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) return;
+    await showAccount(ctx, from);
+  });
 
+  async function showAccount(ctx: Context, from: User): Promise<void> {
     let user;
     try {
       user = await backend.readAccount(String(from.id));
@@ -274,14 +306,17 @@ export function createBot({
       accountStatus(user.accounts),
       keyboard === undefined ? undefined : { reply_markup: keyboard },
     );
-  });
+  }
 
   // The level comes from /users/start, the call /start already makes: it creates a missing row,
   // so /settings works before the first /start too (#120).
   privateChats.command('settings', async (ctx) => {
     const from = ctx.from;
     if (from === undefined) return;
+    await showSettingsCommand(ctx, from);
+  });
 
+  async function showSettingsCommand(ctx: Context, from: User): Promise<void> {
     let user;
     try {
       user = await backend.recordStart(startRequestOf(from));
@@ -297,7 +332,7 @@ export function createBot({
     await replyHtml(ctx, settingsText(user.notificationLevel, user.demoStake), {
       reply_markup: levelKeyboard(user.notificationLevel),
     });
-  });
+  }
 
   // The stake picker's way back (#297): /settings' own read, then the message in place of the
   // picker.

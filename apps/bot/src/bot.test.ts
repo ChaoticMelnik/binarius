@@ -16,6 +16,10 @@ import {
   type UserStartView,
   CONNECT_CALLBACK_DATA,
   DEMO_CALLBACK_DATA,
+  COMMAND_RETRY_PATTERN,
+  commandRetryCallbackData,
+  MENU_CALLBACK_DATA,
+  RETRY_COMMANDS,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
@@ -631,6 +635,67 @@ describe('/menu', () => {
 
     await bot.handleUpdate(textUpdate(CODE));
     expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
+  });
+});
+
+describe('«🏠 В меню» (#350)', () => {
+  it('answers the press and sends the status card as /menu does, without pinning it', async () => {
+    const { bot, backend, calls } = setup({ user: userView({ hasActiveBrokerAccount: true }) });
+    await bot.handleUpdate(callbackUpdate(MENU_CALLBACK_DATA));
+    expect(backend.recordStart).toHaveBeenCalledWith({
+      telegramUserId: '4242',
+      displayName: 'Ada Lovelace',
+    });
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendPhoto']);
+    expect(inlineButtons(sentPayload(calls, 'sendPhoto'))).toEqual([
+      { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
+    ]);
+  });
+
+  it('greets a user without an account with the welcome', async () => {
+    const { bot, calls } = setup();
+    await bot.handleUpdate(callbackUpdate(MENU_CALLBACK_DATA));
+    expect(sentTexts(calls)).toEqual([TEXTS.welcome.value]);
+  });
+
+  it('names the button in the warn line when /users/start fails', async () => {
+    const { bot, logger } = setup({ recordStart: unreachable() });
+    await bot.handleUpdate(callbackUpdate(MENU_CALLBACK_DATA));
+    expect(logger.warn.mock.calls[0]?.[1]).toBe('the menu button not recorded');
+  });
+
+  it('ignores the press in a group', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(callbackUpdate(MENU_CALLBACK_DATA, 'group'));
+    expect(backend.recordStart).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('«🔄 Повторить» of a command (#350)', () => {
+  it('runs /account again', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(callbackUpdate(commandRetryCallbackData('account')));
+    expect(backend.readAccount).toHaveBeenCalledWith('4242');
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(sentTexts(calls)).toEqual([TEXTS.accountNone.value]);
+  });
+
+  it('runs /settings again', async () => {
+    const { bot, backend, calls } = setup();
+    await bot.handleUpdate(callbackUpdate(commandRetryCallbackData('settings')));
+    expect(backend.recordStart).toHaveBeenCalledTimes(1);
+    expect(sentTexts(calls)).toEqual([settingsText(NotificationLevel.All, null).value]);
+  });
+
+  it('keeps every command datum inside 64 bytes and matches no other command', () => {
+    for (const command of RETRY_COMMANDS) {
+      const data = commandRetryCallbackData(command);
+      expect(Buffer.byteLength(data)).toBeLessThanOrEqual(64);
+      expect(COMMAND_RETRY_PATTERN.exec(data)?.[1]).toBe(command);
+    }
+    expect(COMMAND_RETRY_PATTERN.test('cmd:start')).toBe(false);
+    expect(Buffer.byteLength(MENU_CALLBACK_DATA)).toBe(4);
   });
 });
 
