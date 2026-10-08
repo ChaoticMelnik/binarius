@@ -15,6 +15,8 @@ import {
   UserStatus,
   type AdminAuditEntryView,
   type AdminAuditResponse,
+  type AdminBotTextsResponse,
+  type AdminBotTextView,
   type AdminIntentResponse,
   type AdminIntentsResponse,
   type AdminLedgerEntry,
@@ -265,4 +267,37 @@ export const SAMPLE_AUDIT: AdminAuditResponse = {
   me: SAMPLE_ME,
   entries: [SAMPLE_AUDIT_ENTRY, SAMPLE_AUDIT_ENTRY_NULLS, SAMPLE_AUDIT_ENTRY_INTENT],
   nextCursor: null,
+};
+
+// The bot texts section (#300): welcome overridden by a staff member, its connectButton fragment by
+// the CLI, a commands key the loaders reject, an orphan row from a renamed key.
+export const SAMPLE_BOT_TEXTS: AdminBotTextsResponse = {
+  me: SAMPLE_ME,
+  overrides: [
+    { key: 'connectButton', version: 3, updatedAt: AT, updatedByLogin: null, rejection: null },
+    {
+      key: 'startCommand',
+      version: 4,
+      updatedAt: AT,
+      updatedByLogin: null,
+      rejection: 'Только чтение: команды и профиль правятся после #301',
+    },
+    { key: 'welcome', version: 7, updatedAt: AT, updatedByLogin: 'ada', rejection: null },
+    {
+      key: 'zzz',
+      version: 9,
+      updatedAt: AT,
+      updatedByLogin: null,
+      rejection: 'Неизвестный ключ — игнорируется',
+    },
+  ],
+};
+
+export const SAMPLE_BOT_TEXT: AdminBotTextView = {
+  key: 'welcome',
+  override: { source: 'Привет, <b>друг</b>', version: 7, updatedAt: AT, updatedByLogin: 'ada' },
+  rejection: null,
+  fragments: [
+    { placeholder: 'connectButton', key: 'connectButton', source: 'Жми', overridden: true },
+  ],
 };

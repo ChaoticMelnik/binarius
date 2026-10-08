@@ -28,4 +28,16 @@ form.search input { min-width: 18rem; }
 form.search input[type="date"] { min-width: 0; }
 td.payload { max-width: 28rem; }
 code.payload { overflow-wrap: anywhere; white-space: pre-wrap; }
+textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.5rem; }
+form.editor { display: grid; gap: 0.5rem; }
+form.editor .buttons { display: flex; gap: var(--gap); }
+p.notice { font-weight: 600; }
+ul.error { color: #b00020; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.tg-bubble { white-space: pre-wrap; max-width: 32rem; padding: 0.75rem 1rem; border: 1px solid #8884; border-radius: 1rem; }
+.tg-spoiler { background: #8886; color: transparent; }
+.tg-spoiler:hover { color: inherit; }
+.tg-label { display: inline-block; padding: 0.25rem 0.75rem; border: 1px solid #8884; border-radius: 0.5rem; }
+blockquote { margin: 0.25rem 0; padding-left: 0.75rem; border-left: 3px solid #8888; }
+blockquote.expandable { max-height: 4.5em; overflow: hidden; }
 `;

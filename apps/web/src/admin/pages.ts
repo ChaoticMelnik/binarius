@@ -1,4 +1,15 @@
 import {
+  ADMIN_BOT_TEXT_READ_ONLY_GROUPS,
+  BOT_TEXT_CATALOG,
+  BOT_TEXT_GROUP_TITLES,
+  BOT_TEXT_SOURCE_MAX,
+  BotTextGroup,
+  botTextKeysOf,
+  isAdminBotTextEditable,
+  type AdminBotTextOverrideView,
+  type AdminBotTextProblem,
+  type AdminBotTextView,
+  type BotTextKey,
   ADMIN_INTENTS_ACTIVE_FILTER,
   ADMIN_USER_RECENT_INTENTS,
   ADMIN_USER_RECENT_LEDGER,
@@ -101,7 +112,14 @@ const yesNo = (value: boolean): string => (value ? TEXTS.yes : TEXTS.no);
 // The pages a staff session opens, in nav order. The read pages that follow #107 append their
 // keys here; a page outside the nav passes no `active`.
 export type AdminNavKey =
-  'overview' | 'users' | 'sessions' | 'intents' | 'tradingSessions' | 'tokens' | 'audit';
+  | 'overview'
+  | 'users'
+  | 'sessions'
+  | 'intents'
+  | 'tradingSessions'
+  | 'tokens'
+  | 'audit'
+  | 'botTexts';
 
 const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview },
@@ -111,6 +129,7 @@ const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'tradingSessions', href: '/admin/trading-sessions', label: TEXTS.navTradingSessions },
   { key: 'tokens', href: '/admin/tokens', label: TEXTS.navTokens },
   { key: 'audit', href: '/admin/audit', label: TEXTS.navAudit },
+  { key: 'botTexts', href: '/admin/bot-texts', label: TEXTS.navBotTexts },
 ];
 
 /**
@@ -955,5 +974,247 @@ export const auditPage = (
               >`
         }
       </p>`,
+  });
+};
+
+// --- Bot texts (#300, docs/admin-pages.md → Bot texts) -----------------------------------------
+
+export const BOT_TEXTS_PATH = '/admin/bot-texts';
+export type BotTextsNotice = keyof typeof TEXTS.botTextsNotice;
+export type BotTextNotice = keyof typeof TEXTS.botTextNotice;
+
+export const botTextsHref = (notice?: BotTextsNotice): string =>
+  notice === undefined ? BOT_TEXTS_PATH : `${BOT_TEXTS_PATH}?${new URLSearchParams({ notice })}`;
+// the key is a catalog key or matches BOT_TEXT_KEY_PATTERN: [a-zA-Z0-9] only, nothing to encode
+export const botTextHref = (key: string, notice?: BotTextNotice): string =>
+  notice === undefined
+    ? `${BOT_TEXTS_PATH}/${key}`
+    : `${BOT_TEXTS_PATH}/${key}?${new URLSearchParams({ notice })}`;
+
+const notice = (text: string | undefined): SafeHtml | string =>
+  text === undefined ? '' : html`<p class="notice">${text}</p>`;
+
+const changedState = (row: {
+  version: number;
+  updatedAt: string;
+  updatedByLogin: string | null;
+}): SafeHtml =>
+  html`${TEXTS.botTextChanged(row.version, row.updatedByLogin)} ${when(row.updatedAt)}`;
+
+const rejected = (reason: string | null): SafeHtml | string =>
+  reason === null ? '' : html`<p class="error">${TEXTS.botTextRejected(reason)}</p>`;
+
+const orphanRow = (row: AdminBotTextOverrideView): SafeHtml =>
+  html`<tr>
+    <td>${code(row.key)}</td>
+    <td class="num">${row.version}</td>
+    <td>${when(row.updatedAt)}</td>
+    <td>${row.updatedByLogin ?? 'CLI'}</td>
+    <td>
+      <form method="post" action="${BOT_TEXTS_PATH}/${row.key}/reset">
+        <input type="hidden" name="version" value="${row.version}" />
+        <button type="submit">${TEXTS.botTextDelete}</button>
+      </form>
+    </td>
+  </tr>`;
+
+export const botTextsPage = (
+  overrides: readonly AdminBotTextOverrideView[],
+  { login, notice: shown }: { login: string; notice?: BotTextsNotice },
+): SafeHtml => {
+  const byKey = new Map(overrides.map((row) => [row.key, row]));
+  const orphans = overrides.filter((row) => !Object.hasOwn(BOT_TEXT_CATALOG, row.key));
+  return adminShell({
+    title: TEXTS.botTextsTitle,
+    active: 'botTexts',
+    login,
+    body: html`<h1>${TEXTS.botTextsHeading}</h1>
+      ${notice(shown === undefined ? undefined : TEXTS.botTextsNotice[shown])}
+      ${Object.values(BotTextGroup).map(
+        (group) =>
+          html`<h2>${BOT_TEXT_GROUP_TITLES[group]}</h2>
+            ${
+              ADMIN_BOT_TEXT_READ_ONLY_GROUPS.includes(group)
+                ? html`<p class="hint">${TEXTS.botTextReadOnly}</p>`
+                : ''
+            }
+            <table>
+              <thead>
+                <tr>
+                  <th>${TEXTS.columnBotTextKey}</th>
+                  <th>${TEXTS.columnBotTextDescription}</th>
+                  <th>${TEXTS.columnBotTextState}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${botTextKeysOf(group).map((key) => {
+                  const row = byKey.get(key);
+                  return html`<tr>
+                    <td><a href="${botTextHref(key)}">${key}</a></td>
+                    <td>${BOT_TEXT_CATALOG[key].description}</td>
+                    <td>
+                      ${row === undefined ? TEXTS.botTextDefault : changedState(row)}
+                      ${rejected(row?.rejection ?? null)}
+                    </td>
+                  </tr>`;
+                })}
+              </tbody>
+            </table>`,
+      )}
+      ${
+        orphans.length === 0
+          ? ''
+          : html`<h2>${TEXTS.botTextOrphansHeading}</h2>
+              <p class="hint">${TEXTS.botTextOrphansHint}</p>
+              <table>
+                <thead>
+                  <tr>
+                    <th>${TEXTS.columnBotTextKey}</th>
+                    <th>${TEXTS.columnBotTextVersion}</th>
+                    <th>${TEXTS.columnLastSeenAt}</th>
+                    <th>${TEXTS.columnLogin}</th>
+                    <th>${TEXTS.columnAction}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${orphans.map(orphanRow)}
+                </tbody>
+              </table>`
+      }`,
+  });
+};
+
+const hostsOf = (key: BotTextKey): BotTextKey[] =>
+  (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter((host) =>
+    Object.values(BOT_TEXT_CATALOG[host].fragments).includes(key),
+  );
+
+/**
+ * Everything the editor reads from the catalog entry: the argument, the fragments, the limit, the
+ * hosts. #358 widens it to the user's and the system's variables.
+ */
+export const placeholderHints = (text: AdminBotTextView): SafeHtml => {
+  const key = text.key as BotTextKey;
+  const entry = BOT_TEXT_CATALOG[key];
+  const hosts = hostsOf(key);
+  const items = [
+    ...(entry.arg === undefined
+      ? []
+      : [html`<li>${TEXTS.botTextArg(entry.arg, entry.sample ?? '')}</li>`]),
+    ...text.fragments.map(
+      (fragment) =>
+        html`<li>
+          ${`{${fragment.placeholder}}`} —
+          <a href="${botTextHref(fragment.key)}">${fragment.key}</a>: ${code(fragment.source)}
+          ${fragment.overridden ? TEXTS.botTextFragmentChanged : ''}
+        </li>`,
+    ),
+  ];
+  return html`<h2>${TEXTS.botTextPlaceholders}</h2>
+    ${
+      items.length === 0
+        ? html`<p class="hint">${TEXTS.botTextNoPlaceholders}</p>`
+        : html`<ul>
+            ${items}
+          </ul>`
+    }
+    <p class="hint">${TEXTS.botTextLimit(entry.limit, entry.singleLine)}</p>
+    ${
+      hosts.length === 0
+        ? ''
+        : html`<p class="hint">
+            ${TEXTS.botTextUsedIn}
+            ${hosts.map((host, index) => html`${index === 0 ? '' : ', '}<a href="${botTextHref(host)}">${host}</a>`)}
+          </p>`
+    }`;
+};
+
+export interface BotTextPageOptions {
+  login?: string;
+  notice?: BotTextNotice;
+  // what the staff member submitted; stays in the field
+  draft?: string;
+  problems?: readonly AdminBotTextProblem[];
+  conflict?: { currentVersion: number; currentSource: string };
+  message?: string;
+}
+
+// The textarea's content starts with a line feed: the HTML parser drops exactly one right after
+// the opening tag, so a text that itself starts with one keeps it.
+export const botTextPage = (text: AdminBotTextView, options: BotTextPageOptions): SafeHtml => {
+  const key = text.key as BotTextKey;
+  const entry = BOT_TEXT_CATALOG[key];
+  const { override } = text;
+  const editable = isAdminBotTextEditable(key);
+  const version = options.conflict?.currentVersion ?? override?.version ?? 0;
+  const value = options.draft ?? override?.source ?? entry.source;
+  return adminShell({
+    title: `${TEXTS.botTextsTitle}: ${key}`,
+    active: 'botTexts',
+    login: options.login,
+    body: html`<h1>${key}</h1>
+      <p class="hint">${BOT_TEXT_GROUP_TITLES[entry.group]} — ${entry.description}</p>
+      <p>${override === null ? TEXTS.botTextDefault : changedState(override)}</p>
+      ${rejected(text.rejection)}
+      ${notice(options.notice === undefined ? undefined : TEXTS.botTextNotice[options.notice])}
+      ${error(options.message)}
+      ${
+        options.conflict === undefined
+          ? ''
+          : html`<p class="error">${TEXTS.botTextConflict(options.conflict.currentVersion)}</p>
+              <details open>
+                <summary>${TEXTS.botTextCurrent}</summary>
+                <pre>${options.conflict.currentSource}</pre>
+              </details>`
+      }
+      ${
+        options.problems === undefined
+          ? ''
+          : html`<ul class="error">
+              ${options.problems.map(
+                (problem) =>
+                  html`<li>${problem.key === key ? '' : `${problem.key}: `}${problem.reason}</li>`,
+              )}
+            </ul>`
+      }
+      ${placeholderHints(text)}
+      ${
+        editable
+          ? html`<form class="editor" method="post" action="${botTextHref(key)}/save">
+                <label for="source">${TEXTS.botTextSourceField}</label>
+                <textarea id="source" name="source" maxlength="${BOT_TEXT_SOURCE_MAX}" rows="12">
+${value}</textarea>
+                <input type="hidden" name="version" value="${version}" />
+                <div class="buttons">
+                  <button type="submit" formaction="${botTextHref(key)}/preview">
+                    ${TEXTS.botTextPreviewSubmit}
+                  </button>
+                  <button type="submit">${TEXTS.botTextSaveSubmit}</button>
+                </div>
+              </form>
+              ${
+                override !== null && override.source === entry.source
+                  ? html`<p class="hint">${TEXTS.botTextSameAsDefault}</p>`
+                  : ''
+              }`
+          : html`<p class="hint">${TEXTS.botTextReadOnly}</p>
+              <pre>${value}</pre>`
+      }
+      ${
+        override === null
+          ? ''
+          : html`<details>
+                <summary>${TEXTS.botTextDefaultSource}</summary>
+                <pre>${entry.source}</pre>
+              </details>
+              ${
+                editable
+                  ? html`<form method="post" action="${botTextHref(key)}/reset">
+                      <input type="hidden" name="version" value="${version}" />
+                      <button type="submit">${TEXTS.botTextResetSubmit}</button>
+                    </form>`
+                  : ''
+              }`
+      }`,
   });
 };

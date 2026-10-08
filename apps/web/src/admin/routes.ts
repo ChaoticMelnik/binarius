@@ -2,6 +2,11 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import * as z from 'zod';
 import {
   AdminErrorCode,
+  BOT_TEXT_KEY_PATTERN,
+  isBotTextKey,
+  safeParseAdminBotTextResetRequest,
+  safeParseAdminBotTextSaveRequest,
+  UnexpectedBotTextOutcome,
   CLIENT_USER_AGENT_MAX_LENGTH,
   errorLogFields,
   safeParseAdminAuditQuery,
@@ -21,6 +26,12 @@ import { BackendError, BackendErrorCode, type BackendClient } from '../backend-c
 import { noticePage } from '../pages';
 import {
   auditHref,
+  BOT_TEXTS_PATH,
+  botTextHref,
+  botTextPage,
+  botTextsHref,
+  botTextsPage,
+  type BotTextPageOptions,
   auditPage,
   confirmPage,
   intentPage,
@@ -91,6 +102,35 @@ const changedOf = (query: unknown): number | undefined => {
     Number.isSafeInteger(Number(value))
     ? Number(value)
     : undefined;
+};
+
+/** `?notice=` as one of the page's own notices; anything else, a repeated key included, is none. */
+const noticeOf = <K extends string>(query: unknown, notices: Record<K, string>): K | undefined => {
+  const value = (query as { notice?: unknown } | undefined)?.notice;
+  return typeof value === 'string' && Object.hasOwn(notices, value) ? (value as K) : undefined;
+};
+
+// Only the body's shape (a field sent twice arrives as an array), then the shared schema. The
+// browser sends a textarea with CRLF line breaks; one trailing line feed goes, as the CLI drops it
+// from a file (docs/bot-texts.md → The CLI).
+const botTextForm = z.object({ source: z.string(), version: z.string().regex(/^\d{1,16}$/) });
+const resetForm = z.object({ version: z.string().regex(/^\d{1,16}$/) });
+
+const botTextFormOf = (body: unknown) => {
+  const form = botTextForm.safeParse(body);
+  if (!form.success) return undefined;
+  const parsed = safeParseAdminBotTextSaveRequest({
+    source: form.data.source.replace(/\r\n/g, '\n').replace(/\n$/, ''),
+    expectedVersion: Number(form.data.version),
+  });
+  return parsed.success ? parsed.data : undefined;
+};
+
+const resetFormOf = (body: unknown) => {
+  const form = resetForm.safeParse(body);
+  if (!form.success) return undefined;
+  const parsed = safeParseAdminBotTextResetRequest({ expectedVersion: Number(form.data.version) });
+  return parsed.success ? parsed.data : undefined;
 };
 
 /**
@@ -541,6 +581,143 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       return internalFailure(request, reply, error);
     }
   });
+
+  // --- Bot texts (#300, docs/admin-pages.md → Bot texts) ----------------------------------------
+
+  const textNotFound = (reply: FastifyReply) =>
+    sendHtml(reply, 404, noticePage(TEXTS.botTextNotFoundTitle, TEXTS.botTextNotFoundBody));
+  const textBadRequest = (reply: FastifyReply) =>
+    sendHtml(reply, 400, noticePage(TEXTS.botTextsTitle, TEXTS.badRequest));
+  const keyParamOf = (request: FastifyRequest): string => (request.params as { key: string }).key;
+  const isNotFound = (error: unknown) => {
+    const answered = outcome(error);
+    return answered?.status === 404 && answered.code === AdminErrorCode.NotFound;
+  };
+  // not answered or a 5xx: the write may have happened; the editor shows the version and the text
+  const writeOutcomeUnknown = (request: FastifyRequest, reply: FastifyReply, error: unknown) => {
+    const answered = outcome(error);
+    if (answered !== undefined && answered.status < 500) return undefined;
+    request.log.error(errorLogFields(error), 'the bot text write outcome is unknown');
+    return sendHtml(reply, 500, noticePage(TEXTS.outcomeUnknownTitle, TEXTS.botTextOutcomeUnknown));
+  };
+
+  app.get(BOT_TEXTS_PATH, async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const { me, overrides } = await backend.botTexts(token);
+      const notice = noticeOf(request.query, TEXTS.botTextsNotice);
+      return sendHtml(reply, 200, botTextsPage(overrides, { login: me.login, notice }));
+    }),
+  );
+
+  app.get(`${BOT_TEXTS_PATH}/:key`, async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const key = keyParamOf(request);
+      if (!isBotTextKey(key)) return textNotFound(reply);
+      try {
+        const { me, text } = await backend.botText(token, key);
+        const notice = noticeOf(request.query, TEXTS.botTextNotice);
+        return sendHtml(reply, 200, botTextPage(text, { login: me.login, notice }));
+      } catch (error) {
+        // the backend's catalog lacks a key web's has: the two were deployed apart
+        if (isNotFound(error)) return textNotFound(reply);
+        throw error;
+      }
+    }),
+  );
+
+  app.post(`${BOT_TEXTS_PATH}/:key/save`, async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const key = keyParamOf(request);
+      if (!isBotTextKey(key)) return textNotFound(reply);
+      const form = botTextFormOf(request.body);
+      if (form === undefined) return textBadRequest(reply);
+      let answer;
+      try {
+        answer = await backend.saveBotText(token, key, form);
+      } catch (error) {
+        if (isNotFound(error)) return textNotFound(reply);
+        const unknown = writeOutcomeUnknown(request, reply, error);
+        if (unknown !== undefined) return unknown;
+        throw error;
+      }
+      const page = (status: number, options: BotTextPageOptions) =>
+        sendHtml(
+          reply,
+          status,
+          botTextPage(answer.text, { login: answer.me.login, draft: form.source, ...options }),
+        );
+      switch (answer.outcome) {
+        case 'saved':
+          return reply.redirect(botTextHref(key, 'saved'), 303);
+        case 'unchanged':
+          return page(200, { notice: 'unchanged' });
+        case 'version_conflict':
+          return page(409, {
+            conflict: {
+              currentVersion: answer.currentVersion,
+              currentSource: answer.currentSource,
+            },
+          });
+        case 'refused':
+          return page(400, { problems: answer.problems });
+        case 'read_only':
+          return page(400, { message: TEXTS.botTextReadOnly });
+      }
+    }),
+  );
+
+  // a key outside the catalog is a row left behind by a renamed key: «Удалить» on the list
+  app.post(`${BOT_TEXTS_PATH}/:key/reset`, async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const key = keyParamOf(request);
+      if (!BOT_TEXT_KEY_PATTERN.test(key)) return textNotFound(reply);
+      const form = resetFormOf(request.body);
+      if (form === undefined) return textBadRequest(reply);
+      let answer;
+      try {
+        answer = await backend.resetBotText(token, key, form);
+      } catch (error) {
+        const unknown = writeOutcomeUnknown(request, reply, error);
+        if (unknown !== undefined) return unknown;
+        throw error;
+      }
+      if (!isBotTextKey(key)) {
+        switch (answer.outcome) {
+          case 'reset':
+            return reply.redirect(botTextsHref('removed'), 303);
+          case 'already_default':
+            return reply.redirect(botTextsHref('gone'), 303);
+          case 'version_conflict':
+            return reply.redirect(botTextsHref('changed'), 303);
+          // a key outside the catalog takes no effect and is in no group
+          case 'refused':
+          case 'read_only':
+            throw new UnexpectedBotTextOutcome();
+        }
+      }
+      const { text } = answer;
+      if (text === null) throw new UnexpectedBotTextOutcome();
+      const page = (status: number, options: BotTextPageOptions) =>
+        sendHtml(reply, status, botTextPage(text, { login: answer.me.login, ...options }));
+      switch (answer.outcome) {
+        case 'reset':
+          return reply.redirect(botTextHref(key, 'reset'), 303);
+        case 'already_default':
+          return reply.redirect(botTextHref(key, 'already_default'), 303);
+        case 'version_conflict':
+          return page(409, {
+            conflict: {
+              currentVersion: answer.currentVersion,
+              currentSource: answer.currentSource,
+            },
+          });
+        case 'refused':
+          return page(400, { problems: answer.problems });
+        case 'read_only':
+          return page(400, { message: TEXTS.botTextReadOnly });
+      }
+    }),
+  );
 
   app.get('/admin/static/app.css', async (_request, reply) =>
     reply

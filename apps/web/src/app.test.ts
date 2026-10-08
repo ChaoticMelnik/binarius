@@ -5,6 +5,10 @@ import {
   ADMIN_USER_RECENT_INTENTS,
   ADMIN_USER_RECENT_LEDGER,
   AdminErrorCode,
+  BOT_TEXT_CATALOG,
+  BOT_TEXT_GROUP_TITLES,
+  BOT_TEXT_SOURCE_MAX,
+  BotTextGroup,
   AuditAction,
   AuditEntityType,
   adminChangePasswordRequestSchema,
@@ -26,6 +30,8 @@ import { SESSION_COOKIE, CHALLENGE_COOKIE } from './admin/routes';
 import {
   SAMPLE_AUDIT,
   SAMPLE_AUDIT_ENTRY_NULLS,
+  SAMPLE_BOT_TEXT,
+  SAMPLE_BOT_TEXTS,
   SAMPLE_INTENT,
   SAMPLE_INTENT_RESPONSE,
   SAMPLE_INTENTS,
@@ -85,6 +91,10 @@ interface Calls {
   tokens: [string, AdminTokensQuery][];
   audit: [string, AdminAuditQuery][];
   changePassword: unknown[][];
+  botTexts: unknown[];
+  botText: unknown[][];
+  saveBotText: unknown[][];
+  resetBotText: unknown[][];
 }
 
 let calls: Calls;
@@ -107,6 +117,10 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     tokens: [],
     audit: [],
     changePassword: [],
+    botTexts: [],
+    botText: [],
+    saveBotText: [],
+    resetBotText: [],
   };
   lines = [];
   const client: BackendClient = {
@@ -166,6 +180,22 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     changePassword: async (token, request) => {
       calls.changePassword.push([token, request]);
       return { changed: true, revokedSessions: 3 };
+    },
+    botTexts: async (token) => {
+      calls.botTexts.push(token);
+      return SAMPLE_BOT_TEXTS;
+    },
+    botText: async (token, key) => {
+      calls.botText.push([token, key]);
+      return { me: SAMPLE_ME, text: SAMPLE_BOT_TEXT };
+    },
+    saveBotText: async (token, key, request) => {
+      calls.saveBotText.push([token, key, request]);
+      return { me: SAMPLE_ME, text: SAMPLE_BOT_TEXT, outcome: 'saved', version: 8 };
+    },
+    resetBotText: async (token, key, request) => {
+      calls.resetBotText.push([token, key, request]);
+      return { me: SAMPLE_ME, text: SAMPLE_BOT_TEXT, outcome: 'reset' };
     },
     oauthCallback: async () => {
       throw new Error('the admin pages never forward an OAuth callback');
@@ -974,6 +1004,7 @@ describe('the trading sessions page, the card section and the overview breakdown
     TEXTS.navTradingSessions,
     TEXTS.navTokens,
     TEXTS.navAudit,
+    TEXTS.navBotTexts,
   ];
 
   it.each([
@@ -986,7 +1017,8 @@ describe('the trading sessions page, the card section and the overview breakdown
     '/admin/trading-sessions',
     '/admin/tokens',
     '/admin/audit',
-  ])('%s carries the seven nav items in order, staff sessions named as such', async (url) => {
+    '/admin/bot-texts',
+  ])('%s carries the eight nav items in order, staff sessions named as such', async (url) => {
     const response = await get(url, withCookie);
 
     expect(response.statusCode).toBe(200);
@@ -998,6 +1030,7 @@ describe('the trading sessions page, the card section and the overview breakdown
       'Торговые сессии',
       'Токены',
       'Аудит',
+      'Тексты бота',
     ]);
     expect(navOf(response.body)).toEqual(NAV_LABELS);
     expect(response.body).toContain('<a href="/admin/trading-sessions"');
@@ -1412,12 +1445,12 @@ describe('the audit log page (#110)', () => {
     return [...select.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
   };
 
-  it('marks Аудит as the current page, last in the nav, and carries the login', async () => {
+  it('marks Аудит as the current page and carries the login', async () => {
     const response = await get('/admin/audit', withCookie);
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(
-      /<a href="\/admin\/audit"\s+aria-current="page"\s*>\s*Аудит\s*<\/a\s*>\s*<\/nav>/,
+      /<a href="\/admin\/audit"\s+aria-current="page"\s*>\s*Аудит\s*<\/a\s*>/,
     );
     expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
     expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
@@ -2170,5 +2203,251 @@ describe('the password page (#79)', () => {
     expect(all).toContain('the password change outcome is unknown');
     expectNoSecret(all);
     expect(all).not.toContain(TOKEN);
+  });
+});
+
+describe('the bot texts pages (#300)', () => {
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+  const form = (version = '7', source = 'Привет') => ({ source, version });
+  const rebuild = async (backend: Partial<BackendClient>) => {
+    await app.close();
+    app = build(backend);
+  };
+  const answering = (outcome: Record<string, unknown>) =>
+    ({ me: SAMPLE_ME, text: SAMPLE_BOT_TEXT, ...outcome }) as never;
+  const textareaOf = (body: string) => /<textarea[^>]*>([\s\S]*?)<\/textarea/.exec(body)?.[1];
+  const versionsOf = (body: string) =>
+    [...body.matchAll(/name="version" value="(\d+)"/g)].map((match) => match[1]);
+
+  it('W1 puts «Тексты бота» last in the nav and marks it current', async () => {
+    const response = await get('/admin/bot-texts', withCookie);
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatch(
+      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*Тексты бота\s*<\/a\s*>\s*<\/nav>/,
+    );
+  });
+
+  it('W2 lists the groups in catalog order with each key state, and the orphans with «Удалить»', async () => {
+    const { body } = await get('/admin/bot-texts', withCookie);
+    const titles = Object.values(BotTextGroup).map((group) =>
+      body.indexOf(`<h2>${BOT_TEXT_GROUP_TITLES[group]}</h2>`),
+    );
+    expect(titles.every((at, index) => at > (titles[index - 1] ?? -1))).toBe(true);
+    expect(body).toContain('<a href="/admin/bot-texts/welcome">welcome</a>');
+    expect(body).toContain(BOT_TEXT_CATALOG.welcome.description);
+    expect(body).toContain(TEXTS.botTextChanged(7, 'ada'));
+    expect(body).toContain(TEXTS.botTextChanged(3, null));
+    expect(body).toContain(
+      TEXTS.botTextRejected('Только чтение: команды и профиль правятся после #301'),
+    );
+    expect(body.split(TEXTS.botTextReadOnly)).toHaveLength(3);
+    expect(body).toContain(TEXTS.botTextOrphansHeading);
+    expect(body).toMatch(
+      /<form method="post" action="\/admin\/bot-texts\/zzz\/reset">\s*<input type="hidden" name="version" value="9" \/>/,
+    );
+    const removed = await get('/admin/bot-texts?notice=removed', withCookie);
+    expect(removed.body).toContain(TEXTS.botTextsNotice.removed);
+    const junk = await get('/admin/bot-texts?notice=toString', withCookie);
+    expect(junk.body).not.toContain('class="notice"');
+
+    await rebuild({ botTexts: async () => ({ me: SAMPLE_ME, overrides: [] }) });
+    const empty = await get('/admin/bot-texts', withCookie);
+    expect(empty.body).not.toContain(TEXTS.botTextOrphansHeading);
+  });
+
+  it('W3 renders the editor: the text escaped after one line feed, its version, the hints, the forms', async () => {
+    const response = await get('/admin/bot-texts/welcome?notice=saved', withCookie);
+    const { body } = response;
+    expect(response.statusCode).toBe(200);
+    expect(calls.botText).toEqual([[TOKEN, 'welcome']]);
+    expect(textareaOf(body)).toBe('\nПривет, &lt;b&gt;друг&lt;/b&gt;');
+    expect(body).toContain(`maxlength="${BOT_TEXT_SOURCE_MAX}"`);
+    expect(versionsOf(body)).toEqual(['7', '7']);
+    expect(body).toContain('<a href="/admin/bot-texts/connectButton">connectButton</a>');
+    expect(body).toContain(TEXTS.botTextFragmentChanged);
+    expect(body).toContain(TEXTS.botTextDefaultSource);
+    expect(body).toContain('formaction="/admin/bot-texts/welcome/preview"');
+    expect(body).toContain('action="/admin/bot-texts/welcome/save"');
+    expect(body).toContain('action="/admin/bot-texts/welcome/reset"');
+    expect(body).toContain(TEXTS.botTextNotice.saved);
+    expect(TEXTS.botTextNotice.saved).toContain('35 с');
+
+    await rebuild({
+      botText: async () => ({
+        me: SAMPLE_ME,
+        text: { key: 'codeSent', override: null, rejection: null, fragments: [] },
+      }),
+    });
+    const fresh = await get('/admin/bot-texts/codeSent', withCookie);
+    expect(fresh.body).toContain(TEXTS.botTextArg('email', 'ada@example.com'));
+    expect(versionsOf(fresh.body)).toEqual(['0']);
+    expect(fresh.body).not.toContain('/reset"');
+
+    await rebuild({
+      botText: async () => ({
+        me: SAMPLE_ME,
+        text: { key: 'connectButton', override: null, rejection: null, fragments: [] },
+      }),
+    });
+    const fragment = await get('/admin/bot-texts/connectButton', withCookie);
+    expect(fragment.body).toMatch(
+      new RegExp(`${TEXTS.botTextUsedIn}\\s*<a href="/admin/bot-texts/welcome">welcome</a>`),
+    );
+  });
+
+  it('W3 keeps a commands key read-only and answers a key outside the catalog with a 404', async () => {
+    await rebuild({
+      botText: async (token, key) => {
+        calls.botText.push([token, key]);
+        return {
+          me: SAMPLE_ME,
+          text: { key: 'startCommand', override: null, rejection: null, fragments: [] },
+        };
+      },
+    });
+    const readOnly = await get('/admin/bot-texts/startCommand', withCookie);
+    expect(readOnly.body).toContain(TEXTS.botTextReadOnly);
+    expect(readOnly.body).not.toContain('<form method="post" action="/admin/bot-texts');
+
+    const missing = await get('/admin/bot-texts/zzz', withCookie);
+    expect(missing.statusCode).toBe(404);
+    expect(missing.body).toContain(TEXTS.botTextNotFoundTitle);
+    expect(calls.botText).toEqual([[TOKEN, 'startCommand']]);
+  });
+
+  it('W5 saves: 303 on success, the notice on unchanged, the other text on a conflict', async () => {
+    const saved = await post('/admin/bot-texts/welcome/save', form(), withCookie);
+    expect([saved.statusCode, saved.headers.location]).toEqual([
+      303,
+      '/admin/bot-texts/welcome?notice=saved',
+    ]);
+    expect(calls.saveBotText).toEqual([
+      [TOKEN, 'welcome', { source: 'Привет', expectedVersion: 7 }],
+    ]);
+
+    const outcomes: [Record<string, unknown>, number, string][] = [
+      [{ outcome: 'unchanged' }, 200, TEXTS.botTextNotice.unchanged],
+      [
+        { outcome: 'version_conflict', currentVersion: 12, currentSource: 'Чужой <i>текст</i>' },
+        409,
+        '<pre>Чужой &lt;i&gt;текст&lt;/i&gt;</pre>',
+      ],
+      [
+        { outcome: 'refused', problems: [{ key: 'welcome', reason: 'Пустой текст' }] },
+        400,
+        'Пустой текст',
+      ],
+      [{ outcome: 'read_only' }, 400, TEXTS.botTextReadOnly],
+    ];
+    for (const [outcome, status, shown] of outcomes) {
+      await rebuild({ saveBotText: async () => answering(outcome) });
+      const response = await post('/admin/bot-texts/welcome/save', form('7', 'Мой'), withCookie);
+      expect([response.statusCode, response.body.includes(shown)]).toEqual([status, true]);
+      expect(textareaOf(response.body)).toBe('\nМой');
+      if (status === 409) {
+        expect(response.body).toContain(TEXTS.botTextConflict(12));
+        expect(versionsOf(response.body)).toEqual(['12', '12']);
+      }
+    }
+  });
+
+  it('W6 resets: 303 with the notice, the current text on a conflict, an orphan back to the list', async () => {
+    const reset = await post('/admin/bot-texts/welcome/reset', { version: '7' }, withCookie);
+    expect([reset.statusCode, reset.headers.location]).toEqual([
+      303,
+      '/admin/bot-texts/welcome?notice=reset',
+    ]);
+    expect(calls.resetBotText).toEqual([[TOKEN, 'welcome', { expectedVersion: 7 }]]);
+
+    await rebuild({
+      resetBotText: async () =>
+        answering({ outcome: 'version_conflict', currentVersion: 12, currentSource: 'Чужой' }),
+    });
+    const conflict = await post('/admin/bot-texts/welcome/reset', { version: '7' }, withCookie);
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.body).toContain('<pre>Чужой</pre>');
+
+    for (const [outcome, notice] of [
+      ['reset', 'removed'],
+      ['already_default', 'gone'],
+      ['version_conflict', 'changed'],
+    ] as const) {
+      await rebuild({
+        resetBotText: async (_token, key, request) => {
+          calls.resetBotText.push([key, request]);
+          return {
+            me: SAMPLE_ME,
+            text: null,
+            outcome,
+            currentVersion: 10,
+            currentSource: 'x',
+          } as never;
+        },
+      });
+      const orphan = await post('/admin/bot-texts/zzz/reset', { version: '9' }, withCookie);
+      expect([orphan.statusCode, orphan.headers.location]).toEqual([
+        303,
+        `/admin/bot-texts?notice=${notice}`,
+      ]);
+      expect(calls.resetBotText).toEqual([['zzz', { expectedVersion: 9 }]]);
+    }
+
+    await rebuild({});
+    const bad = await post('/admin/bot-texts/not-a-key/reset', { version: '9' }, withCookie);
+    expect(bad.statusCode).toBe(404);
+    expect(calls.resetBotText).toEqual([]);
+  });
+
+  it('W7 refuses a form outside its shape with a 400 and asks the backend nothing', async () => {
+    const raw = (url: string, payload: string) =>
+      app.inject({
+        method: 'POST',
+        url,
+        headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+        payload,
+        cookies: withCookie,
+      });
+    for (const payload of [
+      'source=a&version=abc',
+      'source=a&source=b&version=1',
+      new URLSearchParams({
+        source: '😀'.repeat(BOT_TEXT_SOURCE_MAX + 1),
+        version: '1',
+      }).toString(),
+    ]) {
+      const response = await raw('/admin/bot-texts/welcome/save', payload);
+      expect([response.statusCode, response.body.includes(TEXTS.badRequest)]).toEqual([400, true]);
+    }
+    expect((await raw('/admin/bot-texts/welcome/reset', 'version=-1')).statusCode).toBe(400);
+    expect(calls.saveBotText).toEqual([]);
+    expect(calls.resetBotText).toEqual([]);
+  });
+
+  it('W8 clears a session that is gone, and on an unanswered save says the outcome is unknown', async () => {
+    const malformed = await post('/admin/bot-texts/welcome/save', form(), {
+      [SESSION_COOKIE]: 'short',
+    });
+    expect([malformed.statusCode, malformed.headers.location]).toEqual([302, '/admin/login']);
+
+    await rebuild({
+      saveBotText: async () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+    });
+    const gone = await post('/admin/bot-texts/welcome/save', form(), withCookie);
+    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+
+    await rebuild({
+      saveBotText: async () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    const unknown = await post(
+      '/admin/bot-texts/welcome/save',
+      form('7', 'СЕКРЕТНЫЙ-ЧЕРНОВИК'),
+      withCookie,
+    );
+    expect(unknown.statusCode).toBe(500);
+    expect(unknown.body).toContain(TEXTS.botTextOutcomeUnknown);
+    expect(unknown.headers['set-cookie']).toBeUndefined();
+    const all = lines.join('\n');
+    expect(all).toContain('the bot text write outcome is unknown');
+    expect(all).not.toContain('СЕКРЕТНЫЙ-ЧЕРНОВИК');
   });
 });
