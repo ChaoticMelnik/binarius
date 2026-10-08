@@ -27,7 +27,9 @@ import {
   adminLoginRequestSchema,
   logoutResponseSchema,
   revokeSessionResponseSchema,
+  safeParseAdminChangePasswordRequest,
   safeParseAdminTokensQuery,
+  safeParseChangePasswordResponse,
   safeParseAdminUsersQuery,
   STAFF_LOGIN_PATTERN,
   STAFF_PASSWORD_MAX_LENGTH,
@@ -830,5 +832,77 @@ describe('audit log contracts (#110)', () => {
     expect(auditActionSchema.safeParse('bogus').success).toBe(false);
     expect(auditEntityTypeSchema.safeParse('bogus').success).toBe(false);
     expect(auditActorTypeSchema.safeParse('bogus').success).toBe(false);
+  });
+});
+
+describe('the password change contract (#78)', () => {
+  const body = { currentPassword: 'OLD-SECRET', newPassword: 'NEW-SECRET', ...CLIENT };
+
+  it('accepts two different passwords within the login bounds', () => {
+    expect(safeParseAdminChangePasswordRequest(body).success).toBe(true);
+    const atMax = 'x'.repeat(STAFF_PASSWORD_MAX_LENGTH);
+    expect(safeParseAdminChangePasswordRequest({ ...body, newPassword: atMax }).success).toBe(true);
+    expect(safeParseAdminChangePasswordRequest({ ...body, currentPassword: atMax }).success).toBe(
+      true,
+    );
+  });
+
+  it('refuses an empty or over-long password on either side', () => {
+    const over = 'x'.repeat(STAFF_PASSWORD_MAX_LENGTH + 1);
+    for (const patch of [
+      { newPassword: '' },
+      { currentPassword: '' },
+      { newPassword: over },
+      { currentPassword: over },
+    ]) {
+      expect(safeParseAdminChangePasswordRequest({ ...body, ...patch }).success).toBe(false);
+    }
+  });
+
+  it('refuses a new password equal to the current one with one custom issue on newPassword', () => {
+    const parsed = safeParseAdminChangePasswordRequest({ ...body, newPassword: 'OLD-SECRET' });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map((i) => [i.code, i.path])).toEqual([
+      ['custom', ['newPassword']],
+    ]);
+  });
+
+  it('drops a key it does not declare instead of refusing it', () => {
+    const parsed = safeParseAdminChangePasswordRequest({
+      ...body,
+      newPasswordRepeat: 'NEW-SECRET',
+    });
+    expect(parsed.success).toBe(true);
+    expect(Object.keys(parsed.data ?? {}).sort()).toEqual(
+      ['currentPassword', 'ip', 'newPassword', 'userAgent'].sort(),
+    );
+  });
+
+  it('never echoes a password in its issues', () => {
+    const parsed = safeParseAdminChangePasswordRequest({
+      ...body,
+      currentPassword: 'OLD-SECRET'.repeat(30),
+      newPassword: 'OLD-SECRET'.repeat(30),
+    });
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).not.toContain('OLD-SECRET');
+  });
+
+  it('accepts only the exact success shape as the response', () => {
+    expect(safeParseChangePasswordResponse({ changed: true, revokedSessions: 0 }).success).toBe(
+      true,
+    );
+    expect(safeParseChangePasswordResponse({ changed: true, revokedSessions: 3 }).success).toBe(
+      true,
+    );
+    for (const bad of [
+      { changed: true, revokedSessions: 1, extra: 1 },
+      { changed: false, revokedSessions: 1 },
+      { changed: true, revokedSessions: -1 },
+      { changed: true, revokedSessions: 1.5 },
+      { changed: true },
+    ]) {
+      expect(safeParseChangePasswordResponse(bad).success).toBe(false);
+    }
   });
 });
