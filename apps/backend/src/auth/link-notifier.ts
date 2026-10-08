@@ -1,6 +1,14 @@
 import { Api, InlineKeyboard } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
-import { confirmButtonLabel, confirmCallbackData, type TelegramHtml } from '@binarius/shared';
+import {
+  CONNECT_CALLBACK_DATA,
+  confirmButtonLabel,
+  confirmCallbackData,
+  DEMO_CALLBACK_DATA,
+  MENU_CALLBACK_DATA,
+  supportUrl,
+  type TelegramHtml,
+} from '@binarius/shared';
 import { LINK_PUSH_TELEGRAM_API_TIMEOUT_MS } from '../timing';
 import { CLIENT_LABELS, CLIENT_TEXTS } from './texts';
 
@@ -24,10 +32,19 @@ export type LinkPushOutcome =
       kind: Exclude<LinkPushKind, typeof LinkPushKind.Pending>;
     };
 
+// Every push carries its next step, as the bot's own messages do (#350, docs/bot-navigation.md):
+// the buttons are the bot's, built from bot-navigation.ts, so a press lands on its handler.
 export interface LinkPushMessage {
   text: TelegramHtml;
-  reply_markup?: InlineKeyboardMarkup;
+  reply_markup: InlineKeyboardMarkup;
 }
+
+// a failed login: connect again, or the menu
+const connectAgain = () =>
+  new InlineKeyboard()
+    .text(CLIENT_LABELS.connectButton, CONNECT_CALLBACK_DATA)
+    .row()
+    .text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA);
 
 export function linkPushMessage(outcome: LinkPushOutcome): LinkPushMessage {
   switch (outcome.kind) {
@@ -40,14 +57,20 @@ export function linkPushMessage(outcome: LinkPushOutcome): LinkPushMessage {
         ),
       };
     case LinkPushKind.Active:
-      return { text: CLIENT_TEXTS.linkedActive };
+      return {
+        text: CLIENT_TEXTS.linkedActive,
+        reply_markup: new InlineKeyboard().text(CLIENT_LABELS.demoButton, DEMO_CALLBACK_DATA),
+      };
     case LinkPushKind.Blocked:
-      return { text: CLIENT_TEXTS.blocked };
+      return {
+        text: CLIENT_TEXTS.blocked,
+        reply_markup: new InlineKeyboard().url(CLIENT_LABELS.supportButton, supportUrl()),
+      };
     case LinkPushKind.Taken:
-      return { text: CLIENT_TEXTS.accountTaken };
+      return { text: CLIENT_TEXTS.accountTaken, reply_markup: connectAgain() };
     case LinkPushKind.ExchangeFailed:
     case LinkPushKind.Mismatch:
-      return { text: CLIENT_TEXTS.oauthLoginFailed };
+      return { text: CLIENT_TEXTS.oauthLoginFailed, reply_markup: connectAgain() };
   }
 }
 
@@ -88,7 +111,7 @@ export function createLinkNotifier({
       // plain: Telegram does not parse it.
       await api.sendMessage(String(telegramUserId), text.value, {
         parse_mode: 'HTML',
-        ...(reply_markup === undefined ? {} : { reply_markup }),
+        reply_markup,
       });
     },
   };
