@@ -117,10 +117,11 @@ export function parseEnv(source: EnvSource): Env {
 
 // The broker redirects to apps/web's callback page, so a path other than OAUTH_CALLBACK_PATH would
 // send every login to a page nothing serves (until #314 the backend also derived the Mini App's
-// login page from this URI's origin). The redirect target is a local page during development; it never leaves
-// the machine. The value is sent to the broker byte for byte and the broker compares it with the
-// registered spelling, so the raw string is held to the bare spelling as well: URL parsing would
-// otherwise pass a trailing "\r" from a CRLF .env, a query or a dot-segment as the same path.
+// login page from this URI's origin). The redirect target is a local page during development; it
+// never leaves the machine. The value is sent to the broker byte for byte and the broker compares
+// it with the registered spelling, so the raw string is held to the bare spelling as well: URL
+// parsing would otherwise pass a trailing "\r" from a CRLF .env, a query or a dot-segment as the
+// same path.
 function parseRedirectUri(source: EnvSource): string {
   const value = parseLoopbackOrHttpsUrlEnv(
     readEnv(source, 'BROKER_OAUTH_REDIRECT_URI'),

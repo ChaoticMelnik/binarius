@@ -97,7 +97,8 @@ beforeAll(async () => {
     redirectUri: REDIRECT_URI,
     partnerRef: PARTNER_REF,
     linkNotifier: createLinkNotifier({ token: PUSH_BOT_TOKEN }),
-    // the one public bot both sends the push and launches the Mini App, as in production
+    // the one public bot both sends the push and launched the Mini App (until #314), as in
+    // production
     initDataVerifier: createInitDataVerifier({
       botToken: PUSH_BOT_TOKEN,
       maxAgeMs: INIT_DATA_MAX_AGE_MS,

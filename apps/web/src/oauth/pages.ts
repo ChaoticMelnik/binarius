@@ -33,8 +33,8 @@ const scripts = html`
 const outcomeBlock = (outcome: CallbackOutcome): SafeHtml =>
   html`<p data-outcome="${outcome}" hidden>${OUTCOME_TEXTS[outcome]}</p>`;
 
-// Opened by the bot's web_app button. The script navigates to the broker inside the same webview;
-// the link is what a person taps if it does not.
+// Opened by the bot's web_app button until #314 removed it. The script navigates to the broker
+// inside the same webview; the link is what a person taps if it does not.
 export const loginPage = (authorizeUrl: string): SafeHtml =>
   layout({
     title: OAUTH_TEXTS.loginTitle,

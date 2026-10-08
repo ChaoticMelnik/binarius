@@ -79,9 +79,9 @@ this order (`apps/backend/src/auth/routes.ts`):
    yet. `auth_date` may be at most `INIT_DATA_MAX_AGE_MS` old — the state's ten-minute TTL plus
    60 s for the two clocks, all three in `apps/backend/src/auth/oauth-timing.ts` — because the
    Mini App opened on a button the bot showed after the state existed (until #314; no route
-   issues a state now), and the callback has to arrive before the state expires. An `auth_date` ahead of this host's clock is accepted: only
-   Telegram can sign one. A `user.id` that is not a positive safe integer is refused, because
-   `JSON.parse` would already have rounded it;
+   issues a state now), and the callback has to arrive before the state expires. An `auth_date`
+   ahead of this host's clock is accepted: only Telegram can sign one. A `user.id` that is not a
+   positive safe integer is refused, because `JSON.parse` would already have rounded it;
 4. the state CAS — 400 `invalid_state`;
 5. the Telegram id the `initData` names against `oauth_states.telegram_user_id` from the row the
    CAS returned. A mismatch is 403 `telegram_user_mismatch`: the state stays spent, the code never
