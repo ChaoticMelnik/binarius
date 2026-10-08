@@ -62,6 +62,7 @@ import {
   type StaffActionResult,
   type StaffContext,
   type StaffPasswordChangeResult,
+  type StaffPasswordChangeRow,
   type StaffSessionRow,
   type Tx,
 } from '@binarius/db';
@@ -127,20 +128,31 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     }
   };
 
-  // The password change's two derivations share one slot, the new hash only after the current
-  // password verified: a wrong guess costs what a login costs, and the slot's peak memory does
-  // not change (timing.ts → PASSWORD_CHANGE_DERIVATIONS).
+  // The password change's two derivations share one slot (timing.ts →
+  // PASSWORD_CHANGE_DERIVATIONS), and the new hash is derived only when the row, read again after
+  // verify, is still the one the pre-read saw: a lockout or a reset that lands while the request
+  // waits for the slot or while verify runs gets one answer in one time whatever the guess, so a
+  // session cookie is no faster an oracle for the password than the login form. The two reads of
+  // the staff row inside the slot are bounded by the pool's query_timeout, not by the timing chain.
   const derive = async (
-    stored: string,
+    pre: StaffPasswordChangeRow,
+    token: string,
     current: string,
     next: string,
-  ): Promise<{ ok: true; hash: string } | { ok: false } | 'refused'> => {
+  ): Promise<{ kind: 'ok'; hash: string } | { kind: 'wrong' | 'stale' } | 'refused'> => {
+    const stale = async (): Promise<boolean> => {
+      const row = await findStaffForPasswordChange(deps.db, { token, idleMs });
+      return row === undefined || row.lockedUntil !== null || row.passwordHash !== pre.passwordHash;
+    };
     try {
-      return await queue.run(async () =>
-        (await verify(stored, current))
-          ? { ok: true as const, hash: await hashNew(next) }
-          : { ok: false as const },
-      );
+      return await queue.run(async () => {
+        if (await stale()) return { kind: 'stale' as const };
+        const verified = await verify(pre.passwordHash, current);
+        // before the branch on the guess, so a right and a wrong one differ by nothing here
+        if (await stale()) return { kind: 'stale' as const };
+        if (!verified) return { kind: 'wrong' as const };
+        return { kind: 'ok' as const, hash: await hashNew(next) };
+      });
     } catch (error) {
       if (error instanceof PasswordQueueOverflow) return 'refused';
       throw error;
@@ -466,28 +478,26 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         entity: { type: AuditEntityType.Staff, id: ctx.staffId },
         payload: { ...payload, ip, sessionId: ctx.sessionId },
       });
+      const locked = (until: Date) => ({ reason: 'locked', lockedUntil: until.toISOString() });
 
       // null unless a lockout is running right now, by the database's clock; no KDF under it
       const { lockedUntil } = pre;
       if (lockedUntil !== null) {
-        const answer = await asStaff(
-          request,
-          reply,
-          async (_tx, ctx) => ({
-            result: 'locked' as const,
-            audit: failed(ctx, { reason: 'locked', lockedUntil: lockedUntil.toISOString() }),
-          }),
-          { lockStaff: true },
-        );
+        const answer = await asStaff(request, reply, async (_tx, ctx) => ({
+          result: 'locked' as const,
+          audit: failed(ctx, locked(lockedUntil)),
+        }));
         if (answer === undefined) return reply;
         return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
       }
 
-      const derived = await derive(pre.passwordHash, currentPassword, newPassword);
+      const derived = await derive(pre, token, currentPassword, newPassword);
       if (derived === 'refused') {
         return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
       }
-      if (!derived.ok) {
+      // a wrong guess and a stale row are one transaction: the counter's CAS misses a row that
+      // changed, so a right password caught by a lockout is never counted as a wrong one
+      if (derived.kind !== 'ok') {
         const answer = await asStaff(
           request,
           reply,
@@ -496,19 +506,20 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
               staffId: ctx.staffId,
               passwordHash: pre.passwordHash,
             });
-            return {
-              result: failure,
-              audit: failed(ctx, {
-                reason: failure.stateChanged === true ? 'state_changed' : 'wrong_password',
-                attempts: failure.attempts,
-                locked: failure.locked,
-              }),
-            };
+            const payload =
+              failure.stateChanged !== true
+                ? { reason: 'wrong_password', attempts: failure.attempts, locked: failure.locked }
+                : failure.reason === 'locked' && failure.lockedUntil
+                  ? locked(failure.lockedUntil)
+                  : { reason: 'state_changed' };
+            return { result: payload.reason, audit: failed(ctx, payload) };
           },
           { lockStaff: true },
         );
         if (answer === undefined) return reply;
-        return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
+        return answer === 'locked'
+          ? reply.code(429).send({ error: AdminErrorCode.TooManyAttempts })
+          : reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
       }
 
       const answer = await asStaff(
@@ -522,7 +533,15 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
             newPasswordHash: derived.hash,
           });
           if (!changed.ok) {
-            return { result: changed, audit: failed(ctx, { reason: changed.reason }) };
+            return {
+              result: changed,
+              audit: failed(
+                ctx,
+                changed.reason === 'locked'
+                  ? locked(changed.lockedUntil)
+                  : { reason: changed.reason },
+              ),
+            };
           }
           return {
             result: changed,

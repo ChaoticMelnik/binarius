@@ -17,9 +17,8 @@ import { notificationLevelSchema, userStatusSchema } from './users';
 // The KDF part of both credential routes: POST /admin/auth/login is the wait for a slot in the
 // scrypt queue, the KDF itself, and the one Telegram call that follows; POST /admin/auth/password
 // is the wait plus two derivations in that one slot (verify the current password, hash the new
-// one). Database statements are bounded by the pool's per-statement query_timeout
-// (apps/backend/src/index.ts), not by this — the route as a whole is not, so web treats its own
-// timeout as an unknown outcome. It lives here rather than in either process because both size
+// one). The route as a whole is not bounded by it, so web treats its own timeout as an unknown
+// outcome. It lives here rather than in either process because both size
 // their own chains against it — apps/backend/src/timing.ts must fit inside it,
 // apps/web/src/timing.ts must wait longer than it.
 export const ADMIN_LOGIN_BUDGET_MS = 6_000;
