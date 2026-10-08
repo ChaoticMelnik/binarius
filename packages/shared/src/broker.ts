@@ -188,7 +188,10 @@ export interface ClosedTrade extends TradeBase {
   profit: DecimalString;
 }
 
-function toTradeBase(wire: OpenTradeWire | ClosedTradeWire): TradeBase {
+// the fields both trade forms share but is_demo, which REST sends and the socket does not (#354)
+type TradeBaseWire = Omit<OpenTradeWire, 'is_demo' | 'potential_profit'>;
+
+function toTradeBase(wire: TradeBaseWire, isDemo: boolean): TradeBase {
   return {
     id: toId(wire.id),
     assetId: wire.asset_id,
@@ -197,24 +200,36 @@ function toTradeBase(wire: OpenTradeWire | ClosedTradeWire): TradeBase {
     payout: wire.payout,
     openPrice: wire.open_price,
     openTimestamp: wire.open_timestamp,
-    isDemo: wire.is_demo,
+    isDemo,
     ...(wire.source === undefined ? {} : { source: wire.source }),
     ...(wire.broker_client_id === undefined ? {} : { brokerClientId: wire.broker_client_id }),
   };
 }
 
-export function toOpenTrade(wire: OpenTradeWire): OpenTrade {
-  return { ...toTradeBase(wire), potentialProfit: wire.potential_profit };
+// The mode from the caller: REST's is_demo, or the socket event's name (socket.ts).
+export function toOpenTradeOfMode(
+  wire: Omit<OpenTradeWire, 'is_demo'>,
+  isDemo: boolean,
+): OpenTrade {
+  return { ...toTradeBase(wire, isDemo), potentialProfit: wire.potential_profit };
 }
 
-export function toClosedTrade(wire: ClosedTradeWire): ClosedTrade {
+export function toClosedTradeOfMode(
+  wire: Omit<ClosedTradeWire, 'is_demo'>,
+  isDemo: boolean,
+): ClosedTrade {
   return {
-    ...toTradeBase(wire),
+    ...toTradeBase(wire, isDemo),
     closePrice: wire.close_price,
     closeTimestamp: wire.close_timestamp,
     profit: wire.profit,
   };
 }
+
+export const toOpenTrade = (wire: OpenTradeWire): OpenTrade =>
+  toOpenTradeOfMode(wire, wire.is_demo);
+export const toClosedTrade = (wire: ClosedTradeWire): ClosedTrade =>
+  toClosedTradeOfMode(wire, wire.is_demo);
 
 // GET /broker/user/trades answers { trades: [...] } (live, 2026-10-02, an empty list). Closed is
 // tried first because it is the member with the extra required fields: an open trade carrying a
