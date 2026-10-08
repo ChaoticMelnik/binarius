@@ -427,14 +427,23 @@ would be about 1 950 GETs a minute against 600 ([The budget](#the-budget)).
 **When.** One scan a candle, `SIGNAL_SCAN_SLACK_MS` (500 ms) after its boundary. The live broker
 returned the just-closed `15s` candle 150 ms after the boundary (2026-10-08); the rest of the slack
 covers clock skew. After a start, nothing is served until the first scan, at most 15.5 s later.
+- The timer aims at a remembered target, `nextAt`, the next boundary plus the slack. It is moved
+  forward by one candle at each fire, never recomputed from the clock at that moment. So a timer
+  that fires a few ms early cannot run a second scan for the same candle (S12).
+- A scan's boundary comes from its target. A second run for a boundary already scanned returns at
+  once.
+- After a stall that missed whole candles, the timer fires once, for the next one.
+- A scan takes no new pair once its candle has ended: the rest counts as `skipped` (S13).
+  Otherwise, on a slow broker, it would spend the next candle's tokens on stale work and could call
+  inside the next slack, before that candle's close is published.
 
 **Each call**, at most `SIGNAL_SCAN_CONCURRENCY` (4) at once:
 
 | Step or outcome | What the scanner does |
 |---|---|
-| before the call | takes one token of the pacer; none (a pause, an empty bucket) drops this pair and the rest of the candle (`skipped`) |
-| `decided` | stores `{ kind, action, lastCandleTimestamp, decidedAtMs }` for the pair; resets the 429 backoff |
-| `fetch_failed` `rate_limited` | pauses the pacer for `retryAfterSec`, or without it for 15 s doubling to 120 s (`SIGNAL_SCAN_BACKOFF_MIN_MS`/`_MAX_MS`) |
+| before the call | the candle has ended, or no pacer token (a pause, an empty bucket): this pair and the rest of the candle are dropped (`skipped`) |
+| `decided` | stores `{ kind, action or reason, lastCandleTimestamp, decidedAtMs }` for the pair; resets the 429 backoff |
+| `fetch_failed` `rate_limited` | pauses the pacer for `retryAfterSec` held to 15–120 s (`SIGNAL_SCAN_BACKOFF_MIN_MS`/`_MAX_MS`), or without it for 15 s doubling to 120 s; a 429 without Retry-After while a pause runs is the same burst and neither doubles nor extends it (`pacer.test.ts` P3b, P7, P8) |
 | any other `fetch_failed` | counted by code; the pair's previous entry stays and goes stale with the candle |
 | a throw | counted as `threw`, `warn` `signal scan failed` with the error's name and code and `assetId` (Rule 8) |
 
@@ -448,14 +457,14 @@ at most the ceiling plus one batch (`pacer.test.ts` P2). Only the scanner takes 
 
 **Stop.** `stop()` runs in shutdown phase 1. It clears the timers and waits for the calls in flight.
 Each call is bounded by the cache's `SIGNAL_FETCH_BUDGET_MS` (3 s), already in the phase-1 chain.
-`start()` runs after `listen()` with the other loops, so a SIGTERM during the warm-up never starts
-it (S8).
+The calls still queued are dropped (S8). `start()` runs after `listen()` with the other loops
+(`index.ts`), so a SIGTERM during the warm-up never starts it.
 
 **The log line**, every `SIGNAL_SCAN_LOG_MS` (60 s): `info` `signal scanner` with:
 
 | Field | What it counts |
 |---|---|
-| `eligible` | eligible pairs at the last scan |
+| `eligible` | eligible pairs at the last scan; 0 while the catalog is stale |
 | `scanned` | the size of the scan set |
 | `signals` | fresh signals now (the route's rule) |
 | `noSignal` | `no_signal` decisions over the minute |
@@ -523,7 +532,8 @@ each bounded on its own. The table lives in `packages/shared/src/broker-budget.t
 The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import and in
 `timing.test.ts`:
 - `SIGNAL_SCAN_SLACK_MS < 15 000` and `SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < 15 000`: a
-  scan starts and ends inside its candle;
+  scan starts inside its candle, and a call made at the scan moment ends inside it. A whole scan is
+  bounded by the candle's end check, not by this chain;
 - `SIGNAL_SCAN_BACKOFF_MIN_MS ≤ SIGNAL_SCAN_BACKOFF_MAX_MS`;
 - the env bounds around the default, at least one pair, and below the window.
 
