@@ -23,7 +23,9 @@ import {
   decimalStringSchema,
   type TradingAccessResponse,
   type TradingSignalsResponse,
+  commandRetryCallbackData,
   CONNECT_CALLBACK_DATA,
+  MENU_CALLBACK_DATA,
   DEMO_CALLBACK_DATA,
 } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
@@ -1728,6 +1730,40 @@ const ACCOUNT_BRANCHES: readonly Branch[] = [
   },
 ];
 
+// «🏠 В меню» (#350): /menu's branches after the answer, the card never pinned.
+const menuButton = (label: string, expected: Calls, patch: Partial<Branch> = {}): Branch => ({
+  label,
+  update: callbackUpdate(MENU_CALLBACK_DATA),
+  expected,
+  ...patch,
+});
+const MENU_BUTTON_ACTIVE = { recordStart: () => Promise.resolve(ACTIVE_VIEW) };
+const MENU_BUTTON_WORST_CASE = menuButton(
+  'the photo is refused and the text card is sent',
+  { backend: 2, telegram: 3 },
+  { ...MENU_BUTTON_ACTIVE, ...PHOTO_REFUSED_OUTCOME.scene },
+);
+const MENU_BUTTON_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(MENU_CALLBACK_DATA, 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  menuButton(
+    'the backend refuses the start',
+    { backend: 1, telegram: 2 },
+    { recordStart: unreachable },
+  ),
+  menuButton('the welcome is sent', { backend: 1, telegram: 2 }),
+  menuButton('the card is sent', { backend: 2, telegram: 2 }, MENU_BUTTON_ACTIVE),
+  menuButton(
+    'the access read fails',
+    { backend: 2, telegram: 2 },
+    { ...MENU_BUTTON_ACTIVE, readTradingAccess: unreachable },
+  ),
+  MENU_BUTTON_WORST_CASE,
+];
+
 // Every terminal branch of /settings: one read, one message (#120).
 const SETTINGS_WORST_CASE: Branch = {
   label: 'the levels are shown',
@@ -1760,6 +1796,27 @@ const SETTINGS_BRANCHES: readonly Branch[] = [
   },
   SETTINGS_WORST_CASE,
 ];
+
+// «🔄 Повторить» of /account and /settings (#350): the command's branches after the answer
+const asRetry = (data: string, branches: readonly Branch[]): Branch[] =>
+  branches
+    .filter((branch) => branch.expected.telegram > 0)
+    .map((branch) => ({
+      ...branch,
+      label: `${data}: ${branch.label}`,
+      update: callbackUpdate(data),
+      expected: { backend: branch.expected.backend, telegram: branch.expected.telegram + 1 },
+    }));
+const COMMAND_RETRY_BRANCHES: readonly Branch[] = [
+  ...asRetry(commandRetryCallbackData('account'), ACCOUNT_BRANCHES),
+  ...asRetry(commandRetryCallbackData('settings'), SETTINGS_BRANCHES),
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(commandRetryCallbackData('account'), 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+];
+const COMMAND_RETRY_WORST_CASE = COMMAND_RETRY_BRANCHES[0]!;
 
 const LEVEL_UPDATE = callbackUpdate(levelCallbackData(NotificationLevel.Off));
 
@@ -2077,6 +2134,24 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('/menu', async () => {
     await checkHandler('menu', MENU.branches, MENU.worst, HANDLER_CALLS.menu);
+  });
+
+  it('«🏠 В меню»', async () => {
+    await checkHandler(
+      'menuButton',
+      MENU_BUTTON_BRANCHES,
+      MENU_BUTTON_WORST_CASE,
+      HANDLER_CALLS.menuButton,
+    );
+  });
+
+  it('«🔄 Повторить» of a command', async () => {
+    await checkHandler(
+      'commandRetry',
+      COMMAND_RETRY_BRANCHES,
+      COMMAND_RETRY_WORST_CASE,
+      HANDLER_CALLS.commandRetry,
+    );
   });
 
   it('the demo button', async () => {

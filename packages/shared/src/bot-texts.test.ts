@@ -117,6 +117,8 @@ describe('the bot texts catalog', () => {
         'demoPrevButton',
         'demoRetryButton',
         'loginButton',
+        'menuButton',
+        'newAnalysisButton',
         'oauthButton',
         'refreshIntentButton',
         'repeatAnalysisButton',
@@ -131,6 +133,7 @@ describe('the bot texts catalog', () => {
         'stakeMenuButton',
         'stakeResetButton',
         'supportButton',
+        'toSignalsButton',
       ].sort(),
     );
     expect(botTextKeysOf(BotTextGroup.Commands).sort()).toEqual(

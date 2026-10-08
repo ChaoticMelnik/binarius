@@ -9,6 +9,14 @@ export const DEMO_CALLBACK_DATA = 'demo';
 // The welcome's main button: asks for the address. Buttons sent by earlier versions carry the same
 // data, so they lead where the new ones do; `✏️ Изменить адрес` carries it too.
 export const CONNECT_CALLBACK_DATA = 'connect';
+// «🏠 В меню» (#350): the status card, as /menu.
+export const MENU_CALLBACK_DATA = 'menu';
+// «🔄 Повторить» under a command's failure (#350): the command again. /start and /menu repeat as
+// «🏠 В меню»; the longest, `cmd:settings`, is 12 bytes.
+export const RETRY_COMMANDS = ['account', 'settings'] as const;
+export type RetryCommand = (typeof RETRY_COMMANDS)[number];
+export const commandRetryCallbackData = (command: RetryCommand): string => `cmd:${command}`;
+export const COMMAND_RETRY_PATTERN = new RegExp(`^cmd:(${RETRY_COMMANDS.join('|')})$`);
 
 // Where /support leads (#120). A temporary personal account: #220 replaces it, and this is the one
 // line to change.

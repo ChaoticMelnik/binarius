@@ -1146,8 +1146,19 @@ export const BOT_TEXT_CATALOG = {
   demoAnalysisButton: plain(g.Buttons, 'Демо: кнопка анализа.', '📊 Анализ'),
   demoRetryButton: plain(
     g.Buttons,
-    'Демо: кнопка повтора, когда каталог недоступен.',
+    'Кнопка повтора того же чтения или команды после сбоя: каталог, «сервис недоступен».',
     '🔄 Повторить',
+  ),
+  menuButton: plain(g.Buttons, 'Кнопка «в меню»: карточка статуса, как /menu.', '🏠 В меню'),
+  newAnalysisButton: plain(
+    g.Buttons,
+    'Конец сделки и сессии: анализ той же пары и длительности заново.',
+    '📊 Новый анализ',
+  ),
+  toSignalsButton: plain(
+    g.Buttons,
+    'Конец сделки и сессии: экран «Сигналы сейчас».',
+    '📡 К сигналам',
   ),
   demoBackGroupsButton: plain(g.Buttons, 'Демо: кнопка назад к типам актива.', '↩️ Типы'),
   demoBackPairsButton: plain(g.Buttons, 'Демо: кнопка назад к активам.', '↩️ Активы'),
@@ -1182,7 +1193,11 @@ export const BOT_TEXT_CATALOG = {
     'Экран суммы: сброс к минимальной ставке брокера.',
     '🔁 Минимальная брокера',
   ),
-  stakeBackAnalysisButton: plain(g.Buttons, 'Экран суммы: назад к анализу.', '↩️ Назад к анализу'),
+  stakeBackAnalysisButton: plain(
+    g.Buttons,
+    'Назад к анализу пары: с экрана суммы и после сбоя запуска сделки или сессии.',
+    '↩️ Назад к анализу',
+  ),
   stakeBackSettingsButton: plain(
     g.Buttons,
     'Экран суммы: назад к /settings.',

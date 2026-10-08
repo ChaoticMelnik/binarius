@@ -1107,6 +1107,8 @@ describe('the facades over the catalog', () => {
         'demoRetryButton',
         'helpCommand',
         'loginButton',
+        'menuButton',
+        'newAnalysisButton',
         'menuCommand',
         'oauthButton',
         'refreshIntentButton',
@@ -1124,6 +1126,7 @@ describe('the facades over the catalog', () => {
         'stakeResetButton',
         'startCommand',
         'supportButton',
+        'toSignalsButton',
         'supportCommand',
       ].sort(),
     );

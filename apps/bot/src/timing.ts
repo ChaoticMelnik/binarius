@@ -47,6 +47,11 @@ export const HANDLER_CALLS = {
   start: { backend: 2, telegram: 4 },
   // /menu: /start's path without a payload
   menu: { backend: 2, telegram: 4 },
+  // «🏠 В меню» (#350): answerCallbackQuery, then /menu's path without the unpin and the pin, which
+  // would make it 2 / 5 = 50 s, the shutdown budget itself
+  menuButton: { backend: 2, telegram: 3 },
+  // «🔄 Повторить» of /account or /settings (#350): answerCallbackQuery, then the command
+  commandRetry: { backend: 1, telegram: 2 },
   // the status card's button, the signals screen (#320): answerCallbackQuery ∥ readSignals ∥
   // readPairs — the reads counted as sequential, as in confirm — then sendMessage
   demo: { backend: 2, telegram: 2 },
