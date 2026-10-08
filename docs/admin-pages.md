@@ -386,13 +386,18 @@ transaction: the session touch, then the table lock and the write, then the one 
 `lockStaff`, stated: the route touches only its own session row, and the FK to `staff` takes
 `KEY SHARE`, which the password change's `FOR NO KEY UPDATE` does not block.
 
+Every page `web` builds after a POST — the preview, a refused or unchanged save, a refused reset —
+carries the version the staff member submitted, never the fresher one the backend read for the
+page: the editing session was opened on the submitted version, and a fresher one would void the
+optimistic check. Only the 409 page sets the current version, on purpose.
+
 | Backend `outcome` | `web` |
 |---|---|
-| `rendered` (preview) | 200, the editor with the preview |
+| `rendered` (preview) | 200, the editor with the preview, the draft and the submitted version in the forms |
 | `saved` / `reset` / `already_default` | 303 to the editor with the notice (post/redirect/get) |
 | `unchanged` | 200, the editor with «Текст не изменился» |
 | `version_conflict` | 409: «Текст уже изменил другой сотрудник (версия N)», the text there now under it, the draft in the field and the hidden version set to N, so «Сохранить» again overwrites knowingly (the old text stays in `audit_log`) |
-| `refused` | 400, the reasons in Russian, the draft in the field |
+| `refused` | 400, the reasons in Russian, the draft and the submitted version in the forms |
 | `read_only` | 400 with the message |
 | 404 `not_found` | 404 «Текст не найден» |
 | no answer or a 5xx on save or reset | 500 «Результат неизвестен»: the write may have happened; reopening the editor shows the version and the text |
@@ -426,7 +431,7 @@ named and bounded; nothing else is recorded.
 | bot text editor, a key not in the catalog | `bot_text_viewed` | — | `{ path, result: 'not_found', key? }` — `key` only when it matches `BOT_TEXT_KEY_PATTERN` |
 | bot text preview | `bot_text_previewed` | `bot_text` | `{ path, key?, result }` — `rendered`, `refused`, `read_only` or `not_found`; no text |
 | bot text save, written | `bot_text_saved` | `bot_text` | `{ path, result: 'saved', key, action, oldText, newText, oldVersion, newVersion }` — the CLI's payload plus `path` and `result` |
-| bot text reset, written | `bot_text_reset` | `bot_text` | the same with `result: 'reset'`; an orphan's texts are both `null`, as from the CLI |
+| bot text reset, written | `bot_text_reset` | `bot_text` | the same with `result: 'reset'`; an orphan's `oldText` is the row's text and its `newText` is `null`, as from the CLI |
 | bot text save or reset, refused | `bot_text_saved` / `bot_text_reset` | `bot_text` | `{ path, key?, result }` — `version_conflict`, `unchanged`, `already_default`, `refused`, `read_only` or `not_found`; no text |
 
 A bot text row has `entity_type = 'bot_text'` and `entity_id = NULL`, like the CLI's (a key is not a

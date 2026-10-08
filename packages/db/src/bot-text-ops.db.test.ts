@@ -238,7 +238,7 @@ describe('resetBotTextOverride', () => {
   it('removes the row of a key the catalog no longer has', async () => {
     await tmp.db.insert(botTextOverrides).values({ key: 'renamedKey', source: 'x' });
     expect(await reset('renamedKey')).toMatchObject({ ok: true });
-    expect((await audits())[0]?.payload).toMatchObject({ oldText: null, newText: null });
+    expect((await audits())[0]?.payload).toMatchObject({ oldText: 'x', newText: null });
   });
 });
 

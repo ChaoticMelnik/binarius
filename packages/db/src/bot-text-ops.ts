@@ -180,7 +180,8 @@ export async function applyBotTextReset(
     audit: {
       key,
       action: 'reset',
-      oldText: effectiveText(key, rows),
+      // a key outside the catalog shows nothing: the row's text is the only copy the audit keeps
+      oldText: isBotTextKey(key) ? effectiveText(key, rows) : current.source,
       newText: effectiveText(key, []),
       oldVersion: current.version,
       newVersion: 0,
