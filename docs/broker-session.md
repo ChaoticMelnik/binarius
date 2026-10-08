@@ -24,7 +24,7 @@ TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius \
 | Client | `BrokerSocketClient` ([broker-socket.md](broker-socket.md)) | one per session; the taint after an aborted command |
 | Token | `AccessTokenSource` (`broker/access-token.ts`) | `POST /trading/accounts/:id/access-token` on the backend, always `mayRefresh: false` |
 | Composition | `apps/trading-worker/src/index.ts` | built only when `env.brokerWsUrl` is set; otherwise `noTradeSessions` |
-| Probe | #285 | the two-socket check the rollout waits for; not part of this issue |
+| Probe | `apps/trading-worker/src/cli/socket-probe.ts`, `socket-probe-run.ts`, `socket-probe-verdict.ts` (#285) | the two-socket check the rollout waits for; exit 0 only on its safe verdict ([broker-socket.md → Observed live](broker-socket.md#observed-live)) |
 
 ## The candidates
 
@@ -261,10 +261,13 @@ the compose stack runs without sessions unless it points at the broker itself.
 
 ## Rollout
 
-`BROKER_WS_URL` stays unset on the pilot until the two-socket probe of #285 is merged and has
-printed its safe verdict (`answers go to the sender`, exit 0) on the pilot — the conditions of
-that verdict are listed in #285 ([broker-socket.md → Observed live](broker-socket.md#observed-live)).
-Then:
+`BROKER_WS_URL` stays unset on the pilot until the two-socket probe of #285
+(`pnpm --filter @binarius/trading-worker socket-probe`) has printed on the pilot its safe line,
+`verdict: no cross-socket answer within the window; BROKER_WS_URL may be set`, with exit 0. A
+`broadcast` or `inconclusive` verdict (exit 1) keeps it unset. The command, the preconditions and
+the conditions of the safe verdict are in
+[broker-socket.md → Observed live](broker-socket.md#observed-live); the result there is pending
+the owner's run. Then:
 
 ```bash
 # BROKER_WS_URL=https://broker-ws.binodex.app in .env, then

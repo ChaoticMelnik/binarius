@@ -358,13 +358,90 @@ Node 22 (the 2026-10-03 one is recorded in #99).
   lived 28 s and 93 s until the probe closed them, with a price subscription active. Its cause is
   unknown; the client reconnects after it and resends its subscriptions.
 
-- **Pending: the two-socket probe (#285).** Whether the live broker sends an `open_trade`
-  answer to every socket of a user, or only to the sender, has not been observed. Until it is, a
-  cross-socket answer is an accepted risk ([broker-session.md → Accepted risks](broker-session.md#accepted-risks)).
-  The probe is #285: two sockets on one account, both verified by `user.data`, demo commands from
-  each, a continuity check on both sockets, one verdict line, exit 0 only on the safe verdict; the
-  conditions of that verdict are listed in #285. Until it has run on the pilot `BROKER_WS_URL`
-  stays unset. The result goes here.
+### The two-socket probe (#285) — result: pending the owner's run on the pilot
+
+Whether the live broker sends an `open_trade` answer only to the socket that sent the command, or
+to other sockets of the user too, has not been observed. Until it is, a cross-socket answer is an
+accepted risk ([broker-session.md → Accepted risks](broker-session.md#accepted-risks)) and
+`BROKER_WS_URL` stays unset on the pilot. The probe is the CLI `socket-probe`
+(`apps/trading-worker/src/cli/socket-probe.ts`; the phases in `socket-probe-run.ts`, the verdict
+in `socket-probe-verdict.ts`):
+
+```bash
+# the account id (broker_accounts.id) of the account to probe
+docker compose exec -T postgres psql -U binarius -d binarius -c \
+  "select ba.id, ba.broker_user_id, ba.status from broker_accounts ba join users u on u.id = ba.user_id where u.telegram_user_id = REPLACE_WITH_TG_ID"
+docker compose exec -T -e ACCOUNT_ID=REPLACE_WITH_ID -e BROKER_WS_URL=https://broker-ws.binodex.app \
+  trading-worker pnpm --filter @binarius/trading-worker --fail-if-no-match socket-probe; echo "exit $?"
+```
+
+**Preconditions — the operator's, printed by the probe before command 1 and not checked by it:**
+broker-web of this account is closed and no trade is opened by hand during the run; the worker
+keeps no socket session of the account (`BROKER_WS_URL` unset in `.env`); the account has no
+active intent and no running trading session. An `open_trade.fail` carries no correlation field,
+so a third party's `fail` of the same mode cannot be told from the probe's answer.
+
+**What it does.** Two sockets, A and B, authenticate with the account's token, taken once with
+`mayRefresh: false` (never an exchange). Before command 1 both must be `ready` and have sent a
+`user.data` whose `id` is the account's `broker_user_id` (A also `common.assets_list`), within
+15 s. Then five phases, one after another, each followed by a 15 s listening window; whatever a
+socket hears is counted into the phase in progress:
+
+| Phase | Sender | Amount | Expected |
+|---|---|---|---|
+| `a_min` | A | `min_trade_amount` | `success` |
+| `a_below` | A | `0.01` | `fail` |
+| `b_min` | B | `min_trade_amount` | `success` |
+| `b_below` | B | `0.01` | `fail` |
+| `rest_min` | REST `POST` | `min_trade_amount` | a 2xx with the trade |
+
+All are DEMO, on the first pair with `scheduledUntil` 0 and a payout, at its `minTimeframe`. The
+`0.01` commands are sent only when `min_trade_amount` is strictly above `0.01` by an exact
+decimal comparison; otherwise they are `skipped` and the run is inconclusive. A command waits 10 s
+for its answer. A run takes about 80 s, at most about 120 s.
+
+**The safe verdict needs every one of:**
+
+1. each phase's command ended as expected (the table above);
+2. in each socket phase the sender heard its own answer type (`open_trade_success` in `a_min` and
+   `b_min`, `open_trade_fail` in `a_below` and `b_below`);
+3. `user.data` of both sockets carried the account's id before command 1;
+4. both sockets stayed on one `ready` connection from the end of the wait to the verdict: `ready`
+   at the verdict, `connections` unchanged, no transition out of `ready` recorded;
+5. in each phase no socket other than the sender heard any `open_trade_*` — in `rest_min`
+   neither socket;
+6. every phase's window completed.
+
+Anything heard against condition 5 is `broadcast` whatever else happened; any other unmet
+condition is `inconclusive`, with each one named.
+
+**Output.** A table `phase | event type | A | B` (a `setup` row for what arrived before command 1,
+not counted in the verdict), the trade ids heard, each command's outcome and the broker's `fail`
+messages cut to 200 characters — on stderr, with the client's pino logs at `info`. Never the
+token, a URL or a payload. Then one line on stdout:
+
+- `verdict: no cross-socket answer within the window; BROKER_WS_URL may be set` — exit 0, the only
+  one;
+- `verdict: the broker sends answers to another socket (<phase>: <socket> heard success=<n> fail=<m>); keep BROKER_WS_URL unset`
+  — exit 1;
+- `verdict: inconclusive: <what was not established>; keep BROKER_WS_URL unset` — exit 1.
+
+A failure before command 1 (env, no account row, the token refused or unavailable, the wait timing
+out, a `user.data` of another user, no tradable pair) prints `setup failed: <what>` on stderr and
+exits 1 with no verdict line.
+
+**Stated assumptions.** A `fail` of a below-minimum command stands for every `fail`: its messages
+are printed, not judged. The claim is bounded by the window: the safe verdict means that within
+15 s after each command no answer reached the other socket, not that none ever could.
+
+**What it leaves behind.** Up to three demo trades of `min_trade_amount`, opened outside the
+intent pipeline and the trading switch: `not_ours` for the catch-up and the reconciler. The
+account's demo balance changes.
+
+**The result** — the whole output with the exit code — goes into a comment on #285, and from there
+into this section, replacing "pending". `inconclusive`: rerun once the named condition is fixed (a
+drop: just rerun; the token: open the trade screen in the bot first). `BROKER_WS_URL` is set on
+the pilot only after exit 0; a `broadcast` keeps it unset until a correlation of answers exists.
 
 ## Boundaries
 
