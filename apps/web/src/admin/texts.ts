@@ -211,6 +211,24 @@ export const TEXTS = {
   userAudit: 'Аудит',
   userAuditAll: 'Все события по пользователю →',
 
+  passwordTitle: 'Смена пароля',
+  passwordHeading: 'Сменить пароль',
+  passwordLink: 'Сменить пароль',
+  currentPasswordField: 'Текущий пароль',
+  newPasswordField: 'Новый пароль',
+  newPasswordRepeatField: 'Новый пароль ещё раз',
+  passwordSubmit: 'Сменить пароль',
+  passwordRevokesOthers: (n: number) =>
+    `При смене пароля будут завершены другие открытые сессии: ${n}`,
+  noOtherSessions: 'Других открытых сессий нет.',
+  passwordChanged: (n: number) => `Пароль изменён. Завершено других сессий: ${n}`,
+  passwordMismatch: 'Новые пароли не совпадают',
+  passwordSameAsCurrent: 'Новый пароль совпадает с текущим',
+  invalidCurrentPassword: 'Неверный текущий пароль',
+  outcomeUnknownTitle: 'Результат неизвестен',
+  outcomeUnknownBody:
+    'Не удалось подтвердить результат. Пароль мог измениться — проверьте, войдя заново.',
+
   invalidCredentials: 'Неверный логин или пароль',
   tooManyAttempts: 'Слишком много попыток. Подождите и попробуйте снова',
   tooManyCodeAttempts: 'Слишком много попыток. Подождите минуту',

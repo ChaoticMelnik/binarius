@@ -115,8 +115,8 @@ const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
 
 /**
  * Every page behind a staff session. `login` comes only from the `me` of the backend answer the
- * page was built from; a page rendered without asking the backend (a refused search) has no
- * login, and the account block is left out rather than invented.
+ * page was built from; a page rendered without asking the backend (a refused search, a refused
+ * password form) has no login, and the account block is left out rather than invented.
  */
 export const adminShell = ({
   title,
@@ -143,9 +143,12 @@ export const adminShell = ({
         ${
           login === undefined
             ? ''
-            : html`<form method="post" action="/admin/logout">
-                <button type="submit">${login} — ${TEXTS.logoutSubmit}</button>
-              </form>`
+            : html`<div class="account">
+                <a href="${PASSWORD_PATH}">${TEXTS.passwordLink}</a>
+                <form method="post" action="/admin/logout">
+                  <button type="submit">${login} — ${TEXTS.logoutSubmit}</button>
+                </form>
+              </div>`
         }
       </div>
       ${body}`,
@@ -159,6 +162,60 @@ export const usersHref = (query: AdminUsersQuery): string => {
   const params = adminUsersSearchParams(query);
   return params.size > 0 ? `/admin/users?${params}` : '/admin/users';
 };
+
+export const PASSWORD_PATH = '/admin/password';
+
+/** `changed` is the number of other sessions the change revoked; 0 is a value, not its absence. */
+export const passwordHref = (changed?: number): string =>
+  changed === undefined
+    ? PASSWORD_PATH
+    : `${PASSWORD_PATH}?${new URLSearchParams({ changed: String(changed) })}`;
+
+/**
+ * The form never takes the values it was submitted with, so none of them can reach the page.
+ * `login` and `others` come from the sessions read of a GET; a refused POST asks the backend
+ * nothing and renders without them.
+ */
+export const passwordPage = ({
+  login,
+  others,
+  changed,
+  message,
+}: {
+  login?: string;
+  others?: number;
+  changed?: number;
+  message?: string;
+}): SafeHtml =>
+  adminShell({
+    title: TEXTS.passwordTitle,
+    login,
+    body: html`<h1>${TEXTS.passwordHeading}</h1>
+      ${changed === undefined ? '' : html`<p>${TEXTS.passwordChanged(changed)}</p>`}
+      ${error(message)}
+      ${
+        others === undefined
+          ? ''
+          : html`<p class="hint">
+              ${others === 0 ? TEXTS.noOtherSessions : TEXTS.passwordRevokesOthers(others)}
+            </p>`
+      }
+      <form class="stack" method="post" action="${PASSWORD_PATH}">
+        <label
+          >${TEXTS.currentPasswordField}
+          <input name="currentPassword" type="password" autocomplete="current-password" required />
+        </label>
+        <label
+          >${TEXTS.newPasswordField}
+          <input name="newPassword" type="password" autocomplete="new-password" required />
+        </label>
+        <label
+          >${TEXTS.newPasswordRepeatField}
+          <input name="newPasswordRepeat" type="password" autocomplete="new-password" required />
+        </label>
+        <button type="submit">${TEXTS.passwordSubmit}</button>
+      </form>`,
+  });
 
 export const sessionsPage = (sessions: readonly StaffSessionView[], login: string): SafeHtml =>
   adminShell({
