@@ -8,7 +8,7 @@ import type { DbExecutor } from './trade-intent-ops';
 // users.token_balance / token_reserved are the cache of token_ledger's sums, and every ledger
 // writer moves the cache in the same transaction as its row: createInTransaction (reserve),
 // releaseTokens (release), grantLinkBonus (starter pack), consumeTokens (settle, #17). A new
-// writer — purchases (#117), manual adjustments (#109) — must keep that rule, or this read lies
+// writer — purchases (#117), manual adjustments (#246) — must keep that rule, or this read lies
 // by the missing delta (token-balance-ops.db.test.ts proves the equality for the writers above).
 //
 // One statement, no lock clause: PostgreSQL evaluates it against one snapshot, so balance and

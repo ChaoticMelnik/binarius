@@ -4,8 +4,9 @@ Read-only pages for support and debugging, behind the staff login ([staff-login.
 They change nothing: no page here writes to a table other than `staff_sessions` (the session touch)
 and `audit_log` (the record of the view). #107 adds the overview, the user list with search, and
 the user card; #108 adds the intents list and the intent card; #330 adds the trading sessions
-list, the trading section of the user card and the breakdown of the overview by status; #109–#110
-add their sections and pages through the same mechanism.
+list, the trading section of the user card and the breakdown of the overview by status; #109 adds
+the token ledger list and the card's ledger section; deposits, the broker accounts list (#341,
+#342) and the audit log (#110) follow through the same mechanism.
 
 ## Mechanism
 
@@ -23,12 +24,12 @@ backend under the staff session:
 4. `web` checks the answer against its strict schema (`packages/shared/src/admin.ts`): a key the
    contract does not name is a contract violation (500), not a silently dropped field.
 
-The read functions (`packages/db/src/admin-read-ops.ts`, `admin-trading-ops.ts`) take a `Tx`, not a `Db`, so the compiler
+The read functions (`packages/db/src/admin-read-ops.ts`, `admin-trading-ops.ts`, `admin-ledger-ops.ts`) take a `Tx`, not a `Db`, so the compiler
 refuses a call outside a transaction. That a route's transaction is the one `asStaff` opens — and
 so writes its row — is enforced by review only (see Boundaries).
 
-The reads lock nothing: `users`, `broker_accounts`, `trade_intents` and `trading_sessions` are read
-without `FOR …`, and the session touch is the only `UPDATE`.
+The reads lock nothing: `users`, `broker_accounts`, `trade_intents`, `trading_sessions` and
+`token_ledger` are read without `FOR …`, and the session touch is the only `UPDATE`.
 
 How `web` acts on a backend answer:
 
@@ -43,8 +44,8 @@ How `web` acts on a backend answer:
 
 ## Pages
 
-Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии)
-and the account block
+Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии |
+Токены) and the account block
 («login — Выйти»). The login shown is the one in the `me` of the backend answer the page was built
 from; a page rendered without asking the backend (a refused search) shows no account block.
 `GET /admin` redirects to `/admin/overview`; after a login the landing page is still
@@ -131,11 +132,16 @@ The `users` row and its `broker_accounts`, newest first. Sections:
   «Заявок нет.»), and «Все заявки →»: the intents list filtered by this user, with its next pages.
   The section and the link are there also for a user without broker accounts. The recent intents are
   read by the list's own query, so their order is the list's.
+- **Движения токенов** (#109) — the `ADMIN_USER_RECENT_LEDGER` newest `token_ledger` rows of the user
+  in the columns of the token ledger list (or «Движений нет.»), and «Все записи →»: the list filtered
+  by this user. Read by the list's own query. The section does not add its rows up: the balance is
+  the one in «Токены», and the section is the newest rows, not all of them.
 
-The card is four `SELECT`s without a shared snapshot — the user, the accounts, the recent intents,
-the two counters: an account linked or an intent created in between may or may not show, and each
-answer was true at its moment. The section is part of the card's read: it writes no row of its own
-(the one `user_viewed` row stays as it was).
+The card is five `SELECT`s without a shared snapshot — the user, the accounts, the recent intents,
+the two counters, the recent ledger rows: an account linked, an intent created or a ledger row
+written in between may or may not show, and each answer was true at its moment — the balance in
+«Токены» and the rows of «Движения токенов» can disagree by such a row. The sections are part of the
+card's read: they write no row of their own (the one `user_viewed` row stays as it was).
 
 ### Intents — `GET /admin/intents?status=&mode=&user=&session=&cursor=`
 
@@ -190,6 +196,36 @@ A session's trades are its intents, one link away.
 The next and first links, the redirect and the request to the backend go through
 `adminTradingSessionsSearchParams` (`packages/shared/src/admin.ts`).
 
+### Token ledger — `GET /admin/tokens?user=&kind=&cursor=`
+
+`token_ledger`, newest first, `ADMIN_PAGE_SIZE` per page, keyset on `(created_at, id)` as on the
+other lists: one `SELECT` joined to `users` for the Telegram id. Columns: the time of the row, the
+owner's Telegram id (a link to the user card), the kind as its code, the change of the balance and
+of the reserve, the reference, the note. The changes are the stored `bigint`s printed with their
+sign (`release` and `settle` move the reserve down, an `adjustment` either way); nothing is computed
+from them. A note is printed as text, an empty one as «—».
+
+**Основание** is the one reference a row may carry (`token_ledger_reference_check`): an intent is a
+link to its card; a deposit and a broker account are printed as their ids (they have no page yet); a
+manual reference as `manual:<id>`; a row with none (an `adjustment` without one) shows «—».
+
+**Filters are exact matches**, each optional, both combined:
+
+| Parameter | Matches |
+|---|---|
+| `kind` | one `TokenLedgerKind` (`purchase`, `bonus`, `reserve`, `release`, `settle`, `adjustment`) |
+| `user` | the user's id (a uuid) |
+
+A `user` with no rows, or with no row at all, gives an empty page, not an error. The cursor
+positions, it does not filter, as on the intents list. The form, the next and first links, the
+redirect and the request to the backend go through `adminTokensSearchParams`
+(`packages/shared/src/admin.ts`), in the order `user, kind, cursor`.
+
+What the page shows on production: the reserve of every intent and its `release` or `settle`, and
+the starter `bonus` of a linked account (with the account id). `purchase` (#117) and `adjustment`
+(#246) have no writer yet. The page only shows rows: it does not compare their sum with the cached
+balance in `users` — keeping that equal is the writers' rule (Rule 2), not something a view checks.
+
 ## Audit actions
 
 Each view writes one row with `actor_type = 'admin'` and `actor_id` = the staff id. Payload keys are
@@ -207,8 +243,9 @@ named and bounded; nothing else is recorded.
 | intent card, a uuid with no row | `intent_viewed` | — | `{ path, result: 'not_found', intentId }` |
 | intent card, an id that is not a uuid (direct backend call) | `intent_viewed` | — | `{ path, result: 'not_found' }` |
 | trading sessions | `trading_sessions_viewed` | — | `{ path: '/admin/trading-sessions', cursor? }` — `cursor` only when given |
+| token ledger | `tokens_viewed` | — | `{ path: '/admin/tokens', userId?, kind?, cursor? }` — a key only when the parameter was given |
 
-The card's trading section and the overview's breakdown are parts of `user_viewed` and
+The card's trading and ledger sections and the overview's breakdown are parts of `user_viewed` and
 `overview_viewed`; they add no row and no payload key.
 
 ## Boundaries
@@ -221,6 +258,9 @@ What `web` refuses before asking the backend, with no row:
 - an intents filter outside the schema (an unknown status or mode, a `user` or `session` that is
   not a uuid — a value of blanks included —, a parameter given twice) → 400 with the form and the
   message, whatever the cursor says;
+- a token ledger filter outside the schema (an unknown kind, a `user` that is not a uuid — a value
+  of blanks included —, a parameter given twice) → 400 with the form and the message, whatever the
+  cursor says;
 - a cursor that is not a uuid, or given twice → 302 to the same search, filters or list without it;
 - a user or intent card id that is not a uuid → 404.
 
@@ -242,13 +282,14 @@ around these reads directly is caught only in review.
   `ADMIN_ACTIVE_WINDOW_MINUTES` for «active now» — all in `packages/shared/src/admin.ts`.
 - No rate ceiling on these reads, as on `/admin/sessions`: `web` is a trusted process behind the
   bearer, and the sessions are staff sessions.
-- `users`, `trade_intents` and `trading_sessions` have no index on `created_at`; the lists and the
-  overview scan them. The intents filters `user` and `session` and the card's trading section use
-  `trade_intents_user_id_idx` and `trade_intents_session_id_idx`; the order is still a sort.
-  Assumed: up to 100 000 users, 1 000 000 intents and 100 000 trading sessions on the pilot. If
-  `explain analyze` of a list or the overview passes 200 ms at those sizes, add a `(created_at, id)`
-  index in its own migration.
-- The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most four
+- `users`, `trade_intents`, `trading_sessions` and `token_ledger` have no index on
+  `(created_at, id)`; the lists and the overview scan them. The intents filters `user` and `session`
+  and the card's trading section use `trade_intents_user_id_idx` and `trade_intents_session_id_idx`;
+  the token ledger filter `user` and the card's ledger section use `token_ledger_user_created_idx`;
+  the order is still a sort. Assumed: up to 100 000 users, 1 000 000 intents, 100 000 trading
+  sessions and 1 000 000 ledger rows (two per trade) on the pilot. If `explain analyze` of a list or
+  the overview passes 200 ms at those sizes, add a `(created_at, id)` index in its own migration.
+- The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most five
   `SELECT`s (the user card).
 
 ## Running it locally
@@ -311,6 +352,24 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    and the reason `rejected_twice`; the other has «—» in those four columns and `invalid_settings`.
    «Заявки →» of the first lists one row, of the second «Заявок нет.». The overview, «По статусам»:
    `rejected` 2, every other status 0, «Активные» 0 (on a volume with no other intents).
+   Then give the user two ledger rows — a starter bonus naming the account and a manual adjustment
+   with a note that is markup — and move the cached balance by their sum, so the cache still equals
+   the ledger (Rule 2). Separate statements, so each row has its own `now()`:
+   ```bash
+   docker compose exec postgres psql -U binarius -d binarius -c "insert into token_ledger
+     (user_id, kind, balance_delta, reserved_delta, broker_account_id) select u.id, 'bonus', 10, 0,
+     a.id from users u join broker_accounts a on a.user_id = u.id
+     where a.broker_user_id = 'seed-broker-1'"
+   docker compose exec postgres psql -U binarius -d binarius -c "insert into token_ledger
+     (user_id, kind, balance_delta, reserved_delta, note) select id, 'adjustment', -3, 0,
+     'seed <script>' from users where telegram_user_id = 1"
+   docker compose exec postgres psql -U binarius -d binarius -c "update users
+     set token_balance = token_balance + 7 where telegram_user_id = 1"
+   ```
+   Open «Токены»: two rows, the adjustment first, `-3` with its sign, «—» in «Основание», the note
+   `seed <script>` as text; the bonus with the account id. `?kind=bonus` — one row. The user card:
+   «Токены» — balance 7; «Движения токенов» — both rows, and «Все записи →» opens the list filtered
+   by this user. `?kind=bogus` — 400, the form, no «Выйти».
 6. Check what was written:
    ```bash
    docker compose exec postgres psql -U binarius -d binarius \
@@ -320,7 +379,8 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `users_viewed` with `q` and `by` = `telegram_user_id`, `broker_user_id` and `email`, one
    `users_viewed` with only `path`, and `overview_viewed`; `intents_viewed` with `status`, `mode`,
    `tradingSessionId` or `userId` — each only on its own request —, `intent_viewed` with entity
-   `trade_intent`, and `trading_sessions_viewed` with only `path`; still one `user_viewed` per
-   opening of the card. The refused 257-character search, `?status=bogus` and the card id that is
-   not a uuid wrote nothing.
+   `trade_intent`, `trading_sessions_viewed` with only `path`, and `tokens_viewed` with `kind` or
+   `userId` — each only on its own request; still one `user_viewed` per opening of the card. The
+   refused 257-character search, `?status=bogus`, `?kind=bogus` and the card id that is not a uuid
+   wrote nothing.
 7. `docker compose down -v` when done.
