@@ -368,9 +368,9 @@ export function createDemoTradeComposer<C extends Context>({
       telegramUserId: intent.telegramUserId,
       symbol: pair.symbol,
       view: intent,
-      edit: (text, view) =>
+      edit: (text, view, end) =>
         editMessageTextByIdHtml(ctx.api, sent.chat.id, sent.message_id, text, {
-          reply_markup: intentKeyboard(view),
+          reply_markup: end === 'not_found' ? menuKeyboard() : intentKeyboard(view),
         }),
     });
   }

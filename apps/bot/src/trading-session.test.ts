@@ -194,6 +194,12 @@ describe('the session button', () => {
       text: 'edited',
     });
     expect(rowsOf(edit)).toEqual(STOPPED_ROWS);
+
+    // #350: a session gone from the backend gets the menu only
+    await entry.edit(telegramHtml`gone`, SESSION_VIEW, 'not_found');
+    expect(
+      rowsOf(calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload),
+    ).toEqual([MENU]);
   });
 
   it('shows the session already running in a new message and moves tracking to it', async () => {

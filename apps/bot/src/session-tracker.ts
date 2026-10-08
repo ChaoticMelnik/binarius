@@ -39,8 +39,9 @@ export interface SessionTrackRequest {
   symbol: string | null;
   // what the message shows now
   view: TradingSessionView;
-  // edits the status message; the keyboard follows the view (no stop button once it stopped)
-  edit: (text: TelegramHtml, view: TradingSessionView) => Promise<unknown>;
+  // edits the status message; the keyboard follows the view (no stop button once it stopped),
+  // or only the menu once the session is gone (#350)
+  edit: (text: TelegramHtml, view: TradingSessionView, end?: 'not_found') => Promise<unknown>;
 }
 
 export interface SessionTracker {
@@ -138,9 +139,14 @@ export function createSessionTracker({
   // As in the intent tracker: shown or edited is rendered; gone stops the entry; any other
   // Telegram refusal or a transport failure is retried on the next poll, logged once per entry;
   // anything else is a bug and stops the entry.
-  async function editTo(entry: Entry, text: TelegramHtml, key: string): Promise<boolean> {
+  async function editTo(
+    entry: Entry,
+    text: TelegramHtml,
+    key: string,
+    end?: 'not_found',
+  ): Promise<boolean> {
     try {
-      await entry.edit(text, entry.view);
+      await entry.edit(text, entry.view, end);
       entry.rendered = key;
       return true;
     } catch (error) {
@@ -189,7 +195,9 @@ export function createSessionTracker({
       entry.readFailures += 1;
       if (notFound) {
         // polling cannot fix a missing or foreign id; a replaced entry leaves the old message be
-        if (current(entry)) await editTo(entry, TEXTS.sessionStatusUnavailable, SESSION_NOT_FOUND);
+        if (current(entry)) {
+          await editTo(entry, TEXTS.sessionStatusUnavailable, SESSION_NOT_FOUND, 'not_found');
+        }
         finish(entry);
         return;
       }

@@ -38,6 +38,10 @@ export const TRACKER_STOP_STATUSES: ReadonlySet<TradeIntentStatus> = new Set([
 // the login dialog's bound: the oldest entry goes first, its message keeping the refresh button
 export const INTENT_TRACKER_MAX_ENTRIES = 10_000;
 
+// Why the tracker's last edit is not a status (#350): the intent is gone (nothing left to read, so
+// only the menu).
+export type TrackEnd = 'not_found';
+
 export interface IntentTrackRequest {
   intentId: string;
   telegramUserId: string;
@@ -46,8 +50,8 @@ export interface IntentTrackRequest {
   // what the message shows now
   view: TradeIntentView;
   // edits the status message; the keyboard follows the view (#350: the end of the path once
-  // tracking stops)
-  edit: (text: TelegramHtml, view: TradeIntentView) => Promise<unknown>;
+  // tracking stops), or `end` when the tracker gives up on it
+  edit: (text: TelegramHtml, view: TradeIntentView, end?: TrackEnd) => Promise<unknown>;
 }
 
 export interface IntentTracker {
@@ -130,9 +134,14 @@ export function createIntentTracker({
   // the message); any other refusal or a transport failure is retried on the next poll, until the
   // deadline, since the status is not recorded as rendered — logged once per entry, the later
   // ones only counted; anything else is a bug and stops the entry.
-  async function editTo(entry: Entry, text: TelegramHtml, key: string): Promise<boolean> {
+  async function editTo(
+    entry: Entry,
+    text: TelegramHtml,
+    key: string,
+    end?: TrackEnd,
+  ): Promise<boolean> {
     try {
-      await entry.edit(text, entry.view);
+      await entry.edit(text, entry.view, end);
       entry.rendered = key;
       return true;
     } catch (error) {
@@ -192,7 +201,7 @@ export function createIntentTracker({
       if (notFound) {
         // not retried: polling cannot fix a missing or foreign id; a failed edit leaves the last
         // real status on screen, and the refresh button answers the same on its own
-        await editTo(entry, TEXTS.intentStatusUnavailable, INTENT_NOT_FOUND);
+        await editTo(entry, TEXTS.intentStatusUnavailable, INTENT_NOT_FOUND, 'not_found');
         finish(entry);
         return;
       }

@@ -367,9 +367,9 @@ export function createTradingSessionComposer<C extends Context>({
       telegramUserId,
       symbol,
       view,
-      edit: (text, current) =>
+      edit: (text, current, end) =>
         editMessageTextByIdHtml(ctx.api, chatId, messageId, text, {
-          reply_markup: sessionKeyboard(current),
+          reply_markup: end === 'not_found' ? menuKeyboard() : sessionKeyboard(current),
         }),
     });
   }

@@ -71,7 +71,7 @@ function setup({
   });
 
   const edits: TelegramHtml[] = [];
-  const edit = vi.fn((text: TelegramHtml) => {
+  const edit = vi.fn<IntentTrackRequest['edit']>((text) => {
     edits.push(text);
     return Promise.resolve(true);
   });
@@ -169,10 +169,14 @@ describe('the intent tracker', () => {
   });
 
   it('on a 404 says the status is unavailable, warns once with the id, and stops', async () => {
-    const { tracker, edits, logger, readIntent, request } = setup({ script: [notFound()] });
+    const { tracker, edits, edit, logger, readIntent, request } = setup({
+      script: [notFound()],
+    });
     tracker.track(request());
     await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
     expect(edits.map((text) => text.value)).toEqual([TEXTS.intentStatusUnavailable.value]);
+    // #350: the intent is gone, so its keyboard is the menu only
+    expect(edit.mock.calls.map((call) => call[2])).toEqual(['not_found']);
     expect(readIntent).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(

@@ -229,6 +229,12 @@ describe('the stake button', () => {
     });
     expect(rowsOf(edit)).toEqual(REFRESH_ROWS);
 
+    // #350: a gone intent gets the menu only
+    const lastEdit = () =>
+      rowsOf(calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload);
+    await entry.edit(telegramHtml`gone`, INTENT_VIEW, 'not_found');
+    expect(lastEdit()).toEqual([MENU_ROW]);
+
     // #350: the tracker's last edit draws the end of the path
     await entry.edit(telegramHtml`settled`, intentView({ status: TradeIntentStatus.Settled }));
     expect(
