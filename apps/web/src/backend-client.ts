@@ -1,4 +1,14 @@
 import {
+  safeParseAdminBotTextResetResponse,
+  safeParseAdminBotTextResponse,
+  safeParseAdminBotTextSaveResponse,
+  safeParseAdminBotTextsResponse,
+  type AdminBotTextResetRequest,
+  type AdminBotTextResetResponse,
+  type AdminBotTextResponse,
+  type AdminBotTextSaveRequest,
+  type AdminBotTextSaveResponse,
+  type AdminBotTextsResponse,
   adminIntentsSearchParams,
   adminAuditSearchParams,
   adminTokensSearchParams,
@@ -103,6 +113,18 @@ export interface BackendClient {
     token: string,
     request: AdminChangePasswordRequest,
   ): Promise<ChangePasswordResponse>;
+  botTexts(token: string): Promise<AdminBotTextsResponse>;
+  botText(token: string, key: string): Promise<AdminBotTextResponse>;
+  saveBotText(
+    token: string,
+    key: string,
+    request: AdminBotTextSaveRequest,
+  ): Promise<AdminBotTextSaveResponse>;
+  resetBotText(
+    token: string,
+    key: string,
+    request: AdminBotTextResetRequest,
+  ): Promise<AdminBotTextResetResponse>;
   /** the backend's public OAuth callback; carries no bearer */
   oauthCallback(request: OAuthCallbackRequest): Promise<OAuthCallbackResponse>;
 }
@@ -251,6 +273,30 @@ export function createBackendClient({
         await call('POST', 'admin/auth/password', { body: request, session }),
       );
     },
+    async botTexts(session) {
+      return parsed(
+        safeParseAdminBotTextsResponse,
+        await call('GET', 'admin/bot-texts', { session }),
+      );
+    },
+    async botText(session, key) {
+      return parsed(
+        safeParseAdminBotTextResponse,
+        await call('GET', botTextPath(key), { session }),
+      );
+    },
+    async saveBotText(session, key, request) {
+      return parsed(
+        safeParseAdminBotTextSaveResponse,
+        await call('POST', `${botTextPath(key)}/save`, { body: request, session }),
+      );
+    },
+    async resetBotText(session, key, request) {
+      return parsed(
+        safeParseAdminBotTextResetResponse,
+        await call('POST', `${botTextPath(key)}/reset`, { body: request, session }),
+      );
+    },
     // The route is public on the backend and checks no bearer; this one opens /admin/*, and a
     // token sent where nothing needs it is only a place for it to leak from.
     async oauthCallback(request) {
@@ -265,6 +311,8 @@ export function createBackendClient({
     },
   };
 }
+
+const botTextPath = (key: string): string => `admin/bot-texts/${encodeURIComponent(key)}`;
 
 function errorCodeOf(body: unknown): string | undefined {
   const code = (body as { error?: unknown } | null | undefined)?.error;

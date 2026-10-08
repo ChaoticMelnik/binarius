@@ -47,6 +47,10 @@ beforeEach(() => {
     tokens: unused,
     audit: unused,
     changePassword: unused,
+    botTexts: unused,
+    botText: unused,
+    saveBotText: unused,
+    resetBotText: unused,
     oauthCallback: (request) => {
       forwarded.push(request);
       return answer();

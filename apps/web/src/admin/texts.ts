@@ -1,4 +1,4 @@
-import { ADMIN_SEARCH_MAX_LENGTH } from '@binarius/shared';
+import { ADMIN_SEARCH_MAX_LENGTH, BOT_TEXTS_APPLIED_WITHIN_S } from '@binarius/shared';
 
 // Everything the admin pages say. Russian, per the project's language convention.
 
@@ -38,6 +38,7 @@ export const TEXTS = {
   navTradingSessions: 'Торговые сессии',
   navTokens: 'Токены',
   navAudit: 'Аудит',
+  navBotTexts: 'Тексты бота',
   navLabel: 'Разделы админки',
 
   overviewTitle: 'Сводка',
@@ -228,6 +229,57 @@ export const TEXTS = {
   outcomeUnknownTitle: 'Результат неизвестен',
   outcomeUnknownBody:
     'Не удалось подтвердить результат. Пароль мог измениться — проверьте, войдя заново.',
+
+  botTextsTitle: 'Тексты бота',
+  botTextsHeading: 'Тексты клиентского бота',
+  columnBotTextKey: 'Ключ',
+  columnBotTextDescription: 'Где показывается',
+  columnBotTextState: 'Состояние',
+  botTextDefault: 'исходный',
+  botTextChanged: (version: number, login: string | null) =>
+    `изменён: версия ${version}, ${login ?? 'CLI'},`,
+  botTextRejected: (reason: string) => `Не действует — ${reason}. Показан исходный текст.`,
+  botTextReadOnly: 'Только чтение: команды и профиль бота пока нельзя править из админки',
+  botTextOrphansHeading: 'Строки без ключа в каталоге',
+  botTextOrphansHint: 'Ключа нет в каталоге этой версии — строка не действует.',
+  columnBotTextVersion: 'Версия',
+  botTextDelete: 'Удалить',
+  botTextsNotice: {
+    removed: 'Строка удалена.',
+    gone: 'Строки уже нет.',
+    changed: 'Строку успели изменить — проверьте версию и повторите.',
+  },
+  botTextNotice: {
+    saved: `Сохранено. Бот применит текст в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с`,
+    reset: `Исходный текст возвращён. Бот применит его в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с`,
+    already_default: 'Текст уже исходный.',
+    unchanged: 'Текст не изменился — сохранять нечего.',
+  },
+  botTextNotFoundTitle: 'Текст не найден',
+  botTextNotFoundBody: 'Такого ключа нет в каталоге текстов.',
+  botTextSourceField: 'Текст',
+  botTextPreviewSubmit: 'Предпросмотр',
+  botTextSaveSubmit: 'Сохранить',
+  botTextResetSubmit: 'Вернуть исходный',
+  botTextDefaultSource: 'Исходный текст',
+  botTextSameAsDefault: 'Совпадает с исходным — «Вернуть исходный» снимет переопределение.',
+  botTextConflict: (version: number) =>
+    version === 0
+      ? 'Текст уже изменил другой сотрудник: вернул исходный. Ниже — текущий текст, ваш черновик остался в поле; «Сохранить» ещё раз перезапишет текущий.'
+      : `Текст уже изменил другой сотрудник (версия ${version}). Ниже — текущий текст, ваш черновик остался в поле; «Сохранить» ещё раз перезапишет текущий.`,
+  botTextCurrent: 'Текущий текст',
+  botTextPreviewHeading: 'Предпросмотр',
+  botTextPreviewHint: 'Подстановки — образцы, фрагменты — действующие тексты.',
+  botTextPlaceholders: 'Плейсхолдеры',
+  botTextArg: (name: string, sample: string) =>
+    `{${name}} — обязателен; в предпросмотре: ${sample}`,
+  botTextFragmentChanged: '(изменён)',
+  botTextNoPlaceholders: 'Плейсхолдеров нет.',
+  botTextLimit: (limit: number, singleLine: boolean) =>
+    `Лимит: ${limit} символов${singleLine ? ', одна строка' : ''}.`,
+  botTextUsedIn: 'Используется в:',
+  botTextOutcomeUnknown:
+    'Не удалось подтвердить результат. Текст мог сохраниться — откройте его заново и проверьте версию.',
 
   invalidCredentials: 'Неверный логин или пароль',
   tooManyAttempts: 'Слишком много попыток. Подождите и попробуйте снова',

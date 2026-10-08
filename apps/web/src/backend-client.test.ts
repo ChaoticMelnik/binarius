@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   SAMPLE_AUDIT,
   SAMPLE_AUDIT_ENTRY,
+  SAMPLE_BOT_TEXT,
+  SAMPLE_BOT_TEXTS,
   SAMPLE_INTENT,
   SAMPLE_INTENT_RESPONSE,
   SAMPLE_INTENTS,
@@ -470,5 +472,60 @@ describe('the password change call (#79)', () => {
     const { client } = await prefixed(200, body);
     const error = await rejectionOf(client.changePassword(SESSION, REQUEST));
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+describe('the bot texts calls (#300)', () => {
+  const SESSION = 's'.repeat(43);
+  const prefixed = async (body: unknown) => {
+    const served = await serve((response) => {
+      json(response, 200, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+  const text = { me: SAMPLE_ME, text: SAMPLE_BOT_TEXT };
+
+  it.each([
+    ['botTexts', [], 'GET', '/api/admin/bot-texts', undefined, SAMPLE_BOT_TEXTS],
+    ['botText', ['welcome'], 'GET', '/api/admin/bot-texts/welcome', undefined, text],
+    [
+      'saveBotText',
+      ['welcome', { source: 'x', expectedVersion: 7 }],
+      'POST',
+      '/api/admin/bot-texts/welcome/save',
+      { source: 'x', expectedVersion: 7 },
+      { ...text, outcome: 'saved', version: 8 },
+    ],
+    [
+      'resetBotText',
+      ['zzz', { expectedVersion: 9 }],
+      'POST',
+      '/api/admin/bot-texts/zzz/reset',
+      { expectedVersion: 9 },
+      { me: SAMPLE_ME, text: null, outcome: 'reset' },
+    ],
+  ] as const)(
+    '%s sends its path, the bearer, the session and the body',
+    async (name, args, method, url, body, answer) => {
+      const { client, captured } = await prefixed(answer);
+      const call = client[name] as (
+        session: string,
+        ...rest: readonly unknown[]
+      ) => Promise<unknown>;
+      expect(await call(SESSION, ...args)).toEqual(answer);
+      expect([captured.method, captured.url]).toEqual([method, url]);
+      expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+      expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+      if (body !== undefined) expect(JSON.parse(captured.body ?? '')).toEqual(body);
+    },
+  );
+
+  it('refuses a 2xx with a key the contract does not name', async () => {
+    const { client } = await prefixed({ ...text, outcome: 'unchanged', extra: 1 });
+    const save = client.saveBotText(SESSION, 'welcome', { source: 'x', expectedVersion: 0 });
+    expect(await rejectionOf(save)).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });
