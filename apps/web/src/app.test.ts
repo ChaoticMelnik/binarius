@@ -2,11 +2,14 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ADMIN_SEARCH_MAX_LENGTH,
+  ADMIN_USER_RECENT_INTENTS,
   AdminErrorCode,
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
+  TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
   type AdminIntentsQuery,
+  type AdminTradingSessionsQuery,
   type AdminUsersQuery,
   type StaffSessionView,
 } from '@binarius/shared';
@@ -21,6 +24,9 @@ import {
   SAMPLE_ME,
   SAMPLE_OVERVIEW,
   SAMPLE_SESSION_ID,
+  SAMPLE_TRADING_SESSION,
+  SAMPLE_TRADING_SESSION_NULLS,
+  SAMPLE_TRADING_SESSIONS,
   SAMPLE_USER,
   SAMPLE_USER_ID,
 } from './admin/testing';
@@ -63,6 +69,7 @@ interface Calls {
   user: unknown[][];
   intents: [string, AdminIntentsQuery][];
   intent: unknown[][];
+  tradingSessions: [string, AdminTradingSessionsQuery][];
 }
 
 let calls: Calls;
@@ -81,6 +88,7 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     user: [],
     intents: [],
     intent: [],
+    tradingSessions: [],
   };
   lines = [];
   const client: BackendClient = {
@@ -123,6 +131,10 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     intent: async (token, id) => {
       calls.intent.push([token, id]);
       return SAMPLE_INTENT_RESPONSE;
+    },
+    tradingSessions: async (token, query) => {
+      calls.tradingSessions.push([token, query]);
+      return SAMPLE_TRADING_SESSIONS;
     },
     oauthCallback: async () => {
       throw new Error('the admin pages never forward an OAuth callback');
@@ -839,19 +851,6 @@ describe('the intents pages (#108)', () => {
     expect(response.body).not.toContain('a<b>');
   });
 
-  it("links the user card to the user's intents, with accounts and without", async () => {
-    const intentsOfUser = `/admin/intents?user=${USER}`;
-    expect(hrefOf((await get(`/admin/users/${USER}`, withCookie)).body, TEXTS.userIntentsAll)).toBe(
-      intentsOfUser,
-    );
-
-    await app.close();
-    app = build({ user: () => Promise.resolve({ ...SAMPLE_USER, brokerAccounts: [] }) });
-    const bare = await get(`/admin/users/${USER}`, withCookie);
-    expect(bare.body).toContain(TEXTS.userNoAccounts);
-    expect(hrefOf(bare.body, TEXTS.userIntentsAll)).toBe(intentsOfUser);
-  });
-
   it('answers an id that is not a uuid with 404, before the backend is asked', async () => {
     const response = await get('/admin/intents/not-a-uuid', withCookie);
 
@@ -908,6 +907,234 @@ describe('the intents pages (#108)', () => {
       expect([calls.intents, calls.intent]).toEqual([[], []]);
     },
   );
+});
+
+describe('the trading sessions page, the card section and the overview breakdown (#330)', () => {
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+
+  // the href of the link whose text is `label`, as a browser would read it back
+  const hrefOf = (body: string, label: string): string | undefined => {
+    const match = new RegExp(`<a href="([^"]*)"\\s*>\\s*${label}\\s*</a`).exec(body);
+    return match?.[1]?.replaceAll('&amp;', '&');
+  };
+  const navOf = (body: string): string[] =>
+    [...(/<nav[^>]*>([\s\S]*?)<\/nav>/.exec(body)?.[1] ?? '').matchAll(/>\s*([^<]+?)\s*<\/a/g)].map(
+      (m) => m[1] ?? '',
+    );
+  const NAV_LABELS = [
+    TEXTS.navOverview,
+    TEXTS.navUsers,
+    TEXTS.navSessions,
+    TEXTS.navIntents,
+    TEXTS.navTradingSessions,
+  ];
+
+  it.each([
+    '/admin/overview',
+    '/admin/users',
+    `/admin/users/${SAMPLE_USER_ID}`,
+    '/admin/sessions',
+    '/admin/intents',
+    `/admin/intents/${SAMPLE_INTENT.id}`,
+    '/admin/trading-sessions',
+  ])('%s carries the five nav items in order, staff sessions named as such', async (url) => {
+    const response = await get(url, withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(NAV_LABELS).toEqual([
+      'Сводка',
+      'Пользователи',
+      'Сессии сотрудников',
+      'Заявки',
+      'Торговые сессии',
+    ]);
+    expect(navOf(response.body)).toEqual(NAV_LABELS);
+    expect(response.body).toContain('<a href="/admin/trading-sessions"');
+  });
+
+  it('marks Торговые сессии as the current page and carries the login', async () => {
+    const response = await get('/admin/trading-sessions', withCookie);
+
+    expect(response.body).toMatch(/<a href="\/admin\/trading-sessions"\s+aria-current="page"/);
+    expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+  });
+
+  it('lists a session: its intents, its user, settings v1, and none for every null', async () => {
+    const response = await get('/admin/trading-sessions', withCookie);
+
+    expect(calls.tradingSessions).toEqual([[TOKEN, {}]]);
+    expect(response.body).toContain(
+      `<a href="/admin/intents?session=${SAMPLE_TRADING_SESSION.id}">${TEXTS.tradingSessionIntents}</a>`,
+    );
+    expect(response.body).toContain(
+      `<a href="/admin/intents?session=${SAMPLE_TRADING_SESSION_NULLS.id}">${TEXTS.tradingSessionIntents}</a>`,
+    );
+    expect(response.body).toContain(`<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`);
+    expect(response.body).toContain('<code>rejected_twice</code>');
+    expect(response.body).toMatch(/<td>101<\/td>\s*<td>60<\/td>\s*<td>5<\/td>\s*<td>1\.5<\/td>/);
+    expect(response.body).not.toContain(TEXTS.tradingSessionsNext);
+    expect(response.body).not.toContain(TEXTS.tradingSessionsFirst);
+  });
+
+  it('prints none in the four settings cells, the reason, the end and the decision of a bare session', async () => {
+    await app.close();
+    app = build({
+      tradingSessions: () =>
+        Promise.resolve({ ...SAMPLE_TRADING_SESSIONS, sessions: [SAMPLE_TRADING_SESSION_NULLS] }),
+    });
+
+    const response = await get('/admin/trading-sessions', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.match(/<td>\s*—\s*<\/td>/g)).toHaveLength(7);
+  });
+
+  it('escapes a broker id that is markup', async () => {
+    await app.close();
+    app = build({
+      tradingSessions: () =>
+        Promise.resolve({
+          ...SAMPLE_TRADING_SESSIONS,
+          sessions: [{ ...SAMPLE_TRADING_SESSION, brokerUserId: 'a<b>' }],
+        }),
+    });
+
+    const response = await get('/admin/trading-sessions', withCookie);
+
+    expect(response.body).toContain('a&lt;b&gt;');
+    expect(response.body).not.toContain('a<b>');
+  });
+
+  it('says so when there are no sessions', async () => {
+    await app.close();
+    app = build({
+      tradingSessions: () => Promise.resolve({ ...SAMPLE_TRADING_SESSIONS, sessions: [] }),
+    });
+
+    const response = await get('/admin/trading-sessions', withCookie);
+
+    expect(response.body).toContain(TEXTS.tradingSessionsEmpty);
+    expect(hrefOf(response.body, TEXTS.tradingSessionsFirst)).toBe('/admin/trading-sessions');
+  });
+
+  it('carries the cursor through the next link, and offers the first page from there', async () => {
+    await app.close();
+    app = build({
+      tradingSessions: (token, query) => {
+        calls.tradingSessions.push([token, query]);
+        return Promise.resolve({ ...SAMPLE_TRADING_SESSIONS, nextCursor: CURSOR });
+      },
+    });
+
+    const first = await get('/admin/trading-sessions', withCookie);
+    const next = hrefOf(first.body, TEXTS.tradingSessionsNext);
+    expect(next).toBe(`/admin/trading-sessions?cursor=${CURSOR}`);
+    const second = await get(next ?? '', withCookie);
+
+    expect(calls.tradingSessions.map(([, query]) => query)).toEqual([{}, { cursor: CURSOR }]);
+    expect(hrefOf(second.body, TEXTS.tradingSessionsFirst)).toBe('/admin/trading-sessions');
+  });
+
+  it('asks for the first page when the cursor is empty', async () => {
+    await get('/admin/trading-sessions?cursor=', withCookie);
+    expect(calls.tradingSessions).toEqual([[TOKEN, {}]]);
+  });
+
+  it.each([
+    ['a cursor that is not a uuid', 'cursor=bad'],
+    ['a cursor twice', `cursor=${CURSOR}&cursor=${CURSOR}`],
+  ])('drops %s with a redirect, before the backend is asked', async (_label, query) => {
+    const response = await get(`/admin/trading-sessions?${query}`, withCookie);
+
+    expect([response.statusCode, response.headers.location]).toEqual([
+      302,
+      '/admin/trading-sessions',
+    ]);
+    expect(calls.tradingSessions).toEqual([]);
+  });
+
+  it('drops a session the backend no longer knows, and keeps the cookie on its own failure', async () => {
+    await app.close();
+    app = build({
+      tradingSessions: () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+    });
+    const gone = await get('/admin/trading-sessions', withCookie);
+    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+
+    await app.close();
+    app = build({ tradingSessions: () => Promise.reject(httpFailure(500)) });
+    const failed = await get('/admin/trading-sessions', withCookie);
+    expect(failed.statusCode).toBe(500);
+    expect(cookieOf(failed, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it('treats a malformed session cookie as none, before the backend is asked', async () => {
+    const response = await get('/admin/trading-sessions', {
+      [SESSION_COOKIE]: 'not-a-session-token',
+    });
+
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+    expect(calls.tradingSessions).toEqual([]);
+  });
+
+  it('renders the trading section of the card: counts, the recent intents, all of them', async () => {
+    const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+
+    expect(response.body).toContain(`<h2>${TEXTS.userTrading}</h2>`);
+    expect(response.body).toContain(TEXTS.userIntentsCounts(3, 1));
+    expect(TEXTS.userIntentsCounts(3, 1)).toBe('Всего заявок: 3, активных: 1');
+    expect(response.body).toContain(TEXTS.userIntentsRecent(ADMIN_USER_RECENT_INTENTS));
+    expect(response.body).toContain(`<a href="/admin/intents/${SAMPLE_INTENT.id}">`);
+    expect(hrefOf(response.body, TEXTS.userIntentsAll)).toBe(
+      `/admin/intents?user=${SAMPLE_USER_ID}`,
+    );
+    // the section follows the accounts
+    expect(response.body.indexOf(TEXTS.userTrading)).toBeGreaterThan(
+      response.body.indexOf(TEXTS.userBrokerAccounts),
+    );
+  });
+
+  it('keeps the section and the link to all intents without accounts and without intents', async () => {
+    await app.close();
+    app = build({
+      user: () =>
+        Promise.resolve({
+          ...SAMPLE_USER,
+          brokerAccounts: [],
+          intents: { recent: [], total: 0, active: 0 },
+        }),
+    });
+
+    const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+
+    expect(response.body).toContain(TEXTS.userNoAccounts);
+    expect(response.body).toContain(`<h2>${TEXTS.userTrading}</h2>`);
+    expect(response.body).toContain(TEXTS.userIntentsCounts(0, 0));
+    expect(response.body).toContain(TEXTS.intentsEmpty);
+    expect(response.body).not.toContain(TEXTS.userIntentsRecent(ADMIN_USER_RECENT_INTENTS));
+    expect(hrefOf(response.body, TEXTS.userIntentsAll)).toBe(
+      `/admin/intents?user=${SAMPLE_USER_ID}`,
+    );
+  });
+
+  it('prints the overview breakdown in the order of the constant, and the active count', async () => {
+    const response = await get('/admin/overview', withCookie);
+    const { byStatus, active } = SAMPLE_OVERVIEW.overview.intents;
+
+    const rows = [
+      ...response.body.matchAll(/<dt><code>([a-z_]+)<\/code><\/dt>\s*<dd>(\d+)<\/dd>/g),
+    ].map((m) => [m[1], Number(m[2])]);
+    expect(rows).toEqual(Object.values(TradeIntentStatus).map((s) => [s, byStatus[s]]));
+    expect(response.body).toContain(`<h3>${TEXTS.overviewIntentsByStatus}</h3>`);
+    expect(response.body).toMatch(
+      new RegExp(
+        `<dt>${TEXTS.overviewIntentsActive.replace(/[()]/g, '\\$&')}</dt>\\s*<dd>${active}</dd>`,
+      ),
+    );
+  });
 });
 
 describe('revoking', () => {

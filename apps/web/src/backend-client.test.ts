@@ -8,6 +8,8 @@ import {
   SAMPLE_ME,
   SAMPLE_OVERVIEW,
   SAMPLE_SESSION_ID,
+  SAMPLE_TRADING_SESSION,
+  SAMPLE_TRADING_SESSIONS,
   SAMPLE_USER,
   SAMPLE_USER_ID,
 } from './admin/testing';
@@ -268,6 +270,52 @@ describe('the intents calls (#108)', () => {
       intent: { ...SAMPLE_INTENT, settings: {} },
     });
     const error = await rejectionOf(client.intent(SESSION, SAMPLE_INTENT.id));
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+describe('the trading sessions call (#330)', () => {
+  const SESSION = 's'.repeat(43);
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+
+  const prefixed = async (body: unknown) => {
+    const served = await serve((response) => {
+      json(response, 200, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+
+  it('asks for the page with the cursor, the bearer and the staff session, under the prefix', async () => {
+    const { client, captured } = await prefixed(SAMPLE_TRADING_SESSIONS);
+    expect(await client.tradingSessions(SESSION, { cursor: CURSOR })).toEqual(
+      SAMPLE_TRADING_SESSIONS,
+    );
+    expect(captured.url).toBe(`/api/admin/trading-sessions?cursor=${CURSOR}`);
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+    expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('sends no query string for the first page', async () => {
+    const { client, captured } = await prefixed(SAMPLE_TRADING_SESSIONS);
+    await client.tradingSessions(SESSION, {});
+    expect(captured.url).toBe('/api/admin/trading-sessions');
+  });
+
+  it.each([
+    [
+      'a row',
+      {
+        ...SAMPLE_TRADING_SESSIONS,
+        sessions: [{ ...SAMPLE_TRADING_SESSION, summarySentAt: null }],
+      },
+    ],
+    ['the page', { ...SAMPLE_TRADING_SESSIONS, extra: 1 }],
+  ])('refuses %s with a key the contract does not name', async (_label, body) => {
+    const { client } = await prefixed(body);
+    const error = await rejectionOf(client.tradingSessions(SESSION, {}));
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });
