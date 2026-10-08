@@ -36,6 +36,7 @@ import {
 } from './demo-catalog';
 import type { LoginDialog } from './login-dialog';
 import { telegramErrorFields, type Logger } from './logging';
+import { supportKeyboard } from './keyboards';
 import { editRefusal } from './screen';
 import { editMessageTextHtml, replyHtml } from './send';
 import { formatStake } from './format';
@@ -256,7 +257,8 @@ export function createStakePicker<C extends Context>({
     }
     const { status, broker, brokerUnavailable, demoStake } = access.value;
     if (status === UserStatus.Blocked) {
-      return { text: TEXTS.blocked, keyboard: backKeyboard(origin) };
+      // the support link, as for every blocked user (#350), then the picker's way back
+      return { text: TEXTS.blocked, keyboard: backTo(supportKeyboard().row(), origin) };
     }
     if (broker === null) {
       if (brokerUnavailable === BrokerBalanceUnavailableReason.NoAccount) {

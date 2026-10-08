@@ -73,7 +73,7 @@ on any message whose «🔄 Повторить» carries one of those prefixes, 
 | account card (`sendAccountCard`: the code, the confirm, the recheck) | 🎮 Демо-торговля |
 | push `Active` | 🎮 Демо-торговля |
 | push `Taken`, `ExchangeFailed`, `Mismatch` | 🔗 Подключить · 🏠 В меню |
-| `blocked` (bot, push, a confirm or login refusal, a trade or session refusal) | the support URL; in the stake picker its way back stays |
+| `blocked` (bot, push, a confirm or login refusal, a trade or session refusal) | the support URL; in the stake picker the picker's way back under it |
 | `unavailable` after `/start`, `/menu`, «🏠 В меню» | 🔄 Повторить (`menu`) |
 | `unavailable` after `/account`, `/settings` | 🔄 Повторить (`cmd:…`) · 🏠 В меню |
 | `unavailable` after the picker's way back (`settings`) | 🔄 Повторить (`settings`) · 🏠 В меню |
