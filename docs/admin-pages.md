@@ -1,8 +1,11 @@
 # Admin pages
 
-Read-only pages for support and debugging, behind the staff login ([staff-login.md](staff-login.md)).
-They change nothing: no page here writes to a table other than `staff_sessions` (the session touch)
-and `audit_log` (the record of the view). #107 adds the overview, the user list with search, and
+Pages for support and debugging, behind the staff login ([staff-login.md](staff-login.md)). All
+but one are read-only: they write to no table other than `staff_sessions` (the session touch) and
+`audit_log` (the record of the view). The one exception is «Сменить пароль» (#79, its section
+below): the only page here that submits a change, through the backend operation of #78, which
+writes `staff`, the staff member's other sessions and open challenges ([staff-login.md](staff-login.md)
+→ Changing your own password). #107 adds the overview, the user list with search, and
 the user card; #108 adds the intents list and the intent card; #330 adds the trading sessions
 list, the trading section of the user card and the breakdown of the overview by status; #109 adds
 the token ledger list and the card's ledger section; #110 adds the audit log; deposits and the
@@ -10,8 +13,10 @@ broker accounts list (#341, #342) follow through the same mechanism.
 
 ## Mechanism
 
-`apps/web` never talks to the database (`no-db-access.test.ts`); each page is one `GET` to the
-backend under the staff session:
+`apps/web` never talks to the database (`no-db-access.test.ts`); each request is one call to the
+backend under the staff session — a `GET` for every read page, the `POST /admin/auth/password` of
+#78 for a password change (its own section below; its backend phases are in staff-login.md). A
+read page goes like this:
 
 1. `web` reads the `admin_session` cookie. A cookie of the wrong shape counts as none: it is
    cleared and the browser goes to `/admin/login`, with no backend call (`withStaffSession`,
@@ -30,7 +35,8 @@ so writes its row — is enforced by review only (see Boundaries).
 
 The reads lock nothing: `users`, `broker_accounts`, `trade_intents`, `trading_sessions`,
 `token_ledger`, `audit_log` and `staff` are read without `FOR …`, and the session touch is the only
-`UPDATE`.
+`UPDATE` of a read page. The password change is not a read: it locks the `staff` row first and
+writes under it (staff-login.md → Changing your own password).
 
 How `web` acts on a backend answer:
 
@@ -46,9 +52,10 @@ How `web` acts on a backend answer:
 ## Pages
 
 Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии |
-Токены | Аудит) and the account block
-(«login — Выйти»). The login shown is the one in the `me` of the backend answer the page was built
-from; a page rendered without asking the backend (a refused search) shows no account block.
+Токены | Аудит) and the account block («Сменить пароль · login — Выйти»: the link to the password
+page and the logout button). The login shown is the one in the `me` of the backend answer the page
+was built from; a page rendered without asking the backend (a refused search, a refused password
+form) shows no account block.
 `GET /admin` redirects to `/admin/overview`; after a login the landing page is still
 `/admin/sessions`. Timestamps are printed as the ISO instants the backend sent.
 
@@ -283,6 +290,45 @@ through `adminAuditSearchParams` (`packages/shared/src/admin.ts`), in the order 
 entityId, actorId, from, to, cursor`. The cursor positions, it does not filter, as on the intents
 list; an id with no row gives an empty page.
 
+### Сменить пароль — `GET /admin/password?changed=`, `POST /admin/password`
+
+Not in the nav: the link is in the account block of every page that has one.
+
+`GET` reads `GET /admin/sessions` of the backend, as the sessions page does, for the login in the
+account block and for «При смене пароля будут завершены другие открытые сессии: N». N counts the
+caller's own live sessions other than the current one — the list holds every staff member's, and
+the change revokes only the caller's. It is a snapshot at the time of the request; the number the
+change actually revoked is the one the result shows.
+
+`POST` makes exactly one backend call, like every other request of `web` (the shutdown budget in
+`apps/web/src/timing.ts` counts one). Before it, `web` checks, in this order: the body is three
+strings (a field given twice is an array) → the two entries of the new password are equal → the
+shared `adminChangePasswordRequestSchema` (both passwords 1–`STAFF_PASSWORD_MAX_LENGTH` characters,
+the new one different from the current one). «Новый пароль совпадает с текущим» is shown only when
+the schema's one issue is that one; any other set of issues is «Проверьте введённые данные». Each
+refusal is a 400 with the form, no backend call and no row. A refused form — here or from the
+backend — is rendered without the sessions read, so with the nav and no account block or N.
+
+How `web` acts on the backend's answer to the change:
+
+| Answer | Action |
+|---|---|
+| 200 `{ changed: true, revokedSessions }` | 303 to `/admin/password?changed=<revokedSessions>`; the cookie stays (the current session is kept) |
+| 401 `invalid_credentials` | 401 with the form, «Неверный текущий пароль» |
+| 429 `too_many_attempts` | 429 with the form, «Слишком много попыток…» |
+| 401 `session_invalid` | clear the cookie, 302 to `/admin/login` |
+| 401 `unauthorized`, 400 `validation`, any other 4xx — a 429 without the code included | 500, cookie kept, logged by name and code |
+| no answer (timeout, network), a 2xx outside the contract, a 5xx | 500 «Результат неизвестен»: the password may have changed, the staff member finds out by logging in; cookie kept, logged by name and code |
+
+The branches are on the pair, not the status: the route has no ceiling, so every 429 it sends carries
+the code. The redirect (post/redirect/get) keeps a reload of the result from resubmitting the old
+current password, which would be a wrong guess counted in the lockout shared with the login form.
+`?changed=` is shown only as an integer in `[0, 2^53 − 1]` — the domain of `revokedSessions` —
+given once; anything else shows no result line.
+
+The form never renders the values it was submitted with (the inputs have no `value`), and `web`
+logs no request body: no password reaches the HTML or the log of `web`.
+
 ## Audit actions
 
 Each view writes one row with `actor_type = 'admin'` and `actor_id` = the staff id. Payload keys are
@@ -302,6 +348,8 @@ named and bounded; nothing else is recorded.
 | trading sessions | `trading_sessions_viewed` | — | `{ path: '/admin/trading-sessions', cursor? }` — `cursor` only when given |
 | token ledger | `tokens_viewed` | — | `{ path: '/admin/tokens', userId?, kind?, cursor? }` — a key only when the parameter was given |
 | audit log | `audit_log_viewed` | — | `{ path: '/admin/audit', action?, entityType?, entityId?, actorId?, from?, to?, cursor? }` — a key only when the parameter was given; every value is an enum, a uuid or a date |
+| password page, `GET` | `staff_sessions_viewed` | — | `{ path: '/admin/sessions', sessionId }` — the backend's sessions read, as on the sessions page |
+| password change, `POST` | `staff_password_changed` / `staff_password_change_failed` | `staff`, the caller | staff-login.md → What is written down (#78) |
 
 The card's trading and ledger sections and the overview's breakdown are parts of `user_viewed` and
 `overview_viewed`; they add no row and no payload key.
@@ -323,7 +371,10 @@ What `web` refuses before asking the backend, with no row:
   that is not a uuid — a value of blanks included —, a date that is not `YYYY-MM-DD`, `from` after
   `to`, a parameter given twice) → 400 with the form and the message, whatever the cursor says;
 - a cursor that is not a uuid, or given twice → 302 to the same search, filters or list without it;
-- a user or intent card id that is not a uuid → 404.
+- a user or intent card id that is not a uuid → 404;
+- the password form: a field given twice, the two entries of the new password differing, or
+  `currentPassword`/`newPassword` outside the shared schema (empty, over
+  `STAFF_PASSWORD_MAX_LENGTH`, equal to each other) → 400 with the form, no backend call.
 
 An empty value (`q=`, or `status=` from the form's empty option) is no parameter: the whole list. Unknown query keys (`utm_*`, a
 bookmark's leftovers) are dropped on both sides.
@@ -352,6 +403,8 @@ around these reads directly is caught only in review.
   the overview passes 200 ms at those sizes, add a `(created_at, id)` index in its own migration.
 - The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most five
   `SELECT`s (the user card).
+- The password change is one backend call under the same timeout; a timeout shows «Результат
+  неизвестен» — the change may have committed.
 - The audit log: `audit_log_created_at_idx` serves the order and the dates, `audit_log_entity_idx`
   the filter by entity (the link from the user card); `action` and `actorId` have no index and scan.
   Assumed: up to 1 000 000 rows; if `explain analyze` of a page passes 200 ms there, add an index on
@@ -452,6 +505,10 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
      jsonb_build_object('key', 'k', 'oldText', repeat('я', 20000), 'newText', 'x'))"
    ```
    Open «Аудит»: the row on top, «—» and `system` in «Кто», its payload cut with «(обрезано)».
+   Then «Сменить пароль» from the account block: two different new passwords — 400 with the form,
+   no «Выйти»; the current password wrong — 401 with the form; a real change — «Пароль изменён.
+   Завершено других сессий: 0» (1 if a second browser was logged in; its next page is the login
+   form). Log out and in with the new password.
 6. Check what was written:
    ```bash
    docker compose exec postgres psql -U binarius -d binarius \
