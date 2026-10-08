@@ -281,7 +281,9 @@ Once the PR exists and the issue is In Review:
 
 Track the iteration count (starts at 1 for the first review). **Hard limit: 3 review rounds per issue** (owner's rule, 2026-09-30) — there is no round 4.
 
-**If the reviewer finds issues:**
+Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (reviewer → Severity Guide). A Minor-only verdict goes to the merge relay below as a clean PR; the merge question names the open Minors, and the owner decides whether they are fixed in another round, go to a follow-up issue, or are accepted.
+
+**If the reviewer finds a Blocker or Major:**
 1. Iteration 1 → the architect first (Plan Update **without** Codex re-check; the issue returns to In Progress), then the implementer, then the reviewer again for this issue. When the architect's model is unavailable (the Fable weekly limit), the owner is asked: a Plan Update on Opus, or the findings straight to the implementer with "исправления без Plan Update архитектора" recorded as a deviation — never the latter by default (#130, #287, #284 on 2026-10-07).
 2. Iteration 2 → stop: this starts a **new cycle**. Ask the owner via `AskUserQuestion` for a **change of approach** — the same loop again is not among the options:
    - (a) a whole-feature Codex pass (the reviewer's Step 3a command with `KIND="Whole-feature pass"`, run now) and a Plan Update built from its findings, not from the last round's;
