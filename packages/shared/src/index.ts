@@ -7,6 +7,7 @@ export * from './oauth';
 export * from './users';
 export * from './account';
 export * from './broker-balance';
+export * from './broker-budget';
 export * from './trading-access';
 export * from './access-token';
 export * from './admin';

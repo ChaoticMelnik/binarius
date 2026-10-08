@@ -35,7 +35,7 @@ describe('parseEnv', () => {
       brokerApiBaseUrl: valid.BROKER_API_BASE_URL,
       brokerPairsTtlMs: 30_000,
       balanceReconcileIntervalMs: 60_000,
-      balancePollMaxPerMinute: 200,
+      balancePollMaxPerMinute: 100,
       brokerOauthRedirectUri: valid.BROKER_OAUTH_REDIRECT_URI,
       brokerPartnerRef: valid.BROKER_PARTNER_REF,
       tokenEncryptionKey: Buffer.from(KEY, 'base64'),
@@ -54,10 +54,10 @@ describe('parseEnv', () => {
       HEALTH_TIMEOUT_MS: '2500',
       BROKER_PAIRS_TTL_MS: '45000',
       BALANCE_RECONCILE_INTERVAL_MS: '30000',
-      BALANCE_POLL_MAX_PER_MINUTE: '100',
+      BALANCE_POLL_MAX_PER_MINUTE: '150',
     });
     expect(env.balanceReconcileIntervalMs).toBe(30_000);
-    expect(env.balancePollMaxPerMinute).toBe(100);
+    expect(env.balancePollMaxPerMinute).toBe(150);
     expect(env.port).toBe(8080);
     expect(env.brokerPairsTtlMs).toBe(45_000);
     expect(env.logLevel).toBe('debug');
@@ -289,11 +289,14 @@ describe('broker OAuth configuration', () => {
     ' https://bot.example/oauth/callback',
     'https://bot.example/oauth/callback\x01',
     'https://bot\u200b.example/oauth/callback',
-  ])('rejects the redirect %j, which carries whitespace, a control or a format character', (value) => {
-    expect(() => parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: value })).toThrow(
-      'Env BROKER_OAUTH_REDIRECT_URI must not contain whitespace, control or invisible format characters',
-    );
-  });
+  ])(
+    'rejects the redirect %j, which carries whitespace, a control or a format character',
+    (value) => {
+      expect(() => parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: value })).toThrow(
+        'Env BROKER_OAUTH_REDIRECT_URI must not contain whitespace, control or invisible format characters',
+      );
+    },
+  );
 
   // each parses to the callback path, yet is not the spelling the broker compares against
   it.each([
@@ -303,11 +306,14 @@ describe('broker OAuth configuration', () => {
     'https://bot.example/oauth/callback?x=1',
     'https://bot.example/oauth/callback#x',
     'https://u:p@bot.example/oauth/callback',
-  ])('rejects the redirect %j, which is not spelled scheme://host[:port]/oauth/callback', (value) => {
-    expect(() => parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: value })).toThrow(
-      'Env BROKER_OAUTH_REDIRECT_URI must be spelled scheme://host[:port]/oauth/callback and nothing else (no query, fragment, "\\", "%", "@" or dot-segments): the backend sends it to the broker byte for byte',
-    );
-  });
+  ])(
+    'rejects the redirect %j, which is not spelled scheme://host[:port]/oauth/callback',
+    (value) => {
+      expect(() => parseEnv({ ...valid, BROKER_OAUTH_REDIRECT_URI: value })).toThrow(
+        'Env BROKER_OAUTH_REDIRECT_URI must be spelled scheme://host[:port]/oauth/callback and nothing else (no query, fragment, "\\", "%", "@" or dot-segments): the backend sends it to the broker byte for byte',
+      );
+    },
+  );
 
   it.each(['https://bot.example/oauth/callback', 'https://Bot.Example:443/oauth/callback'])(
     'accepts the redirect %s, whose path is exactly the callback page, unchanged',

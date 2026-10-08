@@ -1,5 +1,6 @@
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
+import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
 import { BROKER_SOCKET_CONNECT_TIMEOUT_MS } from '../broker/socket-config';
 import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
@@ -92,16 +93,15 @@ export const CATCHUP_ATTEMPT_TIMEOUT_MS = 20_000;
 // would make the user wait minutes for a 5 s trade
 export const CATCHUP_STALLED_RETRY_MS = 30_000;
 
-// The broker allows 600 requests a minute per IP (BROKER_RATE_LIMIT_PER_MINUTE in
-// apps/backend/src/timing.ts); the backend's balance refresh takes up to 200 by default. The worker
-// keeps to the rest in the worst case: its passes tick only on their intervals (nothing starts an
-// extra tick), and a tick never overlaps the next. A 429 ends a tick, and the attempt is retried on
-// the lease or the next tick. Its one real cost is a refresh exchange in flight on the backend: a
-// 429 on /user-auth/refresh is classified rejected → refresh_outcome_unknown → the account is
-// revoked (Rule 12, one attempt). The worker's share keeps its own traffic from driving the IP to
-// 429; the sum with the backend's with BALANCE_POLL_MAX_PER_MINUTE above 200 is stated, not
-// enforced.
-export const WORKER_BROKER_GETS_PER_MINUTE = 400;
+// The broker allows 600 requests a minute per IP; the worker's share, WORKER_BROKER_GETS_PER_MINUTE,
+// sits with the backend's two in packages/shared/src/broker-budget.ts. The worker keeps to its
+// share in the worst case: its passes tick only on their intervals (nothing starts an extra
+// tick), and a tick never overlaps the next. A 429 ends a tick, and the attempt is retried on the
+// lease or the next tick. Its one real cost is a refresh exchange in flight on the backend: a 429
+// on /user-auth/refresh is classified rejected → refresh_outcome_unknown → the account is revoked
+// (Rule 12, one attempt). The worker's share keeps its own traffic from driving the IP to 429; the
+// sum with the backend's configured ceilings above their defaults is a warning at the backend's
+// start, not enforced.
 export const WORKER_BROKER_GETS_WORST_CASE =
   RECONCILE_BATCH_SIZE * 2 * RECONCILE_MAX_TRADE_PAGES * (60_000 / RECONCILE_TICK_MS) +
   CATCHUP_BATCH_SIZE * CATCHUP_MAX_TRADE_PAGES * (60_000 / CATCHUP_TICK_MS);
