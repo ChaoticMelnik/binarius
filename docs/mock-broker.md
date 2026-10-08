@@ -369,8 +369,9 @@ and 6 are resolved, 4–5 and 9 remain, and 7–8 are handled on the consumer's 
    drops unknown keys, so a parse of a fixture response does not see either field. The fixture's
    tests check both fields on the raw body, and one test fails once shared's parse keeps them,
    as a signal to drop the duplicate check.
-5. **`is_demo`** is optional in broker-web and always present in shared and in the fixture. The
-   live trade list was empty on 2026-10-02, so this waits for a live trade.
+5. **`is_demo` on REST** is optional in broker-web and always present in shared's REST trade
+   schemas and in the fixture's REST answers and store. The live REST trade list was empty on
+   2026-10-02, so this waits for a live REST trade. The socket omits it (item 6, #354).
 6. **Money on the socket. Resolved 2026-10-06 (#236).** The socket sends the same JSON numbers as
    REST (`user.data`, `update_balance`, `open_trade.success`, `close_trade.success`), because
    `balanceWire`, `openWire` and `closedWire` in `state.ts` are the one place money reaches either
