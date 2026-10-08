@@ -13,6 +13,7 @@ import {
   NotificationJobStatus,
   brokerAccounts,
   createDb,
+  createOAuthState,
   createTokenCipher,
   hashToken,
   notificationJobs,
@@ -38,7 +39,7 @@ import {
   type CapturedApi,
 } from '../admin/testing';
 import { createLinkNotifier } from './link-notifier';
-import { INIT_DATA_MAX_AGE_MS } from './oauth-timing';
+import { INIT_DATA_MAX_AGE_MS, OAUTH_STATE_TTL_MS } from './oauth-timing';
 import { createInitDataVerifier } from './telegram-init-data';
 import { signInitData } from './testing/init-data';
 import { CLIENT_TEXTS } from './texts';
@@ -163,17 +164,15 @@ const initDataFor = (telegramUserId: string | bigint, authDate?: number) =>
     ...(authDate === undefined ? {} : { authDate }),
   });
 
-const start = async (telegramUserId: string, authorization = `Bearer ${TOKEN}`, instance = app) => {
-  const response = await postJson(
-    instance,
-    '/auth/binodex/start',
-    { telegramUserId },
-    { authorization },
-  );
-  if (response.statusCode === 200) {
-    stateOwners.set((response.json() as { state: string }).state, telegramUserId);
-  }
-  return response;
+// No route issues a state since #314, so the cases seed one as the removed start route did.
+const stateFor = async (telegramUserId: string): Promise<string> => {
+  const { state } = await createOAuthState(tmp.db, {
+    telegramUserId: BigInt(telegramUserId),
+    redirectUri: REDIRECT_URI,
+    ttlMs: OAUTH_STATE_TTL_MS,
+  });
+  stateOwners.set(state, telegramUserId);
+  return state;
 };
 
 // The state owner's own signed initData is added to every object body that names no initData
@@ -191,103 +190,31 @@ const callback = (payload: unknown, instance = app) => {
   });
 };
 
-const stateFor = async (telegramUserId: string, instance = app): Promise<string> =>
-  ((await start(telegramUserId, `Bearer ${TOKEN}`, instance)).json() as { state: string }).state;
-
 async function login(telegramUserId: string, brokerUserId: string, isPartnerClient?: boolean) {
-  const started = await start(telegramUserId);
-  const { state } = started.json() as { state: string };
+  const state = await stateFor(telegramUserId);
   const code = stub.issueCode({ brokerUserId, isPartnerClient });
-  return { started, response: await callback({ state, code }), state };
+  return { response: await callback({ state, code }), state };
 }
 
+// #314: the bot offers only the email login, so the route that issued a state is gone
 describe('POST /auth/binodex/start', () => {
-  it('requires the internal token', async () => {
-    expect((await start(telegramId(), 'Bearer nope')).statusCode).toBe(401);
-    expect((await start(telegramId(), '')).statusCode).toBe(401);
-  });
-
-  it('returns an authorize url carrying every documented parameter', async () => {
-    const response = await start(telegramId());
-    expect(response.statusCode).toBe(200);
-    const body = response.json() as { authorizeUrl: string; state: string; expiresAt: string };
-    const url = new URL(body.authorizeUrl);
-    expect(`${url.origin}${url.pathname}`).toBe(AUTHORIZE_URL);
-    expect(Object.fromEntries(url.searchParams)).toEqual({
-      client_id: CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
-      state: body.state,
-      ref: PARTNER_REF,
-    });
-    expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
-  });
-
-  // the Mini App's login page sits on the redirect URI's origin, next to the callback page
-  it('returns the Mini App login url carrying the authorize url for an https redirect', async () => {
-    const response = await start(telegramId());
-    const body = response.json() as { authorizeUrl: string; miniAppUrl?: string };
-    expect(body.miniAppUrl).toBeDefined();
-    const url = new URL(body.miniAppUrl ?? '');
-    expect(`${url.origin}${url.pathname}`).toBe('https://bot.example/oauth/login');
-    expect(Object.fromEntries(url.searchParams)).toEqual({ authorize: body.authorizeUrl });
-  });
-
-  // Telegram takes only https in a web_app button; the local stack's loopback gets a plain link
-  it('returns no Mini App url for an http loopback redirect', async () => {
-    const loopback = testApp({ ...authDeps, redirectUri: 'http://127.0.0.1:3001/oauth/callback' });
-    await loopback.ready();
-    try {
-      const response = await start(telegramId(), `Bearer ${TOKEN}`, loopback);
-      expect(response.statusCode).toBe(200);
-      const body = response.json() as { authorizeUrl: string; miniAppUrl?: string };
-      expect(new URL(body.authorizeUrl).searchParams.get('redirect_uri')).toBe(
-        'http://127.0.0.1:3001/oauth/callback',
+  it('answers 404 with and without the internal token and issues no state', async () => {
+    const telegram = telegramId();
+    for (const authorization of [`Bearer ${TOKEN}`, '']) {
+      const response = await postJson(
+        app,
+        '/auth/binodex/start',
+        { telegramUserId: telegram },
+        { authorization },
       );
-      expect(Object.keys(body).sort()).toEqual(['authorizeUrl', 'expiresAt', 'state']);
-    } finally {
-      await loopback.close();
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({ error: 'not_found' });
     }
-  });
-
-  it('refuses a blocked user before a state or a code is spent', async () => {
-    const blocked = await seedUser(tmp.db, { status: 'blocked' });
-    const response = await start(blocked.telegramUserId);
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toEqual({ error: 'user_blocked' });
     const states = await tmp.db
       .select({ id: oauthStates.id })
       .from(oauthStates)
-      .where(eq(oauthStates.telegramUserId, BigInt(blocked.telegramUserId)));
+      .where(eq(oauthStates.telegramUserId, BigInt(telegram)));
     expect(states).toEqual([]);
-  });
-
-  it('stores only the hash of the state', async () => {
-    const state = await stateFor(telegramId());
-    const byHash = await tmp.db
-      .select({ id: oauthStates.id })
-      .from(oauthStates)
-      .where(eq(oauthStates.stateHash, hashToken(state)));
-    const byRaw = await tmp.db
-      .select({ id: oauthStates.id })
-      .from(oauthStates)
-      .where(eq(oauthStates.stateHash, state));
-    expect(byHash).toHaveLength(1);
-    expect(byRaw).toEqual([]);
-  });
-
-  it.each([
-    ['missing id', {}],
-    ['numeric id', { telegramUserId: 42 }],
-    ['id above int8', { telegramUserId: '9223372036854775808' }],
-  ])('rejects %s with 400', async (_label, payload) => {
-    const response = await app.inject({
-      method: 'POST',
-      url: '/auth/binodex/start',
-      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
-      payload: JSON.stringify(payload),
-    });
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toBe('validation');
   });
 });
 
@@ -507,7 +434,7 @@ describe('the callback rate limits', () => {
       // two real logins first: neither may count towards the failure window
       for (let i = 0; i < 2; i += 1) {
         const telegram = telegramId();
-        const state = await stateFor(telegram, instance);
+        const state = await stateFor(telegram);
         const response = await callback(
           {
             state,
@@ -700,7 +627,7 @@ describe('the Telegram proof on the callback', () => {
     try {
       for (let i = 0; i < 3; i += 1) {
         const telegram = telegramId();
-        const state = await stateFor(telegram, instance);
+        const state = await stateFor(telegram);
         const response = await callback(
           { state, code: 'c', initData: forged(initDataFor(telegram)) },
           instance,
@@ -708,7 +635,7 @@ describe('the Telegram proof on the callback', () => {
         expect(response.statusCode).toBe(401);
       }
       for (let i = 0; i < 3; i += 1) {
-        const state = await stateFor(telegramId(), instance);
+        const state = await stateFor(telegramId());
         const response = await callback(
           { state, code: 'c', initData: initDataFor(telegramId()) },
           instance,
@@ -716,7 +643,7 @@ describe('the Telegram proof on the callback', () => {
         expect(response.statusCode).toBe(403);
       }
       const telegram = telegramId();
-      const state = await stateFor(telegram, instance);
+      const state = await stateFor(telegram);
       const response = await callback(
         { state, code: stub.issueCode({ brokerUserId: `broker-${telegram}` }) },
         instance,
@@ -758,7 +685,7 @@ describe('the Telegram proof on the callback', () => {
       ...markers,
     });
     const badProof = forged(otherProof);
-    const states = [await stateFor(owner, instance), await stateFor(owner, instance)];
+    const states = [await stateFor(owner), await stateFor(owner)];
     const bodies: string[] = [];
     try {
       const refused = await callback({ state: states[0], code: 'c', initData: badProof }, instance);
@@ -960,8 +887,7 @@ describe('the push after the callback', () => {
 
   it('offers the plain confirm button for a blank address', async () => {
     const telegram = telegramId();
-    const started = await start(telegram);
-    const { state } = started.json() as { state: string };
+    const state = await stateFor(telegram);
     const response = await callback({
       state,
       code: stub.issueCode({ brokerUserId: `broker-${telegram}`, email: '' }),
@@ -1106,7 +1032,7 @@ describe('a push that fails', () => {
       { write: (line: string) => void lines.push(line) },
     );
     const telegram = telegramId();
-    const state = await stateFor(telegram, instance);
+    const state = await stateFor(telegram);
     await prepare?.(telegram);
     const code = stub.issueCode({ brokerUserId: `MARKER-BROKER-${telegram}` });
     try {

@@ -3,20 +3,16 @@ import {
   BrokerAccountStatus,
   errorIdentity,
   errorLogFields,
-  MINI_APP_AUTHORIZE_PARAM,
   OAUTH_CALLBACK_BODY_LIMIT_BYTES,
-  OAUTH_LOGIN_PATH,
   OAuthErrorCode,
   safeParseConfirmLoginRequest,
   safeParseEmailLoginRequest,
   safeParseEmailSendCodeRequest,
   safeParseOAuthCallbackRequest,
-  safeParseStartLoginRequest,
 } from '@binarius/shared';
 import {
   confirmBrokerAccount,
   consumeOAuthState,
-  createOAuthState,
   hashToken,
   isUserBlocked,
   linkBrokerAccount,
@@ -34,7 +30,6 @@ import { telegramErrorFields } from '../telegram-logging';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
 import { internalBearerAuth } from './internal';
 import { LinkPushKind, type LinkNotifier, type LinkPushOutcome } from './link-notifier';
-import { OAUTH_STATE_TTL_MS } from './oauth-timing';
 import { createKeyedWindow, createWindow, type RateWindow } from './rate-window';
 import type { InitDataVerifier } from './telegram-init-data';
 
@@ -46,16 +41,6 @@ const CALLBACK_MAX_PER_MINUTE = 3000;
 // minute costs a real flood rather than one request per second: a 32-byte state cannot be
 // guessed, so this window only has to bound junk, and the ceiling above already bounds the work.
 const CALLBACK_MAX_FAILURES_PER_MINUTE = 600;
-
-// The Mini App login page lives next to the callback page on the redirect URI's origin. Telegram
-// takes only an https URL in a web_app button, so an http loopback redirect (the local stack)
-// gets none and the bot falls back to a plain link.
-function miniAppUrlFor(redirectUri: string, authorizeUrl: string): string | undefined {
-  if (!redirectUri.startsWith('https:')) return undefined;
-  const url = new URL(OAUTH_LOGIN_PATH, redirectUri);
-  url.searchParams.set(MINI_APP_AUTHORIZE_PARAM, authorizeUrl);
-  return url.toString();
-}
 
 // Route ceilings, taken before the body is parsed. Every send-code is a real letter, so it is
 // held far lower than the login.
@@ -75,6 +60,8 @@ export interface AuthRoutesDeps {
   cipher: TokenCipher;
   broker: BrokerOAuthClient;
   internalApiToken: string;
+  // the OAuth client's authorize request; no route builds one since #314 disabled
+  // POST /auth/binodex/start
   authorizeUrl: string;
   clientId: string;
   redirectUri: string;
@@ -116,40 +103,10 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
     }
   };
 
-  // the bot starts and confirms a login, so this half keeps the internal-token pattern its
-  // neighbours use
+  // the bot confirms a login and runs the email login, so this half keeps the internal-token
+  // pattern its neighbours use
   await app.register(async (scope) => {
     scope.addHook('onRequest', internalBearerAuth(deps.internalApiToken));
-
-    scope.post('/auth/binodex/start', async (request, reply) => {
-      const parsed = safeParseStartLoginRequest(request.body);
-      if (!parsed.success) {
-        return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
-      }
-      const telegramUserId = BigInt(parsed.data.telegramUserId);
-      // a blocked user would be refused at the end of the flow anyway, after burning a state
-      // and an authorization code
-      if (await isUserBlocked(deps.db, telegramUserId)) {
-        return reply.code(409).send({ error: OAuthErrorCode.UserBlocked });
-      }
-      const { state, expiresAt } = await createOAuthState(deps.db, {
-        telegramUserId,
-        redirectUri: deps.redirectUri,
-        ttlMs: OAUTH_STATE_TTL_MS,
-      });
-      const url = new URL(deps.authorizeUrl);
-      url.searchParams.set('client_id', deps.clientId);
-      url.searchParams.set('redirect_uri', deps.redirectUri);
-      url.searchParams.set('state', state);
-      url.searchParams.set('ref', deps.partnerRef);
-      const authorizeUrl = url.toString();
-      return reply.send({
-        authorizeUrl,
-        state,
-        expiresAt: expiresAt.toISOString(),
-        miniAppUrl: miniAppUrlFor(deps.redirectUri, authorizeUrl),
-      });
-    });
 
     // The link an account becomes usable through. The callback proves that someone authorized
     // at the broker; this proves the Telegram user who started the login agrees it was them.
