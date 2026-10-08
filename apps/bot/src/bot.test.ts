@@ -919,6 +919,7 @@ describe('an old site sign-in button', () => {
     expect(logger.info.mock.calls.map((call) => call[1])).toEqual([
       'the keyboard of an old button was not removed',
     ]);
+    expect(logger.info.mock.calls[0]?.[0]).toMatchObject({ callbackData: OAUTH_CALLBACK_DATA });
   });
 
   it('ignores the callback outside a private chat', async () => {

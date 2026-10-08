@@ -8,6 +8,7 @@ import {
   durationOptions,
   groupOf,
   isOpen,
+  LEGACY_DEMO_DURATIONS_SEC,
   openPairsOf,
   pairsOf,
   pageIndexOf,
@@ -88,6 +89,15 @@ describe('openPairsOf', () => {
     expect(pairsOf(PAIRS_RESPONSE, 'currency')).toEqual([PAIR_EURUSD, PAIR_CLOSED]);
     const narrow = { ...PAIR_EURUSD, id: 8, minTimeframe: 10, maxTimeframe: 15 };
     expect(pairsOf(pairsResponse({ pairs: [narrow] }), 'currency')).toEqual([narrow]);
+  });
+});
+
+describe('the duration sets', () => {
+  // the legacy patterns are registered before the current ones (demo.ts, stake-picker.ts): a
+  // duration in both sets would lose its keyboard instead of reaching its screen
+  it('keeps the current and the legacy durations apart', () => {
+    const legacy: readonly number[] = LEGACY_DEMO_DURATIONS_SEC;
+    expect(DEMO_DURATIONS_SEC.filter((sec) => legacy.includes(sec))).toEqual([]);
   });
 });
 

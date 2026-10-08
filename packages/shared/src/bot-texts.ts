@@ -266,6 +266,8 @@ export const BOT_TEXT_CATALOG = {
     `⏳ <b>Привязка ждёт подтверждения</b>
 Если вход выполнял ты — подтверди её по кнопке ниже.`,
   ),
+  // Must stay the longest /account header: the M1 test of /account (bot-text-messages.test.ts)
+  // pairs it with accountLineRevoked, the longest line, and expects the estimate exactly.
   accountRevoked: html(
     g.Account,
     '/account: заголовок, когда все привязки отозваны; также отказ сделки.',

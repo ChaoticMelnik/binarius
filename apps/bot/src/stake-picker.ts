@@ -23,7 +23,6 @@ import {
 import {
   assetIdOf,
   demoAnalysisCallbackData,
-  durationAlternation,
   durationOf,
   removeLegacyKeyboard,
   STAKE_PICKER_PREFIX,
@@ -74,13 +73,9 @@ const pickerPatterns = (origin: string) => ({
   reset: new RegExp(`^${STAKE_PICKER_PREFIX}z:${origin}$`),
   custom: new RegExp(`^${STAKE_PICKER_PREFIX}c:${origin}$`),
 });
-const PICKER = pickerPatterns(`(s|a:\\d{1,10}:(?:${durationAlternation(DEMO_DURATIONS_SEC)}))`);
-const STAKE_OPEN_PATTERN = PICKER.open;
-const STAKE_PRESET_PATTERN = PICKER.preset;
-const STAKE_RESET_PATTERN = PICKER.reset;
-const STAKE_CUSTOM_PATTERN = PICKER.custom;
+const PICKER = pickerPatterns(`(s|a:\\d{1,10}:(?:${DEMO_DURATIONS_SEC.join('|')}))`);
 const LEGACY_PICKER_PATTERNS = Object.values(
-  pickerPatterns(`(a:\\d{1,10}:(?:${durationAlternation(LEGACY_DEMO_DURATIONS_SEC)}))`),
+  pickerPatterns(`(a:\\d{1,10}:(?:${LEGACY_DEMO_DURATIONS_SEC.join('|')}))`),
 );
 
 // undefined when forged: the asset id the backend would refuse, or a malformed origin
@@ -142,7 +137,7 @@ export function createStakePicker<C extends Context>({
   composer.callbackQuery(LEGACY_PICKER_PATTERNS, (ctx) => removeLegacyKeyboard(ctx, logger));
 
   // also the custom input's «↩️ Назад», so it ends a stake step left open
-  composer.callbackQuery(STAKE_OPEN_PATTERN, async (ctx) => {
+  composer.callbackQuery(PICKER.open, async (ctx) => {
     const origin = stakeOriginOf(ctx.match[1]);
     if (origin === undefined) {
       await answer(ctx);
@@ -157,7 +152,7 @@ export function createStakePicker<C extends Context>({
     await editOrReply(ctx, screen.text, screen.keyboard);
   });
 
-  composer.callbackQuery(STAKE_PRESET_PATTERN, async (ctx) => {
+  composer.callbackQuery(PICKER.preset, async (ctx) => {
     const amount = tradeAmountSchema.safeParse(ctx.match[1]);
     const origin = stakeOriginOf(ctx.match[2]);
     if (!amount.success || origin === undefined) {
@@ -167,7 +162,7 @@ export function createStakePicker<C extends Context>({
     await saveInPlace(ctx, amount.data, origin);
   });
 
-  composer.callbackQuery(STAKE_RESET_PATTERN, async (ctx) => {
+  composer.callbackQuery(PICKER.reset, async (ctx) => {
     const origin = stakeOriginOf(ctx.match[1]);
     if (origin === undefined) {
       await answer(ctx);
@@ -178,7 +173,7 @@ export function createStakePicker<C extends Context>({
 
   // The prompt in place of the picker; the typed amount comes to onStakeText through bot.ts's
   // text handler. Setting the step replaces a login step the user had open.
-  composer.callbackQuery(STAKE_CUSTOM_PATTERN, async (ctx) => {
+  composer.callbackQuery(PICKER.custom, async (ctx) => {
     const origin = stakeOriginOf(ctx.match[1]);
     if (origin === undefined) {
       await answer(ctx);
