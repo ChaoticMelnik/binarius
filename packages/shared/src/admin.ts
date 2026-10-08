@@ -14,10 +14,14 @@ import { telegramUserIdSchema, tokenCountSchema, tradeModeSchema } from './tradi
 import { tokenBalanceViewSchema } from './trading-access';
 import { notificationLevelSchema, userStatusSchema } from './users';
 
-// How long the backend may hold POST /admin/auth/login: the wait for a slot in the scrypt
-// queue, the KDF itself, and the one Telegram call that follows. It lives here rather than in
-// either process because both size their own chains against it — apps/backend/src/timing.ts
-// must fit inside it, apps/web/src/timing.ts must wait longer than it.
+// The KDF part of both credential routes: POST /admin/auth/login is the wait for a slot in the
+// scrypt queue, the KDF itself, and the one Telegram call that follows; POST /admin/auth/password
+// is the wait plus two derivations in that one slot (verify the current password, hash the new
+// one). Database statements are bounded by the pool's per-statement query_timeout
+// (apps/backend/src/index.ts), not by this — the route as a whole is not, so web treats its own
+// timeout as an unknown outcome. It lives here rather than in either process because both size
+// their own chains against it — apps/backend/src/timing.ts must fit inside it,
+// apps/web/src/timing.ts must wait longer than it.
 export const ADMIN_LOGIN_BUDGET_MS = 6_000;
 
 // Every `error` value an /admin/* route answers with. `unauthorized` (the bearer) and
@@ -138,6 +142,29 @@ export type RevokeSessionResponse = z.infer<typeof revokeSessionResponseSchema>;
 
 export const logoutResponseSchema = z.object({ loggedOut: z.literal(true) });
 export type LogoutResponse = z.infer<typeof logoutResponseSchema>;
+
+// A staff member changing their own password (#78). Unknown keys are dropped, as in the login
+// body. The refine runs even when a field already failed, so web can tell "same as the current
+// one" from any other refusal by its issue: code `custom`, path ['newPassword'].
+export const adminChangePasswordRequestSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(STAFF_PASSWORD_MAX_LENGTH),
+    newPassword: z.string().min(1).max(STAFF_PASSWORD_MAX_LENGTH),
+    ...clientFacts,
+  })
+  .refine((v) => v.newPassword !== v.currentPassword, {
+    path: ['newPassword'],
+    error: 'the new password must differ from the current one',
+  });
+export type AdminChangePasswordRequest = z.infer<typeof adminChangePasswordRequestSchema>;
+
+// The current session survives the change; revokedSessions counts the caller's other sessions
+// that were not revoked and within their absolute lifetime (idle-expired ones included).
+export const changePasswordResponseSchema = z.strictObject({
+  changed: z.literal(true),
+  revokedSessions: z.int().nonnegative(),
+});
+export type ChangePasswordResponse = z.infer<typeof changePasswordResponseSchema>;
 
 // --- Read pages (#107) --------------------------------------------------------------------------
 
@@ -459,6 +486,10 @@ export const safeParseStaffSessionsResponse = (input: unknown) =>
 export const safeParseRevokeSessionResponse = (input: unknown) =>
   revokeSessionResponseSchema.safeParse(input);
 export const safeParseLogoutResponse = (input: unknown) => logoutResponseSchema.safeParse(input);
+export const safeParseAdminChangePasswordRequest = (input: unknown) =>
+  adminChangePasswordRequestSchema.safeParse(input);
+export const safeParseChangePasswordResponse = (input: unknown) =>
+  changePasswordResponseSchema.safeParse(input);
 export const safeParseAdminUsersQuery = (input: unknown) => adminUsersQuerySchema.safeParse(input);
 export const safeParseAdminUsersResponse = (input: unknown) =>
   adminUsersResponseSchema.safeParse(input);
