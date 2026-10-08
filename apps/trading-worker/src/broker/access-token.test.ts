@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { accessTokenPath } from '@binarius/shared';
+import { hashToken } from '@binarius/db';
+import { accessTokenPath, safeParseAccessTokenRequest } from '@binarius/shared';
 import {
   createBackendAccessTokenSource,
   isAccessTokenRefusal,
@@ -77,6 +78,12 @@ describe('createBackendAccessTokenSource (#90)', () => {
   it('asks with mayRefresh: true when the caller names no policy', async () => {
     await source().accessToken(ACCOUNT);
     expect(seen[0]?.body).toEqual({ mayRefresh: true });
+  });
+
+  it('posts the fingerprint of the refused token, and the body passes the route schema', async () => {
+    await source().accessToken(ACCOUNT, { mayRefresh: false, refusedToken: hashToken('t') });
+    expect(seen[0]?.body).toEqual({ mayRefresh: false, refusedToken: hashToken('t') });
+    expect(safeParseAccessTokenRequest(seen[0]?.body).success).toBe(true);
   });
 
   it.each([

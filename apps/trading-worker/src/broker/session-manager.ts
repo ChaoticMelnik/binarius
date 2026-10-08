@@ -1,8 +1,9 @@
-import type {
-  BalanceEventWrite,
-  BalanceSnapshotWrite,
-  ClosedTradeOutcome,
-  SessionCandidate,
+import {
+  hashToken,
+  type BalanceEventWrite,
+  type BalanceSnapshotWrite,
+  type ClosedTradeOutcome,
+  type SessionCandidate,
 } from '@binarius/db';
 import {
   AccessTokenRefusal,
@@ -176,8 +177,12 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     }
   }
 
-  function fetchToken(accountId: string) {
-    return tokens.accessToken(accountId, { mayRefresh: false, signal: stopping.signal });
+  function fetchToken(accountId: string, refusedToken?: string) {
+    return tokens.accessToken(accountId, {
+      mayRefresh: false,
+      signal: stopping.signal,
+      ...(refusedToken === undefined ? {} : { refusedToken }),
+    });
   }
 
   function firstOnConnection(entry: RunningEntry, key: string): boolean {
@@ -340,7 +345,9 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     entry.refreshing = true;
     let outcome: AccessTokenOutcome;
     try {
-      outcome = await fetchToken(accountId);
+      // the broker refused this token: the backend marks it expired and answers refresh_needed,
+      // or hands out the pair someone already rotated (#281)
+      outcome = await fetchToken(accountId, hashToken(entry.token));
     } catch (error) {
       if (stopping.signal.aborted || !isCurrent(accountId, entry)) return;
       startFailed(accountId, error);
@@ -352,6 +359,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       drop(accountId, holdBackFor(accountId, outcome));
       return;
     }
+    // unreachable with a backend that reads refusedToken; kept for one that does not (#281)
     if (outcome.accessToken === entry.token) {
       logger.warn({ accountId, sessionState: state }, 'broker session token unchanged');
       drop(accountId, config.retryMs);
