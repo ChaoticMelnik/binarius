@@ -5,8 +5,8 @@ They change nothing: no page here writes to a table other than `staff_sessions` 
 and `audit_log` (the record of the view). #107 adds the overview, the user list with search, and
 the user card; #108 adds the intents list and the intent card; #330 adds the trading sessions
 list, the trading section of the user card and the breakdown of the overview by status; #109 adds
-the token ledger list and the card's ledger section; deposits, the broker accounts list (#341,
-#342) and the audit log (#110) follow through the same mechanism.
+the token ledger list and the card's ledger section; #110 adds the audit log; deposits and the
+broker accounts list (#341, #342) follow through the same mechanism.
 
 ## Mechanism
 
@@ -24,12 +24,13 @@ backend under the staff session:
 4. `web` checks the answer against its strict schema (`packages/shared/src/admin.ts`): a key the
    contract does not name is a contract violation (500), not a silently dropped field.
 
-The read functions (`packages/db/src/admin-read-ops.ts`, `admin-trading-ops.ts`, `admin-ledger-ops.ts`) take a `Tx`, not a `Db`, so the compiler
+The read functions (`packages/db/src/admin-read-ops.ts`, `admin-trading-ops.ts`, `admin-ledger-ops.ts`, `admin-audit-ops.ts`) take a `Tx`, not a `Db`, so the compiler
 refuses a call outside a transaction. That a route's transaction is the one `asStaff` opens — and
 so writes its row — is enforced by review only (see Boundaries).
 
-The reads lock nothing: `users`, `broker_accounts`, `trade_intents`, `trading_sessions` and
-`token_ledger` are read without `FOR …`, and the session touch is the only `UPDATE`.
+The reads lock nothing: `users`, `broker_accounts`, `trade_intents`, `trading_sessions`,
+`token_ledger`, `audit_log` and `staff` are read without `FOR …`, and the session touch is the only
+`UPDATE`.
 
 How `web` acts on a backend answer:
 
@@ -45,7 +46,7 @@ How `web` acts on a backend answer:
 ## Pages
 
 Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии |
-Токены) and the account block
+Токены | Аудит) and the account block
 («login — Выйти»). The login shown is the one in the `me` of the backend answer the page was built
 from; a page rendered without asking the backend (a refused search) shows no account block.
 `GET /admin` redirects to `/admin/overview`; after a login the landing page is still
@@ -136,6 +137,8 @@ The `users` row and its `broker_accounts`, newest first. Sections:
   in the columns of the token ledger list (or «Движений нет.»), and «Все записи →»: the list filtered
   by this user. Read by the list's own query. The section does not add its rows up: the balance is
   the one in «Токены», and the section is the newest rows, not all of them.
+- **Аудит** (#110) — only a link, «Все события по пользователю →»: the audit log filtered by
+  `entityType=user&entityId=<id>`. The card does not read `audit_log`.
 
 The card is five `SELECT`s without a shared snapshot — the user, the accounts, the recent intents,
 the two counters, the recent ledger rows: an account linked, an intent created or a ledger row
@@ -226,6 +229,60 @@ the starter `bonus` of a linked account (with the account id). `purchase` (#117)
 (#246) have no writer yet. The page only shows rows: it does not compare their sum with the cached
 balance in `users` — keeping that equal is the writers' rule (Rule 2), not something a view checks.
 
+### Audit log — `GET /admin/audit?action=&entityType=&entityId=&actorId=&from=&to=&cursor=`
+
+`audit_log`, newest first, `ADMIN_PAGE_SIZE` per page, keyset on `(created_at, id)` as on the other
+lists: one `SELECT` left-joined to `staff` for the actor's login (`listAuditForAdmin`,
+`packages/db/src/admin-audit-ops.ts`). Columns: the time of the row; who — the staff login, else the
+raw `actor_id`, else «—», then `actor_type` as its code; the action as its code; the entity — its type
+as a code and its id; the payload.
+
+**Filters are exact matches**, each optional, all of them combined:
+
+| Parameter | Schema | Matches |
+|---|---|---|
+| `action` | one `AuditAction` | `action = $1` |
+| `entityType` | one `AuditEntityType` | `entity_type = $1` |
+| `entityId` | a uuid | `entity_id = $1` |
+| `actorId` | a uuid | `actor_id = $1` |
+| `from` | `YYYY-MM-DD` | `created_at >= ($1::date)::timestamp at time zone 'UTC'` |
+| `to` | `YYYY-MM-DD`, not before `from` | `created_at < (($1::date + 1)::timestamp) at time zone 'UTC'` |
+
+**Dates are whole UTC days by the database clock, both bounds inclusive**, whatever the session time
+zone: `from = to` is one day, from 00:00:00 UTC to the last microsecond before the next midnight. The
+two selects of the form list the values of the constants (`packages/shared/src/audit.ts`), in their
+order, after an empty «любое»/«любой». `actorId` has no field: it comes from a row's «все события →»
+link, and the page then shows «Сотрудник: <id> — сбросить» and keeps it in a hidden field.
+
+**Links from a row** go only where the target accepts the value: «все события →» only for an
+`actor_id` that is a uuid (`actor_id` is free text — the CLI may write anything, a NULL writes
+nothing), the entity id links to the user card for `user` and to the intent card for
+`trade_intent`, and only when there is an id; anything else is text. A disabled staff member is still
+shown by login — this is history, not access; a `user` actor would get a login only if its uuid
+matched a staff id.
+
+**The payload is a preview**: the first `ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS` (1 024) characters of
+`payload::text`, cut in SQL (`left()`, characters, not bytes), and «(обрезано)» after it when the text
+is longer. The `jsonb` itself never reaches the backend process or the answer: a `bot_text_saved` or
+`bot_text_reset` row carries two bot texts of up to `BOT_TEXT_SOURCE_MAX` characters each (#299), and
+fifty of them would make a page megabytes long. Every other writer's payload fits in the preview
+whole. The text is Postgres's canonical `jsonb` output, not what the writer sent: keys in `jsonb`
+order (shorter first), a space after `:` and `,` — `{"ip": "1.2.3.4", "err": {"name": "E"}}`. It is
+printed as text in a `<code>` block. The full text of a bot text is in `bot_text_overrides` and the
+`bot-text` CLI.
+
+**The page records itself**: every request — the first page, «Далее», each filter — writes its own
+`audit_log_viewed` row, after the `SELECT` and in the same transaction (`runAsStaff`). So a page never
+shows its own row; the next request shows the previous one on top. The keyset cursor is the id of the
+last row shown, so the rows written above it do not shift «Далее»: no repeat, no gap. Hide the views
+with a filter (`action=…` of something else); they are not hidden by default.
+
+The form is serialized by the browser (fields in DOM order, the empty ones as `key=`, which `web`
+drops); the next and first links, the reset link, the redirect and the request to the backend go
+through `adminAuditSearchParams` (`packages/shared/src/admin.ts`), in the order `action, entityType,
+entityId, actorId, from, to, cursor`. The cursor positions, it does not filter, as on the intents
+list; an id with no row gives an empty page.
+
 ## Audit actions
 
 Each view writes one row with `actor_type = 'admin'` and `actor_id` = the staff id. Payload keys are
@@ -244,6 +301,7 @@ named and bounded; nothing else is recorded.
 | intent card, an id that is not a uuid (direct backend call) | `intent_viewed` | — | `{ path, result: 'not_found' }` |
 | trading sessions | `trading_sessions_viewed` | — | `{ path: '/admin/trading-sessions', cursor? }` — `cursor` only when given |
 | token ledger | `tokens_viewed` | — | `{ path: '/admin/tokens', userId?, kind?, cursor? }` — a key only when the parameter was given |
+| audit log | `audit_log_viewed` | — | `{ path: '/admin/audit', action?, entityType?, entityId?, actorId?, from?, to?, cursor? }` — a key only when the parameter was given; every value is an enum, a uuid or a date |
 
 The card's trading and ledger sections and the overview's breakdown are parts of `user_viewed` and
 `overview_viewed`; they add no row and no payload key.
@@ -261,6 +319,9 @@ What `web` refuses before asking the backend, with no row:
 - a token ledger filter outside the schema (an unknown kind, a `user` that is not a uuid — a value
   of blanks included —, a parameter given twice) → 400 with the form and the message, whatever the
   cursor says;
+- an audit filter outside the schema (an unknown action or entity type, an `entityId` or `actorId`
+  that is not a uuid — a value of blanks included —, a date that is not `YYYY-MM-DD`, `from` after
+  `to`, a parameter given twice) → 400 with the form and the message, whatever the cursor says;
 - a cursor that is not a uuid, or given twice → 302 to the same search, filters or list without it;
 - a user or intent card id that is not a uuid → 404.
 
@@ -291,6 +352,15 @@ around these reads directly is caught only in review.
   the overview passes 200 ms at those sizes, add a `(created_at, id)` index in its own migration.
 - The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most five
   `SELECT`s (the user card).
+- The audit log: `audit_log_created_at_idx` serves the order and the dates, `audit_log_entity_idx`
+  the filter by entity (the link from the user card); `action` and `actorId` have no index and scan.
+  Assumed: up to 1 000 000 rows; if `explain analyze` of a page passes 200 ms there, add an index on
+  `(action, created_at desc, id desc)` in its own migration. Each row of a page costs a
+  `payload::text` of its `jsonb` for the preview.
+- A row's payload on the page is at most `ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS` characters (≤ 4 096
+  bytes), so a page of the audit log stays within ≈ 225 KB whatever the writers stored.
+- Every view writes one `audit_log` row that is never deleted — viewing the audit log included, so
+  the log grows with each look at it. Retention is #153.
 
 ## Running it locally
 
@@ -370,6 +440,18 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `seed <script>` as text; the bonus with the account id. `?kind=bonus` — one row. The user card:
    «Токены» — balance 7; «Движения токенов» — both rows, and «Все записи →» opens the list filtered
    by this user. `?kind=bogus` — 400, the form, no «Выйти».
+   Then the audit log. Open «Аудит» twice: the second page shows the first one's `audit_log_viewed`
+   on top, its payload `{"path": "/admin/audit"}`. `?action=audit_log_viewed` — only those. From the
+   user card, «Все события по пользователю →» (`?entityType=user&entityId=<id>`): the `user_viewed`
+   rows. `?from=<today>&to=<today>` (UTC) — today's rows; `?action=bogus` — 400, the form, no
+   «Выйти». Then a bot text row too long to show, written directly (the action is in the CHECK; the
+   table takes only inserts):
+   ```bash
+   docker compose exec postgres psql -U binarius -d binarius -c "insert into audit_log
+     (actor_type, action, entity_type, payload) values ('system', 'bot_text_saved', 'bot_text',
+     jsonb_build_object('key', 'k', 'oldText', repeat('я', 20000), 'newText', 'x'))"
+   ```
+   Open «Аудит»: the row on top, «—» and `system` in «Кто», its payload cut with «(обрезано)».
 6. Check what was written:
    ```bash
    docker compose exec postgres psql -U binarius -d binarius \
@@ -380,7 +462,8 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `users_viewed` with only `path`, and `overview_viewed`; `intents_viewed` with `status`, `mode`,
    `tradingSessionId` or `userId` — each only on its own request —, `intent_viewed` with entity
    `trade_intent`, `trading_sessions_viewed` with only `path`, and `tokens_viewed` with `kind` or
-   `userId` — each only on its own request; still one `user_viewed` per opening of the card. The
-   refused 257-character search, `?status=bogus`, `?kind=bogus` and the card id that is not a uuid
-   wrote nothing.
+   `userId` — each only on its own request; `audit_log_viewed` with `action`, with `entityType` and
+   `entityId`, or with `from` and `to` — each only on its own request; still one `user_viewed` per
+   opening of the card. The refused 257-character search, `?status=bogus`, `?kind=bogus`,
+   `?action=bogus` and the card id that is not a uuid wrote nothing.
 7. `docker compose down -v` when done.
