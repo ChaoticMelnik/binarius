@@ -46,6 +46,14 @@ describe('hashPassword', () => {
   it('pins the parameters production writes', () => {
     expect(SCRYPT_PARAMS).toEqual({ ln: 17, r: 8, p: 1 });
   });
+
+  it('writes a 16-byte salt and a 32-byte key as base64 without padding', async () => {
+    const [, , , salt, key] = (await hashPassword(PASSWORD, CHEAP)).split('$');
+    expect(salt).not.toContain('=');
+    expect(key).not.toContain('=');
+    expect(Buffer.from(salt ?? '', 'base64')).toHaveLength(16);
+    expect(Buffer.from(key ?? '', 'base64')).toHaveLength(32);
+  });
 });
 
 describe('verifyPassword', () => {

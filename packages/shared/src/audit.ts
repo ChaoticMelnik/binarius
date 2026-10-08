@@ -48,6 +48,9 @@ export const AuditAction = {
   TokensViewed: 'tokens_viewed',
   // admin audit log page (#110)
   AuditLogViewed: 'audit_log_viewed',
+  // staff self password change (#78)
+  StaffPasswordChanged: 'staff_password_changed',
+  StaffPasswordChangeFailed: 'staff_password_change_failed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);
