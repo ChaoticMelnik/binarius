@@ -38,6 +38,9 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //     alongside pass.stop() (closeAll runs the steps at once)
 //   BROKER_REST_TIMEOUT_MS < CATCHUP_GRACE_MS; CATCHUP_TICK_MS < CATCHUP_STALLED_RETRY_MS — a
 //     held-back account misses at least one tick
+//   2 × ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < RECONCILE_ATTEMPT_TIMEOUT_MS and
+//     < CATCHUP_ATTEMPT_TIMEOUT_MS — a 401 on the first page and the report of its token (#281)
+//     fit one attempt
 //   the worst case of broker GETs a minute ≤ WORKER_BROKER_GETS_PER_MINUTE (below), with
 //     60_000 / CATCHUP_TICK_MS and 60_000 / RECONCILE_TICK_MS whole ticks a minute
 // The session manager (#101, broker/session-config.ts) adds these:
@@ -126,6 +129,8 @@ export const TIMING_CHAIN_HOLDS =
   CATCHUP_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_REST_TIMEOUT_MS < CATCHUP_GRACE_MS &&
   CATCHUP_TICK_MS < CATCHUP_STALLED_RETRY_MS &&
+  2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < RECONCILE_ATTEMPT_TIMEOUT_MS &&
+  2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < CATCHUP_ATTEMPT_TIMEOUT_MS &&
   Number.isInteger(60_000 / CATCHUP_TICK_MS) &&
   Number.isInteger(60_000 / RECONCILE_TICK_MS) &&
   WORKER_BROKER_GETS_WORST_CASE <= WORKER_BROKER_GETS_PER_MINUTE &&
