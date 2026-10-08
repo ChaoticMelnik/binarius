@@ -37,6 +37,7 @@ import * as botTexts from './bot-texts';
 import * as botTextMessages from './bot-text-messages';
 import * as botTextOverrides from './bot-text-overrides';
 import * as brokerBalance from './broker-balance';
+import * as audit from './audit';
 import * as catalog from './catalog';
 import * as demoStake from './demo-stake';
 import * as env from './env';
@@ -388,6 +389,7 @@ describe('contract coverage (issue #6)', () => {
       admin,
       adminTrading,
       ledger,
+      audit,
       money,
       time,
       ids,

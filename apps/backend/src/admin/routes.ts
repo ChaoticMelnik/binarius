@@ -3,6 +3,8 @@ import {
   ADMIN_ACTIVE_WINDOW_MINUTES,
   ADMIN_PAGE_SIZE,
   AdminErrorCode,
+  AuditAction,
+  AuditEntityType,
   errorIdentity,
   errorLogFields,
   safeParseAdminConfirmRequest,
@@ -16,8 +18,6 @@ import {
   type StaffSessionView,
 } from '@binarius/shared';
 import {
-  AuditAction,
-  AuditEntityType,
   classifyUserSearch,
   completeLogin,
   DUMMY_PASSWORD_HASH,

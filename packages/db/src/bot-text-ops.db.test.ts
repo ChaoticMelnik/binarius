@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BOT_TEXT_CATALOG } from '@binarius/shared';
+import { AuditActorType, BOT_TEXT_CATALOG } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
   listBotTextOverrides,
@@ -10,7 +10,7 @@ import {
   type BotTextActor,
 } from './bot-text-ops';
 import { createTempDatabase, type TempDatabase } from './testing';
-import { AuditActorType, auditLog, botTextOverrides } from './schema/index';
+import { auditLog, botTextOverrides } from './schema/index';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {

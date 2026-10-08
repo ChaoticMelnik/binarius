@@ -7,7 +7,8 @@ import {
   seedUserWithAccount,
   type TempDatabase,
 } from './testing';
-import { AuditAction, auditLog, tradingSwitch } from './schema/index';
+import { AuditAction } from '@binarius/shared';
+import { auditLog, tradingSwitch } from './schema/index';
 import { TradeIntentError, createTradeIntent, takeIntent } from './trade-intent-ops';
 import { openTrading, readTradingSwitch, stopTrading } from './trading-switch-ops';
 

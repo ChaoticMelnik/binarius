@@ -3,6 +3,7 @@ import { TransactionRollbackError, eq, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  AuditAction,
   TradeIntentFailureReason,
   TradeIntentStatus,
   canTransition,
@@ -10,7 +11,6 @@ import {
 } from '@binarius/shared';
 import { createDb, type Db } from './client';
 import {
-  AuditAction,
   auditLog,
   botTextOverrides,
   brokerAccounts,

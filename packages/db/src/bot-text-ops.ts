@@ -11,9 +11,12 @@ import {
   resolveBotTextOverrides,
   type BotTextChangeProblem,
   type BotTextRejection,
+  AuditAction,
+  AuditEntityType,
+  type AuditActorType,
 } from '@binarius/shared';
 import type { Db } from './client';
-import { AuditAction, AuditEntityType, auditLog, type AuditActorType } from './schema/audit-log';
+import { auditLog } from './schema/audit-log';
 import { botTextOverrides } from './schema/bot-text-overrides';
 import type { DbExecutor, Tx } from './trade-intent-ops';
 

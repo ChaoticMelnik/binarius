@@ -1,7 +1,8 @@
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AuditAction, auditLog, staffSessions } from '@binarius/db';
+import { AuditAction } from '@binarius/shared';
+import { auditLog, staffSessions } from '@binarius/db';
 import { createTempDatabase, seedStaff, type TempDatabase } from '@binarius/db/testing';
 import { buildWebApp } from '@binarius/web/app';
 import { createBackendClient } from '@binarius/web/backend-client';
