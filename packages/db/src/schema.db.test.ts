@@ -2169,6 +2169,19 @@ describe('audit_log actions', () => {
       }
     });
   });
+
+  // The two cases above cannot see a value the migration keeps that the constant dropped (or a
+  // hand-edited migration's extra one); the catalog can. Postgres prints the CHECK as
+  // `action = ANY (ARRAY['staff_created'::text, …])`.
+  it('the CHECK lists exactly the values the constant declares', async () => {
+    const { rows } = await pool.query<{ def: string }>(
+      `select pg_get_constraintdef(oid) as def from pg_constraint
+         where conname = 'audit_log_action_check' and connamespace = 'public'::regnamespace`,
+    );
+    expect(rows).toHaveLength(1);
+    const listed = [...rows[0]!.def.matchAll(/'([a-z0-9_-]+)'::text/g)].map((match) => match[1]);
+    expect(listed.sort()).toEqual(Object.values(AuditAction).sort());
+  });
 });
 
 // --- broker_balance_snapshots (#235) ---------------------------------------------------------

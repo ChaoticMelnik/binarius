@@ -18,3 +18,4 @@ export * from './bot-text-ops';
 export * from './admin-read-ops';
 export * from './admin-trading-ops';
 export * from './admin-ledger-ops';
+export * from './admin-audit-ops';
