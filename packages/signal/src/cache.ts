@@ -1,4 +1,4 @@
-import { BrokerRestErrorCode, SignalFeedOutcome } from '@binarius/shared';
+import { BrokerRestErrorCode, SIGNAL_CHART_INTERVAL_MS, SignalFeedOutcome } from '@binarius/shared';
 import type { SignalDecider } from './decide';
 import type { SignalEvaluation, SignalFeed, SignalFeedRequest } from './feed';
 
@@ -29,7 +29,9 @@ interface Held {
 
 // docs/signal.md -> The cache. A decided result is held to the end of the candle its window was
 // fetched in, capped at maxTtlMs; a rate_limited one with retryAfterSec for that long, capped;
-// nothing else is held. Concurrent calls for one key share one inner evaluate. No timer is kept.
+// nothing else is held. Concurrent calls for one key in one candle share one inner evaluate: a
+// call in the next candle never waits for the previous candle's fetch (#343, the scanner at the
+// boundary). No timer is kept.
 export function createCachedSignalFeed(
   inner: SignalFeed,
   options: CachedSignalFeedOptions,
@@ -72,7 +74,10 @@ export function createCachedSignalFeed(
     return entry.result;
   }
 
+  // a late result of an older fetch never replaces a hold that lasts longer
   function hold(key: string, entry: Held): void {
+    const current = held.get(key);
+    if (current !== undefined && current.until > entry.until) return;
     held.delete(key);
     held.set(key, entry);
     for (const oldest of held.keys()) {
@@ -94,14 +99,17 @@ export function createCachedSignalFeed(
       const key = `${request.assetId}:${request.interval}`;
       const hit = fromHold(key);
       if (hit !== undefined) return Promise.resolve(hit);
-      const pending = inFlight.get(key);
+      const intervalMs: number | undefined = SIGNAL_CHART_INTERVAL_MS[request.interval];
+      // an unknown interval keeps the plain key; the inner feed refuses it
+      const flightKey = intervalMs === undefined ? key : `${key}:${Math.floor(now() / intervalMs)}`;
+      const pending = inFlight.get(flightKey);
       if (pending !== undefined) return pending;
 
       const started = fetchAndHold(key, request);
-      inFlight.set(key, started);
+      inFlight.set(flightKey, started);
       // runs after the set above even when the inner call failed synchronously
       const clear = () => {
-        inFlight.delete(key);
+        inFlight.delete(flightKey);
       };
       void started.then(clear, clear);
       return started;

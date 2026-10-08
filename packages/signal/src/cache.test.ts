@@ -293,6 +293,43 @@ describe('createCachedSignalFeed', () => {
     expect(calls).toHaveLength(1);
   });
 
+  // #343: the scanner at B + 500 ms must not wait for a manual fetch started before B
+  it("C12 a call in the next candle does not join the previous candle's fetch", async () => {
+    const pending = [deferred(), deferred()];
+    const { feed, calls } = stubFeed(() => pending[calls.length - 1]!.promise);
+    const cache = cached(feed);
+    at(-200);
+    const before = decided(req('15s'));
+    const first = cache.evaluate(req('15s'));
+    at(500);
+    const after = decided(req('15s'));
+    const second = cache.evaluate(req('15s'));
+    expect(calls).toHaveLength(2);
+    pending[0]!.resolve(before);
+    pending[1]!.resolve(after);
+    expect(await first).toBe(before);
+    expect(await second).toBe(after);
+  });
+
+  it('C13 a late result of the older fetch does not replace the newer hold', async () => {
+    const pending = [deferred(), deferred()];
+    const { feed, calls } = stubFeed(() => pending[calls.length - 1]!.promise);
+    const cache = cached(feed);
+    at(-200);
+    const before = decided(req('15s'));
+    const first = cache.evaluate(req('15s'));
+    at(500);
+    const after = decided(req('15s'));
+    const second = cache.evaluate(req('15s'));
+    pending[1]!.resolve(after);
+    await second;
+    pending[0]!.resolve(before);
+    await first;
+    at(1_000);
+    expect(await cache.evaluate(req('15s'))).toBe(after);
+    expect(calls).toHaveLength(2);
+  });
+
   it('exposes the inner decider', () => {
     const { feed } = stubFeed();
     expect(cached(feed).decider).toBe(feed.decider);
