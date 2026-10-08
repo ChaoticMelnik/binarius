@@ -137,7 +137,9 @@ direction, since the session decides it per trade.
 | the catalog's three failures ([The check](#the-check)) | that row's text + «🔄 Повторить» (the pressed data) + manual; a stale catalog draws no list |
 | `readSignals` threw (unreachable, a non-2xx, a broken body) | «⚠️ Сервис временно недоступен…» + «🔄 Повторить» + manual; `warn` `trading signals not read` |
 
-The catalog's failure is shown first when both fail; each read logs its own line.
+The catalog's failure is shown first when both fail. `readSignals` logs `trading signals not read`;
+the catalog logs as in [The check](#the-check): only `backend_failed`, since the backend logs a
+missing or stale snapshot itself.
 
 ## The launch screen (#320)
 
