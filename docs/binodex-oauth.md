@@ -198,9 +198,16 @@ https://web.telegram.org; base-uri 'none'`, and no `X-Frame-Options` — a brows
 would let `DENY` override `frame-ancestors`. `https://web.telegram.org` is Telegram Web, where the
 Mini App runs in an iframe, and the one parent origin the SDK itself trusts. In that iframe the
 SDK also injects a `<style>` element that Telegram Web fills with a custom style;
-`style-src 'self'` refuses that style, which costs the styling and nothing else. `nosniff`, `referrer-policy: no-referrer` (the navigation to the
-broker carries no `Referer`), `cache-control: no-store` and HSTS are the same as on the admin
-pages, whose own policy and `X-Frame-Options: DENY` are unchanged.
+`style-src 'self'` refuses that style, which costs the styling and nothing else. The routes' own
+hook, which sets that policy, also sets `referrer-policy: no-referrer` on every reply these routes' handlers produce, errors and the
+script included: the login page's URL holds a live state, so not even a same-origin request from
+it carries a `Referer`, and the navigation to the broker carries none. The admin pages send
+`referrer-policy: same-origin` (#241: under `no-referrer` a browser puts `Origin: null` on its
+own form POSTs and the Origin check refuses them; `same-origin` keeps the real Origin and still
+sends no `Referer` off the origin). A POST the Origin check refuses, and a 404 under `/oauth/`,
+are answered before the `/oauth/*` hook and carry the admin defaults: the admin policy,
+`X-Frame-Options: DENY` and `same-origin`. `nosniff`, `cache-control: no-store` and HSTS are the
+same on both.
 
 **Timeouts.** The backend may hold the callback for `OAUTH_CALLBACK_BUDGET_MS` (8 s,
 `packages/shared/src/oauth.ts`): the code exchange (5 s) and the push (3 s); its timing chain

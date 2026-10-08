@@ -205,6 +205,8 @@ describe('the origin check', () => {
     ['another site', 'https://evil.example'],
     // a near miss: the same host on the wrong scheme is a different origin
     ['the wrong scheme', 'https://127.0.0.1:3001'],
+    // what a browser sends on its own form POSTs under no-referrer: accepting it is never the fix
+    ['the literal null a browser sends under no-referrer', 'null'],
   ])('refuses a POST with %s, without calling the backend', async (_label, origin) => {
     const response = await app.inject({
       method: 'POST',
@@ -233,10 +235,21 @@ describe('the response headers', () => {
     ['content-security-policy', "default-src 'none'"],
     ['x-content-type-options', 'nosniff'],
     ['x-frame-options', 'DENY'],
-    ['referrer-policy', 'no-referrer'],
     ['cache-control', 'no-store'],
   ])('sets %s on a page', async (header, expected) => {
     expect(String((await get('/admin/login')).headers[header])).toContain(expected);
+  });
+
+  // under no-referrer a browser serialises the Origin of its own form POSTs as `null` and the
+  // origin check refuses them (#241); same-origin keeps the real Origin
+  it.each([
+    ['a page', '/admin/login', 200],
+    ['a redirect', '/admin/sessions', 302],
+    ['the not-found handler', '/admin/nope', 404],
+  ])('sends referrer-policy same-origin on %s', async (_label, url, status) => {
+    const response = await get(url);
+    expect(response.statusCode).toBe(status);
+    expect(response.headers['referrer-policy']).toBe('same-origin');
   });
 
   // the http half is the point: without the gate there would be nothing to express it with

@@ -75,10 +75,14 @@ export const oauthRoutes: FastifyPluginAsync<OAuthRoutesOptions> = async (
   const broker = new URL(brokerAuthorizeUrl);
   const callbackHref = new URL(OAUTH_CALLBACK_PATH, publicOrigin).href;
 
-  // set before the handler, so an error page Fastify sends for these routes carries it too; the
-  // app's onSend hook adds the admin policy only to a reply that has none
+  // set before the handler, so an error page Fastify sends for these routes carries them too; the
+  // app's onSend hook adds the admin policies only to a reply that has none. no-referrer: the
+  // login page's URL holds a live state and must not surface even as a same-origin Referer, and
+  // the broker navigation carries none; the callback POST is a fetch(), which keeps its Origin
+  // under this policy (#241).
   app.addHook('onRequest', async (_request, reply) => {
     void reply.header('content-security-policy', MINI_APP_CSP);
+    void reply.header('referrer-policy', 'no-referrer');
   });
 
   // The parsed link, or which check refused it as one word: the value itself is never logged —
