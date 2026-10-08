@@ -11,6 +11,7 @@ import {
 import {
   BalanceRefreshError,
   brokerAccounts,
+  hashToken,
   listBalanceRefreshCandidates,
   recordBalanceRefreshFailure,
   summarizeWatchedBalances,
@@ -117,6 +118,25 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
     return { outcome: error, marked };
   }
 
+  // A 401 on a token we believed valid: its fingerprint goes back so the backend marks it expired
+  // (#281). mayRefresh: false on both paths - the tick is a timer (Rule 12), and the route's
+  // budget is shorter than an exchange; the user's next call exchanges it. The answer changes
+  // nothing here, and a throw must not turn the recorded 401 into a throw.
+  async function reportRefused(accountId: string, accessToken: string): Promise<void> {
+    try {
+      const answer = await deps.accessToken(accountId, {
+        mayRefresh: false,
+        refusedToken: hashToken(accessToken),
+      });
+      logger.info(
+        { accountId, answer: answer.ok ? 'ok' : answer.reason },
+        'refused token reported',
+      );
+    } catch (error) {
+      logger.error({ accountId, ...errorLogFields(error) }, 'refused token report failed');
+    }
+  }
+
   async function attempt(
     accountId: string,
     state: FlightState,
@@ -173,6 +193,9 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
         },
         'balance refresh failed',
       );
+      if (error.code === BrokerRestErrorCode.Unauthorized) {
+        await reportRefused(accountId, token.accessToken);
+      }
       return fail(accountId, BROKER_FAILURE[error.code]);
     }
 

@@ -8,6 +8,7 @@ import { until } from '@binarius/shared/testing';
 import {
   brokerBalanceSnapshots,
   createTradeIntent,
+  hashToken,
   upsertBalanceSnapshot,
   type Db,
 } from '@binarius/db';
@@ -187,9 +188,12 @@ describe('refresh', () => {
     await balance.refresh(account.accountId);
     const before = await rowOf(account.accountId);
     lines = [];
+    const callsBefore = tokenCalls.length;
 
     broker.rest.failNext('user', script);
     expect(await balance.refresh(account.accountId)).toBe(code);
+    // only a 401 reports the token back (#281)
+    expect(tokenCalls.length - callsBefore).toBe(code === 'unauthorized' ? 2 : 1);
 
     const after = await rowOf(account.accountId);
     expect(after).toMatchObject({
@@ -209,6 +213,51 @@ describe('refresh', () => {
     expect(warns[0]!.err).not.toHaveProperty('cause');
     expect(lines.join('\n')).not.toContain(account.token);
     expect(lines.join('\n')).not.toContain(broker.url);
+  });
+
+  // #281: the token the broker refused goes back as its fingerprint, never as an exchange
+  it('reports a 401 with the token fingerprint and mayRefresh: false', async () => {
+    const account = await linked();
+    const balance = reconciler();
+    await balance.refresh(account.accountId);
+    tokenCalls.length = 0;
+    lines = [];
+
+    broker.rest.failNext('user', { status: 401 });
+    expect(await balance.refresh(account.accountId)).toBe('unauthorized');
+    expect(tokenCalls).toEqual([
+      { accountId: account.accountId, options: { mayRefresh: true } },
+      {
+        accountId: account.accountId,
+        options: { mayRefresh: false, refusedToken: hashToken(account.token) },
+      },
+    ]);
+    expect(logsAt(INFO).find((entry) => entry.msg === 'refused token reported')).toMatchObject({
+      accountId: account.accountId,
+      answer: 'ok',
+    });
+    expect(lines.join('\n')).not.toContain(account.token);
+    expect(lines.join('\n')).not.toContain(hashToken(account.token));
+  });
+
+  it('keeps the recorded 401 when the report throws', async () => {
+    const account = await linked();
+    const balance = reconciler();
+    await balance.refresh(account.accountId);
+    let calls = 0;
+    tokenAnswers.set(account.accountId, async () => {
+      calls += 1;
+      if (calls === 1) return { ok: true, accessToken: account.token };
+      throw new Error('report broke');
+    });
+    lines = [];
+
+    broker.rest.failNext('user', { status: 401 });
+    expect(await balance.refresh(account.accountId)).toBe('unauthorized');
+    expect((await rowOf(account.accountId))?.lastRefreshError).toBe('unauthorized');
+    expect(
+      logsAt(ERROR).find((entry) => entry.msg === 'refused token report failed'),
+    ).toMatchObject({ accountId: account.accountId, err: { name: 'Error' } });
   });
 
   it('records a value outside the stored domain as a contract violation, by field only', async () => {
@@ -384,6 +433,21 @@ describe('tick', () => {
       watched: 4,
       withoutSnapshot: 0,
     });
+  });
+
+  it('reports a 401 on the tick with mayRefresh: false (#281)', async () => {
+    const account = await requested('-5 minutes');
+    broker.rest.failNext('user', { status: 401 });
+
+    await reconciler(own.db).tick();
+
+    expect(tokenCalls).toEqual([
+      { accountId: account.accountId, options: { mayRefresh: false } },
+      {
+        accountId: account.accountId,
+        options: { mayRefresh: false, refusedToken: hashToken(account.token) },
+      },
+    ]);
   });
 
   it('takes at most the per-tick limit, never-observed accounts first', async () => {
