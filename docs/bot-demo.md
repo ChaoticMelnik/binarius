@@ -270,9 +270,10 @@ read, then the new message); each of `.demoGroups`, `.demoPage`, `.demoAsset` an
 `.demoDuration` is one backend call and up to three Bot API calls (the edit refused as gone,
 then the message sent anew): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is three backend calls
 (the catalog beside the answer, then the signal and the access read for the stake label, #297)
-and up to four Bot API calls — «⏳» refused as gone and sent anew, the result sent; or «⏳»
-edited, the result's edit refused as gone and sent anew: 3 × 5 000 + 4 × 8 000 = 47 s, the
-longest declared path, so `HANDLER_BUDGET_MS` is 47 s ([bot-demo-trade.md](bot-demo-trade.md#timing));
+and up to four Bot API calls — the answer, then «⏳» refused as gone and sent anew, the result
+sent; or the answer, «⏳» edited, the result's edit refused as gone and sent anew:
+3 × 5 000 + 4 × 8 000 = 47 s, the longest declared path, so `HANDLER_BUDGET_MS` is 47 s
+([bot-demo-trade.md](bot-demo-trade.md#timing));
 `HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS` (50 s) `< COMPOSE_STOP_GRACE_PERIOD_MS` (55 s) is
 checked at import (`TIMING_CHAIN_HOLDS`). `.legacyDuration` (#313, an old duration button) is
 no backend call and two Bot API calls, the answer and the keyboard's removal: 16 s. The answer
@@ -292,9 +293,13 @@ makes at most one chart GET, inside `TRADING_SIGNAL_BUDGET_MS` (4 s), and
   alone. No Telegram id, no symbol, nothing of the broker's text.
 - the three edit outcomes above — the method and the Telegram error code, never the description
   or the text; the transport line also names the update id.
-- `answering the callback query failed` (`warn`) — the method and the code.
+- `answering the callback query failed` (`warn`) — the method and the code; from an old button
+  (#313, #314) also its `callbackData`.
+- `the keyboard of an old button was not removed` (`info`) — the method, the code and the pressed
+  `callbackData` (#329: the demo's, the picker's and the old oauth button's handlers share it).
 
-`logging.test.ts` reads these lines back from the pino sink.
+`logging.test.ts` reads these lines back from the pino sink, except the two `callbackData` fields
+and the old-button line, which `demo.test.ts` and `bot.test.ts` read from the handlers' logger.
 
 ## Boundaries
 

@@ -78,8 +78,8 @@ this order (`apps/backend/src/auth/routes.ts`):
    `invalid_telegram_auth`. The state is not touched and nobody is told: its owner is not known
    yet. `auth_date` may be at most `INIT_DATA_MAX_AGE_MS` old — the state's ten-minute TTL plus
    60 s for the two clocks, all three in `apps/backend/src/auth/oauth-timing.ts` — because the
-   Mini App opens on a button the bot shows after the state exists, and the callback has to
-   arrive before the state expires. An `auth_date` ahead of this host's clock is accepted: only
+   Mini App opened on a button the bot showed after the state existed (until #314; no route
+   issues a state now), and the callback has to arrive before the state expires. An `auth_date` ahead of this host's clock is accepted: only
    Telegram can sign one. A `user.id` that is not a positive safe integer is refused, because
    `JSON.parse` would already have rounded it;
 4. the state CAS — 400 `invalid_state`;

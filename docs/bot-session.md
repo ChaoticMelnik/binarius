@@ -194,7 +194,7 @@ One entry per session id, in process memory, like the intent tracker
 ## Timing
 
 - `HANDLER_CALLS.sessionStart` = 3 backend calls and 2 Bot API calls: the catalog read beside the
-  answer (counted as sequential, as in `oauth`), `startSession` and its retry, the message: 31 s.
+  answer (counted as sequential, as in `confirm`), `startSession` and its retry, the message: 31 s.
 - `HANDLER_CALLS.sessionRefresh` = 2 / 3: the edit refused as gone, then sent anew: 34 s.
 - `HANDLER_CALLS.sessionStop` = 3 / 3: `stopSession`, the read after a 409, the edit refused as
   gone and sent anew: 39 s.
