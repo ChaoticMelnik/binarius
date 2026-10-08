@@ -1,8 +1,11 @@
 import {
+  safeParseAdminBotTextPreviewResponse,
   safeParseAdminBotTextResetResponse,
   safeParseAdminBotTextResponse,
   safeParseAdminBotTextSaveResponse,
   safeParseAdminBotTextsResponse,
+  type AdminBotTextPreviewRequest,
+  type AdminBotTextPreviewResponse,
   type AdminBotTextResetRequest,
   type AdminBotTextResetResponse,
   type AdminBotTextResponse,
@@ -115,6 +118,11 @@ export interface BackendClient {
   ): Promise<ChangePasswordResponse>;
   botTexts(token: string): Promise<AdminBotTextsResponse>;
   botText(token: string, key: string): Promise<AdminBotTextResponse>;
+  previewBotText(
+    token: string,
+    key: string,
+    request: AdminBotTextPreviewRequest,
+  ): Promise<AdminBotTextPreviewResponse>;
   saveBotText(
     token: string,
     key: string,
@@ -283,6 +291,12 @@ export function createBackendClient({
       return parsed(
         safeParseAdminBotTextResponse,
         await call('GET', botTextPath(key), { session }),
+      );
+    },
+    async previewBotText(session, key, request) {
+      return parsed(
+        safeParseAdminBotTextPreviewResponse,
+        await call('POST', `${botTextPath(key)}/preview`, { body: request, session }),
       );
     },
     async saveBotText(session, key, request) {

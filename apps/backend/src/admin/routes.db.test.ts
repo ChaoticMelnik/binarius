@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   ADMIN_BOT_TEXT_BODY_LIMIT_BYTES,
   adminBotTextOverrideViewSchema,
+  adminBotTextPreviewResponseSchema,
   adminBotTextResetResponseSchema,
   adminBotTextResponseSchema,
   adminBotTextSaveResponseSchema,
@@ -2346,6 +2347,7 @@ describe('the bot texts pages (#300)', () => {
   it.each([
     ['GET', '/admin/bot-texts', undefined],
     ['GET', '/admin/bot-texts/welcome', undefined],
+    ['POST', '/admin/bot-texts/welcome/preview', { source: 'x' }],
     ['POST', '/admin/bot-texts/welcome/save', { source: 'x', expectedVersion: 0 }],
     ['POST', '/admin/bot-texts/welcome/reset', { expectedVersion: 0 }],
   ] as const)(
@@ -2421,6 +2423,42 @@ describe('the bot texts pages (#300)', () => {
       ]);
       expect(await lastEntry(seeded.staffId)).toMatchObject({ entityType: null, payload });
     }
+  });
+
+  it('T4 renders a preview with the sample and the fragments in effect, and writes no row', async () => {
+    const { seeded, token } = await signedIn();
+    await cliSave('connectButton', 'Жми');
+    const preview = async (key: string, source: string) => {
+      const { body } = await post(token, textUrl(key, 'preview'), { source });
+      const parsed = adminBotTextPreviewResponseSchema.parse(body);
+      const entry = await lastEntry(seeded.staffId);
+      return { parsed, entry };
+    };
+
+    const codeSent = await preview('codeSent', '<b>Код на {email}</b>');
+    expect(codeSent.parsed).toMatchObject({
+      outcome: 'rendered',
+      rendered: { kind: 'html', telegramHtml: '<b>Код на ada@example.com</b>' },
+    });
+    expect(codeSent.entry).toMatchObject({
+      action: AuditAction.BotTextPreviewed,
+      entityType: AuditEntityType.BotText,
+      payload: { path: '/admin/bot-texts/:key/preview', key: 'codeSent', result: 'rendered' },
+    });
+    expect(JSON.stringify((await preview('welcome', 'Нажми «{connectButton}»')).parsed)).toContain(
+      'Нажми «Жми»',
+    );
+    expect((await preview('connectButton', 'Жми сюда')).parsed).toMatchObject({
+      rendered: { kind: 'plain', text: 'Жми сюда' },
+    });
+
+    const broken = await preview('welcome', '<b>тест');
+    expect(broken.parsed).toMatchObject({
+      outcome: 'refused',
+      problems: [{ key: 'welcome', reason: 'Битый HTML: <b> is never closed' }],
+    });
+    expect(broken.entry?.payload).toMatchObject({ result: 'refused' });
+    expect(await botTextRows()).toMatchObject([{ key: 'connectButton' }]);
   });
 
   it('T5 saves under the session: one audit row with both texts, the staff member as writer', async () => {
@@ -2506,7 +2544,7 @@ describe('the bot texts pages (#300)', () => {
     });
   });
 
-  it.each(['save', 'reset'])(
+  it.each(['preview', 'save', 'reset'])(
     'T9 keeps a commands key read-only on %s, before the writer',
     async (action) => {
       const { seeded, token } = await signedIn();

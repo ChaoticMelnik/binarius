@@ -4,12 +4,16 @@ import {
   ADMIN_BOT_TEXT_BODY_LIMIT_BYTES,
   adminBotTextProblems,
   BOT_TEXT_KEY_PATTERN,
+  botTextChangeProblems,
   isAdminBotTextEditable,
   isBotTextKey,
+  renderBotTextPreview,
   resolveBotTextOverrides,
+  safeParseAdminBotTextPreviewRequest,
   safeParseAdminBotTextResetRequest,
   safeParseAdminBotTextSaveRequest,
   UnexpectedBotTextOutcome,
+  type AdminBotTextPreviewResponse,
   type AdminBotTextResetResponse,
   type AdminBotTextResponse,
   type AdminBotTextSaveResponse,
@@ -942,6 +946,51 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         return {
           result: { me: meOf(ctx), text: await textViewOf(tx, known) },
           audit: textAudit(AuditAction.BotTextViewed, path, known, 'found'),
+        };
+      },
+    );
+    if (answer === undefined) return reply;
+    if (answer === null) return reply.code(404).send({ error: AdminErrorCode.NotFound });
+    return reply.send(answer);
+  });
+
+  // nothing is written and nothing locked: a save in between is caught by the version on save
+  app.post('/admin/bot-texts/:key/preview', textBody, async (request, reply) => {
+    const parsed = safeParseAdminBotTextPreviewRequest(request.body);
+    if (!parsed.success) return badTextBody(reply, parsed.error.issues);
+    const { source } = parsed.data;
+    const { key, known } = textKeyOf(request);
+    const path = '/admin/bot-texts/:key/preview';
+    const answer = await asStaff(
+      request,
+      reply,
+      async (tx, ctx): Promise<StaffActionResult<AdminBotTextPreviewResponse | null>> => {
+        const audit = (result: AdminBotTextPreviewResponse['outcome'] | 'not_found') =>
+          textAudit(AuditAction.BotTextPreviewed, path, key, result);
+        if (known === undefined) return { result: null, audit: audit('not_found') };
+        const { rows, resolved } = await readTexts(tx);
+        const base = { me: meOf(ctx), text: toAdminBotTextView(known, rows, resolved) };
+        if (!isAdminBotTextEditable(known)) {
+          return { result: { ...base, outcome: 'read_only' }, audit: audit('read_only') };
+        }
+        const problems = botTextChangeProblems(known, source, rows);
+        if (problems.length > 0) {
+          return {
+            result: { ...base, outcome: 'refused', problems: adminBotTextProblems(problems) },
+            audit: audit('refused'),
+          };
+        }
+        const after = resolveBotTextOverrides([
+          ...rows.filter((row) => row.key !== known),
+          { key: known, source },
+        ]);
+        return {
+          result: {
+            ...base,
+            outcome: 'rendered',
+            rendered: renderBotTextPreview(known, after.source),
+          },
+          audit: audit('rendered'),
         };
       },
     );

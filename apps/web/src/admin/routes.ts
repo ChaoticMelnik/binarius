@@ -625,6 +625,36 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
     }),
   );
 
+  app.post(`${BOT_TEXTS_PATH}/:key/preview`, async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const key = keyParamOf(request);
+      if (!isBotTextKey(key)) return textNotFound(reply);
+      const form = botTextFormOf(request.body);
+      if (form === undefined) return textBadRequest(reply);
+      let answer;
+      try {
+        answer = await backend.previewBotText(token, key, { source: form.source });
+      } catch (error) {
+        if (isNotFound(error)) return textNotFound(reply);
+        throw error;
+      }
+      const page = (status: number, options: BotTextPageOptions) =>
+        sendHtml(
+          reply,
+          status,
+          botTextPage(answer.text, { login: answer.me.login, draft: form.source, ...options }),
+        );
+      switch (answer.outcome) {
+        case 'rendered':
+          return page(200, { rendered: answer.rendered });
+        case 'refused':
+          return page(400, { problems: answer.problems });
+        case 'read_only':
+          return page(400, { message: TEXTS.botTextReadOnly });
+      }
+    }),
+  );
+
   app.post(`${BOT_TEXTS_PATH}/:key/save`, async (request, reply) =>
     withStaffSession(request, reply, async (token) => {
       const key = keyParamOf(request);

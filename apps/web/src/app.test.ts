@@ -93,6 +93,7 @@ interface Calls {
   changePassword: unknown[][];
   botTexts: unknown[];
   botText: unknown[][];
+  previewBotText: unknown[][];
   saveBotText: unknown[][];
   resetBotText: unknown[][];
 }
@@ -119,6 +120,7 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     changePassword: [],
     botTexts: [],
     botText: [],
+    previewBotText: [],
     saveBotText: [],
     resetBotText: [],
   };
@@ -188,6 +190,15 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     botText: async (token, key) => {
       calls.botText.push([token, key]);
       return { me: SAMPLE_ME, text: SAMPLE_BOT_TEXT };
+    },
+    previewBotText: async (token, key, request) => {
+      calls.previewBotText.push([token, key, request]);
+      return {
+        me: SAMPLE_ME,
+        text: SAMPLE_BOT_TEXT,
+        outcome: 'rendered',
+        rendered: { kind: 'html', telegramHtml: '<b>Привет</b> <a href="javascript:x">тут</a>' },
+      };
     },
     saveBotText: async (token, key, request) => {
       calls.saveBotText.push([token, key, request]);
@@ -2313,6 +2324,29 @@ describe('the bot texts pages (#300)', () => {
     expect(missing.statusCode).toBe(404);
     expect(missing.body).toContain(TEXTS.botTextNotFoundTitle);
     expect(calls.botText).toEqual([[TOKEN, 'startCommand']]);
+  });
+
+  it('W4 previews: CRLF normalized, the bubble converted, the draft kept, no inline style or script', async () => {
+    const response = await post(
+      '/admin/bot-texts/welcome/preview',
+      form('7', 'a\r\nb\r\n'),
+      withCookie,
+    );
+    expect(response.statusCode).toBe(200);
+    expect(calls.previewBotText).toEqual([[TOKEN, 'welcome', { source: 'a\nb' }]]);
+    expect(response.body).toMatch(/<div class="tg-bubble">\s*<b>Привет<\/b> тут\s*<\/div>/);
+    expect(response.body).not.toContain('javascript:');
+    expect(textareaOf(response.body)).toBe('\na\nb');
+    expect(response.body).not.toMatch(/<style|<script/);
+
+    await rebuild({
+      previewBotText: async () =>
+        answering({ outcome: 'refused', problems: [{ key: 'welcome', reason: 'Битый HTML: x' }] }),
+    });
+    const refused = await post('/admin/bot-texts/welcome/preview', form('7', '<b>x'), withCookie);
+    expect(refused.statusCode).toBe(400);
+    expect(refused.body).toContain('Битый HTML: x');
+    expect(textareaOf(refused.body)).toBe('\n&lt;b&gt;x');
   });
 
   it('W5 saves: 303 on success, the notice on unchanged, the other text on a conflict', async () => {

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { renderBotTextPreview } from './admin-bot-texts';
+import { BOT_TEXT_CATALOG, defaultBotTextSource, type BotTextKey } from './bot-texts';
 import {
+  decodeTelegramEntities,
   escapeTelegramHtml,
   InvalidTelegramTemplate,
   plainTextOf,
@@ -9,6 +12,7 @@ import {
   telegramHtmlProblems,
   telegramHtmlTagRanges,
   telegramHtmlTemplate,
+  telegramHtmlTokens,
   type TelegramHtml,
 } from './telegram-html';
 
@@ -202,6 +206,50 @@ describe('plainTextOf', () => {
   it('gives back exactly what went through a hole', () => {
     const hostile = `<&>_*"'`;
     expect(plainTextOf(telegramHtml`<b>${hostile}</b>`)).toBe(hostile);
+  });
+});
+
+describe('decodeTelegramEntities', () => {
+  it('decodes in one pass and keeps the tags', () => {
+    expect(decodeTelegramEntities('<b>&lt;&#x41;&amp;lt;</b>')).toBe('<b><A&lt;</b>');
+  });
+});
+
+describe('telegramHtmlTokens (#300)', () => {
+  const htmlKeys = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
+    (key) => BOT_TEXT_CATALOG[key].kind === 'html',
+  );
+
+  it.each(htmlKeys)('reads the text of %s as plainTextOf does', (key) => {
+    const rendered = renderBotTextPreview(key, defaultBotTextSource);
+    if (rendered.kind !== 'html') throw new Error('an html key rendered plain');
+    const text = telegramHtmlTokens(rendered.telegramHtml)
+      .map((token) => (token.type === 'text' ? token.text : ''))
+      .join('');
+    expect(text).toBe(plainTextOf(rendered.telegramHtml));
+  });
+
+  it('keeps an attribute as written and decodes the text', () => {
+    expect(telegramHtmlTokens('<A HREF="https://e.test/?a=1&amp;b=2">x &amp; y</a>')).toEqual([
+      { type: 'open', name: 'a', attributes: { href: 'https://e.test/?a=1&amp;b=2' } },
+      { type: 'text', text: 'x & y' },
+      { type: 'close', name: 'a' },
+    ]);
+  });
+
+  it('gives a bare attribute as true and nests pre and code', () => {
+    expect(telegramHtmlTokens('<blockquote expandable>q</blockquote>')[0]).toEqual({
+      type: 'open',
+      name: 'blockquote',
+      attributes: { expandable: true },
+    });
+    expect(telegramHtmlTokens('<pre><code class="language-ts">x</code></pre>')).toEqual([
+      { type: 'open', name: 'pre', attributes: {} },
+      { type: 'open', name: 'code', attributes: { class: 'language-ts' } },
+      { type: 'text', text: 'x' },
+      { type: 'close', name: 'code' },
+      { type: 'close', name: 'pre' },
+    ]);
   });
 });
 

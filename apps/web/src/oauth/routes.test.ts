@@ -49,6 +49,7 @@ beforeEach(() => {
     changePassword: unused,
     botTexts: unused,
     botText: unused,
+    previewBotText: unused,
     saveBotText: unused,
     resetBotText: unused,
     oauthCallback: (request) => {

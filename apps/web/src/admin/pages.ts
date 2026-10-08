@@ -4,10 +4,12 @@ import {
   BOT_TEXT_GROUP_TITLES,
   BOT_TEXT_SOURCE_MAX,
   BotTextGroup,
+  BotTextKind,
   botTextKeysOf,
   isAdminBotTextEditable,
   type AdminBotTextOverrideView,
   type AdminBotTextProblem,
+  type AdminBotTextRendered,
   type AdminBotTextView,
   type BotTextKey,
   ADMIN_INTENTS_ACTIVE_FILTER,
@@ -40,6 +42,7 @@ import {
   type StaffSessionView,
 } from '@binarius/shared';
 import { html, layout, type SafeHtml } from '../html';
+import { telegramPreview } from './telegram-preview';
 import { TEXTS } from './texts';
 
 const error = (message: string | undefined): SafeHtml =>
@@ -1129,11 +1132,23 @@ export const placeholderHints = (text: AdminBotTextView): SafeHtml => {
     }`;
 };
 
+const previewBlock = (rendered: AdminBotTextRendered): SafeHtml =>
+  html`<h2>${TEXTS.botTextPreviewHeading}</h2>
+    <div class="tg-bubble">
+      ${
+        rendered.kind === BotTextKind.Html
+          ? telegramPreview(rendered.telegramHtml)
+          : html`<span class="tg-label">${rendered.text}</span>`
+      }
+    </div>
+    <p class="hint">${TEXTS.botTextPreviewHint}</p>`;
+
 export interface BotTextPageOptions {
   login?: string;
   notice?: BotTextNotice;
   // what the staff member submitted; stays in the field
   draft?: string;
+  rendered?: AdminBotTextRendered;
   problems?: readonly AdminBotTextProblem[];
   conflict?: { currentVersion: number; currentSource: string };
   message?: string;
@@ -1200,6 +1215,7 @@ ${value}</textarea>
           : html`<p class="hint">${TEXTS.botTextReadOnly}</p>
               <pre>${value}</pre>`
       }
+      ${options.rendered === undefined ? '' : previewBlock(options.rendered)}
       ${
         override === null
           ? ''
