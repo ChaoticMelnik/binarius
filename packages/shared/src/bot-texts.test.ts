@@ -97,6 +97,13 @@ describe('the bot texts catalog', () => {
   it('keeps `buttons` the bot labels of today and `commands` the command descriptions', () => {
     expect(botTextKeysOf(BotTextGroup.Buttons).sort()).toEqual(
       [
+        'backToListButton',
+        'demoManualButton',
+        'demoSignalsRefreshButton',
+        'launchCycleButton',
+        'sessionAgainButton',
+        'stakeBackLaunchButton',
+        'stakeChangeButton',
         'changeEmailButton',
         'confirmButton',
         'confirmButtonNoEmail',

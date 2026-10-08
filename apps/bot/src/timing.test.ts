@@ -294,6 +294,7 @@ async function observe(branch: Branch): Promise<Calls> {
       backend += 1;
       return (branch.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)))();
     },
+    readSignals: () => Promise.reject(new Error('not used here')),
     evaluateSignal: (assetId, interval) => {
       backend += 1;
       return (branch.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)))(assetId, interval);

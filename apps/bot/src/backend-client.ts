@@ -16,6 +16,8 @@ import {
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   safeParseTradingSignalResponse,
+  safeParseTradingSignalsResponse,
+  TRADING_SIGNALS_PATH,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
   type ChatMemberResponse,
@@ -35,6 +37,7 @@ import {
   type TradingAccessResponse,
   type TradingSessionView,
   type TradingSignalResponse,
+  type TradingSignalsResponse,
   TradingSessionErrorCode,
   type UserAccountView,
   type UserStartRequest,
@@ -93,6 +96,9 @@ export interface BackendClient {
   readTradingAccess(telegramUserId: string): Promise<TradingAccessResponse>;
   readPairs(): Promise<PairsCatalogResponse>;
   evaluateSignal(assetId: number, interval: SignalInterval): Promise<TradingSignalResponse>;
+  // the scanner's pairs with a signal on the last closed 15s candle (#343); no symbol or payout:
+  // the bot joins them with readPairs (#320)
+  readSignals(): Promise<TradingSignalsResponse>;
   // a new intent (201) and the replay of the same clientRequestId (200) read the same (#127)
   createIntent(request: CreateTradeIntentRequest): Promise<TradeIntentView>;
   // scoped by the owner: another user's id is the same 404 not_found as a missing one
@@ -269,6 +275,11 @@ export function createBackendClient({
       const parsed = safeParseTradingSignalResponse(
         await post('trading/signal', { assetId, interval }),
       );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
+    },
+    async readSignals() {
+      const parsed = safeParseTradingSignalsResponse(await get(TRADING_SIGNALS_PATH.slice(1)));
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data;
     },

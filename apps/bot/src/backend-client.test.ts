@@ -550,6 +550,50 @@ describe('readBotTexts (#299)', () => {
   });
 });
 
+describe('readSignals', () => {
+  const SIGNALS = {
+    asOf: 1_760_000_016_000,
+    interval: '15s',
+    scanned: 25,
+    signals: [
+      {
+        assetId: 101,
+        action: 'up',
+        lastCandleTimestamp: 1_760_000_000_000,
+        decidedAt: 1_760_000_015_500,
+        ageMs: 1_000,
+      },
+    ],
+  };
+
+  it('sends a GET under the bearer and returns the parsed answer', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, SIGNALS);
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).readSignals()).toEqual(SIGNALS);
+    expect(capture.method).toBe('GET');
+    expect(capture.url).toBe('/trading/signals');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(capture.body).toBe('');
+  });
+
+  it('reports an answer that fails the schema as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { ...SIGNALS, interval: '5s' });
+    });
+    const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readSignals());
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('carries a non-2xx as its status', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 401, { error: 'unauthorized' });
+    });
+    const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readSignals());
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status: 401 });
+  });
+});
+
 describe('readPairs', () => {
   it('sends a GET under the bearer with no body and no content-type, and returns the whole answer', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {

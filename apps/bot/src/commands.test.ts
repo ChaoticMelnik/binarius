@@ -57,6 +57,7 @@ describe('the command menu', () => {
       setNotificationLevel: () => Promise.reject(new Error('not used here')),
       readTradingAccess: () => Promise.reject(new Error('not used here')),
       readPairs: () => Promise.reject(new Error('not used here')),
+      readSignals: () => Promise.reject(new Error('not used here')),
       evaluateSignal: () => Promise.reject(new Error('not used here')),
       createIntent: () => Promise.reject(new Error('not used here')),
       readIntent: () => Promise.reject(new Error('not used here')),

@@ -362,6 +362,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     readTradingAccess: unused,
     readPairs: unused,
     evaluateSignal: unused,
+    readSignals: unused,
     createIntent: unused,
     readIntent: unused,
     startSession: unused,
