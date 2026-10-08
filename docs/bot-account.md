@@ -140,10 +140,10 @@ caught by the projections, not by the database.
 ## Timing
 
 `HANDLER_CALLS.account` = one backend call and one Bot API call (`readAccount`, then
-`sendMessage`), 13 s; the longest handler path (`confirm`, 45 s) is unchanged. `timing.test.ts`
-runs every branch — no sender, a group, an active link, a pending and a revoked link, no link, a
-blocked user, `user_not_found`, an unreachable backend — and checks the declaration against the
-worst of them.
+`sendMessage`), 13 s; the longest handler path (`demoAnalysis`, 47 s since #297) is unchanged.
+`timing.test.ts` runs every branch — no sender, a group, an active link, a pending and a revoked
+link, no link, a blocked user, `user_not_found`, an unreachable backend — and checks the
+declaration against the worst of them.
 
 ## Boundaries
 

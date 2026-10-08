@@ -58,7 +58,7 @@ sends one, so for the bot's parser such a body is a contract violation, not numb
 
 | Outcome | Source | What the bot does |
 | --- | --- | --- |
-| 200 `status: 'active'` | the users row | the status card; `no_account` → «not connected» and the connect buttons ([bot-menu.md](bot-menu.md)) |
+| 200 `status: 'active'` | the users row | the status card; `no_account` → «not connected» and the connect button ([bot-menu.md](bot-menu.md)) |
 | 200 `status: 'blocked'` | the users row | the blocked text, no card; the numbers are still the user's |
 | 404 `user_not_found` (`UserErrorCode.UserNotFound`) | no users row: such a user has no ledger and no reservation | unavailable + warn: the bot reads the route right after `/users/start` upserted the row, so this is the backend contradicting itself |
 | 404 `broker_account_not_found` (`TradeIntentErrorCode.BrokerAccountNotFound`) | `brokerAccountId` is not an account of this user | unavailable + warn (the bot sends no `brokerAccountId`) |

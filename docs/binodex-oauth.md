@@ -760,7 +760,8 @@ not.
 - **#113** is the backend's `initData` check on the callback ([Why the callback is
   public](#why-the-callback-is-public)): the signature, the age and the comparison with the
   state's owner.
-- **#114** is the bot's `web_app` button and the Mini App login and callback pages in `apps/web`
+- **#114** was the bot's `web_app` button (removed in #314; the bot now offers the email login
+  only) and is the Mini App login and callback pages in `apps/web`
   ([The Mini App pages](#the-mini-app-pages-114)); the callback page sends
   `Telegram.WebApp.initData` unchanged with the code and the state, through `apps/web`.
 - **#10** owns the starter pack and the confirm button; the outcome message in the bot is the
