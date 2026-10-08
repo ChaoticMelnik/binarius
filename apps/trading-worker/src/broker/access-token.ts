@@ -25,8 +25,9 @@ export type AccessTokenUnavailable =
 
 export type AccessTokenOutcome =
   | { ok: true; accessToken: string }
-  // a refusal holds until something changes (AccessTokenRefusal); `status` is the HTTP status
-  // behind a backend_status or contract_violation answer
+  // a refusal holds until something changes (AccessTokenRefusal), except refresh_rate_limited
+  // (#275, temporary); `status` is the HTTP status behind a backend_status or contract_violation
+  // answer
   | { ok: false; reason: AccessTokenRefusal | AccessTokenUnavailable; status?: number };
 
 export interface AccessTokenOptions {
