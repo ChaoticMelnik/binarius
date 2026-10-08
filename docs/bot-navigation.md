@@ -95,9 +95,11 @@ on any message whose «🔄 Повторить» carries one of those prefixes, 
 | `stakeInputInvalid` | the picker's way back |
 
 «📊 Новый анализ» opens the analysis of the same pair and duration (`demo:an:<assetId>:<sec>`), never
-a stake: the analysis is not skipped (Rule 20). The trade tracker's edits now take the view
-(`IntentTrackRequest.edit(text, view)`), as the session tracker's do, so its last edit draws the end
-of the path.
+a stake: the analysis is not skipped (Rule 20). The trackers' edits take the view and, for a last
+edit that is not a status, why: `IntentTrackRequest.edit(text, view, end?)` with `end` a `TrackEnd`
+(`not_found`, `deadline`), `SessionTrackRequest.edit(text, view, end?)` with `not_found` only. So
+the last edit draws its next step too: the end of the path on a stop status, the menu alone on a
+404, the refresh and the menu at the deadline of a live trade.
 
 An old message sent before #350 keeps the keyboard it had: Telegram keeps old messages, and the rule
 applies to what is sent after the deploy.
