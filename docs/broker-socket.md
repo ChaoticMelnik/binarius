@@ -433,9 +433,19 @@ exits 1 with no verdict line. A `user.data` of another user after command 1 does
 every window is still listened to, and the verdict is `inconclusive` unless a cross-socket answer
 makes it `broadcast`.
 
-**Stated assumptions.** A `fail` of a below-minimum command stands for every `fail`: its messages
-are printed, not judged. The claim is bounded by the window: the safe verdict means that within
-15 s after each command no answer reached the other socket, not that none ever could.
+**Stated assumptions.**
+
+- A `fail` of a below-minimum command stands for every `fail`: its messages are printed, not
+  judged.
+- The claim is bounded by the window: the safe verdict means that within 15 s after each command
+  no answer reached the other socket, not that none ever could.
+- Only answers that pass the client's schema are counted. An event that fails it is dropped before
+  it can answer a command in the worker's own client too (`socket.ts`: `normalizeBrokerEvent`
+  before `answerCommand`), so it cannot settle a socket order. A `broker event problem` warning
+  naming `user.<mode>.open_trade.*` on either socket's stderr voids a safe verdict: the operator
+  reads stderr before setting `BROKER_WS_URL`.
+- A demo answer's routing stands for real: every probe order is DEMO, while the worker with
+  `BROKER_WS_URL` set also sends `user.real.open_trade`.
 
 **What it leaves behind.** Up to three demo trades of `min_trade_amount`, opened outside the
 intent pipeline and the trading switch: `not_ours` for the catch-up and the reconciler. The
