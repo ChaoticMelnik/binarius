@@ -98,7 +98,7 @@ PostgreSQL + Drizzle ORM (решение зафиксировано 2026-09-21, 
   2. Деньги/токены — `bigint`/`numeric` string-mode + `DecimalString`, никогда JS `number`.
   3. `token_ledger` и `audit_log` — append-only, включая TRUNCATE (триггеры).
   4. Владение строк — композитными FK, не проверками в коде.
-  5. Порядок блокировок `users → broker_accounts → trading_sessions → trade_intents`, `broker_accounts` — `FOR NO KEY UPDATE`.
+  5. Порядок блокировок `users → broker_accounts → trading_sessions → trade_intents`, `broker_accounts` — `FOR NO KEY UPDATE`; домен staff — строка `staff` первой (`FOR NO KEY UPDATE`: CLI, `startLoginChallenge`, `runAsStaff({ lockStaff: true })` у смены пароля и revoke), пара сессий разных сотрудников — #151.
   6. Переходы `trade_intents` — только CAS внутри UPDATE, возраст — по часам БД.
   7. Идемпотентность — unique-индексы `(user_id, client_request_id)`, один нетерминальный intent на аккаунт, outbox `(topic, intent_id)`.
   8. Ошибки логируются именем и кодом (`errorIdentity`/`errorLogFields`); ESLint ловит это частично, логгер (`logOptions`) сводит четыре ключа ошибки верхнего уровня к whitelist и не копирует `err.message` в `msg` — вложенный ключ, format-аргумент и явное сообщение не покрыты (Architecture Rules п.8); redact-пути не чистят строки.
