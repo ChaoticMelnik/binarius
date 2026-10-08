@@ -97,8 +97,8 @@ export const MAX_BALANCE_RECONCILE_INTERVAL_MS = BROKER_BALANCE_SLA_MS;
 export const DEFAULT_BALANCE_RECONCILE_INTERVAL_MS = 60_000;
 
 // The broker's per-IP window and the default share are in packages/shared/src/broker-budget.ts
-// (docs/signal.md -> The budget); the ceiling also leaves room for OAuth, token refreshes and the
-// pairs catalog from the same IP.
+// (docs/signal.md -> The budget); the default shares sum to the whole window, so OAuth, token
+// refreshes and the pairs catalog from the same IP are outside every share.
 export const MIN_BALANCE_POLL_PER_MINUTE = 1;
 export const MAX_BALANCE_POLL_PER_MINUTE = 500;
 

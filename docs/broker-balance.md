@@ -163,9 +163,10 @@ per tick, at most the tick limit.
   outgrow the SLA by configuration.
 - `MAX_BALANCE_POLL_PER_MINUTE` (500) `< BROKER_RATE_LIMIT_PER_MINUTE` (600). This budgets the
   tick only. GETs triggered by the route (`POST /trading/access` with a stale snapshot, at most
-  one in flight per account) come on top and are not capped. Until the probe in Observed live
-  shows whether authorized calls share the per-IP window, the headroom of 100 a minute is shared
-  by OAuth, token exchanges, the pairs catalog and these route GETs.
+  one in flight per account) come on top and are not capped. The default shares (worker 400,
+  balance 100, signal scanner 100) already sum to the whole 600 (docs/signal.md → The budget), so
+  OAuth, token exchanges, the pairs catalog and these route GETs are outside every share; a raised
+  ceiling makes the sum larger still.
 - `MAX_BALANCE_RECONCILE_INTERVAL_MS < BALANCE_STALLED_RETRY_MS < BALANCE_WATCH_WINDOW_MS`: a
   held-back account skips at least one tick and is retried inside its watch window.
 - `MAX_BALANCE_RECONCILE_INTERVAL_MS < BALANCE_WATCH_WINDOW_MS`: an account the bot asked about
