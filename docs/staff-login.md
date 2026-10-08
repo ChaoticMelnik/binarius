@@ -97,9 +97,16 @@ schema for the backend and for the web page that will call it (#79). Three phase
    is running. It is outside any transaction and writes no row, like the login's lookup: the KDF
    runs next, and holding rows through it is what the login refuses to do. A lockout running at
    this point answers `429 too_many_attempts` with no derivation and a `locked` row.
-2. **One slot in the scrypt queue, two derivations.** The current password is verified against
-   that hash, and only then is the new one hashed, so a wrong guess costs what a login costs.
-   `PASSWORD_CHANGE_DERIVATIONS` sizes this against `ADMIN_LOGIN_BUDGET_MS` in `timing.ts`.
+2. **One slot in the scrypt queue.** On entering it the row is read again: a lockout or a reset
+   that landed while the request waited refuses it with no derivation. The current password is
+   verified against the hash of the first read, the row is read once more, and only if it is
+   still the same is the new password hashed. So once the fifth failure has committed, every guess
+   in flight — right or wrong — answers `429 too_many_attempts` after one derivation, as the login
+   form answers `401` in the same case: a stolen cookie learns nothing faster than the login form
+   does. The one exception is a correct guess whose new hash was already being derived when the
+   lockout committed: it answers the same `429` after two derivations (Limits).
+   `PASSWORD_CHANGE_DERIVATIONS` sizes the derivations against `ADMIN_LOGIN_BUDGET_MS` in
+   `timing.ts`.
 3. **A transaction** (`runAsStaff` with `lockStaff`) that takes the `staff` row first, then touches
    the session, then runs `applyStaffPasswordChange`: a CAS on the hash the KDF verified, with the
    account active and not locked. On success the new hash is written, the failure counter and the
@@ -112,9 +119,10 @@ schema for the backend and for the web page that will call it (#79). Three phase
 A wrong current password is a wrong password at login. It counts in the same
 `failed_password_attempts` and the same lockout (`countPasswordFailure`), so a stolen session
 cookie is no faster an oracle for the password than the login form, and five wrong — in either
-place — lock both. It answers `401 invalid_credentials`. So does a CAS that finds the account
-changed under the KDF, which counts nothing because there is nothing left to count against; a CAS
-that finds a lockout started meanwhile answers `429`.
+place — lock both. It answers `401 invalid_credentials`. A lockout or a reset that lands between
+the last re-read and the transaction is caught by the CAS: a lockout answers `429` with a `locked`
+row, an account changed under the KDF answers `401` with a `state_changed` row, and neither counts
+anything — there is nothing left to count against.
 
 The lock order is the CLI's, `staff` first. A change and a CLI reset, two changes from two devices,
 or a change and a revoke of the changing session from another device serialize on the `staff` row
@@ -132,9 +140,9 @@ and every admin request performed under a live session writes a row in `audit_lo
 transaction as the thing it records: no row, no data (`runAsStaff`, `startLoginChallenge`,
 `completeLogin`, the Telegram CASes). Refusals before that point leave no row: a route ceiling
 (429), a malformed body (400), a full scrypt queue (429), a session token of the wrong shape or a
-session that is not live (401), a password change refused before its pre-read (a token of the
-wrong shape, a session that is not live, a body outside the schema, a full scrypt queue), a session
-id, or a user or intent card id, that is not a uuid,
+session that is not live (401), a password change refused before its transaction (a token of the
+wrong shape, a session the pre-read finds not live, a body outside the schema, a full scrypt
+queue), a session id, or a user or intent card id, that is not a uuid,
 which `apps/web` refuses before the backend is asked, and a search query, a list filter or an
 audit filter outside its schema (400), which `apps/web` also refuses before asking. The actions are a closed list (`AuditAction`, enforced
 by `audit_log_action_check`), and the payloads hold only named keys — never a password, a code,
@@ -181,12 +189,16 @@ and lives in the database.
   one account at once, and the queue hands a slot back in its `finally` — before
   `registerPasswordFailure` (in the change form, `countPasswordFailure`) runs, which the route calls
   only after `queue.run` has returned — so arrivals that keep coming can start more. The lock
-  lands when the fifth recorded failure commits; how many guesses were *tried* by then is bounded by the queue's
-  throughput, not by five. A correct password arriving under the lock is still refused.
+  lands when the fifth recorded failure commits; how many guesses were *tried* by then is bounded
+  by the queue's throughput, not by five. A correct password arriving under the lock is still
+  refused. Once the lockout has committed, a change request already in flight is refused with the
+  same `429` in the same time whatever its password was, except the correct guess caught mid-hash
+  above (accepted: at most `PASSWORD_VERIFY_CONCURRENCY` such requests at once).
 - 5 wrong codes exhaust the challenge.
-- At most 2 scrypt slots at once, at most 8 waiting, at most 2 s of waiting; a password change
-  runs its two derivations in one slot. Over any of those the request is refused with 429 and no
-  derivation runs.
+- At most 2 scrypt slots at once, at most 8 waiting, at most 2 s of waiting. A password change
+  holds its slot for two reads of the `staff` row and up to two derivations; those two reads are
+  bounded by the pool's `query_timeout`, not by the timing chain. Over any of those limits the
+  request is refused with 429 and no derivation runs.
 
 «Это не я» closes that challenge and records the press; it changes nothing on the account — the
 password hash, the status, the failure counter and the lockout stay as they were

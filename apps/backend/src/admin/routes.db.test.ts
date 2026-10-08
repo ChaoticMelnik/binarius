@@ -44,6 +44,7 @@ import {
 } from '@binarius/db';
 import {
   createTempDatabase,
+  lockWaiters,
   seedBrokerAccount,
   seedQueuedIntent,
   seedStaff,
@@ -932,10 +933,7 @@ async function queuedBehindLock(pending: Promise<unknown>): Promise<boolean> {
   });
   let waiting = false;
   await until('the request to queue behind the staff row or finish', async () => {
-    const { rows } = await tmp.db.execute<{ n: number }>(
-      sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
-    );
-    waiting = (rows[0]?.n ?? 0) > 0;
+    waiting = (await lockWaiters(tmp.db)) > 0;
     return settled || waiting;
   });
   return waiting && !settled;
@@ -1136,6 +1134,194 @@ describe('POST /admin/auth/password (#78)', () => {
         .json<{ issues: { code: string; path: string[] }[] }>()
         .issues.map((issue) => [issue.code, issue.path]),
     ).toEqual([['custom', ['newPassword']]]);
+  });
+
+  // review round 1, M1: once a lockout has committed, a guess in flight must not say whether it
+  // was right — not by its status, not by how many derivations it cost
+  describe('a row that changes while the guess is in flight', () => {
+    const lockNow = (staffId: string) =>
+      tmp.db
+        .update(staff)
+        .set({ failedPasswordAttempts: 5, lockedUntil: sql`now() + interval '15 minutes'` })
+        .where(eq(staff.id, staffId));
+    const replaceHash = async (staffId: string) =>
+      tmp.db
+        .update(staff)
+        .set({ passwordHash: await hashPassword('set elsewhere', TEST_SCRYPT_PARAMS) })
+        .where(eq(staff.id, staffId));
+    const guesses = [
+      ['a wrong', () => 'not the password'],
+      ['a right', (s: SeededStaff) => s.password],
+    ] as const;
+    /** the real verify, counted, with `before` run once ahead of the first derivation */
+    const verifyAfter = (before: () => Promise<unknown>) => {
+      let fired = false;
+      return async (stored: string, password: string) => {
+        derivations += 1;
+        if (!fired) {
+          fired = true;
+          await before();
+        }
+        return verifyPassword(stored, password);
+      };
+    };
+
+    it.each(guesses)(
+      'answers %s guess caught by a lockout under verify with one 429 after one derivation',
+      async (_label, guess) => {
+        const seeded = await seedStaff(tmp.db);
+        const current = await openSession(seeded);
+        const other = await openSession(seeded);
+        const sessionId = await ownSessionId(current);
+        await app.close();
+        app = build({ verify: verifyAfter(() => lockNow(seeded.staffId)) });
+
+        const response = await change(current, {
+          ...valid(seeded),
+          currentPassword: guess(seeded),
+        });
+
+        expect([response.statusCode, response.json()]).toEqual([
+          429,
+          { error: AdminErrorCode.TooManyAttempts },
+        ]);
+        expect([derivations, hashCalls]).toEqual([1, 0]);
+        const row = await staffRow(seeded.staffId);
+        expect([row.passwordHash, row.failedPasswordAttempts]).toEqual([seeded.passwordHash, 5]);
+        const rows = await passwordRows(seeded.staffId);
+        expect(rows.map((written) => written.payload)).toEqual([
+          {
+            reason: 'locked',
+            lockedUntil: row.lockedUntil?.toISOString(),
+            ip: CLIENT.ip,
+            sessionId,
+          },
+        ]);
+        expect((await withSession('GET', '/admin/sessions', other)).statusCode).toBe(200);
+      },
+    );
+
+    it('refuses a guess that waited for the slot while a lockout committed, before deriving', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const current = await openSession(seeded);
+      const sessionId = await ownSessionId(current);
+      await app.close();
+      const queue = createPasswordQueue({ concurrency: 1, queueMax: 1 });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let hashing = false;
+      app = build({
+        passwordQueue: queue,
+        hash: async (password: string) => {
+          hashCalls += 1;
+          hashing = true;
+          await held;
+          return hashPassword(password, TEST_SCRYPT_PARAMS);
+        },
+      });
+
+      // the right guess holds the only slot inside its new hash; the wrong one queues behind it
+      const right = change(current, valid(seeded));
+      await until('the right guess to reach its new hash', () => hashing);
+      const wrong = change(current, { ...valid(seeded), currentPassword: 'not the password' });
+      await until('the wrong guess to wait for the slot', () => queue.waiting === 1);
+      await lockNow(seeded.staffId);
+      release();
+      const answers = await Promise.all([right, wrong]);
+
+      expect(answers.map((answer) => [answer.statusCode, answer.json()])).toEqual([
+        [429, { error: AdminErrorCode.TooManyAttempts }],
+        [429, { error: AdminErrorCode.TooManyAttempts }],
+      ]);
+      // the right guess is the accepted residual window (its hash was already running); the
+      // queued wrong one never reached the KDF
+      expect([derivations, hashCalls]).toEqual([1, 1]);
+      const lockedUntil = (await staffRow(seeded.staffId)).lockedUntil?.toISOString();
+      expect((await passwordRows(seeded.staffId)).map((written) => written.payload)).toEqual([
+        { reason: 'locked', lockedUntil, ip: CLIENT.ip, sessionId },
+        { reason: 'locked', lockedUntil, ip: CLIENT.ip, sessionId },
+      ]);
+      expect((await staffRow(seeded.staffId)).passwordHash).toBe(seeded.passwordHash);
+    });
+
+    it('answers a hash replaced under the new hash with 401 and a state_changed row', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const current = await openSession(seeded);
+      const sessionId = await ownSessionId(current);
+      await app.close();
+      app = build({
+        hash: async (password: string) => {
+          hashCalls += 1;
+          await replaceHash(seeded.staffId);
+          return hashPassword(password, TEST_SCRYPT_PARAMS);
+        },
+      });
+
+      const response = await change(current, valid(seeded));
+
+      expect([response.statusCode, response.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.InvalidCredentials },
+      ]);
+      expect([derivations, hashCalls]).toEqual([1, 1]);
+      expect((await staffRow(seeded.staffId)).failedPasswordAttempts).toBe(0);
+      expect((await passwordRows(seeded.staffId)).map((written) => written.payload)).toEqual([
+        { reason: 'state_changed', ip: CLIENT.ip, sessionId },
+      ]);
+    });
+
+    it.each(guesses)(
+      'answers %s guess whose hash was replaced under verify with 401 after one derivation',
+      async (_label, guess) => {
+        const seeded = await seedStaff(tmp.db);
+        const current = await openSession(seeded);
+        const sessionId = await ownSessionId(current);
+        await app.close();
+        app = build({ verify: verifyAfter(() => replaceHash(seeded.staffId)) });
+
+        const response = await change(current, {
+          ...valid(seeded),
+          currentPassword: guess(seeded),
+        });
+
+        expect([response.statusCode, response.json()]).toEqual([
+          401,
+          { error: AdminErrorCode.InvalidCredentials },
+        ]);
+        expect([derivations, hashCalls]).toEqual([1, 0]);
+        expect((await staffRow(seeded.staffId)).failedPasswordAttempts).toBe(0);
+        expect((await passwordRows(seeded.staffId)).map((written) => written.payload)).toEqual([
+          { reason: 'state_changed', ip: CLIENT.ip, sessionId },
+        ]);
+      },
+    );
+
+    // a real reset revokes every session, the changing one included: the touch finds nothing
+    it('answers a CLI reset under the new hash with session_invalid and no row', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const current = await openSession(seeded);
+      await app.close();
+      app = build({
+        hash: async (password: string) => {
+          hashCalls += 1;
+          await resetStaffPassword(tmp.db, {
+            login: seeded.login,
+            passwordHash: await hashPassword('the operator chose this', TEST_SCRYPT_PARAMS),
+          });
+          return hashPassword(password, TEST_SCRYPT_PARAMS);
+        },
+      });
+
+      const response = await change(current, valid(seeded));
+
+      expect([response.statusCode, response.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.SessionInvalid },
+      ]);
+      expect(await passwordRows(seeded.staffId)).toEqual([]);
+    });
   });
 
   it.each([

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type Db } from './client';
 import {
   createTempDatabase,
+  lockWaiters,
   seedStaff,
   type SeededStaff,
   type TempDatabase,
@@ -12,6 +13,7 @@ import { hashToken } from './oauth-ops';
 import {
   applyStaffPasswordChange,
   completeLogin,
+  countPasswordFailure,
   type CompleteLoginResult,
   confirmChallengeFromTelegram,
   createStaffAccount,
@@ -1278,12 +1280,10 @@ describe('changing your own password (#78)', () => {
 
   /** Returns once the other side is queued behind a lock this transaction holds. */
   const waitForLockWaiter = () =>
-    until('the other transaction to queue behind a lock', async () => {
-      const { rows } = await tmp.db.execute<{ n: number }>(sql`
-        select count(*)::int as n from pg_stat_activity
-         where datname = current_database() and wait_event_type = 'Lock'`);
-      return (rows[0]?.n ?? 0) > 0;
-    });
+    until(
+      'the other transaction to queue behind a lock',
+      async () => (await lockWaiters(tmp.db)) > 0,
+    );
 
   describe('findStaffForPasswordChange', () => {
     it('reads the hash by a live session and no lockout', async () => {
@@ -1436,9 +1436,76 @@ describe('changing your own password (#78)', () => {
       expect(await change(current, seeded, await newHash())).toEqual({
         ok: false,
         reason: 'locked',
+        lockedUntil: (await staffRow(seeded.staffId)).lockedUntil,
       });
       expect((await staffRow(seeded.staffId)).passwordHash).toBe(seeded.passwordHash);
       expect(await served(other)).toBe('served');
+    });
+  });
+
+  // the change form's failures go through the same CAS as the login's, and zero rows has to say
+  // whether a lockout or a changed row is why: the route answers the first 429, the second 401
+  describe('countPasswordFailure on a row that is no longer the one the KDF saw', () => {
+    const count = (seeded: SeededStaff) =>
+      tmp.db.transaction((tx) =>
+        countPasswordFailure(tx, { staffId: seeded.staffId, passwordHash: seeded.passwordHash }),
+      );
+
+    it('reports a running lockout with its deadline and counts nothing', async () => {
+      const seeded = await seedStaff(tmp.db);
+      await tmp.db
+        .update(staff)
+        .set({ failedPasswordAttempts: 5, lockedUntil: sql`now() + interval '15 minutes'` })
+        .where(eq(staff.id, seeded.staffId));
+      const before = await staffRow(seeded.staffId);
+
+      expect(await count(seeded)).toEqual({
+        attempts: 0,
+        locked: false,
+        stateChanged: true,
+        reason: 'locked',
+        lockedUntil: before.lockedUntil,
+      });
+      expect((await staffRow(seeded.staffId)).failedPasswordAttempts).toBe(5);
+    });
+
+    it('reports a changed hash as state_changed without a deadline', async () => {
+      const seeded = await seedStaff(tmp.db);
+      await tmp.db
+        .update(staff)
+        .set({ passwordHash: await newHash('set elsewhere') })
+        .where(eq(staff.id, seeded.staffId));
+
+      expect(await count(seeded)).toEqual({
+        attempts: 0,
+        locked: false,
+        stateChanged: true,
+        reason: 'state_changed',
+        lockedUntil: null,
+      });
+    });
+
+    it('keeps the login row for a locked account as it was', async () => {
+      const seeded = await seedStaff(tmp.db);
+      await tmp.db
+        .update(staff)
+        .set({ lockedUntil: sql`now() + interval '15 minutes'` })
+        .where(eq(staff.id, seeded.staffId));
+
+      await registerPasswordFailure(tmp.db, {
+        staffId: seeded.staffId,
+        passwordHash: seeded.passwordHash,
+        ip: IP,
+      });
+
+      expect((await entriesFor(seeded.staffId)).at(-1)).toMatchObject({
+        action: AuditAction.StaffLoginFailed,
+        payload: { reason: 'state_changed', ip: IP },
+      });
+      expect(Object.keys((await entriesFor(seeded.staffId)).at(-1)!.payload as object)).toEqual([
+        'ip',
+        'reason',
+      ]);
     });
   });
 

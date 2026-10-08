@@ -41,6 +41,12 @@ const OPEN_STATUS_LIST = sql`(${sqlLiteralList(OPEN_CHALLENGE_STATUSES)})`;
 
 const afterMs = (ms: number): SQL => sql`now() + (${ms}::int * interval '1 millisecond')`;
 
+/** `locked_until` while a lockout is running, by the database's clock; NULL once it expired. */
+const runningLockout = () =>
+  sql<Date | null>`case when ${staff.lockedUntil} > now() then ${staff.lockedUntil} end`.mapWith(
+    staff.lockedUntil,
+  );
+
 /**
  * A session that still answers: not revoked, inside its absolute lifetime, and used recently
  * enough. One fragment, because the list of sessions and the touch that keeps one alive have
@@ -149,6 +155,10 @@ export interface PasswordFailure {
   locked: boolean;
   /** the row the KDF ran against is no longer there: nothing was counted */
   stateChanged?: true;
+  /** with `stateChanged`: whether a running lockout or a changed row is why */
+  reason?: 'locked' | 'state_changed';
+  /** with `reason: 'locked'`: until when, by the database's clock */
+  lockedUntil?: Date | null;
 }
 
 /**
@@ -159,7 +169,7 @@ export interface PasswordFailure {
  * The same CAS the success path takes, for the same reason: ~250 ms passed inside the KDF, and
  * a reset, a disable or a lockout in that window has to win. Zero rows means the credentials
  * this attempt was judged against are gone — there is nothing left to count against, so the
- * counter and the lockout are left alone and the caller's entry says so.
+ * counter and the lockout are left alone; `reason` says whether a lockout or a change is why.
  *
  * One counter for both places a password is typed: the login form and the change form (#78),
  * so a stolen session cookie is no faster an oracle for the password than the login page.
@@ -194,7 +204,20 @@ export async function countPasswordFailure(
       attempts: staff.failedPasswordAttempts,
       lockedUntil: staff.lockedUntil,
     });
-  if (row === undefined) return { attempts: 0, locked: false, stateChanged: true };
+  if (row === undefined) {
+    const [now] = await tx
+      .select({ lockedUntil: runningLockout() })
+      .from(staff)
+      .where(eq(staff.id, staffId));
+    const lockedUntil = now?.lockedUntil ?? null;
+    return {
+      attempts: 0,
+      locked: false,
+      stateChanged: true,
+      reason: lockedUntil === null ? 'state_changed' : 'locked',
+      lockedUntil,
+    };
+  }
   return { attempts: row.attempts, locked: row.lockedUntil !== null };
 }
 
@@ -935,10 +958,7 @@ export async function findStaffForPasswordChange(
       staffId: staff.id,
       sessionId: staffSessions.id,
       passwordHash: staff.passwordHash,
-      lockedUntil:
-        sql<Date | null>`case when ${staff.lockedUntil} > now() then ${staff.lockedUntil} end`.mapWith(
-          staff.lockedUntil,
-        ),
+      lockedUntil: runningLockout(),
     })
     .from(staffSessions)
     .innerJoin(staff, eq(staff.id, staffSessions.staffId))
@@ -1018,8 +1038,7 @@ export interface StaffInvalidation {
 // A writer under a staff session (applyStaffPasswordChange) reaches this through
 // runAsStaff({ lockStaff: true }): `staff` first, then its own session (the touch), then the
 // challenges and the other sessions — not a cycle with the CLI, because both chains start at
-// `staff`. It keeps its own session (`keepSessionId`) and signs the others as revoked by the
-// staff member; the CLI passes neither, so its rows keep revoked_by_staff_id NULL.
+// `staff`.
 async function invalidateIssued(
   tx: Tx,
   staffId: string,
@@ -1060,7 +1079,9 @@ async function invalidateIssued(
 }
 
 export type StaffPasswordChangeResult =
-  ({ ok: true } & StaffInvalidation) | { ok: false; reason: 'locked' | 'state_changed' };
+  | ({ ok: true } & StaffInvalidation)
+  | { ok: false; reason: 'locked'; lockedUntil: Date }
+  | { ok: false; reason: 'state_changed' };
 
 /**
  * The staff member's own password, changed under their session (#78). The same CAS as the
@@ -1092,10 +1113,13 @@ export async function applyStaffPasswordChange(
     .returning({ id: staff.id });
   if (changed === undefined) {
     const [row] = await tx
-      .select({ locked: sql<boolean>`coalesce(${staff.lockedUntil} > now(), false)` })
+      .select({ lockedUntil: runningLockout() })
       .from(staff)
       .where(eq(staff.id, input.staffId));
-    return { ok: false, reason: row?.locked === true ? 'locked' : 'state_changed' };
+    const lockedUntil = row?.lockedUntil ?? null;
+    return lockedUntil === null
+      ? { ok: false, reason: 'state_changed' }
+      : { ok: false, reason: 'locked', lockedUntil };
   }
   const counts = await invalidateIssued(tx, input.staffId, {
     keepSessionId: input.sessionId,
