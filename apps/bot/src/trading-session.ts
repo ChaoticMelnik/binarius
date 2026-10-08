@@ -54,8 +54,9 @@ export const sessionKeyboard = (
   if (view.status !== TradingSessionStatus.Stopped) {
     return keyboard.text(LABELS.sessionStopButton, sessionStopCallbackData(view.id));
   }
-  const durationSec = durationOf(String(view.settings?.durationSec));
-  if (view.settings === null || durationSec === undefined) return keyboard;
+  if (view.settings === null) return keyboard;
+  const durationSec = durationOf(String(view.settings.durationSec));
+  if (durationSec === undefined) return keyboard;
   return keyboard
     .row()
     .text(LABELS.sessionAgainButton, sessionStartCallbackData(view.settings.assetId, durationSec));
