@@ -505,6 +505,12 @@ skew past the slack costs coverage, never a stale answer. This is stricter than 
 `ageMs` is the time since that candle closed. Without the bearer the answer is 401
 `{ error: 'unauthorized' }`.
 
+The one consumer is the bot's signals screen (#320, `readSignals` in
+`apps/bot/src/backend-client.ts`). It keeps a pair only if the catalog read at the same press lists
+it, open and accepting 15 s, and takes the symbol and payout from there; it never re-reads the
+signal at a press, since the session asks for one before every trade
+([bot-demo.md](bot-demo.md#the-signals-screen-320)).
+
 The check after a deploy is the owner's step on the pilot: the agent has no SSH to production, and
 these commands were not run before the merge. Give it a minute after the start, so the first
 `signal scanner` line is out:
@@ -557,8 +563,9 @@ The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import a
 
 - #287 (shipped): session orchestration, which asks `POST /trading/signal` inside a session
   (docs/trading-session.md). #90: the broker base URL in the worker's env and compose.
-- #320: the bot screen that lists the pairs from `GET /trading/signals`. The scanner keeps no
-  history in the database.
+- #320 (shipped): the bot's «Сигналы сейчас» screen reads `GET /trading/signals` and joins it
+  with the pairs catalog for the symbol and payout ([bot-demo.md](bot-demo.md#the-signals-screen-320)).
+  The scanner keeps no history in the database.
 - #126: the analysis screen and its texts in the bot, on `POST /trading/signal`
   ([bot-demo.md](bot-demo.md#the-analysis)). #127: the stake button's press and the intent status. Stake size: docs/stake.md.
 - The decision's wire shape and codes are in `packages/shared/src/signal.ts` (#258).

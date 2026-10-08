@@ -1,7 +1,9 @@
-# The demo session in the bot: the button, the status and the stop (issue #284)
+# The demo session in the bot: the button, the status and the stop (issues #284, #320)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» on a
-signal. Pressing it starts a demo session of `DEFAULT_SESSION_TRADES` trades through
+signal; the launch screen of the signals list (#320,
+[bot-demo.md](bot-demo.md#the-launch-screen-320)) draws «🚀 Запустить цикл», and a stopped
+session's message «🔁 Ещё сессия». All three carry the same data. Pressing one starts a demo session of `DEFAULT_SESSION_TRADES` trades through
 `POST /trading/sessions` ([trading-session.md](trading-session.md#routes)) and sends one status
 message. The message follows the session through `GET /trading/sessions/:id` and carries
 «🔄 Обновить» and «⏹ Остановить сессию». The trades themselves are opened by the worker's
@@ -15,8 +17,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 
 - `apps/bot/src/demo.ts` — the button's data `demo:sess:<assetId>:<sec>`
   (`sessionStartCallbackData`, `SESSION_START_PATTERN`, `sessionStartDataOf`), the predicate
-  `sessionFits(durationSec)` = `sessionFitsDeadline(DEFAULT_SESSION_TRADES, durationSec)`, and the
-  button's row in the analysis keyboard.
+  `sessionFits(durationSec)` = `sessionFitsDeadline(DEFAULT_SESSION_TRADES, durationSec)`, the
+  button's row in the analysis keyboard, and `launchScreen`'s «🚀 Запустить цикл» (#320).
 - `apps/bot/src/trading-session.ts` — `createTradingSessionComposer({ backend, logger,
   sessionTracker, connectKeyboard })`: the start, refresh and stop presses. Also
   `sessionRefreshCallbackData`, `sessionStopCallbackData`, their patterns, `sessionKeyboard`,
@@ -36,7 +38,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
-demo:sess:<assetId>:<sec>          («🚀 Сессия из 5 сделок»)
+demo:sess:<assetId>:<sec>          («🚀 Сессия из 5 сделок», «🚀 Запустить цикл», «🔁 Ещё сессия»)
   bot → answerCallbackQuery ∥ GET /trading/pairs (for the symbol only)
   bot → POST /trading/sessions { telegramUserId, assetId, durationSec, trades: 5 }
   bot → sendMessage: the status, with «🔄 Обновить» (session:<id>) and «⏹ Остановить сессию»
@@ -67,6 +69,12 @@ session:stop:<id>                  («⏹ Остановить сессию»)
   with it, and the bot shows it.
 - The handler checks the duration again: a forged datum or one for a duration that does not fit
   (`demo:sess:101:900`) only stops the spinner, with no backend call.
+- **Two more doors (#320).** «🚀 Запустить цикл» on the launch screen carries
+  `demo:sess:<assetId>:15`, and «🔁 Ещё сессия» on a stopped session the view's own
+  `settings.assetId` and `settings.durationSec`. Neither adds a handler or a datum: the start, its
+  refusals and the active session's 409 are the same. A refusal's «💵 Сумма» opens the picker with
+  the analysis origin (`stk:o:a:<assetId>:<sec>`), whose way back is that pair's analysis, not the
+  launch screen: one datum serves every door (accepted).
 
 ## Outcomes of the start
 
@@ -148,9 +156,12 @@ the same 404 `not_found`.
 
 The map is `satisfies Record<Exclude<TradingSessionStopReason, 'completed'>, …>`.
 
-**Keyboards.** A live session: [«🔄 Обновить»][«⏹ Остановить сессию»]. A stopped one: «🔄 Обновить»
-only, because its last trade can still settle. The tracker's edits redraw the keyboard from the
-view they show, so the stop button goes away when the session stops.
+**Keyboards.** A live session: [«🔄 Обновить»][«⏹ Остановить сессию»]. A stopped one: «🔄 Обновить»,
+because its last trade can still settle, and under it «🔁 Ещё сессия» (#320) on the same pair and
+duration — drawn only when the view has `settings` and its duration is one the demo still offers
+(`durationOf`), so a session of before #313 gets none. The tracker's edits redraw the keyboard from
+the view they show, so the stop button goes away and «🔁 Ещё сессия» appears when the session
+stops.
 
 ## The refresh and the stop
 
@@ -237,7 +248,8 @@ The bot's presses are covered by `trading-session.test.ts`, `session-tracker.tes
 `demo.test.ts` and `timing.test.ts` against the real handlers; they need no services. The routes
 the bot calls are run end to end by [trading-session.md → Running it locally](trading-session.md#running-it-locally).
 That a started session trades and its counters move needs #287's orchestrator in the worker.
-The steps in Telegram — «🎮 Запустить демо», a pair, 15 s, «📊 Анализ», «🚀 Сессия из 5 сделок»,
+The steps in Telegram — «🎮 Демо-торговля», «🧭 Выбрать пару вручную», a pair, 15 s, «📊 Анализ»,
+«🚀 Сессия из 5 сделок» (or a pair of «Сигналы сейчас» and «🚀 Запустить цикл»),
 the status moving, «⏹ Остановить сессию» — need a bot token of its own, which no runtime check of
 this issue used.
 

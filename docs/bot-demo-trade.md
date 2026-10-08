@@ -122,7 +122,8 @@ The user's demo stake is `users.demo_stake`: `NULL` means the broker's minimum a
 which is what every user had before. One stake serves the single trade and the session.
 
 **The picker** (`stake-picker.ts`) opens from «💵 Сумма» beside the stake button, from «💵 Изменить»
-in /settings ([bot-menu.md](bot-menu.md)) and from the stake refusals. It edits the message it was
+in /settings ([bot-menu.md](bot-menu.md)), from «💵 Изменить ставку» on the launch screen (#320,
+[bot-demo.md](bot-demo.md#the-launch-screen-320)) and from the stake refusals. It edits the message it was
 opened from:
 
 ```text
@@ -133,7 +134,7 @@ opened from:
 [$1.00] [$2.00] [$5.00 ✅] [$10.00]    minTradeAmount × 1, 2, 5, 10, only those <= available
 [✏️ Своя сумма]
 [🔁 Минимальная брокера]               only while a stake is saved
-[↩️ Назад к анализу | ↩️ Назад к настройкам]
+[↩️ Назад к анализу | ↩️ Назад к настройкам | ↩️ К запуску]
 ```
 
 The presets and the input syntax come from `packages/shared/src/demo-stake.ts`, bigint at scale 8.
@@ -148,8 +149,21 @@ buttons, two accounts, no balance yet) with the way back.
 | `stk:z:<origin>` | reset to the broker minimum (`amount: null`) |
 | `stk:c:<origin>` | custom: the input step, the prompt in place with «↩️ Назад» → `stk:o:<origin>` |
 
-`<origin>` is `s` (/settings, way back `settings`) or `a:<assetId>:<sec>` (way back
-`demo:an:<assetId>:<sec>`, a fresh analysis with a new nonce).
+`<origin>` is `s` (/settings, way back `settings`), `a:<assetId>:<sec>` (way back
+`demo:an:<assetId>:<sec>`, a fresh analysis with a new nonce) or `p:<assetId>` (#320, the launch
+screen, way back `demo:l:<assetId>`). The longest datum is still
+`stk:s:999999999999.99999999:a:2147483647:15`, 43 bytes; the launch origin's is 40. Every switch
+over the origin is exhaustive (`satisfies never`), so a fourth kind fails `tsc` until each place
+handles it.
+
+**The return to the launch screen (#320).** A save opened from a launch screen (a preset, the
+reset or a typed amount) returns to that screen, not to «✅ Сумма»: «✅ Ставка сохранена: $5.00»
+above the three lines, with «💵 Ставка» at the saved amount (after the reset, «минимальная брокера»)
+and the screen's three buttons. Only the symbol needs a read: `readPairs`, any catalog, a stale one
+included, as the session start reads it. Without one the symbol line is dropped and `warn` `pairs
+not read for the launch screen` is logged; the launch stays, since the start checks the pair
+itself. A preset or the reset edits in place, a typed amount sends the screen as a new message. A
+refusal keeps the picker's texts with «💵 Сумма» and «↩️ К запуску», and reads no catalog.
 
 **The custom input** is a step of the login dialog store (`login-dialog.ts`): one entry per user,
 so the email login and the stake input replace each other. `parseDemoStakeInput` takes digits with
@@ -245,8 +259,9 @@ gets `warn` and nothing more. This press never starts tracking.
   message. That is 36 s.
 - `HANDLER_CALLS.intentRefresh` = 2 backend calls and 3 Bot API calls: the edit refused as gone,
   then sent anew. That is 34 s.
-- The picker (#297): `stakePickerOpen`, `stakePreset`, `stakeReset` and `settingsShow` are 1 / 3
-  (29 s), `stakeCustom` 0 / 3 (24 s), `stakeText` 1 / 1 (13 s).
+- The picker (#297): `stakePickerOpen` and `settingsShow` are 1 / 3 (29 s), `stakeCustom` 0 / 3
+  (24 s). `stakePreset` and `stakeReset` are 2 / 3 (34 s) and `stakeText` 2 / 1 (18 s) since #320:
+  a save opened from a launch screen reads the catalog for its symbol.
 - `HANDLER_CALLS.demoAnalysis` is 3 / 4 = 47 s since #297 (the access read for the label), the
   longest path; the chain still holds below `SHUTDOWN_BUDGET_MS` (50 s), with 3 s to spare.
 - `INTENT_TRACK_FIRST_POLL_MS` = 1 s, `INTENT_TRACK_POLL_MS` = 3 s, `INTENT_TRACK_DEADLINE_MS` =
@@ -268,6 +283,7 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
 - `trading access not read for the stake label`, `trading access not read for the stake picker`,
   `demo stake save outcome unknown` (`warn`), `demo stake not saved` (`warn` for
   `user_not_found`, `error` otherwise) — #297
+- `pairs not read for the launch screen` (`warn`) — #320
 - `trade intent message not edited` (with `intentId` when the tracker writes it)
 
 ## Boundaries
