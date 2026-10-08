@@ -86,7 +86,44 @@ assumes the database clock never steps backwards between the two. A production k
 not; the Colima VM a Mac runs the compose Postgres in does, which is why the local integration
 tests run against a native Postgres on the host instead (README → Test database, #166).
 
-There is no way to change a password from the UI yet — that is a follow-up issue.
+## Changing your own password
+
+`POST /admin/auth/password` (#78) runs under the staff session like every other admin request.
+The body is `currentPassword`, `newPassword` and the client facts: both passwords 1–256
+characters, the new one different from the current one — `adminChangePasswordRequestSchema`, one
+schema for the backend and for the web page that will call it (#79). Three phases, as at login:
+
+1. **A read** by the session token (`findStaffForPasswordChange`): the hash, and the lockout if one
+   is running. It is outside any transaction and writes no row, like the login's lookup: the KDF
+   runs next, and holding rows through it is what the login refuses to do. A lockout running at
+   this point answers `429 too_many_attempts` with no derivation and a `locked` row.
+2. **One slot in the scrypt queue, two derivations.** The current password is verified against
+   that hash, and only then is the new one hashed, so a wrong guess costs what a login costs.
+   `PASSWORD_CHANGE_DERIVATIONS` sizes this against `ADMIN_LOGIN_BUDGET_MS` in `timing.ts`.
+3. **A transaction** (`runAsStaff` with `lockStaff`) that takes the `staff` row first, then touches
+   the session, then runs `applyStaffPasswordChange`: a CAS on the hash the KDF verified, with the
+   account active and not locked. On success the new hash is written, the failure counter and the
+   lockout are cleared, open challenges are closed, and every other session of the staff member
+   that is not revoked and still within its absolute lifetime — idle-expired ones included, the
+   CLI's definition — is revoked with `revoked_by_staff_id` set to the staff member. The session
+   that made the change stays, so its cookie stays valid. The answer is
+   `{ changed: true, revokedSessions }`, the number of those revoked sessions.
+
+A wrong current password is a wrong password at login. It counts in the same
+`failed_password_attempts` and the same lockout (`countPasswordFailure`), so a stolen session
+cookie is no faster an oracle for the password than the login form, and five wrong — in either
+place — lock both. It answers `401 invalid_credentials`. So does a CAS that finds the account
+changed under the KDF, which counts nothing because there is nothing left to count against; a CAS
+that finds a lockout started meanwhile answers `429`.
+
+The lock order is the CLI's, `staff` first. A change and a CLI reset, two changes from two devices,
+or a change and a revoke of the changing session from another device serialize on the `staff` row
+instead of deadlocking on two session rows; the second one finds its session revoked and answers
+`401 session_invalid`. `POST /admin/sessions/:id/revoke` takes the same lock. Two sessions of
+different staff members revoking each other are not ordered by it (#151).
+
+Nothing is sent to Telegram. Resetting another staff member's password stays the CLI's
+`staff reset-password`: there are no roles yet.
 
 ## What is written down
 
@@ -95,7 +132,9 @@ and every admin request performed under a live session writes a row in `audit_lo
 transaction as the thing it records: no row, no data (`runAsStaff`, `startLoginChallenge`,
 `completeLogin`, the Telegram CASes). Refusals before that point leave no row: a route ceiling
 (429), a malformed body (400), a full scrypt queue (429), a session token of the wrong shape or a
-session that is not live (401), a session id, or a user or intent card id, that is not a uuid,
+session that is not live (401), a password change refused before its pre-read (a token of the
+wrong shape, a session that is not live, a body outside the schema, a full scrypt queue), a session
+id, or a user or intent card id, that is not a uuid,
 which `apps/web` refuses before the backend is asked, and a search query, a list filter or an
 audit filter outside its schema (400), which `apps/web` also refuses before asking. The actions are a closed list (`AuditAction`, enforced
 by `audit_log_action_check`), and the payloads hold only named keys — never a password, a code,
@@ -123,6 +162,8 @@ a token, a raw error object, or the login someone typed for an account that does
 | trading sessions listed | `trading_sessions_viewed` |
 | token ledger listed or filtered | `tokens_viewed` |
 | audit log listed or filtered | `audit_log_viewed` |
+| own password changed | `staff_password_changed` |
+| own password change refused: wrong current password, locked out, state changed under the KDF | `staff_password_change_failed` |
 
 The read pages behind the session, and what each of their rows carries, are in
 [admin-pages.md](admin-pages.md).
@@ -134,21 +175,24 @@ and lives in the database.
 
 - 120 login requests and 300 confirm requests per minute, taken before the body is read.
 - 5 attempts per unknown login name per 15 minutes.
-- 5 wrong passwords lock the account for 15 minutes. The counter is written after the derivation,
-  not before it: `PASSWORD_VERIFY_CONCURRENCY + PASSWORD_VERIFY_QUEUE_MAX` (2 + 8, `timing.ts`)
-  derivations can be in flight and queued against one account at once, and the queue hands a slot
-  back in its `finally` — before `registerPasswordFailure` runs, which the route calls only after
-  `queue.run` has returned — so arrivals that keep coming can start more. The lock lands when the
-  fifth recorded failure commits; how many guesses were *tried* by then is bounded by the queue's
+- 5 wrong passwords — at login or in the change form — lock the account for 15 minutes. The
+  counter is written after the derivation, not before it: `PASSWORD_VERIFY_CONCURRENCY +
+  PASSWORD_VERIFY_QUEUE_MAX` (2 + 8, `timing.ts`) derivations can be in flight and queued against
+  one account at once, and the queue hands a slot back in its `finally` — before
+  `registerPasswordFailure` (in the change form, `countPasswordFailure`) runs, which the route calls
+  only after `queue.run` has returned — so arrivals that keep coming can start more. The lock
+  lands when the fifth recorded failure commits; how many guesses were *tried* by then is bounded by the queue's
   throughput, not by five. A correct password arriving under the lock is still refused.
 - 5 wrong codes exhaust the challenge.
-- At most 2 scrypt derivations at once, at most 8 waiting, at most 2 s of waiting. Over any of
-  those the request is refused with 429 and no derivation runs.
+- At most 2 scrypt slots at once, at most 8 waiting, at most 2 s of waiting; a password change
+  runs its two derivations in one slot. Over any of those the request is refused with 429 and no
+  derivation runs.
 
 «Это не я» closes that challenge and records the press; it changes nothing on the account — the
 password hash, the status, the failure counter and the lockout stay as they were
 (`denyChallengeFromTelegram`). The same password therefore opens a new challenge on the next
-attempt, until an operator runs `staff reset-password` or `staff disable`; a login is still
+attempt, until an operator runs `staff reset-password` or `staff disable`, or the staff member
+changes the password themselves; a login is still
 protected by the second factor, which only ever reaches the account's own Telegram.
 
 Accepted, not fixed: while a challenge is open and its invitation delivered, a second login with
