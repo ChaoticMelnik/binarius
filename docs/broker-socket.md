@@ -405,7 +405,8 @@ for its answer. A run takes about 80 s, at most about 120 s.
 1. each phase's command ended as expected (the table above);
 2. in each socket phase the sender heard its own answer type (`open_trade_success` in `a_min` and
    `b_min`, `open_trade_fail` in `a_below` and `b_below`);
-3. `user.data` of both sockets carried the account's id before command 1;
+3. every `user.data` on both sockets carried the account's id, and each socket had one before
+   command 1;
 4. both sockets stayed on one `ready` connection from the end of the wait to the verdict: `ready`
    at the verdict, `connections` unchanged, no transition out of `ready` recorded;
 5. in each phase no socket other than the sender heard any `open_trade_*` — in `rest_min`
@@ -428,7 +429,9 @@ token, a URL or a payload. Then one line on stdout:
 
 A failure before command 1 (env, no account row, the token refused or unavailable, the wait timing
 out, a `user.data` of another user, no tradable pair) prints `setup failed: <what>` on stderr and
-exits 1 with no verdict line.
+exits 1 with no verdict line. A `user.data` of another user after command 1 does not stop the run:
+every window is still listened to, and the verdict is `inconclusive` unless a cross-socket answer
+makes it `broadcast`.
 
 **Stated assumptions.** A `fail` of a below-minimum command stands for every `fail`: its messages
 are printed, not judged. The claim is bounded by the window: the safe verdict means that within

@@ -71,7 +71,8 @@ interface Recorder {
   counts: Map<Row, Map<string, number>>;
   tradeIds: string[];
   user?: { id: string; minTradeAmount: DecimalString };
-  mismatch: boolean;
+  // a user.data with another id: during the wait a setup failure, after it inconclusive
+  foreign: boolean;
   pairs?: BinaryPair[];
   leftReady: string[];
 }
@@ -98,7 +99,7 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeRun> {
 
   for (const socket of PROBE_SOCKETS) {
     const client = deps.openClient(socket);
-    const recorder: Recorder = { counts: new Map(), tradeIds: [], mismatch: false, leftReady: [] };
+    const recorder: Recorder = { counts: new Map(), tradeIds: [], foreign: false, leftReady: [] };
     client.onState((change) => {
       if (change.from === BrokerSocketState.Ready && change.to !== BrokerSocketState.Ready) {
         const reason = change.reason === undefined ? '' : ` (${change.reason})`;
@@ -113,11 +114,11 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeRun> {
       if (event.type === BrokerEventType.CloseTradeSuccess) {
         for (const trade of event.trades) recorder.tradeIds.push(trade.id);
       }
-      if (event.type === BrokerEventType.UserData && recorder.user === undefined) {
-        if (event.user.id === deps.credentials.brokerUserId) {
+      if (event.type === BrokerEventType.UserData) {
+        if (event.user.id !== deps.credentials.brokerUserId) {
+          recorder.foreign = true;
+        } else if (recorder.user === undefined) {
           recorder.user = { id: event.user.id, minTradeAmount: event.user.minTradeAmount };
-        } else {
-          recorder.mismatch = true;
         }
       }
       if (event.type === BrokerEventType.AssetsList) recorder.pairs = event.pairs;
@@ -129,7 +130,7 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeRun> {
 
   const deadline = deps.now() + timing.readyTimeoutMs;
   for (;;) {
-    const mismatched = PROBE_SOCKETS.find((socket) => recorders[socket].mismatch);
+    const mismatched = PROBE_SOCKETS.find((socket) => recorders[socket].foreign);
     if (mismatched !== undefined) {
       return { kind: 'setup_failed', what: `user.data id mismatch on ${mismatched}` };
     }
@@ -268,6 +269,7 @@ export async function runProbe(deps: ProbeDeps): Promise<ProbeRun> {
     kind: 'ran',
     input: {
       userDataVerified,
+      userDataForeign: { A: recorders.A.foreign, B: recorders.B.foreign },
       phases,
       sockets: { A: continuity('A'), B: continuity('B') },
     },

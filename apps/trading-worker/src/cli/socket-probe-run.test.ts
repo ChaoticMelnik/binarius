@@ -303,6 +303,41 @@ describe('runProbe', () => {
       expect(h.clock).toBe(0);
       expect(h.clients.A.calls).toEqual([]);
     });
+
+    it("B sends the account's user.data, then another user's: setup failed at once, and no command", async () => {
+      const h = harness({
+        burst: (label) =>
+          label === 'A'
+            ? defaultBurst('A')
+            : [
+                { type: BrokerEventType.UserData, user: user(BROKER_USER_ID) },
+                { type: BrokerEventType.UserData, user: user('8') },
+              ],
+      });
+      const result = await h.run();
+
+      expect(result).toEqual({ kind: 'setup_failed', what: 'user.data id mismatch on B' });
+      expect(h.clock).toBe(0);
+      expect(h.clients.A.calls).toEqual([]);
+    });
+
+    it("another user's user.data on B after command 1: the run completes, inconclusive", async () => {
+      const h = harness({
+        onSleep: (ms, sent, harnessed) => {
+          if (ms === WINDOW_MS && sent === 2) {
+            harnessed.clients.B.hear({ type: BrokerEventType.UserData, user: user('8') });
+          }
+        },
+      });
+      const input = await ran(h);
+
+      expect(h.restCalls).toHaveLength(1);
+      expect(input.userDataForeign).toEqual({ A: false, B: true });
+      expect(verdict(input)).toEqual({
+        kind: 'inconclusive',
+        missing: ["user.data on B carried another user's id during the run"],
+      });
+    });
   });
 
   it('R3 B drops and reconnects in the window of a_below: inconclusive', async () => {
@@ -313,9 +348,13 @@ describe('runProbe', () => {
         b.fire(BrokerSocketState.Reconnecting, 'transport close');
         b.connections = 2;
         b.fire(BrokerSocketState.Ready);
+        b.hear({ type: BrokerEventType.UserData, user: user(BROKER_USER_ID) });
       },
     });
     const input = await ran(h);
+
+    // the account's own user.data on the new connection is not foreign
+    expect(input.userDataForeign.B).toBe(false);
 
     expect(input.sockets.B).toEqual({
       state: BrokerSocketState.Ready,

@@ -27,6 +27,7 @@ const SILENT = heard(0, 0);
 function safeInput(): VerdictInput {
   return {
     userDataVerified: { A: true, B: true },
+    userDataForeign: { A: false, B: false },
     phases: {
       a_min: { command: 'success', heard: { A: heard(1, 0), B: SILENT }, windowCompleted: true },
       a_below: { command: 'fail', heard: { A: heard(0, 1), B: SILENT }, windowCompleted: true },
@@ -82,6 +83,13 @@ describe('verdict', () => {
         input.userDataVerified[socket] = false;
       }),
       `user.data on ${socket} did not match the account before command 1`,
+    ]),
+    ...PROBE_SOCKETS.map((socket): [string, VerdictInput, string] => [
+      `a foreign user.data on ${socket} during the run`,
+      changed((input) => {
+        input.userDataForeign[socket] = true;
+      }),
+      `user.data on ${socket} carried another user's id during the run`,
     ]),
     ...SOCKET_PHASES.flatMap((phase): [string, VerdictInput, string][] => {
       const expected = phase.endsWith('_min') ? 'success' : 'fail';
@@ -326,6 +334,19 @@ describe('verdict', () => {
         changed((input) => {
           input.phases.a_min.heard.B = heard(1, 0);
           reconnected(input, 'B');
+        }),
+      );
+      expect(result).toEqual({
+        kind: 'broadcast',
+        heard: [{ phase: 'a_min', socket: 'B', answers: heard(1, 0) }],
+      });
+    });
+
+    it('B heard a success and carried a foreign user.data: broadcast wins', () => {
+      const result = verdict(
+        changed((input) => {
+          input.phases.a_min.heard.B = heard(1, 0);
+          input.userDataForeign.B = true;
         }),
       );
       expect(result).toEqual({
