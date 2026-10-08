@@ -211,6 +211,13 @@
       "when": 1791485303951,
       "tag": "0029_admin_bot_text_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1791490500082,
+      "tag": "0030_bot_text_variable_names",
+      "breakpoints": true
     }
   ]
 }
