@@ -90,8 +90,12 @@ pattern is not answered at all.
 `a:<assetId>:<sec>` origin — has a legacy pattern built from the same builder over that list.
 Pressing one answers the query and removes the message's keyboard (`editMessageReplyMarkup` with
 no markup), so the old screen cannot be pressed again; no text is sent. A refused removal (the
-message not modified or gone) is logged at `info` with `telegramErrorFields` and changes nothing.
-Any other duration still matches no pattern.
+message not modified or gone) is logged at `info` with `telegramErrorFields` and the pressed
+`callbackData` (#329: the demo, the picker and the old oauth button share the line), and changes
+nothing; a refused answer is logged at `warn` with the same field. Any other duration still
+matches no pattern. The legacy patterns are registered before the current ones, so the two sets
+must stay disjoint (`demo-catalog.test.ts`): a duration in both would lose its keyboard instead of
+reaching its screen.
 
 ## The check
 
@@ -127,7 +131,10 @@ press. An old pair button of a pair the pages no longer list falls to «❌ Дл
 подходящей длительности…» with the way back to page 0. An empty catalog reads as
 `catalog_unavailable` on the types screen: there is nothing to choose from. A catalog with pairs
 but none that accepts 5 or 15 s says «Сейчас нет активов для коротких сделок.» (`demoNoShortPairs`)
-with «🔄 Повторить» on the types.
+with «🔄 Повторить» on the types. A type's page agrees (#329): page 0 reached from such a pair, or
+an old «💱 …» button of a type whose pairs all refuse 5 and 15 s, says `demoNoShortPairs` with
+«↩️ Типы», and an empty catalog there reads as `catalog_unavailable` too; a type with listed pairs
+none of which is open still says it is closed by the schedule.
 
 ## Fresh
 
@@ -258,20 +265,22 @@ screen. The picker and the press's fingerprint check are in
 
 ## Timing
 
-`HANDLER_CALLS.demo` is one backend call and two Bot API calls (the answer beside the read, then
-the new message); each of `.demoGroups`, `.demoPage`, `.demoAsset` and `.demoDuration` is one
-backend call and up to three Bot API calls (the edit refused as gone, then the message sent
-anew): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is two backend calls and up to four Bot API
-calls — «⏳» refused as gone and sent anew, the signal, the result sent; or «⏳» edited, the
-signal, the result's edit refused as gone and sent anew: 2 × 5 000 + 4 × 8 000 = 42 s.
-`.stakePlaceholder` is the answer and one message. `.legacyDuration` (#313, an old duration
-button) is no backend call and two Bot API calls, the answer and the keyboard's removal: 16 s.
-All are under `confirm`'s 45 s, so
-`HANDLER_BUDGET_MS`, the shutdown budget and the compose grace period do not move. The answer and
-the read run together and are counted as sequential, as for confirm. `timing.test.ts` runs every
-terminal branch of the seven through the real handlers. The pairs route reads the cache in
-memory; the signal route makes at most one chart GET, inside `TRADING_SIGNAL_BUDGET_MS` (4 s),
-and `TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` is checked at import and in
+`HANDLER_CALLS.demo` is one backend call and two Bot API calls (the answer beside the catalog
+read, then the new message); each of `.demoGroups`, `.demoPage`, `.demoAsset` and
+`.demoDuration` is one backend call and up to three Bot API calls (the edit refused as gone,
+then the message sent anew): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is three backend calls
+(the catalog beside the answer, then the signal and the access read for the stake label, #297)
+and up to four Bot API calls — «⏳» refused as gone and sent anew, the result sent; or «⏳»
+edited, the result's edit refused as gone and sent anew: 3 × 5 000 + 4 × 8 000 = 47 s, the
+longest declared path, so `HANDLER_BUDGET_MS` is 47 s ([bot-demo-trade.md](bot-demo-trade.md#timing));
+`HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS` (50 s) `< COMPOSE_STOP_GRACE_PERIOD_MS` (55 s) is
+checked at import (`TIMING_CHAIN_HOLDS`). `.legacyDuration` (#313, an old duration button) is
+no backend call and two Bot API calls, the answer and the keyboard's removal: 16 s. The answer
+and the read run together and are counted as sequential, as for confirm. `timing.test.ts` runs
+every terminal branch of each handler named here through the real handlers — the page of a type
+with no listed pair (#329) included. The pairs route reads the cache in memory; the signal route
+makes at most one chart GET, inside `TRADING_SIGNAL_BUDGET_MS` (4 s), and
+`TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` is checked at import and in
 `timing.test.ts`.
 
 ## Logging

@@ -64,7 +64,7 @@ The checks run in this order, and the first one that fails answers:
    stake button.
 2. **The access.** If the read fails, the bot answers `unavailable` and writes `warn`
    `trading access not read`. A `blocked` user gets `blocked`. With `broker: null` the answer
-   depends on the reason: `no_account` gets `accountNone` with the connect buttons,
+   depends on the reason: `no_account` gets `accountNone` with the connect button,
    `ambiguous_account` gets `statusAmbiguous`, and any other reason gets
    «⏳ Баланс Binodex ещё не получен…».
 3. **The fingerprint.** The amount is the user's saved demo stake (`access.demoStake`), or the
@@ -96,8 +96,8 @@ Every 4xx is answered before a row is committed, so a 4xx means nothing was crea
 | Answer | What the bot shows |
 | --- | --- |
 | 201 / 200 `{ intent }` | the status message, tracked unless the status is already accepted, settled or rejected |
-| 404 `broker_account_not_found` | `accountNone` + the connect buttons |
-| 409 `account_revoked` | `accountRevoked` + the connect buttons |
+| 404 `broker_account_not_found` | `accountNone` + the connect button |
+| 409 `account_revoked` | `accountRevoked` + the connect button |
 | 409 `user_blocked` | `blocked` |
 | 409 `ambiguous_broker_account` | `statusAmbiguous` |
 | 409 `account_not_confirmed` | «⏳ Привязка Binodex ждёт подтверждения — открой /account.» |

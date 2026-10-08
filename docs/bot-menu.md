@@ -32,7 +32,7 @@ status or age line when the broker balance is missing or old, a hint, and one bu
          (/menu sends no payload, so it never spends the acquisition slot)
   bot  → blocked                → "🔒 Доступ ограничен"
          pendingBrokerAccounts  → the confirm prompt and its buttons
-         no active account      → the welcome and its two buttons
+         no active account      → the welcome and its connect button
          an active account      → POST /trading/access { telegramUserId }
                                   → the outcome below
 ```
@@ -99,7 +99,7 @@ variant, with every hole at its widest, is valid Telegram HTML inside the 1 024-
 | --- | --- |
 | 200 `status: 'active'`, a snapshot or a reason other than `no_account` | the card |
 | 200 `status: 'blocked'` (blocked between the two calls) | `TEXTS.blocked`, no card |
-| 200 `brokerUnavailable: 'no_account'` (revoked between the two calls) | `TEXTS.accountNone` + the two connect buttons, as `/account` shows |
+| 200 `brokerUnavailable: 'no_account'` (revoked between the two calls) | `TEXTS.accountNone` + the connect button, as `/account` shows |
 | 404 `user_not_found` | `TEXTS.unavailable` + warn: `/users/start` has just upserted the row, so this is not «not connected» |
 | 404 `broker_account_not_found`, 404 `not_found`, 401, 400, any other 4xx | `TEXTS.unavailable` + warn |
 | 5xx, unreachable, timeout, a body the parser refuses | `TEXTS.unavailable` + warn; the route writes only `last_requested_at`, so `/menu` again is a free retry |
