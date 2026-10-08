@@ -33,6 +33,7 @@ const ACCOUNT = {
 };
 
 interface Captured {
+  method?: string;
   url?: string;
   headers?: IncomingMessage['headers'];
   body?: string;
@@ -60,6 +61,7 @@ async function serve(
     request.setEncoding('utf8');
     request.on('data', (chunk: string) => (body += chunk));
     request.on('end', () => {
+      captured.method = request.method;
       captured.url = request.url;
       captured.headers = request.headers;
       captured.body = body;
@@ -413,6 +415,60 @@ describe('the audit log call (#110)', () => {
   ])('refuses %s with a key the contract does not name', async (_label, body) => {
     const { client } = await prefixed(body);
     const error = await rejectionOf(client.audit(SESSION, {}));
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+describe('the password change call (#79)', () => {
+  const SESSION = 's'.repeat(43);
+  const REQUEST = {
+    currentPassword: 'CURRENT-SECRET',
+    newPassword: 'NEW-SECRET',
+    ip: '203.0.113.7',
+    userAgent: 'agent',
+  };
+
+  const prefixed = async (status: number, body: unknown) => {
+    const served = await serve((response) => {
+      json(response, status, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+
+  it('posts the request as given with the bearer and the staff session, under the prefix', async () => {
+    const { client, captured } = await prefixed(200, { changed: true, revokedSessions: 2 });
+    expect(await client.changePassword(SESSION, REQUEST)).toEqual({
+      changed: true,
+      revokedSessions: 2,
+    });
+    expect(captured.method).toBe('POST');
+    expect(captured.url).toBe('/api/admin/auth/password');
+    expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+    expect(JSON.parse(captured.body ?? '')).toEqual(REQUEST);
+  });
+
+  it('carries a refusal as its status and code', async () => {
+    const { client } = await prefixed(401, { error: 'invalid_credentials' });
+    const error = await rejectionOf(client.changePassword(SESSION, REQUEST));
+    expect(error).toBeInstanceOf(BackendError);
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 401,
+      reason: 'invalid_credentials',
+    });
+  });
+
+  it.each([
+    ['a key the contract does not name', { changed: true, revokedSessions: 1, extra: 1 }],
+    ['a negative count', { changed: true, revokedSessions: -1 }],
+    ['no count', { changed: true }],
+  ])('refuses a 2xx with %s', async (_label, body) => {
+    const { client } = await prefixed(200, body);
+    const error = await rejectionOf(client.changePassword(SESSION, REQUEST));
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });
