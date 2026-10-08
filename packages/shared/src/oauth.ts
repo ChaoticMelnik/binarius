@@ -203,19 +203,6 @@ export const OAUTH_CALLBACK_BODY_LIMIT_BYTES = 8 * 1024;
 // apps/web/src/timing.ts must wait longer than it.
 export const OAUTH_CALLBACK_BUDGET_MS = 8_000;
 
-export const startLoginRequestSchema = z.object({ telegramUserId: telegramUserIdSchema });
-export type StartLoginRequest = z.infer<typeof startLoginRequestSchema>;
-
-export const startLoginResponseSchema = z.object({
-  authorizeUrl: z.url(),
-  state: z.string().min(1),
-  expiresAt: z.iso.datetime({ offset: true }),
-  // the apps/web login page that opens authorizeUrl inside the Mini App; only for an https
-  // redirect URI, because Telegram accepts only https in a web_app button
-  miniAppUrl: z.url().optional(),
-});
-export type StartLoginResponse = z.infer<typeof startLoginResponseSchema>;
-
 // a measured initData with photo_url is ~300 bytes; the bound only stops an unbounded field
 export const INIT_DATA_MAX_LENGTH = 4096;
 
@@ -290,8 +277,6 @@ export const emailLoginRequestSchema = z.object({
 });
 export type EmailLoginRequest = z.infer<typeof emailLoginRequestSchema>;
 
-export const safeParseStartLoginRequest = (input: unknown) =>
-  startLoginRequestSchema.safeParse(input);
 export const safeParseOAuthCallbackRequest = (input: unknown) =>
   oauthCallbackRequestSchema.safeParse(input);
 export const safeParseOAuthCallbackResponse = (input: unknown) =>
