@@ -231,7 +231,11 @@ export function createDemoTradeComposer<C extends Context>({
     const symbol = catalog.ok
       ? (catalog.value.pairs.find((pair) => pair.id === view.assetId)?.symbol ?? null)
       : null;
-    await refreshInPlace(ctx, intentStatusText(symbol, view), intentKeyboard(view));
+    // no tracker follows the message a refresh draws, so a live status gets the menu too (#350)
+    const keyboard = TRACKER_STOP_STATUSES.has(view.status)
+      ? intentKeyboard(view)
+      : withMenu(intentKeyboard(view));
+    await refreshInPlace(ctx, intentStatusText(symbol, view), keyboard);
   });
 
   async function create(request: CreateTradeIntentRequest): Promise<CreateOutcome> {
