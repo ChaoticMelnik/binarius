@@ -20,6 +20,7 @@ import { BackendError, BackendErrorCode, type BackendClient } from './backend-cl
 import { createBot, levelCallbackData } from './bot';
 import {
   DEMO_CALLBACK_DATA,
+  DEMO_GROUPS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
   stakeCallbackData,
@@ -28,6 +29,7 @@ import { intentCallbackData } from './demo-trade';
 import { createIntentTracker } from './intent-tracker';
 import { runBot, type PollingLoop } from './lifecycle';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
+import { stakePresetCallbackData } from './stake-picker';
 import {
   ACCESS_VIEW,
   ACCOUNT_VIEW,
@@ -87,9 +89,11 @@ interface Scenario {
   setNotificationLevel?: BackendClient['setNotificationLevel'];
   readTradingAccess?: BackendClient['readTradingAccess'];
   readPairs?: BackendClient['readPairs'];
+  readSignals?: BackendClient['readSignals'];
   evaluateSignal?: BackendClient['evaluateSignal'];
   createIntent?: BackendClient['createIntent'];
   readIntent?: BackendClient['readIntent'];
+  setDemoStake?: BackendClient['setDemoStake'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -111,14 +115,15 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
       ((_telegramUserId, level) => Promise.resolve({ level, demoStake: null })),
     readTradingAccess: scenario.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
     readPairs: scenario.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)),
-    readSignals: vi.fn(() => Promise.reject(new Error('not used here'))),
+    readSignals: scenario.readSignals ?? (() => Promise.reject(new Error('not used here'))),
     evaluateSignal: scenario.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
     createIntent: scenario.createIntent ?? (() => Promise.resolve(INTENT_VIEW)),
     readIntent: scenario.readIntent ?? (() => Promise.resolve(INTENT_VIEW)),
     startSession: () => Promise.reject(new Error('not used by these scenes')),
     readSession: () => Promise.reject(new Error('not used by these scenes')),
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
-    setDemoStake: () => Promise.reject(new Error('not used by these scenes')),
+    setDemoStake:
+      scenario.setDemoStake ?? (() => Promise.reject(new Error('not used by these scenes'))),
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
   };
   const loginDialog = createLoginDialog();
@@ -644,7 +649,7 @@ describe('what the bot writes about the demo', () => {
 
   it('names a failed catalog read by error, code, status and reason, without the user or a symbol', async () => {
     const { lines } = await linesFrom({
-      update: callbackUpdate(DEMO_CALLBACK_DATA),
+      update: callbackUpdate(DEMO_GROUPS_CALLBACK_DATA),
       level: 'trace',
       readPairs: () =>
         Promise.reject(
@@ -659,6 +664,42 @@ describe('what the bot writes about the demo', () => {
     });
     expect(fieldsOf(lines)).not.toContain(String(USER.id));
     expect(lines.join('')).not.toContain(PAIR_EURUSD.symbol);
+  });
+
+  // #320
+  it('names a failed signals read by error, code, status and reason, without the user', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate(DEMO_CALLBACK_DATA),
+      level: 'trace',
+      readSignals: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, { status: 404, reason: 'not_found' }),
+        ),
+    });
+    expect(lineWith(lines, 'trading signals not read')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 404,
+      backendReason: 'not_found',
+    });
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+  });
+
+  it('names a catalog the launch screen did not get by error and code, without the user or the amount', async () => {
+    const { lines } = await linesFrom({
+      update: callbackUpdate(
+        stakePresetCallbackData('5', { kind: 'pair', assetId: PAIR_EURUSD.id }),
+      ),
+      level: 'trace',
+      setDemoStake: (_id, amount) => Promise.resolve({ saved: amount }),
+      readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    expect(lineWith(lines, 'pairs not read for the launch screen')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.Unreachable },
+    });
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+    expect(fieldsOf(lines)).not.toContain('$5.00');
   });
 
   // #126

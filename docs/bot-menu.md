@@ -4,7 +4,7 @@ A user with an active Binodex account gets the **status card** (#24) as the bot'
 `/start` (in place of the old «👋 С возвращением!») and on `/menu`. The card is the account card's
 picture with a caption of the trading mode, the real balance, the demo balance, the tokens, a
 status or age line when the broker balance is missing or old, a hint, and one button
-«🎮 Запустить демо». It is pinned in place of whatever was pinned before.
+«🎮 Демо-торговля» (#320). It is pinned in place of whatever was pinned before.
 
 ## Components
 
@@ -122,11 +122,13 @@ history but loses its pin; a lost or unpinned account card is replaced by `/star
 
 ## The demo button
 
-`DEMO_CALLBACK_DATA = 'demo'`, label «🎮 Запустить демо». The button opens the asset picker as a
-new message (the card is a photo whose caption cannot be edited into another screen): the asset
-type, the pair, the duration, the summary, each checked on a catalog read at the press
-([bot-demo.md](bot-demo.md)). The bot keeps no state for it, so a button on an old card leads to
-the same place.
+`DEMO_CALLBACK_DATA = 'demo'`, label «🎮 Демо-торговля» (#320; «🎮 Запустить демо» before). The
+button opens «Сигналы сейчас» as a new message (the card is a photo whose caption cannot be edited
+into another screen): the pairs with a signal now, each leading to the launch of a cycle, and
+«🧭 Выбрать пару вручную» for the asset type, the pair, the duration and the summary, each checked
+on a catalog read at the press ([bot-demo.md](bot-demo.md#the-signals-screen-320)). The bot keeps
+no state for it, so a button on an old card leads to the same place: since #320 that is the
+signals screen, and the manual path is one press further.
 
 ## /menu
 
@@ -140,7 +142,8 @@ the command handlers are registered before the text handler and do not call `nex
 `HANDLER_CALLS.start` and `.menu` are two backend calls (`recordStart`, `readTradingAccess`) and up
 to four Bot API calls (the photo refused, the text, the unpin, the pin): 2 × 5 000 + 4 × 8 000 =
 42 s, under `confirm`'s 45 s, so `HANDLER_BUDGET_MS` and the shutdown budget do not move.
-`HANDLER_CALLS.demo` is one backend call and two Bot API calls ([bot-demo.md](bot-demo.md)).
+`HANDLER_CALLS.demo` is two backend calls (the signals and the catalog, #320) and two Bot API
+calls ([bot-demo.md](bot-demo.md#timing)).
 `timing.test.ts` runs every branch of the three through the real handlers.
 
 `TRADING_ACCESS_BUDGET_MS` (4 000, the backend's upper estimate of the route) is at most
