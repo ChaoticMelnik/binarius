@@ -1,4 +1,5 @@
-import type { Api, Context } from 'grammy';
+import type { Api, Context, InlineKeyboard } from 'grammy';
+import type { InlineKeyboardMarkup } from 'grammy/types';
 import type { TelegramHtml } from '@binarius/shared';
 
 // The bot's one send seam for user texts (the backend's is auth/link-notifier.ts): the only place
@@ -6,6 +7,20 @@ import type { TelegramHtml } from '@binarius/shared';
 // markup. ESLint forbids grammY's send methods everywhere else in apps/bot/src outside tests and
 // names this file. A caller's extra cannot override parse_mode or the caption of the video or the
 // photo, nor pass entities, which the Bot API takes instead of parse_mode.
+//
+// Every message carries an inline keyboard, the user's next step (#350, docs/bot-navigation.md):
+// `reply_markup` is required and only an inline one counts. A message without one goes through a
+// `…WithoutNextStep` function, which names its reason from NO_NEXT_STEP_REASONS.
+
+export const NO_NEXT_STEP_REASONS = {
+  // a screen in place while the bot waits for an answer; the next screen replaces it with a
+  // keyboard, and none on it keeps the same button from being pressed twice («⏳ Анализирую…»)
+  InProgress: 'in_progress',
+} as const;
+export type NoNextStepReason = (typeof NO_NEXT_STEP_REASONS)[keyof typeof NO_NEXT_STEP_REASONS];
+
+type NextStep = { reply_markup: InlineKeyboard | InlineKeyboardMarkup };
+type WithNextStep<T> = Omit<T, 'reply_markup'> & NextStep;
 
 type ReplyExtra = Omit<NonNullable<Parameters<Context['reply']>[1]>, 'parse_mode' | 'entities'>;
 type EditExtra = Omit<
@@ -25,12 +40,36 @@ type PhotoExtra = Omit<
   'parse_mode' | 'caption' | 'caption_entities'
 >;
 
-export const replyHtml = (ctx: Context, text: TelegramHtml, extra?: ReplyExtra) =>
+export const replyHtml = (ctx: Context, text: TelegramHtml, extra: WithNextStep<ReplyExtra>) =>
   ctx.reply(text.value, { ...extra, parse_mode: 'HTML' });
 
+// A message without a keyboard. `reason` is not sent: its type makes each such call name an entry
+// of NO_NEXT_STEP_REASONS, which docs/bot-navigation.md lists.
+export const replyHtmlWithoutNextStep = (
+  ctx: Context,
+  text: TelegramHtml,
+  reason: NoNextStepReason,
+) => {
+  void reason;
+  return ctx.reply(text.value, { parse_mode: 'HTML' });
+};
+
 // On a callback query, grammY edits the message the pressed button is under.
-export const editMessageTextHtml = (ctx: Context, text: TelegramHtml, extra?: EditExtra) =>
-  ctx.editMessageText(text.value, { ...extra, parse_mode: 'HTML' });
+export const editMessageTextHtml = (
+  ctx: Context,
+  text: TelegramHtml,
+  extra: WithNextStep<EditExtra>,
+) => ctx.editMessageText(text.value, { ...extra, parse_mode: 'HTML' });
+
+// An edit that removes the keyboard on screen on purpose; `reason` as above.
+export const editMessageTextHtmlWithoutNextStep = (
+  ctx: Context,
+  text: TelegramHtml,
+  reason: NoNextStepReason,
+) => {
+  void reason;
+  return ctx.editMessageText(text.value, { parse_mode: 'HTML' });
+};
 
 // Outside an update (the intent tracker, #127): the message named by its chat and id.
 export const editMessageTextByIdHtml = (
@@ -38,19 +77,19 @@ export const editMessageTextByIdHtml = (
   chatId: number,
   messageId: number,
   text: TelegramHtml,
-  extra?: EditByIdExtra,
+  extra: WithNextStep<EditByIdExtra>,
 ) => api.editMessageText(chatId, messageId, text.value, { ...extra, parse_mode: 'HTML' });
 
 export const replyWithVideoHtml = (
   ctx: Context,
   video: Parameters<Context['replyWithVideo']>[0],
   caption: TelegramHtml,
-  extra?: VideoExtra,
+  extra: WithNextStep<VideoExtra>,
 ) => ctx.replyWithVideo(video, { ...extra, caption: caption.value, parse_mode: 'HTML' });
 
 export const replyWithPhotoHtml = (
   ctx: Context,
   photo: Parameters<Context['replyWithPhoto']>[0],
   caption: TelegramHtml,
-  extra?: PhotoExtra,
+  extra: WithNextStep<PhotoExtra>,
 ) => ctx.replyWithPhoto(photo, { ...extra, caption: caption.value, parse_mode: 'HTML' });

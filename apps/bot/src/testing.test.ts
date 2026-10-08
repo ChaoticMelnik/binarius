@@ -1,7 +1,15 @@
 import { Bot, GrammyError, HttpError } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it } from 'vitest';
-import { BOT_INFO, USER, captureApi, rejectionOf } from './testing';
+import {
+  BOT_INFO,
+  USER,
+  WRITE_CALLBACK_PREFIXES,
+  captureApi,
+  refuseWriteRetried,
+  rejectionOf,
+} from './testing';
+import { LABELS } from './texts';
 
 // captureApi is itself a double, so the premise every other suite reads through it — that a
 // transformer's return value is what the caller of bot.api.<method> gets, and that a thrown
@@ -57,5 +65,27 @@ describe('captureApi', () => {
     expect(api.calls).toEqual([
       { method: 'sendMessage', payload: { chat_id: USER.id, text: 'hi' } },
     ]);
+  });
+});
+
+// #350: the guard every scene's sends pass through
+describe('refuseWriteRetried', () => {
+  const keyboard = (text: string, callback_data: string) => ({
+    reply_markup: { inline_keyboard: [[{ text, callback_data }]] },
+  });
+
+  it.each(WRITE_CALLBACK_PREFIXES)('refuses «🔄 Повторить» carrying %s', (prefix) => {
+    expect(() =>
+      refuseWriteRetried('sendMessage', keyboard(LABELS.demoRetryButton, `${prefix}x`)),
+    ).toThrow('sendMessage repeats a write');
+  });
+
+  it('passes a repeat of a read and a write under its own label', () => {
+    expect(() =>
+      refuseWriteRetried('sendMessage', keyboard(LABELS.demoRetryButton, 'intent:x')),
+    ).not.toThrow();
+    expect(() =>
+      refuseWriteRetried('sendMessage', keyboard(LABELS.sessionAgainButton, 'demo:sess:101:15')),
+    ).not.toThrow();
   });
 });

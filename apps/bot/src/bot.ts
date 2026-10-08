@@ -27,11 +27,11 @@ import {
   type PendingBrokerAccountView,
   type UserStartRequest,
   COMMAND_RETRY_PATTERN,
+  commandRetryCallbackData,
   CONNECT_CALLBACK_DATA,
-  DEMO_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
   RETRY_COMMANDS,
-  supportUrl,
+  type RetryCommand,
 } from '@binarius/shared';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import {
@@ -42,6 +42,7 @@ import {
 } from './backend-client';
 import { BOT_COMMANDS } from './commands';
 import { createDemoComposer, removeLegacyKeyboard } from './demo';
+import { demoKeyboard, menuKeyboard, retryKeyboard, supportKeyboard, withMenu } from './keyboards';
 import { createDemoTradeComposer } from './demo-trade';
 import { createTradingSessionComposer } from './trading-session';
 import type { IntentTracker } from './intent-tracker';
@@ -136,6 +137,15 @@ export function createBot({
 
   const welcomeKeyboard = () => addConnectButtons(new InlineKeyboard());
 
+  // a login refusal: a blocked user to support, any other to the menu
+  const refusalKeyboard = (text: BotStaticHtmlKey) =>
+    text === 'blocked' ? supportKeyboard() : menuKeyboard();
+  const commandRetryKeyboard = (command: RetryCommand) =>
+    retryKeyboard(commandRetryCallbackData(command));
+  // /start, /menu and «🏠 В меню»: the menu is the command, so it is the repeat
+  const homeRetryKeyboard = () =>
+    new InlineKeyboard().text(LABELS.demoRetryButton, MENU_CALLBACK_DATA);
+
   const codeKeyboard = () =>
     new InlineKeyboard()
       .text(LABELS.resendButton, RESEND_CALLBACK_DATA)
@@ -202,12 +212,12 @@ export function createBot({
         { ...errorLogFields(error), ...backendErrorFields(error) },
         `${command} not recorded`,
       );
-      await replyHtml(ctx, TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable, { reply_markup: homeRetryKeyboard() });
       return;
     }
 
     if (user.status === UserStatus.Blocked) {
-      await replyHtml(ctx, TEXTS.blocked);
+      await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return;
     }
     // before the active check on purpose: a link the owner of this Telegram account did not
@@ -238,11 +248,11 @@ export function createBot({
         { ...errorLogFields(error), ...backendErrorFields(error) },
         'trading access not read',
       );
-      await replyHtml(ctx, TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable, { reply_markup: homeRetryKeyboard() });
       return;
     }
     if (access.status === UserStatus.Blocked) {
-      await replyHtml(ctx, TEXTS.blocked);
+      await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return;
     }
     // revoked between the two calls: what /account shows with nothing active
@@ -256,7 +266,7 @@ export function createBot({
       broker: access.broker,
       brokerUnavailable: access.brokerUnavailable,
     });
-    const reply_markup = new InlineKeyboard().text(LABELS.demoButton, DEMO_CALLBACK_DATA);
+    const reply_markup = demoKeyboard();
     const sent = await sendWithTextFallback(
       ctx,
       {
@@ -292,20 +302,18 @@ export function createBot({
         return;
       }
       logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, '/account not read');
-      await replyHtml(ctx, TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable, { reply_markup: commandRetryKeyboard('account') });
       return;
     }
 
     if (user.status === UserStatus.Blocked) {
-      await replyHtml(ctx, TEXTS.blocked);
+      await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return;
     }
     const keyboard = accountKeyboard(user.accounts);
-    await replyHtml(
-      ctx,
-      accountStatus(user.accounts),
-      keyboard === undefined ? undefined : { reply_markup: keyboard },
-    );
+    await replyHtml(ctx, accountStatus(user.accounts), {
+      reply_markup: keyboard ?? withMenu(demoKeyboard()),
+    });
   }
 
   // The level comes from /users/start, the call /start already makes: it creates a missing row,
@@ -322,11 +330,11 @@ export function createBot({
       user = await backend.recordStart(startRequestOf(from));
     } catch (error) {
       logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, '/settings not read');
-      await replyHtml(ctx, TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable, { reply_markup: commandRetryKeyboard('settings') });
       return;
     }
     if (user.status === UserStatus.Blocked) {
-      await replyHtml(ctx, TEXTS.blocked);
+      await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return;
     }
     await replyHtml(ctx, settingsText(user.notificationLevel, user.demoStake), {
@@ -348,11 +356,13 @@ export function createBot({
         { ...errorLogFields(read.reason), ...backendErrorFields(read.reason) },
         '/settings not read',
       );
-      await replyHtml(ctx, TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable, {
+        reply_markup: retryKeyboard(SETTINGS_CALLBACK_DATA),
+      });
       return;
     }
     if (read.value.status === UserStatus.Blocked) {
-      await replyHtml(ctx, TEXTS.blocked);
+      await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return;
     }
     await showSettings(ctx, read.value.notificationLevel, read.value.demoStake);
@@ -374,7 +384,7 @@ export function createBot({
         { ...errorLogFields(set.reason), ...backendErrorFields(set.reason) },
         'notification level not set',
       );
-      await replyHtml(ctx, TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable, { reply_markup: menuKeyboard() });
       return;
     }
     await showSettings(ctx, set.value.level, set.value.demoStake);
@@ -389,13 +399,13 @@ export function createBot({
   // No backend call: the way to a person works for a blocked user and during an outage too.
   privateChats.command('support', async (ctx) => {
     await replyHtml(ctx, TEXTS.support, {
-      reply_markup: new InlineKeyboard().url(LABELS.supportButton, supportUrl()),
+      reply_markup: withMenu(supportKeyboard()),
     });
   });
 
   // No backend call, like /support: the same answer for everyone, during an outage too (#184).
   privateChats.command('help', async (ctx) => {
-    await replyHtml(ctx, helpText(BOT_COMMANDS));
+    await replyHtml(ctx, helpText(BOT_COMMANDS), { reply_markup: menuKeyboard() });
   });
 
   // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries
@@ -438,7 +448,7 @@ export function createBot({
     await ctx.answerCallbackQuery().catch((error: unknown) => {
       logAnswerFailure(error);
     });
-    await replyHtml(ctx, TEXTS.emailPrompt);
+    await replyHtml(ctx, TEXTS.emailPrompt, { reply_markup: menuKeyboard() });
   });
 
   privateChats.callbackQuery(OAUTH_CALLBACK_DATA, (ctx) => removeLegacyKeyboard(ctx, logger));
@@ -468,11 +478,11 @@ export function createBot({
     const refusal =
       error instanceof BackendError ? CONFIRM_REFUSALS[error.reason ?? ''] : undefined;
     if (refusal !== undefined) {
-      await replyHtml(ctx, textOf(refusal));
+      await replyHtml(ctx, textOf(refusal), { reply_markup: refusalKeyboard(refusal) });
       return;
     }
     logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, 'login not confirmed');
-    await replyHtml(ctx, TEXTS.unavailable);
+    await replyHtml(ctx, TEXTS.unavailable, { reply_markup: menuKeyboard() });
   });
 
   privateChats.callbackQuery(RESEND_CALLBACK_DATA, async (ctx) => {
@@ -483,7 +493,9 @@ export function createBot({
         logAnswerFailure(error);
       });
       // no address yet, or no login at all: there is nothing to send a code to
-      await replyHtml(ctx, state?.step === 'email' ? TEXTS.emailPrompt : TEXTS.codeRequestStale);
+      await replyHtml(ctx, state?.step === 'email' ? TEXTS.emailPrompt : TEXTS.codeRequestStale, {
+        reply_markup: menuKeyboard(),
+      });
       return;
     }
     // independent, as in confirm
@@ -533,7 +545,7 @@ export function createBot({
     if (state.step === 'email') {
       const email = emailAddressSchema.safeParse(text);
       if (!email.success) {
-        await replyHtml(ctx, TEXTS.emailInvalid);
+        await replyHtml(ctx, TEXTS.emailInvalid, { reply_markup: menuKeyboard() });
         return;
       }
       const [sent] = await Promise.allSettled([backend.sendEmailCode(String(from.id), email.data)]);
@@ -607,11 +619,9 @@ export function createBot({
   async function replyWithRefusal(ctx: Context, id: number, refusal: Refusal): Promise<void> {
     if (refusal.dialog === 'end') loginDialog.delete(id);
     else if (refusal.dialog !== 'keep') loginDialog.set(id, refusal.dialog);
-    await replyHtml(
-      ctx,
-      textOf(refusal.text),
-      refusal.codeKeyboard === true ? { reply_markup: codeKeyboard() } : {},
-    );
+    await replyHtml(ctx, textOf(refusal.text), {
+      reply_markup: refusal.codeKeyboard === true ? codeKeyboard() : refusalKeyboard(refusal.text),
+    });
   }
 
   // The login is irreversible and its outcome is only in its answer. An answer lost after the
@@ -639,12 +649,12 @@ export function createBot({
         { ...errorLogFields(recheckError), ...backendErrorFields(recheckError) },
         'email login outcome not rechecked',
       );
-      await replyHtml(ctx, TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable, { reply_markup: menuKeyboard() });
       return;
     }
     if (user.status === UserStatus.Blocked) {
       loginDialog.delete(from.id);
-      await replyHtml(ctx, TEXTS.blocked);
+      await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return;
     }
     // The recheck knows that an account is active, not which one nor what was paid: a user who
@@ -659,7 +669,7 @@ export function createBot({
       await replyHtml(ctx, TEXTS.codeInvalid, { reply_markup: codeKeyboard() });
       return;
     }
-    await replyHtml(ctx, TEXTS.unavailable);
+    await replyHtml(ctx, TEXTS.unavailable, { reply_markup: menuKeyboard() });
   }
 
   // A rich message (the welcome video, the account card photo) with its text as the fallback.
@@ -718,11 +728,14 @@ export function createBot({
     const sent = await sendWithTextFallback(
       ctx,
       {
-        send: () => replyWithPhotoHtml(ctx, new InputFile(ACCOUNT_CARD_PHOTO_PATH), card),
+        send: () =>
+          replyWithPhotoHtml(ctx, new InputFile(ACCOUNT_CARD_PHOTO_PATH), card, {
+            reply_markup: demoKeyboard(),
+          }),
         method: 'sendPhoto',
         what: 'the account card photo',
       },
-      () => replyHtml(ctx, card),
+      () => replyHtml(ctx, card, { reply_markup: demoKeyboard() }),
     );
     if (sent === undefined) return;
     await pinCard(ctx, sent.message_id, 'the account card');

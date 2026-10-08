@@ -31,6 +31,7 @@ import {
   type StakeData,
 } from './demo';
 import { formatStake } from './format';
+import { backToAnalysisKeyboard, menuKeyboard, retryKeyboard, supportKeyboard } from './keyboards';
 import { readDemoTrade, type DemoTradeRead } from './demo-catalog';
 import { INTENT_NOT_FOUND, TRACKER_STOP_STATUSES, type IntentTracker } from './intent-tracker';
 import { telegramErrorFields, type Logger } from './logging';
@@ -148,7 +149,7 @@ export function createDemoTradeComposer<C extends Context>({
       await replyTradeFailure(ctx, trade, stake.assetId);
       return;
     }
-    const amount = await amountOf(ctx, access);
+    const amount = await amountOf(ctx, access, stake);
     if (amount === undefined) return;
     // a button drawn for another amount, or before the fingerprint existed: the user would trade
     // an amount the label did not show
@@ -201,7 +202,10 @@ export function createDemoTradeComposer<C extends Context>({
           'trade intent status not read',
         );
       }
-      await replyHtml(ctx, notFound ? TEXTS.intentStatusUnavailable : TEXTS.unavailable);
+      // a missing intent has nothing to read again; any other failure repeats the read
+      await replyHtml(ctx, notFound ? TEXTS.intentStatusUnavailable : TEXTS.unavailable, {
+        reply_markup: notFound ? menuKeyboard() : retryKeyboard(ctx.callbackQuery.data),
+      });
       return;
     }
     const view = read.value;
@@ -219,23 +223,25 @@ export function createDemoTradeComposer<C extends Context>({
     }
   }
 
-  // the stake and the broker's minimum it is checked against, or undefined once the refusal was
-  // sent
+  // The stake and the broker's minimum it is checked against, or undefined once the refusal was
+  // sent. The press is a write, so a refusal leads back to the analysis, never the press again.
   async function amountOf(
     ctx: Context,
     access: Settled<TradingAccessResponse>,
+    stake: StakeData,
   ): Promise<{ amount: DecimalString; minTradeAmount: DecimalString } | undefined> {
+    const back = () => backToAnalysisKeyboard(stake.assetId, stake.durationSec);
     if (!access.ok) {
       logger.warn(
         { ...errorLogFields(access.error), ...backendErrorFields(access.error) },
         'trading access not read',
       );
-      await replyHtml(ctx, TEXTS.unavailable);
+      await replyHtml(ctx, TEXTS.unavailable, { reply_markup: back() });
       return undefined;
     }
     const { status, broker, brokerUnavailable } = access.value;
     if (status === UserStatus.Blocked) {
-      await replyHtml(ctx, TEXTS.blocked);
+      await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return undefined;
     }
     const amount = effectiveStake(access.value);
@@ -245,9 +251,9 @@ export function createDemoTradeComposer<C extends Context>({
     if (brokerUnavailable === BrokerBalanceUnavailableReason.NoAccount) {
       await replyHtml(ctx, TEXTS.accountNone, { reply_markup: connectKeyboard() });
     } else if (brokerUnavailable === BrokerBalanceUnavailableReason.AmbiguousAccount) {
-      await replyHtml(ctx, TEXTS.statusAmbiguous);
+      await replyHtml(ctx, TEXTS.statusAmbiguous, { reply_markup: back() });
     } else {
-      await replyHtml(ctx, TEXTS.stakeBalanceMissing);
+      await replyHtml(ctx, TEXTS.stakeBalanceMissing, { reply_markup: back() });
     }
     return undefined;
   }
@@ -274,15 +280,17 @@ export function createDemoTradeComposer<C extends Context>({
         ? TEXTS.stakeBelowMinimum(formatStake(minTradeAmount))
         : textOf(refusal.text);
     const reply_markup =
-      refusal.connect === true
-        ? connectKeyboard()
-        : refusal.stakeMenu === true
-          ? new InlineKeyboard().text(
-              LABELS.stakeMenuButton,
-              stakeMenuCallbackData(stake.assetId, stake.durationSec),
-            )
-          : undefined;
-    await replyHtml(ctx, text, reply_markup === undefined ? {} : { reply_markup });
+      refusal.text === 'blocked'
+        ? supportKeyboard()
+        : refusal.connect === true
+          ? connectKeyboard()
+          : refusal.stakeMenu === true
+            ? new InlineKeyboard().text(
+                LABELS.stakeMenuButton,
+                stakeMenuCallbackData(stake.assetId, stake.durationSec),
+              )
+            : backToAnalysisKeyboard(stake.assetId, stake.durationSec);
+    await replyHtml(ctx, text, { reply_markup });
   }
 
   // #125's texts as a new message under the analysis, with the way back only: a «🔄 Повторить»

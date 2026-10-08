@@ -47,7 +47,14 @@ import {
 } from './demo-catalog';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
-import { editMessageTextHtml, replyHtml } from './send';
+import {
+  editMessageTextHtml,
+  editMessageTextHtmlWithoutNextStep,
+  NO_NEXT_STEP_REASONS,
+  replyHtml,
+  replyHtmlWithoutNextStep,
+  type NoNextStepReason,
+} from './send';
 import {
   DEMO_DURATION_LABELS,
   demoDurationsScreen,
@@ -425,6 +432,7 @@ export function createDemoComposer<C extends Context>({
     const waiting = await editOrReply(
       ctx,
       TEXTS.analyzing(analysisSubject(read.pair, durationSec)),
+      NO_NEXT_STEP_REASONS.InProgress,
     );
     if (waiting === 'unknown') return;
     const [screen, amount] = await Promise.all([
@@ -566,16 +574,16 @@ export function createDemoComposer<C extends Context>({
   // twice — is done; a message that is gone or cannot be edited gets the screen anew; any other
   // refusal goes to bot.catch with nothing sent, the keyboard on screen being the retry. A
   // transport failure leaves the edit unknown and sends nothing more; anything else is a bug.
-  // The outcome tells the analysis where its result goes. Without a keyboard the edit removes
-  // the one on screen.
+  // The outcome tells the analysis where its result goes. With a reason in place of a keyboard
+  // the edit removes the one on screen (send.ts).
   async function editOrReply(
     ctx: Context,
     text: TelegramHtml,
-    reply_markup?: InlineKeyboard,
+    next: InlineKeyboard | NoNextStepReason,
   ): Promise<EditOutcome> {
-    const extra = reply_markup === undefined ? {} : { reply_markup };
     try {
-      await editMessageTextHtml(ctx, text, extra);
+      if (typeof next === 'string') await editMessageTextHtmlWithoutNextStep(ctx, text, next);
+      else await editMessageTextHtml(ctx, text, { reply_markup: next });
       return 'edited';
     } catch (error) {
       const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
@@ -587,7 +595,8 @@ export function createDemoComposer<C extends Context>({
           { ...errorLogFields(error), ...telegramErrorFields(error) },
           'the demo screen was not edited, sending it anew',
         );
-        await replyHtml(ctx, text, extra);
+        if (typeof next === 'string') await replyHtmlWithoutNextStep(ctx, text, next);
+        else await replyHtml(ctx, text, { reply_markup: next });
         return 'sent';
       } else if (error instanceof HttpError) {
         logger.error(

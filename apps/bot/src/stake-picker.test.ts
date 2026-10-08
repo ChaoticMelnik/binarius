@@ -429,6 +429,7 @@ describe('a typed stake', () => {
       await type(text);
       expect(setDemoStake).not.toHaveBeenCalled();
       expect(lastPayload(calls)?.text).toBe(TEXTS.stakeInputInvalid.value);
+      expect(rowsOf(lastPayload(calls))).toEqual([BACK_SETTINGS]);
       expect(loginDialog.get(USER.id)).toEqual(ON_STAKE_STEP);
     },
   );
