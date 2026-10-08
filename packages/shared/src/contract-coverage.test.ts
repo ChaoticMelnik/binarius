@@ -146,7 +146,10 @@ describe('contract coverage (issue #6)', () => {
   });
 
   it('access token route and halt reason (issue #90)', () => {
-    expectTypeOf<AccessTokenRequest>().toEqualTypeOf<{ mayRefresh: boolean }>();
+    expectTypeOf<AccessTokenRequest>().toEqualTypeOf<{
+      mayRefresh: boolean;
+      refusedToken?: string | undefined;
+    }>();
     expectTypeOf<AccessTokenResponse>().toEqualTypeOf<{ accessToken: string }>();
     expectTypeOf<AccessTokenRefusal>().toEqualTypeOf<
       | 'account_not_found'

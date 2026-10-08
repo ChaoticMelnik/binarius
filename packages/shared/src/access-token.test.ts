@@ -19,11 +19,22 @@ describe('access token route contract (#90)', () => {
     expect(parsed.success && parsed.data).toEqual({ mayRefresh });
   });
 
+  // #281: the fingerprint of a token the broker refused
+  it('round-trips a request with a refused token', () => {
+    const refusedToken = 'a'.repeat(64);
+    const parsed = safeParseAccessTokenRequest({ mayRefresh: false, refusedToken });
+    expect(parsed.success && parsed.data).toEqual({ mayRefresh: false, refusedToken });
+  });
+
   it.each([
     ['an empty body', {}],
     ['a string flag', { mayRefresh: 'true' }],
     ['an extra key', { mayRefresh: true, accountId: 'x' }],
     ['null', null],
+    ['a refused token of 63 characters', { mayRefresh: true, refusedToken: 'a'.repeat(63) }],
+    ['a refused token in upper case', { mayRefresh: true, refusedToken: 'A'.repeat(64) }],
+    ['a refused token that is not hex', { mayRefresh: true, refusedToken: 'g'.repeat(64) }],
+    ['an empty refused token', { mayRefresh: true, refusedToken: '' }],
   ])('refuses a request with %s', (_name, input) => {
     expect(safeParseAccessTokenRequest(input).success).toBe(false);
   });
