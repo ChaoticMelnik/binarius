@@ -224,7 +224,7 @@ recorded as `unknown` and ignored. A trailing ack function is counted in `argc` 
 | --- | --- | --- |
 | `user.auth { id, token }` | an `auth` script; shared's `userAuthWireSchema` (`invalid`: `user.auth.error` with `Validation failed: "<field>" is required` / `is invalid`); the token belongs to `id`, compared as strings so `'1'` matches `1` (`auth_failed`: `Authentication failed: Invalid token`) | `user.auth.success` with one argument, `null`, then `user.data`, `common.assets_list` and the six observed extras below, in this order. A repeated `user.auth` is handled like the first: the burst comes again, a different user moves the socket to that user's events, and the subscriptions stay |
 | `price.subscribe { assets }` | authenticated (else nothing); shared's `priceSubscribeWireSchema`, 1..40 integers (else nothing, `invalid`) | the ids are added to the socket's subscriptions; `price.subscribed { assets }` echoes the request. An id without a pair is kept, and `pushPrices` skips it |
-| `user.{demo,real}.open_trade { asset_id, amount, action, duration }` | authenticated (else nothing, and a queued `openTrade` script stays queued); an `openTrade` script; shared's `socketOpenTradeRequestWireSchema` (`.fail [{ message, field }]`, same texts as the REST body); the store's checks, in the REST order (`.fail [{ message }]`, same texts as REST) | the trade opens in the event's mode. `user.<mode>.update_balance` goes to every socket of the user first, then `user.<mode>.open_trade.success` (the REST trade body, with `close_timestamp` and `symbol`) to the sender only |
+| `user.{demo,real}.open_trade { asset_id, amount, action, duration }` | authenticated (else nothing, and a queued `openTrade` script stays queued); an `openTrade` script; shared's `socketOpenTradeRequestWireSchema` (`.fail [{ message, field }]`, same texts as the REST body); the store's checks, in the REST order (`.fail [{ message }]`, same texts as REST) | the trade opens in the event's mode. `user.<mode>.update_balance` goes to every socket of the user first, then `user.<mode>.open_trade.success` (the REST trade body without `is_demo`, #354, with `close_timestamp` and `symbol`) to the sender only |
 
 A failed `user.auth` leaves the socket as it was: a socket that never authenticated stays
 unauthenticated, and one that had authenticated keeps its user. Nothing before `user.auth`
@@ -375,7 +375,7 @@ and 6 are resolved, 4–5 and 9 remain, and 7–8 are handled on the consumer's 
 6. **Money on the socket. Resolved 2026-10-06 (#236).** The socket sends the same JSON numbers as
    REST (`user.data`, `update_balance`, `open_trade.success`, `close_trade.success`), because
    `balanceWire`, `openWire` and `closedWire` in `state.ts` are the one place money reaches either
-   wire. The trade shapes are assumed, not recorded live (docs/broker-rest.md → Open items 3).
+   wire. The trades' money form is assumed, not recorded live (docs/broker-rest.md → Open items 3).
    **Socket trades carry no `is_demo` (#354, observed live in #285's probe runs):** the socket's
    `open_trade.success` and `close_trade.success` send the REST record without it (`socketTrade` in
    `socket.ts`); the store and REST keep it.
