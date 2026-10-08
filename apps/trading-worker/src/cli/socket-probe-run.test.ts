@@ -104,6 +104,8 @@ const senderOnly: Respond = (label, call, h) => {
 
 interface Options {
   burst?: (label: ProbeSocket) => BrokerEvent[];
+  // published by start() right after its `ready`, before the burst
+  startTransitions?: (label: ProbeSocket) => [BrokerSocketState, string?][];
   respond?: Respond;
   rest?: (request: OpenTradeRequest) => Promise<OpenTrade>;
   // runs while the probe sleeps: `sent` counts the commands and the REST order sent so far
@@ -150,6 +152,7 @@ function harness(options: Options = {}): Harness {
       start() {
         client.connections += 1;
         client.fire(BrokerSocketState.Ready);
+        for (const [to, reason] of options.startTransitions?.(label) ?? []) client.fire(to, reason);
         for (const event of burst(label)) client.hear(event);
       },
       stop: () => undefined,
@@ -261,17 +264,12 @@ describe('runProbe', () => {
     expect(input.sockets.B.connectionsBefore).toBe(1);
   });
 
-  it('R1 the recorders are on before start(): B leaving ready during the wait reaches the verdict', async () => {
+  it('R1 the recorders are on before start(): B leaving ready inside start() reaches the verdict', async () => {
     const h = harness({
-      burst: (label) => (label === 'A' ? defaultBurst('A') : []),
-      onSleep: (_ms, sent, harnessed) => {
-        if (sent > 0 || harnessed.clients.B.calls.length > 0) return;
-        const b = harnessed.clients.B;
-        if (b.state !== BrokerSocketState.Ready) return;
-        b.fire(BrokerSocketState.Reconnecting, 'transport close');
-        b.fire(BrokerSocketState.Ready);
-        b.hear({ type: BrokerEventType.UserData, user: user(BROKER_USER_ID) });
-      },
+      startTransitions: (label) =>
+        label === 'B'
+          ? [[BrokerSocketState.Reconnecting, 'transport close'], [BrokerSocketState.Ready]]
+          : [],
     });
     const input = await ran(h);
 
