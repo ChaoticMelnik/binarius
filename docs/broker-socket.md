@@ -362,8 +362,8 @@ Node 22 (the 2026-10-03 one is recorded in #99).
   `user.demo.close_trade.success` at `trades.0.is_demo`, both `invalid_type`. The mode is in the
   event name only. Before #354 every socket `open_trade.success` was a `schema` problem, so a socket
   command waited out its timeout as `unknown` and tainted the connection. `common.assets_update`
-  was refused at its root in the same runs; its shape is not recorded yet (#354 records it with the
-  `shape` field of the problem line).
+  was refused at its root in the same runs; its shape is not recorded yet (#368 takes it from the
+  `shape` field the problem line carries since #354).
 - **The 2026-10-02 drop after ~16.7 s (`transport close`) did not recur** on 2026-10-03: two runs
   lived 28 s and 93 s until the probe closed them, with a price subscription active. Its cause is
   unknown; the client reconnects after it and resends its subscriptions.
