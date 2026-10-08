@@ -271,6 +271,8 @@ describe('the intent tracker', () => {
     expect(texts).toHaveLength(polls + 1);
     expect(new Set(texts)).toEqual(new Set([shown(rejected)]));
     expect(texts.at(-1)).not.toContain('обрабатывается');
+    // #350: a stop status's last edit is its end of the path, not the deadline's (no second menu)
+    expect(edit.mock.calls.at(-1)?.[2]).toBeUndefined();
     // one line per entry, the later failures only counted
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(
