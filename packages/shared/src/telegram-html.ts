@@ -261,20 +261,58 @@ export function telegramHtmlTagRanges(value: string): (readonly [number, number]
 const ENTITY_ANYWHERE = new RegExp(ENTITY.source, 'g');
 const NAMED_ENTITIES: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"' };
 
+/** Entities decoded in one pass (so `&amp;lt;` reads `&lt;`, as in Telegram). */
+export function decodeTelegramEntities(value: string): string {
+  return value.replace(ENTITY_ANYWHERE, (entity) => {
+    const body = entity.slice(1, -1);
+    if (!body.startsWith('#')) return NAMED_ENTITIES[body] ?? entity;
+    const codePoint = body.startsWith('#x')
+      ? Number.parseInt(body.slice(2), 16)
+      : Number.parseInt(body.slice(1), 10);
+    return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
+  });
+}
+
 /**
  * The text "after entities parsing" that the Bot API's length limits count: tags removed,
- * entities decoded in one pass (so `&amp;lt;` reads `&lt;`, as in Telegram). Meaningful only for a
- * value telegramHtmlProblems accepts.
+ * entities decoded. Meaningful only for a value telegramHtmlProblems accepts.
  */
 export function plainTextOf(value: TelegramHtmlValue | string): string {
-  return String(value)
-    .replace(TAG_ANYWHERE, '')
-    .replace(ENTITY_ANYWHERE, (entity) => {
-      const body = entity.slice(1, -1);
-      if (!body.startsWith('#')) return NAMED_ENTITIES[body] ?? entity;
-      const codePoint = body.startsWith('#x')
-        ? Number.parseInt(body.slice(2), 16)
-        : Number.parseInt(body.slice(1), 10);
-      return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
-    });
+  return decodeTelegramEntities(String(value).replace(TAG_ANYWHERE, ''));
+}
+
+export type TelegramHtmlToken =
+  | { type: 'open'; name: string; attributes: Readonly<Record<string, string | true>> }
+  | { type: 'close'; name: string }
+  | { type: 'text'; text: string };
+
+/**
+ * `value` as tags and text, by the grammar telegramHtmlProblems reads: names lower-cased,
+ * attribute values as written (a bare one is `true`), text with its entities decoded. Meaningful
+ * only for a value telegramHtmlProblems accepts (the admin preview, #300).
+ */
+export function telegramHtmlTokens(value: string): TelegramHtmlToken[] {
+  const tokens: TelegramHtmlToken[] = [];
+  let last = 0;
+  const textUntil = (end: number) => {
+    if (end > last) {
+      tokens.push({ type: 'text', text: decodeTelegramEntities(value.slice(last, end)) });
+    }
+  };
+  for (const match of value.matchAll(TAG_ANYWHERE)) {
+    textUntil(match.index);
+    const [whole, slash, rawName = '', rawAttributes = ''] = match;
+    const name = rawName.toLowerCase();
+    if (slash === '/') tokens.push({ type: 'close', name });
+    else {
+      const attributes: Record<string, string | true> = {};
+      for (const [, attribute = '', attributeValue] of rawAttributes.matchAll(ATTRIBUTE)) {
+        attributes[attribute.toLowerCase()] = attributeValue ?? true;
+      }
+      tokens.push({ type: 'open', name, attributes });
+    }
+    last = match.index + whole.length;
+  }
+  textUntil(value.length);
+  return tokens;
 }

@@ -492,6 +492,14 @@ describe('the bot texts calls (#300)', () => {
     ['botTexts', [], 'GET', '/api/admin/bot-texts', undefined, SAMPLE_BOT_TEXTS],
     ['botText', ['welcome'], 'GET', '/api/admin/bot-texts/welcome', undefined, text],
     [
+      'previewBotText',
+      ['a b', { source: 'x' }],
+      'POST',
+      '/api/admin/bot-texts/a%20b/preview',
+      { source: 'x' },
+      { ...text, outcome: 'read_only' },
+    ],
+    [
       'saveBotText',
       ['welcome', { source: 'x', expectedVersion: 7 }],
       'POST',
@@ -527,5 +535,15 @@ describe('the bot texts calls (#300)', () => {
     const { client } = await prefixed({ ...text, outcome: 'unchanged', extra: 1 });
     const save = client.saveBotText(SESSION, 'welcome', { source: 'x', expectedVersion: 0 });
     expect(await rejectionOf(save)).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('refuses a 2xx with a preview Telegram would refuse', async () => {
+    const { client } = await prefixed({
+      ...text,
+      outcome: 'rendered',
+      rendered: { kind: 'html', telegramHtml: 'a < b' },
+    });
+    const preview = client.previewBotText(SESSION, 'welcome', { source: 'x' });
+    expect(await rejectionOf(preview)).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });
