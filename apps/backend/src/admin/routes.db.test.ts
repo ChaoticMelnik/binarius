@@ -4,7 +4,10 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   ADMIN_SEARCH_MAX_LENGTH,
+  ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS,
   AdminErrorCode,
+  adminAuditEntryViewSchema,
+  adminAuditResponseSchema,
   AuditAction,
   AuditActorType,
   AuditEntityType,
@@ -1574,6 +1577,149 @@ describe('the token ledger page and the card section (#109)', () => {
     await withSession('POST', '/admin/auth/logout', token);
 
     expect((await withSession('GET', '/admin/tokens', token)).statusCode).toBe(401);
+  });
+});
+
+describe('the audit log page (#110)', () => {
+  const ENTRY_KEYS = Object.keys(adminAuditEntryViewSchema.shape);
+
+  it('refuses /admin/audit without a live session and writes nothing', async () => {
+    const before = await auditCount();
+    for (const headers of [BEARER, { ...BEARER, 'x-staff-session': 'a'.repeat(43) }]) {
+      const response = await app.inject({ method: 'GET', url: '/admin/audit', headers });
+      expect([response.statusCode, response.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.SessionInvalid },
+      ]);
+    }
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('answers with exactly the wire keys, drops unknown query keys and records the read', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+
+    const response = await readOnce(seeded.staffId, '/admin/audit?utm=1', token);
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<{ entries: Record<string, unknown>[] }>();
+    expect(Object.keys(raw)).toEqual(['me', 'entries', 'nextCursor']);
+    expect(raw.entries.length).toBeGreaterThan(0);
+    for (const entry of raw.entries) expect(Object.keys(entry)).toEqual(ENTRY_KEYS);
+    const body = adminAuditResponseSchema.parse(raw);
+    expect(body.me).toMatchObject({ staffId: seeded.staffId, login: seeded.login });
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.AuditLogViewed,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: '/admin/audit' },
+    });
+  });
+
+  it('shows its own row on the next request, not in its own answer', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const url = `/admin/audit?action=audit_log_viewed&actorId=${seeded.staffId}`;
+
+    const first = adminAuditResponseSchema.parse(
+      (await readOnce(seeded.staffId, url, token)).json(),
+    );
+    expect(first.entries).toEqual([]);
+
+    const second = adminAuditResponseSchema.parse(
+      (await readOnce(seeded.staffId, url, token)).json(),
+    );
+    expect(second.entries).toHaveLength(1);
+    expect(second.entries[0]).toMatchObject({
+      action: AuditAction.AuditLogViewed,
+      actorType: AuditActorType.Admin,
+      actorId: seeded.staffId,
+      actorLogin: seeded.login,
+      payloadTruncated: false,
+    });
+    expect(second.entries[0]?.payload).toContain('"path": "/admin/audit"');
+  });
+
+  it('records every filter and the cursor it was given, and nothing it was not', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const query = {
+      action: AuditAction.UserViewed,
+      entityType: AuditEntityType.User,
+      entityId: randomUUID(),
+      actorId: randomUUID(),
+      from: '2026-10-01',
+      to: '2026-10-07',
+      cursor: randomUUID(),
+    };
+
+    const page = await readOnce(
+      seeded.staffId,
+      `/admin/audit?${new URLSearchParams(query).toString()}`,
+      token,
+    );
+    expect(page.statusCode).toBe(200);
+    expect(adminAuditResponseSchema.parse(page.json()).entries).toEqual([]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({ path: '/admin/audit', ...query });
+
+    await readOnce(seeded.staffId, '/admin/audit?from=2026-10-01', token);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/audit',
+      from: '2026-10-01',
+    });
+  });
+
+  it('carries a long payload as a preview cut in SQL, flagged', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const writer = randomUUID();
+    // no writer is needed: the action is in the CHECK; audit_log only takes INSERTs
+    await tmp.db.insert(auditLog).values({
+      actorType: AuditActorType.System,
+      actorId: writer,
+      action: AuditAction.BotTextSaved,
+      entityType: AuditEntityType.BotText,
+      payload: { key: 'k', oldText: 'x', newText: 'я'.repeat(20_000) },
+    });
+
+    const response = await readOnce(seeded.staffId, `/admin/audit?actorId=${writer}`, token);
+
+    const body = adminAuditResponseSchema.parse(response.json());
+    expect(body.entries).toHaveLength(1);
+    expect([...(body.entries[0]?.payload ?? '')]).toHaveLength(ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS);
+    expect(body.entries[0]?.payloadTruncated).toBe(true);
+    expect(body.entries[0]?.actorLogin).toBeNull();
+  });
+
+  it.each([
+    ['an unknown action', 'action=bogus'],
+    ['action twice', 'action=staff_logout&action=user_viewed'],
+    ['an unknown entity type', 'entityType=bogus'],
+    ['an entity id that is not a uuid', 'entityId=x'],
+    ['an actor id that is not a uuid', 'actorId=cli'],
+    ['an impossible date', 'from=2026-13-01'],
+    ['from after to', 'from=2026-10-07&to=2026-10-06'],
+    ['a cursor that is not a uuid', 'cursor=bad'],
+  ])('refuses %s with 400 before the session, writing nothing', async (_label, query) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const before = await auditCount();
+
+    const response = await withSession('GET', `/admin/audit?${query}`, token);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('refuses the next read once the session has ended', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    expect((await withSession('GET', '/admin/audit', token)).statusCode).toBe(200);
+    await withSession('POST', '/admin/auth/logout', token);
+
+    expect((await withSession('GET', '/admin/audit', token)).statusCode).toBe(401);
   });
 });
 
