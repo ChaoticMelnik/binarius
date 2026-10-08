@@ -2,6 +2,8 @@ import {
   PairsCatalogErrorCode,
   isPairOpen,
   pairAcceptsDuration,
+  SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_SCAN_INTERVAL,
   type PairsCatalogResponse,
   type PairView,
 } from '@binarius/shared';
@@ -27,6 +29,12 @@ export type DemoAssetGroup = (typeof DEMO_ASSET_GROUPS)[number];
 // on its own sub-minute candle (intervalForDuration).
 export const DEMO_DURATIONS_SEC = [5, 15] as const;
 export type DemoDurationSec = (typeof DEMO_DURATIONS_SEC)[number];
+// The trade the signals screen launches (#320): the length of the candle the backend's scanner
+// decides on, so a listed signal is about the trade it starts.
+export const SIGNALS_DURATION_SEC = 15 as const satisfies DemoDurationSec;
+if (SIGNAL_CHART_INTERVAL_MS[SIGNAL_SCAN_INTERVAL] !== SIGNALS_DURATION_SEC * 1000) {
+  throw new Error('the signals screen trades the scanner candle (see demo-catalog.ts)');
+}
 // the set before #313: only to recognise a button drawn with one (demo.ts, the legacy handler)
 export const LEGACY_DEMO_DURATIONS_SEC = [60, 300, 900, 1800, 3600] as const;
 

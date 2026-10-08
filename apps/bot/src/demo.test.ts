@@ -11,6 +11,7 @@ import {
   TradeAction,
   type PairsCatalogResponse,
   type PairView,
+  type TradingSignalsResponse,
 } from '@binarius/shared';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -18,6 +19,9 @@ import { createBot } from './bot';
 import {
   DEMO_CALLBACK_DATA,
   DEMO_GROUPS_CALLBACK_DATA,
+  DEMO_SIGNALS_CALLBACK_DATA,
+  demoLaunchCallbackData,
+  launchStakeCallbackData,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoDurationCallbackData,
@@ -67,7 +71,9 @@ import {
   demoPairsScreen,
   demoSummary,
   LABELS,
+  launchText,
   sessionStartButtonLabel,
+  signalButtonLabel,
   stakeButtonLabel,
   TEXTS,
 } from './texts';
@@ -85,6 +91,7 @@ interface Button {
 function setup(
   options: {
     readPairs?: BackendClient['readPairs'];
+    readSignals?: BackendClient['readSignals'];
     evaluateSignal?: BackendClient['evaluateSignal'];
     readTradingAccess?: BackendClient['readTradingAccess'];
     dialog?: LoginDialogState;
@@ -92,6 +99,7 @@ function setup(
   } = {},
 ) {
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
+  const readSignals = vi.fn(options.readSignals ?? (() => Promise.resolve(signalsOf())));
   const evaluateSignal = vi.fn<BackendClient['evaluateSignal']>(
     options.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
   );
@@ -105,6 +113,7 @@ function setup(
     token: '123456:AA-bot-token',
     backend: fakeBackend({
       readPairs,
+      readSignals,
       evaluateSignal,
       readTradingAccess: options.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
     }),
@@ -117,7 +126,7 @@ function setup(
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   const press = (data: string, chatType?: string) =>
     bot.handleUpdate(callbackUpdate(data, chatType));
-  return { bot, readPairs, evaluateSignal, logger, loginDialog, press, ...api };
+  return { bot, readPairs, readSignals, evaluateSignal, logger, loginDialog, press, ...api };
 }
 
 const methods = (calls: readonly ApiCall[]) => calls.map((call) => call.method);
@@ -130,6 +139,23 @@ const button = (text: string, callback_data: string): Button => ({ text, callbac
 const catalogOf = (...pairs: PairView[]): (() => Promise<PairsCatalogResponse>) => {
   return () => Promise.resolve(pairsResponse({ pairs }));
 };
+
+// GET /trading/signals in the route's order; the times are the scanner's, which the bot ignores
+const signalsOf = (...signals: [number, TradeAction][]): TradingSignalsResponse => ({
+  asOf: NOW - 500,
+  interval: '15s',
+  scanned: 25,
+  signals: signals.map(([assetId, action]) => ({
+    assetId,
+    action,
+    lastCandleTimestamp: NOW - 15_500,
+    decidedAt: NOW - 500,
+    ageMs: 500,
+  })),
+});
+
+const SIGNALS_REFRESH = button(LABELS.demoSignalsRefreshButton, DEMO_SIGNALS_CALLBACK_DATA);
+const MANUAL = button(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA);
 
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
 const BACK_EURUSD_PAGE = button(LABELS.demoBackPairsButton, demoPageCallbackData('currency', 0));
@@ -156,13 +182,205 @@ const MANY = Array.from({ length: 25 }, (_, index): PairView => ({
   symbol: `P${String(index).padStart(2, '0')}`,
 })).reverse();
 
-describe('the demo button', () => {
-  it('sends the types present as a new message, each with its count of open pairs', async () => {
-    const { press, calls, readPairs } = setup();
+describe('the signals screen', () => {
+  // the route's order, not the catalog's; a closed pair, one that refuses 15 s and one the catalog
+  // does not list have no button
+  const ROUTE = signalsOf(
+    [PAIR_SHORT.id, TradeAction.Down],
+    [PAIR_CLOSED.id, TradeAction.Up],
+    [PAIR_EURUSD.id, TradeAction.Up],
+    [PAIR_MINUTE_ONLY.id, TradeAction.Up],
+    [999, TradeAction.Down],
+    [PAIR_OTHER_TYPE.id, TradeAction.Down],
+  );
+  const ROWS = [
+    [button('BTC/USD OTC · ⬇️ · 90%', demoLaunchCallbackData(PAIR_SHORT.id))],
+    [button('EUR/USD OTC · ⬆️ · 85%', demoLaunchCallbackData(PAIR_EURUSD.id))],
+    [button('US10Y · ⬇️ · 70%', demoLaunchCallbackData(PAIR_OTHER_TYPE.id))],
+    [SIGNALS_REFRESH],
+    [MANUAL],
+  ];
+
+  it('sends the pairs with a signal as a new message, joined with the catalog', async () => {
+    const { press, calls, readPairs, readSignals } = setup({
+      readSignals: () => Promise.resolve(ROUTE),
+    });
     await press(DEMO_CALLBACK_DATA);
 
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
     const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(TEXTS.demoSignalsHeader.value);
+    expect(rowsOf(sent)).toEqual(ROWS);
+    expect(readSignals).toHaveBeenCalledTimes(1);
+    expect(readPairs).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels a pair by its symbol, the arrow of the direction and the payout', () => {
+    expect(signalButtonLabel('EUR/USD OTC', TradeAction.Up, 85)).toBe('EUR/USD OTC · ⬆️ · 85%');
+    expect(signalButtonLabel('EUR/USD OTC', TradeAction.Down, 85)).toBe('EUR/USD OTC · ⬇️ · 85%');
+  });
+
+  it('edits the screen in place on «🔄 Обновить», reading both again', async () => {
+    const { press, calls, readSignals } = setup({ readSignals: () => Promise.resolve(ROUTE) });
+    await press(DEMO_SIGNALS_CALLBACK_DATA);
+
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(edited?.text).toBe(TEXTS.demoSignalsHeader.value);
+    expect(rowsOf(edited)).toEqual(ROWS);
+    expect(readSignals).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the screen anew when the message to refresh is gone', async () => {
+    const { press, calls, apiErrors } = setup({ readSignals: () => Promise.resolve(ROUTE) });
+    apiErrors.set('editMessageText', EDIT_GONE);
+    await press(DEMO_SIGNALS_CALLBACK_DATA);
+
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(ROWS);
+  });
+
+  it('says there is no signal now when none is left after the join, with the refresh and the manual choice', async () => {
+    const { press, calls } = setup({
+      readSignals: () => Promise.resolve(signalsOf([PAIR_CLOSED.id, TradeAction.Up])),
+    });
+    await press(DEMO_CALLBACK_DATA);
+
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(TEXTS.demoSignalsEmpty.value);
+    expect(rowsOf(sent)).toEqual([[SIGNALS_REFRESH], [MANUAL]]);
+  });
+
+  it('draws no list from a catalog the backend does not call fresh', async () => {
+    const { press, calls, logger } = setup({
+      readSignals: () => Promise.resolve(ROUTE),
+      readPairs: () => Promise.resolve(pairsResponse({ fresh: false })),
+    });
+    await press(DEMO_SIGNALS_CALLBACK_DATA);
+
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(edited?.text).toBe(TEXTS.demoCatalogStale.value);
+    expect(rowsOf(edited)).toEqual([
+      [button(LABELS.demoRetryButton, DEMO_SIGNALS_CALLBACK_DATA)],
+      [MANUAL],
+    ]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('says the service is unavailable and warns by name and code when the signals are not read', async () => {
+    const { press, calls, logger } = setup({
+      readSignals: () =>
+        Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
+    });
+    await press(DEMO_CALLBACK_DATA);
+
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(TEXTS.unavailable.value);
+    expect(rowsOf(sent)).toEqual([[button(LABELS.demoRetryButton, DEMO_CALLBACK_DATA)], [MANUAL]]);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual(['trading signals not read']);
+    expect(logger.warn.mock.calls[0]?.[0]).toEqual({
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 500,
+      backendReason: undefined,
+    });
+  });
+});
+
+describe('the launch screen', () => {
+  const LAUNCH = demoLaunchCallbackData(PAIR_EURUSD.id);
+  const LAUNCH_ROWS = [
+    [button(LABELS.launchCycleButton, sessionStartCallbackData(PAIR_EURUSD.id, 15))],
+    [button(LABELS.stakeChangeButton, launchStakeCallbackData(PAIR_EURUSD.id))],
+    [button(LABELS.backToListButton, DEMO_SIGNALS_CALLBACK_DATA)],
+  ];
+
+  it('shows the pair at 15 s, the amount in effect and the cycle, in place of the list', async () => {
+    const { press, calls, readSignals, evaluateSignal } = setup({
+      readTradingAccess: () =>
+        Promise.resolve(accessView({ demoStake: decimalStringSchema.parse('2.5') })),
+    });
+    await press(LAUNCH);
+
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(edited?.text).toBe(
+      launchText({ symbol: PAIR_EURUSD.symbol, amount: '2.5', trades: 5 }).value,
+    );
+    expect(plainTextOf(launchText({ symbol: 'EUR/USD OTC', amount: '2.5', trades: 5 }))).toBe(
+      '🎯 EUR/USD OTC · ⏱ 15 с\n💵 Ставка: $2.50\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.',
+    );
+    expect(rowsOf(edited)).toEqual(LAUNCH_ROWS);
+    // the signal is not read again: the cycle asks for it before each trade
+    expect(readSignals).not.toHaveBeenCalled();
+    expect(evaluateSignal).not.toHaveBeenCalled();
+  });
+
+  it('starts a 15 s session of the pair from «🚀 Запустить цикл»', () => {
+    const data = LAUNCH_ROWS[0]?.[0]?.callback_data ?? '';
+    expect(sessionStartDataOf(SESSION_START_PATTERN.exec(data) ?? '')).toEqual({
+      assetId: PAIR_EURUSD.id,
+      durationSec: 15,
+    });
+  });
+
+  it('draws the stake line without an amount and warns when access is not read', async () => {
+    const { press, calls, logger } = setup({
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await press(LAUNCH);
+
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(edited?.text).toBe(
+      launchText({ symbol: PAIR_EURUSD.symbol, amount: null, trades: 5 }).value,
+    );
+    expect(edited?.text).toContain(TEXTS.launchStakeMinimum.value);
+    expect(rowsOf(edited)).toEqual(LAUNCH_ROWS);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'trading access not read for the stake label',
+    ]);
+  });
+
+  it('refuses a pair that closed after the list was drawn', async () => {
+    const { press, calls } = setup();
+    await press(demoLaunchCallbackData(PAIR_CLOSED.id));
+
+    expect(payloadOf(calls, 'editMessageText')?.text).toBe(
+      TEXTS.demoPairClosed(PAIR_CLOSED.symbol).value,
+    );
+  });
+
+  it('refuses a pair that does not take 15 s', async () => {
+    const { press, calls } = setup();
+    await press(demoLaunchCallbackData(PAIR_MINUTE_ONLY.id));
+
+    expect(payloadOf(calls, 'editMessageText')?.text).toBe(
+      TEXTS.demoDurationUnsupported(PAIR_MINUTE_ONLY.symbol).value,
+    );
+  });
+
+  it('only stops the spinner on an id the backend would refuse', async () => {
+    const { press, calls, readPairs } = setup();
+    await press('demo:l:0');
+
+    expect(methods(calls)).toEqual(['answerCallbackQuery']);
+    expect(readPairs).not.toHaveBeenCalled();
+  });
+
+  it('keeps its data inside the Bot API 64 bytes', () => {
+    const MAX_ID = 2_147_483_647;
+    expect(Buffer.byteLength(demoLaunchCallbackData(MAX_ID))).toBe(17);
+    expect(Buffer.byteLength(launchStakeCallbackData(MAX_ID))).toBe(18);
+    expect(Buffer.byteLength(DEMO_SIGNALS_CALLBACK_DATA)).toBe(8);
+  });
+});
+
+describe('the types screen', () => {
+  it('edits the message to the types present, each with its count of open pairs', async () => {
+    const { press, calls, readPairs } = setup();
+    await press(DEMO_GROUPS_CALLBACK_DATA);
+
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    const sent = payloadOf(calls, 'editMessageText');
     expect(sent?.text).toBe(TEXTS.demoGroups.value);
     // GBP/USD is closed and AUD/CAD accepts no demo duration (#313), so the currencies count one;
     // no commodity, stock or index in the catalog
@@ -186,11 +404,11 @@ describe('the demo button', () => {
           }),
         ),
     });
-    await press(DEMO_CALLBACK_DATA);
+    await press(DEMO_GROUPS_CALLBACK_DATA);
 
-    const sent = payloadOf(calls, 'sendMessage');
+    const sent = payloadOf(calls, 'editMessageText');
     expect(sent?.text).toBe(TEXTS.demoCatalogUnavailable.value);
-    expect(rowsOf(sent)).toEqual([[button(LABELS.demoRetryButton, DEMO_CALLBACK_DATA)]]);
+    expect(rowsOf(sent)).toEqual([[button(LABELS.demoRetryButton, DEMO_GROUPS_CALLBACK_DATA)]]);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
@@ -198,19 +416,19 @@ describe('the demo button', () => {
     const { press, calls, logger } = setup({
       readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     });
-    await press(DEMO_CALLBACK_DATA);
+    await press(DEMO_GROUPS_CALLBACK_DATA);
 
-    const sent = payloadOf(calls, 'sendMessage');
+    const sent = payloadOf(calls, 'editMessageText');
     expect(sent?.text).toBe(TEXTS.unavailable.value);
-    expect(rowsOf(sent)).toEqual([[button(LABELS.demoRetryButton, DEMO_CALLBACK_DATA)]]);
+    expect(rowsOf(sent)).toEqual([[button(LABELS.demoRetryButton, DEMO_GROUPS_CALLBACK_DATA)]]);
     expect(logger.warn.mock.calls.map((call) => call[1])).toEqual(['demo catalog not read']);
   });
 
   it('reads an empty catalog as unavailable, with the retry on the types', async () => {
     const { press, calls } = setup({ readPairs: catalogOf() });
-    await press(DEMO_CALLBACK_DATA);
+    await press(DEMO_GROUPS_CALLBACK_DATA);
 
-    const sent = payloadOf(calls, 'sendMessage');
+    const sent = payloadOf(calls, 'editMessageText');
     expect(sent?.text).toBe(TEXTS.demoCatalogUnavailable.value);
     expect(rowsOf(sent)).toEqual([[button(LABELS.demoRetryButton, DEMO_GROUPS_CALLBACK_DATA)]]);
   });
@@ -219,17 +437,17 @@ describe('the demo button', () => {
   it('gives no button to a type whose pairs all refuse the demo durations', async () => {
     const minuteStock = { ...PAIR_MINUTE_ONLY, id: 606, symbol: 'AAPL', type: 'stock' };
     const { press, calls } = setup({ readPairs: catalogOf(PAIR_EURUSD, minuteStock) });
-    await press(DEMO_CALLBACK_DATA);
-    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual([
+    await press(DEMO_GROUPS_CALLBACK_DATA);
+    expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
       [button('💱 Валюты · 1', demoPageCallbackData('currency', 0))],
     ]);
   });
 
   it('says there is no pair for short trades when no pair accepts them, with the retry', async () => {
     const { press, calls } = setup({ readPairs: catalogOf(PAIR_MINUTE_ONLY) });
-    await press(DEMO_CALLBACK_DATA);
+    await press(DEMO_GROUPS_CALLBACK_DATA);
 
-    const sent = payloadOf(calls, 'sendMessage');
+    const sent = payloadOf(calls, 'editMessageText');
     expect(sent?.text).toBe(TEXTS.demoNoShortPairs.value);
     expect(plainTextOf(TEXTS.demoNoShortPairs)).toBe('Сейчас нет активов для коротких сделок.');
     expect(rowsOf(sent)).toEqual([[button(LABELS.demoRetryButton, DEMO_GROUPS_CALLBACK_DATA)]]);
@@ -242,18 +460,20 @@ describe('the demo button', () => {
       error_code: 400,
       description: 'Bad Request: query is too old and response timeout expired',
     });
-    await press(DEMO_CALLBACK_DATA);
+    await press(DEMO_GROUPS_CALLBACK_DATA);
 
-    expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.demoGroups.value);
+    expect(payloadOf(calls, 'editMessageText')?.text).toBe(TEXTS.demoGroups.value);
     expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
       'answering the callback query failed',
     ]);
   });
 
   it('ignores the press outside a private chat', async () => {
-    const { press, calls, readPairs } = setup();
+    const { press, calls, readPairs, readSignals } = setup();
     for (const data of [
       DEMO_CALLBACK_DATA,
+      DEMO_SIGNALS_CALLBACK_DATA,
+      demoLaunchCallbackData(101),
       DEMO_GROUPS_CALLBACK_DATA,
       demoAssetCallbackData(101),
     ]) {
@@ -261,27 +481,20 @@ describe('the demo button', () => {
     }
     expect(calls).toEqual([]);
     expect(readPairs).not.toHaveBeenCalled();
+    expect(readSignals).not.toHaveBeenCalled();
   });
 });
 
 describe('the types and their pages', () => {
-  it('edits the message back to the types', async () => {
-    const { press, calls } = setup();
-    await press(DEMO_GROUPS_CALLBACK_DATA);
-
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
-    expect(payloadOf(calls, 'editMessageText')?.text).toBe(TEXTS.demoGroups.value);
-  });
-
   it('says a type with pairs but none open is closed by the schedule', async () => {
     const { press, calls } = setup({ readPairs: catalogOf(PAIR_CLOSED) });
-    await press(DEMO_CALLBACK_DATA);
-    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual([
+    await press(DEMO_GROUPS_CALLBACK_DATA);
+    expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
       [button('💱 Валюты · 0', demoPageCallbackData('currency', 0))],
     ]);
 
     await press(demoPageCallbackData('currency', 0));
-    const edited = payloadOf(calls, 'editMessageText');
+    const edited = calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload;
     expect(edited?.text).toBe(TEXTS.demoGroupClosed('💱 Валюты').value);
     expect(rowsOf(edited)).toEqual([[BACK_GROUPS]]);
   });

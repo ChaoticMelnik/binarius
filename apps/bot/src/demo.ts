@@ -15,6 +15,7 @@ import {
   type PairView,
   type TelegramHtml,
   type TradingAccessResponse,
+  type TradingSignalsResponse,
 } from '@binarius/shared';
 import {
   analysisScreen,
@@ -25,6 +26,7 @@ import {
 import { backendErrorFields, type BackendClient } from './backend-client';
 import {
   checkDemoPair,
+  checkDemoTrade,
   DEMO_ASSET_GROUPS,
   DEMO_DURATIONS_SEC,
   durationOptions,
@@ -36,6 +38,7 @@ import {
   pairsOf,
   readDemoCatalog,
   readDemoTrade,
+  SIGNALS_DURATION_SEC,
   type DemoAssetGroup,
   type DemoCatalogRead,
   type DemoDurationSec,
@@ -51,22 +54,28 @@ import {
   demoSummary,
   groupButtonLabel,
   LABELS,
+  launchText,
   pairButtonLabel,
   sessionStartButtonLabel,
+  signalButtonLabel,
   stakeButtonLabel,
   TEXTS,
   DEMO_GROUP_LABELS,
 } from './texts';
 
-// The demo's screens (#125, docs/bot-demo.md): the asset types, one type's pairs by page, the
-// durations of a pair, the summary, and the analysis behind «📊 Анализ» (#126). The bot keeps no
+// The demo's screens (#125, docs/bot-demo.md): the pairs with a signal now and the launch of a
+// cycle on one (#320); the asset types, one type's pairs by page, the durations of a pair, the
+// summary, and the analysis behind «📊 Анализ» (#126). The bot keeps no
 // state for them: what the user chose travels in the callback data, so a restart, an old message
 // and a second device all lead to the same screen, and every screen reads the catalog anew.
 
-// The status card's button (#24): a new message, since it sits under a photo caption that
-// editMessageText cannot edit. Kept as `demo`, so a button on an old card leads here too.
+// The status card's button (#24): the signals screen (#320) as a new message, since it sits under
+// a photo caption that editMessageText cannot edit. Kept as `demo`, so a button on an old card
+// leads here too.
 export const DEMO_CALLBACK_DATA = 'demo';
 // Bot API allows 1-64 bytes; the longest, `demo:t:cryptocurrency:9999`, is 26.
+export const DEMO_SIGNALS_CALLBACK_DATA = 'demo:sig';
+export const demoLaunchCallbackData = (assetId: number): string => `demo:l:${assetId}`;
 export const DEMO_GROUPS_CALLBACK_DATA = 'demo:g';
 export const demoPageCallbackData = (group: DemoAssetGroup, page: number): string =>
   `demo:t:${group}:${page}`;
@@ -106,6 +115,9 @@ export const effectiveStake = (
 export const STAKE_PICKER_PREFIX = 'stk:';
 export const stakeMenuCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
   `${STAKE_PICKER_PREFIX}o:a:${assetId}:${durationSec}`;
+// the launch screen's «💵 Изменить ставку»: the picker whose way back is that launch screen
+export const launchStakeCallbackData = (assetId: number): string =>
+  `${STAKE_PICKER_PREFIX}o:p:${assetId}`;
 // The analysis screen's session button (#284, trading-session.ts). No nonce, by the owner's
 // decision: an old button starts a new session once the previous one has ended, and while one is
 // active the backend answers with it. The longest, `demo:sess:2147483647:15`, is 23 bytes.
@@ -129,6 +141,7 @@ const DURATIONS = DEMO_DURATIONS_SEC.join('|');
 const LEGACY_DURATIONS = LEGACY_DEMO_DURATIONS_SEC.join('|');
 const DEMO_PAGE_PATTERN = /^demo:t:([a-z]{1,16}):(\d{1,4})$/;
 const DEMO_ASSET_PATTERN = /^demo:a:(\d{1,10})$/;
+const DEMO_LAUNCH_PATTERN = /^demo:l:(\d{1,10})$/;
 const demoDurationPattern = (durations: string) =>
   new RegExp(`^demo:d:(\\d{1,10}):(${durations})$`);
 const demoAnalysisPattern = (durations: string) =>
@@ -237,8 +250,68 @@ export function sessionStartDataOf(
   return { assetId, durationSec };
 }
 
+// The pairs with a signal on the scanner's last closed candle (#320), in the route's order, each
+// joined with the catalog for its symbol and payout. A pair the catalog does not list, that is
+// closed now or that does not take the scanner's duration has no button: the launch would refuse
+// it. The list is a snapshot; the cycle checks the signal again before each trade.
+export function signalsScreen(
+  signals: TradingSignalsResponse,
+  catalog: PairsCatalogResponse,
+  nowMs: number,
+): DemoScreen {
+  const keyboard = new InlineKeyboard();
+  let listed = 0;
+  for (const signal of signals.signals) {
+    const checked = checkDemoTrade(catalog, signal.assetId, SIGNALS_DURATION_SEC, nowMs);
+    if (!checked.ok) continue;
+    const { pair } = checked;
+    keyboard
+      .text(
+        signalButtonLabel(pair.symbol, signal.action, pair.payout),
+        demoLaunchCallbackData(pair.id),
+      )
+      .row();
+    listed += 1;
+  }
+  return {
+    text: listed === 0 ? TEXTS.demoSignalsEmpty : TEXTS.demoSignalsHeader,
+    keyboard: keyboard
+      .text(LABELS.demoSignalsRefreshButton, DEMO_SIGNALS_CALLBACK_DATA)
+      .row()
+      .text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA),
+  };
+}
+
+// The launch of a cycle of DEFAULT_SESSION_TRADES on a pair at the scanner's duration (#320):
+// the session start of the analysis screen (#284), the picker with its way back here, the list.
+// The picker draws it too, after a save (stake-picker.ts).
+export function launchScreen({
+  assetId,
+  symbol,
+  amount,
+  saved,
+}: {
+  assetId: number;
+  symbol: string | null;
+  amount: DecimalString | null;
+  saved?: { amount: DecimalString | null };
+}): DemoScreen {
+  return {
+    text: launchText({ symbol, amount, trades: DEFAULT_SESSION_TRADES, saved }),
+    keyboard: new InlineKeyboard()
+      .text(LABELS.launchCycleButton, sessionStartCallbackData(assetId, SIGNALS_DURATION_SEC))
+      .row()
+      .text(LABELS.stakeChangeButton, launchStakeCallbackData(assetId))
+      .row()
+      .text(LABELS.backToListButton, DEMO_SIGNALS_CALLBACK_DATA),
+  };
+}
+
 export interface DemoComposerDeps {
-  backend: Pick<BackendClient, 'readPairs' | 'evaluateSignal' | 'readTradingAccess'>;
+  backend: Pick<
+    BackendClient,
+    'readPairs' | 'readSignals' | 'evaluateSignal' | 'readTradingAccess'
+  >;
   logger: Logger;
   now: () => number;
 }
@@ -253,9 +326,34 @@ export function createDemoComposer<C extends Context>({
   composer.callbackQuery(LEGACY_DURATION_PATTERNS, (ctx) => removeLegacyKeyboard(ctx, logger));
 
   composer.callbackQuery(DEMO_CALLBACK_DATA, async (ctx) => {
-    const read = await answerAnd(ctx, readDemoCatalog(backend));
-    const screen = read.ok ? groupsScreen(read.catalog) : catalogFailure(ctx, read);
+    const screen = await answerAnd(ctx, readSignalsScreen(ctx));
     await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
+  });
+
+  composer.callbackQuery(DEMO_SIGNALS_CALLBACK_DATA, async (ctx) => {
+    const screen = await answerAnd(ctx, readSignalsScreen(ctx));
+    await editOrReply(ctx, screen.text, screen.keyboard);
+  });
+
+  // The pair is checked against the catalog read at this press, never the one the list was drawn
+  // from; the signal is not read again, the cycle asks for it before each trade.
+  composer.callbackQuery(DEMO_LAUNCH_PATTERN, async (ctx) => {
+    const assetId = assetIdOf(ctx.match[1]);
+    if (assetId === undefined) {
+      await answerOnly(ctx);
+      return;
+    }
+    const [read, amount] = await answerAnd(
+      ctx,
+      Promise.all([
+        readDemoTrade(backend, assetId, SIGNALS_DURATION_SEC, now),
+        stakeAmount(ctx.from.id),
+      ]),
+    );
+    const screen = read.ok
+      ? launchScreen({ assetId, symbol: read.pair.symbol, amount })
+      : tradeFailure(ctx, read, assetId);
+    await editOrReply(ctx, screen.text, screen.keyboard);
   });
 
   composer.callbackQuery(DEMO_GROUPS_CALLBACK_DATA, async (ctx) => {
@@ -363,8 +461,38 @@ export function createDemoComposer<C extends Context>({
     return analysisScreen({ pair, durationSec, response });
   }
 
-  // The amount for the stake button's label (#297). A failed read only drops the amount: the
-  // signal decides the screen, and the press reads access again anyway.
+  // The two reads together; a failed one is the screen's retry with the pressed data and the way
+  // to the manual choice. A failed catalog reads as the catalog's own failure.
+  async function readSignalsScreen(ctx: Context): Promise<DemoScreen> {
+    const [signals, read] = await Promise.all([readSignals(), readDemoCatalog(backend)]);
+    if (!read.ok) return withManual(catalogFailure(ctx, read));
+    if (signals === null) {
+      return withManual({
+        text: TEXTS.unavailable,
+        keyboard: new InlineKeyboard().text(
+          LABELS.demoRetryButton,
+          ctx.callbackQuery?.data ?? DEMO_SIGNALS_CALLBACK_DATA,
+        ),
+      });
+    }
+    return signalsScreen(signals, read.catalog, now());
+  }
+
+  async function readSignals(): Promise<TradingSignalsResponse | null> {
+    try {
+      return await backend.readSignals();
+    } catch (error) {
+      logger.warn(
+        { ...errorLogFields(error), ...backendErrorFields(error) },
+        'trading signals not read',
+      );
+      return null;
+    }
+  }
+
+  // The amount for the stake button's label (#297) and the launch screen (#320). A failed read
+  // only drops the amount: the signal or the pair decides the screen, and the press reads access
+  // again anyway.
   async function stakeAmount(telegramUserId: number): Promise<DecimalString | null> {
     try {
       return effectiveStake(await backend.readTradingAccess(String(telegramUserId)));
@@ -616,6 +744,11 @@ export function createDemoComposer<C extends Context>({
     return { text: TEXTS.demoPairClosed(pair.symbol), keyboard: backToPairs(catalog, pair) };
   }
 
+  const withManual = (screen: DemoScreen): DemoScreen => ({
+    text: screen.text,
+    keyboard: screen.keyboard.row().text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA),
+  });
+
   const backToGroups = () =>
     new InlineKeyboard().text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
 
@@ -641,7 +774,7 @@ export function createDemoComposer<C extends Context>({
 
 type EditOutcome = 'edited' | 'shown' | 'sent' | 'unknown';
 
-interface DemoScreen {
+export interface DemoScreen {
   text: TelegramHtml;
   keyboard: InlineKeyboard;
 }

@@ -22,6 +22,7 @@ import {
   UserStatus,
   decimalStringSchema,
   type TradingAccessResponse,
+  type TradingSignalsResponse,
 } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -36,6 +37,8 @@ import {
 import {
   DEMO_CALLBACK_DATA,
   DEMO_GROUPS_CALLBACK_DATA,
+  DEMO_SIGNALS_CALLBACK_DATA,
+  demoLaunchCallbackData,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoDurationCallbackData,
@@ -136,6 +139,7 @@ interface Branch {
   setNotificationLevel?: BackendClient['setNotificationLevel'];
   readTradingAccess?: BackendClient['readTradingAccess'];
   readPairs?: BackendClient['readPairs'];
+  readSignals?: BackendClient['readSignals'];
   evaluateSignal?: BackendClient['evaluateSignal'];
   createIntent?: BackendClient['createIntent'];
   readIntent?: BackendClient['readIntent'];
@@ -294,7 +298,10 @@ async function observe(branch: Branch): Promise<Calls> {
       backend += 1;
       return (branch.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)))();
     },
-    readSignals: () => Promise.reject(new Error('not used here')),
+    readSignals: () => {
+      backend += 1;
+      return (branch.readSignals ?? (() => Promise.resolve(SIGNALS)))();
+    },
     evaluateSignal: (assetId, interval) => {
       backend += 1;
       return (branch.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)))(assetId, interval);
@@ -569,32 +576,64 @@ const CATALOG_UNAVAILABLE = () =>
 const CATALOG_STALE = () => Promise.resolve(pairsResponse({ ageMs: 90_000, fresh: false }));
 const CATALOG_UNREACHABLE = () => Promise.reject(new BackendError(BackendErrorCode.Unreachable));
 
-// The catalog's three failures, each answered with a text and the retry button.
-const catalogBranches = (update: () => Update, telegram: number): Branch[] => [
+// The catalog's three failures, each answered with a text and the retry button; `backend` is
+// the screen's reads, all made whatever the catalog answers.
+const catalogBranches = (update: () => Update, telegram: number, backend = 1): Branch[] => [
   {
     label: 'the catalog is unavailable',
     update: update(),
     readPairs: CATALOG_UNAVAILABLE,
-    expected: { backend: 1, telegram },
+    expected: { backend, telegram },
   },
   {
     label: 'the catalog is stale',
     update: update(),
     readPairs: CATALOG_STALE,
-    expected: { backend: 1, telegram },
+    expected: { backend, telegram },
   },
   {
     label: 'the catalog read fails',
     update: update(),
     readPairs: CATALOG_UNREACHABLE,
-    expected: { backend: 1, telegram },
+    expected: { backend, telegram },
+  },
+];
+
+// one listed pair, so the screen draws a row
+const SIGNALS: TradingSignalsResponse = {
+  asOf: 1_790_000_000_000,
+  interval: '15s',
+  scanned: 25,
+  signals: [
+    {
+      assetId: PAIR_EURUSD.id,
+      action: TradeAction.Up,
+      lastCandleTimestamp: 1_789_999_985_000,
+      decidedAt: 1_790_000_000_000,
+      ageMs: 500,
+    },
+  ],
+};
+// the signals screen's own outcomes, besides the catalog's (#320)
+const signalsBranches = (update: () => Update, telegram: number): Branch[] => [
+  {
+    label: 'the signals read fails',
+    update: update(),
+    readSignals: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 2, telegram },
+  },
+  {
+    label: 'no signal is left after the join',
+    update: update(),
+    readSignals: () => Promise.resolve({ ...SIGNALS, signals: [] }),
+    expected: { backend: 2, telegram },
   },
 ];
 
 const DEMO_WORST_CASE: Branch = {
-  label: 'the query is answered and the types are sent',
+  label: 'the query is answered and the signals are sent',
   update: callbackUpdate(DEMO_CALLBACK_DATA),
-  expected: { backend: 1, telegram: 2 },
+  expected: { backend: 2, telegram: 2 },
 };
 
 const DEMO_BRANCHES: readonly Branch[] = [
@@ -605,12 +644,13 @@ const DEMO_BRANCHES: readonly Branch[] = [
   },
   DEMO_WORST_CASE,
   {
-    label: 'answering the query is refused and the types still go',
+    label: 'answering the query is refused and the signals still go',
     update: callbackUpdate(DEMO_CALLBACK_DATA),
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-    expected: { backend: 1, telegram: 2 },
+    expected: { backend: 2, telegram: 2 },
   },
-  ...catalogBranches(() => callbackUpdate(DEMO_CALLBACK_DATA), 2),
+  ...catalogBranches(() => callbackUpdate(DEMO_CALLBACK_DATA), 2, 2),
+  ...signalsBranches(() => callbackUpdate(DEMO_CALLBACK_DATA), 2),
   // rethrown into bot.catch
   {
     label: 'the message fails in transport',
@@ -624,23 +664,25 @@ const DEMO_BRANCHES: readonly Branch[] = [
         ),
       ],
     ],
-    expected: { backend: 1, telegram: 2 },
+    expected: { backend: 2, telegram: 2 },
   },
 ];
 
 // Every demo screen after the first is one message edited in place, so its branches share the
-// edit's outcomes; `forged` is data the pattern matches and the schema refuses.
+// edit's outcomes; `forged` is data the pattern matches and the schema refuses, `backend` the
+// screen's reads.
 function demoScreenBranches(
   data: string,
   forged: string | undefined,
   own: readonly Omit<Branch, 'update'>[],
+  backend = 1,
 ): { branches: Branch[]; worst: Branch } {
   const update = () => callbackUpdate(data);
   const worst: Branch = {
     label: 'the edit is refused as gone and the screen is sent anew',
     update: update(),
     apiErrors: [['editMessageText', EDIT_REFUSED]],
-    expected: { backend: 1, telegram: 3 },
+    expected: { backend, telegram: 3 },
   };
   const branches: Branch[] = [
     {
@@ -657,20 +699,20 @@ function demoScreenBranches(
             expected: { backend: 0, telegram: 1 },
           },
         ]),
-    ...catalogBranches(update, 2),
-    { label: 'the screen is edited', update: update(), expected: { backend: 1, telegram: 2 } },
+    ...catalogBranches(update, 2, backend),
+    { label: 'the screen is edited', update: update(), expected: { backend, telegram: 2 } },
     {
       label: 'answering the query is refused and the screen is still edited',
       update: update(),
       apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-      expected: { backend: 1, telegram: 2 },
+      expected: { backend, telegram: 2 },
     },
     worst,
     {
       label: 'the edit is refused as not modified',
       update: update(),
       apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
-      expected: { backend: 1, telegram: 2 },
+      expected: { backend, telegram: 2 },
     },
     // rethrown into bot.catch
     {
@@ -682,7 +724,7 @@ function demoScreenBranches(
           { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
         ],
       ],
-      expected: { backend: 1, telegram: 2 },
+      expected: { backend, telegram: 2 },
     },
     {
       label: 'the edit fails in transport',
@@ -696,7 +738,7 @@ function demoScreenBranches(
           ),
         ],
       ],
-      expected: { backend: 1, telegram: 2 },
+      expected: { backend, telegram: 2 },
     },
     ...own.map((branch): Branch => ({ ...branch, update: update() })),
   ];
@@ -730,12 +772,13 @@ const DEMO_PAGE = demoScreenBranches(demoPageCallbackData('currency', 0), 'demo:
 ]);
 const pairBranches = (
   extra: readonly Omit<Branch, 'update'>[] = [],
+  backend = 1,
 ): readonly Omit<Branch, 'update'>[] => [
-  { label: 'the pair is gone', readPairs: onlyPairs(), expected: { backend: 1, telegram: 2 } },
+  { label: 'the pair is gone', readPairs: onlyPairs(), expected: { backend, telegram: 2 } },
   {
     label: 'the pair is closed',
     readPairs: onlyPairs({ ...PAIR_EURUSD, scheduledUntil: PAIR_CLOSED.scheduledUntil }),
-    expected: { backend: 1, telegram: 2 },
+    expected: { backend, telegram: 2 },
   },
   ...extra,
 ];
@@ -759,6 +802,30 @@ const DEMO_DURATION = demoScreenBranches(
   demoDurationCallbackData(PAIR_EURUSD.id, 15),
   'demo:d:2147483648:15',
   pairBranches([unsupported]),
+);
+// the signals screen in place (#320)
+const DEMO_SIGNALS = demoScreenBranches(
+  DEMO_SIGNALS_CALLBACK_DATA,
+  undefined,
+  signalsBranches(() => callbackUpdate(DEMO_SIGNALS_CALLBACK_DATA), 2),
+  2,
+);
+// the launch screen (#320): the pair checked at 15 s, the amount from access
+const DEMO_LAUNCH = demoScreenBranches(
+  demoLaunchCallbackData(PAIR_EURUSD.id),
+  'demo:l:0',
+  pairBranches(
+    [
+      { ...unsupported, expected: { backend: 2, telegram: 2 } },
+      {
+        label: 'access is not read',
+        readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+        expected: { backend: 2, telegram: 2 },
+      },
+    ],
+    2,
+  ),
+  2,
 );
 // «📊 Анализ» (#126): the check, «⏳» edited in place of the summary, the signal, the result in
 // place of «⏳». Its edits are two, so the shared screen branches do not describe it.
@@ -1839,8 +1906,27 @@ const STAKE_OPEN = pickerBranches('stk:o:s', 1, {
     ],
   ],
 });
-const STAKE_PRESET = pickerBranches('stk:s:5:s', 1, { forged: 'stk:s:0:s', extra: SAVE_EXTRA });
-const STAKE_RESET = pickerBranches('stk:z:s', 1, { forged: 'stk:z:a:0:15', extra: SAVE_EXTRA });
+// A save opened from a launch screen (#320) reads the catalog for the screen it returns to; a
+// refusal or an unknown outcome does not, nor does a save opened elsewhere.
+const LAUNCH_SAVE_EXTRA = (elsewhere: string): [string, Partial<Branch>][] => [
+  ...SAVE_EXTRA.map(([label, patch]): [string, Partial<Branch>] => [
+    label,
+    { ...patch, expected: { backend: 1, telegram: 2 } },
+  ]),
+  ['the catalog is not read for the launch screen', { readPairs: CATALOG_UNREACHABLE }],
+  [
+    'the picker was opened from /settings',
+    { update: callbackUpdate(elsewhere), expected: { backend: 1, telegram: 2 } },
+  ],
+];
+const STAKE_PRESET = pickerBranches(`stk:s:5:p:${PAIR_EURUSD.id}`, 2, {
+  forged: 'stk:s:0:s',
+  extra: LAUNCH_SAVE_EXTRA('stk:s:5:s'),
+});
+const STAKE_RESET = pickerBranches(`stk:z:p:${PAIR_EURUSD.id}`, 2, {
+  forged: 'stk:z:a:0:15',
+  extra: LAUNCH_SAVE_EXTRA('stk:z:s'),
+});
 const STAKE_CUSTOM = pickerBranches('stk:c:s', 0, { forged: 'stk:c:a:0:15' });
 const SETTINGS_SHOW = pickerBranches('settings', 1, {
   extra: [
@@ -1860,13 +1946,20 @@ const stakeText = (label: string, text: string, expected: Calls, patch: Partial<
   expected,
   ...patch,
 });
-const STAKE_TEXT_WORST_CASE: Branch = stakeText('the typed stake is saved', '5', {
-  backend: 1,
-  telegram: 1,
-});
+const ON_LAUNCH_STAKE_STEP: LoginDialogState = {
+  step: 'stake',
+  origin: { kind: 'pair', assetId: PAIR_EURUSD.id },
+};
+const STAKE_TEXT_WORST_CASE: Branch = stakeText(
+  'the typed stake is saved from a launch screen',
+  '5',
+  { backend: 2, telegram: 1 },
+  { dialog: ON_LAUNCH_STAKE_STEP },
+);
 const STAKE_TEXT_BRANCHES: readonly Branch[] = [
   stakeText('the text is not an amount', 'abc', { backend: 0, telegram: 1 }),
   stakeText('the save fails', '5', { backend: 1, telegram: 1 }, { setDemoStake: unreachable }),
+  stakeText('the typed stake is saved', '5', { backend: 1, telegram: 1 }),
   STAKE_TEXT_WORST_CASE,
 ];
 
@@ -1988,6 +2081,24 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('the demo button', async () => {
     await checkHandler('demo', DEMO_BRANCHES, DEMO_WORST_CASE, HANDLER_CALLS.demo);
+  });
+
+  it('the signals screen in place', async () => {
+    await checkHandler(
+      'demoSignals',
+      DEMO_SIGNALS.branches,
+      DEMO_SIGNALS.worst,
+      HANDLER_CALLS.demoSignals,
+    );
+  });
+
+  it('a pair of the signals screen', async () => {
+    await checkHandler(
+      'demoLaunch',
+      DEMO_LAUNCH.branches,
+      DEMO_LAUNCH.worst,
+      HANDLER_CALLS.demoLaunch,
+    );
   });
 
   it('the demo types', async () => {

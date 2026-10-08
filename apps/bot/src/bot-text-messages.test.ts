@@ -59,6 +59,7 @@ import {
   demoDurationsScreen,
   demoPairsScreen,
   demoSummary,
+  launchText,
   helpText,
   intentStatusText,
   sessionStatusText,
@@ -307,6 +308,13 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     ),
   demoSummary: () =>
     DEMO_DURATIONS_SEC.map((durationSec: DemoDurationSec) => demoSummary(pair, durationSec)),
+  // the three plurals, each at the widest count
+  demoLaunch: () =>
+    [undefined, { amount: null }, { amount: STAKE }].flatMap((saved) =>
+      [null, STAKE].flatMap((amount) =>
+        [999, 992, 991].map((trades) => launchText({ symbol: pair.symbol, amount, trades, saved })),
+      ),
+    ),
 };
 
 const ASSEMBLED = BOT_TEXT_MESSAGES.filter((message) => message.id in REAL);

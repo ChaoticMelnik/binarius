@@ -23,7 +23,9 @@ import {
 import {
   assetIdOf,
   demoAnalysisCallbackData,
+  demoLaunchCallbackData,
   durationOf,
+  launchScreen,
   removeLegacyKeyboard,
   STAKE_PICKER_PREFIX,
 } from './demo';
@@ -41,19 +43,32 @@ import { LABELS, stakeLabel, stakePickerText, TEXTS } from './texts';
 
 // The demo stake picker (#297, docs/bot-demo-trade.md -> The stake): presets from the broker's
 // minimum, a typed amount, a reset to the minimum, and the way back to where it was opened from —
-// /settings or an analysis screen. The bounds are the backend's (POST /trading/demo-stake): the
+// /settings, an analysis screen or a launch screen (#320). The bounds are the backend's (POST /trading/demo-stake): the
 // bot sends a preset or a parsed input and shows the answer, so a forged amount gets the same
 // refusal as a typed one.
 
-// Where the picker was opened, carried in every callback as `s` or `a:<assetId>:<durationSec>`.
+// Where the picker was opened, carried in every callback as `s`, `a:<assetId>:<durationSec>` or
+// `p:<assetId>`.
 export type StakeOrigin =
-  { kind: 'settings' } | { kind: 'analysis'; assetId: number; durationSec: DemoDurationSec };
+  | { kind: 'settings' }
+  | { kind: 'analysis'; assetId: number; durationSec: DemoDurationSec }
+  | { kind: 'pair'; assetId: number };
 
 // /settings re-rendered in place: the picker's way back when it was opened there (bot.ts)
 export const SETTINGS_CALLBACK_DATA = 'settings';
 
-const originData = (origin: StakeOrigin): string =>
-  origin.kind === 'settings' ? 's' : `a:${origin.assetId}:${origin.durationSec}`;
+function originData(origin: StakeOrigin): string {
+  switch (origin.kind) {
+    case 'settings':
+      return 's';
+    case 'analysis':
+      return `a:${origin.assetId}:${origin.durationSec}`;
+    case 'pair':
+      return `p:${origin.assetId}`;
+    default:
+      return origin satisfies never;
+  }
+}
 
 // Bot API allows 1-64 bytes; the longest, `stk:s:999999999999.99999999:a:2147483647:15`, is 43.
 export const stakeOpenCallbackData = (origin: StakeOrigin): string =>
@@ -73,7 +88,7 @@ const pickerPatterns = (origin: string) => ({
   reset: new RegExp(`^${STAKE_PICKER_PREFIX}z:${origin}$`),
   custom: new RegExp(`^${STAKE_PICKER_PREFIX}c:${origin}$`),
 });
-const PICKER = pickerPatterns(`(s|a:\\d{1,10}:(?:${DEMO_DURATIONS_SEC.join('|')}))`);
+const PICKER = pickerPatterns(`(s|a:\\d{1,10}:(?:${DEMO_DURATIONS_SEC.join('|')})|p:\\d{1,10})`);
 const LEGACY_PICKER_PATTERNS = Object.values(
   pickerPatterns(`(a:\\d{1,10}:(?:${LEGACY_DEMO_DURATIONS_SEC.join('|')}))`),
 );
@@ -83,13 +98,16 @@ export function stakeOriginOf(raw: string | undefined): StakeOrigin | undefined 
   if (raw === 's') return { kind: 'settings' };
   const [kind, asset, duration] = raw?.split(':') ?? [];
   const assetId = assetIdOf(asset);
+  if (assetId === undefined) return undefined;
+  if (kind === 'p' && duration === undefined) return { kind: 'pair', assetId };
   const durationSec = durationOf(duration);
-  if (kind !== 'a' || assetId === undefined || durationSec === undefined) return undefined;
+  if (kind !== 'a' || durationSec === undefined) return undefined;
   return { kind: 'analysis', assetId, durationSec };
 }
 
 export interface StakePickerDeps {
-  backend: Pick<BackendClient, 'readTradingAccess' | 'setDemoStake'>;
+  // readPairs: the symbol of the launch screen a save returns to (#320)
+  backend: Pick<BackendClient, 'readTradingAccess' | 'setDemoStake' | 'readPairs'>;
   logger: Logger;
   dialog: LoginDialog;
   // the welcome's connect button, for a user with no account to trade on
@@ -108,13 +126,21 @@ const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
     (error: unknown) => ({ ok: false, error }),
   );
 
-const backTo = (keyboard: InlineKeyboard, origin: StakeOrigin): InlineKeyboard =>
-  origin.kind === 'settings'
-    ? keyboard.text(LABELS.stakeBackSettingsButton, SETTINGS_CALLBACK_DATA)
-    : keyboard.text(
+function backTo(keyboard: InlineKeyboard, origin: StakeOrigin): InlineKeyboard {
+  switch (origin.kind) {
+    case 'settings':
+      return keyboard.text(LABELS.stakeBackSettingsButton, SETTINGS_CALLBACK_DATA);
+    case 'analysis':
+      return keyboard.text(
         LABELS.stakeBackAnalysisButton,
         demoAnalysisCallbackData(origin.assetId, origin.durationSec),
       );
+    case 'pair':
+      return keyboard.text(LABELS.stakeBackLaunchButton, demoLaunchCallbackData(origin.assetId));
+    default:
+      return origin satisfies never;
+  }
+}
 const backKeyboard = (origin: StakeOrigin) => backTo(new InlineKeyboard(), origin);
 // «💵 Сумма» to try again, then the way back
 const retryKeyboard = (origin: StakeOrigin) =>
@@ -198,7 +224,11 @@ export function createStakePicker<C extends Context>({
       await replyHtml(ctx, TEXTS.stakeInputInvalid);
       return;
     }
-    const screen = savedScreen(id, await settle(backend.setDemoStake(String(id), amount)), origin);
+    const screen = await savedScreen(
+      id,
+      await settle(backend.setDemoStake(String(id), amount)),
+      origin,
+    );
     await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
   }
 
@@ -211,7 +241,7 @@ export function createStakePicker<C extends Context>({
       answer(ctx),
       settle(backend.setDemoStake(String(ctx.from.id), amount)),
     ]);
-    const screen = savedScreen(ctx.from.id, saved, origin);
+    const screen = await savedScreen(ctx.from.id, saved, origin);
     await editOrReply(ctx, screen.text, screen.keyboard);
   }
 
@@ -261,14 +291,16 @@ export function createStakePicker<C extends Context>({
 
   // What a save answered, by where the answer came from (docs/bot-demo-trade.md -> The stake).
   // A typed amount's step stays open for a refusal before the write and an unknown outcome,
-  // so the user can type again; it ends on a save and on a refusal the bot cannot act on.
-  function savedScreen(
+  // so the user can type again; it ends on a save and on a refusal the bot cannot act on. A save
+  // opened from a launch screen returns to it with the saved amount (#320).
+  async function savedScreen(
     id: number,
     saved: Settled<SetDemoStakeResult>,
     origin: StakeOrigin,
-  ): Screen {
+  ): Promise<Screen> {
     if (saved.ok && 'saved' in saved.value) {
       endStakeStep(id);
+      if (origin.kind === 'pair') return savedLaunchScreen(origin.assetId, saved.value.saved);
       return {
         text: TEXTS.stakeSaved(stakeLabel(saved.value.saved)),
         keyboard: backKeyboard(origin),
@@ -306,6 +338,22 @@ export function createStakePicker<C extends Context>({
       logger.warn(fields, 'demo stake not saved');
     else logger.error(fields, 'demo stake not saved');
     return { text: TEXTS.unavailable, keyboard: backKeyboard(origin) };
+  }
+
+  // The symbol only, so any catalog will do, a stale one included; without one the screen drops
+  // its symbol line and the launch stays, since the session start checks the pair itself.
+  async function savedLaunchScreen(assetId: number, amount: DecimalString | null): Promise<Screen> {
+    const catalog = await settle(backend.readPairs());
+    if (!catalog.ok) {
+      logger.warn(
+        { ...errorLogFields(catalog.error), ...backendErrorFields(catalog.error) },
+        'pairs not read for the launch screen',
+      );
+    }
+    const symbol = catalog.ok
+      ? (catalog.value.pairs.find((pair) => pair.id === assetId)?.symbol ?? null)
+      : null;
+    return launchScreen({ assetId, symbol, amount, saved: { amount } });
   }
 
   // only the stake step: a login the user has open is left alone
