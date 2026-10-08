@@ -47,6 +47,15 @@ const runningLockout = () =>
     staff.lockedUntil,
   );
 
+/** The running lockout of one account, read inside the caller's transaction. */
+async function readRunningLockout(executor: DbExecutor, staffId: string): Promise<Date | null> {
+  const [row] = await executor
+    .select({ lockedUntil: runningLockout() })
+    .from(staff)
+    .where(eq(staff.id, staffId));
+  return row?.lockedUntil ?? null;
+}
+
 /**
  * A session that still answers: not revoked, inside its absolute lifetime, and used recently
  * enough. One fragment, because the list of sessions and the touch that keeps one alive have
@@ -155,9 +164,7 @@ export interface PasswordFailure {
   locked: boolean;
   /** the row the KDF ran against is no longer there: nothing was counted */
   stateChanged?: true;
-  /** with `stateChanged`: whether a running lockout or a changed row is why */
-  reason?: 'locked' | 'state_changed';
-  /** with `reason: 'locked'`: until when, by the database's clock */
+  /** with `stateChanged`: the running lockout that is why, or `null` when the row changed */
   lockedUntil?: Date | null;
 }
 
@@ -169,7 +176,7 @@ export interface PasswordFailure {
  * The same CAS the success path takes, for the same reason: ~250 ms passed inside the KDF, and
  * a reset, a disable or a lockout in that window has to win. Zero rows means the credentials
  * this attempt was judged against are gone — there is nothing left to count against, so the
- * counter and the lockout are left alone; `reason` says whether a lockout or a change is why.
+ * counter and the lockout are left alone; `lockedUntil` says whether a running lockout is why.
  *
  * One counter for both places a password is typed: the login form and the change form (#78),
  * so a stolen session cookie is no faster an oracle for the password than the login page.
@@ -205,17 +212,11 @@ export async function countPasswordFailure(
       lockedUntil: staff.lockedUntil,
     });
   if (row === undefined) {
-    const [now] = await tx
-      .select({ lockedUntil: runningLockout() })
-      .from(staff)
-      .where(eq(staff.id, staffId));
-    const lockedUntil = now?.lockedUntil ?? null;
     return {
       attempts: 0,
       locked: false,
       stateChanged: true,
-      reason: lockedUntil === null ? 'state_changed' : 'locked',
-      lockedUntil,
+      lockedUntil: await readRunningLockout(tx, staffId),
     };
   }
   return { attempts: row.attempts, locked: row.lockedUntil !== null };
@@ -262,18 +263,27 @@ export async function recordLoginRefusal(
   );
 }
 
-/** A locked account, refused without spending a KDF on it. */
+/**
+ * A locked account, refused without spending a KDF on it. The lockout the caller's lookup saw is
+ * read again in the transaction that records it, so the row carries that reading: `null` means it
+ * ended in between, nothing was written, and the caller goes on as if there had been none.
+ */
 export async function recordLoginLockout(
   db: Db,
-  input: { staffId: string; ip: string; lockedUntil: Date },
-): Promise<void> {
-  await writeAuditEntry(
-    db,
-    staffEvent(AuditAction.StaffLoginLocked, input.staffId, {
-      ip: input.ip,
-      lockedUntil: input.lockedUntil.toISOString(),
-    }),
-  );
+  input: { staffId: string; ip: string },
+): Promise<Date | null> {
+  return db.transaction(async (tx) => {
+    const lockedUntil = await readRunningLockout(tx, input.staffId);
+    if (lockedUntil === null) return null;
+    await writeAuditEntry(
+      tx,
+      staffEvent(AuditAction.StaffLoginLocked, input.staffId, {
+        ip: input.ip,
+        lockedUntil: lockedUntil.toISOString(),
+      }),
+    );
+    return lockedUntil;
+  });
 }
 
 export type StartLoginChallengeResult =
@@ -972,6 +982,36 @@ export async function findStaffForPasswordChange(
   return row;
 }
 
+/**
+ * The change form's refusal under a running lockout (#78), the same shape as recordLoginLockout:
+ * re-read in the recording transaction, `null` when it ended in between. Outside runAsStaff on
+ * purpose — a refusal before any work, so a locked staff member hammering the form does not
+ * extend the session's idle window; the session id is the pre-read's.
+ */
+export async function recordPasswordChangeLockout(
+  db: Db,
+  input: { staffId: string; sessionId: string; ip: string },
+): Promise<Date | null> {
+  return db.transaction(async (tx) => {
+    const lockedUntil = await readRunningLockout(tx, input.staffId);
+    if (lockedUntil === null) return null;
+    await writeAuditEntry(tx, {
+      action: AuditAction.StaffPasswordChangeFailed,
+      actorType: AuditActorType.Admin,
+      actorId: input.staffId,
+      entityType: AuditEntityType.Staff,
+      entityId: input.staffId,
+      payload: {
+        reason: 'locked',
+        lockedUntil: lockedUntil.toISOString(),
+        ip: input.ip,
+        sessionId: input.sessionId,
+      },
+    });
+    return lockedUntil;
+  });
+}
+
 // --- CLI operations ----------------------------------------------------------------------------
 
 export interface CreatedStaff {
@@ -1112,11 +1152,7 @@ export async function applyStaffPasswordChange(
     )
     .returning({ id: staff.id });
   if (changed === undefined) {
-    const [row] = await tx
-      .select({ lockedUntil: runningLockout() })
-      .from(staff)
-      .where(eq(staff.id, input.staffId));
-    const lockedUntil = row?.lockedUntil ?? null;
+    const lockedUntil = await readRunningLockout(tx, input.staffId);
     return lockedUntil === null
       ? { ok: false, reason: 'state_changed' }
       : { ok: false, reason: 'locked', lockedUntil };

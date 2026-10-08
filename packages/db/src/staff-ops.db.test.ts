@@ -26,6 +26,8 @@ import {
   listLiveStaffSessions,
   markChallengeCodeSent,
   markChallengePromptSent,
+  recordLoginLockout,
+  recordPasswordChangeLockout,
   registerPasswordFailure,
   resetStaffPassword,
   revokeStaffSession,
@@ -56,6 +58,8 @@ beforeAll(async () => {
 afterAll(() => tmp.drop());
 
 const IP = '203.0.113.7';
+// the change form's lockout row names the pre-read's session; any uuid stands in for it here
+const SESSION_ID = '00000000-0000-4000-8000-000000000078';
 const UA = 'Mozilla/5.0';
 const TELEGRAM_FAILURE = { err: { name: 'GrammyError' }, telegram: { method: 'sendMessage' } };
 
@@ -1463,7 +1467,6 @@ describe('changing your own password (#78)', () => {
         attempts: 0,
         locked: false,
         stateChanged: true,
-        reason: 'locked',
         lockedUntil: before.lockedUntil,
       });
       expect((await staffRow(seeded.staffId)).failedPasswordAttempts).toBe(5);
@@ -1480,7 +1483,25 @@ describe('changing your own password (#78)', () => {
         attempts: 0,
         locked: false,
         stateChanged: true,
-        reason: 'state_changed',
+        lockedUntil: null,
+      });
+    });
+
+    it('reports an expired lockout over a changed hash as a changed row, not a lockout', async () => {
+      const seeded = await seedStaff(tmp.db);
+      await tmp.db
+        .update(staff)
+        .set({
+          passwordHash: await newHash('set elsewhere'),
+          failedPasswordAttempts: 5,
+          lockedUntil: sql`now() - interval '1 second'`,
+        })
+        .where(eq(staff.id, seeded.staffId));
+
+      expect(await count(seeded)).toEqual({
+        attempts: 0,
+        locked: false,
+        stateChanged: true,
         lockedUntil: null,
       });
     });
@@ -1506,6 +1527,59 @@ describe('changing your own password (#78)', () => {
         'ip',
         'reason',
       ]);
+    });
+  });
+
+  // review round 2, n1: the refusal under a lockout re-reads it in the transaction that records
+  // it, so a lockout the caller's snapshot saw but that ended since is not a refusal
+  describe.each([
+    {
+      name: 'recordLoginLockout',
+      action: AuditAction.StaffLoginLocked,
+      record: (seeded: SeededStaff) =>
+        recordLoginLockout(tmp.db, { staffId: seeded.staffId, ip: IP }),
+      extra: {},
+    },
+    {
+      name: 'recordPasswordChangeLockout',
+      action: AuditAction.StaffPasswordChangeFailed,
+      record: (seeded: SeededStaff) =>
+        recordPasswordChangeLockout(tmp.db, {
+          staffId: seeded.staffId,
+          sessionId: SESSION_ID,
+          ip: IP,
+        }),
+      extra: { reason: 'locked', sessionId: SESSION_ID },
+    },
+  ])('$name', ({ action, record, extra }) => {
+    const lockFor = (seeded: SeededStaff, interval: string) =>
+      tmp.db
+        .update(staff)
+        .set({ failedPasswordAttempts: 5, lockedUntil: sql.raw(`now() ${interval}`) })
+        .where(eq(staff.id, seeded.staffId));
+
+    it('records a running lockout with the deadline it reads, and returns it', async () => {
+      const seeded = await seedStaff(tmp.db);
+      await lockFor(seeded, "+ interval '15 minutes'");
+      const { lockedUntil } = await staffRow(seeded.staffId);
+
+      expect(await record(seeded)).toEqual(lockedUntil);
+
+      const entries = (await entriesFor(seeded.staffId)).filter((entry) => entry.action === action);
+      expect(entries.map((entry) => entry.payload)).toEqual([
+        { ...extra, ip: IP, lockedUntil: lockedUntil?.toISOString() },
+      ]);
+    });
+
+    it('writes nothing and returns null once the lockout has ended', async () => {
+      const seeded = await seedStaff(tmp.db);
+      await lockFor(seeded, "- interval '1 second'");
+
+      expect(await record(seeded)).toBeNull();
+
+      expect((await entriesFor(seeded.staffId)).filter((entry) => entry.action === action)).toEqual(
+        [],
+      );
     });
   });
 

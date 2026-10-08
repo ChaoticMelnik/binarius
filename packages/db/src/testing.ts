@@ -304,14 +304,6 @@ export async function seedTradingSession(
 // so a 2 ms fixture hash exercises exactly the code path a 250 ms production hash does — and
 // seeding at production cost would add a quarter of a second to every case that needs a staff
 // member. ln=10 is the floor verifyPassword accepts; staff-password.test.ts pins both ends.
-/** Backends of this database waiting on a lock: the other side of a race is queued. */
-export async function lockWaiters(db: Db): Promise<number> {
-  const { rows } = await db.execute<{ n: number }>(
-    sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
-  );
-  return rows[0]?.n ?? 0;
-}
-
 export const TEST_SCRYPT_PARAMS: ScryptParams = { ln: 10, r: 8, p: 1 };
 
 export const TEST_STAFF_PASSWORD = 'correct horse battery staple';
@@ -348,4 +340,13 @@ export async function seedStaff(
     .returning({ id: staff.id });
   if (row === undefined) throw new Error('seedStaff: insert returned no row');
   return { staffId: row.id, login, telegramUserId, password, passwordHash };
+}
+
+// How many sessions of this database wait on a lock: the oracle of the lock-order tests, which
+// need to know the other side of a race is queued before they let the first side go on.
+export async function lockWaiters(db: Db): Promise<number> {
+  const { rows } = await db.execute<{ n: number }>(
+    sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+  );
+  return rows[0]?.n ?? 0;
 }

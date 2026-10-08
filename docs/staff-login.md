@@ -96,12 +96,17 @@ schema for the backend and for the web page that will call it (#79). Three phase
 1. **A read** by the session token (`findStaffForPasswordChange`): the hash, and the lockout if one
    is running. It is outside any transaction and writes no row, like the login's lookup: the KDF
    runs next, and holding rows through it is what the login refuses to do. A lockout running at
-   this point answers `429 too_many_attempts` with no derivation and a `locked` row.
+   this point is read again inside the transaction that records it: still running —
+   `429 too_many_attempts` with no derivation and a `locked` row carrying that reading; just
+   ended — no row, and the request goes on to the KDF. That refusal is recorded outside
+   `runAsStaff`, like `recordLoginLockout` at login: it does no work under the session, and the
+   session id in the row is the pre-read's.
 2. **One slot in the scrypt queue.** On entering it the row is read again: a lockout or a reset
    that landed while the request waited refuses it with no derivation. The current password is
    verified against the hash of the first read, the row is read once more, and only if it is
    still the same is the new password hashed. So once the fifth failure has committed, every guess
-   in flight — right or wrong — answers `429 too_many_attempts` after one derivation, as the login
+   in flight — right or wrong — answers `429 too_many_attempts` after at most one derivation (none
+   when the lockout landed while the request waited for its slot), as the login
    form answers `401` in the same case: a stolen cookie learns nothing faster than the login form
    does. The one exception is a correct guess whose new hash was already being derived when the
    lockout committed: it answers the same `429` after two derivations (Limits).
@@ -119,9 +124,11 @@ schema for the backend and for the web page that will call it (#79). Three phase
 A wrong current password is a wrong password at login. It counts in the same
 `failed_password_attempts` and the same lockout (`countPasswordFailure`), so a stolen session
 cookie is no faster an oracle for the password than the login form, and five wrong — in either
-place — lock both. It answers `401 invalid_credentials`. A lockout or a reset that lands between
-the last re-read and the transaction is caught by the CAS: a lockout answers `429` with a `locked`
-row, an account changed under the KDF answers `401` with a `state_changed` row, and neither counts
+place — lock both. It answers `401 invalid_credentials`. A lockout that lands between the last
+re-read and the transaction is caught by the CAS and answers `429` with a `locked` row. A reset or
+a disable in that window revokes the changing session, so the transaction's touch finds no live
+session: `401 session_invalid`, no row. `state_changed` is reached only by a concurrent change from
+the same session (`401`, a `state_changed` row). Neither the lockout nor the change counts
 anything — there is nothing left to count against.
 
 The lock order is the CLI's, `staff` first. A change and a CLI reset, two changes from two devices,
@@ -191,7 +198,9 @@ and lives in the database.
   only after `queue.run` has returned — so arrivals that keep coming can start more. The lock
   lands when the fifth recorded failure commits; how many guesses were *tried* by then is bounded
   by the queue's throughput, not by five. A correct password arriving under the lock is still
-  refused. Once the lockout has committed, a change request already in flight is refused with the
+  refused. The refusal under a running lockout — at login or in the change form — re-reads the
+  lockout in the transaction that records it; a lockout that ended in between is not a refusal.
+  Once the lockout has committed, a change request already in flight is refused with the
   same `429` in the same time whatever its password was, except the correct guess caught mid-hash
   above (accepted: at most `PASSWORD_VERIFY_CONCURRENCY` such requests at once).
 - 5 wrong codes exhaust the challenge.

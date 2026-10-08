@@ -41,6 +41,7 @@ import {
   readIntentForAdmin,
   readUserForAdmin,
   recordLoginLockout,
+  recordPasswordChangeLockout,
   recordLoginRefusal,
   registerPasswordFailure,
   revokeStaffSession,
@@ -139,18 +140,18 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     token: string,
     current: string,
     next: string,
-  ): Promise<{ kind: 'ok'; hash: string } | { kind: 'wrong' | 'stale' } | 'refused'> => {
+  ): Promise<{ kind: 'ok'; hash: string } | { kind: 'miss' } | 'refused'> => {
     const stale = async (): Promise<boolean> => {
       const row = await findStaffForPasswordChange(deps.db, { token, idleMs });
       return row === undefined || row.lockedUntil !== null || row.passwordHash !== pre.passwordHash;
     };
     try {
       return await queue.run(async () => {
-        if (await stale()) return { kind: 'stale' as const };
+        if (await stale()) return { kind: 'miss' as const };
         const verified = await verify(pre.passwordHash, current);
         // before the branch on the guess, so a right and a wrong one differ by nothing here
-        if (await stale()) return { kind: 'stale' as const };
-        if (!verified) return { kind: 'wrong' as const };
+        if (await stale()) return { kind: 'miss' as const };
+        if (!verified) return { kind: 'miss' as const };
         return { kind: 'ok' as const, hash: await hashNew(next) };
       });
     } catch (error) {
@@ -190,10 +191,11 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
       }
 
-      // null unless a lockout is running right now, by the database's clock (findStaffForLogin)
+      // null unless a lockout is running right now, by the database's clock (findStaffForLogin);
+      // re-read where it is recorded, so one that ended in between is not a refusal
       if (staff.lockedUntil !== null) {
-        await recordLoginLockout(deps.db, { staffId: staff.id, ip, lockedUntil: staff.lockedUntil });
-        return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+        const until = await recordLoginLockout(deps.db, { staffId: staff.id, ip });
+        if (until !== null) return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
       }
 
       const correct = await hash(staff.passwordHash, password);
@@ -480,15 +482,15 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
       });
       const locked = (until: Date) => ({ reason: 'locked', lockedUntil: until.toISOString() });
 
-      // null unless a lockout is running right now, by the database's clock; no KDF under it
-      const { lockedUntil } = pre;
-      if (lockedUntil !== null) {
-        const answer = await asStaff(request, reply, async (_tx, ctx) => ({
-          result: 'locked' as const,
-          audit: failed(ctx, locked(lockedUntil)),
-        }));
-        if (answer === undefined) return reply;
-        return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+      // null unless a lockout is running right now, by the database's clock; no KDF under it.
+      // Re-read where it is recorded, so one that ended in between is not a refusal.
+      if (pre.lockedUntil !== null) {
+        const until = await recordPasswordChangeLockout(deps.db, {
+          staffId: pre.staffId,
+          sessionId: pre.sessionId,
+          ip,
+        });
+        if (until !== null) return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
       }
 
       const derived = await derive(pre, token, currentPassword, newPassword);
@@ -509,7 +511,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
             const payload =
               failure.stateChanged !== true
                 ? { reason: 'wrong_password', attempts: failure.attempts, locked: failure.locked }
-                : failure.reason === 'locked' && failure.lockedUntil
+                : failure.lockedUntil
                   ? locked(failure.lockedUntil)
                   : { reason: 'state_changed' };
             return { result: payload.reason, audit: failed(ctx, payload) };
