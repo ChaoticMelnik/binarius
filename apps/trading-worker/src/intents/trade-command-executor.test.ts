@@ -1,5 +1,5 @@
 import { createBrokerRestClient, MAX_DETAIL_LENGTH } from '@binarius/broker-rest';
-import type { TradeIntentRow } from '@binarius/db';
+import { hashToken, type TradeIntentRow } from '@binarius/db';
 import {
   MockSocketPayload,
   startMockBroker,
@@ -289,7 +289,9 @@ describe('REST only when nothing was emitted', () => {
       body: { error: { message: LONG_TEXT } },
     } as MockScript);
     const detail = LONG_TEXT.slice(0, MAX_DETAIL_LENGTH);
-    expect(await executor().submit(intentOf(), signal())).toEqual({
+    const tokens = grantingTokens();
+    const abort = signal();
+    expect(await executor(undefined, tokens).submit(intentOf(), abort)).toEqual({
       outcome: 'rejected',
       reason: 'broker_rejected',
       detail,
@@ -303,6 +305,13 @@ describe('REST only when nothing was emitted', () => {
         detail,
         ...('retryAfterSec' in script ? { retryAfterSec: script.retryAfterSec } : {}),
       }),
+    ]);
+    // only a 401 reports the token back, with the policy of the trade itself (#281)
+    expect(tokens.calls).toEqual([
+      { brokerAccountId: ACCOUNT, options: { signal: abort } },
+      ...(code === 'unauthorized'
+        ? [{ brokerAccountId: ACCOUNT, options: { signal: abort, refusedToken: hashToken(TOKEN) } }]
+        : []),
     ]);
   });
 
@@ -380,6 +389,23 @@ describe('REST only when nothing was emitted', () => {
     );
   });
 
+  it('R6 a throwing source during the report leaves the rejection as it is', async () => {
+    let calls = 0;
+    const tokens = tokenSource(async () => {
+      calls += 1;
+      if (calls === 1) return { ok: true, accessToken: TOKEN };
+      throw new TypeError('report broke');
+    });
+    broker.rest.failNext('openTrade', { status: 401 });
+    expect(await executor(undefined, tokens).submit(intentOf(), signal())).toMatchObject({
+      outcome: 'rejected',
+      reason: 'broker_rejected',
+    });
+    expect(logs('refused token report failed')).toEqual([
+      expect.objectContaining({ intentId: 'intent-1', err: { name: 'TypeError' } }),
+    ]);
+  });
+
   it('R5 a token source that throws rejects the submit (the processor writes unknown)', async () => {
     const tokens = tokenSource(async () => {
       throw new Error('token source bug');
@@ -419,6 +445,7 @@ describe('logs', () => {
       'trade command refused',
       'trade command outcome unknown',
       'trade command falls back to rest',
+      'refused token reported',
     ]) {
       expect(messages, msg).toContain(msg);
     }

@@ -10,7 +10,7 @@ import {
   type OpenTrade,
   type SocketOpenTradeRequest,
 } from '@binarius/shared';
-import type { AccessTokenSource } from '../broker/access-token';
+import { reportRefusedToken, type AccessTokenSource } from '../broker/access-token';
 import type { TradeSessionSource } from '../broker/trade-session';
 import type { SubmitResult, TradeExecutor } from './executor';
 import type { Logger } from './processor';
@@ -88,6 +88,18 @@ export function createTradeCommandExecutor(deps: TradeCommandExecutorDeps): Trad
             },
             'trade command refused',
           );
+          // mayRefresh stays the default: a trade is the user's action, so the backend may
+          // exchange here (#281)
+          if (code === BrokerRestErrorCode.Unauthorized) {
+            await reportRefusedToken(
+              tokens,
+              logger,
+              { intentId: intent.id },
+              intent.brokerAccountId,
+              token.accessToken,
+              { signal },
+            );
+          }
           return {
             outcome: 'rejected',
             reason: TradeIntentFailureReason.BrokerRejected,
