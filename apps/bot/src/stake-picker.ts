@@ -300,11 +300,18 @@ export function createStakePicker<C extends Context>({
   ): Promise<Screen> {
     if (saved.ok && 'saved' in saved.value) {
       endStakeStep(id);
-      if (origin.kind === 'pair') return savedLaunchScreen(origin.assetId, saved.value.saved);
-      return {
-        text: TEXTS.stakeSaved(stakeLabel(saved.value.saved)),
-        keyboard: backKeyboard(origin),
-      };
+      switch (origin.kind) {
+        case 'settings':
+        case 'analysis':
+          return {
+            text: TEXTS.stakeSaved(stakeLabel(saved.value.saved)),
+            keyboard: backKeyboard(origin),
+          };
+        case 'pair':
+          return savedLaunchScreen(origin.assetId, saved.value.saved);
+        default:
+          return origin satisfies never;
+      }
     }
     if (saved.ok && 'refused' in saved.value) {
       keepStakeStep(id);
