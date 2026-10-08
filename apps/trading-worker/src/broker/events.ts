@@ -9,7 +9,7 @@ import {
   safeParseUpdateBalance,
   safeParseUserAuthError,
   safeParseUserData,
-  toAssetsUpdate,
+  toAssetsUpdates,
   toBinaryPair,
   toBrokerBalance,
   toBrokerUser,
@@ -53,7 +53,7 @@ export type BrokerEvent =
   | { type: typeof BrokerEventType.TokenExpired }
   | { type: typeof BrokerEventType.PriceUpdate; update: PriceUpdate }
   | { type: typeof BrokerEventType.AssetsList; pairs: BinaryPair[] }
-  | { type: typeof BrokerEventType.AssetsUpdate; update: AssetsUpdate }
+  | { type: typeof BrokerEventType.AssetsUpdate; updates: AssetsUpdate[] }
   | { type: typeof BrokerEventType.UserData; user: BrokerUser }
   | { type: typeof BrokerEventType.OpenTradeSuccess; mode: TradeMode; trade: OpenTrade }
   | { type: typeof BrokerEventType.OpenTradeFail; mode: TradeMode; failures: OpenTradeFailure[] }
@@ -178,7 +178,7 @@ const HANDLERS = {
   })),
   'common.assets_update': payloadHandler(safeParseAssetsUpdate, (wire) => ({
     type: BrokerEventType.AssetsUpdate,
-    update: toAssetsUpdate(wire),
+    updates: toAssetsUpdates(wire),
   })),
   'user.data': payloadHandler(safeParseUserData, (wire) => ({
     type: BrokerEventType.UserData,
