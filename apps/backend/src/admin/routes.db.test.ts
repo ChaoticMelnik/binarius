@@ -150,6 +150,15 @@ const build = (
 beforeEach(() => {
   app = build();
 });
+
+/** A promise the test settles itself: the seams below hold a request open on it. */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 afterEach(() => app.close());
 
 const login = (body: Record<string, unknown>) =>
@@ -312,8 +321,12 @@ describe('POST /admin/auth/login', () => {
     ]);
     // the right password would have opened the account, and it was never derived
     expect(derivations).toBe(before);
-    const actions = (await entriesFor(seeded.staffId)).map((entry) => entry.action);
-    expect(actions.at(-1)).toBe(AuditAction.StaffLoginLocked);
+    const last = (await entriesFor(seeded.staffId)).at(-1);
+    expect(last?.action).toBe(AuditAction.StaffLoginLocked);
+    expect(last?.payload).toEqual({
+      ip: CLIENT.ip,
+      lockedUntil: (await staffRow(seeded.staffId)).lockedUntil?.toISOString(),
+    });
   });
 
   // The other side of the lockout flag: an expired one is not a lockout. The database decides
@@ -365,10 +378,7 @@ describe('POST /admin/auth/login', () => {
   // the derivation is held open, so the second request really is concurrent with the first
   it('refuses while the scrypt queue is full, before it derives anything', async () => {
     await app.close();
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: held, resolve: release } = deferred();
     let inFlight = 0;
     app = build({
       passwordQueue: createPasswordQueue({ concurrency: 1, queueMax: 0 }),
@@ -903,14 +913,8 @@ const staffRow = async (id: string) => {
 
 /** Holds the staff row as CLI and startLoginChallenge would, until `release` is called. */
 async function holdStaffRow(staffId: string): Promise<{ release: () => Promise<void> }> {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let taken!: () => void;
-  const lockTaken = new Promise<void>((resolve) => {
-    taken = resolve;
-  });
+  const { promise: gate, resolve: release } = deferred();
+  const { promise: lockTaken, resolve: taken } = deferred();
   const holder = tmp.db.transaction(async (tx) => {
     await tx.select({ id: staff.id }).from(staff).where(eq(staff.id, staffId)).for('no key update');
     taken();
@@ -970,6 +974,9 @@ describe('POST /admin/auth/password (#78)', () => {
         ),
       )
       .orderBy(asc(auditLog.createdAt), asc(auditLog.id));
+
+  const passwordPayloads = async (staffId: string) =>
+    (await passwordRows(staffId)).map((written) => written.payload);
 
   const ownSessionId = async (token: string) =>
     (await withSession('GET', '/admin/sessions', token)).json<{ me: { sessionId: string } }>().me
@@ -1092,7 +1099,7 @@ describe('POST /admin/auth/password (#78)', () => {
     expect([derivations, hashCalls]).toEqual([0, 0]);
     expect((await passwordRows(seeded.staffId)).at(-1)?.payload).toMatchObject({
       reason: 'locked',
-      lockedUntil: expect.any(String),
+      lockedUntil: (await staffRow(seeded.staffId)).lockedUntil?.toISOString(),
       ip: CLIENT.ip,
     });
     expect((await staffRow(seeded.staffId)).passwordHash).toBe(seeded.passwordHash);
@@ -1188,8 +1195,7 @@ describe('POST /admin/auth/password (#78)', () => {
         expect([derivations, hashCalls]).toEqual([1, 0]);
         const row = await staffRow(seeded.staffId);
         expect([row.passwordHash, row.failedPasswordAttempts]).toEqual([seeded.passwordHash, 5]);
-        const rows = await passwordRows(seeded.staffId);
-        expect(rows.map((written) => written.payload)).toEqual([
+        expect(await passwordPayloads(seeded.staffId)).toEqual([
           {
             reason: 'locked',
             lockedUntil: row.lockedUntil?.toISOString(),
@@ -1207,10 +1213,7 @@ describe('POST /admin/auth/password (#78)', () => {
       const sessionId = await ownSessionId(current);
       await app.close();
       const queue = createPasswordQueue({ concurrency: 1, queueMax: 1 });
-      let release!: () => void;
-      const held = new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      const { promise: held, resolve: release } = deferred();
       let hashing = false;
       app = build({
         passwordQueue: queue,
@@ -1239,7 +1242,7 @@ describe('POST /admin/auth/password (#78)', () => {
       // queued wrong one never reached the KDF
       expect([derivations, hashCalls]).toEqual([1, 1]);
       const lockedUntil = (await staffRow(seeded.staffId)).lockedUntil?.toISOString();
-      expect((await passwordRows(seeded.staffId)).map((written) => written.payload)).toEqual([
+      expect(await passwordPayloads(seeded.staffId)).toEqual([
         { reason: 'locked', lockedUntil, ip: CLIENT.ip, sessionId },
         { reason: 'locked', lockedUntil, ip: CLIENT.ip, sessionId },
       ]);
@@ -1267,7 +1270,7 @@ describe('POST /admin/auth/password (#78)', () => {
       ]);
       expect([derivations, hashCalls]).toEqual([1, 1]);
       expect((await staffRow(seeded.staffId)).failedPasswordAttempts).toBe(0);
-      expect((await passwordRows(seeded.staffId)).map((written) => written.payload)).toEqual([
+      expect(await passwordPayloads(seeded.staffId)).toEqual([
         { reason: 'state_changed', ip: CLIENT.ip, sessionId },
       ]);
     });
@@ -1292,11 +1295,39 @@ describe('POST /admin/auth/password (#78)', () => {
         ]);
         expect([derivations, hashCalls]).toEqual([1, 0]);
         expect((await staffRow(seeded.staffId)).failedPasswordAttempts).toBe(0);
-        expect((await passwordRows(seeded.staffId)).map((written) => written.payload)).toEqual([
+        expect(await passwordPayloads(seeded.staffId)).toEqual([
           { reason: 'state_changed', ip: CLIENT.ip, sessionId },
         ]);
       },
     );
+
+    // n4: an expired lockout is no lockout, so a row changed under it is still a changed row
+    it('answers a hash replaced over an expired lockout with 401, not 429', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const current = await openSession(seeded);
+      const sessionId = await ownSessionId(current);
+      await app.close();
+      app = build({
+        verify: verifyAfter(async () => {
+          await replaceHash(seeded.staffId);
+          await tmp.db
+            .update(staff)
+            .set({ failedPasswordAttempts: 5, lockedUntil: sql`now() - interval '1 second'` })
+            .where(eq(staff.id, seeded.staffId));
+        }),
+      });
+
+      const response = await change(current, valid(seeded));
+
+      expect([response.statusCode, response.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.InvalidCredentials },
+      ]);
+      expect((await staffRow(seeded.staffId)).failedPasswordAttempts).toBe(5);
+      expect(await passwordPayloads(seeded.staffId)).toEqual([
+        { reason: 'state_changed', ip: CLIENT.ip, sessionId },
+      ]);
+    });
 
     // a real reset revokes every session, the changing one included: the touch finds nothing
     it('answers a CLI reset under the new hash with session_invalid and no row', async () => {
@@ -1358,10 +1389,7 @@ describe('POST /admin/auth/password (#78)', () => {
   });
 
   it('refuses while the scrypt queue is full, before it derives anything', async () => {
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: held, resolve: release } = deferred();
     let inFlight = 0;
     const seeded = await seedStaff(tmp.db);
     const current = await openSession(seeded);
