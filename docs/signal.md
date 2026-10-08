@@ -368,8 +368,12 @@ feed, keyed by `${assetId}:${interval}`:
 | any other `fetch_failed`, `rate_limited` without `retryAfterSec` | no | the next call fetches |
 | a throw | no | every waiter of that fetch rejects with it |
 
-- Concurrent calls for one key share one inner `evaluate`; the entry is set before the inner call
-  can settle and removed once it does, whatever the outcome.
+- Concurrent calls for one key in one candle (by the cache's clock at the call) share one inner
+  `evaluate`; the entry is set before the inner call can settle and removed once it does, whatever
+  the outcome. A call in the next candle never joins the previous candle's fetch (#343: the
+  scanner at the boundary would otherwise get the previous candle's decision; C12, S5b).
+- A result is held only if it lasts longer than the hold already there: a late result of an older
+  fetch never replaces a newer hold (C13).
 - Every inner call carries the cache's own deadline, `AbortSignal.timeout(fetchBudgetMs)`. The
   cache takes no caller signal, so a joiner never inherits another caller's abort and nobody waits
   longer than the budget from the fetch it joined.
@@ -432,7 +436,10 @@ covers clock skew. After a start, nothing is served until the first scan, at mos
   that fires a few ms early cannot run a second scan for the same candle (S12).
 - A scan's boundary comes from its target. A second run for a boundary already scanned returns at
   once.
-- After a stall that missed whole candles, the timer fires once, for the next one.
+- A target whose candle has already ended (a stall, a forward clock jump) is not scanned. The
+  timer then aims at the candle in progress at once, while it still runs (S15). After the clock
+  moved back by a candle or more it aims at the upcoming moment, so the scanner is never silent
+  for longer than one candle (S16).
 - A scan takes no new pair once its candle has ended: the rest counts as `skipped` (S13).
   Otherwise, on a slow broker, it would spend the next candle's tokens on stale work and could call
   inside the next slack, before that candle's close is published.
@@ -468,7 +475,7 @@ The calls still queued are dropped (S8). `start()` runs after `listen()` with th
 | `scanned` | the size of the scan set |
 | `signals` | fresh signals now (the route's rule) |
 | `noSignal` | `no_signal` decisions over the minute |
-| `skipped` | calls dropped for want of a token |
+| `skipped` | calls dropped: no pacer token, or the candle had ended |
 | `failed` | failed calls by code, with `threw` for a throw |
 | `rateLimited` | 429 answers |
 | `pausedMs` | time added to pauses |
