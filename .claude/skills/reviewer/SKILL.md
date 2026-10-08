@@ -12,7 +12,7 @@ Two modes:
 1. **Task Review** — a specific PR for an issue In Review.
 2. **Project Review** — full codebase, no specific issue named.
 
-Post findings immediately, no additional approval needed. Codex (Step 3a; repeated in Step 6-pre only when 3a no longer matches the head) is a required independent reviewer in both modes.
+Post findings immediately, no additional approval needed. Codex runs once per PR, in Step 6-pre, only on the round that would otherwise end in a merge; an exhausted Codex usage limit skips it without asking anyone (`.claude/CLAUDE.md` → Codex — только финальное ревью перед мержем). Project Review runs without Codex.
 
 **How this role runs.** In the pipeline, `/tech-lead` starts it as an `Agent` spawn (`subagent_type: "general-purpose"`, `model: "opus"`), and the spawned agent's first action is `Skill(skill: "reviewer")`. The spawn's `model` decides the model (`.claude/CLAUDE.md` → Модели по ролям pipeline); the `model: opus` frontmatter above only matters when the owner invokes `/reviewer` directly. The review sub-agents of Steps 3b-3d are this agent's own nested spawns, each with an explicit `model` — never inherited. A spawned reviewer has no `AskUserQuestion`: the merge question goes back to tech-lead (Step 6b). Spawned by `/manager` (`.claude/skills/manager/SKILL.md`) the same way: questions and the merge request go back to the spawner, which answers by the rules of `.claude/CLAUDE.md` → Режим manager.
 
@@ -33,38 +33,13 @@ Issue/PR named → Task Review. "Review the project" / "review the codebase" wit
 - `/github` skill's "Read Issue + Comments" — the Architect's plan, every Plan Update and addendum (the later one governs), and its "Accepted risks".
 - `gh pr diff <N>` — the whole feature against its base. That is the only diff this role ever reviews, on every round: never the iteration's delta (`git diff <old-head>..<new-head>`). Seven delta reviews in a row missed a defect whose two halves sat in different commits (#9).
 
-### Step 3: Run Codex and the automated review agents
+### Step 3: Run the automated review agents
 
 Check diff size first: `gh pr diff <N> | wc -l`.
 
-**Small-diff rule:** full PR diff < 50 lines → run only Codex + code-review agent (3a + 3c), skip security/simplify.
+**Small-diff rule:** full PR diff < 50 lines → run only the code-review agent (3c), skip security/simplify.
 
-**Order of launch.** One message carries the Bash call that starts 3a in the background **and** the `Agent` spawns 3b-3d, so they run in parallel. Spawn 3b-3d with `run_in_background: false`: calls in one message still run concurrently, and the message returns only when all three have reported — background spawns let the harness end the reviewer's turn first and force a hand-back without a verdict (#163, #10: twice each). Then wait for 3b-3d to finish. Then poll 3a to completion. Only then Step 4. Never run the check command while the spawned agents are working — the `/code-review` recipe runs `pnpm typecheck` on the same tree regardless of the brief.
-
-**3a. Codex review** *(always)* — the companion script from Bash, not `Skill(codex:rescue)` (that needs `AskUserQuestion` and a main-context `Agent`, which a spawned reviewer does not have):
-  1. Fill `.claude/codex-review-prompt.md` into a file (issue, goal, the plan's "Accepted risks" with the instruction not to re-raise them). For a diff that touches `.claude/**` or `audits.md`, inline `~/.claude/CLAUDE.md` into its Process-docs block — the Codex sandbox cannot read it.
-  2. Build the prompt file and start the job with the marker `Iteration review`:
-     ```bash
-     PR=<N>; KIND="Iteration review"   # a Step 6-pre rerun uses "Whole-feature pass"
-     TEMPLATE=<scratchpad>/codex-review-$PR.md   # the filled template from 1.
-     # COMPANION: set exactly as in .claude/skills/tech-lead/SKILL.md → "Whole-feature pass — check"
-     git fetch origin main "$(gh pr view $PR --repo ChaoticMelnik/binarius --json headRefName --jq .headRefName)"
-     head=$(gh pr view $PR --repo ChaoticMelnik/binarius --json headRefOid --jq .headRefOid)
-     base=$(git merge-base origin/main "$head")
-     hash=$(git diff --no-color --no-ext-diff "$base" "$head" | shasum -a 256 | cut -d' ' -f1)
-     out=<scratchpad>/codex-$PR-$(date +%s).md
-     {
-       printf '%s #%s: base=%s head=%s diff-sha256=%s\n\n' "$KIND" "$PR" "$base" "$head" "$hash"
-       cat "$TEMPLATE"
-       printf '\n```diff\n'
-       git diff --no-color --no-ext-diff "$base" "$head"
-       printf '```\n'
-     } > "$out"
-     node "$COMPANION" task --background --fresh --model gpt-5.6-sol --effort high --prompt-file "$out"
-     ```
-     The first line is what tech-lead's audit finds and re-hashes; the diff after it is the same one `gh pr diff` shows (merge base to head). `task` without `--write` runs read-only.
-  3. After 3b-3d: `node "$COMPANION" status <job-id> --wait --timeout-ms 540000` (repeat until the job leaves `running`), then `node "$COMPANION" result <job-id>`.
-  4. Before a long round, apply the usage-limit rule of tech-lead → Phase 0, item 1. Policy: 2 attempts, then stop and return to tech-lead (direct invocation: ask the owner). Model and effort are pinned in the command, not taken from `~/.codex/config.toml`.
+**Order of launch.** One message carries the `Agent` spawns 3b-3d, so they run in parallel. Spawn them with `run_in_background: false`: calls in one message still run concurrently, and the message returns only when all three have reported — background spawns let the harness end the reviewer's turn first and force a hand-back without a verdict (#163, #10: twice each). Then wait for 3b-3d to finish. Only then Step 4. Never run the check command while the spawned agents are working — the `/code-review` recipe runs `pnpm typecheck` on the same tree regardless of the brief.
 
 **3b. Security review agent** *(skip on small diff)* — spawn `Agent` with `model: "opus"` and the full `/security-review` prompt.
 
@@ -76,7 +51,7 @@ If a spawn dies on an API error for its model, relaunch it once with the same ex
 
 ### Step 4: Consolidate findings
 
-Merge Codex + agent results, collapse duplicates. Discard findings that just restate an accepted trade-off from the plan — note "accepted at plan stage" instead of returning the issue for them.
+Merge the agents' results, collapse duplicates. Discard findings that just restate an accepted trade-off from the plan — note "accepted at plan stage" instead of returning the issue for them.
 
 - Re-verify every severity label — the tools' and your own — against the actual mechanism and the Severity Guide below (evidence quality is Minor by default) before accepting or dismissing a finding. A tooling-level claim ("this config makes X fail", "the compiler infers Y") is verified with the tool itself before it is labelled Major.
 - A sub-agent's low-confidence finding is verified in the same round and either posted or rejected with its reason in the review comment — never dropped silently (#340: a stale comment flagged as uncertain in round 1 reached the owner only in round 3, after the last fix round).
@@ -94,15 +69,40 @@ Merge Codex + agent results, collapse duplicates. Discard findings that just res
 
 **Architecture** — changes stay within their module/domain (`apps/bot`, `apps/backend`, `apps/web`, `apps/trading-worker`, `packages/db`, `packages/shared`); schema (Drizzle) and API/Socket.IO contract files updated together if the contract changed.
 
-**Process docs consistency** — when the diff touches `.claude/**` or `audits.md`: (a) the skills (`architect`, `implementer`, `reviewer`, `tech-lead`, `github`) describe the same status transition, step order and check command the same way; (b) they agree with `.claude/CLAUDE.md`; (c) `.claude/CLAUDE.md` against `~/.claude/CLAUDE.md` — where they differ the project section governs, so a (c) finding does not block the merge but goes into the proposed edit of the global file. Done by hand here and by Codex through the prompt's Process-docs block (3a).
+**Process docs consistency** — when the diff touches `.claude/**` or `audits.md`: (a) the skills (`architect`, `implementer`, `reviewer`, `tech-lead`, `github`) describe the same status transition, step order and check command the same way; (b) they agree with `.claude/CLAUDE.md`; (c) `.claude/CLAUDE.md` against `~/.claude/CLAUDE.md` — where they differ the project section governs, so a (c) finding does not block the merge but goes into the proposed edit of the global file. Done by hand here and by Codex through the prompt's Process-docs block (6-pre).
 
 **Quoted evidence** — every command output the PR or an evidence comment quotes is re-run at the approved head before it is accepted. #68 carried output from an earlier tree twice (m16, n3); both times the claim held and the quoted numbers did not.
 
 **Runtime check** — after every spawned agent has finished: `pnpm check` on the PR branch under the project's Node (`eval "$(fnm env)" && fnm use`), exit code as the verdict. State explicitly if Playwright E2E could not be run locally.
 
-### Step 6-pre: Whole-feature condition (before any LGTM)
+### Step 6-pre: Final Codex pass (before any LGTM)
 
-Only when Steps 3-5 found no Blocker/Major. A condition, not a second run: this round's 3a already reviewed the full diff at a recorded head, and it counts as the whole-feature pass when its marker's `head` equals the PR's current `headRefOid` (`gh pr view <N> --json headRefOid`). Rerun the Step 3a command with `KIND="Whole-feature pass"` only if commits landed after 3a, or if 3a was not a full-diff run with a marker; consolidate that result as in Step 4, and a Blocker/Major from it goes to Step 6a. No LGTM without a completed full-diff run (either marker) at the approved head — tech-lead's audit re-hashes the diff from that marker (`tech-lead` → Mode 1).
+Only when Steps 3-5 found no Blocker/Major — this is the one Codex run of the round, and of the PR unless it finds something. The companion script from Bash, not `Skill(codex:rescue)` (that needs `AskUserQuestion` and a main-context `Agent`, which a spawned reviewer does not have):
+  1. Fill `.claude/codex-review-prompt.md` into a file (issue, goal, the plan's "Accepted risks" with the instruction not to re-raise them). For a diff that touches `.claude/**` or `audits.md`, inline `~/.claude/CLAUDE.md` into its Process-docs block — the Codex sandbox cannot read it.
+  2. Build the prompt file and start the job with the marker `Whole-feature pass`:
+     ```bash
+     PR=<N>; KIND="Whole-feature pass"
+     TEMPLATE=<scratchpad>/codex-review-$PR.md   # the filled template from 1.
+     # COMPANION: set exactly as in .claude/skills/tech-lead/SKILL.md → "Whole-feature pass — check"
+     git fetch origin main "$(gh pr view $PR --repo ChaoticMelnik/binarius --json headRefName --jq .headRefName)"
+     head=$(gh pr view $PR --repo ChaoticMelnik/binarius --json headRefOid --jq .headRefOid)
+     base=$(git merge-base origin/main "$head")
+     hash=$(git diff --no-color --no-ext-diff "$base" "$head" | shasum -a 256 | cut -d' ' -f1)
+     out=<scratchpad>/codex-$PR-$(date +%s).md
+     {
+       printf '%s #%s: base=%s head=%s diff-sha256=%s\n\n' "$KIND" "$PR" "$base" "$head" "$hash"
+       cat "$TEMPLATE"
+       printf '\n```diff\n'
+       git diff --no-color --no-ext-diff "$base" "$head"
+       printf '```\n'
+     } > "$out"
+     node "$COMPANION" task --background --fresh --model gpt-5.6-sol --effort high --prompt-file "$out"
+     ```
+     The first line is what tech-lead's audit finds and re-hashes; the diff after it is the same one `gh pr diff` shows (merge base to head). `task` without `--write` runs read-only.
+  3. `node "$COMPANION" status <job-id> --wait --timeout-ms 540000` (repeat until the job leaves `running`), then `node "$COMPANION" result <job-id>`. Consolidate as in Step 4; a Blocker/Major goes to Step 6a, and the next round runs Codex again only when it, too, reaches this step.
+  4. **Usage limit** — the job fails with "You've hit your usage limit … try again at HH:MM", or tech-lead's preflight already saw one that has not reset: no second attempt, no question. Write «Codex пропущен: лимит до HH:MM (job <id>), правило 2026-10-08» into the review comment and go on to Step 6b. Any other failure: 2 attempts, then stop and return to tech-lead (direct invocation: ask the owner). Model and effort are pinned in the command, not taken from `~/.codex/config.toml`.
+
+The run must be at the PR's current `headRefOid` (`gh pr view <N> --json headRefOid`): if commits land after it, run it again. No LGTM without a completed run at the approved head, or the limit-skip line — tech-lead's audit re-hashes the diff from the marker (`tech-lead` → Mode 1).
 
 ### Step 6a: Blocker/Major found — post comments, return to Todo
 
@@ -126,7 +126,7 @@ gh pr comment <N> --repo ChaoticMelnik/binarius --body "Review passed. LGTM — 
 
 **Never attempt to approve the PR review yourself** (GitHub blocks self-approval regardless). Merging is a separate action from approving. Whether an agent may run the merge at all is recorded only in this repo's CLAUDE.md → Git-процесс; when it may, it is always after a per-merge `AskUserQuestion`:
 
-- **Spawned by tech-lead:** do not merge. Return to tech-lead: the verdict, the PR number, the head SHA approved, the id and marker of the Codex job that counts as the whole-feature pass (3a or a 6-pre rerun), `gh pr checks` state and the allowed merge methods (`gh api repos/ChaoticMelnik/binarius --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`). Tech-lead asks the owner and runs `gh pr merge`.
+- **Spawned by tech-lead:** do not merge. Return to tech-lead: the verdict, the PR number, the head SHA approved, the id of the 6-pre Codex job (or its limit-skip line), `gh pr checks` state and the allowed merge methods (`gh api repos/ChaoticMelnik/binarius --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`). Tech-lead asks the owner and runs `gh pr merge`.
 - **Invoked directly by the owner:** ask via `AskUserQuestion` immediately before this specific merge — a yes on an earlier PR never carries over. On an explicit yes: `gh pr merge <N>` with the chosen allowed method — never `--admin` or any other bypass flag. If it fails (conflicts, red checks, branch protection): report the failure and stop.
 
 Either way: before moving to Done, confirm the merge actually happened — `gh pr view <N> --json state,mergedAt`, proceed only once `state` is `"MERGED"`. Then move the issue to **Done** via `/github` skill.
@@ -139,9 +139,9 @@ Either way: before moving to Done, confirm the merge actually happened — `gh p
 
 `codegraph_context` if configured, otherwise a structured grep/read pass over the module layout — what domains exist (`apps/bot`, `apps/backend`, `apps/web`, `apps/trading-worker`, `packages/db`, `packages/shared`), key entry points, architecturally significant areas.
 
-### Steps B-D: Codex, security, code, simplification review
+### Steps B-D: Security, code, simplification review
 
-Same as Task Review's 3a/3b/3c/3d, scoped to the whole codebase instead of one diff, in the same order of launch: one message with the background Codex `task` (the prompt names the modules to read instead of inlining a diff; no marker needed) and the three `Agent` spawns with explicit `model`; wait for the agents; then poll Codex to completion.
+Same as Task Review's 3b/3c/3d, scoped to the whole codebase instead of one diff, in the same order of launch: one message with the three `Agent` spawns with explicit `model`; wait for them. No Codex — it runs only before a merge.
 
 ### Step E: Architecture audit
 
@@ -181,8 +181,8 @@ Return an issue to Todo (task mode) or flag as Blocker/Major (project mode) if t
 - Never merge a PR without asking via `AskUserQuestion` immediately before that specific merge — a prior yes never carries over to the next merge.
 - Never wait for permission to post review comments — post immediately.
 - Never move an issue directly to In Progress — Todo only, the Architect updates the plan first.
-- Never approve a PR with outstanding Blocker or Major findings, or without a completed full-diff Codex run at the approved head.
+- Never approve a PR with outstanding Blocker or Major findings, or without a completed 6-pre Codex run at the approved head (unless skipped under the usage-limit rule).
 - Never review an iteration's delta instead of the whole PR diff.
 - Never skip reading the Architect's plan before reviewing an issue.
 - Never open GitHub issues during project review — present recommendations only.
-- Never skip the Codex review checkpoint. If Codex is unavailable, state that explicitly in the review output.
+- Never skip the 6-pre Codex pass for any reason other than an exhausted usage limit, and never skip it silently — the review comment names the skip.
