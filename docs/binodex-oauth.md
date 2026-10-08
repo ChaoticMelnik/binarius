@@ -1,8 +1,10 @@
 # Binodex login (issue #9)
 
 How a Telegram user ends up with a linked broker account, and how that account keeps a usable
-access token afterwards. There are two ways in: the OAuth login below, and the email login
-(#162, [Email login](#email-login-issue-162)), which the bot offers first. The broker's own contract — the authorize page, the 120-second
+access token afterwards. There are two ways in: the email login (#162, [Email
+login](#email-login-issue-162)), the only one the bot offers since #314, and the OAuth login
+below, whose start the bot no longer calls — the callback, the confirmation and the refresh stay
+for what it already issued and linked. The broker's own contract — the authorize page, the 120-second
 single-use code, the server-to-server code exchange and the token refresh — was checked against
 the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contract-verified-2026-10-01).
 
@@ -14,7 +16,7 @@ the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contra
 | Storage   | `packages/db/src/oauth-ops.ts`            | state rows, the linking transaction, rotation and revocation                                     |
 | Starter pack | `packages/db/src/link-bonus-ops.ts`    | `LINK_BONUS_TOKENS` and `grantLinkBonus`, called by the confirmation (#10) and by the email login (#162) |
 | Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token`, the refresh on `POST /v1/broker/user-auth/refresh`, and the email `send-code` and `login`, one attempt each, under a real abort; `BROKER_ENDPOINTS` is the one table of paths and statuses |
-| Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/start`, `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`, `POST /auth/binodex/email/send-code`, `POST /auth/binodex/email/login` |
+| Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`, `POST /auth/binodex/email/send-code`, `POST /auth/binodex/email/login` |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
 | Push      | `apps/backend/src/auth/link-notifier.ts`  | the one `sendMessage` after the callback (#128), on the public bot's token, without polling it   |
 | Telegram proof | `apps/backend/src/auth/telegram-init-data.ts` | the signature and age check of the Mini App's `initData` the callback carries (#113); its limits live in `apps/backend/src/auth/oauth-timing.ts` |
@@ -24,10 +26,9 @@ the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contra
 ## Sequence
 
 ```
-bot ──POST /auth/binodex/start (internal token)──▶ backend
-        │                                   creates oauth_states row (hash only, 10 min TTL)
-        ◀── { authorizeUrl, state, expiresAt, miniAppUrl (https redirect URI only) }
-bot ──web_app button on miniAppUrl (a url button on authorizeUrl without it)──▶ user
+(until #314) bot ──POST /auth/binodex/start──▶ backend: an oauth_states row (hash only, 10 min
+        TTL) and { authorizeUrl, state, expiresAt, miniAppUrl }; the route is gone since #314 (404)
+bot ──web_app button on miniAppUrl (a url button on authorizeUrl without it)──▶ user  (until #314)
 Mini App ──GET /oauth/login?authorize=…──▶ web: checks authorize, renders the page
 page ──location.replace(authorizeUrl), same webview──▶ binodex.app  (client_id, redirect_uri, state, ref)
 broker ──302 <redirect_uri>?code&state──▶ web: GET /oauth/callback, the callback page
@@ -119,16 +120,17 @@ distributed one is a follow-up.
 
 ## The Mini App pages (#114)
 
-`initData` exists only inside a Mini App, so the login runs in one: the bot's button is a
-`web_app` button on the `miniAppUrl` the start answered, and both the broker's page and the
+`initData` exists only inside a Mini App, so the login runs in one: the bot's button was a
+`web_app` button on the `miniAppUrl` the start answered (until #314; nothing links to the login
+page since), and both the broker's page and the
 callback page load in that one webview. `apps/web` serves the two pages (`apps/web/src/oauth/`);
 the paths, the query parameter name, the body limit and the callback budget are constants in
 `packages/shared/src/oauth.ts`.
 
-**The login page (`GET /oauth/login?authorize=<authorizeUrl>`).** The backend builds `miniAppUrl`
-from the redirect URI's origin and `OAUTH_LOGIN_PATH`, with the authorize URL as the parameter,
-and only for an `https:` redirect URI: Telegram takes only https in a `web_app` button, so the
-local stack's loopback redirect gets the old `url` button instead. The page refuses — 400, a
+**The login page (`GET /oauth/login?authorize=<authorizeUrl>`).** Until #314 the backend built
+`miniAppUrl` from the redirect URI's origin and `OAUTH_LOGIN_PATH`, with the authorize URL as the
+parameter, and only for an `https:` redirect URI: Telegram takes only https in a `web_app` button,
+so the local stack's loopback redirect got the old `url` button instead. The page refuses — 400, a
 notice, and a one-word `reason` in the log, never the value — any `authorize` that is longer
 than 2 048 characters, not a URL, not `https:`, not exactly the configured
 `BROKER_OAUTH_AUTHORIZE_URL`'s origin and path, without a `state` of 1-256 characters, or whose
@@ -207,7 +209,7 @@ the forward (`OAUTH_CALLBACK_REQUEST_TIMEOUT_MS`), above the budget so it never 
 that is still going to happen; its shutdown budget is 11 s and the compose `stop_grace_period`
 14 s. Both chains throw at import when out of order.
 
-**The first live test**, on a phone with the VPS deployed and the local stack stopped (they share
+**The first live test** (before #314), on a phone with the VPS deployed and the local stack stopped (they share
 the bot token): `/start` → «🌐 Войти через сайт Binodex» → the `web_app` button → the broker's login
 inside the Mini App → the callback page → «Готово» → the push with «✅ Подтвердить». It checks the
 two assumptions nothing here can: (a) the webview keeps `sessionStorage` across `binodex.app`
@@ -315,7 +317,7 @@ to the chat.
 | a re-login of an account that was `active` or `revoked` (it is `active` again) | 200 | «✅ Аккаунт Binodex подключён!», no button: nothing is paid on this path |
 | `user_blocked` | 409 | «🔒 Доступ ограничен…» |
 | `broker_account_taken` | 409 | «❌ Этот аккаунт Binodex уже подключён к другому пользователю Telegram…», to the user who started the login, never to the account's owner |
-| `invalid_code`, `broker_unavailable`, `broker_contract_violation` | 400 / 502 | «❌ Не удалось завершить вход через сайт Binodex. Попробуй ещё раз через /start.» — the state is spent, so a retry needs a new one |
+| `invalid_code`, `broker_unavailable`, `broker_contract_violation` | 400 / 502 | «❌ Не удалось завершить вход в Binodex. Подключи аккаунт по почте: /start» — the state is spent; the bot offers the email login |
 | `telegram_user_mismatch` | 403 | the same «❌ Не удалось завершить вход…», to the state's owner only, never to the Telegram user the `initData` names; the state is spent and the code was never exchanged |
 | `validation`, `invalid_telegram_auth` | 400 / 401 | none: the state has not been read, so there is no addressee |
 | `invalid_state` | 400 | none: the state is what names the addressee |
@@ -342,35 +344,8 @@ transport error's identity, and the outcome's kind (`push`) — no state, code, 
 grammY's transport error wraps a URL with the token in it, and the request payload holds the
 email on the button.
 
-To exercise the route without the Mini App, call the backend directly; the route needs
-`initData` signed with `TELEGRAM_BOT_TOKEN`. `apps/backend/src/auth/testing/init-data.ts` signs one
-for any Telegram id, the way Telegram builds it. From the repository root, with the backend
-running and Node from `.node-version`:
-
-```sh
-set -a; . ./.env; set +a   # INTERNAL_API_TOKEN and TELEGRAM_BOT_TOKEN
-BACKEND=http://127.0.0.1:3000
-MY_ID=<your Telegram id>
-sign() {
-  TELEGRAM_USER_ID="$1" pnpm --silent --filter @binarius/backend exec tsx -e "import { signInitData } from './src/auth/testing/init-data.ts'; console.log(signInitData({ botToken: process.env.TELEGRAM_BOT_TOKEN, telegramUserId: BigInt(process.env.TELEGRAM_USER_ID) }))"
-}
-start() {
-  curl -s -X POST "$BACKEND/auth/binodex/start" -H "authorization: Bearer $INTERNAL_API_TOKEN" \
-    -H 'content-type: application/json' -d "{\"telegramUserId\":\"$MY_ID\"}"
-}
-callback() {   # state, code, Telegram id the initData names
-  curl -s -w ' %{http_code}\n' -X POST "$BACKEND/auth/binodex/callback" \
-    -H 'content-type: application/json' \
-    -d "$(jq -n --arg state "$1" --arg code "$2" --arg initData "$(sign "$3")" \
-      '{state: $state, code: $code, initData: $initData}')"
-}
-```
-
-- Without the broker: `callback "$(start | jq -r .state)" any-code 1` answers
-  `{"error":"telegram_user_mismatch"} 403`, and your chat gets «❌ Не удалось завершить вход…».
-- With the broker: `start`, log in at its `authorizeUrl`, take the code from the address bar (as
-  in the live check below) and run `callback <state> <code> "$MY_ID"` within 120 seconds: the
-  chat gets the message for that outcome.
+Since #314 no route issues a state, so a manual callback answers `invalid_state`;
+`routes.db.test.ts` seeds states with `createOAuthState`.
 
 ## The starter pack
 
@@ -732,8 +707,8 @@ whitelist drops those fields, and the default level is `info` rather than `trace
 claim this project makes is the narrower one, because the earlier rounds of review were spent on
 claims that were wider than the code.
 
-A state legitimately appears in what `start` returns — inside the authorize URL and as a field of
-its own, which is what the bot passes on. It is absent from callback responses, from errors, and
+Until #314 a state appeared in what `start` returned — inside the authorize URL and as a field of
+its own; nothing returns one now. It is absent from callback responses, from errors, and
 from every line this application or `SafeLogController` writes.
 
 ## Configuration
@@ -745,11 +720,11 @@ and `WEB_PUBLIC_URL` are read by `web`:
 | Variable                                   | Meaning                                                                                                    |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `BROKER_CLIENT_ID`, `BROKER_CLIENT_SECRET` | the OAuth client registered in the broker's cabinet (#8)                                                   |
-| `BROKER_OAUTH_AUTHORIZE_URL`               | the broker's authorize page; `https:` only. Read by `backend`, which builds the URL, and by `web`, whose login page navigates only to it; compose gives both one default through a YAML anchor |
+| `BROKER_OAUTH_AUTHORIZE_URL`               | the broker's authorize page; `https:` only. Read by `backend`, which still checks it at startup though no route builds the URL since #314, and by `web`, whose login page navigates only to it; compose gives both one default through a YAML anchor |
 | `BROKER_API_BASE_URL`                      | the API host every `POST /v1/broker/...` call in `BROKER_ENDPOINTS` lives on: `https://api.binodex.app`; `https:` only. `binodex.app` without `api.` answers 405 to every API call. The pairs catalog's `GET /v1/broker/pairs/binary` uses the same base (docs/pairs-catalog.md) |
-| `BROKER_OAUTH_REDIRECT_URI`                | must match the value registered with the client byte for byte (`localhost` is not `127.0.0.1`), and it must be spelled exactly `scheme://host[:port]/oauth/callback`, `/oauth/callback` being the page `web` serves — no whitespace, control or invisible format characters (a CRLF `.env` leaves a `\r`), query, fragment, `\`, `%`, `@` or dot-segments; the backend refuses to start otherwise. `http:` only for `127.0.0.1` or `localhost`, and then the bot sends a plain link, not the Mini App. Compose defaults it to `<WEB_PUBLIC_URL>/oauth/callback`, and a login completes only when it equals that value of the same deployment; set it only to match the spelling registered with the broker, which the backend sends byte for byte |
+| `BROKER_OAUTH_REDIRECT_URI`                | must match the value registered with the client byte for byte (`localhost` is not `127.0.0.1`), and it must be spelled exactly `scheme://host[:port]/oauth/callback`, `/oauth/callback` being the page `web` serves — no whitespace, control or invisible format characters (a CRLF `.env` leaves a `\r`), query, fragment, `\`, `%`, `@` or dot-segments; the backend refuses to start otherwise. `http:` only for `127.0.0.1` or `localhost`, and then the bot sent a plain link, not the Mini App (until #314; the backend still checks the value at startup, and the code exchange sends it). Compose defaults it to `<WEB_PUBLIC_URL>/oauth/callback`, and a login completes only when it equals that value of the same deployment; set it only to match the spelling registered with the broker, which the backend sends byte for byte |
 | `WEB_PUBLIC_URL`                           | `web` only: the origin its pages are served from (the admin pages and the Mini App pages), spelled exactly `scheme://host[:port]` — no whitespace, control or invisible format characters, `/`, `?`, `#`, `\`, `%`, `@` or dot-segments; see docs/staff-login.md → Configuration |
-| `BROKER_PARTNER_REF`                       | the short partner code, `<code>` from `https://bdclick.app/smart/<code>` — never the link: `[A-Za-z0-9_-]`, 1-64 chars, checked at backend startup (`parsePartnerCode` in `apps/backend/src/env.ts`). Sent as `ref` on every authorization request and as `partner_code` on every email login, so a new user registers under this installation's partner account |
+| `BROKER_PARTNER_REF`                       | the short partner code, `<code>` from `https://bdclick.app/smart/<code>` — never the link: `[A-Za-z0-9_-]`, 1-64 chars, checked at backend startup (`parsePartnerCode` in `apps/backend/src/env.ts`). Sent as `partner_code` on every email login (and as `ref` on authorization requests until #314), so a new user registers under this installation's partner account |
 | `TOKEN_ENCRYPTION_KEY`                     | 32 bytes, base64; `openssl rand -base64 32`                                                                |
 | `TOKEN_ENCRYPTION_KEY_ID`                  | names the key for rotation; no `\|`, no whitespace (the cipher binds with it)                              |
 | `TELEGRAM_BOT_TOKEN`                       | the public bot's token, which `bot` polls; the backend only sends the push after the callback on it and checks the Mini App's `initData` with it. No whitespace; the backend refuses to start when it equals `ADMIN_BOT_TOKEN` |
@@ -778,8 +753,8 @@ not.
 
 ## Boundaries
 
-- **#22** owns `/start` and the button that calls `POST /auth/binodex/start`; it hands the user
-  an authorize URL and nothing else (docs/bot-start.md).
+- **#22** owned `/start`'s button that called `POST /auth/binodex/start`; #314 removed both
+  (docs/bot-start.md).
 - **#128** is the backend's push after the callback ([The push after the callback](#the-push-after-the-callback-128)):
   a `sendMessage` to the Telegram id restored from the state, on every outcome after the state.
 - **#113** is the backend's `initData` check on the callback ([Why the callback is

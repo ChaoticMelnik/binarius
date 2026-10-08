@@ -1,8 +1,8 @@
 # /start and the welcome screen
 
 The bot's first screen (#22): who the user is, where they came from, and the action the screen
-offers — connecting a Binodex account, by email first (#171) and through the broker's site second
-— or, when a link is waiting, confirming it (#10). Linking itself, the email login's backend
+offers — connecting a Binodex account by email (#171; the site sign-in is hidden since #314) — or,
+when a link is waiting, confirming it (#10). Linking itself, the email login's backend
 routes, the confirmation and the starter pack are described in
 [binodex-oauth.md](binodex-oauth.md); this document covers what the bot sends and calls.
 
@@ -65,9 +65,8 @@ API over a shared bearer.
                                     per link
          hasActiveBrokerAccount   → POST /trading/access → the status card, pinned
                                     (bot-menu.md)
-         otherwise                → welcome (video caption when configured) + two buttons:
-                                    "🔗 Подключить аккаунт Binodex" (connect),
-                                    "🌐 Войти через сайт Binodex" (oauth)
+         otherwise                → welcome (video caption when configured) + one button:
+                                    "🔗 Подключить аккаунт Binodex" (connect)
 
 tap "🔗 Подключить аккаунт Binodex" (callback data connect)
   bot  → answerCallbackQuery, dialog → address step, "📧 Пришли адрес электронной почты…"
@@ -100,12 +99,9 @@ tap "🔄 Запросить код ещё раз" (callback data resend)
          any other 4xx → "⚠️ Сервис временно недоступен…" + the same two buttons, the code step
          stays: the backend refused before the letter, and the code already sent is still good
 
-tap "🌐 Войти через сайт Binodex" (callback data oauth)
-  bot  → answerCallbackQuery ∥ POST /auth/binodex/start { telegramUserId }
-  back → { authorizeUrl, state, expiresAt, miniAppUrl? }
-  bot  → message with a web_app button on miniAppUrl, which opens apps/web's login page as a
-         Mini App (#114); without miniAppUrl — an http redirect URI, the local stack — a url
-         button on authorizeUrl, because Telegram opens only https Mini Apps
+tap an old "🌐 Войти через сайт Binodex" (callback data oauth), hidden since #314
+  bot  → answerCallbackQuery, then editMessageReplyMarkup: the old message loses its keyboard;
+         nothing is sent and the backend is not called
 
 tap "✅ Подтвердить" (callback data confirm:<account id>) — from /start, or from the backend's
 push after an OAuth login (#128): the same button, handled the same way
@@ -126,17 +122,17 @@ The refusals the user can act on have their own text — `broker_account_not_fou
 временно недоступен" with a warn line carrying the backend status.
 
 Buttons sent before #171 carry `connect`, so they now open the email dialog; an old message keeps
-its older label (without the emoji), which still says what happens.
+its older label (without the emoji), which still says what happens. Buttons sent before #314 under
+the welcome, `/account` and the no-account refusals of the demo also carry `oauth`, the site sign-in: a press only stops the spinner and
+removes that message's keyboard (`removeLegacyKeyboard`, as for the demo's old duration buttons,
+[bot-demo.md](bot-demo.md)), so the user starts again from `/start`; an old `/account` message
+loses its confirm buttons with it, and `/start` and `/account` show them again. A refused edit is
+an info line.
 
-What happens after the tap is the Mini App's (#114, [binodex-oauth.md → The Mini App
-pages](binodex-oauth.md#the-mini-app-pages-114)): `apps/web`'s login page navigates to the broker
-inside the Mini App, and its callback page sends the code back. The button belongs to the public
-bot because `TELEGRAM_BOT_TOKEN` is what signs the Mini App's launch data. The backend accepts that code only with the
-Mini App's signed `initData` of the Telegram user the login belongs to (#113,
-[binodex-oauth.md → Why the callback is public](binodex-oauth.md#why-the-callback-is-public)). Right after the callback the backend itself sends the user the outcome
-(#128, [binodex-oauth.md → The push after the callback](binodex-oauth.md#the-push-after-the-callback-128)):
-for a waiting link, the same prompt and button `/start` shows; a lost push is made up for by
-`/start`.
+Since #314 the bot offers no site sign-in, and `POST /auth/binodex/start` is gone (404). The Mini
+App pages, the callback and the push stay for a state issued before that: a callback for one still
+links a `pending` account, and the push and `/start` show its confirm button (#114, #113, #128 —
+[binodex-oauth.md](binodex-oauth.md)).
 
 ## Email dialog
 
@@ -624,8 +620,8 @@ blocks, one blank line apart:
 - `TEXTS.helpAbout` — the header and the three feature lines, the catalog's `featureLines`
   fragment, the same one the account card nests, so the two copies cannot drift
   (`profileDescription` keeps its own plain copy, which Telegram does not parse);
-- `TEXTS.helpConnect` — `/start` and the two ways to connect, each button quoted by its label
-  through the `connectButton` and `oauthButton` fragments;
+- `TEXTS.helpConnect` — `/start` and the connect button, quoted by its label through the
+  `connectButton` fragment;
 - `TEXTS.helpCommands` and one `/<command> — <description>` line per entry of `BOT_COMMANDS`, in
   the menu's order, with no emoji. `texts.ts` cannot import the list (`commands.ts` imports
   `LABELS` from it), so `bot.ts` passes it in. Both holes of a line are escaped; Telegram shows
@@ -763,8 +759,9 @@ query answered, the edit refused, the screen sent anew — [bot-demo.md](bot-dem
 «📊 Анализ», two backend calls and up to four Bot API calls («⏳», the signal, the result); the
 stake button is four backend calls (the catalog and the access read together but counted one after
 the other, the intent and its one retry) and two Bot API calls, and «🔄 Обновить статус» two backend
-calls and up to three Bot API calls ([bot-demo-trade.md](bot-demo-trade.md)); the oauth and resend buttons are one
-backend call and two Bot API calls each; the confirm button is one backend call and up to five
+calls and up to three Bot API calls ([bot-demo-trade.md](bot-demo-trade.md)); the resend button is one
+backend call and two Bot API calls; an old oauth button (#314) is no backend call and two Bot API
+calls (the query answered, the keyboard removed); the confirm button is one backend call and up to five
 Bot API calls (the query answered, then the account card: the photo refused, the text, the unpin,
 the pin); the connect button is no backend call and two Bot API calls; a `my_chat_member` update
 is one backend call and no Bot API call (5 s); a text on the address step is one backend call and
@@ -836,8 +833,9 @@ written only when a step really did run out of time.
 - The staff bot's profile (`apps/backend/src/admin`, `ADMIN_BOT_TOKEN`) — not registered.
 - **#31** — referral start links; they take their own payload prefix, and the format is not
   fixed here.
-- **#114** — the Mini App login and callback pages in `apps/web` behind the `web_app` button; the
-  `initData` check they rely on is the backend's (#113, binodex-oauth.md).
+- **#114** — the Mini App login and callback pages in `apps/web` behind the `web_app` button the
+  bot no longer sends (#314); the `initData` check they rely on is the backend's (#113,
+  binodex-oauth.md).
 - **#35** — end-to-end coverage against the mock broker.
 - **#123, #124, #202** — the senders that claim with `acceptsMailing()`, record each mailing as a
   `sent` job and call `recordTelegramSendFailure` ([Blocking the bot](#blocking-the-bot-119)).
