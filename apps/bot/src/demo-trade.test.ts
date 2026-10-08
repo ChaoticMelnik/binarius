@@ -25,13 +25,14 @@ import { BackendError, BackendErrorCode, type BackendClient } from './backend-cl
 import { createBot } from './bot';
 import {
   DEMO_GROUPS_CALLBACK_DATA,
+  DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
   stakeCallbackData,
   stakeFingerprint,
   stakeMenuCallbackData,
 } from './demo';
-import { intentCallbackData } from './demo-trade';
+import { intentCallbackData, intentKeyboard } from './demo-trade';
 import type { IntentTrackRequest } from './intent-tracker';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
@@ -139,6 +140,12 @@ const BACK_ROWS = [
   MENU_ROW,
 ];
 const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
+// the end of the path (#350): the analysis of the same pair and duration, the signals, the menu
+const END_ROWS = [
+  [button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15))],
+  [button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA)],
+  MENU_ROW,
+];
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5))],
@@ -207,11 +214,11 @@ describe('the stake button', () => {
     });
   });
 
-  it("hands the tracker an edit of the status message's own id, keeping its button", async () => {
+  it("hands the tracker an edit of the status message's own id, its keyboard following the view", async () => {
     const { press, calls, intentTracker } = setup();
     await press(STAKE);
     const entry = intentTracker.track.mock.calls[0]?.[0] as IntentTrackRequest;
-    await entry.edit(telegramHtml`edited`);
+    await entry.edit(telegramHtml`edited`, INTENT_VIEW);
 
     const edit = payloadOf(calls, 'editMessageText');
     expect(edit).toMatchObject({
@@ -221,6 +228,12 @@ describe('the stake button', () => {
       parse_mode: 'HTML',
     });
     expect(rowsOf(edit)).toEqual(REFRESH_ROWS);
+
+    // #350: the tracker's last edit draws the end of the path
+    await entry.edit(telegramHtml`settled`, intentView({ status: TradeIntentStatus.Settled }));
+    expect(
+      rowsOf(calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload),
+    ).toEqual(END_ROWS);
   });
 
   it('sends the same key when the same button is pressed twice, and shows the replay', async () => {
@@ -699,5 +712,26 @@ describe('the refresh button', () => {
     await press(REFRESH, 'group');
     expect(calls).toEqual([]);
     expect(readIntent).not.toHaveBeenCalled();
+  });
+});
+
+// #350: the keyboard follows the status: the refresh while the trade can move, the end of the
+// path once the tracker stops
+describe('intentKeyboard', () => {
+  const rows = (status: TradeIntentStatus) =>
+    intentKeyboard(intentView({ status })).inline_keyboard;
+
+  it('offers only the refresh while the tracker follows the trade', () => {
+    expect(rows(TradeIntentStatus.Queued)).toEqual(REFRESH_ROWS);
+    expect(rows(TradeIntentStatus.Submitting)).toEqual(REFRESH_ROWS);
+  });
+
+  it('keeps the refresh under the end of the path while an accepted trade can still settle', () => {
+    expect(rows(TradeIntentStatus.Accepted)).toEqual([...REFRESH_ROWS, ...END_ROWS]);
+  });
+
+  it('drops the refresh once the trade has no way left to move', () => {
+    expect(rows(TradeIntentStatus.Settled)).toEqual(END_ROWS);
+    expect(rows(TradeIntentStatus.Rejected)).toEqual(END_ROWS);
   });
 });

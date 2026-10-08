@@ -45,8 +45,9 @@ export interface IntentTrackRequest {
   symbol: string;
   // what the message shows now
   view: TradeIntentView;
-  // edits the status message, keeping its keyboard
-  edit: (text: TelegramHtml) => Promise<unknown>;
+  // edits the status message; the keyboard follows the view (#350: the end of the path once
+  // tracking stops)
+  edit: (text: TelegramHtml, view: TradeIntentView) => Promise<unknown>;
 }
 
 export interface IntentTracker {
@@ -131,7 +132,7 @@ export function createIntentTracker({
   // ones only counted; anything else is a bug and stops the entry.
   async function editTo(entry: Entry, text: TelegramHtml, key: string): Promise<boolean> {
     try {
-      await entry.edit(text);
+      await entry.edit(text, entry.view);
       entry.rendered = key;
       return true;
     } catch (error) {

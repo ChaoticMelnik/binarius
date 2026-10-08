@@ -10,6 +10,7 @@ import {
   type PairView,
   type BotStaticHtmlKey,
   type TelegramHtml,
+  TRADE_INTENT_TRANSITIONS,
   type TradeIntentView,
   type TradingAccessResponse,
 } from '@binarius/shared';
@@ -31,7 +32,13 @@ import {
   type StakeData,
 } from './demo';
 import { formatStake } from './format';
-import { backToAnalysisKeyboard, menuKeyboard, retryKeyboard, supportKeyboard } from './keyboards';
+import {
+  appendEndOfPath,
+  backToAnalysisKeyboard,
+  menuKeyboard,
+  retryKeyboard,
+  supportKeyboard,
+} from './keyboards';
 import { readDemoTrade, type DemoTradeRead } from './demo-catalog';
 import { INTENT_NOT_FOUND, TRACKER_STOP_STATUSES, type IntentTracker } from './intent-tracker';
 import { telegramErrorFields, type Logger } from './logging';
@@ -48,8 +55,19 @@ export const intentCallbackData = (intentId: string): string => `intent:${intent
 export const INTENT_CALLBACK_PATTERN =
   /^intent:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
-export const intentKeyboard = (intentId: string): InlineKeyboard =>
-  new InlineKeyboard().text(LABELS.refreshIntentButton, intentCallbackData(intentId));
+// «🔄 Обновить статус» while the trade can still move (accepted until it settles); once the
+// tracker stops following it, the end of the path (#350): a new analysis, the signals, the menu.
+export function intentKeyboard(
+  view: Pick<TradeIntentView, 'id' | 'status' | 'assetId' | 'durationSec'>,
+): InlineKeyboard {
+  const keyboard =
+    TRADE_INTENT_TRANSITIONS[view.status].length > 0
+      ? new InlineKeyboard().text(LABELS.refreshIntentButton, intentCallbackData(view.id))
+      : new InlineKeyboard();
+  return TRACKER_STOP_STATUSES.has(view.status)
+    ? appendEndOfPath(keyboard, view.assetId, view.durationSec)
+    : keyboard;
+}
 
 export interface DemoTradeDeps {
   backend: Pick<BackendClient, 'readPairs' | 'readTradingAccess' | 'createIntent' | 'readIntent'>;
@@ -212,7 +230,7 @@ export function createDemoTradeComposer<C extends Context>({
     const symbol = catalog.ok
       ? (catalog.value.pairs.find((pair) => pair.id === view.assetId)?.symbol ?? null)
       : null;
-    await refreshInPlace(ctx, intentStatusText(symbol, view), intentKeyboard(view.id));
+    await refreshInPlace(ctx, intentStatusText(symbol, view), intentKeyboard(view));
   });
 
   async function create(request: CreateTradeIntentRequest): Promise<CreateOutcome> {
@@ -341,16 +359,19 @@ export function createDemoTradeComposer<C extends Context>({
   // (a replay of a finished trade). A replay of a live intent the tracker already follows sends
   // this message untracked: track() of a tracked id is a no-op.
   async function sendStatus(ctx: Context, pair: PairView, intent: TradeIntentView): Promise<void> {
-    const reply_markup = intentKeyboard(intent.id);
-    const sent = await replyHtml(ctx, intentStatusText(pair.symbol, intent), { reply_markup });
+    const sent = await replyHtml(ctx, intentStatusText(pair.symbol, intent), {
+      reply_markup: intentKeyboard(intent),
+    });
     if (TRACKER_STOP_STATUSES.has(intent.status)) return;
     intentTracker.track({
       intentId: intent.id,
       telegramUserId: intent.telegramUserId,
       symbol: pair.symbol,
       view: intent,
-      edit: (text) =>
-        editMessageTextByIdHtml(ctx.api, sent.chat.id, sent.message_id, text, { reply_markup }),
+      edit: (text, view) =>
+        editMessageTextByIdHtml(ctx.api, sent.chat.id, sent.message_id, text, {
+          reply_markup: intentKeyboard(view),
+        }),
     });
   }
 

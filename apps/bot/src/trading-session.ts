@@ -23,7 +23,13 @@ import {
   sessionStartDataOf,
   stakeMenuCallbackData,
 } from './demo';
-import { backToAnalysisKeyboard, menuKeyboard, supportKeyboard, withMenu } from './keyboards';
+import {
+  appendEndOfPath,
+  backToAnalysisKeyboard,
+  menuKeyboard,
+  supportKeyboard,
+  withMenu,
+} from './keyboards';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
@@ -55,12 +61,17 @@ export const sessionKeyboard = (
   if (view.status !== TradingSessionStatus.Stopped) {
     return keyboard.text(LABELS.sessionStopButton, sessionStopCallbackData(view.id));
   }
-  if (view.settings === null) return keyboard;
+  if (view.settings === null) return withMenu(keyboard);
   const durationSec = durationOf(String(view.settings.durationSec));
-  if (durationSec === undefined) return keyboard;
-  return keyboard
-    .row()
-    .text(LABELS.sessionAgainButton, sessionStartCallbackData(view.settings.assetId, durationSec));
+  if (durationSec !== undefined) {
+    keyboard
+      .row()
+      .text(
+        LABELS.sessionAgainButton,
+        sessionStartCallbackData(view.settings.assetId, durationSec),
+      );
+  }
+  return appendEndOfPath(keyboard, view.settings.assetId, view.settings.durationSec);
 };
 
 export interface TradingSessionDeps {
