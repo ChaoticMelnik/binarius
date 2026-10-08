@@ -31,7 +31,7 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/link-notifier.test.t
 
 | `NoNextStepReason` | Where | Why |
 |---|---|---|
-| `in_progress` | the analysis' «⏳ Анализирую…» (`demo.ts`, an edit, or a new message when the summary is gone) | the result replaces it with its keyboard within the signal's budget; a keyboard on it would let «📊 Анализ» be pressed twice |
+| `in_progress` | the analysis' «⏳ Анализирую…» (`demo.ts`, an edit, or a new message when the summary is gone) | the result replaces it with its keyboard within the signal's budget; a keyboard on it would let «📊 Анализ» be pressed twice. Residual: when the result's edit fails in transport or is refused for an unlisted reason, the bot sends nothing more (#126: a second message after an unknown delivery is worse than none), and «⏳» stays without a keyboard; the summary above it and /menu remain |
 
 ## Shared buttons
 
@@ -90,7 +90,7 @@ on any message whose «🔄 Повторить» carries one of those prefixes, 
 | the session's refresh or stop failed | 🔄 Обновить (`session:<id>`) · 🏠 В меню; `sessionStatusUnavailable` (404) → 🏠 В меню |
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить статус; the tracker's last edit at its deadline adds 🏠 В меню, and a 404 while tracking leaves 🏠 В меню only |
 | trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
-| session status, live | 🔄 Обновить · ⏹ Остановить сессию |
+| session status, live | 🔄 Обновить · ⏹ Остановить сессию; a 404 while tracking leaves 🏠 В меню only |
 | session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню; without `settings` only 🔄 Обновить · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |
 | `stakeInputInvalid` | the picker's way back |
 
