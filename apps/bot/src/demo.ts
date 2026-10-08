@@ -114,9 +114,10 @@ export const sessionStartCallbackData = (assetId: number, durationSec: DemoDurat
   `${SESSION_START_PREFIX}${assetId}:${durationSec}`;
 // The button shows only where a session of DEFAULT_SESSION_TRADES fits the worker's deadline
 // (after #313 every duration of DEMO_DURATIONS_SEC: 5 × (15 + 120) s ≤ 1 h); the handler checks
-// again, so an old or forged datum starts nothing.
-export const sessionFits = (durationSec: number): boolean =>
-  sessionFitsDeadline(DEFAULT_SESSION_TRADES, durationSec);
+// again, so an old or forged datum starts nothing. The count is a parameter so a test can reach
+// the refusal: with today's set every duration fits.
+export const sessionFits = (durationSec: number, trades = DEFAULT_SESSION_TRADES): boolean =>
+  sessionFitsDeadline(trades, durationSec);
 // 48 bits: unique among one user's own renders is all it needs, since the key is per user
 export const newStakeNonce = (): string => randomBytes(6).toString('hex');
 
@@ -124,9 +125,8 @@ export const newStakeNonce = (): string => randomBytes(6).toString('hex');
 // one stops the spinner like a forged id; a duration is one of DEMO_DURATIONS_SEC by the pattern.
 // Each duration-carrying shape is built from an alternation, so the legacy patterns (#313) are
 // the same shapes over LEGACY_DEMO_DURATIONS_SEC.
-export const durationAlternation = (durations: readonly number[]): string => durations.join('|');
-const DURATIONS = durationAlternation(DEMO_DURATIONS_SEC);
-const LEGACY_DURATIONS = durationAlternation(LEGACY_DEMO_DURATIONS_SEC);
+const DURATIONS = DEMO_DURATIONS_SEC.join('|');
+const LEGACY_DURATIONS = LEGACY_DEMO_DURATIONS_SEC.join('|');
 const DEMO_PAGE_PATTERN = /^demo:t:([a-z]{1,16}):(\d{1,4})$/;
 const DEMO_ASSET_PATTERN = /^demo:a:(\d{1,10})$/;
 const demoDurationPattern = (durations: string) =>
@@ -157,9 +157,15 @@ const LEGACY_DURATION_PATTERNS = [
 // pressed again; nothing is sent. A refusal of the edit (not modified, the message gone) changes
 // nothing for the user.
 export async function removeLegacyKeyboard(ctx: Context, logger: Logger): Promise<void> {
+  // the three callers share the lines, so the pressed data says which old button it was
+  const callbackData = ctx.callbackQuery?.data;
   await ctx.answerCallbackQuery().catch((error: unknown) => {
     logger.warn(
-      { ...errorLogFields(error), ...telegramErrorFields(error, 'answerCallbackQuery') },
+      {
+        ...errorLogFields(error),
+        ...telegramErrorFields(error, 'answerCallbackQuery'),
+        callbackData,
+      },
       'answering the callback query failed',
     );
   });
@@ -168,7 +174,11 @@ export async function removeLegacyKeyboard(ctx: Context, logger: Logger): Promis
   } catch (error) {
     if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
     logger.info(
-      { ...errorLogFields(error), ...telegramErrorFields(error, 'editMessageReplyMarkup') },
+      {
+        ...errorLogFields(error),
+        ...telegramErrorFields(error, 'editMessageReplyMarkup'),
+        callbackData,
+      },
       'the keyboard of an old button was not removed',
     );
   }
@@ -216,11 +226,12 @@ export function stakeDataOf(match: RegExpMatchArray | string): StakeData | undef
 // the duration does not fit a session.
 export function sessionStartDataOf(
   match: RegExpMatchArray | string,
+  trades = DEFAULT_SESSION_TRADES,
 ): { assetId: number; durationSec: DemoDurationSec } | undefined {
   if (typeof match === 'string') return undefined;
   const assetId = assetIdOf(match[1]);
   const durationSec = durationOf(match[2]);
-  if (assetId === undefined || durationSec === undefined || !sessionFits(durationSec)) {
+  if (assetId === undefined || durationSec === undefined || !sessionFits(durationSec, trades)) {
     return undefined;
   }
   return { assetId, durationSec };
@@ -536,12 +547,20 @@ export function createDemoComposer<C extends Context>({
   }
 
   // DEMO_PAGE_SIZE pairs in two columns, then «◀️» where a page before exists, «↩️ Типы», «▶️»
-  // where a page after exists. A type with no open pair says it is closed by the schedule.
+  // where a page after exists. A type with no open pair says it is closed by the schedule; one
+  // with no listed pair - an old «💱 …» button, or «↩️ Активы» from a pair that admits none -
+  // says there is no pair for short trades (#329).
   function pageScreen(
     catalog: PairsCatalogResponse,
     group: DemoAssetGroup,
     requested: number,
   ): DemoScreen {
+    if (pairsOf(catalog, group).length === 0) {
+      return {
+        text: catalog.pairs.length === 0 ? TEXTS.demoCatalogUnavailable : TEXTS.demoNoShortPairs,
+        keyboard: backToGroups(),
+      };
+    }
     const open = openPairsOf(catalog, group, now());
     if (open.length === 0) {
       return {

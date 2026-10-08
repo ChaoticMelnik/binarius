@@ -61,6 +61,7 @@ import {
   LINK_REVOKED,
   PAIR_CLOSED,
   PAIR_EURUSD,
+  PAIR_MINUTE_ONLY,
   PAIRS_RESPONSE,
   SIGNAL_DATA_REFUSAL,
   SIGNAL_DECIDED,
@@ -713,6 +714,11 @@ const DEMO_PAGE = demoScreenBranches(demoPageCallbackData('currency', 0), 'demo:
   {
     label: 'no pair of the type is open',
     readPairs: onlyPairs(PAIR_CLOSED),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'no pair of the type accepts a demo duration',
+    readPairs: onlyPairs(PAIR_MINUTE_ONLY),
     expected: { backend: 1, telegram: 2 },
   },
 ]);

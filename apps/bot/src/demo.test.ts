@@ -286,6 +286,28 @@ describe('the types and their pages', () => {
     expect(rowsOf(edited)).toEqual([[BACK_GROUPS]]);
   });
 
+  // #313 review m1: a type whose pairs all refuse the durations has no button, yet an old
+  // «💱 Валюты» button or «↩️ Активы» from a pair that admits none still reach its page
+  it('says there is no pair for short trades on the page of a type whose pairs all refuse them', async () => {
+    const { press, calls } = setup({ readPairs: catalogOf(PAIR_MINUTE_ONLY) });
+    await press(demoAssetCallbackData(PAIR_MINUTE_ONLY.id));
+    const back = rowsOf(payloadOf(calls, 'editMessageText'))[0]?.[0];
+    expect(back).toEqual(button(LABELS.demoBackPairsButton, demoPageCallbackData('currency', 0)));
+
+    await press(back?.callback_data ?? '');
+    const edited = calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload;
+    expect(edited?.text).toBe(TEXTS.demoNoShortPairs.value);
+    expect(rowsOf(edited)).toEqual([[BACK_GROUPS]]);
+  });
+
+  it('reads an empty catalog as unavailable on an old page button too', async () => {
+    const { press, calls } = setup({ readPairs: catalogOf() });
+    await press(demoPageCallbackData('currency', 0));
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(edited?.text).toBe(TEXTS.demoCatalogUnavailable.value);
+    expect(rowsOf(edited)).toEqual([[BACK_GROUPS]]);
+  });
+
   it('lists twelve open pairs a page in two columns, sorted, the closed ones hidden', async () => {
     const { press, calls } = setup({ readPairs: catalogOf(...MANY, PAIR_CLOSED) });
     await press(demoPageCallbackData('currency', 0));
@@ -690,6 +712,14 @@ describe('the analysis', () => {
     expect(SESSION_START_PATTERN.exec(`demo:sess:${String(PAIR_EURUSD.id)}:300`)).toBeNull();
   });
 
+  // the guard of the #313 addendum: every duration of the set fits DEFAULT_SESSION_TRADES, so
+  // the count is passed in to reach it
+  it('starts nothing when the session does not fit the hour', () => {
+    const match = SESSION_START_PATTERN.exec(sessionStartCallbackData(PAIR_EURUSD.id, 15)) ?? '';
+    expect(sessionStartDataOf(match, 100)).toBeUndefined();
+    expect(sessionStartDataOf(match)).toEqual({ assetId: PAIR_EURUSD.id, durationSec: 15 });
+  });
+
   it.each([
     ['a rule refusal', SIGNAL_NO_SIGNAL],
     ['a data refusal', SIGNAL_DATA_REFUSAL],
@@ -919,21 +949,44 @@ describe('a button with a duration the demo no longer offers', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it('logs a refused removal at info and sends nothing', async () => {
+  // the demo's and the picker's legacy handlers share the line, so it names the pressed data
+  it.each(['demo:an:101:300', 'stk:o:a:101:300'])(
+    '%s: logs a refused removal at info with the pressed data and sends nothing',
+    async (data) => {
+      const { press, calls, apiErrors, logger } = setup();
+      apiErrors.set('editMessageReplyMarkup', {
+        ok: false,
+        error_code: 400,
+        description: 'Bad Request: message is not modified',
+      });
+      await press(data);
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
+      expect(logger.info.mock.calls.map((call) => call[1])).toEqual([
+        'the keyboard of an old button was not removed',
+      ]);
+      expect(logger.info.mock.calls[0]?.[0]).toMatchObject({
+        method: 'editMessageReplyMarkup',
+        telegramErrorCode: 400,
+        callbackData: data,
+      });
+    },
+  );
+
+  it('logs a refused answer at warn with the pressed data and still removes the keyboard', async () => {
     const { press, calls, apiErrors, logger } = setup();
-    apiErrors.set('editMessageReplyMarkup', {
+    apiErrors.set('answerCallbackQuery', {
       ok: false,
       error_code: 400,
-      description: 'Bad Request: message is not modified',
+      description: 'Bad Request: query is too old and response timeout expired',
     });
-    await press('demo:an:101:300');
+    await press('demo:d:101:300');
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
-    expect(logger.info.mock.calls.map((call) => call[1])).toEqual([
-      'the keyboard of an old button was not removed',
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'answering the callback query failed',
     ]);
-    expect(logger.info.mock.calls[0]?.[0]).toMatchObject({
-      method: 'editMessageReplyMarkup',
-      telegramErrorCode: 400,
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
+      method: 'answerCallbackQuery',
+      callbackData: 'demo:d:101:300',
     });
   });
 });

@@ -127,6 +127,9 @@ const grants: LinkBonusGrantView[] = [
   ...Object.values(LinkBonusSkipReason).map((reason) => ({ granted: false as const, reason })),
 ];
 
+// Each list has one status, so its header comes with that status's lines, while the estimate adds
+// the longest header to the longest line. M1 holds only while the longest header is the one whose
+// lines are the longest too: today accountRevoked with accountLineRevoked (bot-texts.ts).
 const accountLists = (): TelegramHtml[] =>
   Object.values(BrokerAccountStatus).flatMap((status) =>
     [x(W.email), null].map((email) =>
@@ -378,7 +381,7 @@ describe('the assembled messages, against the real assembly', () => {
   it.each(['intentStatus', 'analysisSignal', 'analysisNoSignal'])(
     'M4 estimates %s exactly with a long label overridden',
     (id) => {
-      const texts = { actionUp: 'я'.repeat(64), demoDuration60: 'я'.repeat(64) };
+      const texts = { actionUp: 'я'.repeat(64), demoDuration15: 'я'.repeat(64) };
       const message = ASSEMBLED.find((m) => m.id === id)!;
       setBotTextSource(recording(texts).source);
       const real = Math.max(...REAL[id]!().map(lengthOf));
