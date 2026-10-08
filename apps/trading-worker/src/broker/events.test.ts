@@ -624,6 +624,10 @@ describe('normalizeBrokerEvent: problems', () => {
     );
     expect(describeShape(huge)).toHaveLength(SHAPE_MAX_LENGTH);
     expect(describeShape([])).toBe('[0]');
+    // a binary attachment by its size, never index by index
+    expect(describeShape({ trades: Buffer.alloc(1_048_576) })).toBe('{trades: bytes[1048576]}');
+    expect(describeShape(new Uint16Array(3))).toBe('bytes[6]');
+    expect(describeShape(new ArrayBuffer(4))).toBe('bytes[4]');
     expect(describeShape('SECRET')).toBe('string');
   });
 
