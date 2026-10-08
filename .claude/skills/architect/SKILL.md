@@ -8,7 +8,7 @@ model: fable
 
 ## Overview
 
-Researches issues and writes implementation plans before any code is written. The plan is the primary artifact. Before it's final, run an independent **Codex plan review** (Step 7) and incorporate any Blocker/Major gaps.
+Researches issues and writes implementation plans before any code is written. The plan is the primary artifact. Planning runs without Codex (owner's rule, 2026-10-08): Codex reviews only the finished PR, once, right before the merge (`.claude/CLAUDE.md` → Codex — только финальное ревью перед мержем).
 
 **How this role runs.** In the pipeline, `/tech-lead` starts it as an `Agent` spawn (`subagent_type: "general-purpose"`, `model: "fable"`), and the spawned agent's first action is `Skill(skill: "architect")`. The spawn's `model` is what puts planning on the strongest model (`.claude/CLAUDE.md` → Модели по ролям pipeline); the `model: fable` frontmatter above only matters when the owner invokes `/architect` directly. A spawned agent has no `AskUserQuestion`: every question for the owner is returned to tech-lead in the agent's final message (Step 5), and tech-lead asks it. Spawned by `/manager` (`.claude/skills/manager/SKILL.md`) the same way: questions and the merge request go back to the spawner, which answers by the rules of `.claude/CLAUDE.md` → Режим manager. Split issues go to Backlog when the spawner is the manager (the spawn prompt says so).
 
@@ -141,24 +141,7 @@ Task classes with a mandatory plan section — each row traces to a real review 
 | Work queue / background tick (candidates picked by an order key) | A table of every way an attempt can end (success, each failure code, a throw, an abort, a skip) and what each does to the order key or to a hold-back. If some ending leaves the item at the head of the queue, that item starves every other one (#235 m1: failures did not move `rest_observed_at`; the #137 fix covered the outcomes but not a throw, round 1 m2) |
 | Credential / session lifecycle (disable, reset, revoke) | Every artifact issued under the old credential and every request in flight, with the source of each timestamp written (`now()` is transaction start) and the lock modes checked against a concurrent issue path |
 
-### Step 7: Run Codex plan review
-
-Codex runs through the `codex` plugin's companion script, called from Bash — not through `Skill(codex:rescue)`, which needs `AskUserQuestion` and a main-context `Agent` that a spawned architect does not have. The script's path changes with the plugin version; set `COMPANION` exactly as `.claude/skills/tech-lead/SKILL.md` → "Whole-feature pass — check" does (the one place that line lives), then:
-
-```bash
-node "$COMPANION" task --background --fresh --model gpt-5.6-sol --effort high --prompt-file <file>
-node "$COMPANION" status <job-id> --wait --timeout-ms 540000   # repeat until the job leaves running
-node "$COMPANION" result <job-id>
-```
-
-1. Write the request to a file from `.claude/codex-plan-review-prompt.md`: the issue and acceptance criteria, the draft plan, the domain coverage table, the affected files/schema/API list, and the invariants (Architecture Rules below). The Codex sandbox has no network, so **everything goes into the file inline** — never a URL or "see the issue". `task` without `--write` runs in a read-only sandbox; say "review only" in the request anyway.
-2. Before a long run, apply the usage-limit rule of tech-lead → Phase 0, item 1.
-3. Always `--background` + `status --wait` polling (a foreground call dies at the 10-minute tool cap) and always `--fresh` with the full context — never `--resume` after a failure.
-4. Timeout/failure policy: 2 attempts, then stop. Spawned by tech-lead: return the failure to tech-lead. Direct invocation: ask the owner.
-
-Ask for findings only — missing domain entities, skipped edge cases, wrong ownership/placement, schema/contract drift, auth/multi-tenant risks. Verify every Blocker/Major against the code before it changes the plan (a Codex claim is a hypothesis, like any other), then revise the draft.
-
-### Step 8: Post the plan, move the issue
+### Step 7: Post the plan, move the issue
 
 Post the final plan as an issue comment (`/github` skill), then move the issue to **In Progress**.
 
@@ -170,15 +153,9 @@ Before the hand-off, read the stored body back (`gh api repos/ChaoticMelnik/bina
 
 ### Step 1: Read the PR review comments
 
-`gh pr view <N> --json comments` and/or `gh pr diff <N>` — understand what was rejected and why.
+`gh pr view <N> --json comments` and/or `gh pr diff <N>` — understand what was rejected and why. A reviewer's "optional improvement" is checked like a finding before it goes into the Plan Update — two simplify agents once recommended the exact change that broke CI.
 
-### Step 2: Re-check the revised plan with Codex — new cycle only
-
-Only when this Plan Update opens a new cycle — after the second unsuccessful review round (`.claude/skills/tech-lead/SKILL.md` → Phase 4, iteration 2; the spawn prompt says "Codex re-check: yes"). After the first round the Plan Update goes without Codex: skip to Step 3 and write "Codex re-check: not required (round 1)" in it (owner's rule, 2026-09-30). Invoked directly by the owner: ask which round this is if the PR comments do not show it.
-
-Same mechanism as Step 7 (companion `task`, full context inline). Send: original plan, review findings, proposed revised steps. Ask whether the revision fully covers the gap. A reviewer's "optional improvement" is checked like a finding before it goes into the Plan Update — two simplify agents once recommended the exact change that broke CI.
-
-### Step 3: Post a clarifying comment
+### Step 2: Post a clarifying comment
 
 New comment, don't edit the original plan — preserves the audit trail:
 
@@ -194,7 +171,7 @@ New comment, don't edit the original plan — preserves the audit trail:
 ### Revised implementation steps
 ```
 
-### Step 4: Move the issue back to In Progress
+### Step 3: Move the issue back to In Progress
 
 Implementer picks it up only once this comment exists.
 
@@ -253,6 +230,5 @@ Implementer picks it up only once this comment exists.
 - Never write code — the Architect's output is the plan only.
 - Never move an issue to In Review — that's the Implementer's job.
 - Never skip domain scope analysis.
-- Never skip the Codex plan-review checkpoint (Step 7, and Returned from Review Step 2 when it opens a new cycle). If Codex is unavailable, say so explicitly in the plan handoff.
 - Never post a plan whose size estimate exceeds 3000 added lines — split first (Step 4a).
 - Never call `AskUserQuestion` when running as a spawned agent — return the questions to tech-lead.

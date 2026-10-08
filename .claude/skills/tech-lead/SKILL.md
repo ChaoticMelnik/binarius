@@ -14,7 +14,7 @@ Two modes:
 
 Mandatory stop points follow `~/.claude/CLAUDE.md` → Skill Orchestration → Pipeline autonomy, as waived (or not) by this repo's `.claude/CLAUDE.md` → Git-процесс — that section is the only record of what is waived; read it there rather than trusting a copy. The merge confirmation is never waivable: before every single merge, tech-lead asks the owner via `AskUserQuestion`. `/manager` (`.claude/skills/manager/SKILL.md`) runs Phases 0–4 of Mode 2 unattended with the substitutions listed there and the exceptions in `.claude/CLAUDE.md` → Режим manager; it never merges.
 
-Tech Lead also owns enforcement of the two Codex checkpoints: plan review during Architect, code review during Reviewer — both mandatory (`~/.claude/CLAUDE.md` → ABSOLUTE RULE). Where this skill and `~/.claude/CLAUDE.md` disagree, the project's `.claude/CLAUDE.md` governs (see its note under «Модели по ролям pipeline»).
+Tech Lead also owns enforcement of the one Codex checkpoint: the final whole-feature pass before a merge (reviewer Step 6-pre, Phase 5 docs PR). Planning has none, and an exhausted Codex usage limit skips the checkpoint without a question (`.claude/CLAUDE.md` → Codex — только финальное ревью перед мержем, owner's rule 2026-10-08, overriding `~/.claude/CLAUDE.md` → ABSOLUTE RULE). Where this skill and `~/.claude/CLAUDE.md` disagree, the project's `.claude/CLAUDE.md` governs (see its note under «Модели по ролям pipeline»).
 
 ### Phases run as spawned agents
 
@@ -26,13 +26,13 @@ Spawn prompt — every phase gets these, in this order:
 3. "You have no `AskUserQuestion`. Return every question for the owner in your final message: ≥3 for an architect clarify round, ≥1 for an implementer one, none on a topic with a standing answer (`.claude/CLAUDE.md` → Постоянные ответы владельца), each with 2-4 options, the recommended one first, in Russian. Make no edits in a clarify round."
 4. Node: `eval "$(fnm env)" && fnm use`.
 5. What to return: the role's own hand-off (plan comment URL / PR URL and commit list / review verdict with merge request) plus deviations and anything unfinished.
-6. For an architect Plan Update: the review round it follows and "Codex re-check: yes" (new cycle, Phase 4 iteration 2) or "Codex re-check: no" (iteration 1).
+6. For an architect Plan Update: the review round it follows.
 
 **Clarify relay.** Architect and implementer start with a clarify round: the agent returns its questions and stops. Tech-lead asks them in one `AskUserQuestion` call (at most 4 questions per call — the rest go in a second call, never replaced by the recommended default: #284's fifth question was relayed as a default, 2026-10-07), passing every option through unchanged, then continues the same agent with `SendMessage` carrying the answers (a fresh spawn with the answers in its prompt if the agent is gone). A question the agent marks as a plan defect goes to the architect for a Plan Update, not to the owner. Tech-lead's own clarify questions (Phase 0, merge, change of approach) follow the phases' rule: an option that depends on a tool or API capability is verified by a safe read-only probe before it is asked, and the action it proposes (a merge above all) is never performed before the answer (architect Step 5, implementer Step 0).
 
 **Failed or stalled phase.** When a phase agent fails or stalls (e.g. the stream watchdog), first make sure it has ended — its task notification reports `completed` or `failed`; if it is still running, stop it (`TaskStop`) or continue it, never run a second agent beside it, since a live agent can still post after the check. Then check on GitHub what it already did — issue comments, Pipeline Status, pushed commits, PR state — against what it was supposed to return. Only the missing part is redone: continue the agent, or spawn a fresh one with the done parts named as done. A blind re-spawn duplicates a posted plan or a status change (#56: the architect stalled after posting its Plan Update).
 
-**Merge relay.** The reviewer never merges when spawned; it returns its verdict and a merge request (PR, approved head, the id of the Codex job counted as the whole-feature pass, checks, allowed methods). Tech-lead asks via `AskUserQuestion` immediately before this specific merge, runs `gh pr merge <N>` with the chosen allowed method only on an explicit yes — never `--admin` or another bypass — and then confirms `gh pr view <N> --json state,mergedAt` shows `MERGED`. When the owner skips the Codex review, the spawned reviewer does not post the ready-to-merge comment — the permission classifier refuses it from a sub-agent as a CI bypass, since the owner's decision reaches it only relayed (#258, 2026-10-06). The reviewer returns its verdict, and tech-lead posts the comment from the main context, naming the owner's skip and the open Minors.
+**Merge relay.** The reviewer never merges when spawned; it returns its verdict and a merge request (PR, approved head, the id of the 6-pre Codex job or its limit-skip line, checks, allowed methods). Tech-lead asks via `AskUserQuestion` immediately before this specific merge, runs `gh pr merge <N>` with the chosen allowed method only on an explicit yes — never `--admin` or another bypass — and then confirms `gh pr view <N> --json state,mergedAt` shows `MERGED`. When the Codex pass was skipped (usage limit, or the owner's explicit answer), the spawned reviewer does not post the ready-to-merge comment — the permission classifier refuses it from a sub-agent as a CI bypass (#258, 2026-10-06). The reviewer returns its verdict, and tech-lead posts the comment from the main context, naming the skip and the open Minors; the merge question names the skip too.
 
 ---
 
@@ -46,8 +46,7 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 
 - [ ] Issue has an implementation plan comment posted **before** it moves to In Progress
 - [ ] Plan covers the full domain scope, not just explicitly mentioned entities
-- [ ] Codex plan review happened before the plan was finalized
-- [ ] If returned from review: a "Plan Update" comment exists before re-implementation started; Codex re-checked it only when it opened a new cycle (Phase 4, iteration 2)
+- [ ] If returned from review: a "Plan Update" comment exists before re-implementation started
 - [ ] The plan states the size estimate; an estimate above 3000 added lines was split before the plan was posted
 
 ### Implementer step — check
@@ -63,7 +62,7 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 
 - [ ] Review comments are specific and actionable, not vague
 - [ ] Blockers/Majors were noted before any approval
-- [ ] Codex code review ran before the reviewer finalized the verdict
+- [ ] Codex ran once, as the final pass at the approved head (reviewer Step 6-pre) — not on rounds that returned the issue — or was skipped under the usage-limit rule with the skip line in the review comment
 - [ ] If a Blocker/Major was found: reviewer returned the issue to **Todo** before any re-implementation started; a Minor-only review did not
 - [ ] If clean: reviewer posted the ready-to-merge comment and did not self-approve
 - [ ] Every review round reviewed `gh pr diff` (the whole feature), never an iteration delta
@@ -71,23 +70,23 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 
 ### Whole-feature pass — check
 
-The Codex run that counted as the whole-feature pass covered exactly the approved diff. That is the reviewer's 3a (`Iteration review` marker) when nothing landed after it, otherwise a 6-pre rerun (`Whole-feature pass` marker). Find the newest completed job with either marker and re-hash:
+The reviewer's final Codex pass (Step 6-pre, `Whole-feature pass` marker) covered exactly the approved diff. Skipped under the usage-limit rule → this check is replaced by the skip line in the review comment. Otherwise find the newest completed job with the marker and re-hash:
 
 ```bash
 PR=<N>
 COMPANION="$(jq -r '.plugins["codex@openai-codex"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/codex-companion.mjs"
 node "$COMPANION" status --all --json | jq -r --arg pr "$PR" \
   '[.latestFinished, .recent[]?] | map(select(. != null and .status == "completed"
-      and ((.request.prompt // "") | test("^(Iteration review|Whole-feature pass) #" + $pr + ":"))))
+      and ((.request.prompt // "") | test("^Whole-feature pass #" + $pr + ":"))))
    | sort_by(.completedAt) | reverse | .[] | "\(.id) \(.completedAt) \(.request.prompt | split("\n")[0])"'
-# first line = the newest completed full-diff run: base=<b> head=<h> diff-sha256=<x>
+# first line = the newest completed final pass: base=<b> head=<h> diff-sha256=<x>
 git fetch origin main
 git merge-base --is-ancestor <b> <h> && git merge-base --is-ancestor <b> origin/main && echo base-ok
 git diff --no-color --no-ext-diff <b> <h> | shasum -a 256        # must equal <x>
 gh pr view $PR --repo ChaoticMelnik/binarius --json headRefOid --jq .headRefOid   # must equal <h>
 ```
 
-`<h>` must be the head the LGTM comment approved and the one that merged (the last line), and `<b>` a `main` commit that `<h>` descends from. No marker, a different head, or a different hash is a Major audit finding. `status` lists only this Claude session's jobs and the companion keeps the newest 50 per workspace, so run this check in the session that ran the pipeline. Jobs are also keyed by working directory: a run started from a review worktree is listed only by `status` run from that worktree's path (or its state directory under `~/.claude/plugins/data/codex-openai-codex/state/`), so the reviewer returns the job id and marker and tech-lead re-hashes from the marker (#306, 2026-10-07).
+`<h>` must be the head the LGTM comment approved and the one that merged (the last line), and `<b>` a `main` commit that `<h>` descends from. No marker, a different head, or a different hash is a Major audit finding. `status` lists only this Claude session's jobs and the companion keeps the newest 50 per workspace, so run this check in the session that ran the pipeline. Jobs are also keyed by working directory: a run started from a review worktree is listed only by `status` run from that worktree's path (or its state directory under `~/.claude/plugins/data/codex-openai-codex/state/`), so the reviewer returns the job id and tech-lead re-hashes from the marker (#306, 2026-10-07).
 
 ### Audit proposals — check
 
@@ -252,17 +251,17 @@ Confirm: working tree clean; local `main` not behind `origin/main` (else `git pu
 
 **Preflight checks (mandatory, same phase):**
 
-1. **Codex** — `node "$COMPANION" setup --json` (companion path as in "Whole-feature pass — check"): `ready`, `auth.loggedIn`. Not ready → `Skill(skill: "codex:setup")` once; still not ready → STOP and ask the owner. Then the budget: `node "$COMPANION" status --all --json` — a recent job that failed with "You've hit your usage limit … try again at HH:MM" means the pipeline waits for that reset; a long issue needs several runs (plan review, one per review round, the whole-feature pass).
+1. **Codex** — `node "$COMPANION" setup --json` (companion path as in "Whole-feature pass — check"): `ready`, `auth.loggedIn`. Not ready → `Skill(skill: "codex:setup")` once; still not ready → STOP and ask the owner. Then the budget: `node "$COMPANION" status --all --json` — a recent job that failed with "You've hit your usage limit … try again at HH:MM" does not stop or delay the pipeline: note the reset time and pass it to the reviewer; if the limit has not reset by the final pass, that pass is skipped without a question. An issue needs one run (the final pass), plus one per round whose final pass found a Blocker/Major.
 2. **GitHub** — `gh auth status`; if stale, ask the owner to `gh auth login` / refresh. If the plan's files include `.github/workflows/*`: the token needs the `workflow` scope, or `origin` must be an SSH remote (`git remote -v`) — otherwise the push fails at the end of implementation.
 3. **Project CLAUDE.md on main** — `git diff origin/main -- .claude/CLAUDE.md` must be empty: the harness loads whatever is checked out, and a waiver living only on an unmerged branch was once acted on for a day.
 4. **Runtimes** — every runtime the acceptance criteria exercise is available locally at CI's version: Node from `.node-version` (`eval "$(fnm env)" && fnm use`), Postgres/Redis (`docker compose ps`), Docker/Compose/buildx if the issue touches images or compose; CLI plugins match what CI uses.
 5. **Previous audit** — every proposal of the latest `audits.md` entry has a status (Phase 5 format). An unmarked proposal, or `открыто` without a date and owner, is reported to the owner as a warning before the pipeline starts; it does not stop the pipeline.
 
-**Timeout policy (every checkpoint):** at most 2 attempts per Codex run; after the second failure, stop and ask the owner — no third attempt by default. The owner may choose to skip a checkpoint only by an explicit answer; Phase 5 narrows this further (no merge question without a successful run or that explicit answer).
+**Timeout policy (every checkpoint):** a usage-limit failure is skipped at once, without a second attempt or a question (`.claude/CLAUDE.md` → Codex — только финальное ревью перед мержем). Any other failure: at most 2 attempts per Codex run; after the second, stop and ask the owner — no third attempt by default. The owner may choose to skip a checkpoint only by an explicit answer.
 
 #### Phase 1 — Architect
 
-Spawn the architect (`Agent`, `model: "fable"`, prompt per "Phases run as spawned agents"). Round 1 returns clarify questions → clarify relay → the same agent drafts the plan, runs Codex plan review and posts it. Never perform architect steps inline, regardless of how small the issue looks.
+Spawn the architect (`Agent`, `model: "fable"`, prompt per "Phases run as spawned agents"). Round 1 returns clarify questions → clarify relay → the same agent drafts the plan and posts it (no Codex — planning has none). Never perform architect steps inline, regardless of how small the issue looks.
 
 If this repo's CLAUDE.md has waived the commit/PR stop points: no text between phases — spawn the implementer next. If not waived: report the plan to the owner and follow whatever stop behavior the unwaived pipeline default implies before continuing.
 
@@ -286,12 +285,11 @@ Track the iteration count (starts at 1 for the first review). **Hard limit: 3 re
 Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (reviewer → Severity Guide). A Minor-only verdict goes to the merge relay below as a clean PR; the merge question names the open Minors, and the owner decides whether they are fixed in another round first. Minors still open at the merge go, without a question, into one new Backlog issue (`/github`: "Create an issue" + "Add issue to Project #2", body with `Refs #<N>`, the PR link and each finding with severity and comment link); its number goes into the report (`.claude/CLAUDE.md` → Постоянные ответы владельца).
 
 **If the reviewer finds a Blocker or Major:**
-1. Iteration 1 → the architect first (Plan Update **without** Codex re-check; the issue returns to In Progress), then the implementer, then the reviewer again for this issue. When the architect's model is unavailable (the Fable weekly limit), the owner is asked: a Plan Update on Opus, or the findings straight to the implementer with "исправления без Plan Update архитектора" recorded as a deviation — never the latter by default (#130, #287, #284 on 2026-10-07).
+1. Iteration 1 → the architect first (Plan Update; the issue returns to In Progress), then the implementer, then the reviewer again for this issue. When the architect's model is unavailable (the Fable weekly limit), the owner is asked: a Plan Update on Opus, or the findings straight to the implementer with "исправления без Plan Update архитектора" recorded as a deviation — never the latter by default (#130, #287, #284 on 2026-10-07).
 2. Iteration 2 → stop: this starts a **new cycle**. Ask the owner via `AskUserQuestion` for a **change of approach** — the same loop again is not among the options:
-   - (a) a whole-feature Codex pass (the reviewer's Step 3a command with `KIND="Whole-feature pass"`, run now) and a Plan Update built from its findings, not from the last round's;
-   - (b) split part of the issue into a separate issue (created and added to the board via `/github`), and narrow this PR;
-   - (c) re-plan from scratch: the architect writes a new plan against the current branch.
-   The new cycle's Plan Update or plan **gets** the Codex re-check (architect → Returned from Review, Step 2). Do not spawn the implementer until the owner picked one. Round 3 is the last one; say so in the question.
+   - (a) split part of the issue into a separate issue (created and added to the board via `/github`), and narrow this PR;
+   - (b) re-plan from scratch: the architect writes a new plan against the current branch.
+   Do not spawn the implementer until the owner picked one. Round 3 is the last one; say so in the question.
 3. Iteration 3 → no further round. The remaining findings do not go into a follow-up list — they go into **one new separate issue**:
    - Any **Blocker** left → the merge is held; ask the owner via `AskUserQuestion` what to do (fix it in this PR outside the round count / close the PR / other). Nothing is merged without that answer.
    - Only Minor left → create the new issue in Backlog without a question, as for a Minor-only verdict above, then the merge relay below — the merge question names the findings left open and the new issue.
@@ -337,9 +335,9 @@ Run once the merge is confirmed and the issue is Done.
    - `отклонено: <причина>` — only after the owner's explicit yes via `AskUserQuestion` (one call for all proposals up for rejection); a date of the decision goes inside the reason;
    - `вынесено в #<N>` — the issue is created and added to the board now (`/github`), not "later";
    - `открыто (<YYYY-MM-DD>, <владелец>)` — allowed, and Phase 0 of the next issue warns about it.
-5. **Docs PR** — branch `docs/<N>-audit` from `main`, the audit entry and the skill edits, PR body with `Refs #<N>` instead of `Closes` (the issue is already Done; `.claude/CLAUDE.md` → Git-процесс). It gets no reviewer phase and no 3b-3d sub-agents — process text, not code — but it does get Codex (owner's rule, 2026-09-24):
-   - Run: the reviewer's Step 3a command with `KIND="Whole-feature pass"`, the diff of `.claude/**` + `audits.md` against `origin/main`, and `.claude/codex-review-prompt.md` with its Process-docs block filled (global `~/.claude/CLAUDE.md` inlined). Same criterion as "Whole-feature pass — check": the newest completed run's `head` must be the docs PR's current head before the merge question.
-   - **Attempts** (execution failures) and **iterations** (findings → fixes) are counted separately. Attempts: 2 per run; after the second failure do not ask about the merge — ask the owner what to do with the run (retry later / explicitly accept merging without it). There is no silent skip here.
+5. **Docs PR** — branch `docs/<N>-audit` from `main`, the audit entry and the skill edits, PR body with `Refs #<N>` instead of `Closes` (the issue is already Done; `.claude/CLAUDE.md` → Git-процесс). It gets no reviewer phase and no 3b-3d sub-agents — process text, not code — but it does get the final Codex pass before its merge (owner's rules, 2026-09-24 and 2026-10-08):
+   - Run: the reviewer's Step 6-pre command, the diff of `.claude/**` + `audits.md` against `origin/main`, and `.claude/codex-review-prompt.md` with its Process-docs block filled (global `~/.claude/CLAUDE.md` inlined). Same criterion as "Whole-feature pass — check": the newest completed run's `head` must be the docs PR's current head before the merge question.
+   - **Attempts** (execution failures) and **iterations** (findings → fixes) are counted separately. A usage-limit failure skips the run without a question; the PR body and the merge question name the skip. Any other failure: 2 attempts per run; after the second do not ask about the merge — ask the owner what to do with the run (retry later / explicitly accept merging without it).
    - Iterations: a Blocker/Major is fixed in the same docs PR, and after the last such fix the run is repeated on the final diff, so the merge question is only ever about a diff Codex has seen. At most 2 fix iterations; a third Blocker/Major goes to the owner. A Minor is fixed or left at discretion, recorded in the PR body.
    - The merge question (merge relay) carries the last run's result: counts by severity, what was fixed, what was left.
 
@@ -373,7 +371,7 @@ Run once the merge is confirmed and the issue is Done.
 - Never edit files in another agent's/developer's active domain without flagging the conflict.
 - Never execute Architect, Implementer or Reviewer steps inline — always as an `Agent` spawn with the policy `model` whose first action invokes the role's Skill, even for trivial one-line issues.
 - Never write text output between pipeline phases where this repo's CLAUDE.md has waived stop points — an inter-phase recap forces the user to say "continue" unnecessarily.
-- Never waive a missing Codex checkpoint silently — report it as a process deviation.
+- Never waive a missing Codex final pass silently: a usage-limit skip is recorded with its skip line, any other missing pass is a process deviation.
 - Any question to the owner goes through `AskUserQuestion`, never plain text — including the questions a spawned phase returns.
 - Never offer "one more iteration of the same loop" at the Iteration 2 stop, and never start a 4th review round.
 - Never create the round-limit issue (Phase 4, iteration 3) without the owner's yes on its title and findings.
