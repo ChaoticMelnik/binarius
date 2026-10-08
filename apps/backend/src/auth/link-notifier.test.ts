@@ -11,7 +11,7 @@ import {
   linkPushMessage,
   type LinkPushOutcome,
 } from './link-notifier';
-import { CLIENT_TEXTS, setBotTextSource } from './texts';
+import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from './texts';
 
 const TOKEN = '123456:AA-link-push-token';
 const ACCOUNT_ID = '0b7e3a52-8c1d-4f6e-9a2b-3c4d5e6f7a8b';
@@ -90,16 +90,29 @@ describe('the link push message', () => {
     expect(payload?.text).toBe(CLIENT_TEXTS.confirmPrompt.value);
   });
 
+  // #350: every push has its next step, the bot's own buttons
+  const CONNECT_AGAIN = [
+    { text: CLIENT_LABELS.connectButton, callback_data: 'connect' },
+    { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+  ];
   it.each([
-    [LinkPushKind.Active, CLIENT_TEXTS.linkedActive],
-    [LinkPushKind.Blocked, CLIENT_TEXTS.blocked],
-    [LinkPushKind.Taken, CLIENT_TEXTS.accountTaken],
-    [LinkPushKind.ExchangeFailed, CLIENT_TEXTS.oauthLoginFailed],
-    [LinkPushKind.Mismatch, CLIENT_TEXTS.oauthLoginFailed],
-  ] as const)('sends %s as text alone, with no button', async (kind, text) => {
+    [
+      LinkPushKind.Active,
+      CLIENT_TEXTS.linkedActive,
+      [{ text: CLIENT_LABELS.demoButton, callback_data: 'demo' }],
+    ],
+    [
+      LinkPushKind.Blocked,
+      CLIENT_TEXTS.blocked,
+      [{ text: CLIENT_LABELS.supportButton, url: 'https://t.me/dimmelya' }],
+    ],
+    [LinkPushKind.Taken, CLIENT_TEXTS.accountTaken, CONNECT_AGAIN],
+    [LinkPushKind.ExchangeFailed, CLIENT_TEXTS.oauthLoginFailed, CONNECT_AGAIN],
+    [LinkPushKind.Mismatch, CLIENT_TEXTS.oauthLoginFailed, CONNECT_AGAIN],
+  ] as const)('sends %s with its next step', async (kind, text, buttons) => {
     const payload = await sent({ kind });
     expect(payload?.text).toBe(text.value);
-    expect(payload?.reply_markup).toBeUndefined();
+    expect(inlineButtons(payload)).toEqual(buttons);
   });
 });
 
