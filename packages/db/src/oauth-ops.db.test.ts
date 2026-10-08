@@ -11,6 +11,7 @@ import {
   consumeOAuthState,
   createOAuthState,
   hashToken,
+  markAccessTokenExpired,
   isUserBlocked,
   linkBrokerAccount,
   lockAccountForRefresh,
@@ -367,6 +368,40 @@ describe('refresh helpers', () => {
       cipher.decrypt(row.refreshTokenEnc, { accountId: row.id, field: TokenField.Refresh }),
     ).toBe(rotated.refreshToken);
     expect(row.refreshTokenHash).toBe(hashToken(rotated.refreshToken));
+  });
+
+  // #281: the token the broker refused is expired as of now; nothing else moves
+  it('marks the access token expired by the database clock and touches nothing else', async () => {
+    const created = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_039n,
+      tokens: brokerTokens(),
+      cipher,
+      activate: false,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const before = await brokerAccountRow(tmp.db, created.account.id);
+
+    await tmp.db.transaction((tx) => markAccessTokenExpired(tx, created.account.id));
+
+    const after = await brokerAccountRow(tmp.db, created.account.id);
+    const [clock] = (await tmp.db.execute(sql`select now() as now`)).rows as {
+      now: Date | string;
+    }[];
+    expect(after.accessTokenExpiresAt.getTime()).toBeLessThanOrEqual(
+      new Date(clock!.now).getTime(),
+    );
+    expect(after.accessTokenExpiresAt.getTime()).toBeLessThan(
+      before.accessTokenExpiresAt.getTime(),
+    );
+    expect(after).toMatchObject({
+      refreshTokenHash: before.refreshTokenHash,
+      tokenRotatedAt: before.tokenRotatedAt,
+      status: before.status,
+      accessTokenEnc: before.accessTokenEnc,
+      refreshTokenEnc: before.refreshTokenEnc,
+    });
+    expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
   });
 
   it('revokes with a reason and leaves the trading halt untouched', async () => {
