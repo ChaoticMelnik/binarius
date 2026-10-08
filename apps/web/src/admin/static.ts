@@ -15,6 +15,7 @@ td.agent { max-width: 22rem; overflow-wrap: anywhere; }
 td.num { text-align: right; white-space: nowrap; }
 tr.current { font-weight: 600; }
 .bar { display: flex; gap: var(--gap); align-items: baseline; justify-content: space-between; }
+.account { display: flex; gap: var(--gap); align-items: baseline; }
 nav { display: flex; gap: var(--gap); flex-wrap: wrap; }
 nav a[aria-current="page"] { font-weight: 600; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem var(--gap); }

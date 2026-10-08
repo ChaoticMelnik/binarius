@@ -46,6 +46,7 @@ beforeEach(() => {
     tradingSessions: unused,
     tokens: unused,
     audit: unused,
+    changePassword: unused,
     oauthCallback: (request) => {
       forwarded.push(request);
       return answer();

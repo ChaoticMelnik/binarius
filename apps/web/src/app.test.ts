@@ -7,6 +7,7 @@ import {
   AdminErrorCode,
   AuditAction,
   AuditEntityType,
+  adminChangePasswordRequestSchema,
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
   TokenLedgerKind,
@@ -83,6 +84,7 @@ interface Calls {
   tradingSessions: [string, AdminTradingSessionsQuery][];
   tokens: [string, AdminTokensQuery][];
   audit: [string, AdminAuditQuery][];
+  changePassword: unknown[][];
 }
 
 let calls: Calls;
@@ -104,6 +106,7 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     tradingSessions: [],
     tokens: [],
     audit: [],
+    changePassword: [],
   };
   lines = [];
   const client: BackendClient = {
@@ -158,6 +161,11 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     audit: async (token, query) => {
       calls.audit.push([token, query]);
       return SAMPLE_AUDIT;
+    },
+    // 3 is no fake's count of other sessions: a redirect built from the list would show
+    changePassword: async (token, request) => {
+      calls.changePassword.push([token, request]);
+      return { changed: true, revokedSessions: 3 };
     },
     oauthCallback: async () => {
       throw new Error('the admin pages never forward an OAuth callback');
@@ -1831,5 +1839,336 @@ describe('an expiry the backend reports as already past', () => {
     expect(response.statusCode).toBe(500);
     expect(cookieOf(response, SESSION_COOKIE)).toBeUndefined();
     expect(cookieOf(response, CHALLENGE_COOKIE)).toBeUndefined();
+  });
+});
+
+describe('the password page (#79)', () => {
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+  const CURRENT = 'CURRENT-SECRET';
+  const NEW = 'NEW-SECRET';
+  const OTHER = 'OTHER-SECRET';
+  const SECRETS = [CURRENT, NEW, OTHER];
+  const valid = { currentPassword: CURRENT, newPassword: NEW, newPasswordRepeat: NEW };
+  const ADA_ELSEWHERE: StaffSessionView = {
+    ...VIEW,
+    id: '00000000-0000-4000-8000-0000000000c1',
+    current: false,
+  };
+  const BOB: StaffSessionView = {
+    ...VIEW,
+    id: '00000000-0000-4000-8000-0000000000c2',
+    login: 'bob',
+    current: false,
+  };
+
+  const rebuild = async (backend: Partial<BackendClient>) => {
+    await app.close();
+    app = build(backend);
+  };
+  const expectNoSecret = (text: string) => {
+    for (const secret of SECRETS) expect(text).not.toContain(secret);
+  };
+  const expectFormWithoutAccount = (body: string, message: string) => {
+    expect(body).toContain(message);
+    expect(body).toContain('action="/admin/password"');
+    expect(body).toContain('<nav');
+    expect(body).not.toContain(TEXTS.logoutSubmit);
+    expectNoSecret(body);
+  };
+  const postRaw = (payload: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/admin/password',
+      headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+      payload,
+      cookies: withCookie,
+    });
+
+  describe('GET', () => {
+    it('renders the form under the login, counting only the caller’s other sessions', async () => {
+      await rebuild({
+        sessions: async (token) => {
+          calls.sessions.push(token);
+          return {
+            me: { staffId: VIEW.id, login: 'ada', sessionId: VIEW.id },
+            sessions: [VIEW, ADA_ELSEWHERE, BOB],
+          };
+        },
+      });
+
+      const response = await get('/admin/password', withCookie);
+
+      expect(response.statusCode).toBe(200);
+      expect(calls.sessions).toEqual([TOKEN]);
+      expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+      expect(response.body).toContain(`<a href="/admin/password">${TEXTS.passwordLink}</a>`);
+      expect(response.body).toContain(TEXTS.passwordRevokesOthers(1));
+      for (const [name, autocomplete] of [
+        ['currentPassword', 'current-password'],
+        ['newPassword', 'new-password'],
+        ['newPasswordRepeat', 'new-password'],
+      ]) {
+        expect(response.body).toMatch(
+          new RegExp(
+            `<input\\s+name="${name}"\\s+type="password"\\s+autocomplete="${autocomplete}"\\s+required\\s*/>`,
+          ),
+        );
+      }
+      expect(response.body).not.toContain('value=');
+    });
+
+    it('says there is no other session when the caller has none', async () => {
+      const response = await get('/admin/password', withCookie);
+      expect(response.body).toContain(TEXTS.noOtherSessions);
+    });
+
+    it.each(['/admin/sessions', '/admin/overview', '/admin/audit'])(
+      '%s links to the password page from the account block',
+      async (url) => {
+        const response = await get(url, withCookie);
+        expect(response.body).toContain(`<a href="/admin/password">${TEXTS.passwordLink}</a>`);
+      },
+    );
+
+    it('leaves the link out with the account block of a page built without the backend', async () => {
+      const response = await get(
+        `/admin/users?q=${'x'.repeat(ADMIN_SEARCH_MAX_LENGTH + 1)}`,
+        withCookie,
+      );
+      expect(response.statusCode).toBe(400);
+      expect(response.body).not.toContain(TEXTS.passwordLink);
+    });
+
+    it('sends no cookie to login, and clears one of the wrong shape, before the backend is asked', async () => {
+      const none = await get('/admin/password');
+      expect([none.statusCode, none.headers.location]).toEqual([302, '/admin/login']);
+      const malformed = await get('/admin/password', { [SESSION_COOKIE]: 'not-a-session-token' });
+      expect([malformed.statusCode, malformed.headers.location]).toEqual([302, '/admin/login']);
+      expect(cookieOf(malformed, SESSION_COOKIE)?.value).toBe('');
+      expect(calls.sessions).toEqual([]);
+    });
+
+    it.each([
+      ['0', 0],
+      ['3', 3],
+      ['9007199254740991', 9007199254740991],
+    ])('shows the result for ?changed=%s', async (query, count) => {
+      const response = await get(`/admin/password?changed=${query}`, withCookie);
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain(TEXTS.passwordChanged(count));
+    });
+
+    it.each([
+      'changed=9007199254740992',
+      'changed=2&changed=2',
+      'changed=x',
+      'changed=-1',
+      'changed=',
+    ])('shows no result for ?%s', async (query) => {
+      const response = await get(`/admin/password?${query}`, withCookie);
+      expect(response.statusCode).toBe(200);
+      expect(response.body).not.toContain(TEXTS.passwordChanged(0).split(':')[0]);
+    });
+
+    it('clears the cookie of a session that is gone, and keeps it when our bearer is refused', async () => {
+      await rebuild({
+        sessions: () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+      });
+      const gone = await get('/admin/password', withCookie);
+      expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+      expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+
+      await rebuild({
+        sessions: () => Promise.reject(httpFailure(401, AdminErrorCode.Unauthorized)),
+      });
+      const refused = await get('/admin/password', withCookie);
+      expect(refused.statusCode).toBe(500);
+      expect(refused.body).toContain(TEXTS.errorBody);
+      expect(refused.headers['set-cookie']).toBeUndefined();
+    });
+  });
+
+  describe('POST', () => {
+    it('changes the password with one backend call and redirects to the count it revoked', async () => {
+      const response = await post('/admin/password', valid, withCookie);
+
+      expect([response.statusCode, response.headers.location]).toEqual([
+        303,
+        '/admin/password?changed=3',
+      ]);
+      expect(response.headers['set-cookie']).toBeUndefined();
+      expect(calls.changePassword).toEqual([
+        [
+          TOKEN,
+          {
+            currentPassword: CURRENT,
+            newPassword: NEW,
+            ip: expect.any(String),
+            userAgent: INJECTED_AGENT,
+          },
+        ],
+      ]);
+      expect(adminChangePasswordRequestSchema.safeParse(calls.changePassword[0]?.[1]).success).toBe(
+        true,
+      );
+      expect(calls.sessions).toEqual([]);
+    });
+
+    it('carries a count of zero into the redirect', async () => {
+      await rebuild({ changePassword: async () => ({ changed: true, revokedSessions: 0 }) });
+      const response = await post('/admin/password', valid, withCookie);
+      expect(response.headers.location).toBe('/admin/password?changed=0');
+    });
+
+    it('refuses two different new passwords before the backend is asked', async () => {
+      const response = await post(
+        '/admin/password',
+        { ...valid, newPasswordRepeat: OTHER },
+        withCookie,
+      );
+
+      expect(response.statusCode).toBe(400);
+      expectFormWithoutAccount(response.body, TEXTS.passwordMismatch);
+      expect(calls.changePassword).toEqual([]);
+      expect(calls.sessions).toEqual([]);
+    });
+
+    it('refuses a new password equal to the current one, by the shared schema', async () => {
+      const response = await post(
+        '/admin/password',
+        { currentPassword: CURRENT, newPassword: CURRENT, newPasswordRepeat: CURRENT },
+        withCookie,
+      );
+
+      expect(response.statusCode).toBe(400);
+      expectFormWithoutAccount(response.body, TEXTS.passwordSameAsCurrent);
+      expect(calls.changePassword).toEqual([]);
+    });
+
+    const long = 'x'.repeat(257);
+    it.each([
+      ['an empty new password', 'currentPassword=c&newPassword=&newPasswordRepeat='],
+      [
+        'a new password over the bound',
+        `currentPassword=c&newPassword=${long}&newPasswordRepeat=${long}`,
+      ],
+      [
+        'two equal passwords over the bound',
+        `currentPassword=${long}&newPassword=${long}&newPasswordRepeat=${long}`,
+      ],
+      [
+        'a field sent twice',
+        `currentPassword=${CURRENT}&currentPassword=${OTHER}&newPassword=${NEW}&newPasswordRepeat=${NEW}`,
+      ],
+    ])('refuses %s as a bad request', async (_label, payload) => {
+      const response = await postRaw(payload);
+
+      expect(response.statusCode).toBe(400);
+      expectFormWithoutAccount(response.body, TEXTS.badRequest);
+      expect(response.body).not.toContain(TEXTS.passwordSameAsCurrent);
+      expect(calls.changePassword).toEqual([]);
+    });
+
+    it('answers a wrong current password with the form, keeping the session', async () => {
+      await rebuild({
+        changePassword: () => Promise.reject(httpFailure(401, AdminErrorCode.InvalidCredentials)),
+      });
+      const response = await post('/admin/password', valid, withCookie);
+
+      expect(response.statusCode).toBe(401);
+      expectFormWithoutAccount(response.body, TEXTS.invalidCurrentPassword);
+      expect(response.headers['set-cookie']).toBeUndefined();
+      expect(calls.sessions).toEqual([]);
+    });
+
+    it('answers a lockout with the form', async () => {
+      await rebuild({
+        changePassword: () => Promise.reject(httpFailure(429, AdminErrorCode.TooManyAttempts)),
+      });
+      const response = await post('/admin/password', valid, withCookie);
+
+      expect(response.statusCode).toBe(429);
+      expectFormWithoutAccount(response.body, TEXTS.tooManyAttempts);
+    });
+
+    it.each([
+      ['401 unauthorized', httpFailure(401, AdminErrorCode.Unauthorized)],
+      ['400 validation', httpFailure(400, AdminErrorCode.Validation)],
+      ['404', httpFailure(404)],
+      ['429 without the code', httpFailure(429)],
+    ])('treats %s as our own failure, keeping the cookie', async (_label, failure) => {
+      await rebuild({ changePassword: () => Promise.reject(failure) });
+      const response = await post('/admin/password', valid, withCookie);
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toContain(TEXTS.errorBody);
+      expect(response.body).not.toContain(TEXTS.outcomeUnknownBody);
+      expect(response.headers['set-cookie']).toBeUndefined();
+    });
+
+    it('sends a session that is gone to login', async () => {
+      await rebuild({
+        changePassword: () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+      });
+      const response = await post('/admin/password', valid, withCookie);
+
+      expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+      expect(cookieOf(response, SESSION_COOKIE)?.value).toBe('');
+    });
+
+    it.each([
+      [
+        'unreachable',
+        new BackendError(BackendErrorCode.Unreachable),
+        { name: 'BackendError', code: 'unreachable' },
+      ],
+      [
+        'a 2xx outside the contract',
+        new BackendError(BackendErrorCode.ContractViolation),
+        { name: 'BackendError', code: 'contract_violation' },
+      ],
+      ['a 502', httpFailure(502), { name: 'BackendError', code: 'http_status' }],
+      ['a throw', new Error(`backend said: ${NEW}`), { name: 'Error' }],
+    ])('says the outcome is unknown when %s, keeping the cookie', async (_label, failure, err) => {
+      await rebuild({ changePassword: () => Promise.reject(failure) });
+      const response = await post('/admin/password', valid, withCookie);
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toContain(TEXTS.outcomeUnknownBody);
+      expect(response.body).not.toContain(TEXTS.errorBody);
+      expect(response.headers['set-cookie']).toBeUndefined();
+      const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+      const entry = logged.find((line) => line.msg === 'the password change outcome is unknown');
+      expect(entry?.err).toEqual(err);
+      expectNoSecret(response.body);
+    });
+
+    it('sends no cookie to login, and clears one of the wrong shape, before the backend is asked', async () => {
+      const none = await post('/admin/password', valid);
+      expect([none.statusCode, none.headers.location]).toEqual([302, '/admin/login']);
+      const malformed = await post('/admin/password', valid, {
+        [SESSION_COOKIE]: 'not-a-session-token',
+      });
+      expect([malformed.statusCode, malformed.headers.location]).toEqual([302, '/admin/login']);
+      expect(cookieOf(malformed, SESSION_COOKIE)?.value).toBe('');
+      expect(calls.changePassword).toEqual([]);
+    });
+  });
+
+  it('writes none of the passwords or the cookie to the log', async () => {
+    await post('/admin/password', valid, withCookie);
+    await post('/admin/password', { ...valid, newPasswordRepeat: OTHER }, withCookie);
+    await rebuild({
+      changePassword: () => Promise.reject(httpFailure(401, AdminErrorCode.InvalidCredentials)),
+    });
+    await post('/admin/password', valid, withCookie);
+    const kept = [...lines];
+    await rebuild({ changePassword: () => Promise.reject(new Error(`backend said: ${NEW}`)) });
+    await post('/admin/password', valid, withCookie);
+
+    const all = [...kept, ...lines].join('');
+    expect(all).toContain('the password change outcome is unknown');
+    expectNoSecret(all);
+    expect(all).not.toContain(TOKEN);
   });
 });

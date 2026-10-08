@@ -5,6 +5,7 @@ import {
   CLIENT_USER_AGENT_MAX_LENGTH,
   errorLogFields,
   safeParseAdminAuditQuery,
+  safeParseAdminChangePasswordRequest,
   safeParseAdminIntentsQuery,
   safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
@@ -27,6 +28,9 @@ import {
   intentsPage,
   loginPage,
   overviewPage,
+  PASSWORD_PATH,
+  passwordHref,
+  passwordPage,
   sessionsPage,
   tokensHref,
   tokensPage,
@@ -62,6 +66,32 @@ const loginForm = z.object({
   password: z.string().min(1).max(STAFF_PASSWORD_MAX_LENGTH),
 });
 const confirmForm = z.object({ code: staffLoginCodeSchema });
+// Only the body's shape: a field sent twice arrives as an array. The bounds and "new differs from
+// current" are the shared schema's, checked next, so web holds no second copy of them.
+const passwordForm = z.object({
+  currentPassword: z.string(),
+  newPassword: z.string(),
+  newPasswordRepeat: z.string(),
+});
+
+// The shared schema's refine runs even when a field failed, so "same as the current one" is
+// told only when it is the one issue — two equal passwords that are also too long are a bad
+// request, not a match.
+const sameAsCurrentOnly = (issues: readonly { code: string; path: readonly PropertyKey[] }[]) =>
+  issues.length === 1 && issues[0]?.code === 'custom' && issues[0].path[0] === 'newPassword';
+
+/**
+ * `?changed=` as an integer in exactly the domain of the response's `z.int().nonnegative()`,
+ * [0, 2^53 − 1]; a repeated key arrives as an array and is no value.
+ */
+const changedOf = (query: unknown): number | undefined => {
+  const value = (query as { changed?: unknown } | undefined)?.changed;
+  return typeof value === 'string' &&
+    /^\d{1,16}$/.test(value) &&
+    Number.isSafeInteger(Number(value))
+    ? Number(value)
+    : undefined;
+};
 
 /**
  * A query string before its schema: a key whose value is the empty string is no key — an
@@ -410,6 +440,69 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
     withStaffSession(request, reply, async (token) => {
       const { me, sessions } = await backend.sessions(token);
       return sendHtml(reply, 200, sessionsPage(sessions, me.login));
+    }),
+  );
+
+  app.get(PASSWORD_PATH, async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const { me, sessions } = await backend.sessions(token);
+      // the list holds every staff member's sessions; the change revokes only the caller's
+      const others = sessions.filter((s) => s.login === me.login && !s.current).length;
+      return sendHtml(
+        reply,
+        200,
+        passwordPage({ login: me.login, others, changed: changedOf(request.query) }),
+      );
+    }),
+  );
+
+  // One backend call, like every other request of this process (timing.ts): a refusal is
+  // rendered without the sessions read, so with no account block and no count.
+  app.post(PASSWORD_PATH, async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const form = passwordForm.safeParse(request.body);
+      if (!form.success) return sendHtml(reply, 400, passwordPage({ message: TEXTS.badRequest }));
+      const { currentPassword, newPassword, newPasswordRepeat } = form.data;
+      if (newPassword !== newPasswordRepeat) {
+        return sendHtml(reply, 400, passwordPage({ message: TEXTS.passwordMismatch }));
+      }
+      const body = safeParseAdminChangePasswordRequest({
+        currentPassword,
+        newPassword,
+        ...clientFacts(request),
+      });
+      if (!body.success) {
+        const message = sameAsCurrentOnly(body.error.issues)
+          ? TEXTS.passwordSameAsCurrent
+          : TEXTS.badRequest;
+        return sendHtml(reply, 400, passwordPage({ message }));
+      }
+      try {
+        const { revokedSessions } = await backend.changePassword(token, body.data);
+        return reply.redirect(passwordHref(revokedSessions), 303);
+      } catch (error) {
+        const answered = outcome(error);
+        // not answered (unreachable, a 2xx outside the contract, a throw) or a 5xx: the commit
+        // may have happened, so the staff member learns the state by logging in, not by retrying
+        if (answered === undefined || answered.status >= 500) {
+          request.log.error(errorLogFields(error), 'the password change outcome is unknown');
+          return sendHtml(
+            reply,
+            500,
+            noticePage(TEXTS.outcomeUnknownTitle, TEXTS.outcomeUnknownBody),
+          );
+        }
+        if (answered.status === 401 && answered.code === AdminErrorCode.InvalidCredentials) {
+          return sendHtml(reply, 401, passwordPage({ message: TEXTS.invalidCurrentPassword }));
+        }
+        // on the pair, unlike the login form: this route has no ceiling, so a 429 without the
+        // code is a contract drift, not a lockout
+        if (answered.status === 429 && answered.code === AdminErrorCode.TooManyAttempts) {
+          return sendHtml(reply, 429, passwordPage({ message: TEXTS.tooManyAttempts }));
+        }
+        // session_invalid clears the cookie in withStaffSession; anything else is our failure
+        throw error;
+      }
     }),
   );
 
