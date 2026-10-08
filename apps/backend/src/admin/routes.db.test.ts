@@ -2612,7 +2612,7 @@ describe('the bot texts pages (#300)', () => {
     expect((await lastEntry(seeded.staffId))?.payload).toMatchObject({
       key: 'zzz',
       result: 'reset',
-      oldText: null,
+      oldText: 'x',
       newText: null,
     });
   });

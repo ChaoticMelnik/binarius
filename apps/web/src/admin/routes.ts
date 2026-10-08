@@ -20,6 +20,8 @@ import {
   staffLoginCodeSchema,
   staffLoginSchema,
   UUID_PATTERN,
+  type AdminBotTextView,
+  type AdminMe,
 } from '@binarius/shared';
 import { sendHtml } from '../html';
 import { BackendError, BackendErrorCode, type BackendClient } from '../backend-client';
@@ -113,8 +115,9 @@ const noticeOf = <K extends string>(query: unknown, notices: Record<K, string>):
 // Only the body's shape (a field sent twice arrives as an array), then the shared schema. The
 // browser sends a textarea with CRLF line breaks; one trailing line feed goes, as the CLI drops it
 // from a file (docs/bot-texts.md → The CLI).
-const botTextForm = z.object({ source: z.string(), version: z.string().regex(/^\d{1,16}$/) });
-const resetForm = z.object({ version: z.string().regex(/^\d{1,16}$/) });
+const VERSION_FIELD = z.string().regex(/^\d{1,16}$/);
+const botTextForm = z.object({ source: z.string(), version: VERSION_FIELD });
+const resetForm = z.object({ version: VERSION_FIELD });
 
 const botTextFormOf = (body: unknown) => {
   const form = botTextForm.safeParse(body);
@@ -600,6 +603,24 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
     request.log.error(errorLogFields(error), 'the bot text write outcome is unknown');
     return sendHtml(reply, 500, noticePage(TEXTS.outcomeUnknownTitle, TEXTS.botTextOutcomeUnknown));
   };
+  // The editor after a POST: the draft and the version from the form, the rest from the answer.
+  const editorAfterPost = (
+    reply: FastifyReply,
+    answer: { me: AdminMe; text: AdminBotTextView },
+    form: { source?: string; expectedVersion: number },
+    status: number,
+    options: BotTextPageOptions,
+  ) =>
+    sendHtml(
+      reply,
+      status,
+      botTextPage(answer.text, {
+        login: answer.me.login,
+        draft: form.source,
+        version: form.expectedVersion,
+        ...options,
+      }),
+    );
 
   app.get(BOT_TEXTS_PATH, async (request, reply) =>
     withStaffSession(request, reply, async (token) => {
@@ -638,19 +659,13 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         if (isNotFound(error)) return textNotFound(reply);
         throw error;
       }
-      const page = (status: number, options: BotTextPageOptions) =>
-        sendHtml(
-          reply,
-          status,
-          botTextPage(answer.text, { login: answer.me.login, draft: form.source, ...options }),
-        );
       switch (answer.outcome) {
         case 'rendered':
-          return page(200, { rendered: answer.rendered });
+          return editorAfterPost(reply, answer, form, 200, { rendered: answer.rendered });
         case 'refused':
-          return page(400, { problems: answer.problems });
+          return editorAfterPost(reply, answer, form, 400, { problems: answer.problems });
         case 'read_only':
-          return page(400, { message: TEXTS.botTextReadOnly });
+          return editorAfterPost(reply, answer, form, 400, { message: TEXTS.botTextReadOnly });
       }
     }),
   );
@@ -670,28 +685,22 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         if (unknown !== undefined) return unknown;
         throw error;
       }
-      const page = (status: number, options: BotTextPageOptions) =>
-        sendHtml(
-          reply,
-          status,
-          botTextPage(answer.text, { login: answer.me.login, draft: form.source, ...options }),
-        );
       switch (answer.outcome) {
         case 'saved':
           return reply.redirect(botTextHref(key, 'saved'), 303);
         case 'unchanged':
-          return page(200, { notice: 'unchanged' });
+          return editorAfterPost(reply, answer, form, 200, { notice: 'unchanged' });
         case 'version_conflict':
-          return page(409, {
+          return editorAfterPost(reply, answer, form, 409, {
             conflict: {
               currentVersion: answer.currentVersion,
               currentSource: answer.currentSource,
             },
           });
         case 'refused':
-          return page(400, { problems: answer.problems });
+          return editorAfterPost(reply, answer, form, 400, { problems: answer.problems });
         case 'read_only':
-          return page(400, { message: TEXTS.botTextReadOnly });
+          return editorAfterPost(reply, answer, form, 400, { message: TEXTS.botTextReadOnly });
       }
     }),
   );
@@ -727,24 +736,23 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       }
       const { text } = answer;
       if (text === null) throw new UnexpectedBotTextOutcome();
-      const page = (status: number, options: BotTextPageOptions) =>
-        sendHtml(reply, status, botTextPage(text, { login: answer.me.login, ...options }));
+      const editor = { me: answer.me, text };
       switch (answer.outcome) {
         case 'reset':
           return reply.redirect(botTextHref(key, 'reset'), 303);
         case 'already_default':
           return reply.redirect(botTextHref(key, 'already_default'), 303);
         case 'version_conflict':
-          return page(409, {
+          return editorAfterPost(reply, editor, form, 409, {
             conflict: {
               currentVersion: answer.currentVersion,
               currentSource: answer.currentSource,
             },
           });
         case 'refused':
-          return page(400, { problems: answer.problems });
+          return editorAfterPost(reply, editor, form, 400, { problems: answer.problems });
         case 'read_only':
-          return page(400, { message: TEXTS.botTextReadOnly });
+          return editorAfterPost(reply, editor, form, 400, { message: TEXTS.botTextReadOnly });
       }
     }),
   );

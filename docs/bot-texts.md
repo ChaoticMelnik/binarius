@@ -233,10 +233,11 @@ refuses:
 A save that changes nothing answers «unchanged», a reset of a default «already default»; neither
 writes. Every save and reset writes `audit_log` in the same transaction: `bot_text_saved` or
 `bot_text_reset`, payload `{ key, action, oldText, newText, oldVersion, newVersion }`, the texts
-in effect before and after. The admin's row adds `path` and `result`, and a refused admin request
-writes the same action with `result` and no texts (admin-pages.md → Audit actions). The admin also
-keeps `commands` and `profile` read-only by its own list, `ADMIN_BOT_TEXT_READ_ONLY_GROUPS`, until
-it republishes them (#361).
+in effect before and after; a reset of a key outside the catalog records the row's text as
+`oldText`, the only copy there is. The admin's row adds `path` and `result`, and a refused admin
+request writes the same action with `result` and no texts (admin-pages.md → Audit actions). The
+admin also keeps `commands` and `profile` read-only by its own list,
+`ADMIN_BOT_TEXT_READ_ONLY_GROUPS`, until it republishes them (#361).
 
 ## Loading
 

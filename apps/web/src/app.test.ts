@@ -2334,7 +2334,7 @@ describe('the bot texts pages (#300)', () => {
     );
     expect(response.statusCode).toBe(200);
     expect(calls.previewBotText).toEqual([[TOKEN, 'welcome', { source: 'a\nb' }]]);
-    expect(response.body).toMatch(/<div class="tg-bubble">\s*<b>Привет<\/b> тут\s*<\/div>/);
+    expect(response.body).toContain('<div class="tg-bubble"><b>Привет</b> тут</div>');
     expect(response.body).not.toContain('javascript:');
     expect(textareaOf(response.body)).toBe('\na\nb');
     expect(response.body).not.toMatch(/<style|<script/);
@@ -2347,6 +2347,67 @@ describe('the bot texts pages (#300)', () => {
     expect(refused.statusCode).toBe(400);
     expect(refused.body).toContain('Битый HTML: x');
     expect(textareaOf(refused.body)).toBe('\n&lt;b&gt;x');
+
+    await rebuild({
+      previewBotText: async () =>
+        answering({ outcome: 'rendered', rendered: { kind: 'plain', text: 'Жми' } }),
+    });
+    const plain = await post(
+      '/admin/bot-texts/connectButton/preview',
+      form('3', 'Жми'),
+      withCookie,
+    );
+    expect(plain.body).toContain('<div class="tg-bubble"><span class="tg-label">Жми</span></div>');
+  });
+
+  // #373 M1: a page built after a POST belongs to the editing session opened on the submitted
+  // version; the fake answers with a fresher one
+  describe('W9 keeps the submitted version on every page after a POST', () => {
+    const fresher = {
+      ...SAMPLE_BOT_TEXT,
+      override: { ...SAMPLE_BOT_TEXT.override!, version: 12 },
+    };
+    const problems = [{ key: 'welcome', reason: 'Пустой текст' }];
+    const answer = (outcome: Record<string, unknown>) =>
+      ({ me: SAMPLE_ME, text: fresher, ...outcome }) as never;
+
+    it.each([
+      [
+        'preview rendered',
+        'preview',
+        'previewBotText',
+        { outcome: 'rendered', rendered: { kind: 'plain', text: 'x' } },
+      ],
+      ['preview refused', 'preview', 'previewBotText', { outcome: 'refused', problems }],
+      ['save unchanged', 'save', 'saveBotText', { outcome: 'unchanged' }],
+      ['save refused', 'save', 'saveBotText', { outcome: 'refused', problems }],
+      ['reset refused', 'reset', 'resetBotText', { outcome: 'refused', problems }],
+    ] as const)('%s', async (_label, action, method, outcome) => {
+      await rebuild({ [method]: async () => answer(outcome) });
+      const response = await post(
+        `/admin/bot-texts/welcome/${action}`,
+        form('7', 'Мой'),
+        withCookie,
+      );
+      expect(versionsOf(response.body)).toEqual(['7', '7']);
+      if (action !== 'reset') expect(textareaOf(response.body)).toBe('\nМой');
+    });
+
+    it.each([
+      ['save', 'saveBotText'],
+      ['reset', 'resetBotText'],
+    ] as const)('moves to the current version only on a %s conflict', async (action, method) => {
+      await rebuild({
+        [method]: async () =>
+          answer({ outcome: 'version_conflict', currentVersion: 12, currentSource: 'Чужой' }),
+      });
+      const response = await post(
+        `/admin/bot-texts/welcome/${action}`,
+        form('7', 'Мой'),
+        withCookie,
+      );
+      expect([response.statusCode, versionsOf(response.body)]).toEqual([409, ['12', '12']]);
+    });
   });
 
   it('W5 saves: 303 on success, the notice on unchanged, the other text on a conflict', async () => {

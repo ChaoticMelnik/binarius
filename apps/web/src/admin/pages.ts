@@ -1132,22 +1132,23 @@ export const placeholderHints = (text: AdminBotTextView): SafeHtml => {
     }`;
 };
 
-const previewBlock = (rendered: AdminBotTextRendered): SafeHtml =>
-  html`<h2>${TEXTS.botTextPreviewHeading}</h2>
-    <div class="tg-bubble">
-      ${
-        rendered.kind === BotTextKind.Html
-          ? telegramPreview(rendered.telegramHtml)
-          : html`<span class="tg-label">${rendered.text}</span>`
-      }
-    </div>
+const previewBlock = (rendered: AdminBotTextRendered): SafeHtml => {
+  const content =
+    rendered.kind === BotTextKind.Html
+      ? telegramPreview(rendered.telegramHtml)
+      : html`<span class="tg-label">${rendered.text}</span>`;
+  return html`<h2>${TEXTS.botTextPreviewHeading}</h2>
+    <div class="tg-bubble">${content}</div>
     <p class="hint">${TEXTS.botTextPreviewHint}</p>`;
+};
 
 export interface BotTextPageOptions {
   login?: string;
   notice?: BotTextNotice;
   // what the staff member submitted; stays in the field
   draft?: string;
+  // the version the staff member opened the text at: the one the form submitted
+  version?: number;
   rendered?: AdminBotTextRendered;
   problems?: readonly AdminBotTextProblem[];
   conflict?: { currentVersion: number; currentSource: string };
@@ -1161,7 +1162,10 @@ export const botTextPage = (text: AdminBotTextView, options: BotTextPageOptions)
   const entry = BOT_TEXT_CATALOG[key];
   const { override } = text;
   const editable = isAdminBotTextEditable(key);
-  const version = options.conflict?.currentVersion ?? override?.version ?? 0;
+  // A page after a POST belongs to the editing session opened on the submitted version; the
+  // fresher one the backend read for it would void the optimistic check (#373 M1). Only the 409
+  // page moves to the current version, on purpose.
+  const version = options.conflict?.currentVersion ?? options.version ?? override?.version ?? 0;
   const value = options.draft ?? override?.source ?? entry.source;
   return adminShell({
     title: `${TEXTS.botTextsTitle}: ${key}`,
