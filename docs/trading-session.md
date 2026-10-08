@@ -68,7 +68,8 @@ A strict object: an unknown key or version is refused. `assetId` and `durationSe
 request's own schemas; `trades` is 1–20; `stake` is the fixed strategy only (Rule 23), with
 `baseStake` in `numeric(20,8)` and `stakeScale` 0–8. The column is checked when it is read, not
 when it is written: the orchestrator parses it and stops a session whose settings fail as
-`invalid_settings`, so a row written by hand is a boundary too.
+`invalid_settings`, so a row written by hand is a boundary too. The bot's view and the admin list
+([admin-pages.md](admin-pages.md), #330) show such settings as null.
 
 `stakeSettingsFor(minTradeAmount)` derives the fixed stake from the account's broker minimum:
 the canonical spelling (leading and trailing zeros stripped, as `normalizeDecimal` in

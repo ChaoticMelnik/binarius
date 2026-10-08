@@ -3,9 +3,9 @@
 Read-only pages for support and debugging, behind the staff login ([staff-login.md](staff-login.md)).
 They change nothing: no page here writes to a table other than `staff_sessions` (the session touch)
 and `audit_log` (the record of the view). #107 adds the overview, the user list with search, and
-the user card; #108 adds the intents list and the intent card; the trading sessions, the trading
-section of the user card and the breakdown of the overview by status are #330; #109–#110 add their
-sections and pages through the same mechanism.
+the user card; #108 adds the intents list and the intent card; #330 adds the trading sessions
+list, the trading section of the user card and the breakdown of the overview by status; #109–#110
+add their sections and pages through the same mechanism.
 
 ## Mechanism
 
@@ -27,8 +27,8 @@ The read functions (`packages/db/src/admin-read-ops.ts`, `admin-trading-ops.ts`)
 refuses a call outside a transaction. That a route's transaction is the one `asStaff` opens — and
 so writes its row — is enforced by review only (see Boundaries).
 
-The reads lock nothing: `users`, `broker_accounts` and `trade_intents` are read without `FOR …`,
-and the session touch is the only `UPDATE`.
+The reads lock nothing: `users`, `broker_accounts`, `trade_intents` and `trading_sessions` are read
+without `FOR …`, and the session touch is the only `UPDATE`.
 
 How `web` acts on a backend answer:
 
@@ -43,7 +43,8 @@ How `web` acts on a backend answer:
 
 ## Pages
 
-Every page has the same nav (Сводка | Пользователи | Сессии | Заявки) and the account block
+Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии)
+and the account block
 («login — Выйти»). The login shown is the one in the `me` of the backend answer the page was built
 from; a page rendered without asking the backend (a refused search) shows no account block.
 `GET /admin` redirects to `/admin/overview`; after a login the landing page is still
@@ -57,7 +58,11 @@ One `SELECT` with subqueries, so all the numbers come from one snapshot and agre
   counted once), and «active now»;
 - trades: `trade_intents` rows, total and today, any status — what was created through the bot and
   the trading sessions. `broker_trades` holds only the trades the broker accepted and is not
-  counted here; the breakdown by status is #330.
+  counted here;
+- trades by status (#330): one count for each of the ten `TradeIntentStatus` values, in the order of
+  the constant, a status with no rows included as 0, and «Активные (не в конечном статусе)» — the sum
+  over the statuses outside `TERMINAL_TRADE_INTENT_STATUSES`. The breakdown is a subquery of the same
+  `SELECT`, so it sums to the total.
 
 **«Today» starts at 00:00 UTC by the database clock**
 (`date_trunc('day', now() at time zone 'UTC') at time zone 'UTC'`), whatever the session time zone.
@@ -121,11 +126,16 @@ The `users` row and its `broker_accounts`, newest first. Sections:
   status, revocation reason, halt and its reason, token expiry and rotation, created and updated.
   The ciphertexts, the key id and the refresh-token hash are never selected.
 
-Under the main section, «Заявки пользователя →» opens the intents list filtered by this user — also
-for a user without broker accounts.
+- **Торговля** (#330) — «Всего заявок: N, активных: M» (active = not in a terminal status), the
+  `ADMIN_USER_RECENT_INTENTS` newest intents of the user in the columns of the intents list (or
+  «Заявок нет.»), and «Все заявки →»: the intents list filtered by this user, with its next pages.
+  The section and the link are there also for a user without broker accounts. The recent intents are
+  read by the list's own query, so their order is the list's.
 
-The user and the accounts are two `SELECT`s without a shared snapshot: an account linked in between
-may or may not show, and either answer was true at its moment.
+The card is four `SELECT`s without a shared snapshot — the user, the accounts, the recent intents,
+the two counters: an account linked or an intent created in between may or may not show, and each
+answer was true at its moment. The section is part of the card's read: it writes no row of its own
+(the one `user_viewed` row stays as it was).
 
 ### Intents — `GET /admin/intents?status=&mode=&user=&session=&cursor=`
 
@@ -158,6 +168,28 @@ reconciliation pass last took the intent (its lease, #89); empty — never. `bro
 text. An empty value is shown as «—». The card reads any user's intent: it is behind the staff
 session, not the bot's owner-scoped read.
 
+### Trading sessions — `GET /admin/trading-sessions?cursor=`
+
+`trading_sessions`, every one of them whatever the status of its account or user, newest first,
+`ADMIN_PAGE_SIZE` per page, keyset on `(created_at, id)` as on the other lists: one `SELECT` joined to
+`broker_accounts` and `users`. Columns: the session id with «Заявки →» (the intents list filtered by
+this session), the owner's Telegram id (a link to the user card), the broker id, mode, status, stop
+reason, then asset, duration, trades and base stake from `settings`, then started, ended and last
+decision. Codes are printed as codes, an empty value as «—».
+
+`settings` is parsed against v1 (`tradingSessionSettingsSchema`) at read, as the orchestrator and the
+bot's view do: a row that does not parse — the column default `{}`, an extra key, another version —
+is shown as «—» in all four settings columns. The raw `jsonb` never reaches the answer; the stake
+scale is the sizer's parameter and is not shown.
+
+No filters and no per-session trade counters. With a running orchestrator the active sessions are
+on the first page: a session ends within `SESSION_MAX_DURATION_MS` of its start, unless the worker
+is down or its sweep falls behind — then an active session can be older and further down the list.
+A session's trades are its intents, one link away.
+
+The next and first links, the redirect and the request to the backend go through
+`adminTradingSessionsSearchParams` (`packages/shared/src/admin.ts`).
+
 ## Audit actions
 
 Each view writes one row with `actor_type = 'admin'` and `actor_id` = the staff id. Payload keys are
@@ -174,6 +206,10 @@ named and bounded; nothing else is recorded.
 | intent card, found | `intent_viewed` | `trade_intent`, the id | `{ path: '/admin/intents/:id', result: 'found', intentId }` |
 | intent card, a uuid with no row | `intent_viewed` | — | `{ path, result: 'not_found', intentId }` |
 | intent card, an id that is not a uuid (direct backend call) | `intent_viewed` | — | `{ path, result: 'not_found' }` |
+| trading sessions | `trading_sessions_viewed` | — | `{ path: '/admin/trading-sessions', cursor? }` — `cursor` only when given |
+
+The card's trading section and the overview's breakdown are parts of `user_viewed` and
+`overview_viewed`; they add no row and no payload key.
 
 ## Boundaries
 
@@ -185,7 +221,7 @@ What `web` refuses before asking the backend, with no row:
 - an intents filter outside the schema (an unknown status or mode, a `user` or `session` that is
   not a uuid — a value of blanks included —, a parameter given twice) → 400 with the form and the
   message, whatever the cursor says;
-- a cursor that is not a uuid → 302 to the same search or filters without it;
+- a cursor that is not a uuid, or given twice → 302 to the same search, filters or list without it;
 - a user or intent card id that is not a uuid → 404.
 
 An empty value (`q=`, or `status=` from the form's empty option) is no parameter: the whole list. Unknown query keys (`utm_*`, a
@@ -206,13 +242,14 @@ around these reads directly is caught only in review.
   `ADMIN_ACTIVE_WINDOW_MINUTES` for «active now» — all in `packages/shared/src/admin.ts`.
 - No rate ceiling on these reads, as on `/admin/sessions`: `web` is a trusted process behind the
   bearer, and the sessions are staff sessions.
-- `users` and `trade_intents` have no index on `created_at`; the lists and the overview scan them.
-  The intents filters `user` and `session` use `trade_intents_user_id_idx` and
-  `trade_intents_session_id_idx`; the order is still a sort.
-  Assumed: up to 100 000 users and 1 000 000 intents on the pilot. If `explain analyze` of the list
-  or the overview passes 200 ms at those sizes, add a `(created_at, id)` index in its own migration.
-- The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most three
-  `SELECT`s.
+- `users`, `trade_intents` and `trading_sessions` have no index on `created_at`; the lists and the
+  overview scan them. The intents filters `user` and `session` and the card's trading section use
+  `trade_intents_user_id_idx` and `trade_intents_session_id_idx`; the order is still a sort.
+  Assumed: up to 100 000 users, 1 000 000 intents and 100 000 trading sessions on the pilot. If
+  `explain analyze` of a list or the overview passes 200 ms at those sizes, add a `(created_at, id)`
+  index in its own migration.
+- The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most four
+  `SELECT`s (the user card).
 
 ## Running it locally
 
@@ -261,8 +298,19 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    Open «Заявки»: two rows, newest first. `?status=active` — «Заявок нет» (both are finished);
    `?status=rejected&mode=demo` — both. The card of `seed-1`: «Заявки этой сессии →» lists one row.
    The card of `seed-<b>`: the request id as text, no session and no session link. The user card:
-   «Заявки пользователя →» lists both. `?status=bogus` — 400, the form, no «Выйти»;
-   `/admin/intents/not-a-uuid` — 404.
+   «Торговля» — «Всего заявок: 2, активных: 0», both rows, and «Все заявки →» lists both.
+   `?status=bogus` — 400, the form, no «Выйти»; `/admin/intents/not-a-uuid` — 404.
+   Then add a second stopped session with the column's default settings, which are not v1. It is
+   terminal: neither the orchestrator nor its sweep reads it, both take only `status = active`:
+   ```bash
+   docker compose exec postgres psql -U binarius -d binarius -c "insert into trading_sessions
+     (broker_account_id, mode, status, stop_reason, ended_at) select id, 'demo', 'stopped',
+     'invalid_settings', now() from broker_accounts where broker_user_id = 'seed-broker-1'"
+   ```
+   Open «Торговые сессии»: two rows. One has asset, duration, trades and stake `1`, `60`, `5`, `1`
+   and the reason `rejected_twice`; the other has «—» in those four columns and `invalid_settings`.
+   «Заявки →» of the first lists one row, of the second «Заявок нет.». The overview, «По статусам»:
+   `rejected` 2, every other status 0, «Активные» 0 (on a volume with no other intents).
 6. Check what was written:
    ```bash
    docker compose exec postgres psql -U binarius -d binarius \
@@ -271,7 +319,8 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    Raise the limit to see the whole walk. Among the rows: `user_viewed` with entity `user`, three
    `users_viewed` with `q` and `by` = `telegram_user_id`, `broker_user_id` and `email`, one
    `users_viewed` with only `path`, and `overview_viewed`; `intents_viewed` with `status`, `mode`,
-   `tradingSessionId` or `userId` — each only on its own request — and `intent_viewed` with entity
-   `trade_intent`. The refused 257-character search, `?status=bogus` and the card id that is not a
-   uuid wrote nothing.
+   `tradingSessionId` or `userId` — each only on its own request —, `intent_viewed` with entity
+   `trade_intent`, and `trading_sessions_viewed` with only `path`; still one `user_viewed` per
+   opening of the card. The refused 257-character search, `?status=bogus` and the card id that is
+   not a uuid wrote nothing.
 7. `docker compose down -v` when done.
