@@ -1,5 +1,6 @@
-// How long a login state lives, from POST /auth/binodex/start to the callback. It has to outlive
-// the user typing their credentials, unlike the 120 s code it leads to.
+// How long a login state lives, from `createOAuthState` to the callback (no route issues one
+// since #314). It has to outlive the user typing their credentials, unlike the 120 s code it leads
+// to.
 export const OAUTH_STATE_TTL_MS = 600_000;
 
 // How far the clocks of Telegram's servers, which stamp initData's auth_date, and of this host
