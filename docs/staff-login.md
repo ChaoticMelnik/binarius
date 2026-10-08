@@ -91,7 +91,7 @@ tests run against a native Postgres on the host instead (README → Test databas
 `POST /admin/auth/password` (#78) runs under the staff session like every other admin request.
 The body is `currentPassword`, `newPassword` and the client facts: both passwords 1–256
 characters, the new one different from the current one — `adminChangePasswordRequestSchema`, one
-schema for the backend and for the web page that will call it (#79). Three phases, as at login:
+schema for the backend and for the web page that calls it (#79). Three phases, as at login:
 
 1. **A read** by the session token (`findStaffForPasswordChange`): the hash, and the lockout if one
    is running. It is outside any transaction and writes no row, like the login's lookup: the KDF
@@ -140,6 +140,10 @@ different staff members revoking each other are not ordered by it (#151).
 Nothing is sent to Telegram. Resetting another staff member's password stays the CLI's
 `staff reset-password`: there are no roles yet.
 
+The page is `/admin/password` ([admin-pages.md](admin-pages.md) → Сменить пароль): the current
+password and the new one twice; `apps/web` refuses a mismatch and the shared schema before the
+backend is asked, and never renders or logs the values.
+
 ## What is written down
 
 Every login attempt that reached the password check, every button press that matched a challenge,
@@ -150,6 +154,7 @@ transaction as the thing it records: no row, no data (`runAsStaff`, `startLoginC
 session that is not live (401), a password change refused before its transaction (a token of the
 wrong shape, a session the pre-read finds not live, a body outside the schema, a full scrypt
 queue), a session id, or a user or intent card id, that is not a uuid,
+or a password form whose two entries differ or fail the schema (400),
 which `apps/web` refuses before the backend is asked, and a search query, a list filter or an
 audit filter outside its schema (400), which `apps/web` also refuses before asking. The actions are a closed list (`AuditAction`, enforced
 by `audit_log_action_check`), and the payloads hold only named keys — never a password, a code,
