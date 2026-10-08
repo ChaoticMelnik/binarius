@@ -56,6 +56,8 @@ export interface SocketContinuity {
 
 export interface VerdictInput {
   userDataVerified: Record<ProbeSocket, boolean>;
+  // a user.data with another id arrived after command 1
+  userDataForeign: Record<ProbeSocket, boolean>;
   phases: Record<Phase, PhaseRecord>;
   sockets: Record<ProbeSocket, SocketContinuity>;
 }
@@ -138,6 +140,11 @@ export function verdict(input: VerdictInput): ProbeVerdict {
       input.userDataVerified[socket]
         ? undefined
         : `user.data on ${socket} did not match the account before command 1`,
+    ),
+    ...PROBE_SOCKETS.map((socket) =>
+      input.userDataForeign[socket]
+        ? `user.data on ${socket} carried another user's id during the run`
+        : undefined,
     ),
     ...PROBE_PHASES.flatMap((phase) => {
       const record = input.phases[phase];
