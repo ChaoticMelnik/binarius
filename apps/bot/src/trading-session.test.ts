@@ -13,7 +13,12 @@ import {
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
-import { demoAnalysisCallbackData, sessionStartCallbackData, stakeMenuCallbackData } from './demo';
+import {
+  DEMO_SIGNALS_CALLBACK_DATA,
+  demoAnalysisCallbackData,
+  sessionStartCallbackData,
+  stakeMenuCallbackData,
+} from './demo';
 import type { SessionTrackRequest } from './session-tracker';
 import {
   BOT_INFO,
@@ -122,7 +127,19 @@ const LIVE_ROWS = [
 ];
 // SESSION_VIEW's own pair and duration
 const AGAIN = button(LABELS.sessionAgainButton, sessionStartCallbackData(PAIR_EURUSD.id, 15));
-const STOPPED_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)], [AGAIN]];
+// #350: the end of the path under a stopped session, after its refresh and «🔁 Ещё сессия»
+const TO_SIGNALS = [button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA)];
+const MENU = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
+const newAnalysis = (durationSec: 5 | 15) => [
+  button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, durationSec)),
+];
+const STOPPED_ROWS = [
+  [button(LABELS.sessionRefreshButton, REFRESH)],
+  [AGAIN],
+  newAnalysis(15),
+  TO_SIGNALS,
+  MENU,
+];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
 // #350: a refusal of the start leads back to the analysis and to the menu; a blocked user to support
 const MENU_ROW = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
@@ -479,18 +496,26 @@ describe('«🔁 Ещё сессия»', () => {
     ).toEqual([
       [button(LABELS.sessionRefreshButton, REFRESH)],
       [button(LABELS.sessionAgainButton, sessionStartCallbackData(PAIR_EURUSD.id, 5))],
+      newAnalysis(5),
+      TO_SIGNALS,
+      MENU,
     ]);
     expect(rows(SESSION_VIEW)).toEqual(LIVE_ROWS);
     expect(rows(sessionView({ status: TradingSessionStatus.Paused }))).toEqual(LIVE_ROWS);
   });
 
   it('is not drawn without settings or on a duration the demo no longer offers', () => {
-    const refreshOnly = [[button(LABELS.sessionRefreshButton, REFRESH)]];
-    expect(sessionKeyboard({ ...STOPPED, settings: null }).inline_keyboard).toEqual(refreshOnly);
+    const refresh = [button(LABELS.sessionRefreshButton, REFRESH)];
+    // without settings only the menu follows: no pair to analyse
+    expect(sessionKeyboard({ ...STOPPED, settings: null }).inline_keyboard).toEqual([
+      refresh,
+      MENU,
+    ]);
+    // an old duration: no «🔁 Ещё сессия» and no «📊 Новый анализ», the signals and the menu stay
     expect(
       sessionKeyboard({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 60 } })
         .inline_keyboard,
-    ).toEqual(refreshOnly);
+    ).toEqual([refresh, TO_SIGNALS, MENU]);
   });
 
   it('starts a new session of the same pair and duration through the session button', async () => {

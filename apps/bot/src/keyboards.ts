@@ -1,6 +1,6 @@
 import { InlineKeyboard } from 'grammy';
 import { DEMO_CALLBACK_DATA, MENU_CALLBACK_DATA, supportUrl } from '@binarius/shared';
-import { demoAnalysisCallbackData } from './demo';
+import { DEMO_SIGNALS_CALLBACK_DATA, demoAnalysisCallbackData, durationOf } from './demo';
 import type { DemoDurationSec } from './demo-catalog';
 import { LABELS } from './texts';
 
@@ -36,3 +36,24 @@ export const backToAnalysisKeyboard = (assetId: number, durationSec: DemoDuratio
       demoAnalysisCallbackData(assetId, durationSec),
     ),
   );
+
+// The end of a path: a trade the tracker no longer follows, a stopped session (#350). The
+// analysis of the same pair and duration while the demo still offers it, the signals, the menu;
+// each in its own row, under the rows a caller already put in `keyboard` (or none).
+export function appendEndOfPath(
+  keyboard: InlineKeyboard,
+  assetId: number,
+  durationSec: number,
+): InlineKeyboard {
+  const demoDuration = durationOf(String(durationSec));
+  const rows = [
+    ...(demoDuration === undefined
+      ? []
+      : [[button(LABELS.newAnalysisButton, demoAnalysisCallbackData(assetId, demoDuration))]]),
+    [button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA)],
+    [button(LABELS.menuButton, MENU_CALLBACK_DATA)],
+  ];
+  return new InlineKeyboard([...keyboard.inline_keyboard.filter((row) => row.length > 0), ...rows]);
+}
+
+const button = (text: string, callback_data: string) => ({ text, callback_data });
