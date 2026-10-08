@@ -318,11 +318,14 @@ export function attachMockSocket(
         return;
       }
       case MockChangeType.PairUpdated:
-        emitTo(io.to(AUTHENTICATED_ROOM), BrokerSocketEvent.CommonAssetsUpdate, {
-          asset_id: change.pair.id,
-          payout: change.pair.payout,
-          scheduled_until: change.pair.scheduled_until,
-        });
+        // the live form is an array of patches (#368); a pairs.update() is one pair
+        emitTo(io.to(AUTHENTICATED_ROOM), BrokerSocketEvent.CommonAssetsUpdate, [
+          {
+            asset_id: change.pair.id,
+            payout: change.pair.payout,
+            scheduled_until: change.pair.scheduled_until,
+          },
+        ]);
         return;
       case MockChangeType.TokenRevoked:
         emitTo(toUser(change.userId), BrokerSocketEvent.UserDisconnectTokenExpired, null);

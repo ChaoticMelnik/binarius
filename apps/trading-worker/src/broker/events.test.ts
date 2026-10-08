@@ -183,8 +183,11 @@ const payloadCases: PayloadCase[] = [
   },
   {
     name: 'common.assets_update',
-    wire: { asset_id: 91, payout: 80 },
-    event: { type: BrokerEventType.AssetsUpdate, update: { assetId: 91, payout: 80 } },
+    wire: [{ asset_id: 91, payout: 80, scheduled_until: 0 }],
+    event: {
+      type: BrokerEventType.AssetsUpdate,
+      updates: [{ assetId: 91, payout: 80, scheduledUntil: 0 }],
+    },
   },
   {
     name: 'user.data',
@@ -360,18 +363,36 @@ describe('normalizeBrokerEvent: payload events × payload forms', () => {
     });
   });
 
+  // #368: one event carrying every patch, in order; an empty array is an event with none
   it.each([
     [
-      { id: 91, scheduled_until: 0 },
-      { assetId: 91, scheduledUntil: 0 },
+      [
+        { asset_id: 91, payout: 80, scheduled_until: 0 },
+        { asset_id: 92, payout: 75, scheduled_until: 1790028496624 },
+      ],
+      [
+        { assetId: 91, payout: 80, scheduledUntil: 0 },
+        { assetId: 92, payout: 75, scheduledUntil: 1790028496624 },
+      ],
     ],
-    [{ asset_id: 91, id: 91 }, { assetId: 91 }],
-  ])('accepts assets_update %j', (wire, update) => {
+    [[], []],
+  ])('A3 accepts assets_update %j', (wire, updates) => {
     expect(normalizeBrokerEvent('common.assets_update', [wire])).toEqual({
       ok: true,
-      event: { type: BrokerEventType.AssetsUpdate, update },
+      event: { type: BrokerEventType.AssetsUpdate, updates },
       extraArgs: 0,
     });
+  });
+
+  it('A4 reports the old object form of assets_update with its shape', () => {
+    const problem = expectProblem(
+      normalizeBrokerEvent('common.assets_update', [
+        { asset_id: 91, payout: 80, scheduled_until: 0 },
+      ]),
+    );
+    if (problem.kind !== BrokerEventProblemKind.Schema) throw new Error('not a schema problem');
+    expect(problem.issues).toContainEqual({ code: 'invalid_type', path: '' });
+    expect(problem.shape).toBe('{asset_id: number, payout: number, scheduled_until: number}');
   });
 
   it('accepts an empty open_trade.fail and an empty close_trade.success', () => {
@@ -557,8 +578,16 @@ describe('normalizeBrokerEvent: problems', () => {
       [pairWire, { ...pairWire, payout: 'x' }],
       { code: 'invalid_type', path: '1.payout' },
     ],
-    ['common.assets_update', { payout: 80 }, { code: 'custom', path: '' }],
-    ['common.assets_update', { asset_id: 91, id: 92 }, { code: 'custom', path: '' }],
+    [
+      'common.assets_update',
+      [{ payout: 80, scheduled_until: 0 }],
+      { code: 'invalid_type', path: '0.asset_id' },
+    ],
+    [
+      'common.assets_update',
+      [{ id: 91, payout: 80, scheduled_until: 0 }],
+      { code: 'invalid_type', path: '0.asset_id' },
+    ],
     ['user.data', { ...userWire, id: undefined }, { code: 'invalid_union', path: 'id' }],
     ['user.data', { ...userWire, id: {} }, { code: 'invalid_union', path: 'id' }],
     [

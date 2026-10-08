@@ -21,7 +21,6 @@ import {
   safeParsePriceUpdate,
   safeParseUserAuthError,
   socketOpenTradeRequestWireSchema,
-  toAssetsUpdate,
   toSocketOpenTradeRequestWire,
   userAuthWireSchema,
 } from './socket';
@@ -155,26 +154,30 @@ describe('server → client payloads', () => {
     expect(safeParsePriceUpdate([91, 1.08765]).success).toBe(false);
   });
 
+  // #368: the live form, an array of patches with all three fields
+  it('A1 parses the live assets_update, an array of patches, in order', () => {
+    expect(
+      parseAssetsUpdate([
+        { asset_id: 91, payout: 80, scheduled_until: 0 },
+        { asset_id: 92, payout: 75, scheduled_until: 1790028496624, extra: 'x' },
+        { asset_id: 93, payout: 0, scheduled_until: 0 },
+      ]),
+    ).toEqual([
+      { assetId: 91, payout: 80, scheduledUntil: 0 },
+      { assetId: 92, payout: 75, scheduledUntil: 1790028496624 },
+      { assetId: 93, payout: 0, scheduledUntil: 0 },
+    ]);
+    expect(parseAssetsUpdate([])).toEqual([]);
+  });
+
   it.each([
-    [
-      { asset_id: 91, payout: 80 },
-      { assetId: 91, payout: 80 },
-    ],
-    [
-      { id: 91, scheduled_until: 0 },
-      { assetId: 91, scheduledUntil: 0 },
-    ],
-    [{ asset_id: 91, id: 91 }, { assetId: 91 }],
-  ])('parses assets_update %j', (wire, domain) => {
-    expect(parseAssetsUpdate(wire)).toEqual(domain);
-  });
-
-  it.each([{ payout: 80 }, { asset_id: 91, id: 92 }])('rejects assets_update %j', (wire) => {
+    ['the old object form', { asset_id: 91, payout: 80, scheduled_until: 0 }],
+    ['the id alias', [{ id: 91, payout: 80, scheduled_until: 0 }]],
+    ['a patch without payout', [{ asset_id: 91, scheduled_until: 0 }]],
+    ['a patch without scheduled_until', [{ asset_id: 91, payout: 80 }]],
+    ['a negative scheduled_until', [{ asset_id: 91, payout: 80, scheduled_until: -1 }]],
+  ])('A2 refuses %s', (_label, wire) => {
     expect(safeParseAssetsUpdate(wire).success).toBe(false);
-  });
-
-  it('guards toAssetsUpdate against a hand-built wire without a key', () => {
-    expect(() => toAssetsUpdate({})).toThrow('assets_update without asset_id or id');
   });
 
   it('exposes safe parsers for the socket-only payloads', () => {

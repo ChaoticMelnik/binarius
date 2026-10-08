@@ -581,13 +581,14 @@ describe('fan-out from the store', () => {
     await stranger.expectQuiet(ev('real', 'close_trade.success'));
   });
 
-  it('pairs.update reaches the authenticated sockets only', async () => {
+  it('A5 pairs.update reaches the authenticated sockets only, as a one-patch array', async () => {
     const client = await authed();
     const anonymous = await connectClient();
     broker.pairs.update(EURUSD, { payout: 70 });
     const [update] = await client.waitFor(BrokerSocketEvent.CommonAssetsUpdate);
     expect(safeParseAssetsUpdate(update).success).toBe(true);
-    expect(update).toEqual({ asset_id: EURUSD, payout: 70, scheduled_until: 0 });
+    // #368: the live form, an array of patches; a pairs.update() is one pair
+    expect(update).toEqual([{ asset_id: EURUSD, payout: 70, scheduled_until: 0 }]);
     await anonymous.expectQuiet(BrokerSocketEvent.CommonAssetsUpdate);
   });
 

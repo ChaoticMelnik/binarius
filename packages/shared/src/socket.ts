@@ -101,41 +101,29 @@ export function toPriceUpdate(wire: PriceUpdateWire): PriceUpdate {
   return { assetId, price, timestamp };
 }
 
-// TODO(#8): drop the id alias once the patch key is confirmed; until then either is accepted and
-// both must agree when present
-export const assetsUpdateWireSchema = z
-  .looseObject({
-    asset_id: z.int().optional(),
-    id: z.int().optional(),
-    payout: z.number().optional(),
-    scheduled_until: z.number().nonnegative().optional(),
-  })
-  .refine((patch) => patch.asset_id !== undefined || patch.id !== undefined, {
-    error: 'assets_update needs asset_id or id',
-  })
-  .refine(
-    (patch) =>
-      patch.asset_id === undefined || patch.id === undefined || patch.asset_id === patch.id,
-    { error: 'assets_update asset_id and id disagree' },
-  );
+// An array of patches, each with all three fields (observed live on the pilot after #354, #368:
+// one event of 8). scheduled_until reads as in assets_list: unix ms "not tradable until", 0 open.
+export const assetsUpdateWireSchema = z.array(
+  z.looseObject({
+    asset_id: z.int(),
+    payout: z.number(),
+    scheduled_until: z.number().nonnegative(),
+  }),
+);
 export type AssetsUpdateWire = z.infer<typeof assetsUpdateWireSchema>;
 
 export interface AssetsUpdate {
   assetId: number;
-  payout?: number;
-  scheduledUntil?: number;
+  payout: number;
+  scheduledUntil: number;
 }
 
-export function toAssetsUpdate(wire: AssetsUpdateWire): AssetsUpdate {
-  const assetId = wire.asset_id ?? wire.id;
-  // the refine guarantees one key, but that is invisible to the inferred type
-  if (assetId === undefined) throw new Error('assets_update without asset_id or id');
-  return {
-    assetId,
-    ...(wire.payout === undefined ? {} : { payout: wire.payout }),
-    ...(wire.scheduled_until === undefined ? {} : { scheduledUntil: wire.scheduled_until }),
-  };
-}
+export const toAssetsUpdates = (wire: AssetsUpdateWire): AssetsUpdate[] =>
+  wire.map((patch) => ({
+    assetId: patch.asset_id,
+    payout: patch.payout,
+    scheduledUntil: patch.scheduled_until,
+  }));
 
 export const openTradeFailWireSchema = z.array(
   z.looseObject({ message: z.string(), field: z.string().optional() }),
@@ -182,7 +170,7 @@ export interface BrokerServerToClientEvents {
   'user.disconnect_token_expired': () => void;
   'price.update': (payload: PriceUpdateWire) => void;
   'common.assets_list': (payload: BinaryPairWire[]) => void;
-  'common.assets_update': (payload: AssetsUpdateWire) => void;
+  'common.assets_update': (payload: z.input<typeof assetsUpdateWireSchema>) => void;
   'user.data': (payload: BrokerUserWireInput) => void;
   'user.demo.open_trade.success': (payload: SocketOpenTradeWireInput) => void;
   'user.real.open_trade.success': (payload: SocketOpenTradeWireInput) => void;
@@ -270,8 +258,8 @@ export const safeParseUserAuthError = (input: unknown) => userAuthErrorWireSchem
 export const parsePriceUpdate = (input: unknown): PriceUpdate =>
   toPriceUpdate(priceUpdateWireSchema.parse(input));
 export const safeParsePriceUpdate = (input: unknown) => priceUpdateWireSchema.safeParse(input);
-export const parseAssetsUpdate = (input: unknown): AssetsUpdate =>
-  toAssetsUpdate(assetsUpdateWireSchema.parse(input));
+export const parseAssetsUpdate = (input: unknown): AssetsUpdate[] =>
+  toAssetsUpdates(assetsUpdateWireSchema.parse(input));
 export const safeParseAssetsUpdate = (input: unknown) => assetsUpdateWireSchema.safeParse(input);
 export const parseOpenTradeFail = (input: unknown): OpenTradeFailure[] =>
   toOpenTradeFailures(openTradeFailWireSchema.parse(input));
