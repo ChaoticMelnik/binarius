@@ -33,8 +33,9 @@ export const TEXTS = {
 
   navOverview: 'Сводка',
   navUsers: 'Пользователи',
-  navSessions: 'Сессии',
+  navSessions: 'Сессии сотрудников',
   navIntents: 'Заявки',
+  navTradingSessions: 'Торговые сессии',
   navLabel: 'Разделы админки',
 
   overviewTitle: 'Сводка',
@@ -50,6 +51,8 @@ export const TEXTS = {
   overviewIntents: 'Сделки',
   overviewIntentsTotal: 'Всего',
   overviewIntentsToday: 'Сегодня',
+  overviewIntentsByStatus: 'По статусам',
+  overviewIntentsActive: 'Активные (не в конечном статусе)',
   overviewDayStartsAt: '«Сегодня» — с',
   overviewAsOf: 'Данные на',
 
@@ -100,7 +103,11 @@ export const TEXTS = {
   notificationLevel: { all: 'все', reduced: 'сокращённые', off: 'выключены' },
   userNotFoundTitle: 'Пользователь не найден',
   userNotFoundBody: 'Такого пользователя нет.',
-  userIntentsAll: 'Заявки пользователя →',
+  userTrading: 'Торговля',
+  userIntentsCounts: (total: number, active: number) =>
+    `Всего заявок: ${total}, активных: ${active}`,
+  userIntentsRecent: (n: number) => `Последние ${n}`,
+  userIntentsAll: 'Все заявки →',
 
   intentsTitle: 'Заявки',
   intentsHeading: 'Заявки',
@@ -137,6 +144,20 @@ export const TEXTS = {
   fieldReconcileClaimedAt: 'Последняя сверка',
   intentNotFoundTitle: 'Заявка не найдена',
   intentNotFoundBody: 'Такой заявки нет.',
+
+  tradingSessionsTitle: 'Торговые сессии',
+  tradingSessionsHeading: 'Торговые сессии',
+  tradingSessionsEmpty: 'Торговых сессий нет.',
+  tradingSessionsNext: 'Далее',
+  tradingSessionsFirst: 'В начало',
+  tradingSessionIntents: 'Заявки →',
+  columnSessionId: 'ID сессии',
+  columnStopReason: 'Причина остановки',
+  columnTrades: 'Сделок',
+  columnStake: 'Ставка',
+  columnStartedAt: 'Начата',
+  columnEndedAt: 'Завершена',
+  columnLastDecisionAt: 'Последнее решение',
 
   invalidCredentials: 'Неверный логин или пароль',
   tooManyAttempts: 'Слишком много попыток. Подождите и попробуйте снова',

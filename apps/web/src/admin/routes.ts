@@ -5,6 +5,7 @@ import {
   CLIENT_USER_AGENT_MAX_LENGTH,
   errorLogFields,
   safeParseAdminIntentsQuery,
+  safeParseAdminTradingSessionsQuery,
   safeParseAdminUsersQuery,
   STAFF_PASSWORD_MAX_LENGTH,
   STAFF_SESSION_TOKEN_PATTERN,
@@ -23,6 +24,8 @@ import {
   loginPage,
   overviewPage,
   sessionsPage,
+  tradingSessionsHref,
+  tradingSessionsPage,
   userPage,
   usersHref,
   usersPage,
@@ -181,8 +184,8 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         return sendHtml(reply, 404, noticePage(TEXTS.userNotFoundTitle, TEXTS.userNotFoundBody));
       }
       try {
-        const { me, user, brokerAccounts } = await backend.user(token, id);
-        return sendHtml(reply, 200, userPage(user, brokerAccounts, me.login));
+        const { me, user, brokerAccounts, intents } = await backend.user(token, id);
+        return sendHtml(reply, 200, userPage(user, brokerAccounts, intents, me.login));
       } catch (error) {
         const answered = outcome(error);
         if (answered?.status === 404 && answered.code === AdminErrorCode.NotFound) {
@@ -216,6 +219,22 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         reply,
         200,
         intentsPage(intents, { filters, cursor, nextCursor, login: me.login }),
+      );
+    }),
+  );
+
+  app.get('/admin/trading-sessions', async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      // no filters, so nothing to refuse with a 400: a cursor of the wrong shape (or twice) is
+      // dropped, as on the other lists
+      const parsed = safeParseAdminTradingSessionsQuery(compactQuery(request.query));
+      if (!parsed.success) return reply.redirect(tradingSessionsHref({}), 302);
+      const { cursor } = parsed.data;
+      const { me, sessions, nextCursor } = await backend.tradingSessions(token, { cursor });
+      return sendHtml(
+        reply,
+        200,
+        tradingSessionsPage(sessions, { cursor, nextCursor, login: me.login }),
       );
     }),
   );

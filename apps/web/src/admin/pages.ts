@@ -1,6 +1,8 @@
 import {
   ADMIN_INTENTS_ACTIVE_FILTER,
+  ADMIN_USER_RECENT_INTENTS,
   adminIntentsSearchParams,
+  adminTradingSessionsSearchParams,
   adminUsersSearchParams,
   TradeIntentStatus,
   TradeMode,
@@ -8,7 +10,10 @@ import {
   type AdminIntentsQuery,
   type AdminOverview,
   type AdminTradeIntentView,
+  type AdminTradingSessionsQuery,
+  type AdminTradingSessionView,
   type AdminUserDetail,
+  type AdminUserIntentsSection,
   type AdminUserListItem,
   type AdminUsersQuery,
   type StaffSessionView,
@@ -85,13 +90,14 @@ const yesNo = (value: boolean): string => (value ? TEXTS.yes : TEXTS.no);
 
 // The pages a staff session opens, in nav order. The read pages that follow #107 append their
 // keys here; a page outside the nav passes no `active`.
-export type AdminNavKey = 'overview' | 'users' | 'sessions' | 'intents';
+export type AdminNavKey = 'overview' | 'users' | 'sessions' | 'intents' | 'tradingSessions';
 
 const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview },
   { key: 'users', href: '/admin/users', label: TEXTS.navUsers },
   { key: 'sessions', href: '/admin/sessions', label: TEXTS.navSessions },
   { key: 'intents', href: '/admin/intents', label: TEXTS.navIntents },
+  { key: 'tradingSessions', href: '/admin/trading-sessions', label: TEXTS.navTradingSessions },
 ];
 
 /**
@@ -197,6 +203,16 @@ export const overviewPage = (overview: AdminOverview, login: string): SafeHtml =
         <dd>${overview.intents.total}</dd>
         <dt>${TEXTS.overviewIntentsToday}</dt>
         <dd>${overview.intents.today}</dd>
+        <dt>${TEXTS.overviewIntentsActive}</dt>
+        <dd>${overview.intents.active}</dd>
+      </dl>
+      <h3>${TEXTS.overviewIntentsByStatus}</h3>
+      <dl>
+        ${Object.values(TradeIntentStatus).map(
+          (status) =>
+            html`<dt>${code(status)}</dt>
+              <dd>${overview.intents.byStatus[status]}</dd>`,
+        )}
       </dl>
       <p class="hint">
         ${TEXTS.overviewDayStartsAt} ${when(overview.dayStartsAt)}. ${TEXTS.overviewAsOf}
@@ -291,6 +307,7 @@ const accountRow = (account: AdminBrokerAccountView): SafeHtml =>
 export const userPage = (
   user: AdminUserDetail,
   brokerAccounts: readonly AdminBrokerAccountView[],
+  intents: AdminUserIntentsSection,
   login: string,
 ): SafeHtml =>
   adminShell({
@@ -334,7 +351,6 @@ export const userPage = (
         <dt>${TEXTS.fieldAvailable}</dt>
         <dd>${user.tokens.available}</dd>
       </dl>
-      <p><a href="${intentsHref({ user: user.id })}">${TEXTS.userIntentsAll}</a></p>
       <h2>${TEXTS.userBrokerAccounts}</h2>
       ${
         brokerAccounts.length === 0
@@ -359,7 +375,16 @@ export const userPage = (
                 ${brokerAccounts.map(accountRow)}
               </tbody>
             </table>`
-      }`,
+      }
+      <h2>${TEXTS.userTrading}</h2>
+      <p>${TEXTS.userIntentsCounts(intents.total, intents.active)}</p>
+      ${
+        intents.recent.length === 0
+          ? html`<p>${TEXTS.intentsEmpty}</p>`
+          : html`<p class="hint">${TEXTS.userIntentsRecent(ADMIN_USER_RECENT_INTENTS)}</p>
+              ${intentsTable(intents.recent)}`
+      }
+      <p><a href="${intentsHref({ user: user.id })}">${TEXTS.userIntentsAll}</a></p>`,
   });
 
 /** The intents list URL, through the same serializer as usersHref. */
@@ -389,6 +414,28 @@ const intentRow = (intent: AdminTradeIntentView): SafeHtml =>
     <td>${when(intent.createdAt)}</td>
     <td>${code(intent.lastError)}</td>
   </tr>`;
+
+// The intents table of the list and of the user card's trading section: one set of columns.
+const intentsTable = (intents: readonly AdminTradeIntentView[]): SafeHtml =>
+  html`<table>
+    <thead>
+      <tr>
+        <th>${TEXTS.columnIntentId}</th>
+        <th>${TEXTS.columnTelegramId}</th>
+        <th>${TEXTS.columnMode}</th>
+        <th>${TEXTS.columnStatus}</th>
+        <th>${TEXTS.columnDirection}</th>
+        <th>${TEXTS.columnAmount}</th>
+        <th>${TEXTS.columnAsset}</th>
+        <th>${TEXTS.columnDuration}</th>
+        <th>${TEXTS.columnUserCreatedAt}</th>
+        <th>${TEXTS.columnLastError}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${intents.map(intentRow)}
+    </tbody>
+  </table>`;
 
 export const intentsPage = (
   intents: readonly AdminTradeIntentView[],
@@ -434,29 +481,7 @@ export const intentsPage = (
         <button type="submit">${TEXTS.intentsFilterSubmit}</button>
       </form>
       <p class="hint">${TEXTS.intentsFilterHint}</p>
-      ${
-        intents.length === 0
-          ? html`<p>${TEXTS.intentsEmpty}</p>`
-          : html`<table>
-              <thead>
-                <tr>
-                  <th>${TEXTS.columnIntentId}</th>
-                  <th>${TEXTS.columnTelegramId}</th>
-                  <th>${TEXTS.columnMode}</th>
-                  <th>${TEXTS.columnStatus}</th>
-                  <th>${TEXTS.columnDirection}</th>
-                  <th>${TEXTS.columnAmount}</th>
-                  <th>${TEXTS.columnAsset}</th>
-                  <th>${TEXTS.columnDuration}</th>
-                  <th>${TEXTS.columnUserCreatedAt}</th>
-                  <th>${TEXTS.columnLastError}</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${intents.map(intentRow)}
-              </tbody>
-            </table>`
-      }
+      ${intents.length === 0 ? html`<p>${TEXTS.intentsEmpty}</p>` : intentsTable(intents)}
       <p class="pager">
         ${
           options.cursor !== undefined || intents.length === 0
@@ -531,4 +556,84 @@ export const intentPage = (intent: AdminTradeIntentView, login: string): SafeHtm
         <dt>${TEXTS.columnUpdatedAt}</dt>
         <dd>${when(intent.updatedAt)}</dd>
       </dl>`,
+  });
+
+/** The trading sessions list URL, through the shared serializer as the other lists. */
+export const tradingSessionsHref = (query: AdminTradingSessionsQuery): string => {
+  const params = adminTradingSessionsSearchParams(query);
+  return params.size > 0 ? `/admin/trading-sessions?${params}` : '/admin/trading-sessions';
+};
+
+// settings are null when the row does not parse as v1: each of its cells then prints "—"
+const tradingSessionRow = (session: AdminTradingSessionView): SafeHtml => {
+  const { settings } = session;
+  return html`<tr>
+    <td>
+      ${session.id}
+      <a href="${intentsHref({ session: session.id })}">${TEXTS.tradingSessionIntents}</a>
+    </td>
+    <td><a href="/admin/users/${session.userId}">${session.telegramUserId}</a></td>
+    <td>${session.brokerUserId}</td>
+    <td>${code(session.mode)}</td>
+    <td>${code(session.status)}</td>
+    <td>${code(session.stopReason)}</td>
+    <td>${settings === null ? TEXTS.none : settings.assetId}</td>
+    <td>${settings === null ? TEXTS.none : settings.durationSec}</td>
+    <td>${settings === null ? TEXTS.none : settings.trades}</td>
+    <td>${settings === null ? TEXTS.none : settings.stake.baseStake}</td>
+    <td>${when(session.startedAt)}</td>
+    <td>${whenOrNone(session.endedAt)}</td>
+    <td>${whenOrNone(session.lastDecisionAt)}</td>
+  </tr>`;
+};
+
+export const tradingSessionsPage = (
+  sessions: readonly AdminTradingSessionView[],
+  options: { cursor?: string; nextCursor: string | null; login: string },
+): SafeHtml =>
+  adminShell({
+    title: TEXTS.tradingSessionsTitle,
+    active: 'tradingSessions',
+    login: options.login,
+    body: html`<h1>${TEXTS.tradingSessionsHeading}</h1>
+      ${
+        sessions.length === 0
+          ? html`<p>${TEXTS.tradingSessionsEmpty}</p>`
+          : html`<table>
+              <thead>
+                <tr>
+                  <th>${TEXTS.columnSessionId}</th>
+                  <th>${TEXTS.columnTelegramId}</th>
+                  <th>${TEXTS.columnBrokerUserId}</th>
+                  <th>${TEXTS.columnMode}</th>
+                  <th>${TEXTS.columnStatus}</th>
+                  <th>${TEXTS.columnStopReason}</th>
+                  <th>${TEXTS.columnAsset}</th>
+                  <th>${TEXTS.columnDuration}</th>
+                  <th>${TEXTS.columnTrades}</th>
+                  <th>${TEXTS.columnStake}</th>
+                  <th>${TEXTS.columnStartedAt}</th>
+                  <th>${TEXTS.columnEndedAt}</th>
+                  <th>${TEXTS.columnLastDecisionAt}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${sessions.map(tradingSessionRow)}
+              </tbody>
+            </table>`
+      }
+      <p class="pager">
+        ${
+          options.cursor !== undefined || sessions.length === 0
+            ? html`<a href="${tradingSessionsHref({})}">${TEXTS.tradingSessionsFirst}</a>`
+            : ''
+        }
+        ${
+          options.nextCursor === null
+            ? ''
+            : html`<a href="${tradingSessionsHref({ cursor: options.nextCursor })}"
+                >${TEXTS.tradingSessionsNext}</a
+              >`
+        }
+      </p>`,
   });
