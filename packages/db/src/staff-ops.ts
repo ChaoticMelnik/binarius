@@ -3,12 +3,8 @@ import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Db } from './client';
 import { hashToken } from './oauth-ops';
 import type { DbExecutor, Tx } from './trade-intent-ops';
-import {
-  AuditAction,
-  AuditActorType,
-  AuditEntityType,
-  auditLog,
-} from './schema/audit-log';
+import { AuditAction, AuditActorType, AuditEntityType } from '@binarius/shared';
+import { auditLog } from './schema/audit-log';
 import { sqlLiteralList } from './schema/columns';
 import { staff, StaffStatus } from './schema/staff';
 import {

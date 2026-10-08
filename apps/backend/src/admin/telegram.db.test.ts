@@ -1,8 +1,8 @@
 import { and, eq } from 'drizzle-orm';
 import { GrammyError } from 'grammy';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { AuditAction } from '@binarius/shared';
 import {
-  AuditAction,
   auditLog,
   completeLogin,
   confirmChallengeFromTelegram,

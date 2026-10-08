@@ -1,7 +1,12 @@
 import { eq, not, sql, type SQL } from 'drizzle-orm';
-import { TradingSwitchSource } from '@binarius/shared';
+import {
+  AuditActorType,
+  AuditAction,
+  AuditEntityType,
+  TradingSwitchSource,
+} from '@binarius/shared';
 import type { Db } from './client';
-import { AuditActorType, AuditAction, AuditEntityType, auditLog } from './schema/audit-log';
+import { auditLog } from './schema/audit-log';
 import { tradingSwitch } from './schema/trading-switch';
 import type { DbExecutor, Tx } from './trade-intent-ops';
 

@@ -5,6 +5,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   ADMIN_SEARCH_MAX_LENGTH,
   AdminErrorCode,
+  AuditAction,
+  AuditActorType,
+  AuditEntityType,
   adminIntentResponseSchema,
   adminIntentsResponseSchema,
   adminLedgerEntrySchema,
@@ -20,9 +23,6 @@ import {
   TradeIntentStatus,
 } from '@binarius/shared';
 import {
-  AuditAction,
-  AuditActorType,
-  AuditEntityType,
   auditLog,
   confirmChallengeFromTelegram,
   markChallengeCodeSent,

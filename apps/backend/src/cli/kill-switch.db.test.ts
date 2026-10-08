@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AuditAction, auditLog, tradingSwitch } from '@binarius/db';
+import { AuditAction } from '@binarius/shared';
+import { auditLog, tradingSwitch } from '@binarius/db';
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import { runKillSwitchCli } from './kill-switch';
 

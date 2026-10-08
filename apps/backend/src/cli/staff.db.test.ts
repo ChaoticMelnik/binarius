@@ -1,8 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AuditAction } from '@binarius/shared';
 import {
   auditLog,
-  AuditAction,
   completeLogin,
   confirmChallengeFromTelegram,
   markChallengeCodeSent,

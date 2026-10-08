@@ -49,6 +49,10 @@
       "types": "./src/ledger.ts",
       "default": "./src/ledger.ts"
     },
+    "./audit": {
+      "types": "./src/audit.ts",
+      "default": "./src/audit.ts"
+    },
     "./partner": {
       "types": "./src/partner.ts",
       "default": "./src/partner.ts"

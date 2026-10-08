@@ -29,7 +29,7 @@ import { hashPassword } from './staff-password';
 import { auditLog, staff, staffLoginChallenges, staffSessions } from './schema/index';
 import { StaffLoginChallengeStatus } from './schema/staff-login-challenges';
 import { StaffStatus } from './schema/staff';
-import { AuditAction } from './schema/audit-log';
+import { AuditAction } from '@binarius/shared';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {

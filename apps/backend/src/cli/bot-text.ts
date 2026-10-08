@@ -14,9 +14,9 @@ import {
   readEnv,
   resolveBotTextOverrides,
   type BotTextKey,
+  AuditActorType,
 } from '@binarius/shared';
 import {
-  AuditActorType,
   createDb,
   listBotTextOverrides,
   resetBotTextOverride,
