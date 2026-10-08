@@ -211,6 +211,10 @@ export function describeShape(value: unknown): string {
 
 function shapeOf(value: unknown, depth: number): string {
   if (value === null) return 'null';
+  // a binary attachment by its size: its indices would be one key per byte
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return `bytes[${value.byteLength}]`;
+  }
   if (Array.isArray(value)) {
     if (value.length === 0) return '[0]';
     return depth >= SHAPE_MAX_DEPTH
