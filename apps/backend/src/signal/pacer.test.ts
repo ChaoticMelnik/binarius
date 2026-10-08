@@ -44,9 +44,9 @@ describe('scan pacer', () => {
 
   it('P3 a 429 with Retry-After pauses for exactly that long', () => {
     const { clock, p } = pacer();
-    p.onRateLimited(7);
-    expect(p.pausedUntil()).toBe(clock.now + 7_000);
-    clock.now += 6_999;
+    expect(p.onRateLimited(20)).toBe(20_000);
+    expect(p.pausedUntil()).toBe(clock.now + 20_000);
+    clock.now += 19_999;
     expect(p.tryTake()).toBe(false);
     clock.now += 1;
     expect(p.pausedUntil()).toBeUndefined();
@@ -66,6 +66,35 @@ describe('scan pacer', () => {
     p.onDecided();
     p.onRateLimited(undefined);
     expect((p.pausedUntil() ?? 0) - clock.now).toBe(15_000);
+  });
+
+  it.each([
+    [0, 15_000],
+    [1, 15_000],
+    [10_000, 120_000],
+  ])('P3b a Retry-After of %i s pauses for %i ms (held to the backoff bounds)', (sec, ms) => {
+    const { clock, p } = pacer();
+    p.onRateLimited(sec);
+    expect(p.pausedUntil()).toBe(clock.now + ms);
+  });
+
+  it('P7 one burst of 429s without Retry-After is one pause, not an escalation', () => {
+    const { clock, p } = pacer();
+    expect([1, 2, 3, 4].map(() => p.onRateLimited(undefined))).toEqual([15_000, 0, 0, 0]);
+    expect(p.pausedUntil()).toBe(clock.now + 15_000);
+    clock.now += 15_000;
+    p.onRateLimited(undefined);
+    expect(p.pausedUntil()).toBe(clock.now + 30_000);
+  });
+
+  it('P8 a Retry-After during a pause extends it only when it ends later', () => {
+    const { clock, p } = pacer();
+    p.onRateLimited(undefined);
+    expect(p.onRateLimited(15)).toBe(0);
+    expect(p.pausedUntil()).toBe(clock.now + 15_000);
+    clock.now += 5_000;
+    expect(p.onRateLimited(30)).toBe(20_000);
+    expect(p.pausedUntil()).toBe(clock.now + 30_000);
   });
 
   it('P5 nothing is taken while paused, even with tokens left', () => {
