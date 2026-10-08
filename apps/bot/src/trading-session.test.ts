@@ -7,9 +7,10 @@ import {
   TradingSessionStopReason,
   telegramHtml,
   type TradingSessionView,
+  CONNECT_CALLBACK_DATA,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { createBot, CONNECT_CALLBACK_DATA } from './bot';
+import { createBot } from './bot';
 import { sessionStartCallbackData, stakeMenuCallbackData } from './demo';
 import type { SessionTrackRequest } from './session-tracker';
 import {

@@ -622,11 +622,6 @@ export function stakePickerText({
 ${joinLines(lines)}`;
 }
 
-// Where /support leads (#120). A temporary personal account: #220 replaces it, and this is the one
-// line to change.
-export const SUPPORT = { telegramUsername: 'dimmelya' } as const;
-export const supportUrl = (): string => `https://t.me/${SUPPORT.telegramUsername}`;
-
 // The bot's profile: `description` is the «Что умеет этот бот?» block an empty chat shows before
 // Start, `shortDescription` the line on the profile page and in the preview of a shared link.
 // Telegram parses neither, so like LABELS they are plain and never escaped; line breaks are kept

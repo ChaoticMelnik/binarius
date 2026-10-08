@@ -12,12 +12,12 @@ import {
   type PairsCatalogResponse,
   type PairView,
   type TradingSignalsResponse,
+  DEMO_CALLBACK_DATA,
 } from '@binarius/shared';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
 import {
-  DEMO_CALLBACK_DATA,
   DEMO_GROUPS_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoLaunchCallbackData,

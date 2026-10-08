@@ -23,11 +23,12 @@ import {
   decimalStringSchema,
   type TradingAccessResponse,
   type TradingSignalsResponse,
+  CONNECT_CALLBACK_DATA,
+  DEMO_CALLBACK_DATA,
 } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
-  CONNECT_CALLBACK_DATA,
   LEVEL_CURRENT_CALLBACK_DATA,
   OAUTH_CALLBACK_DATA,
   RESEND_CALLBACK_DATA,
@@ -35,7 +36,6 @@ import {
   levelCallbackData,
 } from './bot';
 import {
-  DEMO_CALLBACK_DATA,
   DEMO_GROUPS_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoLaunchCallbackData,

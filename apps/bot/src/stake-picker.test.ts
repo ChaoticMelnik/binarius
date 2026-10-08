@@ -5,9 +5,10 @@ import {
   NotificationLevel,
   UserStatus,
   type DecimalString,
+  CONNECT_CALLBACK_DATA,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { createBot, CONNECT_CALLBACK_DATA } from './bot';
+import { createBot } from './bot';
 import {
   demoAnalysisCallbackData,
   demoLaunchCallbackData,
