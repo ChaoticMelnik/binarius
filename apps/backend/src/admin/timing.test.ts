@@ -8,6 +8,7 @@ import {
   ADMIN_POLLING_TIMEOUT_S,
   ADMIN_TELEGRAM_API_TIMEOUT_MS,
   GRAMMY_POLLING_BACKOFF_MS,
+  PASSWORD_CHANGE_DERIVATIONS,
   PASSWORD_VERIFY_COST_CEILING_MS,
   PASSWORD_VERIFY_MAX_WAIT_MS,
   SHUTDOWN_PHASE1_BUDGET_MS,
@@ -35,6 +36,13 @@ describe('the staff-login timing chain', () => {
         ADMIN_TELEGRAM_API_TIMEOUT_MS,
     ).toBeLessThanOrEqual(ADMIN_LOGIN_BUDGET_MS);
     expect(ADMIN_LOGIN_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  it('fits the password change KDF, two derivations in one slot, inside the same budget', () => {
+    expect(PASSWORD_CHANGE_DERIVATIONS).toBe(2);
+    expect(
+      PASSWORD_VERIFY_MAX_WAIT_MS + PASSWORD_CHANGE_DERIVATIONS * PASSWORD_VERIFY_COST_CEILING_MS,
+    ).toBeLessThanOrEqual(ADMIN_LOGIN_BUDGET_MS);
   });
 
   it('keeps the long poll under the client timeout, and the batch at one', () => {
