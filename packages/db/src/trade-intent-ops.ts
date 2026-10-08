@@ -2,6 +2,7 @@ import { and, eq, inArray, notInArray, sql, type SQL } from 'drizzle-orm';
 import {
   AccountHaltReason,
   BrokerAccountStatus,
+  TokenLedgerKind,
   TradeIntentErrorCode,
   UserStatus,
   TradeIntentFailureReason,
@@ -24,7 +25,7 @@ import { brokerAccounts } from './schema/broker-accounts';
 import { brokerBalanceSnapshots } from './schema/broker-balance-snapshots';
 import { BrokerTradeStatus, brokerTrades } from './schema/broker-trades';
 import { OutboxTopic, outboxEvents } from './schema/outbox-events';
-import { TokenLedgerKind, tokenLedger } from './schema/token-ledger';
+import { tokenLedger } from './schema/token-ledger';
 import { tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';

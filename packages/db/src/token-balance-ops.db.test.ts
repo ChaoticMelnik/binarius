@@ -2,6 +2,7 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   BrokerAccountStatus,
+  TokenLedgerKind,
   TradeIntentFailureReason,
   UserStatus,
   tokenBalanceViewSchema,
@@ -20,7 +21,7 @@ import {
 } from './testing';
 import { LINK_BONUS_TOKENS } from './link-bonus-ops';
 import { confirmBrokerAccount } from './oauth-ops';
-import { TokenLedgerKind, tokenLedger, users } from './schema/index';
+import { tokenLedger, users } from './schema/index';
 import { readTokenBalance, toTradingAccessView } from './token-balance-ops';
 import {
   TOKENS_PER_INTENT,

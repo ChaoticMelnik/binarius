@@ -11,6 +11,7 @@ export * from './trading-access';
 export * from './access-token';
 export * from './admin';
 export * from './admin-trading';
+export * from './ledger';
 export * from './partner';
 export * from './socket';
 export * from './env';
