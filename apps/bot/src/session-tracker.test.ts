@@ -327,6 +327,8 @@ describe('the session tracker', () => {
     tracker.track(request({ edit }));
     await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
     expect(texts(edits)).toEqual([TEXTS.sessionStatusUnavailable.value]);
+    // #350: the session is gone, so its keyboard is the menu only
+    expect(edit.mock.calls.map((call) => call[2])).toEqual(['not_found']);
     expect(readSession).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
