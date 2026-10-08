@@ -644,6 +644,7 @@ function scene(options: SceneOptions = {}) {
     setNotificationLevel: () => Promise.reject(new Error('not used by these scenes')),
     readTradingAccess: () => Promise.reject(new Error('not used by these scenes')),
     readPairs: () => Promise.reject(new Error('not used by these scenes')),
+    readSignals: vi.fn(() => Promise.reject(new Error('not used here'))),
     evaluateSignal: () => Promise.reject(new Error('not used by these scenes')),
     createIntent: () => Promise.reject(new Error('not used by these scenes')),
     readIntent: () => Promise.reject(new Error('not used by these scenes')),

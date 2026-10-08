@@ -1086,6 +1086,13 @@ describe('the facades over the catalog', () => {
   it('gives LABELS the labels it had', () => {
     expect(Object.keys(LABELS).sort()).toEqual(
       [
+        'backToListButton',
+        'demoManualButton',
+        'demoSignalsRefreshButton',
+        'launchCycleButton',
+        'sessionAgainButton',
+        'stakeBackLaunchButton',
+        'stakeChangeButton',
         'accountCommand',
         'changeEmailButton',
         'confirmButton',

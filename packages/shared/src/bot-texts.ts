@@ -469,6 +469,34 @@ export const BOT_TEXT_CATALOG = {
     'Демо: под выбранными активом и длительностью, перед анализом.',
     `Дальше — анализ: бот посмотрит на свечи и скажет, есть ли сигнал.`,
   ),
+  demoSignalsHeader: html(
+    g.Demo,
+    'Демо: экран «Сигналы сейчас» над кнопками пар (#320).',
+    `📡 <b>Сигналы сейчас</b> · сделка 15 с
+Выбери пару — бот запустит цикл сделок. Сигнал действует одну 15-секундную свечу; перед каждой сделкой бот проверяет его заново.`,
+  ),
+  demoSignalsEmpty: html(
+    g.Demo,
+    'Демо: на экране «Сигналы сейчас» нет ни одной пары с сигналом.',
+    `📡 Сейчас сигналов нет — обнови через несколько секунд или выбери пару вручную.`,
+  ),
+  launchHeader: html(g.Demo, 'Экран ставки: пара и длительность цикла.', `🎯 <b>{subject}</b>`, {
+    arg: subject,
+  }),
+  launchStake: html(g.Demo, 'Экран ставки: сумма каждой сделки цикла.', `💵 Ставка: {amount}`, {
+    arg: { name: 'amount', sample: '$5.00' },
+  }),
+  launchStakeMinimum: html(
+    g.Demo,
+    'Экран ставки: сумма не прочитана — будет минимальная ставка брокера.',
+    `💵 Ставка: минимальная брокера`,
+  ),
+  launchCycle: html(
+    g.Demo,
+    'Экран ставки: что сделает цикл, с числом сделок.',
+    `🤖 Бот проведёт {trades} подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.`,
+    { arg: { name: 'trades', sample: '5 сделок' } },
+  ),
   demoCatalogUnavailable: html(
     g.Demo,
     'Демо: каталог активов недоступен.',
@@ -894,6 +922,12 @@ export const BOT_TEXT_CATALOG = {
   stakeSaved: html(g.Trade, 'Сумма сохранена.', `✅ Сумма: {amount}`, {
     arg: { name: 'amount', sample: '$5.00' },
   }),
+  stakeSavedLine: html(
+    g.Trade,
+    'Экран ставки: строка над экраном после сохранения суммы.',
+    `✅ Ставка сохранена: {amount}`,
+    { arg: { name: 'amount', sample: '$5.00' } },
+  ),
   stakeSaveUnknown: html(
     g.Trade,
     'Сумма: неизвестно, сохранилась ли она.',
@@ -1085,7 +1119,30 @@ export const BOT_TEXT_CATALOG = {
     '🔄 Запросить код ещё раз',
   ),
   changeEmailButton: plain(g.Buttons, 'Вход по почте: кнопка смены адреса.', '✏️ Изменить адрес'),
-  demoButton: plain(g.Buttons, '/menu: кнопка запуска демо.', '🎮 Запустить демо'),
+  demoButton: plain(
+    g.Buttons,
+    'Карточка и /menu: вход в демо — экран «Сигналы сейчас».',
+    '🎮 Демо-торговля',
+  ),
+  demoSignalsRefreshButton: plain(
+    g.Buttons,
+    'Сигналы сейчас: перечитать список пар с сигналом.',
+    '🔄 Обновить',
+  ),
+  demoManualButton: plain(
+    g.Buttons,
+    'Сигналы сейчас: ручной путь — тип актива, пара, длительность, анализ.',
+    '🧭 Выбрать пару вручную',
+  ),
+  launchCycleButton: plain(g.Buttons, 'Экран ставки: запуск цикла сделок.', '🚀 Запустить цикл'),
+  stakeChangeButton: plain(g.Buttons, 'Экран ставки: открыть выбор суммы.', '💵 Изменить ставку'),
+  backToListButton: plain(g.Buttons, 'Экран ставки: назад к сигналам.', '↩️ К списку'),
+  stakeBackLaunchButton: plain(g.Buttons, 'Экран суммы: назад к экрану ставки.', '↩️ К запуску'),
+  sessionAgainButton: plain(
+    g.Buttons,
+    'Итог сессии: новая сессия с теми же активом и длительностью.',
+    '🔁 Ещё сессия',
+  ),
   demoAnalysisButton: plain(g.Buttons, 'Демо: кнопка анализа.', '📊 Анализ'),
   demoRetryButton: plain(
     g.Buttons,

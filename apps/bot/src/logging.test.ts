@@ -111,6 +111,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
       ((_telegramUserId, level) => Promise.resolve({ level, demoStake: null })),
     readTradingAccess: scenario.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
     readPairs: scenario.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)),
+    readSignals: vi.fn(() => Promise.reject(new Error('not used here'))),
     evaluateSignal: scenario.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
     createIntent: scenario.createIntent ?? (() => Promise.resolve(INTENT_VIEW)),
     readIntent: scenario.readIntent ?? (() => Promise.resolve(INTENT_VIEW)),

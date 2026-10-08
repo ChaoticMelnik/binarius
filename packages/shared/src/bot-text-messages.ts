@@ -194,6 +194,13 @@ export const BOT_TEXT_ARG_WIDTHS: Readonly<Record<BotHtmlArgKey, (m: BotTextMeas
   stakeBelowMinimum: () => w.stake,
   stakeAboveAvailableAmount: () => w.stake,
   stakePrecisionDigits: () => w.stakeDigits,
+  // the demo launch screen: the pair is always traded at 15 s (texts.ts -> launchText)
+  launchHeader: subject,
+  launchStake: () => w.stake,
+  // «5 сделок»
+  launchCycle: (m) =>
+    w.sessionCount + 1 + m.longest('sessionTradeOne', 'sessionTradeFew', 'sessionTradeMany'),
+  stakeSavedLine: () => w.stake,
 };
 
 // A literal string, a key's text, the longest of several sequences, or one repeated.
@@ -470,6 +477,21 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       anyOf(...liveIntentLines),
       '\n',
       k('sessionOpenTradePlaysOut'),
+    ],
+  },
+  {
+    id: 'demoLaunch',
+    title: 'Демо: запуск цикла',
+    limit: TELEGRAM_MESSAGE_LIMIT,
+    body: [
+      // only after a saved stake
+      k('stakeSavedLine'),
+      '\n\n',
+      k('launchHeader'),
+      '\n',
+      anyOf('launchStake', 'launchStakeMinimum'),
+      '\n',
+      k('launchCycle'),
     ],
   },
   {
