@@ -197,7 +197,7 @@ const HANDLERS = {
 const isKnownEvent = (event: string): event is keyof typeof HANDLERS =>
   Object.hasOwn(HANDLERS, event);
 
-export const SHAPE_MAX_DEPTH = 3;
+const SHAPE_MAX_DEPTH = 3;
 export const SHAPE_MAX_KEYS = 20;
 export const SHAPE_MAX_KEY_LENGTH = 40;
 export const SHAPE_MAX_LENGTH = 600;
