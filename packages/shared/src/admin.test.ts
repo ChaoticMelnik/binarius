@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   ADMIN_ACTIVE_WINDOW_MINUTES,
+  ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS,
+  adminAuditEntryViewSchema,
+  adminAuditQuerySchema,
+  adminAuditResponseSchema,
+  adminAuditSearchParams,
+  safeParseAdminAuditQuery,
   ADMIN_LOGIN_BUDGET_MS,
   ADMIN_PAGE_SIZE,
   ADMIN_SEARCH_MAX_LENGTH,
@@ -37,6 +43,14 @@ import {
   TokenLedgerRefType,
   tokenLedgerRefTypeSchema,
 } from './ledger';
+import {
+  AuditAction,
+  auditActionSchema,
+  AuditActorType,
+  auditActorTypeSchema,
+  AuditEntityType,
+  auditEntityTypeSchema,
+} from './audit';
 import { TradeIntentStatus } from './trading';
 import { STAFF_LOGIN_CORPUS } from './testing';
 
@@ -627,5 +641,194 @@ describe('token ledger contracts (#109)', () => {
     }
     expect(tokenLedgerKindSchema.safeParse('bogus').success).toBe(false);
     expect(tokenLedgerRefTypeSchema.safeParse('bogus').success).toBe(false);
+  });
+});
+
+describe('audit log contracts (#110)', () => {
+  const STAFF = '00000000-0000-4000-8000-000000000020';
+  const ENTITY = '00000000-0000-4000-8000-000000000010';
+  const full = {
+    action: 'user_viewed',
+    entityType: 'user',
+    entityId: ENTITY,
+    actorId: STAFF,
+    from: '2026-10-01',
+    to: '2026-10-07',
+    cursor: CURSOR,
+  } as const;
+  const entry = {
+    id: '00000000-0000-4000-8000-000000000060',
+    createdAt: AT,
+    actorType: 'admin',
+    actorId: STAFF,
+    actorLogin: 'ada',
+    action: 'user_viewed',
+    entityType: 'user',
+    entityId: ENTITY,
+    payload: '{"path": "/admin/users/:id"}',
+    payloadTruncated: false,
+  };
+  const nulls = {
+    ...entry,
+    actorId: null,
+    actorLogin: null,
+    entityType: null,
+    entityId: null,
+  };
+  const list = { me: ME, entries: [entry, nulls], nextCursor: CURSOR };
+
+  describe('adminAuditQuerySchema', () => {
+    it('takes no key as an empty query, and each key alone', () => {
+      expect(adminAuditQuerySchema.parse({})).toEqual({});
+      for (const [key, value] of Object.entries(full)) {
+        expect(adminAuditQuerySchema.parse({ [key]: value })).toEqual({ [key]: value });
+      }
+    });
+
+    it.each([
+      ['action', 'bogus'],
+      ['action', ''],
+      ['action', ['staff_logout', 'user_viewed']],
+      ['entityType', 'bogus'],
+      ['entityId', 'not-a-uuid'],
+      ['entityId', ' '],
+      ['actorId', 'cli'],
+      ['actorId', ' '],
+      ['cursor', 'bad'],
+      ['from', '2026-13-01'],
+      ['from', '2026-2-3'],
+      ['from', '2026-10-06T00:00:00Z'],
+      ['to', ''],
+    ])('refuses %s = %j', (key, value) => {
+      expect(adminAuditQuerySchema.safeParse({ [key]: value }).success).toBe(false);
+    });
+
+    it('refuses from after to on the to key, with or without a cursor', () => {
+      for (const query of [
+        { from: '2026-10-07', to: '2026-10-06' },
+        { from: '2026-10-07', to: '2026-10-06', cursor: CURSOR },
+      ]) {
+        const parsed = adminAuditQuerySchema.safeParse(query);
+        expect(parsed.success).toBe(false);
+        expect(parsed.error?.issues.map((issue) => issue.path)).toEqual([['to']]);
+      }
+    });
+
+    it('takes one day as from = to, and either bound alone', () => {
+      for (const query of [
+        { from: '2026-10-06', to: '2026-10-06' },
+        { from: '2026-10-06' },
+        { to: '2026-10-06' },
+      ]) {
+        expect(adminAuditQuerySchema.parse(query)).toEqual(query);
+      }
+    });
+
+    it('strips keys it does not declare', () => {
+      expect(adminAuditQuerySchema.parse({ action: 'staff_logout', utm: '1' })).toEqual({
+        action: 'staff_logout',
+      });
+    });
+  });
+
+  describe('adminAuditSearchParams', () => {
+    it('writes keys in the schema order, whatever order the caller used', () => {
+      const reversed = Object.fromEntries(Object.entries(full).reverse()) as typeof full;
+      expect([...adminAuditSearchParams(reversed)].map(([k]) => k)).toEqual([
+        'action',
+        'entityType',
+        'entityId',
+        'actorId',
+        'from',
+        'to',
+        'cursor',
+      ]);
+    });
+
+    it('round-trips a full query through its own serialization', () => {
+      const params = adminAuditSearchParams(full);
+      expect(safeParseAdminAuditQuery(Object.fromEntries(params)).data).toEqual(full);
+    });
+
+    it('writes nothing for an empty query', () => {
+      expect(adminAuditSearchParams({}).size).toBe(0);
+    });
+  });
+
+  it('accepts a row and a row with every nullable as null', () => {
+    expect(adminAuditEntryViewSchema.safeParse(entry).success).toBe(true);
+    expect(adminAuditEntryViewSchema.safeParse(nulls).success).toBe(true);
+  });
+
+  it('carries exactly the ten wire keys of an audit row', () => {
+    expect(Object.keys(adminAuditEntryViewSchema.shape)).toEqual([
+      'id',
+      'createdAt',
+      'actorType',
+      'actorId',
+      'actorLogin',
+      'action',
+      'entityType',
+      'entityId',
+      'payload',
+      'payloadTruncated',
+    ]);
+  });
+
+  it('bounds the payload preview in code points, not bytes', () => {
+    const at = 'я'.repeat(ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS);
+    expect(ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS).toBe(1024);
+    expect(adminAuditEntryViewSchema.safeParse({ ...entry, payload: at }).success).toBe(true);
+    expect(adminAuditEntryViewSchema.safeParse({ ...entry, payload: `${at}я` }).success).toBe(
+      false,
+    );
+  });
+
+  it('takes an entity id of the column shape, not only an RFC uuid', () => {
+    const entityId = '00000000-0000-0000-0000-000000000001';
+    expect(adminAuditEntryViewSchema.safeParse({ ...entry, entityId }).success).toBe(true);
+  });
+
+  it('shows an entity type outside the constant', () => {
+    expect(adminAuditEntryViewSchema.safeParse({ ...entry, entityType: 'other' }).success).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ['an extra key', { ...entry, extra: 1 }],
+    ['an unknown actor type', { ...entry, actorType: 'bogus' }],
+    ['an unknown action', { ...entry, action: 'bogus' }],
+    ['a payload object', { ...entry, payload: { path: '/admin/audit' } }],
+    ['a missing truncation flag', { ...entry, payloadTruncated: undefined }],
+  ])('refuses a row with %s', (_label, row) => {
+    expect(adminAuditEntryViewSchema.safeParse(row).success).toBe(false);
+  });
+
+  it('accepts a page and refuses an extra key at each level, a bad cursor and a 51st row', () => {
+    expect(adminAuditResponseSchema.safeParse(list).success).toBe(true);
+    expect(adminAuditResponseSchema.safeParse({ ...list, nextCursor: null }).success).toBe(true);
+    expect(adminAuditResponseSchema.safeParse({ ...list, extra: 1 }).success).toBe(false);
+    expect(adminAuditResponseSchema.safeParse({ ...list, me: { ...ME, extra: 1 } }).success).toBe(
+      false,
+    );
+    expect(
+      adminAuditResponseSchema.safeParse({ ...list, entries: [{ ...entry, extra: 1 }] }).success,
+    ).toBe(false);
+    expect(adminAuditResponseSchema.safeParse({ ...list, nextCursor: 'bad' }).success).toBe(false);
+    const at = Array.from({ length: ADMIN_PAGE_SIZE }, () => entry);
+    expect(adminAuditResponseSchema.safeParse({ ...list, entries: at }).success).toBe(true);
+    expect(adminAuditResponseSchema.safeParse({ ...list, entries: [...at, entry] }).success).toBe(
+      false,
+    );
+  });
+
+  it('builds the audit enums from the constants', () => {
+    expect(auditActionSchema.options).toEqual(Object.values(AuditAction));
+    expect(auditEntityTypeSchema.options).toEqual(Object.values(AuditEntityType));
+    expect(auditActorTypeSchema.options).toEqual(Object.values(AuditActorType));
+    expect(auditActionSchema.safeParse('bogus').success).toBe(false);
+    expect(auditEntityTypeSchema.safeParse('bogus').success).toBe(false);
+    expect(auditActorTypeSchema.safeParse('bogus').success).toBe(false);
   });
 });

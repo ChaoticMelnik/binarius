@@ -1,8 +1,11 @@
+import * as z from 'zod';
+
 // Lives here rather than in packages/db, like TokenLedgerKind: the admin audit page types a row and
 // builds its filters from the values; packages/db builds the CHECKs from these same objects
 // (schema/audit-log.ts).
 export const AuditActorType = { User: 'user', System: 'system', Admin: 'admin' } as const;
 export type AuditActorType = (typeof AuditActorType)[keyof typeof AuditActorType];
+export const auditActorTypeSchema = z.enum(AuditActorType);
 
 // Every action audit_log accepts. The CHECK is built from this object, so an action a writer
 // invents is refused by the database rather than landing as a row nothing can query by. A new
@@ -45,6 +48,7 @@ export const AuditAction = {
   TokensViewed: 'tokens_viewed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
+export const auditActionSchema = z.enum(AuditAction);
 
 // `entity_type` is deliberately free text — it names whatever the action touched, and the set
 // grows with every feature — but the ones the writers use are spelled once here rather than at
@@ -59,3 +63,4 @@ export const AuditEntityType = {
   TradeIntent: 'trade_intent',
 } as const;
 export type AuditEntityType = (typeof AuditEntityType)[keyof typeof AuditEntityType];
+export const auditEntityTypeSchema = z.enum(AuditEntityType);
