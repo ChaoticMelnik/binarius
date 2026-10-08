@@ -28,6 +28,8 @@ export * from './trading-session';
 export * from './trading-switch';
 export * from './demo-stake';
 export * from './bot-text-template';
+export * from './bot-text-format';
+export * from './bot-text-vars';
 export * from './bot-texts';
 export * from './bot-text-messages';
 export * from './bot-text-overrides';

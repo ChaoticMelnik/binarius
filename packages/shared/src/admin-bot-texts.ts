@@ -9,7 +9,14 @@ import {
   type BotTextChangeProblem,
   type BotTextRejection,
 } from './bot-text-overrides';
-import { BOT_TEXT_CATALOG, BotTextGroup, createBotTexts, type BotTextKey } from './bot-texts';
+import {
+  BOT_TEXT_CATALOG,
+  BotTextGroup,
+  createBotTexts,
+  type BotHtmlKey,
+  type BotPlainKey,
+  type BotTextKey,
+} from './bot-texts';
 import { telegramHtmlProblems } from './telegram-html';
 
 // The admin section «Тексты бота» (#300, docs/admin-pages.md → Bot texts): its wire shapes and
@@ -206,24 +213,15 @@ export const adminBotTextProblems = (
 
 /**
  * What the bot would send for `key` with the texts of `source`: through the same views the bot
- * renders with, the argument filled with the catalog's sample. Throws for a text the validator has
- * not passed (InvalidBotText, InvalidTelegramTemplate).
+ * renders with, each variable at its registry sample (bot-text-vars.ts). Throws for a text the
+ * validator has not passed (InvalidBotText, InvalidTelegramTemplate).
  */
 export function renderBotTextPreview(
   key: BotTextKey,
   source: BotTextSource<BotTextKey>,
 ): AdminBotTextRendered {
-  const entry = BOT_TEXT_CATALOG[key];
-  const texts = createBotTexts(source);
-  const value = (entry.kind === BotTextKind.Html ? texts.html : texts.plain) as Record<
-    string,
-    unknown
-  >;
-  const own = value[key];
-  const rendered = String(
-    typeof own === 'function' ? (own as (arg: string) => unknown)(entry.sample ?? '') : own,
-  );
-  return entry.kind === BotTextKind.Html
-    ? { kind: BotTextKind.Html, telegramHtml: rendered }
-    : { kind: BotTextKind.Plain, text: rendered };
+  const { samples } = createBotTexts(source);
+  return BOT_TEXT_CATALOG[key].kind === BotTextKind.Html
+    ? { kind: BotTextKind.Html, telegramHtml: String(samples.html[key as BotHtmlKey]) }
+    : { kind: BotTextKind.Plain, text: samples.plain[key as BotPlainKey] };
 }

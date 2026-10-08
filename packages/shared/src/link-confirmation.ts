@@ -12,6 +12,6 @@ export const CONFIRM_CALLBACK_PATTERN = new RegExp(`^${CONFIRM_CALLBACK_PREFIX}(
 // The label with the account's address, or without one when the broker sent none. Plain: Telegram
 // does not parse a label, so the broker's email keeps its `&` as is.
 export const confirmButtonLabel = (
-  labels: { confirmButton: (email: string) => string; confirmButtonNoEmail: string },
+  labels: { confirmButton: (context: { email: string }) => string; confirmButtonNoEmail: string },
   email: string | null,
-): string => (email === null ? labels.confirmButtonNoEmail : labels.confirmButton(email));
+): string => (email === null ? labels.confirmButtonNoEmail : labels.confirmButton({ email }));

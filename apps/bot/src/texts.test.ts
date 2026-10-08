@@ -5,7 +5,11 @@ import {
   defaultBotTextSource,
   escapeTelegramHtml,
   type BotTextKey,
+  type BotTextVarName,
   BrokerAccountStatus,
+  decimalStringSchema,
+  MODE_LABELS,
+  parseBotTextTemplate,
   BrokerBalanceUnavailableReason,
   NotificationLevel,
   plainTextOf,
@@ -22,6 +26,7 @@ import {
   type DecimalString,
   type LinkBonusGrantView,
   type LinkedAccountView,
+  type TelegramHtml,
   DEMO_CALLBACK_DATA,
   SUPPORT_TELEGRAM_USERNAME,
   supportUrl,
@@ -68,8 +73,6 @@ import {
   intentStatusText,
   LABELS,
   levelLabel,
-  MODE_LABELS,
-  modeHeader,
   PROFILE,
   pluralTrades,
   sessionStartButtonLabel,
@@ -83,6 +86,56 @@ import {
   type StatusCardInput,
 } from './texts';
 
+const d = (value: string) => decimalStringSchema.parse(value);
+
+// Every variable of `key` at a value: each one printed as given at `text`, the data ones at a
+// valid value of their own.
+const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
+  firstName: text,
+  email: text,
+  tokens: '12',
+  reservedTokens: '3',
+  bonusTokens: text,
+  demoBalance: { amount: d('10000'), fresh: true },
+  realBalance: null,
+  mode: TradeMode.Demo,
+  level: NotificationLevel.All,
+  stake: null,
+  minStake: d('1'),
+  demoAvailable: d('9990'),
+  age: 75,
+  amount: text,
+  count: text,
+  symbol: text,
+  group: text,
+  page: text,
+  payout: text,
+  label: text,
+  subject: text,
+  reason: text,
+  value: text,
+  price: text,
+  seconds: text,
+  line: text,
+  assetId: text,
+  digits: text,
+  step: text,
+  score: text,
+  result: text,
+  trades: text,
+  action: text,
+});
+const contextOf = (key: string, text: string): Record<string, unknown> => {
+  const inputs = inputsOf(text);
+  const vars = BOT_TEXT_CATALOG[key as BotTextKey].vars as readonly BotTextVarName[];
+  return Object.fromEntries(vars.map((name) => [name, inputs[name]]));
+};
+// a key's view, with its variables at `text` when it has any
+const renderOf = (key: string, entry: unknown, text: string): TelegramHtml =>
+  typeof entry === 'function'
+    ? (entry as (context: unknown) => TelegramHtml)(contextOf(key, text))
+    : (entry as TelegramHtml);
+
 // Telegram parses none of these texts: markup or any entity — the four Telegram knows and any
 // other named one alike — would be shown literally (#199)
 const MARKUP_OR_ENTITY = /[<>]|&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i;
@@ -94,27 +147,30 @@ describe('texts', () => {
     expect(telegramTextProblems(TEXTS.welcome, TELEGRAM_CAPTION_LIMIT)).toEqual([]);
   });
 
-  // A function is called with a 254-character argument, RFC 5321's limit for an address, made of
-  // every character that means something in HTML or Markdown. The wire schema does not bound the
-  // email, so the length is a margin check, not a guarantee.
+  // A function is called with its text variables at 254 characters, RFC 5321's limit for an
+  // address, made of every character that means something in HTML or Markdown. The wire schema
+  // does not bound the email, so the length is a margin check, not a guarantee.
   const HOSTILE_ARGUMENT = `<&>_*"`.repeat(43).slice(0, 254);
-  const textOf = (entry: (typeof TEXTS)[keyof typeof TEXTS]) =>
-    typeof entry === 'function' ? entry(HOSTILE_ARGUMENT) : entry;
+  const HOSTILE_INPUTS = inputsOf(HOSTILE_ARGUMENT);
 
   it.each(Object.entries(TEXTS))(
     'keeps %s valid Telegram HTML, inside the limit, non-empty, with no padded line',
-    (_key, entry) => {
-      expect(telegramTextProblems(textOf(entry))).toEqual([]);
+    (key, entry) => {
+      expect(telegramTextProblems(renderOf(key, entry, HOSTILE_ARGUMENT))).toEqual([]);
     },
   );
 
+  // the keys whose default prints a variable as it is given
   it.each(
     Object.entries(TEXTS).filter(
-      (pair): pair is [string, (value: string) => ReturnType<typeof TEXTS.codeSent>] =>
-        typeof pair[1] === 'function',
+      ([key, entry]) =>
+        typeof entry === 'function' &&
+        parseBotTextTemplate(BOT_TEXT_CATALOG[key as BotTextKey].source).names.some(
+          (name) => HOSTILE_INPUTS[name as BotTextVarName] === HOSTILE_ARGUMENT,
+        ),
     ),
-  )('shows what went into %s as it is, escaped in the markup', (_key, entry) => {
-    const text = entry(HOSTILE_ARGUMENT);
+  )('shows what went into %s as it is, escaped in the markup', (key, entry) => {
+    const text = renderOf(key, entry, HOSTILE_ARGUMENT);
     expect(plainTextOf(text)).toContain(HOSTILE_ARGUMENT);
     expect(text.value).toContain(
       HOSTILE_ARGUMENT.replaceAll('&', '&amp;')
@@ -146,7 +202,9 @@ describe('texts', () => {
     it.each(Object.values(NotificationLevel))(
       'lists %s in the /settings legend by its label',
       (level) => {
-        const text = plainTextOf(TEXTS.settings('ignored'));
+        const text = plainTextOf(
+          TEXTS.settings({ level: NotificationLevel.All, stake: null, firstName: 'Ada' }),
+        );
         expect(text.split('\n').some((line) => line.startsWith(`${levelLabel(level)} — `))).toBe(
           true,
         );
@@ -154,7 +212,7 @@ describe('texts', () => {
     );
 
     it('names the selected level in bold', () => {
-      expect(settingsText(NotificationLevel.Reduced, null).value).toContain(
+      expect(settingsText(NotificationLevel.Reduced, null, 'Ada').value).toContain(
         'Сейчас выбрано: <b>🔕 Реже</b>',
       );
     });
@@ -200,7 +258,7 @@ describe('texts', () => {
 
     it('points every «напиши в поддержку» to /support', () => {
       for (const text of [
-        TEXTS.cardBody,
+        TEXTS.cardBody({ firstName: 'Ada', email: null }),
         TEXTS.blocked,
         TEXTS.accountTaken,
         TEXTS.statusAmbiguous,
@@ -218,9 +276,9 @@ describe('texts', () => {
   });
 
   it('names the resend button by its label where it tells the user to press it', () => {
-    expect(plainTextOf(TEXTS.codeSentUnknown('ada@example.test'))).toContain(
-      `«${LABELS.resendButton}»`,
-    );
+    expect(
+      plainTextOf(TEXTS.codeSentUnknown({ email: 'ada@example.test', firstName: 'Ada' })),
+    ).toContain(`«${LABELS.resendButton}»`);
   });
 
   // the same button is pressed after a successful login too, where "expired" would read as a
@@ -255,7 +313,7 @@ describe('texts', () => {
 
     it('puts the header, a blank line and one line per link, in the order given', () => {
       expect(accountStatus([LINK_ACTIVE]).value).toBe(
-        `${TEXTS.accountConnected.value}\n\n${TEXTS.accountLineActive('ada@example.test').value}`,
+        `${TEXTS.accountConnected.value}\n\n${TEXTS.accountLineActive({ email: 'ada@example.test' }).value}`,
       );
       expect(plainTextOf(accountStatus([LINK_PENDING, LINK_ACTIVE, LINK_REVOKED]))).toBe(
         [
@@ -346,33 +404,37 @@ describe('texts', () => {
         email: 'ada@example.test',
         grant: { granted: true, tokens: '7' },
       });
+      const context = { firstName: 'Ada', email: 'ada@example.test' };
       expect(card.value).toBe(
         [
-          `${TEXTS.cardGreeting('Ada').value}\n${TEXTS.cardEmail('ada@example.test').value}`,
-          TEXTS.cardBody.value,
-          TEXTS.cardBonusGranted('7').value,
+          `${TEXTS.cardGreeting(context).value}\n${TEXTS.cardEmail(context).value}`,
+          TEXTS.cardBody(context).value,
+          TEXTS.cardBonusGranted({ ...context, bonusTokens: '7' }).value,
         ].join('\n\n'),
       );
     });
 
     it('says why no pack was paid, and nothing about a pack when that is unknown', () => {
+      const context = { firstName: 'Ada', email: null };
       const card = (grant: LinkBonusGrantView | null) =>
-        plainTextOf(accountCard({ firstName: 'Ada', email: null, grant }));
+        plainTextOf(accountCard({ ...context, grant }));
       expect(card({ granted: false, reason: 'not_partner_client' })).toContain(
-        plainTextOf(TEXTS.cardBonusNotPartner),
+        plainTextOf(TEXTS.cardBonusNotPartner(context)),
       );
       expect(card({ granted: false, reason: 'already_granted' })).toContain(
-        plainTextOf(TEXTS.cardBonusAlready),
+        plainTextOf(TEXTS.cardBonusAlready(context)),
       );
       const unknown = card(null);
       expect(unknown).not.toMatch(/🎁|ℹ️/u);
-      expect(unknown.endsWith(plainTextOf(TEXTS.cardBody))).toBe(true);
+      expect(unknown.endsWith(plainTextOf(TEXTS.cardBody(context)))).toBe(true);
     });
 
     // the Bot API guarantees a first name non-empty, not non-blank
     it('greets a blank name without it, and trims a padded one', () => {
-      expect(TEXTS.cardGreeting('   ').value).toBe('🎉 <b>Привет!</b>');
-      expect(TEXTS.cardGreeting(' Ada ').value).toBe('🎉 <b>Привет, Ada!</b>');
+      expect(TEXTS.cardGreeting({ firstName: '   ', email: null }).value).toBe('🎉 <b>Привет!</b>');
+      expect(TEXTS.cardGreeting({ firstName: ' Ada ', email: null }).value).toBe(
+        '🎉 <b>Привет, Ada!</b>',
+      );
     });
   });
 
@@ -415,7 +477,9 @@ describe('texts', () => {
       const [, ...features] = plainTextOf(TEXTS.helpAbout).split('\n');
       expect(features).toHaveLength(3);
       for (const line of features) {
-        expect(plainTextOf(TEXTS.cardBody).split('\n')).toContain(line);
+        expect(
+          plainTextOf(TEXTS.cardBody({ firstName: 'Ada', email: null })).split('\n'),
+        ).toContain(line);
       }
     });
 
@@ -458,13 +522,79 @@ describe('texts', () => {
   });
 });
 
+// #358: the registry's variables, filled from what the handler holds
+describe('the variables of the texts', () => {
+  afterEach(() => setBotTextSource(defaultBotTextSource));
+  const withTexts = (texts: Partial<Record<BotTextKey, string>>) => {
+    setBotTextSource({ sourceOf: (key) => texts[key] ?? defaultBotTextSource.sourceOf(key) });
+  };
+  const card = (broker: StatusCardInput['broker']) =>
+    plainTextOf(
+      statusCard({
+        firstName: 'Ада',
+        mode: TradeMode.Demo,
+        tokens: { balance: '15', reserved: '3', available: '12' },
+        broker,
+        brokerUnavailable:
+          broker === null ? BrokerBalanceUnavailableReason.BrokerUnavailable : null,
+        demoStake: null,
+      }),
+    );
+  const LINE = '{firstName}, у тебя {tokens} токенов и {demoBalance} на демо';
+
+  it('B1 prints several variables of the status card at the user’s values', () => {
+    withTexts({ statusTokens: LINE });
+    expect(card(brokerBalance({ fresh: true }))).toContain(
+      'Ада, у тебя 12 токенов и $10 000.00 на демо',
+    );
+  });
+
+  it('B2 prints no number for a stale or a missing balance', () => {
+    withTexts({ statusTokens: LINE });
+    const stale = card(brokerBalance({ fresh: false, restSnapshotAgeSec: 400 }));
+    expect(stale).toContain('Ада, у тебя 12 токенов и нет свежих данных на демо');
+    expect(card(null)).toContain('Ада, у тебя 12 токенов и нет свежих данных на демо');
+    withTexts({ statusTokens: LINE, balanceUnavailable: 'баланс обновляется' });
+    expect(card(null)).toContain('и баланс обновляется на демо');
+  });
+
+  it('B4 stands in for an unknown address with the overridden text, escaped', () => {
+    withTexts({ accountUnknownAddress: '<адрес?>' });
+    expect(TEXTS.accountLineActive({ email: null }).value).toBe('✅ Подключён: &lt;адрес?&gt;');
+  });
+
+  it('B5 prints the name, the level and the stake, or the minimum, in /settings', () => {
+    withTexts({ settings: '{firstName}: {level}, ставка {stake}' });
+    const text = (stake: DecimalString | null) =>
+      plainTextOf(settingsText(NotificationLevel.Off, stake, 'Ада')).split('\n')[0];
+    expect(text(decimalStringSchema.parse('5'))).toBe('Ада: ❌ Выключить, ставка $5.00');
+    expect(text(null)).toBe('Ада: ❌ Выключить, ставка минимальная ставка брокера');
+  });
+
+  it('B3 keeps the default card free of the new variables', () => {
+    expect(card(brokerBalance({ fresh: true }))).toBe(
+      [
+        '🎮 Режим: DEMO',
+        '',
+        '💵 Реальный баланс: $0.00',
+        '🧪 Демобаланс: $10 000.00',
+        '🪙 Токены: 12 (в резерве: 3)',
+        '',
+        '💡 Демо без риска — деньги не нужны.',
+      ].join('\n'),
+    );
+  });
+});
+
 describe('the status card', () => {
   const card = (patch: Partial<StatusCardInput> = {}) =>
     statusCard({
+      firstName: 'Ada',
       mode: TradeMode.Demo,
       tokens: ACCESS_VIEW.tokens,
       broker: ACCESS_VIEW.broker,
       brokerUnavailable: ACCESS_VIEW.brokerUnavailable,
+      demoStake: null,
       ...patch,
     });
   const noSnapshot = (reason: BrokerBalanceUnavailableReason) =>
@@ -551,18 +681,19 @@ describe('the status card', () => {
     const stale = card({
       broker: brokerBalance({ restSnapshotAgeSec: 400, balanceEventAgeSec: 75, fresh: false }),
     });
-    expect(plainTextOf(stale)).toContain(plainTextOf(TEXTS.statusStale('1 мин')));
+    expect(plainTextOf(stale)).toContain(plainTextOf(TEXTS.statusStale({ age: 75 })));
     const restOnly = card({
       broker: brokerBalance({ restSnapshotAgeSec: 180, balanceEventAgeSec: null, fresh: false }),
     });
-    expect(plainTextOf(restOnly)).toContain(plainTextOf(TEXTS.statusStale('3 мин')));
+    expect(plainTextOf(restOnly)).toContain(plainTextOf(TEXTS.statusStale({ age: 180 })));
   });
 
   it.each(reasons)('says why there is no balance for %s', (reason) => {
     const plain = plainTextOf(noSnapshot(reason));
     const ambiguous = reason === BrokerBalanceUnavailableReason.AmbiguousAccount;
     expect(plain.includes(plainTextOf(TEXTS.statusAmbiguous))).toBe(ambiguous);
-    expect(plain.includes(plainTextOf(TEXTS.statusNoSnapshot))).toBe(!ambiguous);
+    const noSnapshotLine = plainTextOf(renderOf('statusNoSnapshot', TEXTS.statusNoSnapshot, ''));
+    expect(plain.includes(noSnapshotLine)).toBe(!ambiguous);
     expect(plain).not.toContain('🕒');
   });
 
@@ -576,7 +707,6 @@ describe('the status card', () => {
 
   it('labels both trade modes', () => {
     expect(MODE_LABELS).toEqual({ demo: 'DEMO', real: 'REAL' });
-    expect(plainTextOf(modeHeader(TradeMode.Real))).toBe('🎮 Режим: REAL');
     expect(plainTextOf(card({ mode: TradeMode.Real }))).toMatch(/^🎮 Режим: REAL$/m);
   });
 
@@ -693,7 +823,7 @@ describe('the analysis screen texts', () => {
   it.each(analysisEntries)(
     'calls the signal neither a probability nor an accuracy in %s',
     (_key, entry) => {
-      const text = plainTextOf(typeof entry === 'function' ? entry(HOSTILE) : entry).toLowerCase();
+      const text = plainTextOf(renderOf(_key, entry, HOSTILE)).toLowerCase();
       expect(text).not.toContain('вероятност');
       expect(text).not.toContain('точност');
     },

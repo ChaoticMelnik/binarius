@@ -292,17 +292,19 @@ export function signalsScreen(
 // The picker draws it too, after a save (stake-picker.ts).
 export function launchScreen({
   assetId,
+  firstName,
   symbol,
   amount,
   saved,
 }: {
   assetId: number;
+  firstName: string;
   symbol: string | null;
   amount: DecimalString | null;
   saved?: { amount: DecimalString | null };
 }): DemoScreen {
   return {
-    text: launchText({ symbol, amount, trades: DEFAULT_SESSION_TRADES, saved }),
+    text: launchText({ firstName, symbol, amount, trades: DEFAULT_SESSION_TRADES, saved }),
     keyboard: new InlineKeyboard()
       .text(LABELS.launchCycleButton, sessionStartCallbackData(assetId, SIGNALS_DURATION_SEC))
       .row()
@@ -356,7 +358,7 @@ export function createDemoComposer<C extends Context>({
       ]),
     );
     const screen = read.ok
-      ? launchScreen({ assetId, symbol: read.pair.symbol, amount })
+      ? launchScreen({ assetId, firstName: ctx.from.first_name, symbol: read.pair.symbol, amount })
       : tradeFailure(ctx, read, assetId);
     await editOrReply(ctx, screen.text, screen.keyboard);
   });
@@ -431,7 +433,7 @@ export function createDemoComposer<C extends Context>({
     }
     const waiting = await editOrReply(
       ctx,
-      TEXTS.analyzing(analysisSubject(read.pair, durationSec)),
+      TEXTS.analyzing({ subject: analysisSubject(read.pair, durationSec) }),
       NO_NEXT_STEP_REASONS.InProgress,
     );
     if (waiting === 'unknown') return;
@@ -652,7 +654,7 @@ export function createDemoComposer<C extends Context>({
         return pairClosedScreen(read.catalog, read.pair);
       case 'duration_unsupported':
         return {
-          text: TEXTS.demoDurationUnsupported(read.pair.symbol),
+          text: TEXTS.demoDurationUnsupported({ symbol: read.pair.symbol }),
           keyboard: new InlineKeyboard()
             .text(LABELS.demoBackDurationsButton, demoAssetCallbackData(assetId))
             .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA),
@@ -699,7 +701,7 @@ export function createDemoComposer<C extends Context>({
     const open = openPairsOf(catalog, group, now());
     if (open.length === 0) {
       return {
-        text: TEXTS.demoGroupClosed(DEMO_GROUP_LABELS[group]),
+        text: TEXTS.demoGroupClosed({ group: DEMO_GROUP_LABELS[group] }),
         keyboard: backToGroups(),
       };
     }
@@ -730,7 +732,10 @@ export function createDemoComposer<C extends Context>({
     const { pair } = checked;
     const options = durationOptions(pair);
     if (options.length === 0) {
-      return { text: TEXTS.demoNoDuration(pair.symbol), keyboard: backToPairs(catalog, pair) };
+      return {
+        text: TEXTS.demoNoDuration({ symbol: pair.symbol }),
+        keyboard: backToPairs(catalog, pair),
+      };
     }
     const keyboard = new InlineKeyboard();
     options.forEach((sec) => {
@@ -748,7 +753,10 @@ export function createDemoComposer<C extends Context>({
   }
 
   function pairClosedScreen(catalog: PairsCatalogResponse, pair: PairView): DemoScreen {
-    return { text: TEXTS.demoPairClosed(pair.symbol), keyboard: backToPairs(catalog, pair) };
+    return {
+      text: TEXTS.demoPairClosed({ symbol: pair.symbol }),
+      keyboard: backToPairs(catalog, pair),
+    };
   }
 
   const withManual = (screen: DemoScreen): DemoScreen => ({

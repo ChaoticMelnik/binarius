@@ -1,6 +1,7 @@
 import {
   ADMIN_BOT_TEXT_READ_ONLY_GROUPS,
   BOT_TEXT_CATALOG,
+  BOT_TEXT_VARS,
   BOT_TEXT_GROUP_TITLES,
   BOT_TEXT_SOURCE_MAX,
   BotTextGroup,
@@ -12,6 +13,7 @@ import {
   type AdminBotTextRendered,
   type AdminBotTextView,
   type BotTextKey,
+  type BotTextVarName,
   ADMIN_INTENTS_ACTIVE_FILTER,
   ADMIN_USER_RECENT_INTENTS,
   ADMIN_USER_RECENT_LEDGER,
@@ -92,20 +94,21 @@ export const confirmPage = (message?: string): SafeHtml =>
 // column an operator reads to decide whether a session is theirs.
 const when = (iso: string): SafeHtml => html`<time datetime="${iso}">${iso}</time>`;
 
-const row = (session: StaffSessionView): SafeHtml => html`<tr class="${session.current ? 'current' : ''}">
-  <td>${session.login}${session.current ? html` (${TEXTS.currentSession})` : ''}</td>
-  <td>${session.displayName ?? TEXTS.noDisplayName}</td>
-  <td>${session.ip}</td>
-  <td class="agent">${session.userAgent}</td>
-  <td>${when(session.createdAt)}</td>
-  <td>${when(session.lastSeenAt)}</td>
-  <td>${when(session.expiresAt)}</td>
-  <td>
-    <form method="post" action="/admin/sessions/${session.id}/revoke">
-      <button type="submit">${TEXTS.revokeSubmit}</button>
-    </form>
-  </td>
-</tr>`;
+const row = (session: StaffSessionView): SafeHtml =>
+  html`<tr class="${session.current ? 'current' : ''}">
+    <td>${session.login}${session.current ? html` (${TEXTS.currentSession})` : ''}</td>
+    <td>${session.displayName ?? TEXTS.noDisplayName}</td>
+    <td>${session.ip}</td>
+    <td class="agent">${session.userAgent}</td>
+    <td>${when(session.createdAt)}</td>
+    <td>${when(session.lastSeenAt)}</td>
+    <td>${when(session.expiresAt)}</td>
+    <td>
+      <form method="post" action="/admin/sessions/${session.id}/revoke">
+        <button type="submit">${TEXTS.revokeSubmit}</button>
+      </form>
+    </td>
+  </tr>`;
 
 const whenOrNone = (iso: string | null): SafeHtml | string =>
   iso === null ? TEXTS.none : when(iso);
@@ -1093,17 +1096,18 @@ const hostsOf = (key: BotTextKey): BotTextKey[] =>
   );
 
 /**
- * Everything the editor reads from the catalog entry: the argument, the fragments, the limit, the
- * hosts. #358 widens it to the user's and the system's variables.
+ * Everything the editor reads from the catalog entry: the variables of the key with their
+ * descriptions and samples from the registry (#358), the fragments, the limit, the hosts.
  */
 export const placeholderHints = (text: AdminBotTextView): SafeHtml => {
   const key = text.key as BotTextKey;
   const entry = BOT_TEXT_CATALOG[key];
   const hosts = hostsOf(key);
   const items = [
-    ...(entry.arg === undefined
-      ? []
-      : [html`<li>${TEXTS.botTextArg(entry.arg, entry.sample ?? '')}</li>`]),
+    ...(entry.vars as readonly BotTextVarName[]).map((name) => {
+      const { description, sample } = BOT_TEXT_VARS[name];
+      return html`<li>${TEXTS.botTextVariable(name, description, sample)}</li>`;
+    }),
     ...text.fragments.map(
       (fragment) =>
         html`<li>

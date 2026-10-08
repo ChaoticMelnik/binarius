@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { BOT_TEXT_KEY_PATTERN } from './bot-text-overrides';
 import { BotTextKind, parseBotTextTemplate } from './bot-text-template';
+import { BOT_TEXT_VARS, type BotTextVarFallbackKey } from './bot-text-vars';
 import {
   BOT_TEXT_CATALOG,
   BOT_TEXT_GROUP_TITLES,
   BotTextGroup,
   botTextKeysOf,
   botTextProblems,
+  createBotTexts,
+  defaultBotTextSource,
+  type BotHtmlKey,
+  type BotPlainKey,
   type BotTextKey,
 } from './bot-texts';
+import { plainTextOf } from './telegram-html';
 
 const ENTRIES = Object.entries(BOT_TEXT_CATALOG) as [
   BotTextKey,
@@ -25,19 +31,76 @@ describe('the bot texts catalog', () => {
     expect(key).toMatch(BOT_TEXT_KEY_PATTERN);
   });
 
-  it.each(ENTRIES)('gives %s a sample exactly when it takes an argument', (_key, entry) => {
-    expect(entry.sample === undefined).toBe(entry.arg === undefined);
+  it.each(ENTRIES)(
+    'binds %s to registry variables, each once and apart from its fragments',
+    (_key, entry) => {
+      expect(new Set(entry.vars).size).toBe(entry.vars.length);
+      expect(Object.keys(entry.variables)).toEqual(entry.vars);
+      for (const name of entry.vars) {
+        expect(entry.variables[name as never]).toBe(
+          BOT_TEXT_VARS[name as keyof typeof BOT_TEXT_VARS],
+        );
+        expect(Object.keys(entry.fragments)).not.toContain(name);
+      }
+    },
+  );
+
+  // what the preview and the CLI show, and what the validator measures
+  it.each(ENTRIES)('renders %s at its samples within its limit', (key, entry) => {
+    const { samples } = createBotTexts(defaultBotTextSource);
+    const shown =
+      entry.kind === BotTextKind.Html
+        ? plainTextOf(samples.html[key as BotHtmlKey])
+        : samples.plain[key as BotPlainKey];
+    expect(shown.trim()).not.toBe('');
+    expect(shown.length).toBeLessThanOrEqual(entry.limit);
+  });
+
+  // #358 В1: the placeholder renamed to the registry's name, the text the same
+  it.each([
+    ['statusTokens', 'count', 'tokens'],
+    ['statusReserved', 'count', 'reservedTokens'],
+    ['cardBonusGranted', 'tokens', 'bonusTokens'],
+    ['settings', 'current', 'level'],
+    ['settingsStake', 'amount', 'stake'],
+    ['stakeSaved', 'amount', 'stake'],
+    ['stakePickerMinimum', 'amount', 'minStake'],
+    ['stakeBelowMinimum', 'amount', 'minStake'],
+    ['stakePickerAvailable', 'amount', 'demoAvailable'],
+    ['stakeAboveAvailableAmount', 'amount', 'demoAvailable'],
+    ['launchStake', 'amount', 'stake'],
+    ['stakeSavedLine', 'amount', 'stake'],
+  ] as const)(
+    'renames the placeholder of %s from {%s} to {%s} in the default',
+    (key, before, after) => {
+      const names = parseBotTextTemplate(BOT_TEXT_CATALOG[key].source).names;
+      expect(names).toContain(after);
+      expect(names).not.toContain(before);
+    },
+  );
+
+  // a formatter reads its stand-in through the plain view: a function there would print as code
+  it.each<BotTextVarFallbackKey>([
+    'accountUnknownAddress',
+    'balanceUnavailable',
+    'stakeMinimumLabel',
+    'levelAll',
+    'levelReduced',
+    'levelOff',
+  ])('keeps the stand-in %s a plain text without variables', (key) => {
+    expect(BOT_TEXT_CATALOG[key].kind).toBe(BotTextKind.Plain);
+    expect(BOT_TEXT_CATALOG[key].vars).toEqual([]);
   });
 
   // depth 1, so no cycle and no fragment of a fragment to re-render
   it.each(ENTRIES.filter(([, entry]) => Object.keys(entry.fragments).length > 0))(
-    'points the fragments of %s at keys with no fragments and no argument',
+    'points the fragments of %s at keys with no fragments and no variables',
     (_key, entry) => {
       for (const fragmentKey of Object.values(entry.fragments)) {
         expect(Object.keys(BOT_TEXT_CATALOG)).toContain(fragmentKey);
         const fragment = BOT_TEXT_CATALOG[fragmentKey as BotTextKey];
         expect(fragment.fragments, fragmentKey).toEqual({});
-        expect(fragment.arg, fragmentKey).toBeUndefined();
+        expect(fragment.vars, fragmentKey).toEqual([]);
       }
     },
   );
@@ -53,11 +116,8 @@ describe('the bot texts catalog', () => {
     },
   );
 
-  it.each(ENTRIES)('uses in the default of %s only its argument and fragments', (_key, entry) => {
-    const allowed = [
-      ...(entry.arg === undefined ? [] : [entry.arg]),
-      ...Object.keys(entry.fragments),
-    ];
+  it.each(ENTRIES)('uses in the default of %s only its variables and fragments', (_key, entry) => {
+    const allowed = [...entry.vars, ...Object.keys(entry.fragments)];
     for (const name of parseBotTextTemplate(entry.source).names) expect(allowed).toContain(name);
   });
 

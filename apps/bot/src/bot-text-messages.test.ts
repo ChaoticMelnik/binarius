@@ -43,7 +43,6 @@ import {
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
 import { BOT_COMMANDS } from './commands';
 import { DEMO_DURATIONS_SEC, type DemoAssetGroup, type DemoDurationSec } from './demo-catalog';
-import { formatCount, formatStake, formatUsd } from './format';
 import {
   brokerBalance,
   intentView,
@@ -69,6 +68,7 @@ import {
   stakePickerText,
   statusCard,
   TEXTS,
+  userContextOf,
   type StatusCardInput,
 } from './texts';
 
@@ -83,6 +83,7 @@ const USD = '-999999999999.99999999' as DecimalString;
 // a stake, the broker's minimum and the demo balance are unsigned money() values (#297)
 const STAKE = '999999999999.99999999' as DecimalString;
 const lengthOf = (text: TelegramHtml) => plainTextOf(text).length;
+const NAME = x(W.firstName);
 
 const pair: PairView = { ...PAIR_EURUSD, symbol: x(W.symbol), payout: 999_999 };
 const GROUPS: DemoAssetGroup[] = [
@@ -101,10 +102,12 @@ const statusCards = (): TelegramHtml[] => {
   ) =>
     Object.values(TradeMode).map((mode) =>
       statusCard({
+        firstName: NAME,
         mode,
         tokens: { balance: COUNT, reserved: COUNT, available: COUNT },
         broker,
         brokerUnavailable,
+        demoStake: STAKE,
       }),
     );
   const big = { available: USD, held: USD, total: USD };
@@ -298,12 +301,21 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   sessionStopped: () => sessionTexts(TradingSessionStatus.Stopped, [...STOP_REASONS, null]),
   settings: () =>
     Object.values(NotificationLevel).flatMap((level) =>
-      [null, STAKE].map((stake) => settingsText(level, stake)),
+      [null, STAKE].map((stake) => settingsText(level, stake, NAME)),
     ),
   stakePicker: () =>
     [null, STAKE].flatMap((stake) =>
       [0, 1].map((presets) =>
-        stakePickerText({ stake, minTradeAmount: STAKE, demoAvailable: STAKE, presets }),
+        stakePickerText({
+          user: userContextOf(NAME, TradeMode.Demo, {
+            tokens: { balance: COUNT, reserved: COUNT, available: COUNT },
+            broker: null,
+            demoStake: stake,
+          }),
+          minTradeAmount: STAKE,
+          demoAvailable: STAKE,
+          presets,
+        }),
       ),
     ),
   demoSummary: () =>
@@ -312,7 +324,9 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   demoLaunch: () =>
     [undefined, { amount: null }, { amount: STAKE }].flatMap((saved) =>
       [null, STAKE].flatMap((amount) =>
-        [999, 992, 991].map((trades) => launchText({ symbol: pair.symbol, amount, trades, saved })),
+        [999, 992, 991].map((trades) =>
+          launchText({ firstName: NAME, symbol: pair.symbol, amount, trades, saved }),
+        ),
       ),
     ),
 };
@@ -351,12 +365,20 @@ describe('the assembled messages, against the real assembly', () => {
     expect([...read].sort()).toEqual([...botTextMessageKeys(message)].sort());
   });
 
-  it('M3 takes the widths of the formatters at the edge of their domains', () => {
-    expect(formatUsd(USD)).toHaveLength(W.usd);
-    expect(formatStake(STAKE)).toHaveLength(W.stake);
-    expect(formatUsd('0')).toHaveLength(W.zeroUsd);
-    expect(formatCount(COUNT)).toHaveLength(W.count);
-    expect(COUNT).toHaveLength(W.rawCount);
+  // #358: the variables an override adds are measured at the widest value the bot prints
+  it('M6 estimates /settings exactly with every variable of its keys in the texts', () => {
+    const texts = {
+      settings: 'Привет, {firstName}! Сейчас: {level}, ставка {stake}',
+      settingsStake: '{firstName}: {stake} ({level})',
+    };
+    const message = ASSEMBLED.find((m) => m.id === 'settings')!;
+    setBotTextSource(recording(texts).source);
+    const real = Math.max(...REAL.settings!().map(lengthOf));
+    expect(real).toBe(estimateBotTextMessage(message, recording(texts).source));
+    const { read, source } = recording(texts);
+    setBotTextSource(source);
+    REAL.settings!();
+    expect([...read].sort()).toEqual([...botTextMessageKeys(message)].sort());
   });
 
   it.each(['intentStatus', 'analysisSignal', 'analysisNoSignal'])(
@@ -381,7 +403,7 @@ describe('the assembled messages, against the real assembly', () => {
     ]);
     expect(botTextChangeProblems(unknown.key, unknown.source, [line])).toEqual([]);
     setBotTextSource(resolved.source);
-    expect(TEXTS.accountLineActive(null).value).toBe(
+    expect(TEXTS.accountLineActive({ email: null }).value).toBe(
       '✅ Подключён: <code>&lt;b&gt;адрес неизвестен&lt;/b&gt;</code>',
     );
   });

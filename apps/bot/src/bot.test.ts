@@ -5,11 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BrokerBalanceUnavailableReason,
   confirmCallbackData,
+  decimalStringSchema,
+  type BotTextKey,
   defaultBotTextSource,
   NotificationLevel,
   OAuthErrorCode,
   plainTextOf,
   telegramHtmlProblems,
+  TradeMode,
   UserErrorCode,
   UserStatus,
   type LinkedAccountView,
@@ -83,8 +86,12 @@ import {
   settingsText,
   statusCard,
   TEXTS,
+  userContextOf,
   type AccountCardInput,
 } from './texts';
+
+// a card line whose default holds none of its variables
+const CARD_CONTEXT = { firstName: 'Ada', email: null };
 
 // Every message and caption the bot sends is Telegram HTML: checked on every send any test in
 // this file captures, not on one of them.
@@ -394,12 +401,17 @@ describe('/start', () => {
 describe('the status card', () => {
   const ACTIVE = userView({ hasActiveBrokerAccount: true });
   const DEMO_BUTTON = [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }];
+  // the line's default holds none of its variables
+  const NO_SNAPSHOT = () =>
+    TEXTS.statusNoSnapshot(userContextOf(USER.first_name, TradeMode.Demo, ACCESS_VIEW));
   const cardFor = (access = ACCESS_VIEW) =>
     statusCard({
+      firstName: USER.first_name,
       mode: 'demo',
       tokens: access.tokens,
       broker: access.broker,
       brokerUnavailable: access.brokerUnavailable,
+      demoStake: access.demoStake,
     }).value;
   const PHOTO_REFUSED = {
     ok: false as const,
@@ -527,8 +539,8 @@ describe('the status card', () => {
 
   it.each([
     [BrokerBalanceUnavailableReason.AmbiguousAccount, TEXTS.statusAmbiguous],
-    [BrokerBalanceUnavailableReason.BrokerUnavailable, TEXTS.statusNoSnapshot],
-    [BrokerBalanceUnavailableReason.Refreshing, TEXTS.statusNoSnapshot],
+    [BrokerBalanceUnavailableReason.BrokerUnavailable, NO_SNAPSHOT()],
+    [BrokerBalanceUnavailableReason.Refreshing, NO_SNAPSHOT()],
   ])('shows $0.00 and the status line for %s', async (reason, line) => {
     const access = accessView({ broker: null, brokerUnavailable: reason });
     const { calls } = await home({ readTradingAccess: vi.fn(() => Promise.resolve(access)) });
@@ -544,7 +556,7 @@ describe('the status card', () => {
     });
     const { calls } = await home({ readTradingAccess: vi.fn(() => Promise.resolve(access)) });
     expect(plainTextOf(String(sentPayload(calls, 'sendPhoto')?.caption))).toContain(
-      plainTextOf(TEXTS.statusStale('2 мин')),
+      plainTextOf(TEXTS.statusStale({ age: 130 })),
     );
   });
 
@@ -699,7 +711,9 @@ describe('«🔄 Повторить» of a command (#350)', () => {
     const { bot, backend, calls } = setup();
     await bot.handleUpdate(callbackUpdate(commandRetryCallbackData('settings')));
     expect(backend.recordStart).toHaveBeenCalledTimes(1);
-    expect(sentTexts(calls)).toEqual([settingsText(NotificationLevel.All, null).value]);
+    expect(sentTexts(calls)).toEqual([
+      settingsText(NotificationLevel.All, null, USER.first_name).value,
+    ]);
   });
 
   it('keeps every command datum inside 64 bytes and matches no other command', () => {
@@ -1149,8 +1163,8 @@ describe('the confirm button', () => {
   });
 
   it.each([
-    ['not_partner_client' as const, TEXTS.cardBonusNotPartner],
-    ['already_granted' as const, TEXTS.cardBonusAlready],
+    ['not_partner_client' as const, TEXTS.cardBonusNotPartner(CARD_CONTEXT)],
+    ['already_granted' as const, TEXTS.cardBonusAlready(CARD_CONTEXT)],
   ])('says why no pack was paid (%s)', async (reason, line) => {
     const grant = { granted: false as const, reason };
     const { bot, calls } = setup({
@@ -1564,7 +1578,7 @@ describe('the connect button', () => {
 
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
     const message = sentPayload(calls, 'sendMessage');
-    expect(message?.text).toBe(TEXTS.emailPrompt.value);
+    expect(message?.text).toBe(TEXTS.emailPrompt({ firstName: USER.first_name }).value);
     expect(inlineButtons(message)).toEqual(MENU_BUTTONS);
     expect(dialog.get(USER.id)).toEqual({ step: 'email' });
     expect(backend.sendEmailCode).not.toHaveBeenCalled();
@@ -1578,7 +1592,9 @@ describe('the connect button', () => {
       description: 'Bad Request: query is too old',
     });
     await bot.handleUpdate(callbackUpdate(CONNECT_CALLBACK_DATA));
-    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.emailPrompt.value);
+    expect(sentPayload(calls, 'sendMessage')?.text).toBe(
+      TEXTS.emailPrompt({ firstName: USER.first_name }).value,
+    );
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
   });
 
@@ -1606,7 +1622,7 @@ describe('the address step', () => {
 
     expect(backend.sendEmailCode).toHaveBeenCalledWith('4242', EMAIL);
     const message = sentPayload(calls, 'sendMessage');
-    expect(message?.text).toBe(TEXTS.codeSent(EMAIL).value);
+    expect(message?.text).toBe(TEXTS.codeSent({ email: EMAIL, firstName: USER.first_name }).value);
     expect(message?.text).toContain(EMAIL);
     expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
     expect(dialog.get(USER.id)).toEqual({ step: 'code', email: EMAIL });
@@ -1661,7 +1677,10 @@ describe('the address step', () => {
 
     await bot.handleUpdate(textUpdate(EMAIL));
     expect(sendEmailCode).toHaveBeenCalledTimes(2);
-    expect(sentTexts(calls)).toEqual([TEXTS.sendCodeBusy.value, TEXTS.codeSent(EMAIL).value]);
+    expect(sentTexts(calls)).toEqual([
+      TEXTS.sendCodeBusy.value,
+      TEXTS.codeSent({ email: EMAIL, firstName: USER.first_name }).value,
+    ]);
   });
 
   // the owner's answer 2a of the round 1 fixes: a kept step keeps its clock
@@ -1702,7 +1721,10 @@ describe('the address step', () => {
 
       await bot.handleUpdate(textUpdate(EMAIL));
       expect(sendEmailCode).toHaveBeenCalledTimes(2);
-      expect(sentTexts(calls)).toEqual([TEXTS.unavailable.value, TEXTS.codeSent(EMAIL).value]);
+      expect(sentTexts(calls)).toEqual([
+        TEXTS.unavailable.value,
+        TEXTS.codeSent({ email: EMAIL, firstName: USER.first_name }).value,
+      ]);
     },
   );
 
@@ -1727,7 +1749,9 @@ describe('the address step', () => {
     });
     await bot.handleUpdate(textUpdate(EMAIL));
     const message = sentPayload(calls, 'sendMessage');
-    expect(message?.text).toBe(TEXTS.codeSentUnknown(EMAIL).value);
+    expect(message?.text).toBe(
+      TEXTS.codeSentUnknown({ email: EMAIL, firstName: USER.first_name }).value,
+    );
     expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
     expect(dialog.get(USER.id)).toEqual({ step: 'code', email: EMAIL });
     expect(logger.warn.mock.calls[0]?.[1]).toBe('email code not sent');
@@ -1746,7 +1770,9 @@ describe('the address step', () => {
     });
     await bot.handleUpdate(textUpdate(EMAIL));
     const message = sentPayload(calls, 'sendMessage');
-    expect(message?.text).toBe(TEXTS.codeSentUnknown(EMAIL).value);
+    expect(message?.text).toBe(
+      TEXTS.codeSentUnknown({ email: EMAIL, firstName: USER.first_name }).value,
+    );
     expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
     expect(dialog.get(USER.id)).toEqual({ step: 'code', email: EMAIL });
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ err: { name: 'BackendError' } });
@@ -1998,7 +2024,7 @@ describe('the resend button', () => {
     expect(backend.sendEmailCode).toHaveBeenCalledWith('4242', EMAIL);
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
     const message = sentPayload(calls, 'sendMessage');
-    expect(message?.text).toBe(TEXTS.codeSent(EMAIL).value);
+    expect(message?.text).toBe(TEXTS.codeSent({ email: EMAIL, firstName: USER.first_name }).value);
     expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
     expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
   });
@@ -2015,7 +2041,7 @@ describe('the resend button', () => {
     const { bot, backend, calls } = setup({ dialog: { step: 'email' } });
     await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
     expect(backend.sendEmailCode).not.toHaveBeenCalled();
-    expect(sentTexts(calls)).toEqual([TEXTS.emailPrompt.value]);
+    expect(sentTexts(calls)).toEqual([TEXTS.emailPrompt({ firstName: USER.first_name }).value]);
   });
 
   // the code already sent stays good whichever limit refused a new one
@@ -2073,7 +2099,9 @@ describe('the resend button', () => {
     });
     await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
     const message = sentPayload(calls, 'sendMessage');
-    expect(message?.text).toBe(TEXTS.codeSentUnknown(EMAIL).value);
+    expect(message?.text).toBe(
+      TEXTS.codeSentUnknown({ email: EMAIL, firstName: USER.first_name }).value,
+    );
     expect(inlineButtons(message)).toEqual(CODE_STEP_BUTTONS);
     expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
     expect(logger.warn.mock.calls[0]?.[1]).toBe('email code not sent');
@@ -2106,7 +2134,7 @@ describe('the resend button', () => {
     await bot.handleUpdate(textUpdate(email));
     expect(backend.sendEmailCode).toHaveBeenCalledWith('4242', email);
     const text = String(sentPayload(calls, 'sendMessage')?.text);
-    expect(text).toBe(TEXTS.codeSent(email).value);
+    expect(text).toBe(TEXTS.codeSent({ email: email, firstName: USER.first_name }).value);
     expect(plainTextOf(text)).toContain(email);
   });
 
@@ -2119,7 +2147,9 @@ describe('the resend button', () => {
     });
     await bot.handleUpdate(callbackUpdate(RESEND_CALLBACK_DATA));
     expect(backend.sendEmailCode).toHaveBeenCalledOnce();
-    expect(sentTexts(calls)).toEqual([TEXTS.codeSent(EMAIL).value]);
+    expect(sentTexts(calls)).toEqual([
+      TEXTS.codeSent({ email: EMAIL, firstName: USER.first_name }).value,
+    ]);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
   });
 });
@@ -2234,7 +2264,9 @@ describe('/settings', () => {
       });
       const sends = calls.filter((call) => call.method === 'sendMessage');
       expect(sends).toHaveLength(1);
-      expect(sends[0]?.payload.text).toBe(settingsText(notificationLevel, null).value);
+      expect(sends[0]?.payload.text).toBe(
+        settingsText(notificationLevel, null, USER.first_name).value,
+      );
       expect(
         (sends[0]?.payload.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard,
       ).toEqual([levelButtons(notificationLevel), stakeRow]);
@@ -2292,7 +2324,7 @@ describe('/settings', () => {
       expect(edit).toMatchObject({
         chat_id: USER.id,
         message_id: message.message_id,
-        text: settingsText(NotificationLevel.Off, null).value,
+        text: settingsText(NotificationLevel.Off, null, USER.first_name).value,
         parse_mode: 'HTML',
       });
       expect((edit?.reply_markup as { inline_keyboard: unknown[][] }).inline_keyboard).toEqual([
@@ -2309,7 +2341,7 @@ describe('/settings', () => {
       });
       await bot.handleUpdate(press(NotificationLevel.Off));
       expect(sentPayload(calls, 'editMessageText')?.text).toBe(
-        settingsText(NotificationLevel.Reduced, null).value,
+        settingsText(NotificationLevel.Reduced, null, USER.first_name).value,
       );
     });
 
@@ -2352,7 +2384,9 @@ describe('/settings', () => {
 
         const edit = sentPayload(calls, 'editMessageText');
         const message = sentPayload(calls, 'sendMessage');
-        expect(message?.text).toBe(settingsText(NotificationLevel.Reduced, null).value);
+        expect(message?.text).toBe(
+          settingsText(NotificationLevel.Reduced, null, USER.first_name).value,
+        );
         expect(message?.reply_markup).toEqual(edit?.reply_markup);
         expect(logger.warn).toHaveBeenCalledTimes(1);
         expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
@@ -2427,7 +2461,7 @@ describe('/settings', () => {
       await bot.handleUpdate(press(NotificationLevel.All));
 
       expect(sentPayload(calls, 'editMessageText')?.text).toBe(
-        settingsText(NotificationLevel.All, null).value,
+        settingsText(NotificationLevel.All, null, USER.first_name).value,
       );
       expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
     });
@@ -2640,5 +2674,52 @@ describe('the text source', () => {
     expect(inlineButtons(sentPayload(calls, 'sendMessage'))[0]?.text).toBe(
       stubText('connectButton'),
     );
+  });
+});
+
+// #358: a text with several variables prints the user's values the handler already holds, and
+// reads nothing more for them
+describe('the variables of a text', () => {
+  afterEach(() => setBotTextSource(defaultBotTextSource));
+  const withTexts = (texts: Partial<Record<BotTextKey, string>>) => {
+    setBotTextSource({ sourceOf: (key) => texts[key] ?? defaultBotTextSource.sourceOf(key) });
+  };
+  const backendCalls = (backend: BackendClient) =>
+    Object.entries(backend)
+      .filter(([, fn]) => vi.mocked(fn as () => unknown).mock.calls.length > 0)
+      .map(([name]) => name);
+
+  it('E1 puts the name, the tokens and the demo balance into the /menu card', async () => {
+    withTexts({ statusTokens: '{firstName}, у тебя {tokens} токенов и {demoBalance} на демо' });
+    const { bot, backend, calls } = setup({
+      user: userView({ hasActiveBrokerAccount: true }),
+      readTradingAccess: vi.fn(() =>
+        Promise.resolve(accessView({ tokens: { balance: '15', reserved: '3', available: '12' } })),
+      ),
+    });
+    await bot.handleUpdate(textUpdate('/menu'));
+    expect(plainTextOf(String(sentPayload(calls, 'sendPhoto')?.caption))).toContain(
+      'Ada, у тебя 12 токенов и $10 000.00 на демо',
+    );
+    expect(backendCalls(backend)).toEqual(['recordStart', 'readTradingAccess']);
+  });
+
+  it('E2 puts the name, the level and the stake into /settings', async () => {
+    withTexts({ settings: '{firstName}: {level}, ставка {stake}' });
+    const { bot, backend, calls } = setup({
+      recordStart: vi.fn(() =>
+        Promise.resolve(
+          userView({
+            notificationLevel: NotificationLevel.Reduced,
+            demoStake: decimalStringSchema.parse('5'),
+          }),
+        ),
+      ),
+    });
+    await bot.handleUpdate(textUpdate('/settings'));
+    expect(plainTextOf(String(sentPayload(calls, 'sendMessage')?.text))).toMatch(
+      /^Ada: 🔕 Реже, ставка \$5\.00\n/,
+    );
+    expect(backendCalls(backend)).toEqual(['recordStart']);
   });
 });

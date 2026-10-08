@@ -302,7 +302,7 @@ describe('the stake button', () => {
     [
       TradeIntentErrorCode.StakeBelowMinimum,
       409,
-      TEXTS.stakeBelowMinimum('$1.00'),
+      TEXTS.stakeBelowMinimum({ minStake: decimalStringSchema.parse('1') }),
       STAKE_MENU_ROWS,
     ],
     [TradeIntentErrorCode.InsufficientDemoBalance, 409, TEXTS.stakeAboveAvailable, STAKE_MENU_ROWS],
@@ -382,7 +382,9 @@ describe('the stake button', () => {
         createIntent: () => Promise.reject(httpError(409, TradeIntentErrorCode.StakeBelowMinimum)),
       });
       await press(stakeFor(stakeFingerprint(decimalStringSchema.parse('2'))));
-      expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.stakeBelowMinimum('$5.00').value);
+      expect(payloadOf(calls, 'sendMessage')?.text).toBe(
+        TEXTS.stakeBelowMinimum({ minStake: decimalStringSchema.parse('5') }).value,
+      );
     });
   });
 
@@ -489,14 +491,14 @@ describe('the stake button', () => {
       'the pair is closed',
       catalogOf({ pairs: [PAIR_CLOSED] }),
       stakeCallbackData(PAIR_CLOSED.id, 5, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
-      TEXTS.demoPairClosed(PAIR_CLOSED.symbol),
+      TEXTS.demoPairClosed({ symbol: PAIR_CLOSED.symbol }),
       [[BACK_GROUPS]],
     ],
     [
       "the duration is outside the pair's bounds",
       catalogOf({ pairs: [{ ...PAIR_EURUSD, maxTimeframe: 10 }] }),
       stakeCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, STAKE_NONCE, STAKE_FINGERPRINT),
-      TEXTS.demoDurationUnsupported(PAIR_EURUSD.symbol),
+      TEXTS.demoDurationUnsupported({ symbol: PAIR_EURUSD.symbol }),
       [[BACK_DURATIONS, BACK_GROUPS]],
     ],
   ])('creates nothing and says why when %s', async (_case, readPairs, data, text, rows) => {

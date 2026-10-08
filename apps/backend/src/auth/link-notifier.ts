@@ -28,8 +28,10 @@ export type LinkPushKind = (typeof LinkPushKind)[keyof typeof LinkPushKind];
 
 export type LinkPushOutcome =
   | { kind: typeof LinkPushKind.Pending; account: { id: string; email: string | null } }
+  // the account's address for the text's {email} (#358); null when the broker sent none
+  | { kind: typeof LinkPushKind.Active; email: string | null }
   | {
-      kind: Exclude<LinkPushKind, typeof LinkPushKind.Pending>;
+      kind: Exclude<LinkPushKind, typeof LinkPushKind.Pending | typeof LinkPushKind.Active>;
     };
 
 // Every push carries its next step, as the bot's own messages do (#350, docs/bot-navigation.md):
@@ -58,7 +60,7 @@ export function linkPushMessage(outcome: LinkPushOutcome): LinkPushMessage {
       };
     case LinkPushKind.Active:
       return {
-        text: CLIENT_TEXTS.linkedActive,
+        text: CLIENT_TEXTS.linkedActive({ email: outcome.email }),
         reply_markup: new InlineKeyboard().text(CLIENT_LABELS.demoButton, DEMO_CALLBACK_DATA),
       };
     case LinkPushKind.Blocked:

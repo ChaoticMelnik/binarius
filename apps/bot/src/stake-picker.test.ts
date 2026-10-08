@@ -3,6 +3,8 @@ import {
   BrokerBalanceUnavailableReason,
   decimalStringSchema,
   NotificationLevel,
+  plainTextOf,
+  TradeMode,
   UserStatus,
   type DecimalString,
   CONNECT_CALLBACK_DATA,
@@ -47,7 +49,13 @@ import {
   userView,
   type ApiCall,
 } from './testing';
-import { LABELS, settingsText, stakePickerText, TEXTS } from './texts';
+import { LABELS, settingsText, stakePickerText, TEXTS, userContextOf } from './texts';
+
+const pickerContext = () => ({
+  ...userContextOf(USER.first_name, TradeMode.Demo, accessView()),
+  minStake: d('1'),
+  demoAvailable: d('1'),
+});
 
 interface Button {
   text: string;
@@ -140,9 +148,9 @@ describe('the stake picker', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
     expect(edit?.text).toBe(
       stakePickerText({
-        stake: null,
-        minTradeAmount: '1.00000000',
-        demoAvailable: '10000.00000000',
+        user: userContextOf(USER.first_name, TradeMode.Demo, accessView()),
+        minTradeAmount: d('1.00000000'),
+        demoAvailable: d('10000.00000000'),
         presets: 4,
       }).value,
     );
@@ -191,7 +199,7 @@ describe('the stake picker', () => {
     });
     await press(stakeOpenCallbackData(SETTINGS));
     const edit = lastPayload(calls);
-    expect(edit?.text).toContain(TEXTS.stakePickerNoPresets.value);
+    expect(edit?.text).toContain(plainTextOf(TEXTS.stakePickerNoPresets(pickerContext())));
     expect(rowsOf(edit)).toEqual([CUSTOM(), BACK_SETTINGS]);
   });
 
@@ -297,7 +305,13 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     button(LABELS.stakeBackLaunchButton, demoLaunchCallbackData(PAIR_EURUSD.id)),
   ];
   const savedLaunch = (amount: DecimalString | null, symbol: string | null = PAIR_EURUSD.symbol) =>
-    launchScreen({ assetId: PAIR_EURUSD.id, symbol, amount, saved: { amount } });
+    launchScreen({
+      assetId: PAIR_EURUSD.id,
+      firstName: USER.first_name,
+      symbol,
+      amount,
+      saved: { amount },
+    });
 
   it('leads back to the launch screen', async () => {
     const { press, calls } = setup();
@@ -322,8 +336,12 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
     const screen = savedLaunch(d('5'));
     expect(lastPayload(calls)?.text).toBe(screen.text.value);
-    expect(lastPayload(calls)?.text).toContain(TEXTS.stakeSavedLine('$5.00').value);
-    expect(lastPayload(calls)?.text).toContain(TEXTS.launchStake('$5.00').value);
+    expect(lastPayload(calls)?.text).toContain(
+      TEXTS.stakeSavedLine({ stake: d('5'), firstName: USER.first_name }).value,
+    );
+    expect(lastPayload(calls)?.text).toContain(
+      TEXTS.launchStake({ stake: d('5'), firstName: USER.first_name }).value,
+    );
     expect(rowsOf(lastPayload(calls))).toEqual(screen.keyboard.inline_keyboard);
   });
 
@@ -331,7 +349,9 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     const { press, calls } = setup();
     await press(stakeResetCallbackData(PAIR));
     expect(lastPayload(calls)?.text).toBe(savedLaunch(null).text.value);
-    expect(lastPayload(calls)?.text).toContain(TEXTS.launchStakeMinimum.value);
+    expect(lastPayload(calls)?.text).toContain(
+      TEXTS.launchStakeMinimum({ firstName: USER.first_name, stake: null }).value,
+    );
   });
 
   it('returns to the launch screen as a new message after a typed amount', async () => {
@@ -387,14 +407,25 @@ describe('saving a stake', () => {
     const { press, calls, setDemoStake } = setup();
     await press(data);
     expect(setDemoStake.mock.calls).toEqual([[String(USER.id), amount]]);
-    expect(lastPayload(calls)?.text).toBe(TEXTS.stakeSaved(label).value);
+    const saved = TEXTS.stakeSaved({
+      stake: amount === null ? null : d(amount),
+      firstName: USER.first_name,
+    });
+    expect(lastPayload(calls)?.text).toBe(saved.value);
+    expect(plainTextOf(saved)).toContain(label);
     expect(rowsOf(lastPayload(calls))).toEqual([back]);
   });
 
   it.each([
-    ['stake_precision', TEXTS.stakePrecisionDigits('2')],
-    ['stake_below_minimum', TEXTS.stakeBelowMinimum('$1.00')],
-    ['insufficient_demo_balance', TEXTS.stakeAboveAvailableAmount('$50.00')],
+    [
+      'stake_precision',
+      TEXTS.stakePrecisionDigits({ digits: '2', minStake: d('1'), demoAvailable: d('50') }),
+    ],
+    ['stake_below_minimum', TEXTS.stakeBelowMinimum({ minStake: d('1') })],
+    [
+      'insufficient_demo_balance',
+      TEXTS.stakeAboveAvailableAmount({ demoAvailable: d('50'), minStake: d('1') }),
+    ],
   ] as const)('words the refusal %s from its limits', async (error, text) => {
     const { press, calls, logger } = setup({
       setDemoStake: () =>
@@ -425,7 +456,9 @@ describe('a typed stake', () => {
     await type(' 2,50 ');
     expect(setDemoStake.mock.calls).toEqual([[String(USER.id), '2.5']]);
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
-    expect(lastPayload(calls)?.text).toBe(TEXTS.stakeSaved('$2.50').value);
+    expect(lastPayload(calls)?.text).toBe(
+      TEXTS.stakeSaved({ stake: d('2.5'), firstName: USER.first_name }).value,
+    );
     expect(loginDialog.get(USER.id)).toBeUndefined();
   });
 
@@ -522,7 +555,7 @@ describe('/settings', () => {
     });
     await type('/settings');
     const sent = lastPayload(calls);
-    expect(sent?.text).toBe(settingsText(NotificationLevel.All, '2.5').value);
+    expect(sent?.text).toBe(settingsText(NotificationLevel.All, d('2.5'), USER.first_name).value);
     expect(sent?.text).toContain('Сумма демо-сделки: <b>$2.50</b>');
     expect(rowsOf(sent).at(-1)).toEqual([
       button(LABELS.settingsStakeButton, stakeOpenCallbackData(SETTINGS)),
@@ -530,7 +563,7 @@ describe('/settings', () => {
   });
 
   it('names the broker minimum when no stake is saved', () => {
-    expect(settingsText(NotificationLevel.All, null).value).toContain(
+    expect(settingsText(NotificationLevel.All, null, USER.first_name).value).toContain(
       'Сумма демо-сделки: <b>минимальная ставка брокера</b>',
     );
   });
@@ -542,7 +575,9 @@ describe('/settings', () => {
     await press(SETTINGS_CALLBACK_DATA);
     expect(recordStart).toHaveBeenCalledTimes(1);
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
-    expect(lastPayload(calls)?.text).toBe(settingsText(NotificationLevel.Off, null).value);
+    expect(lastPayload(calls)?.text).toBe(
+      settingsText(NotificationLevel.Off, null, USER.first_name).value,
+    );
   });
 
   it.each([

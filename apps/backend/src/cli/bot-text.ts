@@ -6,6 +6,7 @@ import {
   BOT_TEXT_CATALOG,
   BOT_TEXT_GROUP_TITLES,
   BOT_TEXT_SOURCE_MAX,
+  BOT_TEXT_VARS,
   BOT_TEXTS_APPLIED_WITHIN_S,
   DATABASE_URL_RULES,
   botTextRejectionMessage,
@@ -15,6 +16,7 @@ import {
   readEnv,
   resolveBotTextOverrides,
   type BotTextKey,
+  type BotTextVarName,
   AuditActorType,
 } from '@binarius/shared';
 import {
@@ -176,12 +178,27 @@ function list(rows: BotTextOverrideRecord[], io: BotTextIo): void {
   }
 }
 
+// what the text may hold (#358): the key's variables from the registry, then its fragments
+function placeholdersLine(key: BotTextKey): string {
+  const entry = BOT_TEXT_CATALOG[key];
+  const variables = (entry.vars as readonly BotTextVarName[]).map((name) => {
+    const { description, sample } = BOT_TEXT_VARS[name];
+    return `{${name}} — ${description} (образец: ${sample})`;
+  });
+  const fragments = Object.keys(entry.fragments).map((name) => `{${name}}`);
+  return [
+    variables.length === 0 ? 'переменных нет' : `переменные: ${variables.join('; ')}`,
+    ...(fragments.length === 0 ? [] : [`фрагменты: ${fragments.join(', ')}`]),
+  ].join('; ');
+}
+
 function show(key: BotTextKey, rows: BotTextOverrideRecord[], io: BotTextIo): void {
   const entry = BOT_TEXT_CATALOG[key];
   const row = rows.find((r) => r.key === key);
   const resolved = resolveBotTextOverrides(rows);
   const rejection = resolved.rejected.get(key);
   io.err(`${key} · ${BOT_TEXT_GROUP_TITLES[entry.group]} · ${entry.description}`);
+  io.err(placeholdersLine(key));
   io.err(`${stamp(row)}${row === undefined ? ', версия 0' : ''}`);
   if (rejection !== undefined) {
     io.err(`не действует — ${botTextRejectionMessage(rejection, key)}; показан исходный`);

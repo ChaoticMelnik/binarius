@@ -271,8 +271,9 @@ export const TEXTS = {
   botTextPreviewHeading: 'Предпросмотр',
   botTextPreviewHint: 'Подстановки — образцы, фрагменты — действующие тексты.',
   botTextPlaceholders: 'Плейсхолдеры',
-  botTextArg: (name: string, sample: string) =>
-    `{${name}} — обязателен; в предпросмотре: ${sample}`,
+  // #358: every variable is optional in the text
+  botTextVariable: (name: string, description: string, sample: string) =>
+    `{${name}} — ${description}; в предпросмотре: ${sample}`,
   botTextFragmentChanged: '(изменён)',
   botTextNoPlaceholders: 'Плейсхолдеров нет.',
   botTextLimit: (limit: number, singleLine: boolean) =>

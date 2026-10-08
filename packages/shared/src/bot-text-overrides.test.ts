@@ -71,14 +71,32 @@ describe('resolveBotTextOverrides', () => {
     expect(rejection?.code === 'invalid' && rejection.problems.map((p) => p.code)).toContain(code);
   });
 
-  it('V4 rejects a text that drops its argument', () => {
-    const rejection = resolveBotTextOverrides([row('codeSent', 'Код отправлен')]).rejected.get(
-      'codeSent',
-    );
-    expect(rejection).toMatchObject({
+  // #358 В3, in place of #240's В11: a text may leave out any of its variables
+  it('V4 accepts a text that drops its variable', () => {
+    expect(accepted([row('codeSent', 'Код отправлен')])).toEqual(['codeSent']);
+  });
+
+  it("O2 accepts a key's registry variables and refuses the name the key had before #358", () => {
+    expect(accepted([row('statusTokens', '🪙 {firstName}, у тебя {tokens}')])).toEqual([
+      'statusTokens',
+    ]);
+    expect(
+      resolveBotTextOverrides([row('statusTokens', '🪙 {count}')]).rejected.get('statusTokens'),
+    ).toMatchObject({
       code: BotTextRejectionCode.Invalid,
-      problems: [{ code: BotTextProblemCode.MissingPlaceholder, detail: 'email' }],
+      problems: [{ code: BotTextProblemCode.UnknownPlaceholder, detail: 'count' }],
     });
+  });
+
+  it('O1 names the refused variable and what the key may hold', () => {
+    const [problem] = botTextChangeProblems('codeSent', 'Код на {realBalance}', []);
+    expect(problem && botTextRejectionMessage(problem.rejection, problem.key)).toBe(
+      'Переменная {realBalance} недоступна в этом тексте. Доступны: {email}, {firstName}',
+    );
+    const [welcome] = botTextChangeProblems('welcome', 'Привет, {firstName}', []);
+    expect(welcome && botTextRejectionMessage(welcome.rejection, welcome.key)).toBe(
+      'Переменная {firstName} недоступна в этом тексте. Переменных у этого текста нет; фрагменты: {connectButton}',
+    );
   });
 
   it('V5 rejects a fragment that breaks a host on its default', () => {
@@ -223,7 +241,7 @@ describe('botTextChangeProblems', () => {
       ...resolveBotTextOverrides([
         row('zzz', 'x'),
         row('startCommand', 'x'),
-        row('codeSent', 'нет адреса'),
+        row('codeSent', 'нет {tokens}'),
         row('featureLines', 'я'.repeat(950)),
       ]).rejected,
       ...resolveBotTextOverrides([
@@ -240,7 +258,7 @@ describe('botTextChangeProblems', () => {
     expect(messages).toEqual({
       zzz: 'Неизвестный ключ — игнорируется',
       startCommand: 'Только чтение: команды и профиль правятся после #301',
-      codeSent: 'Нет плейсхолдера {email}',
+      codeSent: 'Переменная {tokens} недоступна в этом тексте. Доступны: {email}, {firstName}',
       featureLines: expect.stringMatching(
         /^Ломает текст-хозяин cardBody: Текст cardBody — \d+ символов при лимите 1024$/,
       ),

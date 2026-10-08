@@ -96,11 +96,11 @@ export function analysisScreen({
   durationSec,
   response,
 }: AnalysisScreenInput): AnalysisScreen {
-  const header = TEXTS.analysisHeader(analysisSubject(pair, durationSec));
+  const header = TEXTS.analysisHeader({ subject: analysisSubject(pair, durationSec) });
   if (response.outcome === SignalFeedOutcome.FetchFailed) {
     const body =
       response.code === BrokerRestErrorCode.RateLimited && response.retryAfterSec !== undefined
-        ? TEXTS.analysisRateLimited(String(response.retryAfterSec))
+        ? TEXTS.analysisRateLimited({ seconds: String(response.retryAfterSec) })
         : TEXTS.analysisUnavailable;
     return {
       text: telegramHtml`${header}
@@ -116,13 +116,13 @@ ${body}`,
 ${textOf(SIGNAL_HEADLINES[decision.action])}
 
 ${features}
-${TEXTS.demoPayout(String(pair.payout))}
+${TEXTS.demoPayout({ payout: String(pair.payout) })}
 
 ${TEXTS.analysisDisclaimer}`,
       stake: decision.action,
     };
   }
-  const headline = TEXTS.analysisNoSignal(NO_SIGNAL_REASON_TEXT[decision.reason]);
+  const headline = TEXTS.analysisNoSignal({ reason: NO_SIGNAL_REASON_TEXT[decision.reason] });
   if (!('features' in decision)) {
     return {
       text: telegramHtml`${header}
@@ -154,7 +154,7 @@ export const analysisUnavailableScreen = (
   pair: PairView,
   durationSec: DemoDurationSec,
 ): AnalysisScreen => ({
-  text: telegramHtml`${TEXTS.analysisHeader(analysisSubject(pair, durationSec))}
+  text: telegramHtml`${TEXTS.analysisHeader({ subject: analysisSubject(pair, durationSec) })}
 ${TEXTS.analysisUnavailable}`,
   stake: null,
 });
@@ -176,9 +176,9 @@ function featureLines(
   const trend = `${TREND_WORDS[f.trend]} — ${fast} ${relation} ${slow}`;
   const momentum = `${MOMENTUM_WORDS[f.momentum]} — RSI${params.rsiPeriod} ${formatRsi(f.rsi)}`;
   const atr = `${volatility} — ATR${params.atrPeriod} ${formatAtrPct(f.atrPct)}%`;
-  return telegramHtml`${TEXTS.analysisTrend(trend)}
-${TEXTS.analysisMomentum(momentum)}
-${TEXTS.analysisVolatility(atr)}
-${TEXTS.analysisCandles(String(f.closedCandles))}
-${TEXTS.analysisLastPrice(formatPrice(f.lastClose, pair.digits))}`;
+  return telegramHtml`${TEXTS.analysisTrend({ value: trend })}
+${TEXTS.analysisMomentum({ value: momentum })}
+${TEXTS.analysisVolatility({ value: atr })}
+${TEXTS.analysisCandles({ count: String(f.closedCandles) })}
+${TEXTS.analysisLastPrice({ price: formatPrice(f.lastClose, pair.digits) })}`;
 }

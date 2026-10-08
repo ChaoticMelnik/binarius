@@ -5,9 +5,11 @@ import {
   DemoStakeRefusal,
   demoStakePresets,
   errorLogFields,
+  formatStake,
   normalizeDecimal,
   parseDemoStakeInput,
   tradeAmountSchema,
+  TradeMode,
   UserStatus,
   type DecimalString,
   type TelegramHtml,
@@ -39,8 +41,7 @@ import { telegramErrorFields, type Logger } from './logging';
 import { supportKeyboard } from './keyboards';
 import { editRefusal } from './screen';
 import { editMessageTextHtml, replyHtml } from './send';
-import { formatStake } from './format';
-import { LABELS, stakeLabel, stakePickerText, TEXTS } from './texts';
+import { LABELS, stakePickerText, TEXTS, userContextOf } from './texts';
 
 // The demo stake picker (#297, docs/bot-demo-trade.md -> The stake): presets from the broker's
 // minimum, a typed amount, a reset to the minimum, and the way back to where it was opened from —
@@ -175,7 +176,7 @@ export function createStakePicker<C extends Context>({
       answer(ctx),
       settle(backend.readTradingAccess(String(ctx.from.id))),
     ]);
-    const screen = pickerScreen(access, origin);
+    const screen = pickerScreen(access, origin, ctx.from.first_name);
     await editOrReply(ctx, screen.text, screen.keyboard);
   });
 
@@ -217,24 +218,24 @@ export function createStakePicker<C extends Context>({
 
   // A typed amount: a new reply, the picker message stays as it was (the bot keeps no message id).
   async function onStakeText(ctx: Context, origin: StakeOrigin, text: string): Promise<void> {
-    const id = ctx.from?.id;
-    if (id === undefined) return;
+    const from = ctx.from;
+    if (from === undefined) return;
     const amount = parseDemoStakeInput(text);
     if (amount === undefined) {
-      keepStakeStep(id);
+      keepStakeStep(from.id);
       await replyHtml(ctx, TEXTS.stakeInputInvalid, { reply_markup: backKeyboard(origin) });
       return;
     }
     const screen = await savedScreen(
-      id,
-      await settle(backend.setDemoStake(String(id), amount)),
+      from,
+      await settle(backend.setDemoStake(String(from.id), amount)),
       origin,
     );
     await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
   }
 
   async function saveInPlace(
-    ctx: Context & { from: { id: number } },
+    ctx: Context & { from: { id: number; first_name: string } },
     amount: DecimalString | null,
     origin: StakeOrigin,
   ): Promise<void> {
@@ -242,12 +243,16 @@ export function createStakePicker<C extends Context>({
       answer(ctx),
       settle(backend.setDemoStake(String(ctx.from.id), amount)),
     ]);
-    const screen = await savedScreen(ctx.from.id, saved, origin);
+    const screen = await savedScreen(ctx.from, saved, origin);
     await editOrReply(ctx, screen.text, screen.keyboard);
   }
 
   // The access read's refusals say what the stake press would say (demo-trade.ts amountOf).
-  function pickerScreen(access: Settled<TradingAccessResponse>, origin: StakeOrigin): Screen {
+  function pickerScreen(
+    access: Settled<TradingAccessResponse>,
+    origin: StakeOrigin,
+    firstName: string,
+  ): Screen {
     if (!access.ok) {
       logger.warn(
         { ...errorLogFields(access.error), ...backendErrorFields(access.error) },
@@ -286,7 +291,11 @@ export function createStakePicker<C extends Context>({
       keyboard.text(LABELS.stakeResetButton, stakeResetCallbackData(origin)).row();
     }
     return {
-      text: stakePickerText({ stake: demoStake, ...limits, presets: presets.length }),
+      text: stakePickerText({
+        user: userContextOf(firstName, TradeMode.Demo, access.value),
+        ...limits,
+        presets: presets.length,
+      }),
       keyboard: backTo(keyboard, origin),
     };
   }
@@ -296,21 +305,22 @@ export function createStakePicker<C extends Context>({
   // so the user can type again; it ends on a save and on a refusal the bot cannot act on. A save
   // opened from a launch screen returns to it with the saved amount (#320).
   async function savedScreen(
-    id: number,
+    from: { id: number; first_name: string },
     saved: Settled<SetDemoStakeResult>,
     origin: StakeOrigin,
   ): Promise<Screen> {
+    const { id, first_name: firstName } = from;
     if (saved.ok && 'saved' in saved.value) {
       endStakeStep(id);
       switch (origin.kind) {
         case 'settings':
         case 'analysis':
           return {
-            text: TEXTS.stakeSaved(stakeLabel(saved.value.saved)),
+            text: TEXTS.stakeSaved({ stake: saved.value.saved, firstName }),
             keyboard: backKeyboard(origin),
           };
         case 'pair':
-          return savedLaunchScreen(origin.assetId, saved.value.saved);
+          return savedLaunchScreen(origin.assetId, saved.value.saved, firstName);
         default:
           return origin satisfies never;
       }
@@ -320,10 +330,17 @@ export function createStakePicker<C extends Context>({
       const { error, limits } = saved.value.refused;
       const text =
         error === DemoStakeRefusal.Precision
-          ? TEXTS.stakePrecisionDigits(String(limits.scale))
+          ? TEXTS.stakePrecisionDigits({
+              digits: String(limits.scale),
+              minStake: limits.minTradeAmount,
+              demoAvailable: limits.demoAvailable,
+            })
           : error === DemoStakeRefusal.BelowMinimum
-            ? TEXTS.stakeBelowMinimum(formatStake(limits.minTradeAmount))
-            : TEXTS.stakeAboveAvailableAmount(formatStake(limits.demoAvailable));
+            ? TEXTS.stakeBelowMinimum({ minStake: limits.minTradeAmount })
+            : TEXTS.stakeAboveAvailableAmount({
+                demoAvailable: limits.demoAvailable,
+                minStake: limits.minTradeAmount,
+              });
       return { text, keyboard: retryKeyboard(origin) };
     }
     if (saved.ok) throw new Error('unreachable: a save result is saved or refused');
@@ -351,7 +368,11 @@ export function createStakePicker<C extends Context>({
 
   // The symbol only, so any catalog will do, a stale one included; without one the screen drops
   // its symbol line and the launch stays, since the session start checks the pair itself.
-  async function savedLaunchScreen(assetId: number, amount: DecimalString | null): Promise<Screen> {
+  async function savedLaunchScreen(
+    assetId: number,
+    amount: DecimalString | null,
+    firstName: string,
+  ): Promise<Screen> {
     const catalog = await settle(backend.readPairs());
     if (!catalog.ok) {
       logger.warn(
@@ -362,7 +383,7 @@ export function createStakePicker<C extends Context>({
     const symbol = catalog.ok
       ? (catalog.value.pairs.find((pair) => pair.id === assetId)?.symbol ?? null)
       : null;
-    return launchScreen({ assetId, symbol, amount, saved: { amount } });
+    return launchScreen({ assetId, firstName, symbol, amount, saved: { amount } });
   }
 
   // only the stake step: a login the user has open is left alone

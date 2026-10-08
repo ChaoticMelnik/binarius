@@ -6,6 +6,7 @@ import {
   ADMIN_USER_RECENT_LEDGER,
   AdminErrorCode,
   BOT_TEXT_CATALOG,
+  BOT_TEXT_VARS,
   BOT_TEXT_GROUP_TITLES,
   BOT_TEXT_SOURCE_MAX,
   BotTextGroup,
@@ -228,7 +229,11 @@ beforeEach(() => {
 });
 afterEach(() => app.close());
 
-const post = (url: string, payload: Record<string, string> = {}, cookies?: Record<string, string>) =>
+const post = (
+  url: string,
+  payload: Record<string, string> = {},
+  cookies?: Record<string, string>,
+) =>
   app.inject({
     method: 'POST',
     url,
@@ -589,7 +594,9 @@ describe('the sessions page', () => {
 
   it('drops a session the backend no longer knows', async () => {
     await app.close();
-    app = build({ sessions: () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)) });
+    app = build({
+      sessions: () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+    });
 
     const response = await get('/admin/sessions', { [SESSION_COOKIE]: TOKEN });
 
@@ -2290,7 +2297,13 @@ describe('the bot texts pages (#300)', () => {
       }),
     });
     const fresh = await get('/admin/bot-texts/codeSent', withCookie);
-    expect(fresh.body).toContain(TEXTS.botTextArg('email', 'ada@example.com'));
+    // W3 (#358): the panel lists the key's variables from the registry, one line each
+    expect(fresh.body).toContain(
+      TEXTS.botTextVariable('email', BOT_TEXT_VARS.email.description, 'ada@example.com'),
+    );
+    expect(fresh.body).toContain(
+      '{firstName} — Имя пользователя из Telegram; в предпросмотре: Ада',
+    );
     expect(versionsOf(fresh.body)).toEqual(['0']);
     expect(fresh.body).not.toContain('/reset"');
 

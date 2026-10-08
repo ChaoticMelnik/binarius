@@ -936,7 +936,8 @@ describe('the push after the callback', () => {
       expect(again.response.statusCode).toBe(200);
       const pushes = pushesTo(telegram);
       expect(pushes).toHaveLength(2);
-      expect(pushes[1]?.text).toBe(CLIENT_TEXTS.linkedActive.value);
+      const { email } = (again.response.json() as { account: { email: string | null } }).account;
+      expect(pushes[1]?.text).toBe(CLIENT_TEXTS.linkedActive({ email }).value);
       expect(inlineButtons(pushes[1])).toEqual([
         { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
       ]);
