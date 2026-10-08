@@ -1,7 +1,10 @@
+import type pino from 'pino';
+import { hashToken } from '@binarius/db';
 import {
   ACCESS_TOKEN_ROUTE_BUDGET_MS,
   AccessTokenRefusal,
   accessTokenPath,
+  errorLogFields,
   safeParseAccessTokenRefusalResponse,
   safeParseAccessTokenResponse,
 } from '@binarius/shared';
@@ -48,6 +51,29 @@ export interface AccessTokenSource {
 const REFUSALS: ReadonlySet<string> = new Set(Object.values(AccessTokenRefusal));
 export const isAccessTokenRefusal = (reason: string): reason is AccessTokenRefusal =>
   REFUSALS.has(reason);
+
+// A broker 401 on a token the backend handed out: its fingerprint goes back, and the backend marks
+// it expired when it is still the stored one (#281). The answer is only logged - it changes
+// nothing in the caller's attempt - and a throw out of the source is caught, so a sure rejection
+// does not turn into a throw.
+export async function reportRefusedToken(
+  tokens: AccessTokenSource,
+  logger: Pick<pino.Logger, 'info' | 'error'>,
+  fields: Record<string, unknown>,
+  brokerAccountId: string,
+  accessToken: string,
+  options: Omit<AccessTokenOptions, 'refusedToken'>,
+): Promise<void> {
+  try {
+    const answer = await tokens.accessToken(brokerAccountId, {
+      ...options,
+      refusedToken: hashToken(accessToken),
+    });
+    logger.info({ ...fields, answer: answer.ok ? 'ok' : answer.reason }, 'refused token reported');
+  } catch (error) {
+    logger.error({ ...fields, ...errorLogFields(error) }, 'refused token report failed');
+  }
+}
 
 export const notConfiguredAccessTokenSource: AccessTokenSource = {
   accessToken: () => Promise.resolve({ ok: false, reason: AccessTokenUnavailable.NotConfigured }),
