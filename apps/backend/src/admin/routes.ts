@@ -7,6 +7,7 @@ import {
   AuditEntityType,
   errorIdentity,
   errorLogFields,
+  safeParseAdminAuditQuery,
   safeParseAdminConfirmRequest,
   safeParseAdminIntentsQuery,
   safeParseAdminLoginRequest,
@@ -25,6 +26,7 @@ import {
   failChallengeDelivery,
   findStaffForLogin,
   listIntentsForAdmin,
+  listAuditForAdmin,
   listLedgerForAdmin,
   listLiveStaffSessions,
   listTradingSessionsForAdmin,
@@ -43,6 +45,7 @@ import {
   startLoginChallenge,
   STAFF_SESSION_IDLE_MS,
   toAdminBrokerAccountView,
+  toAdminAuditEntryView,
   toAdminLedgerEntry,
   toAdminOverview,
   toAdminTradeIntentView,
@@ -633,6 +636,49 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
             path: '/admin/tokens',
             ...(user === undefined ? {} : { userId: user }),
             ...(kind === undefined ? {} : { kind }),
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  // --- Audit log (#110, docs/admin-pages.md) -----------------------------------------------------
+
+  app.get('/admin/audit', async (request, reply) => {
+    // before the session: a query outside the schema costs no transaction and leaves no row
+    const parsed = safeParseAdminAuditQuery(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+    }
+    const { action, entityType, entityId, actorId, from, to, cursor } = parsed.data;
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      // runAsStaff writes this request's own row after this SELECT: it shows on the next page
+      const page = await listAuditForAdmin(tx, {
+        filters: { action, entityType, entityId, actorId, from, to },
+        cursor,
+        limit: ADMIN_PAGE_SIZE,
+      });
+      return {
+        result: {
+          me: meOf(ctx),
+          entries: page.rows.map(toAdminAuditEntryView),
+          nextCursor: page.nextCursor,
+        },
+        audit: {
+          action: AuditAction.AuditLogViewed,
+          payload: {
+            path: '/admin/audit',
+            ...(action === undefined ? {} : { action }),
+            ...(entityType === undefined ? {} : { entityType }),
+            ...(entityId === undefined ? {} : { entityId }),
+            ...(actorId === undefined ? {} : { actorId }),
+            ...(from === undefined ? {} : { from }),
+            ...(to === undefined ? {} : { to }),
             ...(cursor === undefined ? {} : { cursor }),
           },
         },
