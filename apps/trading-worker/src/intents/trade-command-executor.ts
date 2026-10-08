@@ -89,9 +89,10 @@ export function createTradeCommandExecutor(deps: TradeCommandExecutorDeps): Trad
             'trade command refused',
           );
           // mayRefresh stays the default: a trade is the user's action, so the backend may
-          // exchange here (#281)
+          // exchange here (#281). Not awaited: the processor races the submit against its
+          // deadline, and an exchange outlasting it would turn this sure rejection into unknown.
           if (code === BrokerRestErrorCode.Unauthorized) {
-            await reportRefusedToken(
+            void reportRefusedToken(
               tokens,
               logger,
               { intentId: intent.id },

@@ -401,9 +401,25 @@ describe('REST only when nothing was emitted', () => {
       outcome: 'rejected',
       reason: 'broker_rejected',
     });
+    await until('the failed report', () => logs('refused token report failed').length === 1);
     expect(logs('refused token report failed')).toEqual([
       expect.objectContaining({ intentId: 'intent-1', err: { name: 'TypeError' } }),
     ]);
+  });
+
+  it('R7 a report still in flight does not hold the rejection back', async () => {
+    let calls = 0;
+    const tokens = tokenSource(async () => {
+      calls += 1;
+      if (calls === 1) return { ok: true, accessToken: TOKEN };
+      return new Promise<AccessTokenOutcome>(() => undefined);
+    });
+    broker.rest.failNext('openTrade', { status: 401 });
+    expect(await executor(undefined, tokens).submit(intentOf(), signal())).toMatchObject({
+      outcome: 'rejected',
+      reason: 'broker_rejected',
+    });
+    expect(tokens.calls).toHaveLength(2);
   });
 
   it('R5 a token source that throws rejects the submit (the processor writes unknown)', async () => {
