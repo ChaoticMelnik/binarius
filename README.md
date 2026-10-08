@@ -245,8 +245,8 @@ The Telegram ID is the one the staff bot answers with when the person sends it `
 runs on `ADMIN_BOT_TOKEN`, which is a **second** bot from @BotFather, not `TELEGRAM_BOT_TOKEN`.
 The whole flow, the trust boundaries and the audit trail are in
 [docs/staff-login.md](docs/staff-login.md); the pages a session opens (overview, users, user card,
-intents, intent card, trading sessions, token ledger, audit log) and what each view records are in
-[docs/admin-pages.md](docs/admin-pages.md).
+intents, intent card, trading sessions, token ledger, audit log, bot texts) and what each view
+records are in [docs/admin-pages.md](docs/admin-pages.md).
 
 ## Trading switch
 
@@ -266,8 +266,9 @@ deploy note are in [docs/kill-switch.md](docs/kill-switch.md).
 ## Bot texts
 
 The client bot's texts can be overridden without a deploy: the bot and the backend's push apply a
-saved text within 35 s. The same migrated database as above; `show` prints the text alone, so its
-output is the file `set` takes back:
+saved text within 35 s. They are edited in the admin («Тексты бота»,
+[docs/admin-pages.md](docs/admin-pages.md) → Bot texts) or with the CLI, on the same migrated
+database as above; `show` prints the text alone, so its output is the file `set` takes back:
 
 ```bash
 docker compose exec -T backend pnpm -s --filter @binarius/backend bot-text show welcome > welcome.txt

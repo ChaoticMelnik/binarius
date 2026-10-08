@@ -1,11 +1,13 @@
 # Admin pages
 
 Pages for support and debugging, behind the staff login ([staff-login.md](staff-login.md)). All
-but one are read-only: they write to no table other than `staff_sessions` (the session touch) and
-`audit_log` (the record of the view). The one exception is «Сменить пароль» (#79, its section
-below): the only page here that submits a change, through the backend operation of #78, which
-writes `staff`, the staff member's other sessions and open challenges ([staff-login.md](staff-login.md)
-→ Changing your own password). #107 adds the overview, the user list with search, and
+but two are read-only: they write to no table other than `staff_sessions` (the session touch) and
+`audit_log` (the record of the view). The exceptions submit a change, each in its own section
+below: «Сменить пароль» (#79), through the backend operation of #78, which writes `staff`, the
+staff member's other sessions and open challenges ([staff-login.md](staff-login.md) → Changing
+your own password); and «Тексты бота» (#300), which saves and resets the client bot's texts in
+`bot_text_overrides` through the writer of #299 ([bot-texts.md](bot-texts.md) → Overrides). #107
+adds the overview, the user list with search, and
 the user card; #108 adds the intents list and the intent card; #330 adds the trading sessions
 list, the trading section of the user card and the breakdown of the overview by status; #109 adds
 the token ledger list and the card's ledger section; #110 adds the audit log; deposits and the
@@ -15,8 +17,9 @@ broker accounts list (#341, #342) follow through the same mechanism.
 
 `apps/web` never talks to the database (`no-db-access.test.ts`); each request is one call to the
 backend under the staff session — a `GET` for every read page, the `POST /admin/auth/password` of
-#78 for a password change (its own section below; its backend phases are in staff-login.md). A
-read page goes like this:
+#78 for a password change (its own section below; its backend phases are in staff-login.md), a
+`POST /admin/bot-texts/:key/preview|save|reset` for the bot texts (Bot texts below). A read page
+goes like this:
 
 1. `web` reads the `admin_session` cookie. A cookie of the wrong shape counts as none: it is
    cleared and the browser goes to `/admin/login`, with no backend call (`withStaffSession`,
@@ -29,14 +32,15 @@ read page goes like this:
 4. `web` checks the answer against its strict schema (`packages/shared/src/admin.ts`): a key the
    contract does not name is a contract violation (500), not a silently dropped field.
 
-The read functions (`packages/db/src/admin-read-ops.ts`, `admin-trading-ops.ts`, `admin-ledger-ops.ts`, `admin-audit-ops.ts`) take a `Tx`, not a `Db`, so the compiler
+The read functions (`packages/db/src/admin-read-ops.ts`, `admin-trading-ops.ts`, `admin-ledger-ops.ts`, `admin-audit-ops.ts`, `admin-bot-text-ops.ts`) take a `Tx`, not a `Db`, so the compiler
 refuses a call outside a transaction. That a route's transaction is the one `asStaff` opens — and
 so writes its row — is enforced by review only (see Boundaries).
 
 The reads lock nothing: `users`, `broker_accounts`, `trade_intents`, `trading_sessions`,
 `token_ledger`, `audit_log` and `staff` are read without `FOR …`, and the session touch is the only
 `UPDATE` of a read page. The password change is not a read: it locks the `staff` row first and
-writes under it (staff-login.md → Changing your own password).
+writes under it (staff-login.md → Changing your own password). A bot text save or reset touches the
+session, then locks `bot_text_overrides` (Bot texts below).
 
 How `web` acts on a backend answer:
 
@@ -47,12 +51,13 @@ How `web` acts on a backend answer:
 | 400 `validation` | `web` checked the query first, so the contract drifted: 500 |
 | 404 `not_found` (user card) | 404 «Пользователь не найден»; the row is already written |
 | 404 `not_found` (intent card) | 404 «Заявка не найдена»; the row is already written |
+| 404 `not_found` (bot text) | 404 «Текст не найден»: web's catalog has a key the backend's lacks; the row is already written |
 | anything else | 500, cookie kept, the error logged by name and code |
 
 ## Pages
 
 Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии |
-Токены | Аудит) and the account block («Сменить пароль · login — Выйти»: the link to the password
+Токены | Аудит | Тексты бота) and the account block («Сменить пароль · login — Выйти»: the link to the password
 page and the logout button). The login shown is the one in the `me` of the backend answer the page
 was built from; a page rendered without asking the backend (a refused search, a refused password
 form) shows no account block.
@@ -329,6 +334,72 @@ given once; anything else shows no result line.
 The form never renders the values it was submitted with (the inputs have no `value`), and `web`
 logs no request body: no password reaches the HTML or the log of `web`.
 
+### Bot texts — `GET /admin/bot-texts`, `GET /admin/bot-texts/:key`, `POST …/preview|save|reset`
+
+The client bot's texts ([bot-texts.md](bot-texts.md)). The wire shapes are in
+`packages/shared/src/admin-bot-texts.ts`, the reads in `packages/db/src/admin-bot-text-ops.ts`.
+
+**The list** shows every catalog key under its group (`BOT_TEXT_GROUP_TITLES`, in catalog order):
+the key (a link to the editor), where the text is shown, and its state — «исходный», or «изменён:
+версия N, login,» and the time (`CLI` for a row the CLI wrote). A row the loaders reject carries
+the reason and «Показан исходный текст». At the end, «Строки без ключа в каталоге»: rows whose key
+this build's catalog does not have (a renamed key), each with «Удалить» — a `POST …/reset` with the
+row's version. The section is absent when there are none. `?notice=removed|gone|changed` reports
+the result of a delete; any other value shows nothing.
+
+**The editor** shows the key, its group and description, the state as on the list, and
+«Плейсхолдеры» (`placeholderHints`, the one place that reads the entry's `arg`, `sample`,
+`fragments` and `limit`; #358 extends it): the argument — required, with its sample —, each
+fragment with a link to its key, the text in effect and «(изменён)», the limit, «одна строка» for a
+single-line key, and «Используется в:» — the keys that quote this one as a fragment. The form has
+the text (the override, or the default), a hidden version (0 without an override) and two buttons:
+«Предпросмотр» (`formaction` to `…/preview`) and «Сохранить». With an override, «Исходный текст»
+shows the default and «Вернуть исходный» posts `…/reset`. `?notice=saved|reset|already_default`
+reports the result of a write («Сохранено. Бот применит текст в течение 35 с» —
+`BOT_TEXTS_APPLIED_WITHIN_S`, which `apps/bot/src/timing.test.ts` holds at least the refresh plus
+the load timeout).
+
+**Read-only keys.** The `commands` and `profile` groups are read-only in the admin
+(`ADMIN_BOT_TEXT_READ_ONLY_GROUPS`, its own fence, apart from the writer's): the admin does not
+republish the command menu and the profile after a change; that is #361. The list marks the two
+groups, the editor shows the text with «Только чтение: команды и профиль бота пока нельзя править
+из админки» and no form, and the backend answers every POST for such a key `read_only` before the
+writer.
+
+**The preview** renders the draft as the bot would: the backend checks it with
+`botTextChangeProblems` (as a save would), then renders it through the bot's own views with the
+draft in place, the argument filled with the catalog's sample and the fragments with their texts
+in effect. Nothing is written or locked; a save in between is caught by the version on «Сохранить».
+`web` checks the rendered text against `telegramHtmlProblems` (its contract) and converts it
+(`apps/web/src/admin/telegram-preview.ts`): every tag is rebuilt from the Telegram allowlist as a
+browser tag, every text is escaped again, attributes are dropped except a link's `href`, which is
+kept only when its scheme — after decoding the entities — is `http`, `https` or `tg`; any other link
+shows as its text. `telegramHtmlProblems` does not check link schemes, so a saved text can still
+carry a `javascript:` link; what Telegram does with one is not checked here. A plain key shows as
+a button label. The draft stays in the field.
+
+**Saving and resetting.** `web` takes the form only as two strings (`source`, `version` of up to 16
+digits; a field given twice is an array), turns CRLF into LF and drops one trailing line feed, as
+the CLI does with a file, then checks the shared schema (`source` at most `BOT_TEXT_SOURCE_MAX`
+code points). The backend calls `applyBotTextSave`/`applyBotTextReset` inside the `runAsStaff`
+transaction: the session touch, then the table lock and the write, then the one audit row. No
+`lockStaff`, stated: the route touches only its own session row, and the FK to `staff` takes
+`KEY SHARE`, which the password change's `FOR NO KEY UPDATE` does not block.
+
+| Backend `outcome` | `web` |
+|---|---|
+| `rendered` (preview) | 200, the editor with the preview |
+| `saved` / `reset` / `already_default` | 303 to the editor with the notice (post/redirect/get) |
+| `unchanged` | 200, the editor with «Текст не изменился» |
+| `version_conflict` | 409: «Текст уже изменил другой сотрудник (версия N)», the text there now under it, the draft in the field and the hidden version set to N, so «Сохранить» again overwrites knowingly (the old text stays in `audit_log`) |
+| `refused` | 400, the reasons in Russian, the draft in the field |
+| `read_only` | 400 with the message |
+| 404 `not_found` | 404 «Текст не найден» |
+| no answer or a 5xx on save or reset | 500 «Результат неизвестен»: the write may have happened; reopening the editor shows the version and the text |
+
+A delete of an orphan redirects to the list: `reset` → `?notice=removed`, `already_default` →
+`gone`, `version_conflict` → `changed`.
+
 ## Audit actions
 
 Each view writes one row with `actor_type = 'admin'` and `actor_id` = the staff id. Payload keys are
@@ -350,6 +421,16 @@ named and bounded; nothing else is recorded.
 | audit log | `audit_log_viewed` | — | `{ path: '/admin/audit', action?, entityType?, entityId?, actorId?, from?, to?, cursor? }` — a key only when the parameter was given; every value is an enum, a uuid or a date |
 | password page, `GET` | `staff_sessions_viewed` | — | `{ path: '/admin/sessions', sessionId }` — the backend's sessions read, as on the sessions page |
 | password change, `POST` | `staff_password_changed` / `staff_password_change_failed` | `staff`, the caller | staff-login.md → What is written down (#78) |
+| bot texts list | `bot_texts_viewed` | — | `{ path: '/admin/bot-texts' }` |
+| bot text editor, found | `bot_text_viewed` | `bot_text`, no id | `{ path: '/admin/bot-texts/:key', key, result: 'found' }` |
+| bot text editor, a key not in the catalog | `bot_text_viewed` | — | `{ path, result: 'not_found', key? }` — `key` only when it matches `BOT_TEXT_KEY_PATTERN` |
+| bot text preview | `bot_text_previewed` | `bot_text` | `{ path, key?, result }` — `rendered`, `refused`, `read_only` or `not_found`; no text |
+| bot text save, written | `bot_text_saved` | `bot_text` | `{ path, result: 'saved', key, action, oldText, newText, oldVersion, newVersion }` — the CLI's payload plus `path` and `result` |
+| bot text reset, written | `bot_text_reset` | `bot_text` | the same with `result: 'reset'`; an orphan's texts are both `null`, as from the CLI |
+| bot text save or reset, refused | `bot_text_saved` / `bot_text_reset` | `bot_text` | `{ path, key?, result }` — `version_conflict`, `unchanged`, `already_default`, `refused`, `read_only` or `not_found`; no text |
+
+A bot text row has `entity_type = 'bot_text'` and `entity_id = NULL`, like the CLI's (a key is not a
+uuid), so the audit page finds them by `entityType=bot_text`. Every request writes one row.
 
 The card's trading and ledger sections and the overview's breakdown are parts of `user_viewed` and
 `overview_viewed`; they add no row and no payload key.
@@ -374,15 +455,19 @@ What `web` refuses before asking the backend, with no row:
 - a user or intent card id that is not a uuid → 404;
 - the password form: a field given twice, the two entries of the new password differing, or
   `currentPassword`/`newPassword` outside the shared schema (empty, over
-  `STAFF_PASSWORD_MAX_LENGTH`, equal to each other) → 400 with the form, no backend call.
+  `STAFF_PASSWORD_MAX_LENGTH`, equal to each other) → 400 with the form, no backend call;
+- a bot text key not in the catalog (a key not matching `BOT_TEXT_KEY_PATTERN` on a reset) → 404;
+  a bot text form outside its shape (a field given twice, a version that is not digits, a text over
+  `BOT_TEXT_SOURCE_MAX` code points) → 400.
 
 An empty value (`q=`, or `status=` from the form's empty option) is no parameter: the whole list. Unknown query keys (`utm_*`, a
 bookmark's leftovers) are dropped on both sides.
 
 What the backend refuses before the session, with no row: a bad bearer (401 `unauthorized`), a
 session token of the wrong shape (401 `session_invalid`), a list query outside the schema (400
-`validation`). A card id that is not a uuid is checked *inside* the session, so the attempt leaves a
-row, without the id.
+`validation`), a bot text body outside its schema (400 `validation`) or over
+`ADMIN_BOT_TEXT_BODY_LIMIT_BYTES` (413). A card id that is not a uuid is checked *inside* the
+session, so the attempt leaves a row, without the id; so is a bot text key.
 
 Not enforced by code: a new route in `apps/backend/src/admin/routes.ts` must go through `asStaff`.
 The `Tx` parameter guarantees a transaction, not the audit row; a route opening `db.transaction`
@@ -413,7 +498,12 @@ around these reads directly is caught only in review.
 - A row's payload on the page is at most `ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS` characters (≤ 4 096
   bytes), so a page of the audit log stays within ≈ 225 KB whatever the writers stored.
 - Every view writes one `audit_log` row that is never deleted — viewing the audit log included, so
-  the log grows with each look at it. Retention is #153.
+  the log grows with each look at it. Retention is #153. A bot text save or reset records both
+  texts, up to 2 × 16 384 characters a row.
+- A bot text POST body is at most `ADMIN_BOT_TEXT_BODY_LIMIT_BYTES` (128 KiB: a JSON-escaped
+  source of `BOT_TEXT_SOURCE_MAX` code points). A save holds the table lock and the session row for
+  the check of the whole set: 7–10 ms with 150 overrides in the #300 plan's probe, well inside
+  `BACKEND_REQUEST_TIMEOUT_MS`.
 
 ## Running it locally
 
@@ -509,6 +599,18 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    no «Выйти»; the current password wrong — 401 with the form; a real change — «Пароль изменён.
    Завершено других сессий: 0» (1 if a second browser was logged in; its next page is the login
    form). Log out and in with the new password.
+   Then «Тексты бота» (last in the nav): every group, each key «исходный»; «Команды: описания» and
+   «Профиль бота» marked read-only. Open `welcome`: «Плейсхолдеры» lists `{connectButton}` with its
+   text. Change the first line, «Предпросмотр»: the bubble with the bold heading and the button's
+   text, the draft still in the field; «Сохранить» → «Сохранено. Бот применит текст в течение 35 с».
+   `<b>тест` → «Битый HTML: `<b>` is never closed», the draft kept. Open the editor in a second tab,
+   save in the first, then in the second → 409 with the first tab's text under the form. «Вернуть
+   исходный» → «Исходный текст возвращён». `startCommand` — the text, no form. Then an orphan row:
+   ```bash
+   docker compose exec postgres psql -U binarius -d binarius -c "insert into bot_text_overrides
+     (key, source) values ('zzz', 'x')"
+   ```
+   The list ends with «Строки без ключа в каталоге» and `zzz`; «Удалить» → «Строка удалена.».
 6. Check what was written:
    ```bash
    docker compose exec postgres psql -U binarius -d binarius \
@@ -521,6 +623,8 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `trade_intent`, `trading_sessions_viewed` with only `path`, and `tokens_viewed` with `kind` or
    `userId` — each only on its own request; `audit_log_viewed` with `action`, with `entityType` and
    `entityId`, or with `from` and `to` — each only on its own request; still one `user_viewed` per
-   opening of the card. The refused 257-character search, `?status=bogus`, `?kind=bogus`,
+   opening of the card; `bot_texts_viewed`, `bot_text_viewed`, `bot_text_previewed`, a
+   `bot_text_saved` with both texts, one with `result: 'version_conflict'` and no texts, and
+   `bot_text_reset` rows (`?entityType=bot_text` on «Аудит» lists them). The refused 257-character search, `?status=bogus`, `?kind=bogus`,
    `?action=bogus` and the card id that is not a uuid wrote nothing.
 7. `docker compose down -v` when done.
