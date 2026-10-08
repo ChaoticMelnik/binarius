@@ -27,10 +27,11 @@ recorded — `/start`, `/menu` and `/settings`, all through `POST /users/start`
   bot  → POST /users/account { telegramUserId }
   back → 200 { user: { status, accounts: [...] } }   or   404 { error: 'user_not_found' }
   bot  → one message:
-           blocked                     → TEXTS.blocked, no buttons
+           blocked                     → TEXTS.blocked + the support link (#350)
            404 user_not_found, or []   → TEXTS.accountNone + the connect button
            links                       → accountStatus(accounts) + accountKeyboard(accounts)
-           anything else               → TEXTS.unavailable, warn '/account not read'
+           anything else               → TEXTS.unavailable + «🔄 Повторить» (cmd:account) and the
+                                         menu, warn '/account not read'
 ```
 
 The command is answered in private chats only, with or without trailing text. The handler is

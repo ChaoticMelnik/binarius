@@ -114,7 +114,9 @@ Every 4xx is answered before a row is committed, so a 4xx means nothing was crea
 | 5xx, no answer, a broken 2xx body | the outcome is unknown: one more `createIntent` with the same key; if that also fails this way, «⚠️ Не удалось узнать, принята ли заявка…» and `warn` `trade intent not created` |
 
 The refusals are an exhaustive `Record<TradeIntentErrorCode, …>`, so a code added to the contract
-fails `tsc` in `demo-trade.ts`.
+fails `tsc` in `demo-trade.ts`. A row with no button of its own gets «↩️ Назад к анализу» and
+«🏠 В меню» (#350, [bot-navigation.md](bot-navigation.md)), `blocked` the support link: the press is
+a write, so it is never offered again; the same holds for the access read's refusals before it.
 
 ## The stake (#297)
 
@@ -212,7 +214,14 @@ a blank line, and the status line. The status line is chosen by `view.status`, o
 | rejected / any other reason, or none | ❌ Сделка не открыта. Токен возвращён. |
 
 Both maps are exhaustive (`satisfies Record<…>`). `texts.test.ts` checks that «открыта» appears
-(not as «не открыта») for `accepted` and for no other status. Until the trade command executor
+(not as «не открыта») for `accepted` and for no other status.
+
+**The keyboard** (`intentKeyboard(view)`, #350) follows the status: «🔄 Обновить статус» while the
+status has an edge out of it in the shared graph (accepted until it settles); once the tracker stops
+(`TRACKER_STOP_STATUSES`), the end of the path under it — «📊 Новый анализ» (the same pair and
+duration), «📡 К сигналам», «🏠 В меню» ([bot-navigation.md](bot-navigation.md)). The tracker's
+edit takes the view (`IntentTrackRequest.edit(text, view)`), so its last edit draws it. A failed
+refresh offers the same refresh and the menu; a 404 the menu only. Until the trade command executor
 (#100) is deployed, every intent ends as `rejected / executor_not_configured`.
 
 ## The tracker
