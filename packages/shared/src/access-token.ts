@@ -30,8 +30,16 @@ export const AccessTokenRefusal = {
 export type AccessTokenRefusal = (typeof AccessTokenRefusal)[keyof typeof AccessTokenRefusal];
 export const accessTokenRefusalSchema = z.enum(AccessTokenRefusal);
 
+// The fingerprint of a token the broker refused (a socket token_expired/auth_failed, a REST 401):
+// the sha256 hex of the token, never the token itself (#281, docs/binodex-oauth.md -> A refused
+// token is an expired token). The backend compares it with the stored token under the row lock.
+export const refusedTokenSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
 // The caller names its own exchange policy: no default, so a new caller has to decide.
-export const accessTokenRequestSchema = z.strictObject({ mayRefresh: z.boolean() });
+export const accessTokenRequestSchema = z.strictObject({
+  mayRefresh: z.boolean(),
+  refusedToken: refusedTokenSchema.optional(),
+});
 export type AccessTokenRequest = z.infer<typeof accessTokenRequestSchema>;
 
 export const accessTokenResponseSchema = z.strictObject({ accessToken: z.string().min(1) });
