@@ -88,7 +88,7 @@ on any message whose «🔄 Повторить» carries one of those prefixes, 
 | the session start refused or failed, `sessionJustEnded` | ↩️ Назад к анализу · 🏠 В меню |
 | the trade's refresh failed | 🔄 Повторить (`intent:<id>`) · 🏠 В меню; `intentStatusUnavailable` (404) → 🏠 В меню |
 | the session's refresh or stop failed | 🔄 Обновить (`session:<id>`) · 🏠 В меню; `sessionStatusUnavailable` (404) → 🏠 В меню |
-| trade status, live (queued, submitting) | 🔄 Обновить статус |
+| trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить статус; the tracker's last edit at its deadline adds 🏠 В меню, and a 404 while tracking leaves 🏠 В меню only |
 | trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
 | session status, live | 🔄 Обновить · ⏹ Остановить сессию |
 | session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню; without `settings` only 🔄 Обновить · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |

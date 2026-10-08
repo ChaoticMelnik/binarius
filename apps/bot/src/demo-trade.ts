@@ -38,6 +38,7 @@ import {
   menuKeyboard,
   retryKeyboard,
   supportKeyboard,
+  withMenu,
 } from './keyboards';
 import { readDemoTrade, type DemoTradeRead } from './demo-catalog';
 import { INTENT_NOT_FOUND, TRACKER_STOP_STATUSES, type IntentTracker } from './intent-tracker';
@@ -370,7 +371,12 @@ export function createDemoTradeComposer<C extends Context>({
       view: intent,
       edit: (text, view, end) =>
         editMessageTextByIdHtml(ctx.api, sent.chat.id, sent.message_id, text, {
-          reply_markup: end === 'not_found' ? menuKeyboard() : intentKeyboard(view),
+          reply_markup:
+            end === 'not_found'
+              ? menuKeyboard()
+              : end === 'deadline'
+                ? withMenu(intentKeyboard(view))
+                : intentKeyboard(view),
         }),
     });
   }

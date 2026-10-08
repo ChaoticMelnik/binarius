@@ -220,7 +220,9 @@ Both maps are exhaustive (`satisfies Record<…>`). `texts.test.ts` checks that 
 status has an edge out of it in the shared graph (accepted until it settles); once the tracker stops
 (`TRACKER_STOP_STATUSES`), the end of the path under it — «📊 Новый анализ» (the same pair and
 duration), «📡 К сигналам», «🏠 В меню» ([bot-navigation.md](bot-navigation.md)). The tracker's
-edit takes the view (`IntentTrackRequest.edit(text, view)`), so its last edit draws it. A failed
+edit takes the view and, for an edit that is not a status, why (`IntentTrackRequest.edit(text,
+view, end?)`): the deadline on a live status adds «🏠 В меню» under the refresh, and an intent gone
+while tracked (404) leaves «🏠 В меню» only. So its last edit draws the next step. A failed
 refresh offers the same refresh and the menu; a 404 the menu only. Until the trade command executor
 (#100) is deployed, every intent ends as `rejected / executor_not_configured`.
 
