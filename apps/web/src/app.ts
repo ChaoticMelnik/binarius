@@ -37,6 +37,11 @@ const ADMIN_CSP = [
   "base-uri 'none'",
 ].join('; ');
 
+// Under no-referrer a browser serialises the Origin of its own form POSTs as `null` (Fetch,
+// "append a request Origin header"), which the origin check refuses (#241). same-origin keeps
+// the real Origin on them and still sends no Referer off this origin.
+const ADMIN_REFERRER_POLICY = 'same-origin';
+
 export function buildWebApp({
   backend,
   publicOrigin,
@@ -64,7 +69,10 @@ export function buildWebApp({
 
   // Only POST: a browser sends no Origin on a plain navigation, so requiring it on GET would
   // break every link. Together with SameSite=Lax on the cookie this is what stops another
-  // site from submitting a form here with the staff member's session attached.
+  // site from submitting a form here with the staff member's session attached. It relies on the
+  // browser sending a real Origin on its own form POSTs, which the page's referrer policy decides
+  // (ADMIN_REFERRER_POLICY). A refusal replies here, before any plugin hook, so it carries the
+  // app's default headers whichever route it was for (oauth/routes.test.ts pins this).
   app.addHook('onRequest', async (request, reply) => {
     if (request.method !== 'POST') return undefined;
     if (request.headers.origin === publicOrigin) return undefined;
@@ -80,7 +88,9 @@ export function buildWebApp({
       void reply.header('x-frame-options', 'DENY');
     }
     void reply.header('x-content-type-options', 'nosniff');
-    void reply.header('referrer-policy', 'no-referrer');
+    if (reply.getHeader('referrer-policy') === undefined) {
+      void reply.header('referrer-policy', ADMIN_REFERRER_POLICY);
+    }
     // only where the cookie is Secure: the header is ignored over http anyway, and sending it
     // there would state a policy the deployment has not made
     if (secureCookies) void reply.header('strict-transport-security', 'max-age=31536000');

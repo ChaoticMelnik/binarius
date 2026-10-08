@@ -28,7 +28,7 @@ A session lives **24 hours** at most, and dies after **60 minutes** with no admi
 
 | Boundary | What crosses it | What is checked |
 |---|---|---|
-| browser → `apps/web` | the form, the cookies | zod on every field; `Origin` on every POST; `SameSite=Lax`, `HttpOnly`, `Secure` when the origin is https |
+| browser → `apps/web` | the form, the cookies | zod on every field; `Origin` on every POST — the pages send `Referrer-Policy: same-origin`, under which the browser puts the real Origin on its own form POSTs (under `no-referrer` it sends `Origin: null`, which is refused — #241); `SameSite=Lax`, `HttpOnly`, `Secure` when the origin is https |
 | `apps/web` → `apps/backend` | `Authorization: Bearer $ADMIN_WEB_TOKEN`, `X-Staff-Session` | the bearer opens `/admin/*` and nothing else; the session is checked in the database on every request |
 | `apps/backend` → Telegram | the invitation and the code | a bounded call; a refusal closes the challenge, so nobody waits out the window |
 | Telegram → `apps/backend` | the button press | a CAS that joins `staff` on the Telegram account the update came from — the id in the button authorises nothing |

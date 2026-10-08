@@ -97,6 +97,9 @@ const postCallback = (payload: unknown, origin: string | null = ORIGIN) =>
 
 const BODY = { state: STATE, code: CODE, initData: INIT_DATA };
 
+const ADMIN_CSP_LITERAL =
+  "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+
 const logged = () => lines.join('\n');
 
 describe('the Mini App pages headers', () => {
@@ -119,9 +122,7 @@ describe('the Mini App pages headers', () => {
   // the admin pages keep their exact policy: the Mini App's is per route, not a loosening
   it('leaves the admin pages unframeable', async () => {
     const response = await app.inject({ method: 'GET', url: '/admin/login' });
-    expect(response.headers['content-security-policy']).toBe(
-      "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-    );
+    expect(response.headers['content-security-policy']).toBe(ADMIN_CSP_LITERAL);
     expect(response.headers['x-frame-options']).toBe('DENY');
   });
 
@@ -228,10 +229,16 @@ describe('POST /oauth/callback', () => {
   it.each([
     ['no Origin', null],
     ['another origin', 'https://evil.example'],
+    ['the literal null', 'null'],
   ])('refuses %s without calling the backend', async (_label, origin) => {
     const response = await postCallback(BODY, origin);
     expect(response.statusCode).toBe(403);
     expect(forwarded).toEqual([]);
+    // the origin check replies before this plugin's hook, so a refused POST - which no Mini App
+    // page ever sends - carries the app's defaults
+    expect(response.headers['content-security-policy']).toBe(ADMIN_CSP_LITERAL);
+    expect(response.headers['x-frame-options']).toBe('DENY');
+    expect(response.headers['referrer-policy']).toBe('same-origin');
   });
 
   it.each([
@@ -313,5 +320,6 @@ describe('GET /oauth/static/app.js', () => {
     expect(response.headers['content-type']).toBe('text/javascript; charset=utf-8');
     expect(response.headers['cache-control']).toBe('public, max-age=3600');
     expect(response.body).toBe(OAUTH_CLIENT_JS);
+    expect(response.headers['referrer-policy']).toBe('no-referrer');
   });
 });
