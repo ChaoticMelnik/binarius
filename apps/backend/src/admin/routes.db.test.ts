@@ -3,6 +3,13 @@ import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  ADMIN_BOT_TEXT_BODY_LIMIT_BYTES,
+  adminBotTextOverrideViewSchema,
+  adminBotTextResetResponseSchema,
+  adminBotTextResponseSchema,
+  adminBotTextSaveResponseSchema,
+  adminBotTextsResponseSchema,
+  BOT_TEXT_CATALOG,
   ADMIN_SEARCH_MAX_LENGTH,
   ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS,
   AdminErrorCode,
@@ -29,6 +36,8 @@ import {
 import { until } from '@binarius/shared/testing';
 import {
   auditLog,
+  botTextOverrides,
+  saveBotTextOverride,
   confirmChallengeFromTelegram,
   markChallengeCodeSent,
   staff,
@@ -2308,6 +2317,293 @@ describe('the audit log page (#110)', () => {
     await withSession('POST', '/admin/auth/logout', token);
 
     expect((await withSession('GET', '/admin/audit', token)).statusCode).toBe(401);
+  });
+});
+
+describe('the bot texts pages (#300)', () => {
+  const textUrl = (key: string, action = '') =>
+    `/admin/bot-texts/${encodeURIComponent(key)}${action === '' ? '' : `/${action}`}`;
+  const botTextRows = () => tmp.db.select().from(botTextOverrides).orderBy(botTextOverrides.key);
+  const cliSave = (key: string, source: string) =>
+    saveBotTextOverride(tmp.db, {
+      key,
+      source,
+      actor: { type: AuditActorType.System, staffId: null },
+    });
+  const signedIn = async () => {
+    const seeded = await seedStaff(tmp.db);
+    return { seeded, token: await openSession(seeded) };
+  };
+  const post = async (token: string, url: string, body: Record<string, unknown>) => {
+    const response = await postAsStaff(url, token, body);
+    return { status: response.statusCode, body: response.json<Record<string, unknown>>() };
+  };
+
+  beforeEach(async () => {
+    await tmp.db.delete(botTextOverrides);
+  });
+
+  it.each([
+    ['GET', '/admin/bot-texts', undefined],
+    ['GET', '/admin/bot-texts/welcome', undefined],
+    ['POST', '/admin/bot-texts/welcome/save', { source: 'x', expectedVersion: 0 }],
+    ['POST', '/admin/bot-texts/welcome/reset', { expectedVersion: 0 }],
+  ] as const)(
+    'T1 refuses %s %s without a live session and writes nothing',
+    async (method, url, payload) => {
+      const before = await auditCount();
+      for (const headers of [BEARER, { ...BEARER, 'x-staff-session': 'a'.repeat(43) }]) {
+        const response = await app.inject({
+          method,
+          url,
+          headers,
+          ...(payload === undefined ? {} : { payload }),
+        });
+        expect([response.statusCode, response.json()]).toEqual([
+          401,
+          { error: AdminErrorCode.SessionInvalid },
+        ]);
+      }
+      expect(await auditCount()).toBe(before);
+    },
+  );
+
+  it('T2 lists the rows with who wrote them and why the loaders reject one', async () => {
+    const { seeded, token } = await signedIn();
+    await cliSave('connectButton', 'Жми');
+    await post(token, textUrl('welcome', 'save'), { source: 'Привет', expectedVersion: 0 });
+    await tmp.db.insert(botTextOverrides).values({ key: 'startCommand', source: 'Старт' });
+
+    const response = await readOnce(seeded.staffId, '/admin/bot-texts', token);
+    const body = adminBotTextsResponseSchema.parse(response.json());
+    expect(Object.keys(response.json<object>())).toEqual(['me', 'overrides']);
+    expect(Object.keys(body.overrides[0]!).sort()).toEqual(
+      Object.keys(adminBotTextOverrideViewSchema.shape).sort(),
+    );
+    expect(body.overrides).toMatchObject([
+      { key: 'connectButton', updatedByLogin: null, rejection: null },
+      { key: 'startCommand', rejection: expect.stringContaining('Только чтение') },
+      { key: 'welcome', updatedByLogin: seeded.login, rejection: null },
+    ]);
+    expect(await lastEntry(seeded.staffId)).toMatchObject({
+      action: AuditAction.BotTextsViewed,
+      entityType: null,
+      payload: { path: '/admin/bot-texts' },
+    });
+  });
+
+  it('T3 answers the editor with the fragments in effect; a key outside the catalog is a 404', async () => {
+    const { seeded, token } = await signedIn();
+    await cliSave('connectButton', 'Жми');
+    const response = await readOnce(seeded.staffId, textUrl('welcome'), token);
+    expect(adminBotTextResponseSchema.parse(response.json()).text).toMatchObject({
+      key: 'welcome',
+      override: null,
+      rejection: null,
+      fragments: [{ placeholder: 'connectButton', source: 'Жми', overridden: true }],
+    });
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.BotTextViewed,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.BotText,
+      entityId: null,
+      payload: { path: '/admin/bot-texts/:key', key: 'welcome', result: 'found' },
+    });
+
+    for (const [key, payload] of [
+      ['not a key', { path: '/admin/bot-texts/:key', result: 'not_found' }],
+      ['zzz', { path: '/admin/bot-texts/:key', result: 'not_found', key: 'zzz' }],
+    ] as const) {
+      const missing = await readOnce(seeded.staffId, textUrl(key), token);
+      expect([missing.statusCode, missing.json()]).toEqual([
+        404,
+        { error: AdminErrorCode.NotFound },
+      ]);
+      expect(await lastEntry(seeded.staffId)).toMatchObject({ entityType: null, payload });
+    }
+  });
+
+  it('T5 saves under the session: one audit row with both texts, the staff member as writer', async () => {
+    const { seeded, token } = await signedIn();
+    const before = (await entriesFor(seeded.staffId)).length;
+    const { status, body } = await post(token, textUrl('welcome', 'save'), {
+      source: 'Привет',
+      expectedVersion: 0,
+    });
+    const saved = adminBotTextSaveResponseSchema.parse(body);
+    if (saved.outcome !== 'saved') throw new Error(`expected saved, got ${saved.outcome}`);
+    expect(status).toBe(200);
+    expect(saved.text.override).toMatchObject({
+      source: 'Привет',
+      version: saved.version,
+      updatedByLogin: seeded.login,
+    });
+    expect(await botTextRows()).toMatchObject([
+      { key: 'welcome', updatedByStaffId: seeded.staffId, version: saved.version },
+    ]);
+    expect((await entriesFor(seeded.staffId)).length).toBe(before + 1);
+    const entry = await lastEntry(seeded.staffId);
+    expect(entry).toMatchObject({
+      action: AuditAction.BotTextSaved,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.BotText,
+      entityId: null,
+    });
+    expect(entry?.payload).toEqual({
+      path: '/admin/bot-texts/:key/save',
+      result: 'saved',
+      key: 'welcome',
+      action: 'save',
+      oldText: BOT_TEXT_CATALOG.welcome.source,
+      newText: 'Привет',
+      oldVersion: 0,
+      newVersion: saved.version,
+    });
+  });
+
+  it('T6 answers a stale version with the text there now and writes nothing', async () => {
+    const { seeded, token } = await signedIn();
+    const theirs = await cliSave('welcome', 'Чужой');
+    if (!theirs.ok) throw new Error('the seed save failed');
+    const { body } = await post(token, textUrl('welcome', 'save'), {
+      source: 'Мой',
+      expectedVersion: 0,
+    });
+    expect(adminBotTextSaveResponseSchema.parse(body)).toMatchObject({
+      outcome: 'version_conflict',
+      currentVersion: theirs.version,
+      currentSource: 'Чужой',
+    });
+    expect(await botTextRows()).toMatchObject([{ source: 'Чужой', version: theirs.version }]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/bot-texts/:key/save',
+      key: 'welcome',
+      result: 'version_conflict',
+    });
+  });
+
+  it('T7 reports an unchanged text and T8 a fragment that breaks its host, each with its row', async () => {
+    const { seeded, token } = await signedIn();
+    const save = (key: string, source: string, expectedVersion: number) =>
+      post(token, textUrl(key, 'save'), { source, expectedVersion });
+
+    const same = await save('welcome', BOT_TEXT_CATALOG.welcome.source, 0);
+    expect(same.body).toMatchObject({ outcome: 'unchanged' });
+    expect((await lastEntry(seeded.staffId))?.payload).toMatchObject({ result: 'unchanged' });
+
+    const button = await cliSave('connectButton', 'A');
+    if (!button.ok) throw new Error('the seed save failed');
+    await cliSave('welcome', `${'я'.repeat(1022)} {connectButton}`);
+    const breaking = await save('connectButton', 'AB', button.version);
+    expect(adminBotTextSaveResponseSchema.parse(breaking.body)).toMatchObject({
+      outcome: 'refused',
+      problems: [{ key: 'welcome', reason: expect.stringContaining('welcome') }],
+    });
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/bot-texts/:key/save',
+      key: 'connectButton',
+      result: 'refused',
+    });
+  });
+
+  it.each(['save', 'reset'])(
+    'T9 keeps a commands key read-only on %s, before the writer',
+    async (action) => {
+      const { seeded, token } = await signedIn();
+      const { status, body } = await post(token, textUrl('startCommand', action), {
+        ...(action === 'reset' ? {} : { source: 'Старт' }),
+        ...(action === 'preview' ? {} : { expectedVersion: 0 }),
+      });
+      expect([status, body.outcome]).toEqual([200, 'read_only']);
+      expect(await botTextRows()).toEqual([]);
+      expect((await lastEntry(seeded.staffId))?.payload).toMatchObject({
+        key: 'startCommand',
+        result: 'read_only',
+      });
+    },
+  );
+
+  it('T10 resets: the row goes, the default is the new text; a stale version, a default, an orphan', async () => {
+    const { seeded, token } = await signedIn();
+    const reset = (key: string, expectedVersion: number) =>
+      post(token, textUrl(key, 'reset'), { expectedVersion });
+    const saved = await cliSave('welcome', 'Привет');
+    if (!saved.ok) throw new Error('the seed save failed');
+
+    expect((await reset('welcome', saved.version + 1000)).body).toMatchObject({
+      outcome: 'version_conflict',
+      currentVersion: saved.version,
+      currentSource: 'Привет',
+    });
+    const done = adminBotTextResetResponseSchema.parse(
+      (await reset('welcome', saved.version)).body,
+    );
+    expect(done).toMatchObject({ outcome: 'reset', text: { key: 'welcome', override: null } });
+    expect(await botTextRows()).toEqual([]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/bot-texts/:key/reset',
+      result: 'reset',
+      key: 'welcome',
+      action: 'reset',
+      oldText: 'Привет',
+      newText: BOT_TEXT_CATALOG.welcome.source,
+      oldVersion: saved.version,
+      newVersion: 0,
+    });
+    expect((await reset('welcome', 0)).body).toMatchObject({ outcome: 'already_default' });
+    expect((await lastEntry(seeded.staffId))?.payload).toMatchObject({ result: 'already_default' });
+
+    const button = await cliSave('connectButton', 'A');
+    if (!button.ok) throw new Error('the seed save failed');
+    await cliSave('welcome', `${'я'.repeat(1022)} {connectButton}`);
+    expect((await reset('connectButton', button.version)).body).toMatchObject({
+      outcome: 'refused',
+      problems: [{ key: 'welcome' }],
+    });
+
+    await tmp.db.insert(botTextOverrides).values({ key: 'zzz', source: 'x' });
+    const [orphan] = await tmp.db
+      .select()
+      .from(botTextOverrides)
+      .where(eq(botTextOverrides.key, 'zzz'));
+    const removed = await reset('zzz', orphan!.version);
+    expect(adminBotTextResetResponseSchema.parse(removed.body)).toMatchObject({
+      outcome: 'reset',
+      text: null,
+    });
+    expect((await lastEntry(seeded.staffId))?.payload).toMatchObject({
+      key: 'zzz',
+      result: 'reset',
+      oldText: null,
+      newText: null,
+    });
+  });
+
+  it('T11 refuses a body over the limit or outside the schema before the session, without a row', async () => {
+    const { token } = await signedIn();
+    const before = await auditCount();
+    const huge = await post(token, textUrl('welcome', 'save'), {
+      source: 'a'.repeat(ADMIN_BOT_TEXT_BODY_LIMIT_BYTES),
+      expectedVersion: 0,
+    });
+    expect(huge.status).toBe(413);
+    const wrong = await post(token, textUrl('welcome', 'save'), { source: 5, expectedVersion: 0 });
+    expect([wrong.status, wrong.body.error]).toEqual([400, AdminErrorCode.Validation]);
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('T12 answers a save of a key outside the catalog with a 404 and a row naming it', async () => {
+    const { seeded, token } = await signedIn();
+    const { status, body } = await post(token, textUrl('zzz', 'save'), {
+      source: 'x',
+      expectedVersion: 0,
+    });
+    expect([status, body]).toEqual([404, { error: AdminErrorCode.NotFound }]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/bot-texts/:key/save',
+      key: 'zzz',
+      result: 'not_found',
+    });
   });
 });
 

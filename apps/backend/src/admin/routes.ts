@@ -1,6 +1,19 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import {
   ADMIN_ACTIVE_WINDOW_MINUTES,
+  ADMIN_BOT_TEXT_BODY_LIMIT_BYTES,
+  adminBotTextProblems,
+  BOT_TEXT_KEY_PATTERN,
+  isAdminBotTextEditable,
+  isBotTextKey,
+  resolveBotTextOverrides,
+  safeParseAdminBotTextResetRequest,
+  safeParseAdminBotTextSaveRequest,
+  UnexpectedBotTextOutcome,
+  type AdminBotTextResetResponse,
+  type AdminBotTextResponse,
+  type AdminBotTextSaveResponse,
+  type BotTextKey,
   ADMIN_PAGE_SIZE,
   AdminErrorCode,
   AuditAction,
@@ -20,7 +33,13 @@ import {
   type StaffSessionView,
 } from '@binarius/shared';
 import {
+  applyBotTextReset,
+  applyBotTextSave,
   applyStaffPasswordChange,
+  listBotTextOverridesForAdmin,
+  toAdminBotTextOverrideView,
+  toAdminBotTextView,
+  type StaffAuditDescription,
   classifyUserSearch,
   completeLogin,
   countPasswordFailure,
@@ -854,6 +873,211 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
       };
     });
     if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  // --- Bot texts (#300, docs/admin-pages.md → Bot texts) ----------------------------------------
+  // Save and reset run inside runAsStaff without lockStaff (stated): they touch their own session
+  // row, then lock bot_text_overrides; the row's FK takes KEY SHARE on staff, which the password
+  // change's FOR NO KEY UPDATE does not block, so no writer waits on the other in a cycle.
+
+  const textBody = { bodyLimit: ADMIN_BOT_TEXT_BODY_LIMIT_BYTES };
+  const textEntity = { type: AuditEntityType.BotText };
+
+  // the key as the URL has it: by pattern, recorded; in the catalog, known
+  const textKeyOf = (request: FastifyRequest): { key?: string; known?: BotTextKey } => {
+    const key = (request.params as { key?: unknown }).key;
+    if (typeof key !== 'string' || !BOT_TEXT_KEY_PATTERN.test(key)) return {};
+    return isBotTextKey(key) ? { key, known: key } : { key };
+  };
+  const readTexts = async (tx: Tx) => {
+    const rows = await listBotTextOverridesForAdmin(tx);
+    return { rows, resolved: resolveBotTextOverrides(rows) };
+  };
+  const textViewOf = async (tx: Tx, key: BotTextKey) => {
+    const { rows, resolved } = await readTexts(tx);
+    return toAdminBotTextView(key, rows, resolved);
+  };
+  const textAudit = (
+    action: AuditAction,
+    path: string,
+    key: string | undefined,
+    result: string,
+  ): StaffAuditDescription => ({
+    action,
+    entity: textEntity,
+    payload: { path, ...(key === undefined ? {} : { key }), result },
+  });
+  const badTextBody = (reply: FastifyReply, issues: unknown) =>
+    reply.code(400).send({ error: AdminErrorCode.Validation, issues });
+
+  app.get('/admin/bot-texts', async (request, reply) => {
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const { rows, resolved } = await readTexts(tx);
+      return {
+        result: {
+          me: meOf(ctx),
+          overrides: rows.map((row) =>
+            toAdminBotTextOverrideView(row, resolved.rejected.get(row.key)),
+          ),
+        },
+        audit: { action: AuditAction.BotTextsViewed, payload: { path: '/admin/bot-texts' } },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  app.get('/admin/bot-texts/:key', async (request, reply) => {
+    const { key, known } = textKeyOf(request);
+    const path = '/admin/bot-texts/:key';
+    const answer = await asStaff(
+      request,
+      reply,
+      async (tx, ctx): Promise<StaffActionResult<AdminBotTextResponse | null>> => {
+        if (known === undefined) {
+          const payload = { path, result: 'not_found', ...(key === undefined ? {} : { key }) };
+          return { result: null, audit: { action: AuditAction.BotTextViewed, payload } };
+        }
+        return {
+          result: { me: meOf(ctx), text: await textViewOf(tx, known) },
+          audit: textAudit(AuditAction.BotTextViewed, path, known, 'found'),
+        };
+      },
+    );
+    if (answer === undefined) return reply;
+    if (answer === null) return reply.code(404).send({ error: AdminErrorCode.NotFound });
+    return reply.send(answer);
+  });
+
+  app.post('/admin/bot-texts/:key/save', textBody, async (request, reply) => {
+    const parsed = safeParseAdminBotTextSaveRequest(request.body);
+    if (!parsed.success) return badTextBody(reply, parsed.error.issues);
+    const { source, expectedVersion } = parsed.data;
+    const { key, known } = textKeyOf(request);
+    const path = '/admin/bot-texts/:key/save';
+    const answer = await asStaff(
+      request,
+      reply,
+      async (tx, ctx): Promise<StaffActionResult<AdminBotTextSaveResponse | null>> => {
+        const audit = (result: AdminBotTextSaveResponse['outcome'] | 'not_found') =>
+          textAudit(AuditAction.BotTextSaved, path, key, result);
+        if (known === undefined) return { result: null, audit: audit('not_found') };
+        if (!isAdminBotTextEditable(known)) {
+          const text = await textViewOf(tx, known);
+          return {
+            result: { me: meOf(ctx), text, outcome: 'read_only' },
+            audit: audit('read_only'),
+          };
+        }
+        const applied = await applyBotTextSave(tx, {
+          key: known,
+          source,
+          expectedVersion,
+          staffId: ctx.staffId,
+        });
+        // after the write: the same transaction reads its own row
+        const base = { me: meOf(ctx), text: await textViewOf(tx, known) };
+        if (applied.ok) {
+          return {
+            result: { ...base, outcome: 'saved', version: applied.version },
+            audit: { ...audit('saved'), payload: { path, result: 'saved', ...applied.audit } },
+          };
+        }
+        switch (applied.reason) {
+          case 'version_conflict':
+            return {
+              result: {
+                ...base,
+                outcome: 'version_conflict',
+                currentVersion: applied.currentVersion,
+                currentSource: applied.currentSource,
+              },
+              audit: audit('version_conflict'),
+            };
+          case 'unchanged':
+            return { result: { ...base, outcome: 'unchanged' }, audit: audit('unchanged') };
+          case 'refused':
+            return {
+              result: {
+                ...base,
+                outcome: 'refused',
+                problems: adminBotTextProblems(applied.problems),
+              },
+              audit: audit('refused'),
+            };
+          case 'already_default':
+            throw new UnexpectedBotTextOutcome();
+        }
+      },
+    );
+    if (answer === undefined) return reply;
+    if (answer === null) return reply.code(404).send({ error: AdminErrorCode.NotFound });
+    return reply.send(answer);
+  });
+
+  // a key outside the catalog can be reset: a row left behind by a renamed key
+  app.post('/admin/bot-texts/:key/reset', textBody, async (request, reply) => {
+    const parsed = safeParseAdminBotTextResetRequest(request.body);
+    if (!parsed.success) return badTextBody(reply, parsed.error.issues);
+    const { expectedVersion } = parsed.data;
+    const { key, known } = textKeyOf(request);
+    const path = '/admin/bot-texts/:key/reset';
+    const answer = await asStaff(
+      request,
+      reply,
+      async (tx, ctx): Promise<StaffActionResult<AdminBotTextResetResponse | null>> => {
+        const audit = (result: AdminBotTextResetResponse['outcome'] | 'not_found') =>
+          textAudit(AuditAction.BotTextReset, path, key, result);
+        if (key === undefined) return { result: null, audit: audit('not_found') };
+        const viewNow = () => (known === undefined ? null : textViewOf(tx, known));
+        if (known !== undefined && !isAdminBotTextEditable(known)) {
+          const text = await viewNow();
+          return {
+            result: { me: meOf(ctx), text, outcome: 'read_only' },
+            audit: audit('read_only'),
+          };
+        }
+        const applied = await applyBotTextReset(tx, { key, expectedVersion });
+        const base = { me: meOf(ctx), text: await viewNow() };
+        if (applied.ok) {
+          return {
+            result: { ...base, outcome: 'reset' },
+            audit: { ...audit('reset'), payload: { path, result: 'reset', ...applied.audit } },
+          };
+        }
+        switch (applied.reason) {
+          case 'version_conflict':
+            return {
+              result: {
+                ...base,
+                outcome: 'version_conflict',
+                currentVersion: applied.currentVersion,
+                currentSource: applied.currentSource,
+              },
+              audit: audit('version_conflict'),
+            };
+          case 'already_default':
+            return {
+              result: { ...base, outcome: 'already_default' },
+              audit: audit('already_default'),
+            };
+          case 'refused':
+            return {
+              result: {
+                ...base,
+                outcome: 'refused',
+                problems: adminBotTextProblems(applied.problems),
+              },
+              audit: audit('refused'),
+            };
+          case 'unchanged':
+            throw new UnexpectedBotTextOutcome();
+        }
+      },
+    );
+    if (answer === undefined) return reply;
+    if (answer === null) return reply.code(404).send({ error: AdminErrorCode.NotFound });
     return reply.send(answer);
   });
 };
