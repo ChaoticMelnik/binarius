@@ -17,7 +17,7 @@ import {
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { OAUTH_CALLBACK_DATA, createBot, levelCallbackData } from './bot';
+import { createBot, levelCallbackData } from './bot';
 import {
   DEMO_CALLBACK_DATA,
   demoAnalysisCallbackData,
@@ -37,7 +37,6 @@ import {
   CONFIRMED,
   INTENT_ID,
   INTENT_VIEW,
-  LOGIN,
   PAIR_EURUSD,
   PAIRS_RESPONSE,
   SIGNAL_DECIDED,
@@ -82,7 +81,6 @@ interface Scenario {
   update: Update;
   recordStart?: BackendClient['recordStart'];
   readAccount?: BackendClient['readAccount'];
-  startLogin?: BackendClient['startLogin'];
   confirmLogin?: BackendClient['confirmLogin'];
   sendEmailCode?: BackendClient['sendEmailCode'];
   emailLogin?: BackendClient['emailLogin'];
@@ -104,7 +102,6 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
   const backend: BackendClient = {
     recordStart: scenario.recordStart ?? (() => Promise.resolve(USER_VIEW)),
     readAccount: scenario.readAccount ?? (() => Promise.resolve(ACCOUNT_VIEW)),
-    startLogin: scenario.startLogin ?? (() => Promise.resolve(LOGIN)),
     confirmLogin: scenario.confirmLogin ?? (() => Promise.resolve(CONFIRMED)),
     sendEmailCode: scenario.sendEmailCode ?? (() => Promise.resolve(CODE_SENT)),
     emailLogin: scenario.emailLogin ?? (() => Promise.resolve(CONFIRMED)),
@@ -239,26 +236,6 @@ describe('what the bot writes about a failed backend call', () => {
     });
     expect(logged?.err).not.toHaveProperty('message');
     expect(logged?.cause).not.toHaveProperty('message');
-    expect(lines.join('')).not.toContain(INTERNAL_TOKEN);
-  });
-
-  it('carries the backend status when the login cannot be started', async () => {
-    const { lines } = await linesFrom({
-      update: callbackUpdate(OAUTH_CALLBACK_DATA),
-      startLogin: () =>
-        Promise.reject(
-          new BackendError(BackendErrorCode.HttpStatus, {
-            status: 500,
-            cause: new Error(`Bearer ${INTERNAL_TOKEN}`),
-          }),
-        ),
-    });
-    const logged = lineWith(lines, 'login not started');
-
-    expect(logged).toMatchObject({
-      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
-      backendStatus: 500,
-    });
     expect(lines.join('')).not.toContain(INTERNAL_TOKEN);
   });
 

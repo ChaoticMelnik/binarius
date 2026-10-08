@@ -41,7 +41,6 @@ import {
   LINK_ACTIVE,
   LINK_PENDING,
   LINK_REVOKED,
-  LOGIN,
   PENDING_ACCOUNT_ID,
   TEXT_CARD_MESSAGE_ID,
   USER,
@@ -98,7 +97,6 @@ function setup(
     user?: UserStartView;
     recordStart?: BackendClient['recordStart'];
     readAccount?: BackendClient['readAccount'];
-    startLogin?: BackendClient['startLogin'];
     confirmLogin?: BackendClient['confirmLogin'];
     sendEmailCode?: BackendClient['sendEmailCode'];
     emailLogin?: BackendClient['emailLogin'];
@@ -113,7 +111,6 @@ function setup(
   const backend: BackendClient = {
     recordStart: options.recordStart ?? vi.fn(() => Promise.resolve(options.user ?? userView())),
     readAccount: options.readAccount ?? vi.fn(() => Promise.resolve(ACCOUNT_VIEW)),
-    startLogin: options.startLogin ?? vi.fn(() => Promise.resolve(LOGIN)),
     confirmLogin: options.confirmLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
     sendEmailCode: options.sendEmailCode ?? vi.fn(() => Promise.resolve(CODE_SENT)),
     emailLogin: options.emailLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
@@ -204,10 +201,9 @@ describe('/start', () => {
     });
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.welcome.value);
-    // the email login first, the browser second
+    // the email login only: the site sign-in is hidden since #314
     expect(inlineButtons(message)).toEqual([
       { text: LABELS.connectButton, callback_data: CONNECT_CALLBACK_DATA },
-      { text: LABELS.oauthButton, callback_data: OAUTH_CALLBACK_DATA },
     ]);
     // Bot API: callback_data is 1-64 bytes
     for (const data of [CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA, RESEND_CALLBACK_DATA]) {
@@ -493,7 +489,7 @@ describe('the status card', () => {
     expect(sentPayload(calls, 'sendMessage')?.reply_markup).toBeUndefined();
   });
 
-  it('shows the not-connected text and the connect buttons when no account is active any more', async () => {
+  it('shows the not-connected text and the connect button when no account is active any more', async () => {
     const { calls } = await home({
       readTradingAccess: vi.fn(() =>
         Promise.resolve(
@@ -506,7 +502,6 @@ describe('the status card', () => {
     expect(message?.text).toBe(TEXTS.accountNone.value);
     expect(inlineButtons(message)).toEqual([
       { text: LABELS.connectButton, callback_data: CONNECT_CALLBACK_DATA },
-      { text: LABELS.oauthButton, callback_data: OAUTH_CALLBACK_DATA },
     ]);
   });
 
@@ -574,14 +569,13 @@ describe('/menu', () => {
     });
   });
 
-  it('greets a user without an account with the welcome and its buttons', async () => {
+  it('greets a user without an account with the welcome and its button', async () => {
     const { bot, backend, calls } = setup();
     await bot.handleUpdate(textUpdate('/menu'));
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.welcome.value);
     expect(inlineButtons(message)).toEqual([
       { text: LABELS.connectButton, callback_data: CONNECT_CALLBACK_DATA },
-      { text: LABELS.oauthButton, callback_data: OAUTH_CALLBACK_DATA },
     ]);
     expect(backend.readTradingAccess).not.toHaveBeenCalled();
   });
@@ -639,10 +633,7 @@ describe('/menu', () => {
 });
 
 describe('/account', () => {
-  const CONNECT_BUTTONS = [
-    { text: LABELS.connectButton, callback_data: CONNECT_CALLBACK_DATA },
-    { text: LABELS.oauthButton, callback_data: OAUTH_CALLBACK_DATA },
-  ];
+  const CONNECT_BUTTONS = [{ text: LABELS.connectButton, callback_data: CONNECT_CALLBACK_DATA }];
   const CONFIRM_BUTTON = {
     text: '✅ Подтвердить: new@example.test',
     callback_data: `confirm:${PENDING_ACCOUNT_ID}`,
@@ -663,7 +654,7 @@ describe('/account', () => {
     expect(sends).toHaveLength(1);
   });
 
-  it('shows a user with no link the not-connected text and the two connect buttons', async () => {
+  it('shows a user with no link the not-connected text and the connect button', async () => {
     const { message, logger } = await account({ readAccount: withAccounts() });
     expect(message?.text).toBe(TEXTS.accountNone.value);
     expect(inlineButtons(message)).toEqual(CONNECT_BUTTONS);
@@ -685,7 +676,7 @@ describe('/account', () => {
     expect(message?.reply_markup).toBeUndefined();
   });
 
-  it('offers to confirm a waiting link beside an active one, without the connect buttons', async () => {
+  it('offers to confirm a waiting link beside an active one, without the connect button', async () => {
     const { message } = await account({ readAccount: withAccounts(LINK_PENDING, LINK_ACTIVE) });
     expect(message?.text).toBe(
       `${TEXTS.accountConnected.value}\n\n⏳ Ждёт подтверждения: new@example.test\n✅ Подключён: ada@example.test`,
@@ -693,7 +684,7 @@ describe('/account', () => {
     expect(inlineButtons(message)).toEqual([CONFIRM_BUTTON]);
   });
 
-  it('shows a waiting link alone under the pending header, with confirm and connect buttons', async () => {
+  it('shows a waiting link alone under the pending header, with confirm and connect button', async () => {
     const { message } = await account({ readAccount: withAccounts(LINK_PENDING) });
     expect(message?.text).toBe(
       `${TEXTS.accountPending.value}\n\n⏳ Ждёт подтверждения: new@example.test`,
@@ -701,7 +692,7 @@ describe('/account', () => {
     expect(inlineButtons(message)).toEqual([CONFIRM_BUTTON, ...CONNECT_BUTTONS]);
   });
 
-  it('shows revoked links under the revoked header, with the connect buttons', async () => {
+  it('shows revoked links under the revoked header, with the connect button', async () => {
     const { message } = await account({ readAccount: withAccounts(LINK_REVOKED) });
     expect(message?.text).toBe(
       `${TEXTS.accountRevoked.value}\n\n⚠️ Подключение отозвано: old@example.test`,
@@ -896,78 +887,43 @@ describe('the welcome video', () => {
   });
 });
 
-describe('the oauth button', () => {
-  it('answers the query and opens the Mini App login page in a web_app button', async () => {
-    const { bot, backend, calls } = setup();
+// #314 hid the site sign-in; a button sent before that only loses its keyboard
+describe('an old site sign-in button', () => {
+  it('answers the query and removes the keyboard, sending nothing and calling no backend', async () => {
+    const { bot, backend, calls, dialog, logger } = setup({ dialog: ON_CODE_STEP });
     await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
 
-    expect(backend.startLogin).toHaveBeenCalledWith('4242');
-    expect(calls.map((call) => call.method)).toContain('answerCallbackQuery');
-    const message = sentPayload(calls, 'sendMessage');
-    expect(message?.text).toBe(TEXTS.loginLink.value);
-    expect(inlineButtons(message)).toEqual([
-      { text: LABELS.loginButton, web_app: { url: LOGIN.miniAppUrl } },
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'editMessageReplyMarkup',
     ]);
+    expect(sentPayload(calls, 'editMessageReplyMarkup')?.reply_markup).toBeUndefined();
+    for (const method of Object.values(backend)) expect(method).not.toHaveBeenCalled();
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  // the backend sends no Mini App URL for an http redirect: Telegram refuses one in web_app
-  it('falls back to the authorize link as a url button when there is no Mini App url', async () => {
-    const { authorizeUrl, state, expiresAt } = LOGIN;
-    const { bot, calls } = setup({
-      startLogin: vi.fn(() => Promise.resolve({ authorizeUrl, state, expiresAt })),
-    });
-    await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
-
-    expect(inlineButtons(sentPayload(calls, 'sendMessage'))).toEqual([
-      { text: LABELS.loginButton, url: LOGIN.authorizeUrl },
-    ]);
-  });
-
-  it('still sends the link when answering the query fails', async () => {
+  it('logs a refused removal at info and sends nothing', async () => {
     const { bot, calls, logger, apiErrors } = setup();
-    apiErrors.set('answerCallbackQuery', {
+    apiErrors.set('editMessageReplyMarkup', {
       ok: false,
       error_code: 400,
-      description: 'Bad Request: query is too old',
-    });
-
-    await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
-    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.loginLink.value);
-    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ method: 'answerCallbackQuery' });
-  });
-
-  it('shows the blocked text when the backend refuses a blocked user', async () => {
-    const { bot, calls } = setup({
-      startLogin: vi.fn(() =>
-        Promise.reject(
-          new BackendError(BackendErrorCode.HttpStatus, {
-            status: 409,
-            reason: OAuthErrorCode.UserBlocked,
-          }),
-        ),
-      ),
+      description: 'Bad Request: message to edit not found',
     });
     await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
-    const message = sentPayload(calls, 'sendMessage');
-    expect(message?.text).toBe(TEXTS.blocked.value);
-    expect(message?.reply_markup).toBeUndefined();
-  });
 
-  it('shows the generic text for any other backend failure', async () => {
-    const { bot, calls, logger } = setup({
-      startLogin: vi.fn(() =>
-        Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
-      ),
-    });
-    await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA));
-    expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
-    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({ backendStatus: 500 });
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'editMessageReplyMarkup',
+    ]);
+    expect(logger.info.mock.calls.map((call) => call[1])).toEqual([
+      'the keyboard of an old button was not removed',
+    ]);
   });
 
   it('ignores the callback outside a private chat', async () => {
-    const { bot, backend, calls } = setup();
+    const { bot, calls } = setup();
     await bot.handleUpdate(callbackUpdate(OAUTH_CALLBACK_DATA, 'group'));
-    expect(backend.startLogin).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
   });
 });
@@ -1327,7 +1283,6 @@ describe('the account card', () => {
         backend: {
           recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
           readAccount: vi.fn(() => Promise.reject(new Error('unused'))),
-          startLogin: vi.fn(() => Promise.reject(new Error('unused'))),
           confirmLogin: vi.fn(() => Promise.resolve(CONFIRMED)),
           sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
           emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1374,7 +1329,6 @@ describe('the account card', () => {
         backend: {
           recordStart: vi.fn(() => Promise.resolve(userView({ hasActiveBrokerAccount: true }))),
           readAccount: vi.fn(() => Promise.reject(new Error('unused'))),
-          startLogin: vi.fn(() => Promise.reject(new Error('unused'))),
           confirmLogin: vi.fn(() => Promise.reject(new Error('unused'))),
           sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
           emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1417,7 +1371,6 @@ describe('the connect button', () => {
     expect(message?.text).toBe(TEXTS.emailPrompt.value);
     expect(message?.reply_markup).toBeUndefined();
     expect(dialog.get(USER.id)).toEqual({ step: 'email' });
-    expect(backend.startLogin).not.toHaveBeenCalled();
     expect(backend.sendEmailCode).not.toHaveBeenCalled();
   });
 
@@ -2410,7 +2363,6 @@ describe('the Bot API timeout', () => {
       backend: {
         recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
         readAccount: vi.fn(() => Promise.reject(new Error('unused'))),
-        startLogin: vi.fn(() => Promise.reject(new Error('unused'))),
         confirmLogin: vi.fn(() => Promise.reject(new Error('unused'))),
         sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
         emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),

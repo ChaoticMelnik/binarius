@@ -59,7 +59,6 @@ import {
   LINK_ACTIVE,
   LINK_PENDING,
   LINK_REVOKED,
-  LOGIN,
   PAIR_CLOSED,
   PAIR_EURUSD,
   PAIRS_RESPONSE,
@@ -129,7 +128,6 @@ interface Branch {
   expected: Calls;
   recordStart?: BackendClient['recordStart'];
   readAccount?: BackendClient['readAccount'];
-  startLogin?: BackendClient['startLogin'];
   confirmLogin?: BackendClient['confirmLogin'];
   sendEmailCode?: BackendClient['sendEmailCode'];
   emailLogin?: BackendClient['emailLogin'];
@@ -260,10 +258,6 @@ async function observe(branch: Branch): Promise<Calls> {
     readAccount: (telegramUserId) => {
       backend += 1;
       return (branch.readAccount ?? (() => Promise.resolve(ACCOUNT_VIEW)))(telegramUserId);
-    },
-    startLogin: (telegramUserId) => {
-      backend += 1;
-      return (branch.startLogin ?? (() => Promise.resolve(LOGIN)))(telegramUserId);
     },
     confirmLogin: (telegramUserId, accountId) => {
       backend += 1;
@@ -1203,10 +1197,11 @@ const SESSION_STOP_BRANCHES: readonly Branch[] = [
   SESSION_STOP_WORST_CASE,
 ];
 
+// #314: the site sign-in button of a message sent before it
 const OAUTH_WORST_CASE: Branch = {
-  label: 'the query is answered and the link is sent',
+  label: 'the query is answered and the keyboard is removed',
   update: callbackUpdate(OAUTH_CALLBACK_DATA),
-  expected: { backend: 1, telegram: 2 },
+  expected: { backend: 0, telegram: 2 },
 };
 
 const OAUTH_BRANCHES: readonly Branch[] = [
@@ -1217,29 +1212,21 @@ const OAUTH_BRANCHES: readonly Branch[] = [
   },
   OAUTH_WORST_CASE,
   {
-    label: 'answering the query is refused and the link still goes',
+    label: 'answering the query is refused and the removal still goes',
     update: callbackUpdate(OAUTH_CALLBACK_DATA),
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-    expected: { backend: 1, telegram: 2 },
+    expected: { backend: 0, telegram: 2 },
   },
   {
-    label: 'the backend reports a blocked user',
+    label: 'the removal is refused',
     update: callbackUpdate(OAUTH_CALLBACK_DATA),
-    startLogin: () =>
-      Promise.reject(
-        new BackendError(BackendErrorCode.HttpStatus, {
-          status: 409,
-          reason: OAuthErrorCode.UserBlocked,
-        }),
-      ),
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the backend fails for any other reason',
-    update: callbackUpdate(OAUTH_CALLBACK_DATA),
-    startLogin: () =>
-      Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 500 })),
-    expected: { backend: 1, telegram: 2 },
+    apiErrors: [
+      [
+        'editMessageReplyMarkup',
+        { ok: false, error_code: 400, description: 'Bad Request: message to edit not found' },
+      ],
+    ],
+    expected: { backend: 0, telegram: 2 },
   },
 ];
 
@@ -2070,7 +2057,7 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     await checkHandler('connect', CONNECT_BRANCHES, CONNECT_WORST_CASE, HANDLER_CALLS.connect);
   });
 
-  it('the oauth button', async () => {
+  it('an old site sign-in button', async () => {
     await checkHandler('oauth', OAUTH_BRANCHES, OAUTH_WORST_CASE, HANDLER_CALLS.oauth);
   });
 

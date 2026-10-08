@@ -212,9 +212,9 @@ describe('texts', () => {
     });
   });
 
-  it('names both buttons of the welcome by their labels', () => {
+  it('names the connect button of the welcome and not the site sign-in', () => {
     expect(plainTextOf(TEXTS.welcome)).toContain(`«${LABELS.connectButton}»`);
-    expect(plainTextOf(TEXTS.welcome)).toContain(`«${LABELS.oauthButton}»`);
+    expect(plainTextOf(TEXTS.welcome)).not.toContain(LABELS.oauthButton);
   });
 
   it('names the resend button by its label where it tells the user to press it', () => {
@@ -419,9 +419,9 @@ describe('texts', () => {
       }
     });
 
-    it('names both ways to connect by their button labels', () => {
+    it('names the connect button and not the site sign-in', () => {
       expect(plainTextOf(TEXTS.helpConnect)).toContain(`«${LABELS.connectButton}»`);
-      expect(plainTextOf(TEXTS.helpConnect)).toContain(`«${LABELS.oauthButton}»`);
+      expect(plainTextOf(TEXTS.helpConnect)).not.toContain(LABELS.oauthButton);
     });
   });
 

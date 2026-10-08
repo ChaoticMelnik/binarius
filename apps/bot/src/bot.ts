@@ -35,7 +35,7 @@ import {
   type BackendClient,
 } from './backend-client';
 import { BOT_COMMANDS } from './commands';
-import { createDemoComposer, DEMO_CALLBACK_DATA } from './demo';
+import { createDemoComposer, DEMO_CALLBACK_DATA, removeLegacyKeyboard } from './demo';
 import { createDemoTradeComposer } from './demo-trade';
 import { createTradingSessionComposer } from './trading-session';
 import type { IntentTracker } from './intent-tracker';
@@ -69,7 +69,8 @@ import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 // Callback data of the buttons; Bot API allows 1-64 bytes. `connect` is the main button of the
 // welcome and asks for the address: buttons sent by earlier versions carry the same data, so they
 // lead where the new ones do, though an old message may still show an older label. `✏️ Изменить
-// адрес` carries it too — changing the address is pressing the button again.
+// адрес` carries it too — changing the address is pressing the button again. `oauth` was the site
+// sign-in under the welcome and /account; #314 hid it, and an old one only loses its keyboard.
 export const CONNECT_CALLBACK_DATA = 'connect';
 export const OAUTH_CALLBACK_DATA = 'oauth';
 export const RESEND_CALLBACK_DATA = 'resend';
@@ -302,7 +303,7 @@ export function createBot({
   // The stake picker's way back (#297): /settings' own read, then the message in place of the
   // picker.
   privateChats.callbackQuery(SETTINGS_CALLBACK_DATA, async (ctx) => {
-    // independent, as in oauth
+    // independent, as in confirm
     const [answered, read] = await Promise.allSettled([
       ctx.answerCallbackQuery(),
       backend.recordStart(startRequestOf(ctx.from)),
@@ -327,7 +328,7 @@ export function createBot({
     // the pattern is built from Object.values(NotificationLevel), so a mismatch is a bug for
     // bot.catch
     const level = notificationLevelSchema.parse(ctx.match[1]);
-    // independent, as in oauth
+    // independent, as in confirm
     const [answered, set] = await Promise.allSettled([
       ctx.answerCallbackQuery(),
       backend.setNotificationLevel(String(ctx.from.id), level),
@@ -406,43 +407,7 @@ export function createBot({
     await replyHtml(ctx, TEXTS.emailPrompt);
   });
 
-  privateChats.callbackQuery(OAUTH_CALLBACK_DATA, async (ctx) => {
-    // the two calls are independent: the spinner on the button is worth less than the link, so
-    // a rejected answerCallbackQuery ("query is too old" is the usual one) must not skip it
-    const [answered, login] = await Promise.allSettled([
-      ctx.answerCallbackQuery(),
-      backend.startLogin(String(ctx.from.id)),
-    ]);
-    if (answered.status === 'rejected') {
-      logger.warn(
-        {
-          ...errorLogFields(answered.reason),
-          ...telegramErrorFields(answered.reason, 'answerCallbackQuery'),
-        },
-        'answering the callback query failed',
-      );
-    }
-    if (login.status === 'rejected') {
-      const error: unknown = login.reason;
-      if (error instanceof BackendError && error.reason === OAuthErrorCode.UserBlocked) {
-        await replyHtml(ctx, TEXTS.blocked);
-        return;
-      }
-      logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, 'login not started');
-      await replyHtml(ctx, TEXTS.unavailable);
-      return;
-    }
-    const { authorizeUrl, miniAppUrl } = login.value;
-    // The Mini App carries the signed launch data the callback needs (#113). Telegram takes only
-    // https in a web_app button, so the backend sends no Mini App URL for the local stack's
-    // http loopback redirect, and the plain link is what is left there.
-    await replyHtml(ctx, TEXTS.loginLink, {
-      reply_markup:
-        miniAppUrl === undefined
-          ? new InlineKeyboard().url(LABELS.loginButton, authorizeUrl)
-          : new InlineKeyboard().webApp(LABELS.loginButton, miniAppUrl),
-    });
-  });
+  privateChats.callbackQuery(OAUTH_CALLBACK_DATA, (ctx) => removeLegacyKeyboard(ctx, logger));
 
   privateChats.callbackQuery(CONFIRM_CALLBACK_PATTERN, async (ctx) => {
     const accountId = confirmLoginRequestSchema.shape.accountId.safeParse(ctx.match[1]);
@@ -453,7 +418,8 @@ export function createBot({
       });
       return;
     }
-    // independent, as in oauth: the outcome message matters more than the spinner
+    // independent: the outcome message matters more than the spinner, so a rejected
+    // answerCallbackQuery ("query is too old" is the usual one) must not skip it
     const [answered, confirmed] = await Promise.allSettled([
       ctx.answerCallbackQuery(),
       backend.confirmLogin(String(ctx.from.id), accountId.data),
@@ -872,16 +838,14 @@ function startRequestOf(from: User): UserStartRequest {
   };
 }
 
-// the welcome's two ways in, also under /account while no link is active
+// the welcome's way in, also under /account while no link is active
 function addConnectButtons(keyboard: InlineKeyboard): InlineKeyboard {
-  return keyboard
-    .text(LABELS.connectButton, CONNECT_CALLBACK_DATA)
-    .row()
-    .text(LABELS.oauthButton, OAUTH_CALLBACK_DATA);
+  return keyboard.text(LABELS.connectButton, CONNECT_CALLBACK_DATA);
 }
 
-// A confirm button per waiting link, then the two ways in while nothing is active; undefined when
-// there is no button at all (an InlineKeyboard starts as one empty row, so its length says nothing).
+// A confirm button per waiting link, then the connect button while nothing is active; undefined
+// when there is no button at all (an InlineKeyboard starts as one empty row, so its length says
+// nothing).
 function accountKeyboard(accounts: readonly LinkedAccountView[]): InlineKeyboard | undefined {
   const pending = accounts.filter(isPendingLink);
   const connect = !accounts.some((account) => account.status === BrokerAccountStatus.Active);

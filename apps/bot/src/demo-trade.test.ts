@@ -18,7 +18,7 @@ import {
 } from '@binarius/shared';
 import { telegramHtml } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { createBot, CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA } from './bot';
+import { createBot, CONNECT_CALLBACK_DATA } from './bot';
 import {
   DEMO_CALLBACK_DATA,
   DEMO_GROUPS_CALLBACK_DATA,
@@ -128,10 +128,7 @@ const warnings = (logger: ReturnType<typeof fakeLogger>) =>
   logger.warn.mock.calls.map((call) => call[1] as string);
 
 const REFRESH_ROWS = [[button(LABELS.refreshIntentButton, REFRESH)]];
-const CONNECT_ROWS = [
-  [button(LABELS.connectButton, CONNECT_CALLBACK_DATA)],
-  [button(LABELS.oauthButton, OAUTH_CALLBACK_DATA)],
-];
+const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5))],

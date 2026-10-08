@@ -55,7 +55,7 @@ export interface DemoTradeDeps {
   logger: Logger;
   now: () => number;
   intentTracker: Pick<IntentTracker, 'track'>;
-  // the welcome's two ways in, for a press with no account to trade on
+  // the welcome's connect button, for a press with no account to trade on
   connectKeyboard: () => InlineKeyboard;
 }
 

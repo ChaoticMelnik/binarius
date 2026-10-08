@@ -48,7 +48,7 @@ export const HANDLER_CALLS = {
   // /menu: /start's path without a payload
   menu: { backend: 2, telegram: 4 },
   // the status card's button (#125): answerCallbackQuery ∥ readPairs — counted the same way as
-  // oauth — then sendMessage with the asset types
+  // confirm — then sendMessage with the asset types
   demo: { backend: 1, telegram: 2 },
   // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair, a duration):
   // answerCallbackQuery ∥ readPairs, then editMessageText refused as gone → sendMessage
@@ -60,11 +60,11 @@ export const HANDLER_CALLS = {
   legacyDuration: { backend: 0, telegram: 2 },
   // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs, the «⏳» edit refused as gone →
   // sendMessage, evaluateSignal ∥ readTradingAccess (the stake label, #297) — counted as
-  // sequential, as in oauth — the result by sendMessage; or «⏳» edited, the two reads, the
+  // sequential, as in confirm — the result by sendMessage; or «⏳» edited, the two reads, the
   // result's edit refused as gone → sendMessage. Both are 3 / 4.
   demoAnalysis: { backend: 3, telegram: 4 },
   // the stake button (#127): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — the reads
-  // counted as sequential, as in oauth — then createIntent and its one retry on an unknown
+  // counted as sequential, as in confirm — then createIntent and its one retry on an unknown
   // outcome, then sendMessage; a fingerprint mismatch (#297) sends one message instead
   stake: { backend: 4, telegram: 2 },
   // the stake picker (#297, stake-picker.ts) opened, a preset and the reset: answerCallbackQuery
@@ -84,7 +84,7 @@ export const HANDLER_CALLS = {
   // way — then editMessageText refused as gone → sendMessage
   intentRefresh: { backend: 2, telegram: 3 },
   // «🚀 Сессия из 5 сделок» (#284): answerCallbackQuery ∥ readPairs — counted as sequential, as
-  // in oauth — then startSession and its one retry on an unknown outcome, then sendMessage
+  // in confirm — then startSession and its one retry on an unknown outcome, then sendMessage
   sessionStart: { backend: 3, telegram: 2 },
   // the session's «🔄 Обновить»: answerCallbackQuery ∥ readSession ∥ readPairs — counted the same
   // way — then editMessageText refused as gone → sendMessage
@@ -94,10 +94,11 @@ export const HANDLER_CALLS = {
   sessionStop: { backend: 3, telegram: 3 },
   // answerCallbackQuery, then sendMessage asking for the address
   connect: { backend: 0, telegram: 2 },
-  // answerCallbackQuery ∥ startLogin, then sendMessage — the parallel pair is counted as
-  // sequential, so this bound is loose by BACKEND_REQUEST_TIMEOUT_MS (accepted)
-  oauth: { backend: 1, telegram: 2 },
-  // answerCallbackQuery ∥ confirmLogin — counted the same way as oauth — then the account card:
+  // an old site sign-in button (#314 hid it): answerCallbackQuery, then editMessageReplyMarkup,
+  // as legacyDuration
+  oauth: { backend: 0, telegram: 2 },
+  // answerCallbackQuery ∥ confirmLogin — the parallel pair is counted as sequential, so this bound
+  // is loose by BACKEND_REQUEST_TIMEOUT_MS (accepted) — then the account card:
   // sendPhoto refused by Telegram (GrammyError) → sendMessage, unpinAllChatMessages, pinChatMessage
   confirm: { backend: 1, telegram: 5 },
   // a text on the address step: sendEmailCode, then sendMessage
@@ -106,7 +107,7 @@ export const HANDLER_CALLS = {
   // not a definite refusal and the recheck finds the account active, then the account card as
   // in confirm: sendPhoto refused → sendMessage, unpinAllChatMessages, pinChatMessage
   codeStep: { backend: 2, telegram: 4 },
-  // answerCallbackQuery ∥ sendEmailCode, then sendMessage — counted the same way as oauth
+  // answerCallbackQuery ∥ sendEmailCode, then sendMessage — counted the same way as confirm
   resend: { backend: 1, telegram: 2 },
   // my_chat_member in a private chat: recordChatMember; nothing is sent
   myChatMember: { backend: 1, telegram: 0 },
@@ -114,7 +115,7 @@ export const HANDLER_CALLS = {
   account: { backend: 1, telegram: 1 },
   // /settings: recordStart, then sendMessage
   settings: { backend: 1, telegram: 1 },
-  // a level pressed: answerCallbackQuery ∥ setNotificationLevel — counted the same way as oauth —
+  // a level pressed: answerCallbackQuery ∥ setNotificationLevel — counted the same way as confirm —
   // then editMessageText refused by Telegram (GrammyError) → sendMessage
   level: { backend: 1, telegram: 3 },
   // the selected level pressed: answerCallbackQuery only

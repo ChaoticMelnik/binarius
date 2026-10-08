@@ -37,7 +37,6 @@ import {
   type SignalDecision,
   type SignalFeatures,
   type SignalParams,
-  type StartLoginResponse,
   type TradeIntentView,
   type TradingAccessResponse,
   type TradingSessionView,
@@ -95,14 +94,6 @@ export const userView = (patch: Partial<UserStartView> = {}): UserStartView => (
   ...USER_VIEW,
   ...patch,
 });
-
-export const LOGIN: StartLoginResponse = {
-  authorizeUrl: 'https://binodex.app/oauth/authorize?state=abc',
-  state: 'abc',
-  expiresAt: '2026-09-24T10:10:00.000Z',
-  miniAppUrl:
-    'https://bot.example/oauth/login?authorize=https%3A%2F%2Fbinodex.app%2Foauth%2Fauthorize%3Fstate%3Dabc',
-};
 
 export const PENDING_ACCOUNT_ID = '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01';
 
@@ -363,7 +354,6 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
   return {
     recordStart: unused,
     readAccount: unused,
-    startLogin: unused,
     confirmLogin: unused,
     sendEmailCode: unused,
     emailLogin: unused,

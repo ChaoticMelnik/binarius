@@ -18,7 +18,6 @@ import {
   safeParseTradingSignalResponse,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
-  startLoginResponseSchema,
   type ChatMemberResponse,
   type ConfirmLoginResponse,
   type CreateTradeIntentRequest,
@@ -31,7 +30,6 @@ import {
   type NotificationLevelResponse,
   type PairsCatalogResponse,
   type SignalInterval,
-  type StartLoginResponse,
   type TelegramChatMemberStatus,
   type TradeIntentView,
   type TradingAccessResponse,
@@ -81,7 +79,6 @@ export class BackendError extends Error {
 export interface BackendClient {
   recordStart(request: UserStartRequest): Promise<UserStartView>;
   readAccount(telegramUserId: string): Promise<UserAccountView>;
-  startLogin(telegramUserId: string): Promise<StartLoginResponse>;
   confirmLogin(telegramUserId: string, accountId: string): Promise<ConfirmLoginResponse>;
   sendEmailCode(telegramUserId: string, email: string): Promise<EmailSendCodeResponse>;
   emailLogin(telegramUserId: string, email: string, code: string): Promise<EmailLoginResponse>;
@@ -212,13 +209,6 @@ export function createBackendClient({
       const parsed = safeParseUserAccountResponse(await post('users/account', { telegramUserId }));
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data.user;
-    },
-    async startLogin(telegramUserId) {
-      const parsed = startLoginResponseSchema.safeParse(
-        await post('auth/binodex/start', { telegramUserId }),
-      );
-      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
-      return parsed.data;
     },
     async confirmLogin(telegramUserId, accountId) {
       const parsed = safeParseConfirmLoginResponse(
