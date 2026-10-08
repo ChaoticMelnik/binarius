@@ -135,7 +135,8 @@ Every `BALANCE_RECONCILE_INTERVAL_MS` (env, 10 000 to 60 000, default 60 000):
    budget. The next tick's own GET is bounded by `BROKER_REST_TIMEOUT_MS`, and its failure is
    recorded.
 4. **Limit.** `max(1, floor(BALANCE_POLL_MAX_PER_MINUTE × interval / 60 000))` accounts per tick
-   (env, 1 to 500, default 200), four at a time. A `rate_limited` answer stops new calls for the
+   (env, 1 to 500, default 100: its share of the broker's per-IP window, docs/signal.md → The
+   budget), four at a time. A `rate_limited` answer stops new calls for the
    rest of the tick. A tick still running when the next interval fires makes that one a no-op.
 5. **Never a token exchange.** Each call passes `mayRefresh: false`. `ensureFreshAccessToken`
    decides under the row lock, with the same clock and comparison as the exchange. A token that

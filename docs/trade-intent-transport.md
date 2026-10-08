@@ -307,8 +307,9 @@ read. Each ending:
 | the attempt's deadline, a throw                                     | yes                         |
 | `stop()` during the attempt, the token fetch included              | no                          |
 
-**Budget.** The broker allows 600 requests a minute per IP and the backend's balance refresh
-takes up to 200 by default. The worker's worst case is 20 × 2 lists × 2 pages × 4 ticks + 3 × 2
+**Budget.** The broker allows 600 requests a minute per IP. The backend's balance refresh and
+its signal scanner take up to 100 each by default (the shares are in
+`packages/shared/src/broker-budget.ts`, docs/signal.md → The budget). The worker's worst case is 20 × 2 lists × 2 pages × 4 ticks + 3 × 2
 pages × 12 ticks = 392 GETs a minute, at most `WORKER_BROKER_GETS_PER_MINUTE` (400; checked at
 import, with a whole number of ticks a minute for both loops). It is a
 true bound because both loops tick only on their intervals — the reconciliation job does not start
@@ -319,8 +320,8 @@ tick, the lever is part of the reconciliation's share, in a new issue. A 429 end
 retried on the lease or the next tick. Its one real cost is a refresh exchange in flight on the
 backend: a 429 on `/user-auth/refresh` is classified `rejected` → `refresh_outcome_unknown` → the
 account is revoked (Rule 12, one attempt). The worker's share keeps its own traffic from driving
-the IP to 429; the sum with the backend's when `BALANCE_POLL_MAX_PER_MINUTE` is above 200 is
-stated, not enforced.
+the IP to 429; the sum with the backend's ceilings raised above their defaults is a `warn` at the
+backend's start, not enforced.
 
 ## Delivery, ACK and timeout semantics
 
