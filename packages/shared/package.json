@@ -45,6 +45,10 @@
       "types": "./src/admin.ts",
       "default": "./src/admin.ts"
     },
+    "./ledger": {
+      "types": "./src/ledger.ts",
+      "default": "./src/ledger.ts"
+    },
     "./partner": {
       "types": "./src/partner.ts",
       "default": "./src/partner.ts"

@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
-import { LinkBonusSkipReason, type LinkBonusGrantView } from '@binarius/shared';
+import { LinkBonusSkipReason, TokenLedgerKind, type LinkBonusGrantView } from '@binarius/shared';
 import { literal } from './schema/columns';
-import { TokenLedgerKind, tokenLedger } from './schema/token-ledger';
+import { tokenLedger } from './schema/token-ledger';
 import { users } from './schema/users';
 import type { Tx } from './trade-intent-ops';
 

@@ -1,27 +1,11 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, index, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { TokenLedgerKind, TokenLedgerRefType } from '@binarius/shared';
 import { brokerAccounts } from './broker-accounts';
 import { createdAt, id, inList, literal, sqlLiteralList, tokenAmount } from './columns';
 import { depositEvents } from './deposit-events';
 import { tradeIntents } from './trade-intents';
 import { users } from './users';
-
-export const TokenLedgerKind = {
-  Purchase: 'purchase',
-  Bonus: 'bonus',
-  Reserve: 'reserve',
-  Release: 'release',
-  Settle: 'settle',
-  Adjustment: 'adjustment',
-} as const;
-export type TokenLedgerKind = (typeof TokenLedgerKind)[keyof typeof TokenLedgerKind];
-
-// Intents, deposits and broker accounts each have their own FK-checked column, so the polymorphic channel is
-// left with exactly one member. A reference whose target the database can check is never
-// expressed as a label here: a self-declared `ref_type` is not a control, which is how a
-// relabelled row once credited one deposit twice.
-export const TokenLedgerRefType = { Manual: 'manual' } as const;
-export type TokenLedgerRefType = (typeof TokenLedgerRefType)[keyof typeof TokenLedgerRefType];
 
 export const INTENT_LEDGER_KINDS = [
   TokenLedgerKind.Reserve,

@@ -41,6 +41,7 @@ import * as catalog from './catalog';
 import * as demoStake from './demo-stake';
 import * as env from './env';
 import * as ids from './ids';
+import * as ledger from './ledger';
 import * as linkConfirmation from './link-confirmation';
 import * as logging from './logging';
 import * as shared from './index';
@@ -386,6 +387,7 @@ describe('contract coverage (issue #6)', () => {
       account,
       admin,
       adminTrading,
+      ledger,
       money,
       time,
       ids,
