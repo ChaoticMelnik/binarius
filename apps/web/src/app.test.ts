@@ -3,12 +3,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ADMIN_SEARCH_MAX_LENGTH,
   ADMIN_USER_RECENT_INTENTS,
+  ADMIN_USER_RECENT_LEDGER,
   AdminErrorCode,
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
+  TokenLedgerKind,
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
   type AdminIntentsQuery,
+  type AdminTokensQuery,
   type AdminTradingSessionsQuery,
   type AdminUsersQuery,
   type StaffSessionView,
@@ -20,10 +23,13 @@ import {
   SAMPLE_INTENT,
   SAMPLE_INTENT_RESPONSE,
   SAMPLE_INTENTS,
+  SAMPLE_LEDGER_ADJUSTMENT,
+  SAMPLE_LEDGER_ENTRY,
   SAMPLE_LIST_ITEM,
   SAMPLE_ME,
   SAMPLE_OVERVIEW,
   SAMPLE_SESSION_ID,
+  SAMPLE_TOKENS,
   SAMPLE_TRADING_SESSION,
   SAMPLE_TRADING_SESSION_NULLS,
   SAMPLE_TRADING_SESSIONS,
@@ -70,6 +76,7 @@ interface Calls {
   intents: [string, AdminIntentsQuery][];
   intent: unknown[][];
   tradingSessions: [string, AdminTradingSessionsQuery][];
+  tokens: [string, AdminTokensQuery][];
 }
 
 let calls: Calls;
@@ -89,6 +96,7 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     intents: [],
     intent: [],
     tradingSessions: [],
+    tokens: [],
   };
   lines = [];
   const client: BackendClient = {
@@ -135,6 +143,10 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     tradingSessions: async (token, query) => {
       calls.tradingSessions.push([token, query]);
       return SAMPLE_TRADING_SESSIONS;
+    },
+    tokens: async (token, query) => {
+      calls.tokens.push([token, query]);
+      return SAMPLE_TOKENS;
     },
     oauthCallback: async () => {
       throw new Error('the admin pages never forward an OAuth callback');
@@ -928,6 +940,7 @@ describe('the trading sessions page, the card section and the overview breakdown
     TEXTS.navSessions,
     TEXTS.navIntents,
     TEXTS.navTradingSessions,
+    TEXTS.navTokens,
   ];
 
   it.each([
@@ -938,7 +951,8 @@ describe('the trading sessions page, the card section and the overview breakdown
     '/admin/intents',
     `/admin/intents/${SAMPLE_INTENT.id}`,
     '/admin/trading-sessions',
-  ])('%s carries the five nav items in order, staff sessions named as such', async (url) => {
+    '/admin/tokens',
+  ])('%s carries the six nav items in order, staff sessions named as such', async (url) => {
     const response = await get(url, withCookie);
 
     expect(response.statusCode).toBe(200);
@@ -948,6 +962,7 @@ describe('the trading sessions page, the card section and the overview breakdown
       'Сессии сотрудников',
       'Заявки',
       'Торговые сессии',
+      'Токены',
     ]);
     expect(navOf(response.body)).toEqual(NAV_LABELS);
     expect(response.body).toContain('<a href="/admin/trading-sessions"');
@@ -1105,6 +1120,8 @@ describe('the trading sessions page, the card section and the overview breakdown
           ...SAMPLE_USER,
           brokerAccounts: [],
           intents: { recent: [], total: 0, active: 0 },
+          // "Последние 20" is the ledger section's caption too (#109)
+          ledger: { recent: [] },
         }),
     });
 
@@ -1134,6 +1151,204 @@ describe('the trading sessions page, the card section and the overview breakdown
         `<dt>${TEXTS.overviewIntentsActive.replace(/[()]/g, '\\$&')}</dt>\\s*<dd>${active}</dd>`,
       ),
     );
+  });
+});
+
+describe('the token ledger page and the card section (#109)', () => {
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+  const USER = SAMPLE_USER_ID;
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+
+  // the href of the link whose text is `label`, as a browser would read it back
+  const hrefOf = (body: string, label: string): string | undefined => {
+    const match = new RegExp(`<a href="([^"]*)"\\s*>\\s*${label}\\s*</a`).exec(body);
+    return match?.[1]?.replaceAll('&amp;', '&');
+  };
+  // the body rows of the one table on the page
+  const rowsOf = (body: string): string[] => body.split('<tr>').slice(2);
+
+  it('marks Токены as the current page and carries the login', async () => {
+    const response = await get('/admin/tokens', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatch(/<a href="\/admin\/tokens"\s+aria-current="page"/);
+    expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+  });
+
+  it('asks for the whole list when every field of the form was left empty', async () => {
+    const response = await get('/admin/tokens?kind=&user=', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(calls.tokens).toEqual([[TOKEN, {}]]);
+  });
+
+  it('offers every kind in the form, an empty option first, and selects the filter', async () => {
+    const response = await get('/admin/tokens?kind=settle', withCookie);
+
+    const options = [...response.body.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
+    expect(options).toEqual(['', ...Object.values(TokenLedgerKind)]);
+    expect(response.body).toMatch(/<option value="settle"\s+selected/);
+    expect(response.body.match(/\sselected/g)).toHaveLength(1);
+    expect(calls.tokens).toEqual([[TOKEN, { kind: 'settle' }]]);
+  });
+
+  it('carries both filters and the cursor through the next link, and keeps them in the form', async () => {
+    await app.close();
+    app = build({
+      tokens: (token, query) => {
+        calls.tokens.push([token, query]);
+        return Promise.resolve({ ...SAMPLE_TOKENS, nextCursor: CURSOR });
+      },
+    });
+    const filters = { user: USER, kind: 'bonus' };
+
+    const first = await get(`/admin/tokens?${new URLSearchParams(filters)}`, withCookie);
+    expect(first.body).toContain(`name="user" value="${USER}"`);
+    expect(first.body).not.toContain(TEXTS.tokensFirst);
+    const next = hrefOf(first.body, TEXTS.tokensNext);
+    expect(next).toBe(`/admin/tokens?${new URLSearchParams({ ...filters, cursor: CURSOR })}`);
+    const second = await get(next ?? '', withCookie);
+
+    expect(calls.tokens.map(([, query]) => query)).toEqual([
+      filters,
+      { ...filters, cursor: CURSOR },
+    ]);
+    expect(hrefOf(second.body, TEXTS.tokensFirst)).toBe(
+      `/admin/tokens?${new URLSearchParams(filters)}`,
+    );
+  });
+
+  it('drops a malformed cursor and keeps the filters', async () => {
+    const response = await get('/admin/tokens?cursor=bad&kind=bonus', withCookie);
+
+    expect([response.statusCode, response.headers.location]).toEqual([
+      302,
+      '/admin/tokens?kind=bonus',
+    ]);
+    expect(calls.tokens).toEqual([]);
+  });
+
+  it.each([
+    ['an unknown kind, even with a bad cursor', 'cursor=bad&kind=bogus'],
+    ['a user of blanks', 'user=%20'],
+    ['a user that is not a uuid', 'user=not-a-uuid'],
+    ['kind twice', 'kind=bonus&kind=reserve'],
+  ])('refuses %s with the form, before the backend is asked', async (_label, query) => {
+    const response = await get(`/admin/tokens?${query}`, withCookie);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers.location).toBeUndefined();
+    expect(calls.tokens).toEqual([]);
+    expect(response.body).toContain(TEXTS.tokensBadFilter);
+    expect(response.body).toContain('action="/admin/tokens"');
+    // no answer from the backend, so no login to show: the account block is left out
+    expect(response.body).toContain('<nav');
+    expect(response.body).not.toContain('action="/admin/logout"');
+  });
+
+  it('lists a reserve with its intent, an adjustment with its sign, no reference and its note as text', async () => {
+    const response = await get('/admin/tokens', withCookie);
+
+    const rows = rowsOf(response.body);
+    expect(rows).toHaveLength(2);
+    const [reserve = '', adjustment = ''] = rows;
+    expect(reserve).toContain(`<a href="/admin/users/${USER}">4242</a>`);
+    expect(reserve).toContain('<code>reserve</code>');
+    expect(reserve).toContain(
+      `<a href="/admin/intents/${SAMPLE_INTENT.id}">${SAMPLE_INTENT.id}</a>`,
+    );
+    expect(reserve).toMatch(/<td class="num">0<\/td>\s*<td class="num">1<\/td>/);
+    expect(adjustment).toContain('<code>adjustment</code>');
+    expect(adjustment).toMatch(
+      /<td class="num">-3<\/td>\s*<td class="num">0<\/td>\s*<td>\s*—\s*<\/td>/,
+    );
+    expect(adjustment).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(response.body).not.toContain(SAMPLE_LEDGER_ADJUSTMENT.note);
+    expect(response.body).not.toContain(TEXTS.tokensNext);
+    expect(response.body).not.toContain(TEXTS.tokensFirst);
+  });
+
+  it('prints a deposit, an account and a manual reference as ids, and none for a missing note', async () => {
+    const deposit = '00000000-0000-4000-8000-0000000000d7';
+    const account = '00000000-0000-4000-8000-0000000000d8';
+    const ref = '00000000-0000-4000-8000-0000000000d9';
+    await app.close();
+    app = build({
+      tokens: () =>
+        Promise.resolve({
+          ...SAMPLE_TOKENS,
+          entries: [
+            { ...SAMPLE_LEDGER_ADJUSTMENT, kind: 'purchase', depositEventId: deposit, note: null },
+            { ...SAMPLE_LEDGER_ADJUSTMENT, kind: 'bonus', brokerAccountId: account },
+            { ...SAMPLE_LEDGER_ADJUSTMENT, refType: 'manual', refId: ref },
+          ],
+        }),
+    });
+
+    const response = await get('/admin/tokens', withCookie);
+
+    const [purchase = '', bonus = '', manual = ''] = rowsOf(response.body);
+    expect(purchase).toMatch(
+      new RegExp(`<td><code>${deposit}</code></td>\\s*<td>\\s*—\\s*</td>\\s*</tr>`),
+    );
+    expect(bonus).toContain(`<td><code>${account}</code></td>`);
+    expect(manual).toContain(`<td><code>manual:${ref}</code></td>`);
+  });
+
+  it('says so when there are no entries, and keeps the filter in the first-page link', async () => {
+    await app.close();
+    app = build({ tokens: () => Promise.resolve({ ...SAMPLE_TOKENS, entries: [] }) });
+
+    const response = await get(`/admin/tokens?user=${USER}`, withCookie);
+
+    expect(response.body).toContain(TEXTS.tokensEmpty);
+    expect(hrefOf(response.body, TEXTS.tokensFirst)).toBe(`/admin/tokens?user=${USER}`);
+  });
+
+  it('drops a session the backend no longer knows, and keeps the cookie on its own failure', async () => {
+    await app.close();
+    app = build({ tokens: () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)) });
+    const gone = await get('/admin/tokens', withCookie);
+    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+
+    await app.close();
+    app = build({ tokens: () => Promise.reject(httpFailure(500)) });
+    const failed = await get('/admin/tokens', withCookie);
+    expect(failed.statusCode).toBe(500);
+    expect(cookieOf(failed, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it('treats a malformed session cookie as none, before the backend is asked', async () => {
+    const response = await get('/admin/tokens', { [SESSION_COOKIE]: 'not-a-session-token' });
+
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+    expect(calls.tokens).toEqual([]);
+  });
+
+  it('renders the ledger section of the card after the trading section, with a link to all entries', async () => {
+    const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+
+    const ledgerAt = response.body.indexOf(`<h2>${TEXTS.userLedger}</h2>`);
+    expect(ledgerAt).toBeGreaterThan(response.body.indexOf(`<h2>${TEXTS.userTrading}</h2>`));
+    const section = response.body.slice(ledgerAt);
+    expect(TEXTS.userLedgerRecent(ADMIN_USER_RECENT_LEDGER)).toBe('Последние 20');
+    expect(section).toContain(TEXTS.userLedgerRecent(ADMIN_USER_RECENT_LEDGER));
+    expect(section).toContain(`<code>${SAMPLE_LEDGER_ENTRY.kind}</code>`);
+    expect(hrefOf(section, TEXTS.userLedgerAll)).toBe(`/admin/tokens?user=${SAMPLE_USER_ID}`);
+  });
+
+  it('keeps the section and the link to all entries for a user without ledger rows', async () => {
+    await app.close();
+    app = build({ user: () => Promise.resolve({ ...SAMPLE_USER, ledger: { recent: [] } }) });
+
+    const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+
+    const section = response.body.slice(response.body.indexOf(`<h2>${TEXTS.userLedger}</h2>`));
+    expect(section).toContain(TEXTS.tokensEmpty);
+    expect(section).not.toContain(TEXTS.userLedgerRecent(ADMIN_USER_RECENT_LEDGER));
+    expect(hrefOf(section, TEXTS.userLedgerAll)).toBe(`/admin/tokens?user=${SAMPLE_USER_ID}`);
   });
 });
 

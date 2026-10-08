@@ -42,6 +42,8 @@ export const AuditAction = {
   IntentViewed: 'intent_viewed',
   // admin trading sessions page (#330)
   TradingSessionsViewed: 'trading_sessions_viewed',
+  // admin token ledger page (#109)
+  TokensViewed: 'tokens_viewed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 

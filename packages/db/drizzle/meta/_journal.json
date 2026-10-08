@@ -183,6 +183,13 @@
       "when": 1791436922521,
       "tag": "0025_admin_trading_sessions_action",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791447162090,
+      "tag": "0026_admin_tokens_action",
+      "breakpoints": true
     }
   ]
 }

@@ -44,6 +44,7 @@ beforeEach(() => {
     intents: unused,
     intent: unused,
     tradingSessions: unused,
+    tokens: unused,
     oauthCallback: (request) => {
       forwarded.push(request);
       return answer();

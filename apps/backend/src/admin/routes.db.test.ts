@@ -7,13 +7,16 @@ import {
   AdminErrorCode,
   adminIntentResponseSchema,
   adminIntentsResponseSchema,
+  adminLedgerEntrySchema,
   adminOverviewResponseSchema,
+  adminTokensResponseSchema,
   adminTradeIntentViewSchema,
   adminTradingSessionsResponseSchema,
   adminTradingSessionViewSchema,
   adminUserResponseSchema,
   adminUsersResponseSchema,
   staffSessionsResponseSchema,
+  TokenLedgerKind,
   TradeIntentStatus,
 } from '@binarius/shared';
 import {
@@ -28,6 +31,7 @@ import {
   StaffLoginChallengeStatus,
   staffSessions,
   StaffStatus,
+  tokenLedger,
   tradeIntents,
   hashPassword,
   resetStaffPassword,
@@ -1033,7 +1037,7 @@ describe('the read pages (#107)', () => {
 
     expect(response.statusCode).toBe(200);
     const raw = response.json<{ user: object; brokerAccounts: object[] }>();
-    expect(Object.keys(raw)).toEqual(['me', 'user', 'brokerAccounts', 'intents']);
+    expect(Object.keys(raw)).toEqual(['me', 'user', 'brokerAccounts', 'intents', 'ledger']);
     expect(Object.keys(raw.user)).toEqual([
       'id',
       'telegramUserId',
@@ -1434,6 +1438,142 @@ describe('the trading sessions page, the card section and the overview breakdown
     expect(Object.keys(raw.overview.intents)).toEqual(['total', 'today', 'byStatus', 'active']);
     expect(Object.keys(raw.overview.intents.byStatus)).toEqual(Object.values(TradeIntentStatus));
     adminOverviewResponseSchema.parse(raw);
+  });
+});
+
+describe('the token ledger page and the card section (#109)', () => {
+  const ENTRY_KEYS = Object.keys(adminLedgerEntrySchema.shape);
+
+  // no writer yet (#246): written directly, every reference and the ref pair left null
+  const insertAdjustment = async (userId: string) => {
+    const [row] = await tmp.db
+      .insert(tokenLedger)
+      .values({ userId, kind: TokenLedgerKind.Adjustment, balanceDelta: -3n, reservedDelta: 0n })
+      .returning({ id: tokenLedger.id });
+    if (row === undefined) throw new Error('insertAdjustment: insert returned no row');
+    return row.id;
+  };
+
+  it('refuses /admin/tokens without a live session and writes nothing', async () => {
+    const before = await auditCount();
+    for (const headers of [BEARER, { ...BEARER, 'x-staff-session': 'a'.repeat(43) }]) {
+      const response = await app.inject({ method: 'GET', url: '/admin/tokens', headers });
+      expect([response.statusCode, response.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.SessionInvalid },
+      ]);
+    }
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('lists the ledger with exactly the wire keys, drops unknown query keys, records the user', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const target = await seedQueuedIntent(tmp.db);
+    const adjustmentId = await insertAdjustment(target.userId);
+    await seedQueuedIntent(tmp.db);
+
+    const response = await readOnce(
+      seeded.staffId,
+      `/admin/tokens?user=${target.userId}&utm=1`,
+      token,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<{ entries: Record<string, unknown>[] }>();
+    expect(Object.keys(raw)).toEqual(['me', 'entries', 'nextCursor']);
+    for (const entry of raw.entries) expect(Object.keys(entry)).toEqual(ENTRY_KEYS);
+    const body = adminTokensResponseSchema.parse(raw);
+    expect(body.entries.map((e) => [e.id, e.kind])).toEqual([
+      [adjustmentId, TokenLedgerKind.Adjustment],
+      [expect.any(String), TokenLedgerKind.Reserve],
+    ]);
+    expect(body.entries[0]).toMatchObject({
+      userId: target.userId,
+      telegramUserId: target.telegramUserId,
+      balanceDelta: '-3',
+      intentId: null,
+      note: null,
+    });
+    expect(body.entries[1]).toMatchObject({ intentId: target.intent.id, reservedDelta: '1' });
+    expect(body.nextCursor).toBeNull();
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.TokensViewed,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: '/admin/tokens', userId: target.userId },
+    });
+  });
+
+  it('records the kind and the cursor it was given, and nothing it was not', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const cursor = randomUUID();
+
+    const page = await readOnce(seeded.staffId, `/admin/tokens?kind=bonus&cursor=${cursor}`, token);
+    expect(page.statusCode).toBe(200);
+    expect(adminTokensResponseSchema.parse(page.json()).entries).toEqual([]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/tokens',
+      kind: 'bonus',
+      cursor,
+    });
+
+    expect((await readOnce(seeded.staffId, '/admin/tokens', token)).statusCode).toBe(200);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({ path: '/admin/tokens' });
+  });
+
+  it.each([
+    ['an unknown kind', 'kind=bogus'],
+    ['kind twice', 'kind=bonus&kind=reserve'],
+    ['a user that is not a uuid', 'user=not-a-uuid'],
+    ['a cursor that is not a uuid', 'cursor=bad'],
+  ])('refuses %s with 400 before the session, writing nothing', async (_label, query) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const before = await auditCount();
+
+    const response = await withSession('GET', `/admin/tokens?${query}`, token);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(await auditCount()).toBe(before);
+  });
+
+  it("puts only the user's own ledger rows into the card, with exact keys, in the one user_viewed row", async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const target = await seedQueuedIntent(tmp.db);
+    const adjustmentId = await insertAdjustment(target.userId);
+    const other = await seedQueuedIntent(tmp.db);
+    await insertAdjustment(other.userId);
+
+    const response = await readOnce(seeded.staffId, `/admin/users/${target.userId}`, token);
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<{ ledger: { recent: object[] } }>();
+    expect(Object.keys(raw.ledger)).toEqual(['recent']);
+    for (const entry of raw.ledger.recent) expect(Object.keys(entry)).toEqual(ENTRY_KEYS);
+    const body = adminUserResponseSchema.parse(raw);
+    expect(body.ledger.recent.map((e) => e.id)).toEqual([adjustmentId, expect.any(String)]);
+    expect(body.ledger.recent.every((e) => e.userId === target.userId)).toBe(true);
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.UserViewed,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.User,
+      entityId: target.userId,
+      payload: { path: '/admin/users/:id', result: 'found', userId: target.userId },
+    });
+  });
+
+  it('refuses the next read once the session has ended', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    expect((await withSession('GET', '/admin/tokens', token)).statusCode).toBe(200);
+    await withSession('POST', '/admin/auth/logout', token);
+
+    expect((await withSession('GET', '/admin/tokens', token)).statusCode).toBe(401);
   });
 });
 

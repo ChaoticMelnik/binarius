@@ -1,10 +1,12 @@
 import {
   adminIntentsSearchParams,
+  adminTokensSearchParams,
   adminTradingSessionsSearchParams,
   adminUsersSearchParams,
   safeParseAdminIntentResponse,
   safeParseAdminIntentsResponse,
   safeParseAdminOverviewResponse,
+  safeParseAdminTokensResponse,
   safeParseAdminTradingSessionsResponse,
   safeParseAdminUserResponse,
   safeParseAdminUsersResponse,
@@ -22,6 +24,8 @@ import {
   type AdminLoginRequest,
   type AdminLoginResponse,
   type AdminOverviewResponse,
+  type AdminTokensQuery,
+  type AdminTokensResponse,
   type AdminTradingSessionsQuery,
   type AdminTradingSessionsResponse,
   type AdminUserResponse,
@@ -86,6 +90,7 @@ export interface BackendClient {
     token: string,
     query: AdminTradingSessionsQuery,
   ): Promise<AdminTradingSessionsResponse>;
+  tokens(token: string, query: AdminTokensQuery): Promise<AdminTokensResponse>;
   /** the backend's public OAuth callback; carries no bearer */
   oauthCallback(request: OAuthCallbackRequest): Promise<OAuthCallbackResponse>;
 }
@@ -217,6 +222,11 @@ export function createBackendClient({
       const params = adminTradingSessionsSearchParams(query);
       const path = params.size > 0 ? `admin/trading-sessions?${params}` : 'admin/trading-sessions';
       return parsed(safeParseAdminTradingSessionsResponse, await call('GET', path, { session }));
+    },
+    async tokens(session, query) {
+      const params = adminTokensSearchParams(query);
+      const path = params.size > 0 ? `admin/tokens?${params}` : 'admin/tokens';
+      return parsed(safeParseAdminTokensResponse, await call('GET', path, { session }));
     },
     // The route is public on the backend and checks no bearer; this one opens /admin/*, and a
     // token sent where nothing needs it is only a place for it to leak from.
