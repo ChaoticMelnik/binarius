@@ -1,8 +1,9 @@
-import type {
-  BalanceEventWrite,
-  BalanceSnapshotWrite,
-  ClosedTradeOutcome,
-  SessionCandidate,
+import {
+  hashToken,
+  type BalanceEventWrite,
+  type BalanceSnapshotWrite,
+  type ClosedTradeOutcome,
+  type SessionCandidate,
 } from '@binarius/db';
 import { MockSocketPayload, startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import { AccessTokenRefusal, BrokerSocketEvent, logOptions, TradeMode } from '@binarius/shared';
@@ -456,6 +457,11 @@ describe('the token', () => {
     broker.users.revokeToken(tokenOf(1));
     await until('the unchanged token', () => h.logs('broker session token unchanged').length === 1);
     expect(h.manager.clientFor('acc-1')).toBeUndefined();
+    // the start asks without a fingerprint, the fetch after token_expired with the refused one's
+    expect(h.tokenCalls.map(({ options }) => [options.mayRefresh, options.refusedToken])).toEqual([
+      [false, undefined],
+      [false, hashToken(tokenOf(1))],
+    ]);
     await until('no socket', () => broker.socket.sockets().length === 0);
     await h.manager.tick();
     expect(authsOf(1)).toBe(1);
@@ -513,9 +519,42 @@ describe('the token', () => {
         sessionState: 'auth_failed',
       }),
     ]);
+    expect(h.tokenCalls.map(({ options }) => [options.mayRefresh, options.refusedToken])).toEqual([
+      [false, undefined],
+      [false, hashToken(tokenOf(1))],
+    ]);
     await h.manager.tick();
     expect(fakes.made).toHaveLength(1);
     await tickUntil(h, 'a new client after the hold-back', () => fakes.made.length === 2);
+  });
+
+  it('U6c a backend that marks the refused token: the session waits and restarts with the exchanged token', async () => {
+    const fakes = fakeClients();
+    let exchanged = false;
+    const h = harness({
+      openClient: fakes.openClient,
+      tokens: (_accountId, options) => {
+        if (options?.refusedToken === hashToken('SECRET-1')) {
+          exchanged = true;
+          return Promise.resolve({ ok: false, reason: AccessTokenRefusal.RefreshNeeded });
+        }
+        return Promise.resolve({ ok: true, accessToken: exchanged ? 'SECRET-2' : 'SECRET-1' });
+      },
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the client', () => fakes.made.length === 1);
+    fakes.made[0]!.fire(BrokerSocketState.TokenExpired);
+    await until(
+      'the wait for an exchange',
+      () => h.logs('broker session waits for a token exchange').length === 1,
+    );
+    expect(h.manager.clientFor('acc-1')).toBeUndefined();
+    expect(h.logs('broker session token unchanged')).toEqual([]);
+    await h.manager.tick();
+    expect(fakes.made).toHaveLength(1);
+    await tickUntil(h, 'a new client after the hold-back', () => fakes.made.length === 2);
+    expect(fakes.made[1]!.starts).toEqual(['SECRET-2']);
   });
 
   it('U8 disconnected_by_server: dropped and restarted only after retryMs', async () => {

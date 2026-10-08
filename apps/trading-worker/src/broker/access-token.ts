@@ -35,6 +35,10 @@ export interface AccessTokenOptions {
   // whether the backend may exchange the refresh token for this request; default true (an action
   // the user waits on). A timer passes false.
   mayRefresh?: boolean;
+  // sha256 (hashToken) of the token the broker just refused: the backend marks it expired when it
+  // is still the stored one (#281). Sent only when set, so a backend that predates the field
+  // still takes the body.
+  refusedToken?: string;
 }
 
 export interface AccessTokenSource {
@@ -77,7 +81,7 @@ export function createBackendAccessTokenSource({
   timeoutMs = ACCESS_TOKEN_ROUTE_BUDGET_MS,
 }: BackendAccessTokenSourceOptions): AccessTokenSource {
   return {
-    async accessToken(brokerAccountId, { signal, mayRefresh = true } = {}) {
+    async accessToken(brokerAccountId, { signal, mayRefresh = true, refusedToken } = {}) {
       const timeout = AbortSignal.timeout(timeoutMs);
       let status: number;
       let text: string;
@@ -89,7 +93,10 @@ export function createBackendAccessTokenSource({
             'content-type': 'application/json',
             accept: 'application/json',
           },
-          body: JSON.stringify({ mayRefresh }),
+          body: JSON.stringify({
+            mayRefresh,
+            ...(refusedToken === undefined ? {} : { refusedToken }),
+          }),
           signal: signal === undefined ? timeout : AbortSignal.any([timeout, signal]),
         });
         status = response.status;
