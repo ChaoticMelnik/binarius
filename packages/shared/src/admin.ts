@@ -6,6 +6,7 @@ import {
   adminTradingSessionViewSchema,
   adminUserIntentsSectionSchema,
 } from './admin-trading';
+import { auditActionSchema, auditActorTypeSchema, auditEntityTypeSchema } from './audit';
 import { tokenLedgerKindSchema, tokenLedgerRefTypeSchema } from './ledger';
 import { decimalStringSchema } from './money';
 import { accountHaltReasonSchema, authRevokedReasonSchema, BrokerAccountStatus } from './oauth';
@@ -384,6 +385,67 @@ export const adminTokensResponseSchema = z.strictObject({
 });
 export type AdminTokensResponse = z.infer<typeof adminTokensResponseSchema>;
 
+// --- Audit log (#110) ---------------------------------------------------------------------------
+
+// The most of a row's payload the page carries, in characters (code points, as Postgres left()
+// and zod's max() both count them; at most 4 bytes each). A bot text payload (#299) holds two
+// texts of up to BOT_TEXT_SOURCE_MAX code points, so the jsonb itself would make a page of 50
+// rows megabytes long; every other writer's payload (ip, reason, counters, error identities, a
+// search query, uuids, enums, dates) fits inside the preview whole.
+export const ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS = 1024;
+
+// Exact-match filters plus a UTC date range, intersected; unknown keys are stripped, as on the
+// other lists. Every value is an enum, a uuid or a date, so the audit row of a view carries no
+// free text.
+export const adminAuditQuerySchema = z
+  .object({
+    action: auditActionSchema.optional(),
+    entityType: auditEntityTypeSchema.optional(),
+    entityId: z.string().regex(UUID_PATTERN).optional(),
+    actorId: z.string().regex(UUID_PATTERN).optional(),
+    from: z.iso.date().optional(),
+    to: z.iso.date().optional(),
+    cursor: z.string().regex(UUID_PATTERN).optional(),
+  })
+  .refine(
+    (query: { from?: string | undefined; to?: string | undefined }) =>
+      query.from === undefined || query.to === undefined || query.from <= query.to,
+    { path: ['to'], error: 'expected from on or before to' },
+  );
+export type AdminAuditQuery = z.infer<typeof adminAuditQuerySchema>;
+
+export function adminAuditSearchParams(query: AdminAuditQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of Object.keys(adminAuditQuerySchema.shape) as (keyof AdminAuditQuery)[]) {
+    const value = query[key];
+    if (value !== undefined) params.set(key, value);
+  }
+  return params;
+}
+
+// entityType stays free text on the way out (the column is): a writer outside AuditEntityType
+// is still shown. entityId is the bare uuid column, so UUID_PATTERN rather than z.uuid().
+export const adminAuditEntryViewSchema = z.strictObject({
+  id: z.uuid(),
+  createdAt: isoDateTime,
+  actorType: auditActorTypeSchema,
+  actorId: z.string().nullable(),
+  actorLogin: z.string().nullable(),
+  action: auditActionSchema,
+  entityType: z.string().nullable(),
+  entityId: z.string().regex(UUID_PATTERN).nullable(),
+  payload: z.string().max(ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS),
+  payloadTruncated: z.boolean(),
+});
+export type AdminAuditEntryView = z.infer<typeof adminAuditEntryViewSchema>;
+
+export const adminAuditResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  entries: z.array(adminAuditEntryViewSchema).max(ADMIN_PAGE_SIZE),
+  nextCursor: z.string().regex(UUID_PATTERN).nullable(),
+});
+export type AdminAuditResponse = z.infer<typeof adminAuditResponseSchema>;
+
 export const safeParseAdminLoginRequest = (input: unknown) =>
   adminLoginRequestSchema.safeParse(input);
 export const safeParseAdminConfirmRequest = (input: unknown) =>
@@ -418,3 +480,6 @@ export const safeParseAdminTokensQuery = (input: unknown) =>
   adminTokensQuerySchema.safeParse(input);
 export const safeParseAdminTokensResponse = (input: unknown) =>
   adminTokensResponseSchema.safeParse(input);
+export const safeParseAdminAuditQuery = (input: unknown) => adminAuditQuerySchema.safeParse(input);
+export const safeParseAdminAuditResponse = (input: unknown) =>
+  adminAuditResponseSchema.safeParse(input);
