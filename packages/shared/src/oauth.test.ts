@@ -13,7 +13,6 @@ import {
   safeParseEmailSendCodeRequest,
   safeParseEmailSendCodeResponse,
   brokerAccountViewSchema,
-  startLoginResponseSchema,
   safeParseConfirmLoginResponse,
   parseOAuthTokenResponse,
   parseRefreshTokenResponse,
@@ -22,7 +21,6 @@ import {
   safeParseOAuthCallbackResponse,
   safeParseOAuthTokenResponse,
   safeParseRefreshTokenResponse,
-  safeParseStartLoginRequest,
   safeParseWidgetSessionResponse,
   toWidgetSessionRequestWire,
 } from './oauth';
@@ -132,33 +130,6 @@ describe('Widget session', () => {
 });
 
 describe('login flow contract (issue #9)', () => {
-  it('accepts a start request with a telegram id and rejects anything else', () => {
-    expect(safeParseStartLoginRequest({ telegramUserId: '42' }).success).toBe(true);
-    expect(safeParseStartLoginRequest({ telegramUserId: 42 }).success).toBe(false);
-    expect(safeParseStartLoginRequest({ telegramUserId: '0' }).success).toBe(false);
-    expect(safeParseStartLoginRequest({}).success).toBe(false);
-  });
-
-  it('accepts a start response with or without the Mini App URL', () => {
-    const answer = {
-      authorizeUrl: 'https://binodex.app/oauth/authorize?state=s',
-      state: 's',
-      expiresAt: '2026-10-01T10:00:00.000Z',
-    };
-    expect(startLoginResponseSchema.safeParse(answer)).toMatchObject({
-      success: true,
-      data: answer,
-    });
-    const miniAppUrl = 'https://bot.example/oauth/login?authorize=x';
-    expect(startLoginResponseSchema.safeParse({ ...answer, miniAppUrl })).toMatchObject({
-      success: true,
-      data: { miniAppUrl },
-    });
-    expect(startLoginResponseSchema.safeParse({ ...answer, miniAppUrl: 'not a url' }).success).toBe(
-      false,
-    );
-  });
-
   it('parses the callback answer as the account view alone', () => {
     const account = {
       id: '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01',

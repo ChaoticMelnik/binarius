@@ -70,6 +70,15 @@ describe('the bot texts catalog', () => {
     expect(Object.values(BotTextGroup)).toContain(entry.group);
   });
 
+  // #314 hid the site sign-in; the three entries it used stay as override keys, never shown
+  const HIDDEN_SITE_SIGN_IN: readonly BotTextKey[] = ['oauthButton', 'loginButton', 'loginLink'];
+  it.each(ENTRIES.filter(([key]) => !HIDDEN_SITE_SIGN_IN.includes(key)))(
+    'keeps the default of %s free of the site sign-in',
+    (_key, entry) => {
+      expect(entry.source).not.toMatch(/сайт|браузер/i);
+    },
+  );
+
   it('titles every group', () => {
     expect(Object.keys(BOT_TEXT_GROUP_TITLES).sort()).toEqual(Object.values(BotTextGroup).sort());
   });

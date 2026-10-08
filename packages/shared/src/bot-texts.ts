@@ -71,19 +71,17 @@ export const BOT_TEXT_CATALOG = {
     'Ответ на /start, пока аккаунт не подключён; подпись видео, если оно задано.',
     `🚀 <b>Binarius — торговля на Binodex прямо в Telegram</b>
 
-Подключи аккаунт Binodex, и бот откроет меню.
+Подключи аккаунт Binodex по почте, и бот откроет меню.
 
 <b>Как подключить</b>
 1️⃣ Нажми «{connectButton}» и пришли адрес электронной почты.
 2️⃣ Пришли код из письма. Если аккаунта ещё нет, Binodex создаст его.
-3️⃣ Готово — аккаунт подключён, бот открывает меню.
-
-🌐 Удобнее через браузер? Кнопка «{oauthButton}» подключит аккаунт на сайте брокера.`,
-    { ...caption, fragments: { connectButton: 'connectButton', oauthButton: 'oauthButton' } },
+3️⃣ Готово — аккаунт подключён, бот открывает меню.`,
+    { ...caption, fragments: { connectButton: 'connectButton' } },
   ),
   loginLink: html(
     g.Start,
-    'После кнопки входа через сайт: сообщение с кнопкой, открывающей вход.',
+    'Не показывается с #314 (вход через сайт скрыт). После кнопки входа через сайт: сообщение с кнопкой, открывающей вход.',
     `🌐 <b>Вход через сайт Binodex</b>
 Открой вход по кнопке ниже, а затем вернись в этот чат.`,
   ),
@@ -116,7 +114,7 @@ export const BOT_TEXT_CATALOG = {
   oauthLoginFailed: html(
     g.Start,
     'Push, когда вход через сайт не удалось завершить.',
-    `❌ Не удалось завершить вход через сайт Binodex. Попробуй ещё раз через /start.`,
+    `❌ Не удалось завершить вход в Binodex. Подключи аккаунт по почте: /start`,
   ),
   confirmNotFound: html(
     g.Start,
@@ -255,7 +253,7 @@ export const BOT_TEXT_CATALOG = {
     g.Account,
     '/account без подключённого аккаунта; также /menu и сделка без аккаунта.',
     `❌ <b>Аккаунт Binodex не подключён</b>
-Подключи его: по почте или через сайт Binodex — кнопки ниже.`,
+Подключи его по почте — кнопка ниже.`,
   ),
   accountConnected: html(
     g.Account,
@@ -272,7 +270,7 @@ export const BOT_TEXT_CATALOG = {
     g.Account,
     '/account: заголовок, когда все привязки отозваны; также отказ сделки.',
     `⚠️ <b>Подключение Binodex отозвано</b>
-Войди заново: по почте или через сайт Binodex — кнопки ниже.`,
+Войди заново по почте: нажми кнопку ниже и пришли адрес.`,
   ),
   accountLineActive: html(
     g.Account,
@@ -406,12 +404,11 @@ export const BOT_TEXT_CATALOG = {
   ),
   helpConnect: html(
     g.Help,
-    '/help: как подключить аккаунт, с названиями кнопок /start.',
+    '/help: как подключить аккаунт, с названием кнопки /start.',
     `<b>Как подключить аккаунт Binodex</b>
-Если аккаунт ещё не подключён, нажми /start и выбери способ:
-📧 «{connectButton}» — пришли адрес почты и код из письма.
-🌐 «{oauthButton}» — вход на сайте брокера.`,
-    { fragments: { connectButton: 'connectButton', oauthButton: 'oauthButton' } },
+Если аккаунт ещё не подключён, нажми /start, затем «{connectButton}».
+📧 Пришли адрес электронной почты и код из письма. Если аккаунта ещё нет, Binodex создаст его.`,
+    { fragments: { connectButton: 'connectButton' } },
   ),
   helpCommands: html(
     g.Help,
@@ -1072,10 +1069,14 @@ export const BOT_TEXT_CATALOG = {
   ),
   oauthButton: plain(
     g.Buttons,
-    'Кнопка входа через сайт под приветствием и в /account; её название цитируют приветствие и /help.',
+    'Не показывается с #314 (вход через сайт скрыт). Была кнопкой входа через сайт под приветствием и в /account.',
     '🌐 Войти через сайт Binodex',
   ),
-  loginButton: plain(g.Buttons, 'Кнопка, открывающая вход через сайт.', '🌐 Войти в Binodex'),
+  loginButton: plain(
+    g.Buttons,
+    'Не показывается с #314 (вход через сайт скрыт). Кнопка, открывающая вход через сайт.',
+    '🌐 Войти в Binodex',
+  ),
   resendButton: plain(
     g.Buttons,
     'Вход по почте: кнопка повторного запроса кода.',
