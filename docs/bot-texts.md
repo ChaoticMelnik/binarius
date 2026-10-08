@@ -7,8 +7,8 @@ repository's other docs and comments are the catalog's defaults.
 
 The catalog is part 1 of #240. Part 2 (#299) stores overrides in the database, applies them in
 the bot and the backend without a deploy and edits them from a CLI ([Overrides](#overrides)). The
-admin section that edits them (#300) and republishing the commands and the profile (#301) come
-next.
+admin section «Тексты бота» (#300) edits them too ([admin-pages.md](admin-pages.md) → Bot texts);
+republishing the commands and the profile (#301) comes next.
 
 Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the owner's decision of
 2026-10-02) and the Mini App pages (`apps/web/src/oauth/texts.ts`).
@@ -35,6 +35,9 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
 - `packages/db/src/bot-text-ops.ts` — the table's reader and its one writer;
   `apps/backend/src/cli/bot-text.ts` — the CLI; `apps/backend/src/bot-texts/routes.ts` — the bot's
   read.
+- The admin section (#300): `packages/shared/src/admin-bot-texts.ts` (wire shapes, the admin's
+  read-only groups, `renderBotTextPreview`), `packages/db/src/admin-bot-text-ops.ts` (the read with
+  the writer's login), `apps/web/src/admin/telegram-preview.ts` (the preview as browser HTML).
 
 ## An entry
 
@@ -198,6 +201,10 @@ Data and identifiers, not texts (decision on the issue's plan, approved by the o
    `apps/bot/src/bot-text-messages.test.ts`. Nothing finds a new assembly on its own: this step is
    the only thing that puts it under the writer's and the loaders' bound.
 
+The admin's editor reads the entry's `arg`, `sample`, `fragments` and `limit` in one place,
+`placeholderHints` (`apps/web/src/admin/pages.ts`), and the preview fills the argument with
+`sample` (`renderBotTextPreview`); a change to the entry's shape (#358) changes those two.
+
 ## Overrides
 
 `bot_text_overrides` holds one row per overridden key: `key`, `source`, `version`, `updated_at`,
@@ -208,13 +215,16 @@ skips it is ignored by the loaders. A version comes from `bot_text_override_vers
 write, so a key reset and saved again never gets back a version a stale form still holds. A key
 with no row is version 0.
 
-The writer (`saveBotTextOverride`, `resetBotTextOverride`) locks the table in `SHARE ROW
-EXCLUSIVE` mode, which serializes writers and leaves the loaders' SELECT alone, and reads every
-row. It refuses:
+The writer (`applyBotTextSave`, `applyBotTextReset`) locks the table in `SHARE ROW EXCLUSIVE`
+mode, which serializes writers and leaves the loaders' SELECT alone, and reads every row. It runs
+inside its caller's transaction: the CLI's `saveBotTextOverride`/`resetBotTextOverride` open one
+and write the audit row; the admin section calls it inside `runAsStaff`, which writes the row. It
+refuses:
 
 - a key outside the catalog (a reset of one is allowed) and, until #301, the `commands` and
   `profile` groups;
-- an expected version other than the current one: «Текст уже изменил другой сотрудник»;
+- an expected version other than the current one: «Текст уже изменил другой сотрудник»; the
+  answer carries the current version and text (the default when there is no row);
 - a change `botTextChangeProblems` objects to: the key itself would be rejected by the resolver
   below, or an override in effect now would stop being — a fragment that breaks a host, a reset
   that puts back a longer default, two texts that overflow a card together. An override the
@@ -223,7 +233,10 @@ row. It refuses:
 A save that changes nothing answers «unchanged», a reset of a default «already default»; neither
 writes. Every save and reset writes `audit_log` in the same transaction: `bot_text_saved` or
 `bot_text_reset`, payload `{ key, action, oldText, newText, oldVersion, newVersion }`, the texts
-in effect before and after.
+in effect before and after. The admin's row adds `path` and `result`, and a refused admin request
+writes the same action with `result` and no texts (admin-pages.md → Audit actions). The admin also
+keeps `commands` and `profile` read-only by its own list, `ADMIN_BOT_TEXT_READ_ONLY_GROUPS`, until
+it republishes them (#361).
 
 ## Loading
 
@@ -238,7 +251,9 @@ defaults pass, so the loop ends.
 start of the previous load: the bot over `GET /bot-texts` (internal bearer, `{ key, source,
 version }` only) within `BACKEND_REQUEST_TIMEOUT_MS`, the backend from the database within
 `BOT_TEXTS_LOAD_BUDGET_MS`. A saved text reaches new messages within 35 s in the bot and 33 s in
-the backend's push, without a restart. A failed load keeps the last applied set — the defaults
+the backend's push, without a restart; the CLI and the admin promise
+`BOT_TEXTS_APPLIED_WITHIN_S` (35), which `apps/bot/src/timing.test.ts` holds at least the refresh
+plus `BACKEND_REQUEST_TIMEOUT_MS`. A failed load keeps the last applied set — the defaults
 until the first success — and logs a `warn` by error identity; a rejected row is logged once per
 change of the rejected set, by key, version and reason, never with its text. Both processes stop
 the refresher on shutdown.
