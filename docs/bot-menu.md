@@ -14,9 +14,11 @@ status or age line when the broker balance is missing or old, a hint, and one bu
   `safeParseTradingAccessResponse`; a body the parser refuses (`available ≠ balance − reserved`,
   `broker` and `brokerUnavailable` both set or both null, `fresh` disagreeing with the ages) is a
   contract violation.
-- `apps/bot/src/format.ts` — `formatUsd`, `formatCount`, `formatAge` ([Formatting](#formatting)).
-- `apps/bot/src/texts.ts` — the `status*` entries, `MODE_LABELS`, `modeHeader`,
-  `StatusCardInput`, `statusCard`, `LABELS.menuCommand`, `LABELS.demoButton`; the texts are
+- `packages/shared/src/bot-text-format.ts` — `formatUsd`, `formatCount`, `formatAge`
+  ([Formatting](#formatting)); shared with the variables registry (#358, bot-texts.md →
+  Variables).
+- `apps/bot/src/texts.ts` — the `status*` entries, `StatusCardInput`, `statusCard`,
+  `userContextOf`, `LABELS.menuCommand`, `LABELS.demoButton`; the texts are
   catalog entries ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/bot.ts` — `/start` and `/menu` on one path (`answerHome`), `sendStatusCard`, the
   `demo` button's keyboard (`DEMO_CALLBACK_DATA` from `demo.ts`), `pinCard`.
@@ -57,7 +59,7 @@ bot caches nothing; every `/start` and `/menu` reads the route again.
 
 At most one of the three status lines is printed.
 
-- **Mode.** `modeHeader(mode)` prints `MODE_LABELS[mode]`. The bot passes `TradeMode.Demo`: no
+- **Mode.** `statusHeader`'s `{mode}` prints `MODE_LABELS[mode]` (`bot-text-vars.ts`). The bot passes `TradeMode.Demo`: no
   user trades on real yet, and `tradingOpen` is the backend's switch, not the user's mode,
   so it is not read. The issue that brings real mode passes the user's mode and changes nothing
   in `texts.ts`.

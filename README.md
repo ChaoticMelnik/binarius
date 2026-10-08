@@ -37,8 +37,8 @@ duration, the check on a fresh catalog and the analysis screen — is in
 message follows the intent is in [docs/bot-demo-trade.md](docs/bot-demo-trade.md); how the session
 button starts a demo session of five trades, follows it in one message and stops it is in
 [docs/bot-session.md](docs/bot-session.md); where every
-client bot text is written, how its template and validator work and what stays in code is in
-[docs/bot-texts.md](docs/bot-texts.md);
+client bot text is written, the registry of variables a text can print, how its template and
+validator work and what stays in code is in [docs/bot-texts.md](docs/bot-texts.md);
 how the signal package fetches candles, turns them into a direction or into a reason for none,
 and journals each decision, how the backend serves it on `POST /trading/signal`, and how its
 scanner keeps the top pairs' signals for `GET /trading/signals` within the broker's per-IP budget,

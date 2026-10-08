@@ -22,7 +22,12 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
 - `packages/shared/src/bot-text-template.ts` — the entry shape and its two helpers
   (`botHtmlText`, `botPlainText`), the grammar (`parseBotTextTemplate`), the validator
   (`botTextEntryProblems`, `BotTextProblemCode`) and the views (`createBotTextViews`). It is
-  generic over the catalog, so its tests run on a small one of their own.
+  generic over the catalog and its variables, so its tests run on a small catalog and registry of
+  their own.
+- `packages/shared/src/bot-text-vars.ts` — the registry of variables (`BOT_TEXT_VARS`,
+  [Variables](#variables)), `MODE_LABELS` and `BotTextBalance`;
+  `packages/shared/src/bot-text-format.ts` — `formatUsd`, `formatStake`, `formatCount`,
+  `formatAge`, the formatters the registry and the bot share.
 - `packages/shared/src/telegram-html.ts` — `telegramHtmlTemplate`, the constructor the views use
   ([Safety](#safety)).
 - `apps/bot/src/texts.ts` — the bot's view: `TEXTS`, `LABELS`, `PROFILE`, the label maps,
@@ -54,8 +59,8 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
   `bot-texts.test.ts` pins both lists.
 - **description** — where the text is shown, in Russian, at most 200 characters.
 - **source** — the default template.
-- **arg** — at most one value the caller passes, with a sample for the validator (`{ name,
-  sample }`; the type requires the sample).
+- **vars** — the registry's variables every caller of the key holds when it renders it
+  ([Variables](#variables)); `[]` when it holds none.
 - **fragments** — placeholder → key: another entry's text put in place of the placeholder.
 - **limit** and **singleLine** ([Limits](#limits)).
 
@@ -67,9 +72,11 @@ stored under it, so renaming a key is a data migration; without one, the old row
 
 - `{name}`, with `name` matching `[a-z][a-zA-Z0-9]*`, is a placeholder. Any other `{` or `}` is a
   stray brace and an error; there is no escape, and no default needs a literal brace.
-- The **argument** must appear in the template, and may appear more than once.
+- A **variable** of the key is optional: a template may leave out any of them, or use one more
+  than once (#358 В3, owner's decision of 2026-10-08, in place of #240's rule that the argument
+  must appear).
 - A **fragment** placeholder is optional: a template may leave it out. A fragment's key has no
-  fragments and no argument of its own — one level deep, so no cycle — and a plain template takes
+  fragments and no variables of its own — one level deep, so no cycle — and a plain template takes
   only plain fragments. In an html template an html fragment is nested as Telegram HTML, a plain
   one is escaped. Fragments carry the feature lines into the card and `/help`, the level labels
   into the `/settings` legend, the directions into the signal headline, and the button labels a
@@ -88,22 +95,25 @@ admin section. Fragments are rendered from
 |---|---|
 | `empty` | the source is blank, or nothing is left of it after entities parsing |
 | `stray_brace` | a `{` or `}` outside a placeholder |
-| `unknown_placeholder` | a name that is neither the argument nor a fragment (detail: the name) |
-| `missing_placeholder` | the argument does not appear (detail: its name) |
+| `unknown_placeholder` | a name that is neither a variable of the key nor a fragment (detail: the name) |
 | `placeholder_in_tag` | html: a placeholder inside a tag (detail: the name) |
 | `invalid_html` | html: `telegramHtmlProblems` refuses the text (detail: its first problem) |
-| `too_long` | the text with the sample is over the entry's limit (detail: the length) |
+| `too_long` | the text with the variables' samples is over the entry's limit (detail: the length) |
 | `padded_line` | a line of the text starts or ends with a space |
 | `multiline` | a single-line entry holds LF, CR, U+2028 or U+2029 |
 
-A stray brace or an unknown placeholder stops the check: nothing can be rendered. Lengths are
+`unknown_placeholder` reads «Переменная {x} недоступна в этом тексте. Доступны: {a}, {b}» —
+or «Переменных у этого текста нет» — with the key's fragments after it («фрагменты: {connectButton}»),
+in the CLI and the admin alike. A stray brace or an unknown placeholder stops the check: nothing
+can be rendered. Lengths are
 counted as the Bot API counts them: on `plainTextOf(...)` for html, on the string for plain, in
 UTF-16 code units. `bot-texts.test.ts` runs the validator over every default.
 
 ## Safety
 
 **Why a saved text cannot break on a value.** The validator renders an html template twice: with
-the sample, and with `·` (U+00B7) in place of the argument. To find a placeholder inside a tag it
+the variables' samples, and with `·` (U+00B7) in place of every variable. To find a placeholder
+inside a tag it
 renders a third time with a letter in every placeholder, which keeps a tag that holds one a tag
 (`<blockquote e{v}pandable>`). An escaped value in text position holds no `<`, `>`, `"` and no
 bare `&`, so it can change how the text parses only by completing a partial entity of the static
@@ -114,9 +124,10 @@ escaped value, the empty one included.
 **Every rendered text is checked again.** The views build html through `telegramHtmlTemplate`,
 which renders the holes as `telegramHtml` does — strings escaped, `TelegramHtml` nested — and runs
 `telegramHtmlProblems` over the assembled text on every call, throwing `InvalidTelegramTemplate`
-(its `name` only, no text) when Telegram would refuse it. An html view takes its argument as a
-string only (the type, and `InvalidBotText` at run time for anything else), so html reaches html
-only through a declared fragment, which the validator renders and checks (#299). The callers
+(its `name` only, no text) when Telegram would refuse it. A variable's formatter returns a
+string, which the hole escapes; no variable takes `TelegramHtml` (the type, and `InvalidBotText` at
+run time for a formatter's result that is not a string), so html reaches html only through a
+declared fragment, which the validator renders and checks (#299). The callers
 do not catch it: it would mean a catalog default that the tests let through, or an override that
 skipped the resolver ([Loading](#loading)). A source whose text does not parse against its key
 throws `InvalidBotText`, also by name only.
@@ -144,22 +155,28 @@ messages](#assembled-messages).
 
 ## Reading the texts
 
-`createBotTexts(source)` returns `{ html, plain }`: one getter per key, reading
-`source.sourceOf(key)` on every access. A static html key gives `TelegramHtml`, an html key with
-an argument `(value: string) => TelegramHtml`; plain keys give `string` and
-`(value: string) => string`. The types follow each entry's kind and argument
-(`bot-texts.typecheck.ts` is the oracle). A getter returns the same object or function while the
+`createBotTexts(source)` returns `{ html, plain, samples, renderWith }`: one getter per key,
+reading `source.sourceOf(key)` on every access. A static html key gives `TelegramHtml`, an html key
+with variables `(context) => TelegramHtml`, where `context` holds every variable of the key with
+the registry's input type (`{ email: string | null; firstName: string }` for `codeSent`); plain
+keys give `string` and `(context) => string`. The types follow each entry's kind and variables
+(`bot-texts.typecheck.ts` is the oracle: a missing variable, one the key does not have, a wrong
+input type and a `TelegramHtml` value do not compile). Only the variables the text holds are
+formatted, so a stand-in text is read only when it can be shown. `samples.html[key]` and
+`samples.plain[key]` are every key rendered at its variables' samples — the admin's preview and
+the validator's view; `renderWith` fills each placeholder with a given string, for the estimate of
+[Assembled messages](#assembled-messages). A getter returns the same object or function while the
 key's text and its fragments' texts are unchanged — the suites compare texts with `toBe` — and
 renders again as soon as any of them changes.
 
 The bot's `texts.ts` and the backend's `auth/texts.ts` each hold a source, the catalog's defaults
 until `setBotTextSource` replaces it (the refresher does, every 30 s: [Loading](#loading)), and
 build their views over it.
-The bot's views keep the names and signatures they had before the catalog: `TEXTS` is every html
-key but `cardGreetingNoName`, `featureLines` and `oauthLoginFailed`, with `cardGreeting` trimming
-the name and falling back to `cardGreetingNoName`, and `accountLine*` taking `null` for an unknown
-address; `LABELS` is the `buttons` and `commands` groups but `confirmButtonNoEmail`, with
-`confirmButton(email | null)`. Both bot and backend label the confirm button through
+The bot's views keep the names they had before the catalog: `TEXTS` is every html key but
+`cardGreetingNoName`, `featureLines` and `oauthLoginFailed`, with `cardGreeting` falling back to
+`cardGreetingNoName` for a blank name; `LABELS` is the `buttons` and `commands` groups but
+`confirmButtonNoEmail`, with `confirmButton(email | null)`. The status card and the stake picker
+build their context once (`userContextOf` in `texts.ts`). Both bot and backend label the confirm button through
 `confirmButtonLabel` (`link-confirmation.ts`).
 
 **Nothing is read at load.** Every text is looked up when a message is built, so a swapped source
@@ -177,33 +194,89 @@ Data and identifiers, not texts (decision on the issue's plan, approved by the o
 
 - the command names `/start`, `/menu`, `/account`, `/settings`, `/help`, `/support` — the bot
   routes by them; only their descriptions are entries;
-- `MODE_LABELS` (DEMO/REAL);
+- `MODE_LABELS` (DEMO/REAL), now in `bot-text-vars.ts` for `{mode}`;
 - `pairButtonLabel` («symbol · payout%») and `groupButtonLabel`'s ` · N`;
 - the ` ✅` after the selected level (`currentLevelLabel`);
 - the fallback duration `⏱ N с` (`durationLabelOf`), `formatAge`'s `с`/`мин`, `formatUsd`'s `$`
-  and digit grouping;
+  and digit grouping (`bot-text-format.ts`);
 - «N из M» on the demo's page line, the ` · ` of the trade line and `analysisSubject`, the
   indicator names `EMA`/`RSI`/`ATR` and the ` — ` of the analysis lines;
 - the `/command — description` line of `/help`.
 
+## Variables
+
+`BOT_TEXT_VARS` (`packages/shared/src/bot-text-vars.ts`, #358) is the registry of the values a text
+can print. Each variable has a Russian description and a sample — the editor's panel, the CLI's
+`show`, the preview and the validator read them — and a formatter from the caller's input to the
+string in the placeholder: money through `formatUsd`/`formatStake` over a `DecimalString`, never a
+JS number (Rule 2), counts through `formatCount`, the age through `formatAge`. How wide each can
+get is `BOT_TEXT_VAR_DEFAULT_WIDTHS` in `bot-text-messages.ts`; a variable without a width does not
+compile.
+
+| Variable | Input | Printed | Stand-in |
+|---|---|---|---|
+| `firstName` | Telegram's `first_name` | trimmed | — |
+| `email` | the account's address or `null` | as is | `accountUnknownAddress` |
+| `tokens`, `reservedTokens` | token counts of the access read | `formatCount` | — |
+| `bonusTokens` | the link bonus | as is | — |
+| `demoBalance`, `realBalance` | `{ amount, fresh }` or `null` | `formatUsd`, fresh only | `balanceUnavailable` |
+| `mode` | `TradeMode` | `MODE_LABELS` | — |
+| `level` | `NotificationLevel` | its button label | — |
+| `stake` | the saved demo stake or `null` | `formatStake` | `stakeMinimumLabel` |
+| `minStake`, `demoAvailable` | the broker's bounds | `formatStake` | — |
+| `age` | seconds | `formatAge` | — |
+
+The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, …) are a line's value the
+caller has already put into words from the catalog and its data, printed as is; their description
+names what they hold.
+
+**A text never causes a request.** A variable is bound to a key only when every caller of that key
+already holds the value when it renders: the access read and `from.first_name` for the status card
+and the stake picker, the level and the stake for `/settings`, the address for the login dialog,
+the account card, `/account` and the backend's push. A formatter gets nothing but its input and the
+stand-in texts; no handler reads anything more for a text (`HANDLER_CALLS`, held by
+`apps/bot/src/timing.test.ts`). New data for a text is a code change, not an override. A static
+text sent from many places (`unavailable`, `blocked`, `accountNone`, `statusAmbiguous`,
+`confirmPrompt`, …) has no variables, and `statusStale` and `stakeBelowMinimum`, each sent from two
+places, have only what both hold.
+
+**A stale value is never shown as current** (owner, 2026-10-08). `{demoBalance}`/`{realBalance}`
+print a number only from a fresh snapshot (`fresh`, the backend's `isBalanceFresh`); stale or
+missing, they print the editable `balanceUnavailable` («нет свежих данных»). The status card's own
+lines keep `{amount}` as it is and say the age on `statusStale`/`statusNoSnapshot`. A stand-in is
+read from the same source as the text, so an override of it applies everywhere the variable does.
+
+**Renamed placeholders.** Twelve placeholders took the registry's names, the default text the same:
+`statusTokens` `{count}` → `{tokens}`, `statusReserved` `{count}` → `{reservedTokens}`,
+`cardBonusGranted` `{tokens}` → `{bonusTokens}`, `settings` `{current}` → `{level}`,
+`settingsStake`, `stakeSaved`, `launchStake`, `stakeSavedLine` `{amount}` → `{stake}`,
+`stakePickerMinimum`, `stakeBelowMinimum` `{amount}` → `{minStake}`, `stakePickerAvailable`,
+`stakeAboveAvailableAmount` `{amount}` → `{demoAvailable}`. Migration `0030_bot_text_variable_names`
+rewrites a saved override of these keys to the new name, version and time untouched; a row the
+longer name would push past the table's length CHECK stays as it was, and the loaders show the
+default and name the reason (`bot-text list`, the admin section). The old name is then an
+unavailable variable: a form still open with it is refused on save.
+
 ## Adding a text
 
 1. Add an entry to `BOT_TEXT_CATALOG` in the group of the screen that shows it, with a Russian
-   description; give it an argument with a sample if the caller passes a value, and fragments for
-   any other entry it quotes.
+   description; list in `vars` the registry's variables every caller holds when it renders it
+   (a value no variable has yet is a new registry entry with its width), and fragments for any
+   other entry it quotes.
 2. Read it in the bot through `TEXTS`/`LABELS` (or `textOf`/`labelsOf` for a map), never into a
    module constant.
 3. `pnpm check`: `bot-texts.test.ts` validates the default, and the facade tests in `texts.test.ts`
    name the keys `TEXTS` and `LABELS` hold — a new html entry joins `TEXTS`, a new button needs the
-   lists in `bot-texts.test.ts` and `texts.test.ts`. A new html entry with an argument does not
-   compile without a width in `BOT_TEXT_ARG_WIDTHS` ([Assembled messages](#assembled-messages)).
+   lists in `bot-texts.test.ts` and `texts.test.ts`. Where the real assembly is narrower than a
+   variable's default width, add the key to `BOT_TEXT_VAR_WIDTHS`
+   ([Assembled messages](#assembled-messages)).
 4. A new assembly of several texts gets a description in `BOT_TEXT_MESSAGES` and a builder in
    `apps/bot/src/bot-text-messages.test.ts`. Nothing finds a new assembly on its own: this step is
    the only thing that puts it under the writer's and the loaders' bound.
 
-The admin's editor reads the entry's `arg`, `sample`, `fragments` and `limit` in one place,
-`placeholderHints` (`apps/web/src/admin/pages.ts`), and the preview fills the argument with
-`sample` (`renderBotTextPreview`); a change to the entry's shape (#358) changes those two.
+The admin's editor reads the entry's `vars` (with the registry's descriptions and samples),
+`fragments` and `limit` in one place, `placeholderHints` (`apps/web/src/admin/pages.ts`), and the
+preview renders `samples` (`renderBotTextPreview`).
 
 ## Overrides
 
@@ -278,7 +351,8 @@ docker compose exec backend pnpm --filter @binarius/backend bot-text reset welco
 docker compose exec backend pnpm --filter @binarius/backend bot-text list
 ```
 
-`show` prints the text alone on stdout and the rest (group, description, version) on stderr.
+`show` prints the text alone on stdout and the rest (group, description, the key's variables with
+their descriptions and samples, its fragments, the version) on stderr.
 `set` reads strict UTF-8, drops a BOM, turns CRLF into LF and takes off one trailing newline.
 `set` and `reset` take `--version N` from `show`. Exit 0 is done or nothing to do, 1 refused or
 failed, 2 not understood; after a database failure on a write the state may have changed, so the
@@ -286,15 +360,16 @@ CLI points at `show`.
 
 ## Assembled messages
 
-A key's limit is checked with its sample. `BOT_TEXT_MESSAGES` describes what that cannot bound:
-each message the bot builds from several keys (the account and status cards, `/help`, `/account`,
-the analysis screens, the trade and session status, the demo screens, `/settings` with the
-stake line and the stake picker), and each html key whose
-argument is in no such message. `estimateBotTextMessage` adds up the parts at the widest value of
-every argument (`BOT_TEXT_ARG_WIDTHS`), labels read from the texts in effect, so a longer
-override of a label widens the line it goes into. `apps/bot/src/bot-text-messages.test.ts` holds
-every description equal to the real assembly on the defaults and to the keys it reads; a new html
-key with an argument does not compile without a width.
+A key's limit is checked with its variables' samples. `BOT_TEXT_MESSAGES` describes what that
+cannot bound: each message the bot builds from several keys (the account and status cards,
+`/help`, `/account`, the analysis screens, the trade and session status, the demo screens,
+`/settings` with the stake line and the stake picker), and each html key with variables in no such
+message. `estimateBotTextMessage` adds up the parts with every placeholder the text holds at its
+widest — the key's width in `BOT_TEXT_VAR_WIDTHS`, else the variable's in
+`BOT_TEXT_VAR_DEFAULT_WIDTHS` — and labels read from the texts in effect, so a longer override of a
+label widens the line it goes into, and a variable an override adds widens the message by its own
+width. `apps/bot/src/bot-text-messages.test.ts` holds every description equal to the real assembly
+on the defaults and to the keys it reads.
 
 Widths from a schema are enforced there: an address entered by the user 254, a USD amount 20, a
 stake 25 (`formatStake` over an unsigned `numeric(20,8)`: the demo stake, the broker's minimum and

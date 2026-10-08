@@ -348,9 +348,11 @@ row's version. The section is absent when there are none. `?notice=removed|gone|
 the result of a delete; any other value shows nothing.
 
 **The editor** shows the key, its group and description, the state as on the list, and
-«Плейсхолдеры» (`placeholderHints`, the one place that reads the entry's `arg`, `sample`,
-`fragments` and `limit`; #358 extends it): the argument — required, with its sample —, each
-fragment with a link to its key, the text in effect and «(изменён)», the limit, «одна строка» for a
+«Плейсхолдеры» (`placeholderHints`, the one place that reads the entry's `vars`, `fragments` and
+`limit`): one line per variable of the key, from the registry (#358, docs/bot-texts.md →
+Variables) — «{tokens} — Доступные токены автоторговли; в предпросмотре: 12», none of them
+required —, each fragment with a link to its key, the text in effect and «(изменён)», the limit,
+«одна строка» for a
 single-line key, and «Используется в:» — the keys that quote this one as a fragment. The form has
 the text (the override, or the default), a hidden version (0 without an override) and two buttons:
 «Предпросмотр» (`formaction` to `…/preview`) and «Сохранить». With an override, «Исходный текст»
@@ -368,8 +370,9 @@ writer.
 
 **The preview** renders the draft as the bot would: the backend checks it with
 `botTextChangeProblems` (as a save would), then renders it through the bot's own views with the
-draft in place, the argument filled with the catalog's sample and the fragments with their texts
-in effect. Nothing is written or locked; a save in between is caught by the version on «Сохранить».
+draft in place, every variable at the registry's sample and the fragments with their texts in
+effect. A variable the key does not have is refused as a save would refuse it: «Переменная
+{realBalance} недоступна в этом тексте. Доступны: {email}, {firstName}». Nothing is written or locked; a save in between is caught by the version on «Сохранить».
 `web` checks the rendered text against `telegramHtmlProblems` (its contract) and converts it
 (`apps/web/src/admin/telegram-preview.ts`): every tag is rebuilt from the Telegram allowlist as a
 browser tag, every text is escaped again, attributes are dropped except a link's `href`, which is
