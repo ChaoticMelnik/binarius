@@ -16,6 +16,7 @@ import {
   type TelegramHtml,
   type TradingAccessResponse,
   type TradingSignalsResponse,
+  DEMO_CALLBACK_DATA,
 } from '@binarius/shared';
 import {
   analysisScreen,
@@ -69,10 +70,6 @@ import {
 // state for them: what the user chose travels in the callback data, so a restart, an old message
 // and a second device all lead to the same screen, and every screen reads the catalog anew.
 
-// The status card's button (#24): the signals screen (#320) as a new message, since it sits under
-// a photo caption that editMessageText cannot edit. Kept as `demo`, so a button on an old card
-// leads here too.
-export const DEMO_CALLBACK_DATA = 'demo';
 // Bot API allows 1-64 bytes; the longest of the screens' data, `demo:t:cryptocurrency:9999`, is 26,
 // and `demo:l:2147483647` 17.
 export const DEMO_SIGNALS_CALLBACK_DATA = 'demo:sig';

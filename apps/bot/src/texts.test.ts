@@ -22,6 +22,9 @@ import {
   type DecimalString,
   type LinkBonusGrantView,
   type LinkedAccountView,
+  DEMO_CALLBACK_DATA,
+  SUPPORT_TELEGRAM_USERNAME,
+  supportUrl,
 } from '@binarius/shared';
 import { telegramTextProblems } from '@binarius/shared/testing';
 import {
@@ -40,7 +43,6 @@ import {
 } from './testing';
 import { LEVEL_CURRENT_CALLBACK_DATA, levelCallbackData } from './bot';
 import {
-  DEMO_CALLBACK_DATA,
   DEMO_GROUPS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
@@ -75,8 +77,6 @@ import {
   setBotTextSource,
   settingsText,
   stakeButtonLabel,
-  SUPPORT,
-  supportUrl,
   statusCard,
   TEXTS,
   type AccountCardInput,
@@ -191,11 +191,11 @@ describe('texts', () => {
 
     // Telegram usernames: 5-32 letters, digits and underscores
     it('leads /support to an https t.me link of a valid username', () => {
-      expect(SUPPORT.telegramUsername).toMatch(/^[A-Za-z0-9_]{5,32}$/);
+      expect(SUPPORT_TELEGRAM_USERNAME).toMatch(/^[A-Za-z0-9_]{5,32}$/);
       const url = new URL(supportUrl());
       expect(url.protocol).toBe('https:');
       expect(url.host).toBe('t.me');
-      expect(url.pathname).toBe(`/${SUPPORT.telegramUsername}`);
+      expect(url.pathname).toBe(`/${SUPPORT_TELEGRAM_USERNAME}`);
     });
 
     it('points every «напиши в поддержку» to /support', () => {

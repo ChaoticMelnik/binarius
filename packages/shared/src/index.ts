@@ -20,6 +20,7 @@ export * from './env';
 export * from './process';
 export * from './logging';
 export * from './link-confirmation';
+export * from './bot-navigation';
 export * from './telegram-html';
 export * from './catalog';
 export * from './signal';

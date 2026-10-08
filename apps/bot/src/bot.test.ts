@@ -14,12 +14,13 @@ import {
   UserStatus,
   type LinkedAccountView,
   type UserStartView,
+  CONNECT_CALLBACK_DATA,
+  DEMO_CALLBACK_DATA,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
-  CONNECT_CALLBACK_DATA,
   LEVEL_CURRENT_CALLBACK_DATA,
   OAUTH_CALLBACK_DATA,
   RESEND_CALLBACK_DATA,
@@ -27,7 +28,7 @@ import {
   levelCallbackData,
 } from './bot';
 import { BOT_COMMANDS } from './commands';
-import { DEMO_CALLBACK_DATA } from './demo';
+
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCESS_VIEW,

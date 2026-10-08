@@ -14,12 +14,12 @@ import {
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
   type LogLevel,
+  DEMO_CALLBACK_DATA,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot, levelCallbackData } from './bot';
 import {
-  DEMO_CALLBACK_DATA,
   DEMO_GROUPS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoAssetCallbackData,

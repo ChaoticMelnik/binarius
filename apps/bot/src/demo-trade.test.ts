@@ -15,12 +15,13 @@ import {
   type PairsCatalogResponse,
   type TelegramHtml,
   type TradingAccessResponse,
+  CONNECT_CALLBACK_DATA,
+  DEMO_CALLBACK_DATA,
 } from '@binarius/shared';
 import { telegramHtml } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { createBot, CONNECT_CALLBACK_DATA } from './bot';
+import { createBot } from './bot';
 import {
-  DEMO_CALLBACK_DATA,
   DEMO_GROUPS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoAssetCallbackData,

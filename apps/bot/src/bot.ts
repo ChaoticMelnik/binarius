@@ -26,6 +26,9 @@ import {
   type LinkedAccountView,
   type PendingBrokerAccountView,
   type UserStartRequest,
+  CONNECT_CALLBACK_DATA,
+  DEMO_CALLBACK_DATA,
+  supportUrl,
 } from '@binarius/shared';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import {
@@ -35,7 +38,7 @@ import {
   type BackendClient,
 } from './backend-client';
 import { BOT_COMMANDS } from './commands';
-import { createDemoComposer, DEMO_CALLBACK_DATA, removeLegacyKeyboard } from './demo';
+import { createDemoComposer, removeLegacyKeyboard } from './demo';
 import { createDemoTradeComposer } from './demo-trade';
 import { createTradingSessionComposer } from './trading-session';
 import type { IntentTracker } from './intent-tracker';
@@ -59,19 +62,15 @@ import {
   levelLabel,
   settingsText,
   statusCard,
-  supportUrl,
   TEXTS,
   textOf,
   type AccountCardInput,
 } from './texts';
 import { TELEGRAM_API_TIMEOUT_MS } from './timing';
 
-// Callback data of the buttons; Bot API allows 1-64 bytes. `connect` is the main button of the
-// welcome and asks for the address: buttons sent by earlier versions carry the same data, so they
-// lead where the new ones do, though an old message may still show an older label. `✏️ Изменить
-// адрес` carries it too — changing the address is pressing the button again. `oauth` was the site
-// sign-in under the welcome and /account; #314 hid it, and an old one only loses its keyboard.
-export const CONNECT_CALLBACK_DATA = 'connect';
+// Callback data of the buttons; Bot API allows 1-64 bytes. `connect` is shared with the backend's
+// pushes (bot-navigation.ts). `oauth` was the site sign-in under the welcome and /account; #314 hid
+// it, and an old one only loses its keyboard.
 export const OAUTH_CALLBACK_DATA = 'oauth';
 export const RESEND_CALLBACK_DATA = 'resend';
 // The /settings buttons (#120): `level:<level>` sets it; the selected one carries
