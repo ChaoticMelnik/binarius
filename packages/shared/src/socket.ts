@@ -2,16 +2,18 @@ import * as z from 'zod';
 import {
   closedTradeWireSchema,
   openTradeRequestWireSchema,
-  toClosedTrade,
+  openTradeWireSchema,
+  toClosedTradeOfMode,
+  toOpenTradeOfMode,
   type BinaryPairWire,
   type BrokerBalanceWireInput,
   type BrokerUserWireInput,
   type ClosedTrade,
+  type OpenTrade,
   type OpenTradeRequest,
-  type OpenTradeWireInput,
 } from './broker';
 import { idWireSchema } from './ids';
-import type { TradeMode } from './trading';
+import { TradeMode } from './trading';
 
 // Contract per spike #8 §1 (read from binodex/broker-web, not live-verified). Event maps are typed
 // with WIRE payloads: the server may deliver them as bytes, so decode first (decodeSocketPayload),
@@ -152,8 +154,22 @@ export function toOpenTradeFailures(wire: OpenTradeFailWire): OpenTradeFailure[]
   }));
 }
 
+// A socket trade is the REST one without is_demo: the mode travels in the event name only
+// (observed live in #285's probe runs, #354). The objects strip unknown keys, so an is_demo the
+// broker may still send is dropped unchecked; the event's mode is the trade's.
+export const socketOpenTradeWireSchema = openTradeWireSchema.omit({ is_demo: true });
+export type SocketOpenTradeWire = z.infer<typeof socketOpenTradeWireSchema>;
+export type SocketOpenTradeWireInput = z.input<typeof socketOpenTradeWireSchema>;
+export const socketClosedTradeWireSchema = closedTradeWireSchema.omit({ is_demo: true });
+export type SocketClosedTradeWire = z.infer<typeof socketClosedTradeWireSchema>;
+
+export const toSocketOpenTrade = (wire: SocketOpenTradeWire, mode: TradeMode): OpenTrade =>
+  toOpenTradeOfMode(wire, mode === TradeMode.Demo);
+export const toSocketClosedTrade = (wire: SocketClosedTradeWire, mode: TradeMode): ClosedTrade =>
+  toClosedTradeOfMode(wire, mode === TradeMode.Demo);
+
 export const closeTradeSuccessWireSchema = z.looseObject({
-  trades: z.array(closedTradeWireSchema),
+  trades: z.array(socketClosedTradeWireSchema),
 });
 export type CloseTradeSuccessWire = z.infer<typeof closeTradeSuccessWireSchema>;
 export type CloseTradeSuccessWireInput = z.input<typeof closeTradeSuccessWireSchema>;
@@ -168,8 +184,8 @@ export interface BrokerServerToClientEvents {
   'common.assets_list': (payload: BinaryPairWire[]) => void;
   'common.assets_update': (payload: AssetsUpdateWire) => void;
   'user.data': (payload: BrokerUserWireInput) => void;
-  'user.demo.open_trade.success': (payload: OpenTradeWireInput) => void;
-  'user.real.open_trade.success': (payload: OpenTradeWireInput) => void;
+  'user.demo.open_trade.success': (payload: SocketOpenTradeWireInput) => void;
+  'user.real.open_trade.success': (payload: SocketOpenTradeWireInput) => void;
   'user.demo.open_trade.fail': (payload: OpenTradeFailWire) => void;
   'user.real.open_trade.fail': (payload: OpenTradeFailWire) => void;
   'user.demo.close_trade.success': (payload: CloseTradeSuccessWireInput) => void;
@@ -260,8 +276,12 @@ export const safeParseAssetsUpdate = (input: unknown) => assetsUpdateWireSchema.
 export const parseOpenTradeFail = (input: unknown): OpenTradeFailure[] =>
   toOpenTradeFailures(openTradeFailWireSchema.parse(input));
 export const safeParseOpenTradeFail = (input: unknown) => openTradeFailWireSchema.safeParse(input);
-export const parseCloseTradeSuccess = (input: unknown): ClosedTrade[] =>
-  closeTradeSuccessWireSchema.parse(input).trades.map(toClosedTrade);
+export const parseSocketOpenTradeSuccess = (input: unknown, mode: TradeMode): OpenTrade =>
+  toSocketOpenTrade(socketOpenTradeWireSchema.parse(input), mode);
+export const safeParseSocketOpenTradeSuccess = (input: unknown) =>
+  socketOpenTradeWireSchema.safeParse(input);
+export const parseCloseTradeSuccess = (input: unknown, mode: TradeMode): ClosedTrade[] =>
+  closeTradeSuccessWireSchema.parse(input).trades.map((trade) => toSocketClosedTrade(trade, mode));
 export const safeParseCloseTradeSuccess = (input: unknown) =>
   closeTradeSuccessWireSchema.safeParse(input);
 
@@ -270,9 +290,7 @@ export {
   parseBinaryPairs as parseAssetsList,
   parseBrokerBalance as parseUpdateBalance,
   parseBrokerUser as parseUserData,
-  parseOpenTrade as parseSocketOpenTradeSuccess,
   safeParseBinaryPairs as safeParseAssetsList,
   safeParseBrokerBalance as safeParseUpdateBalance,
   safeParseBrokerUser as safeParseUserData,
-  safeParseOpenTrade as safeParseSocketOpenTradeSuccess,
 } from './broker';

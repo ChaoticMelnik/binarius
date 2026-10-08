@@ -25,8 +25,68 @@ import {
   toSocketOpenTradeRequestWire,
   userAuthWireSchema,
 } from './socket';
-import { parseBinaryPairs, parseBrokerBalance, parseBrokerUser, parseOpenTrade } from './broker';
+import {
+  parseBinaryPairs,
+  parseBrokerBalance,
+  parseBrokerUser,
+  parseClosedTrade,
+  parseOpenTrade,
+  safeParseTradesList,
+} from './broker';
 import type { DecimalString } from './money';
+
+// #354: the live socket sends a trade without is_demo; the mode is the event's
+describe('socket trades', () => {
+  const OPEN = {
+    id: 7,
+    asset_id: 91,
+    action: 'up',
+    amount: 10,
+    payout: 85,
+    open_price: 1.1,
+    open_timestamp: 1790028496624,
+    potential_profit: 8.5,
+  };
+  const CLOSED = {
+    ...OPEN,
+    close_price: 1.2,
+    close_timestamp: 1790028556624,
+    profit: 8.5,
+  };
+
+  it('T1 parses a live open_trade.success with no is_demo, the mode from the event', () => {
+    expect(parseSocketOpenTradeSuccess(OPEN, 'demo')).toMatchObject({ id: '7', isDemo: true });
+    expect(parseSocketOpenTradeSuccess(OPEN, 'real')).toMatchObject({ id: '7', isDemo: false });
+  });
+
+  it('T2 parses a live close_trade.success of two trades, each of the event mode', () => {
+    const trades = [CLOSED, { ...CLOSED, id: 8 }];
+    expect(parseCloseTradeSuccess({ trades }, 'real').map((trade) => trade.isDemo)).toEqual([
+      false,
+      false,
+    ]);
+    expect(parseCloseTradeSuccess({ trades }, 'demo').map((trade) => trade.isDemo)).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  it('T3 ignores an is_demo the broker may still send: the event decides', () => {
+    expect(parseSocketOpenTradeSuccess({ ...OPEN, is_demo: true }, 'real').isDemo).toBe(false);
+    expect(
+      parseCloseTradeSuccess({ trades: [{ ...CLOSED, is_demo: false }] }, 'demo')[0]?.isDemo,
+    ).toBe(true);
+    expect(parseSocketOpenTradeSuccess({ ...OPEN, is_demo: 'yes' }, 'demo').isDemo).toBe(true);
+  });
+
+  it('T4 keeps is_demo required on REST', () => {
+    expect(() => parseOpenTrade(OPEN)).toThrow();
+    expect(parseOpenTrade({ ...OPEN, is_demo: true }).isDemo).toBe(true);
+    expect(() => parseClosedTrade(CLOSED)).toThrow();
+    expect(safeParseTradesList({ trades: [CLOSED] }).success).toBe(false);
+    expect(safeParseTradesList({ trades: [{ ...CLOSED, is_demo: false }] }).success).toBe(true);
+  });
+});
 
 describe('event names', () => {
   it('builds mode-scoped names for both modes', () => {
@@ -125,7 +185,6 @@ describe('server → client payloads', () => {
     expect(parseUserData).toBe(parseBrokerUser);
     expect(parseUpdateBalance).toBe(parseBrokerBalance);
     expect(parseAssetsList).toBe(parseBinaryPairs);
-    expect(parseSocketOpenTradeSuccess).toBe(parseOpenTrade);
   });
 
   it('parses open_trade.fail as an array, including empty', () => {
@@ -144,12 +203,11 @@ describe('server → client payloads', () => {
       payout: 85,
       open_price: 1.1,
       open_timestamp: 1790028496624,
-      is_demo: true,
       close_price: 1.2,
       close_timestamp: 1790028556624,
       profit: '8.50',
     };
-    expect(parseCloseTradeSuccess({ trades: [trade] })).toHaveLength(1);
+    expect(parseCloseTradeSuccess({ trades: [trade] }, 'demo')).toHaveLength(1);
     const balance = { available: '1.00', held: '0', total: '1.00' };
     expect(
       parseUserData({
