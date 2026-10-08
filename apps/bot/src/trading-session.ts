@@ -16,7 +16,13 @@ import {
   type BackendClient,
   type StartSessionResult,
 } from './backend-client';
-import { SESSION_START_PATTERN, sessionStartDataOf, stakeMenuCallbackData } from './demo';
+import {
+  durationOf,
+  SESSION_START_PATTERN,
+  sessionStartCallbackData,
+  sessionStartDataOf,
+  stakeMenuCallbackData,
+} from './demo';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
@@ -34,18 +40,25 @@ export const sessionStopCallbackData = (sessionId: string): string => `session:s
 export const SESSION_REFRESH_PATTERN = new RegExp(`^session:${UUID}$`);
 export const SESSION_STOP_PATTERN = new RegExp(`^session:stop:${UUID}$`);
 
-// A live session gets both buttons; a stopped one only the refresh, since its last trade can
-// still settle and move the counters.
+// A live session gets both buttons; a stopped one the refresh, since its last trade can still
+// settle and move the counters, and «🔁 Ещё сессия» on its own pair and duration (#320), the
+// session button's data, so the start handler checks it as any other. A duration the demo no
+// longer offers has no such button.
 export const sessionKeyboard = (
-  view: Pick<TradingSessionView, 'id' | 'status'>,
+  view: Pick<TradingSessionView, 'id' | 'status' | 'settings'>,
 ): InlineKeyboard => {
   const keyboard = new InlineKeyboard().text(
     LABELS.sessionRefreshButton,
     sessionRefreshCallbackData(view.id),
   );
-  return view.status === TradingSessionStatus.Stopped
-    ? keyboard
-    : keyboard.text(LABELS.sessionStopButton, sessionStopCallbackData(view.id));
+  if (view.status !== TradingSessionStatus.Stopped) {
+    return keyboard.text(LABELS.sessionStopButton, sessionStopCallbackData(view.id));
+  }
+  const durationSec = durationOf(String(view.settings?.durationSec));
+  if (view.settings === null || durationSec === undefined) return keyboard;
+  return keyboard
+    .row()
+    .text(LABELS.sessionAgainButton, sessionStartCallbackData(view.settings.assetId, durationSec));
 };
 
 export interface TradingSessionDeps {

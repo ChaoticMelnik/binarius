@@ -47,9 +47,15 @@ export const HANDLER_CALLS = {
   start: { backend: 2, telegram: 4 },
   // /menu: /start's path without a payload
   menu: { backend: 2, telegram: 4 },
-  // the status card's button (#125): answerCallbackQuery ∥ readPairs — counted the same way as
-  // confirm — then sendMessage with the asset types
-  demo: { backend: 1, telegram: 2 },
+  // the status card's button, the signals screen (#320): answerCallbackQuery ∥ readSignals ∥
+  // readPairs — the reads counted as sequential, as in confirm — then sendMessage
+  demo: { backend: 2, telegram: 2 },
+  // its «🔄 Обновить» and «↩️ К списку»: the same reads, then editMessageText refused as gone →
+  // sendMessage
+  demoSignals: { backend: 2, telegram: 3 },
+  // a pair of the list (#320): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — counted the
+  // same way — then editMessageText refused as gone → sendMessage
+  demoLaunch: { backend: 2, telegram: 3 },
   // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair, a duration):
   // answerCallbackQuery ∥ readPairs, then editMessageText refused as gone → sendMessage
   demoGroups: { backend: 1, telegram: 3 },
@@ -68,15 +74,17 @@ export const HANDLER_CALLS = {
   // outcome, then sendMessage; a fingerprint mismatch (#297) sends one message instead
   stake: { backend: 4, telegram: 2 },
   // the stake picker (#297, stake-picker.ts) opened, a preset and the reset: answerCallbackQuery
-  // ∥ readTradingAccess or setDemoStake — counted as sequential — then editMessageText refused as
-  // gone → sendMessage
+  // ∥ readTradingAccess or setDemoStake — counted as sequential — then, after a save opened from
+  // a launch screen, readPairs for its symbol (#320), then editMessageText refused as gone →
+  // sendMessage
   stakePickerOpen: { backend: 1, telegram: 3 },
-  stakePreset: { backend: 1, telegram: 3 },
-  stakeReset: { backend: 1, telegram: 3 },
+  stakePreset: { backend: 2, telegram: 3 },
+  stakeReset: { backend: 2, telegram: 3 },
   // «✏️ Своя сумма»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
   stakeCustom: { backend: 0, telegram: 3 },
-  // a text on the stake step: setDemoStake, then sendMessage
-  stakeText: { backend: 1, telegram: 1 },
+  // a text on the stake step: setDemoStake, readPairs after a save opened from a launch screen,
+  // then sendMessage
+  stakeText: { backend: 2, telegram: 1 },
   // the picker's way back to /settings: answerCallbackQuery ∥ recordStart — counted as
   // sequential — then editMessageText refused as gone → sendMessage
   settingsShow: { backend: 1, telegram: 3 },

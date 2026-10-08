@@ -33,7 +33,7 @@ import {
   type TradingSessionView,
 } from '@binarius/shared';
 import type { BotCommand } from 'grammy/types';
-import type { DemoAssetGroup, DemoDurationSec } from './demo-catalog';
+import { SIGNALS_DURATION_SEC, type DemoAssetGroup, type DemoDurationSec } from './demo-catalog';
 import { formatAge, formatCount, formatStake, formatUsd } from './format';
 
 // The texts live in the catalog (packages/shared/src/bot-texts.ts, docs/bot-texts.md). This file
@@ -545,6 +545,43 @@ ${TEXTS.demoDurationLine(DEMO_DURATION_LABELS[durationSec])}
 ${TEXTS.demoPayout(String(pair.payout))}
 
 ${TEXTS.demoNext}`;
+
+// The signals screen's arrow (#320): a data mark like the pair's payout, so it stays out of the
+// catalog, and the word labels would not fit a row of pairs.
+const SIGNAL_ARROWS = {
+  [TradeAction.Up]: '⬆️',
+  [TradeAction.Down]: '⬇️',
+} as const satisfies Record<TradeAction, string>;
+// a pair with a signal: the symbol, the scanner's direction at the last closed candle, the payout
+export const signalButtonLabel = (symbol: string, action: TradeAction, payout: number): string =>
+  `${symbol} · ${SIGNAL_ARROWS[action]} · ${String(payout)}%`;
+
+// The launch screen (#320): the pair at the scanner's duration, the amount the cycle trades, what the cycle does. A
+// symbol the catalog did not give drops its line, an amount access did not give reads as the
+// broker's minimum; `saved` is what the picker has just saved, null for the reset to the minimum.
+export function launchText({
+  symbol,
+  amount,
+  trades,
+  saved,
+}: {
+  symbol: string | null;
+  amount: string | null;
+  trades: number;
+  saved?: { amount: string | null };
+}): TelegramHtml {
+  const lines = [
+    ...(symbol === null
+      ? []
+      : [TEXTS.launchHeader(`${symbol} · ${DEMO_DURATION_LABELS[SIGNALS_DURATION_SEC]}`)]),
+    amount === null ? TEXTS.launchStakeMinimum : TEXTS.launchStake(formatStake(amount)),
+    TEXTS.launchCycle(tradesCount(trades)),
+  ];
+  if (saved === undefined) return joinLines(lines);
+  return telegramHtml`${TEXTS.stakeSavedLine(stakeLabel(saved.amount))}
+
+${joinLines(lines)}`;
+}
 
 export const levelLabel = (level: NotificationLevel): string => LEVEL_LABELS[level];
 // the label of the level that is selected now, on its button

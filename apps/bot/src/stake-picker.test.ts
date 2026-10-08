@@ -8,7 +8,13 @@ import {
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot, CONNECT_CALLBACK_DATA } from './bot';
-import { demoAnalysisCallbackData, stakeMenuCallbackData } from './demo';
+import {
+  demoAnalysisCallbackData,
+  demoLaunchCallbackData,
+  launchScreen,
+  launchStakeCallbackData,
+  stakeMenuCallbackData,
+} from './demo';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   SETTINGS_CALLBACK_DATA,
@@ -31,6 +37,8 @@ import {
   fakeBackend,
   fakeLogger,
   messageAnswer,
+  PAIR_EURUSD,
+  PAIRS_RESPONSE,
   stubSessionTracker,
   stubTracker,
   textUpdate,
@@ -46,6 +54,7 @@ interface Button {
 
 const SETTINGS: StakeOrigin = { kind: 'settings' };
 const ANALYSIS: StakeOrigin = { kind: 'analysis', assetId: 101, durationSec: 5 };
+const PAIR: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id };
 const ON_STAKE_STEP: LoginDialogState = { step: 'stake', origin: SETTINGS };
 const d = (value: string): DecimalString => decimalStringSchema.parse(value);
 
@@ -53,6 +62,7 @@ function setup(
   options: {
     readTradingAccess?: BackendClient['readTradingAccess'];
     setDemoStake?: BackendClient['setDemoStake'];
+    readPairs?: BackendClient['readPairs'];
     recordStart?: BackendClient['recordStart'];
     dialog?: LoginDialogState;
   } = {},
@@ -64,12 +74,13 @@ function setup(
     options.setDemoStake ?? ((_id, amount) => Promise.resolve({ saved: amount })),
   );
   const recordStart = vi.fn(options.recordStart ?? (() => Promise.resolve(userView())));
+  const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
   const logger = fakeLogger();
   const loginDialog = createLoginDialog();
   if (options.dialog !== undefined) loginDialog.set(USER.id, options.dialog);
   const bot = createBot({
     token: '123456:AA-bot-token',
-    backend: fakeBackend({ readTradingAccess, setDemoStake, recordStart }),
+    backend: fakeBackend({ readTradingAccess, setDemoStake, recordStart, readPairs }),
     logger,
     botInfo: BOT_INFO,
     loginDialog,
@@ -80,7 +91,17 @@ function setup(
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   const press = (data: string) => bot.handleUpdate(callbackUpdate(data));
   const type = (text: string) => bot.handleUpdate(textUpdate(text));
-  return { press, type, logger, loginDialog, readTradingAccess, setDemoStake, recordStart, ...api };
+  return {
+    press,
+    type,
+    logger,
+    loginDialog,
+    readTradingAccess,
+    setDemoStake,
+    recordStart,
+    readPairs,
+    ...api,
+  };
 }
 
 const lastPayload = (calls: readonly ApiCall[]) =>
@@ -248,6 +269,99 @@ describe('the stake picker', () => {
     expect(stakeOriginOf('s')).toEqual(SETTINGS);
     expect(stakeOriginOf('a:0:5')).toBeUndefined();
     expect(stakeOriginOf('x')).toBeUndefined();
+  });
+
+  it('reads the launch origin back from the data the launch screen draws', () => {
+    const longest = stakePresetCallbackData('999999999999.99999999', {
+      kind: 'pair',
+      assetId: 2_147_483_647,
+    });
+    expect(Buffer.byteLength(longest, 'utf8')).toBe(40);
+    expect(launchStakeCallbackData(PAIR_EURUSD.id)).toBe(stakeOpenCallbackData(PAIR));
+    expect(stakeOriginOf(`p:${PAIR_EURUSD.id}`)).toEqual(PAIR);
+    expect(stakeOriginOf('p:0')).toBeUndefined();
+    expect(stakeOriginOf('p:101:5')).toBeUndefined();
+  });
+});
+
+describe('the stake picker opened from a launch screen (#320)', () => {
+  const BACK_LAUNCH = [
+    button(LABELS.stakeBackLaunchButton, demoLaunchCallbackData(PAIR_EURUSD.id)),
+  ];
+  const savedLaunch = (amount: DecimalString | null, symbol: string | null = PAIR_EURUSD.symbol) =>
+    launchScreen({ assetId: PAIR_EURUSD.id, symbol, amount, saved: { amount } });
+
+  it('leads back to the launch screen', async () => {
+    const { press, calls } = setup();
+    await press(stakeOpenCallbackData(PAIR));
+    expect(rowsOf(lastPayload(calls))).toEqual([
+      [
+        preset('1', '$1.00 ✅', PAIR),
+        preset('2', '$2.00', PAIR),
+        preset('5', '$5.00', PAIR),
+        preset('10', '$10.00', PAIR),
+      ],
+      CUSTOM(PAIR),
+      BACK_LAUNCH,
+    ]);
+  });
+
+  it('returns to the launch screen in place with the saved amount', async () => {
+    const { press, calls, setDemoStake, readPairs } = setup();
+    await press(stakePresetCallbackData('5', PAIR));
+    expect(setDemoStake.mock.calls).toEqual([[String(USER.id), '5']]);
+    expect(readPairs).toHaveBeenCalledTimes(1);
+    expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    const screen = savedLaunch(d('5'));
+    expect(lastPayload(calls)?.text).toBe(screen.text.value);
+    expect(lastPayload(calls)?.text).toContain(TEXTS.stakeSavedLine('$5.00').value);
+    expect(lastPayload(calls)?.text).toContain(TEXTS.launchStake('$5.00').value);
+    expect(rowsOf(lastPayload(calls))).toEqual(screen.keyboard.inline_keyboard);
+  });
+
+  it('names the minimum after the reset', async () => {
+    const { press, calls } = setup();
+    await press(stakeResetCallbackData(PAIR));
+    expect(lastPayload(calls)?.text).toBe(savedLaunch(null).text.value);
+    expect(lastPayload(calls)?.text).toContain(TEXTS.launchStakeMinimum.value);
+  });
+
+  it('returns to the launch screen as a new message after a typed amount', async () => {
+    const { type, calls, loginDialog } = setup({ dialog: { step: 'stake', origin: PAIR } });
+    await type('2,5');
+    expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
+    expect(lastPayload(calls)?.text).toBe(savedLaunch(d('2.5')).text.value);
+    expect(loginDialog.get(USER.id)).toBeUndefined();
+  });
+
+  it('drops the symbol line, keeps the launch and warns when the catalog is not read', async () => {
+    const { press, calls, logger } = setup({
+      readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await press(stakePresetCallbackData('5', PAIR));
+    const screen = savedLaunch(d('5'), null);
+    expect(lastPayload(calls)?.text).toBe(screen.text.value);
+    expect(lastPayload(calls)?.text).not.toContain(PAIR_EURUSD.symbol);
+    expect(rowsOf(lastPayload(calls))).toEqual(screen.keyboard.inline_keyboard);
+    expect(warnings(logger)).toEqual(['pairs not read for the launch screen']);
+  });
+
+  it('offers another try and the way back to the launch on a refusal, reading no catalog', async () => {
+    const { press, calls, readPairs } = setup({
+      setDemoStake: () =>
+        Promise.resolve({
+          refused: {
+            error: 'stake_below_minimum',
+            limits: { minTradeAmount: d('1'), demoAvailable: d('50'), scale: 2 },
+          },
+        }),
+    });
+    await press(stakePresetCallbackData('5', PAIR));
+    expect(rowsOf(lastPayload(calls))).toEqual([
+      [button(LABELS.stakeMenuButton, stakeOpenCallbackData(PAIR))],
+      BACK_LAUNCH,
+    ]);
+    expect(readPairs).not.toHaveBeenCalled();
   });
 });
 

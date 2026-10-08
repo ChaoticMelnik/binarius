@@ -34,6 +34,7 @@ import {
 import { sessionStatusText, TEXTS, textOf, LABELS } from './texts';
 import {
   sessionOutcomeUnknown,
+  sessionKeyboard,
   sessionRefreshCallbackData,
   sessionStopCallbackData,
   START_REFUSALS,
@@ -116,7 +117,9 @@ const statusOf = (view: TradingSessionView) => sessionStatusText(PAIR_EURUSD.sym
 const LIVE_ROWS = [
   [button(LABELS.sessionRefreshButton, REFRESH), button(LABELS.sessionStopButton, STOP)],
 ];
-const STOPPED_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)]];
+// SESSION_VIEW's own pair and duration
+const AGAIN = button(LABELS.sessionAgainButton, sessionStartCallbackData(PAIR_EURUSD.id, 15));
+const STOPPED_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)], [AGAIN]];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5))],
@@ -440,5 +443,37 @@ describe("the session's stop button", () => {
     await press(STOP, 'group');
     expect(calls).toEqual([]);
     expect(stopSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('«🔁 Ещё сессия»', () => {
+  it('is on a stopped session only, with its pair and duration', () => {
+    const rows = (view: TradingSessionView) => sessionKeyboard(view).inline_keyboard;
+    expect(rows(STOPPED)).toEqual(STOPPED_ROWS);
+    expect(
+      rows(sessionView({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 5 } })),
+    ).toEqual([
+      [button(LABELS.sessionRefreshButton, REFRESH)],
+      [button(LABELS.sessionAgainButton, sessionStartCallbackData(PAIR_EURUSD.id, 5))],
+    ]);
+    expect(rows(SESSION_VIEW)).toEqual(LIVE_ROWS);
+    expect(rows(sessionView({ status: TradingSessionStatus.Paused }))).toEqual(LIVE_ROWS);
+  });
+
+  it('is not drawn without settings or on a duration the demo no longer offers', () => {
+    const refreshOnly = [[button(LABELS.sessionRefreshButton, REFRESH)]];
+    expect(sessionKeyboard({ ...STOPPED, settings: null }).inline_keyboard).toEqual(refreshOnly);
+    expect(
+      sessionKeyboard({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 60 } })
+        .inline_keyboard,
+    ).toEqual(refreshOnly);
+  });
+
+  it('starts a new session of the same pair and duration through the session button', async () => {
+    const { press, startSession } = setup();
+    await press(AGAIN.callback_data ?? '');
+    expect(startSession.mock.calls).toEqual([
+      [{ telegramUserId: String(USER.id), assetId: PAIR_EURUSD.id, durationSec: 15, trades: 5 }],
+    ]);
   });
 });
