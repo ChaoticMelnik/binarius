@@ -103,6 +103,9 @@ line below and finds no `SECRET-` sentinel and no broker host.
    fallback succeeds; if the cause is the answer's shape, a `broker event problem` with
    `kind: schema` on `user.demo.open_trade.success` at `is_demo` (optional in broker-web, absent
    from the live `close_trade.success`). The fix would be the shared schema, not the executor.
+   That shape failure was observed in #285's probe runs and is fixed by #354 (the socket trade
+   schemas without `is_demo`, [broker-socket.md → Observed live](broker-socket.md#observed-live));
+   the command itself has still not run live end to end.
 2. Without `BROKER_WS_URL` every intent travels over REST (`rest_fallback`) and the socket path
    runs only in tests; with it, an account in work has a session ([broker-session.md](broker-session.md)).
    The `transport` column shows it per intent.
