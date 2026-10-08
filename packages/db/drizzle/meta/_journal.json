@@ -204,6 +204,13 @@
       "when": 1791468882735,
       "tag": "0028_staff_password_change",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1791485303951,
+      "tag": "0029_admin_bot_text_actions",
+      "breakpoints": true
     }
   ]
 }

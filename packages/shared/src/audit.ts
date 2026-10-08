@@ -51,6 +51,10 @@ export const AuditAction = {
   // staff self password change (#78)
   StaffPasswordChanged: 'staff_password_changed',
   StaffPasswordChangeFailed: 'staff_password_change_failed',
+  // admin bot texts section (#300)
+  BotTextsViewed: 'bot_texts_viewed',
+  BotTextViewed: 'bot_text_viewed',
+  BotTextPreviewed: 'bot_text_previewed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);

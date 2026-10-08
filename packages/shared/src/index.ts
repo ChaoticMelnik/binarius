@@ -31,3 +31,4 @@ export * from './bot-text-template';
 export * from './bot-texts';
 export * from './bot-text-messages';
 export * from './bot-text-overrides';
+export * from './admin-bot-texts';

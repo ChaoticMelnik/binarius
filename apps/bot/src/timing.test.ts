@@ -13,6 +13,7 @@ import {
   SESSION_MAX_DURATION_MS,
   TRADING_ACCESS_BUDGET_MS,
   TRADING_SESSION_START_BUDGET_MS,
+  BOT_TEXTS_APPLIED_WITHIN_S,
   BOT_TEXTS_REFRESH_MS,
   TradingSessionErrorCode,
   TradingSessionStatus,
@@ -2334,6 +2335,12 @@ describe('the text overrides (#299)', () => {
   it('ends a load before the next one starts and inside the shutdown budget', () => {
     expect(BACKEND_REQUEST_TIMEOUT_MS).toBeLessThan(BOT_TEXTS_REFRESH_MS);
     expect(BACKEND_REQUEST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+  });
+
+  it('applies a saved text within what the CLI and the admin section promise (#300)', () => {
+    expect(BOT_TEXTS_REFRESH_MS + BACKEND_REQUEST_TIMEOUT_MS).toBeLessThanOrEqual(
+      BOT_TEXTS_APPLIED_WITHIN_S * 1000,
+    );
   });
 });
 
