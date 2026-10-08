@@ -20,6 +20,7 @@ import { pairsRoutes, type PairsRoutesDeps } from './trading/pairs-routes';
 import { tradingRoutes, type TradingRoutesDeps } from './trading/routes';
 import { tradingSessionRoutes, type TradingSessionRoutesDeps } from './trading/session-routes';
 import { signalRoutes, type SignalRoutesDeps } from './trading/signal-routes';
+import { signalsRoutes, type SignalsRoutesDeps } from './trading/signals-routes';
 import { usersRoutes, type UsersRoutesDeps } from './users/routes';
 import { botTextsRoutes } from './bot-texts/routes';
 
@@ -34,6 +35,7 @@ export interface AppDeps {
   pairs: PairsRoutesDeps;
   sessions: TradingSessionRoutesDeps;
   signal: SignalRoutesDeps;
+  signals: SignalsRoutesDeps;
   auth: AuthRoutesDeps;
   users: UsersRoutesDeps;
   admin: AdminRoutesDeps;
@@ -139,6 +141,7 @@ export function buildApp({
   pairs,
   sessions,
   signal,
+  signals,
   auth,
   users,
   admin,
@@ -200,6 +203,7 @@ export function buildApp({
   void app.register(pairsRoutes, pairs);
   void app.register(tradingSessionRoutes, sessions);
   void app.register(signalRoutes, signal);
+  void app.register(signalsRoutes, signals);
   void app.register(authRoutes, auth);
   void app.register(usersRoutes, users);
   void app.register(botTextsRoutes, users);

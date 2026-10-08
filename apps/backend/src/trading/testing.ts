@@ -7,6 +7,7 @@ import type { PairsRoutesDeps } from './pairs-routes';
 import type { TradingRoutesDeps } from './routes';
 import type { TradingSessionRoutesDeps } from './session-routes';
 import type { SignalRoutesDeps } from './signal-routes';
+import type { SignalsRoutesDeps } from './signals-routes';
 
 export const PAIRS_TEST_TOKEN = 'internal-token-for-tests';
 
@@ -49,6 +50,16 @@ export const unusedSignalDeps = (): SignalRoutesDeps => ({
   feed: {
     evaluate: () => {
       throw new Error('the signal feed is not wired in this test');
+    },
+  },
+  internalApiToken: PAIRS_TEST_TOKEN,
+});
+
+// for suites that never call GET /trading/signals
+export const unusedSignalsDeps = (): SignalsRoutesDeps => ({
+  scanner: {
+    snapshot: () => {
+      throw new Error('the signal scanner is not wired in this test');
     },
   },
   internalApiToken: PAIRS_TEST_TOKEN,

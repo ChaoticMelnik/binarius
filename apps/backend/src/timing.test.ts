@@ -9,7 +9,10 @@ import {
   BROKER_BALANCE_SLA_MS,
   TRADING_ACCESS_BUDGET_MS,
 } from '@binarius/shared/broker-balance';
-import { BROKER_RATE_LIMIT_PER_MINUTE } from '@binarius/shared/broker-budget';
+import {
+  BROKER_RATE_LIMIT_PER_MINUTE,
+  DEFAULT_SIGNAL_SCAN_PER_MINUTE,
+} from '@binarius/shared/broker-budget';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import { SIGNAL_CHART_INTERVAL_MS, TRADING_SIGNAL_BUDGET_MS } from '@binarius/shared/signal';
 import { TRADING_SESSION_START_BUDGET_MS } from '@binarius/shared/trading-session';
@@ -27,11 +30,17 @@ import {
   LINK_PUSH_TELEGRAM_API_TIMEOUT_MS,
   MAX_BALANCE_POLL_PER_MINUTE,
   MAX_BALANCE_RECONCILE_INTERVAL_MS,
+  MAX_SIGNAL_SCAN_PER_MINUTE,
   MIN_BALANCE_RECONCILE_INTERVAL_MS,
+  MIN_SIGNAL_SCAN_PER_MINUTE,
   SHUTDOWN_PHASE1_BUDGET_MS,
   SHUTDOWN_PHASE2_BUDGET_MS,
   SIGNAL_CACHE_MAX_TTL_MS,
   SIGNAL_FETCH_BUDGET_MS,
+  SIGNAL_SCAN_BACKOFF_MAX_MS,
+  SIGNAL_SCAN_BACKOFF_MIN_MS,
+  SIGNAL_SCAN_SLACK_MS,
+  signalScanMaxPairs,
   TRADING_ACCESS_REFRESH_BUDGET_MS,
 } from './timing';
 
@@ -108,15 +117,30 @@ describe('broker balance timing', () => {
     expect(SIGNAL_CACHE_MAX_TTL_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS['1m']);
   });
 
+  it('starts and ends a scan inside its 15s candle', () => {
+    expect(SIGNAL_SCAN_SLACK_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS['15s']);
+    expect(SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS).toBeLessThan(
+      SIGNAL_CHART_INTERVAL_MS['15s'],
+    );
+    expect(SIGNAL_SCAN_BACKOFF_MIN_MS).toBeLessThanOrEqual(SIGNAL_SCAN_BACKOFF_MAX_MS);
+  });
+
+  it('keeps the scan ceiling between one pair and the broker window', () => {
+    expect(signalScanMaxPairs(MIN_SIGNAL_SCAN_PER_MINUTE)).toBe(1);
+    expect(signalScanMaxPairs(DEFAULT_SIGNAL_SCAN_PER_MINUTE)).toBe(25);
+    expect(MAX_SIGNAL_SCAN_PER_MINUTE).toBeLessThan(BROKER_RATE_LIMIT_PER_MINUTE);
+  });
+
   it('ends a bot texts load before the next one starts and inside phase 1', () => {
     expect(BOT_TEXTS_LOAD_BUDGET_MS).toBeLessThan(BOT_TEXTS_REFRESH_MS);
     expect(BOT_TEXTS_LOAD_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
-  it.each(['BALANCE_RECONCILE_INTERVAL_MS', 'BALANCE_POLL_MAX_PER_MINUTE'])(
-    'forwards %s to the backend without a default of its own',
-    (name) => {
-      expect(composeServiceEnvValue(composeYaml, 'backend', name)).toBe('');
-    },
-  );
+  it.each([
+    'BALANCE_RECONCILE_INTERVAL_MS',
+    'BALANCE_POLL_MAX_PER_MINUTE',
+    'SIGNAL_SCAN_MAX_PER_MINUTE',
+  ])('forwards %s to the backend without a default of its own', (name) => {
+    expect(composeServiceEnvValue(composeYaml, 'backend', name)).toBe('');
+  });
 });

@@ -13,6 +13,7 @@ import {
   unusedPairsDeps,
   unusedSignalDeps,
   unusedSessionDeps,
+  unusedSignalsDeps,
 } from './testing';
 
 const ACCOUNT = '0b8f3c62-7a1e-4d2b-9a55-3c1f2e4d5a6b';
@@ -43,6 +44,7 @@ function appWith(answer: AccessTokenResult): FastifyInstance {
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
+    signals: unusedSignalsDeps(),
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
     users: { db: {} as UsersRoutesDeps['db'], internalApiToken: PAIRS_TEST_TOKEN },
     admin: unusedAdminDeps(),

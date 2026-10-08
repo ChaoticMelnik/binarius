@@ -59,6 +59,7 @@ import {
   unusedBalanceDeps,
   unusedPairsDeps,
   unusedSignalDeps,
+  unusedSignalsDeps,
   unusedSessionDeps,
 } from '../trading/testing';
 
@@ -94,6 +95,7 @@ const build = (
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
+    signals: unusedSignalsDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: logs === undefined ? 'silent' : 'error',

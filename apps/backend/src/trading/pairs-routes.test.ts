@@ -19,6 +19,7 @@ import {
   unusedBalanceDeps,
   unusedSignalDeps,
   unusedSessionDeps,
+  unusedSignalsDeps,
 } from './testing';
 
 const pair: BinaryPair = {
@@ -52,6 +53,7 @@ function appWith(view: PairsCatalogView | undefined): FastifyInstance {
     pairs: { catalog: fakeCatalog(view), internalApiToken: PAIRS_TEST_TOKEN },
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
+    signals: unusedSignalsDeps(),
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
     users: { db: {} as UsersRoutesDeps['db'], internalApiToken: PAIRS_TEST_TOKEN },
     admin: unusedAdminDeps(),
