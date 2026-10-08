@@ -236,6 +236,43 @@ describe('signal scanner', () => {
     await scanner.stop();
   });
 
+  it('S5b a manual call still in flight across the boundary does not answer the scan', async () => {
+    // the broker answers each chart GET after 1 s
+    const getChart = vi.fn(
+      () => new Promise<[]>((resolve) => setTimeout(() => resolve([]), 1_000)),
+    );
+    const cached = createCachedSignalFeed(
+      createSignalFeed({ rest: { getChart }, logger: { info: vi.fn(), warn: vi.fn() } }),
+      { fetchBudgetMs: 3_000, maxTtlMs: 30_000 },
+    );
+    const scanner = createSignalScanner({
+      feed: cached,
+      catalog: { read: () => view([pair(1)]) },
+      pacer: createScanPacer({
+        perMinute: 100,
+        capacity: 25,
+        backoffMinMs: 15_000,
+        backoffMaxMs: 120_000,
+        now: Date.now,
+      }),
+      logger: { info: vi.fn(), warn: vi.fn() },
+      now: Date.now,
+      maxPairs: 25,
+      slackMs: SLACK_MS,
+      concurrency: 4,
+      logEveryMs: LOG_EVERY_MS,
+    });
+    scanner.start();
+    await vi.advanceTimersByTimeAsync(B + SCAN_INTERVAL_MS - 200 - Date.now());
+    const manual = cached.evaluate({ assetId: 1, interval: '15s' });
+    await toScan(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await manual;
+    expect(getChart).toHaveBeenCalledTimes(2);
+    expect(scanner.snapshot().entries.get(1)?.decidedAtMs).toBe(B + SCAN_INTERVAL_MS + SLACK_MS);
+    await scanner.stop();
+  });
+
   it('S6 a stale or missing catalog scans nothing and warns once per streak', async () => {
     const h = harness();
     h.state.view = view([pair(1)], false);
@@ -402,6 +439,31 @@ describe('signal scanner', () => {
     await vi.advanceTimersByTimeAsync(16_000);
     await stopping;
     expect(h.calls).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
+  });
+
+  it('S15 after a forward clock jump the candle in progress is scanned at once', async () => {
+    const h = harness();
+    h.scanner.start();
+    // the scanner's clock reads 16 s ahead when the timer for B + 15.5 s fires
+    h.state.skewMs = -16_000;
+    await toScan(1);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.calls).toEqual([1, 2]);
+    // the ended candle's target was not scanned at all: nothing counted as skipped for it
+    await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
+    expect(h.logger.info.mock.calls[0]?.[0]).toMatchObject({ skipped: 0 });
+    await h.scanner.stop();
+  });
+
+  it('S16 after the clock moved back 20 s the next scan comes within one candle', async () => {
+    const h = harness();
+    h.scanner.start();
+    h.state.skewMs = 20_000;
+    await toScan(1);
+    expect(h.calls).toEqual([1, 2]);
+    await vi.advanceTimersByTimeAsync(5_010);
+    expect(h.calls).toEqual([1, 2, 1, 2]);
+    await h.scanner.stop();
   });
 
   it('S14 the log line counts no eligible pair while the catalog is stale', async () => {
