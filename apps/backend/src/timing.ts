@@ -1,6 +1,10 @@
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
+import {
+  BROKER_RATE_LIMIT_PER_MINUTE,
+  DEFAULT_BALANCE_POLL_PER_MINUTE,
+} from '@binarius/shared/broker-budget';
 import { BOT_TEXTS_REFRESH_MS } from '@binarius/shared';
 import {
   BALANCE_WATCH_WINDOW_MS,
@@ -87,13 +91,11 @@ export const MIN_BALANCE_RECONCILE_INTERVAL_MS = 10_000;
 export const MAX_BALANCE_RECONCILE_INTERVAL_MS = BROKER_BALANCE_SLA_MS;
 export const DEFAULT_BALANCE_RECONCILE_INTERVAL_MS = 60_000;
 
-// The broker's window, observed live without a token on 2026-10-03: x-ratelimit-limit 600 per
-// 60 s, counted per IP. The ceiling leaves room for OAuth, token refreshes and the pairs catalog
-// from the same IP.
-export const BROKER_RATE_LIMIT_PER_MINUTE = 600;
+// The broker's per-IP window and the default share are in packages/shared/src/broker-budget.ts
+// (docs/signal.md -> The budget); the ceiling also leaves room for OAuth, token refreshes and the
+// pairs catalog from the same IP.
 export const MIN_BALANCE_POLL_PER_MINUTE = 1;
 export const MAX_BALANCE_POLL_PER_MINUTE = 500;
-export const DEFAULT_BALANCE_POLL_PER_MINUTE = 200;
 
 // GETs of one tick in flight at once.
 export const BALANCE_POLL_CONCURRENCY = 4;

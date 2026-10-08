@@ -6,6 +6,7 @@ import {
   RULE_REFUSAL_REASONS,
   safeParseTradingSignalRequest,
   safeParseTradingSignalResponse,
+  safeParseTradingSignalsResponse,
   SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SHORTEST_INTERVAL_MS,
   signalDecisionSchema,
@@ -181,6 +182,33 @@ describe('POST /trading/signal contract', () => {
     { outcome: 'maybe', code: 'unavailable' },
   ])('S4 refuses the response %j', (response) => {
     expect(safeParseTradingSignalResponse(response).success).toBe(false);
+  });
+});
+
+describe('GET /trading/signals contract', () => {
+  const item = {
+    assetId: 101,
+    action: 'up',
+    lastCandleTimestamp: 1_760_000_000_000,
+    decidedAt: 1_760_000_015_500,
+    ageMs: 500,
+  };
+  const answer = { asOf: 1_760_000_016_000, interval: '15s', scanned: 25, signals: [item] };
+
+  it.each([answer, { ...answer, signals: [] }])('S6 accepts the response %j', (response) => {
+    expect(safeParseTradingSignalsResponse(response).data).toEqual(response);
+  });
+
+  it.each([
+    { ...answer, interval: '5s' },
+    { ...answer, scanned: -1 },
+    { ...answer, signals: [{ ...item, action: 'sideways' }] },
+    { ...answer, signals: [{ ...item, ageMs: -1 }] },
+    { ...answer, signals: [{ ...item, assetId: 0 }] },
+    { ...answer, signals: [{ ...item, reason: 'flat_trend' }] },
+    { asOf: answer.asOf, interval: '15s', signals: [] },
+  ])('S6 refuses the response %j', (response) => {
+    expect(safeParseTradingSignalsResponse(response).success).toBe(false);
   });
 });
 

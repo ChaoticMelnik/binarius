@@ -21,7 +21,7 @@ import type {
   PartnerTraderStats,
 } from './partner';
 import type { AssetsUpdate, PriceUpdate, SocketOpenTradeRequest } from './socket';
-import type { SignalParams, TradingSignalResponse } from './signal';
+import type { SignalParams, TradingSignalResponse, TradingSignalsResponse } from './signal';
 import type { TradeIntent, TradeIntentView } from './trading';
 import type { AccessTokenRefusal, AccessTokenRequest, AccessTokenResponse } from './access-token';
 import type { AccountHaltReason } from './oauth';
@@ -38,6 +38,7 @@ import * as botTextMessages from './bot-text-messages';
 import * as botTextOverrides from './bot-text-overrides';
 import * as brokerBalance from './broker-balance';
 import * as audit from './audit';
+import * as brokerBudget from './broker-budget';
 import * as catalog from './catalog';
 import * as demoStake from './demo-stake';
 import * as env from './env';
@@ -336,6 +337,16 @@ describe('contract coverage (issue #6)', () => {
     >();
   });
 
+  it('Trading signals list (issue #343)', () => {
+    expectTypeOf<keyof TradingSignalsResponse>().toEqualTypeOf<
+      'asOf' | 'interval' | 'scanned' | 'signals'
+    >();
+    expectTypeOf<keyof TradingSignalsResponse['signals'][number]>().toEqualTypeOf<
+      'assetId' | 'action' | 'lastCandleTimestamp' | 'decidedAt' | 'ageMs'
+    >();
+    expectTypeOf<TradingSignalsResponse['interval']>().toEqualTypeOf<'15s'>();
+  });
+
   it('Trading session view and refusal (issue #283)', () => {
     expectTypeOf<keyof TradingSessionView>().toEqualTypeOf<
       | 'id'
@@ -397,6 +408,7 @@ describe('contract coverage (issue #6)', () => {
       tradingAccess,
       broker,
       brokerBalance,
+      brokerBudget,
       oauth,
       users,
       partner,

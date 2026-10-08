@@ -232,3 +232,31 @@ export const safeParseTradingSignalRequest = (input: unknown) =>
   tradingSignalRequestSchema.safeParse(input);
 export const safeParseTradingSignalResponse = (input: unknown) =>
   tradingSignalResponseSchema.safeParse(input);
+
+// --- GET /trading/signals (#343) --------------------------------------------------------------
+
+export const TRADING_SIGNALS_PATH = '/trading/signals';
+
+// The one interval the backend's scanner decides (docs/signal.md -> The scanner): 5s trades keep
+// the on-demand analysis, the broker's budget does not fit both.
+export const SIGNAL_SCAN_INTERVAL = '15s' satisfies SignalInterval;
+
+// Only the pairs with a signal on the candle that closed most recently; times are unix ms.
+export const tradingSignalsResponseSchema = z.strictObject({
+  asOf: z.int().nonnegative(),
+  interval: z.literal(SIGNAL_SCAN_INTERVAL),
+  scanned: z.int().nonnegative(),
+  signals: z.array(
+    z.strictObject({
+      assetId: createTradeIntentRequestSchema.shape.assetId,
+      action: tradeActionSchema,
+      lastCandleTimestamp: z.number(),
+      decidedAt: z.int().nonnegative(),
+      ageMs: z.int().nonnegative(),
+    }),
+  ),
+});
+export type TradingSignalsResponse = z.infer<typeof tradingSignalsResponseSchema>;
+
+export const safeParseTradingSignalsResponse = (input: unknown) =>
+  tradingSignalsResponseSchema.safeParse(input);

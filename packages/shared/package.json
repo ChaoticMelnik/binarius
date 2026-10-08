@@ -85,6 +85,10 @@
       "types": "./src/broker-balance.ts",
       "default": "./src/broker-balance.ts"
     },
+    "./broker-budget": {
+      "types": "./src/broker-budget.ts",
+      "default": "./src/broker-budget.ts"
+    },
     "./trading-access": {
       "types": "./src/trading-access.ts",
       "default": "./src/trading-access.ts"
