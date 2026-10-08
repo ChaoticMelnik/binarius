@@ -64,7 +64,7 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 - [ ] Review comments are specific and actionable, not vague
 - [ ] Blockers/Majors were noted before any approval
 - [ ] Codex code review ran before the reviewer finalized the verdict
-- [ ] If issues found: reviewer returned the issue to **Todo** before any re-implementation started
+- [ ] If a Blocker/Major was found: reviewer returned the issue to **Todo** before any re-implementation started; a Minor-only review did not
 - [ ] If clean: reviewer posted the ready-to-merge comment and did not self-approve
 - [ ] Every review round reviewed `gh pr diff` (the whole feature), never an iteration delta
 - [ ] CI (`gh pr checks`) was green on the merged head — `pnpm check` there carries the automated gates (manifest targets, status literals, constraint coverage)

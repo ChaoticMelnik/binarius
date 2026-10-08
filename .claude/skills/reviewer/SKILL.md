@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Reviews PRs of issues in In Review status. Posts findings as PR comments immediately without additional approval. If issues found, returns the issue to Todo. If clean, reports the verdict: spawned by tech-lead, it returns a merge request and tech-lead asks and merges; invoked directly, it asks via AskUserQuestion immediately before merging (when this repo's CLAUDE.md allows agent merges). The issue moves to Done only after the merge is confirmed. Also supports full project review mode.
+description: Reviews PRs of issues in In Review status. Posts findings as PR comments immediately without additional approval. If a Blocker or Major is found, returns the issue to Todo; Minor-only findings do not block. If clean, reports the verdict: spawned by tech-lead, it returns a merge request and tech-lead asks and merges; invoked directly, it asks via AskUserQuestion immediately before merging (when this repo's CLAUDE.md allows agent merges). The issue moves to Done only after the merge is confirmed. Also supports full project review mode.
 model: opus
 ---
 
@@ -103,7 +103,9 @@ Merge Codex + agent results, collapse duplicates. Discard findings that just res
 
 Only when Steps 3-5 found no Blocker/Major. A condition, not a second run: this round's 3a already reviewed the full diff at a recorded head, and it counts as the whole-feature pass when its marker's `head` equals the PR's current `headRefOid` (`gh pr view <N> --json headRefOid`). Rerun the Step 3a command with `KIND="Whole-feature pass"` only if commits landed after 3a, or if 3a was not a full-diff run with a marker; consolidate that result as in Step 4, and a Blocker/Major from it goes to Step 6a. No LGTM without a completed full-diff run (either marker) at the approved head — tech-lead's audit re-hashes the diff from that marker (`tech-lead` → Mode 1).
 
-### Step 6a: Issues found — post comments, return to Todo
+### Step 6a: Blocker/Major found — post comments, return to Todo
+
+A Minor-only review does not come here: post the Minors as a comment and go to Step 6b; the merge question names them (Severity Guide).
 
 ```bash
 gh pr review <N> --repo ChaoticMelnik/binarius --comment --body "..."
