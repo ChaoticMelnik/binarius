@@ -317,9 +317,9 @@ a tick, and a tick never overlaps the next. Reconciliation handles at most 80 in
 new `reconciling` intent waits for the next tick (≤ 15 s). The catch-up settles at most 36 intents
 a minute (accepted, #313): when the `settlement catch-up tick` line shows `overdue` at 3 tick after
 tick, the lever is part of the reconciliation's share, in a new issue. A 429 ends a tick and the attempt is
-retried on the lease or the next tick. Its one real cost is a refresh exchange in flight on the
-backend: a 429 on `/user-auth/refresh` is classified `rejected` → `refresh_outcome_unknown` → the
-account is revoked (Rule 12, one attempt). The worker's share keeps its own traffic from driving
+retried on the lease or the next tick. A 429 on `/user-auth/refresh` during an exchange on the
+backend is the refusal `refresh_rate_limited`: nothing is revoked, the caller asks again later
+(#275). The worker's share keeps its own traffic from driving
 the IP to 429; the sum with the backend's ceilings raised above their defaults is a `warn` at the
 backend's start, not enforced.
 

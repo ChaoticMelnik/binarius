@@ -466,7 +466,8 @@ the broker balance refresh (`apps/backend/src/broker/balance-reconciler.ts`): `P
 (#90, internal bearer), which passes `mayRefresh` from its body — the caller names its policy
 (`accessTokenRequestSchema`, no default). The route answers `{ accessToken }` or `{ error }` with
 the refusal code alone (404 `account_not_found`, 409 the rest; `revokedReason` stays here), and
-neither side logs either body.
+neither side logs either body. `refresh_rate_limited` is the one refusal that is temporary (#275):
+the broker's rate limit refused the exchange, and asking again later may succeed.
 
 | Step                                                        | Outcome                                                                                                           |
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -482,7 +483,8 @@ neither side logs either body.
 | `coalesce(token_rotated_at, created_at)` older than 90 days | revoke `refresh_expired`, without asking the broker                                                               |
 | otherwise                                                   | exactly one refresh exchange                                                                                      |
 
-**A timer never exchanges a token.** A failed exchange revokes the account, and the background
+**A timer never exchanges a token.** A failed exchange whose outcome may have spent the pair
+revokes the account (a 429 does not, see below), and the background
 balance tick runs for accounts nobody is using at that moment. It would revoke them during a
 broker outage. So the tick passes `mayRefresh: false`, and so does the worker's settlement
 catch-up. The one exception is reconciling an intent whose outcome is unknown (owner's decision
@@ -504,12 +506,13 @@ write here bumps. In particular it leaves `token_rotated_at` alone: that column 
 token and starts the ninety-day clock, so moving it would hand a token that is already months old
 another ninety days of life.
 
-Exchange failures map to revocations, never to retries:
+Exchange failures map to revocations, never to retries — except a 429:
 
 | Failure | Reason |
 | --- | --- |
 | broker answers 401 to `user-auth/refresh` (`Invalid token`: unknown or already consumed) | `refresh_invalid_grant` — the token was already consumed, which is what a replayed refresh token looks like from our side |
-| anything else | `refresh_outcome_unknown` — a timeout, a network error or a 5xx, but also a 4xx other than 401 (a 400 means our request was malformed, and the broker may still have read the token) and a 2xx whose body breaks the contract. In each the broker may have rotated the pair, and presenting the old token again would be that replay |
+| broker answers 429 to `user-auth/refresh` (its rate limit, #275) | no revocation: `refresh_rate_limited` (409 on the worker's route), the pair and the row untouched, nothing written; the caller decides when to ask again. That the limiter answers before the token is read is stated (Live check below) |
+| a 4xx other than 401 and 429, and anything else | `refresh_outcome_unknown` — a timeout, a network error or a 5xx, but also a 4xx other than 401 and 429 (a 400 means our request was malformed, and the broker may still have read the token) and a 2xx whose body breaks the contract. In each the broker may have rotated the pair, and presenting the old token again would be that replay |
 
 Every branch commits its revocation and reports afterwards; throwing inside the transaction
 would roll the revocation back.
@@ -547,6 +550,22 @@ If the second transaction itself fails, the account stays active holding a token
 refuse, the failure is logged, and `ensureFreshAccessToken` **throws** rather than returning a
 result — callers such as ARCH-01 (#40) see an exception, not an `AccessTokenResult`. The next
 refresh gets a 401 and revokes it there with `refresh_invalid_grant`.
+
+### Live check: a 429 on `user-auth/refresh` (owner, after #275)
+
+Not run yet: that the broker's limiter answers a 429 before it reads the refresh token is stated,
+the same premise the REST contract stands on (docs/broker-rest.md → `rate_limited`). Run it **not
+from the pilot's IP**: switch the Amnezia VPN off if it routes through `185.249.152.35`, check the
+first line does not print that address, and stop the local stack so it does not share the window.
+
+```bash
+curl -s https://api.ipify.org; echo
+seq 1 700 | xargs -P 25 -I{} curl -s -o /dev/null -w '%{http_code}\n' -X POST https://api.binodex.app/v1/broker/user-auth/refresh -H 'content-type: application/json' -d '{"refresh_token":"junk-275-probe"}' | sort | uniq -c
+curl -s -D - -o /dev/null -X POST https://api.binodex.app/v1/broker/user-auth/refresh -H 'content-type: application/json' -d '{"refresh_token":"junk-275-probe"}' | grep -i -E '^(HTTP|retry-after|x-ratelimit)'
+```
+
+About 600 `401` and the rest `429` confirms the premise: a junk token refused by the limiter, not
+by the token check. Only `401` in 700 requests neither confirms nor refutes it; record it here.
 
 ### Why the refresh does not compare the user
 
@@ -598,12 +617,15 @@ parsed or logged:
 | --- | --- | --- | --- | --- |
 | 400 | `invalid_grant` | `rejected` | `invalid_grant` | `invalid_grant` |
 | 401 | `rejected` | `invalid_grant` | `rejected` | `rejected` |
+| 429 | `rate_limited` | `rate_limited` | `rate_limited` | `rate_limited` |
 | other 4xx | `rejected` | `rejected` | `rejected` | `rejected` |
 | 5xx, timeout, network failure | `unavailable` | `unavailable` | `unavailable` | `unavailable` |
 | 2xx that breaks the schema, or `expires_in` outside (0, 30 days] | `contract_violation` | `contract_violation` | `contract_violation` (anything but `status: true`) | `contract_violation` |
 
 The routes turn `invalid_grant` into 400 — `invalid_code` on the callback and the email login,
-`invalid_email` on `send-code` — and everything else into 502 (`brokerOutcome` in `routes.ts`).
+`invalid_email` on `send-code` — `rejected` and `contract_violation` into 502
+`broker_contract_violation`, and `rate_limited` and `unavailable` into 502 `broker_unavailable`
+(`brokerOutcome` in `routes.ts`; #275: a rate limit is the broker being busy, not our contract).
 
 A 400 on the code exchange is also what our own malformed request gets (`Validation failed`), so
 such a bug reaches the browser as `invalid_code`, and the callback's warn line cannot tell it from
