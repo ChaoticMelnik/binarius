@@ -4,6 +4,7 @@ import {
   AdminErrorCode,
   CLIENT_USER_AGENT_MAX_LENGTH,
   errorLogFields,
+  safeParseAdminAuditQuery,
   safeParseAdminIntentsQuery,
   safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
@@ -18,6 +19,8 @@ import { sendHtml } from '../html';
 import { BackendError, BackendErrorCode, type BackendClient } from '../backend-client';
 import { noticePage } from '../pages';
 import {
+  auditHref,
+  auditPage,
   confirmPage,
   intentPage,
   intentsHref,
@@ -264,6 +267,32 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         reply,
         200,
         tokensPage(entries, { filters, cursor, nextCursor, login: me.login }),
+      );
+    }),
+  );
+
+  app.get('/admin/audit', async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const query = compactQuery(request.query);
+      // the filters first, without the cursor, as on the token ledger
+      const parsed = safeParseAdminAuditQuery({ ...query, cursor: undefined });
+      if (!parsed.success) {
+        return sendHtml(
+          reply,
+          400,
+          auditPage([], { filters: {}, nextCursor: null, message: TEXTS.auditBadFilter }),
+        );
+      }
+      const filters = parsed.data;
+      const cursor = query.cursor;
+      if (cursor !== undefined && (typeof cursor !== 'string' || !UUID_PATTERN.test(cursor))) {
+        return reply.redirect(auditHref(filters), 302);
+      }
+      const { me, entries, nextCursor } = await backend.audit(token, { ...filters, cursor });
+      return sendHtml(
+        reply,
+        200,
+        auditPage(entries, { filters, cursor, nextCursor, login: me.login }),
       );
     }),
   );

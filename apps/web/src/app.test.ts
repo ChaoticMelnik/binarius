@@ -5,11 +5,14 @@ import {
   ADMIN_USER_RECENT_INTENTS,
   ADMIN_USER_RECENT_LEDGER,
   AdminErrorCode,
+  AuditAction,
+  AuditEntityType,
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
   TokenLedgerKind,
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
+  type AdminAuditQuery,
   type AdminIntentsQuery,
   type AdminTokensQuery,
   type AdminTradingSessionsQuery,
@@ -20,6 +23,8 @@ import { buildWebApp } from './app';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { SESSION_COOKIE, CHALLENGE_COOKIE } from './admin/routes';
 import {
+  SAMPLE_AUDIT,
+  SAMPLE_AUDIT_ENTRY_NULLS,
   SAMPLE_INTENT,
   SAMPLE_INTENT_RESPONSE,
   SAMPLE_INTENTS,
@@ -77,6 +82,7 @@ interface Calls {
   intent: unknown[][];
   tradingSessions: [string, AdminTradingSessionsQuery][];
   tokens: [string, AdminTokensQuery][];
+  audit: [string, AdminAuditQuery][];
 }
 
 let calls: Calls;
@@ -97,6 +103,7 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     intent: [],
     tradingSessions: [],
     tokens: [],
+    audit: [],
   };
   lines = [];
   const client: BackendClient = {
@@ -147,6 +154,10 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     tokens: async (token, query) => {
       calls.tokens.push([token, query]);
       return SAMPLE_TOKENS;
+    },
+    audit: async (token, query) => {
+      calls.audit.push([token, query]);
+      return SAMPLE_AUDIT;
     },
     oauthCallback: async () => {
       throw new Error('the admin pages never forward an OAuth callback');
@@ -941,6 +952,7 @@ describe('the trading sessions page, the card section and the overview breakdown
     TEXTS.navIntents,
     TEXTS.navTradingSessions,
     TEXTS.navTokens,
+    TEXTS.navAudit,
   ];
 
   it.each([
@@ -952,7 +964,8 @@ describe('the trading sessions page, the card section and the overview breakdown
     `/admin/intents/${SAMPLE_INTENT.id}`,
     '/admin/trading-sessions',
     '/admin/tokens',
-  ])('%s carries the six nav items in order, staff sessions named as such', async (url) => {
+    '/admin/audit',
+  ])('%s carries the seven nav items in order, staff sessions named as such', async (url) => {
     const response = await get(url, withCookie);
 
     expect(response.statusCode).toBe(200);
@@ -963,6 +976,7 @@ describe('the trading sessions page, the card section and the overview breakdown
       'Заявки',
       'Торговые сессии',
       'Токены',
+      'Аудит',
     ]);
     expect(navOf(response.body)).toEqual(NAV_LABELS);
     expect(response.body).toContain('<a href="/admin/trading-sessions"');
@@ -1349,6 +1363,230 @@ describe('the token ledger page and the card section (#109)', () => {
     expect(section).toContain(TEXTS.tokensEmpty);
     expect(section).not.toContain(TEXTS.userLedgerRecent(ADMIN_USER_RECENT_LEDGER));
     expect(hrefOf(section, TEXTS.userLedgerAll)).toBe(`/admin/tokens?user=${SAMPLE_USER_ID}`);
+  });
+});
+
+describe('the audit log page (#110)', () => {
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+  const ACTOR = SAMPLE_ME.staffId;
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+  const FILTERS = {
+    action: AuditAction.UserViewed,
+    entityType: AuditEntityType.User,
+    entityId: SAMPLE_USER_ID,
+    actorId: ACTOR,
+    from: '2026-10-01',
+    to: '2026-10-07',
+  };
+
+  // the href of the link whose text is `label`, as a browser would read it back
+  const hrefOf = (body: string, label: string): string | undefined => {
+    const match = new RegExp(`<a href="([^"]*)"\\s*>\\s*${label}\\s*</a`).exec(body);
+    return match?.[1]?.replaceAll('&amp;', '&');
+  };
+  // the body rows of the one table on the page
+  const rowsOf = (body: string): string[] => body.split('<tr>').slice(2);
+  const optionsOf = (body: string, name: string): (string | undefined)[] => {
+    const select = new RegExp(`<select name="${name}">([\\s\\S]*?)</select>`).exec(body)?.[1] ?? '';
+    return [...select.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
+  };
+
+  it('marks Аудит as the current page, last in the nav, and carries the login', async () => {
+    const response = await get('/admin/audit', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatch(
+      /<a href="\/admin\/audit"\s+aria-current="page"\s*>\s*Аудит\s*<\/a\s*>\s*<\/nav>/,
+    );
+    expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+  });
+
+  it('asks for the whole log when every field of the form was left empty', async () => {
+    const response = await get('/admin/audit?action=&entityType=&entityId=&from=&to=', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(calls.audit).toEqual([[TOKEN, {}]]);
+  });
+
+  it('offers every action and every entity type, an empty option first, and selects the filters', async () => {
+    const response = await get('/admin/audit?action=staff_logout&entityType=bot_text', withCookie);
+
+    expect(optionsOf(response.body, 'action')).toEqual(['', ...Object.values(AuditAction)]);
+    expect(optionsOf(response.body, 'entityType')).toEqual(['', ...Object.values(AuditEntityType)]);
+    expect(response.body).toMatch(/<option value="staff_logout"\s+selected/);
+    expect(response.body).toMatch(/<option value="bot_text"\s+selected/);
+    expect(response.body.match(/\sselected/g)).toHaveLength(2);
+  });
+
+  it('carries every filter and the cursor through the next link, and keeps them in the form', async () => {
+    await app.close();
+    app = build({
+      audit: (token, query) => {
+        calls.audit.push([token, query]);
+        return Promise.resolve({ ...SAMPLE_AUDIT, nextCursor: CURSOR });
+      },
+    });
+
+    const first = await get(`/admin/audit?${new URLSearchParams(FILTERS)}`, withCookie);
+    expect(first.body).toContain(`name="entityId" value="${SAMPLE_USER_ID}"`);
+    expect(first.body).toContain('name="from" type="date" value="2026-10-01"');
+    expect(first.body).toContain('name="to" type="date" value="2026-10-07"');
+    expect(first.body).not.toContain(TEXTS.auditFirst);
+    const next = hrefOf(first.body, TEXTS.auditNext);
+    expect(next).toBe(`/admin/audit?${new URLSearchParams({ ...FILTERS, cursor: CURSOR })}`);
+    const second = await get(next ?? '', withCookie);
+
+    expect(calls.audit.map(([, query]) => query)).toEqual([
+      FILTERS,
+      { ...FILTERS, cursor: CURSOR },
+    ]);
+    expect(hrefOf(second.body, TEXTS.auditFirst)).toBe(
+      `/admin/audit?${new URLSearchParams(FILTERS)}`,
+    );
+  });
+
+  it('drops a malformed cursor and keeps the filters', async () => {
+    const response = await get('/admin/audit?cursor=bad&action=staff_logout', withCookie);
+
+    expect([response.statusCode, response.headers.location]).toEqual([
+      302,
+      '/admin/audit?action=staff_logout',
+    ]);
+    expect(calls.audit).toEqual([]);
+  });
+
+  it.each([
+    ['an unknown action, even with a bad cursor', 'cursor=bad&action=bogus'],
+    ['an unknown action', 'action=bogus'],
+    ['an entity id of blanks', 'entityId=%20'],
+    ['an actor id that is not a uuid', 'actorId=cli'],
+    ['from after to', 'from=2026-10-07&to=2026-10-06'],
+    ['action twice', 'action=staff_logout&action=user_viewed'],
+  ])('refuses %s with the form, before the backend is asked', async (_label, query) => {
+    const response = await get(`/admin/audit?${query}`, withCookie);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers.location).toBeUndefined();
+    expect(calls.audit).toEqual([]);
+    expect(response.body).toContain(TEXTS.auditBadFilter);
+    expect(response.body).toContain('action="/admin/audit"');
+    // no answer from the backend, so no login to show: the account block is left out
+    expect(response.body).toContain('<nav');
+    expect(response.body).not.toContain('action="/admin/logout"');
+  });
+
+  it('renders a staff row with links, a system row as text, and an intent row linking its card', async () => {
+    const response = await get('/admin/audit', withCookie);
+
+    const [staffRow = '', systemRow = '', intentRow = ''] = rowsOf(response.body);
+    expect(staffRow).toContain('ada <code>admin</code>');
+    expect(staffRow).toContain(
+      `<a href="/admin/audit?actorId=${ACTOR}">${TEXTS.auditActorAll}</a>`,
+    );
+    expect(staffRow).toContain('<code>user_viewed</code>');
+    expect(staffRow).toContain(
+      `<code>user</code> <a href="/admin/users/${SAMPLE_USER_ID}">${SAMPLE_USER_ID}</a>`,
+    );
+    expect(staffRow).toContain(
+      '<code class="payload">{&quot;path&quot;: &quot;/admin/users/:id&quot;, &quot;result&quot;: &quot;found&quot;}</code>',
+    );
+    expect(staffRow).not.toContain(TEXTS.auditPayloadTruncated);
+
+    expect(systemRow).toContain('cli <code>system</code>');
+    expect(response.body).not.toContain('href="/admin/audit?actorId=cli"');
+    expect(systemRow).toMatch(/<td>\s*— —\s*<\/td>/);
+    expect(systemRow).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(systemRow).not.toContain('<script>');
+    expect(systemRow).toContain(TEXTS.auditPayloadTruncated);
+
+    expect(intentRow).toContain(
+      `<code>trade_intent</code> <a href="/admin/intents/${SAMPLE_INTENT.id}">${SAMPLE_INTENT.id}</a>`,
+    );
+  });
+
+  it('prints none for a row with neither login nor actor id, and a user type without an id as text', async () => {
+    await app.close();
+    app = build({
+      audit: () =>
+        Promise.resolve({
+          ...SAMPLE_AUDIT,
+          entries: [{ ...SAMPLE_AUDIT_ENTRY_NULLS, actorId: null, entityType: 'user' }],
+        }),
+    });
+
+    const response = await get('/admin/audit', withCookie);
+
+    const [only = ''] = rowsOf(response.body);
+    expect(only).toMatch(/<td>\s*— <code>system<\/code>\s*<\/td>/);
+    expect(only).toMatch(/<td>\s*<code>user<\/code> —\s*<\/td>/);
+    expect(response.body).not.toContain('href="/admin/users/null"');
+  });
+
+  it('shows the actor filter with a reset link and a hidden field only when it is set', async () => {
+    const filtered = await get(`/admin/audit?actorId=${ACTOR}&action=staff_logout`, withCookie);
+    expect(filtered.body).toContain(TEXTS.auditActorFilter(ACTOR));
+    expect(filtered.body).toContain(`<input type="hidden" name="actorId" value="${ACTOR}"`);
+    expect(hrefOf(filtered.body, TEXTS.auditActorReset)).toBe('/admin/audit?action=staff_logout');
+
+    const plain = await get('/admin/audit', withCookie);
+    expect(plain.body).not.toContain(TEXTS.auditActorFilter(ACTOR));
+    expect(plain.body).not.toContain('name="actorId"');
+  });
+
+  it('says so when there are no entries, and keeps the filters in the first-page link', async () => {
+    await app.close();
+    app = build({ audit: () => Promise.resolve({ ...SAMPLE_AUDIT, entries: [] }) });
+
+    const response = await get('/admin/audit?action=staff_logout', withCookie);
+
+    expect(response.body).toContain(TEXTS.auditEmpty);
+    expect(hrefOf(response.body, TEXTS.auditFirst)).toBe('/admin/audit?action=staff_logout');
+  });
+
+  it.each([
+    ['with accounts and rows', SAMPLE_USER],
+    [
+      'without accounts or rows',
+      {
+        ...SAMPLE_USER,
+        brokerAccounts: [],
+        intents: { recent: [], total: 0, active: 0 },
+        ledger: { recent: [] },
+      },
+    ],
+  ])('links the user card %s to the audit of that user', async (_label, user) => {
+    await app.close();
+    app = build({ user: () => Promise.resolve(user) });
+
+    const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+
+    const section = response.body.slice(response.body.indexOf(`<h2>${TEXTS.userAudit}</h2>`));
+    expect(section.length).toBeLessThan(response.body.length);
+    expect(hrefOf(section, TEXTS.userAuditAll)).toBe(
+      `/admin/audit?entityType=user&entityId=${SAMPLE_USER_ID}`,
+    );
+  });
+
+  it('drops a session the backend no longer knows, and keeps the cookie on its own failure', async () => {
+    await app.close();
+    app = build({ audit: () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)) });
+    const gone = await get('/admin/audit', withCookie);
+    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+
+    await app.close();
+    app = build({ audit: () => Promise.reject(httpFailure(500)) });
+    const failed = await get('/admin/audit', withCookie);
+    expect(failed.statusCode).toBe(500);
+    expect(cookieOf(failed, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it('treats a malformed session cookie as none, before the backend is asked', async () => {
+    const response = await get('/admin/audit', { [SESSION_COOKIE]: 'not-a-session-token' });
+
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+    expect(calls.audit).toEqual([]);
   });
 });
 

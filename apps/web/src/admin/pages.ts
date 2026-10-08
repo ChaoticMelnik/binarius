@@ -2,13 +2,19 @@ import {
   ADMIN_INTENTS_ACTIVE_FILTER,
   ADMIN_USER_RECENT_INTENTS,
   ADMIN_USER_RECENT_LEDGER,
+  adminAuditSearchParams,
   adminIntentsSearchParams,
   adminTokensSearchParams,
   adminTradingSessionsSearchParams,
   adminUsersSearchParams,
+  AuditAction,
+  AuditEntityType,
   TokenLedgerKind,
   TradeIntentStatus,
   TradeMode,
+  UUID_PATTERN,
+  type AdminAuditEntryView,
+  type AdminAuditQuery,
   type AdminBrokerAccountView,
   type AdminIntentsQuery,
   type AdminLedgerEntry,
@@ -95,7 +101,7 @@ const yesNo = (value: boolean): string => (value ? TEXTS.yes : TEXTS.no);
 // The pages a staff session opens, in nav order. The read pages that follow #107 append their
 // keys here; a page outside the nav passes no `active`.
 export type AdminNavKey =
-  'overview' | 'users' | 'sessions' | 'intents' | 'tradingSessions' | 'tokens';
+  'overview' | 'users' | 'sessions' | 'intents' | 'tradingSessions' | 'tokens' | 'audit';
 
 const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview },
@@ -104,6 +110,7 @@ const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'intents', href: '/admin/intents', label: TEXTS.navIntents },
   { key: 'tradingSessions', href: '/admin/trading-sessions', label: TEXTS.navTradingSessions },
   { key: 'tokens', href: '/admin/tokens', label: TEXTS.navTokens },
+  { key: 'audit', href: '/admin/audit', label: TEXTS.navAudit },
 ];
 
 /**
@@ -396,7 +403,13 @@ export const userPage = (
           : html`<p class="hint">${TEXTS.userLedgerRecent(ADMIN_USER_RECENT_LEDGER)}</p>
               ${ledgerTable(ledger.recent)}`
       }
-      <p><a href="${tokensHref({ user: user.id })}">${TEXTS.userLedgerAll}</a></p>`,
+      <p><a href="${tokensHref({ user: user.id })}">${TEXTS.userLedgerAll}</a></p>
+      <h2>${TEXTS.userAudit}</h2>
+      <p>
+        <a href="${auditHref({ entityType: AuditEntityType.User, entityId: user.id })}"
+          >${TEXTS.userAuditAll}</a
+        >
+      </p>`,
   });
 
 /** The intents list URL, through the same serializer as usersHref. */
@@ -744,6 +757,144 @@ export const tokensPage = (
             ? ''
             : html`<a href="${tokensHref({ ...filters, cursor: options.nextCursor })}"
                 >${TEXTS.tokensNext}</a
+              >`
+        }
+      </p>`,
+  });
+};
+
+/** The audit log URL, through the shared serializer as the other lists. */
+export const auditHref = (query: AdminAuditQuery): string => {
+  const params = adminAuditSearchParams(query);
+  return params.size > 0 ? `/admin/audit?${params}` : '/admin/audit';
+};
+
+// actor_id is free text: only a uuid is something the actor filter accepts, so only a uuid gets
+// the "all events" link; anything else ('cli') is printed as it is.
+const auditActor = (entry: AdminAuditEntryView): SafeHtml => {
+  const name = entry.actorLogin ?? entry.actorId ?? TEXTS.none;
+  const link =
+    entry.actorId !== null && UUID_PATTERN.test(entry.actorId)
+      ? html` <a href="${auditHref({ actorId: entry.actorId })}">${TEXTS.auditActorAll}</a>`
+      : '';
+  return html`${name} ${code(entry.actorType)}${link}`;
+};
+
+// Only a user and an intent have a page; a type without an id links nowhere.
+const auditEntity = (entry: AdminAuditEntryView): SafeHtml => {
+  const { entityType, entityId } = entry;
+  if (entityId !== null && entityType === AuditEntityType.User) {
+    return html`${code(entityType)} <a href="/admin/users/${entityId}">${entityId}</a>`;
+  }
+  if (entityId !== null && entityType === AuditEntityType.TradeIntent) {
+    return html`${code(entityType)} <a href="/admin/intents/${entityId}">${entityId}</a>`;
+  }
+  return html`${code(entityType)} ${orNone(entityId)}`;
+};
+
+const auditRow = (entry: AdminAuditEntryView): SafeHtml =>
+  html`<tr>
+    <td>${when(entry.createdAt)}</td>
+    <td>${auditActor(entry)}</td>
+    <td>${code(entry.action)}</td>
+    <td>${auditEntity(entry)}</td>
+    <td class="payload">
+      <code class="payload">${entry.payload}</code>${
+        entry.payloadTruncated ? html` ${TEXTS.auditPayloadTruncated}` : ''
+      }
+    </td>
+  </tr>`;
+
+export const auditPage = (
+  entries: readonly AdminAuditEntryView[],
+  options: {
+    filters: Omit<AdminAuditQuery, 'cursor'>;
+    cursor?: string;
+    nextCursor: string | null;
+    login?: string;
+    message?: string;
+  },
+): SafeHtml => {
+  const { filters } = options;
+  const { actorId, ...withoutActor } = filters;
+  return adminShell({
+    title: TEXTS.auditTitle,
+    active: 'audit',
+    login: options.login,
+    body: html`<h1>${TEXTS.auditHeading}</h1>
+      ${error(options.message)}
+      <form class="search" method="get" action="/admin/audit">
+        <label
+          >${TEXTS.auditFilterAction}
+          <select name="action">
+            ${option('', TEXTS.auditFilterAnyAction, filters.action ?? '')}
+            ${Object.values(AuditAction).map((a) => option(a, a, filters.action))}
+          </select>
+        </label>
+        <label
+          >${TEXTS.auditFilterEntityType}
+          <select name="entityType">
+            ${option('', TEXTS.auditFilterAnyEntityType, filters.entityType ?? '')}
+            ${Object.values(AuditEntityType).map((t) => option(t, t, filters.entityType))}
+          </select>
+        </label>
+        <label
+          >${TEXTS.auditFilterEntityId}
+          <input name="entityId" value="${filters.entityId ?? ''}" autocomplete="off" />
+        </label>
+        <label
+          >${TEXTS.auditFilterFrom}
+          <input name="from" type="date" value="${filters.from ?? ''}" />
+        </label>
+        <label
+          >${TEXTS.auditFilterTo}
+          <input name="to" type="date" value="${filters.to ?? ''}" />
+        </label>
+        ${
+          actorId === undefined
+            ? ''
+            : html`<input type="hidden" name="actorId" value="${actorId}" />`
+        }
+        <button type="submit">${TEXTS.auditFilterSubmit}</button>
+      </form>
+      ${
+        actorId === undefined
+          ? ''
+          : html`<p>
+              ${TEXTS.auditActorFilter(actorId)} —
+              <a href="${auditHref(withoutActor)}">${TEXTS.auditActorReset}</a>
+            </p>`
+      }
+      <p class="hint">${TEXTS.auditFilterHint}</p>
+      ${
+        entries.length === 0
+          ? html`<p>${TEXTS.auditEmpty}</p>`
+          : html`<table>
+              <thead>
+                <tr>
+                  <th>${TEXTS.columnAuditAt}</th>
+                  <th>${TEXTS.columnActor}</th>
+                  <th>${TEXTS.columnAuditAction}</th>
+                  <th>${TEXTS.columnEntity}</th>
+                  <th>${TEXTS.columnPayload}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${entries.map(auditRow)}
+              </tbody>
+            </table>`
+      }
+      <p class="pager">
+        ${
+          options.cursor !== undefined || entries.length === 0
+            ? html`<a href="${auditHref(filters)}">${TEXTS.auditFirst}</a>`
+            : ''
+        }
+        ${
+          options.nextCursor === null
+            ? ''
+            : html`<a href="${auditHref({ ...filters, cursor: options.nextCursor })}"
+                >${TEXTS.auditNext}</a
               >`
         }
       </p>`,
