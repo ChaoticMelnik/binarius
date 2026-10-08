@@ -1,11 +1,15 @@
 import { eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   ADMIN_ACTIVE_WINDOW_MINUTES,
   ADMIN_PAGE_SIZE,
   AuthRevokedReason,
   BrokerAccountStatus,
+  TradeAction,
+  TradeIntentStatus,
+  TradeMode,
   UserStatus,
+  type DecimalString,
 } from '@binarius/shared';
 import {
   classifyUserSearch,
@@ -13,9 +17,11 @@ import {
   readAdminOverview,
   readUserForAdmin,
   toAdminBrokerAccountView,
+  toAdminOverview,
   toAdminUserDetail,
   type UserSearch,
 } from './admin-read-ops';
+import { TERMINAL_TRADE_INTENT_STATUSES } from './schema/trade-intents';
 import type { Db } from './client';
 import { brokerAccounts, tradeIntents, users } from './schema/index';
 import {
@@ -317,5 +323,96 @@ describe('readAdminOverview', () => {
     expect(row.dayStartsAt.getTime()).toBe(
       Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate()),
     );
+  });
+});
+
+describe('readUserForAdmin — the trading section (#330)', () => {
+  const db = withDatabase();
+
+  it("reads the user's own intents and counts into the card", async () => {
+    const { userId } = await seedUser(db());
+    const brokerAccountId = await seedBrokerAccount(db(), userId);
+    const [own] = await db()
+      .insert(tradeIntents)
+      .values({
+        userId,
+        brokerAccountId,
+        mode: TradeMode.Demo,
+        assetId: 1,
+        amount: '1.50000000' as DecimalString,
+        action: TradeAction.Up,
+        durationSec: 60,
+        clientRequestId: 'card-1',
+        status: TradeIntentStatus.Queued,
+        tokensReserved: 1n,
+      })
+      .returning({ id: tradeIntents.id });
+    await seedQueuedIntent(db());
+    const card = await db().transaction((tx) => readUserForAdmin(tx, userId));
+    expect(card?.intents.recent.map((r) => r.id)).toEqual([own?.id]);
+    expect(card?.intents).toMatchObject({ total: 1, active: 1 });
+  });
+});
+
+describe('readAdminOverview — intents by status (#330)', () => {
+  const db = withDatabase();
+
+  const overview = () =>
+    db().transaction((tx) =>
+      readAdminOverview(tx, { activeWindowMinutes: ADMIN_ACTIVE_WINDOW_MINUTES }),
+    );
+  const statuses = Object.values(TradeIntentStatus);
+  const isTerminal = (s: TradeIntentStatus) => TERMINAL_TRADE_INTENT_STATUSES.includes(s);
+
+  it('gives every status a zero and no active intent on an empty table', async () => {
+    const view = toAdminOverview(await overview(), ADMIN_ACTIVE_WINDOW_MINUTES);
+    expect(view.intents.byStatus).toEqual(Object.fromEntries(statuses.map((s) => [s, 0])));
+    expect(view.intents.active).toBe(0);
+  });
+
+  it('counts each status, sums to the total, and counts the non-terminal ones as active', async () => {
+    const { userId } = await seedUser(db());
+    let seq = 0;
+    const insert = (status: TradeIntentStatus, brokerAccountId: string) =>
+      db()
+        .insert(tradeIntents)
+        .values({
+          userId,
+          brokerAccountId,
+          mode: TradeMode.Demo,
+          assetId: 1,
+          amount: '1.50000000' as DecimalString,
+          action: TradeAction.Up,
+          durationSec: 60,
+          clientRequestId: `overview-${++seq}`,
+          status,
+          tokensReserved: isTerminal(status) ? 0n : 1n,
+        });
+    // one non-terminal intent per account (trade_intents_active_account_idx)
+    for (const status of statuses) await insert(status, await seedBrokerAccount(db(), userId));
+    await insert(TradeIntentStatus.Settled, await seedBrokerAccount(db(), userId));
+
+    const view = toAdminOverview(await overview(), ADMIN_ACTIVE_WINDOW_MINUTES);
+    expect(view.intents.byStatus).toEqual({
+      ...Object.fromEntries(statuses.map((s) => [s, 1])),
+      settled: 2,
+    });
+    expect(view.intents.total).toBe(11);
+    expect(Object.values(view.intents.byStatus).reduce((a, b) => a + b, 0)).toBe(
+      view.intents.total,
+    );
+    expect(statuses.filter((s) => !isTerminal(s))).toHaveLength(8);
+    expect(view.intents.active).toBe(8);
+  });
+
+  // one statement is what makes the breakdown agree with the total
+  it('reads everything in exactly one statement', async () => {
+    await db().transaction(async (tx) => {
+      const execute = vi.spyOn(tx, 'execute');
+      const select = vi.spyOn(tx, 'select');
+      await readAdminOverview(tx, { activeWindowMinutes: ADMIN_ACTIVE_WINDOW_MINUTES });
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(select).not.toHaveBeenCalled();
+    });
   });
 });

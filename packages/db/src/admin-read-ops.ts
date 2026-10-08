@@ -3,18 +3,22 @@ import {
   addressOrNull,
   BrokerAccountStatus,
   telegramUserIdSchema,
+  TradeIntentStatus,
   UserStatus,
+  type AdminIntentsByStatus,
   type AdminBrokerAccountView,
   type AdminOverview,
   type AdminUserDetail,
   type AdminUserListItem,
 } from '@binarius/shared';
+import { readUserIntentsSection, type AdminUserIntentRows } from './admin-trading-ops';
 import { brokerAccounts } from './schema/broker-accounts';
-import { tradeIntents } from './schema/trade-intents';
+import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { users } from './schema/users';
 import type { Tx } from './trade-intent-ops';
 
-// The admin read pages (#107, docs/admin-pages.md). Every function takes a Tx, not a Db: each
+// The admin read pages (#107, the trading section and the overview breakdown #330;
+// docs/admin-pages.md). Every function takes a Tx, not a Db: each
 // runs inside the staff transaction that also writes its audit row (runAsStaff), and none of
 // them locks anything — only the staff_sessions touch is an UPDATE.
 
@@ -132,11 +136,12 @@ export type AdminBrokerAccountRow = Pick<
 export interface AdminUserCard {
   user: AdminUserRow;
   brokerAccounts: AdminBrokerAccountRow[];
+  intents: AdminUserIntentRows;
 }
 
-// Two selects without a shared snapshot (READ COMMITTED): an account linked between them may or
-// may not show, and either answer was true at its moment. Ciphertexts, the key id and the
-// refresh-token hash are never selected.
+// Four selects without a shared snapshot (READ COMMITTED): an account linked or an intent created
+// in between may or may not show, and either answer was true at its moment. Ciphertexts, the key
+// id and the refresh-token hash are never selected.
 export async function readUserForAdmin(tx: Tx, userId: string): Promise<AdminUserCard | undefined> {
   const [user] = await tx
     .select({
@@ -176,7 +181,7 @@ export async function readUserForAdmin(tx: Tx, userId: string): Promise<AdminUse
     .from(brokerAccounts)
     .where(eq(brokerAccounts.userId, userId))
     .orderBy(desc(brokerAccounts.createdAt), desc(brokerAccounts.id));
-  return { user, brokerAccounts: accounts };
+  return { user, brokerAccounts: accounts, intents: await readUserIntentsSection(tx, userId) };
 }
 
 export interface AdminOverviewRow {
@@ -187,6 +192,8 @@ export interface AdminOverviewRow {
   usersActiveNow: number;
   intentsTotal: number;
   intentsToday: number;
+  // only the statuses that have rows; the CHECK keeps every key a TradeIntentStatus
+  intentsByStatus: Partial<Record<string, number>>;
   dayStartsAt: Date;
   asOf: Date;
 }
@@ -206,6 +213,7 @@ export async function readAdminOverview(
     users_active_now: number;
     intents_total: number;
     intents_today: number;
+    intents_by_status: Partial<Record<string, number>>;
     day_starts_at: Date | string;
     as_of: Date | string;
   }>(sql`
@@ -223,6 +231,9 @@ export async function readAdminOverview(
       (select count(*)::int from ${tradeIntents}) as intents_total,
       (select count(*)::int from ${tradeIntents} where ${tradeIntents.createdAt} >= d.day_start)
         as intents_today,
+      coalesce((select jsonb_object_agg(s.status, s.n) from
+        (select ${tradeIntents.status} as status, count(*)::int as n from ${tradeIntents}
+          group by ${tradeIntents.status}) as s), '{}'::jsonb) as intents_by_status,
       d.day_start as day_starts_at,
       now() as as_of
     from (select date_trunc('day', now() at time zone 'UTC') at time zone 'UTC' as day_start) as d
@@ -237,6 +248,7 @@ export async function readAdminOverview(
     usersActiveNow: row.users_active_now,
     intentsTotal: row.intents_total,
     intentsToday: row.intents_today,
+    intentsByStatus: row.intents_by_status,
     dayStartsAt: new Date(row.day_starts_at),
     asOf: new Date(row.as_of),
   };
@@ -303,6 +315,9 @@ export function toAdminOverview(
   row: AdminOverviewRow,
   activeWindowMinutes: AdminOverview['activeWindowMinutes'],
 ): AdminOverview {
+  const byStatus = Object.fromEntries(
+    Object.values(TradeIntentStatus).map((status) => [status, row.intentsByStatus[status] ?? 0]),
+  ) as AdminIntentsByStatus;
   return {
     users: {
       total: row.usersTotal,
@@ -311,7 +326,14 @@ export function toAdminOverview(
       withActiveBrokerAccount: row.usersWithActiveBrokerAccount,
       activeNow: row.usersActiveNow,
     },
-    intents: { total: row.intentsTotal, today: row.intentsToday },
+    intents: {
+      total: row.intentsTotal,
+      today: row.intentsToday,
+      byStatus,
+      active: Object.values(TradeIntentStatus)
+        .filter((status) => !TERMINAL_TRADE_INTENT_STATUSES.includes(status))
+        .reduce((sum, status) => sum + byStatus[status], 0),
+    },
     activeWindowMinutes,
     dayStartsAt: row.dayStartsAt.toISOString(),
     asOf: row.asOf.toISOString(),

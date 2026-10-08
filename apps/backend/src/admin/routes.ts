@@ -8,6 +8,7 @@ import {
   safeParseAdminConfirmRequest,
   safeParseAdminIntentsQuery,
   safeParseAdminLoginRequest,
+  safeParseAdminTradingSessionsQuery,
   safeParseAdminUsersQuery,
   STAFF_SESSION_TOKEN_PATTERN,
   UUID_PATTERN,
@@ -24,6 +25,7 @@ import {
   findStaffForLogin,
   listIntentsForAdmin,
   listLiveStaffSessions,
+  listTradingSessionsForAdmin,
   listUsersForAdmin,
   markChallengePromptSent,
   readAdminOverview,
@@ -41,6 +43,7 @@ import {
   toAdminBrokerAccountView,
   toAdminOverview,
   toAdminTradeIntentView,
+  toAdminTradingSessionView,
   toAdminUserDetail,
   toAdminUserListItem,
   verifyPassword,
@@ -466,6 +469,11 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
           me: meOf(ctx),
           user: toAdminUserDetail(card.user),
           brokerAccounts: card.brokerAccounts.map(toAdminBrokerAccountView),
+          intents: {
+            recent: card.intents.recent.map(toAdminTradeIntentView),
+            total: card.intents.total,
+            active: card.intents.active,
+          },
         },
         audit: {
           action: AuditAction.UserViewed,
@@ -557,6 +565,38 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     if (answer === null) {
       return reply.code(404).send({ error: AdminErrorCode.NotFound });
     }
+    return reply.send(answer);
+  });
+
+  // --- Trading sessions (#330, docs/admin-pages.md) ----------------------------------------------
+
+  app.get('/admin/trading-sessions', async (request, reply) => {
+    // before the session: a query outside the schema costs no transaction and leaves no row
+    const parsed = safeParseAdminTradingSessionsQuery(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+    }
+    const { cursor } = parsed.data;
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const page = await listTradingSessionsForAdmin(tx, { cursor, limit: ADMIN_PAGE_SIZE });
+      return {
+        result: {
+          me: meOf(ctx),
+          sessions: page.rows.map(toAdminTradingSessionView),
+          nextCursor: page.nextCursor,
+        },
+        audit: {
+          action: AuditAction.TradingSessionsViewed,
+          payload: {
+            path: '/admin/trading-sessions',
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
     return reply.send(answer);
   });
 };

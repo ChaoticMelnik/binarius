@@ -3,7 +3,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   ADMIN_INTENTS_ACTIVE_FILTER,
   ADMIN_PAGE_SIZE,
+  ADMIN_USER_RECENT_INTENTS,
   adminTradeIntentViewSchema,
+  adminTradingSessionViewSchema,
   TradeAction,
   type DecimalString,
   TradeIntentStatus,
@@ -13,8 +15,11 @@ import {
 } from '@binarius/shared';
 import {
   listIntentsForAdmin,
+  listTradingSessionsForAdmin,
   readIntentForAdmin,
+  readUserIntentsSection,
   toAdminTradeIntentView,
+  toAdminTradingSessionView,
   type AdminIntentFilters,
 } from './admin-trading-ops';
 import type { Db } from './client';
@@ -25,8 +30,10 @@ import {
   seedBrokerAccount,
   seedTradingSession,
   seedUser,
+  sessionSettings,
   type TempDatabase,
 } from './testing';
+import { markSessionDecision } from './trading-session-ops';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -389,5 +396,233 @@ describe('readIntentForAdmin and toAdminTradeIntentView', () => {
       tokensReserved: '1',
     });
     expect(await read(bare.id)).toMatchObject({ tradingSessionId: null, reconcileClaimedAt: null });
+  });
+});
+
+// --- The trading sessions page and the user card's trading section (#330) ---------------------
+
+const listSessions = (db: Db, options: { cursor?: string; limit?: number } = {}) =>
+  db.transaction((tx) => listTradingSessionsForAdmin(tx, { limit: ADMIN_PAGE_SIZE, ...options }));
+
+// A stopped session written directly, created_at explicit: an account holds one active session at
+// most, stopped ones are free.
+async function insertStoppedSession(
+  db: Db,
+  brokerAccountId: string,
+  row: { secondsAgo: number; settings?: unknown; id?: string },
+): Promise<string> {
+  const [inserted] = await db
+    .insert(tradingSessions)
+    .values({
+      ...(row.id === undefined ? {} : { id: row.id }),
+      brokerAccountId,
+      mode: TradeMode.Demo,
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Completed,
+      endedAt: new Date('2026-10-01T12:30:00.000Z'),
+      settings: (row.settings ?? sessionSettings()) as never,
+      createdAt: sql`'2026-10-01T12:00:00.000000Z'::timestamptz - make_interval(secs => ${row.secondsAgo})`,
+    })
+    .returning({ id: tradingSessions.id });
+  if (inserted === undefined) throw new Error('insertStoppedSession: insert returned no row');
+  return inserted.id;
+}
+
+describe('listTradingSessionsForAdmin — pages (#330)', () => {
+  const db = withDatabase();
+  const ids: string[] = [];
+
+  beforeAll(async () => {
+    const { userId } = await seedUser(db());
+    const brokerAccountId = await seedBrokerAccount(db(), userId);
+    for (let i = 0; i < ADMIN_PAGE_SIZE + 1; i += 1) {
+      ids.push(await insertStoppedSession(db(), brokerAccountId, { secondsAgo: i + 1 }));
+    }
+  });
+
+  it('shows ADMIN_PAGE_SIZE rows and a cursor at the last one shown when one more exists', async () => {
+    const page = await listSessions(db());
+    expect(page.rows.map((r) => r.id)).toEqual(ids.slice(0, ADMIN_PAGE_SIZE));
+    expect(page.nextCursor).toBe(ids[ADMIN_PAGE_SIZE - 1]);
+    const next = await listSessions(db(), { cursor: page.nextCursor ?? undefined });
+    expect(next.rows.map((r) => r.id)).toEqual([ids[ADMIN_PAGE_SIZE]]);
+    expect(next.nextCursor).toBeNull();
+  });
+
+  it('gives no cursor when exactly ADMIN_PAGE_SIZE rows remain', async () => {
+    const page = await listSessions(db(), { cursor: ids[0] });
+    expect(page.rows).toHaveLength(ADMIN_PAGE_SIZE);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it('answers an id with no row with an empty page, not an error', async () => {
+    const page = await listSessions(db(), { cursor: '00000000-0000-4000-8000-00000000dead' });
+    expect(page).toEqual({ rows: [], nextCursor: null });
+  });
+});
+
+describe('listTradingSessionsForAdmin — equal created_at across a page boundary (#330)', () => {
+  // a database per limit: the walk compares against every row there is
+  describe.each([1, 2])('at limit %i', (limit) => {
+    const db = withDatabase();
+
+    it('breaks the tie by id, with no row skipped or repeated', async () => {
+      const { userId } = await seedUser(db());
+      const brokerAccountId = await seedBrokerAccount(db(), userId);
+      const newest = await insertStoppedSession(db(), brokerAccountId, { secondsAgo: 0 });
+      // inserted in ascending id order, so the heap order alone is the wrong order
+      const tied: string[] = [];
+      for (const n of [1, 2, 3, 4]) {
+        const id = `00000000-0000-4000-8000-00000000000${n}`;
+        tied.push(await insertStoppedSession(db(), brokerAccountId, { secondsAgo: 1, id }));
+      }
+      const walked: string[] = [];
+      let cursor: string | undefined;
+      for (let i = 0; i < 10; i += 1) {
+        const page = await listSessions(db(), { cursor, limit });
+        walked.push(...page.rows.map((r) => r.id));
+        cursor = page.nextCursor ?? undefined;
+        if (cursor === undefined) break;
+      }
+      expect(walked).toEqual([newest, ...[...tied].reverse()]);
+      expect(cursor).toBeUndefined();
+    });
+  });
+});
+
+describe('listTradingSessionsForAdmin and toAdminTradingSessionView — owner and projection (#330)', () => {
+  const db = withDatabase();
+
+  const sessionView = async (id: string) => {
+    const page = await listSessions(db());
+    const row = page.rows.find((r) => r.id === id);
+    if (row === undefined) throw new Error(`no session ${id}`);
+    return toAdminTradingSessionView(row);
+  };
+
+  it("carries each session's own account and that account's owner", async () => {
+    const ada = await seedUser(db());
+    const bob = await seedUser(db());
+    const adaAccount = await seedBrokerAccount(db(), ada.userId, { brokerUserId: 'ada-broker' });
+    const bobAccount = await seedBrokerAccount(db(), bob.userId, { brokerUserId: 'bob-broker' });
+    const adaSession = await insertStoppedSession(db(), adaAccount, { secondsAgo: 2 });
+    const bobSession = await insertStoppedSession(db(), bobAccount, { secondsAgo: 1 });
+    expect(await sessionView(adaSession)).toMatchObject({
+      brokerAccountId: adaAccount,
+      brokerUserId: 'ada-broker',
+      userId: ada.userId,
+      telegramUserId: ada.telegramUserId,
+    });
+    expect(await sessionView(bobSession)).toMatchObject({
+      brokerAccountId: bobAccount,
+      brokerUserId: 'bob-broker',
+      userId: bob.userId,
+      telegramUserId: bob.telegramUserId,
+    });
+  });
+
+  it("projects to exactly the view's keys; a stopped session has its reason and end", async () => {
+    const { userId } = await seedUser(db());
+    const accountId = await seedBrokerAccount(db(), userId);
+    const id = await insertStoppedSession(db(), accountId, { secondsAgo: 0 });
+    const view = await sessionView(id);
+    expect(Object.keys(view)).toEqual(Object.keys(adminTradingSessionViewSchema.shape));
+    expect(adminTradingSessionViewSchema.safeParse(view).success).toBe(true);
+    expect(view).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Completed,
+      endedAt: '2026-10-01T12:30:00.000Z',
+    });
+    expect(view.settings).toEqual(sessionSettings());
+  });
+
+  it('an active session has no reason, end or decision until one is marked', async () => {
+    const { userId } = await seedUser(db());
+    const accountId = await seedBrokerAccount(db(), userId);
+    const session = await seedTradingSession(db(), accountId);
+    expect(await sessionView(session.id)).toMatchObject({
+      status: TradingSessionStatus.Active,
+      stopReason: null,
+      endedAt: null,
+      lastDecisionAt: null,
+    });
+    await markSessionDecision(db(), { id: session.id });
+    const [stored] = await db()
+      .select({ at: tradingSessions.lastDecisionAt })
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, session.id));
+    if (stored?.at == null) throw new Error('the decision was not marked');
+    expect((await sessionView(session.id)).lastDecisionAt).toBe(stored.at.toISOString());
+  });
+
+  it.each([
+    ['the column default {}', {}],
+    ['v1 with an extra key', { ...sessionSettings(), extra: 1 }],
+    ['another version', { ...sessionSettings(), version: 2 }],
+  ])(
+    'shows settings as null for %s, and the view still passes its schema',
+    async (_label, settings) => {
+      const { userId } = await seedUser(db());
+      const accountId = await seedBrokerAccount(db(), userId);
+      const id = await insertStoppedSession(db(), accountId, { secondsAgo: 0, settings });
+      const view = await sessionView(id);
+      expect(view.settings).toBeNull();
+      expect(adminTradingSessionViewSchema.safeParse(view).success).toBe(true);
+    },
+  );
+});
+
+describe('readUserIntentsSection (#330)', () => {
+  const db = withDatabase();
+  let userU = '';
+  let userEmpty = '';
+  const uIds: string[] = [];
+  const nonTerminal = Object.values(TradeIntentStatus).filter((s) => !isTerminal(s));
+
+  beforeAll(async () => {
+    userU = (await seedUser(db())).userId;
+    const userV = (await seedUser(db())).userId;
+    userEmpty = (await seedUser(db())).userId;
+    let age = 0;
+    // one non-terminal intent per account (trade_intents_active_account_idx)
+    for (const status of nonTerminal) {
+      const brokerAccountId = await seedBrokerAccount(db(), userU);
+      const row = await insertIntent(db(), {
+        userId: userU,
+        brokerAccountId,
+        status,
+        secondsAgo: (age += 1),
+      });
+      uIds.push(row.id);
+    }
+    const terminalAccount = await seedBrokerAccount(db(), userU);
+    while (uIds.length < 25) {
+      const row = await insertIntent(db(), {
+        userId: userU,
+        brokerAccountId: terminalAccount,
+        status: uIds.length % 2 === 0 ? TradeIntentStatus.Settled : TradeIntentStatus.Rejected,
+        secondsAgo: (age += 1),
+      });
+      uIds.push(row.id);
+    }
+    // the other user's intents are newer than all of U's, a non-terminal one included
+    const accountV = await seedBrokerAccount(db(), userV);
+    for (const status of [TradeIntentStatus.Queued, TradeIntentStatus.Settled]) {
+      await insertIntent(db(), { userId: userV, brokerAccountId: accountV, status, secondsAgo: 0 });
+    }
+  });
+
+  const section = (userId: string) => db().transaction((tx) => readUserIntentsSection(tx, userId));
+
+  it("shows the user's newest ADMIN_USER_RECENT_INTENTS, counts all and the non-terminal ones", async () => {
+    const read = await section(userU);
+    expect(read.recent.map((r) => r.id)).toEqual(uIds.slice(0, ADMIN_USER_RECENT_INTENTS));
+    expect(read.total).toBe(25);
+    expect(nonTerminal).toHaveLength(8);
+    expect(read.active).toBe(nonTerminal.length);
+  });
+
+  it('is empty and zero for a user without intents while others have some', async () => {
+    expect(await section(userEmpty)).toEqual({ recent: [], total: 0, active: 0 });
   });
 });

@@ -1,5 +1,11 @@
 import * as z from 'zod';
-import { adminIntentStatusFilterSchema, adminTradeIntentViewSchema } from './admin-trading';
+import {
+  adminIntentsByStatusSchema,
+  adminIntentStatusFilterSchema,
+  adminTradeIntentViewSchema,
+  adminTradingSessionViewSchema,
+  adminUserIntentsSectionSchema,
+} from './admin-trading';
 import { decimalStringSchema } from './money';
 import { accountHaltReasonSchema, authRevokedReasonSchema, BrokerAccountStatus } from './oauth';
 import { telegramUserIdSchema, tokenCountSchema, tradeModeSchema } from './trading';
@@ -226,6 +232,7 @@ export const adminUserResponseSchema = z.strictObject({
   me: adminStrictMeSchema,
   user: adminUserDetailSchema,
   brokerAccounts: z.array(adminBrokerAccountViewSchema),
+  intents: adminUserIntentsSectionSchema,
 });
 export type AdminUserResponse = z.infer<typeof adminUserResponseSchema>;
 
@@ -238,7 +245,12 @@ export const adminOverviewSchema = z.strictObject({
     withActiveBrokerAccount: countSchema,
     activeNow: countSchema,
   }),
-  intents: z.strictObject({ total: countSchema, today: countSchema }),
+  intents: z.strictObject({
+    total: countSchema,
+    today: countSchema,
+    byStatus: adminIntentsByStatusSchema,
+    active: countSchema,
+  }),
   activeWindowMinutes: z.literal(ADMIN_ACTIVE_WINDOW_MINUTES),
   dayStartsAt: isoDateTime,
   asOf: isoDateTime,
@@ -286,6 +298,34 @@ export const adminIntentResponseSchema = z.strictObject({
 });
 export type AdminIntentResponse = z.infer<typeof adminIntentResponseSchema>;
 
+// --- Trading sessions (#330) --------------------------------------------------------------------
+
+// No filters: only the cursor, and unknown keys are stripped as on the other lists.
+export const adminTradingSessionsQuerySchema = z.object({
+  cursor: z.string().regex(UUID_PATTERN).optional(),
+});
+export type AdminTradingSessionsQuery = z.infer<typeof adminTradingSessionsQuerySchema>;
+
+export function adminTradingSessionsSearchParams(
+  query: AdminTradingSessionsQuery,
+): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of Object.keys(
+    adminTradingSessionsQuerySchema.shape,
+  ) as (keyof AdminTradingSessionsQuery)[]) {
+    const value = query[key];
+    if (value !== undefined) params.set(key, value);
+  }
+  return params;
+}
+
+export const adminTradingSessionsResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  sessions: z.array(adminTradingSessionViewSchema).max(ADMIN_PAGE_SIZE),
+  nextCursor: z.string().regex(UUID_PATTERN).nullable(),
+});
+export type AdminTradingSessionsResponse = z.infer<typeof adminTradingSessionsResponseSchema>;
+
 export const safeParseAdminLoginRequest = (input: unknown) =>
   adminLoginRequestSchema.safeParse(input);
 export const safeParseAdminConfirmRequest = (input: unknown) =>
@@ -312,3 +352,7 @@ export const safeParseAdminIntentsResponse = (input: unknown) =>
   adminIntentsResponseSchema.safeParse(input);
 export const safeParseAdminIntentResponse = (input: unknown) =>
   adminIntentResponseSchema.safeParse(input);
+export const safeParseAdminTradingSessionsQuery = (input: unknown) =>
+  adminTradingSessionsQuerySchema.safeParse(input);
+export const safeParseAdminTradingSessionsResponse = (input: unknown) =>
+  adminTradingSessionsResponseSchema.safeParse(input);

@@ -23,7 +23,10 @@ import {
   staffSessionsResponseSchema,
   staffSessionViewSchema,
 } from './admin';
+import { TradeIntentStatus } from './trading';
 import { STAFF_LOGIN_CORPUS } from './testing';
+
+const ZERO_BY_STATUS = Object.fromEntries(Object.values(TradeIntentStatus).map((s) => [s, 0]));
 
 const CLIENT = { ip: '203.0.113.7', userAgent: 'Mozilla/5.0' };
 
@@ -301,13 +304,14 @@ describe('admin read responses', () => {
     createdAt: AT,
     updatedAt: AT,
   };
-  const user = { me: ME, user: detail, brokerAccounts: [account] };
+  const intents = { recent: [], total: 0, active: 0 };
+  const user = { me: ME, user: detail, brokerAccounts: [account], intents };
 
   const overview = {
     me: ME,
     overview: {
       users: { total: 3, today: 1, blocked: 0, withActiveBrokerAccount: 1, activeNow: 2 },
-      intents: { total: 4, today: 0 },
+      intents: { total: 4, today: 0, byStatus: { ...ZERO_BY_STATUS, settled: 4 }, active: 0 },
       activeWindowMinutes: ADMIN_ACTIVE_WINDOW_MINUTES,
       dayStartsAt: '2026-10-07T00:00:00.000Z',
       asOf: AT,
@@ -341,7 +345,8 @@ describe('admin read responses', () => {
       tokenRotatedAt: null,
     };
     expect(
-      adminUserResponseSchema.safeParse({ me: ME, user: bare, brokerAccounts: [fresh] }).success,
+      adminUserResponseSchema.safeParse({ me: ME, user: bare, brokerAccounts: [fresh], intents })
+        .success,
     ).toBe(true);
     expect(
       adminUsersResponseSchema.safeParse({ ...users, users: [{ ...listItem, displayName: null }] })
@@ -395,7 +400,7 @@ describe('admin read responses', () => {
   it('refuse a negative count', () => {
     const bad = {
       ...overview,
-      overview: { ...overview.overview, intents: { total: -1, today: 0 } },
+      overview: { ...overview.overview, intents: { ...overview.overview.intents, total: -1 } },
     };
     expect(adminOverviewResponseSchema.safeParse(bad).success).toBe(false);
   });
@@ -404,6 +409,50 @@ describe('admin read responses', () => {
     expect(adminUsersResponseSchema.safeParse({ ...users, nextCursor: 'bad' }).success).toBe(false);
     const over = Array.from({ length: ADMIN_PAGE_SIZE + 1 }, () => listItem);
     expect(adminUsersResponseSchema.safeParse({ ...users, users: over }).success).toBe(false);
+  });
+
+  describe('the trading section and the overview breakdown (#330)', () => {
+    it('refuse a user response without intents, an overview without byStatus or active', () => {
+      const without = (value: object, key: string) => {
+        const rest: Record<string, unknown> = { ...value };
+        delete rest[key];
+        return rest;
+      };
+      expect(adminUserResponseSchema.safeParse(without(user, 'intents')).success).toBe(false);
+      for (const key of ['byStatus', 'active']) {
+        const intents = without(overview.overview.intents, key);
+        const body = { ...overview, overview: { ...overview.overview, intents } };
+        expect(adminOverviewResponseSchema.safeParse(body).success).toBe(false);
+      }
+    });
+
+    it.each([
+      ['the user intents', { ...user, intents: { ...intents, extra: 1 } }, adminUserResponseSchema],
+      [
+        'the overview intents',
+        {
+          ...overview,
+          overview: { ...overview.overview, intents: { ...overview.overview.intents, extra: 1 } },
+        },
+        adminOverviewResponseSchema,
+      ],
+      [
+        'the overview breakdown',
+        {
+          ...overview,
+          overview: {
+            ...overview.overview,
+            intents: {
+              ...overview.overview.intents,
+              byStatus: { ...overview.overview.intents.byStatus, bogus: 0 },
+            },
+          },
+        },
+        adminOverviewResponseSchema,
+      ],
+    ] as const)('refuse an extra key in %s', (_label, body, schema) => {
+      expect(schema.safeParse(body).success).toBe(false);
+    });
   });
 
   it('share the sessions response me', () => {
