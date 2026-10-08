@@ -633,8 +633,17 @@ describe('the refresh button', () => {
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     const edit = payloadOf(calls, 'editMessageText');
     expect(edit?.text).toBe(statusOf(submitting));
-    expect(rowsOf(edit)).toEqual(REFRESH_ROWS);
+    // #350: nothing tracks this message, so a live status gets the menu under its refresh
+    expect(rowsOf(edit)).toEqual([...REFRESH_ROWS, MENU_ROW]);
     expect(intentTracker.track).not.toHaveBeenCalled();
+  });
+
+  it('draws the end of the path, without a second menu, for a status the tracker stops on', async () => {
+    const { press, calls } = setup({
+      readIntent: () => Promise.resolve(intentView({ status: TradeIntentStatus.Settled })),
+    });
+    await press(REFRESH);
+    expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual(END_ROWS);
   });
 
   it('stands the asset id in for the symbol when the catalog cannot say', async () => {
@@ -694,14 +703,14 @@ describe('the refresh button', () => {
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
   });
 
-  it('sends the status anew with its button when the message is gone', async () => {
+  it('sends the status anew with its keyboard when the message is gone', async () => {
     const { press, calls, apiErrors } = setup();
     apiErrors.set('editMessageText', EDIT_GONE);
     await press(REFRESH);
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(statusOf());
-    expect(rowsOf(sent)).toEqual(REFRESH_ROWS);
+    expect(rowsOf(sent)).toEqual([...REFRESH_ROWS, MENU_ROW]);
   });
 
   it('sends nothing more and warns when the edit fails in transport', async () => {
