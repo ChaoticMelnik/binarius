@@ -6,6 +6,7 @@ import {
   BOT_TEXT_CATALOG,
   BOT_TEXT_GROUP_TITLES,
   BOT_TEXT_SOURCE_MAX,
+  BOT_TEXTS_APPLIED_WITHIN_S,
   DATABASE_URL_RULES,
   botTextRejectionMessage,
   isBotTextKey,
@@ -44,7 +45,6 @@ const USAGE = `Тексты клиентского бота.
 
 // a UTF-8 text of BOT_TEXT_SOURCE_MAX UTF-16 units takes at most this many bytes
 const FILE_MAX_BYTES = 4 * BOT_TEXT_SOURCE_MAX;
-const APPLIED_WITHIN_S = 35;
 
 export interface BotTextIo {
   out(line: string): void;
@@ -193,8 +193,8 @@ function report(key: string, result: BotTextWriteResult, io: BotTextIo, saved?: 
   if (result.ok) {
     io.out(
       result.version === 0
-        ? `Сброшено: ${key}. Бот и push backend'а вернут исходный текст в течение ${APPLIED_WITHIN_S} с.`
-        : `Сохранено: ${key}, версия ${result.version}. Бот и push backend'а применят текст в течение ${APPLIED_WITHIN_S} с.`,
+        ? `Сброшено: ${key}. Бот и push backend'а вернут исходный текст в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с.`
+        : `Сохранено: ${key}, версия ${result.version}. Бот и push backend'а применят текст в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с.`,
     );
     if (isBotTextKey(key) && saved === BOT_TEXT_CATALOG[key].source) {
       io.err('Текст совпадает с исходным: чтобы вернуть исходный, есть reset.');

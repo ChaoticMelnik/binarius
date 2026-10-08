@@ -797,7 +797,8 @@ export interface StaffContext {
 
 export interface StaffAuditDescription {
   action: AuditAction;
-  entity?: { type: AuditEntityType; id: string };
+  // no id for an entity named by something other than a uuid (a bot text, #300)
+  entity?: { type: AuditEntityType; id?: string };
   payload: Record<string, unknown>;
 }
 

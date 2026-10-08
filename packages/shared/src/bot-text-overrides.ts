@@ -11,7 +11,7 @@ import { errorLogFields } from './logging';
 
 // Overrides of the client bot's texts (docs/bot-texts.md → Overrides): stored by @binarius/db,
 // read by the bot over GET /bot-texts and by the backend from the database, edited by the CLI and
-// later the admin section. One resolver decides which of them take effect, for the loaders and
+// the admin section (#300). One resolver decides which of them take effect, for the loaders and
 // the writer alike.
 
 // one source for the catalog's test, the wire schema and the table's CHECK
@@ -21,6 +21,8 @@ export const BOT_TEXT_SOURCE_MAX = 16384;
 export const BOT_TEXT_OVERRIDES_MAX = 1000;
 // how often the bot and the backend reload the overrides
 export const BOT_TEXTS_REFRESH_MS = 30_000;
+// what the CLI and the admin section promise: a refresh plus a load's budget (apps/bot timing.test)
+export const BOT_TEXTS_APPLIED_WITHIN_S = 35;
 export const BOT_TEXTS_PATH = '/bot-texts';
 
 // edited only once the commands and the profile are republished on a change (#301)

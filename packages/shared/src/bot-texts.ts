@@ -13,8 +13,8 @@ import {
 import { TELEGRAM_CAPTION_LIMIT } from './telegram-html';
 
 // Every text the client bot shows, in one place for every process: the bot, the backend's push
-// after the OAuth callback, and the admin section that will edit them (docs/bot-texts.md). A key
-// is a permanent id — overrides will be stored under it — and the source here is the default.
+// after the OAuth callback, and the admin section that edits them (#300; docs/bot-texts.md). A
+// key is a permanent id — overrides are stored under it — and the source here is the default.
 // The staff bot and the Mini App pages are not here.
 
 export const BotTextGroup = {

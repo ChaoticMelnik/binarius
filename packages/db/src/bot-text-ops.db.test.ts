@@ -3,6 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AuditActorType, BOT_TEXT_CATALOG } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
+  applyBotTextReset,
+  applyBotTextSave,
   listBotTextOverrides,
   lockBotTextOverrides,
   resetBotTextOverride,
@@ -237,5 +239,43 @@ describe('resetBotTextOverride', () => {
     await tmp.db.insert(botTextOverrides).values({ key: 'renamedKey', source: 'x' });
     expect(await reset('renamedKey')).toMatchObject({ ok: true });
     expect((await audits())[0]?.payload).toMatchObject({ oldText: null, newText: null });
+  });
+});
+
+describe('applyBotTextSave / applyBotTextReset (#300)', () => {
+  it('B14 write inside the caller transaction and leave the audit row to it', async () => {
+    const saved = await tmp.db.transaction((tx) =>
+      applyBotTextSave(tx, { key: 'welcome', source: 'Привет', staffId: null }),
+    );
+    expect(saved).toMatchObject({ ok: true, audit: { action: 'save', newText: 'Привет' } });
+    const reset = await tmp.db.transaction((tx) =>
+      applyBotTextReset(tx, { key: 'welcome', expectedVersion: versionOf(saved) }),
+    );
+    expect(reset).toMatchObject({ ok: true, audit: { action: 'reset', oldText: 'Привет' } });
+    expect(await audits()).toEqual([]);
+  });
+
+  it('B15 give a version conflict the text there now: the row, or the default without one', async () => {
+    const version = versionOf(await save('welcome', 'Привет'));
+    const conflict = (expectedVersion: number) =>
+      tmp.db.transaction((tx) =>
+        applyBotTextSave(tx, { key: 'welcome', source: 'Новый', expectedVersion, staffId: null }),
+      );
+    expect(await conflict(version + 1000)).toEqual({
+      ok: false,
+      reason: 'version_conflict',
+      currentVersion: version,
+      currentSource: 'Привет',
+    });
+    expect(
+      await tmp.db.transaction((tx) =>
+        applyBotTextReset(tx, { key: 'welcome', expectedVersion: version + 1000 }),
+      ),
+    ).toMatchObject({ reason: 'version_conflict', currentSource: 'Привет' });
+    await reset('welcome');
+    expect(await conflict(version)).toMatchObject({
+      currentVersion: 0,
+      currentSource: BOT_TEXT_CATALOG.welcome.source,
+    });
   });
 });
