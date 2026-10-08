@@ -269,7 +269,8 @@ describe('broker OAuth configuration', () => {
     },
   );
 
-  // the broker redirects to apps/web's page, and the Mini App URL is derived from this origin
+  // the broker redirects to apps/web's page (until #314 the Mini App URL was also derived from
+  // this origin)
   it.each([
     'https://bot.example/callback',
     'https://bot.example/oauth/callback/',
