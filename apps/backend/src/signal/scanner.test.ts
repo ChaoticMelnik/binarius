@@ -1,4 +1,6 @@
+import { pino } from 'pino';
 import {
+  logOptions,
   SIGNAL_ALGORITHM_VERSION,
   type BinaryPair,
   type BrokerRestErrorCode,
@@ -108,6 +110,8 @@ function harness(
     answer?: Answer;
     maxPairs?: number;
     pacer?: ScanPacer;
+    // the scanner logs through a real pino logger (logOptions) into this sink instead
+    sink?: (line: string) => void;
   } = {},
 ) {
   const state = {
@@ -135,7 +139,7 @@ function harness(
         backoffMaxMs: 120_000,
         now: Date.now,
       }),
-    logger,
+    logger: options.sink === undefined ? logger : pino(logOptions('info'), { write: options.sink }),
     now: () => Date.now() - state.skewMs,
     maxPairs: options.maxPairs ?? 25,
     slackMs: SLACK_MS,
@@ -475,6 +479,32 @@ describe('signal scanner', () => {
     const [fields] = h.logger.info.mock.calls[0] as [Record<string, unknown>];
     expect(fields).toMatchObject({ eligible: 0, scanned: 0 });
     await h.scanner.stop();
+  });
+});
+
+describe('signal scanner logs (Rule 8)', () => {
+  it('S17 the real log lines carry the error by name and code, never its message', async () => {
+    const lines: string[] = [];
+    const h = harness({
+      pairs: [pair(1)],
+      sink: (line) => void lines.push(line),
+      answer: () => {
+        throw new TypeError('GET https://SECRET-host/v1/broker/chart?token=SECRET-token failed');
+      },
+    });
+    h.scanner.start();
+    await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
+    await h.scanner.stop();
+    const parsed = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(parsed.find((line) => line.msg === 'signal scan failed')).toMatchObject({
+      level: 40,
+      assetId: 1,
+      err: { name: 'TypeError' },
+    });
+    expect(parsed.find((line) => line.msg === 'signal scanner')).toMatchObject({
+      failed: { threw: 4 },
+    });
+    expect(lines.filter((line) => line.includes('SECRET-'))).toEqual([]);
   });
 });
 
