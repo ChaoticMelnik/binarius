@@ -79,6 +79,7 @@ If a spawn dies on an API error for its model, relaunch it once with the same ex
 Merge Codex + agent results, collapse duplicates. Discard findings that just restate an accepted trade-off from the plan — note "accepted at plan stage" instead of returning the issue for them.
 
 - Re-verify every severity label — the tools' and your own — against the actual mechanism and the Severity Guide below (evidence quality is Minor by default) before accepting or dismissing a finding. A tooling-level claim ("this config makes X fail", "the compiler infers Y") is verified with the tool itself before it is labelled Major.
+- A sub-agent's low-confidence finding is verified in the same round and either posted or rejected with its reason in the review comment — never dropped silently (#340: a stale comment flagged as uncertain in round 1 reached the owner only in round 3, after the last fix round).
 - A sub-agent's "optional improvement" is checked like a finding before it is passed on to the Plan Update: two simplify agents once recommended the exact change that broke CI.
 
 ### Step 5: Manual checklist
