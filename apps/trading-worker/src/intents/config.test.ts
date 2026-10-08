@@ -74,6 +74,15 @@ describe('timing constants', () => {
     expect(CATCHUP_TICK_MS).toBeLessThan(CATCHUP_STALLED_RETRY_MS);
   });
 
+  it('keep a 401 and the report of its token inside an attempt (#281)', () => {
+    expect(2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS).toBeLessThan(
+      RECONCILE_ATTEMPT_TIMEOUT_MS,
+    );
+    expect(2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS).toBeLessThan(
+      CATCHUP_ATTEMPT_TIMEOUT_MS,
+    );
+  });
+
   it('keep the worst case of broker GETs within the worker share of the IP limit (#90)', () => {
     expect(WORKER_BROKER_GETS_WORST_CASE).toBe(
       RECONCILE_BATCH_SIZE * 2 * RECONCILE_MAX_TRADE_PAGES * (60_000 / RECONCILE_TICK_MS) +
