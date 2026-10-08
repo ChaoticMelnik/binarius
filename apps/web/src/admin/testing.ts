@@ -1,4 +1,7 @@
 import {
+  AuditAction,
+  AuditActorType,
+  AuditEntityType,
   BrokerAccountStatus,
   NotificationLevel,
   TokenLedgerKind,
@@ -10,6 +13,8 @@ import {
   TradingSessionStatus,
   TradingSessionStopReason,
   UserStatus,
+  type AdminAuditEntryView,
+  type AdminAuditResponse,
   type AdminIntentResponse,
   type AdminIntentsResponse,
   type AdminLedgerEntry,
@@ -24,7 +29,7 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 
-// Backend answers for the read pages (#107, #108, #330, #109), valid against their strict schemas. Shared by
+// Backend answers for the read pages (#107, #108, #330, #109, #110), valid against their strict schemas. Shared by
 // the client's and the pages' tests.
 
 const AT = '2026-10-07T08:00:00.000Z';
@@ -218,5 +223,46 @@ export const SAMPLE_TRADING_SESSIONS: AdminTradingSessionsResponse = {
 export const SAMPLE_TOKENS: AdminTokensResponse = {
   me: SAMPLE_ME,
   entries: [SAMPLE_LEDGER_ENTRY, SAMPLE_LEDGER_ADJUSTMENT],
+  nextCursor: null,
+};
+
+export const SAMPLE_AUDIT_ENTRY: AdminAuditEntryView = {
+  id: '00000000-0000-4000-8000-0000000000f1',
+  createdAt: AT,
+  actorType: AuditActorType.Admin,
+  actorId: SAMPLE_ME.staffId,
+  actorLogin: 'ada',
+  action: AuditAction.UserViewed,
+  entityType: AuditEntityType.User,
+  entityId: SAMPLE_USER_ID,
+  payload: '{"path": "/admin/users/:id", "result": "found"}',
+  payloadTruncated: false,
+};
+
+export const SAMPLE_AUDIT_ENTRY_NULLS: AdminAuditEntryView = {
+  id: '00000000-0000-4000-8000-0000000000f2',
+  createdAt: AT,
+  actorType: AuditActorType.System,
+  actorId: 'cli',
+  actorLogin: null,
+  action: AuditAction.BotTextSaved,
+  entityType: null,
+  entityId: null,
+  payload: '{"note": "<script>alert(1)</script>"}',
+  payloadTruncated: true,
+};
+
+export const SAMPLE_AUDIT_ENTRY_INTENT: AdminAuditEntryView = {
+  ...SAMPLE_AUDIT_ENTRY,
+  id: '00000000-0000-4000-8000-0000000000f3',
+  action: AuditAction.IntentViewed,
+  entityType: AuditEntityType.TradeIntent,
+  entityId: SAMPLE_INTENT.id,
+  payload: '{}',
+};
+
+export const SAMPLE_AUDIT: AdminAuditResponse = {
+  me: SAMPLE_ME,
+  entries: [SAMPLE_AUDIT_ENTRY, SAMPLE_AUDIT_ENTRY_NULLS, SAMPLE_AUDIT_ENTRY_INTENT],
   nextCursor: null,
 };

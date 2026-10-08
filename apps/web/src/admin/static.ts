@@ -24,4 +24,7 @@ p.hint { color: #888; font-size: 0.9rem; }
 form.search { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; }
 form.search input { min-width: 18rem; }
 .pager { display: flex; gap: var(--gap); }
+form.search input[type="date"] { min-width: 0; }
+td.payload { max-width: 28rem; }
+code.payload { overflow-wrap: anywhere; white-space: pre-wrap; }
 `;

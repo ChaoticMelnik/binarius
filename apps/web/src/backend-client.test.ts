@@ -2,6 +2,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  SAMPLE_AUDIT,
+  SAMPLE_AUDIT_ENTRY,
   SAMPLE_INTENT,
   SAMPLE_INTENT_RESPONSE,
   SAMPLE_INTENTS,
@@ -360,6 +362,57 @@ describe('the token ledger call (#109)', () => {
   ])('refuses %s with a key the contract does not name', async (_label, body) => {
     const { client } = await prefixed(body);
     const error = await rejectionOf(client.tokens(SESSION, {}));
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+describe('the audit log call (#110)', () => {
+  const SESSION = 's'.repeat(43);
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+  const ACTOR = '00000000-0000-4000-8000-0000000000a1';
+
+  const prefixed = async (body: unknown) => {
+    const served = await serve((response) => {
+      json(response, 200, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+
+  it('asks for the page with every filter in the schema order, the bearer and the staff session, under the prefix', async () => {
+    const { client, captured } = await prefixed(SAMPLE_AUDIT);
+    expect(
+      await client.audit(SESSION, {
+        cursor: CURSOR,
+        to: '2026-10-07',
+        from: '2026-10-01',
+        actorId: ACTOR,
+        entityId: SAMPLE_USER_ID,
+        entityType: 'user',
+        action: 'user_viewed',
+      }),
+    ).toEqual(SAMPLE_AUDIT);
+    expect(captured.url).toBe(
+      `/api/admin/audit?action=user_viewed&entityType=user&entityId=${SAMPLE_USER_ID}&actorId=${ACTOR}&from=2026-10-01&to=2026-10-07&cursor=${CURSOR}`,
+    );
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+    expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('sends no query string for no filters', async () => {
+    const { client, captured } = await prefixed(SAMPLE_AUDIT);
+    await client.audit(SESSION, {});
+    expect(captured.url).toBe('/api/admin/audit');
+  });
+
+  it.each([
+    ['a row', { ...SAMPLE_AUDIT, entries: [{ ...SAMPLE_AUDIT_ENTRY, payloadRaw: {} }] }],
+    ['the page', { ...SAMPLE_AUDIT, extra: 1 }],
+  ])('refuses %s with a key the contract does not name', async (_label, body) => {
+    const { client } = await prefixed(body);
+    const error = await rejectionOf(client.audit(SESSION, {}));
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });
