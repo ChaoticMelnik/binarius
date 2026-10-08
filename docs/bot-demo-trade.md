@@ -241,7 +241,7 @@ gets `warn` and nothing more. This press never starts tracking.
 ## Timing
 
 - `HANDLER_CALLS.stake` = 4 backend calls and 2 Bot API calls: the catalog and the access reads
-  (counted one after the other, as in `oauth`), `createIntent` and its retry, the answer and the
+  (counted one after the other, as in `confirm`), `createIntent` and its retry, the answer and the
   message. That is 36 s.
 - `HANDLER_CALLS.intentRefresh` = 2 backend calls and 3 Bot API calls: the edit refused as gone,
   then sent anew. That is 34 s.

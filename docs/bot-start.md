@@ -775,8 +775,9 @@ old duration button are declared in the same table (bot-demo-trade.md, bot-sessi
 bot-demo.md); and a text on the code step two backend calls (the login and the recheck) and up to
 four Bot API calls (the same card), 42 s. The longest is «📊 Анализ», 3 × 5 000 + 4 × 8 000 =
 **47 s**, inside the **50 s** shutdown budget, inside the **55 s** `stop_grace_period` of the
-compose service. The usual path is far shorter — one upload and two short calls — and the 47 s
-needs three backend calls and four Bot API calls each to hit its timeout. `timing.test.ts` runs
+compose service. The usual path is far shorter — the answer, the «⏳» edit and the result's edit
+beside three short reads — and the 47 s needs three backend calls and four Bot API calls each to
+hit its timeout. `timing.test.ts` runs
 every terminal branch of each handler through the real handlers and asserts that each makes the
 calls it is declared to make and that the worst of them is what `HANDLER_CALLS` says — so a
 handler that grows a call turns the suite red instead of quietly outgrowing the budget. It reads

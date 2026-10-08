@@ -721,6 +721,11 @@ const DEMO_PAGE = demoScreenBranches(demoPageCallbackData('currency', 0), 'demo:
     readPairs: onlyPairs(PAIR_MINUTE_ONLY),
     expected: { backend: 1, telegram: 2 },
   },
+  {
+    label: 'the catalog is read and empty',
+    readPairs: onlyPairs(),
+    expected: { backend: 1, telegram: 2 },
+  },
 ]);
 const pairBranches = (
   extra: readonly Omit<Branch, 'update'>[] = [],

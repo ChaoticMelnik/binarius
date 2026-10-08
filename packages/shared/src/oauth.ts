@@ -186,8 +186,8 @@ export const LinkBonusSkipReason = {
 export type LinkBonusSkipReason = (typeof LinkBonusSkipReason)[keyof typeof LinkBonusSkipReason];
 
 // The two apps/web pages of the Mini App login (#114). The broker redirects to the callback page,
-// so BROKER_OAUTH_REDIRECT_URI must end with OAUTH_CALLBACK_PATH; the backend derives the login
-// page's URL from that URI's origin.
+// so BROKER_OAUTH_REDIRECT_URI must end with OAUTH_CALLBACK_PATH; until #314 the backend derived
+// the login page's URL from that URI's origin.
 export const OAUTH_LOGIN_PATH = '/oauth/login';
 export const OAUTH_CALLBACK_PATH = '/oauth/callback';
 // the login page's query parameter carrying the broker authorize URL
