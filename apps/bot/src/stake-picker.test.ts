@@ -6,6 +6,7 @@ import {
   UserStatus,
   type DecimalString,
   CONNECT_CALLBACK_DATA,
+  supportUrl,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -195,7 +196,13 @@ describe('the stake picker', () => {
   });
 
   it.each([
-    ['a blocked user', accessView({ status: UserStatus.Blocked }), TEXTS.blocked, [BACK_SETTINGS]],
+    // #350: the support link, then the way back
+    [
+      'a blocked user',
+      accessView({ status: UserStatus.Blocked }),
+      TEXTS.blocked,
+      [[{ text: LABELS.supportButton, url: supportUrl() }], BACK_SETTINGS],
+    ],
     [
       'no account',
       accessView({ broker: null, brokerUnavailable: BrokerBalanceUnavailableReason.NoAccount }),
