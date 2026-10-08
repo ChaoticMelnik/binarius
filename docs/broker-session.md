@@ -95,7 +95,7 @@ happens on the user's trade over the REST fallback, where the executor passes th
 |---|---|
 | `ok` | start the client, or restart it with a new token after a terminal state |
 | `refresh_needed` | drop, hold back `SESSION_RETRY_MS`; `info` `broker session waits for a token exchange` |
-| `backend_unreachable`, `backend_status`, `contract_violation`, `not_configured` | drop, hold back `SESSION_RETRY_MS`; `warn` `broker session token unavailable` (`reason`, `status`). `not_configured` cannot happen: `index.ts` builds the manager only with the backend source |
+| `backend_unreachable`, `backend_status`, `contract_violation`, `not_configured`, `refresh_rate_limited` | drop, hold back `SESSION_RETRY_MS`; `warn` `broker session token unavailable` (`reason`, `status`). `not_configured` cannot happen: `index.ts` builds the manager only with the backend source; `refresh_rate_limited` cannot either with `mayRefresh: false` (#275) |
 | `backend_unreachable` while stopping | drop, nothing logged |
 | `account_not_found`, `account_pending`, `account_revoked`, `user_blocked`, `key_unavailable` | drop, hold back `SESSION_REFUSAL_RETRY_MS`; `warn` `broker session token refused` (`refusal`) |
 
@@ -320,7 +320,7 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
 - ARCH-02: #93 the lease, #94 the measured per-process limit and sharding, #95 handoff and
   single-flight refresh across processes, #96 the emergency stop.
 - ARCH-05: #87 the load stand, #88 degradation.
-- #92 (a balance check after a reconciliation, DLQ), #274 (`not_found`), #275 (429 on refresh),
+- #92 (a balance check after a reconciliation, DLQ), #274 (`not_found`),
   #278, #279, #281 (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)
   keeps its account in work between trades through `touchBalanceRequested`, so its socket stays open.
 - `price.update` has no consumer in production: the signal feed reads the REST chart; E2 proves

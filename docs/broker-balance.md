@@ -94,6 +94,7 @@ signal starts no flight. The steps:
 | a snapshot written | `ok`, cleared | — |
 | token `account_pending` / `account_revoked` / `key_unavailable` | the same code | token-service logs `key_unavailable` |
 | token `refresh_needed` (the tick, `mayRefresh: false`) | `refresh_needed`, nothing written | — |
+| token `refresh_rate_limited` (`POST /trading/access`, an exchange the broker rate-limited, #275) | `rate_limited` | token-service `warn` |
 | token `user_blocked` | `user_blocked`, nothing written | — |
 | token `account_not_found` | nothing written | — |
 | `BrokerRestError` `unauthorized` / `rate_limited` / `rejected` / `unavailable` / `contract_violation` | the same code | `warn` `balance refresh failed`, with `status`, `retryAfterSec`, `detail` |
@@ -141,7 +142,7 @@ Every `BALANCE_RECONCILE_INTERVAL_MS` (env, 10 000 to 60 000, default 60 000):
 5. **Never a token exchange.** Each call passes `mayRefresh: false`. `ensureFreshAccessToken`
    decides under the row lock, with the same clock and comparison as the exchange. A token that
    would need one comes back as `refresh_needed`, with nothing exchanged or revoked, the 90-day
-   rule included. A refresh failure revokes the account (Rule 12), and a timer must not do that
+   rule included. A failed exchange can revoke the account (Rule 12), and a timer must not do that
    to an account nobody is using.
 6. **Summary**, one `info` line per tick:
    `{ candidates, refreshed, failed, skipped, watched, withoutSnapshot, oldestAgeSec, msg: 'balance tick' }`.

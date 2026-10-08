@@ -97,9 +97,9 @@ export const CATCHUP_STALLED_RETRY_MS = 30_000;
 // sits with the backend's two in packages/shared/src/broker-budget.ts. The worker keeps to its
 // share in the worst case: its passes tick only on their intervals (nothing starts an extra
 // tick), and a tick never overlaps the next. A 429 ends a tick, and the attempt is retried on the
-// lease or the next tick. Its one real cost is a refresh exchange in flight on the backend: a 429
-// on /user-auth/refresh is classified rejected → refresh_outcome_unknown → the account is revoked
-// (Rule 12, one attempt). The worker's share keeps its own traffic from driving the IP to 429; the
+// lease or the next tick. A 429 on /user-auth/refresh during an exchange on the backend is the
+// refusal refresh_rate_limited: nothing is revoked, the caller asks again later (#275). The
+// worker's share keeps its own traffic from driving the IP to 429; the
 // sum with the backend's configured ceilings above their defaults is a warning at the backend's
 // start, not enforced.
 export const WORKER_BROKER_GETS_WORST_CASE =
