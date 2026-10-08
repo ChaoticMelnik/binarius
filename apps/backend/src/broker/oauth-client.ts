@@ -22,6 +22,9 @@ export const BrokerOAuthErrorCode = {
   InvalidGrant: 'invalid_grant',
   // any other 4xx: our request or configuration is wrong
   Rejected: 'rejected',
+  // 429 on any endpoint: the broker's rate limiter refused before the request was handled;
+  // nothing was consumed
+  RateLimited: 'rate_limited',
   // timeout, network failure or 5xx — the outcome is unknown, the broker may have consumed it
   Unavailable: 'unavailable',
   // a 2xx body that does not match the contract
@@ -71,6 +74,7 @@ export type BrokerEndpoint = keyof typeof BROKER_ENDPOINTS;
 
 function classify(endpoint: BrokerEndpoint, status: number): BrokerOAuthErrorCode {
   if (status >= 500) return BrokerOAuthErrorCode.Unavailable;
+  if (status === 429) return BrokerOAuthErrorCode.RateLimited;
   return status === BROKER_ENDPOINTS[endpoint].invalidGrantStatus
     ? BrokerOAuthErrorCode.InvalidGrant
     : BrokerOAuthErrorCode.Rejected;

@@ -434,6 +434,8 @@ describe('the token', () => {
     [AccessTokenUnavailable.BackendUnreachable, 'broker session token unavailable'],
     [AccessTokenUnavailable.BackendStatus, 'broker session token unavailable'],
     [AccessTokenRefusal.RefreshNeeded, 'broker session waits for a token exchange'],
+    // #275: unreachable with mayRefresh: false, temporary if it ever comes
+    [AccessTokenRefusal.RefreshRateLimited, 'broker session token unavailable'],
   ])('U5 %s: held back retryMs, then asked again', async (reason, msg) => {
     const h = harness({ tokens: () => Promise.resolve({ ok: false, reason }) });
     h.state.candidates = [candidate(1)];

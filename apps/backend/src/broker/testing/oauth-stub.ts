@@ -39,6 +39,9 @@ export interface OAuthStub {
   // the body keys of the last request to each JSON endpoint, to prove what the client sends
   lastRefreshBodyKeys: string[] | undefined;
   lastSendCodeBodyKeys: string[] | undefined;
+  // answers the refresh with this status before the token is looked at, as the broker's rate
+  // limiter does; the family is untouched (#275)
+  refuseRefresh: { status: number; headers?: Record<string, string> } | undefined;
   lastEmailLoginBodyKeys: string[] | undefined;
   issueCode(input: Partial<IssuedCode> & { brokerUserId: string }): string;
   // an account the broker already has, so an email login signs in rather than registers
@@ -77,6 +80,7 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
     hang: options.hang ?? false,
     pendingHangs: 0,
     lastRefreshBodyKeys: undefined,
+    refuseRefresh: undefined,
     lastSendCodeBodyKeys: undefined,
     lastEmailLoginBodyKeys: undefined,
     issueCode: ({ brokerUserId, email, isPartnerClient, code }) => {
@@ -170,6 +174,12 @@ export async function startOAuthStub(options: OAuthStubOptions): Promise<OAuthSt
     await received(request.url);
     const body = request.body as Record<string, unknown> | undefined;
     stub.lastRefreshBodyKeys = body === undefined ? [] : Object.keys(body).sort();
+    if (stub.refuseRefresh !== undefined) {
+      return reply
+        .code(stub.refuseRefresh.status)
+        .headers(stub.refuseRefresh.headers ?? {})
+        .send(brokerError('Too many requests'));
+    }
     const presented = body?.refresh_token;
     if (typeof presented !== 'string') {
       return reply.code(400).send(brokerError('Validation failed: "refresh_token" is required'));

@@ -350,6 +350,23 @@ describe('REST only when nothing was emitted', () => {
     ]);
   });
 
+  // #275: the broker rate-limited the exchange; nothing is sent, the reserve is released
+  it('R3 a rate-limited token on the REST path is rejected, nothing sent', async () => {
+    const tokens = tokenSource(async () => ({
+      ok: false,
+      reason: 'refresh_rate_limited',
+      status: 409,
+    }));
+    expect(await executor(undefined, tokens).submit(intentOf(), signal())).toEqual({
+      outcome: 'rejected',
+      reason: 'broker_rejected',
+    });
+    expect(restOpens()).toEqual([]);
+    expect(logs('trade command refused')).toEqual([
+      expect.objectContaining({ stage: 'token', reason: 'refresh_rate_limited' }),
+    ]);
+  });
+
   it.each([
     ['10.00000000', '10'],
     ['1.50000000', '1.5'],
