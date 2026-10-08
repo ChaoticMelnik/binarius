@@ -152,9 +152,10 @@ buttons, two accounts, no balance yet) with the way back.
 `<origin>` is `s` (/settings, way back `settings`), `a:<assetId>:<sec>` (way back
 `demo:an:<assetId>:<sec>`, a fresh analysis with a new nonce) or `p:<assetId>` (#320, the launch
 screen, way back `demo:l:<assetId>`). The longest datum is still
-`stk:s:999999999999.99999999:a:2147483647:15`, 43 bytes; the launch origin's is 40. Every switch
-over the origin is exhaustive (`satisfies never`), so a fourth kind fails `tsc` until each place
-handles it.
+`stk:s:999999999999.99999999:a:2147483647:15`, 43 bytes; the launch origin's is 40. The three
+switches over the origin (`originData`, `backTo`, `savedScreen`) are exhaustive (`satisfies
+never`), so a fourth kind fails `tsc` until each of them handles it; the parser `stakeOriginOf` and
+the `PICKER` pattern are extended by hand.
 
 **The return to the launch screen (#320).** A save opened from a launch screen (a preset, the
 reset or a typed amount) returns to that screen, not to «✅ Сумма»: «✅ Ставка сохранена: $5.00»
