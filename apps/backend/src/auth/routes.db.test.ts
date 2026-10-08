@@ -42,7 +42,7 @@ import { createLinkNotifier } from './link-notifier';
 import { INIT_DATA_MAX_AGE_MS, OAUTH_STATE_TTL_MS } from './oauth-timing';
 import { createInitDataVerifier } from './telegram-init-data';
 import { signInitData } from './testing/init-data';
-import { CLIENT_TEXTS } from './texts';
+import { CLIENT_LABELS, CLIENT_TEXTS } from './texts';
 import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
@@ -619,8 +619,8 @@ describe('the Telegram proof on the callback', () => {
 
     expect(stub.tokenRequests).toBe(before);
     expect(await accountsOf(`broker-${owner}`)).toEqual([]);
-    expect(pushesTo(owner).map((push) => [push.text, push.reply_markup])).toEqual([
-      [CLIENT_TEXTS.oauthLoginFailed.value, undefined],
+    expect(pushesTo(owner).map((push) => [push.text, inlineButtons(push)])).toEqual([
+      [CLIENT_TEXTS.oauthLoginFailed.value, CONNECT_AGAIN],
     ]);
     expect(pushesTo(other)).toEqual([]);
   });
@@ -864,6 +864,12 @@ describe('secrecy', () => {
 
 // --- The push after the callback (issue #128) --------------------------------------------------
 
+// #350: a failed login's push offers connecting again and the menu
+const CONNECT_AGAIN = [
+  { text: CLIENT_LABELS.connectButton, callback_data: 'connect' },
+  { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
+];
+
 const pushesTo = (telegramUserId: string, captured = pushApi) =>
   callsTo(captured.calls, 'sendMessage')
     .filter((call) => call.payload.chat_id === telegramUserId)
@@ -919,7 +925,7 @@ describe('the push after the callback', () => {
   });
 
   it.each(['active', 'revoked'] as const)(
-    'says the account is connected, with no button, on a re-login of a %s account',
+    'says the account is connected, with the demo button (#350), on a re-login of a %s account',
     async (status) => {
       const telegram = telegramId();
       const first = await login(telegram, `broker-${telegram}`);
@@ -931,7 +937,9 @@ describe('the push after the callback', () => {
       const pushes = pushesTo(telegram);
       expect(pushes).toHaveLength(2);
       expect(pushes[1]?.text).toBe(CLIENT_TEXTS.linkedActive.value);
-      expect(pushes[1]?.reply_markup).toBeUndefined();
+      expect(inlineButtons(pushes[1])).toEqual([
+        { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
+      ]);
     },
   );
 
@@ -943,8 +951,8 @@ describe('the push after the callback', () => {
     const { response } = await login(intruder, brokerUserId);
     expect(response.statusCode).toBe(409);
 
-    expect(pushesTo(intruder).map((push) => [push.text, push.reply_markup])).toEqual([
-      [CLIENT_TEXTS.accountTaken.value, undefined],
+    expect(pushesTo(intruder).map((push) => [push.text, inlineButtons(push)])).toEqual([
+      [CLIENT_TEXTS.accountTaken.value, CONNECT_AGAIN],
     ]);
     // the owner heard only about their own login
     expect(pushesTo(owner)).toHaveLength(1);
