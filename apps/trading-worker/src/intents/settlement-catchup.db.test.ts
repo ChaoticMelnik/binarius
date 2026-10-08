@@ -8,6 +8,7 @@ import { until } from '@binarius/shared/testing';
 import {
   brokerTrades,
   findTradeIntent,
+  hashToken,
   markIntentAccepted,
   takeIntent,
   tokenLedger,
@@ -364,6 +365,29 @@ describe('createSettlementCatchup (#90)', () => {
     await catchup.tick();
     await catchup.stop();
     expect(askedFor(first.brokerAccountId)).toBe(2);
+  });
+
+  it('reports a 401 with the token fingerprint and mayRefresh: false, and holds the account back (#281)', async () => {
+    const a = await acceptedAtBroker();
+    broker.rest.failNext('tradesList', { status: 401 });
+    const log = capture();
+    const catchup = catchupOf(log.logger);
+    await catchup.tick();
+    const calls = tokenCalls.filter((c) => c.accountId === a.brokerAccountId);
+    expect(calls.map((c) => ({ ...c.options, signal: undefined }))).toEqual([
+      { mayRefresh: false, signal: undefined },
+      { mayRefresh: false, signal: undefined, refusedToken: hashToken(a.token) },
+    ]);
+    expect(calls[1]!.options!.signal).toBe(calls[0]!.options!.signal);
+    expect(log.line('settlement catch-up trade list failed')).toMatchObject({ status: 401 });
+    expect(log.line('refused token reported')).toMatchObject({
+      intentId: a.intent.id,
+      answer: 'ok',
+    });
+    await catchup.tick();
+    await catchup.stop();
+    expect(askedFor(a.brokerAccountId)).toBe(2);
+    expect(log.lines.join('\n')).not.toContain(a.token);
   });
 
   it('logs a throwing settlement by name and code only and holds the account back', async () => {

@@ -12,7 +12,11 @@ import {
   type Db,
   type OverdueAcceptedIntent,
 } from '@binarius/db';
-import { isAccessTokenRefusal, type AccessTokenSource } from '../broker/access-token';
+import {
+  isAccessTokenRefusal,
+  reportRefusedToken,
+  type AccessTokenSource,
+} from '../broker/access-token';
 import type { Logger } from './processor';
 import { readTradePages, TradePagesError } from './trade-pages';
 
@@ -141,6 +145,13 @@ export function createSettlementCatchup({
         },
         'settlement catch-up trade list failed',
       );
+      // a timer: the backend only marks the token expired, never exchanges it here (#281, Rule 12)
+      if (error.code === BrokerRestErrorCode.Unauthorized) {
+        await reportRefusedToken(tokens, logger, ids, overdue.brokerAccountId, token.accessToken, {
+          mayRefresh: false,
+          signal,
+        });
+      }
       // a 429 is the IP's state, not the account's: the tick ends and nobody is held back
       return error.code === BrokerRestErrorCode.RateLimited ? 'rate_limited' : 'stalled';
     }
