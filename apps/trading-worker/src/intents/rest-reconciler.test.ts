@@ -10,7 +10,7 @@ import {
   type UnixMs,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
-import type { TradeIntentRow } from '@binarius/db';
+import { hashToken, type TradeIntentRow } from '@binarius/db';
 import type { AccessTokenOutcome, AccessTokenOptions } from '../broker/access-token';
 import {
   createRestReconciler,
@@ -491,6 +491,19 @@ describe('createRestReconciler: failures (#90)', () => {
       retryAfterSec: 7,
       detail: 'slow down',
     });
+    // only a 401 reports the token back (#281)
+    expect(h.tokenCalls).toEqual([
+      { accountId: 'account-1', options: { mayRefresh: true, signal: h.signal } },
+      ...(code === 'unauthorized'
+        ? [
+            {
+              accountId: 'account-1',
+              options: { mayRefresh: true, signal: h.signal, refusedToken: hashToken('tok') },
+            },
+          ]
+        : []),
+    ]);
+    expect(h.line('refused token reported') !== undefined).toBe(code === 'unauthorized');
   });
 
   it('lets any other error through', async () => {

@@ -8,7 +8,11 @@ import {
   type BrokerTrade,
 } from '@binarius/shared';
 import type { TradeIntentRow } from '@binarius/db';
-import { isAccessTokenRefusal, type AccessTokenSource } from '../broker/access-token';
+import {
+  isAccessTokenRefusal,
+  reportRefusedToken,
+  type AccessTokenSource,
+} from '../broker/access-token';
 import type { Logger } from './processor';
 import { readTradePages, TradePagesError } from './trade-pages';
 import {
@@ -63,8 +67,9 @@ const unavailable = (reason: ReconcileUnavailableReason): ReconcileResult => ({
 
 const REST_ERROR_REASON: Record<BrokerRestErrorCode, ReconcileUnavailableReason> = {
   [BrokerRestErrorCode.RateLimited]: ReconcileUnavailableReason.RateLimited,
-  // 401 on a token the backend just handed out; nobody refreshes on it (Rule 12): the user's
-  // next action exchanges the token
+  // 401 on a token the backend just handed out: the attempt reports its fingerprint back (#281),
+  // the backend marks it expired and exchanges it there (mayRefresh: true), and the next attempt
+  // by lease takes the new token
   [BrokerRestErrorCode.Unauthorized]: ReconcileUnavailableReason.TokenUnavailable,
   [BrokerRestErrorCode.Rejected]: ReconcileUnavailableReason.BrokerContract,
   [BrokerRestErrorCode.ContractViolation]: ReconcileUnavailableReason.BrokerContract,
@@ -166,6 +171,12 @@ export function createRestReconciler({
           },
           'reconciliation trade list failed',
         );
+        if (error.code === BrokerRestErrorCode.Unauthorized) {
+          await reportRefusedToken(tokens, logger, ids, intent.brokerAccountId, token.accessToken, {
+            mayRefresh: true,
+            signal,
+          });
+        }
         return unavailable(REST_ERROR_REASON[error.code]);
       }
 
