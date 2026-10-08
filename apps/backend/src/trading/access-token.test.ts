@@ -92,6 +92,12 @@ describe('POST /trading/accounts/:id/access-token (#90)', () => {
     expect(calls).toEqual([{ accountId: ACCOUNT, options: { mayRefresh: flag } }]);
   });
 
+  it('passes refusedToken through with the policy (#281)', async () => {
+    const refusedToken = 'a'.repeat(64);
+    await post(appWith(granted), { mayRefresh: false, refusedToken });
+    expect(calls).toEqual([{ accountId: ACCOUNT, options: { mayRefresh: false, refusedToken } }]);
+  });
+
   it('answers 404 for an id that is not a uuid, without a lookup', async () => {
     const response = await post(appWith(granted), { mayRefresh: true }, { id: 'not-a-uuid' });
     expect(response.statusCode).toBe(404);
@@ -111,6 +117,8 @@ describe('POST /trading/accounts/:id/access-token (#90)', () => {
     ['no mayRefresh', {}],
     ['a string flag', { mayRefresh: 'true' }],
     ['an extra key', { mayRefresh: true, accountId: ACCOUNT }],
+    ['a refusedToken that is not a fingerprint', { mayRefresh: true, refusedToken: 'xyz' }],
+    ['a 63-character refusedToken', { mayRefresh: true, refusedToken: 'a'.repeat(63) }],
   ])('answers 400 for a body with %s, without a lookup', async (_name, body) => {
     const response = await post(appWith(granted), body);
     expect(response.statusCode).toBe(400);

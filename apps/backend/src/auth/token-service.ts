@@ -10,6 +10,7 @@ import {
   backfillRefreshTokenHash,
   hashToken,
   lockAccountForRefresh,
+  markAccessTokenExpired,
   revokeAccount,
   revokeAccountIfUnchanged,
   TokenCipherError,
@@ -39,7 +40,8 @@ export type AccessTokenResult =
   | { ok: false; reason: 'account_pending' }
   // the row was encrypted under a key this process does not hold; another process has it
   | { ok: false; reason: 'key_unavailable' }
-  // the token needs an exchange and the caller forbade one (mayRefresh: false)
+  // the token needs an exchange and the caller forbade one (mayRefresh: false): it expired, or
+  // the stored token was just marked expired on the caller's report (#281)
   | { ok: false; reason: 'refresh_needed' }
   // the broker's rate limit refused the exchange before acting: the pair is intact, nothing
   // written (#275)
@@ -66,6 +68,11 @@ export interface AccessTokenOptions {
   // nobody is waiting on (the background balance refresh) must not change the account. Decided
   // under the row lock, by the same clock and comparison as the exchange itself.
   mayRefresh?: boolean;
+  // sha256 (hashToken) of an access token the broker refused. Compared with the stored token
+  // under the row lock: a match marks it expired and the decision goes on as for an expired
+  // token; another token means someone already rotated the pair, and the stored one is returned
+  // (#281)
+  refusedToken?: string;
 }
 
 // Returns a usable access token for the account, refreshing it when needed.
@@ -164,13 +171,20 @@ async function refreshUnderLock(
       );
       return revoked(tx, account.id, AuthRevokedReason.StorageInconsistent);
     }
-    // a row linked before the hash column existed gets it filled in here, under the lock.
-    // Only the hash: token_rotated_at dates the refresh token, and moving it would give a
-    // token that is already months old another ninety days of life.
-    if (account.refreshTokenHash === null) {
-      await backfillRefreshTokenHash(tx, account.id, hashToken(refreshToken));
+    if (options.refusedToken === undefined || hashToken(accessToken) !== options.refusedToken) {
+      // a row linked before the hash column existed gets it filled in here, under the lock.
+      // Only the hash: token_rotated_at dates the refresh token, and moving it would give a
+      // token that is already months old another ninety days of life.
+      if (account.refreshTokenHash === null) {
+        await backfillRefreshTokenHash(tx, account.id, hashToken(refreshToken));
+      }
+      return { ok: true, accessToken };
     }
-    return { ok: true, accessToken };
+    logger.warn(
+      { accountId: account.id, mayRefresh: options.mayRefresh !== false },
+      'broker refused the stored access token, marking it expired',
+    );
+    await markAccessTokenExpired(tx, account.id);
   }
 
   if (options.mayRefresh === false) return { ok: false, reason: 'refresh_needed' };

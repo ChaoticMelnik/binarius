@@ -774,3 +774,150 @@ describe('ensureFreshAccessToken for a blocked user', () => {
     }
   });
 });
+
+// #281: a caller whose token the broker refused reports its fingerprint; under the row lock a
+// match marks the stored token expired, and the decision goes on as for an expired token
+describe('ensureFreshAccessToken with a refused token (#281)', () => {
+  const storedOf = (row: BrokerAccountRow) =>
+    cipher.decrypt(row.accessTokenEnc, { accountId: row.id, field: TokenField.Access });
+  const fingerprintOf = (row: BrokerAccountRow) => hashToken(storedOf(row));
+  const nowDb = async () => {
+    const result = await tmp.db.execute<{ now: string }>(sql`select now()::text as now`);
+    return new Date(result.rows[0]!.now);
+  };
+
+  it('T1 exchanges when the broker refused the stored token and the caller may refresh', async () => {
+    const account = await linkedAccount();
+    const before = stub.tokenRequests;
+    const result = await ensureFreshAccessToken(deps(), account.id, {
+      mayRefresh: true,
+      refusedToken: fingerprintOf(account),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.accessToken).not.toBe(storedOf(account));
+    expect(stub.tokenRequests).toBe(before + 1);
+
+    const row = await rowOf(account.id);
+    expect(storedOf(row)).toBe(result.accessToken);
+    expect(row.refreshTokenEnc).not.toEqual(account.refreshTokenEnc);
+    expect(row.accessTokenExpiresAt.getTime()).toBeGreaterThan((await nowDb()).getTime());
+    expect(row.tokenRotatedAt!.getTime()).toBeGreaterThan(account.tokenRotatedAt!.getTime() - 1);
+  });
+
+  it('T2 marks it expired and exchanges nothing when the caller may not refresh', async () => {
+    const account = await linkedAccount();
+    const before = stub.tokenRequests;
+    expect(
+      await ensureFreshAccessToken(deps(), account.id, {
+        mayRefresh: false,
+        refusedToken: fingerprintOf(account),
+      }),
+    ).toEqual({ ok: false, reason: 'refresh_needed' });
+
+    const row = await rowOf(account.id);
+    expect(row.accessTokenExpiresAt.getTime()).toBeLessThanOrEqual((await nowDb()).getTime());
+    expect(row).toMatchObject({
+      status: 'active',
+      accessTokenEnc: account.accessTokenEnc,
+      refreshTokenEnc: account.refreshTokenEnc,
+      refreshTokenHash: account.refreshTokenHash,
+      tokenRotatedAt: account.tokenRotatedAt,
+    });
+    expect(stub.tokenRequests).toBe(before);
+
+    // the mark is what every later caller sees, with or without a fingerprint
+    expect(await ensureFreshAccessToken(deps(), account.id, { mayRefresh: false })).toEqual({
+      ok: false,
+      reason: 'refresh_needed',
+    });
+    const exchanged = await ensureFreshAccessToken(deps(), account.id, { mayRefresh: true });
+    expect(exchanged.ok).toBe(true);
+    expect(stub.tokenRequests).toBe(before + 1);
+  });
+
+  it.each([true, false])(
+    'T3 returns the stored token for a fingerprint that is not the stored one (mayRefresh: %s)',
+    async (mayRefresh) => {
+      const account = await linkedAccount();
+      const before = stub.tokenRequests;
+      expect(
+        await ensureFreshAccessToken(deps(), account.id, {
+          mayRefresh,
+          refusedToken: hashToken('another-token'),
+        }),
+      ).toEqual({ ok: true, accessToken: storedOf(account) });
+      const row = await rowOf(account.id);
+      expect(row.accessTokenExpiresAt).toEqual(account.accessTokenExpiresAt);
+      expect(row.updatedAt).toEqual(account.updatedAt);
+      expect(stub.tokenRequests).toBe(before);
+    },
+  );
+
+  it.each([
+    {
+      name: 'a pending account',
+      prepare: () => pendingAccount(),
+      expected: { ok: false, reason: 'account_pending' },
+    },
+    {
+      name: 'a revoked account',
+      prepare: async () => {
+        const account = await linkedAccount();
+        await tmp.db
+          .update(brokerAccounts)
+          .set({ status: 'revoked', authRevokedReason: 'refresh_expired' })
+          .where(eq(brokerAccounts.id, account.id));
+        return account;
+      },
+      expected: { ok: false, reason: 'account_revoked', revokedReason: 'refresh_expired' },
+    },
+    {
+      name: 'a blocked user',
+      prepare: async () => {
+        const account = await linkedAccount();
+        await tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, account.userId));
+        return account;
+      },
+      expected: { ok: false, reason: 'user_blocked' },
+    },
+    {
+      name: 'a row under another key',
+      prepare: async () => {
+        const account = await linkedAccount();
+        await tmp.db
+          .update(brokerAccounts)
+          .set({ tokenKeyId: 'rotated-key' })
+          .where(eq(brokerAccounts.id, account.id));
+        return account;
+      },
+      expected: { ok: false, reason: 'key_unavailable' },
+    },
+  ])('T4 answers $name before it reads the fingerprint', async ({ prepare, expected }) => {
+    const account = await prepare();
+    const before = stub.tokenRequests;
+    expect(
+      await ensureFreshAccessToken(deps(), account.id, {
+        mayRefresh: true,
+        refusedToken: fingerprintOf(account),
+      }),
+    ).toEqual(expected);
+    expect((await rowOf(account.id)).accessTokenExpiresAt).toEqual(account.accessTokenExpiresAt);
+    expect(stub.tokenRequests).toBe(before);
+  });
+
+  it('T5 does not read the fingerprint of a token already expired by the clock', async () => {
+    const account = await expiredAccount();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ accessTokenEnc: randomBytes(64) })
+      .where(eq(brokerAccounts.id, account.id));
+    expect(
+      await ensureFreshAccessToken(deps(), account.id, {
+        mayRefresh: false,
+        refusedToken: hashToken('whatever'),
+      }),
+    ).toEqual({ ok: false, reason: 'refresh_needed' });
+    expect(await rowOf(account.id)).toMatchObject({ status: 'active', authRevokedReason: null });
+  });
+});
