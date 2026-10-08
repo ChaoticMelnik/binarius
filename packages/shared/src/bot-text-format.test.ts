@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatAge, formatCount, formatStake, formatUsd } from './format';
+import { formatAge, formatCount, formatStake, formatUsd } from './bot-text-format';
 
 const NBSP = ' ';
 const spaced = (text: string) => text.replaceAll(' ', NBSP);

@@ -9,20 +9,21 @@ import {
   type BotPlainKey,
   type BotTextKey,
 } from './bot-texts';
+import type { BotTextVarName } from './bot-text-vars';
 import { plainTextOf, TELEGRAM_CAPTION_LIMIT, TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
 
 // The messages the client bot assembles from several catalog keys (docs/bot-texts.md → Assembled
-// messages). A key's own limit is checked with its sample; these descriptions bound what the key
-// limit cannot: a caption or a message made of many keys, and a key whose argument can be far
-// wider than its sample. The bot's test (apps/bot/src/bot-text-messages.test.ts) holds every
+// messages). A key's own limit is checked with its variables' samples; these descriptions bound
+// what the key limit cannot: a caption or a message made of many keys, and a variable that can be
+// far wider than its sample. The bot's test (apps/bot/src/bot-text-messages.test.ts) holds every
 // description equal to the real assembly on the defaults.
 
 type Catalog = typeof BOT_TEXT_CATALOG;
-export type BotHtmlArgKey = {
-  [K in BotHtmlKey]: Catalog[K]['arg'] extends string ? K : never;
+export type BotHtmlVarKey = {
+  [K in BotHtmlKey]: [keyof Catalog[K]['variables']] extends [never] ? never : K;
 }[BotHtmlKey];
 
-// The widest value each argument can take. A bound named after a schema is enforced there; the
+// The widest value each variable can take. A bound named after a schema is enforced there; the
 // rest are stated assumptions (docs/bot-texts.md → Assembled messages → Assumptions).
 export const BOT_TEXT_WIDTHS = {
   // Telegram's first_name, 1-64 characters
@@ -71,10 +72,13 @@ export const BOT_TEXT_WIDTHS = {
 } as const;
 
 export interface BotTextMeasure {
-  // the length after entities parsing of `key`'s text, its argument `argWidth` characters wide
-  length(key: BotTextKey, argWidth?: number): number;
+  // the length after entities parsing of `key`'s text, each variable in it as wide as `widths`
+  // says, or as its width for this key (BOT_TEXT_VAR_WIDTHS, then the default)
+  length(key: BotTextKey, widths?: Partial<Record<BotTextVarName, number>>): number;
   longest(...keys: BotTextKey[]): number;
 }
+
+export type BotTextWidth = (m: BotTextMeasure) => number;
 
 const w = BOT_TEXT_WIDTHS;
 const durations = ['demoDuration5', 'demoDuration15'] as const satisfies readonly BotPlainKey[];
@@ -108,20 +112,20 @@ const address = (m: BotTextMeasure) => Math.max(w.email, m.length('accountUnknow
 // `${word} — EMA9 1.08542 above EMA21 1.08511` and the like (analysis.ts → featureLines)
 const indicator = (value: number) => 'EMA'.length + w.period + 1 + value;
 const tradeLine = (m: BotTextMeasure, action: number) =>
-  Math.max(w.symbol, m.length('intentAssetFallback', w.assetId)) +
+  Math.max(w.symbol, m.length('intentAssetFallback')) +
   SEPARATOR +
   action +
   Math.max(m.longest(...durations), w.durationFallback) +
   SEPARATOR +
-  m.length('intentStake', w.stake);
+  m.length('intentStake');
 const stakeLabel = (m: BotTextMeasure) => Math.max(w.stake, m.length('stakeMinimumLabel'));
 // «3 в плюс, 1 в минус, 1 в ноль»
 const score = (m: BotTextMeasure) =>
-  m.length('sessionWon', w.sessionCount) +
+  m.length('sessionWon') +
   ', '.length +
-  m.length('sessionLost', w.sessionCount) +
+  m.length('sessionLost') +
   ', '.length +
-  m.length('sessionTied', w.sessionCount);
+  m.length('sessionTied');
 // «5 сделок — 3 в плюс, 2 в минус»
 const result = (m: BotTextMeasure) =>
   w.sessionCount +
@@ -131,35 +135,39 @@ const result = (m: BotTextMeasure) =>
   score(m);
 const volatility = (word: number) => word + DASH + indicator(w.atrPct + '%'.length);
 
-export const BOT_TEXT_ARG_WIDTHS: Readonly<Record<BotHtmlArgKey, (m: BotTextMeasure) => number>> = {
-  codeSent: () => w.email,
-  codeSentUnknown: () => w.email,
-  cardGreeting: () => w.firstName,
-  cardEmail: () => w.email,
-  cardBonusGranted: () => w.rawCount,
-  accountLineActive: address,
-  accountLinePending: address,
-  accountLineRevoked: address,
-  statusHeader: () => w.mode,
-  statusReal: () => w.usd,
-  statusDemo: () => w.usd,
-  statusTokens: () => w.count,
-  statusReserved: () => w.count,
-  statusStale: () => w.age,
-  settings: (m) => m.longest('levelAll', 'levelReduced', 'levelOff'),
-  demoPairsHeader: (m) => m.longest(...groups),
-  demoPage: () => w.page,
-  demoGroupClosed: (m) => m.longest(...groups),
-  demoAsset: () => w.symbol,
-  demoPayout: () => w.payout,
-  demoDurationLine: (m) => m.longest(...durations),
-  demoPairClosed: () => w.symbol,
-  demoDurationUnsupported: () => w.symbol,
-  demoNoDuration: () => w.symbol,
-  analyzing: subject,
-  analysisHeader: subject,
-  analysisNoSignal: (m) => m.longest(...ruleReasons, ...dataReasons),
-  analysisTrend: (m) =>
+const trades = (m: BotTextMeasure) =>
+  m.longest('sessionTradeOne', 'sessionTradeFew', 'sessionTradeMany');
+// a balance prints a number only when fresh, its stand-in otherwise (bot-text-vars.ts)
+const balance = (m: BotTextMeasure) => Math.max(w.usd, m.length('balanceUnavailable'));
+
+// Each variable's widest value wherever it stands; a variable without one does not compile.
+export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTextWidth>> = {
+  firstName: () => w.firstName,
+  email: address,
+  tokens: () => w.count,
+  reservedTokens: () => w.count,
+  bonusTokens: () => w.rawCount,
+  demoBalance: balance,
+  realBalance: balance,
+  mode: () => w.mode,
+  level: (m) => m.longest('levelAll', 'levelReduced', 'levelOff'),
+  // the saved stake, or the minimum's label (texts.ts → stakeLabel)
+  stake: stakeLabel,
+  minStake: () => w.stake,
+  demoAvailable: () => w.stake,
+  age: () => w.age,
+  // stakePickerText: the saved stake, or «label (minimum)»
+  amount: (m) =>
+    Math.max(w.stake, m.length('stakeMinimumLabel') + ' ('.length + w.stake + ')'.length),
+  count: () => w.count,
+  symbol: () => w.symbol,
+  group: (m) => m.longest(...groups),
+  page: () => w.page,
+  payout: () => w.payout,
+  label: (m) => m.longest(...durations),
+  subject,
+  reason: (m) => m.longest(...ruleReasons, ...dataReasons),
+  value: (m) =>
     m.longest('trendUp', 'trendDown', 'trendFlat') +
     DASH +
     indicator(w.price) +
@@ -167,47 +175,59 @@ export const BOT_TEXT_ARG_WIDTHS: Readonly<Record<BotHtmlArgKey, (m: BotTextMeas
     m.longest('emaAbove', 'emaBelow', 'emaEqual') +
     1 +
     indicator(w.price),
-  analysisMomentum: (m) =>
-    m.longest('momentumUp', 'momentumDown', 'momentumNeutral') + DASH + indicator(w.rsi),
-  analysisVolatility: (m) =>
-    volatility(m.longest('volatilityNormal', 'volatilityLow', 'volatilityHigh')),
-  analysisCandles: () => w.candles,
-  analysisLastPrice: () => w.price,
-  analysisRateLimited: () => w.retryAfterSec,
+  price: () => w.price,
+  seconds: () => w.retryAfterSec,
   // asset · direction · duration · stake (texts.ts → intentStatusText)
-  intentTrade: (m) => tradeLine(m, m.longest('actionUp', 'actionDown') + SEPARATOR),
-  // asset · duration · stake (texts.ts → sessionStatusText)
-  sessionSettings: (m) => tradeLine(m, 0),
+  line: (m) => tradeLine(m, m.longest('actionUp', 'actionDown') + SEPARATOR),
+  assetId: () => w.assetId,
+  digits: () => w.stakeDigits,
   // «3 из 5»
-  sessionStep: () => w.sessionCount + ' из '.length + w.sessionCount,
-  sessionScore: score,
-  sessionCompleted: result,
-  sessionTotal: result,
-  // stakeLabel: the saved stake, or the minimum's label (texts.ts)
-  settingsStake: stakeLabel,
-  stakeSaved: stakeLabel,
-  // stakePickerText: the saved stake, or «label (minimum)»
-  stakePickerCurrent: (m) =>
-    Math.max(w.stake, m.length('stakeMinimumLabel') + ' ('.length + w.stake + ')'.length),
-  stakePickerMinimum: () => w.stake,
-  stakePickerAvailable: () => w.stake,
-  stakeBelowMinimum: () => w.stake,
-  stakeAboveAvailableAmount: () => w.stake,
-  stakePrecisionDigits: () => w.stakeDigits,
-  // the demo launch screen: the pair is always traded at 15 s (texts.ts -> launchText)
-  launchHeader: (m) => w.symbol + SEPARATOR + m.length('demoDuration15'),
-  launchStake: () => w.stake,
+  step: () => w.sessionCount + ' из '.length + w.sessionCount,
+  score,
+  result,
   // «5 сделок»
-  launchCycle: (m) =>
-    w.sessionCount + 1 + m.longest('sessionTradeOne', 'sessionTradeFew', 'sessionTradeMany'),
-  stakeSavedLine: stakeLabel,
+  trades: (m) => w.sessionCount + 1 + trades(m),
+  // the direction, then the stake when known (texts.ts → stakeButtonLabel)
+  action: (m) => m.longest('actionUp', 'actionDown') + SEPARATOR + w.stake,
 };
+
+// Where a key's real assembly is narrower than a variable's default width.
+export const BOT_TEXT_VAR_WIDTHS: Readonly<
+  Partial<Record<BotTextKey, Partial<Record<BotTextVarName, BotTextWidth>>>>
+> = {
+  // the address the user typed, or the card's when the broker sent one: never the stand-in
+  codeSent: { email: () => w.email },
+  codeSentUnknown: { email: () => w.email },
+  cardEmail: { email: () => w.email },
+  statusReal: { amount: () => w.usd },
+  statusDemo: { amount: () => w.usd },
+  analysisMomentum: {
+    value: (m) =>
+      m.longest('momentumUp', 'momentumDown', 'momentumNeutral') + DASH + indicator(w.rsi),
+  },
+  analysisVolatility: {
+    value: (m) => volatility(m.longest('volatilityNormal', 'volatilityLow', 'volatilityHigh')),
+  },
+  analysisCandles: { count: () => w.candles },
+  intentStake: { amount: () => w.stake },
+  // asset · duration · stake (texts.ts → sessionStatusText)
+  sessionSettings: { line: (m) => tradeLine(m, 0) },
+  sessionWon: { count: () => w.sessionCount },
+  sessionLost: { count: () => w.sessionCount },
+  sessionTied: { count: () => w.sessionCount },
+  // the demo launch screen: the pair is always traded at 15 s (texts.ts → launchText)
+  launchHeader: { subject: (m) => w.symbol + SEPARATOR + m.length('demoDuration15') },
+  // shown only with an amount; launchStakeMinimum stands in without one
+  launchStake: { stake: () => w.stake },
+};
+
+type Widths = Partial<Record<BotTextVarName, BotTextWidth>>;
 
 // A literal string, a key's text, the longest of several sequences, or one repeated.
 export type BotTextSegment =
   | string
-  // `width` in place of the key's own argument width, where the message narrows the argument
-  | { readonly key: BotTextKey; readonly width?: (m: BotTextMeasure) => number }
+  // `width` in place of the key's own widths, where the message narrows a variable
+  | { readonly key: BotTextKey; readonly width?: Widths }
   | { readonly oneOf: readonly (readonly BotTextSegment[])[] }
   | {
       readonly repeat: number;
@@ -223,15 +243,15 @@ export interface BotTextMessage {
   readonly body: readonly BotTextSegment[];
 }
 
-const k = (key: BotTextKey, width?: (m: BotTextMeasure) => number): BotTextSegment =>
+const k = (key: BotTextKey, width?: Widths): BotTextSegment =>
   width === undefined ? { key } : { key, width };
 const oneOf = (...options: (readonly BotTextSegment[])[]): BotTextSegment => ({ oneOf: options });
 const anyOf = (...keys: BotTextKey[]): BotTextSegment => oneOf(...keys.map((key) => [k(key)]));
 
 const balances = (amount: number): BotTextSegment[] => [
-  k('statusReal', () => amount),
+  k('statusReal', { amount: () => amount }),
   '\n',
-  k('statusDemo', () => amount),
+  k('statusDemo', { amount: () => amount }),
   '\n',
   k('statusTokens'),
   ' ',
@@ -245,7 +265,7 @@ const features = (signal: boolean): BotTextSegment[] => [
   k('analysisMomentum'),
   '\n',
   signal
-    ? k('analysisVolatility', (m) => volatility(m.length('volatilityNormal')))
+    ? k('analysisVolatility', { value: (m) => volatility(m.length('volatilityNormal')) })
     : k('analysisVolatility'),
   '\n',
   k('analysisCandles'),
@@ -379,7 +399,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     body: [
       k('analysisHeader'),
       '\n',
-      k('analysisNoSignal', (m) => m.longest(...dataReasons)),
+      k('analysisNoSignal', { reason: (m) => m.longest(...dataReasons) }),
       '\n\n',
       k('analysisDataHint'),
     ],
@@ -391,7 +411,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     body: [
       k('analysisHeader'),
       '\n',
-      k('analysisNoSignal', (m) => m.longest(...ruleReasons)),
+      k('analysisNoSignal', { reason: (m) => m.longest(...ruleReasons) }),
       '\n\n',
       ...features(false),
       '\n\n',
@@ -533,12 +553,17 @@ function keysIn(body: readonly BotTextSegment[]): BotTextKey[] {
 
 const assembledKeys = new Set(ASSEMBLED.flatMap((message) => keysIn(message.body)));
 
-// A key whose argument is in no assembled message is a message of its own: its widest argument
-// is checked against its own limit.
+// An html key with variables in no assembled message is a message of its own: its widest
+// variables are checked against its own limit.
 export const BOT_TEXT_MESSAGES: readonly BotTextMessage[] = [
   ...ASSEMBLED,
-  ...(Object.keys(BOT_TEXT_ARG_WIDTHS) as BotHtmlArgKey[])
-    .filter((key) => !assembledKeys.has(key))
+  ...(Object.keys(BOT_TEXT_CATALOG) as BotTextKey[])
+    .filter(
+      (key): key is BotHtmlVarKey =>
+        BOT_TEXT_CATALOG[key].kind === BotTextKind.Html &&
+        BOT_TEXT_CATALOG[key].vars.length > 0 &&
+        !assembledKeys.has(key),
+    )
     .map((key) => ({
       id: key,
       title: `текст ${key}`,
@@ -547,27 +572,40 @@ export const BOT_TEXT_MESSAGES: readonly BotTextMessage[] = [
     })),
 ];
 
-function measureOf(lookup: BotTextSource<BotTextKey>): BotTextMeasure {
-  const { html, plain } = createBotTexts(lookup);
-  // an html text is measured after entities parsing; a plain one is escaped and shown as written
-  const length = (key: BotTextKey, argWidth = 0): number => {
-    const isHtml = BOT_TEXT_CATALOG[key].kind === BotTextKind.Html;
-    const view: unknown = isHtml ? html[key as BotHtmlKey] : plain[key as BotPlainKey];
-    const value =
-      typeof view === 'function' ? (view as (arg: string) => unknown)('x'.repeat(argWidth)) : view;
-    return isHtml ? plainTextOf(String(value)).length : String(value).length;
-  };
-  return { length, longest: (...keys) => Math.max(...keys.map((key) => length(key))) };
-}
+const KEY_WIDTHS: Partial<Record<BotTextKey, Widths>> = BOT_TEXT_VAR_WIDTHS;
 
-const ARG_WIDTHS: Partial<Record<BotTextKey, (m: BotTextMeasure) => number>> = BOT_TEXT_ARG_WIDTHS;
+function measureOf(lookup: BotTextSource<BotTextKey>): BotTextMeasure {
+  const { renderWith } = createBotTexts(lookup);
+  // an html text is measured after entities parsing; a plain one is escaped and shown as written;
+  // a width is worked out only for a variable the text holds
+  const length: BotTextMeasure['length'] = (key, widths = {}) => {
+    const value = renderWith(key, (name) => {
+      const variable = name as BotTextVarName;
+      const width =
+        widths[variable] ??
+        (KEY_WIDTHS[key]?.[variable] ?? BOT_TEXT_VAR_DEFAULT_WIDTHS[variable])(m);
+      return 'x'.repeat(width);
+    });
+    return BOT_TEXT_CATALOG[key].kind === BotTextKind.Html
+      ? plainTextOf(String(value)).length
+      : String(value).length;
+  };
+  const m: BotTextMeasure = {
+    length,
+    longest: (...keys) => Math.max(...keys.map((key) => length(key))),
+  };
+  return m;
+}
 
 function lengthOf(body: readonly BotTextSegment[], m: BotTextMeasure): number {
   let total = 0;
   for (const segment of body) {
     if (typeof segment === 'string') total += segment.length;
     else if ('key' in segment) {
-      total += m.length(segment.key, (segment.width ?? ARG_WIDTHS[segment.key])?.(m));
+      const narrowed = Object.entries(segment.width ?? {}).map(
+        ([name, width]) => [name, width(m)] as const,
+      );
+      total += m.length(segment.key, Object.fromEntries(narrowed));
     } else if ('oneOf' in segment) {
       total += Math.max(...segment.oneOf.map((option) => lengthOf(option, m)));
     } else {

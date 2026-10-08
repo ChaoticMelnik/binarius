@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BOT_TEXT_ARG_WIDTHS,
   BOT_TEXT_MESSAGES,
+  BOT_TEXT_VAR_WIDTHS,
+  BOT_TEXT_WIDTHS,
   botTextMessageKeys,
   botTextMessageOverflows,
   estimateBotTextMessage,
@@ -19,17 +20,45 @@ const withTexts = (texts: Partial<Record<BotTextKey, string>>) => ({
 });
 
 describe('the assembled messages', () => {
-  it('G1 gives every html key with an argument a width, and only those', () => {
-    const argKeys = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
-      (key) =>
-        BOT_TEXT_CATALOG[key].kind === BotTextKind.Html && BOT_TEXT_CATALOG[key].arg !== undefined,
-    );
-    expect(Object.keys(BOT_TEXT_ARG_WIDTHS).sort()).toEqual(argKeys.sort());
+  it('G1 narrows a width only for a variable of that key', () => {
+    for (const [key, widths] of Object.entries(BOT_TEXT_VAR_WIDTHS)) {
+      for (const name of Object.keys(widths)) {
+        expect(BOT_TEXT_CATALOG[key as BotTextKey].vars, `${key}.${name}`).toContain(name);
+      }
+    }
   });
 
-  it('G1 makes every key with an argument part of some message', () => {
+  it('G1 makes every html key with variables part of some message', () => {
     const covered = new Set(BOT_TEXT_MESSAGES.flatMap((m) => [...botTextMessageKeys(m)]));
-    for (const key of Object.keys(BOT_TEXT_ARG_WIDTHS)) expect(covered, key).toContain(key);
+    const keys = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
+      (key) =>
+        BOT_TEXT_CATALOG[key].kind === BotTextKind.Html && BOT_TEXT_CATALOG[key].vars.length > 0,
+    );
+    for (const key of keys) expect(covered, key).toContain(key);
+  });
+
+  // #358: a variable a staff member adds to a key is measured at its widest
+  it('G6 widens a message by each variable an override adds, at its own width', () => {
+    const card = message('statusCard');
+    const base = estimateBotTextMessage(card, defaultBotTextSource);
+    const tokens = BOT_TEXT_CATALOG.statusTokens.source;
+    expect(
+      estimateBotTextMessage(card, withTexts({ statusTokens: `${tokens} {firstName}` })) - base,
+    ).toBe(1 + BOT_TEXT_WIDTHS.firstName);
+    expect(
+      estimateBotTextMessage(card, withTexts({ statusTokens: `${tokens} {demoBalance}` })) - base,
+    ).toBe(1 + BOT_TEXT_WIDTHS.usd);
+    const stale = 'я'.repeat(40);
+    expect(
+      estimateBotTextMessage(
+        card,
+        withTexts({ statusTokens: `${tokens} {demoBalance}`, balanceUnavailable: stale }),
+      ) - base,
+    ).toBe(1 + stale.length);
+  });
+
+  it('reads a stand-in text only for a message whose texts hold its variable', () => {
+    expect(botTextMessageKeys(message('statusCard'))).not.toContain('balanceUnavailable');
   });
 
   it('keeps every message within its limit on the defaults', () => {

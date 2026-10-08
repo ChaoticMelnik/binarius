@@ -357,7 +357,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
           consumed.telegramUserId,
           account.status === BrokerAccountStatus.Pending
             ? { kind: LinkPushKind.Pending, account: { id: account.id, email: account.email } }
-            : { kind: LinkPushKind.Active },
+            : { kind: LinkPushKind.Active, email: account.email },
         );
         return reply.send({ account });
       },

@@ -7,20 +7,46 @@ import {
   InvalidBotText,
   parseBotTextTemplate,
   type BotTextSource,
+  type BotTextVariable,
 } from './bot-text-template';
 import { telegramHtml } from './telegram-html';
 
+// a registry of its own, as bot-text-vars.ts is the catalog's
+const shown = (sample: string): BotTextVariable<string> => ({
+  description: 'строка',
+  sample,
+  format: (value) => value,
+});
+const formatted: string[] = [];
+const count: BotTextVariable<number> = {
+  description: 'число',
+  sample: '12',
+  format: (value) => {
+    formatted.push('n');
+    return `${String(value)} шт.`;
+  },
+};
+const who: BotTextVariable<string | null> = {
+  description: 'кто, или слово каталога вместо него',
+  sample: 'Ада',
+  format: (value, texts) => value ?? texts('word'),
+};
+
 const CATALOG = {
   msg: botHtmlText('g', 'сообщение', '<b>{v}</b>', {
-    arg: { name: 'v', sample: 'Ада' },
+    variables: { v: shown('Ада') },
     fragments: { word: 'word', bold: 'bold' },
   }),
-  count: botHtmlText('g', 'число', 'Токены: {v}', { arg: { name: 'v', sample: '100' } }),
-  short: botHtmlText('g', 'короткое', '{v}', { arg: { name: 'v', sample: 'Ада' }, limit: 10 }),
+  count: botHtmlText('g', 'число', 'Токены: {v}', { variables: { v: shown('100') } }),
+  short: botHtmlText('g', 'короткое', '{v}', { variables: { v: shown('Ада') }, limit: 10 }),
+  pair: botHtmlText('g', 'две переменные', 'Привет, {v}! Токены: {n}', {
+    variables: { v: shown('Ада'), n: count },
+  }),
   host: botHtmlText('g', 'хозяин', 'Нажми «{word}», затем {bold}.', {
     fragments: { word: 'word', bold: 'bold' },
   }),
-  line: botPlainText('g', 'надпись', '{v}', { arg: { name: 'v', sample: 'Ада' } }),
+  line: botPlainText('g', 'надпись', '{v}', { variables: { v: shown('Ада') } }),
+  whoLine: botPlainText('g', 'кто', '{who}', { variables: { who } }),
   plainHost: botPlainText('g', 'plain-хозяин', '{word}!', { fragments: { word: 'word' } }),
   word: botPlainText('g', 'слово', 'слово'),
   bold: botHtmlText('g', 'жирный', '<b>жирный</b>'),
@@ -56,8 +82,11 @@ describe('botTextEntryProblems', () => {
       '{v} {other}',
       [{ code: 'unknown_placeholder', detail: 'other' }],
     ],
-    ['missing argument', 'msg', 'без аргумента', [{ code: 'missing_placeholder', detail: 'v' }]],
-    ['argument twice', 'msg', '{v} и {v}', []],
+    // #358 В3: no variable is required, the old argument included
+    ['a variable left out', 'msg', 'без переменной', []],
+    ['one of two variables left out', 'pair', 'Токены: {n}', []],
+    ["another key's variable", 'count', '{v} {n}', [{ code: 'unknown_placeholder', detail: 'n' }]],
+    ['a variable twice', 'msg', '{v} и {v}', []],
     [
       'placeholder in an attribute value',
       'msg',
@@ -72,18 +101,30 @@ describe('botTextEntryProblems', () => {
     ],
     ['placeholder in text next to a tag', 'msg', '<b>{v}</b>{v}<i>{v}</i>', []],
     [
-      'partial numeric entity before the argument',
+      'partial numeric entity before a variable',
       'count',
       '&#{v};',
       [{ code: 'invalid_html', detail: 'a bare "&" at 0' }],
     ],
     [
-      'partial numeric entity around the argument',
+      'partial numeric entity around a variable',
       'count',
       '&#{v}1;',
       [{ code: 'invalid_html', detail: 'a bare "&" at 0' }],
     ],
-    ['full entities around the argument', 'count', '{v} &amp; {v}', []],
+    [
+      'partial named entity before a variable',
+      'count',
+      '&am{v};',
+      [{ code: 'invalid_html', detail: 'a bare "&" at 0' }],
+    ],
+    [
+      'partial entity before the second of two variables',
+      'pair',
+      '{v} &am{n};',
+      [{ code: 'invalid_html', detail: 'a bare "&" at 2' }],
+    ],
+    ['full entities around a variable', 'count', '{v} &amp; {v}', []],
     ['unclosed tag', 'msg', '<b>{v}', [{ code: 'invalid_html', detail: '<b> is never closed' }]],
     ['too long', 'short', '{v} 12345678', [{ code: 'too_long', detail: '12' }]],
     ['at the limit', 'short', '<b>{v}</b> 123456', []],
@@ -149,13 +190,39 @@ describe('createBotTextViews', () => {
   });
 
   // #299 V12: html goes into html only through a declared fragment, which the validator checks
-  it('escapes a string argument; a non-string argument throws InvalidBotText', () => {
+  it('escapes a string value; a non-string value throws InvalidBotText', () => {
     const { html, plain } = createBotTextViews(CATALOG, sourceOf({ msg: '{v}, {v}' }));
-    expect(html.msg(HOSTILE).value).toBe('&lt;&amp;&gt;&quot;, &lt;&amp;&gt;&quot;');
-    expect(() => html.msg(telegramHtml`<i>${'&'}</i>` as unknown as string)).toThrow(
+    expect(html.msg({ v: HOSTILE }).value).toBe('&lt;&amp;&gt;&quot;, &lt;&amp;&gt;&quot;');
+    expect(() => html.msg({ v: telegramHtml`<i>${'&'}</i>` as unknown as string })).toThrow(
       InvalidBotText,
     );
-    expect(plain.line(HOSTILE)).toBe(HOSTILE);
+    expect(plain.line({ v: HOSTILE })).toBe(HOSTILE);
+  });
+
+  it('fills every variable of the key, each through its formatter', () => {
+    const { html } = createBotTextViews(CATALOG, sourceOf());
+    expect(html.pair({ v: 'Ада', n: 12 }).value).toBe('Привет, Ада! Токены: 12 шт.');
+  });
+
+  it('formats only the variables the text holds', () => {
+    const { html } = createBotTextViews(CATALOG, sourceOf({ pair: 'Привет, {v}!' }));
+    formatted.length = 0;
+    expect(html.pair({ v: 'Ада', n: 12 }).value).toBe('Привет, Ада!');
+    expect(formatted).toEqual([]);
+  });
+
+  it("reads a formatter's stand-in from the same source as the text", () => {
+    const { plain } = createBotTextViews(CATALOG, sourceOf({ word: 'никто' }));
+    expect(plain.whoLine({ who: null })).toBe('никто');
+    expect(plain.whoLine({ who: 'Ада' })).toBe('Ада');
+  });
+
+  it("renders every key at its variables' samples", () => {
+    const { samples } = createBotTextViews(CATALOG, sourceOf({ msg: '{v} &amp; {word}' }));
+    expect(samples.html.pair.value).toBe('Привет, Ада! Токены: 12');
+    expect(samples.html.msg.value).toBe('Ада &amp; слово');
+    expect(samples.plain.line).toBe('Ада');
+    expect(samples.html.bold.value).toBe('<b>жирный</b>');
   });
 
   it('refuses a text that does not parse against its key', () => {
@@ -172,7 +239,7 @@ describe('createBotTextViews', () => {
       expect(html.host).toBe(html.host);
     });
 
-    it('returns the same function for a key with an argument while the sources stay', () => {
+    it('returns the same function for a key with variables while the sources stay', () => {
       const { html, plain } = views();
       expect(html.msg).toBe(html.msg);
       expect(plain.line).toBe(plain.line);
@@ -201,9 +268,9 @@ describe('createBotTextViews', () => {
 
     it('enumerates every key of its kind', () => {
       const { html, plain } = views();
-      expect(Object.keys(html).sort()).toEqual(['bold', 'count', 'host', 'msg', 'short']);
-      expect(Object.keys(plain).sort()).toEqual(['line', 'plainHost', 'word']);
-      expect(Object.entries(html)).toHaveLength(5);
+      expect(Object.keys(html).sort()).toEqual(['bold', 'count', 'host', 'msg', 'pair', 'short']);
+      expect(Object.keys(plain).sort()).toEqual(['line', 'plainHost', 'whoLine', 'word']);
+      expect(Object.entries(html)).toHaveLength(6);
     });
   });
 });

@@ -190,13 +190,27 @@ export function botTextChangeProblems(
 
 // ---- Messages, one source for the CLI and the admin section ---------------------------------
 
+const placeholders = (names: readonly string[]): string =>
+  names.map((name) => `{${name}}`).join(', ');
+
+// what the key's text may hold, for a refusal of a placeholder it may not (#358)
+function availableOf(key: BotTextKey): string {
+  const entry = BOT_TEXT_CATALOG[key];
+  const fragments = Object.keys(entry.fragments);
+  return [
+    entry.vars.length === 0
+      ? 'Переменных у этого текста нет'
+      : `Доступны: ${placeholders(entry.vars)}`,
+    ...(fragments.length === 0 ? [] : [`фрагменты: ${placeholders(fragments)}`]),
+  ].join('; ');
+}
+
 export function botTextProblemMessage(key: BotTextKey, problem: BotTextProblem): string {
   const detail = problem.detail ?? '';
   const messages = {
     [BotTextProblemCode.Empty]: 'Пустой текст',
     [BotTextProblemCode.StrayBrace]: 'Лишняя фигурная скобка',
-    [BotTextProblemCode.UnknownPlaceholder]: `Неизвестный плейсхолдер {${detail}}`,
-    [BotTextProblemCode.MissingPlaceholder]: `Нет плейсхолдера {${detail}}`,
+    [BotTextProblemCode.UnknownPlaceholder]: `Переменная {${detail}} недоступна в этом тексте. ${availableOf(key)}`,
     [BotTextProblemCode.PlaceholderInTag]: `Плейсхолдер {${detail}} внутри тега`,
     [BotTextProblemCode.InvalidHtml]: `Битый HTML: ${detail}`,
     [BotTextProblemCode.TooLong]: `Текст ${key} — ${detail} символов при лимите ${String(BOT_TEXT_CATALOG[key].limit)}`,

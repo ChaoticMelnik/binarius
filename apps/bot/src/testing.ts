@@ -52,10 +52,10 @@ import {
 } from '@binarius/shared';
 
 // A text source for the tests of the source swap (#240): the named keys read a marked text of
-// their own kind, with the argument where the key has one; every other key its default.
+// their own kind, with every variable the key has; every other key its default.
 export const stubText = (key: BotTextKey): string => {
   const entry = BOT_TEXT_CATALOG[key];
-  const marked = `ЗАГЛУШКА ${key}${entry.arg === undefined ? '' : ` {${entry.arg}}`}`;
+  const marked = [`ЗАГЛУШКА ${key}`, ...entry.vars.map((name) => `{${name}}`)].join(' ');
   return entry.kind === BotTextKind.Html ? `<b>${marked}</b>` : marked;
 };
 export const stubTextSource = (...keys: BotTextKey[]): BotTextSource<BotTextKey> => ({

@@ -2452,6 +2452,22 @@ describe('the bot texts pages (#300)', () => {
       rendered: { kind: 'plain', text: 'Жми сюда' },
     });
 
+    // #358 A2: every variable of the key at its registry sample
+    expect((await preview('statusTokens', '{firstName}, {tokens}')).parsed).toMatchObject({
+      rendered: { kind: 'html', telegramHtml: 'Ада, 12' },
+    });
+    // A3: a variable the key does not have is refused with what it may hold
+    expect((await preview('codeSent', 'Код на {realBalance}')).parsed).toMatchObject({
+      outcome: 'refused',
+      problems: [
+        {
+          key: 'codeSent',
+          reason:
+            'Переменная {realBalance} недоступна в этом тексте. Доступны: {email}, {firstName}',
+        },
+      ],
+    });
+
     const broken = await preview('welcome', '<b>тест');
     expect(broken.parsed).toMatchObject({
       outcome: 'refused',

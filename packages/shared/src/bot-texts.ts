@@ -1,15 +1,20 @@
 import {
-  botHtmlText as html,
-  botPlainText as plain,
+  botHtmlText,
+  botPlainText,
   botTextEntryProblems,
   createBotTextViews,
   type BotHtmlKeyOf,
   type BotHtmlTextsOf,
   type BotPlainKeyOf,
   type BotPlainTextsOf,
+  type BotTextOptions,
   type BotTextProblem,
+  type BotTextSamplesOf,
   type BotTextSource,
+  type BotTextVariables,
+  type BotTextViews,
 } from './bot-text-template';
+import { BOT_TEXT_VARS, type BotTextVarName, type BotTextVars } from './bot-text-vars';
 import { TELEGRAM_CAPTION_LIMIT } from './telegram-html';
 
 // Every text the client bot shows, in one place for every process: the bot, the backend's push
@@ -58,11 +63,50 @@ const COMMAND_LIMIT = 256;
 const DESCRIPTION_LIMIT = 512;
 const SHORT_DESCRIPTION_LIMIT = 120;
 
+type CatalogOptions<V extends readonly BotTextVarName[]> = Omit<
+  BotTextOptions<BotTextVariables>,
+  'variables'
+> & {
+  // the registry's variables every caller of the key holds when it renders (bot-text-vars.ts)
+  vars?: V;
+};
+
+const variablesOf = <V extends readonly BotTextVarName[]>(
+  names: V | undefined,
+): Pick<BotTextVars, V[number]> =>
+  Object.fromEntries((names ?? []).map((name) => [name, BOT_TEXT_VARS[name]])) as Pick<
+    BotTextVars,
+    V[number]
+  >;
+
+const html = <const G extends string, const V extends readonly BotTextVarName[] = readonly []>(
+  group: G,
+  description: string,
+  source: string,
+  { vars, ...options }: CatalogOptions<V> = {},
+) => botHtmlText(group, description, source, { ...options, variables: variablesOf(vars) });
+
+const plain = <const G extends string, const V extends readonly BotTextVarName[] = readonly []>(
+  group: G,
+  description: string,
+  source: string,
+  { vars, ...options }: CatalogOptions<V> = {},
+) => botPlainText(group, description, source, { ...options, variables: variablesOf(vars) });
+
 const g = BotTextGroup;
 const caption = { limit: TELEGRAM_CAPTION_LIMIT };
-const email = { name: 'email', sample: 'ada@example.com' } as const;
-const symbol = { name: 'symbol', sample: 'EUR/USD OTC' } as const;
-const subject = { name: 'subject', sample: 'EUR/USD OTC · ⏱ 15 с' } as const;
+// What a status card's handler holds: the access read and the user's first_name (docs/bot-texts.md
+// → Variables); the stake picker's adds the two bounds it shows.
+const user = [
+  'firstName',
+  'tokens',
+  'reservedTokens',
+  'demoBalance',
+  'realBalance',
+  'mode',
+  'stake',
+] as const;
+const picker = [...user, 'minStake', 'demoAvailable'] as const;
 
 export const BOT_TEXT_CATALOG = {
   // ---- Вход и подключение -------------------------------------------------------------------
@@ -105,6 +149,7 @@ export const BOT_TEXT_CATALOG = {
     g.Start,
     'Push после повторного входа через сайт в уже подтверждённый аккаунт.',
     `✅ <b>Аккаунт Binodex подключён!</b>`,
+    { vars: ['email'] },
   ),
   accountTaken: html(
     g.Start,
@@ -131,6 +176,7 @@ export const BOT_TEXT_CATALOG = {
     'Вход по почте: просьба прислать адрес.',
     `📧 <b>Пришли адрес электронной почты</b>
 Тот, на который зарегистрирован аккаунт Binodex. Если аккаунта ещё нет, Binodex создаст его на этот адрес.`,
+    { vars: ['firstName'] },
   ),
   emailInvalid: html(
     g.Start,
@@ -147,7 +193,7 @@ export const BOT_TEXT_CATALOG = {
     'Вход по почте: код отправлен, с адресом, который ввёл пользователь.',
     `📩 <b>Код отправлен на {email}</b>
 Пришли его сюда одним сообщением.`,
-    { arg: email },
+    { vars: ['email', 'firstName'] },
   ),
   codeInvalid: html(
     g.Start,
@@ -179,7 +225,7 @@ export const BOT_TEXT_CATALOG = {
     'Вход по почте: неизвестно, ушло ли письмо с кодом; с адресом и кнопкой повторного запроса.',
     `⚠️ Не удалось подтвердить отправку кода на {email}.
 Если письмо пришло — пришли код из него. Если нет — нажми «{resendButton}».`,
-    { arg: email, fragments: { resendButton: 'resendButton' } },
+    { vars: ['email', 'firstName'], fragments: { resendButton: 'resendButton' } },
   ),
   tooManyCodeAttempts: html(
     g.Start,
@@ -197,19 +243,19 @@ export const BOT_TEXT_CATALOG = {
     g.Card,
     'Карточка после подключения: приветствие с именем из Telegram.',
     `🎉 <b>Привет, {firstName}!</b>`,
-    { ...caption, arg: { name: 'firstName', sample: 'Ада' } },
+    { ...caption, vars: ['firstName', 'email'] },
   ),
   cardGreetingNoName: html(
     g.Card,
     'Карточка после подключения: приветствие, когда имя в Telegram пустое.',
     `🎉 <b>Привет!</b>`,
-    caption,
+    { ...caption, vars: ['email'] },
   ),
   cardEmail: html(
     g.Card,
     'Карточка после подключения: адрес подключённого аккаунта, если он известен.',
     `📧 Аккаунт Binodex: {email}`,
-    { ...caption, arg: email },
+    { ...caption, vars: ['firstName', 'email'] },
   ),
   cardBody: html(
     g.Card,
@@ -219,7 +265,7 @@ export const BOT_TEXT_CATALOG = {
 <b>Что теперь доступно</b>
 {features}
 🆘 Если что-то пошло не так — напиши в поддержку: /support`,
-    { ...caption, fragments: { features: 'featureLines' } },
+    { ...caption, fragments: { features: 'featureLines' }, vars: ['firstName', 'email'] },
   ),
   featureLines: html(
     g.Card,
@@ -232,20 +278,20 @@ export const BOT_TEXT_CATALOG = {
   cardBonusGranted: html(
     g.Card,
     'Карточка после подключения: начислены стартовые токены.',
-    `<blockquote>🎁 Начислено токенов автоторговли: {tokens}</blockquote>`,
-    { ...caption, arg: { name: 'tokens', sample: '100' } },
+    `<blockquote>🎁 Начислено токенов автоторговли: {bonusTokens}</blockquote>`,
+    { ...caption, vars: ['bonusTokens', 'firstName', 'email'] },
   ),
   cardBonusNotPartner: html(
     g.Card,
     'Карточка после подключения: аккаунт зарегистрирован не через Binarius, токенов нет.',
     `ℹ️ Стартовые токены начисляются только аккаунтам, зарегистрированным через Binarius.`,
-    caption,
+    { ...caption, vars: ['firstName', 'email'] },
   ),
   cardBonusAlready: html(
     g.Card,
     'Карточка после подключения: стартовые токены уже начислялись.',
     `ℹ️ Стартовые токены уже были начислены раньше.`,
-    caption,
+    { ...caption, vars: ['firstName', 'email'] },
   ),
 
   // ---- /account -----------------------------------------------------------------------------
@@ -278,19 +324,19 @@ export const BOT_TEXT_CATALOG = {
     g.Account,
     '/account: строка активной привязки с адресом.',
     `✅ Подключён: {email}`,
-    { arg: email },
+    { vars: ['email'] },
   ),
   accountLinePending: html(
     g.Account,
     '/account: строка привязки, ждущей подтверждения, с адресом.',
     `⏳ Ждёт подтверждения: {email}`,
-    { arg: email },
+    { vars: ['email'] },
   ),
   accountLineRevoked: html(
     g.Account,
     '/account: строка отозванной привязки с адресом.',
     `⚠️ Подключение отозвано: {email}`,
-    { arg: email },
+    { vars: ['email'] },
   ),
   accountUnknownAddress: plain(
     g.Account,
@@ -301,37 +347,37 @@ export const BOT_TEXT_CATALOG = {
   // ---- Главное меню и статус ----------------------------------------------------------------
   statusHeader: html(g.Menu, '/menu: заголовок карточки с режимом.', `🎮 <b>Режим: {mode}</b>`, {
     ...caption,
-    arg: { name: 'mode', sample: 'DEMO' },
+    vars: user,
   }),
   statusReal: html(g.Menu, '/menu: реальный баланс.', `💵 Реальный баланс: {amount}`, {
     ...caption,
-    arg: { name: 'amount', sample: '$1,234.56' },
+    vars: ['amount', ...user],
   }),
   statusDemo: html(g.Menu, '/menu: демобаланс.', `🧪 Демобаланс: {amount}`, {
     ...caption,
-    arg: { name: 'amount', sample: '$10,000.00' },
+    vars: ['amount', ...user],
   }),
-  statusTokens: html(g.Menu, '/menu: токены.', `🪙 Токены: {count}`, {
+  statusTokens: html(g.Menu, '/menu: токены.', `🪙 Токены: {tokens}`, {
     ...caption,
-    arg: { name: 'count', sample: '12' },
+    vars: user,
   }),
   statusReserved: html(
     g.Menu,
     '/menu: на той же строке после токенов, когда часть в резерве.',
-    `(в резерве: {count})`,
-    { ...caption, arg: { name: 'count', sample: '3' } },
+    `(в резерве: {reservedTokens})`,
+    { ...caption, vars: user },
   ),
   statusStale: html(
     g.Menu,
     '/menu: баланс устарел, с возрастом снимка.',
     `🕒 Баланс Binodex обновлён {age} назад.`,
-    { ...caption, arg: { name: 'age', sample: '5 мин' } },
+    { ...caption, vars: ['age'] },
   ),
   statusNoSnapshot: html(
     g.Menu,
     '/menu: баланса ещё нет.',
     `⏳ Баланс Binodex ещё не получен — попробуй /menu через минуту.`,
-    caption,
+    { ...caption, vars: user },
   ),
   statusAmbiguous: html(
     g.Menu,
@@ -343,7 +389,12 @@ export const BOT_TEXT_CATALOG = {
     g.Menu,
     '/menu: подсказка внизу карточки.',
     `💡 Демо без риска — деньги не нужны.`,
-    caption,
+    { ...caption, vars: user },
+  ),
+  balanceUnavailable: plain(
+    g.Menu,
+    'Вместо {demoBalance} и {realBalance}, когда свежего снимка баланса нет.',
+    'нет свежих данных',
   ),
 
   // ---- /settings ----------------------------------------------------------------------------
@@ -354,13 +405,13 @@ export const BOT_TEXT_CATALOG = {
 Так бот присылает напоминания и подсказки — например, когда ты ещё не начал демо.
 Ответы на твои команды и итоги твоих сделок приходят всегда.
 
-Сейчас выбрано: <b>{current}</b>
+Сейчас выбрано: <b>{level}</b>
 
 {levelAll} — каждое напоминание.
 {levelReduced} — не чаще одного в день.
 {levelOff} — никаких напоминаний.`,
     {
-      arg: { name: 'current', sample: '🔔 Все' },
+      vars: ['level', 'stake', 'firstName'],
       fragments: { levelAll: 'levelAll', levelReduced: 'levelReduced', levelOff: 'levelOff' },
     },
   ),
@@ -378,8 +429,8 @@ export const BOT_TEXT_CATALOG = {
   settingsStake: html(
     g.Settings,
     '/settings: строка с суммой демо-сделки под уровнями уведомлений.',
-    `💵 Сумма демо-сделки: <b>{amount}</b>`,
-    { arg: { name: 'amount', sample: '$5.00' } },
+    `💵 Сумма демо-сделки: <b>{stake}</b>`,
+    { vars: ['level', 'stake', 'firstName'] },
   ),
   stakeMinimumLabel: plain(
     g.Settings,
@@ -430,26 +481,26 @@ export const BOT_TEXT_CATALOG = {
     'Демо: список активов типа, с названием типа.',
     `🎮 <b>Демо-сделка</b> · {group}
 Выбери актив. Число на кнопке — выплата при верном прогнозе, не вероятность.`,
-    { arg: { name: 'group', sample: '💱 Валюты' } },
+    { vars: ['group'] },
   ),
   demoPage: html(g.Demo, 'Демо: строка страницы списка активов.', `Страница {page}`, {
-    arg: { name: 'page', sample: '2 из 4' },
+    vars: ['page'],
   }),
   demoGroupClosed: html(
     g.Demo,
     'Демо: все активы типа закрыты по расписанию.',
     `🔒 <b>{group}: сейчас всё закрыто по расписанию</b>
 Выбери другой тип актива.`,
-    { arg: { name: 'group', sample: '💱 Валюты' } },
+    { vars: ['group'] },
   ),
   demoAsset: html(g.Demo, 'Демо: строка выбранного актива.', `🎯 Актив: {symbol}`, {
-    arg: symbol,
+    vars: ['symbol'],
   }),
   demoPayout: html(
     g.Demo,
     'Демо и анализ: строка выплаты актива.',
     `💰 Выплата: {payout}% — размер выигрыша при верном прогнозе, не вероятность.`,
-    { arg: { name: 'payout', sample: '92' } },
+    { vars: ['payout'] },
   ),
   demoChooseDuration: html(
     g.Demo,
@@ -461,7 +512,7 @@ export const BOT_TEXT_CATALOG = {
     'Демо: строка выбранной длительности.',
     `⏱ Длительность: {label}`,
     {
-      arg: { name: 'label', sample: '⏱ 15 с' },
+      vars: ['label'],
     },
   ),
   demoNext: html(
@@ -481,21 +532,22 @@ export const BOT_TEXT_CATALOG = {
     `📡 Сейчас сигналов нет — обнови через несколько секунд или выбери пару вручную.`,
   ),
   launchHeader: html(g.Demo, 'Экран ставки: пара и длительность цикла.', `🎯 <b>{subject}</b>`, {
-    arg: subject,
+    vars: ['subject', 'firstName', 'stake'],
   }),
-  launchStake: html(g.Demo, 'Экран ставки: сумма каждой сделки цикла.', `💵 Ставка: {amount}`, {
-    arg: { name: 'amount', sample: '$5.00' },
+  launchStake: html(g.Demo, 'Экран ставки: сумма каждой сделки цикла.', `💵 Ставка: {stake}`, {
+    vars: ['stake', 'firstName'],
   }),
   launchStakeMinimum: html(
     g.Demo,
     'Экран ставки: сумма не прочитана — будет минимальная ставка брокера.',
     `💵 Ставка: минимальная брокера`,
+    { vars: ['firstName', 'stake'] },
   ),
   launchCycle: html(
     g.Demo,
     'Экран ставки: что сделает цикл, с числом сделок.',
     `🤖 Бот проведёт {trades} подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.`,
-    { arg: { name: 'trades', sample: '5 сделок' } },
+    { vars: ['trades', 'firstName', 'stake'] },
   ),
   demoCatalogUnavailable: html(
     g.Demo,
@@ -521,19 +573,19 @@ export const BOT_TEXT_CATALOG = {
     g.Demo,
     'Демо: выбранный актив закрыт по расписанию.',
     `🔒 {symbol} сейчас закрыт по расписанию. Выбери другой актив.`,
-    { arg: symbol },
+    { vars: ['symbol'] },
   ),
   demoDurationUnsupported: html(
     g.Demo,
     'Демо: выбранная длительность не подходит активу.',
     `❌ Эта длительность не подходит для {symbol}. Выбери другую.`,
-    { arg: symbol },
+    { vars: ['symbol'] },
   ),
   demoNoDuration: html(
     g.Demo,
     'Демо: у актива нет подходящей длительности.',
     `❌ Для {symbol} нет подходящей длительности. Выбери другой актив.`,
-    { arg: symbol },
+    { vars: ['symbol'] },
   ),
   demoGroupCurrency: plain(
     g.Demo,
@@ -562,13 +614,13 @@ export const BOT_TEXT_CATALOG = {
 
   // ---- Анализ -------------------------------------------------------------------------------
   analyzing: html(g.Analysis, 'Анализ: пока бот ждёт ответа.', `⏳ Анализирую {subject}…`, {
-    arg: subject,
+    vars: ['subject'],
   }),
   analysisHeader: html(
     g.Analysis,
     'Анализ: заголовок с активом и длительностью.',
     `📊 <b>Анализ: {subject}</b>`,
-    { arg: subject },
+    { vars: ['subject'] },
   ),
   analysisSignalUp: html(g.Analysis, 'Анализ: сигнал вверх.', `📈 <b>Сигнал: {actionUp}</b>`, {
     fragments: { actionUp: 'actionUp' },
@@ -580,30 +632,30 @@ export const BOT_TEXT_CATALOG = {
     g.Analysis,
     'Анализ: сигнала нет, с причиной.',
     `⏸ <b>Сигнала нет: {reason}</b>`,
-    { arg: { name: 'reason', sample: 'тренд не определён' } },
+    { vars: ['reason'] },
   ),
   analysisTrend: html(g.Analysis, 'Анализ: строка тренда.', `📐 Тренд по EMA: {value}`, {
-    arg: { name: 'value', sample: 'вверх — EMA9 1.08542 выше EMA21 1.08511' },
+    vars: ['value'],
   }),
   analysisMomentum: html(g.Analysis, 'Анализ: строка импульса.', `⚡ Импульс по RSI: {value}`, {
-    arg: { name: 'value', sample: 'вверх — RSI14 62.3' },
+    vars: ['value'],
   }),
   analysisVolatility: html(
     g.Analysis,
     'Анализ: строка волатильности.',
     `🌊 Волатильность по ATR: {value}`,
-    { arg: { name: 'value', sample: 'в норме — ATR14 0.041%' } },
+    { vars: ['value'] },
   ),
   analysisCandles: html(
     g.Analysis,
     'Анализ: число закрытых свечей.',
     `🕯 Закрытых свечей: {count}`,
     {
-      arg: { name: 'count', sample: '59' },
+      vars: ['count'],
     },
   ),
   analysisLastPrice: html(g.Analysis, 'Анализ: последняя цена.', `💲 Последняя цена: {price}`, {
-    arg: { name: 'price', sample: '1.08560' },
+    vars: ['price'],
   }),
   analysisDisclaimer: html(
     g.Analysis,
@@ -624,7 +676,7 @@ export const BOT_TEXT_CATALOG = {
     g.Analysis,
     'Анализ: брокер ограничил запросы, с секундами до повтора.',
     `⚠️ Брокер ограничил запросы. Попробуй через {seconds} с.`,
-    { arg: { name: 'seconds', sample: '7' } },
+    { vars: ['seconds'] },
   ),
   analysisUnavailable: html(
     g.Analysis,
@@ -645,13 +697,13 @@ export const BOT_TEXT_CATALOG = {
     g.Analysis,
     'Анализ: кнопка открытия сделки, с направлением.',
     '🚀 Открыть сделку: {action}',
-    { arg: { name: 'action', sample: '⬆️ Вверх' } },
+    { vars: ['action'] },
   ),
   sessionStartButton: plain(
     g.Analysis,
     'Анализ: кнопка запуска демо-сессии, с числом сделок.',
     '🚀 Сессия из {trades}',
-    { arg: { name: 'trades', sample: '5 сделок' } },
+    { vars: ['trades'] },
   ),
   noSignalVolatilityTooLow: plain(
     g.Analysis,
@@ -733,16 +785,16 @@ export const BOT_TEXT_CATALOG = {
     g.Trade,
     'Сделка: строка с активом, направлением, длительностью и ставкой.',
     `📈 {line}`,
-    { arg: { name: 'line', sample: 'EUR/USD OTC · ⬆️ Вверх · ⏱ 15 с · ставка $1.00' } },
+    { vars: ['line'] },
   ),
   intentAssetFallback: plain(
     g.Trade,
     'Сделка: вместо названия актива, когда каталог его не знает.',
     'актив #{assetId}',
-    { arg: { name: 'assetId', sample: '42' } },
+    { vars: ['assetId'] },
   ),
   intentStake: plain(g.Trade, 'Сделка: ставка в строке сделки.', 'ставка {amount}', {
-    arg: { name: 'amount', sample: '$1.00' },
+    vars: ['amount'],
   }),
   intentQueued: html(
     g.Trade,
@@ -861,8 +913,8 @@ export const BOT_TEXT_CATALOG = {
   stakeBelowMinimum: html(
     g.Trade,
     'Сумма меньше минимальной ставки брокера: на кнопке сделки и при сохранении суммы.',
-    `⚠️ Минимальная ставка брокера сейчас {amount}. Выбери сумму не меньше.`,
-    { arg: { name: 'amount', sample: '$1.00' } },
+    `⚠️ Минимальная ставка брокера сейчас {minStake}. Выбери сумму не меньше.`,
+    { vars: ['minStake'] },
   ),
   stakeBelowBrokerMinimum: html(
     g.Trade,
@@ -877,8 +929,8 @@ export const BOT_TEXT_CATALOG = {
   stakeAboveAvailableAmount: html(
     g.Trade,
     'Сохранение суммы: сумма больше доступного демо-баланса.',
-    `⚠️ На демо-счёте доступно {amount}. Выбери сумму поменьше.`,
-    { arg: { name: 'amount', sample: '$9 990.00' } },
+    `⚠️ На демо-счёте доступно {demoAvailable}. Выбери сумму поменьше.`,
+    { vars: ['demoAvailable', 'minStake'] },
   ),
   stakePrecision: html(
     g.Trade,
@@ -889,25 +941,33 @@ export const BOT_TEXT_CATALOG = {
     g.Trade,
     'Сохранение суммы: слишком много знаков после запятой, с допустимым числом.',
     `❌ Не больше {digits} знаков после запятой.`,
-    { arg: { name: 'digits', sample: '2' } },
+    { vars: ['digits', 'minStake', 'demoAvailable'] },
   ),
-  stakePickerHeader: html(g.Trade, 'Экран суммы: заголовок.', `💵 <b>Сумма демо-сделки</b>`),
+  stakePickerHeader: html(g.Trade, 'Экран суммы: заголовок.', `💵 <b>Сумма демо-сделки</b>`, {
+    vars: picker,
+  }),
   stakePickerCurrent: html(g.Trade, 'Экран суммы: выбранная сейчас сумма.', `Сейчас: {amount}`, {
-    arg: { name: 'amount', sample: '$5.00' },
+    vars: ['amount', ...picker],
   }),
   stakePickerMinimum: html(
     g.Trade,
     'Экран суммы: минимальная ставка брокера.',
-    `Минимум брокера: {amount}`,
-    { arg: { name: 'amount', sample: '$1.00' } },
+    `Минимум брокера: {minStake}`,
+    { vars: picker },
   ),
-  stakePickerAvailable: html(g.Trade, 'Экран суммы: доступный демо-баланс.', `Доступно: {amount}`, {
-    arg: { name: 'amount', sample: '$9 990.00' },
-  }),
+  stakePickerAvailable: html(
+    g.Trade,
+    'Экран суммы: доступный демо-баланс.',
+    `Доступно: {demoAvailable}`,
+    {
+      vars: picker,
+    },
+  ),
   stakePickerNoPresets: html(
     g.Trade,
     'Экран суммы: демо-баланса не хватает даже на минимальную ставку.',
     `На демо-счёте недостаточно средств даже для минимальной ставки.`,
+    { vars: picker },
   ),
   stakeInputPrompt: html(
     g.Trade,
@@ -919,14 +979,14 @@ export const BOT_TEXT_CATALOG = {
     'Своя сумма: присланное не похоже на сумму.',
     `❌ Введи сумму числом, например 5 или 2,50.`,
   ),
-  stakeSaved: html(g.Trade, 'Сумма сохранена.', `✅ Сумма: {amount}`, {
-    arg: { name: 'amount', sample: '$5.00' },
+  stakeSaved: html(g.Trade, 'Сумма сохранена.', `✅ Сумма: {stake}`, {
+    vars: ['stake', 'firstName'],
   }),
   stakeSavedLine: html(
     g.Trade,
     'Экран ставки: строка над экраном после сохранения суммы.',
-    `✅ Ставка сохранена: {amount}`,
-    { arg: { name: 'amount', sample: '$5.00' } },
+    `✅ Ставка сохранена: {stake}`,
+    { vars: ['stake', 'firstName'] },
   ),
   stakeSaveUnknown: html(
     g.Trade,
@@ -939,35 +999,35 @@ export const BOT_TEXT_CATALOG = {
     g.Session,
     'Сессия: строка с активом, длительностью и ставкой.',
     `📈 {line}`,
-    { arg: { name: 'line', sample: 'EUR/USD OTC · ⏱ 15 с · ставка $1.00' } },
+    { vars: ['line'] },
   ),
   sessionStep: html(g.Session, 'Сессия: номер текущей сделки из всех.', `🔢 Сделка {step}`, {
-    arg: { name: 'step', sample: '3 из 5' },
+    vars: ['step'],
   }),
   sessionScore: html(
     g.Session,
     'Сессия: счёт закрытых сделок, пока сессия идёт.',
     `📊 Счёт: {score}`,
     {
-      arg: { name: 'score', sample: '1 в плюс, 1 в минус, 1 в ноль' },
+      vars: ['score'],
     },
   ),
   sessionWon: plain(g.Session, 'Сессия: число сделок в плюс, в счёте и итоге.', '{count} в плюс', {
-    arg: { name: 'count', sample: '3' },
+    vars: ['count'],
   }),
   sessionLost: plain(
     g.Session,
     'Сессия: число сделок в минус, в счёте и итоге.',
     '{count} в минус',
     {
-      arg: { name: 'count', sample: '2' },
+      vars: ['count'],
     },
   ),
   sessionTied: plain(
     g.Session,
     'Сессия: число сделок в ноль; показывается, только когда такие есть.',
     '{count} в ноль',
-    { arg: { name: 'count', sample: '1' } },
+    { vars: ['count'] },
   ),
   sessionTradeOne: plain(g.Session, 'Сессия: слово после числа 1, 21, 31… («1 сделка»).', 'сделка'),
   sessionTradeFew: plain(
@@ -989,10 +1049,10 @@ export const BOT_TEXT_CATALOG = {
     g.Session,
     'Сессия: итог, когда все сделки сыграны.',
     `🏁 Сессия завершена: {result}`,
-    { arg: { name: 'result', sample: '5 сделок — 3 в плюс, 2 в минус' } },
+    { vars: ['result'] },
   ),
   sessionTotal: html(g.Session, 'Сессия: итог под причиной остановки.', `📊 Итог: {result}`, {
-    arg: { name: 'result', sample: '3 сделки — 2 в плюс, 1 в минус' },
+    vars: ['result'],
   }),
   sessionOpenTradePlaysOut: html(
     g.Session,
@@ -1091,7 +1151,7 @@ export const BOT_TEXT_CATALOG = {
     g.Buttons,
     'Кнопка подтверждения привязки с адресом аккаунта: на /start, в /account и в push.',
     '✅ Подтвердить: {email}',
-    { arg: email },
+    { vars: ['email'] },
   ),
   confirmButtonNoEmail: plain(
     g.Buttons,
@@ -1265,8 +1325,11 @@ export type BotTextKey = keyof Catalog;
 export type BotHtmlKey = BotHtmlKeyOf<Catalog>;
 export type BotPlainKey = BotPlainKeyOf<Catalog>;
 export type BotStaticHtmlKey = {
-  [K in BotHtmlKey]: Catalog[K]['arg'] extends string ? never : K;
+  [K in BotHtmlKey]: [keyof Catalog[K]['variables']] extends [never] ? K : never;
 }[BotHtmlKey];
+export type BotStaticPlainKey = {
+  [K in BotPlainKey]: [keyof Catalog[K]['variables']] extends [never] ? K : never;
+}[BotPlainKey];
 export type BotTextKeyOfGroup<G extends BotTextGroup> = {
   [K in BotTextKey]: Catalog[K]['group'] extends G ? K : never;
 }[BotTextKey];
@@ -1288,6 +1351,7 @@ export const botTextProblems = (
   lookup: BotTextSource<BotTextKey> = defaultBotTextSource,
 ): BotTextProblem[] => botTextEntryProblems(BOT_TEXT_CATALOG, key, source, lookup);
 
-export const createBotTexts = (
-  source: BotTextSource<BotTextKey>,
-): { html: BotHtmlTexts; plain: BotPlainTexts } => createBotTextViews(BOT_TEXT_CATALOG, source);
+export type BotTextSamples = BotTextSamplesOf<Catalog>;
+
+export const createBotTexts = (source: BotTextSource<BotTextKey>): BotTextViews<Catalog> =>
+  createBotTextViews(BOT_TEXT_CATALOG, source);

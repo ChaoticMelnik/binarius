@@ -5,6 +5,8 @@ import {
   confirmButtonLabel,
   createBotTexts,
   defaultBotTextSource,
+  formatStake,
+  formatUsd,
   isPendingLink,
   LinkBonusSkipReason,
   BrokerBalanceUnavailableReason,
@@ -18,12 +20,13 @@ import {
   TradingSessionStatus,
   TradingSessionStopReason,
   type BotHtmlKey,
-  type BotPlainKey,
-  type BotPlainTexts,
   type BotStaticHtmlKey,
+  type BotStaticPlainKey,
+  type BotTextBalance,
   type BotTextKey,
   type BotTextKeyOfGroup,
   type BotTextSource,
+  type DecimalString,
   type LinkBonusGrantView,
   type LinkedAccountView,
   type PairView,
@@ -34,11 +37,11 @@ import {
 } from '@binarius/shared';
 import type { BotCommand } from 'grammy/types';
 import { SIGNALS_DURATION_SEC, type DemoAssetGroup, type DemoDurationSec } from './demo-catalog';
-import { formatAge, formatCount, formatStake, formatUsd } from './format';
 
 // The texts live in the catalog (packages/shared/src/bot-texts.ts, docs/bot-texts.md). This file
-// is the bot's view of it: TEXTS, LABELS, PROFILE and the label maps keep the names and
-// signatures they had, and every one of them reads the source at the moment it is used. No text
+// is the bot's view of it: TEXTS, LABELS, PROFILE and the label maps keep the names they had, a
+// key with variables takes their values as one context (#358), and every one of them reads the
+// source at the moment it is used. No text
 // is taken into a module constant at load, so a source swapped by setBotTextSource reaches every
 // message — BOT_COMMANDS (commands.ts) is the one exception until the commands are republished
 // (#301).
@@ -50,10 +53,6 @@ const { html, plain } = createBotTexts({ sourceOf: (key) => active.sourceOf(key)
 
 // A message part by its key, for the maps that name a text rather than hold it (the refusals).
 export const textOf = (key: BotStaticHtmlKey): TelegramHtml => html[key];
-
-type StaticPlainKey = {
-  [K in BotPlainKey]: BotPlainTexts[K] extends string ? K : never;
-}[BotPlainKey];
 
 // `keys` read through `view` on every access; `overrides` are fixed functions, created once so a
 // toBe on them holds.
@@ -74,7 +73,7 @@ function facadeOf<V extends object, K extends keyof V & string, R extends object
 }
 
 // A map from a value (a level, a direction, a reason) to its label, by catalog key.
-export function labelsOf<M extends Record<string | number, StaticPlainKey>>(
+export function labelsOf<M extends Record<string | number, BotStaticPlainKey>>(
   keys: M,
 ): { readonly [K in keyof M]: string } {
   const labels = {};
@@ -89,37 +88,22 @@ const LEVEL_LABELS = labelsOf({
   [NotificationLevel.All]: 'levelAll',
   [NotificationLevel.Reduced]: 'levelReduced',
   [NotificationLevel.Off]: 'levelOff',
-} as const satisfies Record<NotificationLevel, StaticPlainKey>);
-
-// The status card's header (#24): the card says DEMO until a user can trade on real, and the
-// issue that adds that passes the user's mode without touching this file. Data, not a text: it
-// stays out of the catalog.
-export const MODE_LABELS = {
-  [TradeMode.Demo]: 'DEMO',
-  [TradeMode.Real]: 'REAL',
-} as const satisfies Record<TradeMode, string>;
+} as const satisfies Record<NotificationLevel, BotStaticPlainKey>);
 
 // A trade's direction in words: the analysis screen's headline and its stake button (#126), and
 // #127's status texts.
 export const ACTION_LABELS = labelsOf({
   [TradeAction.Up]: 'actionUp',
   [TradeAction.Down]: 'actionDown',
-} as const satisfies Record<TradeAction, StaticPlainKey>);
+} as const satisfies Record<TradeAction, BotStaticPlainKey>);
 
 // Messages are Telegram HTML, sent with parse_mode HTML by send.ts only. Every hole is escaped
 // unless it is TelegramHtml already, and every assembled text is checked again
-// (telegramHtmlTemplate). The catalog's html keys but three: cardGreeting branches to
-// cardGreetingNoName, featureLines is a fragment of cardBody and helpAbout, and only the
-// backend's push sends oauthLoginFailed.
+// (telegramHtmlTemplate); a variable's value is escaped like any string (bot-text-vars.ts). The
+// catalog's html keys but three: cardGreeting branches to cardGreetingNoName, featureLines is a
+// fragment of cardBody and helpAbout, and only the backend's push sends oauthLoginFailed.
 const NOT_IN_TEXTS = ['cardGreetingNoName', 'featureLines', 'oauthLoginFailed'] as const;
 type TextKey = Exclude<BotHtmlKey, (typeof NOT_IN_TEXTS)[number]>;
-
-// in place of an address the broker did not send; plain, escaped as data like the address it
-// stands in for
-const lineWithAddress =
-  (key: 'accountLineActive' | 'accountLinePending' | 'accountLineRevoked') =>
-  (email: string | null): TelegramHtml =>
-    html[key](email ?? plain.accountUnknownAddress);
 
 export const TEXTS = facadeOf(
   html,
@@ -127,17 +111,49 @@ export const TEXTS = facadeOf(
     (key): key is TextKey => !(NOT_IN_TEXTS as readonly string[]).includes(key),
   ),
   {
-    // The name is Telegram's first_name: the Bot API guarantees it non-empty, not non-blank, and
-    // a padded name would pad the line.
-    cardGreeting: (firstName: string): TelegramHtml => {
-      const name = firstName.trim();
-      return name === '' ? html.cardGreetingNoName : html.cardGreeting(name);
-    },
-    accountLineActive: lineWithAddress('accountLineActive'),
-    accountLinePending: lineWithAddress('accountLinePending'),
-    accountLineRevoked: lineWithAddress('accountLineRevoked'),
+    // The name is Telegram's first_name: the Bot API guarantees it non-empty, not non-blank.
+    cardGreeting: (context: { firstName: string; email: string | null }): TelegramHtml =>
+      context.firstName.trim() === ''
+        ? html.cardGreetingNoName({ email: context.email })
+        : html.cardGreeting(context),
   },
 );
+
+// What a handler holding the access read and the user's first_name gives the texts of the status
+// card and the stake picker (docs/bot-texts.md → Variables). Nothing here is read for a text.
+export interface UserTextContext {
+  firstName: string;
+  tokens: string;
+  reservedTokens: string;
+  demoBalance: BotTextBalance;
+  realBalance: BotTextBalance;
+  mode: TradeMode;
+  stake: DecimalString | null;
+}
+
+type AccessForTexts = Pick<TradingAccessResponse, 'tokens' | 'broker' | 'demoStake'>;
+
+// a balance with the freshness the backend judged (isBalanceFresh); null with no snapshot
+export const balanceOf = (
+  broker: TradingAccessResponse['broker'],
+  side: TradeMode,
+): BotTextBalance =>
+  broker === null ? null : { amount: broker[side].available, fresh: broker.fresh };
+
+// `mode` is the card's: DEMO until a user can trade on real
+export const userContextOf = (
+  firstName: string,
+  mode: TradeMode,
+  { tokens, broker, demoStake }: AccessForTexts,
+): UserTextContext => ({
+  firstName,
+  tokens: tokens.available,
+  reservedTokens: tokens.reserved,
+  demoBalance: balanceOf(broker, TradeMode.Demo),
+  realBalance: balanceOf(broker, TradeMode.Real),
+  mode,
+  stake: demoStake,
+});
 
 // The /help message: the three blocks, then one line per command in the menu's order.
 export function helpText(commands: readonly BotCommand[]): TelegramHtml {
@@ -174,14 +190,14 @@ ${line}`,
 ${lines}`;
 }
 
-function accountLine(account: LinkedAccountView): TelegramHtml {
-  switch (account.status) {
+function accountLine({ status, email }: LinkedAccountView): TelegramHtml {
+  switch (status) {
     case BrokerAccountStatus.Active:
-      return TEXTS.accountLineActive(account.email);
+      return TEXTS.accountLineActive({ email });
     case BrokerAccountStatus.Pending:
-      return TEXTS.accountLinePending(account.email);
+      return TEXTS.accountLinePending({ email });
     case BrokerAccountStatus.Revoked:
-      return TEXTS.accountLineRevoked(account.email);
+      return TEXTS.accountLineRevoked({ email });
   }
 }
 
@@ -197,77 +213,85 @@ export interface AccountCardInput {
 
 // Blocks separated by one blank line; an absent block takes its blank line with it.
 export function accountCard({ firstName, email, grant }: AccountCardInput): TelegramHtml {
-  const greeting = TEXTS.cardGreeting(firstName);
+  const context = { firstName, email };
+  const greeting = TEXTS.cardGreeting(context);
   const header =
     email === null
       ? greeting
       : telegramHtml`${greeting}
-${TEXTS.cardEmail(email)}`;
-  const bonus = bonusOf(grant);
+${TEXTS.cardEmail(context)}`;
+  const bonus = bonusOf(grant, context);
   const tail = bonus === null ? [] : [telegramHtml`\n\n${bonus}`];
   return telegramHtml`${header}
 
-${TEXTS.cardBody}${tail}`;
+${TEXTS.cardBody(context)}${tail}`;
 }
 
-function bonusOf(grant: LinkBonusGrantView | null): TelegramHtml | null {
+function bonusOf(
+  grant: LinkBonusGrantView | null,
+  context: { firstName: string; email: string | null },
+): TelegramHtml | null {
   if (grant === null) return null;
-  if (grant.granted) return TEXTS.cardBonusGranted(grant.tokens);
+  if (grant.granted) return TEXTS.cardBonusGranted({ ...context, bonusTokens: grant.tokens });
   return grant.reason === LinkBonusSkipReason.NotPartnerClient
-    ? TEXTS.cardBonusNotPartner
-    : TEXTS.cardBonusAlready;
+    ? TEXTS.cardBonusNotPartner(context)
+    : TEXTS.cardBonusAlready(context);
 }
 
 // Only what the card prints reaches it: `status` is branched on before a card exists, and
 // tradingOpen is the backend's switch, not the user's mode.
 export type StatusCardInput = Pick<
   TradingAccessResponse,
-  'tokens' | 'broker' | 'brokerUnavailable'
+  'tokens' | 'broker' | 'brokerUnavailable' | 'demoStake'
 > & {
+  firstName: string;
   mode: TradeMode;
 };
 
-export const modeHeader = (mode: TradeMode): TelegramHtml => TEXTS.statusHeader(MODE_LABELS[mode]);
-
 // The header, a blank line, the balances and tokens, the status line when there is one, a blank
-// line, the hint. With no snapshot both amounts read $0.00 and the status line says why.
-export function statusCard({
-  mode,
-  tokens,
-  broker,
-  brokerUnavailable,
-}: StatusCardInput): TelegramHtml {
+// line, the hint. With no snapshot both amounts read $0.00 and the status line says why; the
+// card's own amounts are printed as they are, their freshness on the status line (#358 В2).
+export function statusCard(input: StatusCardInput): TelegramHtml {
+  const { tokens, broker, brokerUnavailable } = input;
+  const context = userContextOf(input.firstName, input.mode, input);
   const zero = formatUsd('0');
-  const real = TEXTS.statusReal(broker === null ? zero : formatUsd(broker.real.available));
-  const demo = TEXTS.statusDemo(broker === null ? zero : formatUsd(broker.demo.available));
+  const real = TEXTS.statusReal({
+    ...context,
+    amount: broker === null ? zero : formatUsd(broker.real.available),
+  });
+  const demo = TEXTS.statusDemo({
+    ...context,
+    amount: broker === null ? zero : formatUsd(broker.demo.available),
+  });
   // the wire form of a count is ^\d+$, so a non-zero digit is a non-zero count
   const reserved = /[1-9]/.test(tokens.reserved)
-    ? [telegramHtml` ${TEXTS.statusReserved(formatCount(tokens.reserved))}`]
+    ? [telegramHtml` ${TEXTS.statusReserved(context)}`]
     : [];
-  const status = statusLineOf(broker, brokerUnavailable);
+  const status = statusLineOf(broker, brokerUnavailable, context);
   const statusTail = status === null ? [] : [telegramHtml`\n${status}`];
-  return telegramHtml`${modeHeader(mode)}
+  return telegramHtml`${TEXTS.statusHeader(context)}
 
 ${real}
 ${demo}
-${TEXTS.statusTokens(formatCount(tokens.available))}${reserved}${statusTail}
+${TEXTS.statusTokens(context)}${reserved}${statusTail}
 
-${TEXTS.statusHint}`;
+${TEXTS.statusHint(context)}`;
 }
 
 function statusLineOf(
   broker: StatusCardInput['broker'],
   brokerUnavailable: StatusCardInput['brokerUnavailable'],
+  context: UserTextContext,
 ): TelegramHtml | null {
   if (broker === null) {
     return brokerUnavailable === BrokerBalanceUnavailableReason.AmbiguousAccount
       ? TEXTS.statusAmbiguous
-      : TEXTS.statusNoSnapshot;
+      : TEXTS.statusNoSnapshot(context);
   }
   if (broker.fresh) return null;
   // the same age isBalanceFresh judged: the newer of the REST snapshot and the last event
   const age = Math.min(broker.restSnapshotAgeSec, broker.balanceEventAgeSec ?? Infinity);
-  return TEXTS.statusStale(formatAge(age));
+  return TEXTS.statusStale({ age });
 }
 
 // The status line of each status but rejected, whose line is its reason's. Exhaustive, so a
@@ -338,13 +362,13 @@ export function intentStatusText(
 ): TelegramHtml {
   const asset =
     symbol === null
-      ? plain.intentAssetFallback(String(view.assetId))
+      ? plain.intentAssetFallback({ assetId: String(view.assetId) })
       : symbol.slice(0, INTENT_SYMBOL_LIMIT);
   const trade = [
     asset,
     ACTION_LABELS[view.action],
     durationLabelOf(view.durationSec),
-    plain.intentStake(formatStake(view.amount)),
+    plain.intentStake({ amount: formatStake(view.amount) }),
   ].join(' · ');
   const tail = deadline
     ? [
@@ -354,7 +378,7 @@ ${TEXTS.intentDeadline}`,
       ]
     : [];
   return telegramHtml`${TEXTS.intentHeader}
-${TEXTS.intentTrade(trade)}
+${TEXTS.intentTrade({ line: trade })}
 
 ${statusLineOfIntent(view)}${tail}`;
 }
@@ -389,7 +413,7 @@ const tradesCount = (count: number): string => `${String(count)} ${pluralTrades(
 
 // the analysis screen's session button, with the number of trades it starts
 export const sessionStartButtonLabel = (trades: number): string =>
-  plain.sessionStartButton(tradesCount(trades));
+  plain.sessionStartButton({ trades: tradesCount(trades) });
 
 // A trade with an outgoing edge in the shared graph: it can still settle or be rejected, so the
 // session's counters can still move (manual_review included).
@@ -417,9 +441,9 @@ ${line}`,
 // «3 в плюс, 1 в минус», with «в ноль» only when a trade tied
 const scoreOf = ({ won, lost, tied }: TradingSessionView['trades']): string =>
   [
-    plain.sessionWon(String(won)),
-    plain.sessionLost(String(lost)),
-    ...(tied > 0 ? [plain.sessionTied(String(tied))] : []),
+    plain.sessionWon({ count: String(won) }),
+    plain.sessionLost({ count: String(lost) }),
+    ...(tied > 0 ? [plain.sessionTied({ count: String(tied) })] : []),
   ].join(', ');
 const resultOf = (trades: TradingSessionView['trades']): string =>
   `${tradesCount(trades.settled)} — ${scoreOf(trades)}`;
@@ -440,27 +464,27 @@ ${TEXTS.sessionSettingsUnavailable}`;
   }
   const asset =
     symbol === null
-      ? plain.intentAssetFallback(String(settings.assetId))
+      ? plain.intentAssetFallback({ assetId: String(settings.assetId) })
       : symbol.slice(0, INTENT_SYMBOL_LIMIT);
   const line = [
     asset,
     durationLabelOf(settings.durationSec),
-    plain.intentStake(formatStake(settings.stake.baseStake)),
+    plain.intentStake({ amount: formatStake(settings.stake.baseStake) }),
   ].join(' · ');
-  const head = [TEXTS.sessionHeader, TEXTS.sessionSettings(line)];
+  const head = [TEXTS.sessionHeader, TEXTS.sessionSettings({ line })];
   const body: TelegramHtml[] = [];
   if (view.status !== TradingSessionStatus.Stopped) {
     const step = Math.min(trades.settled + 1, trades.planned);
-    head.push(TEXTS.sessionStep(`${String(step)} из ${String(trades.planned)}`));
-    if (trades.settled > 0) head.push(TEXTS.sessionScore(scoreOf(trades)));
+    head.push(TEXTS.sessionStep({ step: `${String(step)} из ${String(trades.planned)}` }));
+    if (trades.settled > 0) head.push(TEXTS.sessionScore({ score: scoreOf(trades) }));
     body.push(
       sessionIntentLive(lastIntent) ? statusLineOfIntent(lastIntent) : TEXTS.sessionWaitingSignal,
     );
   } else if (view.stopReason === TradingSessionStopReason.Completed) {
-    body.push(TEXTS.sessionCompleted(resultOf(trades)));
+    body.push(TEXTS.sessionCompleted({ result: resultOf(trades) }));
   } else {
     if (view.stopReason !== null) body.push(textOf(SESSION_STOP_LINES[view.stopReason]));
-    if (trades.settled > 0) body.push(TEXTS.sessionTotal(resultOf(trades)));
+    if (trades.settled > 0) body.push(TEXTS.sessionTotal({ result: resultOf(trades) }));
     // manual_review's stop line already says it and points at /support: one text for both of its
     // sources (owner, #284 clarify), so the trade's own review line is not repeated under it
     const reviewRepeated =
@@ -503,12 +527,12 @@ export const DEMO_GROUP_LABELS = labelsOf({
   cryptocurrency: 'demoGroupCryptocurrency',
   index: 'demoGroupIndex',
   other: 'demoGroupOther',
-} as const satisfies Record<DemoAssetGroup, StaticPlainKey>);
+} as const satisfies Record<DemoAssetGroup, BotStaticPlainKey>);
 
 export const DEMO_DURATION_LABELS = labelsOf({
   5: 'demoDuration5',
   15: 'demoDuration15',
-} as const satisfies Record<DemoDurationSec, StaticPlainKey>);
+} as const satisfies Record<DemoDurationSec, BotStaticPlainKey>);
 
 // a type's button with the count of its open pairs
 export const groupButtonLabel = (group: DemoAssetGroup, openCount: number): string =>
@@ -516,9 +540,10 @@ export const groupButtonLabel = (group: DemoAssetGroup, openCount: number): stri
 // the analysis screen's button by the signal's direction (#126), with the amount it trades when
 // known (#297)
 export const stakeButtonLabel = (action: TradeAction, amount: string | null = null): string =>
-  plain.stakeButton(
-    amount === null ? ACTION_LABELS[action] : `${ACTION_LABELS[action]} · ${formatStake(amount)}`,
-  );
+  plain.stakeButton({
+    action:
+      amount === null ? ACTION_LABELS[action] : `${ACTION_LABELS[action]} · ${formatStake(amount)}`,
+  });
 // a data label, like the confirm button's address: no emoji, the symbol as the broker spells it
 // (it already carries «OTC»), the payout printed as it arrives
 export const pairButtonLabel = (symbol: string, payout: number): string =>
@@ -530,19 +555,19 @@ export const demoPairsScreen = (
   page: number,
   pageCount: number,
 ): TelegramHtml =>
-  telegramHtml`${TEXTS.demoPairsHeader(DEMO_GROUP_LABELS[group])}
-${TEXTS.demoPage(`${page + 1} из ${pageCount}`)}`;
+  telegramHtml`${TEXTS.demoPairsHeader({ group: DEMO_GROUP_LABELS[group] })}
+${TEXTS.demoPage({ page: `${page + 1} из ${pageCount}` })}`;
 
 export const demoDurationsScreen = (pair: PairView): TelegramHtml =>
-  telegramHtml`${TEXTS.demoAsset(pair.symbol)}
-${TEXTS.demoPayout(String(pair.payout))}
+  telegramHtml`${TEXTS.demoAsset({ symbol: pair.symbol })}
+${TEXTS.demoPayout({ payout: String(pair.payout) })}
 
 ${TEXTS.demoChooseDuration}`;
 
 export const demoSummary = (pair: PairView, durationSec: DemoDurationSec): TelegramHtml =>
-  telegramHtml`${TEXTS.demoAsset(pair.symbol)}
-${TEXTS.demoDurationLine(DEMO_DURATION_LABELS[durationSec])}
-${TEXTS.demoPayout(String(pair.payout))}
+  telegramHtml`${TEXTS.demoAsset({ symbol: pair.symbol })}
+${TEXTS.demoDurationLine({ label: DEMO_DURATION_LABELS[durationSec] })}
+${TEXTS.demoPayout({ payout: String(pair.payout) })}
 
 ${TEXTS.demoNext}`;
 
@@ -561,25 +586,35 @@ export const signalButtonLabel = (symbol: string, action: TradeAction, payout: n
 // reads as the broker's minimum; `saved` is what the picker has just saved, null for the reset to
 // the minimum.
 export function launchText({
+  firstName,
   symbol,
   amount,
   trades,
   saved,
 }: {
+  firstName: string;
   symbol: string | null;
-  amount: string | null;
+  amount: DecimalString | null;
   trades: number;
-  saved?: { amount: string | null };
+  saved?: { amount: DecimalString | null };
 }): TelegramHtml {
+  const context = { firstName, stake: amount };
   const lines = [
     ...(symbol === null
       ? []
-      : [TEXTS.launchHeader(`${symbol} · ${DEMO_DURATION_LABELS[SIGNALS_DURATION_SEC]}`)]),
-    amount === null ? TEXTS.launchStakeMinimum : TEXTS.launchStake(formatStake(amount)),
-    TEXTS.launchCycle(tradesCount(trades)),
+      : [
+          TEXTS.launchHeader({
+            ...context,
+            subject: `${symbol} · ${DEMO_DURATION_LABELS[SIGNALS_DURATION_SEC]}`,
+          }),
+        ]),
+    amount === null
+      ? TEXTS.launchStakeMinimum(context)
+      : TEXTS.launchStake({ ...context, stake: amount }),
+    TEXTS.launchCycle({ ...context, trades: tradesCount(trades) }),
   ];
   if (saved === undefined) return joinLines(lines);
-  return telegramHtml`${TEXTS.stakeSavedLine(stakeLabel(saved.amount))}
+  return telegramHtml`${TEXTS.stakeSavedLine({ firstName, stake: saved.amount })}
 
 ${joinLines(lines)}`;
 }
@@ -587,38 +622,42 @@ ${joinLines(lines)}`;
 export const levelLabel = (level: NotificationLevel): string => LEVEL_LABELS[level];
 // the label of the level that is selected now, on its button
 export const currentLevelLabel = (level: NotificationLevel): string => `${levelLabel(level)} ✅`;
-// the saved demo stake, or what stands in for it (#297)
-export const stakeLabel = (stake: string | null): string =>
-  stake === null ? plain.stakeMinimumLabel : formatStake(stake);
-export const settingsText = (level: NotificationLevel, demoStake: string | null): TelegramHtml =>
-  telegramHtml`${TEXTS.settings(levelLabel(level))}
+export const settingsText = (
+  level: NotificationLevel,
+  demoStake: DecimalString | null,
+  firstName: string,
+): TelegramHtml => {
+  const context = { level, stake: demoStake, firstName };
+  return telegramHtml`${TEXTS.settings(context)}
 
-${TEXTS.settingsStake(stakeLabel(demoStake))}`;
+${TEXTS.settingsStake(context)}`;
+};
 
 // The stake picker (#297, stake-picker.ts): the saved stake, or the broker's minimum named as
 // such, then the two bounds the backend checks it against.
 export function stakePickerText({
-  stake,
+  user,
   minTradeAmount,
   demoAvailable,
   presets,
 }: {
-  stake: string | null;
-  minTradeAmount: string;
-  demoAvailable: string;
+  user: UserTextContext;
+  minTradeAmount: DecimalString;
+  demoAvailable: DecimalString;
   presets: number;
 }): TelegramHtml {
-  const current =
-    stake === null
+  const context = { ...user, minStake: minTradeAmount, demoAvailable };
+  const amount =
+    user.stake === null
       ? `${plain.stakeMinimumLabel} (${formatStake(minTradeAmount)})`
-      : formatStake(stake);
+      : formatStake(user.stake);
   const lines = [
-    TEXTS.stakePickerCurrent(current),
-    TEXTS.stakePickerMinimum(formatStake(minTradeAmount)),
-    TEXTS.stakePickerAvailable(formatStake(demoAvailable)),
-    ...(presets === 0 ? [TEXTS.stakePickerNoPresets] : []),
+    TEXTS.stakePickerCurrent({ ...context, amount }),
+    TEXTS.stakePickerMinimum(context),
+    TEXTS.stakePickerAvailable(context),
+    ...(presets === 0 ? [TEXTS.stakePickerNoPresets(context)] : []),
   ];
-  return telegramHtml`${TEXTS.stakePickerHeader}
+  return telegramHtml`${TEXTS.stakePickerHeader(context)}
 ${joinLines(lines)}`;
 }
 

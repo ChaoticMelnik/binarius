@@ -261,10 +261,12 @@ export function createBot({
       return;
     }
     const card = statusCard({
+      firstName: from.first_name,
       mode: TradeMode.Demo,
       tokens: access.tokens,
       broker: access.broker,
       brokerUnavailable: access.brokerUnavailable,
+      demoStake: access.demoStake,
     });
     const reply_markup = demoKeyboard();
     const sent = await sendWithTextFallback(
@@ -337,7 +339,7 @@ export function createBot({
       await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return;
     }
-    await replyHtml(ctx, settingsText(user.notificationLevel, user.demoStake), {
+    await replyHtml(ctx, settingsText(user.notificationLevel, user.demoStake, from.first_name), {
       reply_markup: levelKeyboard(user.notificationLevel),
     });
   }
@@ -365,7 +367,12 @@ export function createBot({
       await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return;
     }
-    await showSettings(ctx, read.value.notificationLevel, read.value.demoStake);
+    await showSettings(
+      ctx,
+      read.value.notificationLevel,
+      read.value.demoStake,
+      ctx.from.first_name,
+    );
   });
 
   privateChats.callbackQuery(LEVEL_CALLBACK_PATTERN, async (ctx) => {
@@ -387,7 +394,7 @@ export function createBot({
       await replyHtml(ctx, TEXTS.unavailable, { reply_markup: menuKeyboard() });
       return;
     }
-    await showSettings(ctx, set.value.level, set.value.demoStake);
+    await showSettings(ctx, set.value.level, set.value.demoStake, ctx.from.first_name);
   });
 
   privateChats.callbackQuery(LEVEL_CURRENT_CALLBACK_DATA, async (ctx) => {
@@ -448,7 +455,9 @@ export function createBot({
     await ctx.answerCallbackQuery().catch((error: unknown) => {
       logAnswerFailure(error);
     });
-    await replyHtml(ctx, TEXTS.emailPrompt, { reply_markup: menuKeyboard() });
+    await replyHtml(ctx, TEXTS.emailPrompt({ firstName: ctx.from.first_name }), {
+      reply_markup: menuKeyboard(),
+    });
   });
 
   privateChats.callbackQuery(OAUTH_CALLBACK_DATA, (ctx) => removeLegacyKeyboard(ctx, logger));
@@ -493,7 +502,11 @@ export function createBot({
         logAnswerFailure(error);
       });
       // no address yet, or no login at all: there is nothing to send a code to
-      await replyHtml(ctx, state?.step === 'email' ? TEXTS.emailPrompt : TEXTS.codeRequestStale, {
+      const text =
+        state?.step === 'email'
+          ? TEXTS.emailPrompt({ firstName: ctx.from.first_name })
+          : TEXTS.codeRequestStale;
+      await replyHtml(ctx, text, {
         reply_markup: menuKeyboard(),
       });
       return;
@@ -504,7 +517,7 @@ export function createBot({
       backend.sendEmailCode(String(id), state.email),
     ]);
     if (answered.status === 'rejected') logAnswerFailure(answered.reason);
-    await replyToSendCode(ctx, id, state.email, 'code', sent);
+    await replyToSendCode(ctx, ctx.from, state.email, 'code', sent);
   });
 
   // The user blocked (`kicked`) or unblocked (`member`) the bot (#119). The bot forwards
@@ -549,7 +562,7 @@ export function createBot({
         return;
       }
       const [sent] = await Promise.allSettled([backend.sendEmailCode(String(from.id), email.data)]);
-      await replyToSendCode(ctx, from.id, email.data, 'email', sent);
+      await replyToSendCode(ctx, from, email.data, 'email', sent);
       return;
     }
 
@@ -581,14 +594,16 @@ export function createBot({
   // code step. The same refusal means a different thing for the dialog on each (SEND_CODE_REFUSALS).
   async function replyToSendCode(
     ctx: Context,
-    id: number,
+    { id, first_name: firstName }: User,
     email: string,
     step: LoginStep,
     sent: PromiseSettledResult<EmailSendCodeResponse>,
   ): Promise<void> {
     if (sent.status === 'fulfilled') {
       loginDialog.set(id, { step: 'code', email });
-      await replyHtml(ctx, TEXTS.codeSent(email), { reply_markup: codeKeyboard() });
+      await replyHtml(ctx, TEXTS.codeSent({ email, firstName }), {
+        reply_markup: codeKeyboard(),
+      });
       return;
     }
     const error: unknown = sent.reason;
@@ -613,7 +628,9 @@ export function createBot({
     // that failed after sending, any 5xx, a broken 2xx body), so the user is let type the code
     // from it; the buttons cover the case where nothing arrived.
     loginDialog.set(id, { step: 'code', email });
-    await replyHtml(ctx, TEXTS.codeSentUnknown(email), { reply_markup: codeKeyboard() });
+    await replyHtml(ctx, TEXTS.codeSentUnknown({ email, firstName }), {
+      reply_markup: codeKeyboard(),
+    });
   }
 
   async function replyWithRefusal(ctx: Context, id: number, refusal: Refusal): Promise<void> {
@@ -752,8 +769,9 @@ export function createBot({
     ctx: Context,
     level: NotificationLevel,
     demoStake: DecimalString | null,
+    firstName: string,
   ): Promise<void> {
-    const text = settingsText(level, demoStake);
+    const text = settingsText(level, demoStake, firstName);
     const reply_markup = levelKeyboard(level);
     try {
       await editMessageTextHtml(ctx, text, { reply_markup });

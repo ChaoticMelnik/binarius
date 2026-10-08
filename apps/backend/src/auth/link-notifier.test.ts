@@ -95,12 +95,31 @@ describe('the link push message', () => {
     { text: CLIENT_LABELS.connectButton, callback_data: 'connect' },
     { text: CLIENT_LABELS.menuButton, callback_data: 'menu' },
   ];
+  it('sends active with the account address in its text, and the demo button', async () => {
+    const payload = await sent({ kind: LinkPushKind.Active, email: 'ada@example.test' });
+    expect(payload?.text).toBe(CLIENT_TEXTS.linkedActive({ email: 'ada@example.test' }).value);
+    expect(inlineButtons(payload)).toEqual([
+      { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
+    ]);
+  });
+
+  // #358 P1: the address an overridden text holds, or its stand-in
+  it('puts the address into an overridden linkedActive, escaped, or says it is unknown', async () => {
+    setBotTextSource({
+      sourceOf: (key) =>
+        key === 'linkedActive' ? '✅ {email} подключён' : defaultBotTextSource.sourceOf(key),
+    });
+    try {
+      const known = await sent({ kind: LinkPushKind.Active, email: 'a&b@example.test' });
+      expect(known?.text).toBe('✅ a&amp;b@example.test подключён');
+      const unknown = await sent({ kind: LinkPushKind.Active, email: null });
+      expect(unknown?.text).toBe('✅ адрес неизвестен подключён');
+    } finally {
+      setBotTextSource(defaultBotTextSource);
+    }
+  });
+
   it.each([
-    [
-      LinkPushKind.Active,
-      CLIENT_TEXTS.linkedActive,
-      [{ text: CLIENT_LABELS.demoButton, callback_data: 'demo' }],
-    ],
     [
       LinkPushKind.Blocked,
       CLIENT_TEXTS.blocked,
@@ -133,7 +152,9 @@ describe('the link push transport', () => {
     const notifier = createLinkNotifier({ token: TOKEN, apiRoot, telegramApiTimeoutMs: 500 });
 
     const at = Date.now();
-    const error = await rejectionOf(notifier.send(TELEGRAM_USER_ID, { kind: LinkPushKind.Active }));
+    const error = await rejectionOf(
+      notifier.send(TELEGRAM_USER_ID, { kind: LinkPushKind.Active, email: null }),
+    );
     const elapsed = Date.now() - at;
     expect(error).toBeInstanceOf(HttpError);
     expect(elapsed).toBeGreaterThanOrEqual(450);
@@ -154,7 +175,9 @@ describe('the link push transport', () => {
     const apiRoot = await listen(server);
     const notifier = createLinkNotifier({ token: TOKEN, apiRoot });
 
-    const error = await rejectionOf(notifier.send(TELEGRAM_USER_ID, { kind: LinkPushKind.Active }));
+    const error = await rejectionOf(
+      notifier.send(TELEGRAM_USER_ID, { kind: LinkPushKind.Active, email: null }),
+    );
     expect(error).toBeInstanceOf(GrammyError);
     expect((error as GrammyError).error_code).toBe(403);
     expect((error as GrammyError).method).toBe('sendMessage');

@@ -31,7 +31,6 @@ import {
   stakeMenuCallbackData,
   type StakeData,
 } from './demo';
-import { formatStake } from './format';
 import {
   appendEndOfPath,
   backToAnalysisKeyboard,
@@ -300,7 +299,7 @@ export function createDemoTradeComposer<C extends Context>({
     }
     const text =
       !failure.unknown && reason === TradeIntentErrorCode.StakeBelowMinimum
-        ? TEXTS.stakeBelowMinimum(formatStake(minTradeAmount))
+        ? TEXTS.stakeBelowMinimum({ minStake: minTradeAmount })
         : textOf(refusal.text);
     const reply_markup =
       refusal.text === 'blocked'
@@ -348,12 +347,12 @@ export function createDemoTradeComposer<C extends Context>({
         await replyHtml(ctx, TEXTS.demoPairMissing, { reply_markup: backToGroups });
         return;
       case 'pair_closed':
-        await replyHtml(ctx, TEXTS.demoPairClosed(read.pair.symbol), {
+        await replyHtml(ctx, TEXTS.demoPairClosed({ symbol: read.pair.symbol }), {
           reply_markup: backToGroups,
         });
         return;
       case 'duration_unsupported':
-        await replyHtml(ctx, TEXTS.demoDurationUnsupported(read.pair.symbol), {
+        await replyHtml(ctx, TEXTS.demoDurationUnsupported({ symbol: read.pair.symbol }), {
           reply_markup: backToDurations,
         });
         return;

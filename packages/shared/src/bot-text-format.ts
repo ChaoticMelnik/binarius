@@ -1,7 +1,8 @@
-// How the status card prints the backend's numbers (#24). Text in, text out: an amount is a
-// decimal string and a count an integer string, and going through Number would lose digits a
-// numeric(20,8) or a bigint holds (Rule 2). The fraction is cut to two digits, not rounded, so the
-// card never shows more than the broker reported.
+// How the bot texts print the backend's numbers (#24), for the bot and the variables of
+// bot-text-vars.ts (#358). Text in, text out: an amount is a decimal string and a count an
+// integer string, and going through Number would lose digits a numeric(20,8) or a bigint holds
+// (Rule 2). The fraction is cut to two digits, not rounded, so the card never shows more than the
+// broker reported.
 
 const GROUP_SEPARATOR = ' ';
 

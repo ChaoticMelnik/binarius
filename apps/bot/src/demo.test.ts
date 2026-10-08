@@ -304,9 +304,23 @@ describe('the launch screen', () => {
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     const edited = payloadOf(calls, 'editMessageText');
     expect(edited?.text).toBe(
-      launchText({ symbol: PAIR_EURUSD.symbol, amount: '2.5', trades: 5 }).value,
+      launchText({
+        firstName: USER.first_name,
+        symbol: PAIR_EURUSD.symbol,
+        amount: decimalStringSchema.parse('2.5'),
+        trades: 5,
+      }).value,
     );
-    expect(plainTextOf(launchText({ symbol: 'EUR/USD OTC', amount: '2.5', trades: 5 }))).toBe(
+    expect(
+      plainTextOf(
+        launchText({
+          firstName: USER.first_name,
+          symbol: 'EUR/USD OTC',
+          amount: decimalStringSchema.parse('2.5'),
+          trades: 5,
+        }),
+      ),
+    ).toBe(
       '🎯 EUR/USD OTC · ⏱ 15 с\n💵 Ставка: $2.50\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Это демо: деньги не нужны.',
     );
     expect(rowsOf(edited)).toEqual(LAUNCH_ROWS);
@@ -331,9 +345,16 @@ describe('the launch screen', () => {
 
     const edited = payloadOf(calls, 'editMessageText');
     expect(edited?.text).toBe(
-      launchText({ symbol: PAIR_EURUSD.symbol, amount: null, trades: 5 }).value,
+      launchText({
+        firstName: USER.first_name,
+        symbol: PAIR_EURUSD.symbol,
+        amount: null,
+        trades: 5,
+      }).value,
     );
-    expect(edited?.text).toContain(TEXTS.launchStakeMinimum.value);
+    expect(edited?.text).toContain(
+      TEXTS.launchStakeMinimum({ firstName: USER.first_name, stake: null }).value,
+    );
     expect(rowsOf(edited)).toEqual(LAUNCH_ROWS);
     expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
       'trading access not read for the stake label',
@@ -345,7 +366,7 @@ describe('the launch screen', () => {
     await press(demoLaunchCallbackData(PAIR_CLOSED.id));
 
     expect(payloadOf(calls, 'editMessageText')?.text).toBe(
-      TEXTS.demoPairClosed(PAIR_CLOSED.symbol).value,
+      TEXTS.demoPairClosed({ symbol: PAIR_CLOSED.symbol }).value,
     );
   });
 
@@ -354,7 +375,7 @@ describe('the launch screen', () => {
     await press(demoLaunchCallbackData(PAIR_MINUTE_ONLY.id));
 
     expect(payloadOf(calls, 'editMessageText')?.text).toBe(
-      TEXTS.demoDurationUnsupported(PAIR_MINUTE_ONLY.symbol).value,
+      TEXTS.demoDurationUnsupported({ symbol: PAIR_MINUTE_ONLY.symbol }).value,
     );
   });
 
@@ -495,7 +516,7 @@ describe('the types and their pages', () => {
 
     await press(demoPageCallbackData('currency', 0));
     const edited = calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload;
-    expect(edited?.text).toBe(TEXTS.demoGroupClosed('💱 Валюты').value);
+    expect(edited?.text).toBe(TEXTS.demoGroupClosed({ group: '💱 Валюты' }).value);
     expect(rowsOf(edited)).toEqual([[BACK_GROUPS]]);
   });
 
@@ -601,7 +622,7 @@ describe('a pair and its durations', () => {
     await press(demoAssetCallbackData(PAIR_SHORT.id));
 
     const edited = payloadOf(calls, 'editMessageText');
-    expect(edited?.text).toBe(TEXTS.demoNoDuration(PAIR_SHORT.symbol).value);
+    expect(edited?.text).toBe(TEXTS.demoNoDuration({ symbol: PAIR_SHORT.symbol }).value);
     expect(rowsOf(edited)).toEqual([
       [button(LABELS.demoBackPairsButton, demoPageCallbackData('cryptocurrency', 0)), BACK_GROUPS],
     ]);
@@ -612,7 +633,7 @@ describe('a pair and its durations', () => {
     await press(demoAssetCallbackData(PAIR_CLOSED.id));
 
     const edited = payloadOf(calls, 'editMessageText');
-    expect(edited?.text).toBe(TEXTS.demoPairClosed(PAIR_CLOSED.symbol).value);
+    expect(edited?.text).toBe(TEXTS.demoPairClosed({ symbol: PAIR_CLOSED.symbol }).value);
     expect(rowsOf(edited)).toEqual([[BACK_EURUSD_PAGE, BACK_GROUPS]]);
   });
 
@@ -651,7 +672,7 @@ describe('the summary and «📊 Анализ»', () => {
     const edits = calls.filter((call) => call.method === 'editMessageText');
     expect(edits.map((call) => call.payload.text)).toEqual([
       demoSummary(PAIR_EURUSD, 15).value,
-      TEXTS.demoPairClosed(PAIR_EURUSD.symbol).value,
+      TEXTS.demoPairClosed({ symbol: PAIR_EURUSD.symbol }).value,
     ]);
     expect(evaluateSignal).not.toHaveBeenCalled();
     expect(readPairs).toHaveBeenCalledTimes(2);
@@ -674,7 +695,7 @@ describe('the summary and «📊 Анализ»', () => {
     await press(demoDurationCallbackData(PAIR_EURUSD.id, 15));
 
     const edited = payloadOf(calls, 'editMessageText');
-    expect(edited?.text).toBe(TEXTS.demoDurationUnsupported(PAIR_EURUSD.symbol).value);
+    expect(edited?.text).toBe(TEXTS.demoDurationUnsupported({ symbol: PAIR_EURUSD.symbol }).value);
     expect(rowsOf(edited)).toEqual([[BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
   });
 
@@ -758,7 +779,7 @@ describe('the analysis', () => {
 
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'editMessageText']);
     const [waiting, result] = edits(calls);
-    expect(waiting?.payload.text).toBe(TEXTS.analyzing('EUR/USD OTC · ⏱ 5 с').value);
+    expect(waiting?.payload.text).toBe(TEXTS.analyzing({ subject: 'EUR/USD OTC · ⏱ 5 с' }).value);
     // without a keyboard the edit removes the summary's, so «📊 Анализ» cannot be pressed twice
     expect(waiting?.payload.reply_markup).toBeUndefined();
     expect(result?.payload.text).toBe(resultOf());
@@ -819,7 +840,7 @@ describe('the analysis', () => {
 
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
     expect(payloadOf(calls, 'editMessageText')?.text).toBe(
-      TEXTS.demoPairClosed(PAIR_CLOSED.symbol).value,
+      TEXTS.demoPairClosed({ symbol: PAIR_CLOSED.symbol }).value,
     );
     expect(evaluateSignal).not.toHaveBeenCalled();
   });
@@ -991,7 +1012,7 @@ describe('the analysis', () => {
       'sendMessage',
     ]);
     const [waiting, result] = calls.filter((call) => call.method === 'sendMessage');
-    expect(waiting?.payload.text).toBe(TEXTS.analyzing('EUR/USD OTC · ⏱ 5 с').value);
+    expect(waiting?.payload.text).toBe(TEXTS.analyzing({ subject: 'EUR/USD OTC · ⏱ 5 с' }).value);
     expect(result?.payload.text).toBe(resultOf());
     expect(rowsOf(result?.payload)[2]).toEqual([REPEAT]);
   });

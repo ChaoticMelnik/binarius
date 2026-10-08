@@ -142,7 +142,27 @@ describe('bot-text on a database', () => {
     const { code, out, err } = await run(['show', 'welcome']);
     expect(code).toBe(0);
     expect(out).toEqual([BOT_TEXT_CATALOG.welcome.source]);
-    expect(err[1]).toBe('исходный, версия 0');
+    expect(err[1]).toBe('переменных нет; фрагменты: {connectButton}');
+    expect(err[2]).toBe('исходный, версия 0');
+  });
+
+  // #358 K1: the key's variables with their descriptions and samples
+  it('K1 lists the variables a text may hold', async () => {
+    const { err } = await run(['show', 'codeSent']);
+    expect(err[1]).toBe(
+      'переменные: {email} — Адрес аккаунта Binodex; неизвестен — «адрес неизвестен» (образец: ada@example.com); {firstName} — Имя пользователя из Telegram (образец: Ада)',
+    );
+  });
+
+  // K2: a variable the key does not have is refused by name, with the ones it has
+  it('K2 refuses a variable the text may not hold', async () => {
+    const { code, err } = await run(['set', 'codeSent', '--file', 'f'], {
+      f: utf8('Код на {realBalance}'),
+    });
+    expect(code).toBe(1);
+    expect(err).toEqual([
+      'Переменная {realBalance} недоступна в этом тексте. Доступны: {email}, {firstName}',
+    ]);
   });
 
   it('L3 saves from stdin and says when the bot applies it', async () => {
@@ -173,7 +193,7 @@ describe('bot-text on a database', () => {
 
   it.each([
     ['<b>Привет', 'Битый HTML'],
-    ['Привет, {name}', 'Неизвестный плейсхолдер {name}'],
+    ['Привет, {name}', 'Переменная {name} недоступна в этом тексте'],
     ['я'.repeat(1025), 'символов при лимите 1024'],
   ])('L6 refuses %j, and the old text stays', async (text, message) => {
     const { code, err } = await run(['set', 'welcome', '--file', 'f'], { f: utf8(text) });

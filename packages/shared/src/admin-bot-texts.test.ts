@@ -110,7 +110,7 @@ describe('the catalog', () => {
 });
 
 describe('renderBotTextPreview', () => {
-  it('fills the argument with its sample and the fragments with the texts in effect', () => {
+  it('fills every variable with its registry sample and the fragments with the texts in effect', () => {
     const codeSent = renderBotTextPreview('codeSent', defaultBotTextSource);
     expect(codeSent).toMatchObject({ kind: 'html' });
     expect(JSON.stringify(codeSent)).toContain('ada@example.com');

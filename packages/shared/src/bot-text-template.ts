@@ -20,49 +20,69 @@ export type BotTextKind = (typeof BotTextKind)[keyof typeof BotTextKind];
 // button readable and is well above the longest default (docs/bot-texts.md → Limits).
 export const BOT_LABEL_LIMIT = 64;
 
+// A value a text can print (bot-text-vars.ts, docs/bot-texts.md → Variables): `format` turns the
+// caller's input into the string that fills the placeholder, reading a stand-in text (an unknown
+// address, a stale balance) through `texts`; `sample` is what the validator and the preview put
+// there. Synchronous and given nothing but its input and the texts: a text never causes a request.
+export interface BotTextVariable<I = unknown> {
+  // in Russian, for the editor and the CLI
+  readonly description: string;
+  readonly sample: string;
+  format(input: I, texts: (key: string) => string): string;
+}
+
+export type BotTextVariables = Readonly<Record<string, BotTextVariable>>;
+
+export type BotTextVariableInput<V> = V extends BotTextVariable<infer I> ? I : never;
+
+// What the caller of a key with variables passes: every variable of the key, by name.
+export type BotTextContextOf<R> = { readonly [N in keyof R]: BotTextVariableInput<R[N]> };
+
 export interface BotTextEntry<
   K extends BotTextKind = BotTextKind,
   G extends string = string,
-  A extends string | undefined = string | undefined,
+  R extends BotTextVariables = BotTextVariables,
 > {
   readonly kind: K;
   readonly group: G;
   // where the text is shown, in Russian, for the admin section
   readonly description: string;
   readonly source: string;
-  // the one value the caller passes, and a sample of it for the validator
-  readonly arg: A;
-  readonly sample: string | undefined;
+  // the values every caller of the key holds when it renders; each optional in the template (#358)
+  // the names of `variables`, in the catalog's order
+  readonly vars: readonly string[];
+  readonly variables: R;
   // placeholder → the key whose text goes there; optional in the template
   readonly fragments: Readonly<Record<string, string>>;
   readonly limit: number;
   readonly singleLine: boolean;
 }
 
-export interface BotTextOptions<A extends string> {
-  arg?: { name: A; sample: string };
+export interface BotTextOptions<R extends BotTextVariables> {
+  variables?: R;
   fragments?: Readonly<Record<string, string>>;
   limit?: number;
   singleLine?: boolean;
 }
 
-type ArgOf<A extends string> = [A] extends [never] ? undefined : A;
+export type BotTextNoVariables = Readonly<Record<never, BotTextVariable>>;
 
-function entryOf<K extends BotTextKind, G extends string, A extends string>(
+function entryOf<K extends BotTextKind, G extends string, R extends BotTextVariables>(
   kind: K,
   group: G,
   description: string,
   source: string,
-  options: BotTextOptions<A>,
+  options: BotTextOptions<R>,
   defaults: { limit: number; singleLine: boolean },
-): BotTextEntry<K, G, ArgOf<A>> {
+): BotTextEntry<K, G, R> {
+  const variables = options.variables ?? ({} as R);
   return {
     kind,
     group,
     description,
     source,
-    arg: options.arg?.name as ArgOf<A>,
-    sample: options.arg?.sample,
+    vars: Object.keys(variables),
+    variables,
     fragments: options.fragments ?? {},
     limit: options.limit ?? defaults.limit,
     singleLine: options.singleLine ?? defaults.singleLine,
@@ -70,12 +90,15 @@ function entryOf<K extends BotTextKind, G extends string, A extends string>(
 }
 
 // A message part: Telegram HTML, a message's limit, any number of lines.
-export const botHtmlText = <const G extends string, const A extends string = never>(
+export const botHtmlText = <
+  const G extends string,
+  R extends BotTextVariables = BotTextNoVariables,
+>(
   group: G,
   description: string,
   source: string,
-  options: BotTextOptions<A> = {},
-): BotTextEntry<typeof BotTextKind.Html, G, ArgOf<A>> =>
+  options: BotTextOptions<R> = {},
+): BotTextEntry<typeof BotTextKind.Html, G, R> =>
   entryOf(BotTextKind.Html, group, description, source, options, {
     limit: TELEGRAM_MESSAGE_LIMIT,
     singleLine: false,
@@ -83,12 +106,15 @@ export const botHtmlText = <const G extends string, const A extends string = nev
 
 // A label, a word put into a message, a command description or the profile: never parsed by
 // Telegram, so never escaped; one line of BOT_LABEL_LIMIT unless told otherwise.
-export const botPlainText = <const G extends string, const A extends string = never>(
+export const botPlainText = <
+  const G extends string,
+  R extends BotTextVariables = BotTextNoVariables,
+>(
   group: G,
   description: string,
   source: string,
-  options: BotTextOptions<A> = {},
-): BotTextEntry<typeof BotTextKind.Plain, G, ArgOf<A>> =>
+  options: BotTextOptions<R> = {},
+): BotTextEntry<typeof BotTextKind.Plain, G, R> =>
   entryOf(BotTextKind.Plain, group, description, source, options, {
     limit: BOT_LABEL_LIMIT,
     singleLine: true,
@@ -101,18 +127,22 @@ export type BotHtmlKeyOf<C> = {
   [K in KeyOf<C>]: C[K] extends { kind: typeof BotTextKind.Html } ? K : never;
 }[KeyOf<C>];
 export type BotPlainKeyOf<C> = Exclude<KeyOf<C>, BotHtmlKeyOf<C>>;
+type VariablesOf<E> = E extends { variables: infer R } ? R : never;
+// a key with no variables is its text; one with variables, a function of their values
+type ViewOf<E, T> = [keyof VariablesOf<E>] extends [never]
+  ? T
+  : (context: BotTextContextOf<VariablesOf<E>>) => T;
 export type BotHtmlTextsOf<C> = {
-  // a string only: html is nested into html through declared fragments, which the validator
-  // renders and checks; a TelegramHtml argument would go in unchecked (#299)
-  readonly [K in BotHtmlKeyOf<C>]: C[K] extends { arg: string }
-    ? (value: string) => TelegramHtml
-    : TelegramHtml;
+  // a variable's value is data a formatter turns into a string, never TelegramHtml: html is
+  // nested into html through declared fragments, which the validator renders and checks (#299)
+  readonly [K in BotHtmlKeyOf<C>]: ViewOf<C[K], TelegramHtml>;
 };
-export type BotPlainTextsOf<C> = {
-  readonly [K in BotPlainKeyOf<C>]: C[K] extends { arg: string }
-    ? (value: string) => string
-    : string;
-};
+export type BotPlainTextsOf<C> = { readonly [K in BotPlainKeyOf<C>]: ViewOf<C[K], string> };
+// every key rendered with its variables' samples: the preview, the CLI, the validator's view
+export interface BotTextSamplesOf<C> {
+  readonly html: { readonly [K in BotHtmlKeyOf<C>]: TelegramHtml };
+  readonly plain: { readonly [K in BotPlainKeyOf<C>]: string };
+}
 
 // Where a key's current text comes from: the catalog's default, or an override (#299).
 export interface BotTextSource<K extends string = string> {
@@ -161,7 +191,6 @@ export const BotTextProblemCode = {
   Empty: 'empty',
   StrayBrace: 'stray_brace',
   UnknownPlaceholder: 'unknown_placeholder',
-  MissingPlaceholder: 'missing_placeholder',
   PlaceholderInTag: 'placeholder_in_tag',
   InvalidHtml: 'invalid_html',
   TooLong: 'too_long',
@@ -185,9 +214,12 @@ const STAND_IN = '·';
 const TAG_STAND_IN = 'x';
 const LINE_BREAK = /[\n\r\p{Zl}\p{Zp}]/u;
 
+const isVariable = (entry: BotTextEntry, name: string): boolean =>
+  Object.hasOwn(entry.variables, name);
+
 function unknownNames(entry: BotTextEntry, names: readonly string[]): string[] {
   return [...new Set(names)].filter(
-    (name) => name !== entry.arg && !Object.hasOwn(entry.fragments, name),
+    (name) => !isVariable(entry, name) && !Object.hasOwn(entry.fragments, name),
   );
 }
 
@@ -224,9 +256,6 @@ export function botTextEntryProblems<C extends BotTextCatalog>(
     problems.push({ code: BotTextProblemCode.UnknownPlaceholder, detail: name });
   }
   if (problems.length > 0) return problems;
-  if (entry.arg !== undefined && !parsed.names.includes(entry.arg)) {
-    problems.push({ code: BotTextProblemCode.MissingPlaceholder, detail: entry.arg });
-  }
 
   const isHtml = entry.kind === BotTextKind.Html;
   const fragmentOf = (name: string): string => {
@@ -236,10 +265,14 @@ export function botTextEntryProblems<C extends BotTextCatalog>(
       ? escapeTelegramHtml(text)
       : text;
   };
-  const withArg = (value: string) => (name: string) =>
-    name === entry.arg ? value : fragmentOf(name);
-  const sample = entry.sample ?? '';
-  const withSample = assemble(parsed, withArg(isHtml ? escapeTelegramHtml(sample) : sample)).text;
+  // every variable gets the same value: a stand-in, or its own sample
+  const withVariables = (valueOf: (name: string) => string) => (name: string) =>
+    isVariable(entry, name) ? valueOf(name) : fragmentOf(name);
+  const sampleOf = (name: string): string => {
+    const sample = entry.variables[name]?.sample ?? '';
+    return isHtml ? escapeTelegramHtml(sample) : sample;
+  };
+  const withSample = assemble(parsed, withVariables(sampleOf)).text;
 
   if (isHtml) {
     const allStandIns = assemble(parsed, () => TAG_STAND_IN);
@@ -254,8 +287,12 @@ export function botTextEntryProblems<C extends BotTextCatalog>(
       problems.push({ code: BotTextProblemCode.PlaceholderInTag, detail: name });
     }
     const htmlProblem =
-      telegramHtmlProblems(assemble(parsed, withArg(STAND_IN)).text)[0] ??
-      telegramHtmlProblems(withSample)[0];
+      telegramHtmlProblems(
+        assemble(
+          parsed,
+          withVariables(() => STAND_IN),
+        ).text,
+      )[0] ?? telegramHtmlProblems(withSample)[0];
     if (htmlProblem !== undefined) {
       problems.push({ code: BotTextProblemCode.InvalidHtml, detail: htmlProblem });
     }
@@ -283,70 +320,107 @@ export class InvalidBotText extends Error {
   override readonly name = 'InvalidBotText';
 }
 
+// A key's text with each variable's placeholder filled by `holeOf`, called only for the variables
+// the text holds; TelegramHtml for an html key, a string for a plain one.
+type RenderWith = (holeOf: (name: string) => string) => unknown;
+
+interface Built {
+  value: unknown;
+  renderWith: RenderWith;
+}
+
 interface Cached {
   sources: readonly string[];
-  value: unknown;
+  built: Built;
 }
 
 const sameSources = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && a.every((value, index) => value === b[index]);
 
+export interface BotTextViews<C> {
+  html: BotHtmlTextsOf<C>;
+  plain: BotPlainTextsOf<C>;
+  samples: BotTextSamplesOf<C>;
+  // the estimate of assembled messages (bot-text-messages.ts): each placeholder a string of a width
+  renderWith(key: KeyOf<C>, holeOf: (name: string) => string): unknown;
+}
+
 /**
- * The catalog's texts as `{ html, plain }`, one getter per key, read from `source` on every access.
- * A getter returns the same object (or function) while the key's text and its fragments' texts are
- * unchanged — the suites compare texts with toBe — and renders again once any of them changes.
+ * The catalog's texts as `{ html, plain }`, one getter per key, read from `source` on every access;
+ * `samples` the same with every variable at its sample. A getter returns the same object (or
+ * function) while the key's text and its fragments' texts are unchanged — the suites compare texts
+ * with toBe — and renders again once any of them changes. A variable is formatted only when its
+ * placeholder is in the text, so a stand-in text is read only when it can be shown.
  */
 export function createBotTextViews<C extends BotTextCatalog>(
   catalog: C,
   source: BotTextSource<KeyOf<C>>,
-): { html: BotHtmlTextsOf<C>; plain: BotPlainTextsOf<C> } {
+): BotTextViews<C> {
   const cache = new Map<string, Cached>();
 
-  function valueOf(key: KeyOf<C>): unknown {
+  function builtOf(key: KeyOf<C>): Built {
     const entry: BotTextEntry = catalog[key];
     const fragmentKeys = Object.values(entry.fragments) as KeyOf<C>[];
     const sources = [source.sourceOf(key), ...fragmentKeys.map((k) => source.sourceOf(k))];
     const cached = cache.get(key);
-    if (cached !== undefined && sameSources(cached.sources, sources)) return cached.value;
-    const value = build(entry, sources[0] ?? '');
-    cache.set(key, { sources, value });
-    return value;
+    if (cached !== undefined && sameSources(cached.sources, sources)) return cached.built;
+    const built = build(entry, sources[0] ?? '');
+    cache.set(key, { sources, built });
+    return built;
   }
 
-  function build(entry: BotTextEntry, text: string): unknown {
+  const textOf = (key: string): string => String(builtOf(key as KeyOf<C>).value);
+
+  function build(entry: BotTextEntry, text: string): Built {
     const parsed = parseBotTextTemplate(text);
     if (parsed.strayBraces > 0 || unknownNames(entry, parsed.names).length > 0) {
       throw new InvalidBotText();
     }
     const fragments = new Map(
       parsed.names
-        .filter((name) => name !== entry.arg)
-        .map((name) => [name, valueOf(entry.fragments[name] as KeyOf<C>)] as const),
+        .filter((name) => !isVariable(entry, name))
+        .map((name) => [name, builtOf(entry.fragments[name] as KeyOf<C>).value] as const),
     );
-    const holesWith = (value: unknown): unknown[] =>
-      parsed.names.map((name) => (name === entry.arg ? value : fragments.get(name)));
-    if (entry.kind === BotTextKind.Html) {
-      const render = (value?: string): TelegramHtml =>
-        telegramHtmlTemplate(parsed.statics, holesWith(value) as TelegramHtmlHole[]);
-      if (entry.arg === undefined) return render();
-      // the type says string; a cast or a JS caller could still pass a TelegramHtml
-      return (value: string) => {
-        if (typeof value !== 'string') throw new InvalidBotText();
-        return render(value);
-      };
+    const holesWith = (holeOf: (name: string) => string): unknown[] =>
+      parsed.names.map((name) => (isVariable(entry, name) ? holeOf(name) : fragments.get(name)));
+    const renderWith: RenderWith =
+      entry.kind === BotTextKind.Html
+        ? (holeOf) => telegramHtmlTemplate(parsed.statics, holesWith(holeOf) as TelegramHtmlHole[])
+        : (holeOf) =>
+            assemble(parsed, (name) =>
+              isVariable(entry, name) ? holeOf(name) : String(fragments.get(name)),
+            ).text;
+    if (entry.vars.length === 0) {
+      return { value: renderWith(() => ''), renderWith };
     }
-    const render = (value?: string): string =>
-      assemble(parsed, (name) => String(name === entry.arg ? value : fragments.get(name))).text;
-    return entry.arg === undefined ? render() : (value: string) => render(value);
+    const value = (context: Readonly<Record<string, unknown>>): unknown =>
+      renderWith((name) => {
+        const formatted: unknown = entry.variables[name]?.format(context[name], textOf);
+        // the types say string; a cast or a JS caller could still pass a TelegramHtml through
+        if (typeof formatted !== 'string') throw new InvalidBotText();
+        return formatted;
+      });
+    return { value, renderWith };
   }
 
   const html = {};
   const plain = {};
+  const samples = { html: {}, plain: {} };
   for (const key of Object.keys(catalog) as KeyOf<C>[]) {
-    Object.defineProperty(catalog[key]?.kind === BotTextKind.Html ? html : plain, key, {
-      get: () => valueOf(key),
+    const isHtml = catalog[key]?.kind === BotTextKind.Html;
+    Object.defineProperty(isHtml ? html : plain, key, {
+      get: () => builtOf(key).value,
+      enumerable: true,
+    });
+    Object.defineProperty(isHtml ? samples.html : samples.plain, key, {
+      get: () => builtOf(key).renderWith((name) => catalog[key]?.variables[name]?.sample ?? ''),
       enumerable: true,
     });
   }
-  return { html: html as BotHtmlTextsOf<C>, plain: plain as BotPlainTextsOf<C> };
+  return {
+    html: html as BotHtmlTextsOf<C>,
+    plain: plain as BotPlainTextsOf<C>,
+    samples: samples as BotTextSamplesOf<C>,
+    renderWith: (key, holeOf) => builtOf(key).renderWith(holeOf),
+  };
 }

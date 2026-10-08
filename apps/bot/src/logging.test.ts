@@ -327,7 +327,7 @@ describe('what the bot writes during the email dialog', () => {
     expectNoSecrets(lines);
     // the reply does carry the address back to the user; the log, read above, does not
     expect(calls.find((call) => call.method === 'sendMessage')?.payload.text).toBe(
-      TEXTS.codeSentUnknown(ADDRESS).value,
+      TEXTS.codeSentUnknown({ email: ADDRESS, firstName: USER.first_name }).value,
     );
   });
 
@@ -558,7 +558,9 @@ describe('what the bot writes about the settings edit', () => {
       'editMessageText',
       'sendMessage',
     ]);
-    expect(calls[2]?.payload.text).toBe(settingsText(NotificationLevel.Off, null).value);
+    expect(calls[2]?.payload.text).toBe(
+      settingsText(NotificationLevel.Off, null, USER.first_name).value,
+    );
   });
 
   it('writes the not-modified refusal at info with the method and code, not its text', async () => {
