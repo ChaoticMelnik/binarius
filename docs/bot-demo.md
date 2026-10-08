@@ -268,7 +268,7 @@ signal, the result's edit refused as gone and sent anew: 2 × 5 000 + 4 × 8 000
 button) is no backend call and two Bot API calls, the answer and the keyboard's removal: 16 s.
 All are under `confirm`'s 45 s, so
 `HANDLER_BUDGET_MS`, the shutdown budget and the compose grace period do not move. The answer and
-the read run together and are counted as sequential, as for oauth. `timing.test.ts` runs every
+the read run together and are counted as sequential, as for confirm. `timing.test.ts` runs every
 terminal branch of the seven through the real handlers. The pairs route reads the cache in
 memory; the signal route makes at most one chart GET, inside `TRADING_SIGNAL_BUDGET_MS` (4 s),
 and `TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` is checked at import and in

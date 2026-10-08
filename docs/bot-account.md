@@ -28,7 +28,7 @@ recorded — `/start`, `/menu` and `/settings`, all through `POST /users/start`
   back → 200 { user: { status, accounts: [...] } }   or   404 { error: 'user_not_found' }
   bot  → one message:
            blocked                     → TEXTS.blocked, no buttons
-           404 user_not_found, or []   → TEXTS.accountNone + the two connect buttons
+           404 user_not_found, or []   → TEXTS.accountNone + the connect button
            links                       → accountStatus(accounts) + accountKeyboard(accounts)
            anything else               → TEXTS.unavailable, warn '/account not read'
 ```
@@ -59,17 +59,17 @@ a plain text escaped as data, like the address it stands in for). The address is
 
 `accountKeyboard` puts one «✅ Подтвердить: ‹email›» button (or «✅ Подтвердить привязку» without an
 address) per `pending` link — the same `LABELS.confirmButton`, callback data and confirm handler
-as `/start` — and then, while no link is `active`, the welcome's two rows «🔗 Подключить аккаунт
-Binodex» and «🌐 Войти через сайт Binodex» (`addConnectButtons`, shared with the welcome). A user
+as `/start` — and then, while no link is `active`, the welcome's «🔗 Подключить аккаунт Binodex»
+(`addConnectButtons`, shared with the welcome; the site sign-in row is gone since #314). A user
 whose links are all `active`, or `active` and `revoked`, gets the text with no `reply_markup`.
 
-| Links                   | Confirm buttons | Connect buttons |
-| ----------------------- | --------------- | --------------- |
-| none / `user_not_found` | —               | yes             |
-| `active` (± `revoked`)  | —               | —               |
-| `active` + `pending`    | one per pending | —               |
-| `pending` (± `revoked`) | one per pending | yes             |
-| `revoked` only          | —               | yes             |
+| Links                   | Confirm buttons | Connect button |
+| ----------------------- | --------------- | -------------- |
+| none / `user_not_found` | —               | yes            |
+| `active` (± `revoked`)  | —               | —              |
+| `active` + `pending`    | one per pending | —              |
+| `pending` (± `revoked`) | one per pending | yes            |
+| `revoked` only          | —               | yes            |
 
 ## POST /users/account
 
@@ -90,14 +90,14 @@ the confirm button sends back. The wire shape is a union discriminated by `statu
 or revoked row's id cannot leave the backend by type, and the bot's `z.object` strips a stray one.
 No token, `brokerUserId`, `users.id`, revocation reason, halt flag or partner flag is selected.
 
-| Outcome                                               | Source                                          | Bot                                          |
-| ----------------------------------------------------- | ----------------------------------------------- | -------------------------------------------- |
-| 200, `status: 'blocked'`                              | the users row                                   | `TEXTS.blocked` only                         |
-| 200, `accounts: []`                                   | a users row with no `broker_accounts` row       | `accountNone` + connect buttons              |
-| 200, `accounts: [...]`                                | the rows                                        | `accountStatus` + `accountKeyboard`          |
-| 404 `user_not_found`                                  | no users row (the backend was down on `/start`) | `accountNone` + connect buttons, no log line |
-| 404 `not_found`, 401, 400 `validation`, any other 4xx | the route refused or is absent                  | `TEXTS.unavailable` + warn                   |
-| 5xx, unreachable, timeout, a broken 2xx body          | unknown                                         | `TEXTS.unavailable` + warn                   |
+| Outcome                                               | Source                                          | Bot                                         |
+| ----------------------------------------------------- | ----------------------------------------------- | ------------------------------------------- |
+| 200, `status: 'blocked'`                              | the users row                                   | `TEXTS.blocked` only                        |
+| 200, `accounts: []`                                   | a users row with no `broker_accounts` row       | `accountNone` + the connect button          |
+| 200, `accounts: [...]`                                | the rows                                        | `accountStatus` + `accountKeyboard`         |
+| 404 `user_not_found`                                  | no users row (the backend was down on `/start`) | `accountNone` + connect button, no log line |
+| 404 `not_found`, 401, 400 `validation`, any other 4xx | the route refused or is absent                  | `TEXTS.unavailable` + warn                  |
+| 5xx, unreachable, timeout, a broken 2xx body          | unknown                                         | `TEXTS.unavailable` + warn                  |
 
 The bot tells «no users row» from «no route» by the error code, never by the status: a backend
 without this route answers a bare `404 not_found`, and that is an outage, not «не подключён».
