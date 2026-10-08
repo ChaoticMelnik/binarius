@@ -1,9 +1,16 @@
 import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type Db } from './client';
-import { createTempDatabase, seedStaff, type SeededStaff, type TempDatabase } from './testing';
+import {
+  createTempDatabase,
+  seedStaff,
+  type SeededStaff,
+  type TempDatabase,
+  TEST_SCRYPT_PARAMS,
+} from './testing';
 import { hashToken } from './oauth-ops';
 import {
+  applyStaffPasswordChange,
   completeLogin,
   type CompleteLoginResult,
   confirmChallengeFromTelegram,
@@ -13,6 +20,7 @@ import {
   endStaffSession,
   failChallengeDelivery,
   findStaffForLogin,
+  findStaffForPasswordChange,
   listLiveStaffSessions,
   markChallengeCodeSent,
   markChallengePromptSent,
@@ -30,6 +38,7 @@ import { auditLog, staff, staffLoginChallenges, staffSessions } from './schema/i
 import { StaffLoginChallengeStatus } from './schema/staff-login-challenges';
 import { StaffStatus } from './schema/staff';
 import { AuditAction } from '@binarius/shared';
+import { until } from '@binarius/shared/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -1197,5 +1206,329 @@ describe('completeLogin under the code-sent race', () => {
       userAgent: UA,
     });
     expect(late.ok).toBe(true);
+  });
+});
+
+describe('changing your own password (#78)', () => {
+  const session = async (seeded: SeededStaff) => {
+    const { challengeId, code } = await reachCodeEntry(seeded);
+    const completed = await completeLogin(tmp.db, { challengeId, code, ip: IP, userAgent: UA });
+    if (!completed.ok) throw new Error('unreachable');
+    return completed.sessionToken;
+  };
+
+  const newHash = (password = 'brand new password') => hashPassword(password, TEST_SCRYPT_PARAMS);
+
+  const served = (token: string) =>
+    runAsStaff(tmp.db, { token }, async () => ({
+      result: 'served',
+      audit: { action: AuditAction.StaffSessionsViewed, payload: {} },
+    }));
+
+  const change = (
+    token: string,
+    seeded: SeededStaff,
+    newPasswordHash: string,
+    beforeWrite: () => Promise<void> = async () => {},
+  ) =>
+    runAsStaff(tmp.db, { token, lockStaff: true }, async (tx, ctx) => {
+      await beforeWrite();
+      const result = await applyStaffPasswordChange(tx, {
+        staffId: ctx.staffId,
+        sessionId: ctx.sessionId,
+        passwordHashSeen: seeded.passwordHash,
+        newPasswordHash,
+      });
+      return {
+        result,
+        audit: { action: AuditAction.StaffPasswordChanged, payload: { sessionId: ctx.sessionId } },
+      };
+    });
+
+  const revoke = (
+    token: string,
+    sessionId: string,
+    beforeWrite: () => Promise<void> = async () => {},
+  ) =>
+    runAsStaff(tmp.db, { token, lockStaff: true }, async (tx, ctx) => {
+      await beforeWrite();
+      return {
+        result: await revokeStaffSession(tx, { sessionId, byStaffId: ctx.staffId }),
+        audit: { action: AuditAction.StaffSessionRevoked, payload: {} },
+      };
+    });
+
+  const sessionState = async (sessionId: string) => {
+    const [row] = await tmp.db
+      .select({ revokedAt: staffSessions.revokedAt, revokedBy: staffSessions.revokedByStaffId })
+      .from(staffSessions)
+      .where(eq(staffSessions.id, sessionId));
+    if (row === undefined) throw new Error(`no session ${sessionId}`);
+    return row;
+  };
+
+  type Settled = { ok: unknown } | { err: unknown };
+  const settle = (work: Promise<unknown>): Promise<Settled> =>
+    work.then(
+      (ok) => ({ ok }),
+      (error: { cause?: { code?: unknown }; code?: unknown }) => ({
+        err: error.cause?.code ?? error.code ?? String(error),
+      }),
+    );
+
+  /** Returns once the other side is queued behind a lock this transaction holds. */
+  const waitForLockWaiter = () =>
+    until('the other transaction to queue behind a lock', async () => {
+      const { rows } = await tmp.db.execute<{ n: number }>(sql`
+        select count(*)::int as n from pg_stat_activity
+         where datname = current_database() and wait_event_type = 'Lock'`);
+      return (rows[0]?.n ?? 0) > 0;
+    });
+
+  describe('findStaffForPasswordChange', () => {
+    it('reads the hash by a live session and no lockout', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const token = await session(seeded);
+
+      expect(await findStaffForPasswordChange(tmp.db, { token })).toEqual({
+        staffId: seeded.staffId,
+        sessionId: await sessionIdFor(token),
+        passwordHash: seeded.passwordHash,
+        lockedUntil: null,
+      });
+    });
+
+    it('reports a running lockout by the database clock and hides an expired one', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const token = await session(seeded);
+
+      await tmp.db
+        .update(staff)
+        .set({ lockedUntil: sql`now() + interval '15 minutes'` })
+        .where(eq(staff.id, seeded.staffId));
+      expect((await findStaffForPasswordChange(tmp.db, { token }))?.lockedUntil).toBeInstanceOf(
+        Date,
+      );
+
+      await tmp.db
+        .update(staff)
+        .set({ lockedUntil: sql`now() - interval '1 minute'` })
+        .where(eq(staff.id, seeded.staffId));
+      expect((await findStaffForPasswordChange(tmp.db, { token }))?.lockedUntil).toBeNull();
+    });
+
+    it('answers nothing for a token nobody holds or a revoked session', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const token = await session(seeded);
+      expect(await findStaffForPasswordChange(tmp.db, { token: 'b'.repeat(43) })).toBeUndefined();
+
+      await tmp.db
+        .update(staffSessions)
+        .set({ revokedAt: sql`now()` })
+        .where(eq(staffSessions.id, await sessionIdFor(token)));
+      expect(await findStaffForPasswordChange(tmp.db, { token })).toBeUndefined();
+    });
+
+    it('answers nothing for a session idle past the window', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const token = await session(seeded);
+      await backdateSession(await sessionIdFor(token), '61 minutes');
+
+      expect(await findStaffForPasswordChange(tmp.db, { token })).toBeUndefined();
+    });
+
+    it('answers nothing for a session past its absolute lifetime', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const token = await session(seeded);
+      await tmp.db
+        .update(staffSessions)
+        .set({
+          createdAt: sql`now() - interval '25 hours'`,
+          expiresAt: sql`now() - interval '1 hour'`,
+        })
+        .where(eq(staffSessions.id, await sessionIdFor(token)));
+
+      expect(await findStaffForPasswordChange(tmp.db, { token })).toBeUndefined();
+    });
+
+    it('answers nothing once the owner is disabled', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const token = await session(seeded);
+      await tmp.db
+        .update(staff)
+        .set({ status: StaffStatus.Disabled })
+        .where(eq(staff.id, seeded.staffId));
+
+      expect(await findStaffForPasswordChange(tmp.db, { token })).toBeUndefined();
+    });
+  });
+
+  describe('applyStaffPasswordChange', () => {
+    it('replaces the hash, clears the counter and revokes everything else the old password issued', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const current = await session(seeded);
+      const other = await session(seeded);
+      const third = await session(seeded);
+      const expired = await session(seeded);
+      await tmp.db
+        .update(staffSessions)
+        .set({
+          createdAt: sql`now() - interval '25 hours'`,
+          expiresAt: sql`now() - interval '1 hour'`,
+        })
+        .where(eq(staffSessions.id, await sessionIdFor(expired)));
+      const open = await start(seeded);
+      if (!open.ok) throw new Error('unreachable');
+      await tmp.db
+        .update(staff)
+        .set({ failedPasswordAttempts: 3 })
+        .where(eq(staff.id, seeded.staffId));
+      const hash = await newHash();
+
+      const result = await change(current, seeded, hash);
+
+      expect(result).toEqual({ ok: true, closedChallenges: 1, revokedSessions: 2 });
+      const row = await staffRow(seeded.staffId);
+      expect([row.passwordHash, row.failedPasswordAttempts, row.lockedUntil]).toEqual([
+        hash,
+        0,
+        null,
+      ]);
+      for (const token of [other, third]) {
+        const state = await sessionState(await sessionIdFor(token));
+        expect(state.revokedAt).not.toBeNull();
+        expect(state.revokedBy).toBe(seeded.staffId);
+        expect(await served(token)).toBeUndefined();
+      }
+      expect((await sessionState(await sessionIdFor(expired))).revokedAt).toBeNull();
+      expect((await sessionState(await sessionIdFor(current))).revokedAt).toBeNull();
+      expect(await served(current)).toBe('served');
+      expect((await challengeRow(open.challengeId)).status).toBe(StaffLoginChallengeStatus.Expired);
+    });
+
+    it('refuses when the hash changed under the KDF and leaves every session alive', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const current = await session(seeded);
+      const other = await session(seeded);
+      const elsewhere = await newHash('set by somebody else');
+      await tmp.db
+        .update(staff)
+        .set({ passwordHash: elsewhere })
+        .where(eq(staff.id, seeded.staffId));
+
+      expect(await change(current, seeded, await newHash())).toEqual({
+        ok: false,
+        reason: 'state_changed',
+      });
+      expect((await staffRow(seeded.staffId)).passwordHash).toBe(elsewhere);
+      expect(await served(other)).toBe('served');
+    });
+
+    it('answers a lockout that began under the KDF as one and changes nothing', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const current = await session(seeded);
+      const other = await session(seeded);
+      await tmp.db
+        .update(staff)
+        .set({ lockedUntil: sql`now() + interval '15 minutes'` })
+        .where(eq(staff.id, seeded.staffId));
+
+      expect(await change(current, seeded, await newHash())).toEqual({
+        ok: false,
+        reason: 'locked',
+      });
+      expect((await staffRow(seeded.staffId)).passwordHash).toBe(seeded.passwordHash);
+      expect(await served(other)).toBe('served');
+    });
+  });
+
+  // staff → sessions for every writer of the domain: without lockStaff each of these pairs
+  // deadlocks (40P01), because the request holds its own session row before it reaches staff
+  describe('the lock order staff → sessions', () => {
+    it('serialises a change against a CLI reset that starts while the change holds staff', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const current = await session(seeded);
+      const other = await session(seeded);
+      const cliHash = await newHash('the operator chose this');
+      let cli: Promise<Settled> | undefined;
+
+      const request = await settle(
+        change(current, seeded, await newHash(), async () => {
+          cli = settle(resetStaffPassword(tmp.db, { login: seeded.login, passwordHash: cliHash }));
+          await waitForLockWaiter();
+        }),
+      );
+
+      expect(request).toEqual({ ok: { ok: true, closedChallenges: 0, revokedSessions: 1 } });
+      expect(await cli).toEqual({ ok: { closedChallenges: 0, revokedSessions: 1 } });
+      expect((await staffRow(seeded.staffId)).passwordHash).toBe(cliHash);
+      expect((await sessionState(await sessionIdFor(current))).revokedAt).not.toBeNull();
+      expect((await sessionState(await sessionIdFor(other))).revokedBy).toBe(seeded.staffId);
+    });
+
+    it('lets the second of two self-changes find its session revoked by the first', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const first = await session(seeded);
+      const second = await session(seeded);
+      const firstHash = await newHash('from the first device');
+      const secondHash = await newHash('from the second device');
+      let late: Promise<Settled> | undefined;
+
+      const early = await settle(
+        change(first, seeded, firstHash, async () => {
+          late = settle(change(second, seeded, secondHash));
+          await waitForLockWaiter();
+        }),
+      );
+
+      expect(early).toEqual({ ok: { ok: true, closedChallenges: 0, revokedSessions: 1 } });
+      expect(await late).toEqual({ ok: undefined });
+      expect((await staffRow(seeded.staffId)).passwordHash).toBe(firstHash);
+      expect(await served(first)).toBe('served');
+    });
+
+    it('serialises a change from one session against revoking that session from another', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const changing = await session(seeded);
+      const revoking = await session(seeded);
+      const changingId = await sessionIdFor(changing);
+      const hash = await newHash();
+      let revoked: Promise<Settled> | undefined;
+
+      const changed = await settle(
+        change(changing, seeded, hash, async () => {
+          revoked = settle(revoke(revoking, changingId));
+          await waitForLockWaiter();
+        }),
+      );
+
+      expect(changed).toEqual({ ok: { ok: true, closedChallenges: 0, revokedSessions: 1 } });
+      expect(await revoked).toEqual({ ok: undefined });
+      expect((await staffRow(seeded.staffId)).passwordHash).toBe(hash);
+      expect(await served(changing)).toBe('served');
+      expect(await served(revoking)).toBeUndefined();
+    });
+
+    it('serialises the same pair when the revoke takes staff first', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const changing = await session(seeded);
+      const revoking = await session(seeded);
+      const changingId = await sessionIdFor(changing);
+      const hash = await newHash();
+      let changed: Promise<Settled> | undefined;
+
+      const revoked = await settle(
+        revoke(revoking, changingId, async () => {
+          changed = settle(change(changing, seeded, hash));
+          await waitForLockWaiter();
+        }),
+      );
+
+      expect(revoked).toEqual({ ok: { staffId: seeded.staffId } });
+      expect(await changed).toEqual({ ok: undefined });
+      expect((await staffRow(seeded.staffId)).passwordHash).toBe(seeded.passwordHash);
+      expect(await served(changing)).toBeUndefined();
+      expect(await served(revoking)).toBe('served');
+    });
   });
 });

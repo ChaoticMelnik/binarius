@@ -122,10 +122,7 @@ export interface StaffLoginRow {
 
 /** Case-insensitive, matching staff_login_lower_idx; disabled accounts are returned too, so
  * the caller can spend the same KDF on them as on a live one. */
-export async function findStaffForLogin(
-  db: Db,
-  login: string,
-): Promise<StaffLoginRow | undefined> {
+export async function findStaffForLogin(db: Db, login: string): Promise<StaffLoginRow | undefined> {
   const [row] = await db
     .select({
       id: staff.id,
@@ -135,9 +132,10 @@ export async function findStaffForLogin(
       telegramUserId: staff.telegramUserId,
       // mapWith is not decoration: `sql<T>` is a type assertion, and without the column's own
       // driver mapping this comes back as the raw `2026-09-29 19:08:40.817068+00` string
-      lockedUntil: sql<Date | null>`case when ${staff.lockedUntil} > now() then ${staff.lockedUntil} end`.mapWith(
-        staff.lockedUntil,
-      ),
+      lockedUntil:
+        sql<Date | null>`case when ${staff.lockedUntil} > now() then ${staff.lockedUntil} end`.mapWith(
+          staff.lockedUntil,
+        ),
     })
     .from(staff)
     .where(sql`lower(${staff.login}) = lower(${login})`);
@@ -159,55 +157,60 @@ export interface PasswordFailure {
  * The same CAS the success path takes, for the same reason: ~250 ms passed inside the KDF, and
  * a reset, a disable or a lockout in that window has to win. Zero rows means the credentials
  * this attempt was judged against are gone — there is nothing left to count against, so the
- * counter and the lockout are left alone and the entry says so.
+ * counter and the lockout are left alone and the caller's entry says so.
+ *
+ * One counter for both places a password is typed: the login form and the change form (#78),
+ * so a stolen session cookie is no faster an oracle for the password than the login page.
  */
-export async function registerPasswordFailure(
-  db: Db,
-  { staffId, passwordHash, ip }: { staffId: string; passwordHash: string; ip: string },
+export async function countPasswordFailure(
+  tx: Tx,
+  { staffId, passwordHash }: { staffId: string; passwordHash: string },
 ): Promise<PasswordFailure> {
   const attempts = sql`case
       when ${staff.lockedUntil} is not null and ${staff.lockedUntil} <= now() then 1
       else ${staff.failedPasswordAttempts} + 1
     end`;
+  const [row] = await tx
+    .update(staff)
+    .set({
+      failedPasswordAttempts: attempts,
+      lockedUntil: sql`case
+          when (${attempts}) >= ${STAFF_MAX_PASSWORD_ATTEMPTS} then ${afterMs(STAFF_LOCKOUT_MS)}
+          else null
+        end`,
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(staff.id, staffId),
+        eq(staff.passwordHash, passwordHash),
+        eq(staff.status, StaffStatus.Active),
+        sql`(${staff.lockedUntil} is null or ${staff.lockedUntil} <= now())`,
+      ),
+    )
+    .returning({
+      attempts: staff.failedPasswordAttempts,
+      lockedUntil: staff.lockedUntil,
+    });
+  if (row === undefined) return { attempts: 0, locked: false, stateChanged: true };
+  return { attempts: row.attempts, locked: row.lockedUntil !== null };
+}
+
+export async function registerPasswordFailure(
+  db: Db,
+  { staffId, passwordHash, ip }: { staffId: string; passwordHash: string; ip: string },
+): Promise<PasswordFailure> {
   return db.transaction(async (tx) => {
-    const [row] = await tx
-      .update(staff)
-      .set({
-        failedPasswordAttempts: attempts,
-        lockedUntil: sql`case
-            when (${attempts}) >= ${STAFF_MAX_PASSWORD_ATTEMPTS} then ${afterMs(STAFF_LOCKOUT_MS)}
-            else null
-          end`,
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(staff.id, staffId),
-          eq(staff.passwordHash, passwordHash),
-          eq(staff.status, StaffStatus.Active),
-          sql`(${staff.lockedUntil} is null or ${staff.lockedUntil} <= now())`,
-        ),
-      )
-      .returning({
-        attempts: staff.failedPasswordAttempts,
-        lockedUntil: staff.lockedUntil,
-      });
-    if (row === undefined) {
-      await writeAuditEntry(
-        tx,
-        staffEvent(AuditAction.StaffLoginFailed, staffId, { reason: 'state_changed', ip }),
-      );
-      return { attempts: 0, locked: false, stateChanged: true };
-    }
-    const failure = { attempts: row.attempts, locked: row.lockedUntil !== null };
+    const failure = await countPasswordFailure(tx, { staffId, passwordHash });
     await writeAuditEntry(
       tx,
-      staffEvent(AuditAction.StaffLoginFailed, staffId, {
-        reason: 'wrong_password',
-        attempts: failure.attempts,
-        locked: failure.locked,
-        ip,
-      }),
+      staffEvent(
+        AuditAction.StaffLoginFailed,
+        staffId,
+        failure.stateChanged === true
+          ? { reason: 'state_changed', ip }
+          : { reason: 'wrong_password', attempts: failure.attempts, locked: failure.locked, ip },
+      ),
     );
     return failure;
   });
@@ -483,8 +486,7 @@ export async function failChallengeDelivery(db: Db, input: DeliveryFailure): Pro
 // --- The Telegram side -------------------------------------------------------------------------
 
 /** Six digits with their leading zeros; the string is what is hashed and what is sent. */
-const generateLoginCode = (): string =>
-  String(randomInt(CODE_CEILING)).padStart(CODE_DIGITS, '0');
+const generateLoginCode = (): string => String(randomInt(CODE_CEILING)).padStart(CODE_DIGITS, '0');
 
 export interface ConfirmedChallenge {
   staffId: string;
@@ -529,12 +531,9 @@ export async function confirmChallengeFromTelegram(
     if (row === undefined) return undefined;
     await writeAuditEntry(
       tx,
-      challengeEvent(
-        AuditAction.StaffLoginTelegramConfirmed,
-        row.staff_id,
-        input.challengeId,
-        { repeat: row.repeat },
-      ),
+      challengeEvent(AuditAction.StaffLoginTelegramConfirmed, row.staff_id, input.challengeId, {
+        repeat: row.repeat,
+      }),
     );
     return { staffId: row.staff_id, code, repeat: row.repeat };
   });
@@ -775,21 +774,41 @@ export interface StaffActionResult<T> {
  * run the work, then record it. The entry is written from what the work returned, so the
  * recorded event is the one that happened; if the INSERT fails, the touch and the work roll
  * back together and nothing is answered.
+ *
+ * `lockStaff` is for every transaction that touches more than its own session row or writes
+ * `staff` (the password change, revoke): it takes the owner's `staff` row `FOR NO KEY UPDATE`
+ * before the touch, so the order is `staff → sessions` like the CLI's and two such writers of
+ * one staff member queue on that row instead of deadlocking on two session rows. Without it
+ * the touch is the first statement. It does not order two sessions of different staff members
+ * (#151).
  */
 export async function runAsStaff<T>(
   db: Db,
-  options: { token: string; idleMs?: number },
+  options: { token: string; idleMs?: number; lockStaff?: boolean },
   fn: (tx: Tx, ctx: StaffContext) => Promise<StaffActionResult<T>>,
 ): Promise<T | undefined> {
   const idleMs = options.idleMs ?? STAFF_SESSION_IDLE_MS;
+  const tokenHash = hashToken(options.token);
   return db.transaction(async (tx) => {
+    if (options.lockStaff === true) {
+      const [owner] = await tx
+        .select({ staffId: staffSessions.staffId })
+        .from(staffSessions)
+        .where(eq(staffSessions.tokenHash, tokenHash));
+      if (owner === undefined) return undefined;
+      await tx
+        .select({ id: staff.id })
+        .from(staff)
+        .where(eq(staff.id, owner.staffId))
+        .for('no key update');
+    }
     // the target table is not aliased: liveStaffSession names its columns through the schema,
     // which renders them qualified by the real table name
     const { rows } = await tx.execute<{ id: string; staff_id: string; login: string }>(sql`
       update ${staffSessions}
          set last_seen_at = now()
         from ${staff} as st
-       where ${staffSessions.tokenHash} = ${hashToken(options.token)}
+       where ${staffSessions.tokenHash} = ${tokenHash}
          and st.id = ${staffSessions.staffId}
          and st.status = ${StaffStatus.Active}
          and ${liveStaffSession(idleMs)}
@@ -876,15 +895,51 @@ export async function revokeStaffSession(
 }
 
 /** The staff member's own session, ended by them; unlike revoke, it cannot miss. */
-export async function endStaffSession(
-  tx: Tx,
-  sessionId: string,
-  byStaffId: string,
-): Promise<void> {
+export async function endStaffSession(tx: Tx, sessionId: string, byStaffId: string): Promise<void> {
   await tx
     .update(staffSessions)
     .set({ revokedAt: sql`now()`, revokedByStaffId: byStaffId })
     .where(and(eq(staffSessions.id, sessionId), sql`${staffSessions.revokedAt} is null`));
+}
+
+export interface StaffPasswordChangeRow {
+  staffId: string;
+  sessionId: string;
+  passwordHash: string;
+  /** a running lockout by the database's clock, as in StaffLoginRow; `null` when none */
+  lockedUntil: Date | null;
+}
+
+/**
+ * The hash the change form's KDF needs, read by the caller's live session. Outside runAsStaff
+ * and without an audit row on purpose, like findStaffForLogin: the KDF runs between this read
+ * and the transaction, and holding the staff and session rows through ~500 ms of scrypt is what
+ * the login flow already refuses to do (#68). The transaction re-checks everything by CAS.
+ */
+export async function findStaffForPasswordChange(
+  db: Db,
+  { token, idleMs = STAFF_SESSION_IDLE_MS }: { token: string; idleMs?: number },
+): Promise<StaffPasswordChangeRow | undefined> {
+  const [row] = await db
+    .select({
+      staffId: staff.id,
+      sessionId: staffSessions.id,
+      passwordHash: staff.passwordHash,
+      lockedUntil:
+        sql<Date | null>`case when ${staff.lockedUntil} > now() then ${staff.lockedUntil} end`.mapWith(
+          staff.lockedUntil,
+        ),
+    })
+    .from(staffSessions)
+    .innerJoin(staff, eq(staff.id, staffSessions.staffId))
+    .where(
+      and(
+        eq(staffSessions.tokenHash, hashToken(token)),
+        eq(staff.status, StaffStatus.Active),
+        liveStaffSession(idleMs),
+      ),
+    );
+  return row;
 }
 
 // --- CLI operations ----------------------------------------------------------------------------
@@ -949,7 +1004,17 @@ export interface StaffInvalidation {
 // under it, or this one waits there and afterwards sees the session already committed. A session
 // committed by a transaction that began after this one is therefore ordinary here, and that is
 // what the revocation timestamp below has to survive (#149).
-async function invalidateIssued(tx: Tx, staffId: string): Promise<StaffInvalidation> {
+//
+// A writer under a staff session (applyStaffPasswordChange) reaches this through
+// runAsStaff({ lockStaff: true }): `staff` first, then its own session (the touch), then the
+// challenges and the other sessions — not a cycle with the CLI, because both chains start at
+// `staff`. It keeps its own session (`keepSessionId`) and signs the others as revoked by the
+// staff member; the CLI passes neither, so its rows keep revoked_by_staff_id NULL.
+async function invalidateIssued(
+  tx: Tx,
+  staffId: string,
+  opts: { keepSessionId?: string; revokedByStaffId?: string } = {},
+): Promise<StaffInvalidation> {
   const closed = await tx
     .update(staffLoginChallenges)
     .set({ status: StaffLoginChallengeStatus.Expired })
@@ -969,16 +1034,64 @@ async function invalidateIssued(tx: Tx, staffId: string): Promise<StaffInvalidat
   // harmless.
   const revoked = await tx
     .update(staffSessions)
-    .set({ revokedAt: sql`clock_timestamp()` })
+    .set({ revokedAt: sql`clock_timestamp()`, revokedByStaffId: opts.revokedByStaffId ?? null })
     .where(
       and(
         eq(staffSessions.staffId, staffId),
         sql`${staffSessions.revokedAt} is null`,
         sql`${staffSessions.expiresAt} > now()`,
+        opts.keepSessionId === undefined
+          ? undefined
+          : sql`${staffSessions.id} <> ${opts.keepSessionId}`,
       ),
     )
     .returning({ id: staffSessions.id });
   return { closedChallenges: closed.length, revokedSessions: revoked.length };
+}
+
+export type StaffPasswordChangeResult =
+  ({ ok: true } & StaffInvalidation) | { ok: false; reason: 'locked' | 'state_changed' };
+
+/**
+ * The staff member's own password, changed under their session (#78). The same CAS as the
+ * login's step 1: the hash the KDF verified against must still be the row's, the account
+ * active and not locked. On zero rows the outcome is read back rather than guessed — a lockout
+ * that began during the KDF answers as one. The caller's session survives; everything else
+ * issued under the old password does not.
+ */
+export async function applyStaffPasswordChange(
+  tx: Tx,
+  input: { staffId: string; sessionId: string; passwordHashSeen: string; newPasswordHash: string },
+): Promise<StaffPasswordChangeResult> {
+  const [changed] = await tx
+    .update(staff)
+    .set({
+      passwordHash: input.newPasswordHash,
+      failedPasswordAttempts: 0,
+      lockedUntil: null,
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(staff.id, input.staffId),
+        eq(staff.passwordHash, input.passwordHashSeen),
+        eq(staff.status, StaffStatus.Active),
+        sql`(${staff.lockedUntil} is null or ${staff.lockedUntil} <= now())`,
+      ),
+    )
+    .returning({ id: staff.id });
+  if (changed === undefined) {
+    const [row] = await tx
+      .select({ locked: sql<boolean>`coalesce(${staff.lockedUntil} > now(), false)` })
+      .from(staff)
+      .where(eq(staff.id, input.staffId));
+    return { ok: false, reason: row?.locked === true ? 'locked' : 'state_changed' };
+  }
+  const counts = await invalidateIssued(tx, input.staffId, {
+    keepSessionId: input.sessionId,
+    revokedByStaffId: input.staffId,
+  });
+  return { ok: true, ...counts };
 }
 
 export async function disableStaffAccount(
