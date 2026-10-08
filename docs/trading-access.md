@@ -91,7 +91,7 @@ the code today moves the cache in the same transaction as its ledger row:
 `users_token_reserved_check` keeps `0 <= reserved <= balance` per statement.
 `token-balance-ops.db.test.ts` checks that the cache equals the ledger sums after each of those
 writers and under a concurrent burst of reserves. That equality is held by the writers, not by a
-trigger. A new writer — purchases (#117), manual adjustments (#109), settlement (ARCH-04) — must
+trigger. A new writer — purchases (#117), manual adjustments (#246), settlement (ARCH-04) — must
 write its ledger row and the cache in one transaction, or this endpoint will be off by the
 missing delta.
 
@@ -212,6 +212,6 @@ may save: the stake is a preference, and trades refuse at creation.
 - The bot's display and `BackendClient.readTradingAccess`: [bot-menu.md](bot-menu.md).
 - **#121**: may read `tradingOpen` for the start screen; it is one switch for demo and real
   (#144). **#135** (a revoked grant and running sessions) is separate from it.
-- **#117, #109, ARCH-04**: future ledger writers, bound by the same-transaction rule above.
+- **#117, #246, ARCH-04**: future ledger writers, bound by the same-transaction rule above.
 - `/users/start` and `/users/account` carry no balance, by design: their views stay allowlists
   without it.

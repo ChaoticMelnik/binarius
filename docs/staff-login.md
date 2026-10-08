@@ -121,6 +121,7 @@ a token, a raw error object, or the login someone typed for an account that does
 | intents listed or filtered | `intents_viewed` |
 | intent card opened, or an id that found nothing | `intent_viewed` |
 | trading sessions listed | `trading_sessions_viewed` |
+| token ledger listed or filtered | `tokens_viewed` |
 
 The read pages behind the session, and what each of their rows carries, are in
 [admin-pages.md](admin-pages.md).
