@@ -159,9 +159,12 @@ The map is `satisfies Record<Exclude<TradingSessionStopReason, 'completed'>, …
 **Keyboards.** A live session: [«🔄 Обновить»][«⏹ Остановить сессию»]. A stopped one: «🔄 Обновить»,
 because its last trade can still settle, and under it «🔁 Ещё сессия» (#320) on the same pair and
 duration — drawn only when the view has `settings` and its duration is one the demo still offers
-(`durationOf`), so a session of before #313 gets none. The tracker's edits redraw the keyboard from
-the view they show, so the stop button goes away and «🔁 Ещё сессия» appears when the session
-stops.
+(`durationOf`), so a session of before #313 gets none — then the end of the path (#350,
+([bot-navigation.md](bot-navigation.md))): «📊 Новый анализ» on the same pair and duration (when the demo still offers
+it), «📡 К сигналам», «🏠 В меню»; without `settings` only «🏠 В меню». The tracker's edits redraw
+the keyboard from the view they show, so the stop button goes away and the rest appears when the
+session stops. A failed start, `sessionJustEnded`, leads back to the analysis and the menu; a failed
+refresh or stop offers the refresh and the menu, never the stop again.
 
 ## The refresh and the stop
 

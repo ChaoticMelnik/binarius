@@ -137,6 +137,14 @@ path with the request `/settings` sends: no payload, trailing text ignored. It i
 private chat, and on the code step of the email dialog it answers without touching the dialog:
 the command handlers are registered before the text handler and do not call `next()`.
 
+## «🏠 В меню» and «🔄 Повторить» (#350)
+
+«🏠 В меню» (`menu`) under the bot's messages answers the press and runs `/menu`'s path, but sends
+the card without the unpin and the pin: with the answer they would put the path at the shutdown
+budget. `/start` and `/menu` failing offer «🔄 Повторить» with the same `menu`; `/account` and
+`/settings` failing offer `cmd:account` / `cmd:settings`, which run the command again
+([bot-navigation.md](bot-navigation.md)).
+
 ## Timing
 
 `HANDLER_CALLS.start` and `.menu` are two backend calls (`recordStart`, `readTradingAccess`) and up
@@ -144,7 +152,8 @@ to four Bot API calls (the photo refused, the text, the unpin, the pin): 2 × 5 
 42 s, under `confirm`'s 45 s, so `HANDLER_BUDGET_MS` and the shutdown budget do not move.
 `HANDLER_CALLS.demo` is two backend calls (the signals and the catalog, #320) and two Bot API
 calls ([bot-demo.md](bot-demo.md#timing)).
-`timing.test.ts` runs every branch of the three through the real handlers.
+`HANDLER_CALLS.menuButton` is 2 / 3 (34 s) and `.commandRetry` 1 / 2 (21 s), #350.
+`timing.test.ts` runs every branch of these through the real handlers.
 
 `TRADING_ACCESS_BUDGET_MS` (4 000, the backend's upper estimate of the route) is at most
 `BACKEND_REQUEST_TIMEOUT_MS` (5 000): the bot waits at least as long as the backend budgets the
@@ -168,7 +177,7 @@ pnpm test --project unit apps/bot/src
 - **#201** — levels and their progress on this card.
 - Real mode — the header reads REAL once a user can trade on real; #144's `tradingOpen` is
   the backend's switch, not a user's mode.
-- A «🔄 Обновить» button that edits the caption in place, and a menu button on the account card —
-  not asked; `/menu` sends a new card.
+- A «🔄 Обновить» button that edits the caption in place — not asked; `/menu` sends a new card.
+  The account card carries «🎮 Демо-торговля» since #350 ([bot-navigation.md](bot-navigation.md)).
 - The picture is uploaded on every `/start` and `/menu` (no `file_id` cache), as for the account
   card.

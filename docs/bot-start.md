@@ -60,7 +60,7 @@ API over a shared bearer.
   bot  → POST /users/start { telegramUserId, displayName, languageCode?, startPayload? }
   back → { user: { telegramUserId, status, acquisitionSource, acquiredAt, hasActiveBrokerAccount,
                    pendingBrokerAccounts } }
-  bot  → blocked                  → "🔒 Доступ ограничен", no button
+  bot  → blocked                  → "🔒 Доступ ограничен" + the support link (#350)
          pendingBrokerAccounts    → "🔐 Найдена новая привязка…" + one "✅ Подтвердить" button
                                     per link
          hasActiveBrokerAccount   → POST /trading/access → the status card, pinned
@@ -259,6 +259,10 @@ in a blockquote, or the `ℹ️` reason none was paid. The address is the broker
 it issued tokens for, or after an email login without one the address the code was redeemed for;
 a confirmed link without an address and the recheck show no `📧` line, and the recheck shows no
 pack line either. Every fragment is a `TEXTS` entry.
+
+**Its button** (#350). The card carries «🎮 Демо-торговля» (`DEMO_CALLBACK_DATA`), the status
+card's own entry, on all three paths and on the text card that replaces a refused photo; the push
+after an OAuth login carries it too ([bot-navigation.md](bot-navigation.md)).
 
 **The picture.** `apps/bot/src/assets/account-card.jpg`, its path in `assets.ts`, uploaded as an
 `InputFile` with every card — no `file_id` cache, accepted at one card per account activation.
@@ -473,9 +477,10 @@ accept that locks the users row first. What a sender must do is in
 
 **The bot.** `/settings` reads the level from `/users/start`, so it also creates a missing users
 row and clears the Telegram block mark, as `/start` would; a blocked user gets the blocked text and
-no keyboard, and a backend failure the unavailable text. A press acts on no error code of the set
-route: any failure is the unavailable text as a new message, the keyboard untouched, so pressing
-again is the retry.
+the support link, and a backend failure the unavailable text with «🔄 Повторить» (`cmd:settings`)
+and the menu (#350, ([bot-navigation.md](bot-navigation.md))). A press acts on no error code of the set route: any
+failure is the unavailable text as a new message with the menu, the keyboard untouched, so
+pressing again is the retry.
 
 Unlike a refused send, a refused edit may mean the message already shows the result, so the
 refusal is classified (`editRefusal` in `bot.ts`), by `error_code` 400 and the lead phrase of
@@ -614,7 +619,7 @@ plugin — and is rethrown into `bot.catch` unchanged rather than reported as on
 ```
 
 The message is `helpText(BOT_COMMANDS)` in `apps/bot/src/texts.ts`, built on every `/help` (so it
-reads the catalog's texts as they are then) and sent through `replyHtml` with no buttons. Three
+reads the catalog's texts as they are then) and sent through `replyHtml` with «🏠 В меню» (#350). Three
 blocks, one blank line apart:
 
 - `TEXTS.helpAbout` — the header and the three feature lines, the catalog's `featureLines`

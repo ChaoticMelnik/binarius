@@ -321,8 +321,8 @@ to the chat.
 | Outcome of the callback | Status | Message |
 | --- | --- | --- |
 | a new link, or a re-login of an account still `pending` | 200 | «🔐 Найдена новая привязка…» with one «✅ Подтвердить: ‹email›» button for that account — what `/start` shows for it (#10); the bot handles the press as before |
-| a re-login of an account that was `active` or `revoked` (it is `active` again) | 200 | «✅ Аккаунт Binodex подключён!», no button: nothing is paid on this path |
-| `user_blocked` | 409 | «🔒 Доступ ограничен…» |
+| a re-login of an account that was `active` or `revoked` (it is `active` again) | 200 | «✅ Аккаунт Binodex подключён!» with «🎮 Демо-торговля» (#350); nothing is paid on this path |
+| `user_blocked` | 409 | «🔒 Доступ ограничен…» with the support link (#350) |
 | `broker_account_taken` | 409 | «❌ Этот аккаунт Binodex уже подключён к другому пользователю Telegram…», to the user who started the login, never to the account's owner |
 | `invalid_code`, `broker_unavailable`, `broker_contract_violation` | 400 / 502 | «❌ Не удалось завершить вход в Binodex. Подключи аккаунт по почте: /start» — the state is spent; the bot offers the email login |
 | `telegram_user_mismatch` | 403 | the same «❌ Не удалось завершить вход…», to the state's owner only, never to the Telegram user the `initData` names; the state is spent and the code was never exchanged |
