@@ -122,7 +122,10 @@ export interface StaffLoginRow {
 
 /** Case-insensitive, matching staff_login_lower_idx; disabled accounts are returned too, so
  * the caller can spend the same KDF on them as on a live one. */
-export async function findStaffForLogin(db: Db, login: string): Promise<StaffLoginRow | undefined> {
+export async function findStaffForLogin(
+  db: Db,
+  login: string,
+): Promise<StaffLoginRow | undefined> {
   const [row] = await db
     .select({
       id: staff.id,
@@ -132,10 +135,9 @@ export async function findStaffForLogin(db: Db, login: string): Promise<StaffLog
       telegramUserId: staff.telegramUserId,
       // mapWith is not decoration: `sql<T>` is a type assertion, and without the column's own
       // driver mapping this comes back as the raw `2026-09-29 19:08:40.817068+00` string
-      lockedUntil:
-        sql<Date | null>`case when ${staff.lockedUntil} > now() then ${staff.lockedUntil} end`.mapWith(
-          staff.lockedUntil,
-        ),
+      lockedUntil: sql<Date | null>`case when ${staff.lockedUntil} > now() then ${staff.lockedUntil} end`.mapWith(
+        staff.lockedUntil,
+      ),
     })
     .from(staff)
     .where(sql`lower(${staff.login}) = lower(${login})`);
@@ -486,7 +488,8 @@ export async function failChallengeDelivery(db: Db, input: DeliveryFailure): Pro
 // --- The Telegram side -------------------------------------------------------------------------
 
 /** Six digits with their leading zeros; the string is what is hashed and what is sent. */
-const generateLoginCode = (): string => String(randomInt(CODE_CEILING)).padStart(CODE_DIGITS, '0');
+const generateLoginCode = (): string =>
+  String(randomInt(CODE_CEILING)).padStart(CODE_DIGITS, '0');
 
 export interface ConfirmedChallenge {
   staffId: string;
@@ -531,9 +534,12 @@ export async function confirmChallengeFromTelegram(
     if (row === undefined) return undefined;
     await writeAuditEntry(
       tx,
-      challengeEvent(AuditAction.StaffLoginTelegramConfirmed, row.staff_id, input.challengeId, {
-        repeat: row.repeat,
-      }),
+      challengeEvent(
+        AuditAction.StaffLoginTelegramConfirmed,
+        row.staff_id,
+        input.challengeId,
+        { repeat: row.repeat },
+      ),
     );
     return { staffId: row.staff_id, code, repeat: row.repeat };
   });
@@ -895,7 +901,11 @@ export async function revokeStaffSession(
 }
 
 /** The staff member's own session, ended by them; unlike revoke, it cannot miss. */
-export async function endStaffSession(tx: Tx, sessionId: string, byStaffId: string): Promise<void> {
+export async function endStaffSession(
+  tx: Tx,
+  sessionId: string,
+  byStaffId: string,
+): Promise<void> {
   await tx
     .update(staffSessions)
     .set({ revokedAt: sql`now()`, revokedByStaffId: byStaffId })

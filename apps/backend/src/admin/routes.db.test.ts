@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -24,7 +24,9 @@ import {
   staffSessionsResponseSchema,
   TokenLedgerKind,
   TradeIntentStatus,
+  type LogLevel,
 } from '@binarius/shared';
+import { until } from '@binarius/shared/testing';
 import {
   auditLog,
   confirmChallengeFromTelegram,
@@ -47,6 +49,7 @@ import {
   seedStaff,
   seedTradingSession,
   seedUser,
+  TEST_SCRYPT_PARAMS,
   TEST_STAFF_PASSWORD,
   type SeededStaff,
   type TempDatabase,
@@ -84,13 +87,17 @@ let app: FastifyInstance;
 let telegram: ReturnType<typeof stubTelegram>;
 // counts derivations and still runs the real one: the oracles below are about how many happen
 let derivations: number;
+// the same for the new password's hash (#78), at the fixtures' cheap parameters
+let hashCalls: number;
 
 const build = (
   patch: Record<string, unknown> = {},
   logs?: { write(line: string): void },
+  level: LogLevel = 'error',
 ): FastifyInstance => {
   telegram = stubTelegram(true);
   derivations = 0;
+  hashCalls = 0;
   return buildApp({
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
@@ -98,7 +105,7 @@ const build = (
     signals: unusedSignalsDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
-    logLevel: logs === undefined ? 'silent' : 'error',
+    logLevel: logs === undefined ? 'silent' : level,
     ...(logs === undefined ? {} : { logDestination: logs }),
     checkTimeoutMs: 50,
     trading: {
@@ -129,6 +136,10 @@ const build = (
       verify: (stored, password) => {
         derivations += 1;
         return verifyPassword(stored, password);
+      },
+      hash: (password: string) => {
+        hashCalls += 1;
+        return hashPassword(password, TEST_SCRYPT_PARAMS);
       },
       ...patch,
     },
@@ -182,6 +193,7 @@ describe('the narrow bearer', () => {
     ['GET', '/admin/sessions'],
     ['POST', '/admin/sessions/00000000-0000-4000-8000-00000000000a/revoke'],
     ['POST', '/admin/auth/logout'],
+    ['POST', '/admin/auth/password'],
     ['GET', '/admin/overview'],
     ['GET', '/admin/users'],
     ['GET', '/admin/users/00000000-0000-4000-8000-00000000000a'],
@@ -871,6 +883,366 @@ describe('POST /admin/auth/logout', () => {
       401,
       { error: AdminErrorCode.SessionInvalid },
     ]);
+  });
+});
+
+const postAsStaff = (url: string, token: string | undefined, body: Record<string, unknown>) =>
+  app.inject({
+    method: 'POST',
+    url,
+    headers: token === undefined ? BEARER : { ...BEARER, 'x-staff-session': token },
+    payload: body,
+  });
+
+const staffRow = async (id: string) => {
+  const [row] = await tmp.db.select().from(staff).where(eq(staff.id, id));
+  if (row === undefined) throw new Error(`no staff ${id}`);
+  return row;
+};
+
+/** Holds the staff row as CLI and startLoginChallenge would, until `release` is called. */
+async function holdStaffRow(staffId: string): Promise<{ release: () => Promise<void> }> {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let taken!: () => void;
+  const lockTaken = new Promise<void>((resolve) => {
+    taken = resolve;
+  });
+  const holder = tmp.db.transaction(async (tx) => {
+    await tx.select({ id: staff.id }).from(staff).where(eq(staff.id, staffId)).for('no key update');
+    taken();
+    await gate;
+  });
+  await lockTaken;
+  return {
+    release: async () => {
+      release();
+      await holder;
+    },
+  };
+}
+
+/** True once the request queued behind a lock; false if it finished without waiting. */
+async function queuedBehindLock(pending: Promise<unknown>): Promise<boolean> {
+  let settled = false;
+  void pending.finally(() => {
+    settled = true;
+  });
+  let waiting = false;
+  await until('the request to queue behind the staff row or finish', async () => {
+    const { rows } = await tmp.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+    );
+    waiting = (rows[0]?.n ?? 0) > 0;
+    return settled || waiting;
+  });
+  return waiting && !settled;
+}
+
+describe('POST /admin/auth/password (#78)', () => {
+  const PASSWORD_URL = '/admin/auth/password';
+  const NEW_PASSWORD = 'a brand new staff password';
+  const change = (token: string | undefined, body: Record<string, unknown>) =>
+    postAsStaff(PASSWORD_URL, token, body);
+  const valid = (seeded: SeededStaff) => ({
+    currentPassword: seeded.password,
+    newPassword: NEW_PASSWORD,
+    ...CLIENT,
+  });
+
+  const passwordRows = (staffId: string) =>
+    tmp.db
+      .select({
+        action: auditLog.action,
+        actorType: auditLog.actorType,
+        entityType: auditLog.entityType,
+        entityId: auditLog.entityId,
+        payload: auditLog.payload,
+      })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.actorId, staffId),
+          inArray(auditLog.action, [
+            AuditAction.StaffPasswordChanged,
+            AuditAction.StaffPasswordChangeFailed,
+          ]),
+        ),
+      )
+      .orderBy(asc(auditLog.createdAt), asc(auditLog.id));
+
+  const ownSessionId = async (token: string) =>
+    (await withSession('GET', '/admin/sessions', token)).json<{ me: { sessionId: string } }>().me
+      .sessionId;
+
+  it('changes the password, keeps the current session and ends every other one', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const current = await openSession(seeded);
+    const other = await openSession(seeded);
+    const sessionId = await ownSessionId(current);
+    derivations = 0;
+
+    const response = await change(current, valid(seeded));
+
+    expect(response.statusCode).toBe(200);
+    expect(Object.keys(JSON.parse(response.body) as object)).toEqual([
+      'changed',
+      'revokedSessions',
+    ]);
+    expect(response.json()).toEqual({ changed: true, revokedSessions: 1 });
+    expect([derivations, hashCalls]).toEqual([1, 1]);
+    const newHash = (await staffRow(seeded.staffId)).passwordHash;
+    expect(await verifyPassword(newHash, NEW_PASSWORD)).toBe(true);
+
+    const rows = await passwordRows(seeded.staffId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: AuditAction.StaffPasswordChanged,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.Staff,
+      entityId: seeded.staffId,
+      payload: { sessionId, closedChallenges: 0, revokedSessions: 1, ip: CLIENT.ip },
+    });
+    expect(Object.keys(rows[0]!.payload as object).sort()).toEqual([
+      'closedChallenges',
+      'ip',
+      'revokedSessions',
+      'sessionId',
+    ]);
+    const written = JSON.stringify(rows) + response.body;
+    for (const secret of [seeded.password, NEW_PASSWORD, seeded.passwordHash, newHash, current]) {
+      expect(written).not.toContain(secret);
+    }
+
+    expect((await withSession('GET', '/admin/sessions', other)).statusCode).toBe(401);
+    expect((await withSession('GET', '/admin/sessions', current)).statusCode).toBe(200);
+    expect(
+      (await login({ login: seeded.login, password: NEW_PASSWORD, ...CLIENT })).statusCode,
+    ).toBe(200);
+    expect(
+      (await login({ login: seeded.login, password: seeded.password, ...CLIENT })).statusCode,
+    ).toBe(401);
+  });
+
+  it('refuses a wrong current password after one derivation and counts it as a login failure', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const current = await openSession(seeded);
+    const other = await openSession(seeded);
+    const sessionId = await ownSessionId(current);
+    derivations = 0;
+
+    const response = await change(current, {
+      ...valid(seeded),
+      currentPassword: 'not the password',
+    });
+
+    expect([response.statusCode, response.json()]).toEqual([
+      401,
+      { error: AdminErrorCode.InvalidCredentials },
+    ]);
+    expect([derivations, hashCalls]).toEqual([1, 0]);
+    const row = await staffRow(seeded.staffId);
+    expect([row.passwordHash, row.failedPasswordAttempts]).toEqual([seeded.passwordHash, 1]);
+    const rows = await passwordRows(seeded.staffId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: AuditAction.StaffPasswordChangeFailed,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.Staff,
+      entityId: seeded.staffId,
+    });
+    expect(rows[0]!.payload).toEqual({
+      reason: 'wrong_password',
+      attempts: 1,
+      locked: false,
+      ip: CLIENT.ip,
+      sessionId,
+    });
+    const written = JSON.stringify(rows) + response.body;
+    for (const secret of ['not the password', NEW_PASSWORD, seeded.passwordHash, current]) {
+      expect(written).not.toContain(secret);
+    }
+    expect((await withSession('GET', '/admin/sessions', other)).statusCode).toBe(200);
+  });
+
+  // a stolen cookie is no faster an oracle for the password than the login form
+  it('shares the lockout with the login: five wrong in the form lock both', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const current = await openSession(seeded);
+    const wrong = { ...valid(seeded), currentPassword: 'not the password' };
+    for (let attempt = 1; attempt < 5; attempt += 1) {
+      expect((await change(current, wrong)).statusCode).toBe(401);
+    }
+
+    const fifth = await change(current, wrong);
+    expect(fifth.statusCode).toBe(401);
+    expect((await passwordRows(seeded.staffId)).at(-1)?.payload).toMatchObject({
+      reason: 'wrong_password',
+      attempts: 5,
+      locked: true,
+    });
+    derivations = 0;
+
+    const sixth = await change(current, valid(seeded));
+
+    expect([sixth.statusCode, sixth.json()]).toEqual([
+      429,
+      { error: AdminErrorCode.TooManyAttempts },
+    ]);
+    expect([derivations, hashCalls]).toEqual([0, 0]);
+    expect((await passwordRows(seeded.staffId)).at(-1)?.payload).toMatchObject({
+      reason: 'locked',
+      lockedUntil: expect.any(String),
+      ip: CLIENT.ip,
+    });
+    expect((await staffRow(seeded.staffId)).passwordHash).toBe(seeded.passwordHash);
+    const atLogin = await login({ login: seeded.login, password: seeded.password, ...CLIENT });
+    expect([atLogin.statusCode, atLogin.json()]).toEqual([
+      429,
+      { error: AdminErrorCode.TooManyAttempts },
+    ]);
+  });
+
+  it.each([
+    ['the new password equals the current one', (s: SeededStaff) => ({ newPassword: s.password })],
+    ['the new password is empty', () => ({ newPassword: '' })],
+    ['the new password is too long', () => ({ newPassword: 'n'.repeat(257) })],
+    ['the current password is missing', () => ({ currentPassword: undefined })],
+  ])('refuses a body where %s before any derivation or row', async (_label, patch) => {
+    const seeded = await seedStaff(tmp.db);
+    const current = await openSession(seeded);
+    derivations = 0;
+
+    const response = await change(current, { ...valid(seeded), ...patch(seeded) });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(response.body).not.toContain(seeded.password);
+    expect(response.body).not.toContain(NEW_PASSWORD);
+    expect([derivations, hashCalls]).toEqual([0, 0]);
+    expect(await passwordRows(seeded.staffId)).toEqual([]);
+  });
+
+  it('names the same-as-current refusal on newPassword with a custom issue', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const current = await openSession(seeded);
+
+    const response = await change(current, { ...valid(seeded), newPassword: seeded.password });
+
+    expect(
+      response
+        .json<{ issues: { code: string; path: string[] }[] }>()
+        .issues.map((issue) => [issue.code, issue.path]),
+    ).toEqual([['custom', ['newPassword']]]);
+  });
+
+  it.each([
+    ['no session header', () => Promise.resolve(undefined)],
+    ['a token of the wrong shape', () => Promise.resolve('not-a-token')],
+    ['a token nobody was given', () => Promise.resolve('a'.repeat(43))],
+  ])('answers session_invalid for %s, before any derivation or row', async (_label, tokenOf) => {
+    const seeded = await seedStaff(tmp.db);
+    derivations = 0;
+
+    const response = await change(await tokenOf(), valid(seeded));
+
+    expect([response.statusCode, response.json()]).toEqual([
+      401,
+      { error: AdminErrorCode.SessionInvalid },
+    ]);
+    expect([derivations, hashCalls]).toEqual([0, 0]);
+  });
+
+  it('answers session_invalid for a session that was logged out, with no derivation or row', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    await withSession('POST', '/admin/auth/logout', token);
+    derivations = 0;
+
+    const response = await change(token, valid(seeded));
+
+    expect([response.statusCode, response.json()]).toEqual([
+      401,
+      { error: AdminErrorCode.SessionInvalid },
+    ]);
+    expect([derivations, hashCalls]).toEqual([0, 0]);
+    expect(await passwordRows(seeded.staffId)).toEqual([]);
+  });
+
+  it('refuses while the scrypt queue is full, before it derives anything', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let inFlight = 0;
+    const seeded = await seedStaff(tmp.db);
+    const current = await openSession(seeded);
+    await app.close();
+    app = build({
+      passwordQueue: createPasswordQueue({ concurrency: 1, queueMax: 0 }),
+      verify: async (stored: string, password: string) => {
+        inFlight += 1;
+        await held;
+        return verifyPassword(stored, password);
+      },
+    });
+    const blocking = change(current, valid(seeded));
+    await until('the first change to hold the only slot', () => inFlight === 1);
+
+    const refused = await change(current, { ...valid(seeded), newPassword: 'another one' });
+
+    expect([refused.statusCode, refused.json()]).toEqual([
+      429,
+      { error: AdminErrorCode.TooManyAttempts },
+    ]);
+    expect([inFlight, hashCalls]).toEqual([1, 0]);
+    expect(await passwordRows(seeded.staffId)).toEqual([]);
+    release();
+    expect((await blocking).statusCode).toBe(200);
+  });
+
+  // staff → sessions (runAsStaff lockStaff): both routes that touch more than their own session
+  // row wait for a holder of the staff row instead of taking a session row first
+  it.each([
+    ['a change', (s: SeededStaff) => valid(s), 200],
+    ['a wrong current password', (s: SeededStaff) => ({ ...valid(s), currentPassword: 'no' }), 401],
+  ])(
+    'queues %s behind a held staff row before it touches its session',
+    async (_l, body, status) => {
+      const seeded = await seedStaff(tmp.db);
+      const current = await openSession(seeded);
+      const sessionId = await ownSessionId(current);
+      const holder = await holdStaffRow(seeded.staffId);
+
+      const pending = change(current, body(seeded));
+
+      expect(await queuedBehindLock(pending)).toBe(true);
+      // the session row is still free: the request waits on staff, not after its touch
+      const free = await tmp.db.transaction(async (tx) =>
+        tx.execute(
+          sql`select id from staff_sessions where id = ${sessionId} for no key update nowait`,
+        ),
+      );
+      expect(free.rows).toHaveLength(1);
+      await holder.release();
+      expect((await pending).statusCode).toBe(status);
+    },
+  );
+
+  it('makes the revoke route queue behind a held staff row as well', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const current = await openSession(seeded);
+    const other = await openSession(seeded);
+    const otherId = await ownSessionId(other);
+    const holder = await holdStaffRow(seeded.staffId);
+
+    const pending = withSession('POST', `/admin/sessions/${otherId}/revoke`, current);
+
+    expect(await queuedBehindLock(pending)).toBe(true);
+    await holder.release();
+    expect((await pending).json()).toEqual({ revoked: true, current: false });
   });
 });
 
@@ -1790,5 +2162,35 @@ describe('what reaches the backend log', () => {
     // is the one shape nothing downstream can clean
     expect(logs.lines.join('')).not.toContain('chat not found');
     expect(logs.lines.join('')).not.toContain(seeded.password);
+  });
+
+  // at 'info', so the request lines themselves are in what is searched (#78)
+  it.each([
+    ['a password change', 'the current password', 200],
+    ['a refused password change', 'not the password', 401],
+  ])('keeps both passwords, both hashes and the token out of %s', async (_label, typed, status) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    await app.close();
+    const logs = capture();
+    app = build({}, logs, 'info');
+    const current = typed === 'the current password' ? seeded.password : typed;
+    const newPassword = 'a brand new staff password';
+
+    const response = await postAsStaff('/admin/auth/password', token, {
+      currentPassword: current,
+      newPassword,
+      ...CLIENT,
+    });
+
+    expect(response.statusCode).toBe(status);
+    expect(lineWith(logs.lines, 'request completed')).toMatchObject({
+      res: { statusCode: status },
+    });
+    const newHash = (await staffRow(seeded.staffId)).passwordHash;
+    const written = logs.lines.join('');
+    for (const secret of [current, newPassword, seeded.passwordHash, newHash, token]) {
+      expect(written).not.toContain(secret);
+    }
   });
 });

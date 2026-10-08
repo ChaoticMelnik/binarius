@@ -80,6 +80,9 @@ export const PASSWORD_VERIFY_MAX_WAIT_MS = 2_000;
 // Upper estimate of one scrypt at the parameters staff-password.ts writes (measured: 250 ms).
 // A premise of the chain below, not a test: timing a KDF in CI would flake.
 export const PASSWORD_VERIFY_COST_CEILING_MS = 1_000;
+// POST /admin/auth/password runs verify and hash in one slot of the queue (admin/routes.ts →
+// derive): two derivations per slot, one wait.
+export const PASSWORD_CHANGE_DERIVATIONS = 2;
 
 // How long grammY sleeps before retrying a failed getUpdates (out/bot.js, handlePollingError).
 // Nothing of ours configures it and stop() does not interrupt the sleep. admin/timing.test.ts
@@ -165,6 +168,10 @@ export const TIMING_CHAIN_HOLDS =
   // Telegram call after it. The contract constant lives in packages/shared because apps/web
   // sizes its own client timeout above the same number.
   PASSWORD_VERIFY_MAX_WAIT_MS + PASSWORD_VERIFY_COST_CEILING_MS + ADMIN_TELEGRAM_API_TIMEOUT_MS <=
+    ADMIN_LOGIN_BUDGET_MS &&
+  // and what POST /admin/auth/password may spend on its KDF: the same wait, then two derivations
+  // in that one slot. Its statements are bounded by the pool's query_timeout, not by this.
+  PASSWORD_VERIFY_MAX_WAIT_MS + PASSWORD_CHANGE_DERIVATIONS * PASSWORD_VERIFY_COST_CEILING_MS <=
     ADMIN_LOGIN_BUDGET_MS &&
   ADMIN_LOGIN_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   ADMIN_HANDLER_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&

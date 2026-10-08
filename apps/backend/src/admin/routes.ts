@@ -8,6 +8,7 @@ import {
   errorIdentity,
   errorLogFields,
   safeParseAdminAuditQuery,
+  safeParseAdminChangePasswordRequest,
   safeParseAdminConfirmRequest,
   safeParseAdminIntentsQuery,
   safeParseAdminLoginRequest,
@@ -19,12 +20,16 @@ import {
   type StaffSessionView,
 } from '@binarius/shared';
 import {
+  applyStaffPasswordChange,
   classifyUserSearch,
   completeLogin,
+  countPasswordFailure,
   DUMMY_PASSWORD_HASH,
   endStaffSession,
   failChallengeDelivery,
   findStaffForLogin,
+  findStaffForPasswordChange,
+  hashPassword,
   listIntentsForAdmin,
   listAuditForAdmin,
   listLedgerForAdmin,
@@ -56,6 +61,7 @@ import {
   type Db,
   type StaffActionResult,
   type StaffContext,
+  type StaffPasswordChangeResult,
   type StaffSessionRow,
   type Tx,
 } from '@binarius/db';
@@ -86,6 +92,7 @@ export interface AdminRoutesDeps {
   // the seams the tests need; production takes every default
   passwordQueue?: PasswordQueue;
   verify?: (stored: string, password: string) => Promise<boolean>;
+  hash?: (password: string) => Promise<string>;
   loginMaxPerMinute?: number;
   confirmMaxPerMinute?: number;
   sessionIdleMs?: number;
@@ -94,6 +101,7 @@ export interface AdminRoutesDeps {
 export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps) => {
   const queue = deps.passwordQueue ?? createPasswordQueue();
   const verify = deps.verify ?? verifyPassword;
+  const hashNew = deps.hash ?? hashPassword;
   const idleMs = deps.sessionIdleMs ?? STAFF_SESSION_IDLE_MS;
   const loginCeiling = createWindow(deps.loginMaxPerMinute ?? LOGIN_MAX_PER_MINUTE);
   const confirmCeiling = createWindow(deps.confirmMaxPerMinute ?? CONFIRM_MAX_PER_MINUTE);
@@ -113,6 +121,26 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   const hash = async (stored: string, password: string): Promise<boolean | 'refused'> => {
     try {
       return await queue.run(() => verify(stored, password));
+    } catch (error) {
+      if (error instanceof PasswordQueueOverflow) return 'refused';
+      throw error;
+    }
+  };
+
+  // The password change's two derivations share one slot, the new hash only after the current
+  // password verified: a wrong guess costs what a login costs, and the slot's peak memory does
+  // not change (timing.ts → PASSWORD_CHANGE_DERIVATIONS).
+  const derive = async (
+    stored: string,
+    current: string,
+    next: string,
+  ): Promise<{ ok: true; hash: string } | { ok: false } | 'refused'> => {
+    try {
+      return await queue.run(async () =>
+        (await verify(stored, current))
+          ? { ok: true as const, hash: await hashNew(next) }
+          : { ok: false as const },
+      );
     } catch (error) {
       if (error instanceof PasswordQueueOverflow) return 'refused';
       throw error;
@@ -288,19 +316,21 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   /**
    * The one way into runAsStaff: a token of the wrong shape or a session that is not live is a
    * 401 with no row; otherwise the work and its audit row share one transaction. `undefined`
-   * means the 401 is already sent.
+   * means the 401 is already sent. `lockStaff` for a route that writes `staff` or touches a
+   * session other than its own (runAsStaff).
    */
   const asStaff = async <T>(
     request: FastifyRequest,
     reply: FastifyReply,
     fn: (tx: Tx, ctx: StaffContext) => Promise<StaffActionResult<T>>,
+    options: { lockStaff?: boolean } = {},
   ): Promise<T | undefined> => {
     const token = tokenOf(request);
     if (token === undefined) {
       await reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
       return undefined;
     }
-    const answer = await runAsStaff(deps.db, { token, idleMs }, fn);
+    const answer = await runAsStaff(deps.db, { token, idleMs, ...options }, fn);
     if (answer === undefined) {
       request.log.info('a staff session was refused');
       await reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
@@ -334,51 +364,56 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
 
   app.post('/admin/sessions/:id/revoke', async (request, reply) => {
     const targetSessionId = (request.params as { id?: unknown }).id;
-    const answer = await asStaff(request, reply, async (tx, ctx) => {
-      // Inside the session check, not in front of it: an id that is not a uuid is
-      // indistinguishable from one nobody was issued, and both deserve the same row. The id
-      // itself stays out of the payload here — it is arbitrary input, the same reason the
-      // login someone typed for an account that does not exist is never recorded.
-      if (typeof targetSessionId !== 'string' || !UUID_PATTERN.test(targetSessionId)) {
+    const answer = await asStaff(
+      request,
+      reply,
+      async (tx, ctx) => {
+        // Inside the session check, not in front of it: an id that is not a uuid is
+        // indistinguishable from one nobody was issued, and both deserve the same row. The id
+        // itself stays out of the payload here — it is arbitrary input, the same reason the
+        // login someone typed for an account that does not exist is never recorded.
+        if (typeof targetSessionId !== 'string' || !UUID_PATTERN.test(targetSessionId)) {
+          return {
+            result: { revoked: false, current: false },
+            audit: {
+              action: AuditAction.StaffSessionRevoked,
+              payload: { result: 'not_found', current: false },
+            },
+          };
+        }
+        const revoked = await revokeStaffSession(tx, {
+          sessionId: targetSessionId,
+          byStaffId: ctx.staffId,
+          idleMs,
+        });
+        const current = targetSessionId === ctx.sessionId;
+        if (revoked === undefined) {
+          // the truthful entry: an attempt happened, a revocation did not, so there is no
+          // entity to name
+          return {
+            result: { revoked: false, current: false },
+            audit: {
+              action: AuditAction.StaffSessionRevoked,
+              payload: { result: 'not_found', targetSessionId, current: false },
+            },
+          };
+        }
         return {
-          result: { revoked: false, current: false },
+          result: { revoked: true, current },
           audit: {
             action: AuditAction.StaffSessionRevoked,
-            payload: { result: 'not_found', current: false },
+            entity: { type: AuditEntityType.StaffSession, id: targetSessionId },
+            payload: {
+              result: 'revoked',
+              targetSessionId,
+              targetStaffId: revoked.staffId,
+              current,
+            },
           },
         };
-      }
-      const revoked = await revokeStaffSession(tx, {
-        sessionId: targetSessionId,
-        byStaffId: ctx.staffId,
-        idleMs,
-      });
-      const current = targetSessionId === ctx.sessionId;
-      if (revoked === undefined) {
-        // the truthful entry: an attempt happened, a revocation did not, so there is no
-        // entity to name
-        return {
-          result: { revoked: false, current: false },
-          audit: {
-            action: AuditAction.StaffSessionRevoked,
-            payload: { result: 'not_found', targetSessionId, current: false },
-          },
-        };
-      }
-      return {
-        result: { revoked: true, current },
-        audit: {
-          action: AuditAction.StaffSessionRevoked,
-          entity: { type: AuditEntityType.StaffSession, id: targetSessionId },
-          payload: {
-            result: 'revoked',
-            targetSessionId,
-            targetStaffId: revoked.staffId,
-            current,
-          },
-        },
-      };
-    });
+      },
+      { lockStaff: true },
+    );
     if (answer === undefined) return reply;
     if (!answer.revoked) {
       return reply.code(404).send({ error: AdminErrorCode.NotFound });
@@ -401,6 +436,119 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     if (answer === undefined) return reply;
     return reply.send(answer);
   });
+
+  // docs/staff-login.md → Changing your own password. Three phases, as at login: a read outside
+  // any transaction, the KDF in the queue, then a transaction that re-checks by CAS what the
+  // KDF saw. Refusals before the transaction leave no row, as the login's do.
+  app.post(
+    '/admin/auth/password',
+    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const token = tokenOf(request);
+      if (token === undefined) {
+        return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
+      }
+      const parsed = safeParseAdminChangePasswordRequest(request.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+      }
+      const { currentPassword, newPassword, ip } = parsed.data;
+
+      const pre = await findStaffForPasswordChange(deps.db, { token, idleMs });
+      if (pre === undefined) {
+        request.log.info('a staff session was refused');
+        return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
+      }
+      const failed = (ctx: StaffContext, payload: Record<string, unknown>) => ({
+        action: AuditAction.StaffPasswordChangeFailed,
+        entity: { type: AuditEntityType.Staff, id: ctx.staffId },
+        payload: { ...payload, ip, sessionId: ctx.sessionId },
+      });
+
+      // null unless a lockout is running right now, by the database's clock; no KDF under it
+      const { lockedUntil } = pre;
+      if (lockedUntil !== null) {
+        const answer = await asStaff(
+          request,
+          reply,
+          async (_tx, ctx) => ({
+            result: 'locked' as const,
+            audit: failed(ctx, { reason: 'locked', lockedUntil: lockedUntil.toISOString() }),
+          }),
+          { lockStaff: true },
+        );
+        if (answer === undefined) return reply;
+        return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+      }
+
+      const derived = await derive(pre.passwordHash, currentPassword, newPassword);
+      if (derived === 'refused') {
+        return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+      }
+      if (!derived.ok) {
+        const answer = await asStaff(
+          request,
+          reply,
+          async (tx, ctx) => {
+            const failure = await countPasswordFailure(tx, {
+              staffId: ctx.staffId,
+              passwordHash: pre.passwordHash,
+            });
+            return {
+              result: failure,
+              audit: failed(ctx, {
+                reason: failure.stateChanged === true ? 'state_changed' : 'wrong_password',
+                attempts: failure.attempts,
+                locked: failure.locked,
+              }),
+            };
+          },
+          { lockStaff: true },
+        );
+        if (answer === undefined) return reply;
+        return reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
+      }
+
+      const answer = await asStaff(
+        request,
+        reply,
+        async (tx, ctx): Promise<StaffActionResult<StaffPasswordChangeResult>> => {
+          const changed = await applyStaffPasswordChange(tx, {
+            staffId: ctx.staffId,
+            sessionId: ctx.sessionId,
+            passwordHashSeen: pre.passwordHash,
+            newPasswordHash: derived.hash,
+          });
+          if (!changed.ok) {
+            return { result: changed, audit: failed(ctx, { reason: changed.reason }) };
+          }
+          return {
+            result: changed,
+            audit: {
+              action: AuditAction.StaffPasswordChanged,
+              entity: { type: AuditEntityType.Staff, id: ctx.staffId },
+              payload: {
+                sessionId: ctx.sessionId,
+                closedChallenges: changed.closedChallenges,
+                revokedSessions: changed.revokedSessions,
+                ip,
+              },
+            },
+          };
+        },
+        { lockStaff: true },
+      );
+      if (answer === undefined) return reply;
+      if (!answer.ok) {
+        return answer.reason === 'locked'
+          ? reply.code(429).send({ error: AdminErrorCode.TooManyAttempts })
+          : reply.code(401).send({ error: AdminErrorCode.InvalidCredentials });
+      }
+      return reply.send({ changed: true, revokedSessions: answer.revokedSessions });
+    },
+  );
 
   // --- Read pages (#107, docs/admin-pages.md) ---------------------------------------------------
 
