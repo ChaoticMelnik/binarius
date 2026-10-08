@@ -46,6 +46,8 @@ export const AuditAction = {
   TradingSessionsViewed: 'trading_sessions_viewed',
   // admin token ledger page (#109)
   TokensViewed: 'tokens_viewed',
+  // admin audit log page (#110)
+  AuditLogViewed: 'audit_log_viewed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);
