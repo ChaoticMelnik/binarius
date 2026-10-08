@@ -375,6 +375,9 @@ and 6 are resolved, 4–5 and 9 remain, and 7–8 are handled on the consumer's 
    REST (`user.data`, `update_balance`, `open_trade.success`, `close_trade.success`), because
    `balanceWire`, `openWire` and `closedWire` in `state.ts` are the one place money reaches either
    wire. The trade shapes are assumed, not recorded live (docs/broker-rest.md → Open items 3).
+   **Socket trades carry no `is_demo` (#354, observed live in #285's probe runs):** the socket's
+   `open_trade.success` and `close_trade.success` send the REST record without it (`socketTrade` in
+   `socket.ts`); the store and REST keep it.
 7. **`user.auth.success` carries one argument, `null`**, where shared's event map says
    `() => void`. The normalizer's `extraArgs` rule does not count that `null`
    (docs/broker-socket.md → `extraArgs`).

@@ -48,7 +48,10 @@ name that is not in the map (for example the client→server `user.demo.open_tra
 | `user.{demo,real}.close_trade.success` | `close_trade_success` | `mode`, `trades: ClosedTrade[]` |
 | `user.{demo,real}.update_balance` | `balance_update` | `mode`, `balance: BrokerBalance` |
 
-`mode` comes from the event name. `type` and a problem's `kind` are `as const` constants
+`mode` comes from the event name, and so does a trade's `isDemo` (#354): the live socket trade
+carries no `is_demo` (Observed live), so `socketOpenTradeWireSchema` and
+`socketClosedTradeWireSchema` (`packages/shared/src/socket.ts`) are the REST forms without it, and
+one the broker may still send is dropped unchecked. REST keeps `is_demo` required. `type` and a problem's `kind` are `as const` constants
 (`BrokerEventType`, `BrokerEventProblemKind`). Outside `events.ts` and tests, compare against
 the constant, not a bare string; `local/no-status-literal` catches part of the bare literals.
 
@@ -273,7 +276,7 @@ connection and reset on `connect`.
 | `broker socket auth failed` | warn | `user.auth.error` | `detail`: the broker's text cut to `MAX_DETAIL_LENGTH` |
 | `broker socket token expired` | warn | that terminal state | — |
 | `broker socket disconnected by server` | warn | that terminal state | `reason` (`io server disconnect` or `connect_error`); `err` for `connect_error` (name and code only, never the server's text) |
-| `broker event problem` | warn once per (event, kind) per connection, then counted | a problem for a name not in `IGNORED_BROKER_EVENTS` | `problem`, `extraArgs` |
+| `broker event problem` | warn once per (event, kind) per connection, then counted | a problem for a name not in `IGNORED_BROKER_EVENTS` | `problem`, `extraArgs`; a `schema` problem carries `shape` (#354): the refused payload's keys and types, never a value — arrays by length and first element, objects by sorted keys, depth ≤ 3, ≤ 20 keys an object, key names cut to 40, at most 600 characters (`describeShape`, `events.ts`) |
 | `broker event with extra arguments` | warn once per event name per connection | a valid event with `extraArgs > 0` | `event`, `extraArgs` |
 | `broker event ignored` | debug | a name in `IGNORED_BROKER_EVENTS` (the live extras under Observed live) | `event` |
 | `broker event listener threw` | warn once per event type per connection | an `onEvent` listener throws; the others still run | `type`, `err` |
@@ -354,6 +357,13 @@ Node 22 (the 2026-10-03 one is recorded in #99).
 - **The `price.update` timestamp is in milliseconds** (2026-10-03: 13 digits, matching the
   server's clock), about four updates a second for an OTC pair. The value is still passed through
   as received.
+- **Socket trade events carry no `is_demo`** (#285's two-socket probe runs on the pilot, #354): the
+  normalizer reported `user.demo.open_trade.success` at `is_demo` and
+  `user.demo.close_trade.success` at `trades.0.is_demo`, both `invalid_type`. The mode is in the
+  event name only. Before #354 every socket `open_trade.success` was a `schema` problem, so a socket
+  command waited out its timeout as `unknown` and tainted the connection. `common.assets_update`
+  was refused at its root in the same runs; its shape is not recorded yet (#354 records it with the
+  `shape` field of the problem line).
 - **The 2026-10-02 drop after ~16.7 s (`transport close`) did not recur** on 2026-10-03: two runs
   lived 28 s and 93 s until the probe closed them, with a price subscription active. Its cause is
   unknown; the client reconnects after it and resends its subscriptions.
