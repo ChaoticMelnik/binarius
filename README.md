@@ -244,7 +244,8 @@ The Telegram ID is the one the staff bot answers with when the person sends it `
 runs on `ADMIN_BOT_TOKEN`, which is a **second** bot from @BotFather, not `TELEGRAM_BOT_TOKEN`.
 The whole flow, the trust boundaries and the audit trail are in
 [docs/staff-login.md](docs/staff-login.md); the pages a session opens (overview, users, user card,
-intents, intent card) and what each view records are in [docs/admin-pages.md](docs/admin-pages.md).
+intents, intent card, trading sessions, token ledger, audit log) and what each view records are in
+[docs/admin-pages.md](docs/admin-pages.md).
 
 ## Trading switch
 
