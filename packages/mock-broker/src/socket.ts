@@ -214,7 +214,7 @@ export function attachMockSocket(
     }
     const result = state.openTrade(userId, { ...parsed.data, is_demo: mode === TradeMode.Demo });
     if (!result.ok) answer('open_trade.fail', [{ message: result.message }]);
-    else answer('open_trade.success', result.trade);
+    else answer('open_trade.success', socketTrade(result.trade));
     return MockSocketOutcome.Handled;
   }
 
@@ -308,7 +308,7 @@ export function attachMockSocket(
       case MockChangeType.TradeClosed: {
         const mode = change.trade.is_demo ? TradeMode.Demo : TradeMode.Real;
         emitTo(toUser(change.userId), modeEvent(mode, 'close_trade.success'), {
-          trades: [change.trade],
+          trades: [socketTrade(change.trade)],
         });
         emitTo(
           toUser(change.userId),
@@ -411,4 +411,10 @@ export function attachMockSocket(
       io.engine.close();
     },
   };
+}
+
+// The live broker's socket trade (#354): the REST form without is_demo, the mode being the event's.
+// The store keeps is_demo for REST.
+function socketTrade(trade: object): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(trade).filter(([key]) => key !== 'is_demo'));
 }

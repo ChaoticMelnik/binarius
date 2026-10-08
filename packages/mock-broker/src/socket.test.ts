@@ -354,6 +354,10 @@ describe('price.subscribe and price.update', () => {
   });
 });
 
+// the live socket trade (#354): the REST record without is_demo
+const withoutIsDemo = (trade: object | undefined) =>
+  Object.fromEntries(Object.entries(trade ?? {}).filter(([key]) => key !== 'is_demo'));
+
 describe('open_trade', () => {
   it.each(['demo', 'real'] as const)(
     'opens a %s trade: update_balance to every socket of the user, then success to the sender only',
@@ -365,8 +369,11 @@ describe('open_trade', () => {
 
       const [trade] = await sender.waitFor(ev(mode, 'open_trade.success'));
       expect(safeParseSocketOpenTradeSuccess(trade).success).toBe(true);
-      expect(trade).toEqual(broker.trades.list(1)[0]);
-      expect(trade).toMatchObject({ is_demo: mode === 'demo', symbol: 'EUR/USD' });
+      // #354: the live socket form is the REST record without is_demo; the store keeps it
+      expect(trade).toEqual(withoutIsDemo(broker.trades.list(1)[0]));
+      expect(trade).not.toHaveProperty('is_demo');
+      expect(broker.trades.list(1)[0]).toMatchObject({ is_demo: mode === 'demo' });
+      expect(trade).toMatchObject({ symbol: 'EUR/USD' });
       expect(trade).toHaveProperty('close_timestamp');
       const events = sender.received.map((entry) => entry.event);
       expect(events.indexOf(ev(mode, 'update_balance'))).toBeLessThan(
@@ -563,7 +570,7 @@ describe('fan-out from the store', () => {
     for (const client of [first, second]) {
       const [success] = await client.waitFor(ev('real', 'close_trade.success'));
       expect(safeParseCloseTradeSuccess(success).success).toBe(true);
-      expect(success).toEqual({ trades: [closed] });
+      expect(success).toEqual({ trades: [withoutIsDemo(closed)] });
       const balances = await client.waitFor(ev('real', 'update_balance'), 2);
       expect(balances.at(-1)).toEqual(broker.users.get(1).real);
       const events = client.received.map((entry) => entry.event);
@@ -781,7 +788,7 @@ describe.each(Object.values(MockSocketPayload))('socketPayload %s', (form) => {
 
     client.socket.emit(ev('demo', 'open_trade'), tradeCommand());
     const [trade] = await client.waitFor(ev('demo', 'open_trade.success'));
-    expect(trade).toEqual(encoded.trades.list(1)[0]);
+    expect(trade).toEqual(withoutIsDemo(encoded.trades.list(1)[0]));
     for (const entry of client.received.slice(1)) expect(rawMatches(entry.args[0])).toBe(true);
   });
 });
