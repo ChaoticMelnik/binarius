@@ -14,7 +14,13 @@ import {
 } from '@binarius/signal';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createScanPacer, type ScanPacer } from './pacer';
-import { createSignalScanner, freshSignals, SCAN_INTERVAL_MS, scanCandidates } from './scanner';
+import {
+  createSignalScanner,
+  eligiblePairs,
+  freshSignals,
+  SCAN_INTERVAL_MS,
+  topPairs,
+} from './scanner';
 
 // a 15 s boundary
 const B = 1_760_000_010_000;
@@ -104,7 +110,11 @@ function harness(
     pacer?: ScanPacer;
   } = {},
 ) {
-  const state = { view: view(options.pairs ?? [pair(1), pair(2)]) as PairsCatalogView | undefined };
+  const state = {
+    view: view(options.pairs ?? [pair(1), pair(2)]) as PairsCatalogView | undefined,
+    // how far the scanner's clock reads behind the timers' clock
+    skewMs: 0,
+  };
   const calls: number[] = [];
   const answer: Answer = options.answer ?? ((request) => decided(request, signal(Date.now())));
   const logger = { info: vi.fn(), warn: vi.fn() };
@@ -126,7 +136,7 @@ function harness(
         now: Date.now,
       }),
     logger,
-    now: Date.now,
+    now: () => Date.now() - state.skewMs,
     maxPairs: options.maxPairs ?? 25,
     slackMs: SLACK_MS,
     concurrency: 4,
@@ -171,7 +181,7 @@ describe('signal scanner', () => {
       pair(4, { scheduledUntil: B - 1 }),
       pair(5),
     ];
-    expect(scanCandidates(view(pairs), B + 3_000, 25)).toEqual([4, 5]);
+    expect(eligiblePairs(view(pairs), B + 3_000).map((p) => p.id)).toEqual([4, 5]);
   });
 
   it('S3 the top pairs by payout, then by id', () => {
@@ -181,7 +191,7 @@ describe('signal scanner', () => {
       pair(8, { payout: 90 }),
       pair(6, { payout: 70 }),
     ];
-    expect(scanCandidates(view(pairs), B, 2)).toEqual([8, 9]);
+    expect(topPairs(pairs, 2)).toEqual([8, 9]);
   });
 
   it("S4 a catalog change between candles changes the next candle's set", async () => {
@@ -256,6 +266,7 @@ describe('signal scanner', () => {
     h.scanner.start();
     await toScan(1);
     expect([...h.scanner.snapshot().entries.keys()]).toEqual([3]);
+    expect(h.scanner.snapshot().entries.get(3)).toMatchObject({ kind: 'signal', action: 'up' });
     expect(h.logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ assetId: 1, err: { name: 'TypeError' } }),
       'signal scan failed',
@@ -265,28 +276,30 @@ describe('signal scanner', () => {
     await h.scanner.stop();
   });
 
-  it('S8 stop() waits for the call in flight and starts nothing after it', async () => {
-    let release: (value: SignalEvaluation) => void = () => undefined;
+  it('S8 stop() waits for the calls in flight and drops the queued ones', async () => {
+    const releases: (() => void)[] = [];
     const h = harness({
-      pairs: [pair(1)],
+      // six pairs, four in flight at once: 5 and 6 wait in the queue
+      pairs: [1, 2, 3, 4, 5, 6].map((id) => pair(id, { payout: 90 - id })),
       answer: (request) =>
         new Promise((resolve) => {
-          release = () => resolve(decided(request, signal(Date.now())));
+          releases.push(() => resolve(decided(request, signal(Date.now()))));
         }),
     });
     h.scanner.start();
     await toScan(1);
+    expect(h.calls).toEqual([1, 2, 3, 4]);
     let stopped = false;
     const stopping = h.scanner.stop().then(() => {
       stopped = true;
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(stopped).toBe(false);
-    release(decided({ assetId: 1, interval: '15s' }, signal(Date.now())));
+    for (const release of releases) release();
     await stopping;
     expect(stopped).toBe(true);
     await toScan(3);
-    expect(h.calls).toEqual([1]);
+    expect(h.calls).toEqual([1, 2, 3, 4]);
   });
 
   it('S9 a pair that left the top is gone from the snapshot', async () => {
@@ -320,6 +333,10 @@ describe('signal scanner', () => {
     });
     h.scanner.start();
     await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
+    expect(h.scanner.snapshot().entries.get(3)).toMatchObject({
+      kind: 'no_signal',
+      reason: 'insufficient_candles',
+    });
     expect(h.logger.info).toHaveBeenCalledTimes(1);
     const [fields, message] = h.logger.info.mock.calls[0] as [Record<string, unknown>, string];
     expect(message).toBe('signal scanner');
@@ -352,6 +369,49 @@ describe('signal scanner', () => {
     expect(h.calls).toEqual([1]);
     await toScan(3);
     expect(h.calls).toEqual([1, 1]);
+    await h.scanner.stop();
+  });
+
+  it('S12 a timer that fires 1 ms early still scans its candle once', async () => {
+    const h = harness();
+    h.scanner.start();
+    // from here the scanner's clock reads 1 ms behind the timers', as on an early fire
+    h.state.skewMs = 1;
+    await toScan(1);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.calls).toEqual([1, 2]);
+    await vi.advanceTimersByTimeAsync(B + 2 * SCAN_INTERVAL_MS + SLACK_MS + 1 - Date.now());
+    expect(h.calls).toEqual([1, 2, 1, 2]);
+    await h.scanner.stop();
+  });
+
+  it('S13 a scan takes no pair after its candle ended', async () => {
+    const h = harness({
+      pairs: [1, 2, 3, 4, 5, 6].map((id) => pair(id, { payout: 90 - id })),
+      // slower than a candle: the first wave answers after the next boundary
+      answer: (request) =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(decided(request, signal(Date.now()))), 16_000);
+        }),
+    });
+    h.scanner.start();
+    await toScan(1);
+    await vi.advanceTimersByTimeAsync(16_500);
+    expect(h.calls).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
+    const stopping = h.scanner.stop();
+    await vi.advanceTimersByTimeAsync(16_000);
+    await stopping;
+    expect(h.calls).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
+  });
+
+  it('S14 the log line counts no eligible pair while the catalog is stale', async () => {
+    const h = harness();
+    h.scanner.start();
+    await toScan(1);
+    h.state.view = view([pair(1), pair(2)], false);
+    await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
+    const [fields] = h.logger.info.mock.calls[0] as [Record<string, unknown>];
+    expect(fields).toMatchObject({ eligible: 0, scanned: 0 });
     await h.scanner.stop();
   });
 });

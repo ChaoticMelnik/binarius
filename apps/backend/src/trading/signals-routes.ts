@@ -14,10 +14,7 @@ export interface SignalsRoutesDeps {
 }
 
 // Named fields only (Rule 9): the snapshot also carries no_signal entries, which stay inside.
-export function toTradingSignalsResponse(
-  snapshot: ScanSnapshot,
-  nowMs: number,
-): TradingSignalsResponse {
+function toTradingSignalsResponse(snapshot: ScanSnapshot, nowMs: number): TradingSignalsResponse {
   return {
     asOf: nowMs,
     interval: SIGNAL_SCAN_INTERVAL,

@@ -7,6 +7,8 @@ import {
   SIGNAL_SCAN_INTERVAL,
   SignalFeedOutcome,
   SignalKind,
+  type BinaryPair,
+  type NoSignalReason,
   type PairsCatalogView,
   type TradeAction,
 } from '@binarius/shared';
@@ -26,6 +28,7 @@ const SCAN_DURATION_SEC = SCAN_INTERVAL_MS / 1000;
 export interface ScanEntry {
   kind: SignalKind;
   action?: TradeAction;
+  reason?: NoSignalReason;
   // the candle the decision closed on; absent on a data refusal
   lastCandleTimestamp?: number;
   decidedAtMs: number;
@@ -37,7 +40,7 @@ export interface ScanSnapshot {
   entries: ReadonlyMap<number, ScanEntry>;
 }
 
-export interface SignalScannerLogger {
+interface SignalScannerLogger {
   info(fields: object, message: string): void;
   warn(fields: object, message: string): void;
 }
@@ -62,16 +65,19 @@ export interface SignalScanner {
   snapshot(): ScanSnapshot;
 }
 
+export const eligiblePairs = (view: PairsCatalogView, nowMs: number): BinaryPair[] =>
+  view.pairs.filter(
+    (pair) => isPairOpen(pair, nowMs) && pairAcceptsDuration(pair, SCAN_DURATION_SEC),
+  );
+
 // payout desc, then id asc, so the choice does not depend on the catalog's order
-export function scanCandidates(view: PairsCatalogView, nowMs: number, maxPairs: number): number[] {
-  return view.pairs
-    .filter((pair) => isPairOpen(pair, nowMs) && pairAcceptsDuration(pair, SCAN_DURATION_SEC))
+export const topPairs = (eligible: readonly BinaryPair[], maxPairs: number): number[] =>
+  [...eligible]
     .sort((a, b) => b.payout - a.payout || a.id - b.id)
     .slice(0, maxPairs)
     .map((pair) => pair.id);
-}
 
-export interface FreshSignal {
+interface FreshSignal {
   assetId: number;
   action: TradeAction;
   lastCandleTimestamp: number;
@@ -142,22 +148,37 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
   const entries = new Map<number, ScanEntry>();
   let staleStreak = false;
   let period = newPeriod();
+  // the next scan moment, boundary + slack; kept, never recomputed from the clock at fire time,
+  // so a timer that fires a few ms early cannot make a second scan of one candle
+  let nextAt: number | undefined;
+  let lastBoundary: number | undefined;
 
-  function nextScanDelay(): number {
-    const at = now();
-    const boundary = Math.floor((at - slackMs) / SCAN_INTERVAL_MS) * SCAN_INTERVAL_MS;
-    return boundary + SCAN_INTERVAL_MS + slackMs - at;
+  // the first scan moment not yet past
+  function upcoming(at: number): number {
+    return (
+      Math.floor((at - slackMs) / SCAN_INTERVAL_MS) * SCAN_INTERVAL_MS + SCAN_INTERVAL_MS + slackMs
+    );
   }
 
   function schedule(): void {
     if (stopped) return;
-    candleTimer = setTimeout(() => {
-      candleTimer = undefined;
-      schedule();
-      const run = scan();
-      inFlight.add(run);
-      void run.finally(() => inFlight.delete(run));
-    }, nextScanDelay());
+    const at = now();
+    // a stalled loop that missed whole candles fires once for the next one, not for each
+    nextAt =
+      nextAt === undefined || nextAt + SCAN_INTERVAL_MS < at
+        ? upcoming(at)
+        : nextAt + SCAN_INTERVAL_MS;
+    const target = nextAt;
+    candleTimer = setTimeout(
+      () => {
+        candleTimer = undefined;
+        schedule();
+        const run = scan(target - slackMs);
+        inFlight.add(run);
+        void run.finally(() => inFlight.delete(run));
+      },
+      Math.max(0, target - at),
+    );
   }
 
   function choose(nowMs: number): number[] {
@@ -166,23 +187,18 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
       if (!staleStreak)
         logger.warn({ fresh: view?.fresh ?? null }, 'signal scan skipped: no fresh catalog');
       staleStreak = true;
+      period.eligible = 0;
       return [];
     }
     staleStreak = false;
-    const chosen = scanCandidates(view, nowMs, maxPairs);
-    period.eligible = view.pairs.filter(
-      (pair) => isPairOpen(pair, nowMs) && pairAcceptsDuration(pair, SCAN_DURATION_SEC),
-    ).length;
-    return chosen;
+    const eligible = eligiblePairs(view, nowMs);
+    period.eligible = eligible.length;
+    return topPairs(eligible, maxPairs);
   }
 
   function rateLimited(retryAfterSec: number | undefined): void {
-    const at = now();
-    const before = pacer.pausedUntil() ?? at;
-    pacer.onRateLimited(retryAfterSec);
-    const after = pacer.pausedUntil() ?? at;
     period.rateLimited += 1;
-    period.pausedMs += Math.max(0, after - Math.max(before, at));
+    period.pausedMs += pacer.onRateLimited(retryAfterSec);
   }
 
   async function decide(assetId: number, boundary: number): Promise<void> {
@@ -199,7 +215,9 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
       if (!scanned.includes(assetId)) return;
       entries.set(assetId, {
         kind: decision.kind,
-        ...(decision.kind === SignalKind.Signal ? { action: decision.action } : {}),
+        ...(decision.kind === SignalKind.Signal
+          ? { action: decision.action }
+          : { reason: decision.reason }),
         ...('features' in decision
           ? { lastCandleTimestamp: decision.features.lastCandleTimestamp }
           : {}),
@@ -213,10 +231,11 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     }
   }
 
-  async function scan(): Promise<void> {
-    const at = now();
-    const boundary = Math.floor(at / SCAN_INTERVAL_MS) * SCAN_INTERVAL_MS;
-    scanned = choose(at);
+  async function scan(boundary: number): Promise<void> {
+    if (boundary === lastBoundary) return;
+    lastBoundary = boundary;
+    const candleEnd = boundary + SCAN_INTERVAL_MS;
+    scanned = choose(now());
     for (const assetId of entries.keys()) {
       if (!scanned.includes(assetId)) entries.delete(assetId);
     }
@@ -224,8 +243,10 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     const worker = async () => {
       for (let assetId = queue.shift(); assetId !== undefined; assetId = queue.shift()) {
         if (stopped) return;
-        if (!pacer.tryTake()) {
-          // a pause or an empty bucket drops the rest of this candle; the next one starts fresh
+        // past its candle a scan would spend the next candle's tokens on stale work, and a call
+        // inside the next slack could see that candle's close still unpublished
+        if (now() >= candleEnd || !pacer.tryTake()) {
+          // a pause, an empty bucket or the candle's end drops the rest; the next scan starts fresh
           period.skipped += queue.length + 1;
           queue.length = 0;
           return;

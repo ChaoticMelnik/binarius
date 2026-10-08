@@ -128,7 +128,8 @@ export const SIGNAL_CACHE_MAX_TTL_MS = 30_000;
 export const SIGNAL_SCAN_SLACK_MS = 500;
 // chart GETs of one scan in flight at once
 export const SIGNAL_SCAN_CONCURRENCY = 4;
-// the scanner's pause after a 429 without Retry-After: doubles from the first to the second
+// the scanner's pause after a 429 without Retry-After: doubles from the first to the second; a
+// Retry-After is held to the same bounds
 export const SIGNAL_SCAN_BACKOFF_MIN_MS = 15_000;
 export const SIGNAL_SCAN_BACKOFF_MAX_MS = 120_000;
 // the period of the scanner's `signal scanner` log line
@@ -193,7 +194,8 @@ export const TIMING_CHAIN_HOLDS =
   SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS &&
   TRADING_SIGNAL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SIGNAL_CACHE_MAX_TTL_MS < SIGNAL_CHART_INTERVAL_MS['1m'] &&
-  // a scan starts inside its candle and its chart GET, bounded by the cache, ends inside it too
+  // a scan starts inside its candle and a call made at the scan moment, bounded by the cache, ends
+  // inside it too; the scanner takes no pair past the candle's end (scanner.ts)
   SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[SIGNAL_SCAN_INTERVAL] &&
   SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[SIGNAL_SCAN_INTERVAL] &&
   SIGNAL_SCAN_BACKOFF_MIN_MS <= SIGNAL_SCAN_BACKOFF_MAX_MS &&
