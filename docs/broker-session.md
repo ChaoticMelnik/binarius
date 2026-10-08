@@ -22,7 +22,7 @@ TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius \
 | Candidates | `listSessionCandidates` in `packages/db/src/balance-snapshot-ops.ts` | the accounts in work, `{ id, brokerUserId }` |
 | Writers | `upsertBalanceSnapshot`, `applyBalanceEvent` (same file), `settleClosedTrades` (`trade-intent-ops.ts`) | what a session hears, written once its connection proved whose it is |
 | Client | `BrokerSocketClient` ([broker-socket.md](broker-socket.md)) | one per session; the taint after an aborted command |
-| Token | `AccessTokenSource` (`broker/access-token.ts`) | `POST /trading/accounts/:id/access-token` on the backend, always `mayRefresh: false` |
+| Token | `AccessTokenSource` (`broker/access-token.ts`) | `POST /trading/accounts/:id/access-token` on the backend, always `mayRefresh: false`; after `token_expired`/`auth_failed` with the refused token's fingerprint (#281) |
 | Composition | `apps/trading-worker/src/index.ts` | built only when `env.brokerWsUrl` is set; otherwise `noTradeSessions` |
 | Probe | `apps/trading-worker/src/cli/socket-probe.ts`, `socket-probe-run.ts`, `socket-probe-verdict.ts` (#285) | the two-socket check the rollout waits for; exit 0 only on its safe verdict ([broker-socket.md → Observed live](broker-socket.md#observed-live)) |
 
@@ -73,7 +73,7 @@ session start failed` and holds the account back `SESSION_RETRY_MS`.
 | `connecting`, `reconnecting`, `authenticating` | the connection is new: it is unverified until its `user.data` ([The identity gate](#the-identity-gate)) |
 | `idle` | unverified: a stopped client has no connection. An external `client.stop()` (outside the manager) is not supported: the entry stays, without a session, until its account leaves the candidates and the idle grace closes it |
 | `ready` | nothing |
-| `token_expired`, `auth_failed` | unverified at once (the client closed its socket), then one token fetch (single-flight per entry: a second terminal state during it is ignored). A token different from the session's → `start()` on the same client at once. The same token → `broker session token unchanged` (`accountId`, `sessionState`), dropped, held back `SESSION_RETRY_MS`. A non-`ok` answer → [The token](#the-token) |
+| `token_expired`, `auth_failed` | unverified at once (the client closed its socket), then one token fetch carrying the refused token's fingerprint (#281; single-flight per entry: a second terminal state during it is ignored). A token different from the session's → `start()` on the same client at once. The same token → `broker session token unchanged` (`accountId`, `sessionState`), dropped, held back `SESSION_RETRY_MS`. A non-`ok` answer → [The token](#the-token) |
 | `disconnected_by_server` | `broker session closed` (`reason: disconnected_by_server`), dropped, held back `SESSION_RETRY_MS` |
 
 "Dropped" means `client.stop()` and the entry deleted: the account is a plain candidate again
@@ -89,12 +89,15 @@ a tainted connection, which the executor sends over REST.
 
 Every fetch passes `mayRefresh: false` (Rule 12: a timer never exchanges a token; the exchange
 happens on the user's trade over the REST fallback, where the executor passes the default
-`true`), and the manager's stop signal.
+`true`), and the manager's stop signal. The fetch after `token_expired`/`auth_failed` also passes
+`refusedToken`, the sha256 of the session's token: the backend marks that token expired and
+answers `refresh_needed`, or hands out the pair someone already rotated
+([binodex-oauth.md → A refused token](binodex-oauth.md#a-refused-token-is-an-expired-token-281)).
 
 | Answer | Manager |
 |---|---|
 | `ok` | start the client, or restart it with a new token after a terminal state |
-| `refresh_needed` | drop, hold back `SESSION_RETRY_MS`; `info` `broker session waits for a token exchange` |
+| `refresh_needed` | the token expired, or the one the broker just refused was marked expired (#281): drop, hold back `SESSION_RETRY_MS`; `info` `broker session waits for a token exchange` |
 | `backend_unreachable`, `backend_status`, `contract_violation`, `not_configured`, `refresh_rate_limited` | drop, hold back `SESSION_RETRY_MS`; `warn` `broker session token unavailable` (`reason`, `status`). `not_configured` cannot happen: `index.ts` builds the manager only with the backend source; `refresh_rate_limited` cannot either with `mayRefresh: false` (#275) |
 | `backend_unreachable` while stopping | drop, nothing logged |
 | `account_not_found`, `account_pending`, `account_revoked`, `user_blocked`, `key_unavailable` | drop, hold back `SESSION_REFUSAL_RETRY_MS`; `warn` `broker session token refused` (`refusal`) |
@@ -214,7 +217,7 @@ redacted key).
 | `broker session waits for a token exchange` | info | `accountId` |
 | `broker session token unavailable` | warn | `accountId`, `reason`, `status` |
 | `broker session token refused` | warn | `accountId`, `refusal` |
-| `broker session token unchanged` | warn | `accountId`, `sessionState` |
+| `broker session token unchanged` | warn | `accountId`, `sessionState`; only from a backend that ignores `refusedToken` (#281) |
 | `broker session user mismatch` | error | `accountId`, `expected`, `received` |
 | `broker session event before user.data` | warn, once per connection | `accountId`, `type` |
 | `balance snapshot not written` | warn, once per connection and source | `accountId`, `source`, `reason`, `field` |
@@ -235,7 +238,8 @@ present.
   writers; the `openClient` seam for the token cycle and an `openSocket` wrapper that holds
   chosen events back): U1 one client per candidate; U2 the idle grace; U3/U3b the cap, a starting
   session counted; U4/U5 the token answers and their hold-backs; U6/U6b/U7 `token_expired` and
-  `auth_failed` with the same and with a new token; U8 `disconnected_by_server`; U9/U9b/U9c the
+  `auth_failed` with the same and with a new token, the fetch carrying the refused token's
+  fingerprint; U6c a backend that marks it: the session waits and restarts with the exchanged one; U8 `disconnected_by_server`; U9/U9b/U9c the
   identity gate (a burst with a foreign `user.data`, a reconnect); U10 a throwing writer; U11
   `sessionFor` (U11b: only for a verified connection, again after a reconnect; U11c: none during
   the refresh after `token_expired`/`auth_failed`; U11d: none on `idle`, for a listener that
@@ -282,12 +286,11 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
    `transport: socket`; if every intent instead shows `trade command outcome unknown` with
    `transport: socket`, the fix is the shared schema or this manager, and `BROKER_WS_URL` is unset
    until then.
-2. **A token the broker refuses before its stored expiry does not converge** (#281). The backend
-   returns the stored token while it outlives `now() + 60 s`, before it reads `mayRefresh`; a REST
-   401 exchanges nothing. After a live `token_expired`/`auth_failed` for such a token the manager
-   holds the account back every `SESSION_RETRY_MS` with `broker session token unchanged`, and the
-   user's REST trades are refused until the stored expiry (≤ 7 days) or a re-login. Falsifiable:
-   that line repeating for one account for longer than `SESSION_RETRY_MS`.
+2. **A token the broker refuses before its stored expiry waits for an exchange.** Closed by #281:
+   the fetch after `token_expired`/`auth_failed` reports the token, the backend marks it expired.
+   The residual is Rule 12's — the account trades over REST until the user's next action or a
+   reconciliation exchanges the token, and the balance tick skips it meanwhile. Falsifiable:
+   `broker session waits for a token exchange` repeating for an account whose user is active.
 3. **A late `success` with the command's own terms on an untainted connection** is accepted for
    the wrong intent only when the earlier trade was never linked. The only way to the same
    connection is an abort, which taints it; reconciliation links the earlier trade first in every
@@ -310,7 +313,8 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
 10. **Whether the WebSocket handshake counts against the broker's 600/min per-IP limit is
     unknown.** Falsifiable: `connect_error`s with a 429 during a reconnect storm.
 11. **`mayRefresh: false` costs one REST-fallback trade per weekly token expiry** per account when
-    the broker's refusal and the stored expiry coincide; when they do not, risk 2 applies.
+    the broker's refusal and the stored expiry coincide; when the refusal comes first, #281 marks
+    the token expired and the same single REST trade exchanges it.
 12. **A slow backend delays the starts, not the tick**: 500 token fetches at the 7 s budget, 4 in
     flight, take ~15 minutes. Falsifiable: `broker session tick` lines with `queued > 0` across
     many ticks.
@@ -321,7 +325,7 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
   single-flight refresh across processes, #96 the emergency stop.
 - ARCH-05: #87 the load stand, #88 degradation.
 - #92 (a balance check after a reconciliation, DLQ), #274 (`not_found`),
-  #278, #279, #281 (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)
+  #278, #279; #281 shipped (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)
   keeps its account in work between trades through `touchBalanceRequested`, so its socket stays open.
 - `price.update` has no consumer in production: the signal feed reads the REST chart; E2 proves
   the subscription pipe only.

@@ -72,10 +72,18 @@ fetch and the REST call; the executor has no timer of its own.
 | REST, token | `ok: false` (any reason: a refusal or the backend unavailable) | `rejected`; no request leaves the worker | `broker_rejected` |
 | REST, token | a throw | propagates: the processor's `unknown`/`executor_error` | — |
 | REST | the trade | `accepted`, `transport: rest_fallback` | — |
-| REST | `unauthorized`, `rate_limited`, `rejected` | `rejected`, `detail` = the broker's, already cut | `broker_rejected` |
+| REST | `unauthorized`, `rate_limited`, `rejected` | `rejected`, `detail` = the broker's, already cut; `unauthorized` also reports the token, not awaited (below) | `broker_rejected` |
 | REST | `unavailable`, `contract_violation` | `unknown` | `broker_unavailable` |
 | REST | `aborted` | `unknown`, dropped by the processor | `broker_unavailable` |
 | REST | any other throw | propagates: the processor's `unknown`/`executor_error` | — |
+
+On a REST 401 the executor reports the token's fingerprint through the same source with the
+default `mayRefresh: true` and the same signal (#281,
+[binodex-oauth.md → A refused token](binodex-oauth.md#a-refused-token-is-an-expired-token-281)):
+the backend marks the token expired and may exchange it for the user's next trade. The report is
+not awaited — the processor races the submit against its deadline, and an exchange outlasting it
+would turn a sure `rejected` into `executor_timeout` (`trade-command-executor.test.ts` R7); its
+answer is only logged, and a throw out of it is caught (R6).
 
 `rejected` only where the order certainly did not go out; `unknown` everywhere it may exist. An
 accepted trade that does not match the intent is the processor's `trade_mismatch` (#17), not the
@@ -94,6 +102,8 @@ line below and finds no `SECRET-` sentinel and no broker host.
 | `trade command refused` | warn | `intentId`, `transport`; socket: `failures` (count), `detail`; token: `stage: token`, `reason`, `status`; REST: `stage: rest`, `code`, `status`, `retryAfterSec`, `detail` |
 | `trade command outcome unknown` | warn | `intentId`, `transport`; socket: `reason`, `sessionState`; REST: `stage: rest`, `code`, `status` |
 | `trade command falls back to rest` | info | `intentId`, `sessionState` (`none` without a session) |
+| `refused token reported` | info | `intentId`, `answer` (`ok` or the refusal reason) — after a REST 401 (#281) |
+| `refused token report failed` | error | `intentId`, `err` (name and code) |
 
 ## Accepted risks
 
@@ -116,7 +126,10 @@ line below and finds no `SECRET-` sentinel and no broker host.
    `true`), so the backend may exchange the token on this path (a trade is a user action). When
    the budget runs out the processor writes `executor_timeout`/`unknown` and reconciliation
    decides; a fetch cut before the POST sent nothing, so the reconciler finds no trade and parks
-   the intent in `manual_review` with the account halted (no `not_found` in `main`, #274).
+   the intent in `manual_review` with the account halted (no `not_found` in `main`, #274). The
+   report after a REST 401 (#281) is a third fetch that may exchange, but it is not awaited, so it
+   never holds the outcome past the deadline; cut by the deadline's abort, it is reported again on
+   the next 401.
 4. A late answer of an earlier command on the same connection is closed by #101: a command that
    ends without its answer taints its connection and the client drops it, and a `success` is the
    answer only with the command's asset, action and amount ([broker-socket.md → The trade
@@ -137,4 +150,5 @@ line below and finds no `SECRET-` sentinel and no broker host.
 - **#101**: implemented — the session manager ([broker-session.md](broker-session.md)) and the
   taint; no `refresh()` after `accepted` (the `update_balance` before `open_trade.success` is it).
 - **#91**: the "REST only before send" rule and the four stages are proven here.
+- **#281**: a REST 401 reports the refused token back.
 - The operator tool for `manual_review` and the bot's trade flow are later issues.
