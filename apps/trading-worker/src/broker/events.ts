@@ -13,10 +13,10 @@ import {
   toBinaryPair,
   toBrokerBalance,
   toBrokerUser,
-  toClosedTrade,
-  toOpenTrade,
   toOpenTradeFailures,
   toPriceUpdate,
+  toSocketClosedTrade,
+  toSocketOpenTrade,
   TradeMode,
   type AssetsUpdate,
   type BinaryPair,
@@ -88,6 +88,8 @@ export type BrokerEventProblem =
       event: string;
       issues: BrokerEventIssue[];
       issueCount: number;
+      // the refused payload's keys and types (describeShape), never a value
+      shape: string;
     };
 
 export type NormalizedBrokerEvent =
@@ -103,8 +105,7 @@ interface WireIssue {
 }
 
 type SafeParseResult<W> =
-  | { success: true; data: W }
-  | { success: false; error: { readonly issues: readonly WireIssue[] } };
+  { success: true; data: W } | { success: false; error: { readonly issues: readonly WireIssue[] } };
 
 type ParseOutcome = { ok: true; event: BrokerEvent } | { ok: false; issues: readonly WireIssue[] };
 
@@ -134,7 +135,7 @@ const openTradeSuccess = (mode: TradeMode): Handler =>
   payloadHandler(safeParseSocketOpenTradeSuccess, (wire) => ({
     type: BrokerEventType.OpenTradeSuccess,
     mode,
-    trade: toOpenTrade(wire),
+    trade: toSocketOpenTrade(wire, mode),
   }));
 
 const openTradeFail = (mode: TradeMode): Handler =>
@@ -148,7 +149,7 @@ const closeTradeSuccess = (mode: TradeMode): Handler =>
   payloadHandler(safeParseCloseTradeSuccess, (wire: CloseTradeSuccessWire) => ({
     type: BrokerEventType.CloseTradeSuccess,
     mode,
-    trades: wire.trades.map(toClosedTrade),
+    trades: wire.trades.map((trade) => toSocketClosedTrade(trade, mode)),
   }));
 
 const balanceUpdate = (mode: TradeMode): Handler =>
@@ -196,7 +197,44 @@ const HANDLERS = {
 const isKnownEvent = (event: string): event is keyof typeof HANDLERS =>
   Object.hasOwn(HANDLERS, event);
 
-function schemaProblem(event: string, issues: readonly WireIssue[]): BrokerEventProblem {
+export const SHAPE_MAX_DEPTH = 3;
+export const SHAPE_MAX_KEYS = 20;
+export const SHAPE_MAX_KEY_LENGTH = 40;
+export const SHAPE_MAX_LENGTH = 600;
+
+// What a payload the schema refused looks like (#354): the types of its values, arrays by their
+// length and first element, objects by their sorted keys — never a value, so the problem can be
+// logged whole. A key name is the broker's text and stays: no user data travels in it.
+export function describeShape(value: unknown): string {
+  return shapeOf(value, 0).slice(0, SHAPE_MAX_LENGTH);
+}
+
+function shapeOf(value: unknown, depth: number): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[0]';
+    return depth >= SHAPE_MAX_DEPTH
+      ? `[${value.length}]`
+      : `[${value.length}: ${shapeOf(value[0], depth + 1)}]`;
+  }
+  if (typeof value === 'object') {
+    if (depth >= SHAPE_MAX_DEPTH) return '{…}';
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    const shown = keys
+      .slice(0, SHAPE_MAX_KEYS)
+      .map((key) => `${key.slice(0, SHAPE_MAX_KEY_LENGTH)}: ${shapeOf(record[key], depth + 1)}`);
+    const more = keys.length > SHAPE_MAX_KEYS ? [`…+${keys.length - SHAPE_MAX_KEYS}`] : [];
+    return `{${[...shown, ...more].join(', ')}}`;
+  }
+  return typeof value;
+}
+
+function schemaProblem(
+  event: string,
+  issues: readonly WireIssue[],
+  decoded: unknown,
+): BrokerEventProblem {
   return {
     kind: BrokerEventProblemKind.Schema,
     event,
@@ -205,6 +243,7 @@ function schemaProblem(event: string, issues: readonly WireIssue[]): BrokerEvent
       path: issue.path.map(String).join('.'),
     })),
     issueCount: issues.length,
+    shape: describeShape(decoded),
   };
 }
 
@@ -241,6 +280,8 @@ export function normalizeBrokerEvent(
     return { ok: false, problem: { kind: BrokerEventProblemKind.Decode, event: name }, extraArgs };
   }
   const parsed = handler.parse(decoded.value);
-  if (!parsed.ok) return { ok: false, problem: schemaProblem(name, parsed.issues), extraArgs };
+  if (!parsed.ok) {
+    return { ok: false, problem: schemaProblem(name, parsed.issues, decoded.value), extraArgs };
+  }
   return { ok: true, event: parsed.event, extraArgs };
 }
