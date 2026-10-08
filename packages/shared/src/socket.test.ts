@@ -77,6 +77,9 @@ describe('socket trades', () => {
       parseCloseTradeSuccess({ trades: [{ ...CLOSED, is_demo: false }] }, 'demo')[0]?.isDemo,
     ).toBe(true);
     expect(parseSocketOpenTradeSuccess({ ...OPEN, is_demo: 'yes' }, 'demo').isDemo).toBe(true);
+    expect(
+      parseCloseTradeSuccess({ trades: [{ ...CLOSED, is_demo: 'yes' }] }, 'real')[0]?.isDemo,
+    ).toBe(false);
   });
 
   it('T4 keeps is_demo required on REST', () => {
