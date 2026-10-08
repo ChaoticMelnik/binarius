@@ -160,19 +160,31 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     );
   }
 
+  // Normally the kept target plus one candle. After a stall or a forward clock jump, the candle
+  // in progress at once while it still runs; after a jump back by a candle or more, the upcoming
+  // moment, so the scanner is never silent for longer than one candle.
+  function nextTarget(at: number): number {
+    const ahead = upcoming(at);
+    if (nextAt === undefined) return ahead;
+    const candidate = nextAt + SCAN_INTERVAL_MS;
+    if (candidate > ahead + SCAN_INTERVAL_MS) return ahead;
+    const latest = ahead - SCAN_INTERVAL_MS;
+    if (candidate <= latest) return at < latest - slackMs + SCAN_INTERVAL_MS ? latest : ahead;
+    return candidate;
+  }
+
   function schedule(): void {
     if (stopped) return;
     const at = now();
-    // a stalled loop that missed whole candles fires once for the next one, not for each
-    nextAt =
-      nextAt === undefined || nextAt + SCAN_INTERVAL_MS < at
-        ? upcoming(at)
-        : nextAt + SCAN_INTERVAL_MS;
+    nextAt = nextTarget(at);
     const target = nextAt;
     candleTimer = setTimeout(
       () => {
         candleTimer = undefined;
+        // a target whose candle already ended is not scanned: schedule() aims at the current one
+        const live = now() < target - slackMs + SCAN_INTERVAL_MS;
         schedule();
+        if (!live) return;
         const run = scan(target - slackMs);
         inFlight.add(run);
         void run.finally(() => inFlight.delete(run));
