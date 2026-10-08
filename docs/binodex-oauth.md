@@ -464,7 +464,8 @@ the broker balance refresh (`apps/backend/src/broker/balance-reconciler.ts`): `P
 /trading/access` with the default `mayRefresh: true`, and the background tick with
 `mayRefresh: false`; and the trading worker's token route `POST /trading/accounts/:id/access-token`
 (#90, internal bearer), which passes `mayRefresh` from its body — the caller names its policy
-(`accessTokenRequestSchema`, no default). The route answers `{ accessToken }` or `{ error }` with
+(`accessTokenRequestSchema`, no default) — and, when the broker has just refused a token, its
+fingerprint `refusedToken` ([A refused token](#a-refused-token-is-an-expired-token-281)). The route answers `{ accessToken }` or `{ error }` with
 the refusal code alone (404 `account_not_found`, 409 the rest; `revokedReason` stays here), and
 neither side logs either body. `refresh_rate_limited` is the one refusal that is temporary (#275):
 the broker's rate limit refused the exchange, and asking again later may succeed.
@@ -478,7 +479,8 @@ the broker's rate limit refused the exchange, and asking again later may succeed
 | `token_key_id ≠ the process's key id`                       | `key_unavailable`, and **nothing is written** (see below)                                                         |
 | ciphertext fails to decrypt under its own key id            | revoke `storage_inconsistent`                                                                                     |
 | stored hash ≠ hash of the stored ciphertext                 | revoke `storage_inconsistent`                                                                                     |
-| access token still valid (60 s skew)                        | return it; a legacy row missing its hash gets one here, and only the hash                                         |
+| access token still valid and `refusedToken` is its sha256   | `access_token_expires_at = now()` (`markAccessTokenExpired`), then the rows below as for an expired token (#281)  |
+| access token still valid (60 s skew)                        | return it, also when `refusedToken` names another token (someone already rotated the pair); a legacy row missing its hash gets one here, and only the hash |
 | `mayRefresh: false`                                         | `refresh_needed`: nothing exchanged and nothing revoked, the 90-day rule below included                           |
 | `coalesce(token_rotated_at, created_at)` older than 90 days | revoke `refresh_expired`, without asking the broker                                                               |
 | otherwise                                                   | exactly one refresh exchange                                                                                      |
@@ -585,6 +587,43 @@ newest token of the same chain (the last row of the Live check table). A 401 the
 read as "this one token was stale": the whole session is gone, whatever caused it, and revoking
 the account so the user logs in again is the only move left. No stored token would get a
 different answer, which is why `refresh_invalid_grant` is final.
+
+### A refused token is an expired token (#281)
+
+The broker may refuse an access token before the expiry we stored for it. Nothing on our side
+reads the broker's text: each consumer of the token reports the state it already sees, and the
+backend treats the token as expired from that moment.
+
+| Consumer | Signal | `mayRefresh` of the report | After the report |
+| --- | --- | --- | --- |
+| worker session manager, the fetch after a terminal state (`session-manager.ts` `refresh()`) | socket client state `token_expired`/`auth_failed` | `false` — the fetch it makes anyway carries the fingerprint | `refresh_needed` → `broker session waits for a token exchange`, held back `SESSION_RETRY_MS`; another token → the client restarts with it |
+| worker executor, REST fallback (`trade-command-executor.ts`) | REST 401 on `POST /trades` | default `true` — a trade is the user's action | the intent is `rejected`/`broker_rejected` as before; the answer is logged |
+| worker REST reconciler (`rest-reconciler.ts`) | REST 401 on a trade list | `true` — it passes `true` already | `unavailable` `token_unavailable` as before; the next attempt by lease takes the new token |
+| worker settlement catch-up (`settlement-catchup.ts`) | REST 401 on the closed list | `false` — a timer | `stalled` as before |
+| backend balance refresh, the route and the tick (`balance-reconciler.ts`) | REST 401 on `GET /v1/broker/user` | `false` on both: the tick is a timer, and the route's budget (`TRADING_ACCESS_REFRESH_BUDGET_MS`) is shorter than an exchange | `unauthorized` recorded as before |
+
+A 429, a 5xx, `unavailable`, `contract_violation` and an abort report nothing.
+
+- **The fingerprint, not the token.** `refusedToken` is `hashToken` (sha256 hex) of the refused
+  token: the request body never carries a live token back, and the backend compares it with the
+  hash of the stored token after decrypting it under the row lock. No log line carries either.
+- **Under the lock, after every status check.** A blocked user, a pending or revoked account and
+  a row under another key answer as before and nothing is written; a token already expired by the
+  clock is not decrypted for the comparison (`token-service.db.test.ts` T1–T5).
+- **A match only marks.** `access_token_expires_at = now()` is the one write: the pair and
+  `token_rotated_at` stay, so the 90-day clock does not move. The decision then continues as for
+  any expired token: `mayRefresh: false` → `refresh_needed`, `true` → one exchange with all its
+  outcomes. Every reader of "token valid" already reads that column, so no flag and no migration.
+- **Another token is ignored.** The pair was rotated between the refusal and the report; the
+  stored token is returned.
+- **Why not revoke, and why a timer does not exchange.** A refusal may be passing (`auth_failed`
+  for another reason), and revoking would cost the user a login; a timer exchanging on its report
+  is the mass `refresh_outcome_unknown` risk Rule 12 forbids. A wrong report costs one exchange on
+  the user's next action — what the weekly expiry costs anyway.
+- **Convergence** waits for the user's next action or a reconciliation: until then the balance
+  tick skips the account (its token is expired) and the session manager holds it back.
+- **Deploy window.** The worker puts the key in the body only when it has a fingerprint; a
+  backend that predates the field answers 400, which every caller treats as `backend_status`.
 
 ## Broker contract (verified 2026-10-01)
 
@@ -802,7 +841,8 @@ not.
   side: the address → code dialog, its state, the buttons and texts
   ([bot-start.md → Email dialog](bot-start.md#email-dialog)).
 - **#100** (the executor) takes its token through the same worker route (`AccessTokenSource`,
-  `apps/trading-worker/src/broker/access-token.ts`) with the default `mayRefresh: true`.
+  `apps/trading-worker/src/broker/access-token.ts`) with the default `mayRefresh: true`, and
+  reports a REST 401's token back through it (#281).
 - **#35** owns the reusable mock broker; the stub next to the client
   (`apps/backend/src/broker/testing/oauth-stub.ts`) exists so this suite can prove code expiry,
   single use and refresh-family behaviour, and the email codes' single use and partner check,

@@ -281,7 +281,10 @@ trades list. The pass keeps `rejectIntent` on `not_found` as the port's contract
 route refusing (`token_unavailable`) or failing (`backend_unavailable`) and every broker error
 (`rate_limited`, `unauthorized` → `token_unavailable`, `rejected`/`contract_violation` →
 `broker_contract`, `unavailable`, `aborted` → `timeout`) answer `unavailable` with a `warn`;
-anything else is thrown and the pass logs it by name.
+anything else is thrown and the pass logs it by name. A 401 first reports the token's fingerprint
+with `mayRefresh: true` (#281): the backend marks it expired and exchanges it, and the next
+attempt by lease takes the new token; the token, the 401 and the report fit one attempt
+(`2 × ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS`, `TIMING_CHAIN_HOLDS`).
 
 **Halt and alert.** Every `manual_review` the pass writes — `ambiguous`, `unresolved`
 (`reconciliation_not_found`) and a found trade that does not match (`trade_mismatch`) — goes through `haltAccountForManualReview`: `broker_accounts`
@@ -302,7 +305,7 @@ read. Each ending:
 | `settled`, `already_settled`, `intent_not_accepted` (left the queue) | no                          |
 | trade not in the pages read (still open, or past the cap)           | yes                         |
 | token refused or the backend failing                                | yes, one `warn` per attempt |
-| broker error other than `rate_limited`, inconsistent pages          | yes                         |
+| broker error other than `rate_limited`, inconsistent pages; a 401 first reports its token with `mayRefresh: false` (#281) | yes                         |
 | `rate_limited`                                                      | no; the tick ends           |
 | the attempt's deadline, a throw                                     | yes                         |
 | `stop()` during the attempt, the token fetch included              | no                          |

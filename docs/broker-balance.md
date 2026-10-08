@@ -97,7 +97,7 @@ signal starts no flight. The steps:
 | token `refresh_rate_limited` (`POST /trading/access`, an exchange the broker rate-limited, #275) | `rate_limited` | token-service `warn` |
 | token `user_blocked` | `user_blocked`, nothing written | — |
 | token `account_not_found` | nothing written | — |
-| `BrokerRestError` `unauthorized` / `rate_limited` / `rejected` / `unavailable` / `contract_violation` | the same code | `warn` `balance refresh failed`, with `status`, `retryAfterSec`, `detail` |
+| `BrokerRestError` `unauthorized` / `rate_limited` / `rejected` / `unavailable` / `contract_violation` | the same code | `warn` `balance refresh failed`, with `status`, `retryAfterSec`, `detail`; `unauthorized` also reports the token (below): `info` `refused token reported` (`answer`) or `error` `refused token report failed` |
 | `BrokerRestError` `aborted` (`stop()`, the route's budget) | `aborted`, nothing written | — |
 | the answer is another broker user's | `account_mismatch`, snapshot not written | `warn` with `expected` and `received` |
 | a value outside the stored domain | `contract_violation`, snapshot not written | `warn` with `field` |
@@ -109,10 +109,12 @@ route it reaches the opaque 500. In the tick it is logged as
 Only the error's name and code are logged: a drizzle error carries the whole statement and the
 row's values.
 
-401 with a token we believed valid is recorded as `unauthorized` and retried. Nobody forces a
-refresh or revokes on it: the token is exchanged on the user's next action (Rule 12). The
-worker's sessions hold a refused token back ([broker-session.md → The token](broker-session.md#the-token));
-a token the broker refuses before its stored expiry is accepted risk 2 of #101, filed as #281.
+401 with a token we believed valid is recorded as `unauthorized`. The attempt reports the
+token's fingerprint back with `mayRefresh: false` on the route and on the tick (#281): the token
+is marked expired, and the account leaves the tick's candidates until the user's next action
+exchanges it (Rule 12). Nothing revokes on it. The report changes nothing in the attempt, and a
+throw out of it is logged, not raised
+([binodex-oauth.md → A refused token](binodex-oauth.md#a-refused-token-is-an-expired-token-281)).
 
 ## The background tick
 
