@@ -556,9 +556,10 @@ const SIGNAL_ARROWS = {
 export const signalButtonLabel = (symbol: string, action: TradeAction, payout: number): string =>
   `${symbol} · ${SIGNAL_ARROWS[action]} · ${String(payout)}%`;
 
-// The launch screen (#320): the pair at the scanner's duration, the amount the cycle trades, what the cycle does. A
-// symbol the catalog did not give drops its line, an amount access did not give reads as the
-// broker's minimum; `saved` is what the picker has just saved, null for the reset to the minimum.
+// The launch screen (#320): the pair at the scanner's duration, the amount the cycle trades, what
+// the cycle does. A symbol the catalog did not give drops its line, an amount access did not give
+// reads as the broker's minimum; `saved` is what the picker has just saved, null for the reset to
+// the minimum.
 export function launchText({
   symbol,
   amount,

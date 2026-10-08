@@ -43,9 +43,9 @@ import { LABELS, stakeLabel, stakePickerText, TEXTS } from './texts';
 
 // The demo stake picker (#297, docs/bot-demo-trade.md -> The stake): presets from the broker's
 // minimum, a typed amount, a reset to the minimum, and the way back to where it was opened from —
-// /settings, an analysis screen or a launch screen (#320). The bounds are the backend's (POST /trading/demo-stake): the
-// bot sends a preset or a parsed input and shows the answer, so a forged amount gets the same
-// refusal as a typed one.
+// /settings, an analysis screen or a launch screen (#320). The bounds are the backend's (POST
+// /trading/demo-stake): the bot sends a preset or a parsed input and shows the answer, so a forged
+// amount gets the same refusal as a typed one.
 
 // Where the picker was opened, carried in every callback as `s`, `a:<assetId>:<durationSec>` or
 // `p:<assetId>`.

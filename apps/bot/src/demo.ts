@@ -73,7 +73,8 @@ import {
 // a photo caption that editMessageText cannot edit. Kept as `demo`, so a button on an old card
 // leads here too.
 export const DEMO_CALLBACK_DATA = 'demo';
-// Bot API allows 1-64 bytes; the longest, `demo:t:cryptocurrency:9999`, is 26.
+// Bot API allows 1-64 bytes; the longest of the screens' data, `demo:t:cryptocurrency:9999`, is 26,
+// and `demo:l:2147483647` 17.
 export const DEMO_SIGNALS_CALLBACK_DATA = 'demo:sig';
 export const demoLaunchCallbackData = (assetId: number): string => `demo:l:${assetId}`;
 export const DEMO_GROUPS_CALLBACK_DATA = 'demo:g';
