@@ -158,10 +158,12 @@ describe('the intent tracker', () => {
   });
 
   it('at the deadline edits once with the hint and polls no more', async () => {
-    const { tracker, edits, readIntent, request } = setup({ script: [unknown] });
+    const { tracker, edits, edit, readIntent, request } = setup({ script: [unknown] });
     tracker.track(request());
     await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
     expect(edits.map((text) => text.value)).toEqual([shown(unknown), shown(unknown, true)]);
+    // #350: the deadline edit says so, so its keyboard adds the menu
+    expect(edit.mock.calls.map((call) => call[2])).toEqual([undefined, 'deadline']);
     const polls = readIntent.mock.calls.length;
     expect(tracker.size()).toBe(0);
     await vi.advanceTimersByTimeAsync(DEADLINE);

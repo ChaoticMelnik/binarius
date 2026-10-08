@@ -39,8 +39,9 @@ export const TRACKER_STOP_STATUSES: ReadonlySet<TradeIntentStatus> = new Set([
 export const INTENT_TRACKER_MAX_ENTRIES = 10_000;
 
 // Why the tracker's last edit is not a status (#350): the intent is gone (nothing left to read, so
-// only the menu).
-export type TrackEnd = 'not_found';
+// only the menu), or the deadline passed on a status that can still move (its refresh and the
+// menu).
+export type TrackEnd = 'not_found' | 'deadline';
 
 export interface IntentTrackRequest {
   intentId: string;
@@ -242,6 +243,7 @@ export function createIntentTracker({
       entry,
       intentStatusText(entry.symbol, entry.view, stopped ? {} : { deadline: true }),
       stopped ? renderKey(entry.view) : 'deadline',
+      stopped ? undefined : 'deadline',
     );
     finish(entry);
   }
