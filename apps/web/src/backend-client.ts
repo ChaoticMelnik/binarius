@@ -12,6 +12,7 @@ import {
   safeParseAdminTradingSessionsResponse,
   safeParseAdminUserResponse,
   safeParseAdminUsersResponse,
+  safeParseChangePasswordResponse,
   safeParseOAuthCallbackResponse,
   safeParseAdminConfirmResponse,
   safeParseAdminLoginResponse,
@@ -28,6 +29,7 @@ import {
   type AdminOverviewResponse,
   type AdminAuditQuery,
   type AdminAuditResponse,
+  type AdminChangePasswordRequest,
   type AdminTokensQuery,
   type AdminTokensResponse,
   type AdminTradingSessionsQuery,
@@ -35,6 +37,7 @@ import {
   type AdminUserResponse,
   type AdminUsersQuery,
   type AdminUsersResponse,
+  type ChangePasswordResponse,
   type LogoutResponse,
   type OAuthCallbackRequest,
   type OAuthCallbackResponse,
@@ -96,6 +99,10 @@ export interface BackendClient {
   ): Promise<AdminTradingSessionsResponse>;
   tokens(token: string, query: AdminTokensQuery): Promise<AdminTokensResponse>;
   audit(token: string, query: AdminAuditQuery): Promise<AdminAuditResponse>;
+  changePassword(
+    token: string,
+    request: AdminChangePasswordRequest,
+  ): Promise<ChangePasswordResponse>;
   /** the backend's public OAuth callback; carries no bearer */
   oauthCallback(request: OAuthCallbackRequest): Promise<OAuthCallbackResponse>;
 }
@@ -237,6 +244,12 @@ export function createBackendClient({
       const params = adminAuditSearchParams(query);
       const path = params.size > 0 ? `admin/audit?${params}` : 'admin/audit';
       return parsed(safeParseAdminAuditResponse, await call('GET', path, { session }));
+    },
+    async changePassword(session, request) {
+      return parsed(
+        safeParseChangePasswordResponse,
+        await call('POST', 'admin/auth/password', { body: request, session }),
+      );
     },
     // The route is public on the backend and checks no bearer; this one opens /admin/*, and a
     // token sent where nothing needs it is only a place for it to leak from.
