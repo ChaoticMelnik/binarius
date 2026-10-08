@@ -44,6 +44,7 @@ const REFUSAL_STATUS: Record<Refusal, 404 | 409> = {
   account_revoked: 409,
   key_unavailable: 409,
   refresh_needed: 409,
+  refresh_rate_limited: 409,
 } satisfies Record<AccessTokenRefusal, 404 | 409>;
 
 const NOT_FOUND_CODES: ReadonlySet<ErrorCode> = new Set([

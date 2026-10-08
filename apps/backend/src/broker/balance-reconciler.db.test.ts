@@ -264,6 +264,13 @@ describe('refresh', () => {
       null,
     ],
     ['a missing account', { ok: false, reason: 'account_not_found' }, 'account_not_found', null],
+    // #275: recorded as a 429 on the GET would be
+    [
+      'a rate-limited exchange',
+      { ok: false, reason: 'refresh_rate_limited' },
+      'rate_limited',
+      'rate_limited',
+    ],
   ])('does not call the broker for %s', async (_label, answer, outcome, recorded) => {
     const account = await linked();
     const balance = reconciler();

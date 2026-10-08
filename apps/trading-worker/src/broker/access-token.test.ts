@@ -86,6 +86,7 @@ describe('createBackendAccessTokenSource (#90)', () => {
     [409, 'account_revoked'],
     [409, 'key_unavailable'],
     [409, 'refresh_needed'],
+    [409, 'refresh_rate_limited'],
   ])('passes a %i %s refusal through as a refusal', async (status, error) => {
     reply = (res) => json(res, status, { error });
     const outcome = await source().accessToken(ACCOUNT);
@@ -144,9 +145,10 @@ describe('createBackendAccessTokenSource (#90)', () => {
 
   it('keeps the token and the URL out of every failure', async () => {
     const failures = [
-      await createBackendAccessTokenSource({ baseUrl: 'http://127.0.0.1:1', token: BEARER }).accessToken(
-        ACCOUNT,
-      ),
+      await createBackendAccessTokenSource({
+        baseUrl: 'http://127.0.0.1:1',
+        token: BEARER,
+      }).accessToken(ACCOUNT),
       await (async () => {
         reply = (res) => json(res, 200, { accessToken: SECRET, extra: SECRET });
         return source().accessToken(ACCOUNT);

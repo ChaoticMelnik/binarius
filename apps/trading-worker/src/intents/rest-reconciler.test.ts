@@ -12,7 +12,11 @@ import {
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import type { TradeIntentRow } from '@binarius/db';
 import type { AccessTokenOutcome, AccessTokenOptions } from '../broker/access-token';
-import { createRestReconciler, ReconcilerInputError, type RestReconcilerConfig } from './rest-reconciler';
+import {
+  createRestReconciler,
+  ReconcilerInputError,
+  type RestReconcilerConfig,
+} from './rest-reconciler';
 
 const SUBMITTED = Date.UTC(2026, 9, 6, 12, 0, 0);
 const BEFORE = 60_000;
@@ -240,8 +244,9 @@ describe('createRestReconciler: matching (#90)', () => {
 
   it('compares the amount as a decimal, not as a spelling', async () => {
     const trade = at(2_000, { amount: '10' as DecimalString });
-    expect(await harness({ open: [trade] }).run(intent({ amount: '10.00000000' as DecimalString })))
-      .toEqual({ outcome: 'found', trade });
+    expect(
+      await harness({ open: [trade] }).run(intent({ amount: '10.00000000' as DecimalString })),
+    ).toEqual({ outcome: 'found', trade });
   });
 
   it.each([
@@ -294,7 +299,13 @@ describe('createRestReconciler: when absence is certain (#90)', () => {
   });
 
   it('reads a second page when the first is full and still inside the window', async () => {
-    const closed = [at(4_000), at(3_000), at(2_000, { assetId: 102 }), at(1_000, { assetId: 103 }), old()];
+    const closed = [
+      at(4_000),
+      at(3_000),
+      at(2_000, { assetId: 102 }),
+      at(1_000, { assetId: 103 }),
+      old(),
+    ];
     const h = harness({ open: [], closed });
     expect(await h.run()).toEqual({ outcome: 'ambiguous' });
     expect(h.requests.map((r) => r.filter)).toEqual([
@@ -305,16 +316,30 @@ describe('createRestReconciler: when absence is certain (#90)', () => {
   });
 
   it('reads past the window start before answering unresolved', async () => {
-    const closed = [at(4_000, { assetId: 102 }), at(3_000, { assetId: 102 }), at(2_000, { assetId: 102 }), at(-BEFORE, { assetId: 102 }), old()];
+    const closed = [
+      at(4_000, { assetId: 102 }),
+      at(3_000, { assetId: 102 }),
+      at(2_000, { assetId: 102 }),
+      at(-BEFORE, { assetId: 102 }),
+      old(),
+    ];
     const h = harness({ open: [], closed });
     expect(await h.run()).toEqual({ outcome: 'unresolved' });
-    expect(h.requests.filter((r) => r.filter.status === 'closed').map((r) => r.filter.offset)).toEqual([0, 3]);
+    expect(
+      h.requests.filter((r) => r.filter.status === 'closed').map((r) => r.filter.offset),
+    ).toEqual([0, 3]);
   });
 
   // a broker that caps the page below the limit must not make a short page the end
   it('finds the trade behind pages the broker cut short', async () => {
     const ours = at(3_000);
-    const closed = [at(5_000, { assetId: 102 }), at(4_000, { assetId: 102 }), ours, at(2_000, { assetId: 102 }), old()];
+    const closed = [
+      at(5_000, { assetId: 102 }),
+      at(4_000, { assetId: 102 }),
+      ours,
+      at(2_000, { assetId: 102 }),
+      old(),
+    ];
     expect(await harness({ open: [], closed }, { cap: 2, maxPages: 4 }).run()).toEqual({
       outcome: 'found',
       trade: ours,
@@ -332,7 +357,13 @@ describe('createRestReconciler: when absence is certain (#90)', () => {
 
   it('finds the trade behind a page answered one short of the limit', async () => {
     const ours = at(1_000);
-    const closed = [at(4_000, { assetId: 102 }), at(3_000, { assetId: 102 }), at(2_000, { assetId: 102 }), ours, old()];
+    const closed = [
+      at(4_000, { assetId: 102 }),
+      at(3_000, { assetId: 102 }),
+      at(2_000, { assetId: 102 }),
+      ours,
+      old(),
+    ];
     const h = harness({ open: [], closed }, { cap: PAGE - 1 });
     expect(await h.run()).toEqual({ outcome: 'found', trade: ours });
     expect(h.requests.filter((r) => r.filter.status === 'closed')).toHaveLength(2);
@@ -357,7 +388,9 @@ describe('createRestReconciler: when absence is certain (#90)', () => {
   });
 
   it('answers window_not_covered while the window is open and the page cap runs out', async () => {
-    const closed = Array.from({ length: 2 * PAGE + 1 }, (_, i) => at(80_000 - i * 1_000, { assetId: 102 }));
+    const closed = Array.from({ length: 2 * PAGE + 1 }, (_, i) =>
+      at(80_000 - i * 1_000, { assetId: 102 }),
+    );
     const h = harness({ open: [], closed });
     expect(await h.run(intent({ reconcileClaimedAt: new Date(SUBMITTED) }))).toEqual({
       outcome: 'unavailable',
@@ -369,7 +402,10 @@ describe('createRestReconciler: when absence is certain (#90)', () => {
   });
 
   it('does not answer found for one candidate in a window the pages did not cover', async () => {
-    const closed = [at(80_000), ...Array.from({ length: 2 * PAGE }, (_, i) => at(70_000 - i * 1_000, { assetId: 102 }))];
+    const closed = [
+      at(80_000),
+      ...Array.from({ length: 2 * PAGE }, (_, i) => at(70_000 - i * 1_000, { assetId: 102 })),
+    ];
     expect(
       await harness({ open: [], closed }).run(intent({ reconcileClaimedAt: new Date(SUBMITTED) })),
     ).toEqual({ outcome: 'unavailable', reason: 'window_not_covered' });
@@ -387,17 +423,29 @@ describe('createRestReconciler: when absence is certain (#90)', () => {
     ['an ignored offset', { ignoreOffset: true }],
     ['a skewed offset', { offsetSkew: 1 }],
     ['an open list that shrinks between pages', { shrinkAfterFirstPage: 2 }],
-  ] as const)('never answers not_found: %s, no trade of ours, window closed', async (_name, broker) => {
-    const others = Array.from({ length: 2 * PAGE + 1 }, (_, i) => at(80_000 - i * 1_000, { assetId: 102 }));
-    for (const lists of [{}, { open: others }, { closed: [...others, old()] }, { open: others, closed: [old()] }]) {
-      const result = await harness(lists, broker).run();
-      expect(result.outcome).not.toBe('not_found');
-      expect(['unresolved', 'ambiguous', 'unavailable']).toContain(result.outcome);
-    }
-  });
+  ] as const)(
+    'never answers not_found: %s, no trade of ours, window closed',
+    async (_name, broker) => {
+      const others = Array.from({ length: 2 * PAGE + 1 }, (_, i) =>
+        at(80_000 - i * 1_000, { assetId: 102 }),
+      );
+      for (const lists of [
+        {},
+        { open: others },
+        { closed: [...others, old()] },
+        { open: others, closed: [old()] },
+      ]) {
+        const result = await harness(lists, broker).run();
+        expect(result.outcome).not.toBe('not_found');
+        expect(['unresolved', 'ambiguous', 'unavailable']).toContain(result.outcome);
+      }
+    },
+  );
 
   it('answers broker_contract, not unresolved, when the open list shrinks between pages', async () => {
-    const open = Array.from({ length: PAGE + 1 }, (_, i) => at(80_000 - i * 1_000, { assetId: 102 }));
+    const open = Array.from({ length: PAGE + 1 }, (_, i) =>
+      at(80_000 - i * 1_000, { assetId: 102 }),
+    );
     const h = harness({ open, closed: [old()] }, { shrinkAfterFirstPage: 2 });
     expect(await h.run()).toEqual({ outcome: 'unavailable', reason: 'broker_contract' });
     expect(h.line('broker trade pages are inconsistent; nothing concluded')).toMatchObject({
@@ -450,7 +498,7 @@ describe('createRestReconciler: failures (#90)', () => {
     await expect(harness({}, { failOn: { status: 'open', error: boom } }).run()).rejects.toBe(boom);
   });
 
-  it.each(['user_blocked', 'refresh_needed', 'account_revoked'] as const)(
+  it.each(['user_blocked', 'refresh_needed', 'account_revoked', 'refresh_rate_limited'] as const)(
     'answers token_unavailable when the backend refuses with %s',
     async (refusal) => {
       const h = harness({}, { token: { ok: false, reason: refusal } });
@@ -487,7 +535,10 @@ describe('createRestReconciler: failures (#90)', () => {
   });
 
   it('keeps the token out of the log', async () => {
-    const h = harness({}, { failOn: { status: 'open', error: new BrokerRestError('unavailable') } });
+    const h = harness(
+      {},
+      { failOn: { status: 'open', error: new BrokerRestError('unavailable') } },
+    );
     await h.run();
     expect(JSON.stringify(h.lines)).not.toContain('tok"');
   });
@@ -496,7 +547,9 @@ describe('createRestReconciler: failures (#90)', () => {
     ['submittedAt', { submittedAt: null }],
     ['reconcileClaimedAt', { reconcileClaimedAt: null }],
   ] as const)('throws ReconcilerInputError without %s', async (field, patch) => {
-    const error = await harness({}).run(intent(patch)).catch((thrown: unknown) => thrown);
+    const error = await harness({})
+      .run(intent(patch))
+      .catch((thrown: unknown) => thrown);
     expect(error).toBeInstanceOf(ReconcilerInputError);
     expect((error as ReconcilerInputError).field).toBe(field);
   });

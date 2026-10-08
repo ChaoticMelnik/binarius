@@ -123,6 +123,7 @@ describe('POST /trading/accounts/:id/access-token (#90)', () => {
     { ok: false, reason: 'account_pending' },
     { ok: false, reason: 'key_unavailable' },
     { ok: false, reason: 'refresh_needed' },
+    { ok: false, reason: 'refresh_rate_limited' },
     { ok: false, reason: 'account_revoked', revokedReason: 'refresh_expired' },
   ] as const satisfies AccessTokenResult[])(
     'answers 409 for $reason, code only',

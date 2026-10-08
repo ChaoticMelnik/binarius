@@ -1288,6 +1288,8 @@ describe('POST /auth/binodex/email/send-code', () => {
     [BrokerOAuthErrorCode.Rejected, 502, 'broker_contract_violation'],
     [BrokerOAuthErrorCode.ContractViolation, 502, 'broker_contract_violation'],
     [BrokerOAuthErrorCode.Unavailable, 502, 'broker_unavailable'],
+    // #275: the broker being busy, not our contract
+    [BrokerOAuthErrorCode.RateLimited, 502, 'broker_unavailable'],
   ] as const)('maps a broker %s to %i %s', async (brokerCode, status, error) => {
     const instance = await own({
       broker: failingBroker(() => {

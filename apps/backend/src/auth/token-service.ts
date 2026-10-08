@@ -41,6 +41,9 @@ export type AccessTokenResult =
   | { ok: false; reason: 'key_unavailable' }
   // the token needs an exchange and the caller forbade one (mayRefresh: false)
   | { ok: false; reason: 'refresh_needed' }
+  // the broker's rate limit refused the exchange before acting: the pair is intact, nothing
+  // written (#275)
+  | { ok: false; reason: 'refresh_rate_limited' }
   | { ok: false; reason: 'account_revoked'; revokedReason: AuthRevokedReason | null };
 
 export interface TokenServiceDeps {
@@ -185,6 +188,15 @@ async function refreshUnderLock(
   try {
     tokens = await broker.refresh({ refreshToken });
   } catch (error) {
+    // refused before the broker read the token: the pair is not spent, so the account stays
+    // active and the next caller exchanges the same pair (#275)
+    if (error instanceof BrokerOAuthError && error.code === BrokerOAuthErrorCode.RateLimited) {
+      logger.warn(
+        { accountId: account.id, ...errorLogFields(error) },
+        'broker refresh rate limited, keeping the pair',
+      );
+      return { ok: false, reason: 'refresh_rate_limited' };
+    }
     const reason = revocationReasonFor(error);
     if (pairMayBeSpent(reason)) onExchanged(heldPair);
     logger.warn(
@@ -263,7 +275,8 @@ async function revoked(
 }
 
 // An unknown outcome is treated as a consumed token: the broker may have rotated the pair
-// before the connection died, and presenting the old one again is the replay we must avoid.
+// before the connection died, and presenting the old one again is the replay we must avoid. A
+// 429 never gets here: it is refused before the broker acted (#275).
 function revocationReasonFor(error: unknown): AuthRevokedReason {
   if (error instanceof BrokerOAuthError && error.code === BrokerOAuthErrorCode.InvalidGrant) {
     return AuthRevokedReason.RefreshInvalidGrant;

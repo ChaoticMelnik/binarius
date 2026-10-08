@@ -14,7 +14,9 @@ export const accessTokenPath = (accountId: string): string =>
 export const ACCESS_TOKEN_ROUTE_BUDGET_MS = 7_000;
 
 // Why the backend refused to hand out a token: each holds until something changes (the user acts,
-// an operator acts, the key is deployed), never because of a passing failure.
+// an operator acts, the key is deployed), never because of a passing failure — except
+// refresh_rate_limited: the broker's rate limit refused the exchange before acting, the pair is
+// intact, and asking again later may succeed (#275).
 export const AccessTokenRefusal = {
   AccountNotFound: 'account_not_found',
   UserBlocked: 'user_blocked',
@@ -23,6 +25,7 @@ export const AccessTokenRefusal = {
   KeyUnavailable: 'key_unavailable',
   // the token needs an exchange and the caller passed mayRefresh: false
   RefreshNeeded: 'refresh_needed',
+  RefreshRateLimited: 'refresh_rate_limited',
 } as const;
 export type AccessTokenRefusal = (typeof AccessTokenRefusal)[keyof typeof AccessTokenRefusal];
 export const accessTokenRefusalSchema = z.enum(AccessTokenRefusal);

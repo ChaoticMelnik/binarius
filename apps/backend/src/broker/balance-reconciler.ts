@@ -142,6 +142,9 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
         // token-service has already logged it
         case AccessTokenRefusal.KeyUnavailable:
           return fail(accountId, BalanceRefreshError.KeyUnavailable);
+        // the exchange the broker rate-limited (#275): recorded as a 429 on the GET would be
+        case AccessTokenRefusal.RefreshRateLimited:
+          return fail(accountId, BalanceRefreshError.RateLimited);
         default:
           return assertExhausted(token);
       }

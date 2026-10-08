@@ -368,7 +368,8 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
 // 400 belongs to the caller's own mistake, and only a refused grant is one: a bad code, or an
 // address the broker will not take. A rejection or a malformed body means our client id, secret
 // or contract is wrong, which is a 502: the caller did nothing it could do differently. One
-// function for every route, so the status and the code cannot drift.
+// function for every route, so the status and the code cannot drift. A rate limit is the broker
+// being busy, not our contract (#275).
 function brokerOutcome(
   error: unknown,
   invalidGrantCode: OAuthErrorCode,
@@ -382,6 +383,8 @@ function brokerOutcome(
     case BrokerOAuthErrorCode.ContractViolation:
     case BrokerOAuthErrorCode.Rejected:
       return { status: 502, code: OAuthErrorCode.BrokerContractViolation };
+    case BrokerOAuthErrorCode.RateLimited:
+      return { status: 502, code: OAuthErrorCode.BrokerUnavailable };
     default:
       return { status: 502, code: OAuthErrorCode.BrokerUnavailable };
   }

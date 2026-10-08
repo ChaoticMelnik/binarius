@@ -153,10 +153,13 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
         if (stopping.signal.aborted) return undefined;
         logger.warn({ accountId, reason, status }, 'broker session token unavailable');
         return config.retryMs;
-      // not_configured: index.ts builds the manager only with the backend source
+      // not_configured: index.ts builds the manager only with the backend source;
+      // refresh_rate_limited is unreachable with mayRefresh: false, temporary if it ever comes
+      // (#275)
       case AccessTokenUnavailable.BackendStatus:
       case AccessTokenUnavailable.ContractViolation:
       case AccessTokenUnavailable.NotConfigured:
+      case AccessTokenRefusal.RefreshRateLimited:
         logger.warn({ accountId, reason, status }, 'broker session token unavailable');
         return config.retryMs;
       case AccessTokenRefusal.AccountNotFound:

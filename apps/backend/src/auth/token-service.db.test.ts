@@ -559,6 +559,71 @@ describe('ensureFreshAccessToken', () => {
   });
 });
 
+// #275: a 429 is the broker's rate limiter refusing before it read the token, so the pair is
+// intact; anything after which the pair may be spent still revokes
+describe('ensureFreshAccessToken when the broker rate-limits the exchange', () => {
+  const refusing = async <T>(
+    refusal: NonNullable<OAuthStub['refuseRefresh']>,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    stub.refuseRefresh = refusal;
+    try {
+      return await run();
+    } finally {
+      stub.refuseRefresh = undefined;
+    }
+  };
+
+  it.each([
+    ['with Retry-After', { 'retry-after': '7' }],
+    ['without Retry-After', undefined],
+  ])('T1 keeps the account and its pair on a 429 %s', async (_label, headers) => {
+    const account = await expiredAccount();
+    const refreshes = () => stub.paths.filter((path) => path.includes('user-auth/refresh')).length;
+    const before = refreshes();
+    const result = await refusing(
+      { status: 429, ...(headers === undefined ? {} : { headers }) },
+      () => ensureFreshAccessToken(deps(), account.id),
+    );
+    expect(result).toEqual({ ok: false, reason: 'refresh_rate_limited' });
+    expect(refreshes()).toBe(before + 1);
+    const row = await rowOf(account.id);
+    expect(row).toMatchObject({ status: 'active', authRevokedReason: null });
+    expect(row.refreshTokenHash).toBe(account.refreshTokenHash);
+    expect(row.tokenRotatedAt).toEqual(account.tokenRotatedAt);
+    expect(
+      cipher.decrypt(row.refreshTokenEnc, { accountId: row.id, field: TokenField.Refresh }),
+    ).toBe(
+      cipher.decrypt(account.refreshTokenEnc, { accountId: account.id, field: TokenField.Refresh }),
+    );
+
+    // the stub takes only the family's newest member: the pair was not spent
+    const again = await ensureFreshAccessToken(deps(), account.id);
+    expect(again.ok).toBe(true);
+    expect((await rowOf(account.id)).refreshTokenHash).not.toBe(account.refreshTokenHash);
+  });
+
+  it('T2 still revokes a 5xx on the exchange as an unknown outcome', async () => {
+    const account = await expiredAccount();
+    expect(
+      await refusing({ status: 503 }, () => ensureFreshAccessToken(deps(), account.id)),
+    ).toEqual({ ok: false, reason: 'account_revoked', revokedReason: 'refresh_outcome_unknown' });
+    expect(await rowOf(account.id)).toMatchObject({ status: 'revoked' });
+  });
+
+  it.each([400, 403])(
+    'T3 still revokes any other 4xx (%i) as an unknown outcome',
+    async (status) => {
+      const account = await expiredAccount();
+      expect(await refusing({ status }, () => ensureFreshAccessToken(deps(), account.id))).toEqual({
+        ok: false,
+        reason: 'account_revoked',
+        revokedReason: 'refresh_outcome_unknown',
+      });
+    },
+  );
+});
+
 // The background balance refresh (#137) passes mayRefresh: false. Whatever the token's state, the
 // account must come out exactly as it went in, and the broker must not hear about it.
 describe('ensureFreshAccessToken with mayRefresh: false', () => {

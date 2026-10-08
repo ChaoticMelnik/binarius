@@ -219,6 +219,12 @@ describe('status map', () => {
     ],
     ['email/login', 401, live('Authentication failed: Invalid client credentials'), 'rejected'],
     ['email/login', 502, '', 'unavailable'],
+    // #275: the broker's rate limiter, on every endpoint; the body never decides
+    ['oauth/token', 429, live('Too many requests'), 'rate_limited'],
+    ['user-auth/refresh', 429, live('Too many requests'), 'rate_limited'],
+    ['user-auth/refresh', 429, { error: 'invalid_grant' }, 'rate_limited'],
+    ['email/send-code', 429, live('Too many requests'), 'rate_limited'],
+    ['email/login', 429, live('Too many requests'), 'rate_limited'],
   ] as const)('%s %i with %j is %s', async (name, status, body, expected) => {
     const { path, call } = endpoints[name];
     await withBroker(
@@ -235,6 +241,22 @@ describe('status map', () => {
       },
     );
   });
+});
+
+it('reads a 429 with Retry-After as rate_limited, ignoring the header (#275)', async () => {
+  await withBroker(
+    REFRESH_PATH,
+    (reply) => reply.code(429).header('retry-after', '7').send(''),
+    async (probe) => {
+      const thrown = await probe.refresh({ refreshToken: 'r' }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(thrown).toBeInstanceOf(BrokerOAuthError);
+      expect((thrown as BrokerOAuthError).code).toBe('rate_limited');
+      expect((thrown as BrokerOAuthError).status).toBe(429);
+    },
+  );
 });
 
 describe('endpoint table', () => {
