@@ -36,6 +36,7 @@ describe('parseEnv', () => {
       brokerPairsTtlMs: 30_000,
       balanceReconcileIntervalMs: 60_000,
       balancePollMaxPerMinute: 100,
+      signalScanMaxPerMinute: 100,
       brokerOauthRedirectUri: valid.BROKER_OAUTH_REDIRECT_URI,
       brokerPartnerRef: valid.BROKER_PARTNER_REF,
       tokenEncryptionKey: Buffer.from(KEY, 'base64'),
@@ -170,17 +171,14 @@ describe('parseEnv', () => {
   });
 
   it.each([
-    ['BALANCE_RECONCILE_INTERVAL_MS', '10000', 10_000],
-    ['BALANCE_RECONCILE_INTERVAL_MS', '60000', 60_000],
-    ['BALANCE_POLL_MAX_PER_MINUTE', '1', 1],
-    ['BALANCE_POLL_MAX_PER_MINUTE', '500', 500],
-  ])('accepts %s=%s at its bound', (name, value, expected) => {
-    const env = parseEnv({ ...valid, [name]: value });
-    const key =
-      name === 'BALANCE_RECONCILE_INTERVAL_MS'
-        ? 'balanceReconcileIntervalMs'
-        : 'balancePollMaxPerMinute';
-    expect(env[key]).toBe(expected);
+    ['BALANCE_RECONCILE_INTERVAL_MS', '10000', 'balanceReconcileIntervalMs', 10_000],
+    ['BALANCE_RECONCILE_INTERVAL_MS', '60000', 'balanceReconcileIntervalMs', 60_000],
+    ['BALANCE_POLL_MAX_PER_MINUTE', '1', 'balancePollMaxPerMinute', 1],
+    ['BALANCE_POLL_MAX_PER_MINUTE', '500', 'balancePollMaxPerMinute', 500],
+    ['SIGNAL_SCAN_MAX_PER_MINUTE', '4', 'signalScanMaxPerMinute', 4],
+    ['SIGNAL_SCAN_MAX_PER_MINUTE', '200', 'signalScanMaxPerMinute', 200],
+  ] as const)('accepts %s=%s at its bound', (name, value, key, expected) => {
+    expect(parseEnv({ ...valid, [name]: value })[key]).toBe(expected);
   });
 
   it.each([
@@ -190,6 +188,9 @@ describe('parseEnv', () => {
     ['BALANCE_POLL_MAX_PER_MINUTE', '0', 'must be between 1 and 500'],
     ['BALANCE_POLL_MAX_PER_MINUTE', '501', 'must be between 1 and 500'],
     ['BALANCE_POLL_MAX_PER_MINUTE', '1.5', 'must be an integer'],
+    ['SIGNAL_SCAN_MAX_PER_MINUTE', '3', 'must be between 4 and 200'],
+    ['SIGNAL_SCAN_MAX_PER_MINUTE', '201', 'must be between 4 and 200'],
+    ['SIGNAL_SCAN_MAX_PER_MINUTE', '', 'must not be empty'],
   ])('rejects %s=%s', (name, value, message) => {
     expect(() => parseEnv({ ...valid, [name]: value })).toThrow(`Env ${name} ${message}`);
   });

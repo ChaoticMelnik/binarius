@@ -12,6 +12,7 @@ import {
   unusedPairsDeps,
   unusedSignalDeps,
   unusedSessionDeps,
+  unusedSignalsDeps,
 } from './trading/testing';
 
 const ok = () => Promise.resolve();
@@ -53,6 +54,7 @@ async function health(deps: Pick<AppDeps, 'checkPostgres' | 'checkRedis'>) {
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
+    signals: unusedSignalsDeps(),
     admin: unusedAdminDeps(),
     ...deps,
     logLevel: 'silent',
@@ -134,6 +136,7 @@ describe('what reaches the log', () => {
       pairs: unusedPairsDeps(),
       sessions: unusedSessionDeps(),
       signal: unusedSignalDeps(),
+      signals: unusedSignalsDeps(),
       admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,
@@ -320,6 +323,7 @@ describe('request logging', () => {
       pairs: unusedPairsDeps(),
       sessions: unusedSessionDeps(),
       signal: unusedSignalDeps(),
+      signals: unusedSignalsDeps(),
       admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,
@@ -349,6 +353,7 @@ describe('error handler', () => {
       pairs: unusedPairsDeps(),
       sessions: unusedSessionDeps(),
       signal: unusedSignalDeps(),
+      signals: unusedSignalsDeps(),
       admin: unusedAdminDeps(),
       checkPostgres: ok,
       checkRedis: ok,

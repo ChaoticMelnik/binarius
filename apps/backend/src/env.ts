@@ -19,13 +19,18 @@ import {
   MAX_BROKER_PAIRS_TTL_MS,
   MIN_BROKER_PAIRS_TTL_MS,
 } from '@binarius/broker-rest';
-import { DEFAULT_BALANCE_POLL_PER_MINUTE } from '@binarius/shared/broker-budget';
+import {
+  DEFAULT_BALANCE_POLL_PER_MINUTE,
+  DEFAULT_SIGNAL_SCAN_PER_MINUTE,
+} from '@binarius/shared/broker-budget';
 import {
   DEFAULT_BALANCE_RECONCILE_INTERVAL_MS,
   MAX_BALANCE_POLL_PER_MINUTE,
   MAX_BALANCE_RECONCILE_INTERVAL_MS,
+  MAX_SIGNAL_SCAN_PER_MINUTE,
   MIN_BALANCE_POLL_PER_MINUTE,
   MIN_BALANCE_RECONCILE_INTERVAL_MS,
+  MIN_SIGNAL_SCAN_PER_MINUTE,
 } from './timing';
 
 // the compose probe timeout (3s) is sized above this ceiling
@@ -54,6 +59,7 @@ export interface Env {
   brokerPairsTtlMs: number;
   balanceReconcileIntervalMs: number;
   balancePollMaxPerMinute: number;
+  signalScanMaxPerMinute: number;
   brokerOauthRedirectUri: string;
   brokerPartnerRef: string;
   tokenEncryptionKey: Buffer;
@@ -107,6 +113,12 @@ export function parseEnv(source: EnvSource): Env {
       'BALANCE_POLL_MAX_PER_MINUTE',
       MIN_BALANCE_POLL_PER_MINUTE,
       MAX_BALANCE_POLL_PER_MINUTE,
+    ),
+    signalScanMaxPerMinute: parseBoundedIntegerEnv(
+      readEnv(source, 'SIGNAL_SCAN_MAX_PER_MINUTE', String(DEFAULT_SIGNAL_SCAN_PER_MINUTE)),
+      'SIGNAL_SCAN_MAX_PER_MINUTE',
+      MIN_SIGNAL_SCAN_PER_MINUTE,
+      MAX_SIGNAL_SCAN_PER_MINUTE,
     ),
     brokerOauthRedirectUri: parseRedirectUri(source),
     brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),

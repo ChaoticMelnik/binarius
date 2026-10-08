@@ -4,6 +4,7 @@ import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared/admin';
 import {
   BROKER_RATE_LIMIT_PER_MINUTE,
   DEFAULT_BALANCE_POLL_PER_MINUTE,
+  DEFAULT_SIGNAL_SCAN_PER_MINUTE,
 } from '@binarius/shared/broker-budget';
 import { BOT_TEXTS_REFRESH_MS } from '@binarius/shared';
 import {
@@ -12,7 +13,11 @@ import {
   TRADING_ACCESS_BUDGET_MS,
 } from '@binarius/shared/broker-balance';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
-import { SIGNAL_CHART_INTERVAL_MS, TRADING_SIGNAL_BUDGET_MS } from '@binarius/shared/signal';
+import {
+  SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_SCAN_INTERVAL,
+  TRADING_SIGNAL_BUDGET_MS,
+} from '@binarius/shared/signal';
 import { TRADING_SESSION_START_BUDGET_MS } from '@binarius/shared/trading-session';
 import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
@@ -116,6 +121,29 @@ export const SIGNAL_FETCH_BUDGET_MS = 3_000;
 // the 5s and 15s candles (#313) the candle's end binds first.
 export const SIGNAL_CACHE_MAX_TTL_MS = 30_000;
 
+// --- The signal scanner (#343) ----------------------------------------------------------------
+// docs/signal.md -> The scanner. One scan a 15s candle, this long after its boundary: the live
+// broker returned the just-closed candle 150 ms after the boundary (2026-10-08), and the rest
+// covers the host's clock against the broker's.
+export const SIGNAL_SCAN_SLACK_MS = 500;
+// chart GETs of one scan in flight at once
+export const SIGNAL_SCAN_CONCURRENCY = 4;
+// the scanner's pause after a 429 without Retry-After: doubles from the first to the second
+export const SIGNAL_SCAN_BACKOFF_MIN_MS = 15_000;
+export const SIGNAL_SCAN_BACKOFF_MAX_MS = 120_000;
+// the period of the scanner's `signal scanner` log line
+export const SIGNAL_SCAN_LOG_MS = 60_000;
+// decisions a minute for one scanned pair: one a candle
+export const SIGNAL_SCAN_DECISIONS_PER_PAIR_PER_MINUTE =
+  60_000 / SIGNAL_CHART_INTERVAL_MS[SIGNAL_SCAN_INTERVAL];
+// SIGNAL_SCAN_MAX_PER_MINUTE's bounds: at least one pair, and below the whole per-IP window
+export const MIN_SIGNAL_SCAN_PER_MINUTE = SIGNAL_SCAN_DECISIONS_PER_PAIR_PER_MINUTE;
+export const MAX_SIGNAL_SCAN_PER_MINUTE = 200;
+
+// the pairs scanned each candle under a ceiling of chart GETs a minute
+export const signalScanMaxPairs = (perMinute: number): number =>
+  Math.floor(perMinute / SIGNAL_SCAN_DECISIONS_PER_PAIR_PER_MINUTE);
+
 // --- Bot text overrides (#299) ------------------------------------------------------------------
 // docs/bot-texts.md → Loading. One SELECT of bot_text_overrides; a slower one counts as failed and
 // the push keeps the texts it had. The SELECT itself is bounded by the pool's query_timeout.
@@ -165,6 +193,15 @@ export const TIMING_CHAIN_HOLDS =
   SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS &&
   TRADING_SIGNAL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SIGNAL_CACHE_MAX_TTL_MS < SIGNAL_CHART_INTERVAL_MS['1m'] &&
+  // a scan starts inside its candle and its chart GET, bounded by the cache, ends inside it too
+  SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[SIGNAL_SCAN_INTERVAL] &&
+  SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[SIGNAL_SCAN_INTERVAL] &&
+  SIGNAL_SCAN_BACKOFF_MIN_MS <= SIGNAL_SCAN_BACKOFF_MAX_MS &&
+  Number.isInteger(SIGNAL_SCAN_DECISIONS_PER_PAIR_PER_MINUTE) &&
+  MIN_SIGNAL_SCAN_PER_MINUTE <= DEFAULT_SIGNAL_SCAN_PER_MINUTE &&
+  DEFAULT_SIGNAL_SCAN_PER_MINUTE <= MAX_SIGNAL_SCAN_PER_MINUTE &&
+  MAX_SIGNAL_SCAN_PER_MINUTE < BROKER_RATE_LIMIT_PER_MINUTE &&
+  signalScanMaxPairs(MIN_SIGNAL_SCAN_PER_MINUTE) >= 1 &&
   // the worker's token route (#90): its longest path is one exchange under the account's row
   // lock, and the worker waits ACCESS_TOKEN_ROUTE_BUDGET_MS for it
   BROKER_HTTP_TIMEOUT_MS < ACCESS_TOKEN_ROUTE_BUDGET_MS &&

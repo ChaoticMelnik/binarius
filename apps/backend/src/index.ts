@@ -2,6 +2,8 @@ import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import {
   BOT_TEXTS_REFRESH_MS,
+  BROKER_RATE_LIMIT_PER_MINUTE,
+  brokerGetsPerMinute,
   closeAll,
   createBotTextRefresher,
   errorLogFields,
@@ -22,12 +24,20 @@ import { createBrokerOAuthClient } from './broker/oauth-client';
 import { parseEnv } from './env';
 import { createBullmqPublisher } from './outbox/bullmq';
 import { OutboxPublisher } from './outbox/publisher';
+import { createScanPacer } from './signal/pacer';
+import { createSignalScanner } from './signal/scanner';
 import {
   BOT_TEXTS_LOAD_BUDGET_MS,
   SHUTDOWN_PHASE1_BUDGET_MS,
   SHUTDOWN_PHASE2_BUDGET_MS,
   SIGNAL_CACHE_MAX_TTL_MS,
   SIGNAL_FETCH_BUDGET_MS,
+  SIGNAL_SCAN_BACKOFF_MAX_MS,
+  SIGNAL_SCAN_BACKOFF_MIN_MS,
+  SIGNAL_SCAN_CONCURRENCY,
+  SIGNAL_SCAN_LOG_MS,
+  SIGNAL_SCAN_SLACK_MS,
+  signalScanMaxPairs,
 } from './timing';
 
 const env = parseEnv(process.env);
@@ -95,6 +105,32 @@ const signalFeed = createCachedSignalFeed(
   { fetchBudgetMs: SIGNAL_FETCH_BUDGET_MS, maxTtlMs: SIGNAL_CACHE_MAX_TTL_MS },
 );
 
+// The background scan of the top pairs (docs/signal.md -> The scanner): through the same cache, so
+// a manual analysis of a scanned pair in that candle costs no second GET. Started with the other
+// loops after listen(), stopped in phase 1.
+const signalScanPairs = signalScanMaxPairs(env.signalScanMaxPerMinute);
+const signalScanner = createSignalScanner({
+  feed: signalFeed,
+  catalog: pairsCatalog,
+  pacer: createScanPacer({
+    perMinute: env.signalScanMaxPerMinute,
+    capacity: signalScanPairs,
+    backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
+    backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
+    now: Date.now,
+  }),
+  // the app's logger does not exist yet, and this one is first used by the first scan
+  logger: {
+    info: (object, message) => app.log.info(object, message),
+    warn: (object, message) => app.log.warn(object, message),
+  },
+  now: Date.now,
+  maxPairs: signalScanPairs,
+  slackMs: SIGNAL_SCAN_SLACK_MS,
+  concurrency: SIGNAL_SCAN_CONCURRENCY,
+  logEveryMs: SIGNAL_SCAN_LOG_MS,
+});
+
 // created before the app so the routes can hold it; polling starts after listen()
 const adminBot = createAdminBot({
   token: env.adminBotToken,
@@ -139,6 +175,10 @@ const app = buildApp({
     feed: signalFeed,
     internalApiToken: env.internalApiToken,
   },
+  signals: {
+    scanner: signalScanner,
+    internalApiToken: env.internalApiToken,
+  },
   auth: {
     db,
     cipher,
@@ -180,6 +220,19 @@ const balanceReconciler = createBalanceReconciler({
   },
 });
 
+// docs/signal.md -> The budget: the defaults fit the broker's per-IP window (checked at import);
+// ceilings raised over it are the operator's choice, said once here
+const brokerGets = brokerGetsPerMinute({
+  balancePollPerMinute: env.balancePollMaxPerMinute,
+  signalScanPerMinute: env.signalScanMaxPerMinute,
+});
+if (brokerGets > BROKER_RATE_LIMIT_PER_MINUTE) {
+  app.log.warn(
+    { brokerGetsPerMinute: brokerGets, limit: BROKER_RATE_LIMIT_PER_MINUTE },
+    'broker budget over the per-IP limit',
+  );
+}
+
 // the push's texts with their overrides (docs/bot-texts.md → Loading)
 const botTexts = createBotTextRefresher({
   load: () => listBotTextOverrides(db),
@@ -212,6 +265,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => publisher.stop(),
       () => adminBot.stop(),
       () => Promise.resolve(pairsCatalog.stop()),
+      () => signalScanner.stop(),
       () => balanceReconciler.stop(),
       () => botTexts.stop(),
     ],
@@ -251,6 +305,7 @@ if (!shuttingDown) {
 if (!shuttingDown) {
   publisher.start();
   balanceReconciler.start();
+  signalScanner.start();
   botTexts.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.

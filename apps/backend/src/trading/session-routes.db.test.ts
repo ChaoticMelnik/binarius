@@ -52,6 +52,7 @@ import {
   unusedBalanceDeps,
   unusedPairsDeps,
   unusedSignalDeps,
+  unusedSignalsDeps,
 } from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -158,6 +159,7 @@ function appWith(
       now: () => NOW,
     },
     signal: unusedSignalDeps(),
+    signals: unusedSignalsDeps(),
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
     users: { db: {} as UsersRoutesDeps['db'], internalApiToken: PAIRS_TEST_TOKEN },
     admin: unusedAdminDeps(),

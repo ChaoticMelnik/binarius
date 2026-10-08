@@ -25,6 +25,7 @@ import {
   unusedBalanceDeps,
   unusedPairsDeps,
   unusedSignalDeps,
+  unusedSignalsDeps,
   unusedSessionDeps,
 } from '../trading/testing';
 
@@ -66,6 +67,7 @@ beforeAll(async () => {
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
+    signals: unusedSignalsDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'silent',
