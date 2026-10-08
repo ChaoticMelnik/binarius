@@ -18,11 +18,11 @@ const MAX_INTENT_MAX_AGE_MS = 600_000;
 const MIN_SUBMIT_ACK_TIMEOUT_MS = 500;
 const MAX_WORKER_CONCURRENCY = 100;
 // the backend is reached over the compose network in plain http, as the bot reaches it
-const BACKEND_URL_RULES: UrlEnvRules = {
+export const BACKEND_URL_RULES: UrlEnvRules = {
   protocols: ['http:', 'https:'],
   allowIpv6Literal: false,
 };
-const BROKER_WS_URL_RULES: UrlEnvRules = {
+export const BROKER_WS_URL_RULES: UrlEnvRules = {
   protocols: ['https:', 'wss:'],
   allowIpv6Literal: false,
 };
