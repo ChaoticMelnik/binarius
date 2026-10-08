@@ -9,9 +9,12 @@ import {
   adminIntentsResponseSchema,
   adminOverviewResponseSchema,
   adminTradeIntentViewSchema,
+  adminTradingSessionsResponseSchema,
+  adminTradingSessionViewSchema,
   adminUserResponseSchema,
   adminUsersResponseSchema,
   staffSessionsResponseSchema,
+  TradeIntentStatus,
 } from '@binarius/shared';
 import {
   AuditAction,
@@ -1030,7 +1033,7 @@ describe('the read pages (#107)', () => {
 
     expect(response.statusCode).toBe(200);
     const raw = response.json<{ user: object; brokerAccounts: object[] }>();
-    expect(Object.keys(raw)).toEqual(['me', 'user', 'brokerAccounts']);
+    expect(Object.keys(raw)).toEqual(['me', 'user', 'brokerAccounts', 'intents']);
     expect(Object.keys(raw.user)).toEqual([
       'id',
       'telegramUserId',
@@ -1303,6 +1306,134 @@ describe('the intents pages (#108)', () => {
 
     expect((await withSession('GET', '/admin/intents', token)).statusCode).toBe(401);
     expect((await withSession('GET', card, token)).statusCode).toBe(401);
+  });
+});
+
+describe('the trading sessions page, the card section and the overview breakdown (#330)', () => {
+  const SESSION_KEYS = Object.keys(adminTradingSessionViewSchema.shape);
+  const INTENT_KEYS = Object.keys(adminTradeIntentViewSchema.shape).sort();
+
+  it('refuses /admin/trading-sessions without a live session and writes nothing', async () => {
+    const before = await auditCount();
+    for (const headers of [BEARER, { ...BEARER, 'x-staff-session': 'a'.repeat(43) }]) {
+      const response = await app.inject({ method: 'GET', url: '/admin/trading-sessions', headers });
+      expect([response.statusCode, response.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.SessionInvalid },
+      ]);
+    }
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('lists sessions with exactly the wire keys, drops unknown query keys, records the path', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const owner = await seedUser(tmp.db);
+    const brokerUserId = `b330-${randomUUID()}`;
+    const accountId = await seedBrokerAccount(tmp.db, owner.userId, { brokerUserId });
+    const session = await seedTradingSession(tmp.db, accountId);
+
+    const response = await readOnce(seeded.staffId, '/admin/trading-sessions?utm=1', token);
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<{ sessions: Record<string, unknown>[] }>();
+    expect(Object.keys(raw)).toEqual(['me', 'sessions', 'nextCursor']);
+    const row = raw.sessions.find((s) => s.id === session.id);
+    expect(Object.keys(row ?? {})).toEqual(SESSION_KEYS);
+    expect(response.body).not.toMatch(/Enc|Hash|KeyId|_enc|_hash|key_id|summary/i);
+    const body = adminTradingSessionsResponseSchema.parse(raw);
+    expect(body.sessions.find((s) => s.id === session.id)).toMatchObject({
+      id: session.id,
+      brokerAccountId: accountId,
+      brokerUserId,
+      userId: owner.userId,
+      telegramUserId: owner.telegramUserId,
+      status: 'active',
+      stopReason: null,
+    });
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.TradingSessionsViewed,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: '/admin/trading-sessions' },
+    });
+  });
+
+  it('records the cursor it was given', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const cursor = randomUUID();
+
+    const response = await readOnce(
+      seeded.staffId,
+      `/admin/trading-sessions?cursor=${cursor}`,
+      token,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(adminTradingSessionsResponseSchema.parse(response.json()).sessions).toEqual([]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/trading-sessions',
+      cursor,
+    });
+  });
+
+  it.each([
+    ['a cursor that is not a uuid', 'cursor=bad'],
+    ['cursor twice', `cursor=${randomUUID()}&cursor=${randomUUID()}`],
+  ])('refuses %s with 400 before the session, writing nothing', async (_label, query) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const before = await auditCount();
+
+    const response = await withSession('GET', `/admin/trading-sessions?${query}`, token);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('refuses the next read once the session has ended', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    expect((await withSession('GET', '/admin/trading-sessions', token)).statusCode).toBe(200);
+    await withSession('POST', '/admin/auth/logout', token);
+
+    expect((await withSession('GET', '/admin/trading-sessions', token)).statusCode).toBe(401);
+  });
+
+  it("puts only the user's own intents into the card, with exact keys, in the one user_viewed row", async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const target = await seedQueuedIntent(tmp.db);
+    await seedQueuedIntent(tmp.db);
+
+    const response = await readOnce(seeded.staffId, `/admin/users/${target.userId}`, token);
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<{ intents: { recent: object[] } }>();
+    expect(Object.keys(raw.intents)).toEqual(['recent', 'total', 'active']);
+    expect(Object.keys(raw.intents.recent[0] ?? {}).sort()).toEqual(INTENT_KEYS);
+    const body = adminUserResponseSchema.parse(raw);
+    expect(body.intents.recent.map((i) => i.id)).toEqual([target.intent.id]);
+    expect(body.intents).toMatchObject({ total: 1, active: 1 });
+    expect(await lastEntry(seeded.staffId)).toMatchObject({
+      action: AuditAction.UserViewed,
+      payload: { path: '/admin/users/:id', result: 'found', userId: target.userId },
+    });
+  });
+
+  it('answers the overview intents with exactly their keys, every status included', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+
+    const response = await readOnce(seeded.staffId, '/admin/overview', token);
+
+    const raw = response.json<{ overview: { intents: { byStatus: object } } }>();
+    expect(Object.keys(raw.overview.intents)).toEqual(['total', 'today', 'byStatus', 'active']);
+    expect(Object.keys(raw.overview.intents.byStatus)).toEqual(Object.values(TradeIntentStatus));
+    adminOverviewResponseSchema.parse(raw);
   });
 });
 

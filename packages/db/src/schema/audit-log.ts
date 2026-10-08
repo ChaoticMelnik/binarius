@@ -40,6 +40,8 @@ export const AuditAction = {
   // admin intents pages (#108)
   IntentsViewed: 'intents_viewed',
   IntentViewed: 'intent_viewed',
+  // admin trading sessions page (#330)
+  TradingSessionsViewed: 'trading_sessions_viewed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 
