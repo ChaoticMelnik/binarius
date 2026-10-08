@@ -929,7 +929,7 @@ describe('a button with a duration the demo no longer offers', () => {
     await press('demo:an:101:300');
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
     expect(logger.info.mock.calls.map((call) => call[1])).toEqual([
-      'the keyboard of an old duration button was not removed',
+      'the keyboard of an old button was not removed',
     ]);
     expect(logger.info.mock.calls[0]?.[0]).toMatchObject({
       method: 'editMessageReplyMarkup',

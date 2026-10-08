@@ -52,7 +52,7 @@ export interface TradingSessionDeps {
   backend: Pick<BackendClient, 'readPairs' | 'startSession' | 'readSession' | 'stopSession'>;
   logger: Logger;
   sessionTracker: Pick<SessionTracker, 'track'>;
-  // the welcome's two ways in, for a press with no account to trade on
+  // the welcome's connect button, for a press with no account to trade on
   connectKeyboard: () => InlineKeyboard;
 }
 

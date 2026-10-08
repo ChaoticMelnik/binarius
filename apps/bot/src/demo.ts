@@ -152,9 +152,10 @@ const LEGACY_DURATION_PATTERNS = [
   sessionStartPattern(LEGACY_DURATIONS),
 ];
 
-// A button drawn before #313 with a duration the demo no longer offers: the spinner stops and the
-// message loses its keyboard, so the old screen cannot be pressed again; nothing is sent. A
-// refusal of the edit (not modified, the message gone) changes nothing for the user.
+// A button drawn before #313 with a duration the demo no longer offers, or before #314 with the
+// site sign-in: the spinner stops and the message loses its keyboard, so the old screen cannot be
+// pressed again; nothing is sent. A refusal of the edit (not modified, the message gone) changes
+// nothing for the user.
 export async function removeLegacyKeyboard(ctx: Context, logger: Logger): Promise<void> {
   await ctx.answerCallbackQuery().catch((error: unknown) => {
     logger.warn(
@@ -168,7 +169,7 @@ export async function removeLegacyKeyboard(ctx: Context, logger: Logger): Promis
     if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
     logger.info(
       { ...errorLogFields(error), ...telegramErrorFields(error, 'editMessageReplyMarkup') },
-      'the keyboard of an old duration button was not removed',
+      'the keyboard of an old button was not removed',
     );
   }
 }

@@ -637,7 +637,6 @@ function scene(options: SceneOptions = {}) {
   const backend: BackendClient = {
     recordStart: options.recordStart ?? (() => Promise.resolve(USER_VIEW)),
     readAccount: () => Promise.reject(new Error('not used by these scenes')),
-    startLogin: () => Promise.reject(new Error('not used by these scenes')),
     confirmLogin: () => Promise.reject(new Error('not used by these scenes')),
     sendEmailCode: () => Promise.reject(new Error('not used by these scenes')),
     emailLogin: () => Promise.reject(new Error('not used by these scenes')),

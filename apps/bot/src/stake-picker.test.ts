@@ -7,7 +7,7 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { createBot, CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA } from './bot';
+import { createBot, CONNECT_CALLBACK_DATA } from './bot';
 import { demoAnalysisCallbackData, stakeMenuCallbackData } from './demo';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
@@ -178,11 +178,7 @@ describe('the stake picker', () => {
       'no account',
       accessView({ broker: null, brokerUnavailable: BrokerBalanceUnavailableReason.NoAccount }),
       TEXTS.accountNone,
-      [
-        [button(LABELS.connectButton, CONNECT_CALLBACK_DATA)],
-        [button(LABELS.oauthButton, OAUTH_CALLBACK_DATA)],
-        BACK_SETTINGS,
-      ],
+      [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)], BACK_SETTINGS],
     ],
     [
       'two accounts',

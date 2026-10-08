@@ -50,7 +50,6 @@ describe('the command menu', () => {
     const backend: BackendClient = {
       recordStart: () => Promise.resolve(USER_VIEW),
       readAccount: () => Promise.resolve(ACCOUNT_VIEW),
-      startLogin: () => Promise.reject(new Error('not used here')),
       confirmLogin: () => Promise.reject(new Error('not used here')),
       sendEmailCode: () => Promise.reject(new Error('not used here')),
       emailLogin: () => Promise.reject(new Error('not used here')),

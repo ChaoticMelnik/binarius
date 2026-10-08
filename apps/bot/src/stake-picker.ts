@@ -97,7 +97,7 @@ export interface StakePickerDeps {
   backend: Pick<BackendClient, 'readTradingAccess' | 'setDemoStake'>;
   logger: Logger;
   dialog: LoginDialog;
-  // the welcome's two ways in, for a user with no account to trade on
+  // the welcome's connect button, for a user with no account to trade on
   connectKeyboard: () => InlineKeyboard;
 }
 

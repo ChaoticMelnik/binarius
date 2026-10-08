@@ -27,7 +27,6 @@ import {
   LINK_ACTIVE,
   LINK_PENDING,
   LINK_REVOKED,
-  LOGIN,
   PAIRS_RESPONSE,
   PENDING_ACCOUNT_ID,
   SIGNAL_DECIDED,
@@ -245,48 +244,6 @@ describe('readAccount', () => {
   });
 });
 
-describe('startLogin', () => {
-  it('sends the telegram id and returns the parsed response', async () => {
-    const { baseUrl, capture } = await serve((_request, reply) => {
-      json(reply, 200, LOGIN);
-    });
-    expect(await createBackendClient({ baseUrl, token: TOKEN }).startLogin('4242')).toEqual(LOGIN);
-    expect(capture.url).toBe('/auth/binodex/start');
-    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
-  });
-
-  it('accepts a response without the Mini App url, for an http redirect', async () => {
-    const { authorizeUrl, state, expiresAt } = LOGIN;
-    const withoutMiniApp = { authorizeUrl, state, expiresAt };
-    const { baseUrl } = await serve((_request, reply) => {
-      json(reply, 200, withoutMiniApp);
-    });
-    expect(await createBackendClient({ baseUrl, token: TOKEN }).startLogin('4242')).toEqual(
-      withoutMiniApp,
-    );
-  });
-
-  it('carries the backend error code as the reason', async () => {
-    const { baseUrl } = await serve((_request, reply) => {
-      json(reply, 409, { error: OAuthErrorCode.UserBlocked });
-    });
-    const error = await rejectionOf(
-      createBackendClient({ baseUrl, token: TOKEN }).startLogin('4242'),
-    );
-    expect(error).toMatchObject({ status: 409, reason: OAuthErrorCode.UserBlocked });
-  });
-
-  it('refuses an error code that is not a bare code', async () => {
-    const { baseUrl } = await serve((_request, reply) => {
-      json(reply, 409, { error: 'Sorry Ada, your account 4242 is blocked' });
-    });
-    const error = await rejectionOf(
-      createBackendClient({ baseUrl, token: TOKEN }).startLogin('4242'),
-    );
-    expect((error as BackendError).reason).toBeUndefined();
-  });
-});
-
 describe('confirmLogin', () => {
   it('sends both identities and returns the parsed response', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {
@@ -322,6 +279,16 @@ describe('confirmLogin', () => {
       createBackendClient({ baseUrl, token: TOKEN }).confirmLogin('4242', PENDING_ACCOUNT_ID),
     );
     expect(error).toMatchObject({ status: 409, reason: OAuthErrorCode.AccountNotPending });
+  });
+
+  it('refuses an error code that is not a bare code', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 409, { error: 'Sorry Ada, your account 4242 is not pending' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).confirmLogin('4242', PENDING_ACCOUNT_ID),
+    );
+    expect((error as BackendError).reason).toBeUndefined();
   });
 });
 

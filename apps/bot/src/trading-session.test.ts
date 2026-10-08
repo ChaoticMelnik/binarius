@@ -9,7 +9,7 @@ import {
   type TradingSessionView,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
-import { createBot, CONNECT_CALLBACK_DATA, OAUTH_CALLBACK_DATA } from './bot';
+import { createBot, CONNECT_CALLBACK_DATA } from './bot';
 import { sessionStartCallbackData, stakeMenuCallbackData } from './demo';
 import type { SessionTrackRequest } from './session-tracker';
 import {
@@ -117,10 +117,7 @@ const LIVE_ROWS = [
   [button(LABELS.sessionRefreshButton, REFRESH), button(LABELS.sessionStopButton, STOP)],
 ];
 const STOPPED_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)]];
-const CONNECT_ROWS = [
-  [button(LABELS.connectButton, CONNECT_CALLBACK_DATA)],
-  [button(LABELS.oauthButton, OAUTH_CALLBACK_DATA)],
-];
+const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5))],
 ];
