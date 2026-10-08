@@ -2230,6 +2230,7 @@ PR #331 смержен через rebase (5 коммитов, голова `bb22
 
 ### Process improvement proposals
 
-1. **Порог возврата в Todo един — только Blocker/Major** — **внедрено в #333: .claude/CLAUDE.md → GitHub — статусы задач; .claude/skills/tech-lead/SKILL.md → Phase 4**
+1. **Порог возврата в Todo един — только Blocker/Major** — **внедрено в #333: .claude/CLAUDE.md → GitHub — статусы задач; .claude/skills/tech-lead/SKILL.md → Phase 4 и чеклист Reviewer step; .claude/skills/reviewer/SKILL.md → description и Step 6a**
 2. **Допускается ли разовая отмена `/clarify` владельцем** — глобальное правило сейчас запрещает её без исключений; нужно решение владельца: оставить запрет (и такие указания впредь отклонять) или записать исключение в `~/.claude/CLAUDE.md` — **открыто (2026-10-08, владелец)**
 3. **Minor** — **вынесено в #332**
+4. **Правка глобального `~/.claude/CLAUDE.md` → Task Workflow:** там «Changes requested → back to In Progress», а в проекте — Blocker/Major → Todo, In Progress возвращает архитектор после Plan Update (проектная секция правит). Предлагается владельцу заменить строку на «Blocker/Major → Todo; In Progress — после Plan Update архитектора» — **открыто (2026-10-08, владелец)**
