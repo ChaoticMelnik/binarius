@@ -221,7 +221,7 @@ export function createStakePicker<C extends Context>({
     const amount = parseDemoStakeInput(text);
     if (amount === undefined) {
       keepStakeStep(id);
-      await replyHtml(ctx, TEXTS.stakeInputInvalid);
+      await replyHtml(ctx, TEXTS.stakeInputInvalid, { reply_markup: backKeyboard(origin) });
       return;
     }
     const screen = await savedScreen(

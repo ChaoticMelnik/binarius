@@ -16,6 +16,8 @@ import {
   type TelegramHtml,
   type TradingAccessResponse,
   CONNECT_CALLBACK_DATA,
+  MENU_CALLBACK_DATA,
+  supportUrl,
   DEMO_CALLBACK_DATA,
 } from '@binarius/shared';
 import { telegramHtml } from '@binarius/shared';
@@ -130,6 +132,13 @@ const warnings = (logger: ReturnType<typeof fakeLogger>) =>
 
 const REFRESH_ROWS = [[button(LABELS.refreshIntentButton, REFRESH)]];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
+// #350: a refusal of the press leads back to the analysis and to the menu; a blocked user to support
+const MENU_ROW = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
+const BACK_ROWS = [
+  [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5))],
+  MENU_ROW,
+];
+const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5))],
@@ -257,17 +266,17 @@ describe('the stake button', () => {
   });
 
   it.each([
-    [TradeIntentErrorCode.UserBlocked, 409, TEXTS.blocked, []],
+    [TradeIntentErrorCode.UserBlocked, 409, TEXTS.blocked, SUPPORT_ROWS],
     [TradeIntentErrorCode.BrokerAccountNotFound, 404, TEXTS.accountNone, CONNECT_ROWS],
-    [TradeIntentErrorCode.AmbiguousBrokerAccount, 409, TEXTS.statusAmbiguous, []],
+    [TradeIntentErrorCode.AmbiguousBrokerAccount, 409, TEXTS.statusAmbiguous, BACK_ROWS],
     [TradeIntentErrorCode.AccountRevoked, 409, TEXTS.accountRevoked, CONNECT_ROWS],
-    [TradeIntentErrorCode.AccountNotConfirmed, 409, TEXTS.stakeAccountNotConfirmed, []],
-    [TradeIntentErrorCode.AccountHalted, 409, TEXTS.stakeAccountHalted, []],
-    [TradeIntentErrorCode.InsufficientTokens, 409, TEXTS.stakeInsufficientTokens, []],
-    [TradeIntentErrorCode.ActiveIntentExists, 409, TEXTS.stakeActiveIntent, []],
-    [TradeIntentErrorCode.ClientRequestIdConflict, 409, TEXTS.stakeButtonUsed, []],
-    [TradeIntentErrorCode.TradingPaused, 409, TEXTS.tradingPaused, []],
-    [TradeIntentErrorCode.BalanceUnavailable, 409, TEXTS.stakeBalanceMissing, []],
+    [TradeIntentErrorCode.AccountNotConfirmed, 409, TEXTS.stakeAccountNotConfirmed, BACK_ROWS],
+    [TradeIntentErrorCode.AccountHalted, 409, TEXTS.stakeAccountHalted, BACK_ROWS],
+    [TradeIntentErrorCode.InsufficientTokens, 409, TEXTS.stakeInsufficientTokens, BACK_ROWS],
+    [TradeIntentErrorCode.ActiveIntentExists, 409, TEXTS.stakeActiveIntent, BACK_ROWS],
+    [TradeIntentErrorCode.ClientRequestIdConflict, 409, TEXTS.stakeButtonUsed, BACK_ROWS],
+    [TradeIntentErrorCode.TradingPaused, 409, TEXTS.tradingPaused, BACK_ROWS],
+    [TradeIntentErrorCode.BalanceUnavailable, 409, TEXTS.stakeBalanceMissing, BACK_ROWS],
     [TradeIntentErrorCode.StakePrecision, 409, TEXTS.stakePrecision, STAKE_MENU_ROWS],
     [
       TradeIntentErrorCode.StakeBelowMinimum,
@@ -382,6 +391,8 @@ describe('the stake button', () => {
     await press(STAKE);
     expect(createIntent).toHaveBeenCalledTimes(1);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+    // #350: the press is a write, so its failure leads back to the analysis, never the press
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(BACK_ROWS);
     expect(warnings(logger)).toEqual(['trade intent not created']);
   });
 
@@ -495,13 +506,14 @@ describe('the stake button', () => {
     });
     await press(STAKE);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(BACK_ROWS);
     expect(createIntent).not.toHaveBeenCalled();
     expect(warnings(logger)).toEqual(['trading access not read']);
   });
 
   type AccessCase = [string, TradingAccessResponse, TelegramHtml, readonly (readonly Button[])[]];
   it.each<AccessCase>([
-    ['a blocked user', accessView({ status: UserStatus.Blocked }), TEXTS.blocked, []],
+    ['a blocked user', accessView({ status: UserStatus.Blocked }), TEXTS.blocked, SUPPORT_ROWS],
     [
       'no account',
       accessView({ broker: null, brokerUnavailable: BrokerBalanceUnavailableReason.NoAccount }),
@@ -515,7 +527,7 @@ describe('the stake button', () => {
         brokerUnavailable: BrokerBalanceUnavailableReason.AmbiguousAccount,
       }),
       TEXTS.statusAmbiguous,
-      [],
+      BACK_ROWS,
     ],
     ...Object.values(BrokerBalanceUnavailableReason)
       .filter(
@@ -529,7 +541,7 @@ describe('the stake button', () => {
             `no snapshot (${reason})`,
             accessView({ broker: null, brokerUnavailable: reason }),
             TEXTS.stakeBalanceMissing,
-            [],
+            BACK_ROWS,
           ] satisfies AccessCase,
       ),
   ])('creates nothing for %s', async (_case, access, text, rows) => {
@@ -622,6 +634,8 @@ describe('the refresh button', () => {
     await press(REFRESH);
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.intentStatusUnavailable.value);
+    // nothing to read again: the menu only
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual([MENU_ROW]);
     expect(warnings(logger)).toEqual([]);
   });
 
@@ -634,6 +648,11 @@ describe('the refresh button', () => {
     const { press, calls, logger } = setup({ readIntent: () => Promise.reject(error) });
     await press(REFRESH);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+    // a read: the same press again, then the menu
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual([
+      [button(LABELS.demoRetryButton, REFRESH)],
+      MENU_ROW,
+    ]);
     expect(warnings(logger)).toEqual(['trade intent status not read']);
   });
 

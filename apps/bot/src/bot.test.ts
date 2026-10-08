@@ -20,6 +20,7 @@ import {
   commandRetryCallbackData,
   MENU_CALLBACK_DATA,
   RETRY_COMMANDS,
+  supportUrl,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
@@ -34,6 +35,7 @@ import {
 import { BOT_COMMANDS } from './commands';
 
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
+import { SETTINGS_CALLBACK_DATA } from './stake-picker';
 import {
   ACCESS_VIEW,
   ACCOUNT_VIEW,
@@ -175,6 +177,18 @@ const unreachable = () =>
 
 const ON_CODE_STEP: LoginDialogState = { step: 'code', email: EMAIL };
 
+// the next steps (#350, docs/bot-navigation.md)
+const MENU_BUTTONS = [{ text: LABELS.menuButton, callback_data: MENU_CALLBACK_DATA }];
+const SUPPORT_BUTTONS = [{ text: LABELS.supportButton, url: supportUrl() }];
+const DEMO_AND_MENU_BUTTONS = [
+  { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
+  ...MENU_BUTTONS,
+];
+const retryButtons = (data: string) => [
+  { text: LABELS.demoRetryButton, callback_data: data },
+  ...MENU_BUTTONS,
+];
+
 const CODE_STEP_BUTTONS = [
   { text: LABELS.resendButton, callback_data: RESEND_CALLBACK_DATA },
   { text: LABELS.changeEmailButton, callback_data: CONNECT_CALLBACK_DATA },
@@ -294,12 +308,12 @@ describe('/start', () => {
     );
   });
 
-  it('shows a blocked user no CTA', async () => {
+  it('shows a blocked user no CTA but the support', async () => {
     const { bot, calls } = setup({ user: userView({ status: UserStatus.Blocked }) });
     await bot.handleUpdate(startUpdate('/start'));
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.blocked.value);
-    expect(message?.reply_markup).toBeUndefined();
+    expect(inlineButtons(message)).toEqual(SUPPORT_BUTTONS);
   });
 
   it('offers to confirm a link that waits for it, one button per link', async () => {
@@ -357,7 +371,7 @@ describe('/start', () => {
     await bot.handleUpdate(startUpdate('/start'));
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.blocked.value);
-    expect(message?.reply_markup).toBeUndefined();
+    expect(inlineButtons(message)).toEqual(SUPPORT_BUTTONS);
   });
 
   it('tells the user to come back later when the backend is unreachable', async () => {
@@ -492,7 +506,7 @@ describe('the status card', () => {
     });
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.blocked.value);
-    expect(sentPayload(calls, 'sendMessage')?.reply_markup).toBeUndefined();
+    expect(inlineButtons(sentPayload(calls, 'sendMessage'))).toEqual(SUPPORT_BUTTONS);
   });
 
   it('shows the not-connected text and the connect button when no account is active any more', async () => {
@@ -699,6 +713,118 @@ describe('«🔄 Повторить» of a command (#350)', () => {
   });
 });
 
+// #350: every message the bot answers with carries its next step (docs/bot-navigation.md)
+describe('the next step under every message', () => {
+  const ACTIVE = userView({ hasActiveBrokerAccount: true });
+  const HOME_RETRY = [{ text: LABELS.demoRetryButton, callback_data: MENU_CALLBACK_DATA }];
+  const DEMO = [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }];
+  // the last message the scene sent, a photo's caption included
+  const lastSent = (calls: readonly { method: string; payload: Record<string, unknown> }[]) =>
+    calls.filter((call) => call.method === 'sendMessage' || call.method === 'sendPhoto').at(-1)
+      ?.payload;
+
+  it.each([
+    [
+      '/start failing offers the menu as its repeat',
+      () => textUpdate('/start'),
+      { recordStart: unreachable() },
+      HOME_RETRY,
+    ],
+    [
+      '/menu failing on the access read offers the menu as its repeat',
+      () => textUpdate('/menu'),
+      { user: ACTIVE, readTradingAccess: unreachable() },
+      HOME_RETRY,
+    ],
+    [
+      '/settings failing offers /settings again',
+      () => textUpdate('/settings'),
+      { recordStart: unreachable() },
+      retryButtons(commandRetryCallbackData('settings')),
+    ],
+    [
+      "the picker's way back failing offers the same read",
+      () => callbackUpdate(SETTINGS_CALLBACK_DATA),
+      { recordStart: unreachable() },
+      retryButtons(SETTINGS_CALLBACK_DATA),
+    ],
+    [
+      'a level not set offers the menu, not the write again',
+      () => callbackUpdate(levelCallbackData(NotificationLevel.Off)),
+      { setNotificationLevel: unreachable() },
+      MENU_BUTTONS,
+    ],
+    [
+      'a confirm refused offers the menu',
+      () => callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID)),
+      { confirmLogin: refused(409, OAuthErrorCode.AccountNotPending) },
+      MENU_BUTTONS,
+    ],
+    [
+      'a confirm refused for a blocked user offers the support',
+      () => callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID)),
+      { confirmLogin: refused(403, OAuthErrorCode.UserBlocked) },
+      SUPPORT_BUTTONS,
+    ],
+    [
+      'a confirm failing offers the menu',
+      () => callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID)),
+      { confirmLogin: unreachable() },
+      MENU_BUTTONS,
+    ],
+    [
+      'a confirm sends the account card with the demo',
+      () => callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID)),
+      {},
+      DEMO,
+    ],
+    [
+      'the resend without a code step offers the menu',
+      () => callbackUpdate(RESEND_CALLBACK_DATA),
+      {},
+      MENU_BUTTONS,
+    ],
+    [
+      'an address that is not one offers the menu',
+      () => textUpdate('not an address'),
+      { dialog: { step: 'email' } as LoginDialogState },
+      MENU_BUTTONS,
+    ],
+    [
+      'a code accepted sends the account card with the demo',
+      () => textUpdate(CODE),
+      { dialog: ON_CODE_STEP },
+      DEMO,
+    ],
+    [
+      'a recheck failing offers the menu',
+      () => textUpdate(CODE),
+      { dialog: ON_CODE_STEP, emailLogin: unreachable(), recordStart: unreachable() },
+      MENU_BUTTONS,
+    ],
+    [
+      'a recheck finding the user blocked offers the support',
+      () => textUpdate(CODE),
+      {
+        dialog: ON_CODE_STEP,
+        emailLogin: unreachable(),
+        user: userView({ status: UserStatus.Blocked }),
+      },
+      SUPPORT_BUTTONS,
+    ],
+    [
+      'a recheck finding an active account sends the card with the demo',
+      () => textUpdate(CODE),
+      { dialog: ON_CODE_STEP, emailLogin: unreachable(), user: ACTIVE },
+      DEMO,
+    ],
+  ] as const)('%s', async (_label, update, options, buttons) => {
+    const { bot, calls } = setup(options);
+    await bot.handleUpdate(update());
+    expect(inlineButtons(lastSent(calls))).toEqual(buttons);
+  });
+});
+
 describe('/account', () => {
   const CONNECT_BUTTONS = [{ text: LABELS.connectButton, callback_data: CONNECT_CALLBACK_DATA }];
   const CONFIRM_BUTTON = {
@@ -737,10 +863,10 @@ describe('/account', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it('shows an active link with its address and no buttons', async () => {
+  it('shows an active link with its address, the demo and the menu', async () => {
     const { message } = await account({ readAccount: withAccounts(LINK_ACTIVE) });
     expect(message?.text).toBe(`${TEXTS.accountConnected.value}\n\n✅ Подключён: ada@example.test`);
-    expect(message?.reply_markup).toBeUndefined();
+    expect(inlineButtons(message)).toEqual(DEMO_AND_MENU_BUTTONS);
   });
 
   it('offers to confirm a waiting link beside an active one, without the connect button', async () => {
@@ -767,12 +893,12 @@ describe('/account', () => {
     expect(inlineButtons(message)).toEqual(CONNECT_BUTTONS);
   });
 
-  it('shows a revoked link beside an active one under the connected header, without buttons', async () => {
+  it('shows a revoked link beside an active one under the connected header, with the demo and the menu', async () => {
     const { message } = await account({ readAccount: withAccounts(LINK_ACTIVE, LINK_REVOKED) });
     expect(message?.text).toBe(
       `${TEXTS.accountConnected.value}\n\n✅ Подключён: ada@example.test\n⚠️ Подключение отозвано: old@example.test`,
     );
-    expect(message?.reply_markup).toBeUndefined();
+    expect(inlineButtons(message)).toEqual(DEMO_AND_MENU_BUTTONS);
   });
 
   it('says the address is unknown when the broker sent none', async () => {
@@ -797,7 +923,7 @@ describe('/account', () => {
     });
     expect(sends).toHaveLength(1);
     expect(message?.text).toBe(TEXTS.blocked.value);
-    expect(message?.reply_markup).toBeUndefined();
+    expect(inlineButtons(message)).toEqual(SUPPORT_BUTTONS);
   });
 
   it.each([
@@ -816,7 +942,7 @@ describe('/account', () => {
   ])('says the service is unavailable when %s, and warns', async (_label, error, fields) => {
     const { message, logger } = await account({ readAccount: vi.fn(() => Promise.reject(error)) });
     expect(message?.text).toBe(TEXTS.unavailable.value);
-    expect(message?.reply_markup).toBeUndefined();
+    expect(inlineButtons(message)).toEqual(retryButtons(commandRetryCallbackData('account')));
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
       err: { name: 'BackendError', code: error.code },
@@ -1439,7 +1565,7 @@ describe('the connect button', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendMessage']);
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.emailPrompt.value);
-    expect(message?.reply_markup).toBeUndefined();
+    expect(inlineButtons(message)).toEqual(MENU_BUTTONS);
     expect(dialog.get(USER.id)).toEqual({ step: 'email' });
     expect(backend.sendEmailCode).not.toHaveBeenCalled();
   });
@@ -1529,7 +1655,7 @@ describe('the address step', () => {
     await bot.handleUpdate(textUpdate(EMAIL));
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.sendCodeBusy.value);
-    expect(message?.reply_markup).toBeUndefined();
+    expect(inlineButtons(message)).toEqual(MENU_BUTTONS);
     expect(dialog.get(USER.id)).toEqual(ON_EMAIL_STEP);
     expect(logger.warn).not.toHaveBeenCalled();
 
@@ -1567,7 +1693,7 @@ describe('the address step', () => {
       await bot.handleUpdate(textUpdate(EMAIL));
       const message = sentPayload(calls, 'sendMessage');
       expect(message?.text).toBe(TEXTS.unavailable.value);
-      expect(message?.reply_markup).toBeUndefined();
+      expect(inlineButtons(message)).toEqual(MENU_BUTTONS);
       expect(dialog.get(USER.id)).toEqual(ON_EMAIL_STEP);
       expect(logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ backendStatus: status }),
@@ -2115,12 +2241,12 @@ describe('/settings', () => {
     },
   );
 
-  it('shows a blocked user the blocked text and no keyboard', async () => {
+  it('shows a blocked user the blocked text and the support', async () => {
     const { bot, calls } = setup({ user: userView({ status: UserStatus.Blocked }) });
     await bot.handleUpdate(textUpdate('/settings'));
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.blocked.value);
-    expect(message?.reply_markup).toBeUndefined();
+    expect(inlineButtons(message)).toEqual(SUPPORT_BUTTONS);
   });
 
   it('says the service is unavailable when the backend cannot be reached', async () => {
@@ -2331,7 +2457,7 @@ describe('/settings', () => {
 });
 
 describe('/support', () => {
-  it('sends the support text and one url button, without calling the backend', async () => {
+  it('sends the support text, its url button and the menu, without calling the backend', async () => {
     const { bot, backend, calls } = setup({ recordStart: unreachable() });
     await bot.handleUpdate(textUpdate('/support'));
 
@@ -2342,6 +2468,7 @@ describe('/support', () => {
     expect(sends[0]?.payload.text).toBe(TEXTS.support.value);
     expect(inlineButtons(sends[0]?.payload)).toEqual([
       { text: LABELS.supportButton, url: 'https://t.me/dimmelya' },
+      ...MENU_BUTTONS,
     ]);
   });
 
@@ -2362,11 +2489,11 @@ describe('/help', () => {
     return { backend, sends: calls.filter((call) => call.method === 'sendMessage'), calls };
   };
 
-  it('sends the help text once, with no buttons and no backend call', async () => {
+  it('sends the help text once, with the menu and no backend call', async () => {
     const { backend, sends, calls } = await helpSends('/help');
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     expect(sends[0]?.payload.text).toBe(helpText(BOT_COMMANDS).value);
-    expect(sends[0]?.payload.reply_markup).toBeUndefined();
+    expect(inlineButtons(sends[0]?.payload)).toEqual(MENU_BUTTONS);
     expect(backend.recordStart).not.toHaveBeenCalled();
     expect(backend.readAccount).not.toHaveBeenCalled();
   });

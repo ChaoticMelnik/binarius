@@ -23,6 +23,7 @@ import {
   sessionStartDataOf,
   stakeMenuCallbackData,
 } from './demo';
+import { backToAnalysisKeyboard, menuKeyboard, supportKeyboard, withMenu } from './keyboards';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
@@ -185,7 +186,10 @@ export function createTradingSessionComposer<C extends Context>({
     // and tracking moves to it (owner's decision).
     const view = 'started' in result ? result.started : result.active;
     if (view === null) {
-      await replyHtml(ctx, TEXTS.sessionJustEnded);
+      // the start is a write: back to the analysis, whose session button starts the next one
+      await replyHtml(ctx, TEXTS.sessionJustEnded, {
+        reply_markup: backToAnalysisKeyboard(data.assetId, data.durationSec),
+      });
       return;
     }
     const symbol = symbolOf(catalog, view);
@@ -204,7 +208,7 @@ export function createTradingSessionComposer<C extends Context>({
       settle(backend.readPairs()),
     ]);
     if (!read.ok) {
-      await replyReadFailure(ctx, read.error, 'trading session status not read');
+      await replyReadFailure(ctx, sessionId, read.error, 'trading session status not read');
       return;
     }
     await showInPlace(ctx, telegramUserId, symbolOf(catalog, read.value), read.value);
@@ -227,12 +231,12 @@ export function createTradingSessionComposer<C extends Context>({
       // it had ended already: show how
       const read = await settle(backend.readSession(sessionId, telegramUserId));
       if (!read.ok) {
-        await replyReadFailure(ctx, read.error, 'trading session status not read');
+        await replyReadFailure(ctx, sessionId, read.error, 'trading session status not read');
         return;
       }
       view = read.value;
     } else {
-      await replyReadFailure(ctx, stopped.error, 'trading session not stopped');
+      await replyReadFailure(ctx, sessionId, stopped.error, 'trading session not stopped');
       return;
     }
     await showInPlace(ctx, telegramUserId, symbolOf(catalog, view), view);
@@ -267,22 +271,40 @@ export function createTradingSessionComposer<C extends Context>({
       );
     }
     const reply_markup =
-      refusal.connect === true
-        ? connectKeyboard()
-        : refusal.stakeMenu === true
-          ? new InlineKeyboard().text(
-              LABELS.stakeMenuButton,
-              stakeMenuCallbackData(assetId, durationSec),
-            )
-          : undefined;
-    await replyHtml(ctx, textOf(refusal.text), reply_markup === undefined ? {} : { reply_markup });
+      refusal.text === 'blocked'
+        ? supportKeyboard()
+        : refusal.connect === true
+          ? connectKeyboard()
+          : refusal.stakeMenu === true
+            ? new InlineKeyboard().text(
+                LABELS.stakeMenuButton,
+                stakeMenuCallbackData(assetId, durationSec),
+              )
+            : backToAnalysisKeyboard(assetId, durationSec);
+    await replyHtml(ctx, textOf(refusal.text), { reply_markup });
   }
 
-  // a missing or foreign id is told as such; anything else is logged
-  async function replyReadFailure(ctx: Context, error: unknown, message: string): Promise<void> {
+  // A missing or foreign id is told as such and has nothing to read again; anything else is
+  // logged and offers the session's read, the refresh, whether the press was the refresh or the
+  // stop (a stop is a write and is not repeated).
+  async function replyReadFailure(
+    ctx: Context,
+    sessionId: string,
+    error: unknown,
+    message: string,
+  ): Promise<void> {
     const notFound = isHttpError(error, SESSION_NOT_FOUND);
     if (!notFound) logger.warn({ ...errorLogFields(error), ...backendErrorFields(error) }, message);
-    await replyHtml(ctx, notFound ? TEXTS.sessionStatusUnavailable : TEXTS.unavailable);
+    await replyHtml(ctx, notFound ? TEXTS.sessionStatusUnavailable : TEXTS.unavailable, {
+      reply_markup: notFound
+        ? menuKeyboard()
+        : withMenu(
+            new InlineKeyboard().text(
+              LABELS.sessionRefreshButton,
+              sessionRefreshCallbackData(sessionId),
+            ),
+          ),
+    });
   }
 
   // The view in place of the message the button is under, then tracking on whichever message

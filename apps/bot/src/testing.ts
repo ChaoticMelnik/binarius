@@ -10,6 +10,7 @@ import type { BackendClient } from './backend-client';
 import { stakeFingerprint } from './demo';
 import type { IntentTracker } from './intent-tracker';
 import type { SessionTracker } from './session-tracker';
+import { LABELS } from './texts';
 import {
   BrokerAccountStatus,
   brokerBalanceViewSchema,
@@ -527,6 +528,34 @@ export interface CapturedApi {
 // methods answer `result: true`. The account card reads the message_id of the sendPhoto or
 // sendMessage that carried it, so a scene that reaches the pin programs those two with
 // messageAnswer; a handler that starts reading another result needs the same.
+// The data of the presses that write (#350, docs/bot-navigation.md → The repeat): a «🔄 Повторить»
+// carrying one would write again, a second trade or a second session
+export const WRITE_CALLBACK_PREFIXES = [
+  'demo:stake:',
+  'demo:sess:',
+  'session:stop:',
+  'confirm:',
+  'resend',
+  'stk:s:',
+  'stk:z:',
+  'level:',
+] as const;
+
+// Every message a scene sends goes through here, so no scene can send a repeat of a write
+// unnoticed: the call throws and the scene fails.
+export function refuseWriteRetried(method: string, payload: Record<string, unknown>): void {
+  for (const button of inlineButtons(payload)) {
+    const data = button.callback_data;
+    if (
+      button.text === LABELS.demoRetryButton &&
+      data !== undefined &&
+      WRITE_CALLBACK_PREFIXES.some((prefix) => data.startsWith(prefix))
+    ) {
+      throw new Error(`${method} repeats a write: ${data}`);
+    }
+  }
+}
+
 export function captureApi(bot: Bot): CapturedApi {
   const captured: CapturedApi = { calls: [], apiErrors: new Map(), answers: new Map() };
   bot.api.config.use(((
@@ -536,6 +565,7 @@ export function captureApi(bot: Bot): CapturedApi {
     signal?: AbortSignal,
   ) => {
     captured.calls.push({ method, payload });
+    refuseWriteRetried(method, payload);
     const failure = captured.apiErrors.get(method);
     if (failure !== undefined) {
       if (failure instanceof Error) throw failure;

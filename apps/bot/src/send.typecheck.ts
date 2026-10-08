@@ -8,6 +8,7 @@ import {
   editMessageTextByIdHtml,
   editMessageTextHtml,
   replyHtml,
+  replyHtmlWithoutNextStep,
   replyWithPhotoHtml,
   replyWithVideoHtml,
 } from './send';
@@ -38,3 +39,19 @@ export const viaConstant = {
   // @ts-expect-error a message constant holds TelegramHtml, not a string (TS2322)
   text: 'raw',
 } as const satisfies Record<string, TelegramHtml | ((value: string) => TelegramHtml)>;
+
+// #350: every message carries an inline keyboard, its next step
+// @ts-expect-error a message without reply_markup does not compile (TS2554)
+export const viaNoKeyboard = replyHtml(ctx, text);
+// @ts-expect-error nor with reply_markup left undefined (TS2322)
+export const viaUndefinedKeyboard = replyHtml(ctx, text, { reply_markup: undefined });
+export const viaReplyKeyboard = replyHtml(ctx, text, {
+  // @ts-expect-error a reply keyboard is not a next step: only an inline one counts (TS2353)
+  reply_markup: { keyboard: [] },
+});
+// @ts-expect-error the edit needs one too (TS2554)
+export const viaEditNoKeyboard = editMessageTextHtml(ctx, text);
+// @ts-expect-error the edit by id too (TS2554)
+export const viaEditByIdNoKeyboard = editMessageTextByIdHtml(api, 1, 2, text);
+// @ts-expect-error a reason outside NO_NEXT_STEP_REASONS does not compile (TS2345)
+export const viaUnlistedReason = replyHtmlWithoutNextStep(ctx, text, 'because');

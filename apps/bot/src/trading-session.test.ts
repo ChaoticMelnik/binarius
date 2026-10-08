@@ -8,10 +8,12 @@ import {
   telegramHtml,
   type TradingSessionView,
   CONNECT_CALLBACK_DATA,
+  MENU_CALLBACK_DATA,
+  supportUrl,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
-import { sessionStartCallbackData, stakeMenuCallbackData } from './demo';
+import { demoAnalysisCallbackData, sessionStartCallbackData, stakeMenuCallbackData } from './demo';
 import type { SessionTrackRequest } from './session-tracker';
 import {
   BOT_INFO,
@@ -122,6 +124,15 @@ const LIVE_ROWS = [
 const AGAIN = button(LABELS.sessionAgainButton, sessionStartCallbackData(PAIR_EURUSD.id, 15));
 const STOPPED_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)], [AGAIN]];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
+// #350: a refusal of the start leads back to the analysis and to the menu; a blocked user to support
+const MENU_ROW = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
+const BACK_ROWS = [
+  [button(LABELS.stakeBackAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5))],
+  MENU_ROW,
+];
+const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
+// a failed read of the session, after the refresh or the stop: its refresh, never the stop again
+const SESSION_REFRESH_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)], MENU_ROW];
 const STAKE_MENU_ROWS = [
   [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5))],
 ];
@@ -185,6 +196,8 @@ describe('the session button', () => {
     });
     await press(START);
     expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.sessionJustEnded.value);
+    // #350: the start is a write; the analysis' session button starts the next one
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(BACK_ROWS);
     expect(sessionTracker.track).not.toHaveBeenCalled();
   });
 
@@ -205,7 +218,13 @@ describe('the session button', () => {
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(textOf(refusal.text).value);
     expect(rowsOf(sent)).toEqual(
-      refusal.connect === true ? CONNECT_ROWS : refusal.stakeMenu === true ? STAKE_MENU_ROWS : [],
+      refusal.text === 'blocked'
+        ? SUPPORT_ROWS
+        : refusal.connect === true
+          ? CONNECT_ROWS
+          : refusal.stakeMenu === true
+            ? STAKE_MENU_ROWS
+            : BACK_ROWS,
     );
     expect(startSession).toHaveBeenCalledTimes(1);
     expect(sessionTracker.track).not.toHaveBeenCalled();
@@ -301,6 +320,7 @@ describe('the session button', () => {
       });
       await press(START);
       expect(payloadOf(calls, 'sendMessage')?.text, reason).toBe(TEXTS.unavailable.value);
+      expect(rowsOf(payloadOf(calls, 'sendMessage')), reason).toEqual(BACK_ROWS);
       expect(warnings(logger), reason).toEqual(['trading session not started']);
     }
   });
@@ -373,6 +393,7 @@ describe("the session's refresh button", () => {
     expect(payloadOf(missing.calls, 'sendMessage')?.text).toBe(
       TEXTS.sessionStatusUnavailable.value,
     );
+    expect(rowsOf(payloadOf(missing.calls, 'sendMessage'))).toEqual([MENU_ROW]);
     expect(warnings(missing.logger)).toEqual([]);
 
     const broken = setup({
@@ -380,6 +401,7 @@ describe("the session's refresh button", () => {
     });
     await broken.press(REFRESH);
     expect(payloadOf(broken.calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+    expect(rowsOf(payloadOf(broken.calls, 'sendMessage'))).toEqual(SESSION_REFRESH_ROWS);
     expect(warnings(broken.logger)).toEqual(['trading session status not read']);
   });
 });
@@ -436,6 +458,7 @@ describe("the session's stop button", () => {
     await broken.press(STOP);
     expect(broken.stopSession).toHaveBeenCalledTimes(1);
     expect(payloadOf(broken.calls, 'sendMessage')?.text).toBe(TEXTS.unavailable.value);
+    expect(rowsOf(payloadOf(broken.calls, 'sendMessage'))).toEqual(SESSION_REFRESH_ROWS);
     expect(warnings(broken.logger)).toEqual(['trading session not stopped']);
   });
 
