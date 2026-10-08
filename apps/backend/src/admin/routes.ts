@@ -8,6 +8,7 @@ import {
   safeParseAdminConfirmRequest,
   safeParseAdminIntentsQuery,
   safeParseAdminLoginRequest,
+  safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
   safeParseAdminUsersQuery,
   STAFF_SESSION_TOKEN_PATTERN,
@@ -24,6 +25,7 @@ import {
   failChallengeDelivery,
   findStaffForLogin,
   listIntentsForAdmin,
+  listLedgerForAdmin,
   listLiveStaffSessions,
   listTradingSessionsForAdmin,
   listUsersForAdmin,
@@ -41,6 +43,7 @@ import {
   startLoginChallenge,
   STAFF_SESSION_IDLE_MS,
   toAdminBrokerAccountView,
+  toAdminLedgerEntry,
   toAdminOverview,
   toAdminTradeIntentView,
   toAdminTradingSessionView,
@@ -474,6 +477,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
             total: card.intents.total,
             active: card.intents.active,
           },
+          ledger: { recent: card.ledger.map(toAdminLedgerEntry) },
         },
         audit: {
           action: AuditAction.UserViewed,
@@ -591,6 +595,44 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
           action: AuditAction.TradingSessionsViewed,
           payload: {
             path: '/admin/trading-sessions',
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  // --- Token ledger (#109, docs/admin-pages.md) --------------------------------------------------
+
+  app.get('/admin/tokens', async (request, reply) => {
+    // before the session: a query outside the schema costs no transaction and leaves no row
+    const parsed = safeParseAdminTokensQuery(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+    }
+    const { user, kind, cursor } = parsed.data;
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const page = await listLedgerForAdmin(tx, {
+        filters: { userId: user, kind },
+        cursor,
+        limit: ADMIN_PAGE_SIZE,
+      });
+      return {
+        result: {
+          me: meOf(ctx),
+          entries: page.rows.map(toAdminLedgerEntry),
+          nextCursor: page.nextCursor,
+        },
+        audit: {
+          action: AuditAction.TokensViewed,
+          payload: {
+            path: '/admin/tokens',
+            ...(user === undefined ? {} : { userId: user }),
+            ...(kind === undefined ? {} : { kind }),
             ...(cursor === undefined ? {} : { cursor }),
           },
         },

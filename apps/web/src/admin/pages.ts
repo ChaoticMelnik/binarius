@@ -1,20 +1,24 @@
 import {
   ADMIN_INTENTS_ACTIVE_FILTER,
   ADMIN_USER_RECENT_INTENTS,
+  ADMIN_USER_RECENT_LEDGER,
   adminIntentsSearchParams,
+  adminTokensSearchParams,
   adminTradingSessionsSearchParams,
   adminUsersSearchParams,
+  TokenLedgerKind,
   TradeIntentStatus,
   TradeMode,
   type AdminBrokerAccountView,
   type AdminIntentsQuery,
+  type AdminLedgerEntry,
   type AdminOverview,
+  type AdminTokensQuery,
   type AdminTradeIntentView,
   type AdminTradingSessionsQuery,
   type AdminTradingSessionView,
-  type AdminUserDetail,
-  type AdminUserIntentsSection,
   type AdminUserListItem,
+  type AdminUserResponse,
   type AdminUsersQuery,
   type StaffSessionView,
 } from '@binarius/shared';
@@ -90,7 +94,8 @@ const yesNo = (value: boolean): string => (value ? TEXTS.yes : TEXTS.no);
 
 // The pages a staff session opens, in nav order. The read pages that follow #107 append their
 // keys here; a page outside the nav passes no `active`.
-export type AdminNavKey = 'overview' | 'users' | 'sessions' | 'intents' | 'tradingSessions';
+export type AdminNavKey =
+  'overview' | 'users' | 'sessions' | 'intents' | 'tradingSessions' | 'tokens';
 
 const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview },
@@ -98,6 +103,7 @@ const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'sessions', href: '/admin/sessions', label: TEXTS.navSessions },
   { key: 'intents', href: '/admin/intents', label: TEXTS.navIntents },
   { key: 'tradingSessions', href: '/admin/trading-sessions', label: TEXTS.navTradingSessions },
+  { key: 'tokens', href: '/admin/tokens', label: TEXTS.navTokens },
 ];
 
 /**
@@ -305,9 +311,7 @@ const accountRow = (account: AdminBrokerAccountView): SafeHtml =>
   </tr>`;
 
 export const userPage = (
-  user: AdminUserDetail,
-  brokerAccounts: readonly AdminBrokerAccountView[],
-  intents: AdminUserIntentsSection,
+  { user, brokerAccounts, intents, ledger }: Omit<AdminUserResponse, 'me'>,
   login: string,
 ): SafeHtml =>
   adminShell({
@@ -384,7 +388,15 @@ export const userPage = (
           : html`<p class="hint">${TEXTS.userIntentsRecent(ADMIN_USER_RECENT_INTENTS)}</p>
               ${intentsTable(intents.recent)}`
       }
-      <p><a href="${intentsHref({ user: user.id })}">${TEXTS.userIntentsAll}</a></p>`,
+      <p><a href="${intentsHref({ user: user.id })}">${TEXTS.userIntentsAll}</a></p>
+      <h2>${TEXTS.userLedger}</h2>
+      ${
+        ledger.recent.length === 0
+          ? html`<p>${TEXTS.tokensEmpty}</p>`
+          : html`<p class="hint">${TEXTS.userLedgerRecent(ADMIN_USER_RECENT_LEDGER)}</p>
+              ${ledgerTable(ledger.recent)}`
+      }
+      <p><a href="${tokensHref({ user: user.id })}">${TEXTS.userLedgerAll}</a></p>`,
   });
 
 /** The intents list URL, through the same serializer as usersHref. */
@@ -637,3 +649,103 @@ export const tradingSessionsPage = (
         }
       </p>`,
   });
+
+/** The token ledger list URL, through the shared serializer as the other lists. */
+export const tokensHref = (query: AdminTokensQuery): string => {
+  const params = adminTokensSearchParams(query);
+  return params.size > 0 ? `/admin/tokens?${params}` : '/admin/tokens';
+};
+
+// At most one reference is set (token_ledger_reference_check). Only an intent has a page to link
+// to; a deposit and a broker account are printed as their ids.
+const ledgerReference = (entry: AdminLedgerEntry): SafeHtml | string => {
+  if (entry.intentId !== null) {
+    return html`<a href="/admin/intents/${entry.intentId}">${entry.intentId}</a>`;
+  }
+  if (entry.depositEventId !== null) return code(entry.depositEventId);
+  if (entry.brokerAccountId !== null) return code(entry.brokerAccountId);
+  if (entry.refType !== null && entry.refId !== null) {
+    return code(`${entry.refType}:${entry.refId}`);
+  }
+  return TEXTS.none;
+};
+
+const ledgerRow = (entry: AdminLedgerEntry): SafeHtml =>
+  html`<tr>
+    <td>${when(entry.createdAt)}</td>
+    <td><a href="/admin/users/${entry.userId}">${entry.telegramUserId}</a></td>
+    <td>${code(entry.kind)}</td>
+    <td class="num">${entry.balanceDelta}</td>
+    <td class="num">${entry.reservedDelta}</td>
+    <td>${ledgerReference(entry)}</td>
+    <td>${orNone(entry.note)}</td>
+  </tr>`;
+
+// The ledger table of the list and of the user card's section: one set of columns.
+const ledgerTable = (entries: readonly AdminLedgerEntry[]): SafeHtml =>
+  html`<table>
+    <thead>
+      <tr>
+        <th>${TEXTS.columnLedgerAt}</th>
+        <th>${TEXTS.columnTelegramId}</th>
+        <th>${TEXTS.columnKind}</th>
+        <th>${TEXTS.columnBalanceDelta}</th>
+        <th>${TEXTS.columnReservedDelta}</th>
+        <th>${TEXTS.columnReference}</th>
+        <th>${TEXTS.columnNote}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${entries.map(ledgerRow)}
+    </tbody>
+  </table>`;
+
+export const tokensPage = (
+  entries: readonly AdminLedgerEntry[],
+  options: {
+    filters: Omit<AdminTokensQuery, 'cursor'>;
+    cursor?: string;
+    nextCursor: string | null;
+    login?: string;
+    message?: string;
+  },
+): SafeHtml => {
+  const { filters } = options;
+  return adminShell({
+    title: TEXTS.tokensTitle,
+    active: 'tokens',
+    login: options.login,
+    body: html`<h1>${TEXTS.tokensHeading}</h1>
+      ${error(options.message)}
+      <form class="search" method="get" action="/admin/tokens">
+        <label
+          >${TEXTS.tokensFilterKind}
+          <select name="kind">
+            ${option('', TEXTS.tokensFilterAny, filters.kind ?? '')}
+            ${Object.values(TokenLedgerKind).map((k) => option(k, k, filters.kind))}
+          </select>
+        </label>
+        <label
+          >${TEXTS.tokensFilterUser}
+          <input name="user" value="${filters.user ?? ''}" autocomplete="off" />
+        </label>
+        <button type="submit">${TEXTS.tokensFilterSubmit}</button>
+      </form>
+      <p class="hint">${TEXTS.tokensFilterHint}</p>
+      ${entries.length === 0 ? html`<p>${TEXTS.tokensEmpty}</p>` : ledgerTable(entries)}
+      <p class="pager">
+        ${
+          options.cursor !== undefined || entries.length === 0
+            ? html`<a href="${tokensHref(filters)}">${TEXTS.tokensFirst}</a>`
+            : ''
+        }
+        ${
+          options.nextCursor === null
+            ? ''
+            : html`<a href="${tokensHref({ ...filters, cursor: options.nextCursor })}"
+                >${TEXTS.tokensNext}</a
+              >`
+        }
+      </p>`,
+  });
+};

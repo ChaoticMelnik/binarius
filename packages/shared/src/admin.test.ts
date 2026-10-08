@@ -5,7 +5,13 @@ import {
   ADMIN_PAGE_SIZE,
   ADMIN_SEARCH_MAX_LENGTH,
   adminMeSchema,
+  ADMIN_USER_RECENT_LEDGER,
+  adminLedgerEntrySchema,
   adminOverviewResponseSchema,
+  adminTokensQuerySchema,
+  adminTokensResponseSchema,
+  adminTokensSearchParams,
+  adminUserLedgerSectionSchema,
   adminUserResponseSchema,
   adminUsersQuerySchema,
   adminUsersResponseSchema,
@@ -15,6 +21,7 @@ import {
   adminLoginRequestSchema,
   logoutResponseSchema,
   revokeSessionResponseSchema,
+  safeParseAdminTokensQuery,
   safeParseAdminUsersQuery,
   STAFF_LOGIN_PATTERN,
   STAFF_PASSWORD_MAX_LENGTH,
@@ -22,7 +29,14 @@ import {
   staffLoginSchema,
   staffSessionsResponseSchema,
   staffSessionViewSchema,
+  tokenDeltaSchema,
 } from './admin';
+import {
+  TokenLedgerKind,
+  tokenLedgerKindSchema,
+  TokenLedgerRefType,
+  tokenLedgerRefTypeSchema,
+} from './ledger';
 import { TradeIntentStatus } from './trading';
 import { STAFF_LOGIN_CORPUS } from './testing';
 
@@ -305,7 +319,8 @@ describe('admin read responses', () => {
     updatedAt: AT,
   };
   const intents = { recent: [], total: 0, active: 0 };
-  const user = { me: ME, user: detail, brokerAccounts: [account], intents };
+  const ledger = { recent: [] };
+  const user = { me: ME, user: detail, brokerAccounts: [account], intents, ledger };
 
   const overview = {
     me: ME,
@@ -345,8 +360,13 @@ describe('admin read responses', () => {
       tokenRotatedAt: null,
     };
     expect(
-      adminUserResponseSchema.safeParse({ me: ME, user: bare, brokerAccounts: [fresh], intents })
-        .success,
+      adminUserResponseSchema.safeParse({
+        me: ME,
+        user: bare,
+        brokerAccounts: [fresh],
+        intents,
+        ledger,
+      }).success,
     ).toBe(true);
     expect(
       adminUsersResponseSchema.safeParse({ ...users, users: [{ ...listItem, displayName: null }] })
@@ -359,6 +379,7 @@ describe('admin read responses', () => {
     ['me', { ...users, me: { ...ME, extra: 1 } }, adminUsersResponseSchema],
     ['a list row', { ...users, users: [{ ...listItem, extra: 1 }] }, adminUsersResponseSchema],
     ['the user response', { ...user, extra: 1 }, adminUserResponseSchema],
+    ['the user ledger', { ...user, ledger: { ...ledger, extra: 1 } }, adminUserResponseSchema],
     ['the user', { ...user, user: { ...detail, accessTokenEnc: 'x' } }, adminUserResponseSchema],
     [
       'an account',
@@ -419,6 +440,7 @@ describe('admin read responses', () => {
         return rest;
       };
       expect(adminUserResponseSchema.safeParse(without(user, 'intents')).success).toBe(false);
+      expect(adminUserResponseSchema.safeParse(without(user, 'ledger')).success).toBe(false);
       for (const key of ['byStatus', 'active']) {
         const intents = without(overview.overview.intents, key);
         const body = { ...overview, overview: { ...overview.overview, intents } };
@@ -457,5 +479,153 @@ describe('admin read responses', () => {
 
   it('share the sessions response me', () => {
     expect(staffSessionsResponseSchema.shape.me).toBe(adminMeSchema);
+  });
+});
+
+describe('token ledger contracts (#109)', () => {
+  const U1 = '00000000-0000-4000-8000-000000000010';
+  const entry = {
+    id: '00000000-0000-4000-8000-000000000050',
+    userId: U1,
+    telegramUserId: '4242',
+    kind: 'reserve',
+    balanceDelta: '0',
+    reservedDelta: '1',
+    intentId: '00000000-0000-4000-8000-000000000030',
+    depositEventId: null,
+    brokerAccountId: null,
+    refType: null,
+    refId: null,
+    note: null,
+    createdAt: AT,
+  };
+  const bare = { ...entry, kind: 'adjustment', balanceDelta: '-3', reservedDelta: '0' };
+  const bareAll = { ...bare, intentId: null, note: 'manual' };
+  const manual = { ...bareAll, refType: 'manual', refId: CURSOR };
+  const list = { me: ME, entries: [entry, bareAll], nextCursor: CURSOR };
+
+  it.each(['0', '-3', '12', '-9223372036854775808'])('takes %j as a token delta', (value) => {
+    expect(tokenDeltaSchema.safeParse(value).success).toBe(true);
+  });
+
+  it.each(['-0', '03', '', '+1', '1.5', ' 1'])('refuses %j as a token delta', (value) => {
+    expect(tokenDeltaSchema.safeParse(value).success).toBe(false);
+  });
+
+  it('accepts a row, a row with every nullable as null, and a manual reference', () => {
+    expect(adminLedgerEntrySchema.safeParse(entry).success).toBe(true);
+    expect(adminLedgerEntrySchema.safeParse({ ...bare, intentId: null }).success).toBe(true);
+    expect(adminLedgerEntrySchema.safeParse(manual).success).toBe(true);
+  });
+
+  it('carries exactly the thirteen wire keys of a ledger row', () => {
+    expect(Object.keys(adminLedgerEntrySchema.shape)).toEqual([
+      'id',
+      'userId',
+      'telegramUserId',
+      'kind',
+      'balanceDelta',
+      'reservedDelta',
+      'intentId',
+      'depositEventId',
+      'brokerAccountId',
+      'refType',
+      'refId',
+      'note',
+      'createdAt',
+    ]);
+  });
+
+  it.each([
+    ['an extra key', { ...entry, extra: 1 }],
+    ['an unknown kind', { ...entry, kind: 'bogus' }],
+    ['an unknown ref type', { ...manual, refType: 'deposit' }],
+    ['a numeric delta', { ...entry, reservedDelta: 1 }],
+  ])('refuses a row with %s', (_label, row) => {
+    expect(adminLedgerEntrySchema.safeParse(row).success).toBe(false);
+  });
+
+  it('bounds the card section at ADMIN_USER_RECENT_LEDGER rows', () => {
+    const at = Array.from({ length: ADMIN_USER_RECENT_LEDGER }, () => entry);
+    expect(ADMIN_USER_RECENT_LEDGER).toBe(20);
+    expect(adminUserLedgerSectionSchema.safeParse({ recent: at }).success).toBe(true);
+    expect(adminUserLedgerSectionSchema.safeParse({ recent: [...at, entry] }).success).toBe(false);
+    expect(adminUserLedgerSectionSchema.safeParse({ recent: [], extra: 1 }).success).toBe(false);
+  });
+
+  it('accepts a page and refuses an extra key at each level, a bad cursor and a 51st row', () => {
+    expect(adminTokensResponseSchema.safeParse(list).success).toBe(true);
+    expect(adminTokensResponseSchema.safeParse({ ...list, nextCursor: null }).success).toBe(true);
+    expect(adminTokensResponseSchema.safeParse({ ...list, extra: 1 }).success).toBe(false);
+    expect(adminTokensResponseSchema.safeParse({ ...list, me: { ...ME, extra: 1 } }).success).toBe(
+      false,
+    );
+    expect(
+      adminTokensResponseSchema.safeParse({ ...list, entries: [{ ...entry, extra: 1 }] }).success,
+    ).toBe(false);
+    expect(adminTokensResponseSchema.safeParse({ ...list, nextCursor: 'bad' }).success).toBe(false);
+    const at = Array.from({ length: ADMIN_PAGE_SIZE }, () => entry);
+    expect(adminTokensResponseSchema.safeParse({ ...list, entries: at }).success).toBe(true);
+    expect(adminTokensResponseSchema.safeParse({ ...list, entries: [...at, entry] }).success).toBe(
+      false,
+    );
+  });
+
+  it('puts the ledger section last on the user card', () => {
+    const user = adminUserResponseSchema.shape;
+    expect(Object.keys(user)).toEqual(['me', 'user', 'brokerAccounts', 'intents', 'ledger']);
+    expect(user.ledger).toBe(adminUserLedgerSectionSchema);
+  });
+
+  describe('adminTokensQuerySchema', () => {
+    it('takes no key as an empty query, and each key alone', () => {
+      expect(adminTokensQuerySchema.parse({})).toEqual({});
+      for (const query of [{ user: U1 }, { kind: 'bonus' }, { cursor: CURSOR }]) {
+        expect(adminTokensQuerySchema.parse(query)).toEqual(query);
+      }
+    });
+
+    it.each([
+      ['kind', 'bogus'],
+      ['kind', ''],
+      ['kind', ['bonus', 'reserve']],
+      ['user', 'not-a-uuid'],
+      ['user', ' '],
+      ['cursor', 'bad'],
+    ])('refuses %s = %j', (key, value) => {
+      expect(adminTokensQuerySchema.safeParse({ [key]: value }).success).toBe(false);
+    });
+
+    it('strips keys it does not declare', () => {
+      expect(adminTokensQuerySchema.parse({ kind: 'bonus', utm: '1' })).toEqual({ kind: 'bonus' });
+    });
+  });
+
+  describe('adminTokensSearchParams', () => {
+    it('writes keys in the schema order, whatever order the caller used', () => {
+      const params = adminTokensSearchParams({ cursor: CURSOR, kind: 'settle', user: U1 });
+      expect([...params].map(([k]) => k)).toEqual(['user', 'kind', 'cursor']);
+    });
+
+    it('round-trips a query through its own serialization', () => {
+      const query = { user: U1, kind: 'adjustment', cursor: CURSOR } as const;
+      const params = adminTokensSearchParams(query);
+      expect(safeParseAdminTokensQuery(Object.fromEntries(params)).data).toEqual(query);
+    });
+
+    it('writes nothing for an empty query', () => {
+      expect(adminTokensSearchParams({}).size).toBe(0);
+    });
+  });
+
+  it('builds both enums from the constants', () => {
+    for (const value of Object.values(TokenLedgerKind)) {
+      expect(tokenLedgerKindSchema.safeParse(value).success).toBe(true);
+    }
+    for (const value of Object.values(TokenLedgerRefType)) {
+      expect(tokenLedgerRefTypeSchema.safeParse(value).success).toBe(true);
+    }
+    expect(tokenLedgerKindSchema.safeParse('bogus').success).toBe(false);
+    expect(tokenLedgerRefTypeSchema.safeParse('bogus').success).toBe(false);
   });
 });

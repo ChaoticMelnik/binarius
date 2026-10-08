@@ -3,8 +3,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   ADMIN_ACTIVE_WINDOW_MINUTES,
   ADMIN_PAGE_SIZE,
+  ADMIN_USER_RECENT_LEDGER,
   AuthRevokedReason,
   BrokerAccountStatus,
+  TokenLedgerKind,
   TradeAction,
   TradeIntentStatus,
   TradeMode,
@@ -23,7 +25,7 @@ import {
 } from './admin-read-ops';
 import { TERMINAL_TRADE_INTENT_STATUSES } from './schema/trade-intents';
 import type { Db } from './client';
-import { brokerAccounts, tradeIntents, users } from './schema/index';
+import { brokerAccounts, tokenLedger, tradeIntents, users } from './schema/index';
 import {
   brokerAccountRow,
   createTempDatabase,
@@ -351,6 +353,43 @@ describe('readUserForAdmin — the trading section (#330)', () => {
     const card = await db().transaction((tx) => readUserForAdmin(tx, userId));
     expect(card?.intents.recent.map((r) => r.id)).toEqual([own?.id]);
     expect(card?.intents).toMatchObject({ total: 1, active: 1 });
+  });
+});
+
+describe('readUserForAdmin — the token ledger section (#109)', () => {
+  const db = withDatabase();
+
+  const adjust = async (userId: string, secondsAgo: number) => {
+    const [row] = await db()
+      .insert(tokenLedger)
+      .values({
+        userId,
+        kind: TokenLedgerKind.Adjustment,
+        balanceDelta: 1n,
+        reservedDelta: 0n,
+        createdAt: sql`'2026-10-01T12:00:00.000000Z'::timestamptz - make_interval(secs => ${secondsAgo})`,
+      })
+      .returning({ id: tokenLedger.id });
+    if (row === undefined) throw new Error('adjust: insert returned no row');
+    return row.id;
+  };
+
+  it("reads the user's newest ADMIN_USER_RECENT_LEDGER rows, none of another user's", async () => {
+    const { userId } = await seedUser(db());
+    const other = await seedUser(db());
+    const own: string[] = [];
+    for (let i = 0; i < 25; i += 1) own.push(await adjust(userId, 2 * i + 2));
+    // newer than every row of the owner: a leak would take a slot at the top
+    await adjust(other.userId, 1);
+    const card = await db().transaction((tx) => readUserForAdmin(tx, userId));
+    expect(ADMIN_USER_RECENT_LEDGER).toBe(20);
+    expect(card?.ledger.map((r) => r.id)).toEqual(own.slice(0, ADMIN_USER_RECENT_LEDGER));
+  });
+
+  it('is empty for a user without ledger rows', async () => {
+    const { userId } = await seedUser(db());
+    const card = await db().transaction((tx) => readUserForAdmin(tx, userId));
+    expect(card?.ledger).toEqual([]);
   });
 });
 

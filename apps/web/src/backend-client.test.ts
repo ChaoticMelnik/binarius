@@ -5,9 +5,11 @@ import {
   SAMPLE_INTENT,
   SAMPLE_INTENT_RESPONSE,
   SAMPLE_INTENTS,
+  SAMPLE_LEDGER_ENTRY,
   SAMPLE_ME,
   SAMPLE_OVERVIEW,
   SAMPLE_SESSION_ID,
+  SAMPLE_TOKENS,
   SAMPLE_TRADING_SESSION,
   SAMPLE_TRADING_SESSIONS,
   SAMPLE_USER,
@@ -316,6 +318,48 @@ describe('the trading sessions call (#330)', () => {
   ])('refuses %s with a key the contract does not name', async (_label, body) => {
     const { client } = await prefixed(body);
     const error = await rejectionOf(client.tradingSessions(SESSION, {}));
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+describe('the token ledger call (#109)', () => {
+  const SESSION = 's'.repeat(43);
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+
+  const prefixed = async (body: unknown) => {
+    const served = await serve((response) => {
+      json(response, 200, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+
+  it('asks for the page with the filters in the schema order, the bearer and the staff session, under the prefix', async () => {
+    const { client, captured } = await prefixed(SAMPLE_TOKENS);
+    expect(
+      await client.tokens(SESSION, { cursor: CURSOR, kind: 'adjustment', user: SAMPLE_USER_ID }),
+    ).toEqual(SAMPLE_TOKENS);
+    expect(captured.url).toBe(
+      `/api/admin/tokens?user=${SAMPLE_USER_ID}&kind=adjustment&cursor=${CURSOR}`,
+    );
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+    expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('sends no query string for no filters', async () => {
+    const { client, captured } = await prefixed(SAMPLE_TOKENS);
+    await client.tokens(SESSION, {});
+    expect(captured.url).toBe('/api/admin/tokens');
+  });
+
+  it.each([
+    ['a row', { ...SAMPLE_TOKENS, entries: [{ ...SAMPLE_LEDGER_ENTRY, accessTokenEnc: 'x' }] }],
+    ['the page', { ...SAMPLE_TOKENS, extra: 1 }],
+  ])('refuses %s with a key the contract does not name', async (_label, body) => {
+    const { client } = await prefixed(body);
+    const error = await rejectionOf(client.tokens(SESSION, {}));
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });

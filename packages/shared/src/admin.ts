@@ -6,6 +6,7 @@ import {
   adminTradingSessionViewSchema,
   adminUserIntentsSectionSchema,
 } from './admin-trading';
+import { tokenLedgerKindSchema, tokenLedgerRefTypeSchema } from './ledger';
 import { decimalStringSchema } from './money';
 import { accountHaltReasonSchema, authRevokedReasonSchema, BrokerAccountStatus } from './oauth';
 import { telegramUserIdSchema, tokenCountSchema, tradeModeSchema } from './trading';
@@ -228,11 +229,42 @@ export const adminUserDetailSchema = z.strictObject({
 });
 export type AdminUserDetail = z.infer<typeof adminUserDetailSchema>;
 
+// The token ledger row (#109) is declared here, ahead of the card that embeds it: `const`s
+// initialize in order. The page's query and envelope are in the #109 block below.
+export const ADMIN_USER_RECENT_LEDGER = 20;
+
+// A signed whole number of tokens as PostgreSQL prints a bigint: tokenCountSchema is unsigned,
+// and release, settle and adjustment rows move a balance down.
+export const tokenDeltaSchema = z.string().regex(/^(0|-?[1-9]\d*)$/);
+
+export const adminLedgerEntrySchema = z.strictObject({
+  id: z.uuid(),
+  userId: z.uuid(),
+  telegramUserId: telegramUserIdSchema,
+  kind: tokenLedgerKindSchema,
+  balanceDelta: tokenDeltaSchema,
+  reservedDelta: tokenDeltaSchema,
+  intentId: z.uuid().nullable(),
+  depositEventId: z.uuid().nullable(),
+  brokerAccountId: z.uuid().nullable(),
+  refType: tokenLedgerRefTypeSchema.nullable(),
+  refId: z.uuid().nullable(),
+  note: z.string().nullable(),
+  createdAt: isoDateTime,
+});
+export type AdminLedgerEntry = z.infer<typeof adminLedgerEntrySchema>;
+
+export const adminUserLedgerSectionSchema = z.strictObject({
+  recent: z.array(adminLedgerEntrySchema).max(ADMIN_USER_RECENT_LEDGER),
+});
+export type AdminUserLedgerSection = z.infer<typeof adminUserLedgerSectionSchema>;
+
 export const adminUserResponseSchema = z.strictObject({
   me: adminStrictMeSchema,
   user: adminUserDetailSchema,
   brokerAccounts: z.array(adminBrokerAccountViewSchema),
   intents: adminUserIntentsSectionSchema,
+  ledger: adminUserLedgerSectionSchema,
 });
 export type AdminUserResponse = z.infer<typeof adminUserResponseSchema>;
 
@@ -326,6 +358,32 @@ export const adminTradingSessionsResponseSchema = z.strictObject({
 });
 export type AdminTradingSessionsResponse = z.infer<typeof adminTradingSessionsResponseSchema>;
 
+// --- Token ledger (#109) ------------------------------------------------------------------------
+
+// Exact-match filters, intersected; unknown keys are stripped, as on the other lists.
+export const adminTokensQuerySchema = z.object({
+  user: z.string().regex(UUID_PATTERN).optional(),
+  kind: tokenLedgerKindSchema.optional(),
+  cursor: z.string().regex(UUID_PATTERN).optional(),
+});
+export type AdminTokensQuery = z.infer<typeof adminTokensQuerySchema>;
+
+export function adminTokensSearchParams(query: AdminTokensQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of Object.keys(adminTokensQuerySchema.shape) as (keyof AdminTokensQuery)[]) {
+    const value = query[key];
+    if (value !== undefined) params.set(key, value);
+  }
+  return params;
+}
+
+export const adminTokensResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  entries: z.array(adminLedgerEntrySchema).max(ADMIN_PAGE_SIZE),
+  nextCursor: z.string().regex(UUID_PATTERN).nullable(),
+});
+export type AdminTokensResponse = z.infer<typeof adminTokensResponseSchema>;
+
 export const safeParseAdminLoginRequest = (input: unknown) =>
   adminLoginRequestSchema.safeParse(input);
 export const safeParseAdminConfirmRequest = (input: unknown) =>
@@ -356,3 +414,7 @@ export const safeParseAdminTradingSessionsQuery = (input: unknown) =>
   adminTradingSessionsQuerySchema.safeParse(input);
 export const safeParseAdminTradingSessionsResponse = (input: unknown) =>
   adminTradingSessionsResponseSchema.safeParse(input);
+export const safeParseAdminTokensQuery = (input: unknown) =>
+  adminTokensQuerySchema.safeParse(input);
+export const safeParseAdminTokensResponse = (input: unknown) =>
+  adminTokensResponseSchema.safeParse(input);

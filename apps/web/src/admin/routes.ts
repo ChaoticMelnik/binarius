@@ -5,6 +5,7 @@ import {
   CLIENT_USER_AGENT_MAX_LENGTH,
   errorLogFields,
   safeParseAdminIntentsQuery,
+  safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
   safeParseAdminUsersQuery,
   STAFF_PASSWORD_MAX_LENGTH,
@@ -24,6 +25,8 @@ import {
   loginPage,
   overviewPage,
   sessionsPage,
+  tokensHref,
+  tokensPage,
   tradingSessionsHref,
   tradingSessionsPage,
   userPage,
@@ -184,8 +187,8 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         return sendHtml(reply, 404, noticePage(TEXTS.userNotFoundTitle, TEXTS.userNotFoundBody));
       }
       try {
-        const { me, user, brokerAccounts, intents } = await backend.user(token, id);
-        return sendHtml(reply, 200, userPage(user, brokerAccounts, intents, me.login));
+        const { me, ...card } = await backend.user(token, id);
+        return sendHtml(reply, 200, userPage(card, me.login));
       } catch (error) {
         const answered = outcome(error);
         if (answered?.status === 404 && answered.code === AdminErrorCode.NotFound) {
@@ -235,6 +238,32 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         reply,
         200,
         tradingSessionsPage(sessions, { cursor, nextCursor, login: me.login }),
+      );
+    }),
+  );
+
+  app.get('/admin/tokens', async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const query = compactQuery(request.query);
+      // the filters first, without the cursor, as on the intents list
+      const parsed = safeParseAdminTokensQuery({ ...query, cursor: undefined });
+      if (!parsed.success) {
+        return sendHtml(
+          reply,
+          400,
+          tokensPage([], { filters: {}, nextCursor: null, message: TEXTS.tokensBadFilter }),
+        );
+      }
+      const filters = parsed.data;
+      const cursor = query.cursor;
+      if (cursor !== undefined && (typeof cursor !== 'string' || !UUID_PATTERN.test(cursor))) {
+        return reply.redirect(tokensHref(filters), 302);
+      }
+      const { me, entries, nextCursor } = await backend.tokens(token, { ...filters, cursor });
+      return sendHtml(
+        reply,
+        200,
+        tokensPage(entries, { filters, cursor, nextCursor, login: me.login }),
       );
     }),
   );

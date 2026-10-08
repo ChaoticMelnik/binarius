@@ -1,6 +1,7 @@
 import {
   BrokerAccountStatus,
   NotificationLevel,
+  TokenLedgerKind,
   TradeAction,
   TradeIntentFailureReason,
   TradeIntentStatus,
@@ -11,8 +12,10 @@ import {
   UserStatus,
   type AdminIntentResponse,
   type AdminIntentsResponse,
+  type AdminLedgerEntry,
   type AdminMe,
   type AdminOverviewResponse,
+  type AdminTokensResponse,
   type AdminTradeIntentView,
   type AdminTradingSessionsResponse,
   type AdminTradingSessionView,
@@ -21,7 +24,7 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 
-// Backend answers for the read pages (#107, #108, #330), valid against their strict schemas. Shared by
+// Backend answers for the read pages (#107, #108, #330, #109), valid against their strict schemas. Shared by
 // the client's and the pages' tests.
 
 const AT = '2026-10-07T08:00:00.000Z';
@@ -98,6 +101,34 @@ export const SAMPLE_INTENT: AdminTradeIntentView = {
   reconcileClaimedAt: AT,
 };
 
+// a reserve: the intent is its one reference
+export const SAMPLE_LEDGER_ENTRY: AdminLedgerEntry = {
+  id: '00000000-0000-4000-8000-0000000000b1',
+  userId: SAMPLE_USER_ID,
+  telegramUserId: '4242',
+  kind: TokenLedgerKind.Reserve,
+  balanceDelta: '0',
+  reservedDelta: '1',
+  intentId: SAMPLE_INTENT.id,
+  depositEventId: null,
+  brokerAccountId: null,
+  refType: null,
+  refId: null,
+  note: null,
+  createdAt: AT,
+};
+
+// a manual adjustment: no reference, a negative delta, a note that must print as text
+export const SAMPLE_LEDGER_ADJUSTMENT: AdminLedgerEntry = {
+  ...SAMPLE_LEDGER_ENTRY,
+  id: '00000000-0000-4000-8000-0000000000b2',
+  kind: TokenLedgerKind.Adjustment,
+  balanceDelta: '-3',
+  reservedDelta: '0',
+  intentId: null,
+  note: '<script>alert(1)</script>',
+};
+
 export const SAMPLE_USER: AdminUserResponse = {
   me: SAMPLE_ME,
   user: {
@@ -132,6 +163,7 @@ export const SAMPLE_USER: AdminUserResponse = {
     },
   ],
   intents: { recent: [SAMPLE_INTENT], total: 3, active: 1 },
+  ledger: { recent: [SAMPLE_LEDGER_ENTRY] },
 };
 
 export const SAMPLE_INTENTS: AdminIntentsResponse = {
@@ -180,5 +212,11 @@ export const SAMPLE_TRADING_SESSION_NULLS: AdminTradingSessionView = {
 export const SAMPLE_TRADING_SESSIONS: AdminTradingSessionsResponse = {
   me: SAMPLE_ME,
   sessions: [SAMPLE_TRADING_SESSION, SAMPLE_TRADING_SESSION_NULLS],
+  nextCursor: null,
+};
+
+export const SAMPLE_TOKENS: AdminTokensResponse = {
+  me: SAMPLE_ME,
+  entries: [SAMPLE_LEDGER_ENTRY, SAMPLE_LEDGER_ADJUSTMENT],
   nextCursor: null,
 };
