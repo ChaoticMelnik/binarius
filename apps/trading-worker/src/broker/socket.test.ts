@@ -823,7 +823,7 @@ describe('events and problems', () => {
       broker.socket.emitRaw(
         { userId: 1 },
         BrokerSocketEvent.PriceUpdate,
-        Buffer.from('{"SECRET-a":1}'),
+        Buffer.from('{"token":"SECRET-a"}'),
       );
     }
     broker.socket.emitRaw({ userId: 1 }, BrokerSocketEvent.PriceUpdate, Buffer.from('not json'));
@@ -840,7 +840,12 @@ describe('events and problems', () => {
     expect(problems.map(({ level, problem }) => [level, problem])).toEqual([
       [
         LEVEL.warn,
-        expect.objectContaining({ event: 'price.update', kind: BrokerEventProblemKind.Schema }),
+        // #354: the refused payload's shape reaches the line, its value does not
+        expect.objectContaining({
+          event: 'price.update',
+          kind: BrokerEventProblemKind.Schema,
+          shape: '{token: string}',
+        }),
       ],
       [LEVEL.warn, { event: 'price.update', kind: BrokerEventProblemKind.Decode }],
       [LEVEL.warn, { event: 'user.unheard.of', kind: BrokerEventProblemKind.UnknownEvent }],
@@ -849,6 +854,7 @@ describe('events and problems', () => {
     expect(h.logs('broker event with extra arguments')).toEqual([
       expect.objectContaining({ level: LEVEL.warn, event: 'price.update', extraArgs: 1 }),
     ]);
+    expect(h.lines.join('\n')).not.toContain('SECRET');
     expect(h.logs('broker event ignored').map(({ event }) => event)).toEqual(
       Object.values(OBSERVED_EXTRA_EVENTS).filter((name) => name !== 'price.subscribed'),
     );

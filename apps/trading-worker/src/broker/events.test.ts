@@ -12,7 +12,11 @@ import {
   BrokerEventType,
   MAX_EVENT_NAME_LENGTH,
   MAX_REPORTED_ISSUES,
+  describeShape,
   normalizeBrokerEvent,
+  SHAPE_MAX_KEY_LENGTH,
+  SHAPE_MAX_KEYS,
+  SHAPE_MAX_LENGTH,
   type BrokerEvent,
   type BrokerEventProblem,
   type NormalizedBrokerEvent,
@@ -81,6 +85,7 @@ const user = {
   real: balanceWire,
   demo: { available: '10000.00', held: '10.00', total: '10010.00' },
 };
+// the live socket form (#354): no is_demo, the mode is the event's
 const tradeBaseWire = {
   id: 1,
   asset_id: 91,
@@ -89,7 +94,6 @@ const tradeBaseWire = {
   payout: 85,
   open_price: 1.1,
   open_timestamp: 1790028496624,
-  is_demo: true,
 };
 const tradeBase = {
   id: '1',
@@ -99,7 +103,6 @@ const tradeBase = {
   payout: 85,
   openPrice: 1.1,
   openTimestamp: 1790028496624,
-  isDemo: true,
 };
 const openTradeWire = { ...tradeBaseWire, potential_profit: '8.50', broker_client_id: 'c-1' };
 const openTrade = { ...tradeBase, potentialProfit: '8.50', brokerClientId: 'c-1' };
@@ -128,7 +131,11 @@ const modeCases = (mode: TradeMode): PayloadCase[] => [
   {
     name: modeEvent(mode, 'open_trade.success'),
     wire: openTradeWire,
-    event: { type: BrokerEventType.OpenTradeSuccess, mode, trade: openTrade } as BrokerEvent,
+    event: {
+      type: BrokerEventType.OpenTradeSuccess,
+      mode,
+      trade: { ...openTrade, isDemo: mode === TradeMode.Demo },
+    } as BrokerEvent,
   },
   {
     name: modeEvent(mode, 'open_trade.fail'),
@@ -145,7 +152,7 @@ const modeCases = (mode: TradeMode): PayloadCase[] => [
     event: {
       type: BrokerEventType.CloseTradeSuccess,
       mode,
-      trades: [closedTrade],
+      trades: [{ ...closedTrade, isDemo: mode === TradeMode.Demo }],
     } as BrokerEvent,
   },
   {
@@ -201,7 +208,7 @@ const liveModeCases = (mode: TradeMode): PayloadCase[] => [
     event: {
       type: BrokerEventType.OpenTradeSuccess,
       mode,
-      trade: { ...liveTrade, potentialProfit: '1.275' },
+      trade: { ...liveTrade, potentialProfit: '1.275', isDemo: mode === TradeMode.Demo },
     } as BrokerEvent,
   },
   {
@@ -214,7 +221,15 @@ const liveModeCases = (mode: TradeMode): PayloadCase[] => [
     event: {
       type: BrokerEventType.CloseTradeSuccess,
       mode,
-      trades: [{ ...liveTrade, closePrice: 1.0, closeTimestamp: 1790028556624, profit: '-1.5' }],
+      trades: [
+        {
+          ...liveTrade,
+          closePrice: 1.0,
+          closeTimestamp: 1790028556624,
+          profit: '-1.5',
+          isDemo: mode === TradeMode.Demo,
+        },
+      ],
     } as BrokerEvent,
   },
   {
@@ -346,7 +361,10 @@ describe('normalizeBrokerEvent: payload events × payload forms', () => {
   });
 
   it.each([
-    [{ id: 91, scheduled_until: 0 }, { assetId: 91, scheduledUntil: 0 }],
+    [
+      { id: 91, scheduled_until: 0 },
+      { assetId: 91, scheduledUntil: 0 },
+    ],
     [{ asset_id: 91, id: 91 }, { assetId: 91 }],
   ])('accepts assets_update %j', (wire, update) => {
     expect(normalizeBrokerEvent('common.assets_update', [wire])).toEqual({
@@ -575,6 +593,38 @@ describe('normalizeBrokerEvent: problems', () => {
     if (problem.kind !== BrokerEventProblemKind.Schema) throw new Error('not a schema problem');
     expect(problem.issues).toContainEqual(issue);
     expect(problem.issueCount).toBe(problem.issues.length);
+  });
+
+  // #354: the shape of a refused payload, keys and types only
+  it('T6 describes the refused payload by its keys and types, never a value', () => {
+    const problem = expectProblem(
+      normalizeBrokerEvent('common.assets_update', [
+        [{ token: 'SECRET-TOKEN-abc', id: 91, open: true, at: null, rows: [[1, 'x']] }],
+      ]),
+    );
+    if (problem.kind !== BrokerEventProblemKind.Schema) throw new Error('not a schema problem');
+    expect(problem.shape).toBe(
+      '[1: {at: null, id: number, open: boolean, rows: [1: [2]], token: string}]',
+    );
+    expect(JSON.stringify(problem)).not.toContain('SECRET');
+    expect(JSON.stringify(problem)).not.toContain('91');
+  });
+
+  it('T6 caps the shape: depth, keys an object, key length, total length', () => {
+    expect(describeShape({ a: { b: { c: { d: 1 } } } })).toBe('{a: {b: {c: {…}}}}');
+    const wide = Object.fromEntries(
+      Array.from({ length: SHAPE_MAX_KEYS + 3 }, (_, i) => [`k${String(i).padStart(2, '0')}`, 1]),
+    );
+    expect(describeShape(wide)).toMatch(/, …\+3\}$/);
+    expect(describeShape(wide).match(/: number/g)).toHaveLength(SHAPE_MAX_KEYS);
+    const long = 'x'.repeat(SHAPE_MAX_KEY_LENGTH + 10);
+    expect(describeShape({ [long]: 1 })).toBe(`{${'x'.repeat(SHAPE_MAX_KEY_LENGTH)}: number}`);
+    const huge = Object.fromEntries(
+      Array.from({ length: SHAPE_MAX_KEYS }, (_, i) => ['y'.repeat(30) + String(i), 'v']),
+    );
+    expect(describeShape(huge)).toHaveLength(SHAPE_MAX_LENGTH);
+    expect(describeShape([])).toBe('[0]');
+    expect(describeShape('SECRET')).toBe('string');
   });
 
   it('caps the reported issues and keeps the full count', () => {
