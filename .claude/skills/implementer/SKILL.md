@@ -81,7 +81,7 @@ Run before committing. Every item traces to a review finding (`audits.md`):
 - [ ] Every new mutation checked against other in-flight actions on the same entity for an inconsistent-state race
 - [ ] Money/token fields are `numeric(20,8)`/`bigint` in the DB and `DecimalString` in code, never a JS number — the two wire-boundary exceptions are in Rule 2
 - [ ] Deposit/postback handlers dedupe by postback id and payment_id before crediting anything
-- [ ] **Class, not instance:** whenever a constraint, a rule or a fix changes, search the whole domain for the same construct (grep/codegraph — write the command down) and close every occurrence, not the one named
+- [ ] **Class, not instance:** whenever a constraint, a rule or a fix changes, search the whole domain for the same construct (grep/codegraph — write the command down) and close every occurrence, not the one named. When the change removes a path (a route, a button, a flow), the search runs over the whole repo — docs, comments and tests included — for its names and the words that describe it, and every hit is edited or left with a reason (#314: present-tense claims about the removed site sign-in surfaced one by one over four review rounds of #335 and #340)
 - [ ] A framework default the code or a comment relies on (error bodies, redaction, retries, lock modes) was verified by running it
 - [ ] No comment, doc or README sentence promises more than the code or DDL enforces
 - [ ] Every command added to documentation was executed as written before the commit
