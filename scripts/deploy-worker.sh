@@ -5,8 +5,11 @@
 # and the migrations.
 #
 # Exit codes: 0 the new worker runs alone (or none ran and a plain `up -d` started one);
-# 1 the new worker never logged ready, it was removed and the old one runs untouched;
-# 2 refused: more than one worker runs already, an operator decides which one stays.
+# 1 the new worker never logged ready: it was removed and the old one runs untouched; or a command
+# failed under set -e: the trap printed the stage and every container with its state
+# (docs/worker-deploy.md -> Exit codes);
+# 2 refused, nothing changed: two or more workers run, a container besides the running one exists
+# in any state, or READY_TIMEOUT_S is not a positive integer.
 #
 # Knobs: READY_TIMEOUT_S (default 120), COMPOSE (default "docker compose").
 set -euo pipefail
@@ -35,11 +38,23 @@ container_ids() {
   done < <("${compose[@]}" ps -q "$@" "$service")
 }
 
+list_containers() {
+  local id
+  for id in "$@"; do
+    say "  $id $(docker inspect -f '{{.State.Status}} {{.Image}}' "$id")"
+  done
+}
+
 running=()
 while IFS= read -r id; do running+=("$id"); done < <(container_ids --status running)
+all=()
+while IFS= read -r id; do all+=("$id"); done < <(container_ids -a)
 
 case "${#running[@]}" in
   0)
+    if ((${#all[@]} > 0)); then
+      say "stopped containers found: ${all[*]}; compose reconciles them to one running container"
+    fi
     say "no running $service: starting one with a plain up -d"
     "${compose[@]}" up -d "$service"
     say "done: $service started without an overlap"
@@ -54,15 +69,28 @@ case "${#running[@]}" in
 esac
 
 old="${running[0]}"
+
+leftovers=()
+for id in "${all[@]}"; do
+  if [[ "$id" != "$old" ]]; then leftovers+=("$id"); fi
+done
+if ((${#leftovers[@]} > 0)); then
+  say "refused: $service containers besides the running one $old:"
+  list_containers "${leftovers[@]}"
+  say "a previous run left it (an interrupt during the old container's stop, or a failed docker rm); compose would start it on its old image instead of creating a new container"
+  say "remove it (docker stop -t $stop_timeout_s <id> if it is not stopped; docker rm <id>), then run again; nothing changed"
+  exit 2
+fi
+
 say "old container: $old"
 
 stage=overlap
 on_exit() {
-  local status=$?
+  local status=$? id
   if [[ "$stage" != done ]]; then
-    say "interrupted at stage '$stage' (exit $status); running $service containers now:"
-    container_ids --status running | sed 's/^/deploy-worker:   /'
-    say "two running workers are safe (docs/worker-deploy.md); while two run, the next run refuses"
+    say "ended at stage '$stage' (exit $status); $service containers now (id, state, image):"
+    while IFS= read -r id; do list_containers "$id"; done < <(container_ids -a)
+    say "the next run refuses while a second container exists in any state (docker stop -t $stop_timeout_s <id> if it runs; docker rm <id>), starts one with a plain up -d when none runs, and deploys normally with exactly one running; two running workers are safe (docs/worker-deploy.md)"
   fi
 }
 trap on_exit EXIT
@@ -71,15 +99,30 @@ trap 'exit 143' TERM
 
 "${compose[@]}" up -d --no-deps --no-recreate --scale "$service=2" "$service"
 
-new=""
+new_ids=()
 while IFS= read -r id; do
-  if [[ "$id" != "$old" ]]; then new="$id"; fi
+  existed=false
+  for before in "${all[@]}"; do
+    if [[ "$id" == "$before" ]]; then existed=true; fi
+  done
+  if [[ "$existed" != true ]]; then new_ids+=("$id"); fi
 done < <(container_ids -a)
-if [[ -z "$new" ]]; then
-  stage=done
-  say "compose created no second $service container; the old one runs untouched"
-  exit 1
-fi
+case "${#new_ids[@]}" in
+  0)
+    stage=done
+    say "compose created no second $service container; the old one runs untouched"
+    exit 1
+    ;;
+  1) ;;
+  *)
+    stage=done
+    say "unexpected: ${#new_ids[@]} new $service containers:"
+    list_containers "${new_ids[@]}"
+    say "none removed; the next run refuses until an operator removes all but one"
+    exit 1
+    ;;
+esac
+new="${new_ids[0]}"
 say "new container: $new; waiting up to ${ready_timeout_s}s for its ready line"
 
 rollback() {
@@ -94,13 +137,16 @@ rollback() {
 
 ready=false
 for ((waited = 0; waited < ready_timeout_s; waited++)); do
-  if docker logs "$new" 2>&1 | grep -qF "$ready_line"; then
-    ready=true
-    break
-  fi
-  if [[ "$(docker inspect -f '{{.State.Running}}' "$new")" != true ]]; then
+  read -r is_running started_at <<<"$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$new")"
+  if [[ "$is_running" != true ]]; then
     docker logs --tail 20 "$new" 2>&1 | sed 's/^/deploy-worker:   /' || true
     rollback "the new container exited before it was ready"
+  fi
+  # grep without -q reads to EOF: -q exits on the first match and docker logs then dies of SIGPIPE,
+  # which pipefail turns into a miss
+  if docker logs --since "$started_at" "$new" 2>&1 | grep -F "$ready_line" >/dev/null; then
+    ready=true
+    break
   fi
   sleep 1
 done
