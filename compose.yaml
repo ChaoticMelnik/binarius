@@ -61,8 +61,12 @@ services:
 
   redis:
     image: redis:8-alpine
+    # the dead-letter queue and the queued jobs survive a restart (#92); AOF fsyncs every second
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 5s
@@ -328,3 +332,4 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
