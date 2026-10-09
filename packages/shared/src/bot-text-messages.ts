@@ -215,9 +215,6 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   sessionWon: { count: () => w.sessionCount },
   sessionLost: { count: () => w.sessionCount },
   sessionTied: { count: () => w.sessionCount },
-  // the demo launch screen: the pair at a duration of the main path; the width is the longest
-  // label (texts.ts → launchText)
-  launchHeader: { subject },
   // shown only with an amount; launchStakeMinimum stands in without one
   launchStake: { stake: () => w.stake },
   // the offer under a finished trade names the session its row starts, always
