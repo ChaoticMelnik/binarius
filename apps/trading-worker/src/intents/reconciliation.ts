@@ -17,6 +17,7 @@ import {
   type ManualReviewReason,
   type TradeIntentRow,
 } from '@binarius/db';
+import type { BalanceCheck, BalanceCheckEnding } from './balance-check';
 import { InvalidJobError, type Logger } from './processor';
 import {
   ReconcileUnavailableReason,
@@ -72,11 +73,14 @@ export interface ReconciliationPassConfig {
   retryMs: number;
   attemptTimeoutMs: number;
   batchSize: number;
+  balanceCheckTimeoutMs: number;
 }
 
 export interface ReconciliationPassDeps {
   db: Db;
   reconciler: IntentReconciler;
+  // run after every recorded outcome (#92); never changes the outcome
+  balanceCheck: BalanceCheck;
   logger: Logger;
   config: ReconciliationPassConfig;
 }
@@ -103,13 +107,25 @@ export interface TickSummary {
   dropped: number;
   // the reconciler or an outcome write threw
   failed: number;
+  // balance checks that compared at least one mode, and those that alerted (#92)
+  balanceCompared: number;
+  balanceMismatch: number;
 }
 
-type Ending = Exclude<keyof TickSummary, 'candidates'>;
+type Ending = Exclude<keyof TickSummary, 'candidates' | 'balanceCompared' | 'balanceMismatch'>;
+
+// an outcome that changed what we hold at the broker, or proved what we do not (#92)
+const CHECKED_ENDINGS: ReadonlySet<Ending> = new Set([
+  'accepted',
+  'settled',
+  'manualReview',
+  'rejected',
+]);
 
 export function createReconciliationPass({
   db,
   reconciler,
+  balanceCheck,
   logger,
   config,
 }: ReconciliationPassDeps): ReconciliationPass {
@@ -138,6 +154,28 @@ export function createReconciliationPass({
         return undefined;
       });
     return Promise.race([attempt, expired]).finally(() => clearTimeout(timeout));
+  }
+
+  // The same shape as reconcileWithDeadline: the pass, not the check, bounds it, and a throw (a
+  // database error, a bug) is logged and ends as failed. It never touches the intent.
+  function checkWithDeadline(brokerAccountId: string): Promise<BalanceCheckEnding> {
+    const deadline = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<BalanceCheckEnding>((resolve) => {
+      timeout = setTimeout(() => {
+        deadline.abort();
+        logger.warn({ brokerAccountId }, 'balance check timed out');
+        resolve('failed');
+      }, config.balanceCheckTimeoutMs);
+    });
+    const signal = AbortSignal.any([stopping.signal, deadline.signal]);
+    const check = Promise.resolve()
+      .then(() => balanceCheck.check(brokerAccountId, signal))
+      .catch((error: unknown): BalanceCheckEnding => {
+        logger.error({ ...errorLogFields(error), brokerAccountId }, 'balance check threw');
+        return 'failed';
+      });
+    return Promise.race([check, expired]).finally(() => clearTimeout(timeout));
   }
 
   // Every manual_review out of the pass halts the account in the same transaction (#90). The
@@ -224,13 +262,18 @@ export function createReconciliationPass({
 
   // The claim is the first write of every attempt, before the broker is asked: no ending can
   // leave an intent at the head of the order.
-  async function attempt(id: string): Promise<{ ending: Ending; rateLimited: boolean }> {
+  async function attempt(
+    id: string,
+  ): Promise<{ ending: Ending; rateLimited: boolean; check?: BalanceCheckEnding }> {
     const claimed = await claimReconciling(db, { id, retryMs: config.retryMs });
     if (claimed === undefined) return { ending: 'skipped', rateLimited: false };
     const result = await reconcileWithDeadline(claimed);
     const rateLimited =
       result?.outcome === 'unavailable' && result.reason === ReconcileUnavailableReason.RateLimited;
-    return { ending: await persist(claimed, result), rateLimited };
+    const ending = await persist(claimed, result);
+    if (stopped || !CHECKED_ENDINGS.has(ending)) return { ending, rateLimited };
+    const check = await checkWithDeadline(claimed.brokerAccountId);
+    return { ending, rateLimited: rateLimited || check === 'rate_limited', check };
   }
 
   async function runTick(): Promise<void> {
@@ -248,12 +291,16 @@ export function createReconciliationPass({
       skipped: 0,
       dropped: 0,
       failed: 0,
+      balanceCompared: 0,
+      balanceMismatch: 0,
     };
     for (const { id } of candidates) {
       if (stopped) break;
       try {
-        const { ending, rateLimited } = await attempt(id);
+        const { ending, rateLimited, check } = await attempt(id);
         summary[ending] += 1;
+        if (check === 'compared' || check === 'mismatch') summary.balanceCompared += 1;
+        if (check === 'mismatch') summary.balanceMismatch += 1;
         if (rateLimited) break;
       } catch (error) {
         logger.error({ ...errorLogFields(error), intentId: id }, 'reconciliation attempt failed');
