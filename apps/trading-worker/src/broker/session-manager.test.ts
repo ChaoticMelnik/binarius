@@ -22,6 +22,7 @@ import type { SessionManagerConfig } from './session-config';
 import {
   createBrokerSessionManager,
   type BrokerSessionManager,
+  type SessionLeases,
   type SessionWriters,
 } from './session-manager';
 import {
@@ -102,6 +103,8 @@ interface HarnessOptions {
   writers?: (writes: Write[]) => SessionWriters;
   openClient?: (options: BrokerSocketClientOptions) => BrokerSocketClient;
   deadLetters?: DeadLetterSink;
+  leases?: Partial<SessionLeases>;
+  monotonicNow?: () => number;
 }
 
 function recordingWriters(writes: Write[]): SessionWriters {
@@ -136,8 +139,26 @@ function harness(options: HarnessOptions = {}) {
   const tokenCalls: { accountId: string; options: AccessTokenOptions }[] = [];
   const writes: Write[] = [];
   const deadLetters: DeadLetter[] = [];
+  // every lease granted and renewed unless a case says otherwise; each call recorded
+  const leaseCalls: { op: 'acquire' | 'renew' | 'release'; ids: string[] }[] = [];
+  const leases: SessionLeases = {
+    acquire: (accountId, ttlMs) => {
+      leaseCalls.push({ op: 'acquire', ids: [accountId] });
+      return options.leases?.acquire?.(accountId, ttlMs) ?? Promise.resolve(true);
+    },
+    renew: (accountIds, ttlMs) => {
+      leaseCalls.push({ op: 'renew', ids: [...accountIds] });
+      return options.leases?.renew?.(accountIds, ttlMs) ?? Promise.resolve([...accountIds]);
+    },
+    release: () => {
+      leaseCalls.push({ op: 'release', ids: [] });
+      return options.leases?.release?.() ?? Promise.resolve(0);
+    },
+  };
   const manager = createBrokerSessionManager({
     url: broker.url,
+    leases,
+    ...(options.monotonicNow === undefined ? {} : { monotonicNow: options.monotonicNow }),
     deadLetters: options.deadLetters ?? {
       add: (_name, entry) => {
         deadLetters.push(entry);
@@ -169,6 +190,7 @@ function harness(options: HarnessOptions = {}) {
     tokenCalls,
     writes,
     deadLetters,
+    leaseCalls,
     lines,
     logs: (msg: string) =>
       lines.map((line) => JSON.parse(line) as LogEntry).filter((entry) => entry.msg === msg),
@@ -1119,6 +1141,207 @@ describe('sessionFor, stop() and the tick', () => {
     await quiet();
     expect(broker.socket.sockets()).toEqual([]);
     expect(h.manager.clientFor('acc-1')).toBeUndefined();
+  });
+});
+
+describe('the lease (#93)', () => {
+  // short enough to run: the fence 200 ms after an acquire or a renewal is sent
+  const LEASE = { leaseRenewMs: 50, leaseFenceMs: 200, leaseTtlMs: 250 };
+  const leaseOps = (h: Harness) => h.leaseCalls.map((call) => call.op);
+  async function verifiedSession(h: Harness, fakes: ReturnType<typeof fakeClients>) {
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the client', () => fakes.made.length === 1);
+    const client = fakes.made[0]!;
+    client.hear({ type: 'user_data', user: USER_1 });
+    expect(h.manager.sessionFor('acc-1')).toBe(client);
+    return client;
+  }
+
+  it('L1 a busy account costs no token fetch and no client, and is held back', async () => {
+    const fakes = fakeClients();
+    const h = harness({ openClient: fakes.openClient, leases: { acquire: async () => false } });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the busy line', () => h.logs('broker session lease busy').length === 1);
+    expect(h.tokenCalls).toEqual([]);
+    expect(fakes.made).toEqual([]);
+    expect(h.manager.size).toBe(0);
+    await h.manager.tick();
+    expect(leaseOps(h)).toEqual(['acquire']);
+  });
+
+  it('L2 an acquire that throws is a failed start, no client', async () => {
+    const fakes = fakeClients();
+    const h = harness({
+      openClient: fakes.openClient,
+      leases: { acquire: () => Promise.reject(new Error('database down')) },
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the failed start', () => h.logs('broker session start failed').length === 1);
+    expect(h.tokenCalls).toEqual([]);
+    expect(fakes.made).toEqual([]);
+  });
+
+  it('L3 takes the lease before the token', async () => {
+    const fakes = fakeClients();
+    const h = harness({ openClient: fakes.openClient });
+    await verifiedSession(h, fakes);
+    expect(leaseOps(h)).toEqual(['acquire']);
+    expect(h.tokenCalls).toHaveLength(1);
+  });
+
+  it('L4 a renewal without the account drops it at once, not after the idle grace', async () => {
+    const fakes = fakeClients();
+    const h = harness({ openClient: fakes.openClient, leases: { renew: async () => [] } });
+    const client = await verifiedSession(h, fakes);
+    await h.manager.renewLeases();
+    expect(client.stops).toBe(1);
+    expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+    expect(h.manager.clientFor('acc-1')).toBeUndefined();
+    expect(h.logs('broker session lease lost')).toEqual([
+      expect.objectContaining({ level: LEVEL.warn, accountId: 'acc-1' }),
+    ]);
+  });
+
+  it('L5 sessionFor refuses past the fence even before the fence timer ran', async () => {
+    const fakes = fakeClients();
+    let offset = 0;
+    const h = harness({
+      openClient: fakes.openClient,
+      monotonicNow: () => performance.now() + offset,
+    });
+    const client = await verifiedSession(h, fakes);
+    // the clock past the fence (25 s in CONFIG); the timer, armed in real time, has not run
+    offset = CONFIG.leaseFenceMs + 1;
+    expect(h.manager.sessionFor('acc-1')).toBeUndefined();
+    expect(h.manager.clientFor('acc-1')).toBe(client);
+  });
+
+  it('L6 a renewal that never answers: the fence closes the socket, and its later events write nothing', async () => {
+    const fakes = fakeClients();
+    const h = harness({
+      openClient: fakes.openClient,
+      config: LEASE,
+      leases: { renew: () => new Promise(() => undefined) },
+    });
+    const client = await verifiedSession(h, fakes);
+    void h.manager.renewLeases();
+    await until('the fence', () => h.logs('broker session lease fenced').length === 1);
+    expect(client.stops).toBe(1);
+    expect(h.manager.clientFor('acc-1')).toBeUndefined();
+    const writes = h.writes.length;
+    client.hear({ type: 'user_data', user: USER_1 });
+    await quiet();
+    expect(h.writes).toHaveLength(writes);
+  });
+
+  it('L7 one failed renewal fences nothing, and the next answer moves the fence', async () => {
+    const fakes = fakeClients();
+    let renewals = 0;
+    let offset = 0;
+    const h = harness({
+      openClient: fakes.openClient,
+      monotonicNow: () => performance.now() + offset,
+      leases: {
+        renew: async (ids) => {
+          renewals += 1;
+          if (renewals === 1) throw new Error('database down');
+          return [...ids];
+        },
+      },
+    });
+    const client = await verifiedSession(h, fakes);
+    await h.manager.renewLeases();
+    expect(h.logs('broker session lease renewal failed')).toHaveLength(1);
+    expect(h.manager.sessionFor('acc-1')).toBe(client);
+    // the second renewal is sent 15 s in, so it holds until 40 s: past the acquire's 25 s
+    offset = 15_000;
+    await h.manager.renewLeases();
+    offset = CONFIG.leaseFenceMs + 5_000;
+    expect(h.manager.sessionFor('acc-1')).toBe(client);
+    expect(client.stops).toBe(0);
+  });
+
+  it('L8 stop() closes every socket before it releases, and a hanging release ends at the budget', async () => {
+    const fakes = fakeClients();
+    const order: string[] = [];
+    const h = harness({
+      openClient: fakes.openClient,
+      leases: {
+        release: () => {
+          order.push(`release after ${fakes.made[0]!.stops} stop(s)`);
+          return new Promise(() => undefined);
+        },
+      },
+    });
+    await verifiedSession(h, fakes);
+    await h.manager.stop();
+    expect(order).toEqual(['release after 1 stop(s)']);
+    expect(h.logs('broker session stop budget exceeded')).toHaveLength(1);
+  });
+
+  it('L9 a renewal answer leaves alone an entry started after it was sent', async () => {
+    const fakes = fakeClients();
+    let answer: (ids: string[]) => void = () => undefined;
+    const h = harness({
+      openClient: fakes.openClient,
+      leases: { renew: () => new Promise<string[]>((resolve) => (answer = resolve)) },
+    });
+    await verifiedSession(h, fakes);
+    const renewal = h.manager.renewLeases();
+    h.state.candidates = [candidate(1), candidate(2)];
+    await h.manager.tick();
+    await until('the second client', () => fakes.made.length === 2);
+    answer(['acc-1']);
+    await renewal;
+    expect(h.manager.clientFor('acc-2')).toBe(fakes.made[1]);
+    expect(h.logs('broker session lease lost')).toEqual([]);
+  });
+
+  it('L10 an acquire still in flight is not renewed, and is once it answered', async () => {
+    const fakes = fakeClients();
+    let grantLease: (granted: boolean) => void = () => undefined;
+    const h = harness({
+      openClient: fakes.openClient,
+      leases: { acquire: () => new Promise<boolean>((resolve) => (grantLease = resolve)) },
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the acquire in flight', () => leaseOps(h).includes('acquire'));
+    await h.manager.renewLeases();
+    expect(leaseOps(h)).toEqual(['acquire']);
+    grantLease(true);
+    await until('the client', () => fakes.made.length === 1);
+    await h.manager.renewLeases();
+    expect(h.leaseCalls.at(-1)).toEqual({ op: 'renew', ids: ['acc-1'] });
+    expect(h.manager.clientFor('acc-1')).toBe(fakes.made[0]);
+  });
+
+  it('L11 a renewal answer for a dropped entry does not touch the entry that replaced it', async () => {
+    const fakes = fakeClients();
+    let answer: (ids: string[]) => void = () => undefined;
+    let renewals = 0;
+    const h = harness({
+      openClient: fakes.openClient,
+      leases: {
+        renew: (ids) => {
+          renewals += 1;
+          return renewals === 1
+            ? new Promise<string[]>((resolve) => (answer = resolve))
+            : Promise.resolve([...ids]);
+        },
+      },
+    });
+    const first = await verifiedSession(h, fakes);
+    const renewal = h.manager.renewLeases();
+    first.fire(BrokerSocketState.DisconnectedByServer);
+    await tickUntil(h, 'a new client after the hold-back', () => fakes.made.length === 2);
+    answer([]);
+    await renewal;
+    expect(h.manager.clientFor('acc-1')).toBe(fakes.made[1]);
+    expect(h.logs('broker session lease lost')).toEqual([]);
   });
 });
 
