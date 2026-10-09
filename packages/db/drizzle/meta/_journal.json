@@ -218,6 +218,13 @@
       "when": 1791490500082,
       "tag": "0030_bot_text_variable_names",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1791526925708,
+      "tag": "0031_broker_session_leases",
+      "breakpoints": true
     }
   ]
 }
