@@ -95,6 +95,10 @@ Under `--watch`, edits to `src/` restart the affected app; edits to a `package.j
 backend (`3000`) and `web` (`3001`: the admin pages and the Mini App login pages) are published
 on `127.0.0.1` only.
 
+Replacing the trading worker of a running stack without a gap in job processing:
+`scripts/deploy-worker.sh` after `docker compose build trading-worker` (the new container starts
+first, then the old one drains; [docs/worker-deploy.md](docs/worker-deploy.md)).
+
 ## Database
 
 `packages/db` holds the Drizzle schema and its forward-only migrations (`packages/db/drizzle`).

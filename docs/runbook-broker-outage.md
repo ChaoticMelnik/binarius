@@ -24,6 +24,8 @@ broker's silence is always cut by them first and counted), a token refusal or a 
 (credentials), our own drops (idle, the lease fence of #93, a refusal, a stop) beyond the state
 they had. The thresholds can be raised or lowered through the
 worker's env (`.env.example`); a window not longer than the 45 s grace stops the worker at start.
+The window lives in the worker process's memory: during a deploy's overlap two processes count
+their own shares, and the new one starts with an empty window (docs/worker-deploy.md, #95).
 
 It closes **demo and real together**, writes the audit row `trading_stopped` with
 `via: circuit_breaker`, and never opens anything: only an operator reopens

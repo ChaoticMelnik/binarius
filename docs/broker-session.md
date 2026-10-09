@@ -24,7 +24,7 @@ TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius \
 | Writers | `upsertBalanceSnapshot`, `applyBalanceEvent` (same file), `settleClosedTrades` (`trade-intent-ops.ts`) | what a session hears, written once its connection proved whose it is |
 | Client | `BrokerSocketClient` ([broker-socket.md](broker-socket.md)) | one per session; the taint after an aborted command |
 | Token | `AccessTokenSource` (`broker/access-token.ts`) | `POST /trading/accounts/:id/access-token` on the backend, always `mayRefresh: false`; after `token_expired`/`auth_failed` with the refused token's fingerprint (#281) |
-| Composition | `apps/trading-worker/src/index.ts` | built only when `env.brokerWsUrl` is set; otherwise `noTradeSessions` |
+| Composition | `apps/trading-worker/src/worker.ts` (`createWorker`, #95) | built only when `env.brokerWsUrl` is set; otherwise `noTradeSessions` |
 | Probe | `apps/trading-worker/src/cli/socket-probe.ts`, `socket-probe-run.ts`, `socket-probe-verdict.ts` (#285) | the two-socket check of the rollout, safe on the pilot 2026-10-08; exit 0 only on its safe verdict ([broker-socket.md → Observed live](broker-socket.md#observed-live)) |
 
 ## The candidates
@@ -209,11 +209,14 @@ stalled in the database and commits after a later one leaves the later expiry, s
 A dead owner's account is picked up by another process within about TTL + one hold-back + one tick
 (~95 s; owner, 2026-10-09): until then it trades over REST. Falsifiable: `broker session lease
 busy` for one account longer than 95 s after its owner's last line. `compose.yaml` still runs one
-worker: more replicas, sharding and routing intent jobs to the owner are #94.
+worker; two run only during a deploy's overlap (`scripts/deploy-worker.sh`, #95,
+[worker-deploy.md](worker-deploy.md)): the old process's `stop()` deletes its rows after closing its
+sockets, and the new one, whose scan skipped those accounts while another owner held them, opens
+them on its next tick. More replicas, sharding and routing intent jobs to the owner are #94.
 
 ## Losses for the circuit breaker (#96)
 
-With a `lossObserver` (`index.ts` passes the circuit breaker's), `observeSessions()` runs every
+With a `lossObserver` (`worker.ts` passes the circuit breaker's), `observeSessions()` runs every
 `SESSION_TICK_MS` on its own timer (not inside the tick, so a scan stuck on the database does not
 hide the broker's losses). It reports every running session in `ready` as ready — so the
 breaker's window holds every session in work during the window with its latest state, also after
@@ -229,7 +232,7 @@ longer current. Tests: `session-manager.test.ts` S1–S9 (S9: the check's own ti
 
 ## Start and shutdown
 
-`index.ts` builds the manager only when `BROKER_WS_URL` is set and passes it to the trade command
+`worker.ts` builds the manager only when `BROKER_WS_URL` is set and passes it to the trade command
 executor in place of `noTradeSessions`; `sessions?.start()` runs after the reconciliation pass and
 the catch-up, and `trading-worker started` carries `sessions: true|false`.
 
@@ -396,6 +399,10 @@ docker compose up -d trading-worker
 docker compose logs -f trading-worker | grep -E 'broker socket ready|broker session|trade command'
 ```
 
+The plain `up -d` recreates the worker with a gap in which no process takes jobs;
+`scripts/deploy-worker.sh` makes the same change with an overlap (the new container gets the new
+`.env`, [worker-deploy.md](worker-deploy.md)).
+
 ## Accepted risks
 
 1. **Never exercised live** (#100 risk 1 stands). Falsifiable: with `BROKER_WS_URL` set,
@@ -426,8 +433,9 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
    every socket of the process, trading goes on over REST and the sessions restart on the next
    ticks; a command in flight when the fence fires ends `unknown` and goes to reconciliation. An
    acquire answered after `stop()` released leaves one row of the dead owner until it lapses.
-   Falsifiable: `broker session lease fenced` with `lateMs` above 5 000. One worker container still
-   runs; more is #94.
+   Falsifiable: `broker session lease fenced` with `lateMs` above 5 000. One worker container
+   runs, two only during a deploy's overlap (#95, [worker-deploy.md](worker-deploy.md)); more is
+   #94.
 6. **A revocation or a block reaches the session only through the candidates**, within 65 s; until
    then the session writes that account's balance events — rows of an account that cannot trade.
 7. **Writes queued at `stop()` are dropped**; the snapshot is rewritten by the next `user.data` or
@@ -449,8 +457,9 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
 ## Boundaries
 
 - ARCH-02: #93 the lease (shipped, above), #94 the measured per-process limit, sharding and the
-  orchestrator and catch-up under several processes, #95 handoff and
-  single-flight refresh across processes, #96 the emergency stop.
+  orchestrator and catch-up under several processes, #95 the deploy's overlap (shipped,
+  [worker-deploy.md](worker-deploy.md); single-flight refresh across processes is the backend's
+  row lock, Rule 12), #96 the emergency stop.
 - ARCH-05: #87 the load stand, #88 degradation.
 - #92 shipped: the writers' dead letters above, and the balance check after a reconciliation
   (docs/trade-intent-transport.md). #274 (`not_found`), #278, #279; #281 shipped (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)

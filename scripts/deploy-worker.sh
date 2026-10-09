@@ -59,13 +59,15 @@ say "old container: $old"
 stage=overlap
 on_exit() {
   local status=$?
-  if [[ "$stage" != done && "$status" -ne 0 ]]; then
+  if [[ "$stage" != done ]]; then
     say "interrupted at stage '$stage' (exit $status); running $service containers now:"
     container_ids --status running | sed 's/^/deploy-worker:   /'
-    say "two running workers are safe (docs/worker-deploy.md); the next run refuses until one is stopped"
+    say "two running workers are safe (docs/worker-deploy.md); while two run, the next run refuses"
   fi
 }
 trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 "${compose[@]}" up -d --no-deps --no-recreate --scale "$service=2" "$service"
 
