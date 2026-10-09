@@ -47,7 +47,7 @@ import { processIntentJob } from '../intents/processor';
 import { createTradeCommandExecutor } from '../intents/trade-command-executor';
 import type { PairsOutcome, PairsSource, SignalOutcome, SignalSource } from './backend';
 import { TRADING_SESSION_CANDLE_SLACK_MS, type SessionOrchestratorConfig } from './config';
-import { createSessionOrchestrator } from './orchestrator';
+import { createSessionOrchestrator, pausedDirection } from './orchestrator';
 import { eurUsd, fetchFailedAnswer, noSignalAnswer, signalAnswer } from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -281,13 +281,14 @@ async function settle(
 async function tradeOnce(
   orchestrator: ReturnType<typeof orchestratorOf>,
   seed: { brokerAccountId: string; accessToken: string; session: { id: string } },
+  outcome: MockTradeOutcome = MockTradeOutcome.Win,
 ) {
   await orchestrator.tick();
   const intents = await intentsOf(seed.session.id);
   const intent = intents.at(-1)!;
   expect(intent.status).toBe(TradeIntentStatus.Queued);
   expect(await processIntent(intent.id)).toBe('accepted');
-  await settle(seed, intent.id);
+  await settle(seed, intent.id, outcome);
   return intent;
 }
 
@@ -800,6 +801,200 @@ describe('the endings of an attempt (#287)', () => {
     expect(await intentsOf(seed.session.id)).toHaveLength(1);
     expect(msgsOf(seed.session.id)).toContain(msg);
     await orchestrator.stop();
+  });
+});
+
+// docs/trading-session.md -> The pause after two losses (#379); a candle wait is under 66 s for
+// the 1m sessions here (the next boundary plus the 5 s slack)
+describe('the pause after two losses (#379)', () => {
+  const CANDLE_WAIT = 66_000;
+  const signalTo = (action: TradeAction): SignalOutcome => ({
+    ok: true,
+    response: signalAnswer(action),
+  });
+  const pauseLines = (sessionId: string) =>
+    linesOf(sessionId).filter(
+      (line) => line.msg === 'trading session waits for the signal to change',
+    );
+
+  it('P1 (716ed06d) two losses in one direction hold it until the signal changes', async () => {
+    const seed = await seedSession({ settings: sessionSettings({ trades: 10 }) });
+    let answer = signalTo(TradeAction.Down);
+    const signals = signalsOf(() => answer);
+    const orchestrator = orchestratorOf({ signals });
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    const before = await sessionRow(seed.session.id);
+    expect(before.lastSignalAction).toBe(TradeAction.Down);
+
+    await orchestrator.tick();
+    expect(await intentsOf(seed.session.id)).toHaveLength(3);
+    const paused = await sessionRow(seed.session.id);
+    expect(paused.lastSignalAction).toBe(TradeAction.Down);
+    expect(paused.lastDecisionAt!.getTime()).toBeGreaterThan(before.lastDecisionAt!.getTime());
+    expect(pauseLines(seed.session.id)).toEqual([
+      expect.objectContaining({ level: 30, action: TradeAction.Down }),
+    ]);
+    // held for the candle wait, not retried at the next tick
+    const asked = signals.calls.length;
+    advance(CONFIG.tickMs);
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(asked);
+
+    answer = { ok: true, response: noSignalAnswer() };
+    advance(CANDLE_WAIT);
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(asked + 1);
+    expect((await sessionRow(seed.session.id)).lastSignalAction).toBeNull();
+
+    answer = signalTo(TradeAction.Down);
+    advance(CANDLE_WAIT);
+    await orchestrator.tick();
+    const intents = await intentsOf(seed.session.id);
+    expect(intents).toHaveLength(4);
+    expect(intents[3]!.action).toBe(TradeAction.Down);
+    expect((await sessionRow(seed.session.id)).lastSignalAction).toBe(TradeAction.Down);
+    await orchestrator.stop();
+  });
+
+  it('P2 two losses down, then a signal up trades at once', async () => {
+    const seed = await seedSession();
+    let answer = signalTo(TradeAction.Down);
+    const orchestrator = orchestratorOf({ signals: signalsOf(() => answer) });
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    answer = signalTo(TradeAction.Up);
+    await orchestrator.tick();
+    const intents = await intentsOf(seed.session.id);
+    expect(intents.map((i) => i.action)).toEqual([
+      TradeAction.Down,
+      TradeAction.Down,
+      TradeAction.Up,
+    ]);
+    expect(pauseLines(seed.session.id)).toEqual([]);
+    await orchestrator.stop();
+  });
+
+  it('P3 loss, win, loss in one direction is not two losses in a row: it trades', async () => {
+    const seed = await seedSession();
+    const orchestrator = orchestratorOf({ signals: signalsOf(signalTo(TradeAction.Down)) });
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await orchestrator.tick();
+    expect(await intentsOf(seed.session.id)).toHaveLength(4);
+    expect(pauseLines(seed.session.id)).toEqual([]);
+    await orchestrator.stop();
+  });
+
+  it('P4 a new orchestrator (a worker restart) pauses from the row alone', async () => {
+    const seed = await seedSession();
+    const signals = signalsOf(signalTo(TradeAction.Down));
+    const first = orchestratorOf({ signals });
+    await tradeOnce(first, seed, MockTradeOutcome.Loss);
+    await tradeOnce(first, seed, MockTradeOutcome.Loss);
+    await first.stop();
+    const second = orchestratorOf({ signals });
+    await second.tick();
+    expect(await intentsOf(seed.session.id)).toHaveLength(2);
+    expect(pauseLines(seed.session.id)).toHaveLength(1);
+    await second.stop();
+  });
+
+  it('P5 a rejected intent between the two losses is skipped: still paused', async () => {
+    const seed = await seedSession();
+    const orchestrator = orchestratorOf({ signals: signalsOf(signalTo(TradeAction.Down)) });
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await orchestrator.tick();
+    broker.rest.failNext('openTrade', { status: 400 });
+    expect(await processIntent((await intentsOf(seed.session.id)).at(-1)!.id)).toBe('rejected');
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await orchestrator.tick();
+    expect((await intentsOf(seed.session.id)).map((i) => i.status)).toEqual([
+      TradeIntentStatus.Settled,
+      TradeIntentStatus.Rejected,
+      TradeIntentStatus.Settled,
+    ]);
+    expect(pauseLines(seed.session.id)).toHaveLength(1);
+    await orchestrator.stop();
+  });
+
+  it('P6 a pair paying below the floor holds the session for retryMs and asks no signal', async () => {
+    const seed = await seedSession();
+    const signals = signalsOf();
+    let catalog = fresh([eurUsd({ payout: 79 })]);
+    const orchestrator = orchestratorOf({
+      signals,
+      pairs: { read: () => Promise.resolve(catalog) },
+    });
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(0);
+    const row = await sessionRow(seed.session.id);
+    expect(row).toMatchObject({ status: TradingSessionStatus.Active, lastSignalAction: null });
+    expect(row.lastDecisionAt).not.toBeNull();
+    expect(
+      linesOf(seed.session.id).filter(
+        (line) => line.msg === 'trading session waits for the payout',
+      ),
+    ).toEqual([expect.objectContaining({ level: 30, assetId: 101, payout: 79, floor: 80 })]);
+    advance(CONFIG.retryMs - 1_000);
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(0);
+
+    catalog = fresh([eurUsd({ payout: 80 })]);
+    advance(1_000);
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(1);
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    await orchestrator.stop();
+  });
+
+  // the streak rule on the history alone
+  const intent = (
+    action: TradeAction,
+    status: TradeIntentStatus,
+    profit: string | null,
+  ): Parameters<typeof pausedDirection>[0][number] => ({
+    id: `${action}-${status}-${profit}`,
+    action,
+    status,
+    amount: '1.00000000' as DecimalString,
+    profit: profit as DecimalString | null,
+    lastError: null,
+  });
+  const loss = (action: TradeAction) => intent(action, TradeIntentStatus.Settled, '-1.00000000');
+
+  it.each([
+    ['two losses down', [loss(TradeAction.Down), loss(TradeAction.Down)], TradeAction.Down],
+    ['two losses in two directions', [loss(TradeAction.Up), loss(TradeAction.Down)], undefined],
+    ['one loss', [loss(TradeAction.Up)], undefined],
+    [
+      'a tie after a loss',
+      [loss(TradeAction.Up), intent(TradeAction.Up, TradeIntentStatus.Settled, '0.00000000')],
+      undefined,
+    ],
+    [
+      'a settled trade without its profit',
+      [loss(TradeAction.Up), intent(TradeAction.Up, TradeIntentStatus.Settled, null)],
+      undefined,
+    ],
+    [
+      'a manual_review intent',
+      [loss(TradeAction.Up), intent(TradeAction.Up, TradeIntentStatus.ManualReview, null)],
+      undefined,
+    ],
+    [
+      'a rejected intent between two losses',
+      [
+        loss(TradeAction.Up),
+        intent(TradeAction.Down, TradeIntentStatus.Rejected, null),
+        loss(TradeAction.Up),
+      ],
+      TradeAction.Up,
+    ],
+  ])('P7 %s', (_, intents, expected) => {
+    expect(pausedDirection(intents)).toBe(expected);
   });
 });
 

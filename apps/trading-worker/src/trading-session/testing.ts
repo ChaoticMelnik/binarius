@@ -27,6 +27,7 @@ const features = {
   closedCandles: 60,
   trend: TrendDirection.Up,
   momentum: MomentumDirection.Up,
+  atrTicks: 200,
 };
 
 export const signalAnswer = (action: TradeAction): TradingSignalResponse => ({
