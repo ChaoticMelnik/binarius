@@ -166,7 +166,7 @@ does not send the broker an operation with real money; demo works as usual. It i
 |---|---|---|
 | Covers | demo and real | real only |
 | Where | one database row, all processes | one process's environment |
-| Changed by | `kill-switch on/off`, the breaker, no restart | `.env` and a restart |
+| Changed by | `kill-switch on/off`, the breaker, no restart | `.env`, then recreating the containers (`docker compose up -d backend trading-worker`; `restart` keeps the old environment) |
 | Default | open (the migration) | off (`false`; the pilot never sets it) |
 
 It is read once at start by `parseDemoOnlyEnv` (`packages/shared/src/env.ts`): only `true` or
@@ -186,7 +186,12 @@ The readers and what each does with the flag on:
 | the CLI `session-start` (worker) | reads the flag and passes it to `createTradingSession`; it creates demo sessions only, so the refusal is unreachable today |
 
 So the stand has two lines, as the switch does: creation in the backend and the take in the worker.
-Each holds alone when only one process has the flag. The bot does not know the flag: it shows
+They are not equal: the worker's line holds alone (a flagged worker rejects every queued real
+intent, whoever created it, and stops a real session at its first attempt), while the backend's
+alone only refuses new real intents and sessions created through it: a real intent already queued,
+or a real session row, still reaches an unflagged worker's executor. So the flag goes on both
+processes, which the compose anchor does from one `.env` value, and the check below reads both.
+The bot does not know the flag: it shows
 the refusal as «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» and the
 rejection as «⚠️ Сделка отклонена: реальные сделки на этом сервере отключены. Токен возвращён.»;
 the cashier (#11) must refuse `POST /deposit/widget-session` with 409 `demo_only` before it
@@ -212,9 +217,17 @@ configuration from the moment `createWorker` builds them, and the backend's rout
 `buildApp` registers them. To check a stand before working on it:
 
 ```bash
-docker compose logs backend trading-worker | grep -E '"msg":"(backend|trading-worker) started"'
-docker compose logs backend trading-worker | grep -c '"demoOnly":true'   # 2 on a protected stand
+for s in backend trading-worker; do
+  docker compose logs --no-log-prefix "$s" | grep -F "\"msg\":\"$s started\"" | tail -1 |
+    grep -q '"demoOnly":true' && echo "$s: demo-only" || echo "$s: NOT demo-only"
+done
 ```
+
+On a protected stand it prints exactly `backend: demo-only` and `trading-worker: demo-only`;
+anything else (a missing start line prints `NOT demo-only` too) means the stand is not protected:
+recreate the containers and run it again. It reads each service's latest start line, not a count:
+a container's log survives `docker compose restart` and `restart: unless-stopped`, so a count over
+both services can come from one of them, while recreation (`up -d`) starts a fresh log.
 
 ## Tests
 
@@ -233,4 +246,5 @@ docker compose logs backend trading-worker | grep -c '"demoOnly":true'   # 2 on 
   spellings), `trade-intent-ops.db.test.ts` F1–F4, `trading-session-ops.db.test.ts` F1–F2,
   `apps/backend/src/trading/routes.db.test.ts` → DEMO_ONLY, `processor.db.test.ts` F1–F6,
   `orchestrator.db.test.ts` F1–F2, `cli/session-start.db.test.ts`, `worker.handoff.db.test.ts`
-  H5–H6 (the started line), `intents/config.test.ts` (the compose entry).
+  H5–H6 (the started line) and H7–H8 (the flag through `createWorker`: a queued real intent
+  rejected, a real session stopped), `intents/config.test.ts` (the compose entry).

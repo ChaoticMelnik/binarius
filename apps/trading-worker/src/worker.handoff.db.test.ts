@@ -38,7 +38,9 @@ import {
   logOptions,
   SESSION_MAX_DURATION_MS,
   TradeAction,
+  TradeIntentFailureReason,
   TradeIntentStatus,
+  TradeMode,
   TradeTransport,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -270,10 +272,15 @@ interface Account {
   telegramUserId: string;
 }
 
-async function seedAccount({ snapshot = false } = {}): Promise<Account> {
+async function seedAccount({ snapshot = false, real = '0.00' } = {}): Promise<Account> {
   const brokerUserId = ++brokerUserSeq;
   const accessToken = `handoff-token-${brokerUserId}`;
-  broker.users.register({ id: brokerUserId, accessToken, demo: { available: '10000.00' } });
+  broker.users.register({
+    id: brokerUserId,
+    accessToken,
+    demo: { available: '10000.00' },
+    real: { available: real },
+  });
   const user = await seedUser(tmp.db, { balance: 20n });
   const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId, {
     brokerUserId: String(brokerUserId),
@@ -290,9 +297,9 @@ async function seedAccount({ snapshot = false } = {}): Promise<Account> {
       level: { code: 'standard', rank: 1 },
       minTradeAmount: '1.00' as DecimalString,
       real: {
-        available: '0.00' as DecimalString,
+        available: real as DecimalString,
         held: '0.00' as DecimalString,
-        total: '0.00' as DecimalString,
+        total: real as DecimalString,
       },
       demo: balance,
     };
@@ -301,10 +308,14 @@ async function seedAccount({ snapshot = false } = {}): Promise<Account> {
   return { brokerUserId, brokerAccountId, telegramUserId: user.telegramUserId };
 }
 
-async function newIntent(account: Account): Promise<string> {
+async function newIntent(account: Account, mode: TradeMode = TradeMode.Demo): Promise<string> {
   const { intent } = await createTradeIntent(
     tmp.db,
-    intentRequest(account.telegramUserId, { assetId: EURUSD, amount: '1.50' as DecimalString }),
+    intentRequest(account.telegramUserId, {
+      assetId: EURUSD,
+      amount: '1.50' as DecimalString,
+      mode,
+    }),
   );
   return intent.id;
 }
@@ -594,6 +605,53 @@ describe('the readiness line', () => {
     expect(logsOf(w, 'trading-worker started')).toEqual([
       expect.objectContaining({ demoOnly: true }),
     ]);
+    expect(await shutdown(w)).toBe('clean');
+  });
+});
+
+// #396: the flag reaches the processor and the orchestrator through createWorker itself, not only
+// the started line (H6)
+describe('DEMO_ONLY across the composition (#396)', () => {
+  it('H7 a flagged worker rejects a queued real intent before the broker', async () => {
+    const w = startWorker('H7', { sockets: false, demoOnly: true });
+    const account = await seedAccount();
+    const id = await newIntent(account, TradeMode.Real);
+    await publishPending([id]);
+    await until('H7 rejected', async () => (await statusOf(id)) === TradeIntentStatus.Rejected);
+    expect((await intentRows([id]))[0]).toMatchObject({
+      lastError: TradeIntentFailureReason.DemoOnly,
+      submittedAt: null,
+    });
+    expect(broker.trades.list(account.brokerUserId)).toEqual([]);
+    expect(logsOf(w, 'intent rejected: demo only')).toEqual([
+      expect.objectContaining({ intentId: id }),
+    ]);
+    expect(await shutdown(w)).toBe('clean');
+  });
+
+  it('H8 a flagged worker stops a real session at its first attempt, creating nothing', async () => {
+    // a real balance: the sizer runs before the intent creation and would stop the session
+    // stake_stop on an empty one
+    const account = await seedAccount({ snapshot: true, real: '50.00' });
+    const session = await seedTradingSession(tmp.db, account.brokerAccountId, {
+      mode: TradeMode.Real,
+      settings: sessionSettings({ trades: 3 }),
+    });
+    const sessionRow = async () =>
+      (await tmp.db.select().from(tradingSessions).where(eq(tradingSessions.id, session.id)))[0]!;
+    const w = startWorker('H8', { sockets: false, demoOnly: true });
+    await until(
+      'H8 stopped',
+      async () => (await sessionRow()).status === TradingSessionStatus.Stopped,
+    );
+    expect((await sessionRow()).stopReason).toBe(TradingSessionStopReason.AccountUnavailable);
+    expect(
+      await tmp.db.select().from(tradeIntents).where(eq(tradeIntents.tradingSessionId, session.id)),
+    ).toEqual([]);
+    expect(logsOf(w, 'trading session stopped')).toContainEqual(
+      expect.objectContaining({ reason: 'account_unavailable', code: 'demo_only' }),
+    );
+    expect(broker.trades.list(account.brokerUserId)).toEqual([]);
     expect(await shutdown(w)).toBe('clean');
   });
 });
