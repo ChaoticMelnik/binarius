@@ -221,6 +221,23 @@ describe('reportRefusedToken (#281)', () => {
     ]);
     expect(JSON.stringify(lines)).not.toContain(SECRET);
   });
+
+  it("does not warn when the caller's own signal cut the report", async () => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = pino(logOptions('info'), {
+      write: (line: string) => void lines.push(JSON.parse(line) as Record<string, unknown>),
+    });
+    await reportRefusedToken(
+      { accessToken: () => Promise.resolve({ ok: false, reason: 'backend_unreachable' }) },
+      logger,
+      { brokerAccountId: ACCOUNT },
+      SECRET,
+      { mayRefresh: false, signal: AbortSignal.abort() },
+    );
+    expect(lines).toEqual([
+      expect.objectContaining({ level: 30, msg: 'refused token report cut' }),
+    ]);
+  });
 });
 
 describe('notConfiguredAccessTokenSource', () => {

@@ -39,7 +39,7 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //   BROKER_REST_TIMEOUT_MS < CATCHUP_GRACE_MS; CATCHUP_TICK_MS < CATCHUP_STALLED_RETRY_MS — a
 //     held-back account misses at least one tick
 //   2 × ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < RECONCILE_ATTEMPT_TIMEOUT_MS and
-//     < CATCHUP_ATTEMPT_TIMEOUT_MS — a 401 on the first page and the report of its token (#281)
+//     < CATCHUP_ATTEMPT_TIMEOUT_MS - a 401 on the first page and the report of its token (#281)
 //     fit one attempt. A 401 on a later page (the token refused mid-attempt) can outlast it
 //     (34 s and 24 s): the report is cut by the attempt's signal, and the next attempt meets the
 //     401 on its first page and reports in time (stated)

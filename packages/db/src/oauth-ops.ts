@@ -293,14 +293,15 @@ export async function backfillRefreshTokenHash(
     .where(and(eq(brokerAccounts.id, accountId), isNull(brokerAccounts.refreshTokenHash)));
 }
 
-// The broker refused the stored access token before its stored expiry (#281): it is expired as of
-// now, by the database's clock, so every reader of access_token_expires_at sees it as needing an
-// exchange. The pair and token_rotated_at are left alone: nothing was rotated, and the 90-day
-// clock does not move. Called only under the row lock of refreshUnderLock.
+// The broker refused the stored access token before its stored expiry (#281): it is marked a day
+// in the past, so every reader of access_token_expires_at - by the database's clock or by a
+// process clock that may run behind it - sees it as needing an exchange. The pair and
+// token_rotated_at are left alone: nothing was rotated, and the 90-day clock does not move.
+// Called only under the row lock of refreshUnderLock.
 export async function markAccessTokenExpired(tx: Tx, accountId: string): Promise<void> {
   await tx
     .update(brokerAccounts)
-    .set({ accessTokenExpiresAt: sql`now()` })
+    .set({ accessTokenExpiresAt: sql`now() - interval '1 day'` })
     .where(eq(brokerAccounts.id, accountId));
 }
 

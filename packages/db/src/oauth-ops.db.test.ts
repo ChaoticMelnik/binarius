@@ -388,8 +388,9 @@ describe('refresh helpers', () => {
     const [clock] = (await tmp.db.execute(sql`select now() as now`)).rows as {
       now: Date | string;
     }[];
+    // a day behind the database clock: past for a process clock that runs up to a day behind it
     expect(after.accessTokenExpiresAt.getTime()).toBeLessThanOrEqual(
-      new Date(clock!.now).getTime(),
+      new Date(clock!.now).getTime() - 24 * 60 * 60_000,
     );
     expect(after.accessTokenExpiresAt.getTime()).toBeLessThan(
       before.accessTokenExpiresAt.getTime(),

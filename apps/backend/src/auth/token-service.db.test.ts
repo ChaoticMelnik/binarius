@@ -816,7 +816,9 @@ describe('ensureFreshAccessToken with a refused token (#281)', () => {
     ).toEqual({ ok: false, reason: 'refresh_needed' });
 
     const row = await rowOf(account.id);
-    expect(row.accessTokenExpiresAt.getTime()).toBeLessThanOrEqual((await nowDb()).getTime());
+    expect(row.accessTokenExpiresAt.getTime()).toBeLessThanOrEqual(
+      (await nowDb()).getTime() - 24 * 60 * 60_000,
+    );
     expect(row).toMatchObject({
       status: 'active',
       accessTokenEnc: account.accessTokenEnc,

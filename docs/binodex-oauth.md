@@ -479,7 +479,7 @@ the broker's rate limit refused the exchange, and asking again later may succeed
 | `token_key_id ≠ the process's key id`                       | `key_unavailable`, and **nothing is written** (see below)                                                         |
 | ciphertext fails to decrypt under its own key id            | revoke `storage_inconsistent`                                                                                     |
 | stored hash ≠ hash of the stored ciphertext                 | revoke `storage_inconsistent`                                                                                     |
-| access token still valid and `refusedToken` is its sha256   | `access_token_expires_at = now()` (`markAccessTokenExpired`), then the rows below as for an expired token (#281)  |
+| access token still valid and `refusedToken` is its sha256   | `access_token_expires_at = now() - 1 day` (`markAccessTokenExpired`), then the rows below as for an expired token (#281) |
 | access token still valid (60 s skew)                        | return it, also when `refusedToken` names another token (someone already rotated the pair); a legacy row missing its hash gets one here, and only the hash |
 | `mayRefresh: false`                                         | `refresh_needed`: nothing exchanged and nothing revoked, the 90-day rule below included                           |
 | `coalesce(token_rotated_at, created_at)` older than 90 days | revoke `refresh_expired`, without asking the broker                                                               |
@@ -610,7 +610,8 @@ A 429, a 5xx, `unavailable`, `contract_violation` and an abort report nothing.
 - **Under the lock, after every status check.** A blocked user, a pending or revoked account and
   a row under another key answer as before and nothing is written; a token already expired by the
   clock is not decrypted for the comparison (`token-service.db.test.ts` T1–T5).
-- **A match only marks.** `access_token_expires_at = now()` is the one write: the pair and
+- **A match only marks.** `access_token_expires_at = now() - 1 day` is the one write — a day back
+  so that a process clock behind the database's still reads it as expired: the pair and
   `token_rotated_at` stay, so the 90-day clock does not move. The decision then continues as for
   any expired token: `mayRefresh: false` → `refresh_needed`, `true` → one exchange with all its
   outcomes. Every reader of "token valid" already reads that column, so no flag and no migration.
@@ -627,8 +628,9 @@ A 429, a 5xx, `unavailable`, `contract_violation` and an abort report nothing.
   `SESSION_RETRY_MS`, a 401 reporter logs `refused token not reported`. Bodies without a
   fingerprint pass as before. Compose ships both images together.
 - **Not reported** is a `warn` (`failure`, `status`): the backend never answered for the token,
-  the mark may be missing, and the next 401 reports again. A throw out of the source is an
-  `error` `refused token report failed`.
+  the mark may be missing, and the next 401 reports again. A report cut by the caller's own
+  signal (its attempt's deadline, `stop()`) is an `info` `refused token report cut`: the mark
+  may have landed. A throw out of the source is an `error` `refused token report failed`.
 
 ## Broker contract (verified 2026-10-01)
 
