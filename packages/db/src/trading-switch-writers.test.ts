@@ -2,10 +2,10 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// T8 (#144): only an operator opens trading. No CHECK holds it yet (#96 adds one with the first
-// source that must never open), so the rule is that openTrading is the only non-test source that
-// writes trading_enabled = true, and the seed migration is the only SQL that does. A new writer
-// fails this list until someone decides it belongs here.
+// T8 (#144): only an operator opens trading. trading_switch_open_source_check (#96) refuses an
+// open row with any other source; this keeps openTrading the only non-test code that writes
+// trading_enabled = true, and the seed migration the only SQL that does. A new writer fails this
+// list until someone decides it belongs here.
 const repoRoot = path.resolve(import.meta.dirname, '..', '..', '..');
 const ALLOWED = ['packages/db/src/trading-switch-ops.ts'];
 const OPEN_WRITE = String.raw`tradingEnabled: true|trading_enabled"? *= *true`;
