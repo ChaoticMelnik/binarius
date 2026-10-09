@@ -595,7 +595,18 @@ docker compose logs -f trading-worker | grep -E 'trading session|intent outcome 
 ```
 
 (REPLACE_WITH_TG_ID: your Telegram id; REPLACE_WITH_PAIR_ID: an open pair from `GET /trading/pairs`
-that takes 15 s, the default `DURATION_SEC`.) `ACCOUNT_ID` is needed only with more than one active account.
+that takes 15 s, the default `DURATION_SEC`, and pays at least 80 %: below the floor the CLI's
+session waits for the payout.) `ACCOUNT_ID` is needed only with more than one active account.
+
+After the #379 deploy (the owner's step: the agent has no SSH, and these ran on no pilot before
+the merge), the floor and the pause:
+
+```bash
+# every listed signal is on a pair paying >= 80; scanned <= 25
+docker compose exec -T backend sh -c 'wget -qO- --header "Authorization: Bearer $INTERNAL_API_TOKEN" http://127.0.0.1:3000/trading/signals'
+# the pause and the payout wait inside a session
+docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to change|waits for the payout|intent created'
+```
 
 ## Accepted risks (#287)
 

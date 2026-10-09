@@ -1,10 +1,11 @@
-# Signal v1 (issues #132, #133, #258, #343)
+# Signal v2 (issues #132, #133, #258, #343, #379)
 
-`packages/signal` (`@binarius/signal`) turns a series of candles into a trade direction (`up` or
-`down`) or into a reason why there is none. It lived in `apps/trading-worker/src/signal/` until
+`packages/signal` (`@binarius/signal`) turns a series of candles and the pair's quote precision
+(`digits`) into a trade direction (`up` or `down`) or into a reason why there is none. It lived in `apps/trading-worker/src/signal/` until
 #258 moved it to a package, so the backend and the worker share one module. It does not use an
 LLM. The decider is a pure function: it reads no clock, no environment and no network, and writes
-no log. The same candles, `intervalMs`, `nowMs` and parameters always give the same decision. The
+no log. The same candles, `intervalMs`, `nowMs`, `digits` and parameters always give the same
+decision. The
 signal feed (`feed.ts`, #133, [Feed and journal](#feed-and-journal-133)) fetches the candles,
 calls the decider and writes one journal line per decision. Its callers are the backend's
 `POST /trading/signal` (#258, [below](#post-tradingsignal-258)) and the backend's background
@@ -15,6 +16,12 @@ cache. The worker never calls the feed itself: the session orchestrator (#287,
 Nobody has shown that this algorithm makes money. It is a technical baseline: the defaults are not
 tuned and no backtest was run.
 
+**v2 (#379)** adds two rule gates to v1's, from the owner's seven demo sessions of 2026-10-07…08
+(8 wins in 30): an ATR floor in quote steps (`minAtrTicks`, session `2e25e081`: every move one
+step of 0.00001) and the RSI extremes (`rsiExtremeBand`, session `d9c92776`: three `up` at RSI
+66.9–69.1 right after a rush). `SIGNAL_ALGORITHM_VERSION` is `'v2'`. v1's decider stays in the
+package, unchanged, for its journal lines only ([Replay per version](#replay-per-version-379)).
+
 ```bash
 pnpm test --project unit packages/signal   # needs no database or Redis
 ```
@@ -23,13 +30,14 @@ pnpm test --project unit packages/signal   # needs no database or Redis
 
 ```ts
 const decider = createSignalDecider(); // DEFAULT_SIGNAL_PARAMS
-const decision = decider.decide({ candles, intervalMs: 60_000, nowMs: Date.now() });
+const decision = decider.decide({ candles, intervalMs: 60_000, nowMs: Date.now(), digits: 5 });
 ```
 
 `createSignalDecider(params?)` checks the parameters once and keeps a frozen copy in
 `decider.params`. That copy is the only place the numbers live. A decision carries `version`
-(`SIGNAL_ALGORITHM_VERSION`, `'v1'`) but not the parameters, so a journal stores
-`decider.params` next to each decision.
+(`SIGNAL_ALGORITHM_VERSION`, `'v2'`) but not the parameters, so a journal stores
+`decider.params` next to each decision. `createSignalDeciderV1(params?)` is v1's decider, for the
+replay of v1 lines; no runtime caller uses it.
 
 ## Pipeline
 
@@ -47,9 +55,10 @@ candles ──> prepareCandles ──> EMA / RSI / ATR ──> gates ──> dec
 | `candles` | `readonly Candle[]` (`@binarius/shared`) | ascending by `timestamp`; never mutated |
 | `intervalMs` | number | a positive integer, the candle step |
 | `nowMs` | number | finite, `>= 0`; the caller's clock |
+| `digits` (v2) | number | a non-negative integer: the pair's `digits` from the catalog, one quote step = 10^-digits |
 
 `volume` is never read: the live chart sends 5-element tuples without it (docs/broker-rest.md).
-A wrong `intervalMs` or `nowMs` throws a `RangeError`. So do wrong parameters, at
+A wrong `intervalMs`, `nowMs` or `digits` throws a `RangeError`. So do wrong parameters, at
 `createSignalDecider`. A bad candle never throws.
 
 ## Data policy
@@ -112,17 +121,29 @@ From the closed series:
 - `momentum`: `up` when `rsi >= 50 + rsiBand`; `down` when `rsi <= 50 - rsiBand`; otherwise
   `neutral`.
 - `atrPct = atr / lastClose × 100`.
+- `atrTicks = atr × 10^digits` (v2): the ATR in the pair's quote steps, a float.
 
-The gates run in this order, and the first one that holds is the reason:
+The gates run in this order, and the first one that holds is the reason (v1 has gates 1, 2 and
+4–6 in the same order and no other):
 
 | Gate | Condition | `reason` |
 |---|---|---|
 | 1 | `atrPct < minAtrPct` | `volatility_too_low` |
 | 2 | `atrPct > maxAtrPct` | `volatility_too_high` |
-| 3 | `trend === flat` | `trend_flat` |
-| 4 | `momentum === neutral` | `rsi_neutral` |
-| 5 | `trend !== momentum` | `trend_momentum_disagree` |
+| 3 (v2) | `atrTicks < minAtrTicks` | `volatility_below_tick_floor` |
+| 4 | `trend === flat` | `trend_flat` |
+| 5 | `momentum === neutral` | `rsi_neutral` |
+| 6 | `trend !== momentum` | `trend_momentum_disagree` |
+| 7 (v2) | `trend === up` and `rsi >= 50 + rsiExtremeBand` | `rsi_overbought` |
+| 8 (v2) | `trend === down` and `rsi <= 50 − rsiExtremeBand` | `rsi_oversold` |
 | — | none of the above | `{ kind: 'signal', action: trend }` |
+
+The tick floor is a volatility gate and sits with them. The RSI extremes come last, so a refusal
+names the extreme only when trend and momentum already agreed: at RSI 70 with the trend down the
+answer is `trend_momentum_disagree`, as in v1. At the defaults a signal needs RSI in [55, 65) for
+`up` and (35, 45] for `down` (`decide.test.ts` D16–D18). The floor compares with `<`: an ATR of
+exactly `minAtrTicks` steps passes (D21, on integer closes at `digits` 0, where the product is
+exact); elsewhere a value within float noise of the floor may fall either side (stated).
 
 The caller does not trade on that candle after any rule refusal. `trend_flat` covers a trend with
 no direction at all: the two EMAs are equal, or the slope's sign contradicts their order. Splitting
@@ -132,21 +153,23 @@ says nothing (owner's decision 2026-10-03).
 ## Output
 
 ```ts
-| { kind: 'signal'; version: 'v1'; action: 'up' | 'down'; features }
-| { kind: 'no_signal'; version: 'v1'; reason: <rule reason>; features }
-| { kind: 'no_signal'; version: 'v1'; reason: <data reason>; detail }
+| { kind: 'signal'; version: 'v2'; action: 'up' | 'down'; features }
+| { kind: 'no_signal'; version: 'v2'; reason: <rule reason>; features }
+| { kind: 'no_signal'; version: 'v2'; reason: <data reason>; detail }
 ```
 
 `features` is `{ emaFast, emaSlow, emaSlowSlope, rsi, atr, atrPct, lastClose,
-lastCandleTimestamp, closedCandles, trend, momentum }`. Every number in it is finite, and no key is
-ever set to `undefined`. A decision survives `JSON.parse(JSON.stringify(decision))` unchanged, so
-the feed logs it as it is. All codes come from `as const` constants in
+lastCandleTimestamp, closedCandles, trend, momentum, atrTicks }`; v1's has no `atrTicks`. Every
+number in it is finite, and no key is ever set to `undefined`. A decision survives
+`JSON.parse(JSON.stringify(decision))` unchanged, so the feed logs it as it is. All codes come from `as const` constants in
 `packages/shared/src/signal.ts`: `SignalKind`, `NoSignalReason` (split into
 `DATA_REFUSAL_REASONS` and `RULE_REFUSAL_REASONS`), `CandleProblem`, `TrendDirection` and
 `MomentumDirection`. The direction is shared's `TradeAction`. The same file holds the decision's
-wire schema, `signalDecisionSchema`, and `SignalDecision` is its inferred type, the one type
-`decide.ts` returns. `decide.test.ts` (D15) parses every decision shape the decider produces back
-through it.
+wire schema, `signalDecisionSchema` (v2: eight rule reasons, `atrTicks`), and `SignalDecision` is
+its inferred type, the one type `decide.ts` returns. `decide.test.ts` (D15) parses every decision
+shape the decider produces back through it. v1's shapes stay beside it for the replay:
+`signalDecisionV1Schema` (`RULE_REFUSAL_REASONS_V1`, five), `signalFeaturesV1Schema`,
+`signalParamsV1Schema`; each version's decision parses through its own schema only (D23, S8).
 
 ## Parameters
 
@@ -162,9 +185,16 @@ through it.
 | `maxAtrPct` | 2 | finite, `> minAtrPct` | above it the market is treated as a shock |
 | `minClosedCandles` | 50 | integer `>= minClosedCandlesFloor(params)` (24 for the defaults) | how much history a decision needs |
 | `maxStaleIntervals` | 2 | integer `>= 1` | how old the last closed candle may be |
+| `rsiExtremeBand` (v2) | 15 | finite, `rsiBand < band <= 50` | no `up` at RSI ≥ 65, no `down` at RSI ≤ 35 |
+| `minAtrTicks` (v2) | 5 | integer `>= 1` | below it the price moves by a few quote steps only |
 
 `minClosedCandlesFloor = max(emaSlow + slopeLookback, rsiPeriod + 1, atrPeriod + 1)`. The defaults
 are checked when `config.ts` is imported, so a default edited out of its rules fails at import.
+`DEFAULT_SIGNAL_PARAMS_V1` and `assertSignalParamsV1` are v1's ten fields and rules; v2's assert
+runs v1's and adds the two rows above (`config.test.ts` K11–K15). The two v2 values are expert
+ones (owner, 2026-10-09); the backtest stand (#381) tunes them. `minAtrTicks` 5 may refuse quiet
+5 s candles on majors (EUR/USD at 5 digits: a step is 0.1 pip) — the owner's choice with that
+consequence named; the journal shows the rate.
 
 The ATR corridor is there to refuse a dead feed (ATR 0, an OTC weekend) and a shock. It is not
 meant to be optimal. On the mock broker's curve (the architect's probe: 6 pairs, 1m and 5m, 480
@@ -179,7 +209,7 @@ rule.
 
 ```ts
 const feed = createSignalFeed({ rest, logger }); // decider defaults to createSignalDecider()
-const result = await feed.evaluate({ assetId, interval: '1m' }, { signal });
+const result = await feed.evaluate({ assetId, interval: '1m', digits: pair.digits }, { signal });
 ```
 
 The intervals are a closed table, `SIGNAL_CHART_INTERVAL_MS` in `packages/shared/src/signal.ts`:
@@ -187,14 +217,15 @@ The intervals are a closed table, `SIGNAL_CHART_INTERVAL_MS` in `packages/shared
 probe 2026-10-03: every interval from `1s` to `1d`). `5s` and `15s` (#313) analyse the demo's 5
 and 15 s trades; no separate probe was made for them (owner, 2026-10-07): the first live analysis
 after the deploy checks them, through [the post-deploy check](#the-post-deploy-check-313).
-Signal v1's parameters are unchanged on them: every window counts candles, so 60 candles × 5 s is
+The parameters are the same on them: every window counts candles, so 60 candles × 5 s is
 a 5-minute window and `maxStaleIntervals` 2 lets the last closed `5s` candle be 10 s old. An
 interval outside the table is a `RangeError` before any fetch.
 
 ### The window
 
 `evaluate` reads the clock once (`nowMs`, `Date.now` unless `now` is passed) and checks it with
-`assertSignalClock` before any broker call. It then requests
+`assertSignalClock`, and `digits` with `assertDigits`, before any broker call (`feed.test.ts`
+F11). It then requests
 `chartWindow(nowMs, intervalMs, SIGNAL_CHART_LIMIT)`:
 `startTime = floor(nowMs / intervalMs) × intervalMs − (limit − 1) × intervalMs`. That is `limit`
 candle starts ending on the current interval boundary. The last of them is the forming candle,
@@ -242,6 +273,7 @@ key `signal`:
 | Field | Content |
 |---|---|
 | `assetId`, `interval`, `intervalMs`, `nowMs` | the request and the clock reading the decision used |
+| `digits` (v2) | the pair's quote precision the caller passed |
 | `fetch` | `{ startTime, limit, rows, durationMs }` |
 | `version` | `SIGNAL_ALGORITHM_VERSION` |
 | `params` | `decider.params`, the frozen parameters |
@@ -251,11 +283,21 @@ key `signal`:
 No key of the entry is a redacted key or an error key of `logOptions`, so the line holds the entry
 unchanged. The line carries everything the decision was computed from, so
 `replaySignalJournalEntry(JSON.parse(line).signal)` computes the same decision again.
-`feed.test.ts` does this on a line read back from a `logOptions` logger. `journal.test.ts` does it
-for a signal, each of the four data refusals and both volatility refusals, one of them from a
-decider with non-default parameters. An entry of another `version` is refused with a `RangeError`:
-v1 code does not re-decide a v2 line. A non-finite price (impossible on the live chart, which is
+`feed.test.ts` does this on a line read back from a `logOptions` logger (F2, F10 with `digits`).
+`journal.test.ts` does it for a signal, each of the four data refusals and both volatility
+refusals, one of them from a decider with non-default parameters. A non-finite price (impossible on the live chart, which is
 JSON) is `null` on the line, and replays as `non_finite` at the same index.
+
+#### Replay per version (#379)
+
+`replaySignalJournalEntry` dispatches on the line's `version`, never on the current decider: `v1`
+→ v1's decider on `{ candles, intervalMs, nowMs }` with the line's v1 `params`; `v2` → v2's on the
+same plus the line's `digits`; anything else → `RangeError('signal journal: entry version v0 is
+not one of v1, v2')` (J3). So a v1 line logged before the deploy replays to its recorded
+decision: `packages/signal/src/fixtures/v1-signal-line.json` is one such line, produced by main's
+feed before any v2 change, and J4 replays it (a `signal up` at RSI 74.3 that v2 would answer
+`rsi_overbought`; J5 shows the two versions on one series). A v2 line without `digits` throws
+`RangeError` rather than deciding. A later version is one more entry in the same dispatch.
 
 A line is about 5 KB (5 231 bytes live, below). With every price at 17 significant digits, the
 longest a double prints, it is 6 332 bytes. `feed.test.ts` (F9) keeps it under 16 KiB, the line
@@ -263,9 +305,11 @@ size Docker's log copier reads in one piece.
 
 ### Probe
 
-`signal-probe` runs one evaluation and exits. The journal line goes to stdout and a one-line
-summary to stderr. It exits 0 on `decided` (a refusal included) and 1 on `fetch_failed`. It reads
-no token and opens no trade.
+`signal-probe` reads the public pairs list once (`listPairs`) for the asset's `digits`, then runs
+one evaluation and exits. The journal line goes to stdout and a one-line summary to stderr. It
+exits 0 on `decided` (a refusal included) and 1 on `fetch_failed` (`pairs fetch_failed <code>` when
+the list itself fails) or on an id the list does not hold (`unknown asset id`, before any chart
+GET). It reads no token and opens no trade.
 
 ```bash
 BROKER_API_BASE_URL=https://api.binodex.app ASSET_ID=237831086 pnpm --filter @binarius/trading-worker signal-probe
@@ -300,6 +344,16 @@ docker compose logs --no-log-prefix --since 1h backend | grep -F '"msg":"signal 
 Any of them is a question on the #132 parameters for the owner — never a minute candle: a 5 or
 15 s trade is analysed on its own candle only.
 
+After the #379 deploy, the v2 reasons by interval — `rsi_overbought`/`rsi_oversold` and
+`volatility_below_tick_floor` are the new filters' rates, and every line now carries `version`
+`v2` and `digits` (the owner's step; the filter ran here over the feed's lines on the mock broker
+only):
+
+```bash
+docker compose logs --no-log-prefix --since 1h backend | grep -F '"msg":"signal decision"' \
+  | jq -c '[.signal.version, .signal.interval, (.signal.decision.reason // "signal")]' | sort | uniq -c
+```
+
 ### Observed live (2026-10-06)
 
 - The architect made three public chart GETs (asset 237831086, NZD/USD OTC, `1m`). The rows are
@@ -324,14 +378,18 @@ public chart GET through the cached feed, on the process's one REST client.
 
 Request: `{ assetId, interval }` (`tradingSignalRequestSchema`): `assetId` a positive int4, the
 same spelling as `POST /trading/intents`; `interval` a key of the table. There is no user id: the
-chart is public and a decision is per pair. Whether the asset is in the fresh catalog is the bot's
-check (#126); the route checks only the shape.
+chart is public and a decision is per pair. After the shape, the route looks the pair up in the
+backend's pairs cache (the one `GET /trading/pairs` serves) for its `digits` (#379), before any
+chart GET; neither refusal below is journalled, no decision was made. Whether the pair is open or
+accepts a duration stays the caller's check: an analysis of a closed pair is allowed.
 
 | Evaluation | Status | Body (`tradingSignalResponseSchema`) |
 |---|---|---|
 | `decided` | 200 | `{ outcome: 'decided', params, decision }`: the decider's parameters, so the screen names `EMA9`/`EMA21` from them, and the decision |
 | `fetch_failed` | 200 | `{ outcome: 'fetch_failed', code, retryAfterSec? }`; `status` and the request facts stay in the feed's `warn` line |
 | a body that fails the schema | 400 | `{ error: 'validation', issues }` |
+| no catalog snapshot, or not `fresh` | 503 | `{ error: 'catalog_unavailable' }` (`TradingSignalErrorCode.CatalogUnavailable`, the pairs route's string); the feed is not called (`signal-routes.test.ts` R7) |
+| the id not in the catalog | 409 | `{ error: 'pair_unknown' }` (`TradingSignalErrorCode.PairUnknown`); the feed is not called (R8) |
 | a wrong bearer | 401 | `{ error: 'unauthorized' }` |
 | a throw (a broken clock: a programmer error) | 500 | `{ error: 'internal' }`, logged by name and code |
 
@@ -344,7 +402,7 @@ fields; the journal series never leaves the backend's log.
 | `decided` | shows the decision: the direction and the stake button on a signal, the reason in words on a refusal; the feature lines from `features`, the periods from `params` |
 | `fetch_failed` `rate_limited` | «попробуй через N с» with `retryAfterSec`; without it, the analysis as unavailable; no log line |
 | any other `fetch_failed` code | shows the analysis as unavailable and logs `warn` `signal not evaluated` with `signalCode` |
-| 400, 401, 500, a timeout, a broken body | shows the analysis as unavailable and logs `warn` `signal not evaluated` with the error |
+| 400, 401, 409, 500, 503, a timeout, a broken body | the bot shows the analysis as unavailable and logs `warn` `signal not evaluated` with the error; the worker's session holds back `TRADING_SESSION_RETRY_MS` (`backend_status`), and its next attempt's pairs read stops `pair_unavailable` if the pair is gone. Both read a fresh catalog before asking, so the 503 and the 409 are races |
 
 `intervalForDuration(durationSec)` (shared) picks the interval for a trade's duration: the longest
 table interval not above it, the shortest (`5s`) below it. A 5 s trade gets `5s` and a 15 s trade
@@ -359,7 +417,10 @@ one chart GET and one journal line, which replays to the answered decision.
 ### The cache
 
 `createCachedSignalFeed(inner, { fetchBudgetMs, maxTtlMs, maxEntries, now })` (`cache.ts`) wraps a
-feed, keyed by `${assetId}:${interval}`:
+feed, keyed by `${assetId}:${interval}`. `digits` is the pair's, not the request's, and is not in
+the key: two requests for one key in one candle share one fetch and the first caller's `digits`
+(C14); they can differ only if the catalog changed the pair's precision inside that candle
+(stated).
 
 | Inner result | Held? | Until |
 |---|---|---|
@@ -421,8 +482,12 @@ analysis. The broker's per-IP budget does not fit both: 122 pairs on every `5s` 
 would be about 1 950 GETs a minute against 600 ([The budget](#the-budget)).
 - Each candle reads the pairs catalog. A missing or stale catalog (`fresh: false`) scans nothing,
   with one `warn` `signal scan skipped: no fresh catalog` per stale streak.
-- Eligible pairs are those open by `scheduled_until` (`isPairOpen`) and accepting a 15 s trade
-  (`pairAcceptsDuration`). A `min_timeframe` 60 pair is never scanned.
+- Eligible pairs are those open by `scheduled_until` (`isPairOpen`), accepting a 15 s trade
+  (`pairAcceptsDuration`) and paying at least the cycle floor (`pairPayoutAccepted`,
+  `MIN_CYCLE_PAYOUT_PCT` 80, #379: no cycle starts below it, [trading-session.md](trading-session.md#the-payout-floor-379)).
+  A `min_timeframe` 60 pair and a pair paying 79 % are never scanned nor served (S18). Each
+  evaluation carries the pair's `digits` from the catalog it was chosen from (S19). On the live
+  catalog of 2026-10-09, 50 of the 122 pairs accepting 15 s paid ≥ 80, the top 25 ≥ 86.
 - The scan set is the top `floor(SIGNAL_SCAN_MAX_PER_MINUTE / 4)` eligible pairs by `payout` desc,
   then `id` asc. That is 25 by default, each decided once a candle.
 - The set is recomputed every candle, so it follows the catalog's refresh. A pair that left the set
@@ -471,7 +536,7 @@ The calls still queued are dropped (S8). `start()` runs after `listen()` with th
 
 | Field | What it counts |
 |---|---|
-| `eligible` | eligible pairs at the last scan; 0 while the catalog is stale |
+| `eligible` | eligible pairs at the last scan (open, 15 s, at or above the payout floor); 0 while the catalog is stale |
 | `scanned` | the size of the scan set |
 | `signals` | fresh signals now (the route's rule) |
 | `noSignal` | `no_signal` decisions over the minute |
@@ -507,7 +572,8 @@ skew past the slack costs coverage, never a stale answer. This is stricter than 
 
 The one consumer is the bot's signals screen (#320, `readSignals` in
 `apps/bot/src/backend-client.ts`). It keeps a pair only if the catalog read at the same press lists
-it, open and accepting 15 s, and takes the symbol and payout from there; it never re-reads the
+it, open, accepting 15 s and paying at least the cycle floor (`checkDemoCycle`, #379), and takes the
+symbol and payout from there; it never re-reads the
 signal at a press, since the session asks for one before every trade
 ([bot-demo.md](bot-demo.md#the-signals-screen-320)).
 
@@ -561,7 +627,7 @@ The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import a
 - It does no tuning or backtesting and makes no profitability claim.
 - The decider makes no network calls, writes no logs and contains no user-facing text (the feed
   does the fetching and the logging). The Russian wording of a reason belongs to the bot (#126).
-- It does not read volume or price ticks. v1 works from the chart only.
+- It does not read volume or price ticks. It works from the chart and the pair's `digits` only.
 
 ## Boundaries
 
