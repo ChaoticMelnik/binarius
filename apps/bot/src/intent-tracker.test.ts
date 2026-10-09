@@ -10,6 +10,7 @@ import { BackendError, BackendErrorCode, type BackendClient } from './backend-cl
 import {
   createIntentTracker,
   INTENT_NOT_FOUND,
+  sessionOfferOf,
   TRACKER_STOP_STATUSES,
   type IntentTrackRequest,
 } from './intent-tracker';
@@ -95,8 +96,15 @@ function setup({
   return { tracker, readIntent, edit, edits, logger, request };
 }
 
-const shown = (view: TradeIntentView, deadline = false) =>
-  intentStatusText(SYMBOL, view, { deadline }).value;
+// the tail under the status: the hint at the deadline of a live status, the session offer under a
+// stop status (#360), never both
+const shown = (view: TradeIntentView, tail?: 'deadline' | 'offer') =>
+  intentStatusText(SYMBOL, view, {
+    deadline: tail === 'deadline',
+    sessionOffer: tail === 'offer',
+  }).value;
+const OFFER = '🤖 Дальше бот может торговать сам';
+const HINT = 'обрабатывается';
 
 const submitting = intentView({ status: TradeIntentStatus.Submitting });
 const accepted = intentView({ status: TradeIntentStatus.Accepted });
@@ -127,7 +135,9 @@ describe('the intent tracker', () => {
     expect(readIntent).toHaveBeenCalledWith(INTENT_ID, String(USER.id));
     expect(edits.map((text) => text.value)).toEqual([shown(submitting)]);
     await vi.advanceTimersByTimeAsync(POLL);
-    expect(edits.map((text) => text.value)).toEqual([shown(submitting), shown(accepted)]);
+    expect(edits.map((text) => text.value)).toEqual([shown(submitting), shown(accepted, 'offer')]);
+    expect(edits[0]?.value).not.toContain(OFFER);
+    expect(edits[1]?.value).toContain(OFFER);
     expect(tracker.size()).toBe(0);
     await vi.advanceTimersByTimeAsync(DEADLINE);
     expect(readIntent).toHaveBeenCalledTimes(2);
@@ -140,11 +150,26 @@ describe('the intent tracker', () => {
       const { tracker, edits, readIntent, request } = setup({ script: [rejected] });
       tracker.track(request());
       await vi.advanceTimersByTimeAsync(FIRST + POLL);
-      expect(edits.map((text) => text.value)).toEqual([shown(rejected)]);
+      expect(edits.map((text) => text.value)).toEqual([shown(rejected, 'offer')]);
       expect(readIntent).toHaveBeenCalledTimes(1);
       expect(tracker.size()).toBe(0);
     },
   );
+
+  // #360: the line and the session row follow the status, never the moment
+  it('offers the session on a stop status of a duration the demo still takes, and only then', () => {
+    for (const status of TRACKER_STOP_STATUSES) {
+      expect(sessionOfferOf({ status, durationSec: 5 })).toBe(5);
+      expect(sessionOfferOf({ status, durationSec: 15 })).toBe(15);
+      // a trade from before #313
+      expect(sessionOfferOf({ status, durationSec: 60 })).toBeUndefined();
+    }
+    for (const status of Object.values(TradeIntentStatus).filter(
+      (status) => !TRACKER_STOP_STATUSES.has(status),
+    )) {
+      expect(sessionOfferOf({ status, durationSec: 5 })).toBeUndefined();
+    }
+  });
 
   it('edits nothing while the status stays the same, and keeps polling a live one', async () => {
     const { tracker, edits, readIntent, request } = setup({ script: [intentView(), unknown] });
@@ -161,7 +186,10 @@ describe('the intent tracker', () => {
     const { tracker, edits, edit, readIntent, request } = setup({ script: [unknown] });
     tracker.track(request());
     await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
-    expect(edits.map((text) => text.value)).toEqual([shown(unknown), shown(unknown, true)]);
+    expect(edits.map((text) => text.value)).toEqual([shown(unknown), shown(unknown, 'deadline')]);
+    // a live status gets the hint and never the offer
+    expect(edits.map((text) => text.value).join('\n')).not.toContain(OFFER);
+    expect(edits[1]?.value).toContain(HINT);
     // #350: the deadline edit says so, so its keyboard adds the menu
     expect(edit.mock.calls.map((call) => call[2])).toEqual([undefined, 'deadline']);
     const polls = readIntent.mock.calls.length;
@@ -177,6 +205,7 @@ describe('the intent tracker', () => {
     tracker.track(request());
     await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
     expect(edits.map((text) => text.value)).toEqual([TEXTS.intentStatusUnavailable.value]);
+    expect(edits[0]?.value).not.toContain(OFFER);
     // #350: the intent is gone, so its keyboard is the menu only
     expect(edit.mock.calls.map((call) => call[2])).toEqual(['not_found']);
     expect(readIntent).toHaveBeenCalledTimes(1);
@@ -195,7 +224,7 @@ describe('the intent tracker', () => {
     tracker.track(request());
     await vi.advanceTimersByTimeAsync(FIRST + POLL * 2);
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(edits.map((text) => text.value)).toEqual([shown(accepted)]);
+    expect(edits.map((text) => text.value)).toEqual([shown(accepted, 'offer')]);
     expect(tracker.size()).toBe(0);
   });
 
@@ -249,7 +278,10 @@ describe('the intent tracker', () => {
     await vi.advanceTimersByTimeAsync(FIRST);
     expect(tracker.size()).toBe(1);
     await vi.advanceTimersByTimeAsync(POLL);
-    expect(edit.mock.calls.map(([text]) => text.value)).toEqual([shown(rejected), shown(rejected)]);
+    expect(edit.mock.calls.map(([text]) => text.value)).toEqual([
+      shown(rejected, 'offer'),
+      shown(rejected, 'offer'),
+    ]);
     expect(tracker.size()).toBe(0);
     await vi.advanceTimersByTimeAsync(DEADLINE);
     expect(readIntent).toHaveBeenCalledTimes(2);
@@ -269,8 +301,10 @@ describe('the intent tracker', () => {
     expect(polls).toBeGreaterThan(DEADLINE / POLL - 2);
     const texts = edit.mock.calls.map(([text]) => text.value);
     expect(texts).toHaveLength(polls + 1);
-    expect(new Set(texts)).toEqual(new Set([shown(rejected)]));
-    expect(texts.at(-1)).not.toContain('обрабатывается');
+    expect(new Set(texts)).toEqual(new Set([shown(rejected, 'offer')]));
+    // the deadline edit of a stop status: its offer, not the hint
+    expect(texts.at(-1)).not.toContain(HINT);
+    expect(texts.at(-1)).toContain(OFFER);
     // #350: a stop status's last edit is its end of the path, not the deadline's (no second menu)
     expect(edit.mock.calls.at(-1)?.[2]).toBeUndefined();
     // one line per entry, the later failures only counted

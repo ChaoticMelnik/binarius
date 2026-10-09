@@ -81,8 +81,10 @@ export const analysisSubject = (pair: PairView, durationSec: DemoDurationSec): s
 
 export interface AnalysisScreen {
   text: TelegramHtml;
-  // the direction of the stake button, set on a signal only
+  // the direction of the stake button behind «➕ Ещё», set on a signal only
   stake: TradeAction | null;
+  // the session row (#360): on every `decided` answer, never when the candles were not read
+  session: boolean;
 }
 
 export interface AnalysisScreenInput {
@@ -106,6 +108,7 @@ export function analysisScreen({
       text: telegramHtml`${header}
 ${body}`,
       stake: null,
+      session: false,
     };
   }
   const { decision, params } = response;
@@ -120,6 +123,7 @@ ${TEXTS.demoPayout({ payout: String(pair.payout) })}
 
 ${TEXTS.analysisDisclaimer}`,
       stake: decision.action,
+      session: true,
     };
   }
   const headline = TEXTS.analysisNoSignal({ reason: NO_SIGNAL_REASON_TEXT[decision.reason] });
@@ -130,6 +134,7 @@ ${headline}
 
 ${TEXTS.analysisDataHint}`,
       stake: null,
+      session: true,
     };
   }
   const volatility =
@@ -146,6 +151,7 @@ ${featureLines(decision.features, params, pair, volatility)}
 
 ${TEXTS.analysisNoSignalHint}`,
     stake: null,
+    session: true,
   };
 }
 
@@ -157,6 +163,7 @@ export const analysisUnavailableScreen = (
   text: telegramHtml`${TEXTS.analysisHeader({ subject: analysisSubject(pair, durationSec) })}
 ${TEXTS.analysisUnavailable}`,
   stake: null,
+  session: false,
 });
 
 function featureLines(

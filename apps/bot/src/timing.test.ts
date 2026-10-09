@@ -42,6 +42,7 @@ import {
   DEMO_GROUPS_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoLaunchCallbackData,
+  analysisMoreCallbackData,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoDurationCallbackData,
@@ -843,7 +844,7 @@ const DEMO_ANALYSIS_WORST_CASE: Branch = {
   label: '«⏳» is refused as gone and sent anew, then the result is sent',
   update: analysisUpdate(),
   apiErrors: [['editMessageText', EDIT_REFUSED]],
-  expected: { backend: 3, telegram: 4 },
+  expected: { backend: 2, telegram: 4 },
 };
 const DEMO_ANALYSIS = {
   worst: DEMO_ANALYSIS_WORST_CASE,
@@ -866,20 +867,20 @@ const DEMO_ANALYSIS = {
     {
       label: '«⏳» and the result are edited',
       update: analysisUpdate(),
-      expected: { backend: 3, telegram: 3 },
+      expected: { backend: 2, telegram: 3 },
     },
     {
       label: 'answering the query is refused and the analysis still goes',
       update: analysisUpdate(),
       apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-      expected: { backend: 3, telegram: 3 },
+      expected: { backend: 2, telegram: 3 },
     },
     DEMO_ANALYSIS_WORST_CASE,
     {
       label: '«⏳» and the result are refused as not modified',
       update: analysisUpdate(),
       apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
-      expected: { backend: 3, telegram: 3 },
+      expected: { backend: 2, telegram: 3 },
     },
     // rethrown into bot.catch
     {
@@ -903,43 +904,109 @@ const DEMO_ANALYSIS = {
       label: 'the result edit is refused as gone and the result is sent anew',
       update: analysisUpdate(),
       failSecondEdit: EDIT_REFUSED,
-      expected: { backend: 3, telegram: 4 },
+      expected: { backend: 2, telegram: 4 },
     },
     {
       label: 'the result edit fails in transport',
       update: analysisUpdate(),
       failSecondEdit: EDIT_TRANSPORT,
-      expected: { backend: 3, telegram: 3 },
-    },
-    {
-      label: 'the access read for the stake label fails',
-      update: analysisUpdate(),
-      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-      expected: { backend: 3, telegram: 3 },
+      expected: { backend: 2, telegram: 3 },
     },
     {
       label: 'the signal call fails',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-      expected: { backend: 3, telegram: 3 },
+      expected: { backend: 2, telegram: 3 },
     },
     {
       label: 'the broker rate-limits the candles',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
-      expected: { backend: 3, telegram: 3 },
+      expected: { backend: 2, telegram: 3 },
     },
     {
       label: 'the decision is a rule refusal',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
-      expected: { backend: 3, telegram: 3 },
+      expected: { backend: 2, telegram: 3 },
     },
     {
       label: 'the decision is a data refusal',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_DATA_REFUSAL),
-      expected: { backend: 3, telegram: 3 },
+      expected: { backend: 2, telegram: 3 },
+    },
+  ] satisfies Branch[],
+};
+
+// «➕ Ещё» (#360): the access read for the stake label, then the keyboard edited in place;
+// a refused edit sends nothing more
+const moreUpdate = (chatType?: string) =>
+  callbackUpdate(analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up), chatType);
+const MARKUP_TRANSPORT = new HttpError(
+  "Network request for 'editMessageReplyMarkup' failed!",
+  new Error('The operation was aborted due to timeout'),
+);
+const ANALYSIS_MORE_WORST_CASE: Branch = {
+  label: 'access is read and the keyboard is edited',
+  update: moreUpdate(),
+  expected: { backend: 1, telegram: 2 },
+};
+const ANALYSIS_MORE = {
+  worst: ANALYSIS_MORE_WORST_CASE,
+  branches: [
+    {
+      label: 'the chat is not private',
+      update: moreUpdate('group'),
+      expected: { backend: 0, telegram: 0 },
+    },
+    {
+      label: 'the data is forged',
+      update: callbackUpdate('demo:more:0:15:up'),
+      expected: { backend: 0, telegram: 1 },
+    },
+    ANALYSIS_MORE_WORST_CASE,
+    {
+      label: 'access is not read',
+      update: moreUpdate(),
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+      expected: { backend: 1, telegram: 2 },
+    },
+    {
+      label: 'answering the query is refused and the keyboard still goes',
+      update: moreUpdate(),
+      apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+      expected: { backend: 1, telegram: 2 },
+    },
+    {
+      label: 'the edit is refused as not modified',
+      update: moreUpdate(),
+      apiErrors: [['editMessageReplyMarkup', EDIT_NOT_MODIFIED]],
+      expected: { backend: 1, telegram: 2 },
+    },
+    {
+      label: 'the edit is refused as gone',
+      update: moreUpdate(),
+      apiErrors: [['editMessageReplyMarkup', EDIT_REFUSED]],
+      expected: { backend: 1, telegram: 2 },
+    },
+    {
+      label: 'the edit fails in transport',
+      update: moreUpdate(),
+      apiErrors: [['editMessageReplyMarkup', MARKUP_TRANSPORT]],
+      expected: { backend: 1, telegram: 2 },
+    },
+    // rethrown into bot.catch
+    {
+      label: 'the edit is refused for an unlisted reason',
+      update: moreUpdate(),
+      apiErrors: [
+        [
+          'editMessageReplyMarkup',
+          { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
+        ],
+      ],
+      expected: { backend: 1, telegram: 2 },
     },
   ] satisfies Branch[],
 };
@@ -2211,6 +2278,15 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
       DEMO_ANALYSIS.branches,
       DEMO_ANALYSIS.worst,
       HANDLER_CALLS.demoAnalysis,
+    );
+  });
+
+  it('«➕ Ещё» under the analysis', async () => {
+    await checkHandler(
+      'analysisMore',
+      ANALYSIS_MORE.branches,
+      ANALYSIS_MORE.worst,
+      HANDLER_CALLS.analysisMore,
     );
   });
 

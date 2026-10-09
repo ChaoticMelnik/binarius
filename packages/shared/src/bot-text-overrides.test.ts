@@ -168,17 +168,21 @@ describe('resolveBotTextOverrides', () => {
   it('V13 counts a plain label with markup at the length it is shown', () => {
     const intent = BOT_TEXT_MESSAGES.find((m) => m.id === 'intentStatus')!;
     const base = estimateBotTextMessage(intent, resolveBotTextOverrides([]).source);
-    // 30 characters below the limit on its own; the label adds 63 shown characters
+    // 30 characters below the limit on its own (the offer is the wider of the message's two
+    // tails, #360); the label adds 63 shown characters
     const filler = 'я'.repeat(TELEGRAM_MESSAGE_LIMIT - 30 - base - 1);
-    const deadline = row('intentDeadline', `${BOT_TEXT_CATALOG.intentDeadline.source}\n${filler}`);
+    const offer = row(
+      'intentSessionOffer',
+      `${BOT_TEXT_CATALOG.intentSessionOffer.source}\n${filler}`,
+    );
     const action = row('actionUp', '<b></b>'.repeat(9));
-    expect(accepted([deadline])).toEqual(['intentDeadline']);
+    expect(accepted([offer])).toEqual(['intentSessionOffer']);
     expect(accepted([action])).toEqual(['actionUp']);
-    expect(codes([deadline, action])).toEqual({
-      intentDeadline: BotTextRejectionCode.MessageOverflow,
+    expect(codes([offer, action])).toEqual({
+      intentSessionOffer: BotTextRejectionCode.MessageOverflow,
       actionUp: BotTextRejectionCode.MessageOverflow,
     });
-    expect(botTextChangeProblems('actionUp', action.source, [deadline])).not.toEqual([]);
+    expect(botTextChangeProblems('actionUp', action.source, [offer])).not.toEqual([]);
   });
 
   it('V9 rejects nothing with no overrides', () => {
