@@ -16,6 +16,7 @@ import {
   type BrokerTrade,
   type ClosedTrade,
   type CreateTradeIntentRequest,
+  type DecimalString,
   type OpenTrade,
   type TradeIntentView,
   type TradeTransport,
@@ -26,7 +27,8 @@ import { brokerBalanceSnapshots } from './schema/broker-balance-snapshots';
 import { BrokerTradeStatus, brokerTrades } from './schema/broker-trades';
 import { OutboxTopic, outboxEvents } from './schema/outbox-events';
 import { tokenLedger } from './schema/token-ledger';
-import { tradeIntents } from './schema/trade-intents';
+import { sqlLiteralList } from './schema/columns';
+import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
 import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-switch-ops';
@@ -1141,6 +1143,9 @@ export interface OverdueAcceptedIntent {
   mode: TradeMode;
 }
 
+// the broker's open time plus the intent's duration, Unix ms; over broker_trades joined to its intent
+const expectedCloseMs = sql`${brokerTrades.openTimestampMs} + ${tradeIntents.durationSec}::bigint * 1000`;
+
 // The one definition of "accepted past its expected close" (#17), for the REST catch-up of #90:
 // the broker's open time plus the intent's duration plus graceMs, against the database clock.
 // Ordered by that expected close, oldest first; graceMs and its chain belong to the polling loop.
@@ -1150,7 +1155,6 @@ export async function listOverdueAcceptedIntents(
   exec: DbExecutor,
   { graceMs, limit, exclude = [] }: { graceMs: number; limit: number; exclude?: readonly string[] },
 ): Promise<OverdueAcceptedIntent[]> {
-  const expectedCloseMs = sql`${brokerTrades.openTimestampMs} + ${tradeIntents.durationSec}::bigint * 1000`;
   return exec
     .select({
       id: tradeIntents.id,
@@ -1170,6 +1174,90 @@ export async function listOverdueAcceptedIntents(
     )
     .orderBy(expectedCloseMs)
     .limit(limit);
+}
+
+export interface HeldExposure {
+  mode: TradeMode;
+  // our open broker_trades of the account in this mode, sorted
+  openTradeIds: string[];
+  // every trade_intents row of the account in this mode: an intent created between two reads
+  // changes it
+  intentCount: number;
+  // a non-terminal intent of this mode that is not `accepted` with an open linked trade
+  unresolvedIntent: boolean;
+  // an open linked trade at or past its expected close, by the database clock
+  settlementPending: boolean;
+  // held > the sum of the open amounts, compared as numeric; null when no held was passed
+  heldExceedsOpen: boolean | null;
+}
+
+// Our side of the broker balance check (#92): per mode, what we hold open at the broker and what
+// could make a compare with the broker's `held` meaningless. One statement, no locks; the money
+// comparison stays in SQL numeric (Rule 2). `held` must already have passed the snapshot's domain
+// check, so the cast cannot fail.
+export async function readHeldExposure(
+  exec: DbExecutor,
+  {
+    brokerAccountId,
+    held = {},
+  }: { brokerAccountId: string; held?: Partial<Record<TradeMode, DecimalString>> },
+): Promise<HeldExposure[]> {
+  const openOfMode = sql`${brokerTrades.brokerAccountId} = ${brokerAccountId}
+    and ${brokerTrades.mode} = m.mode
+    and ${brokerTrades.status} = ${BrokerTradeStatus.Open}`;
+  const intentsOfMode = sql`${tradeIntents.brokerAccountId} = ${brokerAccountId}
+    and ${tradeIntents.mode} = m.mode`;
+  const { rows } = await exec.execute<{
+    mode: TradeMode;
+    open_trade_ids: string[];
+    intent_count: number;
+    unresolved_intent: boolean;
+    settlement_pending: boolean;
+    held_exceeds_open: boolean | null;
+  }>(sql`
+    select m.mode,
+      coalesce(
+        (select array_agg(${brokerTrades.brokerTradeId} order by ${brokerTrades.brokerTradeId})
+           from ${brokerTrades} where ${openOfMode}),
+        '{}'
+      ) as open_trade_ids,
+      (select count(*)::int from ${tradeIntents} where ${intentsOfMode}) as intent_count,
+      exists (
+        select 1 from ${tradeIntents}
+         where ${intentsOfMode}
+           and ${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})
+           and not (
+             ${tradeIntents.status} = ${TradeIntentStatus.Accepted}
+             and exists (
+               select 1 from ${brokerTrades}
+                where ${brokerTrades.intentId} = ${tradeIntents.id}
+                  and ${brokerTrades.status} = ${BrokerTradeStatus.Open}
+             )
+           )
+      ) as unresolved_intent,
+      exists (
+        select 1 from ${brokerTrades}
+          join ${tradeIntents} on ${tradeIntents.id} = ${brokerTrades.intentId}
+         where ${openOfMode}
+           and ${expectedCloseMs} <= (extract(epoch from now()) * 1000)
+      ) as settlement_pending,
+      (case m.mode
+         when ${TradeMode.Demo} then ${held.demo ?? null}::numeric
+         when ${TradeMode.Real} then ${held.real ?? null}::numeric
+       end)
+        > coalesce((select sum(${brokerTrades.amount}) from ${brokerTrades} where ${openOfMode}), 0)
+        as held_exceeds_open
+    from unnest(array[${sqlLiteralList(Object.values(TradeMode))}]::text[]) as m(mode)
+    order by m.mode
+  `);
+  return rows.map((row) => ({
+    mode: row.mode,
+    openTradeIds: row.open_trade_ids,
+    intentCount: row.intent_count,
+    unresolvedIntent: row.unresolved_intent,
+    settlementPending: row.settlement_pending,
+    heldExceedsOpen: row.held_exceeds_open,
+  }));
 }
 
 export async function findTradeIntent(
