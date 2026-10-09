@@ -280,7 +280,7 @@ export const SAMPLE_BOT_TEXTS: AdminBotTextsResponse = {
       version: 4,
       updatedAt: AT,
       updatedByLogin: null,
-      rejection: 'Только чтение: команды и профиль правятся после #301',
+      rejection: 'Пустой текст',
     },
     { key: 'welcome', version: 7, updatedAt: AT, updatedByLogin: 'ada', rejection: null },
     {

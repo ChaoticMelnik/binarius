@@ -1,7 +1,8 @@
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { GrammyError } from 'grammy';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { BOT_TEXT_CATALOG } from '@binarius/shared';
-import { auditLog, botTextOverrides } from '@binarius/db';
+import { auditLog, botTextOverrides, listBotTextOverrides } from '@binarius/db';
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import {
   decodeBotTextFile,
@@ -9,7 +10,9 @@ import {
   readAtMost,
   runBotTextCli,
   streamAtMost,
+  type BotTextCliDeps,
 } from './bot-text';
+import type { BotProfileApi, BotProfileMethod } from '../bot-texts/publish';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -26,12 +29,17 @@ afterAll(() => tmp.drop());
 
 const utf8 = (value: string) => new TextEncoder().encode(value);
 
-async function run(argv: string[], files: Record<string, Uint8Array> = {}) {
+async function run(
+  argv: string[],
+  files: Record<string, Uint8Array> = {},
+  env: NodeJS.ProcessEnv = { DATABASE_URL: tmp.url },
+  deps?: BotTextCliDeps,
+) {
   const out: string[] = [];
   const err: string[] = [];
   const code = await runBotTextCli(
     argv,
-    { DATABASE_URL: tmp.url },
+    env,
     {
       out: (line) => out.push(line),
       err: (line) => err.push(line),
@@ -41,6 +49,7 @@ async function run(argv: string[], files: Record<string, Uint8Array> = {}) {
           : Promise.resolve(files[path]),
       readStdin: () => Promise.resolve(files['-'] ?? new Uint8Array()),
     },
+    deps,
   );
   return { code, out, err };
 }
@@ -51,9 +60,9 @@ describe('parseBotTextArgs', () => {
     [['set', 'welcome', '--file', 'a', '--version', 'abc'], '--version'],
     [['show', 'welcome', 'extra'], 'лишние аргументы'],
     [['set', 'renamedKey', '--file', 'a'], 'неизвестный ключ'],
-    [['set', 'startCommand', '--file', 'a'], '#301'],
-    [['reset', 'profileDescription'], '#301'],
     [['list', 'welcome'], 'list'],
+    [['publish', 'startCommand'], 'publish не принимает аргументов'],
+    [['publish', '--version', '1'], 'publish не принимает аргументов'],
     [[], 'нет команды'],
   ])('P refuses %j', (argv, message) => {
     expect(() => parseBotTextArgs(argv)).toThrow(message);
@@ -72,8 +81,21 @@ describe('parseBotTextArgs', () => {
     });
   });
 
+  it("P takes the commands' and the profile's keys, and publish (#301)", () => {
+    expect(parseBotTextArgs(['set', 'startCommand', '--file', 'a'])).toEqual({
+      command: 'set',
+      key: 'startCommand',
+      file: 'a',
+    });
+    expect(parseBotTextArgs(['reset', 'profileDescription'])).toEqual({
+      command: 'reset',
+      key: 'profileDescription',
+    });
+    expect(parseBotTextArgs(['publish'])).toEqual({ command: 'publish' });
+  });
+
   it('answers a usage error with exit 2 and the usage', async () => {
-    const { code, err } = await run(['set', 'startCommand', '--file', 'a']);
+    const { code, err } = await run(['set', 'welcome']);
     expect(code).toBe(2);
     expect(err[1]).toContain('bot-text list');
   });
@@ -135,7 +157,9 @@ describe('bot-text on a database', () => {
     expect(code).toBe(0);
     expect(out).toHaveLength(Object.keys(BOT_TEXT_CATALOG).length);
     expect(out[0]).toBe('welcome\tstart\tисходный');
-    expect(out.find((line) => line.startsWith('startCommand'))).toContain('только чтение до #301');
+    expect(out.find((line) => line.startsWith('startCommand'))).toBe(
+      'startCommand\tcommands\tисходный',
+    );
   });
 
   it('L2 shows the text alone on stdout and the rest on stderr', async () => {
@@ -267,5 +291,191 @@ describe('bot-text on a database', () => {
     );
     expect(code).toBe(1);
     expect(err[0]).toMatch(/^Не удалось выполнить команду: .*проверьте командой show\.$/);
+  });
+});
+
+// A fake of the three Bot API methods: what each call carried, and the failure to throw for one.
+function fakeProfileApi(fail: Partial<Record<BotProfileMethod, unknown>> = {}) {
+  const calls: { method: BotProfileMethod; args: unknown[] }[] = [];
+  const created: { token: string }[] = [];
+  const call =
+    (method: BotProfileMethod) =>
+    (...args: unknown[]): Promise<true> => {
+      calls.push({ method, args });
+      return method in fail ? Promise.reject(fail[method]) : Promise.resolve(true);
+    };
+  const api = {
+    setMyCommands: call('setMyCommands'),
+    setMyDescription: call('setMyDescription'),
+    setMyShortDescription: call('setMyShortDescription'),
+  } as unknown as BotProfileApi;
+  const deps: BotTextCliDeps = {
+    createApi: (options) => {
+      created.push({ token: options.token });
+      return api;
+    },
+  };
+  return { calls, created, deps };
+}
+
+const refusal = (method: string, code: number) =>
+  new GrammyError(
+    `Call to '${method}' failed!`,
+    { ok: false, error_code: code, description: 'Bad Request: secret description' },
+    method,
+    {},
+  );
+
+const DEFAULT_MENU = [
+  { command: 'start', description: 'Начать' },
+  { command: 'menu', description: 'Главное меню' },
+  { command: 'account', description: 'Аккаунт Binodex' },
+  { command: 'settings', description: 'Настройки уведомлений' },
+  { command: 'help', description: 'Помощь' },
+  { command: 'support', description: 'Поддержка' },
+];
+const SCOPE = { scope: { type: 'all_private_chats' } };
+const TOKEN = '123456:AA-cli-publish-token';
+const HINT = 'Публикация не удалась: после восстановления выполните bot-text publish.';
+
+describe('bot-text publishing the menu and the profile (#301)', () => {
+  const withToken = () => ({ DATABASE_URL: tmp.url, TELEGRAM_BOT_TOKEN: TOKEN });
+  beforeEach(async () => {
+    await tmp.db.delete(botTextOverrides);
+  });
+
+  it('L11 saves a command description and publishes the menu with it, and only the menu', async () => {
+    const fake = fakeProfileApi();
+    const { code, out, err } = await run(
+      ['set', 'startCommand', '--file', 'f'],
+      { f: utf8('Поехали') },
+      withToken(),
+      fake.deps,
+    );
+    expect(code).toBe(0);
+    expect(err).toEqual([]);
+    expect(out[0]).toMatch(/^Сохранено: startCommand, версия \d+\./);
+    expect(out.slice(1)).toEqual(['setMyCommands: опубликовано']);
+    expect(fake.created).toEqual([{ token: TOKEN }]);
+    expect(fake.calls).toEqual([
+      {
+        method: 'setMyCommands',
+        args: [[{ command: 'start', description: 'Поехали' }, ...DEFAULT_MENU.slice(1)], SCOPE],
+      },
+    ]);
+  });
+
+  it('L12 keeps the save when Telegram refuses, exits 0 and says how to publish again', async () => {
+    const fake = fakeProfileApi({ setMyCommands: refusal('setMyCommands', 400) });
+    const { code, out, err } = await run(
+      ['set', 'menuCommand', '--file', 'f'],
+      { f: utf8('Меню') },
+      withToken(),
+      fake.deps,
+    );
+    expect(code).toBe(0);
+    expect(out.slice(1)).toEqual(['setMyCommands: ошибка — GrammyError, Telegram 400']);
+    expect(err).toEqual([HINT]);
+    expect(JSON.stringify({ out, err })).not.toContain('secret');
+    expect(await listBotTextOverrides(tmp.db)).toMatchObject([
+      { key: 'menuCommand', source: 'Меню' },
+    ]);
+  });
+
+  it('L13 resets the short description and publishes the default', async () => {
+    await tmp.db.insert(botTextOverrides).values({ key: 'profileShortDescription', source: 'x' });
+    const fake = fakeProfileApi();
+    const { code, out } = await run(
+      ['reset', 'profileShortDescription'],
+      {},
+      withToken(),
+      fake.deps,
+    );
+    expect(code).toBe(0);
+    expect(out[0]).toMatch(/^Сброшено: profileShortDescription\./);
+    expect(out.slice(1)).toEqual(['setMyShortDescription: опубликовано']);
+    expect(fake.calls).toEqual([
+      {
+        method: 'setMyShortDescription',
+        args: [BOT_TEXT_CATALOG.profileShortDescription.source],
+      },
+    ]);
+  });
+
+  it('L14 publishes all three from the rows, and exits 1 when one fails', async () => {
+    await tmp.db.insert(botTextOverrides).values({ key: 'profileDescription', source: 'Описание' });
+    const ok = fakeProfileApi();
+    expect(await run(['publish'], {}, withToken(), ok.deps)).toEqual({
+      code: 0,
+      out: [
+        'setMyCommands: опубликовано',
+        'setMyDescription: опубликовано',
+        'setMyShortDescription: опубликовано',
+      ],
+      err: [],
+    });
+    expect(ok.calls).toEqual([
+      { method: 'setMyCommands', args: [DEFAULT_MENU, SCOPE] },
+      { method: 'setMyDescription', args: ['Описание'] },
+      { method: 'setMyShortDescription', args: [BOT_TEXT_CATALOG.profileShortDescription.source] },
+    ]);
+
+    const failing = fakeProfileApi({ setMyDescription: refusal('setMyDescription', 400) });
+    expect(await run(['publish'], {}, withToken(), failing.deps)).toEqual({
+      code: 1,
+      out: [
+        'setMyCommands: опубликовано',
+        'setMyDescription: ошибка — GrammyError, Telegram 400',
+        'setMyShortDescription: опубликовано',
+      ],
+      err: [HINT],
+    });
+  });
+
+  it('L15 refuses a command description without the token before writing anything', async () => {
+    const fake = fakeProfileApi();
+    const { code, err } = await run(
+      ['set', 'startCommand', '--file', 'f'],
+      { f: utf8('Поехали') },
+      { DATABASE_URL: tmp.url },
+      fake.deps,
+    );
+    expect(code).toBe(1);
+    expect(err).toEqual(['Missing required env TELEGRAM_BOT_TOKEN']);
+    expect(await listBotTextOverrides(tmp.db)).toEqual([]);
+    expect(fake.created).toEqual([]);
+  });
+
+  it('L16 saves any other key with no token and publishes nothing', async () => {
+    const fake = fakeProfileApi();
+    const { code, out } = await run(
+      ['set', 'welcome', '--file', 'f'],
+      { f: utf8('Привет') },
+      { DATABASE_URL: tmp.url },
+      fake.deps,
+    );
+    expect(code).toBe(0);
+    expect(out).toHaveLength(1);
+    expect(fake.created).toEqual([]);
+    // the reset of a key the catalog no longer has publishes nothing either
+    await tmp.db.insert(botTextOverrides).values({ key: 'renamedKey', source: 'x' });
+    const orphan = await run(['reset', 'renamedKey'], {}, { DATABASE_URL: tmp.url }, fake.deps);
+    expect(orphan.code).toBe(0);
+    expect(fake.created).toEqual([]);
+  });
+
+  it('L17 publishes nothing when nothing was written', async () => {
+    await tmp.db.insert(botTextOverrides).values({ key: 'startCommand', source: 'Поехали' });
+    const fake = fakeProfileApi();
+    const files = { f: utf8('Поехали') };
+    expect(
+      await run(['set', 'startCommand', '--file', 'f'], files, withToken(), fake.deps),
+    ).toEqual({ code: 0, out: ['Текст не изменился.'], err: [] });
+    expect(await run(['reset', 'profileDescription'], {}, withToken(), fake.deps)).toEqual({
+      code: 0,
+      out: ['Уже исходный текст.'],
+      err: [],
+    });
+    expect(fake.calls).toEqual([]);
   });
 });

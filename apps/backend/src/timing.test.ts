@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
-import { BOT_TEXTS_REFRESH_MS } from '@binarius/shared';
+import { BOT_PROFILE_PUBLISH_BUDGET_MS, BOT_TEXTS_REFRESH_MS } from '@binarius/shared';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import {
   BALANCE_WATCH_WINDOW_MS,
@@ -25,6 +25,8 @@ import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
 import {
   BALANCE_STALLED_RETRY_MS,
+  BOT_PROFILE_PUBLISH_CALLS,
+  BOT_PROFILE_PUBLISH_TIMEOUT_MS,
   BOT_TEXTS_LOAD_BUDGET_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
   LINK_PUSH_TELEGRAM_API_TIMEOUT_MS,
@@ -134,6 +136,14 @@ describe('broker balance timing', () => {
   it('ends a bot texts load before the next one starts and inside phase 1', () => {
     expect(BOT_TEXTS_LOAD_BUDGET_MS).toBeLessThan(BOT_TEXTS_REFRESH_MS);
     expect(BOT_TEXTS_LOAD_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  // web's link, BOT_PROFILE_PUBLISH_BUDGET_MS < its BACKEND_REQUEST_TIMEOUT_MS (8 s), is #361's
+  it('fits one publish of the menu and the profile in its budget and inside phase 1 (#301)', () => {
+    expect(BOT_PROFILE_PUBLISH_CALLS * BOT_PROFILE_PUBLISH_TIMEOUT_MS).toBeLessThanOrEqual(
+      BOT_PROFILE_PUBLISH_BUDGET_MS,
+    );
+    expect(BOT_PROFILE_PUBLISH_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   it.each([

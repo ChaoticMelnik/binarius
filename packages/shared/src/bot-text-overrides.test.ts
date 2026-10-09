@@ -54,11 +54,28 @@ describe('resolveBotTextOverrides', () => {
     );
   });
 
-  it('V3 ignores the commands and the profile until #301', () => {
-    expect(codes([row('startCommand', 'Старт'), row('profileShortDescription', 'x')])).toEqual({
-      startCommand: BotTextRejectionCode.ReadOnlyGroup,
-      profileShortDescription: BotTextRejectionCode.ReadOnlyGroup,
-    });
+  it('V3 applies the commands and the profile within their limits (#301)', () => {
+    expect(
+      accepted([
+        row('startCommand', 'я'.repeat(256)),
+        row('profileDescription', 'Первая строка\nВторая'),
+        row('profileShortDescription', 'я'.repeat(120)),
+      ]),
+    ).toEqual(['startCommand', 'profileDescription', 'profileShortDescription']);
+    const problemsOf = (key: string, source: string) => {
+      const rejection = resolveBotTextOverrides([row(key, source)]).rejected.get(key);
+      return rejection?.code === BotTextRejectionCode.Invalid
+        ? rejection.problems.map((problem) => problem.code)
+        : rejection?.code;
+    };
+    expect(problemsOf('startCommand', 'я'.repeat(257))).toEqual([BotTextProblemCode.TooLong]);
+    expect(problemsOf('profileShortDescription', 'я'.repeat(121))).toEqual([
+      BotTextProblemCode.TooLong,
+    ]);
+    expect(problemsOf('profileShortDescription', 'Один\nДва')).toEqual([
+      BotTextProblemCode.Multiline,
+    ]);
+    expect(problemsOf('startCommand', ' Старт')).toEqual([BotTextProblemCode.PaddedLine]);
   });
 
   it.each([
@@ -216,10 +233,9 @@ describe('botTextChangeProblems', () => {
     expect(botTextChangeProblems('featureLines', null, rows)).toEqual([]);
   });
 
-  it('W6 refuses a command description', () => {
-    expect(botTextChangeProblems('startCommand', 'Старт', [])).toMatchObject([
-      { key: 'startCommand', rejection: { code: BotTextRejectionCode.ReadOnlyGroup } },
-    ]);
+  it('W6 takes a command description and a profile text (#301)', () => {
+    expect(botTextChangeProblems('startCommand', 'Старт', [])).toEqual([]);
+    expect(botTextChangeProblems('profileShortDescription', 'Коротко', [])).toEqual([]);
   });
 
   it('W7 refuses an unknown key, and lets its reset through', () => {
@@ -240,7 +256,6 @@ describe('botTextChangeProblems', () => {
     const rejected = [
       ...resolveBotTextOverrides([
         row('zzz', 'x'),
-        row('startCommand', 'x'),
         row('codeSent', 'нет {tokens}'),
         row('featureLines', 'я'.repeat(950)),
       ]).rejected,
@@ -257,7 +272,6 @@ describe('botTextChangeProblems', () => {
     );
     expect(messages).toEqual({
       zzz: 'Неизвестный ключ — игнорируется',
-      startCommand: 'Только чтение: команды и профиль правятся после #301',
       codeSent: 'Переменная {tokens} недоступна в этом тексте. Доступны: {email}, {firstName}',
       featureLines: expect.stringMatching(
         /^Ломает текст-хозяин cardBody: Текст cardBody — \d+ символов при лимите 1024$/,
@@ -417,5 +431,51 @@ describe('createBotTextRefresher', () => {
     ]);
     expect(JSON.stringify(warns)).not.toContain('secret');
     await r.stop();
+  });
+
+  // whether loaded() has settled after the timers advanced so far
+  const settled = (r: ReturnType<typeof refresher>) => {
+    let done = false;
+    void r.loaded().then(() => {
+      done = true;
+    });
+    return () => done;
+  };
+
+  it('F9 settles loaded() once the first load has, applied or failed', async () => {
+    next = () => delay(1_000, [row('welcome', 'Привет')]);
+    const ok = refresher();
+    const okSettled = settled(ok);
+    ok.start();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(okSettled()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(okSettled()).toBe(true);
+    expect(applied).toEqual(['Привет']);
+    await ok.stop();
+
+    next = () => delay(1_000, []).then(() => Promise.reject(new Error('down')));
+    const failing = refresher();
+    const failingSettled = settled(failing);
+    failing.start();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(failingSettled()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(failingSettled()).toBe(true);
+    expect(warns.map((w) => w.message)).toEqual([
+      'bot texts load failed, the last loaded texts stay',
+    ]);
+    await failing.stop();
+  });
+
+  it('F10 settles loaded() on a stop before any load, and not before start otherwise', async () => {
+    const idle = refresher();
+    const idleSettled = settled(idle);
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    expect(idleSettled()).toBe(false);
+    await idle.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(idleSettled()).toBe(true);
+    expect(loads).toEqual([]);
   });
 });

@@ -1,9 +1,8 @@
 import { USER_ACCOUNT_LIST_LIMIT } from './account';
+import { BOT_COMMANDS } from './bot-commands';
 import { BotTextKind, type BotTextSource } from './bot-text-template';
 import {
   BOT_TEXT_CATALOG,
-  BotTextGroup,
-  botTextKeysOf,
   createBotTexts,
   type BotHtmlKey,
   type BotPlainKey,
@@ -273,11 +272,8 @@ const features = (signal: boolean): BotTextSegment[] => [
   k('analysisLastPrice'),
 ];
 
-// helpText: a line per command, the command's name read off its key (startCommand → start)
-const commandLines = botTextKeysOf(BotTextGroup.Commands).flatMap((key) => [
-  `\n/${key.replace(/Command$/, '')} — `,
-  k(key),
-]);
+// helpText: a line per command of the menu, in its order
+const commandLines = BOT_COMMANDS.flatMap(({ command, key }) => [`\n/${command} — `, k(key)]);
 
 const intentStatusLines = [
   'intentQueued',

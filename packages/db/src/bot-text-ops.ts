@@ -7,7 +7,6 @@ import {
   BotTextRejectionCode,
   botTextChangeProblems,
   isBotTextKey,
-  isBotTextWritable,
   resolveBotTextOverrides,
   type BotTextChangeProblem,
   type BotTextRejection,
@@ -99,16 +98,12 @@ const refused = (key: string, rejection: BotTextRejection): BotTextApplyResult =
   reason: 'refused',
   problems: [{ key, rejection }],
 });
-const refusedKey = (key: string): BotTextApplyResult =>
-  refused(key, {
-    code: isBotTextKey(key) ? BotTextRejectionCode.ReadOnlyGroup : BotTextRejectionCode.UnknownKey,
-  });
 
 export async function applyBotTextSave(
   tx: Tx,
   { key, source, expectedVersion, staffId }: ApplyBotTextSaveInput,
 ): Promise<BotTextApplyResult> {
-  if (!isBotTextWritable(key)) return refusedKey(key);
+  if (!isBotTextKey(key)) return refused(key, { code: BotTextRejectionCode.UnknownKey });
   // before the statement: the CHECK would refuse it as a database error
   if (source.length > BOT_TEXT_SOURCE_MAX) {
     const tooLong = { code: BotTextProblemCode.TooLong, detail: String(source.length) } as const;
@@ -159,7 +154,6 @@ export async function applyBotTextReset(
   tx: Tx,
   { key, expectedVersion }: ApplyBotTextResetInput,
 ): Promise<BotTextApplyResult> {
-  if (isBotTextKey(key) && !isBotTextWritable(key)) return refusedKey(key);
   const rows = await lockedRows(tx);
   const current = rows.find((row) => row.key === key);
   if (current === undefined) return { ok: false, reason: 'already_default' };

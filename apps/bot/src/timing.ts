@@ -34,7 +34,11 @@ export const BACKEND_REQUEST_TIMEOUT_MS = 5_000;
 // of them, so a signal during the registration waits for all of them. lifecycle.test.ts compares
 // this number with the calls the real start makes.
 export const STARTUP_CALLS = 3;
-export const STARTUP_BUDGET_MS = STARTUP_CALLS * TELEGRAM_API_TIMEOUT_MS;
+// Before them onStart waits for the texts' first load (#301), which the refresher bounds by the
+// budgetMs index.ts gives it — BACKEND_REQUEST_TIMEOUT_MS, a wiring premise this chain cannot
+// see, like STARTUP_CALLS.
+export const STARTUP_BUDGET_MS =
+  BACKEND_REQUEST_TIMEOUT_MS + STARTUP_CALLS * TELEGRAM_API_TIMEOUT_MS;
 
 // What each handler does on its longest path — declared, not described in prose, because the
 // budget below is computed from these numbers and timing.test.ts compares them against the

@@ -129,14 +129,36 @@ describe('saveBotTextOverride', () => {
     expect(await audits()).toEqual([]);
   });
 
-  it('B7 refuses a read-only key and an unknown one before the transaction', async () => {
-    expect(await save('startCommand', 'Старт')).toMatchObject({
-      reason: 'refused',
-      problems: [{ rejection: { code: 'read_only_group' } }],
-    });
+  it('B7 refuses only a key outside the catalog before the transaction', async () => {
     expect(await save('renamedKey', 'x')).toMatchObject({
-      problems: [{ rejection: { code: 'unknown_key' } }],
+      reason: 'refused',
+      problems: [{ key: 'renamedKey', rejection: { code: 'unknown_key' } }],
     });
+    expect(await listBotTextOverrides(tmp.db)).toEqual([]);
+    expect(await audits()).toEqual([]);
+  });
+
+  it('B16 saves a command description and resets a profile text, each audited (#301)', async () => {
+    const saved = versionOf(await save('startCommand', 'Старт'));
+    const short = versionOf(await save('profileShortDescription', 'Коротко'));
+    expect(await reset('profileShortDescription', short)).toEqual({ ok: true, version: 0 });
+    expect(await listBotTextOverrides(tmp.db)).toMatchObject([
+      { key: 'startCommand', source: 'Старт', version: saved },
+    ]);
+    expect((await audits()).map((row) => [row.action, row.payload])).toEqual([
+      ['bot_text_saved', expect.objectContaining({ key: 'startCommand', newText: 'Старт' })],
+      [
+        'bot_text_saved',
+        expect.objectContaining({ key: 'profileShortDescription', newText: 'Коротко' }),
+      ],
+      [
+        'bot_text_reset',
+        expect.objectContaining({
+          key: 'profileShortDescription',
+          newText: BOT_TEXT_CATALOG.profileShortDescription.source,
+        }),
+      ],
+    ]);
   });
 
   it('B8 serializes writers: a save waits for the lock and sees the rows written under it', async () => {

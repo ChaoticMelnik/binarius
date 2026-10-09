@@ -7,8 +7,9 @@ repository's other docs and comments are the catalog's defaults.
 
 The catalog is part 1 of #240. Part 2 (#299) stores overrides in the database, applies them in
 the bot and the backend without a deploy and edits them from a CLI ([Overrides](#overrides)). The
-admin section «Тексты бота» (#300) edits them too ([admin-pages.md](admin-pages.md) → Bot texts);
-republishing the commands and the profile (#301) comes next.
+admin section «Тексты бота» (#300) edits them too ([admin-pages.md](admin-pages.md) → Bot texts).
+Part 4 (#301) makes the command descriptions and the profile editable from the CLI and republishes
+them to Telegram when they change ([Publishing](#publishing)); the admin page does so in #361.
 
 Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the owner's decision of
 2026-10-02) and the Mini App pages (`apps/web/src/oauth/texts.ts`).
@@ -30,8 +31,10 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
   `formatAge`, the formatters the registry and the bot share.
 - `packages/shared/src/telegram-html.ts` — `telegramHtmlTemplate`, the constructor the views use
   ([Safety](#safety)).
-- `apps/bot/src/texts.ts` — the bot's view: `TEXTS`, `LABELS`, `PROFILE`, the label maps,
-  `setBotTextSource`, `textOf`.
+- `apps/bot/src/texts.ts` — the bot's view: `TEXTS`, `LABELS`, `PROFILE`, `botCommands()`, the
+  label maps, `setBotTextSource`, `textOf`.
+- `packages/shared/src/bot-commands.ts` — the command menu: `BOT_COMMANDS` (each command's name and
+  its description's key), `BOT_COMMAND_SCOPE`, `botCommandsOf(plain)`.
 - `apps/backend/src/auth/texts.ts` — the backend's view: `CLIENT_TEXTS`, `CLIENT_LABELS`,
   `setBotTextSource`.
 - `packages/shared/src/bot-text-overrides.ts` — the resolver, the writer's check, the Russian
@@ -39,7 +42,7 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
 - `packages/shared/src/bot-text-messages.ts` — the assembled messages and their estimate.
 - `packages/db/src/bot-text-ops.ts` — the table's reader and its one writer;
   `apps/backend/src/cli/bot-text.ts` — the CLI; `apps/backend/src/bot-texts/routes.ts` — the bot's
-  read.
+  read; `apps/backend/src/bot-texts/publish.ts` — publishing the menu and the profile.
 - The admin section (#300): `packages/shared/src/admin-bot-texts.ts` (wire shapes, the admin's
   read-only groups, `renderBotTextPreview`), `packages/db/src/admin-bot-text-ops.ts` (the read with
   the writer's login), `apps/web/src/admin/telegram-preview.ts` (the preview as browser HTML).
@@ -183,9 +186,9 @@ build their context once (`userContextOf` in `texts.ts`). Both bot and backend l
 reaches every message: `/help` is assembled per request, and the maps that used to hold texts —
 the refusals in `bot.ts` and `demo-trade.ts`, the intent status lines, the signal headlines —
 now hold keys (`textOf(key)`), while the label maps (`ACTION_LABELS`, `DEMO_GROUP_LABELS`,
-`DEMO_DURATION_LABELS`, the analysis words) are getters over keys (`labelsOf`). The one exception
-is `BOT_COMMANDS` in `apps/bot/src/commands.ts`, built at load until #301 republishes the commands.
-The tests of the source swap hold one place each (`bot.test.ts`, `demo-trade.test.ts`,
+`DEMO_DURATION_LABELS`, the analysis words) are getters over keys (`labelsOf`). `botCommands()`
+included (#301): `/help` lists the descriptions in effect, and the menu published at start is
+built when it is published. The tests of the source swap hold one place each (`bot.test.ts`, `demo-trade.test.ts`,
 `texts.test.ts`, `analysis.test.ts`, `link-notifier.test.ts`).
 
 ## What stays in code
@@ -193,7 +196,8 @@ The tests of the source swap hold one place each (`bot.test.ts`, `demo-trade.tes
 Data and identifiers, not texts (decision on the issue's plan, approved by the owner):
 
 - the command names `/start`, `/menu`, `/account`, `/settings`, `/help`, `/support` — the bot
-  routes by them; only their descriptions are entries;
+  routes by them; only their descriptions are entries. The names and their order are
+  `BOT_COMMANDS` in `packages/shared/src/bot-commands.ts`;
 - `MODE_LABELS` (DEMO/REAL), now in `bot-text-vars.ts` for `{mode}`;
 - `pairButtonLabel` («symbol · payout%») and `groupButtonLabel`'s ` · N`;
 - the ` ✅` after the selected level (`currentLevelLabel`);
@@ -294,8 +298,7 @@ inside its caller's transaction: the CLI's `saveBotTextOverride`/`resetBotTextOv
 and write the audit row; the admin section calls it inside `runAsStaff`, which writes the row. It
 refuses:
 
-- a key outside the catalog (a reset of one is allowed) and, until #301, the `commands` and
-  `profile` groups;
+- a key outside the catalog (a reset of one is allowed);
 - an expected version other than the current one: «Текст уже изменил другой сотрудник»; the
   answer carries the current version and text (the default when there is no row);
 - a change `botTextChangeProblems` objects to: the key itself would be rejected by the resolver
@@ -315,7 +318,7 @@ admin also keeps `commands` and `profile` read-only by its own list,
 ## Loading
 
 `resolveBotTextOverrides(rows)` decides which rows take effect, for the loaders and the writer
-alike. A row is rejected, and its key shows the default, when its key is unknown or read-only,
+alike. A row is rejected, and its key shows the default, when its key is unknown,
 when `botTextProblems` refuses it against the other accepted texts, when it is a fragment that
 breaks a host still on its default, or when it is a part of an assembled message that would
 overflow (every overridden part of that message goes). Rejecting only takes candidates out and the
@@ -356,7 +359,50 @@ their descriptions and samples, its fragments, the version) on stderr.
 `set` reads strict UTF-8, drops a BOM, turns CRLF into LF and takes off one trailing newline.
 `set` and `reset` take `--version N` from `show`. Exit 0 is done or nothing to do, 1 refused or
 failed, 2 not understood; after a database failure on a write the state may have changed, so the
-CLI points at `show`.
+CLI points at `show`. `set` and `reset` of a command description or a profile text, and `publish`,
+also publish to Telegram ([Publishing](#publishing)).
+
+## Publishing
+
+Telegram keeps the command menu (`setMyCommands`, scope `all_private_chats`), the description and
+the short description on its side, so a change of one of those texts reaches users only once it is
+published. Three places publish, each from the rows as the loaders resolve them, never from the
+text of a request:
+
+- **The bot at start.** `onStart` waits for the first texts load (`botTexts.loaded()`, bounded by
+  the refresher's own budget), then sends the three calls with the texts in effect. A failed first
+  load publishes the defaults. The refresher's later loads apply new texts to messages and `/help`,
+  but do not publish: the menu and the profile change at the next start or `publish`.
+- **The CLI after a save or a reset** of a `commands` key (`setMyCommands`) or a `profile` key
+  (`setMyDescription` or `setMyShortDescription`): after the commit, only the method of that key.
+  A save or reset that writes nothing publishes nothing.
+- **`bot-text publish`**: all three, for a failed publish or a row written by hand.
+
+```bash
+docker compose exec backend pnpm --filter @binarius/backend bot-text publish
+```
+
+The CLI prints one line per method: `setMyCommands: опубликовано`, or
+`setMyCommands: ошибка — GrammyError, Telegram 400` / `… — HttpError (Error)`: the error's identity
+and Telegram's `error_code`, never its description or the payload (Rule 8). On any failure a line
+on stderr says to run `bot-text publish`. A save or reset exits 0 whatever Telegram answered: the
+override is kept (#240, В6). `publish` exits 1 when any method failed. These runs read
+`TELEGRAM_BOT_TOKEN` before anything is written — a missing token refuses the run with nothing
+saved — and other keys never need it.
+
+`publishBotProfile` (`apps/backend/src/bot-texts/publish.ts`) does the backend's publishing: one
+attempt per method, one call after another, each caught on its own, one result per method sent. It
+uses a bare grammY `Api` on the public bot's token, which polls nothing. Each call is bounded by
+`BOT_PROFILE_PUBLISH_TIMEOUT_MS` (2 s) and the three by `BOT_PROFILE_PUBLISH_BUDGET_MS` (6 s,
+`packages/shared`), the bound web sizes its request timeout against when the admin page publishes
+(#361). The backend's timing chain holds both. The CLI's publish is not audited; its save or reset
+is.
+
+The bot's start and a CLI run may publish at the same time. Both publish the resolved rows, and the
+last call wins. A save committed after the bot resolved its first load and before its
+`setMyCommands` leaves the old menu in Telegram until the next publish. The CLI's own publish
+follows its commit, so a CLI run ends with its value in Telegram unless its publish failed, and
+then it says so.
 
 ## Assembled messages
 

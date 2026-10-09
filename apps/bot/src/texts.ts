@@ -1,4 +1,5 @@
 import {
+  botCommandsOf,
   botTextKeysOf,
   BotTextGroup,
   BrokerAccountStatus,
@@ -39,12 +40,11 @@ import type { BotCommand } from 'grammy/types';
 import { SIGNALS_DURATION_SEC, type DemoAssetGroup, type DemoDurationSec } from './demo-catalog';
 
 // The texts live in the catalog (packages/shared/src/bot-texts.ts, docs/bot-texts.md). This file
-// is the bot's view of it: TEXTS, LABELS, PROFILE and the label maps keep the names they had, a
-// key with variables takes their values as one context (#358), and every one of them reads the
-// source at the moment it is used. No text
-// is taken into a module constant at load, so a source swapped by setBotTextSource reaches every
-// message — BOT_COMMANDS (commands.ts) is the one exception until the commands are republished
-// (#301).
+// is the bot's view of it: TEXTS, LABELS, PROFILE and the label maps keep the names they had,
+// botCommands() joined them (#301), a key with variables takes their values as one context (#358),
+// and every one of them reads the source at the moment it is used. No text is taken into a module
+// constant at load, so a source swapped by setBotTextSource reaches every message, the command
+// menu and /help's command lines included.
 let active: BotTextSource<BotTextKey> = defaultBotTextSource;
 export const setBotTextSource = (source: BotTextSource<BotTextKey>): void => {
   active = source;
@@ -660,6 +660,10 @@ export function stakePickerText({
   return telegramHtml`${TEXTS.stakePickerHeader(context)}
 ${joinLines(lines)}`;
 }
+
+// The command menu (packages/shared/src/bot-commands.ts) with the descriptions in effect now: the
+// menu published at start and /help's lines (#301).
+export const botCommands = (): BotCommand[] => botCommandsOf(plain);
 
 // The bot's profile: `description` is the «Что умеет этот бот?» block an empty chat shows before
 // Start, `shortDescription` the line on the profile page and in the preview of a shared link.

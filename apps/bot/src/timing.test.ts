@@ -110,6 +110,8 @@ import {
   SESSION_TRACK_FIRST_POLL_MS,
   SESSION_TRACK_POLL_MS,
   SHUTDOWN_BUDGET_MS,
+  STARTUP_BUDGET_MS,
+  STARTUP_CALLS,
   TELEGRAM_API_TIMEOUT_MS,
 } from './timing';
 
@@ -2341,6 +2343,13 @@ describe('the text overrides (#299)', () => {
     expect(BOT_TEXTS_REFRESH_MS + BACKEND_REQUEST_TIMEOUT_MS).toBeLessThanOrEqual(
       BOT_TEXTS_APPLIED_WITHIN_S * 1000,
     );
+  });
+
+  it('counts the first load the start waits for, then the profile calls (#301)', () => {
+    expect(STARTUP_BUDGET_MS).toBe(
+      BACKEND_REQUEST_TIMEOUT_MS + STARTUP_CALLS * TELEGRAM_API_TIMEOUT_MS,
+    );
+    expect(STARTUP_BUDGET_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
   });
 });
 

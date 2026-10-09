@@ -2374,7 +2374,7 @@ describe('the bot texts pages (#300)', () => {
     const { seeded, token } = await signedIn();
     await cliSave('connectButton', 'Жми');
     await post(token, textUrl('welcome', 'save'), { source: 'Привет', expectedVersion: 0 });
-    await tmp.db.insert(botTextOverrides).values({ key: 'startCommand', source: 'Старт' });
+    await tmp.db.insert(botTextOverrides).values({ key: 'startCommand', source: 'Старт\nещё' });
 
     const response = await readOnce(seeded.staffId, '/admin/bot-texts', token);
     const body = adminBotTextsResponseSchema.parse(response.json());
@@ -2384,7 +2384,7 @@ describe('the bot texts pages (#300)', () => {
     );
     expect(body.overrides).toMatchObject([
       { key: 'connectButton', updatedByLogin: null, rejection: null },
-      { key: 'startCommand', rejection: expect.stringContaining('Только чтение') },
+      { key: 'startCommand', rejection: 'Перенос строки в однострочном тексте' },
       { key: 'welcome', updatedByLogin: seeded.login, rejection: null },
     ]);
     expect(await lastEntry(seeded.staffId)).toMatchObject({

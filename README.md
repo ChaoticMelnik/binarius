@@ -275,6 +275,11 @@ docker compose exec -T backend pnpm -s --filter @binarius/backend bot-text show 
 docker compose exec -T backend pnpm --filter @binarius/backend bot-text set welcome --file - < welcome.txt
 docker compose exec backend pnpm --filter @binarius/backend bot-text reset welcome
 docker compose exec backend pnpm --filter @binarius/backend bot-text list
+docker compose exec backend pnpm --filter @binarius/backend bot-text publish
 ```
 
-What the writer refuses and how the texts are loaded: [docs/bot-texts.md](docs/bot-texts.md).
+The command descriptions and the bot's profile live in Telegram: a CLI `set` or `reset` of one of
+them publishes it at once and prints the result per method, and `publish` sends the menu and both
+profile texts again (after a failed publish, for example). The bot also publishes them at every
+start. What the writer refuses, how the texts are loaded and published:
+[docs/bot-texts.md](docs/bot-texts.md).

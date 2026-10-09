@@ -30,7 +30,7 @@ routes, the confirmation and the starter pack are described in
   card's amounts and counts, [bot-menu.md](bot-menu.md)), `send.ts` (with `editMessageTextByIdHtml`, the
   edit outside an update the intent tracker uses), `logging.ts`, `assets.ts` (the path of
   `assets/account-card.jpg`, the card's picture), `login-dialog.ts` (the email dialog's state,
-  [Email dialog](#email-dialog)), `bot.ts` (the handlers), `commands.ts` (the command menu and its scope, [Command menu](#command-menu)),
+  [Email dialog](#email-dialog)), `bot.ts` (the handlers),
   `lifecycle.ts` (start, the profile registration — the menu, the description, the short
   description — signals, drain), `index.ts` (wiring), and
   `testing.ts`, the fixtures the suites share; `demo.ts`, `demo-catalog.ts` and `analysis.ts` (the
@@ -618,8 +618,8 @@ plugin — and is rethrown into `bot.catch` unchanged rather than reported as on
   bot  → one message: what the bot does, how to connect, the commands; no backend call
 ```
 
-The message is `helpText(BOT_COMMANDS)` in `apps/bot/src/texts.ts`, built on every `/help` (so it
-reads the catalog's texts as they are then) and sent through `replyHtml` with «🏠 В меню» (#350). Three
+The message is `helpText(botCommands())` in `apps/bot/src/texts.ts`, built on every `/help` (so it
+reads the catalog's texts and their overrides as they are then) and sent through `replyHtml` with «🏠 В меню» (#350). Three
 blocks, one blank line apart:
 
 - `TEXTS.helpAbout` — the header and the three feature lines, the catalog's `featureLines`
@@ -627,9 +627,9 @@ blocks, one blank line apart:
   (`profileDescription` keeps its own plain copy, which Telegram does not parse);
 - `TEXTS.helpConnect` — `/start` and the connect button, quoted by its label through the
   `connectButton` fragment;
-- `TEXTS.helpCommands` and one `/<command> — <description>` line per entry of `BOT_COMMANDS`, in
-  the menu's order, with no emoji. `texts.ts` cannot import the list (`commands.ts` imports
-  `LABELS` from it), so `bot.ts` passes it in. Both holes of a line are escaped; Telegram shows
+- `TEXTS.helpCommands` and one `/<command> — <description>` line per entry of the menu
+  (`botCommands()`, [Command menu](#command-menu)), in its order, with no emoji. `bot.ts` passes
+  the list in, so the tests can pass hostile data. Both holes of a line are escaped; Telegram shows
   every `/<command>` as a tappable command without markup.
 
 The answer reads no state, so an admin-blocked user (`UserStatus.Blocked`) and a backend outage
@@ -642,8 +642,8 @@ step and its clock untouched, as `/start` and `/account` do. A refused or failed
 reaches `bot.catch`, nothing is retried, and the handler writes no log line of its own.
 
 `HANDLER_CALLS.help` is one Bot API call and no backend call (8 s). `texts.test.ts` holds the
-message inside the limit, its exact assembly, the command lines equal to `BOT_COMMANDS` (each once,
-in order), the escaping of both holes, the feature lines shared with the card and both button
+message inside the limit, its exact assembly, the command lines equal to `botCommands()` (each
+once, in order), the escaping of both holes, the feature lines shared with the card and both button
 labels; `bot.test.ts` sends `/help` through the real handlers and fails when a command of the menu
 is missing from the answer; `timing.test.ts` holds the declared calls.
 
@@ -654,14 +654,18 @@ order: `/start` — «Начать», `/menu` — «Главное меню» ([
 «Аккаунт Binodex» ([bot-account.md](bot-account.md)),
 `/settings` — «Настройки уведомлений», `/help` — «Помощь» ([/help](#help-184)) and `/support` —
 «Поддержка» ([Notification level and /support](#notification-level-and-support-120)). The list is `BOT_COMMANDS` in
-`apps/bot/src/commands.ts`, the only place it is written; the descriptions are the `LABELS` keys
-ending in `Command`. The next command is one more element there and
-one more literal in each of the two `setMyCommands` assertions of `lifecycle.test.ts`, which name
-the values on purpose.
-`commands.test.ts` holds the Bot API limits (a command of 1-32 lowercase letters, digits and
-underscores, a description of 1-256 UTF-16 code units, at most 100 commands, each once) and sends
-every listed command through the real handlers to check that it is answered — grammY keeps no
-registry of handlers to ask instead. A handler with no menu entry is invisible to that check.
+`packages/shared/src/bot-commands.ts`, the only place it is written (#301): each command's name and
+the key of its description, the catalog's `commands` group, which the CLI can override
+([bot-texts.md](bot-texts.md) → Publishing). The bot reads it through `botCommands()` in
+`texts.ts`, with the descriptions in effect at that moment. The next command is one more pair there,
+one more key in the catalog, and one more literal in each of the two `setMyCommands` assertions of
+`lifecycle.test.ts`, which name the values on purpose.
+`packages/shared/src/bot-commands.test.ts` holds the list equal to the `commands` group (each key
+once) and the Bot API limits (a command of 1-32 lowercase letters, digits and underscores, a
+description of 1-256 UTF-16 code units, at most 100 commands, each once); an override is held to
+256 by its catalog entry. `commands.test.ts` sends every listed command through the real handlers
+to check that it is answered — grammY keeps no registry of handlers to ask instead. A handler with
+no menu entry is invisible to that check.
 
 The scope is `all_private_chats`: the bot ignores every other chat type (`bot.chatType('private')`
 in `bot.ts`), so a menu there would offer commands nothing answers. For a user in a private chat
@@ -672,8 +676,12 @@ sets `default`) is shadowed where the bot talks and would still show in groups. 
 `runBot` (`apps/bot/src/lifecycle.ts`) registers the list on every start, inside grammY's
 `onStart` — after `getMe` and `deleteWebhook` have succeeded and before the first `getUpdates` —
 so an invalid token fails once, at `getMe`, and the list is on Telegram's side before the first
-update is taken. `setMyCommands` replaces the whole list of the scope, so a command removed from
-`BOT_COMMANDS` disappears on the next successful registration.
+update is taken. Before the registration `onStart` waits for the first load of the text overrides
+(`botTexts.loaded()`, at most `BACKEND_REQUEST_TIMEOUT_MS`), so the menu carries the overridden
+descriptions; a failed load registers the defaults (#301). A signal during that wait skips the
+registration. `setMyCommands` replaces the whole list of the scope, so a command removed from
+`BOT_COMMANDS` disappears on the next successful registration. The CLI publishes the same list
+after a change ([bot-texts.md](bot-texts.md) → Publishing).
 
 A failed registration does not stop the bot. One attempt is made; whatever it throws — Telegram's
 refusal, a transport failure or the 8 s client timeout, anything else — is caught and logged at
@@ -692,16 +700,18 @@ so the handler is unchanged.
 Two texts describe the bot before anyone talks to it. The **description** is the «Что умеет этот
 бот?» block an empty chat shows before Start; the **short description** is the line on the bot's
 profile page and in the preview of a shared link to it. Both are written once, as the catalog's
-`profileDescription` and `profileShortDescription` ([bot-texts.md](bot-texts.md)), read by
+`profileDescription` and `profileShortDescription` ([bot-texts.md](bot-texts.md)), which the CLI
+can override and publish (#301, bot-texts.md → Publishing), read by
 `PROFILE` in `apps/bot/src/texts.ts`, and follow the [Style](#texts) of the other texts. Telegram parses neither, so they are plain and never escaped, and line breaks are kept
 as written. The Bot API bounds the description at 512 and the short description at 120 characters,
-counted here in UTF-16 code units (`String#length`, the unit `commands.test.ts` counts in).
+counted here in UTF-16 code units (`String#length`, the unit `bot-commands.test.ts` counts in).
 `texts.test.ts` holds both limits against the texts themselves, refuses an empty text (an empty
 string is what removes the text on Telegram's side), markup or an entity, a non-empty line without a
 leading emoji, a line with a space at either end, and a line break in the short description.
 
-`runBot` registers them on every start, inside grammY's `onStart`, right after the command menu:
-`setMyCommands`, then `setMyDescription`, then `setMyShortDescription`, one call at a time and
+`runBot` registers them on every start, inside grammY's `onStart`, after the first texts load and
+right after the command menu: `setMyCommands`, then `setMyDescription`, then
+`setMyShortDescription`, one call at a time and
 one attempt each. Every call is caught on its own — a refusal, a transport failure or the 8 s
 client timeout, anything else — and logged at `warn` by the error's identity and the method:
 `bot commands not registered`, `bot description not registered`,
@@ -808,9 +818,10 @@ update is in flight during that sleep, so an overrun there costs the exit code a
 
 The profile registration ([Command menu](#command-menu), [Bot profile](#bot-profile)) is
 `STARTUP_CALLS` = 3 Bot API calls at startup, one after another, each bounded by the same 8 s
-client timeout, and is not part of `HANDLER_CALLS`: no update is in flight while it runs. Its
-bound is `STARTUP_BUDGET_MS` = 3 × 8 s = **24 s**, and `STARTUP_BUDGET_MS < SHUTDOWN_BUDGET_MS` is a
-conjunct of the import-time chain; `lifecycle.test.ts` checks that the real start makes exactly
+client timeout, after the wait for the first texts load (the refresher's budget,
+`BACKEND_REQUEST_TIMEOUT_MS` = 5 s, as `index.ts` wires it), and is not part of `HANDLER_CALLS`: no
+update is in flight while it runs. Its bound is `STARTUP_BUDGET_MS` = 5 s + 3 × 8 s = **29 s**, and
+`STARTUP_BUDGET_MS < SHUTDOWN_BUDGET_MS` is a conjunct of the import-time chain; `lifecycle.test.ts` checks that the real start makes exactly
 `STARTUP_CALLS` calls between `deleteWebhook` and the first `getUpdates`. grammY awaits `onStart`
 to completion and `bot.stop()` cancels none of these calls, so a SIGTERM during the registration
 waits for all three (≤ 24 s) with `bot.stop()`'s offset confirmation (≤ 8 s) running alongside,
