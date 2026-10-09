@@ -25,7 +25,7 @@ TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius \
 | Client | `BrokerSocketClient` ([broker-socket.md](broker-socket.md)) | one per session; the taint after an aborted command |
 | Token | `AccessTokenSource` (`broker/access-token.ts`) | `POST /trading/accounts/:id/access-token` on the backend, always `mayRefresh: false`; after `token_expired`/`auth_failed` with the refused token's fingerprint (#281) |
 | Composition | `apps/trading-worker/src/index.ts` | built only when `env.brokerWsUrl` is set; otherwise `noTradeSessions` |
-| Probe | `apps/trading-worker/src/cli/socket-probe.ts`, `socket-probe-run.ts`, `socket-probe-verdict.ts` (#285) | the two-socket check the rollout waits for; exit 0 only on its safe verdict ([broker-socket.md → Observed live](broker-socket.md#observed-live)) |
+| Probe | `apps/trading-worker/src/cli/socket-probe.ts`, `socket-probe-run.ts`, `socket-probe-verdict.ts` (#285) | the two-socket check of the rollout, safe on the pilot 2026-10-08; exit 0 only on its safe verdict ([broker-socket.md → Observed live](broker-socket.md#observed-live)) |
 
 ## The candidates
 
@@ -363,13 +363,14 @@ the compose stack runs without sessions unless it points at the broker itself.
 
 ## Rollout
 
-`BROKER_WS_URL` stays unset on the pilot until the two-socket probe of #285
-(`pnpm --filter @binarius/trading-worker socket-probe`) has printed on the pilot its safe line,
+`BROKER_WS_URL` is set only after the two-socket probe of #285
+(`pnpm --filter @binarius/trading-worker socket-probe`) has printed its safe line,
 `verdict: no cross-socket answer within the window; BROKER_WS_URL may be set`, with exit 0. A
-`broadcast` or `inconclusive` verdict (exit 1) keeps it unset. The command, the preconditions and
-the conditions of the safe verdict are in
-[broker-socket.md → Observed live](broker-socket.md#observed-live); the result there is pending
-the owner's run. Then:
+`broadcast` or `inconclusive` verdict (exit 1) keeps it unset. The command, the preconditions,
+the conditions of the safe verdict and the result are in
+[broker-socket.md → Observed live](broker-socket.md#observed-live). **On the pilot** the probe
+printed the safe line on 2026-10-08 (`0a997ef`, after #354), and `BROKER_WS_URL` is set there
+since (owner's decision). To set it:
 
 ```bash
 # BROKER_WS_URL=https://broker-ws.binodex.app in .env, then
@@ -395,8 +396,10 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
    path in `main`.
 4. **A cross-socket answer**: if the live broker sends `open_trade.*` to every socket of the user,
    a `fail` for a manual broker-web order would reject our intent while our order may be open, and
-   a `success` with equal terms would link the manual trade. Not closable without an answer field;
-   the probe of #285 decides, and until it has run `BROKER_WS_URL` stays unset.
+   a `success` with equal terms would link the manual trade. Not closable without an answer field.
+   The probe of #285 found none on the pilot on 2026-10-08: `open_trade.*` reached only the
+   sender, and a REST order reached no socket. What stays is an answer later than its 15 s window
+   or a change on the broker's side; a rerun that prints `broadcast` unsets `BROKER_WS_URL`.
 5. **No fencing at the broker** (#93). The lease is enforced on our side only: a process frozen
    longer than `SESSION_LEASE_FENCE_MS` (an event-loop stall, a VM pause) keeps its TCP socket
    until it resumes, while another process may open a second one after the TTL. On resume

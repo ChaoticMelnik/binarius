@@ -372,12 +372,14 @@ Node 22 (the 2026-10-03 one is recorded in #99).
   lived 28 s and 93 s until the probe closed them, with a price subscription active. Its cause is
   unknown; the client reconnects after it and resends its subscriptions.
 
-### The two-socket probe (#285) — result: pending the owner's run on the pilot
+### The two-socket probe (#285) — result: safe on the pilot (2026-10-08)
 
 Whether the live broker sends an `open_trade` answer only to the socket that sent the command, or
-to other sockets of the user too, has not been observed. Until it is, a cross-socket answer is an
-accepted risk ([broker-session.md → Accepted risks](broker-session.md#accepted-risks)) and
-`BROKER_WS_URL` stays unset on the pilot. The probe is the CLI `socket-probe`
+to other sockets of the user too, is what this probe checks. On the pilot it printed the safe
+verdict on 2026-10-08 ([The result](#the-result-on-the-pilot)), and `BROKER_WS_URL` is set there
+since (owner's decision). A cross-socket answer later than the window stays an accepted risk
+([broker-session.md → Accepted risks](broker-session.md#accepted-risks)). The probe is the CLI
+`socket-probe`
 (`apps/trading-worker/src/cli/socket-probe.ts`; the phases in `socket-probe-run.ts`, the verdict
 in `socket-probe-verdict.ts`):
 
@@ -465,10 +467,50 @@ makes it `broadcast`.
 intent pipeline and the trading switch: `not_ours` for the catch-up and the reconciler. The
 account's demo balance changes.
 
-**The result** — the whole output with the exit code — goes into a comment on #285, and from there
-into this section, replacing "pending". `inconclusive`: rerun once the named condition is fixed (a
-drop: just rerun; the token: open the trade screen in the bot first). `BROKER_WS_URL` is set on
-the pilot only after exit 0; a `broadcast` keeps it unset until a correlation of answers exists.
+#### The result on the pilot
+
+Three runs on 2026-10-08 on the owner's demo account, preconditions held (broker-web closed,
+`BROKER_WS_URL` unset in `.env`, no active intent or session). The whole outputs are in comments
+on #285.
+
+| Build | Verdict | Why |
+|---|---|---|
+| `26be9e8`, twice | `inconclusive`, exit 1 | `a_min` and `b_min` ended `unknown (aborted, ready)`: every socket `open_trade.success` failed the schema at `is_demo` (fixed by #354), so the command timed out, tainted its connection and both sockets reconnected (`connections 1 -> 2`). The `fail` phases already answered only their sender. |
+| `0a997ef` (after #354) | `verdict: no cross-socket answer within the window; BROKER_WS_URL may be set`, exit 0 | all six conditions held |
+
+The safe run's table:
+
+```
+phase | event type | A | B
+setup | assets_list | 1 | 1
+setup | auth_success | 1 | 1
+setup | user_data | 1 | 1
+a_min | balance_update | 4 | 4
+a_min | close_trade_success | 1 | 1
+a_min | open_trade_success | 1 | 0
+a_below | open_trade_fail | 1 | 0
+b_min | balance_update | 4 | 4
+b_min | close_trade_success | 1 | 1
+b_min | open_trade_success | 0 | 1
+b_below | open_trade_fail | 0 | 1
+rest_min | balance_update | 4 | 4
+rest_min | close_trade_success | 1 | 1
+```
+
+What it established:
+- **`open_trade.success` and `open_trade.fail` reach only the socket that sent the command.**
+- **A REST order produces no `open_trade_*` on any socket** of the user (`rest_min`).
+- **`close_trade.success` and `update_balance` reach every socket of the user**, the REST order's
+  too: they are account events, not answers to a command.
+- `common.assets_update` was still a `schema` problem on both sockets in that run; its live shape
+  is recorded above and fixed by #368.
+
+**A rerun** — after a broker change, or before setting `BROKER_WS_URL` on another deployment —
+follows the same steps. On the pilot `BROKER_WS_URL` is now set, so the precondition "the worker
+keeps no socket session of the account" means unsetting it and recreating `trading-worker` for
+the run, then setting it back. `inconclusive`: rerun once the named condition is fixed (a drop:
+just rerun; the token: open the trade screen in the bot first). A `broadcast` means: unset
+`BROKER_WS_URL` until a correlation of answers exists.
 
 ## Boundaries
 
