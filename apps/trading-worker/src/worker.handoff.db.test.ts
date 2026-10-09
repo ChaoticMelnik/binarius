@@ -235,12 +235,14 @@ const recordedBy = (w: Running) =>
   new Set(logsOf(w, 'intent outcome recorded').map((line) => line.intentId as string));
 
 // the backend's outbox publisher, by hand: every pending row becomes the job it would add
-// (apps/backend/src/outbox/bullmq.ts: the intent id as job id, one attempt)
-async function publishPending(): Promise<number> {
+// (apps/backend/src/outbox/bullmq.ts: the intent id as job id, one attempt); `only` keeps a case
+// to its own rows, so a failed case's leftovers cannot change the next one's count
+async function publishPending(only?: readonly string[]): Promise<number> {
+  const pending = eq(outboxEvents.status, OutboxStatus.Pending);
   const rows = await tmp.db
     .select({ id: outboxEvents.id, intentId: outboxEvents.intentId, topic: outboxEvents.topic })
     .from(outboxEvents)
-    .where(eq(outboxEvents.status, OutboxStatus.Pending));
+    .where(only === undefined ? pending : and(pending, inArray(outboxEvents.intentId, [...only])));
   for (const row of rows) {
     await queues
       .get(row.topic)!
@@ -371,7 +373,7 @@ describe.each([
       broker.rest.failNext('openTrade', { delayMs: HELD_REST_MS });
       broker.rest.failNext('openTrade', { delayMs: HELD_REST_MS });
     }
-    expect(await publishPending()).toBe(2);
+    expect(await publishPending(early)).toBe(2);
     await until('A took both', () => allIn(early, [TradeIntentStatus.Submitting]));
 
     // the new container is ready, then the old one gets SIGTERM; the rest of the stream follows
@@ -379,7 +381,7 @@ describe.each([
     expect(logsOf(b, 'trading-worker started')).toHaveLength(1);
     const late = [await newIntent(third), await newIntent(fourth)];
     const stopping = shutdown(a);
-    expect(await publishPending()).toBe(2);
+    expect(await publishPending(late)).toBe(2);
     expect(await stopping).toBe('clean');
 
     const all = [...early, ...late];
@@ -467,7 +469,7 @@ describe('a deploy whose old worker overruns its drain', () => {
     const b = startWorker('B', { sockets: false });
     expect(await shutdown(a)).toBe('dirty');
     // the exit: whatever A's held call brings back can no longer be written
-    await a.pool.end();
+    if (!a.pool.ending) await a.pool.end();
 
     await until('the intent resolved through reconciliation', async () => {
       await publishPending();
