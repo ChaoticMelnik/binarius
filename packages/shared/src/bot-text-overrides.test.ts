@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BotTextProblemCode } from './bot-text-template';
 import {
+  BOT_PROFILE_METHODS,
   BotTextRejectionCode,
+  botProfileMethodsOf,
   botTextChangeProblems,
   botTextOverridesResponseSchema,
   botTextProblemMessage,
@@ -12,7 +14,7 @@ import {
   type BotTextRejection,
 } from './bot-text-overrides';
 import { BOT_TEXT_MESSAGES, estimateBotTextMessage } from './bot-text-messages';
-import { BOT_TEXT_CATALOG, type BotTextKey } from './bot-texts';
+import { BOT_TEXT_CATALOG, BotTextGroup, botTextKeysOf, type BotTextKey } from './bot-texts';
 import { TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
 
 const row = (key: string, source: string, version = 1): BotTextOverrideRow => ({
@@ -281,6 +283,31 @@ describe('botTextChangeProblems', () => {
       ),
       cardBonusAlready: expect.stringMatching(/^Сообщение «Карточка аккаунта»/),
     });
+  });
+});
+
+describe('botProfileMethodsOf', () => {
+  it('O1 names the method a key of the two groups republishes, and none for any other key', () => {
+    const commands = botTextKeysOf(BotTextGroup.Commands);
+    const profile = botTextKeysOf(BotTextGroup.Profile);
+    expect(commands.length).toBeGreaterThan(0);
+    expect(profile).toEqual(['profileDescription', 'profileShortDescription']);
+    for (const key of commands) expect(botProfileMethodsOf(key)).toEqual(['setMyCommands']);
+    expect(botProfileMethodsOf('profileDescription')).toEqual(['setMyDescription']);
+    expect(botProfileMethodsOf('profileShortDescription')).toEqual(['setMyShortDescription']);
+    const others = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
+      (key) =>
+        !(commands as BotTextKey[]).includes(key) && !(profile as BotTextKey[]).includes(key),
+    );
+    expect(others.length).toBeGreaterThan(0);
+    for (const key of others) expect(botProfileMethodsOf(key)).toEqual([]);
+  });
+
+  it('O2 every method is republished by some key of the catalog', () => {
+    const named = new Set(
+      (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).flatMap((key) => botProfileMethodsOf(key)),
+    );
+    expect([...named].sort()).toEqual([...BOT_PROFILE_METHODS].sort());
   });
 });
 

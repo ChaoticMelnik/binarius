@@ -1,13 +1,13 @@
 import { Api, HttpError } from 'grammy';
 import {
   BOT_COMMAND_SCOPE,
+  BOT_PROFILE_METHODS,
   botCommandsOf,
-  BOT_TEXT_CATALOG,
-  BotTextGroup,
   createBotTexts,
   errorIdentity,
   errorLogFields,
   resolveBotTextOverrides,
+  type BotProfileMethod,
   type BotTextKey,
   type BotTextSource,
   type ErrorLogFields,
@@ -20,14 +20,6 @@ import { BOT_PROFILE_PUBLISH_TIMEOUT_MS } from '../timing';
 // the CLI after its save or reset of a `commands`/`profile` key and on `bot-text publish`, the
 // admin section in #361. apps/bot publishes the same three at its start.
 
-// in the order they are sent; BOT_PROFILE_PUBLISH_CALLS in timing.ts is their number
-export const BOT_PROFILE_METHODS = [
-  'setMyCommands',
-  'setMyDescription',
-  'setMyShortDescription',
-] as const;
-export type BotProfileMethod = (typeof BOT_PROFILE_METHODS)[number];
-
 export type BotProfileApi = Pick<Api, BotProfileMethod>;
 
 // Identity only (Rule 8): Telegram's `description` and the payload never reach a result, so a
@@ -35,13 +27,6 @@ export type BotProfileApi = Pick<Api, BotProfileMethod>;
 export type BotProfileMethodResult =
   | { method: BotProfileMethod; ok: true }
   | ({ method: BotProfileMethod; ok: false; telegramErrorCode?: number } & ErrorLogFields);
-
-// the method a change of `key` has to republish; none for a key outside the two groups
-export function botProfileMethodsOf(key: BotTextKey): BotProfileMethod[] {
-  if (key === 'profileDescription') return ['setMyDescription'];
-  if (key === 'profileShortDescription') return ['setMyShortDescription'];
-  return BOT_TEXT_CATALOG[key].group === BotTextGroup.Commands ? ['setMyCommands'] : [];
-}
 
 export interface CreateBotProfileApiOptions {
   token: string;

@@ -72,8 +72,9 @@ const signals = () => new EventEmitter();
 const idleTracker = () => ({ stop: vi.fn(() => Promise.resolve()) });
 // a refresher whose first load has settled already (#301)
 const idleTexts = () => ({ ...idleTracker(), loaded: () => Promise.resolve() });
-// a refresher whose first load is still pending: settle() ends it, and so does stop(), as the real
-// one does when stopped before its load
+// A refresher whose first load is still pending: settle() ends it, and so does stop(). In
+// production start() has begun that load, and stop() awaits it, which ends within its budget —
+// the stub stands for that load ending, not for a signal cutting it short.
 function heldTexts() {
   let settleLoad = (): void => {};
   const first = new Promise<void>((resolve) => {

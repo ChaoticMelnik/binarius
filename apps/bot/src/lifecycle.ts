@@ -95,8 +95,10 @@ export function runBot({
     // grammY awaits this after getMe and deleteWebhook and before the first getUpdates, so
     // `bot started` still means polling begins now
     onStart: async () => {
-      // A failed load settles it too, and the defaults are published. A signal while it is
-      // pending releases it through botTexts.stop(); publishing then would only hold the drain.
+      // A failed load settles it too, and the defaults are published. start() runs the first
+      // load before polling, so a signal while it is pending does not cut it short: stop() awaits
+      // that load, which ends within its budget. The check below is what skips publishing then —
+      // it would only hold the drain.
       await botTexts.loaded();
       if (stopping) return;
       await registerProfile();

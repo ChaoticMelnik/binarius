@@ -1,15 +1,15 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BOT_TEXT_CATALOG, defaultBotTextSource, type BotTextKey } from '@binarius/shared';
-import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
-import { BOT_PROFILE_PUBLISH_CALLS } from '../timing';
 import {
   BOT_PROFILE_METHODS,
-  botProfileMethodsOf,
-  createBotProfileApi,
-  publishBotProfile,
-} from './publish';
+  BOT_TEXT_CATALOG,
+  defaultBotTextSource,
+  type BotTextKey,
+} from '@binarius/shared';
+import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
+import { BOT_PROFILE_PUBLISH_CALLS } from '../timing';
+import { createBotProfileApi, publishBotProfile } from './publish';
 
 const TOKEN = '123456:AA-profile-publish-token';
 
@@ -66,28 +66,6 @@ const DEFAULT_MENU = [
   { command: 'help', description: 'Помощь' },
   { command: 'support', description: 'Поддержка' },
 ];
-
-describe('botProfileMethodsOf', () => {
-  it('U1 names the method a key republishes, and none for any other key', () => {
-    for (const key of [
-      'startCommand',
-      'menuCommand',
-      'accountCommand',
-      'settingsCommand',
-      'helpCommand',
-      'supportCommand',
-    ] as const) {
-      expect(botProfileMethodsOf(key)).toEqual(['setMyCommands']);
-    }
-    expect(botProfileMethodsOf('profileDescription')).toEqual(['setMyDescription']);
-    expect(botProfileMethodsOf('profileShortDescription')).toEqual(['setMyShortDescription']);
-    const others = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
-      (key) => key.endsWith('Command') === false && key.startsWith('profile') === false,
-    );
-    expect(others.length).toBeGreaterThan(0);
-    for (const key of others) expect(botProfileMethodsOf(key)).toEqual([]);
-  });
-});
 
 describe('publishBotProfile', () => {
   it('U2 sends the menu, the description and the short description from the source', async () => {

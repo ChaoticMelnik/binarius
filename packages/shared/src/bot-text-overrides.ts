@@ -6,7 +6,13 @@ import {
   estimateBotTextMessage,
   type BotTextMessage,
 } from './bot-text-messages';
-import { BOT_TEXT_CATALOG, botTextProblems, type BotTextKey } from './bot-texts';
+import {
+  BOT_TEXT_CATALOG,
+  BotTextGroup,
+  botTextProblems,
+  type BotTextKey,
+  type BotTextKeyOfGroup,
+} from './bot-texts';
 import { errorLogFields } from './logging';
 
 // Overrides of the client bot's texts (docs/bot-texts.md → Overrides): stored by @binarius/db,
@@ -28,6 +34,30 @@ export const BOT_TEXTS_PATH = '/bot-texts';
 // backend's BOT_PROFILE_PUBLISH_TIMEOUT_MS (its timing chain holds the product to this). Here
 // because web sizes its request timeout against it when the admin section publishes (#361).
 export const BOT_PROFILE_PUBLISH_BUDGET_MS = 6_000;
+
+// in the order they are sent; the backend's BOT_PROFILE_PUBLISH_CALLS is their number
+export const BOT_PROFILE_METHODS = [
+  'setMyCommands',
+  'setMyDescription',
+  'setMyShortDescription',
+] as const;
+export type BotProfileMethod = (typeof BOT_PROFILE_METHODS)[number];
+
+// a new `profile` key does not compile until it names the method that publishes it
+const PROFILE_KEY_METHOD = {
+  profileDescription: 'setMyDescription',
+  profileShortDescription: 'setMyShortDescription',
+} as const satisfies Record<BotTextKeyOfGroup<typeof BotTextGroup.Profile>, BotProfileMethod>;
+
+// the method a change of `key` has to republish; none for a key outside the two groups
+export function botProfileMethodsOf(key: BotTextKey): BotProfileMethod[] {
+  const { group } = BOT_TEXT_CATALOG[key];
+  if (group === BotTextGroup.Commands) return ['setMyCommands'];
+  if (group === BotTextGroup.Profile) {
+    return [PROFILE_KEY_METHOD[key as BotTextKeyOfGroup<typeof BotTextGroup.Profile>]];
+  }
+  return [];
+}
 
 export const isBotTextKey = (key: string): key is BotTextKey =>
   Object.hasOwn(BOT_TEXT_CATALOG, key);
