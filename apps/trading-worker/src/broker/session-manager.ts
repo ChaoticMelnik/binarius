@@ -72,9 +72,6 @@ export interface SessionLeases {
 export interface SessionLossObserver {
   lost(accountId: string): void;
   ready(accountId: string): void;
-  // how long a session that was ready may stay not ready before it counts: longer than one full
-  // reconnect, so a broker restart that reconnects everyone does not count
-  graceMs: number;
 }
 
 export interface BrokerSessionManagerDeps {
@@ -150,7 +147,7 @@ interface RunningEntry {
   idleSince?: number;
   // warn-once keys of the current connection
   warned: Set<string>;
-  // #96: ready at least once; when it left ready (Date.now()); this loss already reported; the
+  // #96: ready at least once; when it left ready (monotonic); this loss already reported; the
   // next connection after a token refresh counts as leaving ready
   everReady: boolean;
   lostSince?: number;
@@ -497,7 +494,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
         // a ready session that left ready, or the first connection after its token refresh: a loss
         // once it outlasts the grace (observeSessions decides)
         if (change.from === BrokerSocketState.Ready || entry.rearmed) {
-          entry.lostSince ??= Date.now();
+          entry.lostSince ??= now();
           entry.rearmed = false;
         }
         return;
@@ -665,11 +662,12 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   }
 
   // every ready session is reported ready, so the breaker's window holds every session in work with
-  // its latest state; a session still not ready a grace after it left ready is one loss
+  // its latest state; a session still not ready config.lossGraceMs after it left ready is one loss
+  // (monotonic, like the fence: a wall-clock jump neither hides nor invents a loss)
   function observeSessions() {
     const observer = deps.lossObserver;
     if (observer === undefined || stopping.signal.aborted) return;
-    const at = Date.now();
+    const at = now();
     for (const [accountId, entry] of entries) {
       if (entry.kind !== 'running') continue;
       if (entry.client.state === BrokerSocketState.Ready) {
@@ -677,7 +675,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
         continue;
       }
       if (entry.lostSince === undefined || entry.lossReported) continue;
-      if (at - entry.lostSince < observer.graceMs) continue;
+      if (at - entry.lostSince < config.lossGraceMs) continue;
       entry.lossReported = true;
       observer.lost(accountId);
     }

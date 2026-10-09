@@ -27,6 +27,8 @@ import { createBackendAccessTokenSource } from './broker/access-token';
 import { SESSION_MANAGER_CONFIG } from './broker/session-config';
 import { createBrokerSessionManager } from './broker/session-manager';
 import { noTradeSessions } from './broker/trade-session';
+import { createCircuitBreaker } from './circuit-breaker/breaker';
+import { observeExecutor } from './circuit-breaker/observe-executor';
 import { parseEnv } from './env';
 import {
   BALANCE_CHECK_TIMEOUT_MS,
@@ -51,9 +53,6 @@ import {
   SWEEP_BATCH_SIZE,
   SWEEP_INTERVAL_MS,
 } from './intents/config';
-import { createCircuitBreaker } from './circuit-breaker/breaker';
-import { SOCKET_LOSS_GRACE_MS } from './circuit-breaker/config';
-import { observeExecutor } from './circuit-breaker/observe-executor';
 import { createBalanceCheck } from './intents/balance-check';
 import type { DeadLetter } from './dead-letter';
 import { startIntentConsumer } from './intents/consumer';
@@ -130,7 +129,6 @@ const sessions =
         lossObserver: {
           lost: (accountId) => breaker.socketLost(accountId),
           ready: (accountId) => breaker.socketReady(accountId),
-          graceMs: SOCKET_LOSS_GRACE_MS,
         },
         logger,
         config: SESSION_MANAGER_CONFIG,

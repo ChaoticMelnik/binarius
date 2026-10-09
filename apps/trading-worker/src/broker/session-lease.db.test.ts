@@ -60,6 +60,7 @@ const CONFIG: SessionManagerConfig = {
   leaseRenewMs: 6_000,
   leaseRenewTimeoutMs: 3_000,
   leaseFenceMs: 25_000,
+  lossGraceMs: 2_000,
 };
 
 let tmp: TempDatabase;

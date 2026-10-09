@@ -2,25 +2,19 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { composeServiceEnvValue } from '@binarius/shared/testing';
-import { SESSION_TICK_MS } from '../broker/session-config';
-import {
-  CIRCUIT_BREAKER_WINDOW_MS,
-  ONE_RECONNECT_MS,
-  SOCKET_LOSS_GRACE_MS,
-} from './config';
+import { ONE_RECONNECT_MS } from './config';
 
 const composeYaml = readFileSync(
   fileURLToPath(new URL('../../../../compose.yaml', import.meta.url)),
   'utf8',
 );
 
+// The chain is enforced at import: circuit-breaker/config.ts throws when it does not hold, so a
+// violation takes this file down before the first test runs.
 describe('the circuit breaker constants (#96)', () => {
-  it('hold the chain: a full reconnect never counts, a loss counts inside the window', () => {
+  it('count one full reconnect at its worst case', () => {
     // 10 s × 1.5 + 10 s + 5 s
     expect(ONE_RECONNECT_MS).toBe(30_000);
-    expect(ONE_RECONNECT_MS).toBeLessThan(SOCKET_LOSS_GRACE_MS);
-    expect(SESSION_TICK_MS).toBeLessThan(SOCKET_LOSS_GRACE_MS);
-    expect(SOCKET_LOSS_GRACE_MS).toBeLessThan(CIRCUIT_BREAKER_WINDOW_MS);
   });
 
   it.each([

@@ -24,6 +24,9 @@ import { isTimerMs } from './socket-config';
 //                                failed
 //   SESSION_LEASE_FENCE_MS     — how long after sending an acquire or a renewal the process trusts
 //                                it; past it the socket is closed
+//   SOCKET_LOSS_GRACE_MS       — how long a session that was ready may stay not ready before the
+//                                loss observer counts it (#96); longer than one full reconnect —
+//                                the circuit breaker's chain in circuit-breaker/config.ts
 // The chain: an account missing from one scan is not closed (TICK < IDLE_GRACE); a held-back
 // account skips at least one tick (TICK < RETRY ≤ REFUSAL_RETRY); an account the bot asked about
 // keeps its session for the whole watch window (IDLE_GRACE < BALANCE_WATCH_WINDOW_MS); one failed
@@ -32,8 +35,8 @@ import { isTimerMs } from './socket-config';
 // (2 × LEASE_RENEW + 2 × LEASE_RENEW_TIMEOUT < LEASE_FENCE); the fence closes the socket before
 // the database lets anyone else in (LEASE_FENCE < LEASE_TTL); a stuck renewal ends before the next
 // is due (LEASE_RENEW_TIMEOUT < LEASE_RENEW); an account busy under another owner is asked again
-// only once that lease could have lapsed (LEASE_TTL < RETRY); every *_MS is an integer in
-// [1, MAX_TIMER_MS]. The links to the shutdown budget are in intents/config.ts.
+// only once that lease could have lapsed (LEASE_TTL < RETRY); the loss check sees a loss within
+// the grace (TICK < SOCKET_LOSS_GRACE); every *_MS is an integer in [1, MAX_TIMER_MS]. The links to the shutdown budget are in intents/config.ts.
 export const SESSION_TICK_MS = 5_000;
 export const SESSION_IDLE_GRACE_MS = 60_000;
 export const SESSION_RETRY_MS = 60_000;
@@ -44,6 +47,7 @@ export const SESSION_LEASE_TTL_MS = 30_000;
 export const SESSION_LEASE_RENEW_MS = 6_000;
 export const SESSION_LEASE_RENEW_TIMEOUT_MS = 3_000;
 export const SESSION_LEASE_FENCE_MS = 25_000;
+export const SOCKET_LOSS_GRACE_MS = 45_000;
 // how long a session write that threw waits for its dead letter (#92): below the stop budget, so
 // stop() never waits on Redis longer than on the write itself
 export const DEAD_LETTER_WRITE_TIMEOUT_MS = 1_000;
@@ -62,6 +66,7 @@ export interface SessionManagerConfig {
   leaseRenewMs: number;
   leaseRenewTimeoutMs: number;
   leaseFenceMs: number;
+  lossGraceMs: number;
 }
 
 export const SESSION_MANAGER_CONFIG: Readonly<SessionManagerConfig> = {
@@ -77,6 +82,7 @@ export const SESSION_MANAGER_CONFIG: Readonly<SessionManagerConfig> = {
   leaseRenewMs: SESSION_LEASE_RENEW_MS,
   leaseRenewTimeoutMs: SESSION_LEASE_RENEW_TIMEOUT_MS,
   leaseFenceMs: SESSION_LEASE_FENCE_MS,
+  lossGraceMs: SOCKET_LOSS_GRACE_MS,
 };
 
 const isCount = (value: number) => Number.isSafeInteger(value) && value >= 1;
@@ -93,9 +99,11 @@ export function sessionManagerConfigHolds(config: SessionManagerConfig): boolean
     isTimerMs(config.leaseRenewMs) &&
     isTimerMs(config.leaseRenewTimeoutMs) &&
     isTimerMs(config.leaseFenceMs) &&
+    isTimerMs(config.lossGraceMs) &&
     isCount(config.maxSessions) &&
     isCount(config.startConcurrency) &&
     config.tickMs < config.idleGraceMs &&
+    config.tickMs < config.lossGraceMs &&
     config.tickMs < config.retryMs &&
     config.retryMs <= config.refusalRetryMs &&
     config.idleGraceMs < config.watchWindowMs &&

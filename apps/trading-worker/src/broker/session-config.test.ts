@@ -14,6 +14,7 @@ import {
   SESSION_START_CONCURRENCY,
   SESSION_STOP_BUDGET_MS,
   SESSION_TICK_MS,
+  SOCKET_LOSS_GRACE_MS,
   sessionManagerConfigHolds,
   type SessionManagerConfig,
 } from './session-config';
@@ -45,6 +46,7 @@ describe('the session constants', () => {
       leaseRenewMs: SESSION_LEASE_RENEW_MS,
       leaseRenewTimeoutMs: SESSION_LEASE_RENEW_TIMEOUT_MS,
       leaseFenceMs: SESSION_LEASE_FENCE_MS,
+      lossGraceMs: SOCKET_LOSS_GRACE_MS,
     });
   });
 
@@ -68,6 +70,9 @@ describe('the session constants', () => {
     ['a busy retry before the lease could lapse', { leaseTtlMs: SESSION_RETRY_MS }],
     ['a fractional renewal', { leaseRenewMs: 1.5 }],
     ['a renewal timeout as long as the interval', { leaseRenewTimeoutMs: SESSION_LEASE_RENEW_MS }],
+    // #96: the loss check must see a loss within the grace
+    ['a loss grace no longer than a scan', { lossGraceMs: SESSION_TICK_MS }],
+    ['a fractional loss grace', { lossGraceMs: 1.5 }],
   ])('refuses %s', (_label, patch) => {
     expect(sessionManagerConfigHolds({ ...SESSION_MANAGER_CONFIG, ...patch })).toBe(false);
   });

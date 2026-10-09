@@ -17,8 +17,8 @@ import {
   CIRCUIT_BREAKER_WINDOW_MS,
   MAX_CIRCUIT_BREAKER_MIN_FAILURES,
   MAX_CIRCUIT_BREAKER_WINDOW_MS,
-  SOCKET_LOSS_GRACE_MS,
 } from './circuit-breaker/config';
+import { SOCKET_LOSS_GRACE_MS } from './broker/session-config';
 import { MAX_SUBMIT_ACK_TIMEOUT_MS, MIN_SUBMIT_ACK_TIMEOUT_MS } from './intents/config';
 
 const MIN_INTENT_MAX_AGE_MS = 1_000;
