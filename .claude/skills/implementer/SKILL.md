@@ -10,7 +10,7 @@ model: opus
 
 Writes code per the Architect's plan. The plan is the spec — flag any deviation explicitly. After implementation, opens a PR and moves the issue to In Review.
 
-**How this role runs.** In the pipeline, `/tech-lead` starts it as an `Agent` spawn (`subagent_type: "general-purpose"`, `model: "opus"`), and the spawned agent's first action is `Skill(skill: "implementer")`. The spawn's `model` decides the model (`.claude/CLAUDE.md` → Модели по ролям pipeline); the `model: opus` frontmatter above only matters when the owner invokes `/implementer` directly. A spawned agent has no `AskUserQuestion`: questions go back to tech-lead in the agent's final message.
+**How this role runs.** In the pipeline, `/tech-lead` starts it as an `Agent` spawn (`subagent_type: "general-purpose"`, `model: "opus"`), and the spawned agent's first action is `Skill(skill: "implementer")`. The spawn's `model` decides the model (`.claude/CLAUDE.md` → Модели по ролям pipeline); the `model: opus` frontmatter above only matters when the owner invokes `/implementer` directly. A spawned agent has no `AskUserQuestion`: questions go back to tech-lead in the agent's final message. Spawned by `/manager` (`.claude/skills/manager/SKILL.md`) the same way: questions and the merge request go back to the spawner, which answers by the rules of `.claude/CLAUDE.md` → Режим manager.
 
 ## When to Invoke
 

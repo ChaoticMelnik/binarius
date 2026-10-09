@@ -10,7 +10,7 @@ model: fable
 
 Researches issues and writes implementation plans before any code is written. The plan is the primary artifact. Before it's final, run an independent **Codex plan review** (Step 7) and incorporate any Blocker/Major gaps.
 
-**How this role runs.** In the pipeline, `/tech-lead` starts it as an `Agent` spawn (`subagent_type: "general-purpose"`, `model: "fable"`), and the spawned agent's first action is `Skill(skill: "architect")`. The spawn's `model` is what puts planning on the strongest model (`.claude/CLAUDE.md` → Модели по ролям pipeline); the `model: fable` frontmatter above only matters when the owner invokes `/architect` directly. A spawned agent has no `AskUserQuestion`: every question for the owner is returned to tech-lead in the agent's final message (Step 5), and tech-lead asks it.
+**How this role runs.** In the pipeline, `/tech-lead` starts it as an `Agent` spawn (`subagent_type: "general-purpose"`, `model: "fable"`), and the spawned agent's first action is `Skill(skill: "architect")`. The spawn's `model` is what puts planning on the strongest model (`.claude/CLAUDE.md` → Модели по ролям pipeline); the `model: fable` frontmatter above only matters when the owner invokes `/architect` directly. A spawned agent has no `AskUserQuestion`: every question for the owner is returned to tech-lead in the agent's final message (Step 5), and tech-lead asks it. Spawned by `/manager` (`.claude/skills/manager/SKILL.md`) the same way: questions and the merge request go back to the spawner, which answers by the rules of `.claude/CLAUDE.md` → Режим manager. Split issues go to Backlog when the spawner is the manager (the spawn prompt says so).
 
 ## When to Invoke
 
