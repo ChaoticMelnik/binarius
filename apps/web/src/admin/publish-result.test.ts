@@ -39,6 +39,16 @@ describe('the publish result in the query (#361)', () => {
       },
     ];
     expect(through(results)).toEqual(results);
+    // one character more is not sent: the encoder takes the wire's bound too
+    expect(
+      encodePublishResults([
+        {
+          method: 'setMyCommands',
+          ok: false,
+          err: { name: 'E'.repeat(ADMIN_BOT_PROFILE_IDENTITY_MAX + 1) },
+        },
+      ]),
+    ).toBe('setMyCommands:Error');
   });
 
   it('W11 carries what the page shows: no cause; a name or code outside the grammar falls back', () => {
