@@ -41,6 +41,7 @@ beforeAll(async () => {
     onIntentQueued: () => {},
     balance: unusedBalanceDeps(),
     accessToken: unusedAccessTokenDeps(),
+    demoOnly: false,
   });
   await app.ready();
 });

@@ -5,6 +5,7 @@ import {
   HTTPS_ONLY_RULES,
   assertOriginSpelling,
   parseBoundedIntegerEnv,
+  parseDemoOnlyEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
   parseLoopbackOrHttpsUrlEnv,
@@ -67,6 +68,8 @@ export interface Env {
   telegramBotToken: string;
   adminBotToken: string;
   adminWebToken: string;
+  // the demo-only fuse (#396): read once at start, refuses real intents and real sessions
+  demoOnly: boolean;
 }
 
 export function parseEnv(source: EnvSource): Env {
@@ -122,6 +125,7 @@ export function parseEnv(source: EnvSource): Env {
     ),
     brokerOauthRedirectUri: parseRedirectUri(source),
     brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),
+    demoOnly: parseDemoOnlyEnv(source),
     ...parseBotTokens(source),
     ...parseTokenEncryption(source),
   };

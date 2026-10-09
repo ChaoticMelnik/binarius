@@ -160,7 +160,7 @@ afterAll(async () => {
   await tmp.drop();
 });
 
-function envOf(sockets: boolean): Env {
+function envOf(sockets: boolean, demoOnly = false): Env {
   return {
     databaseUrl: tmp.url,
     redisUrl: redisUrl!,
@@ -174,13 +174,18 @@ function envOf(sockets: boolean): Env {
     brokerWsUrl: sockets ? broker.url : undefined,
     // no trip inside a case: the switch is not what this file tests
     circuitBreaker: { windowMs: 60_000, minFailures: 1_000, failurePercent: 100 },
+    demoOnly,
   };
 }
 
 // one container of the deploy: its own pool, Redis connection and log sink
 function startWorker(
   name: string,
-  { sockets, tuning = {} }: { sockets: boolean; tuning?: Partial<WorkerTuning> },
+  {
+    sockets,
+    demoOnly = false,
+    tuning = {},
+  }: { sockets: boolean; demoOnly?: boolean; tuning?: Partial<WorkerTuning> },
 ): Running {
   const lines: Record<string, unknown>[] = [];
   const logger = pino(logOptions('debug'), {
@@ -189,7 +194,7 @@ function startWorker(
   const pool = new Pool({ connectionString: tmp.url });
   const redis = new Redis(redisUrl!, { maxRetriesPerRequest: null });
   const worker = createWorker({
-    env: envOf(sockets),
+    env: envOf(sockets, demoOnly),
     db: createDb(pool),
     pool,
     redis,
@@ -573,7 +578,7 @@ describe('the readiness line', () => {
   it('H5 start() logs it once, with the text scripts/deploy-worker.sh waits for', async () => {
     const w = startWorker('H5', { sockets: false });
     expect(logsOf(w, 'trading-worker started')).toEqual([
-      expect.objectContaining({ concurrency: 4, sessions: false }),
+      expect.objectContaining({ concurrency: 4, sessions: false, demoOnly: false }),
     ]);
     const script = readFileSync(
       new URL('../../../scripts/deploy-worker.sh', import.meta.url),
@@ -582,5 +587,13 @@ describe('the readiness line', () => {
     expect(script).toContain('"msg":"trading-worker started"');
     expect(await shutdown(w)).toBe('clean');
     expect(logsOf(w, 'trading-worker started')).toHaveLength(1);
+  });
+
+  it('H6 carries DEMO_ONLY from the env it was built with (#396)', async () => {
+    const w = startWorker('H6', { sockets: false, demoOnly: true });
+    expect(logsOf(w, 'trading-worker started')).toEqual([
+      expect.objectContaining({ demoOnly: true }),
+    ]);
+    expect(await shutdown(w)).toBe('clean');
   });
 });

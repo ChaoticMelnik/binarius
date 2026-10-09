@@ -168,6 +168,7 @@ const app = buildApp({
     // the reconciler needs the app's logger, so it is created after the app
     balance: { refresh: (accountId, options) => balanceReconciler.refresh(accountId, options) },
     accessToken,
+    demoOnly: env.demoOnly,
   },
   pairs: {
     catalog: pairsCatalog,
@@ -178,6 +179,7 @@ const app = buildApp({
     catalog: pairsCatalog,
     balance: { refresh: (accountId, options) => balanceReconciler.refresh(accountId, options) },
     internalApiToken: env.internalApiToken,
+    demoOnly: env.demoOnly,
   },
   signal: {
     feed: signalFeed,
@@ -310,6 +312,8 @@ if (!shuttingDown) {
   pairsCatalog.start();
   app.log.info({ warmed }, 'pairs catalog started');
   await app.listen({ port: env.port, host: '0.0.0.0' });
+  // #397's manager greps this line for "demoOnly":true before it drives a stand
+  app.log.info({ demoOnly: env.demoOnly }, 'backend started');
 }
 if (!shuttingDown) {
   publisher.start();

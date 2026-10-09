@@ -3,6 +3,7 @@ import {
   HTTPS_ONLY_RULES,
   REDIS_URL_RULES,
   parseBoundedIntegerEnv,
+  parseDemoOnlyEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
   parseUrlEnv,
@@ -52,6 +53,9 @@ export interface Env {
   // the circuit breaker's thresholds (#96, circuit-breaker/config.ts); the window stays longer
   // than the socket loss grace
   circuitBreaker: { windowMs: number; minFailures: number; failurePercent: number };
+  // the demo-only fuse (#396): a queued real intent is rejected before the take, a real session
+  // is stopped
+  demoOnly: boolean;
 }
 
 export function parseEnv(source: EnvSource): Env {
@@ -90,6 +94,7 @@ export function parseEnv(source: EnvSource): Env {
       'BROKER_API_BASE_URL',
       HTTPS_ONLY_RULES,
     ),
+    demoOnly: parseDemoOnlyEnv(source),
     // readEnv refuses '', while an absent variable leaves the sessions off
     brokerWsUrl:
       source.BROKER_WS_URL === undefined

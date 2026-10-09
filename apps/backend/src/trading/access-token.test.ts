@@ -40,6 +40,7 @@ function appWith(answer: AccessTokenResult): FastifyInstance {
         calls.push({ accountId, options });
         return Promise.resolve(answer);
       },
+      demoOnly: false,
     },
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),

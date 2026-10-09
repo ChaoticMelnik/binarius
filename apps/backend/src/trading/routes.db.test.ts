@@ -35,7 +35,7 @@ let probeUserId: string | undefined;
 let probe: Promise<string | undefined> | undefined;
 let app: ReturnType<typeof buildApp>;
 
-const appWith = () =>
+const appWith = (demoOnly = false) =>
   buildApp({
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
@@ -76,6 +76,7 @@ const appWith = () =>
       },
       balance: unusedBalanceDeps(),
       accessToken: unusedAccessTokenDeps(),
+      demoOnly,
     },
   });
 
@@ -319,6 +320,55 @@ describe('POST /trading/intents: the global trading switch (#144)', () => {
     expect(created.statusCode).toBe(201);
     await closeTradingSwitch(tmp.db);
     const replayed = await post(payload);
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json().intent.id).toBe(created.json().intent.id);
+  });
+});
+
+describe('POST /trading/intents: DEMO_ONLY (#396)', () => {
+  let demoOnlyApp: ReturnType<typeof buildApp>;
+  beforeAll(async () => {
+    demoOnlyApp = appWith(true);
+    await demoOnlyApp.ready();
+  });
+  afterAll(() => demoOnlyApp.close());
+
+  const postDemoOnly = (payload: unknown) =>
+    demoOnlyApp.inject({
+      method: 'POST',
+      url: '/trading/intents',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      payload: JSON.stringify(payload),
+    });
+  const reservedOf = async (userId: string) =>
+    (await tmp.db.select({ v: users.tokenReserved }).from(users).where(eq(users.id, userId)))[0]!.v;
+
+  it('answers 409 demo_only for a real intent and creates nothing', async () => {
+    const s = await seed();
+    wakes = [];
+    const response = await postDemoOnly(body(s.telegramUserId, { mode: 'real' }));
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'demo_only' });
+    expect(
+      await tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, s.userId)),
+    ).toEqual([]);
+    expect(await reservedOf(s.userId)).toBe(0n);
+    expect(wakes).toEqual([]);
+  });
+
+  it('creates a demo intent', async () => {
+    const s = await seed();
+    const response = await postDemoOnly(body(s.telegramUserId));
+    expect(response.statusCode).toBe(201);
+    expect(response.json().intent).toMatchObject({ mode: 'demo', status: 'queued' });
+  });
+
+  it('replays a real intent created without the flag', async () => {
+    const s = await seed();
+    const payload = body(s.telegramUserId, { mode: 'real' });
+    const created = await post(payload);
+    expect(created.statusCode).toBe(201);
+    const replayed = await postDemoOnly(payload);
     expect(replayed.statusCode).toBe(200);
     expect(replayed.json().intent.id).toBe(created.json().intent.id);
   });

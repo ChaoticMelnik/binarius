@@ -126,7 +126,12 @@ describe('startIntentConsumer', () => {
               }),
             },
             logger,
-            config: { intentMaxAgeMs: 60_000, submitAckTimeoutMs: 500, staleSubmittingMs: 60_000 },
+            config: {
+              intentMaxAgeMs: 60_000,
+              submitAckTimeoutMs: 500,
+              staleSubmittingMs: 60_000,
+              demoOnly: false,
+            },
           },
           payload,
         ),

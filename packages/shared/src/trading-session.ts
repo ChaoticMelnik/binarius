@@ -132,6 +132,8 @@ export const TradingSessionErrorCode = {
   // createTradingSession refuses a non-demo mode; the start route only creates demo sessions,
   // so it answers this only if that changes
   ModeNotAllowed: 'mode_not_allowed',
+  // a real session on a DEMO_ONLY process (#396), before mode_not_allowed
+  DemoOnly: 'demo_only',
   ActiveSessionExists: 'active_session_exists',
   SessionTooLong: 'session_too_long',
   BalanceUnavailable: 'balance_unavailable',

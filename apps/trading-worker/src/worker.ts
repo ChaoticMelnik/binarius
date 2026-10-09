@@ -229,6 +229,7 @@ export function createWorker({
             intentMaxAgeMs: env.intentMaxAgeMs,
             submitAckTimeoutMs: env.submitAckTimeoutMs,
             staleSubmittingMs: tuning.staleSubmittingMs,
+            demoOnly: env.demoOnly,
           },
         },
         payload,
@@ -295,6 +296,7 @@ export function createWorker({
     pairs: testing.pairs ?? createBackendPairsSource(backend),
     logger,
     config: tuning.orchestrator,
+    demoOnly: env.demoOnly,
   });
 
   const sweeper = startSweeper({
@@ -367,6 +369,9 @@ export function createWorker({
           concurrency: env.workerConcurrency,
           sessions: sessions !== undefined,
           ...(sessions === undefined ? {} : { sessionOwnerId }),
+          // a report of the env the processor and the orchestrator were built with (#396), not a
+          // gate: the consumers already take jobs
+          demoOnly: env.demoOnly,
         },
         WORKER_READY_MSG,
       );

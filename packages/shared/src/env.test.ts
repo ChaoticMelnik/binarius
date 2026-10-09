@@ -3,7 +3,9 @@ import {
   DATABASE_URL_RULES,
   REDIS_URL_RULES,
   assertOriginSpelling,
+  parseBooleanEnv,
   parseBoundedIntegerEnv,
+  parseDemoOnlyEnv,
   parseEnumEnv,
   parseIntegerEnv,
   parseInternalTokenEnv,
@@ -80,6 +82,37 @@ describe('parseEnumEnv', () => {
   it('rejects an unknown log level', () => {
     expect(() => parseLogLevelEnv('verbose', 'LOG_LEVEL')).toThrow(
       'Env LOG_LEVEL must be one of: fatal error warn info debug trace silent',
+    );
+  });
+});
+
+describe('parseBooleanEnv', () => {
+  it('reads the two lowercase spellings', () => {
+    expect(parseBooleanEnv('true', 'X')).toBe(true);
+    expect(parseBooleanEnv('false', 'X')).toBe(false);
+  });
+
+  it.each(['1', 'TRUE', 'yes'])('refuses %s', (raw) => {
+    expect(() => parseBooleanEnv(raw, 'X')).toThrow('Env X must be one of: true false');
+  });
+});
+
+describe('parseDemoOnlyEnv', () => {
+  it('is off when the variable is absent', () => {
+    expect(parseDemoOnlyEnv({})).toBe(false);
+  });
+
+  it('is on for DEMO_ONLY=true', () => {
+    expect(parseDemoOnlyEnv({ DEMO_ONLY: 'true' })).toBe(true);
+  });
+
+  it('refuses an empty value', () => {
+    expect(() => parseDemoOnlyEnv({ DEMO_ONLY: '' })).toThrow('Env DEMO_ONLY must not be empty');
+  });
+
+  it('refuses 1', () => {
+    expect(() => parseDemoOnlyEnv({ DEMO_ONLY: '1' })).toThrow(
+      'Env DEMO_ONLY must be one of: true false',
     );
   });
 });

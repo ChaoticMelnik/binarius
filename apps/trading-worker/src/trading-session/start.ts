@@ -94,4 +94,6 @@ export const SESSION_START_REFUSALS = {
   [TradingSessionDbErrorCode.TradingPaused]: 'Торговля остановлена — сессия не создана',
   // unreachable from the CLI, which passes demo
   [TradingSessionDbErrorCode.ModeNotAllowed]: 'Сессии бывают только demo',
+  // unreachable while the CLI passes demo; the flag is read so a future real mode meets the guard
+  [TradingSessionDbErrorCode.DemoOnly]: 'Стенд запущен с DEMO_ONLY=true — real-сессии отключены',
 } as const satisfies Record<TradingSessionDbErrorCode, string>;

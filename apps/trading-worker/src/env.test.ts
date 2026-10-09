@@ -23,6 +23,7 @@ describe('parseEnv', () => {
       brokerApiBaseUrl: valid.BROKER_API_BASE_URL,
       brokerWsUrl: undefined,
       circuitBreaker: { windowMs: 120_000, minFailures: 10, failurePercent: 50 },
+      demoOnly: false,
     });
   });
 
@@ -51,13 +52,21 @@ describe('parseEnv', () => {
       INTENT_MAX_AGE_MS: '30000',
       SUBMIT_ACK_TIMEOUT_MS: '8000',
       WORKER_CONCURRENCY: '1',
+      DEMO_ONLY: 'true',
     });
     expect(env).toMatchObject({
       logLevel: 'debug',
       intentMaxAgeMs: 30_000,
       submitAckTimeoutMs: 8_000,
       workerConcurrency: 1,
+      demoOnly: true,
     });
+  });
+
+  it('refuses DEMO_ONLY=1 (#396)', () => {
+    expect(() => parseEnv({ ...valid, DEMO_ONLY: '1' })).toThrow(
+      'Env DEMO_ONLY must be one of: true false',
+    );
   });
 
   it.each([

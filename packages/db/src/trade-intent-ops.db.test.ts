@@ -828,6 +828,75 @@ describe('createTradeIntent: the demo-stake bounds (#297)', () => {
   });
 });
 
+describe('createTradeIntent: DEMO_ONLY (#396)', () => {
+  const real = (telegramUserId: string) => intentRequest(telegramUserId, { mode: TradeMode.Real });
+  const demoOnly = { demoOnly: true } as const;
+  const intentsOf = (userId: string) =>
+    tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, userId));
+
+  it('F1 refuses a real intent and leaves no trace, ahead of the switch and the account', async () => {
+    const s = await seedUserWithAccount(tmp.db);
+    await failsWith(
+      createTradeIntent(tmp.db, real(s.telegramUserId), undefined, demoOnly),
+      'demo_only',
+    );
+    expect(await intentsOf(s.userId)).toEqual([]);
+    expect(await tokenReservedOf(s.userId)).toBe(0n);
+    expect(await tmp.db.select().from(tokenLedger).where(eq(tokenLedger.userId, s.userId))).toEqual(
+      [],
+    );
+
+    await closeTradingSwitch(tmp.db);
+    try {
+      await failsWith(
+        createTradeIntent(tmp.db, real(s.telegramUserId), undefined, demoOnly),
+        'demo_only',
+      );
+    } finally {
+      await openTrading(tmp.db);
+    }
+
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ status: 'revoked' })
+      .where(eq(brokerAccounts.id, s.brokerAccountId));
+    await failsWith(
+      createTradeIntent(tmp.db, real(s.telegramUserId), undefined, demoOnly),
+      'demo_only',
+    );
+  });
+
+  it('F2 creates a demo intent under the flag', async () => {
+    const s = await seedUserWithAccount(tmp.db);
+    const { intent } = await createTradeIntent(
+      tmp.db,
+      intentRequest(s.telegramUserId),
+      undefined,
+      demoOnly,
+    );
+    expect(intent).toMatchObject({ mode: 'demo', status: 'queued' });
+  });
+
+  it('F3 creates a real intent with the flag off or absent', async () => {
+    const off = await seedUserWithAccount(tmp.db);
+    const absent = await seedUserWithAccount(tmp.db);
+    const created = await createTradeIntent(tmp.db, real(off.telegramUserId), undefined, {
+      demoOnly: false,
+    });
+    expect(created.intent).toMatchObject({ mode: 'real', status: 'queued' });
+    expect((await createTradeIntent(tmp.db, real(absent.telegramUserId))).created).toBe(true);
+  });
+
+  it('F4 replays a real intent created without the flag', async () => {
+    const s = await seedUserWithAccount(tmp.db);
+    const input = real(s.telegramUserId);
+    const first = await createTradeIntent(tmp.db, input, undefined, { demoOnly: false });
+    const again = await createTradeIntent(tmp.db, input, undefined, demoOnly);
+    expect(again.created).toBe(false);
+    expect(again.intent.id).toBe(first.intent.id);
+  });
+});
+
 // --- #17: acceptance with the broker's trade, settlement, the closed-trade applier -------------
 
 const tradesOf = (intentId: string) =>

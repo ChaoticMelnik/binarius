@@ -182,7 +182,12 @@ const deps = (submitAckTimeoutMs = 5_000): ProcessorDeps => ({
   db: tmp.db,
   executor: executor(),
   logger,
-  config: { intentMaxAgeMs: 60_000, submitAckTimeoutMs, staleSubmittingMs: 60_000 },
+  config: {
+    intentMaxAgeMs: 60_000,
+    submitAckTimeoutMs,
+    staleSubmittingMs: 60_000,
+    demoOnly: false,
+  },
 });
 
 async function newIntent(patch: Parameters<typeof intentRequest>[1] = {}) {
