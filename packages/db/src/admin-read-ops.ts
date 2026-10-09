@@ -12,7 +12,12 @@ import {
   type AdminUserDetail,
   type AdminUserListItem,
 } from '@binarius/shared';
-import { listLedgerForAdmin, type AdminLedgerRow } from './admin-ledger-ops';
+import {
+  listDepositsForAdmin,
+  listLedgerForAdmin,
+  type AdminDepositRow,
+  type AdminLedgerRow,
+} from './admin-ledger-ops';
 import { readUserIntentsSection, type AdminUserIntentRows } from './admin-trading-ops';
 import { brokerAccounts } from './schema/broker-accounts';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
@@ -20,7 +25,7 @@ import { users } from './schema/users';
 import type { Tx } from './trade-intent-ops';
 
 // The admin read pages (#107, the trading section and the overview breakdown #330, the token
-// ledger section #109; docs/admin-pages.md). Every function takes a Tx, not a Db: each
+// ledger section #109, the deposits section #341; docs/admin-pages.md). Every function takes a Tx, not a Db: each
 // runs inside the staff transaction that also writes its audit row (runAsStaff), and none of
 // them locks anything — only the staff_sessions touch is an UPDATE.
 
@@ -140,11 +145,13 @@ export interface AdminUserCard {
   brokerAccounts: AdminBrokerAccountRow[];
   intents: AdminUserIntentRows;
   ledger: AdminLedgerRow[];
+  deposits: AdminDepositRow[];
 }
 
-// Five selects without a shared snapshot (READ COMMITTED): an account linked, an intent created or
-// a ledger row written in between may or may not show, and either answer was true at its moment. Ciphertexts, the key
-// id and the refresh-token hash are never selected.
+// Six selects without a shared snapshot (READ COMMITTED): an account linked, an intent created, a
+// ledger row written or a deposit recorded in between may or may not show, and either answer was
+// true at its moment. Ciphertexts, the key id, the refresh-token hash and a deposit's payload are
+// never selected.
 export async function readUserForAdmin(tx: Tx, userId: string): Promise<AdminUserCard | undefined> {
   const [user] = await tx
     .select({
@@ -189,7 +196,11 @@ export async function readUserForAdmin(tx: Tx, userId: string): Promise<AdminUse
     filters: { userId },
     limit: ADMIN_USER_RECENT_LEDGER,
   });
-  return { user, brokerAccounts: accounts, intents, ledger };
+  const { rows: deposits } = await listDepositsForAdmin(tx, {
+    filters: { userId },
+    limit: ADMIN_USER_RECENT_LEDGER,
+  });
+  return { user, brokerAccounts: accounts, intents, ledger, deposits };
 }
 
 export interface AdminOverviewRow {

@@ -15,10 +15,12 @@ import {
   adminChangePasswordRequestSchema,
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
+  DepositEventStatus,
   TokenLedgerKind,
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
   type AdminAuditQuery,
+  type AdminDepositsQuery,
   type AdminIntentsQuery,
   type AdminTokensQuery,
   type AdminTradingSessionsQuery,
@@ -33,6 +35,9 @@ import {
   SAMPLE_AUDIT_ENTRY_NULLS,
   SAMPLE_BOT_TEXT,
   SAMPLE_BOT_TEXTS,
+  SAMPLE_DEPOSIT,
+  SAMPLE_DEPOSIT_UNOWNED,
+  SAMPLE_DEPOSITS,
   SAMPLE_PUBLISHED,
   SAMPLE_PUBLISHED_QUERY,
   SAMPLE_INTENT,
@@ -92,6 +97,7 @@ interface Calls {
   intent: unknown[][];
   tradingSessions: [string, AdminTradingSessionsQuery][];
   tokens: [string, AdminTokensQuery][];
+  deposits: [string, AdminDepositsQuery][];
   audit: [string, AdminAuditQuery][];
   changePassword: unknown[][];
   botTexts: unknown[];
@@ -120,6 +126,7 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     intent: [],
     tradingSessions: [],
     tokens: [],
+    deposits: [],
     audit: [],
     changePassword: [],
     botTexts: [],
@@ -178,6 +185,10 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     tokens: async (token, query) => {
       calls.tokens.push([token, query]);
       return SAMPLE_TOKENS;
+    },
+    deposits: async (token, query) => {
+      calls.deposits.push([token, query]);
+      return SAMPLE_DEPOSITS;
     },
     audit: async (token, query) => {
       calls.audit.push([token, query]);
@@ -1037,6 +1048,7 @@ describe('the trading sessions page, the card section and the overview breakdown
     TEXTS.navTokens,
     TEXTS.navAudit,
     TEXTS.navBotTexts,
+    TEXTS.navDeposits,
   ];
 
   it.each([
@@ -1050,7 +1062,8 @@ describe('the trading sessions page, the card section and the overview breakdown
     '/admin/tokens',
     '/admin/audit',
     '/admin/bot-texts',
-  ])('%s carries the eight nav items in order, staff sessions named as such', async (url) => {
+    '/admin/deposits',
+  ])('%s carries the nine nav items in order, staff sessions named as such', async (url) => {
     const response = await get(url, withCookie);
 
     expect(response.statusCode).toBe(200);
@@ -1063,6 +1076,7 @@ describe('the trading sessions page, the card section and the overview breakdown
       'Токены',
       'Аудит',
       'Тексты бота',
+      'Депозиты',
     ]);
     expect(navOf(response.body)).toEqual(NAV_LABELS);
     expect(response.body).toContain('<a href="/admin/trading-sessions"');
@@ -1220,8 +1234,9 @@ describe('the trading sessions page, the card section and the overview breakdown
           ...SAMPLE_USER,
           brokerAccounts: [],
           intents: { recent: [], total: 0, active: 0 },
-          // "Последние 20" is the ledger section's caption too (#109)
+          // "Последние 20" is the ledger and the deposits sections' caption too (#109, #341)
           ledger: { recent: [] },
+          deposits: { recent: [] },
         }),
     });
 
@@ -1441,7 +1456,11 @@ describe('the token ledger page and the card section (#109)', () => {
 
   it('keeps the section and the link to all entries for a user without ledger rows', async () => {
     await app.close();
-    app = build({ user: () => Promise.resolve({ ...SAMPLE_USER, ledger: { recent: [] } }) });
+    // the deposits section below carries the same caption (#341)
+    app = build({
+      user: () =>
+        Promise.resolve({ ...SAMPLE_USER, ledger: { recent: [] }, deposits: { recent: [] } }),
+    });
 
     const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
 
@@ -1639,6 +1658,7 @@ describe('the audit log page (#110)', () => {
         brokerAccounts: [],
         intents: { recent: [], total: 0, active: 0 },
         ledger: { recent: [] },
+        deposits: { recent: [] },
       },
     ],
   ])('links the user card %s to the audit of that user', async (_label, user) => {
@@ -1673,6 +1693,225 @@ describe('the audit log page (#110)', () => {
 
     expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
     expect(calls.audit).toEqual([]);
+  });
+});
+
+describe('the deposits page and the card section (#341)', () => {
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+  const USER = SAMPLE_USER_ID;
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+
+  // the href of the link whose text is `label`, as a browser would read it back
+  const hrefOf = (body: string, label: string): string | undefined => {
+    const match = new RegExp(`<a href="([^"]*)"\\s*>\\s*${label}\\s*</a`).exec(body);
+    return match?.[1]?.replaceAll('&amp;', '&');
+  };
+  // the body rows of the one table on the page
+  const rowsOf = (body: string): string[] => body.split('<tr>').slice(2);
+  // the cells of a row, whitespace inside each trimmed
+  const cellsOf = (row: string): string[] =>
+    [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => (m[1] ?? '').trim());
+
+  it('marks Депозиты as the current page, last in the nav, and carries the login', async () => {
+    const response = await get('/admin/deposits', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatch(/<a href="\/admin\/deposits"\s+aria-current="page"/);
+    expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+    const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
+    expect(nav.trimEnd()).toMatch(/>\s*Депозиты\s*<\/a\s*>$/);
+  });
+
+  it('asks for the whole list when every field of the form was left empty', async () => {
+    const response = await get('/admin/deposits?status=&user=', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(calls.deposits).toEqual([[TOKEN, {}]]);
+  });
+
+  it('offers every status in the form, an empty option first, and selects the filter', async () => {
+    const response = await get('/admin/deposits?status=credited', withCookie);
+
+    const options = [...response.body.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
+    expect(options).toEqual(['', ...Object.values(DepositEventStatus)]);
+    expect(response.body).toMatch(/<option value="credited"\s+selected/);
+    expect(response.body.match(/\sselected/g)).toHaveLength(1);
+    expect(calls.deposits).toEqual([[TOKEN, { status: 'credited' }]]);
+  });
+
+  it('carries both filters and the cursor through the next link, and keeps them in the form', async () => {
+    await app.close();
+    app = build({
+      deposits: (token, query) => {
+        calls.deposits.push([token, query]);
+        return Promise.resolve({ ...SAMPLE_DEPOSITS, nextCursor: CURSOR });
+      },
+    });
+    const filters = { user: USER, status: 'credited' };
+
+    const first = await get(`/admin/deposits?${new URLSearchParams(filters)}`, withCookie);
+    expect(first.body).toContain(`name="user" value="${USER}"`);
+    expect(first.body).not.toContain(TEXTS.depositsFirst);
+    const next = hrefOf(first.body, TEXTS.depositsNext);
+    expect(next).toBe(`/admin/deposits?${new URLSearchParams({ ...filters, cursor: CURSOR })}`);
+    const second = await get(next ?? '', withCookie);
+
+    expect(calls.deposits.map(([, query]) => query)).toEqual([
+      filters,
+      { ...filters, cursor: CURSOR },
+    ]);
+    expect(hrefOf(second.body, TEXTS.depositsFirst)).toBe(
+      `/admin/deposits?${new URLSearchParams(filters)}`,
+    );
+  });
+
+  it('drops a malformed cursor and keeps the filters', async () => {
+    const response = await get('/admin/deposits?cursor=bad&status=credited', withCookie);
+
+    expect([response.statusCode, response.headers.location]).toEqual([
+      302,
+      '/admin/deposits?status=credited',
+    ]);
+    expect(calls.deposits).toEqual([]);
+  });
+
+  it.each([
+    ['an unknown status, even with a bad cursor', 'cursor=bad&status=bogus'],
+    ['an unknown status', 'status=bogus'],
+    ['a user of blanks', 'user=%20'],
+    ['a user that is not a uuid', 'user=not-a-uuid'],
+    ['status twice', 'status=credited&status=failed'],
+  ])('refuses %s with the form, before the backend is asked', async (_label, query) => {
+    const response = await get(`/admin/deposits?${query}`, withCookie);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers.location).toBeUndefined();
+    expect(calls.deposits).toEqual([]);
+    expect(response.body).toContain(TEXTS.depositsBadFilter);
+    expect(response.body).toContain('action="/admin/deposits"');
+    // no answer from the backend, so no login to show: the account block is left out
+    expect(response.body).toContain('<nav');
+    expect(response.body).not.toContain('action="/admin/logout"');
+  });
+
+  it("lists an owned deposit with its owner's link and the amount as sent, an unowned one with none", async () => {
+    const response = await get('/admin/deposits', withCookie);
+
+    const rows = rowsOf(response.body);
+    expect(rows).toHaveLength(2);
+    const [owned = '', unowned = ''] = rows;
+    expect(cellsOf(owned)).toEqual([
+      `<time datetime="${SAMPLE_DEPOSIT.createdAt}">${SAMPLE_DEPOSIT.createdAt}</time>`,
+      `<a href="/admin/users/${USER}">4242</a>`,
+      `<code>${SAMPLE_DEPOSIT.brokerAccountId}</code>`,
+      '<code>pb-1</code>',
+      '<code>pay-1</code>',
+      '10.50000000',
+      'USD',
+      '<code>credited</code>',
+      `<time datetime="${SAMPLE_DEPOSIT.processedAt}">${SAMPLE_DEPOSIT.processedAt}</time>`,
+    ]);
+    expect(owned).toContain('<td class="num">10.50000000</td>');
+    expect(cellsOf(unowned)).toEqual([
+      `<time datetime="${SAMPLE_DEPOSIT_UNOWNED.createdAt}">${SAMPLE_DEPOSIT_UNOWNED.createdAt}</time>`,
+      TEXTS.none,
+      TEXTS.none,
+      '<code>pb-&lt;b&gt;</code>',
+      TEXTS.none,
+      TEXTS.none,
+      TEXTS.none,
+      '<code>received</code>',
+      TEXTS.none,
+    ]);
+    expect(response.body).not.toContain(SAMPLE_DEPOSIT_UNOWNED.postbackId);
+    expect(response.body).not.toContain(TEXTS.depositsNext);
+    expect(response.body).not.toContain(TEXTS.depositsFirst);
+  });
+
+  it('prints none for the owner of a deposit that names only an account, and the account id', async () => {
+    await app.close();
+    app = build({
+      deposits: () =>
+        Promise.resolve({
+          ...SAMPLE_DEPOSITS,
+          deposits: [{ ...SAMPLE_DEPOSIT, userId: null, telegramUserId: null }],
+        }),
+    });
+
+    const response = await get('/admin/deposits', withCookie);
+
+    const [row = ''] = rowsOf(response.body);
+    const cells = cellsOf(row);
+    expect(cells[1]).toBe(TEXTS.none);
+    expect(cells[2]).toBe(`<code>${SAMPLE_DEPOSIT.brokerAccountId}</code>`);
+    expect(row).not.toContain('/admin/users/');
+  });
+
+  it('says so when there are no deposits, and keeps the filter in the form and the first-page link', async () => {
+    await app.close();
+    app = build({ deposits: () => Promise.resolve({ ...SAMPLE_DEPOSITS, deposits: [] }) });
+
+    const response = await get(`/admin/deposits?user=${USER}`, withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain(TEXTS.depositsEmpty);
+    expect(response.body).toContain(`name="user" value="${USER}"`);
+    expect(hrefOf(response.body, TEXTS.depositsFirst)).toBe(`/admin/deposits?user=${USER}`);
+  });
+
+  it('drops a session the backend no longer knows, and keeps the cookie on its own failure', async () => {
+    await app.close();
+    app = build({
+      deposits: () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+    });
+    const gone = await get('/admin/deposits', withCookie);
+    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+
+    await app.close();
+    app = build({ deposits: () => Promise.reject(httpFailure(500)) });
+    const failed = await get('/admin/deposits', withCookie);
+    expect(failed.statusCode).toBe(500);
+    expect(cookieOf(failed, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it('treats a malformed session cookie as none, before the backend is asked', async () => {
+    const response = await get('/admin/deposits', { [SESSION_COOKIE]: 'not-a-session-token' });
+
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+    expect(calls.deposits).toEqual([]);
+  });
+
+  it('renders the deposits section of the card between the ledger and the audit, with a link to all deposits', async () => {
+    const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+
+    const ledgerAt = response.body.indexOf(`<h2>${TEXTS.userLedger}</h2>`);
+    const depositsAt = response.body.indexOf(`<h2>${TEXTS.userDeposits}</h2>`);
+    const auditAt = response.body.indexOf(`<h2>${TEXTS.userAudit}</h2>`);
+    expect(ledgerAt).toBeGreaterThan(-1);
+    expect(depositsAt).toBeGreaterThan(ledgerAt);
+    expect(auditAt).toBeGreaterThan(depositsAt);
+    const section = response.body.slice(depositsAt, auditAt);
+    expect(section).toContain(TEXTS.userDepositsRecent(ADMIN_USER_RECENT_LEDGER));
+    expect(section).toContain('<code>pb-1</code>');
+    expect(section).toContain('<td class="num">10.50000000</td>');
+    expect(hrefOf(section, TEXTS.userDepositsAll)).toBe(`/admin/deposits?user=${SAMPLE_USER_ID}`);
+  });
+
+  it('keeps the section and the link to all deposits for a user without deposits', async () => {
+    await app.close();
+    app = build({ user: () => Promise.resolve({ ...SAMPLE_USER, deposits: { recent: [] } }) });
+
+    const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+
+    const section = response.body.slice(
+      response.body.indexOf(`<h2>${TEXTS.userDeposits}</h2>`),
+      response.body.indexOf(`<h2>${TEXTS.userAudit}</h2>`),
+    );
+    expect(section).toContain(TEXTS.depositsEmpty);
+    expect(section).not.toContain(TEXTS.userDepositsRecent(ADMIN_USER_RECENT_LEDGER));
+    expect(hrefOf(section, TEXTS.userDepositsAll)).toBe(`/admin/deposits?user=${SAMPLE_USER_ID}`);
   });
 });
 
@@ -2251,11 +2490,12 @@ describe('the bot texts pages (#300)', () => {
   const versionsOf = (body: string) =>
     [...body.matchAll(/name="version" value="(\d+)"/g)].map((match) => match[1]);
 
-  it('W1 puts «Тексты бота» last in the nav and marks it current', async () => {
+  // «Депозиты» (#341) was appended after it
+  it('W1 puts «Тексты бота» in the nav right before «Депозиты» and marks it current', async () => {
     const response = await get('/admin/bot-texts', withCookie);
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(
-      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*Тексты бота\s*<\/a\s*>\s*<\/nav>/,
+      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*Тексты бота\s*<\/a\s*>\s*<a href="\/admin\/deposits"\s*>\s*Депозиты\s*<\/a\s*>\s*<\/nav>/,
     );
   });
 

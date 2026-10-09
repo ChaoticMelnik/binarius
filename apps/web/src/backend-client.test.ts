@@ -6,6 +6,8 @@ import {
   SAMPLE_AUDIT_ENTRY,
   SAMPLE_BOT_TEXT,
   SAMPLE_BOT_TEXTS,
+  SAMPLE_DEPOSIT,
+  SAMPLE_DEPOSITS,
   SAMPLE_INTENT,
   SAMPLE_PUBLISHED,
   SAMPLE_INTENT_RESPONSE,
@@ -418,6 +420,48 @@ describe('the audit log call (#110)', () => {
   ])('refuses %s with a key the contract does not name', async (_label, body) => {
     const { client } = await prefixed(body);
     const error = await rejectionOf(client.audit(SESSION, {}));
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+describe('the deposits call (#341)', () => {
+  const SESSION = 's'.repeat(43);
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+
+  const prefixed = async (body: unknown) => {
+    const served = await serve((response) => {
+      json(response, 200, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+
+  it('asks for the page with the filters in the schema order, the bearer and the staff session, under the prefix', async () => {
+    const { client, captured } = await prefixed(SAMPLE_DEPOSITS);
+    expect(
+      await client.deposits(SESSION, { cursor: CURSOR, status: 'credited', user: SAMPLE_USER_ID }),
+    ).toEqual(SAMPLE_DEPOSITS);
+    expect(captured.url).toBe(
+      `/api/admin/deposits?user=${SAMPLE_USER_ID}&status=credited&cursor=${CURSOR}`,
+    );
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+    expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('sends no query string for no filters', async () => {
+    const { client, captured } = await prefixed(SAMPLE_DEPOSITS);
+    await client.deposits(SESSION, {});
+    expect(captured.url).toBe('/api/admin/deposits');
+  });
+
+  it.each([
+    ['a row', { ...SAMPLE_DEPOSITS, deposits: [{ ...SAMPLE_DEPOSIT, payload: {} }] }],
+    ['the page', { ...SAMPLE_DEPOSITS, extra: 1 }],
+  ])('refuses %s with a key the contract does not name', async (_label, body) => {
+    const { client } = await prefixed(body);
+    const error = await rejectionOf(client.deposits(SESSION, {}));
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });

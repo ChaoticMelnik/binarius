@@ -1,3 +1,4 @@
+import { DepositEventStatus } from '@binarius/shared';
 import { sql } from 'drizzle-orm';
 import {
   check,
@@ -14,14 +15,6 @@ import {
 import { createdAt, id, inList, money, nullablePositiveNumeric } from './columns';
 import { brokerAccounts } from './broker-accounts';
 import { users } from './users';
-
-export const DepositEventStatus = {
-  Received: 'received',
-  Credited: 'credited',
-  Ignored: 'ignored',
-  Failed: 'failed',
-} as const;
-export type DepositEventStatus = (typeof DepositEventStatus)[keyof typeof DepositEventStatus];
 
 // skeleton (#7): the postback contract is confirmed in #12; a postback is stored before it
 // is credited and deduplicated by postback_id and payment_id.

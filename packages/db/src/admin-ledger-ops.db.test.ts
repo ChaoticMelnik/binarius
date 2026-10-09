@@ -2,18 +2,31 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   ADMIN_PAGE_SIZE,
+  adminDepositViewSchema,
   adminLedgerEntrySchema,
+  DepositEventStatus,
   TokenLedgerKind,
   TokenLedgerRefType,
+  type DecimalString,
 } from '@binarius/shared';
 import {
+  listDepositsForAdmin,
   listLedgerForAdmin,
+  toAdminDepositView,
   toAdminLedgerEntry,
+  type AdminDepositFilters,
   type AdminLedgerFilters,
 } from './admin-ledger-ops';
 import type { Db } from './client';
-import { tokenLedger } from './schema/index';
-import { createTempDatabase, seedQueuedIntent, seedUser, type TempDatabase } from './testing';
+import { depositEvents, tokenLedger } from './schema/index';
+import {
+  createTempDatabase,
+  seedQueuedIntent,
+  seedUser,
+  seedUserWithAccount,
+  type SeededAccount,
+  type TempDatabase,
+} from './testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -275,5 +288,242 @@ describe('toAdminLedgerEntry', () => {
       refType: TokenLedgerRefType.Manual,
       refId,
     });
+  });
+});
+
+// --- Deposits (#341) ----------------------------------------------------------------------------
+
+const listDeposits = (
+  db: Db,
+  options: { filters?: AdminDepositFilters; cursor?: string; limit?: number } = {},
+) =>
+  db.transaction((tx) =>
+    listDepositsForAdmin(tx, { filters: {}, limit: ADMIN_PAGE_SIZE, ...options }),
+  );
+
+let postbackSeq = 0;
+
+// Written directly: deposit_events has no writer yet (#141/#142), so a row's status and amount
+// here are the test's choice, not a postback contract. created_at is explicit, as in insertEntry.
+async function insertDeposit(
+  db: Db,
+  row: {
+    userId?: string;
+    brokerAccountId?: string;
+    status?: DepositEventStatus;
+    amount?: string;
+    processedAt?: Date;
+    secondsAgo: number;
+  },
+): Promise<string> {
+  const [inserted] = await db
+    .insert(depositEvents)
+    .values({
+      userId: row.userId ?? null,
+      brokerAccountId: row.brokerAccountId ?? null,
+      postbackId: `pb-${++postbackSeq}`,
+      amount: row.amount === undefined ? null : (row.amount as DecimalString),
+      status: row.status ?? DepositEventStatus.Received,
+      processedAt: row.processedAt ?? null,
+      payload: { secret: 'raw postback' },
+      createdAt: sql`'2026-10-01T12:00:00.000000Z'::timestamptz - make_interval(secs => ${row.secondsAgo})`,
+    })
+    .returning({ id: depositEvents.id });
+  if (inserted === undefined) throw new Error('insertDeposit: insert returned no row');
+  return inserted.id;
+}
+
+describe('listDepositsForAdmin — pages', () => {
+  const db = withDatabase();
+  const ids: string[] = [];
+
+  beforeAll(async () => {
+    for (let i = 0; i < ADMIN_PAGE_SIZE + 1; i += 1) {
+      ids.push(await insertDeposit(db(), { secondsAgo: i + 1 }));
+    }
+  });
+
+  it('shows ADMIN_PAGE_SIZE rows and a cursor at the last one shown when one more exists', async () => {
+    const page = await listDeposits(db());
+    expect(page.rows.map((r) => r.id)).toEqual(ids.slice(0, ADMIN_PAGE_SIZE));
+    expect(page.nextCursor).toBe(ids[ADMIN_PAGE_SIZE - 1]);
+    const next = await listDeposits(db(), { cursor: page.nextCursor ?? undefined });
+    expect(next.rows.map((r) => r.id)).toEqual([ids[ADMIN_PAGE_SIZE]]);
+    expect(next.nextCursor).toBeNull();
+  });
+
+  it('gives no cursor when exactly ADMIN_PAGE_SIZE rows remain', async () => {
+    const page = await listDeposits(db(), { cursor: ids[0] });
+    expect(page.rows).toHaveLength(ADMIN_PAGE_SIZE);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it('answers an id with no row with an empty page, not an error', async () => {
+    const page = await listDeposits(db(), { cursor: '00000000-0000-4000-8000-00000000dead' });
+    expect(page).toEqual({ rows: [], nextCursor: null });
+  });
+});
+
+describe('listDepositsForAdmin — equal created_at across a page boundary', () => {
+  const db = withDatabase();
+
+  it('breaks the tie by id, with no row skipped or repeated', async () => {
+    const seeded: string[] = [];
+    for (let i = 0; i < 3; i += 1) seeded.push(await insertDeposit(db(), { secondsAgo: 0 }));
+    const expected = [...seeded].sort().reverse();
+    const walked: string[] = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < 3; i += 1) {
+      const page = await listDeposits(db(), { cursor, limit: 1 });
+      walked.push(...page.rows.map((r) => r.id));
+      cursor = page.nextCursor ?? undefined;
+    }
+    expect(walked).toEqual(expected);
+    expect(cursor).toBeUndefined();
+  });
+});
+
+describe('listDepositsForAdmin — filters', () => {
+  const db = withDatabase();
+  let owner: SeededAccount;
+  let other: SeededAccount;
+  let ownCredited = '';
+  let ownReceived = '';
+  let otherCredited = '';
+  let unowned = '';
+  let accountOnly = '';
+
+  beforeAll(async () => {
+    owner = await seedUserWithAccount(db());
+    other = await seedUserWithAccount(db());
+    const own = { userId: owner.userId, brokerAccountId: owner.brokerAccountId };
+    ownCredited = await insertDeposit(db(), {
+      ...own,
+      status: DepositEventStatus.Credited,
+      secondsAgo: 1,
+    });
+    ownReceived = await insertDeposit(db(), { ...own, secondsAgo: 2 });
+    otherCredited = await insertDeposit(db(), {
+      userId: other.userId,
+      brokerAccountId: other.brokerAccountId,
+      status: DepositEventStatus.Credited,
+      secondsAgo: 3,
+    });
+    unowned = await insertDeposit(db(), { secondsAgo: 4 });
+    // the owner's account but no user: the owner of a deposit is user_id alone
+    accountOnly = await insertDeposit(db(), {
+      brokerAccountId: owner.brokerAccountId,
+      secondsAgo: 5,
+    });
+  });
+
+  it('shows every row without a filter, with the owner joined by user_id', async () => {
+    const page = await listDeposits(db());
+    expect(page.rows.map((r) => r.id)).toEqual([
+      ownCredited,
+      ownReceived,
+      otherCredited,
+      unowned,
+      accountOnly,
+    ]);
+    expect(page.rows.map((r) => r.telegramUserId?.toString() ?? null)).toEqual([
+      owner.telegramUserId,
+      owner.telegramUserId,
+      other.telegramUserId,
+      null,
+      null,
+    ]);
+  });
+
+  it("keeps only the user's own rows: neither an unowned one nor one naming only the account", async () => {
+    const page = await listDeposits(db(), { filters: { userId: owner.userId } });
+    expect(page.rows.map((r) => r.id)).toEqual([ownCredited, ownReceived]);
+  });
+
+  it('keeps only the status asked for', async () => {
+    const page = await listDeposits(db(), { filters: { status: DepositEventStatus.Credited } });
+    expect(page.rows.map((r) => r.id)).toEqual([ownCredited, otherCredited]);
+  });
+
+  it('intersects the two filters', async () => {
+    const page = await listDeposits(db(), {
+      filters: { userId: owner.userId, status: DepositEventStatus.Credited },
+    });
+    expect(page.rows.map((r) => r.id)).toEqual([ownCredited]);
+  });
+
+  it('stops at the limit it is given', async () => {
+    const { userId, brokerAccountId } = await seedUserWithAccount(db());
+    const rows: string[] = [];
+    for (let i = 0; i < 25; i += 1) {
+      rows.push(await insertDeposit(db(), { userId, brokerAccountId, secondsAgo: 10 + i }));
+    }
+    const page = await listDeposits(db(), { filters: { userId }, limit: 20 });
+    expect(page.rows.map((r) => r.id)).toEqual(rows.slice(0, 20));
+    expect(page.nextCursor).toBe(rows[19]);
+  });
+});
+
+describe('toAdminDepositView', () => {
+  const db = withDatabase();
+
+  it('selects no payload and projects a row to exactly the wire keys', async () => {
+    const { userId, brokerAccountId, telegramUserId } = await seedUserWithAccount(db());
+    const id = await insertDeposit(db(), {
+      userId,
+      brokerAccountId,
+      status: DepositEventStatus.Credited,
+      amount: '10.5',
+      processedAt: new Date('2026-10-01T11:00:00.000Z'),
+      secondsAgo: 1,
+    });
+    const page = await listDeposits(db());
+    const row = page.rows.find((r) => r.id === id);
+    if (row === undefined) throw new Error('row missing');
+    expect(Object.keys(row)).toEqual([
+      'id',
+      'userId',
+      'brokerAccountId',
+      'postbackId',
+      'paymentId',
+      'amount',
+      'currency',
+      'status',
+      'processedAt',
+      'createdAt',
+      'telegramUserId',
+    ]);
+    const view = toAdminDepositView(row);
+    expect(Object.keys(view)).toEqual(Object.keys(adminDepositViewSchema.shape));
+    expect(view).toMatchObject({
+      id,
+      userId,
+      telegramUserId,
+      brokerAccountId,
+      amount: '10.50000000',
+      status: DepositEventStatus.Credited,
+      processedAt: '2026-10-01T11:00:00.000Z',
+      createdAt: '2026-10-01T11:59:59.000Z',
+    });
+    expect(adminDepositViewSchema.safeParse(view).success).toBe(true);
+  });
+
+  it('prints the nullable columns of an unowned row as null', async () => {
+    const id = await insertDeposit(db(), { secondsAgo: 2 });
+    const page = await listDeposits(db());
+    const row = page.rows.find((r) => r.id === id);
+    if (row === undefined) throw new Error('row missing');
+    const view = toAdminDepositView(row);
+    expect(view).toMatchObject({
+      userId: null,
+      telegramUserId: null,
+      brokerAccountId: null,
+      paymentId: null,
+      amount: null,
+      currency: null,
+      status: DepositEventStatus.Received,
+      processedAt: null,
+    });
+    expect(adminDepositViewSchema.safeParse(view).success).toBe(true);
   });
 });

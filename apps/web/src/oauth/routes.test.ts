@@ -45,6 +45,7 @@ beforeEach(() => {
     intent: unused,
     tradingSessions: unused,
     tokens: unused,
+    deposits: unused,
     audit: unused,
     changePassword: unused,
     botTexts: unused,

@@ -24,10 +24,16 @@ import {
   adminUsersSearchParams,
   adminConfirmRequestSchema,
   adminConfirmResponseSchema,
+  adminDepositsQuerySchema,
+  adminDepositsResponseSchema,
+  adminDepositsSearchParams,
+  adminDepositViewSchema,
   adminLoginRequestSchema,
+  adminUserDepositsSectionSchema,
   logoutResponseSchema,
   revokeSessionResponseSchema,
   safeParseAdminChangePasswordRequest,
+  safeParseAdminDepositsQuery,
   safeParseAdminTokensQuery,
   safeParseChangePasswordResponse,
   safeParseAdminUsersQuery,
@@ -40,6 +46,8 @@ import {
   tokenDeltaSchema,
 } from './admin';
 import {
+  DepositEventStatus,
+  depositEventStatusSchema,
   TokenLedgerKind,
   tokenLedgerKindSchema,
   TokenLedgerRefType,
@@ -336,7 +344,8 @@ describe('admin read responses', () => {
   };
   const intents = { recent: [], total: 0, active: 0 };
   const ledger = { recent: [] };
-  const user = { me: ME, user: detail, brokerAccounts: [account], intents, ledger };
+  const deposits = { recent: [] };
+  const user = { me: ME, user: detail, brokerAccounts: [account], intents, ledger, deposits };
 
   const overview = {
     me: ME,
@@ -382,6 +391,7 @@ describe('admin read responses', () => {
         brokerAccounts: [fresh],
         intents,
         ledger,
+        deposits,
       }).success,
     ).toBe(true);
     expect(
@@ -587,10 +597,18 @@ describe('token ledger contracts (#109)', () => {
     );
   });
 
-  it('puts the ledger section last on the user card', () => {
+  it('puts the ledger and the deposits sections last on the user card, in that order', () => {
     const user = adminUserResponseSchema.shape;
-    expect(Object.keys(user)).toEqual(['me', 'user', 'brokerAccounts', 'intents', 'ledger']);
+    expect(Object.keys(user)).toEqual([
+      'me',
+      'user',
+      'brokerAccounts',
+      'intents',
+      'ledger',
+      'deposits',
+    ]);
     expect(user.ledger).toBe(adminUserLedgerSectionSchema);
+    expect(user.deposits).toBe(adminUserDepositsSectionSchema);
   });
 
   describe('adminTokensQuerySchema', () => {
@@ -643,6 +661,146 @@ describe('token ledger contracts (#109)', () => {
     }
     expect(tokenLedgerKindSchema.safeParse('bogus').success).toBe(false);
     expect(tokenLedgerRefTypeSchema.safeParse('bogus').success).toBe(false);
+  });
+});
+
+describe('deposit contracts (#341)', () => {
+  const U1 = '00000000-0000-4000-8000-000000000010';
+  const deposit = {
+    id: '00000000-0000-4000-8000-000000000060',
+    userId: U1,
+    telegramUserId: '4242',
+    brokerAccountId: '00000000-0000-4000-8000-000000000020',
+    postbackId: 'pb-1',
+    paymentId: 'pay-1',
+    amount: '10.50000000',
+    currency: 'USD',
+    status: 'credited',
+    processedAt: AT,
+    createdAt: AT,
+  };
+  const unowned = {
+    ...deposit,
+    userId: null,
+    telegramUserId: null,
+    brokerAccountId: null,
+    paymentId: null,
+    amount: null,
+    currency: null,
+    status: 'received',
+    processedAt: null,
+  };
+  const list = { me: ME, deposits: [deposit, unowned], nextCursor: CURSOR };
+
+  it('accepts a row and a row with all seven nullables as null', () => {
+    expect(adminDepositViewSchema.safeParse(deposit).success).toBe(true);
+    expect(adminDepositViewSchema.safeParse(unowned).success).toBe(true);
+  });
+
+  it('carries exactly the eleven wire keys of a deposit row, without payload', () => {
+    expect(Object.keys(adminDepositViewSchema.shape)).toEqual([
+      'id',
+      'userId',
+      'telegramUserId',
+      'brokerAccountId',
+      'postbackId',
+      'paymentId',
+      'amount',
+      'currency',
+      'status',
+      'processedAt',
+      'createdAt',
+    ]);
+  });
+
+  it.each([
+    ['an extra key', { ...deposit, extra: 1 }],
+    ['the raw payload', { ...deposit, payload: {} }],
+    ['a numeric amount', { ...deposit, amount: 10.5 }],
+    ['an unknown status', { ...deposit, status: 'bogus' }],
+    ['a numeric Telegram id', { ...deposit, telegramUserId: 4242 }],
+  ])('refuses a row with %s', (_label, row) => {
+    expect(adminDepositViewSchema.safeParse(row).success).toBe(false);
+  });
+
+  it('bounds the card section at ADMIN_USER_RECENT_LEDGER rows', () => {
+    const at = Array.from({ length: ADMIN_USER_RECENT_LEDGER }, () => deposit);
+    expect(adminUserDepositsSectionSchema.safeParse({ recent: at }).success).toBe(true);
+    expect(adminUserDepositsSectionSchema.safeParse({ recent: [...at, deposit] }).success).toBe(
+      false,
+    );
+    expect(adminUserDepositsSectionSchema.safeParse({ recent: [], extra: 1 }).success).toBe(false);
+  });
+
+  it('accepts a page and refuses an extra key at each level, a bad cursor and a 51st row', () => {
+    expect(adminDepositsResponseSchema.safeParse(list).success).toBe(true);
+    expect(adminDepositsResponseSchema.safeParse({ ...list, nextCursor: null }).success).toBe(true);
+    expect(adminDepositsResponseSchema.safeParse({ ...list, extra: 1 }).success).toBe(false);
+    expect(
+      adminDepositsResponseSchema.safeParse({ ...list, me: { ...ME, extra: 1 } }).success,
+    ).toBe(false);
+    expect(
+      adminDepositsResponseSchema.safeParse({ ...list, deposits: [{ ...deposit, extra: 1 }] })
+        .success,
+    ).toBe(false);
+    expect(adminDepositsResponseSchema.safeParse({ ...list, nextCursor: 'bad' }).success).toBe(
+      false,
+    );
+    const at = Array.from({ length: ADMIN_PAGE_SIZE }, () => deposit);
+    expect(adminDepositsResponseSchema.safeParse({ ...list, deposits: at }).success).toBe(true);
+    expect(
+      adminDepositsResponseSchema.safeParse({ ...list, deposits: [...at, deposit] }).success,
+    ).toBe(false);
+  });
+
+  describe('adminDepositsQuerySchema', () => {
+    it('takes no key as an empty query, and each key alone', () => {
+      expect(adminDepositsQuerySchema.parse({})).toEqual({});
+      for (const query of [{ user: U1 }, { status: 'failed' }, { cursor: CURSOR }]) {
+        expect(adminDepositsQuerySchema.parse(query)).toEqual(query);
+      }
+    });
+
+    it.each([
+      ['status', 'bogus'],
+      ['status', ''],
+      ['status', ['credited', 'failed']],
+      ['user', 'not-a-uuid'],
+      ['user', ' '],
+      ['cursor', 'bad'],
+    ])('refuses %s = %j', (key, value) => {
+      expect(adminDepositsQuerySchema.safeParse({ [key]: value }).success).toBe(false);
+    });
+
+    it('strips keys it does not declare', () => {
+      expect(adminDepositsQuerySchema.parse({ status: 'ignored', utm: '1' })).toEqual({
+        status: 'ignored',
+      });
+    });
+  });
+
+  describe('adminDepositsSearchParams', () => {
+    it('writes keys in the schema order, whatever order the caller used', () => {
+      const params = adminDepositsSearchParams({ cursor: CURSOR, status: 'credited', user: U1 });
+      expect([...params].map(([k]) => k)).toEqual(['user', 'status', 'cursor']);
+    });
+
+    it('round-trips a query through its own serialization', () => {
+      const query = { user: U1, status: 'received', cursor: CURSOR } as const;
+      const params = adminDepositsSearchParams(query);
+      expect(safeParseAdminDepositsQuery(Object.fromEntries(params)).data).toEqual(query);
+    });
+
+    it('writes nothing for an empty query', () => {
+      expect(adminDepositsSearchParams({}).size).toBe(0);
+    });
+  });
+
+  it('builds the status enum from the constant', () => {
+    for (const value of Object.values(DepositEventStatus)) {
+      expect(depositEventStatusSchema.safeParse(value).success).toBe(true);
+    }
+    expect(depositEventStatusSchema.safeParse('bogus').success).toBe(false);
   });
 });
 

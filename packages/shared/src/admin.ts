@@ -7,7 +7,11 @@ import {
   adminUserIntentsSectionSchema,
 } from './admin-trading';
 import { auditActionSchema, auditActorTypeSchema, auditEntityTypeSchema } from './audit';
-import { tokenLedgerKindSchema, tokenLedgerRefTypeSchema } from './ledger';
+import {
+  depositEventStatusSchema,
+  tokenLedgerKindSchema,
+  tokenLedgerRefTypeSchema,
+} from './ledger';
 import { decimalStringSchema } from './money';
 import { accountHaltReasonSchema, authRevokedReasonSchema, BrokerAccountStatus } from './oauth';
 import { telegramUserIdSchema, tokenCountSchema, tradeModeSchema } from './trading';
@@ -286,12 +290,36 @@ export const adminUserLedgerSectionSchema = z.strictObject({
 });
 export type AdminUserLedgerSection = z.infer<typeof adminUserLedgerSectionSchema>;
 
+// The deposit row (#341), declared ahead of the card for the same reason as the ledger row; the
+// page's query and envelope are in the #341 block below. `payload` is not a key: the raw postback
+// never leaves the backend. `amount` is the numeric(20,8) column as PostgreSQL prints it.
+export const adminDepositViewSchema = z.strictObject({
+  id: z.uuid(),
+  userId: z.uuid().nullable(),
+  telegramUserId: telegramUserIdSchema.nullable(),
+  brokerAccountId: z.uuid().nullable(),
+  postbackId: z.string(),
+  paymentId: z.string().nullable(),
+  amount: decimalStringSchema.nullable(),
+  currency: z.string().nullable(),
+  status: depositEventStatusSchema,
+  processedAt: isoDateTime.nullable(),
+  createdAt: isoDateTime,
+});
+export type AdminDepositView = z.infer<typeof adminDepositViewSchema>;
+
+export const adminUserDepositsSectionSchema = z.strictObject({
+  recent: z.array(adminDepositViewSchema).max(ADMIN_USER_RECENT_LEDGER),
+});
+export type AdminUserDepositsSection = z.infer<typeof adminUserDepositsSectionSchema>;
+
 export const adminUserResponseSchema = z.strictObject({
   me: adminStrictMeSchema,
   user: adminUserDetailSchema,
   brokerAccounts: z.array(adminBrokerAccountViewSchema),
   intents: adminUserIntentsSectionSchema,
   ledger: adminUserLedgerSectionSchema,
+  deposits: adminUserDepositsSectionSchema,
 });
 export type AdminUserResponse = z.infer<typeof adminUserResponseSchema>;
 
@@ -472,6 +500,32 @@ export const adminAuditResponseSchema = z.strictObject({
 });
 export type AdminAuditResponse = z.infer<typeof adminAuditResponseSchema>;
 
+// --- Deposits (#341) ----------------------------------------------------------------------------
+
+// Exact-match filters, intersected; unknown keys are stripped, as on the other lists.
+export const adminDepositsQuerySchema = z.object({
+  user: z.string().regex(UUID_PATTERN).optional(),
+  status: depositEventStatusSchema.optional(),
+  cursor: z.string().regex(UUID_PATTERN).optional(),
+});
+export type AdminDepositsQuery = z.infer<typeof adminDepositsQuerySchema>;
+
+export function adminDepositsSearchParams(query: AdminDepositsQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of Object.keys(adminDepositsQuerySchema.shape) as (keyof AdminDepositsQuery)[]) {
+    const value = query[key];
+    if (value !== undefined) params.set(key, value);
+  }
+  return params;
+}
+
+export const adminDepositsResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  deposits: z.array(adminDepositViewSchema).max(ADMIN_PAGE_SIZE),
+  nextCursor: z.string().regex(UUID_PATTERN).nullable(),
+});
+export type AdminDepositsResponse = z.infer<typeof adminDepositsResponseSchema>;
+
 export const safeParseAdminLoginRequest = (input: unknown) =>
   adminLoginRequestSchema.safeParse(input);
 export const safeParseAdminConfirmRequest = (input: unknown) =>
@@ -513,3 +567,7 @@ export const safeParseAdminTokensResponse = (input: unknown) =>
 export const safeParseAdminAuditQuery = (input: unknown) => adminAuditQuerySchema.safeParse(input);
 export const safeParseAdminAuditResponse = (input: unknown) =>
   adminAuditResponseSchema.safeParse(input);
+export const safeParseAdminDepositsQuery = (input: unknown) =>
+  adminDepositsQuerySchema.safeParse(input);
+export const safeParseAdminDepositsResponse = (input: unknown) =>
+  adminDepositsResponseSchema.safeParse(input);
