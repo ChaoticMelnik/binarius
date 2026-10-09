@@ -594,7 +594,7 @@ describe('the variables of the texts', () => {
         '🧪 Демобаланс: $10 000.00',
         '🪙 Токены: 12 (в резерве: 3)',
         '',
-        '💡 Демо без риска — деньги не нужны.',
+        '💡 Автосессия: бот сам проводит серию демо-сделок — деньги не нужны.',
       ].join('\n'),
     );
   });
@@ -659,7 +659,7 @@ describe('the status card', () => {
         '🧪 Демобаланс: $10\u00a0000.00',
         '🪙 Токены: 5',
         '',
-        '💡 Демо без риска — деньги не нужны.',
+        '💡 Автосессия: бот сам проводит серию демо-сделок — деньги не нужны.',
       ].join('\n'),
     );
   });
@@ -777,7 +777,7 @@ describe('the demo screens', () => {
 ⏱ Длительность: ⏱ 15 с
 💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность.
 
-Дальше — анализ: бот посмотрит на свечи и скажет, есть ли сигнал.`,
+Дальше — анализ свечей, а за ним кнопка автосессии: бот сам проведёт серию сделок по сигналу.`,
     );
   });
 
@@ -888,8 +888,8 @@ describe('the demo trade status', () => {
         durationSec: 2_147_483_647,
         amount: '999999999999.99999999' as DecimalString,
       };
-      for (const deadline of [false, true]) {
-        const text = intentStatusText(HOSTILE_SYMBOL, widest, { deadline });
+      for (const tail of [{}, { deadline: true }, { sessionOffer: true }]) {
+        const text = intentStatusText(HOSTILE_SYMBOL, widest, tail);
         expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
       }
     },
@@ -950,6 +950,27 @@ describe('the demo trade status', () => {
       plainTextOf(intentStatusText('X', intentView(), { deadline: true })).endsWith(`\n\n${hint}`),
     ).toBe(true);
     expect(hint).toContain(`«${LABELS.refreshIntentButton}»`);
+  });
+
+  // #360: the offer names the session its row starts, DEFAULT_SESSION_TRADES (5) trades
+  it('appends the session offer only when asked, after a blank line', () => {
+    const offer =
+      '🤖 Дальше бот может торговать сам: сессия из 5 сделок на этой паре, сигнал он проверяет перед каждой сделкой.';
+    const view = intentView({ status: TradeIntentStatus.Accepted });
+    expect(plainTextOf(intentStatusText('X', view, { sessionOffer: true }))).toBe(
+      [
+        '🎮 Демо-сделка',
+        '📈 X · ⬆️ Вверх · ⏱ 15 с · ставка $1.00',
+        '',
+        plainTextOf(TEXTS.intentAccepted),
+        '',
+        offer,
+      ].join('\n'),
+    );
+    expect(plainTextOf(intentStatusText('X', view))).not.toContain('🤖');
+    const withDeadline = plainTextOf(intentStatusText('X', view, { deadline: true }));
+    expect(withDeadline).not.toContain('🤖');
+    expect(withDeadline.endsWith(plainTextOf(TEXTS.intentDeadline))).toBe(true);
   });
 
   it('tells a trade the executor never took apart from a broker refusal', () => {
@@ -1230,6 +1251,7 @@ describe('the facades over the catalog', () => {
   it('gives LABELS the labels it had', () => {
     expect(Object.keys(LABELS).sort()).toEqual(
       [
+        'analysisMoreButton',
         'backToListButton',
         'demoManualButton',
         'demoSignalsRefreshButton',

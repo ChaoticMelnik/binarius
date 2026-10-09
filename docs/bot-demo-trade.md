@@ -1,7 +1,8 @@
 # The demo trade: the stake press and the intent's status (issue #127)
 
-The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Открыть сделку: ⬆️ Вверх ·
-$1.00» on a signal, with «💵 Сумма» beside it ([The stake](#the-stake-297)). Pressing it creates a demo intent through `POST /trading/intents`
+The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «➕ Ещё» on a signal; its
+press (#360) draws «🚀 Открыть сделку: ⬆️ Вверх · $1.00» in place, with «💵 Сумма» beside it
+([The stake](#the-stake-297)). Pressing it creates a demo intent through `POST /trading/intents`
 ([trade-intent-transport.md](trade-intent-transport.md)) and sends one status message. The message
 follows the intent's real status, read through `GET /trading/intents/:id`. It never marks the trade
 open because the button was pressed: «✅ Сделка открыта у брокера.» comes only from `accepted`.
@@ -18,7 +19,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   filter, right after the demo's composer.
 - `apps/bot/src/intent-tracker.ts` — `createIntentTracker({ backend, logger, firstPollMs, pollMs,
   deadlineMs, maxEntries?, now? })` → `{ track, stop, size }`. Also `TRACKER_STOP_STATUSES`,
-  `INTENT_TRACKER_MAX_ENTRIES` and `INTENT_NOT_FOUND`. `index.ts` builds one and hands it to
+  `sessionOfferOf` (#360), `INTENT_TRACKER_MAX_ENTRIES` and `INTENT_NOT_FOUND`. `index.ts` builds one and hands it to
   `createBot` and to `runBot`.
 - `apps/bot/src/demo.ts` — the stake button's data
   `demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>`, `newStakeNonce`,
@@ -41,6 +42,9 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
+demo:more:<assetId>:<sec>:<up|down>   («➕ Ещё» under the analysis, #360)
+  bot → answerCallbackQuery ∥ POST /trading/access
+  bot → editMessageReplyMarkup: the stake button (a new nonce, the amount's fingerprint) and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
   bot → answerCallbackQuery ∥ GET /trading/pairs (readDemoTrade) ∥ POST /trading/access
   bot → POST /trading/intents { telegramUserId, mode: demo, assetId,
@@ -48,7 +52,8 @@ demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
                                 clientRequestId: demo:<telegramUserId>:<nonce> }
   bot → sendMessage: the status, with «🔄 Обновить статус» (intent:<id>)
   tracker: after 1 s, then every 3 s → GET /trading/intents/<id>?telegramUserId=<id>
-           → editMessageText of that message when the status changes
+           → editMessageText of that message when the status changes; on accepted, settled or
+             rejected the session offer and «🚀 Сессия из 5 сделок» (demo:sess:<assetId>:<sec>, #360)
 intent:<id>                («🔄 Обновить статус»)
   bot → answerCallbackQuery ∥ GET /trading/intents/<id>?telegramUserId=<presser> ∥ GET /trading/pairs
   bot → editMessageText: the status in place
@@ -71,7 +76,7 @@ The checks run in this order, and the first one that fails answers:
    broker's `minTradeAmount` without one, a string exactly as the backend sent it. The bot never
    computes it (Rule 2). The button carries the first 6 hex of `sha256` of the amount its label
    showed. When the amount in effect now has another fingerprint — the stake was saved or reset
-   since the render, the broker moved its minimum, the label had no amount, or the button is
+   since the expansion, the broker moved its minimum, the label had no amount, or the button is
    older than #297 and has none — the bot answers «⚠️ Сумма сделки изменилась — открой анализ
    заново.» with «↩️ Назад к анализу», and nothing is created.
 4. **The intent.** `POST /trading/intents` with that amount. The backend checks it against the
@@ -80,12 +85,13 @@ The checks run in this order, and the first one that fails answers:
 
 ## Idempotency
 
-The button's nonce is 6 random bytes in hex, drawn once per render of the analysis screen,
-including each «🔄 Повторить анализ». It is the trade's key: `clientRequestId =
+The button's nonce is 6 random bytes in hex, drawn once per «➕ Ещё» press (#360; before it, once
+per render of the analysis screen). It is the trade's key: `clientRequestId =
 demo:<telegramUserId>:<nonce>`. Pressing the same button again replays the same intent (200) and
 never opens a second trade (`trade_intents_user_request_idx`, Rule 7). That covers a double tap, an
-old message and a press after a restart. A new render carries a new nonce, so its button can open
-a new trade. A replay sends the intent's current state as a new message. It is tracked only when
+old message and a press after a restart. A new expansion carries a new nonce, so its button can
+open a new trade; a double tap on «➕ Ещё» draws two, as two renders of «🔄 Повторить анализ» did.
+An analysis message from before #360 keeps its stake button and its nonce. A replay sends the intent's current state as a new message. It is tracked only when
 the status is live and the tracker is not already following that id: `track()` does nothing for
 an id it already has. So after a restart, pressing the stake button again restarts tracking.
 
@@ -123,7 +129,8 @@ a write, so it is never offered again; the same holds for the access read's refu
 The user's demo stake is `users.demo_stake`: `NULL` means the broker's minimum at each trade,
 which is what every user had before. One stake serves the single trade and the session.
 
-**The picker** (`stake-picker.ts`) opens from «💵 Сумма» beside the stake button, from «💵 Изменить»
+**The picker** (`stake-picker.ts`) opens from «💵 Сумма» beside the stake button (drawn by
+«➕ Ещё», #360), from «💵 Изменить»
 in /settings ([bot-menu.md](bot-menu.md)), from «💵 Изменить ставку» on the launch screen (#320,
 [bot-demo.md](bot-demo.md#the-launch-screen-320)) and from the stake refusals. It edits the message it was
 opened from:
@@ -198,9 +205,10 @@ status line of an intent and a session's stake use it too; balances keep `format
 
 ## The status message
 
-`intentStatusText(symbol, view, { deadline? })` builds the message from four parts: a header, the
-trade line (`EUR/USD OTC · ⬆️ Вверх · ⏱ 15 с · ставка $1.00`, the symbol capped at 64 characters),
-a blank line, and the status line. The status line is chosen by `view.status`, or by
+`intentStatusText(symbol, view, { deadline?, sessionOffer? })` builds the message from four parts: a
+header, the trade line (`EUR/USD OTC · ⬆️ Вверх · ⏱ 15 с · ставка $1.00`, the symbol capped at 64
+characters), a blank line, and the status line; then, after a blank line, the deadline hint or the
+session offer (#360) when the caller asks for one. The callers never ask for both. The status line is chosen by `view.status`, or by
 `view.lastError` when the status is `rejected`:
 
 | Status | Line |
@@ -220,8 +228,24 @@ Both maps are exhaustive (`satisfies Record<…>`). `texts.test.ts` checks that 
 
 **The keyboard** (`intentKeyboard(view)`, #350) follows the status: «🔄 Обновить статус» while the
 status has an edge out of it in the shared graph (accepted until it settles); once the tracker stops
-(`TRACKER_STOP_STATUSES`), the end of the path under it — «📊 Новый анализ» (the same pair and
-duration), «📡 К сигналам», «🏠 В меню» ([bot-navigation.md](bot-navigation.md)). The tracker's
+(`TRACKER_STOP_STATUSES`), the session offer (#360) and the end of the path under it —
+«🚀 Сессия из 5 сделок», then «📊 Новый анализ» (the same pair and duration), «📡 К сигналам»,
+«🏠 В меню» ([bot-navigation.md](bot-navigation.md)). An accepted trade gets all five rows.
+
+**The session offer (#360).** On `accepted`, `settled` and `rejected` alike, the message ends with
+«🤖 Дальше бот может торговать сам: сессия из 5 сделок на этой паре, сигнал он проверяет перед
+каждой сделкой.» and the keyboard carries «🚀 Сессия из 5 сделок» with `demo:sess:<assetId>:<sec>`
+of that trade — the session button's own data, so its press is the start handler with its
+refusals and its `{ active }` answer: a press while a session runs shows the running one and starts
+none ([bot-session.md](bot-session.md#the-button)). One predicate decides the line and the row,
+`sessionOfferOf(view)`: the status is a stop status, the duration is one of `DEMO_DURATIONS_SEC`
+and a session of five fits it. A trade from before #313 (60 s) gets neither, as it gets no
+«📊 Новый анализ». The tracker's edits and «🔄 Обновить статус» draw it; the message right after
+the press (`planned`) never does; the deadline edit of a live status carries the hint and no
+offer, and the deadline edit of a stop status whose edit never landed carries the offer; the 404
+edit carries neither. The number of trades is the catalog's `{trades}`, from
+`DEFAULT_SESSION_TRADES`. A rejection whose cause also refuses a session (`trading_paused`,
+`account_halted`) still shows the offer; the start's refusal explains it (owner, #320). The tracker's
 edit takes the view and, for an edit that is not a status, why (`IntentTrackRequest.edit(text,
 view, end?)`): the deadline on a live status adds «🏠 В меню» under the refresh, and an intent gone
 while tracked (404) leaves «🏠 В меню» only. So its last edit draws the next step. A failed
@@ -262,7 +286,7 @@ by the presser (`ctx.from`), so a forwarded message pressed by someone else answ
 bot replies «⚠️ Статус сделки недоступен.» without a log line. Any other read failure gets
 `unavailable` and `warn` `trade intent status not read`. When the read succeeds, the status is
 edited in place, with the symbol taken from `GET /trading/pairs`; a stale catalog is accepted for
-this. When the catalog cannot answer, «актив #<id>» stands in for the symbol. The edit outcomes:
+this. On a stop status it draws the session offer and its row, as the tracker does (#360). When the catalog cannot answer, «актив #<id>» stands in for the symbol. The edit outcomes:
 «not modified» means done; gone means the status is sent anew with its button; a transport failure
 gets `warn` and nothing more. This press never starts tracking.
 
@@ -276,8 +300,9 @@ gets `warn` and nothing more. This press never starts tracking.
 - The picker (#297): `stakePickerOpen` and `settingsShow` are 1 / 3 (29 s), `stakeCustom` 0 / 3
   (24 s). `stakePreset` and `stakeReset` are 2 / 3 (34 s) and `stakeText` 2 / 1 (18 s) since #320:
   a save opened from a launch screen reads the catalog for its symbol.
-- `HANDLER_CALLS.demoAnalysis` is 3 / 4 = 47 s since #297 (the access read for the label), the
-  longest path; the chain still holds below `SHUTDOWN_BUDGET_MS` (50 s), with 3 s to spare.
+- `HANDLER_CALLS.demoAnalysis` is 2 / 4 = 42 s since #360: the access read for the label (#297)
+  moved to «➕ Ещё», `HANDLER_CALLS.analysisMore` = 1 / 2 = 21 s. The longest path is `confirm`'s
+  45 s; the chain holds below `SHUTDOWN_BUDGET_MS` (50 s), with 5 s to spare.
 - `INTENT_TRACK_FIRST_POLL_MS` = 1 s, `INTENT_TRACK_POLL_MS` = 3 s, `INTENT_TRACK_DEADLINE_MS` =
   120 s. The deadline is the worker's `INTENT_MAX_AGE_MS` (60 s) plus `SUBMIT_ACK_TIMEOUT_MS`
   (10 s), with room. That relation is stated, not checked, because the worker's constants cannot
@@ -294,7 +319,8 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
 
 - `trade intent not created`
 - `trade intent status not read` (with `intentId` when the tracker writes it)
-- `trading access not read for the stake label`, `trading access not read for the stake picker`,
+- `trading access not read for the stake label` (written by «➕ Ещё» since #360), `trading access
+  not read for the stake picker`,
   `demo stake save outcome unknown` (`warn`), `demo stake not saved` (`warn` for
   `user_not_found`, `error` otherwise) — #297
 - `pairs not read for the launch screen` (`warn`) — #320
@@ -303,6 +329,7 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
 ## Boundaries
 
 - **#125 / #126** — the screens, the check and the stake button ([bot-demo.md](bot-demo.md)).
+- **#360** — «➕ Ещё», which draws the stake button, and the session offer under a finished trade.
 - **#100** — the executor; until it is deployed, every intent is `rejected / executor_not_configured`.
 - **#90 / #101 / #29** — the trade's close and result, and the notification after `accepted`. The
   tracker stops at `accepted`.

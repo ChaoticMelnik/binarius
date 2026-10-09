@@ -1,6 +1,7 @@
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
   BrokerBalanceUnavailableReason,
+  DEFAULT_SESSION_TRADES,
   errorLogFields,
   TradeIntentErrorCode,
   TradeMode,
@@ -25,6 +26,7 @@ import {
   demoAnalysisCallbackData,
   demoAssetCallbackData,
   effectiveStake,
+  sessionStartCallbackData,
   STAKE_CALLBACK_PATTERN,
   stakeDataOf,
   stakeFingerprint,
@@ -40,14 +42,19 @@ import {
   withMenu,
 } from './keyboards';
 import { readDemoTrade, type DemoTradeRead } from './demo-catalog';
-import { INTENT_NOT_FOUND, TRACKER_STOP_STATUSES, type IntentTracker } from './intent-tracker';
+import {
+  INTENT_NOT_FOUND,
+  sessionOfferOf,
+  TRACKER_STOP_STATUSES,
+  type IntentTracker,
+} from './intent-tracker';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
-import { intentStatusText, LABELS, TEXTS, textOf } from './texts';
+import { intentStatusText, LABELS, sessionStartButtonLabel, TEXTS, textOf } from './texts';
 
-// The demo trade (#127, docs/bot-demo-trade.md): the stake button under the analysis screen
-// creates an intent through POST /trading/intents, one status message follows it (the tracker),
+// The demo trade (#127, docs/bot-demo-trade.md): the stake button «➕ Ещё» draws under the analysis
+// screen (#360) creates an intent through POST /trading/intents, one status message follows it (the tracker),
 // and «🔄 Обновить статус» under that message reads the intent again.
 
 // `intent:<uuid>` is 43 bytes, inside the Bot API 64.
@@ -56,7 +63,8 @@ export const INTENT_CALLBACK_PATTERN =
   /^intent:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 // «🔄 Обновить статус» while the trade can still move (accepted until it settles); once the
-// tracker stops following it, the end of the path (#350): a new analysis, the signals, the menu.
+// tracker stops following it, the session offer (#360) and the end of the path (#350): a new
+// analysis, the signals, the menu.
 export function intentKeyboard(
   view: Pick<TradeIntentView, 'id' | 'status' | 'assetId' | 'durationSec'>,
 ): InlineKeyboard {
@@ -64,6 +72,15 @@ export function intentKeyboard(
     TRADE_INTENT_TRANSITIONS[view.status].length > 0
       ? new InlineKeyboard().text(LABELS.refreshIntentButton, intentCallbackData(view.id))
       : new InlineKeyboard();
+  const offer = sessionOfferOf(view);
+  if (offer !== undefined) {
+    keyboard
+      .row()
+      .text(
+        sessionStartButtonLabel(DEFAULT_SESSION_TRADES),
+        sessionStartCallbackData(view.assetId, offer),
+      );
+  }
   return TRACKER_STOP_STATUSES.has(view.status)
     ? appendEndOfPath(keyboard, view.assetId, view.durationSec)
     : keyboard;
@@ -234,7 +251,11 @@ export function createDemoTradeComposer<C extends Context>({
     const keyboard = TRACKER_STOP_STATUSES.has(view.status)
       ? intentKeyboard(view)
       : withMenu(intentKeyboard(view));
-    await refreshInPlace(ctx, intentStatusText(symbol, view), keyboard);
+    await refreshInPlace(
+      ctx,
+      intentStatusText(symbol, view, { sessionOffer: sessionOfferOf(view) !== undefined }),
+      keyboard,
+    );
   });
 
   async function create(request: CreateTradeIntentRequest): Promise<CreateOutcome> {
@@ -363,9 +384,13 @@ export function createDemoTradeComposer<C extends Context>({
   // (a replay of a finished trade). A replay of a live intent the tracker already follows sends
   // this message untracked: track() of a tracked id is a no-op.
   async function sendStatus(ctx: Context, pair: PairView, intent: TradeIntentView): Promise<void> {
-    const sent = await replyHtml(ctx, intentStatusText(pair.symbol, intent), {
-      reply_markup: intentKeyboard(intent),
-    });
+    const sent = await replyHtml(
+      ctx,
+      intentStatusText(pair.symbol, intent, { sessionOffer: sessionOfferOf(intent) !== undefined }),
+      {
+        reply_markup: intentKeyboard(intent),
+      },
+    );
     if (TRACKER_STOP_STATUSES.has(intent.status)) return;
     intentTracker.track({
       intentId: intent.id,

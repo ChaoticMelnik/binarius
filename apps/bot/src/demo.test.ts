@@ -8,6 +8,7 @@ import {
   PairsCatalogErrorCode,
   plainTextOf,
   SignalFeedOutcome,
+  SignalKind,
   TradeAction,
   type PairsCatalogResponse,
   type PairView,
@@ -17,6 +18,9 @@ import { analysisScreen, analysisUnavailableScreen } from './analysis';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
 import {
+  ANALYSIS_MORE_PATTERN,
+  analysisMoreCallbackData,
+  analysisMoreDataOf,
   DEMO_GROUPS_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoLaunchCallbackData,
@@ -49,6 +53,8 @@ import {
   PAIRS_RESPONSE,
   SIGNAL_DATA_REFUSAL,
   SIGNAL_DECIDED,
+  SIGNAL_DECISION,
+  SIGNAL_FEATURES,
   SIGNAL_FETCH_FAILED,
   SIGNAL_NO_SIGNAL,
   STAKE_FINGERPRINT,
@@ -64,6 +70,7 @@ import {
   pairsResponse,
   rejectionOf,
   signalsResponse,
+  signalDecided,
   type ApiCall,
   stubSessionTracker,
   stubTracker,
@@ -106,6 +113,9 @@ function setup(
   const evaluateSignal = vi.fn<BackendClient['evaluateSignal']>(
     options.evaluateSignal ?? (() => Promise.resolve(SIGNAL_DECIDED)),
   );
+  const readTradingAccess = vi.fn<BackendClient['readTradingAccess']>(
+    options.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
+  );
   const logger = fakeLogger();
   const clock = options.dialogClock;
   const loginDialog = createLoginDialog(clock === undefined ? {} : { now: () => clock.at });
@@ -118,7 +128,7 @@ function setup(
       readPairs,
       readSignals,
       evaluateSignal,
-      readTradingAccess: options.readTradingAccess ?? (() => Promise.resolve(ACCESS_VIEW)),
+      readTradingAccess,
     }),
     logger,
     botInfo: BOT_INFO,
@@ -129,7 +139,17 @@ function setup(
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   const press = (data: string, chatType?: string) =>
     bot.handleUpdate(callbackUpdate(data, chatType));
-  return { bot, readPairs, readSignals, evaluateSignal, logger, loginDialog, press, ...api };
+  return {
+    bot,
+    readPairs,
+    readSignals,
+    evaluateSignal,
+    readTradingAccess,
+    logger,
+    loginDialog,
+    press,
+    ...api,
+  };
 }
 
 const methods = (calls: readonly ApiCall[]) => calls.map((call) => call.method);
@@ -848,50 +868,10 @@ describe('the analysis', () => {
   const DATA = demoAnalysisCallbackData(PAIR_EURUSD.id, 5);
   const REPEAT = button(LABELS.repeatAnalysisButton, DATA);
   const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 5));
-  const STAKE_MENU = button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5));
-  const stakeRowOf = (calls: readonly ApiCall[]) => rowsOf(edits(calls).at(-1)?.payload)[0];
-
-  // #297: the label and the fingerprint are the amount the press would trade
-  it('labels the stake button with the saved stake and fingerprints it', async () => {
-    const { press, calls } = setup({
-      readTradingAccess: () =>
-        Promise.resolve(accessView({ demoStake: decimalStringSchema.parse('2.5') })),
-    });
-    await press(DATA);
-    const [stake, menu] = stakeRowOf(calls) ?? [];
-    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '2.5'));
-    expect(stake?.text).toContain('$2.50');
-    const match = STAKE_CALLBACK_PATTERN.exec(stake?.callback_data ?? '');
-    expect(stakeDataOf(match ?? '')?.fingerprint).toBe(
-      stakeFingerprint(decimalStringSchema.parse('2.5')),
-    );
-    expect(stakeDataOf(match ?? '')?.fingerprint).not.toBe(STAKE_FINGERPRINT);
-    expect(menu).toEqual(STAKE_MENU);
-  });
-
-  it('drops the amount, not the button, when access cannot say it', async () => {
-    const { press, calls, logger } = setup({
-      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    });
-    await press(DATA);
-    const [stake, menu] = stakeRowOf(calls) ?? [];
-    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up));
-    const match = STAKE_CALLBACK_PATTERN.exec(stake?.callback_data ?? '');
-    expect(stakeDataOf(match ?? '')?.fingerprint).toBe(stakeFingerprint(null));
-    expect(menu).toEqual(STAKE_MENU);
-    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
-      'trading access not read for the stake label',
-    ]);
-  });
-
-  it('draws no amount without a broker snapshot', async () => {
-    const { press, calls } = setup({
-      readTradingAccess: () =>
-        Promise.resolve(accessView({ broker: null, brokerUnavailable: 'refreshing' })),
-    });
-    await press(DATA);
-    expect(stakeRowOf(calls)?.[0]?.text).toBe(stakeButtonLabel(TradeAction.Up));
-  });
+  const MORE = button(
+    LABELS.analysisMoreButton,
+    analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up),
+  );
 
   it('fingerprints the canonical amount, so a spelling never decides a mismatch', () => {
     expect(stakeFingerprint(decimalStringSchema.parse('5.00000000'))).toBe(
@@ -907,8 +887,9 @@ describe('the analysis', () => {
   const edits = (calls: readonly ApiCall[]) =>
     calls.filter((call) => call.method === 'editMessageText');
 
-  it('reads the catalog, shows «⏳», asks for the signal, then shows it with the stake button', async () => {
-    const { press, calls, readPairs, evaluateSignal } = setup();
+  // #360: the session first, the single trade behind «➕ Ещё»; the amount is read at the expansion
+  it('reads the catalog, shows «⏳», asks for the signal, then shows it with the session first', async () => {
+    const { press, calls, readPairs, evaluateSignal, readTradingAccess } = setup();
     await press(DATA);
 
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'editMessageText']);
@@ -917,23 +898,36 @@ describe('the analysis', () => {
     // without a keyboard the edit removes the summary's, so «📊 Анализ» cannot be pressed twice
     expect(waiting?.payload.reply_markup).toBeUndefined();
     expect(result?.payload.text).toBe(resultOf());
-    const [[stake, menu], ...rest] = rowsOf(result?.payload);
-    // the amount the press trades: no saved stake, so the broker's minimum (#297)
-    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '1.00000000'));
-    expect(stake?.text).toContain('$1.00');
-    expect(menu).toEqual(STAKE_MENU);
-    // the nonce is drawn per render (#127); everything before it is the pressed pair
-    const match = STAKE_CALLBACK_PATTERN.exec(stake?.callback_data ?? '');
-    expect(stakeDataOf(match ?? '')).toEqual({
-      assetId: PAIR_EURUSD.id,
-      durationSec: 5,
-      action: TradeAction.Up,
-      nonce: expect.stringMatching(/^[0-9a-f]{12}$/),
-      fingerprint: STAKE_FINGERPRINT,
-    });
-    expect(rest).toEqual([[SESSION], [REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
+    expect(rowsOf(result?.payload)).toEqual([
+      [SESSION],
+      [MORE],
+      [REPEAT],
+      [BACK_EURUSD_DURATIONS, BACK_GROUPS],
+    ]);
     expect(readPairs).toHaveBeenCalledTimes(1);
     expect(evaluateSignal.mock.calls).toEqual([[PAIR_EURUSD.id, '5s']]);
+    expect(readTradingAccess).not.toHaveBeenCalled();
+  });
+
+  it('carries the direction of the signal in «➕ Ещё»', async () => {
+    const { press, calls } = setup({
+      evaluateSignal: () =>
+        Promise.resolve(
+          signalDecided({
+            kind: SignalKind.Signal,
+            version: SIGNAL_DECISION.version,
+            action: TradeAction.Down,
+            features: SIGNAL_FEATURES,
+          }),
+        ),
+    });
+    await press(DATA);
+    expect(rowsOf(edits(calls).at(-1)?.payload)[1]).toEqual([
+      button(
+        LABELS.analysisMoreButton,
+        analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Down),
+      ),
+    ]);
   });
 
   // #313: a short trade's analysis runs on its own sub-minute candle, never on 1m
@@ -990,23 +984,6 @@ describe('the analysis', () => {
     expect(evaluateSignal).not.toHaveBeenCalled();
   });
 
-  // #127: «🔄 Повторить анализ» re-renders the same message, so the nonce is what tells two
-  // renders' buttons apart and lets the second one open a trade of its own
-  it('draws a new nonce on every render, and nothing else changes', async () => {
-    const { press, calls } = setup();
-    await press(DATA);
-    await press(DATA);
-    const stakes = edits(calls)
-      .map((call) => rowsOf(call.payload)[0]?.[0]?.callback_data)
-      .filter((data): data is string => data?.startsWith('demo:stake:') === true);
-    expect(stakes).toHaveLength(2);
-    const [first, second] = stakes.map((data) =>
-      stakeDataOf(STAKE_CALLBACK_PATTERN.exec(data) ?? ''),
-    );
-    expect(first?.nonce).not.toBe(second?.nonce);
-    expect({ ...first, nonce: '' }).toEqual({ ...second, nonce: '' });
-  });
-
   it.each(['0123456789a', '0123456789AB', 'AbCdEf012345', 'ASNFZ4mrze8=', '0123456789abc'])(
     'refuses the nonce %s',
     (nonce) => {
@@ -1056,7 +1033,7 @@ describe('the analysis', () => {
   it.each([
     [5, true],
     [15, true],
-  ] as const)('offers the session at %i s on a signal: %s', async (durationSec, shown) => {
+  ] as const)('offers the session first at %i s on a signal: %s', async (durationSec, shown) => {
     const { press, calls } = setup();
     await press(demoAnalysisCallbackData(PAIR_EURUSD.id, durationSec));
     const session = button(
@@ -1065,7 +1042,7 @@ describe('the analysis', () => {
     );
     const rows = rowsOf(edits(calls).at(-1)?.payload);
     expect(rows.some((row) => row.length === 1 && row[0]?.text === session.text)).toBe(shown);
-    if (shown) expect(rows[1]).toEqual([session]);
+    if (shown) expect(rows[0]).toEqual([session]);
   });
 
   it('keeps the longest session datum inside the Bot API limit and reads it back', () => {
@@ -1088,18 +1065,35 @@ describe('the analysis', () => {
     expect(sessionStartDataOf(match)).toEqual({ assetId: PAIR_EURUSD.id, durationSec: 15 });
   });
 
+  // #360: no signal still offers the session, which waits for a signal itself; candles not read
+  // offer none, since its first trade would wait on the same failure
   it.each([
-    ['a rule refusal', SIGNAL_NO_SIGNAL],
-    ['a data refusal', SIGNAL_DATA_REFUSAL],
-    ['the broker rate-limiting the candles', SIGNAL_FETCH_FAILED],
-  ])('shows %s with no stake button and no warning', async (_case, response) => {
-    const { press, calls, logger } = setup({ evaluateSignal: () => Promise.resolve(response) });
-    await press(DATA);
+    ['a rule refusal', SIGNAL_NO_SIGNAL, true],
+    ['a data refusal', SIGNAL_DATA_REFUSAL, true],
+    ['the broker rate-limiting the candles', SIGNAL_FETCH_FAILED, false],
+  ])(
+    'shows %s with no «➕ Ещё», the session row only where the candles were read, and no warning',
+    async (_case, response, session) => {
+      const { press, calls, logger } = setup({ evaluateSignal: () => Promise.resolve(response) });
+      await press(DATA);
 
-    const result = edits(calls).at(-1)?.payload;
-    expect(result?.text).toBe(resultOf(response));
-    expect(rowsOf(result)).toEqual([[REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
-    expect(logger.warn).not.toHaveBeenCalled();
+      const result = edits(calls).at(-1)?.payload;
+      expect(result?.text).toBe(resultOf(response));
+      expect(rowsOf(result)).toEqual([
+        ...(session ? [[SESSION]] : []),
+        [REPEAT],
+        [BACK_EURUSD_DURATIONS, BACK_GROUPS],
+      ]);
+      expect(logger.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it('says under a rule refusal that the session waits for a signal itself', async () => {
+    const { press, calls } = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL) });
+    await press(DATA);
+    expect(edits(calls).at(-1)?.payload.text).toContain(
+      'Без сигнала разовую сделку бот не предлагает. Автосессия дождётся сигнала сама — или повтори анализ позже.',
+    );
   });
 
   it('says the candles are unavailable and warns with the code on any other broker failure', async () => {
@@ -1112,9 +1106,9 @@ describe('the analysis', () => {
     });
     await press(DATA);
 
-    expect(edits(calls).at(-1)?.payload.text).toBe(
-      analysisUnavailableScreen(PAIR_EURUSD, 5).text.value,
-    );
+    const result = edits(calls).at(-1)?.payload;
+    expect(result?.text).toBe(analysisUnavailableScreen(PAIR_EURUSD, 5).text.value);
+    expect(rowsOf(result)).toEqual([[REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
     expect(logger.warn.mock.calls).toEqual([
       [{ signalCode: BrokerRestErrorCode.Unavailable }, 'signal not evaluated'],
     ]);
@@ -1197,6 +1191,191 @@ describe('the analysis', () => {
   });
 });
 
+// #360: «➕ Ещё» draws the single trade's row in place of the collapsed keyboard
+describe('«➕ Ещё» under the analysis', () => {
+  const DATA = analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up);
+  const REPEAT = button(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
+  const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 5));
+  const STAKE_MENU = button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5));
+  const expandedOf = (calls: readonly ApiCall[]) =>
+    calls.filter((call) => call.method === 'editMessageReplyMarkup');
+  const stakeRowOf = (calls: readonly ApiCall[]) => rowsOf(expandedOf(calls).at(-1)?.payload)[1];
+  const stakeOf = (data: string | undefined) =>
+    stakeDataOf(STAKE_CALLBACK_PATTERN.exec(data ?? '') ?? '');
+  const NOT_MODIFIED_MARKUP: ApiError = {
+    ok: false,
+    error_code: 400,
+    description:
+      'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message',
+  };
+
+  it('reads access and edits only the keyboard of the pressed message: the stake row joins it', async () => {
+    const { press, calls, readPairs, evaluateSignal, readTradingAccess } = setup();
+    await press(DATA);
+
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
+    const [edit] = expandedOf(calls);
+    expect(edit?.payload.text).toBeUndefined();
+    const [[session], [stake, menu], ...rest] = rowsOf(edit?.payload);
+    expect(session).toEqual(SESSION);
+    // the amount the press trades: no saved stake, so the broker's minimum (#297)
+    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '1.00000000'));
+    expect(stake?.text).toContain('$1.00');
+    expect(menu).toEqual(STAKE_MENU);
+    // the nonce is drawn per expansion (#127); everything before it is the pressed pair
+    expect(stakeOf(stake?.callback_data)).toEqual({
+      assetId: PAIR_EURUSD.id,
+      durationSec: 5,
+      action: TradeAction.Up,
+      nonce: expect.stringMatching(/^[0-9a-f]{12}$/),
+      fingerprint: STAKE_FINGERPRINT,
+    });
+    expect(rest).toEqual([[REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
+    expect(readTradingAccess.mock.calls).toEqual([[String(USER.id)]]);
+    expect(readPairs).not.toHaveBeenCalled();
+    expect(evaluateSignal).not.toHaveBeenCalled();
+  });
+
+  it('draws the direction the button carries', async () => {
+    const { press, calls } = setup();
+    await press(analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Down));
+    const stake = rowsOf(expandedOf(calls)[0]?.payload)[1]?.[0];
+    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Down, '1.00000000'));
+    expect(stakeOf(stake?.callback_data)).toMatchObject({
+      durationSec: 15,
+      action: TradeAction.Down,
+    });
+  });
+
+  // #127: two expansions are two buttons, and the nonce lets the second open a trade of its own
+  it('draws a new nonce on every expansion, and nothing else changes', async () => {
+    const { press, calls } = setup();
+    await press(DATA);
+    await press(DATA);
+    const stakes = expandedOf(calls).map((call) => rowsOf(call.payload)[1]?.[0]?.callback_data);
+    expect(stakes).toHaveLength(2);
+    const [first, second] = stakes.map(stakeOf);
+    expect(first?.nonce).toMatch(/^[0-9a-f]{12}$/);
+    expect(first?.nonce).not.toBe(second?.nonce);
+    expect({ ...first, nonce: '' }).toEqual({ ...second, nonce: '' });
+  });
+
+  // #297: the label and the fingerprint are the amount the press would trade
+  it('labels the stake button with the saved stake and fingerprints it', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () =>
+        Promise.resolve(accessView({ demoStake: decimalStringSchema.parse('2.5') })),
+    });
+    await press(DATA);
+    const [stake, menu] = stakeRowOf(calls) ?? [];
+    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '2.5'));
+    expect(stake?.text).toContain('$2.50');
+    expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(
+      stakeFingerprint(decimalStringSchema.parse('2.5')),
+    );
+    expect(stakeOf(stake?.callback_data)?.fingerprint).not.toBe(STAKE_FINGERPRINT);
+    expect(menu).toEqual(STAKE_MENU);
+  });
+
+  it('drops the amount, not the button, when access cannot say it', async () => {
+    const { press, calls, logger } = setup({
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await press(DATA);
+    const [stake, menu] = stakeRowOf(calls) ?? [];
+    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up));
+    expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(stakeFingerprint(null));
+    expect(menu).toEqual(STAKE_MENU);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'trading access not read for the stake label',
+    ]);
+  });
+
+  it('draws no amount without a broker snapshot, and logs nothing', async () => {
+    const { press, calls, logger } = setup({
+      readTradingAccess: () =>
+        Promise.resolve(accessView({ broker: null, brokerUnavailable: 'refreshing' })),
+    });
+    await press(DATA);
+    const stake = stakeRowOf(calls)?.[0];
+    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up));
+    expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(stakeFingerprint(null));
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('is done when Telegram says the keyboard already shows this', async () => {
+    const { press, calls, logger, apiErrors } = setup();
+    apiErrors.set('editMessageReplyMarkup', NOT_MODIFIED_MARKUP);
+    await press(DATA);
+
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
+    expect(logger.info.mock.calls.map((call) => call[1])).toEqual([
+      'the analysis keyboard already shows this',
+    ]);
+  });
+
+  it('sends nothing when the message is gone: there is no analysis to expand', async () => {
+    const { press, calls, logger, apiErrors } = setup();
+    apiErrors.set('editMessageReplyMarkup', EDIT_GONE);
+    await press(DATA);
+
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'the analysis keyboard was not expanded',
+    ]);
+  });
+
+  it('sends nothing more when the edit fails in transport', async () => {
+    const { press, calls, logger, apiErrors } = setup();
+    apiErrors.set(
+      'editMessageReplyMarkup',
+      new HttpError(
+        "Network request for 'editMessageReplyMarkup' failed!",
+        new Error('The operation was aborted due to timeout'),
+      ),
+    );
+    await press(DATA);
+
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
+    expect(logger.error.mock.calls.map((call) => call[1])).toEqual([
+      'the analysis keyboard edit failed in transport, sending nothing more',
+    ]);
+  });
+
+  it('hands any other refusal to bot.catch with nothing sent', async () => {
+    const { press, calls, apiErrors } = setup();
+    apiErrors.set('editMessageReplyMarkup', {
+      ok: false,
+      error_code: 403,
+      description: 'Forbidden: bot was blocked by the user',
+    });
+    const thrown = await rejectionOf(press(DATA));
+
+    expect(thrown).toBeInstanceOf(BotError);
+    expect((thrown as BotError).error).toBeInstanceOf(GrammyError);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageReplyMarkup']);
+  });
+
+  it('keeps the longest datum inside the Bot API limit and reads it back', () => {
+    const longest = Math.max(...DEMO_DURATIONS_SEC) as (typeof DEMO_DURATIONS_SEC)[number];
+    const data = analysisMoreCallbackData(2_147_483_647, longest, TradeAction.Down);
+    expect(data).toBe('demo:more:2147483647:15:down');
+    expect(Buffer.byteLength(data, 'utf8')).toBe(28);
+    expect(analysisMoreDataOf(ANALYSIS_MORE_PATTERN.exec(data) ?? '')).toEqual({
+      assetId: 2_147_483_647,
+      durationSec: 15,
+      action: TradeAction.Down,
+    });
+  });
+
+  it('does nothing outside a private chat', async () => {
+    const { press, calls, readTradingAccess } = setup();
+    await press(DATA, 'group');
+    expect(calls).toEqual([]);
+    expect(readTradingAccess).not.toHaveBeenCalled();
+  });
+});
+
 describe('the edit of a demo screen', () => {
   const data = demoAssetCallbackData(PAIR_EURUSD.id);
 
@@ -1266,11 +1445,14 @@ describe('demo data the bot did not draw', () => {
     'demo:d:0:15',
     'demo:an:2147483648:15',
     'demo:l:0:5',
+    'demo:more:0:5:up',
+    'demo:more:2147483648:15:down',
   ])('stops the spinner on %s and sends nothing', async (data) => {
-    const { press, calls, readPairs } = setup();
+    const { press, calls, readPairs, readTradingAccess } = setup();
     await press(data);
     expect(methods(calls)).toEqual(['answerCallbackQuery']);
     expect(readPairs).not.toHaveBeenCalled();
+    expect(readTradingAccess).not.toHaveBeenCalled();
   });
 
   // a duration outside DEMO_DURATIONS_SEC matches no pattern (#125 review m5)
@@ -1284,6 +1466,9 @@ describe('demo data the bot did not draw', () => {
     'demo:sig:60',
     'demo:sig:',
     'demo:l:101:60',
+    'demo:more:101:60:up',
+    'demo:more:101:5:flat',
+    'demo:more:101:5',
     'stk:o:a:101:120',
     'stk:o:p:101:60',
     'stk:o:s:300',

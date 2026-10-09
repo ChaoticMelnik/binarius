@@ -2505,3 +2505,41 @@ Taken by this session on the owner's instruction «Запускай 301 и 361 �
 2. **Architect: the no-real-Telegram rule for runtime checks (dummy tokens + a Bot API stub) belongs in the plan template** — **открыто (2026-10-09, tech-lead)**
 3. **#358 entry, proposal 2 (implementer clarify split)** — **закрыто: commit split is no longer an owner question (#388, standing owner answers)**
 4. **Remaining Minor** — **вынесено в #398**
+
+## #341, #342, #246 — admin deposits, broker accounts list, manual token adjustment (2026-10-09)
+
+Taken by this session on the owner's choice of the next admin tasks (#342, #341, #246). Tech-lead ran them in the order the #109 split fixed: #341 → #342 → #246. All three merged with rebase, each in one review round.
+
+| Issue | PR | Review rounds | Added lines (without snapshot) | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #341 deposits | #402 | 1 | 1481 | 0034 | skipped (limit until 14.10) | → #403 |
+| #342 broker accounts list | #406 | 1 | 1234 | 0035 | skipped (limit until 14.10) | → #408 |
+| #246 manual token adjustment | #409 | 1 | 1649 | 0036 | skipped (limit until 14.10) | → #410 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Plans | Fable. #341 and #342 planned in parallel against `main` (#342 appending after #341's planned blocks); #246 planned while #342 was implemented. Clarify: #341 4 questions, #342 4, #246 6 — all answered by the owner. Codex was not used in planning — the owner's decision of 2026-10-08. The #341 architect stopped once on a Fable 403 «Request not allowed» and finished after one resume. |
+| Implementer | Clarify | #341 and #246: no questions — the plan left no fork (floor of the standing owner answers, #388). #342: 1 question from a plan contradiction (blank `?halted=`), answered by the owner. |
+| Implementer | Re-check against `main` | #342 and #246 re-verified the planned append points against the merged predecessors; mismatches were recorded as plan defects (nav tests pinning «Депозиты» last, docs section order, `+50` vs `50` in the owner's walk). |
+| Implementer | Runtime | Own DBs and Redis for each; #246 in an isolated compose project `impl246` with dummy bot tokens. No call reached Telegram. The browser walks need a Telegram login — the owner's step in each PR's test plan. |
+| Tech Lead | Before review | Mergeability checked (`gh pr view --json mergeable`) before every reviewer spawn, as proposed in the #301/#361 entry — no review round was spent on a conflict this time. |
+| Reviewer | All three | No Blocker/Major. #246 was reviewed as a money path: bigint end to end, lock order, refusals before any write, concurrent consume/reserve vs `expectedBalance`. |
+| Tech Lead | Merges | `AskUserQuestion` before each merge; `--match-head-commit` on all three. Unfixed Minor → #403, #408, #410 without a question (standing owner answers, #388). A CI flake in #95's handoff test seen on #409 → #411 (the owner). |
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| #341: the tie-break test passes in ~1 of 6 runs with the `id` tie-break removed (same in #109's ledger twin) | Minor | unverified-claim | Random ids under one `created_at`; the mutation was marked "probabilistic" instead of the test being made deterministic | Implementer mutation evidence |
+| #342 plan: blank `?halted=` was both a 400 and silently dropped by `compactQuery` | Plan defect → owner decision | single-source | The plan's edge-case list was not checked against the shared query helper it relied on elsewhere | Architect plan |
+| #342: the card test found the account id in the deposits section | Minor → fixed in the PR | instance-vs-class | A page-wide match where the value repeats in another section | Implementer — caught by its own mutation run |
+| #246 plan: the owner walk expects `+50` in the ledger row; the table prints `50` | Plan defect → docs fixed | unverified-claim | The rendering was not checked against the existing ledger table | Architect plan |
+| `gh pr merge --delete-branch` failed locally after the merge on #409 (`main` checked out in the main checkout) and left the remote branch | Process | env-parity | In a worktree session `gh` tries to switch to `main` after the merge; the remote branch had to be deleted by hand | Tech Lead merge |
+
+### Process improvement proposals
+
+1. **#301/#361 entry, proposal 1 (mergeability check before the reviewer spawn)** — **применено вручную в этой волне; в tech-lead SKILL.md ещё не внесено — открыто**
+2. **Tech-lead merge in a worktree session: after `gh pr merge`, check `git ls-remote --heads origin <branch>` and delete the remote branch by hand when `gh` failed to switch to `main`** — **открыто (2026-10-09, tech-lead)**
+3. **Remaining Minor** — **вынесено в #403, #408, #410; flaky test #95 → #411**

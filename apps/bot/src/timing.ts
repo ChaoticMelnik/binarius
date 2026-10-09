@@ -79,10 +79,13 @@ export const HANDLER_CALLS = {
   // #382 (no duration): answerCallbackQuery, then editMessageReplyMarkup
   legacyDuration: { backend: 0, telegram: 2 },
   // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs, the «⏳» edit refused as gone →
-  // sendMessage, evaluateSignal ∥ readTradingAccess (the stake label, #297) — counted as
-  // sequential, as in confirm — the result by sendMessage; or «⏳» edited, the two reads, the
-  // result's edit refused as gone → sendMessage. Both are 3 / 4.
-  demoAnalysis: { backend: 3, telegram: 4 },
+  // sendMessage, evaluateSignal, the result by sendMessage; or «⏳» edited, the signal, the
+  // result's edit refused as gone → sendMessage. Both are 2 / 4: the stake label's access read
+  // moved to «➕ Ещё» (#360).
+  demoAnalysis: { backend: 2, telegram: 4 },
+  // «➕ Ещё» (#360): answerCallbackQuery ∥ readTradingAccess — counted as sequential, as in
+  // confirm — then editMessageReplyMarkup; a refused edit sends nothing more
+  analysisMore: { backend: 1, telegram: 2 },
   // the stake button (#127): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — the reads
   // counted as sequential, as in confirm — then createIntent and its one retry on an unknown
   // outcome, then sendMessage; a fingerprint mismatch (#297) sends one message instead
@@ -105,7 +108,8 @@ export const HANDLER_CALLS = {
   // «🔄 Обновить статус» (#127): answerCallbackQuery ∥ readIntent ∥ readPairs — counted the same
   // way — then editMessageText refused as gone → sendMessage
   intentRefresh: { backend: 2, telegram: 3 },
-  // «🚀 Сессия из 5 сделок» (#284): answerCallbackQuery ∥ readPairs — counted as sequential, as
+  // «🚀 Сессия из 5 сделок» (#284; the analysis, the row under a finished trade #360, «🔁 Ещё
+  // сессия» #320 all land here): answerCallbackQuery ∥ readPairs — counted as sequential, as
   // in confirm — then startSession and its one retry on an unknown outcome, then sendMessage
   sessionStart: { backend: 3, telegram: 2 },
   // the session's «🔄 Обновить»: answerCallbackQuery ∥ readSession ∥ readPairs — counted the same

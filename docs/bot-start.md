@@ -65,8 +65,9 @@ API over a shared bearer.
                                     per link
          hasActiveBrokerAccount   → POST /trading/access → the status card, pinned
                                     (bot-menu.md)
-         otherwise                → welcome (video caption when configured) + one button:
-                                    "🔗 Подключить аккаунт Binodex" (connect)
+         otherwise                → welcome (video caption when configured): what the bot
+                                    is, "Главное — автосессия" (#360), how to connect; + one
+                                    button: "🔗 Подключить аккаунт Binodex" (connect)
 
 tap "🔗 Подключить аккаунт Binodex" (callback data connect)
   bot  → answerCallbackQuery, dialog → address step, "📧 Пришли адрес электронной почты…"

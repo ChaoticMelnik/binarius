@@ -1,9 +1,11 @@
 # The demo session in the bot: the button, the status and the stop (issues #284, #320)
 
-The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» on a
-signal; the launch screen of the signals list (#320,
-[bot-demo.md](bot-demo.md#the-launch-screen-320)) draws «🚀 Запустить цикл», and a stopped
-session's message «🔁 Ещё сессия». All three carry the same data. Pressing one starts a demo session of `DEFAULT_SESSION_TRADES` trades through
+The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» as its
+first row on every `decided` answer, a signal or none (#360); a finished single trade's message
+draws the same button under its result (#360,
+[bot-demo-trade.md](bot-demo-trade.md#the-status-message)); the launch screen of the signals list
+(#320, [bot-demo.md](bot-demo.md#the-launch-screen-320)) draws «🚀 Запустить цикл», and a stopped
+session's message «🔁 Ещё сессия». All four carry the same data. Pressing one starts a demo session of `DEFAULT_SESSION_TRADES` trades through
 `POST /trading/sessions` ([trading-session.md](trading-session.md#routes)) and sends one status
 message. The message follows the session through `GET /trading/sessions/:id` and carries
 «🔄 Обновить» and «⏹ Остановить сессию». The trades themselves are opened by the worker's
@@ -38,7 +40,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
-demo:sess:<assetId>:<sec>          («🚀 Сессия из 5 сделок», «🚀 Запустить цикл», «🔁 Ещё сессия»)
+demo:sess:<assetId>:<sec>          («🚀 Сессия из 5 сделок» under the analysis or a finished trade, «🚀 Запустить цикл», «🔁 Ещё сессия»)
   bot → answerCallbackQuery ∥ GET /trading/pairs (for the symbol only)
   bot → POST /trading/sessions { telegramUserId, assetId, durationSec, trades: 5 }
   bot → sendMessage: the status, with «🔄 Обновить» (session:<id>) and «⏹ Остановить сессию»
@@ -56,8 +58,10 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 
 ## The button
 
-- It is drawn only on a signal, in its own row under the stake button, and only where
-  `sessionFits(durationSec)` holds: 5 × (5 + 120) s and 5 × (15 + 120) s fit the worker's hour, so
+- On the analysis it is drawn on every `decided` answer (#360) — a signal or «сигнала нет», since
+  the orchestrator asks for a signal before each trade itself — as the first row, above «➕ Ещё»;
+  not on `fetch_failed` or a failed signal call, where its first trade would wait on the same
+  failure. It is drawn only where `sessionFits(durationSec)` holds: 5 × (5 + 120) s and 5 × (15 + 120) s fit the worker's hour, so
   after #313 every duration of the set has the button; the guard stays, in the keyboard and in
   `sessionStartDataOf`, so a datum that does not fit starts nothing. The label is built from `DEFAULT_SESSION_TRADES` with
   `pluralTrades`, and the request sends the same number, so the label, the check and the request
@@ -75,6 +79,11 @@ session:stop:<id>                  («⏹ Остановить сессию»)
   refusals and the active session's 409 are the same. A refusal's «💵 Сумма» opens the picker with
   the analysis origin (`stk:o:a:<assetId>:<sec>`), whose way back is that pair's analysis, not the
   launch screen: one datum serves every door (accepted).
+- **A third door (#360).** A single trade's status message, once the trade is `accepted`, `settled`
+  or `rejected`, draws «🚀 Сессия из 5 сделок» with `demo:sess:<assetId>:<sec>` of that trade, above
+  the end of the path, by the tracker's edits and by «🔄 Обновить статус» (`sessionOfferOf`,
+  [bot-demo-trade.md](bot-demo-trade.md#the-status-message)). A press while a session runs shows the
+  running one and starts none, as from any door.
 
 ## Outcomes of the start
 
@@ -212,7 +221,7 @@ One entry per session id, in process memory, like the intent tracker
 - `HANDLER_CALLS.sessionRefresh` = 2 / 3: the edit refused as gone, then sent anew: 34 s.
 - `HANDLER_CALLS.sessionStop` = 3 / 3: `stopSession`, the read after a 409, the edit refused as
   gone and sent anew: 39 s.
-- All stay below the longest path (`demoAnalysis`, 47 s since #297 —
+- All stay below the longest path (`confirm`, 45 s; `demoAnalysis` is 42 s since #360 —
   [bot-demo-trade.md](bot-demo-trade.md#timing)), so `HANDLER_BUDGET_MS` and the shutdown
   budget do not move. `timing.test.ts` runs every terminal branch of the three.
 - `SESSION_TRACK_FIRST_POLL_MS` = 3 s, `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
@@ -252,9 +261,10 @@ The bot's presses are covered by `trading-session.test.ts`, `session-tracker.tes
 the bot calls are run end to end by [trading-session.md → Running it locally](trading-session.md#running-it-locally).
 That a started session trades and its counters move needs #287's orchestrator in the worker.
 The steps in Telegram — «🎮 Демо-торговля», «🧭 Выбрать пару вручную», a pair, 15 s, «📊 Анализ»,
-«🚀 Сессия из 5 сделок» (or a pair of «Сигналы сейчас» and «🚀 Запустить цикл»),
-the status moving, «⏹ Остановить сессию» — need a bot token of its own, which no runtime check of
-this issue used.
+«🚀 Сессия из 5 сделок» first, with or without a signal (or a pair of «Сигналы сейчас» and
+«🚀 Запустить цикл»), the status moving, «⏹ Остановить сессию»; on a signal, «➕ Ещё», the stake
+button, and the row «🚀 Сессия из 5 сделок» under the trade's result (#360) — need a bot token of
+its own, which no runtime check of this issue used.
 
 ## Boundaries
 
@@ -262,4 +272,5 @@ this issue used.
 - **#283** — the start, read and stop routes.
 - **#29** — a notification for each trade of the session; this message is only edited.
 - **#297** — choosing the stake; its new start refusals join `START_REFUSALS`.
+- **#360** — the button first on every `decided` analysis, and under a finished single trade.
 - **#121** — real mode; **#201** — levels and rewards.

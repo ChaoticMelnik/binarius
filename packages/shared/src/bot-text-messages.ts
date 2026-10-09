@@ -10,6 +10,7 @@ import {
 } from './bot-texts';
 import type { BotTextVarName } from './bot-text-vars';
 import { plainTextOf, TELEGRAM_CAPTION_LIMIT, TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
+import { DEFAULT_SESSION_TRADES } from './trading-session';
 
 // The messages the client bot assembles from several catalog keys (docs/bot-texts.md → Assembled
 // messages). A key's own limit is checked with its variables' samples; these descriptions bound
@@ -219,6 +220,11 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   launchHeader: { subject },
   // shown only with an amount; launchStakeMinimum stands in without one
   launchStake: { stake: () => w.stake },
+  // the offer under a finished trade names the session its row starts, always
+  // DEFAULT_SESSION_TRADES — 5, «сделок» (texts.ts → intentStatusText, #360)
+  intentSessionOffer: {
+    trades: (m) => String(DEFAULT_SESSION_TRADES).length + 1 + m.length('sessionTradeMany'),
+  },
 };
 
 type Widths = Partial<Record<BotTextVarName, BotTextWidth>>;
@@ -426,7 +432,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       '\n\n',
       anyOf(...intentStatusLines),
       '\n\n',
-      k('intentDeadline'),
+      anyOf('intentDeadline', 'intentSessionOffer'),
     ],
   },
   {
