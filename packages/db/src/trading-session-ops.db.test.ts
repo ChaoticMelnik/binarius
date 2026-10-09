@@ -857,12 +857,18 @@ describe('createSessionIntent', () => {
   // lost after the INSERT cannot lose the traded action
   it('D6 writes the intent action to last_signal_action; a replay and a refused session leave it', async () => {
     const seed = await seedSessionAccount();
-    const first = await createSessionIntent(tmp.db, intentInput(seed, { action: TradeAction.Down }));
+    const first = await createSessionIntent(
+      tmp.db,
+      intentInput(seed, { action: TradeAction.Down }),
+    );
     expect(first.created).toBe(true);
     expect((await sessionOf(seed.session.id))!.lastSignalAction).toBe('down');
 
     await markSessionDecision(tmp.db, { id: seed.session.id, signalAction: null });
-    const again = await createSessionIntent(tmp.db, intentInput(seed, { action: TradeAction.Down }));
+    const again = await createSessionIntent(
+      tmp.db,
+      intentInput(seed, { action: TradeAction.Down }),
+    );
     expect(again.created).toBe(false);
     expect((await sessionOf(seed.session.id))!.lastSignalAction).toBeNull();
 
