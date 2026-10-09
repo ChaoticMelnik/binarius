@@ -12,8 +12,7 @@ adds the overview, the user list with search, and
 the user card; #108 adds the intents list and the intent card; #330 adds the trading sessions
 list, the trading section of the user card and the breakdown of the overview by status; #109 adds
 the token ledger list and the card's ledger section; #110 adds the audit log; #341 adds the
-deposits list and the card's deposits section; the broker accounts list (#342) follows through the
-same mechanism.
+deposits list and the card's deposits section; #342 adds the broker accounts list.
 
 ## Mechanism
 
@@ -61,7 +60,7 @@ How `web` acts on a backend answer:
 ## Pages
 
 Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии |
-Токены | Аудит | Тексты бота | Депозиты) and the account block («Сменить пароль · login — Выйти»: the link to the password
+Токены | Аудит | Тексты бота | Депозиты | Брокерские аккаунты) and the account block («Сменить пароль · login — Выйти»: the link to the password
 page and the logout button). The login shown is the one in the `me` of the backend answer the page
 was built from; a page rendered without asking the backend (a refused search, a refused password
 form) shows no account block.
@@ -140,9 +139,11 @@ The `users` row and its `broker_accounts`, newest first. Sections:
   брокера»), created and updated. The card only shows the notification level and the blocked
   time; what decides a send is still `deliverable()` (Rule 19).
 - **Токены** — balance, reserved, available (`balance - reserved`, computed in `bigint`).
-- **Брокерские аккаунты** — broker id, address (a blank one is shown as «—»), partner client,
-  status, revocation reason, halt and its reason, token expiry and rotation, created and updated.
-  The ciphertexts, the key id and the refresh-token hash are never selected.
+- **Брокерские аккаунты** — the account id (the uuid the ledger's «Основание» and the intent card
+  print), broker id, address (a blank one is shown as «—»), partner client, status, revocation
+  reason, halt and its reason, token expiry and rotation, created and updated: the same table as
+  the broker accounts list (#342), without its owner column. The ciphertexts, the key id and the
+  refresh-token hash are never selected.
 
 - **Торговля** (#330) — «Всего заявок: N, активных: M» (active = not in a terminal status), the
   `ADMIN_USER_RECENT_INTENTS` newest intents of the user in the columns of the intents list (or
@@ -231,7 +232,8 @@ from them. A note is printed as text, an empty one as «—».
 
 **Основание** is the one reference a row may carry (`token_ledger_reference_check`): an intent is a
 link to its card; a deposit is printed as its id (the deposits list has no filter by id); a broker
-account as its id (it has no page); a manual reference as `manual:<id>`; a row with none (an
+account as its id (it has no page; the broker accounts list shows the same id in its first
+column); a manual reference as `manual:<id>`; a row with none (an
 `adjustment` without one) shows «—».
 
 **Filters are exact matches**, each optional, both combined:
@@ -285,6 +287,38 @@ What the page shows on production: nothing until the postback writer exists (#14
 row is written all the same. `status` and `amount` stay mutable after a ledger row references the
 deposit (the writer's rule, `packages/db/src/schema/deposit-events.ts`): the page shows the row as it
 is now and says nothing about its history.
+
+### Broker accounts — `GET /admin/broker-accounts?status=&halted=&cursor=`
+
+`broker_accounts`, every account whatever the status of its user, newest first, `ADMIN_PAGE_SIZE`
+per page, keyset on `(created_at, id)` as on the other lists: one `SELECT` joined to `users` for the
+owner's Telegram id (`listBrokerAccountsForAdmin`, `packages/db/src/admin-read-ops.ts`). Columns:
+the owner's Telegram id (a link to the user card), the account id, then the columns of the user
+card's section — broker id, address, partner client, status (its Russian label, as on the card),
+revocation reason, halt and its reason (both codes), token expiry and rotation, created and updated.
+An empty value is shown as «—»; the times are the ISO instants the backend sent, the token expiry
+included — the page computes nothing against the clock. There is no account page.
+
+**The ciphertexts, the key id and the refresh-token hash are not selected.** The card and the list
+read `broker_accounts` through one column constant, `adminBrokerAccountColumns`, which does not name
+them; the row's strict schema (`adminBrokerAccountListItemSchema`, the card's view plus `userId` and
+`telegramUserId`) has no key for them.
+
+**Filters are exact matches**, each optional, both combined:
+
+| Parameter | Matches |
+|---|---|
+| `status` | one `BrokerAccountStatus` (`pending`, `active`, `revoked`); the form offers each by its Russian label |
+| `halted` | only `true`: the accounts with `trading_halted`, whatever their status. The checkbox sends `halted=true`, an unchecked one sends nothing. A blank `halted=` is no parameter on the page, as `status=` is (the backend, asked directly, refuses it); any other value — `on`, `false`, the parameter twice — is a 400 |
+
+The cursor positions, it does not filter, as on the intents list. The form, the next and first
+links, the redirect and the request to the backend go through `adminBrokerAccountsSearchParams`
+(`packages/shared/src/admin.ts`), in the order `status, halted, cursor`.
+
+What the page shows on production: an account linked by the bot's e-mail code login is `active` at
+once; one linked through the OAuth callback is `pending` until the user confirms it in the bot (Rule
+12); `revoked` with its reason after a refresh failure; halted with its reason by reconciliation
+(#90). The list is read-only: lifting a halt or revoking an account is not here.
 
 ### Audit log — `GET /admin/audit?action=&entityType=&entityId=&actorId=&from=&to=&cursor=`
 
@@ -501,6 +535,7 @@ named and bounded; nothing else is recorded.
 | trading sessions | `trading_sessions_viewed` | — | `{ path: '/admin/trading-sessions', cursor? }` — `cursor` only when given |
 | token ledger | `tokens_viewed` | — | `{ path: '/admin/tokens', userId?, kind?, cursor? }` — a key only when the parameter was given |
 | deposits | `deposits_viewed` | — | `{ path: '/admin/deposits', userId?, status?, cursor? }` — a key only when the parameter was given |
+| broker accounts | `broker_accounts_viewed` | — | `{ path: '/admin/broker-accounts', status?, halted?: true, cursor? }` — a key only when the parameter was given; `halted` is the JSON `true` |
 | audit log | `audit_log_viewed` | — | `{ path: '/admin/audit', action?, entityType?, entityId?, actorId?, from?, to?, cursor? }` — a key only when the parameter was given; every value is an enum, a uuid or a date |
 | password page, `GET` | `staff_sessions_viewed` | — | `{ path: '/admin/sessions', sessionId }` — the backend's sessions read, as on the sessions page |
 | password change, `POST` | `staff_password_changed` / `staff_password_change_failed` | `staff`, the caller | staff-login.md → What is written down (#78) |
@@ -540,6 +575,9 @@ What `web` refuses before asking the backend, with no row:
 - a deposits filter outside the schema (an unknown status, a `user` that is not a uuid — a value of
   blanks included —, a parameter given twice) → 400 with the form and the message, whatever the
   cursor says;
+- a broker accounts filter outside the schema (an unknown status, `halted` with any value but
+  `true` — `on`, `false` —, a parameter given twice) → 400 with the form and the message, whatever
+  the cursor says;
 - an audit filter outside the schema (an unknown action or entity type, an `entityId` or `actorId`
   that is not a uuid — a value of blanks included —, a date that is not `YYYY-MM-DD`, `from` after
   `to`, a parameter given twice) → 400 with the form and the message, whatever the cursor says;
@@ -552,7 +590,7 @@ What `web` refuses before asking the backend, with no row:
   a bot text form outside its shape (a field given twice, a version that is not digits, a text over
   `BOT_TEXT_SOURCE_MAX` code points) → 400.
 
-An empty value (`q=`, or `status=` from the form's empty option) is no parameter: the whole list. Unknown query keys (`utm_*`, a
+An empty value (`q=`, `status=` from the form's empty option, a typed `halted=`) is no parameter: the whole list. Unknown query keys (`utm_*`, a
 bookmark's leftovers) are dropped on both sides.
 
 What the backend refuses before the session, with no row: a bad bearer (401 `unauthorized`), a
@@ -576,14 +614,15 @@ who pressed the button even if the session is revoked between the check and the 
   `ADMIN_ACTIVE_WINDOW_MINUTES` for «active now» — all in `packages/shared/src/admin.ts`.
 - No rate ceiling on these reads, as on `/admin/sessions`: `web` is a trusted process behind the
   bearer, and the sessions are staff sessions.
-- `users`, `trade_intents`, `trading_sessions`, `token_ledger` and `deposit_events` have no index on
-  `(created_at, id)`; the lists and the overview scan them. The intents filters `user` and `session`
+- `users`, `trade_intents`, `trading_sessions`, `token_ledger`, `deposit_events` and
+  `broker_accounts` have no index on `(created_at, id)`; the lists and the overview scan them, and
+  the broker accounts filters `status` and `halted` scan too. The intents filters `user` and `session`
   and the card's trading section use `trade_intents_user_id_idx` and `trade_intents_session_id_idx`;
   the token ledger filter `user` and the card's ledger section use `token_ledger_user_created_idx`;
   the deposits filter `user` and the card's deposits section use `deposit_events_user_id_idx`;
   the order is still a sort. Assumed: up to 100 000 users, 1 000 000 intents, 100 000 trading
-  sessions, 1 000 000 ledger rows (two per trade) and 100 000 deposits (one postback each) on the
-  pilot. If `explain analyze` of a list or the overview passes 200 ms at those sizes, add a
+  sessions, 1 000 000 ledger rows (two per trade), 100 000 deposits (one postback each) and 100 000
+  broker accounts on the pilot. If `explain analyze` of a list or the overview passes 200 ms at those sizes, add a
   `(created_at, id)` index in its own migration.
 - The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most six
   `SELECT`s (the user card).
@@ -700,11 +739,23 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
      payload) select u.id, a.id, 'pb-local-2', 'pay-1', 10.5, 'USD', 'credited', now(), '{}'
      from users u join broker_accounts a on a.user_id = u.id where a.broker_user_id = 'seed-broker-1'"
    ```
-   Open «Депозиты» (last in the nav): two rows, the user's first — the Telegram ID a link to the
+   Open «Депозиты»: two rows, the user's first — the Telegram ID a link to the
    card, `10.50000000`, `USD`, `credited`, the processing time; `pb-local` has «—» in six columns
    (Telegram ID, account, payment, amount, currency, processed). `?status=credited` — one row. The
    user card: «Депозиты» between «Движения токенов» and «Аудит», one row, and «Все записи →» opens
    the list filtered by this user, without `pb-local`. `?status=bogus` — 400, the form, no «Выйти».
+   Then open «Брокерские аккаунты» (last in the nav): one row — `1`, a link to the card, the account
+   uuid, `seed-broker-1`, `Ada@Example.com`, «нет», «активен», «—», «нет», «—», the token expiry,
+   «—», created, updated. `?halted=true` — «Аккаунтов нет.». Then halt the account (the reason goes
+   with the flag, `broker_accounts_halt_reason_pair_check`; the seed's sessions are already stopped,
+   so nothing else reacts):
+   ```bash
+   docker compose exec postgres psql -U binarius -d binarius -c "update broker_accounts
+     set trading_halted = true, halted_reason = 'trade_mismatch' where broker_user_id = 'seed-broker-1'"
+   ```
+   `?halted=true` — the row, with «да» and `trade_mismatch`; `?status=active&halted=true` — the same
+   row; `?status=revoked` — «Аккаунтов нет.»; `?halted=on` — 400, the form, no «Выйти». The user card:
+   «Брокерские аккаунты» in the same columns, the account uuid first, «да» and `trade_mismatch`.
    Then the audit log. Open «Аудит» twice: the second page shows the first one's `audit_log_viewed`
    on top, its payload `{"path": "/admin/audit"}`. `?action=audit_log_viewed` — only those. From the
    user card, «Все события по пользователю →» (`?entityType=user&entityId=<id>`): the `user_viewed`
@@ -748,11 +799,14 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `tradingSessionId` or `userId` — each only on its own request —, `intent_viewed` with entity
    `trade_intent`, `trading_sessions_viewed` with only `path`, and `tokens_viewed` with `kind` or
    `userId` — each only on its own request; `deposits_viewed` with `status`, with `userId`, or with
-   only `path` — each only on its own request; `audit_log_viewed` with `action`, with `entityType` and
+   only `path` — each only on its own request; `broker_accounts_viewed` with `"halted": true`, with
+   `status` and `halted`, with `status`, or with only `path` — each only on its own request;
+   `audit_log_viewed` with `action`, with `entityType` and
    `entityId`, or with `from` and `to` — each only on its own request; still one `user_viewed` per
    opening of the card; `bot_texts_viewed`, `bot_text_viewed`, `bot_text_previewed`, a
    `bot_text_saved` with both texts, one with `result: 'version_conflict'` and no texts,
    `bot_text_reset` rows, and `bot_profile_published` after the save of `startCommand` and for
    «Опубликовать заново» (`?entityType=bot_text` on «Аудит» lists them). The refused 257-character search, both `?status=bogus` (intents and
-   deposits), `?kind=bogus`, `?action=bogus` and the card id that is not a uuid wrote nothing.
+   deposits), `?kind=bogus`, `?action=bogus`, `?halted=on` and the card id that is not a uuid wrote
+   nothing.
 7. `docker compose down -v` when done.
