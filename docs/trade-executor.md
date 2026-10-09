@@ -142,8 +142,9 @@ line below and finds no `SECRET-` sentinel and no broker host.
    command](broker-socket.md#the-trade-command-100)). What stays open is an answer on another
    socket of the same user — a manual order in broker-web, if the live broker sends answers to
    every socket: a `fail` would reject our intent while our order may be open, and a `success`
-   with equal terms would link the manual trade. The two-socket probe (#285) decides whether
-   `BROKER_WS_URL` may be set; until then it stays unset.
+   with equal terms would link the manual trade. The two-socket probe (#285) found no such
+   answer within its window on the pilot on 2026-10-08, and `BROKER_WS_URL` is set there since
+   ([broker-socket.md → The result on the pilot](broker-socket.md#the-result-on-the-pilot)).
 5. Every token failure is `broker_rejected` (owner: one new code); the log names the stage and
    the reason.
 6. The broker's `fail` and REST `detail` texts are logged cut to 200 characters; an amount the
