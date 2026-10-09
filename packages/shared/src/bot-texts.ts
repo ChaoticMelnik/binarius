@@ -1189,7 +1189,7 @@ export const BOT_TEXT_CATALOG = {
   changeEmailButton: plain(g.Buttons, 'Вход по почте: кнопка смены адреса.', '✏️ Изменить адрес'),
   demoButton: plain(
     g.Buttons,
-    'Карточка и /menu: вход в демо — экран «Сигналы сейчас».',
+    'Карточка и /menu: вход в демо — выбор длительности, затем экран «Сигналы сейчас» (#382).',
     '🎮 Демо-торговля',
   ),
   demoSignalsRefreshButton: plain(

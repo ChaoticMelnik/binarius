@@ -40,7 +40,8 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/link-notifier.test.t
   `cmd:settings`) and its pattern, and `supportUrl()`. The bot and the backend's push build their
   buttons from it, so a pushed button lands on the bot's handler.
 - `apps/bot/src/keyboards.ts`: `menuKeyboard`, `withMenu`, `demoKeyboard`, `supportKeyboard`,
-  `retryKeyboard`, `backToAnalysisKeyboard`, `appendEndOfPath`.
+  `retryKeyboard`, `backToAnalysisKeyboard`, `appendEndOfPath` (its «📡 К сигналам» carries the
+  path's duration, `demo:sig:<sec>`, since #382).
 - The labels are catalog entries: `menuButton` «🏠 В меню», `newAnalysisButton` «📊 Новый анализ»,
   `toSignalsButton` «📡 К сигналам»; reused: `demoRetryButton` «🔄 Повторить»,
   `stakeBackAnalysisButton` «↩️ Назад к анализу», `supportButton`, `demoButton`.
@@ -95,7 +96,9 @@ on any message whose «🔄 Повторить» carries one of those prefixes, 
 | `stakeInputInvalid` | the picker's way back |
 
 «📊 Новый анализ» opens the analysis of the same pair and duration (`demo:an:<assetId>:<sec>`), never
-a stake: the analysis is not skipped (Rule 20). The trackers' edits take the view and, for a last
+a stake: the analysis is not skipped (Rule 20). «📡 К сигналам» opens the signals of the same
+duration (`demo:sig:<sec>`, #382), or the main path's duration screen (`demo:sig`) on a duration the
+demo no longer offers. The trackers' edits take the view and, for a last
 edit that is not a status, why: `IntentTrackRequest.edit(text, view, end?)` with `end` a `TrackEnd`
 (`not_found`, `deadline`), `SessionTrackRequest.edit(text, view, end?)` with `not_found` only. So
 the last edit draws its next step too: the end of the path on a stop status, the menu alone on a

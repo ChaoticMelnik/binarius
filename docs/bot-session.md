@@ -70,7 +70,7 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 - The handler checks the duration again: a forged datum or one for a duration that does not fit
   (`demo:sess:101:900`) only stops the spinner, with no backend call.
 - **Two more doors (#320).** «🚀 Запустить цикл» on the launch screen carries
-  `demo:sess:<assetId>:15`, and «🔁 Ещё сессия» on a stopped session the view's own
+  `demo:sess:<assetId>:<sec>` at the duration chosen on the main path (#382), and «🔁 Ещё сессия» on a stopped session the view's own
   `settings.assetId` and `settings.durationSec`. Neither adds a handler or a datum: the start, its
   refusals and the active session's 409 are the same. A refusal's «💵 Сумма» opens the picker with
   the analysis origin (`stk:o:a:<assetId>:<sec>`), whose way back is that pair's analysis, not the
