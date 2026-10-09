@@ -248,6 +248,8 @@ export const SIGNAL_PARAMS: SignalParams = {
   maxAtrPct: 2,
   minClosedCandles: 50,
   maxStaleIntervals: 2,
+  rsiExtremeBand: 15,
+  minAtrTicks: 5,
 };
 export const SIGNAL_FEATURES: SignalFeatures = {
   emaFast: 1.085423,
@@ -261,6 +263,7 @@ export const SIGNAL_FEATURES: SignalFeatures = {
   closedCandles: 59,
   trend: TrendDirection.Up,
   momentum: MomentumDirection.Up,
+  atrTicks: 44.7,
 };
 export const signalDecided = (decision: SignalDecision): TradingSignalResponse =>
   tradingSignalResponseSchema.parse({

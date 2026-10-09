@@ -8,6 +8,8 @@ import {
   normalizeDecimal,
   sessionFitsDeadline,
   intervalForDuration,
+  MIN_CYCLE_PAYOUT_PCT,
+  pairPayoutAccepted,
   SignalFeedOutcome,
   TradeAction,
   type DecimalString,
@@ -26,8 +28,8 @@ import {
 } from './analysis';
 import { backendErrorFields, type BackendClient } from './backend-client';
 import {
+  checkDemoCycle,
   checkDemoPair,
-  checkDemoTrade,
   DEMO_ASSET_GROUPS,
   DEMO_DURATIONS_SEC,
   durationOptions,
@@ -38,10 +40,12 @@ import {
   pageOf,
   pairsOf,
   readDemoCatalog,
+  readDemoCycle,
   readDemoTrade,
   SIGNALS_DURATION_SEC,
   type DemoAssetGroup,
   type DemoCatalogRead,
+  type DemoCycleRead,
   type DemoDurationSec,
   type DemoTradeRead,
 } from './demo-catalog';
@@ -60,6 +64,7 @@ import {
   demoDurationsScreen,
   demoPairsScreen,
   demoSummary,
+  formatBreakEven,
   groupButtonLabel,
   LABELS,
   launchText,
@@ -257,8 +262,8 @@ export function sessionStartDataOf(
 
 // The pairs with a signal on the scanner's last closed candle (#320), in the route's order, each
 // joined with the catalog for its symbol and payout. A pair the catalog does not list, that is
-// closed now or that does not take the scanner's duration has no button: the launch would refuse
-// it. The list is a snapshot; the cycle checks the signal again before each trade.
+// closed now, that does not take the scanner's duration or that pays less than the cycle floor
+// (#379) has no button: the launch would refuse it. The list is a snapshot; the cycle checks the signal again before each trade.
 export function signalsScreen(
   signals: TradingSignalsResponse,
   catalog: PairsCatalogResponse,
@@ -267,7 +272,7 @@ export function signalsScreen(
   const keyboard = new InlineKeyboard();
   let listed = 0;
   for (const signal of signals.signals) {
-    const checked = checkDemoTrade(catalog, signal.assetId, SIGNALS_DURATION_SEC, nowMs);
+    const checked = checkDemoCycle(catalog, signal.assetId, SIGNALS_DURATION_SEC, nowMs);
     if (!checked.ok) continue;
     const { pair } = checked;
     keyboard
@@ -353,13 +358,13 @@ export function createDemoComposer<C extends Context>({
     const [read, amount] = await answerAnd(
       ctx,
       Promise.all([
-        readDemoTrade(backend, assetId, SIGNALS_DURATION_SEC, now),
+        readDemoCycle(backend, assetId, SIGNALS_DURATION_SEC, now),
         stakeAmount(ctx.from.id),
       ]),
     );
     const screen = read.ok
       ? launchScreen({ assetId, firstName: ctx.from.first_name, symbol: read.pair.symbol, amount })
-      : tradeFailure(ctx, read, assetId);
+      : launchFailure(ctx, read, assetId);
     await editOrReply(ctx, screen.text, screen.keyboard);
   });
 
@@ -441,7 +446,7 @@ export function createDemoComposer<C extends Context>({
       evaluate(read.pair, durationSec),
       stakeAmount(ctx.from.id),
     ]);
-    const keyboard = analysisKeyboard(assetId, durationSec, screen, amount);
+    const keyboard = analysisKeyboard(assetId, durationSec, screen, amount, read.pair);
     // «⏳» went as a new message: the result follows it rather than editing the summary again
     if (waiting === 'sent') await replyHtml(ctx, screen.text, { reply_markup: keyboard });
     else await editOrReply(ctx, screen.text, keyboard);
@@ -513,12 +518,14 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // the stake and session buttons on a signal only, then «🔄 Повторить анализ» and the way back
+  // the stake and session buttons on a signal only, then «🔄 Повторить анализ» and the way back;
+  // no session button on a pair below the cycle payout floor (#379), the screen says why
   function analysisKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
     screen: AnalysisScreen,
     amount: DecimalString | null,
+    pair: PairView,
   ): InlineKeyboard {
     const keyboard = new InlineKeyboard();
     if (screen.stake !== null) {
@@ -537,7 +544,7 @@ export function createDemoComposer<C extends Context>({
         .row();
       // its own row: the session's trades follow the orchestrator's signal at each trade, not
       // this screen's direction
-      if (sessionFits(durationSec)) {
+      if (sessionFits(durationSec) && pairPayoutAccepted(pair)) {
         keyboard
           .text(
             sessionStartButtonLabel(DEFAULT_SESSION_TRADES),
@@ -660,6 +667,29 @@ export function createDemoComposer<C extends Context>({
             .text(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA),
         };
     }
+  }
+
+  // The launch press refuses a pair below the cycle floor with the way back to the list and to the
+  // manual path, whose single trade the floor does not restrict (#379)
+  function launchFailure(
+    ctx: Context,
+    read: Exclude<DemoCycleRead, { ok: true }>,
+    assetId: number,
+  ): DemoScreen {
+    if (read.reason !== 'payout_too_low') return tradeFailure(ctx, read, assetId);
+    const { pair } = read;
+    return {
+      text: TEXTS.demoPayoutTooLow({
+        symbol: pair.symbol,
+        payout: String(pair.payout),
+        payoutFloor: String(MIN_CYCLE_PAYOUT_PCT),
+        breakEven: formatBreakEven(pair.payout),
+      }),
+      keyboard: new InlineKeyboard()
+        .text(LABELS.backToListButton, DEMO_SIGNALS_CALLBACK_DATA)
+        .row()
+        .text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA),
+    };
   }
 
   // The types present in the catalog, each with its count of open pairs; a type with no pair

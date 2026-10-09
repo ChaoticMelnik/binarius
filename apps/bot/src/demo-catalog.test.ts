@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PairsCatalogErrorCode, type PairView } from '@binarius/shared';
 import { BackendError, BackendErrorCode } from './backend-client';
 import {
+  checkDemoCycle,
   checkDemoTrade,
   DEMO_DURATIONS_SEC,
   DEMO_PAGE_SIZE,
@@ -14,6 +15,7 @@ import {
   pageIndexOf,
   pageOf,
   readDemoCatalog,
+  readDemoCycle,
   readDemoTrade,
 } from './demo-catalog';
 import {
@@ -273,5 +275,48 @@ describe('readDemoTrade', () => {
       pair: PAIR_CLOSED,
       catalog: PAIRS_RESPONSE,
     });
+  });
+});
+
+// #379: a cycle needs the payout floor on top of the single trade's check
+describe('checkDemoCycle', () => {
+  const at = (payout: number) => ({ ...PAIR_EURUSD, payout });
+
+  it('refuses a pair paying 79 %, admits one paying 80 %', () => {
+    expect(checkDemoCycle(pairsResponse({ pairs: [at(79)] }), 101, 15, NOW)).toEqual({
+      ok: false,
+      reason: 'payout_too_low',
+      pair: at(79),
+    });
+    expect(checkDemoCycle(pairsResponse({ pairs: [at(80)] }), 101, 15, NOW)).toEqual({
+      ok: true,
+      pair: at(80),
+      durationSec: 15,
+    });
+  });
+
+  it("keeps the single trade's refusals first", () => {
+    const closed = { ...at(79), scheduledUntil: NOW + 1 };
+    expect(checkDemoCycle(pairsResponse({ pairs: [closed] }), 101, 15, NOW)).toMatchObject({
+      reason: 'pair_closed',
+    });
+    expect(checkDemoCycle(pairsResponse({ pairs: [at(79)] }), 101, 60, NOW)).toMatchObject({
+      reason: 'duration_unsupported',
+    });
+  });
+
+  it('leaves the manual path unrestricted: checkDemoTrade admits the pair at 79 %', () => {
+    expect(checkDemoTrade(pairsResponse({ pairs: [at(79)] }), 101, 15, NOW)).toEqual({
+      ok: true,
+      pair: at(79),
+      durationSec: 15,
+    });
+  });
+
+  it('readDemoCycle carries the catalog with the refusal', async () => {
+    const catalog = pairsResponse({ pairs: [at(79)] });
+    expect(
+      await readDemoCycle({ readPairs: () => Promise.resolve(catalog) }, 101, 15, () => NOW),
+    ).toEqual({ ok: false, reason: 'payout_too_low', pair: at(79), catalog });
   });
 });

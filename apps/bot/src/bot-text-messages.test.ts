@@ -84,7 +84,9 @@ const STAKE = '999999999999.99999999' as DecimalString;
 const lengthOf = (text: TelegramHtml) => plainTextOf(text).length;
 const NAME = x(W.firstName);
 
-const pair: PairView = { ...PAIR_EURUSD, symbol: x(W.symbol), payout: 999_999 };
+// a payout of six characters whose break-even share is five («100.0»), below the cycle floor so the
+// analysis prints its note too (#379)
+const pair: PairView = { ...PAIR_EURUSD, symbol: x(W.symbol), payout: 0.0001 };
 const GROUPS: DemoAssetGroup[] = [
   'currency',
   'commodity',
@@ -159,6 +161,7 @@ const featuresOf = (trend: string, momentum: string, emaSlow = -999_999_999.5) =
   rsi: 100,
   atr: 1,
   atrPct: 99_999.999,
+  atrTicks: 999_999_999.9,
   lastClose: -999_999_999.5,
   lastCandleTimestamp: 1,
   closedCandles: 99_999,

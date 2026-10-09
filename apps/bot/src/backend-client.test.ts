@@ -688,7 +688,7 @@ describe('evaluateSignal', () => {
     ],
     [
       'a decision of another version',
-      { ...SIGNAL_DECIDED, decision: { ...SIGNAL_DECISION, version: 'v2' } },
+      { ...SIGNAL_DECIDED, decision: { ...SIGNAL_DECISION, version: 'v1' } },
     ],
   ])('reports %s as a contract violation', async (_case, body) => {
     const { baseUrl } = await serve((_request, reply) => {

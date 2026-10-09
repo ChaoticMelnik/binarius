@@ -27,6 +27,7 @@ import {
   analysisScreen,
   analysisUnavailableScreen,
   formatAtrPct,
+  formatAtrTicks,
   formatPrice,
   formatRsi,
   NO_SIGNAL_REASON_TEXT,
@@ -44,7 +45,7 @@ import {
   stubText,
   stubTextSource,
 } from './testing';
-import { setBotTextSource, TEXTS } from './texts';
+import { formatBreakEven, setBotTextSource, TEXTS } from './texts';
 
 const head = { version: SIGNAL_ALGORITHM_VERSION } as const;
 const signalOf = (action: TradeAction, features = SIGNAL_FEATURES) =>
@@ -106,9 +107,11 @@ describe('the analysis screen', () => {
       formatRsi(SIGNAL_FEATURES.rsi),
       String(SIGNAL_PARAMS.atrPeriod),
       formatAtrPct(SIGNAL_FEATURES.atrPct),
+      formatAtrTicks(SIGNAL_FEATURES.atrTicks),
       String(SIGNAL_FEATURES.closedCandles),
       formatPrice(SIGNAL_FEATURES.lastClose, PAIR_EURUSD.digits),
       String(PAIR_EURUSD.payout),
+      formatBreakEven(PAIR_EURUSD.payout),
     ].sort();
     expect(numbers).toEqual(expected);
   });
@@ -120,10 +123,10 @@ describe('the analysis screen', () => {
 
 📐 Тренд по EMA: вверх — EMA7 1.08542 выше EMA25 1.08511
 ⚡ Импульс по RSI: вверх — RSI10 62.3
-🌊 Волатильность по ATR: в норме — ATR12 0.041%
+🌊 Волатильность по ATR: в норме — ATR12 0.041% · 44.7 шагов котировки
 🕯 Закрытых свечей: 59
 💲 Последняя цена: 1.08560
-💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность.
+💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность. Безубыточность: 54.1% верных прогнозов.
 
 ⚠️ Сигнал — не прогноз результата и не гарантия. Это демо: деньги не нужны.`,
     );
@@ -150,8 +153,44 @@ describe('the analysis screen', () => {
     expect(volatilityOf(ruleRefusalOf(NoSignalReason.VolatilityTooHigh))).toMatch(
       /: слишком высокая — /,
     );
+    expect(volatilityOf(ruleRefusalOf(NoSignalReason.VolatilityBelowTickFloor))).toMatch(
+      /: меньше порога в шагах котировки — ATR12 0\.041% · 44\.7 шагов котировки$/,
+    );
+    expect(volatilityOf(ruleRefusalOf(NoSignalReason.RsiOverbought))).toMatch(/: в норме — /);
     expect(volatilityOf(SIGNAL_NO_SIGNAL)).toMatch(/: в норме — /);
     expect(volatilityOf(SIGNAL_DECIDED)).toMatch(/: в норме — /);
+  });
+
+  // #379: the three v2 refusals in words of their own
+  it.each([
+    [NoSignalReason.VolatilityBelowTickFloor, 'цена движется на считаные шаги котировки'],
+    [NoSignalReason.RsiOverbought, 'RSI слишком высокий для входа вверх'],
+    [NoSignalReason.RsiOversold, 'RSI слишком низкий для входа вниз'],
+  ])('names %s', (reason, words) => {
+    expect(linesOf(ruleRefusalOf(reason))[1]).toBe(`⏸ Сигнала нет: ${words}`);
+  });
+
+  // #379: a pair below the cycle floor keeps its analysis and its single trade, and the screen
+  // says why it has no session button (demo.ts)
+  it('notes under a signal on a pair paying below 80 % that no cycle starts on it', () => {
+    const note = '🚫 Цикл на этой паре не запускается: выплата ниже 80%.';
+    const low = linesOf(SIGNAL_DECIDED, { ...PAIR_EURUSD, payout: 79 });
+    const payoutAt = low.findIndex((line) => line.startsWith('💰'));
+    expect(low[payoutAt]).toContain('Безубыточность: 55.9%');
+    expect(low[payoutAt + 1]).toBe(note);
+    expect(screenOf(SIGNAL_DECIDED, { ...PAIR_EURUSD, payout: 79 }).stake).toBe(TradeAction.Up);
+    expect(linesOf(SIGNAL_DECIDED, { ...PAIR_EURUSD, payout: 80 })).not.toContain(note);
+    expect(linesOf(SIGNAL_NO_SIGNAL, { ...PAIR_EURUSD, payout: 79 })).not.toContain(note);
+  });
+
+  it('formats the break-even share to a tenth, a dash where the payout gives none', () => {
+    expect(formatBreakEven(80)).toBe('55.6');
+    expect(formatBreakEven(68.9)).toBe('59.2');
+    expect(formatBreakEven(0.0001)).toBe('100.0');
+    expect(formatBreakEven(0)).toBe('—');
+    expect(formatBreakEven(-50)).toBe('—');
+    expect(formatBreakEven(Number.NaN)).toBe('—');
+    expect(formatAtrTicks(2.7879)).toBe('2.8');
   });
 
   // A4
