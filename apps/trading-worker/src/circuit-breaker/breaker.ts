@@ -72,7 +72,10 @@ export function createCircuitBreaker(deps: CircuitBreakerDeps): CircuitBreaker {
       // a storm that goes on does not call stopTrading on every event; the switch is closed
       windows[signal].clear();
     } catch (error) {
-      // the window stays: the next failure tries again
+      // the window stays; the next failure record tries again: REST — the next unanswered
+      // submit, sockets — the next loss of a session not yet counted (a loss already reported is
+      // not reported again, so a storm that has already lost every session re-tries only once a
+      // session comes back and is lost again; the runbook says to check `status` and stop by hand)
       logger.error({ signal, ...errorLogFields(error) }, 'circuit breaker trip failed');
     }
   }
