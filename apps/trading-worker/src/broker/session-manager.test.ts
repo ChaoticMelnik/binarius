@@ -1378,6 +1378,26 @@ describe('the lease (#93)', () => {
     expect(h.manager.size).toBe(0);
   });
 
+  it('L16 a token refreshed past the fence restarts no socket', async () => {
+    const fakes = fakeClients();
+    let offset = 0;
+    let issued = 0;
+    const h = harness({
+      openClient: fakes.openClient,
+      monotonicNow: () => performance.now() + offset,
+      tokens: () => Promise.resolve({ ok: true, accessToken: `SECRET-${(issued += 1)}` }),
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the client', () => fakes.made.length === 1);
+    const client = fakes.made[0]!;
+    offset = CONFIG.leaseFenceMs + 1;
+    client.fire(BrokerSocketState.TokenExpired);
+    await until('the fence', () => h.logs('broker session lease fenced').length === 1);
+    expect(client.starts).toEqual(['SECRET-1']);
+    expect(h.manager.clientFor('acc-1')).toBeUndefined();
+  });
+
   it('L9 a renewal answer leaves alone an entry started after it was sent', async () => {
     const fakes = fakeClients();
     let answer: (ids: string[]) => void = () => undefined;

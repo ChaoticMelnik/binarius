@@ -23,7 +23,9 @@ export async function acquireSessionLease(
       set: {
         ownerId: sql`excluded.owner_id`,
         acquiredAt: sql`excluded.acquired_at`,
-        expiresAt: sql`excluded.expires_at`,
+        // never earlier than it was: a statement that began first but commits last must not
+        // shorten a lease a later one already extended (a lapsed foreign row is in the past)
+        expiresAt: sql`greatest(${l.expiresAt}, excluded.expires_at)`,
       },
       setWhere: sql`${l.expiresAt} <= now() or ${l.ownerId} = excluded.owner_id`,
     })
@@ -41,7 +43,8 @@ export async function renewSessionLeases(
   const l = brokerSessionLeases;
   const rows = await db
     .update(l)
-    .set({ expiresAt: millisecondsFromNow(ttlMs) })
+    // greatest: a renewal that stalled and commits after a later one must not shorten the lease
+    .set({ expiresAt: sql`greatest(${l.expiresAt}, ${millisecondsFromNow(ttlMs)})` })
     .where(
       sql`${l.ownerId} = ${ownerId}
         and ${l.brokerAccountId} = any(${sql.param([...accountIds])}::uuid[])

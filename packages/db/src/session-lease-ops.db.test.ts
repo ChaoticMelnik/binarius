@@ -178,6 +178,21 @@ describe('renewSessionLeases (#93)', () => {
     ).toEqual([]);
   });
 
+  // a statement that began first but commits last: it must not shorten what a later one set
+  it('R5 never shortens a lease, by a renewal or by its own re-acquire', async () => {
+    const accountId = await account();
+    const owner = randomUUID();
+    await acquire(accountId, owner);
+    await expireIn(accountId, '1 hour');
+    const far = (await rowOf(accountId))!.expiresAt;
+    expect(
+      await renewSessionLeases(tmp.db, { ownerId: owner, accountIds: [accountId], ttlMs: TTL }),
+    ).toEqual([accountId]);
+    expect((await rowOf(accountId))!.expiresAt).toEqual(far);
+    expect(await acquire(accountId, owner)).toBe(true);
+    expect((await rowOf(accountId))!.expiresAt).toEqual(far);
+  });
+
   it('R4 answers an empty list without a query', async () => {
     expect(
       await renewSessionLeases(tmp.db, { ownerId: randomUUID(), accountIds: [], ttlMs: TTL }),
