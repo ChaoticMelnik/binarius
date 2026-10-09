@@ -499,8 +499,8 @@ export const BOT_TEXT_CATALOG = {
   demoPayout: html(
     g.Demo,
     'Демо и анализ: строка выплаты актива.',
-    `💰 Выплата: {payout}% — размер выигрыша при верном прогнозе, не вероятность.`,
-    { vars: ['payout'] },
+    `💰 Выплата: {payout}% — размер выигрыша при верном прогнозе, не вероятность. Безубыточность: {breakEven}% верных прогнозов.`,
+    { vars: ['payout', 'breakEven'] },
   ),
   demoChooseDuration: html(
     g.Demo,
@@ -574,6 +574,12 @@ export const BOT_TEXT_CATALOG = {
     'Демо: выбранный актив закрыт по расписанию.',
     `🔒 {symbol} сейчас закрыт по расписанию. Выбери другой актив.`,
     { vars: ['symbol'] },
+  ),
+  demoPayoutTooLow: html(
+    g.Demo,
+    'Сигналы сейчас: выплата пары ниже порога цикла сделок.',
+    `🚫 {symbol}: выплата {payout}% — ниже {payoutFloor}%, цикл на этой паре не запускается. Безубыточность при такой выплате — {breakEven}% верных прогнозов.`,
+    { vars: ['symbol', 'payout', 'payoutFloor', 'breakEven'] },
   ),
   demoDurationUnsupported: html(
     g.Demo,
@@ -657,6 +663,12 @@ export const BOT_TEXT_CATALOG = {
   analysisLastPrice: html(g.Analysis, 'Анализ: последняя цена.', `💲 Последняя цена: {price}`, {
     vars: ['price'],
   }),
+  analysisCycleUnavailable: html(
+    g.Analysis,
+    'Анализ: под сигналом на паре с выплатой ниже порога цикла — кнопки сессии нет.',
+    `🚫 Цикл на этой паре не запускается: выплата ниже {payoutFloor}%.`,
+    { vars: ['payoutFloor'] },
+  ),
   analysisDisclaimer: html(
     g.Analysis,
     'Анализ: оговорка под сигналом.',
@@ -715,6 +727,11 @@ export const BOT_TEXT_CATALOG = {
     'Анализ: причина «нет сигнала» — высокая волатильность.',
     'волатильность слишком высокая',
   ),
+  noSignalVolatilityBelowTickFloor: plain(
+    g.Analysis,
+    'Анализ: причина «нет сигнала» — цена движется на считаные шаги котировки.',
+    'цена движется на считаные шаги котировки',
+  ),
   noSignalTrendFlat: plain(
     g.Analysis,
     'Анализ: причина «нет сигнала» — тренд не определён.',
@@ -729,6 +746,16 @@ export const BOT_TEXT_CATALOG = {
     g.Analysis,
     'Анализ: причина «нет сигнала» — тренд и импульс расходятся.',
     'тренд и импульс расходятся',
+  ),
+  noSignalRsiOverbought: plain(
+    g.Analysis,
+    'Анализ: причина «нет сигнала» — RSI слишком высокий для входа вверх.',
+    'RSI слишком высокий для входа вверх',
+  ),
+  noSignalRsiOversold: plain(
+    g.Analysis,
+    'Анализ: причина «нет сигнала» — RSI слишком низкий для входа вниз.',
+    'RSI слишком низкий для входа вниз',
   ),
   noSignalInsufficientCandles: plain(
     g.Analysis,
@@ -774,6 +801,17 @@ export const BOT_TEXT_CATALOG = {
     g.Analysis,
     'Анализ: высокая волатильность, в строке волатильности.',
     'слишком высокая',
+  ),
+  volatilityTickFloor: plain(
+    g.Analysis,
+    'Анализ: ATR меньше порога в шагах котировки, в строке волатильности.',
+    'меньше порога в шагах котировки',
+  ),
+  analysisAtrTicks: plain(
+    g.Analysis,
+    'Анализ: ATR в шагах котировки, в строке волатильности.',
+    '{count} шагов котировки',
+    { vars: ['count'] },
   ),
   emaAbove: plain(g.Analysis, 'Анализ: быстрая EMA выше медленной, в строке тренда.', 'выше'),
   emaBelow: plain(g.Analysis, 'Анализ: быстрая EMA ниже медленной, в строке тренда.', 'ниже'),
@@ -1099,6 +1137,11 @@ export const BOT_TEXT_CATALOG = {
     g.Session,
     'Кнопка сессии: пара недоступна.',
     `⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.`,
+  ),
+  sessionPayoutTooLow: html(
+    g.Session,
+    'Кнопка сессии: выплата пары ниже порога цикла сделок.',
+    `🚫 Выплата по паре сейчас ниже порога — сессия на ней не запускается. Открой анализ заново.`,
   ),
   sessionStopManualReview: html(
     g.Session,

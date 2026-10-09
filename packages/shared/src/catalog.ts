@@ -36,6 +36,17 @@ export const pairAcceptsDuration = (
   durationSec: number,
 ): boolean => durationSec >= pair.minTimeframe && durationSec <= pair.maxTimeframe;
 
+// No cycle starts on a pair paying less (#379, docs/trading-session.md -> The payout floor): at
+// 80 % a session breaks even at 55.6 % right forecasts. Single trades are not restricted.
+export const MIN_CYCLE_PAYOUT_PCT = 80;
+
+export const pairPayoutAccepted = (pair: { payout: number }): boolean =>
+  pair.payout >= MIN_CYCLE_PAYOUT_PCT;
+
+// The share of right forecasts at which a fixed stake neither gains nor loses: a win pays
+// stake x payout / 100, a loss costs the stake.
+export const breakEvenPct = (payout: number): number => (100 * 100) / (100 + payout);
+
 export const pairsCatalogResponseSchema = z.object({
   pairs: z.array(pairViewSchema),
   // process clock of the backend, taken after the broker's answer was parsed

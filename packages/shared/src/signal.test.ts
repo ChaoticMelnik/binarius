@@ -4,18 +4,25 @@ import {
   intervalForDuration,
   NoSignalReason,
   RULE_REFUSAL_REASONS,
+  RULE_REFUSAL_REASONS_V1,
   safeParseTradingSignalRequest,
   safeParseTradingSignalResponse,
   safeParseTradingSignalsResponse,
   SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_ALGORITHM_VERSION,
+  SIGNAL_ALGORITHM_VERSIONS,
   SIGNAL_SHORTEST_INTERVAL_MS,
   signalDecisionSchema,
+  signalDecisionV1Schema,
+  signalParamsSchema,
+  signalParamsV1Schema,
   type DataRefusalReason,
   type RuleRefusalReason,
   type SignalParams,
+  type SignalParamsV1,
 } from './signal';
 
-const features = {
+const featuresV1 = {
   emaFast: 1.1052,
   emaSlow: 1.1047,
   emaSlowSlope: 0.0003,
@@ -28,8 +35,9 @@ const features = {
   trend: 'up',
   momentum: 'up',
 };
+const features = { ...featuresV1, atrTicks: 4 };
 
-const params: SignalParams = {
+const paramsV1: SignalParamsV1 = {
   emaFast: 9,
   emaSlow: 21,
   slopeLookback: 3,
@@ -41,36 +49,37 @@ const params: SignalParams = {
   minClosedCandles: 50,
   maxStaleIntervals: 2,
 };
+const params: SignalParams = { ...paramsV1, rsiExtremeBand: 15, minAtrTicks: 5 };
 
 const DECISIONS: Record<string, Record<string, unknown>> = {
-  signal: { kind: 'signal', version: 'v1', action: 'up', features },
+  signal: { kind: 'signal', version: 'v2', action: 'up', features },
   volatility_too_low: {
     kind: 'no_signal',
-    version: 'v1',
+    version: 'v2',
     reason: 'volatility_too_low',
     features: { ...features, atrPct: 0.0001, trend: 'flat', momentum: 'neutral' },
   },
   invalid_candle: {
     kind: 'no_signal',
-    version: 'v1',
+    version: 'v2',
     reason: 'invalid_candle',
     detail: { index: 3, problem: 'non_finite' },
   },
   candle_gap: {
     kind: 'no_signal',
-    version: 'v1',
+    version: 'v2',
     reason: 'candle_gap',
     detail: { index: 7, expectedTimestamp: 1_760_000_420_000, actualTimestamp: 1_760_000_480_000 },
   },
   stale: {
     kind: 'no_signal',
-    version: 'v1',
+    version: 'v2',
     reason: 'stale',
     detail: { lastCandleTimestamp: 1_760_000_000_000, ageMs: 600_000, maxAgeMs: 180_000 },
   },
   insufficient_candles: {
     kind: 'no_signal',
-    version: 'v1',
+    version: 'v2',
     reason: 'insufficient_candles',
     detail: { closedCandles: 9, required: 50 },
   },
@@ -84,7 +93,8 @@ describe('signalDecisionSchema', () => {
   });
 
   const refused: [string, Record<string, unknown>][] = [
-    ['another version', { ...DECISIONS.signal, version: 'v2' }],
+    ['another version', { ...DECISIONS.signal, version: 'v1' }],
+    ['a decision without atrTicks', { ...DECISIONS.signal, features: featuresV1 }],
     ['a rule reason with a detail', { ...DECISIONS.volatility_too_low, detail: { index: 0 } }],
     ['a data reason with features', { ...DECISIONS.stale, features }],
     ['an unknown reason', { ...DECISIONS.volatility_too_low, reason: 'moon_phase' }],
@@ -97,7 +107,7 @@ describe('signalDecisionSchema', () => {
       'a fractional closedCandles',
       { ...DECISIONS.signal, features: { ...features, closedCandles: 1.5 } },
     ],
-    ['a signal without an action', { kind: 'signal', version: 'v1', features }],
+    ['a signal without an action', { kind: 'signal', version: 'v2', features }],
   ];
   it.each(refused)('S2 refuses %s', (_, decision) => {
     expect(signalDecisionSchema.safeParse(decision).success).toBe(false);
@@ -218,5 +228,49 @@ describe('refusal reasons', () => {
     expect(new Set(all).size).toBe(all.length);
     expect(new Set(all)).toEqual(new Set(Object.values(NoSignalReason)));
     expectTypeOf<DataRefusalReason | RuleRefusalReason>().toEqualTypeOf<NoSignalReason>();
+  });
+});
+
+describe('algorithm versions (#379)', () => {
+  it('S7 the current version is the last of the list', () => {
+    expect(SIGNAL_ALGORITHM_VERSIONS.at(-1)).toBe(SIGNAL_ALGORITHM_VERSION);
+    expect(SIGNAL_ALGORITHM_VERSIONS).toEqual(['v1', 'v2']);
+  });
+
+  const v1Signal = { kind: 'signal', version: 'v1', action: 'up', features: featuresV1 };
+  const v2Signal = DECISIONS.signal;
+
+  it('S8 each decision parses through its own version only', () => {
+    expect(signalDecisionV1Schema.safeParse(v1Signal).data).toEqual(v1Signal);
+    expect(signalDecisionSchema.safeParse(v2Signal).data).toEqual(v2Signal);
+    expect(signalDecisionSchema.safeParse(v1Signal).success).toBe(false);
+    expect(signalDecisionV1Schema.safeParse(v2Signal).success).toBe(false);
+    // the v1 shape with the v1 version but v2 features
+    expect(signalDecisionV1Schema.safeParse({ ...v1Signal, features }).success).toBe(false);
+  });
+
+  it.each(['volatility_below_tick_floor', 'rsi_overbought', 'rsi_oversold'])(
+    'S8 %s is a v2 reason only',
+    (reason) => {
+      const v2 = { kind: 'no_signal', version: 'v2', reason, features };
+      const v1 = { kind: 'no_signal', version: 'v1', reason, features: featuresV1 };
+      expect(signalDecisionSchema.safeParse(v2).success).toBe(true);
+      expect(signalDecisionV1Schema.safeParse(v1).success).toBe(false);
+    },
+  );
+
+  it('S9 the v1 params refuse the v2 fields, the v2 params require them', () => {
+    expect(signalParamsV1Schema.safeParse(paramsV1).success).toBe(true);
+    expect(signalParamsV1Schema.safeParse(params).success).toBe(false);
+    expect(signalParamsSchema.safeParse(params).data).toEqual(params);
+    expect(signalParamsSchema.safeParse(paramsV1).success).toBe(false);
+    expect(signalParamsSchema.safeParse({ ...params, extra: 1 }).success).toBe(false);
+    expect(signalParamsSchema.safeParse({ ...params, minAtrTicks: 2.5 }).success).toBe(false);
+    expect(signalParamsSchema.safeParse({ ...params, rsiExtremeBand: -1 }).success).toBe(false);
+  });
+
+  it('S5 the v1 rule reasons are the first five of the v2 list', () => {
+    expect(RULE_REFUSAL_REASONS.slice(0, 5)).toEqual([...RULE_REFUSAL_REASONS_V1]);
+    expect(RULE_REFUSAL_REASONS).toHaveLength(8);
   });
 });

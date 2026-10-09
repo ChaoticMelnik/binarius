@@ -1,5 +1,6 @@
 import { USER_ACCOUNT_LIST_LIMIT } from './account';
 import { BOT_COMMANDS } from './bot-commands';
+import { MIN_CYCLE_PAYOUT_PCT } from './catalog';
 import { BotTextKind, type BotTextSource } from './bot-text-template';
 import {
   BOT_TEXT_CATALOG,
@@ -49,6 +50,9 @@ export const BOT_TEXT_WIDTHS = {
   // the broker's symbol, unbounded on the wire; assumed as INTENT_SYMBOL_LIMIT
   symbol: 64,
   payout: 6,
+  // formatBreakEven: 0.0-100.0, or a dash
+  breakEven: 5,
+  payoutFloor: String(MIN_CYCLE_PAYOUT_PCT).length,
   // «999 из 999»
   page: 10,
   retryAfterSec: 5,
@@ -59,6 +63,8 @@ export const BOT_TEXT_WIDTHS = {
   rsi: 5,
   // formatAtrPct
   atrPct: 9,
+  // formatAtrTicks
+  atrTicks: 11,
   // a signal parameter's period, and the count of closed candles
   period: 4,
   candles: 5,
@@ -93,9 +99,12 @@ const groups = [
 const ruleReasons = [
   'noSignalVolatilityTooLow',
   'noSignalVolatilityTooHigh',
+  'noSignalVolatilityBelowTickFloor',
   'noSignalTrendFlat',
   'noSignalRsiNeutral',
   'noSignalTrendMomentumDisagree',
+  'noSignalRsiOverbought',
+  'noSignalRsiOversold',
 ] as const satisfies readonly BotPlainKey[];
 const dataReasons = [
   'noSignalInsufficientCandles',
@@ -132,7 +141,9 @@ const result = (m: BotTextMeasure) =>
   m.longest('sessionTradeOne', 'sessionTradeFew', 'sessionTradeMany') +
   DASH +
   score(m);
-const volatility = (word: number) => word + DASH + indicator(w.atrPct + '%'.length);
+// `${word} — ATR14 0.041% · 8.4 шагов котировки` (analysis.ts → featureLines)
+const volatility = (m: BotTextMeasure, word: number) =>
+  word + DASH + indicator(w.atrPct + '%'.length) + SEPARATOR + m.length('analysisAtrTicks');
 
 const trades = (m: BotTextMeasure) =>
   m.longest('sessionTradeOne', 'sessionTradeFew', 'sessionTradeMany');
@@ -163,6 +174,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   group: (m) => m.longest(...groups),
   page: () => w.page,
   payout: () => w.payout,
+  breakEven: () => w.breakEven,
+  payoutFloor: () => w.payoutFloor,
   label: (m) => m.longest(...durations),
   subject,
   reason: (m) => m.longest(...ruleReasons, ...dataReasons),
@@ -205,9 +218,14 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
       m.longest('momentumUp', 'momentumDown', 'momentumNeutral') + DASH + indicator(w.rsi),
   },
   analysisVolatility: {
-    value: (m) => volatility(m.longest('volatilityNormal', 'volatilityLow', 'volatilityHigh')),
+    value: (m) =>
+      volatility(
+        m,
+        m.longest('volatilityNormal', 'volatilityLow', 'volatilityHigh', 'volatilityTickFloor'),
+      ),
   },
   analysisCandles: { count: () => w.candles },
+  analysisAtrTicks: { count: () => w.atrTicks },
   intentStake: { amount: () => w.stake },
   // asset · duration · stake (texts.ts → sessionStatusText)
   sessionSettings: { line: (m) => tradeLine(m, 0) },
@@ -264,7 +282,7 @@ const features = (signal: boolean): BotTextSegment[] => [
   k('analysisMomentum'),
   '\n',
   signal
-    ? k('analysisVolatility', { value: (m) => volatility(m.length('volatilityNormal')) })
+    ? k('analysisVolatility', { value: (m) => volatility(m, m.length('volatilityNormal')) })
     : k('analysisVolatility'),
   '\n',
   k('analysisCandles'),
@@ -384,6 +402,8 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       ...features(true),
       '\n',
       k('demoPayout'),
+      // a pair paying below the cycle floor: no session button, the note says why
+      oneOf([], ['\n', k('analysisCycleUnavailable')]),
       '\n\n',
       k('analysisDisclaimer'),
     ],

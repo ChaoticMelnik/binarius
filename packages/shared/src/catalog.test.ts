@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { BinaryPair } from './broker';
 import {
+  breakEvenPct,
+  MIN_CYCLE_PAYOUT_PCT,
+  pairPayoutAccepted,
   PairsCatalogErrorCode,
   TRADING_PAIRS_PATH,
   isPairOpen,
@@ -130,5 +133,30 @@ describe('pair predicates', () => {
     expect(pairAcceptsDuration(range, 3600)).toBe(true);
     expect(pairAcceptsDuration(range, 59)).toBe(false);
     expect(pairAcceptsDuration(range, 3601)).toBe(false);
+  });
+});
+
+describe('the cycle payout floor (#379)', () => {
+  it.each([
+    [79, false],
+    [79.99, false],
+    [80, true],
+    [81, true],
+  ])('a pair paying %d%% is accepted: %s', (payout, accepted) => {
+    expect(MIN_CYCLE_PAYOUT_PCT).toBe(80);
+    expect(pairPayoutAccepted({ payout })).toBe(accepted);
+  });
+
+  it.each([
+    [80, 55.56],
+    [68.9, 59.21],
+    [100, 50],
+    [0, 100],
+  ])('at %d%% the break-even share is %d%%', (payout, share) => {
+    expect(breakEvenPct(payout)).toBeCloseTo(share, 2);
+  });
+
+  it('is not finite at a payout of -100', () => {
+    expect(Number.isFinite(breakEvenPct(-100))).toBe(false);
   });
 });

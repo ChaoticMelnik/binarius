@@ -21,7 +21,12 @@ import type {
   PartnerTraderStats,
 } from './partner';
 import type { AssetsUpdate, PriceUpdate, SocketOpenTradeRequest } from './socket';
-import type { SignalParams, TradingSignalResponse, TradingSignalsResponse } from './signal';
+import type {
+  SignalParams,
+  TradingSignalErrorCode,
+  TradingSignalResponse,
+  TradingSignalsResponse,
+} from './signal';
 import type { TradeIntent, TradeIntentView } from './trading';
 import type { AccessTokenRefusal, AccessTokenRequest, AccessTokenResponse } from './access-token';
 import type { AccountHaltReason } from './oauth';
@@ -342,6 +347,8 @@ describe('contract coverage (issue #6)', () => {
       | 'contract_violation'
       | 'aborted'
     >();
+    // the route's refusals before the chart GET (#379)
+    expectTypeOf<TradingSignalErrorCode>().toEqualTypeOf<'pair_unknown' | 'catalog_unavailable'>();
   });
 
   it('Trading signals list (issue #343)', () => {
@@ -391,6 +398,7 @@ describe('contract coverage (issue #6)', () => {
       | 'session_too_long'
       | 'balance_unavailable'
       | 'pair_unavailable'
+      | 'payout_too_low'
       | 'catalog_unavailable'
       | 'not_found'
       | 'session_not_active'
