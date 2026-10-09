@@ -33,6 +33,7 @@ import {
   safeParseAdminAuditQuery,
   safeParseAdminChangePasswordRequest,
   safeParseAdminConfirmRequest,
+  safeParseAdminDepositsQuery,
   safeParseAdminIntentsQuery,
   safeParseAdminLoginRequest,
   safeParseAdminTokensQuery,
@@ -61,6 +62,7 @@ import {
   hashPassword,
   listIntentsForAdmin,
   listAuditForAdmin,
+  listDepositsForAdmin,
   listLedgerForAdmin,
   listLiveStaffSessions,
   listTradingSessionsForAdmin,
@@ -83,6 +85,7 @@ import {
   STAFF_SESSION_IDLE_MS,
   toAdminBrokerAccountView,
   toAdminAuditEntryView,
+  toAdminDepositView,
   toAdminLedgerEntry,
   toAdminOverview,
   toAdminTradeIntentView,
@@ -689,6 +692,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
             active: card.intents.active,
           },
           ledger: { recent: card.ledger.map(toAdminLedgerEntry) },
+          deposits: { recent: card.deposits.map(toAdminDepositView) },
         },
         audit: {
           action: AuditAction.UserViewed,
@@ -887,6 +891,44 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
             ...(actorId === undefined ? {} : { actorId }),
             ...(from === undefined ? {} : { from }),
             ...(to === undefined ? {} : { to }),
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  // --- Deposits (#341, docs/admin-pages.md) ------------------------------------------------------
+
+  app.get('/admin/deposits', async (request, reply) => {
+    // before the session: a query outside the schema costs no transaction and leaves no row
+    const parsed = safeParseAdminDepositsQuery(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+    }
+    const { user, status, cursor } = parsed.data;
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const page = await listDepositsForAdmin(tx, {
+        filters: { userId: user, status },
+        cursor,
+        limit: ADMIN_PAGE_SIZE,
+      });
+      return {
+        result: {
+          me: meOf(ctx),
+          deposits: page.rows.map(toAdminDepositView),
+          nextCursor: page.nextCursor,
+        },
+        audit: {
+          action: AuditAction.DepositsViewed,
+          payload: {
+            path: '/admin/deposits',
+            ...(user === undefined ? {} : { userId: user }),
+            ...(status === undefined ? {} : { status }),
             ...(cursor === undefined ? {} : { cursor }),
           },
         },

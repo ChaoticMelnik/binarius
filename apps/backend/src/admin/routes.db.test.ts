@@ -19,6 +19,8 @@ import {
   AdminErrorCode,
   adminAuditEntryViewSchema,
   adminAuditResponseSchema,
+  adminDepositsResponseSchema,
+  adminDepositViewSchema,
   AuditAction,
   AuditActorType,
   AuditEntityType,
@@ -32,6 +34,7 @@ import {
   adminTradingSessionViewSchema,
   adminUserResponseSchema,
   adminUsersResponseSchema,
+  DepositEventStatus,
   staffSessionsResponseSchema,
   TokenLedgerKind,
   TradeIntentStatus,
@@ -43,6 +46,7 @@ import {
   botTextOverrides,
   saveBotTextOverride,
   confirmChallengeFromTelegram,
+  depositEvents,
   markChallengeCodeSent,
   staff,
   staffLoginChallenges,
@@ -1641,7 +1645,14 @@ describe('the read pages (#107)', () => {
 
     expect(response.statusCode).toBe(200);
     const raw = response.json<{ user: object; brokerAccounts: object[] }>();
-    expect(Object.keys(raw)).toEqual(['me', 'user', 'brokerAccounts', 'intents', 'ledger']);
+    expect(Object.keys(raw)).toEqual([
+      'me',
+      'user',
+      'brokerAccounts',
+      'intents',
+      'ledger',
+      'deposits',
+    ]);
     expect(Object.keys(raw.user)).toEqual([
       'id',
       'telegramUserId',
@@ -2178,6 +2189,181 @@ describe('the token ledger page and the card section (#109)', () => {
     await withSession('POST', '/admin/auth/logout', token);
 
     expect((await withSession('GET', '/admin/tokens', token)).statusCode).toBe(401);
+  });
+});
+
+describe('the deposits page and the card section (#341)', () => {
+  const DEPOSIT_KEYS = Object.keys(adminDepositViewSchema.shape);
+  let seq = 0;
+
+  // no writer yet (#141/#142): written directly, with a payload that must never come back
+  const insertDeposit = async (
+    row: { userId?: string; brokerAccountId?: string; status?: DepositEventStatus } = {},
+  ) => {
+    const [inserted] = await tmp.db
+      .insert(depositEvents)
+      .values({
+        userId: row.userId ?? null,
+        brokerAccountId: row.brokerAccountId ?? null,
+        postbackId: `route-pb-${++seq}`,
+        status: row.status ?? DepositEventStatus.Received,
+        payload: { payloadSecret: 'raw postback' },
+      })
+      .returning({ id: depositEvents.id });
+    if (inserted === undefined) throw new Error('insertDeposit: insert returned no row');
+    return inserted.id;
+  };
+
+  const ownedDeposit = async (status?: DepositEventStatus) => {
+    const { userId } = await seedUser(tmp.db);
+    const brokerAccountId = await seedBrokerAccount(tmp.db, userId);
+    const id = await insertDeposit({ userId, brokerAccountId, status });
+    return { userId, brokerAccountId, id };
+  };
+
+  it('refuses /admin/deposits without a live session and writes nothing', async () => {
+    const before = await auditCount();
+    for (const headers of [BEARER, { ...BEARER, 'x-staff-session': 'a'.repeat(43) }]) {
+      const response = await app.inject({ method: 'GET', url: '/admin/deposits', headers });
+      expect([response.statusCode, response.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.SessionInvalid },
+      ]);
+    }
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('lists deposits with exactly the wire keys and no payload, owned or not', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const unownedId = await insertDeposit();
+    const owned = await ownedDeposit(DepositEventStatus.Credited);
+
+    const response = await readOnce(seeded.staffId, '/admin/deposits', token);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain('payload');
+    expect(response.body).not.toContain('payloadSecret');
+    const raw = response.json<{ deposits: Record<string, unknown>[] }>();
+    expect(Object.keys(raw)).toEqual(['me', 'deposits', 'nextCursor']);
+    const unowned = raw.deposits.find((d) => d.id === unownedId);
+    const own = raw.deposits.find((d) => d.id === owned.id);
+    expect(Object.keys(unowned ?? {})).toEqual(DEPOSIT_KEYS);
+    expect(Object.keys(own ?? {})).toEqual(DEPOSIT_KEYS);
+    const body = adminDepositsResponseSchema.parse(raw);
+    expect(body.deposits.find((d) => d.id === unownedId)).toMatchObject({
+      userId: null,
+      telegramUserId: null,
+      brokerAccountId: null,
+      amount: null,
+      processedAt: null,
+    });
+    expect(body.deposits.find((d) => d.id === owned.id)).toMatchObject({
+      userId: owned.userId,
+      brokerAccountId: owned.brokerAccountId,
+      status: DepositEventStatus.Credited,
+    });
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.DepositsViewed,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: '/admin/deposits' },
+    });
+  });
+
+  it("keeps only the user's own deposits, drops unknown query keys, records the user", async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const owned = await ownedDeposit();
+    await ownedDeposit();
+    await insertDeposit({ brokerAccountId: owned.brokerAccountId });
+
+    const response = await readOnce(
+      seeded.staffId,
+      `/admin/deposits?user=${owned.userId}&utm=1`,
+      token,
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = adminDepositsResponseSchema.parse(response.json());
+    expect(body.deposits.map((d) => d.id)).toEqual([owned.id]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/deposits',
+      userId: owned.userId,
+    });
+  });
+
+  it('records the status and the cursor it was given, and nothing it was not', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const cursor = randomUUID();
+
+    const page = await readOnce(
+      seeded.staffId,
+      `/admin/deposits?status=credited&cursor=${cursor}`,
+      token,
+    );
+    expect(page.statusCode).toBe(200);
+    expect(adminDepositsResponseSchema.parse(page.json()).deposits).toEqual([]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/deposits',
+      status: 'credited',
+      cursor,
+    });
+  });
+
+  it.each([
+    ['an unknown status', 'status=bogus'],
+    ['status twice', 'status=credited&status=failed'],
+    ['a user that is not a uuid', 'user=not-a-uuid'],
+    ['a cursor that is not a uuid', 'cursor=bad'],
+  ])('refuses %s with 400 before the session, writing nothing', async (_label, query) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const before = await auditCount();
+
+    const response = await withSession('GET', `/admin/deposits?${query}`, token);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(await auditCount()).toBe(before);
+  });
+
+  it("puts only the user's own deposits into the card, with exact keys, in the one user_viewed row", async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const owned = await ownedDeposit();
+    await ownedDeposit();
+    await insertDeposit({ brokerAccountId: owned.brokerAccountId });
+    const before = await auditCount();
+
+    const response = await readOnce(seeded.staffId, `/admin/users/${owned.userId}`, token);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain('payloadSecret');
+    const raw = response.json<{ deposits: { recent: object[] } }>();
+    expect(Object.keys(raw.deposits)).toEqual(['recent']);
+    for (const deposit of raw.deposits.recent) expect(Object.keys(deposit)).toEqual(DEPOSIT_KEYS);
+    const body = adminUserResponseSchema.parse(raw);
+    expect(body.deposits.recent.map((d) => d.id)).toEqual([owned.id]);
+    expect(await auditCount()).toBe(before + 1);
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.UserViewed,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.User,
+      entityId: owned.userId,
+      payload: { path: '/admin/users/:id', result: 'found', userId: owned.userId },
+    });
+  });
+
+  it('refuses the next read once the session has ended', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    expect((await withSession('GET', '/admin/deposits', token)).statusCode).toBe(200);
+    await withSession('POST', '/admin/auth/logout', token);
+
+    expect((await withSession('GET', '/admin/deposits', token)).statusCode).toBe(401);
   });
 });
 

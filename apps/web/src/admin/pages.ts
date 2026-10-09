@@ -18,12 +18,14 @@ import {
   ADMIN_USER_RECENT_INTENTS,
   ADMIN_USER_RECENT_LEDGER,
   adminAuditSearchParams,
+  adminDepositsSearchParams,
   adminIntentsSearchParams,
   adminTokensSearchParams,
   adminTradingSessionsSearchParams,
   adminUsersSearchParams,
   AuditAction,
   AuditEntityType,
+  DepositEventStatus,
   TokenLedgerKind,
   TradeIntentStatus,
   TradeMode,
@@ -31,6 +33,8 @@ import {
   type AdminAuditEntryView,
   type AdminAuditQuery,
   type AdminBrokerAccountView,
+  type AdminDepositsQuery,
+  type AdminDepositView,
   type AdminIntentsQuery,
   type AdminLedgerEntry,
   type AdminOverview,
@@ -126,7 +130,8 @@ export type AdminNavKey =
   | 'tradingSessions'
   | 'tokens'
   | 'audit'
-  | 'botTexts';
+  | 'botTexts'
+  | 'deposits';
 
 const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview },
@@ -137,6 +142,7 @@ const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'tokens', href: '/admin/tokens', label: TEXTS.navTokens },
   { key: 'audit', href: '/admin/audit', label: TEXTS.navAudit },
   { key: 'botTexts', href: '/admin/bot-texts', label: TEXTS.navBotTexts },
+  { key: 'deposits', href: '/admin/deposits', label: TEXTS.navDeposits },
 ];
 
 /**
@@ -401,7 +407,7 @@ const accountRow = (account: AdminBrokerAccountView): SafeHtml =>
   </tr>`;
 
 export const userPage = (
-  { user, brokerAccounts, intents, ledger }: Omit<AdminUserResponse, 'me'>,
+  { user, brokerAccounts, intents, ledger, deposits }: Omit<AdminUserResponse, 'me'>,
   login: string,
 ): SafeHtml =>
   adminShell({
@@ -487,6 +493,14 @@ export const userPage = (
               ${ledgerTable(ledger.recent)}`
       }
       <p><a href="${tokensHref({ user: user.id })}">${TEXTS.userLedgerAll}</a></p>
+      <h2>${TEXTS.userDeposits}</h2>
+      ${
+        deposits.recent.length === 0
+          ? html`<p>${TEXTS.depositsEmpty}</p>`
+          : html`<p class="hint">${TEXTS.userDepositsRecent(ADMIN_USER_RECENT_LEDGER)}</p>
+              ${depositsTable(deposits.recent)}`
+      }
+      <p><a href="${depositsHref({ user: user.id })}">${TEXTS.userDepositsAll}</a></p>
       <h2>${TEXTS.userAudit}</h2>
       <p>
         <a href="${auditHref({ entityType: AuditEntityType.User, entityId: user.id })}"
@@ -978,6 +992,105 @@ export const auditPage = (
             ? ''
             : html`<a href="${auditHref({ ...filters, cursor: options.nextCursor })}"
                 >${TEXTS.auditNext}</a
+              >`
+        }
+      </p>`,
+  });
+};
+
+// --- Deposits (#341, docs/admin-pages.md → Deposits) --------------------------------------------
+
+/** The deposits list URL, through the shared serializer as the other lists. */
+export const depositsHref = (query: AdminDepositsQuery): string => {
+  const params = adminDepositsSearchParams(query);
+  return params.size > 0 ? `/admin/deposits?${params}` : '/admin/deposits';
+};
+
+// The owner is user_id alone: a deposit that names only an account has no owner to link to, and
+// the account has no page (its id is the next column).
+const depositOwner = (deposit: AdminDepositView): SafeHtml | string =>
+  deposit.userId === null || deposit.telegramUserId === null
+    ? TEXTS.none
+    : html`<a href="/admin/users/${deposit.userId}">${deposit.telegramUserId}</a>`;
+
+const depositRow = (deposit: AdminDepositView): SafeHtml =>
+  html`<tr>
+    <td>${when(deposit.createdAt)}</td>
+    <td>${depositOwner(deposit)}</td>
+    <td>${code(deposit.brokerAccountId)}</td>
+    <td>${code(deposit.postbackId)}</td>
+    <td>${code(deposit.paymentId)}</td>
+    <td class="num">${orNone(deposit.amount)}</td>
+    <td>${orNone(deposit.currency)}</td>
+    <td>${code(deposit.status)}</td>
+    <td>${whenOrNone(deposit.processedAt)}</td>
+  </tr>`;
+
+// The deposits table of the list and of the user card's section: one set of columns.
+const depositsTable = (deposits: readonly AdminDepositView[]): SafeHtml =>
+  html`<table>
+    <thead>
+      <tr>
+        <th>${TEXTS.columnDepositAt}</th>
+        <th>${TEXTS.columnTelegramId}</th>
+        <th>${TEXTS.columnAccountId}</th>
+        <th>${TEXTS.columnPostbackId}</th>
+        <th>${TEXTS.columnPaymentId}</th>
+        <th>${TEXTS.columnAmount}</th>
+        <th>${TEXTS.columnCurrency}</th>
+        <th>${TEXTS.columnStatus}</th>
+        <th>${TEXTS.columnProcessedAt}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${deposits.map(depositRow)}
+    </tbody>
+  </table>`;
+
+export const depositsPage = (
+  deposits: readonly AdminDepositView[],
+  options: {
+    filters: Omit<AdminDepositsQuery, 'cursor'>;
+    cursor?: string;
+    nextCursor: string | null;
+    login?: string;
+    message?: string;
+  },
+): SafeHtml => {
+  const { filters } = options;
+  return adminShell({
+    title: TEXTS.depositsTitle,
+    active: 'deposits',
+    login: options.login,
+    body: html`<h1>${TEXTS.depositsHeading}</h1>
+      ${error(options.message)}
+      <form class="search" method="get" action="/admin/deposits">
+        <label
+          >${TEXTS.depositsFilterStatus}
+          <select name="status">
+            ${option('', TEXTS.depositsFilterAny, filters.status ?? '')}
+            ${Object.values(DepositEventStatus).map((s) => option(s, s, filters.status))}
+          </select>
+        </label>
+        <label
+          >${TEXTS.depositsFilterUser}
+          <input name="user" value="${filters.user ?? ''}" autocomplete="off" />
+        </label>
+        <button type="submit">${TEXTS.depositsFilterSubmit}</button>
+      </form>
+      <p class="hint">${TEXTS.depositsFilterHint}</p>
+      ${deposits.length === 0 ? html`<p>${TEXTS.depositsEmpty}</p>` : depositsTable(deposits)}
+      <p class="pager">
+        ${
+          options.cursor !== undefined || deposits.length === 0
+            ? html`<a href="${depositsHref(filters)}">${TEXTS.depositsFirst}</a>`
+            : ''
+        }
+        ${
+          options.nextCursor === null
+            ? ''
+            : html`<a href="${depositsHref({ ...filters, cursor: options.nextCursor })}"
+                >${TEXTS.depositsNext}</a
               >`
         }
       </p>`,

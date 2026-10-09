@@ -12,6 +12,7 @@ import {
   errorLogFields,
   safeParseAdminAuditQuery,
   safeParseAdminChangePasswordRequest,
+  safeParseAdminDepositsQuery,
   safeParseAdminIntentsQuery,
   safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
@@ -38,6 +39,8 @@ import {
   type BotTextPageOptions,
   auditPage,
   confirmPage,
+  depositsHref,
+  depositsPage,
   intentPage,
   intentsHref,
   intentsPage,
@@ -390,6 +393,32 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         reply,
         200,
         auditPage(entries, { filters, cursor, nextCursor, login: me.login }),
+      );
+    }),
+  );
+
+  app.get('/admin/deposits', async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const query = compactQuery(request.query);
+      // the filters first, without the cursor, as on the token ledger
+      const parsed = safeParseAdminDepositsQuery({ ...query, cursor: undefined });
+      if (!parsed.success) {
+        return sendHtml(
+          reply,
+          400,
+          depositsPage([], { filters: {}, nextCursor: null, message: TEXTS.depositsBadFilter }),
+        );
+      }
+      const filters = parsed.data;
+      const cursor = query.cursor;
+      if (cursor !== undefined && (typeof cursor !== 'string' || !UUID_PATTERN.test(cursor))) {
+        return reply.redirect(depositsHref(filters), 302);
+      }
+      const { me, deposits, nextCursor } = await backend.deposits(token, { ...filters, cursor });
+      return sendHtml(
+        reply,
+        200,
+        depositsPage(deposits, { filters, cursor, nextCursor, login: me.login }),
       );
     }),
   );

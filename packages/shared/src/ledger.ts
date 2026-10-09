@@ -20,3 +20,13 @@ export const tokenLedgerKindSchema = z.enum(TokenLedgerKind);
 export const TokenLedgerRefType = { Manual: 'manual' } as const;
 export type TokenLedgerRefType = (typeof TokenLedgerRefType)[keyof typeof TokenLedgerRefType];
 export const tokenLedgerRefTypeSchema = z.enum(TokenLedgerRefType);
+
+// Moved from packages/db (#341) for the same reason: the deposits page filters by these values.
+export const DepositEventStatus = {
+  Received: 'received',
+  Credited: 'credited',
+  Ignored: 'ignored',
+  Failed: 'failed',
+} as const;
+export type DepositEventStatus = (typeof DepositEventStatus)[keyof typeof DepositEventStatus];
+export const depositEventStatusSchema = z.enum(DepositEventStatus);

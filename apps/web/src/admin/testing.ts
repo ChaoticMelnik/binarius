@@ -3,6 +3,7 @@ import {
   AuditActorType,
   AuditEntityType,
   BrokerAccountStatus,
+  DepositEventStatus,
   NotificationLevel,
   TokenLedgerKind,
   TradeAction,
@@ -18,6 +19,8 @@ import {
   type AdminBotProfileMethodResult,
   type AdminBotTextsResponse,
   type AdminBotTextView,
+  type AdminDepositsResponse,
+  type AdminDepositView,
   type AdminIntentResponse,
   type AdminIntentsResponse,
   type AdminLedgerEntry,
@@ -32,7 +35,7 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 
-// Backend answers for the read pages (#107, #108, #330, #109, #110), valid against their strict schemas. Shared by
+// Backend answers for the read pages (#107, #108, #330, #109, #110, #341), valid against their strict schemas. Shared by
 // the client's and the pages' tests.
 
 const AT = '2026-10-07T08:00:00.000Z';
@@ -137,6 +140,36 @@ export const SAMPLE_LEDGER_ADJUSTMENT: AdminLedgerEntry = {
   note: '<script>alert(1)</script>',
 };
 
+// a credited deposit of the sample user, through its account
+export const SAMPLE_DEPOSIT: AdminDepositView = {
+  id: '00000000-0000-4000-8000-000000000071',
+  userId: SAMPLE_USER_ID,
+  telegramUserId: '4242',
+  brokerAccountId: '00000000-0000-4000-8000-0000000000d1',
+  postbackId: 'pb-1',
+  paymentId: 'pay-1',
+  amount: '10.50000000' as DecimalString,
+  currency: 'USD',
+  status: DepositEventStatus.Credited,
+  processedAt: AT,
+  createdAt: AT,
+};
+
+// an unattributed postback: every nullable key null, a postback id that must print as text
+export const SAMPLE_DEPOSIT_UNOWNED: AdminDepositView = {
+  id: '00000000-0000-4000-8000-000000000072',
+  userId: null,
+  telegramUserId: null,
+  brokerAccountId: null,
+  postbackId: 'pb-<b>',
+  paymentId: null,
+  amount: null,
+  currency: null,
+  status: DepositEventStatus.Received,
+  processedAt: null,
+  createdAt: AT,
+};
+
 export const SAMPLE_USER: AdminUserResponse = {
   me: SAMPLE_ME,
   user: {
@@ -172,6 +205,7 @@ export const SAMPLE_USER: AdminUserResponse = {
   ],
   intents: { recent: [SAMPLE_INTENT], total: 3, active: 1 },
   ledger: { recent: [SAMPLE_LEDGER_ENTRY] },
+  deposits: { recent: [SAMPLE_DEPOSIT] },
 };
 
 export const SAMPLE_INTENTS: AdminIntentsResponse = {
@@ -267,6 +301,12 @@ export const SAMPLE_AUDIT_ENTRY_INTENT: AdminAuditEntryView = {
 export const SAMPLE_AUDIT: AdminAuditResponse = {
   me: SAMPLE_ME,
   entries: [SAMPLE_AUDIT_ENTRY, SAMPLE_AUDIT_ENTRY_NULLS, SAMPLE_AUDIT_ENTRY_INTENT],
+  nextCursor: null,
+};
+
+export const SAMPLE_DEPOSITS: AdminDepositsResponse = {
+  me: SAMPLE_ME,
+  deposits: [SAMPLE_DEPOSIT, SAMPLE_DEPOSIT_UNOWNED],
   nextCursor: null,
 };
 

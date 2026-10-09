@@ -57,6 +57,8 @@ export const AuditAction = {
   BotTextPreviewed: 'bot_text_previewed',
   // the command menu and the profile published from the admin (#361)
   BotProfilePublished: 'bot_profile_published',
+  // admin deposits page (#341)
+  DepositsViewed: 'deposits_viewed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);

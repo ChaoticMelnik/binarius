@@ -1,13 +1,20 @@
 import { and, desc, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
-import type { AdminLedgerEntry, TokenLedgerKind } from '@binarius/shared';
+import type {
+  AdminDepositView,
+  AdminLedgerEntry,
+  DepositEventStatus,
+  TokenLedgerKind,
+} from '@binarius/shared';
+import { depositEvents } from './schema/deposit-events';
 import { tokenLedger } from './schema/token-ledger';
 import { users } from './schema/users';
 import type { Tx } from './trade-intent-ops';
 
-// The admin token ledger page and the user card's ledger section (#109; docs/admin-pages.md).
+// The admin token ledger page and the user card's ledger section (#109; docs/admin-pages.md),
+// and the deposits page and section (#341).
 // Every function takes a Tx, not a Db: each runs inside the staff transaction that also writes
 // its audit row (runAsStaff), and none of them locks anything — only the staff_sessions touch is
-// an UPDATE. Read only: nothing here writes token_ledger or users.
+// an UPDATE. Read only: nothing here writes token_ledger, deposit_events or users.
 
 export type AdminLedgerRow = typeof tokenLedger.$inferSelect & { telegramUserId: bigint };
 
@@ -70,6 +77,99 @@ export function toAdminLedgerEntry(row: AdminLedgerRow): AdminLedgerEntry {
     refType: row.refType,
     refId: row.refId,
     note: row.note,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+// --- Deposits (#341) ----------------------------------------------------------------------------
+
+// `payload` is not in the type: the raw postback is never selected, so it cannot leave the
+// database, let alone the backend.
+export type AdminDepositRow = Pick<
+  typeof depositEvents.$inferSelect,
+  | 'id'
+  | 'userId'
+  | 'brokerAccountId'
+  | 'postbackId'
+  | 'paymentId'
+  | 'amount'
+  | 'currency'
+  | 'status'
+  | 'processedAt'
+  | 'createdAt'
+> & { telegramUserId: bigint | null };
+
+export interface AdminDepositFilters {
+  userId?: string;
+  status?: DepositEventStatus;
+}
+
+export interface AdminDepositsPage {
+  rows: AdminDepositRow[];
+  // the id of the last row shown, only when at least one more row exists
+  nextCursor: string | null;
+}
+
+// An explicit projection, not getTableColumns: that would select `payload`.
+const depositWithOwner = {
+  id: depositEvents.id,
+  userId: depositEvents.userId,
+  brokerAccountId: depositEvents.brokerAccountId,
+  postbackId: depositEvents.postbackId,
+  paymentId: depositEvents.paymentId,
+  amount: depositEvents.amount,
+  currency: depositEvents.currency,
+  status: depositEvents.status,
+  processedAt: depositEvents.processedAt,
+  createdAt: depositEvents.createdAt,
+  telegramUserId: users.telegramUserId,
+};
+
+// The same keyset as listLedgerForAdmin. The owner is deposit_events.user_id alone: a left join,
+// because an unattributed postback has none, and a row that names an account but no user stays
+// out of a `userId` filter, as an unowned one does.
+export async function listDepositsForAdmin(
+  tx: Tx,
+  options: { filters: AdminDepositFilters; cursor?: string; limit: number },
+): Promise<AdminDepositsPage> {
+  const { userId, status } = options.filters;
+  const conditions: (SQL | undefined)[] = [
+    userId === undefined ? undefined : eq(depositEvents.userId, userId),
+    status === undefined ? undefined : eq(depositEvents.status, status),
+  ];
+  if (options.cursor !== undefined) {
+    conditions.push(
+      sql`(${depositEvents.createdAt}, ${depositEvents.id}) < (select c.created_at, c.id from ${depositEvents} as c where c.id = ${options.cursor})`,
+    );
+  }
+  const rows = await tx
+    .select(depositWithOwner)
+    .from(depositEvents)
+    .leftJoin(users, eq(users.id, depositEvents.userId))
+    .where(and(...conditions))
+    .orderBy(desc(depositEvents.createdAt), desc(depositEvents.id))
+    .limit(options.limit + 1);
+  const page = rows.slice(0, options.limit);
+  const last = page.at(-1);
+  return {
+    rows: page,
+    nextCursor: rows.length > options.limit && last !== undefined ? last.id : null,
+  };
+}
+
+// Key by key, the row is never spread. `amount` is the numeric's own string (Rule 2).
+export function toAdminDepositView(row: AdminDepositRow): AdminDepositView {
+  return {
+    id: row.id,
+    userId: row.userId,
+    telegramUserId: row.telegramUserId === null ? null : row.telegramUserId.toString(),
+    brokerAccountId: row.brokerAccountId,
+    postbackId: row.postbackId,
+    paymentId: row.paymentId,
+    amount: row.amount,
+    currency: row.currency,
+    status: row.status,
+    processedAt: row.processedAt === null ? null : row.processedAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
   };
 }

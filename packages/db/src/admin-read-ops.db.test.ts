@@ -25,13 +25,14 @@ import {
 } from './admin-read-ops';
 import { TERMINAL_TRADE_INTENT_STATUSES } from './schema/trade-intents';
 import type { Db } from './client';
-import { brokerAccounts, tokenLedger, tradeIntents, users } from './schema/index';
+import { brokerAccounts, depositEvents, tokenLedger, tradeIntents, users } from './schema/index';
 import {
   brokerAccountRow,
   createTempDatabase,
   seedBrokerAccount,
   seedQueuedIntent,
   seedUser,
+  seedUserWithAccount,
   type TempDatabase,
 } from './testing';
 
@@ -390,6 +391,47 @@ describe('readUserForAdmin — the token ledger section (#109)', () => {
     const { userId } = await seedUser(db());
     const card = await db().transaction((tx) => readUserForAdmin(tx, userId));
     expect(card?.ledger).toEqual([]);
+  });
+});
+
+describe('readUserForAdmin — the deposits section (#341)', () => {
+  const db = withDatabase();
+  let seq = 0;
+
+  const deposit = async (
+    owner: { userId?: string; brokerAccountId: string },
+    secondsAgo: number,
+  ) => {
+    const [row] = await db()
+      .insert(depositEvents)
+      .values({
+        userId: owner.userId ?? null,
+        brokerAccountId: owner.brokerAccountId,
+        postbackId: `card-pb-${++seq}`,
+        payload: {},
+        createdAt: sql`'2026-10-01T12:00:00.000000Z'::timestamptz - make_interval(secs => ${secondsAgo})`,
+      })
+      .returning({ id: depositEvents.id });
+    if (row === undefined) throw new Error('deposit: insert returned no row');
+    return row.id;
+  };
+
+  it("reads the user's newest ADMIN_USER_RECENT_LEDGER deposits, none of another user's or an account-only row", async () => {
+    const owner = await seedUserWithAccount(db());
+    const other = await seedUserWithAccount(db());
+    const own: string[] = [];
+    for (let i = 0; i < 25; i += 1) own.push(await deposit(owner, 2 * i + 3));
+    // newer than every row of the owner: a leak would take a slot at the top
+    await deposit(other, 1);
+    await deposit({ brokerAccountId: owner.brokerAccountId }, 2);
+    const card = await db().transaction((tx) => readUserForAdmin(tx, owner.userId));
+    expect(card?.deposits.map((r) => r.id)).toEqual(own.slice(0, ADMIN_USER_RECENT_LEDGER));
+  });
+
+  it('is empty for a user without deposits', async () => {
+    const { userId } = await seedUser(db());
+    const card = await db().transaction((tx) => readUserForAdmin(tx, userId));
+    expect(card?.deposits).toEqual([]);
   });
 });
 
