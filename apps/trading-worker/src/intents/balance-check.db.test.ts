@@ -5,6 +5,7 @@ import { BrokerRestError } from '@binarius/broker-rest';
 import type { BrokerUser, DecimalString } from '@binarius/shared';
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import {
+  hashToken,
   brokerBalanceSnapshots,
   brokerTrades,
   createTradeIntent,
@@ -88,7 +89,10 @@ async function withOpenTrade(patch: Parameters<typeof seedQueuedIntent>[1] = {})
 
 function harness(
   answer: (signal: AbortSignal | undefined) => Promise<BrokerUser>,
-  token: AccessTokenOutcome = { ok: true, accessToken: 'SECRET-token' },
+  token: AccessTokenOutcome | (() => AccessTokenOutcome) = {
+    ok: true,
+    accessToken: 'SECRET-token',
+  },
 ) {
   const lines: string[] = [];
   const logger = pino({ level: 'info' }, { write: (line: string) => void lines.push(line) });
@@ -105,7 +109,7 @@ function harness(
     tokens: {
       accessToken: (_id, options = {}) => {
         tokenCalls.push(options);
-        return Promise.resolve(token);
+        return Promise.resolve(typeof token === 'function' ? token() : token);
       },
     },
     logger,
@@ -316,5 +320,43 @@ describe('createBalanceCheck (#92)', () => {
     const h = harness(async () => userOf(a.brokerUserId, { demo: SECRET_HELD, real: '0' }));
     expect(await h.run(a.brokerAccountId)).toBe('mismatch');
     expect(h.all('broker balance mismatch')).toEqual([expect.objectContaining({ mode: 'demo' })]);
+  });
+
+  it('B14 reports the refused token on a 401, never asking for an exchange (#281)', async () => {
+    const a = await withOpenTrade();
+    const h = harness(() => Promise.reject(new BrokerRestError('unauthorized', { status: 401 })));
+    const signal = new AbortController().signal;
+    expect(await h.run(a.brokerAccountId, signal)).toBe('failed');
+    expect(h.tokenCalls).toEqual([
+      { mayRefresh: false, signal },
+      { mayRefresh: false, signal, refusedToken: hashToken('SECRET-token') },
+    ]);
+  });
+
+  it('B15 writes and alerts nothing once the pass gave up during the GET', async () => {
+    const a = await withOpenTrade();
+    const controller = new AbortController();
+    const h = harness(async () => {
+      controller.abort();
+      return userOf(a.brokerUserId, { demo: SECRET_HELD });
+    });
+    expect(await h.run(a.brokerAccountId, controller.signal)).toBe('aborted');
+    expect(await snapshotOf(a.brokerAccountId)).toBeUndefined();
+    expect(h.all('broker balance mismatch')).toEqual([]);
+  });
+
+  it('B16 calls a token fetch cut by the deadline aborted, not a token failure', async () => {
+    const a = await withOpenTrade();
+    const controller = new AbortController();
+    const h = harness(
+      async () => userOf(a.brokerUserId, {}),
+      () => {
+        controller.abort();
+        return { ok: false, reason: 'backend_unreachable' };
+      },
+    );
+    expect(await h.run(a.brokerAccountId, controller.signal)).toBe('aborted');
+    expect(h.all('balance check failed')).toEqual([]);
+    expect(h.gets()).toBe(0);
   });
 });

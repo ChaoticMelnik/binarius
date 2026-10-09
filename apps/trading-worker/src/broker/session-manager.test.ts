@@ -16,7 +16,7 @@ import {
   type AccessTokenOptions,
   type AccessTokenOutcome,
 } from './access-token';
-import type { DeadLetter, DeadLetterSink } from '../intents/consumer';
+import type { DeadLetter, DeadLetterSink } from '../dead-letter';
 import type { BrokerEvent } from './events';
 import type { SessionManagerConfig } from './session-config';
 import {
@@ -974,6 +974,31 @@ describe('sessionFor, stop() and the tick', () => {
     await until('no socket', () => broker.socket.sockets().length === 0);
     expect(h.writes).toEqual([]);
     expect(h.manager.size).toBe(0);
+  });
+
+  it('U10c a dead-letter write that never answers holds the account queue for its timeout only (#92)', async () => {
+    let added = 0;
+    const h = harness({
+      writers: (writes) => ({
+        ...recordingWriters(writes),
+        snapshot: () => Promise.reject(new Error('connection terminated')),
+      }),
+      deadLetters: {
+        add: () => {
+          added += 1;
+          return new Promise(() => undefined);
+        },
+      },
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await readyFor(h, 'acc-1');
+    await until('the dead-letter write', () => added === 1);
+    broker.socket.emitRaw({ userId: 1 }, 'user.demo.update_balance', balanceWire('5.00'));
+    await until('the balance write after the timeout', () => h.writes.length === 1);
+    expect(h.logs('dlq_publish_failed')).toEqual([
+      expect.objectContaining({ accountId: 'acc-1', source: 'user_data', reason: 'timeout' }),
+    ]);
   });
 
   it('U12c stop() waits for a dead-letter write in flight (#92)', async () => {

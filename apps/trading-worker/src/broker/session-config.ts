@@ -27,6 +27,9 @@ export const SESSION_RETRY_MS = 60_000;
 export const SESSION_REFUSAL_RETRY_MS = 300_000;
 export const SESSION_START_CONCURRENCY = 4;
 export const SESSION_STOP_BUDGET_MS = 2_000;
+// how long a session write that threw waits for its dead letter (#92): below the stop budget, so
+// stop() never waits on Redis longer than on the write itself
+export const DEAD_LETTER_WRITE_TIMEOUT_MS = 1_000;
 export const MAX_SESSIONS_PER_WORKER = 500;
 
 export interface SessionManagerConfig {
@@ -71,7 +74,9 @@ export function sessionManagerConfigHolds(config: SessionManagerConfig): boolean
 }
 
 // a constant edited out of order fails at import, not in production
-export const SESSION_CHAIN_HOLDS = sessionManagerConfigHolds(SESSION_MANAGER_CONFIG);
+export const SESSION_CHAIN_HOLDS =
+  sessionManagerConfigHolds(SESSION_MANAGER_CONFIG) &&
+  DEAD_LETTER_WRITE_TIMEOUT_MS < SESSION_STOP_BUDGET_MS;
 if (!SESSION_CHAIN_HOLDS) {
   throw new Error('broker session constants are out of order (see broker/session-config.ts)');
 }

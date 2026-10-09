@@ -47,7 +47,8 @@ import {
   SWEEP_INTERVAL_MS,
 } from './intents/config';
 import { createBalanceCheck } from './intents/balance-check';
-import { startIntentConsumer, type DeadLetter } from './intents/consumer';
+import type { DeadLetter } from './dead-letter';
+import { startIntentConsumer } from './intents/consumer';
 import { processIntentJob } from './intents/processor';
 import { createReconciliationPass, processReconciliationJob } from './intents/reconciliation';
 import { createRestReconciler } from './intents/rest-reconciler';
@@ -81,12 +82,11 @@ const tokens = createBackendAccessTokenSource({
 // The broker sessions only with BROKER_WS_URL set (docs/broker-session.md); unset, every order
 // goes over REST. A writer that throws leaves its event in the consumers' dead-letter queue (#92):
 // its own instance, because the manager is built before the consumers.
-const sessionDeadLetters =
-  env.brokerWsUrl === undefined
-    ? undefined
-    : new Queue<DeadLetter>(TRADING_INTENTS_DEAD_LETTER_QUEUE, { connection: redis });
+const sessionDeadLetters = new Queue<DeadLetter>(TRADING_INTENTS_DEAD_LETTER_QUEUE, {
+  connection: redis,
+});
 const sessions =
-  env.brokerWsUrl === undefined || sessionDeadLetters === undefined
+  env.brokerWsUrl === undefined
     ? undefined
     : createBrokerSessionManager({
         url: env.brokerWsUrl,
@@ -241,7 +241,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     [
       () => consumer.dlq.close(),
       () => reconciliationConsumer.dlq.close(),
-      () => sessionDeadLetters?.close() ?? Promise.resolve(),
+      () => sessionDeadLetters.close(),
       () => redis.quit(),
       () => pool.end(),
     ],

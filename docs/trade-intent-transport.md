@@ -297,10 +297,12 @@ from `AccountHaltReason`, in one transaction. After the commit one line
 source for #69). A lost CAS writes and alerts nothing. Only an operator lifts the halt, writing
 both columns (the pair CHECK).
 
-**Balance check after an outcome (#92).** After every recorded `accepted`, `settled`,
-`manual_review` and `rejected` (the last has no producer until #274), and only while the pass is
-not stopping, the pass runs `createBalanceCheck` (`intents/balance-check.ts`) for the intent's
-account under its own deadline, `BALANCE_CHECK_TIMEOUT_MS` (15 s). The check never changes the
+**Balance check after an outcome (#92).** After every recorded `accepted`, `settled` and
+`rejected` (the last has no producer until #274), and only while the pass is not stopping, the
+pass runs `createBalanceCheck` (`intents/balance-check.ts`) for the intent's account under its own
+deadline, `BALANCE_CHECK_TIMEOUT_MS` (20 s: the token, the GET and, on a 401, the report of the
+refused token, `2 × 7 + 5 < 20`). Not after `manual_review`: the account is already halted and
+alerted, and the parked intent keeps its mode out of any compare. The check never changes the
 outcome or the intent:
 
 1. `readHeldExposure` (`packages/db`, one statement, no locks): per mode, our open
@@ -329,9 +331,12 @@ The two reads, not the trade durations, keep a moving trade out of the compare: 
 or with its trade in the first read's ids) or creates one after it (the count changes)
 (`balance-check.db.test.ts` B5b, B6, B6b). No amount reaches a log line. Failures are a `warn`
 `balance check failed` with `reason` (`token`, `account_not_found`, `broker` with `code`,
-`status`, `retryAfterSec`; the broker's `detail` is not logged); a `rate_limited` GET ends the
-tick like the attempt's own 429; a throw is `error` `balance check threw` and a deadline `warn`
-`balance check timed out`. The tick summary counts `balanceCompared` and `balanceMismatch`.
+`status`, `retryAfterSec`; the broker's `detail` is not logged); a 401 also reports the refused
+token with `mayRefresh: false` (#281); a `rate_limited` GET ends the tick like the attempt's own
+429; a throw is `error` `balance check threw` and a deadline `warn` `balance check timed out`. A
+check whose signal the deadline or `stop()` aborted ends `aborted` at the next step: a cut token
+fetch is not logged as a backend failure, and after the GET it writes and alerts nothing
+(B14–B16). The tick summary counts `balanceCompared` and `balanceMismatch`.
 
 **Settlement catch-up.** `listOverdueAcceptedIntents` (open time + duration + 10 s grace by the
 database clock; every 5 s, at most 3 intents a tick — sized in #313 for the demo's 5 and 15 s
@@ -409,8 +414,15 @@ sees `unknown`, not `submitting`) and reconciliation recovers the real result.
 broker session write that throws (#92, [broker-session.md](broker-session.md)) leaves
 `{ source: 'user_data' | 'update_balance' | 'close_trade_success', accountId, mode, brokerTradeIds,
 reason: 'processing_failed', failedAt }`: the event's mode and trade ids, never its amounts or
-user object. The session manager awaits the write inside the account's write queue, so `stop()`
-waits for it too; the writes `stop()` drops are not failures and leave nothing. No exception text is stored — it can carry connection
+user object. Its job id is `session.<accountId>.<source>.<UTC hour>`: BullMQ adds nothing while
+an entry with the id exists and nothing consumes the queue, so a writer failing on every event
+leaves at most three entries per account an hour (the trade ids are the hour's first event's);
+the log line marks every failure. The session manager awaits the write inside the account's
+write queue, so `stop()` waits for it too, but never longer than `DEAD_LETTER_WRITE_TIMEOUT_MS`
+(1 s, below `SESSION_STOP_BUDGET_MS`): the worker's Redis connection holds a command while
+Redis is down instead of failing it, and the queue then goes on after an `error`
+`dlq_publish_failed` with `reason: 'timeout'` (the entry lands once Redis is back). The writes
+`stop()` drops are not failures and leave nothing. No exception text is stored — it can carry connection
 details — the log line next to it has the error. A failure to write the entry is logged as
 `dlq_publish_failed`; the worker keeps running. Writes started by jobs that fail during a
 shutdown drain are awaited before the queue connection closes. Nothing consumes the queue
@@ -466,7 +478,7 @@ Worker (optional, code defaults in `apps/trading-worker/src/env.ts`):
 Fixed constants and why they relate the way they do: `apps/trading-worker/src/intents/config.ts`
 — among them the reconciliation pass's `RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s),
 `RECONCILE_RETRY_MS` (60 s, the lease), `RECONCILE_TICK_MS` (15 s), `RECONCILE_BATCH_SIZE`
-(16) and the balance check's `BALANCE_CHECK_TIMEOUT_MS` (15 s), the matching window and pages (`RECONCILE_WINDOW_*`, `RECONCILE_TRADES_PAGE_SIZE`,
+(16) and the balance check's `BALANCE_CHECK_TIMEOUT_MS` (20 s), the matching window and pages (`RECONCILE_WINDOW_*`, `RECONCILE_TRADES_PAGE_SIZE`,
 `RECONCILE_MAX_TRADE_PAGES`) and the catch-up's `CATCHUP_*`; none has an environment variable.
 
 Trading itself is not configured by the environment: `REAL_TRADING_ENABLED` (#134) is gone, and

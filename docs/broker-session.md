@@ -137,8 +137,9 @@ of the same account queues behind what an earlier one left.
 A writer's throw → `error` `broker session write failed` (`source`, `errorLogFields`), then a
 dead letter `{ source, accountId, mode, brokerTradeIds }` in the consumers' queue (#92,
 [trade-intent-transport.md → Dead-letter queue](trade-intent-transport.md#dead-letter-queue)),
-awaited inside the account's queue so `stop()` waits for it; the queue goes on with the next
-write. No REST GET at session start (`user.data` is the snapshot) and none
+awaited inside the account's queue so `stop()` waits for it, for at most
+`DEAD_LETTER_WRITE_TIMEOUT_MS` (1 s, `session-config.ts`, below `SESSION_STOP_BUDGET_MS`), one
+entry per account, source and hour; the queue goes on with the next write. No REST GET at session start (`user.data` is the snapshot) and none
 after `accepted` (the `update_balance` before `open_trade.success` is it). `price.update`,
 `common.*` and the command answers are not the manager's: the answers are the executor's through
 `openTrade`.
@@ -243,7 +244,7 @@ present.
   session counted; U4/U5 the token answers and their hold-backs; U6/U6b/U7 `token_expired` and
   `auth_failed` with the same and with a new token, the fetch carrying the refused token's
   fingerprint; U6c a backend that marks it: the session waits and restarts with the exchanged one; U8 `disconnected_by_server`; U9/U9b/U9c the
-  identity gate (a burst with a foreign `user.data`, a reconnect); U10/U10b a throwing writer and its dead letter, ids only; U11
+  identity gate (a burst with a foreign `user.data`, a reconnect); U10/U10b/U10c a throwing writer and its dead letter, ids only, held for its timeout at most; U11
   `sessionFor` (U11b: only for a verified connection, again after a reconnect; U11c: none during
   the refresh after `token_expired`/`auth_failed`; U11d: none on `idle`, for a listener that
   re-enters during the stop); U12/U12b/U12c `stop()` and its budget, a dead-letter write in flight included; U13 single-flight and a failing scan; U15 a tick
