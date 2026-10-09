@@ -2424,3 +2424,46 @@ PR #356 смержен через rebase (6 коммитов, голова `1cb1
 ### Process improvement proposals
 
 None.
+
+---
+
+## #241, #78, #79, #300, #358 — admin forms, staff password change, bot texts in the admin, text variables (2026-10-08/09)
+
+Taken by this session on the owner's instruction: «#78, #79 и #300 запускай» + #241 (blocker for the POST forms) + #358 queued after #300. All five merged with rebase.
+
+| Issue | PR | Review rounds | Added lines (without snapshot) | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #241 403 on admin forms | #362 | 1 | 42 | — | skipped (limit) | → #364 |
+| #78 staff password change (backend) | #365 | 3 (limit) | ~1700 | 0028 | r2: Major (a) rejected by the reviewer, (b) → Minor; r3: Major → Minor, the owner accepted | → #369 |
+| #79 «Сменить пароль» page | #370 | 1 | 656 | — | no findings (hash checked) | → #371 |
+| #300 «Тексты бота» section | #373 | 2 | 2900 | 0029 | skipped (limit until 14.10) | → #375 |
+| #358 text variables | #377 | 1 | 1906 | 0030 (data) | skipped (limit) | accepted by the owner, no issue |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Tech Lead | Taking over | #78, #79, #241 were In Progress with plans but without branches; #300 and #358 got new plans. |
+| Architect | Plans | Fable (the limit reset 2026-10-07). #78, #79, #241 — Plan Updates against `main`; #300, #358 — clarify (5 questions each) and plans; #300 split out #361 (publishing). Codex was not used in planning — the owner's decision of 2026-10-08. The architects of #78 and #300 were stopped by the session restart and continued from their transcripts; no duplicate posted. |
+| Implementer | Workspace | Separate worktrees impl-* turned out to be unwritable (a worktree-isolated session): implementers ran one at a time in rosy-singing-fiddle, in the order #241 → #78 → #79 → #300 → #358 (it is also the dependency order). |
+| Implementer | Clarify + code | Each answered by the owner. The guard script before `pnpm check` was stopped by the permission system — the owner: «Сразу pnpm check». #78's implementer died on a network error after its commits and was continued. |
+| Reviewer | #78 | r1: Major — a password oracle under a lockout (429 vs 401 + timing) → Plan Update «единый 429 + перепроверка» (the owner); r2: no Blocker/Major, the owner chose to fix the Minors; r3: the last round, Minor → #369. |
+| Reviewer | #300 | r1: Major — after the preview a save overwrote someone else's version without 409 → closed as a class on every re-render path; r2 clean. |
+| Tech Lead | Merges | `AskUserQuestion` before every merge; when Codex was skipped the ready-to-merge comment was posted by tech-lead; the Codex marker hash was re-checked when the pass ran. Migrations 0028-0030 were applied to the shared test DB after each merge. |
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| #78: a password oracle for in-flight guesses after a lockout | Major → fixed | unverified-claim | The plan's goal «no faster oracle than login» was not checked against the CAS branches | Architect plan |
+| #300: the hidden version was taken from the fresh view after the preview | Major → fixed as a class | instance-vs-class | D9 set the version only for GET; the re-render paths after POST were not enumerated | Architect plan |
+| #300: D5 contradicted D11 (an orphan's text in the audit row) | Plan defect | single-source | — | Architect plan → fixed in Plan Update r1 |
+| #358: 3 commits instead of the owner's «5 by layer» | Deviation | other | The contract change breaks the callers at compile time — the option «each layer is green» did not exist | Implementer clarify |
+| #79: the stale-docs grep list missed 3 places | Minor | single-source | — | Architect Plan Update → fixed in the PR |
+| Unwritable impl-* worktrees in an isolated session | Process | env-parity | tech-lead Step 7 assumes the agents can write in their own worktree | Tech Lead Step 7 |
+
+### Process improvement proposals
+
+1. **Tech-lead Step 7: in a worktree-isolated session, implementers run one at a time in the session's worktree; extra worktrees only for read-only architects** — **внедрено в #<PR>: .claude/skills/tech-lead/SKILL.md → Step 7**
+2. **Implementer clarify: do not offer a split «each layer is green» when the contract change in shared breaks the callers** — **открыто (2026-10-09, tech-lead)**
+3. **Remaining Minor** — **вынесено в #364, #369, #371, #375**
