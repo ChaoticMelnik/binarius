@@ -23,7 +23,6 @@ import {
   UserStatus,
   decimalStringSchema,
   type TradingAccessResponse,
-  type TradingSignalsResponse,
   commandRetryCallbackData,
   CONNECT_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
@@ -42,6 +41,7 @@ import {
   DEMO_GROUPS_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
   demoLaunchCallbackData,
+  demoSignalsCallbackData,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
   demoDurationCallbackData,
@@ -90,6 +90,7 @@ import {
   accountView,
   brokerBalance,
   pairsResponse,
+  signalsResponse,
   type ApiAnswer,
   SESSION_VIEW,
   sessionView,
@@ -604,22 +605,11 @@ const catalogBranches = (update: () => Update, telegram: number, backend = 1): B
   },
 ];
 
-// one listed pair, so the screen draws a row
-const SIGNALS: TradingSignalsResponse = {
-  asOf: 1_790_000_000_000,
-  interval: '15s',
-  scanned: 25,
-  signals: [
-    {
-      assetId: PAIR_EURUSD.id,
-      action: TradeAction.Up,
-      lastCandleTimestamp: 1_789_999_985_000,
-      decidedAt: 1_790_000_000_000,
-      ageMs: 500,
-    },
-  ],
-};
-// the signals screen's own outcomes, besides the catalog's (#320)
+// one listed pair on the 15s list, so the 15 s screen draws a row
+const SIGNALS = signalsResponse(1_790_000_000_000, {
+  '15s': [[PAIR_EURUSD.id, TradeAction.Up]],
+});
+// the signals screen's own outcomes, besides the catalog's (#320, #382)
 const signalsBranches = (update: () => Update, telegram: number): Branch[] => [
   {
     label: 'the signals read fails',
@@ -630,15 +620,21 @@ const signalsBranches = (update: () => Update, telegram: number): Branch[] => [
   {
     label: 'no signal is left after the join',
     update: update(),
-    readSignals: () => Promise.resolve({ ...SIGNALS, signals: [] }),
+    readSignals: () => Promise.resolve(signalsResponse(1_790_000_000_000)),
+    expected: { backend: 2, telegram },
+  },
+  {
+    label: 'the body has no list for the duration',
+    update: update(),
+    readSignals: () => Promise.resolve({ ...SIGNALS, lists: [] }),
     expected: { backend: 2, telegram },
   },
 ];
 
 const DEMO_WORST_CASE: Branch = {
-  label: 'the query is answered and the signals are sent',
+  label: 'the query is answered and the duration screen is sent',
   update: callbackUpdate(DEMO_CALLBACK_DATA),
-  expected: { backend: 2, telegram: 2 },
+  expected: { backend: 0, telegram: 2 },
 };
 
 const DEMO_BRANCHES: readonly Branch[] = [
@@ -649,13 +645,11 @@ const DEMO_BRANCHES: readonly Branch[] = [
   },
   DEMO_WORST_CASE,
   {
-    label: 'answering the query is refused and the signals still go',
+    label: 'answering the query is refused and the duration screen still goes',
     update: callbackUpdate(DEMO_CALLBACK_DATA),
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-    expected: { backend: 2, telegram: 2 },
+    expected: { backend: 0, telegram: 2 },
   },
-  ...catalogBranches(() => callbackUpdate(DEMO_CALLBACK_DATA), 2, 2),
-  ...signalsBranches(() => callbackUpdate(DEMO_CALLBACK_DATA), 2),
   // rethrown into bot.catch
   {
     label: 'the message fails in transport',
@@ -669,13 +663,13 @@ const DEMO_BRANCHES: readonly Branch[] = [
         ),
       ],
     ],
-    expected: { backend: 2, telegram: 2 },
+    expected: { backend: 0, telegram: 2 },
   },
 ];
 
 // Every demo screen after the first is one message edited in place, so its branches share the
 // edit's outcomes; `forged` is data the pattern matches and the schema refuses, `backend` the
-// screen's reads.
+// screen's reads (none: no catalog branches either).
 function demoScreenBranches(
   data: string,
   forged: string | undefined,
@@ -704,7 +698,7 @@ function demoScreenBranches(
             expected: { backend: 0, telegram: 1 },
           },
         ]),
-    ...catalogBranches(update, 2, backend),
+    ...(backend === 0 ? [] : catalogBranches(update, 2, backend)),
     { label: 'the screen is edited', update: update(), expected: { backend, telegram: 2 } },
     {
       label: 'answering the query is refused and the screen is still edited',
@@ -808,17 +802,19 @@ const DEMO_DURATION = demoScreenBranches(
   'demo:d:2147483648:15',
   pairBranches([unsupported]),
 );
-// the signals screen in place (#320)
+// the main path's duration screen in place (#382): no read
+const DEMO_DURATIONS = demoScreenBranches(DEMO_SIGNALS_CALLBACK_DATA, undefined, [], 0);
+// a duration's signals screen in place (#320, #382)
 const DEMO_SIGNALS = demoScreenBranches(
-  DEMO_SIGNALS_CALLBACK_DATA,
+  demoSignalsCallbackData(15),
   undefined,
-  signalsBranches(() => callbackUpdate(DEMO_SIGNALS_CALLBACK_DATA), 2),
+  signalsBranches(() => callbackUpdate(demoSignalsCallbackData(15)), 2),
   2,
 );
-// the launch screen (#320): the pair checked at 15 s, the amount from access
+// the launch screen (#320): the pair checked at the data's duration, the amount from access
 const DEMO_LAUNCH = demoScreenBranches(
-  demoLaunchCallbackData(PAIR_EURUSD.id),
-  'demo:l:0',
+  demoLaunchCallbackData(PAIR_EURUSD.id, 15),
+  'demo:l:0:15',
   pairBranches(
     [
       { ...unsupported, expected: { backend: 2, telegram: 2 } },
@@ -1979,11 +1975,11 @@ const LAUNCH_SAVE_EXTRA = (elsewhere: string): [string, Partial<Branch>][] => [
     { update: callbackUpdate(elsewhere), expected: { backend: 1, telegram: 2 } },
   ],
 ];
-const STAKE_PRESET = pickerBranches(`stk:s:5:p:${PAIR_EURUSD.id}`, 2, {
+const STAKE_PRESET = pickerBranches(`stk:s:5:p:${PAIR_EURUSD.id}:15`, 2, {
   forged: 'stk:s:0:s',
   extra: LAUNCH_SAVE_EXTRA('stk:s:5:s'),
 });
-const STAKE_RESET = pickerBranches(`stk:z:p:${PAIR_EURUSD.id}`, 2, {
+const STAKE_RESET = pickerBranches(`stk:z:p:${PAIR_EURUSD.id}:15`, 2, {
   forged: 'stk:z:a:0:15',
   extra: LAUNCH_SAVE_EXTRA('stk:z:s'),
 });
@@ -2008,7 +2004,7 @@ const stakeText = (label: string, text: string, expected: Calls, patch: Partial<
 });
 const ON_LAUNCH_STAKE_STEP: LoginDialogState = {
   step: 'stake',
-  origin: { kind: 'pair', assetId: PAIR_EURUSD.id },
+  origin: { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 15 },
 };
 const STAKE_TEXT_WORST_CASE: Branch = stakeText(
   'the typed stake is saved from a launch screen',
@@ -2070,6 +2066,16 @@ const LEGACY_DURATION_BRANCHES: Branch[] = [
   {
     label: 'a stake picker datum of the old set',
     update: callbackUpdate('stk:o:a:101:60'),
+    expected: { backend: 0, telegram: 2 },
+  },
+  {
+    label: 'a launch screen datum from before #382',
+    update: callbackUpdate('demo:l:101'),
+    expected: { backend: 0, telegram: 2 },
+  },
+  {
+    label: 'a launch picker datum from before #382',
+    update: callbackUpdate('stk:o:p:101'),
     expected: { backend: 0, telegram: 2 },
   },
   {
@@ -2159,6 +2165,15 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('the demo button', async () => {
     await checkHandler('demo', DEMO_BRANCHES, DEMO_WORST_CASE, HANDLER_CALLS.demo);
+  });
+
+  it('the duration screen in place', async () => {
+    await checkHandler(
+      'demoDurations',
+      DEMO_DURATIONS.branches,
+      DEMO_DURATIONS.worst,
+      HANDLER_CALLS.demoDurations,
+    );
   });
 
   it('the signals screen in place', async () => {

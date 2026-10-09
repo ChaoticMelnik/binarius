@@ -317,8 +317,17 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   demoLaunch: () =>
     [undefined, { amount: null }, { amount: STAKE }].flatMap((saved) =>
       [null, STAKE].flatMap((amount) =>
-        [999, 992, 991].map((trades) =>
-          launchText({ firstName: NAME, symbol: pair.symbol, amount, trades, saved }),
+        [999, 992, 991].flatMap((trades) =>
+          DEMO_DURATIONS_SEC.map((durationSec: DemoDurationSec) =>
+            launchText({
+              firstName: NAME,
+              durationSec,
+              symbol: pair.symbol,
+              amount,
+              trades,
+              saved,
+            }),
+          ),
         ),
       ),
     ),

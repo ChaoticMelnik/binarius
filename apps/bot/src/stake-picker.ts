@@ -50,11 +50,11 @@ import { LABELS, stakePickerText, TEXTS, userContextOf } from './texts';
 // amount gets the same refusal as a typed one.
 
 // Where the picker was opened, carried in every callback as `s`, `a:<assetId>:<durationSec>` or
-// `p:<assetId>`.
+// `p:<assetId>:<durationSec>` (the launch screen's duration since #382).
 export type StakeOrigin =
   | { kind: 'settings' }
   | { kind: 'analysis'; assetId: number; durationSec: DemoDurationSec }
-  | { kind: 'pair'; assetId: number };
+  | { kind: 'pair'; assetId: number; durationSec: DemoDurationSec };
 
 // /settings re-rendered in place: the picker's way back when it was opened there (bot.ts)
 export const SETTINGS_CALLBACK_DATA = 'settings';
@@ -66,7 +66,7 @@ function originData(origin: StakeOrigin): string {
     case 'analysis':
       return `a:${origin.assetId}:${origin.durationSec}`;
     case 'pair':
-      return `p:${origin.assetId}`;
+      return `p:${origin.assetId}:${origin.durationSec}`;
     default:
       return origin satisfies never;
   }
@@ -82,18 +82,19 @@ export const stakeResetCallbackData = (origin: StakeOrigin): string =>
 export const stakeCustomCallbackData = (origin: StakeOrigin): string =>
   `${STAKE_PICKER_PREFIX}c:${originData(origin)}`;
 
-// The four shapes over an origin; the legacy origin (#313) is an analysis of a duration from
-// before #313 only, since /settings carries none.
+// The four shapes over an origin. The legacy origins: an analysis of a duration from before #313
+// (/settings carries none), and a launch screen from before #382, which carried no duration.
 const pickerPatterns = (origin: string) => ({
   open: new RegExp(`^${STAKE_PICKER_PREFIX}o:${origin}$`),
   preset: new RegExp(`^${STAKE_PICKER_PREFIX}s:(\\d{1,12}(?:\\.\\d{1,8})?):${origin}$`),
   reset: new RegExp(`^${STAKE_PICKER_PREFIX}z:${origin}$`),
   custom: new RegExp(`^${STAKE_PICKER_PREFIX}c:${origin}$`),
 });
-const PICKER = pickerPatterns(`(s|a:\\d{1,10}:(?:${DEMO_DURATIONS_SEC.join('|')})|p:\\d{1,10})`);
-const LEGACY_PICKER_PATTERNS = Object.values(
-  pickerPatterns(`(a:\\d{1,10}:(?:${LEGACY_DEMO_DURATIONS_SEC.join('|')}))`),
-);
+const PICKER = pickerPatterns(`(s|[ap]:\\d{1,10}:(?:${DEMO_DURATIONS_SEC.join('|')}))`);
+const LEGACY_PICKER_PATTERNS = [
+  ...Object.values(pickerPatterns(`(a:\\d{1,10}:(?:${LEGACY_DEMO_DURATIONS_SEC.join('|')}))`)),
+  ...Object.values(pickerPatterns('(p:\\d{1,10})')),
+];
 
 // undefined when forged: the asset id the backend would refuse, or a malformed origin
 export function stakeOriginOf(raw: string | undefined): StakeOrigin | undefined {
@@ -101,10 +102,11 @@ export function stakeOriginOf(raw: string | undefined): StakeOrigin | undefined 
   const [kind, asset, duration] = raw?.split(':') ?? [];
   const assetId = assetIdOf(asset);
   if (assetId === undefined) return undefined;
-  if (kind === 'p' && duration === undefined) return { kind: 'pair', assetId };
   const durationSec = durationOf(duration);
-  if (kind !== 'a' || durationSec === undefined) return undefined;
-  return { kind: 'analysis', assetId, durationSec };
+  if (durationSec === undefined) return undefined;
+  if (kind === 'p') return { kind: 'pair', assetId, durationSec };
+  if (kind === 'a') return { kind: 'analysis', assetId, durationSec };
+  return undefined;
 }
 
 export interface StakePickerDeps {
@@ -138,7 +140,10 @@ function backTo(keyboard: InlineKeyboard, origin: StakeOrigin): InlineKeyboard {
         demoAnalysisCallbackData(origin.assetId, origin.durationSec),
       );
     case 'pair':
-      return keyboard.text(LABELS.stakeBackLaunchButton, demoLaunchCallbackData(origin.assetId));
+      return keyboard.text(
+        LABELS.stakeBackLaunchButton,
+        demoLaunchCallbackData(origin.assetId, origin.durationSec),
+      );
     default:
       return origin satisfies never;
   }
@@ -320,7 +325,7 @@ export function createStakePicker<C extends Context>({
             keyboard: backKeyboard(origin),
           };
         case 'pair':
-          return savedLaunchScreen(origin.assetId, saved.value.saved, firstName);
+          return savedLaunchScreen(origin, saved.value.saved, firstName);
         default:
           return origin satisfies never;
       }
@@ -369,7 +374,7 @@ export function createStakePicker<C extends Context>({
   // The symbol only, so any catalog will do, a stale one included; without one the screen drops
   // its symbol line and the launch stays, since the session start checks the pair itself.
   async function savedLaunchScreen(
-    assetId: number,
+    { assetId, durationSec }: { assetId: number; durationSec: DemoDurationSec },
     amount: DecimalString | null,
     firstName: string,
   ): Promise<Screen> {
@@ -383,7 +388,7 @@ export function createStakePicker<C extends Context>({
     const symbol = catalog.ok
       ? (catalog.value.pairs.find((pair) => pair.id === assetId)?.symbol ?? null)
       : null;
-    return launchScreen({ assetId, firstName, symbol, amount, saved: { amount } });
+    return launchScreen({ assetId, durationSec, firstName, symbol, amount, saved: { amount } });
   }
 
   // only the stake step: a login the user has open is left alone

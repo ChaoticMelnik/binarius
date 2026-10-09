@@ -143,7 +143,8 @@ const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
 // the end of the path (#350): the analysis of the same pair and duration, the signals, the menu
 const END_ROWS = [
   [button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15))],
-  [button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA)],
+  // the list of the trade's duration (#382)
+  [button(LABELS.toSignalsButton, `${DEMO_SIGNALS_CALLBACK_DATA}:15`)],
   MENU_ROW,
 ];
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);

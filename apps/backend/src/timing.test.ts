@@ -14,7 +14,11 @@ import {
   DEFAULT_SIGNAL_SCAN_PER_MINUTE,
 } from '@binarius/shared/broker-budget';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
-import { SIGNAL_CHART_INTERVAL_MS, TRADING_SIGNAL_BUDGET_MS } from '@binarius/shared/signal';
+import {
+  SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_SCAN_INTERVALS,
+  TRADING_SIGNAL_BUDGET_MS,
+} from '@binarius/shared/signal';
 import { TRADING_SESSION_START_BUDGET_MS } from '@binarius/shared/trading-session';
 import {
   composeDurationMs,
@@ -41,8 +45,11 @@ import {
   SIGNAL_FETCH_BUDGET_MS,
   SIGNAL_SCAN_BACKOFF_MAX_MS,
   SIGNAL_SCAN_BACKOFF_MIN_MS,
+  SIGNAL_SCAN_SHARES_PERCENT,
   SIGNAL_SCAN_SLACK_MS,
-  signalScanMaxPairs,
+  scanDecisionsPerMinute,
+  signalScanPairs,
+  signalScanPerMinute,
   TRADING_ACCESS_REFRESH_BUDGET_MS,
 } from './timing';
 
@@ -119,17 +126,47 @@ describe('broker balance timing', () => {
     expect(SIGNAL_CACHE_MAX_TTL_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS['1m']);
   });
 
-  it('starts and ends a scan inside its 15s candle', () => {
-    expect(SIGNAL_SCAN_SLACK_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS['15s']);
+  it.each(SIGNAL_SCAN_INTERVALS)('starts and ends a scan inside its %s candle', (interval) => {
+    expect(SIGNAL_SCAN_SLACK_MS).toBeLessThan(SIGNAL_CHART_INTERVAL_MS[interval]);
     expect(SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS).toBeLessThan(
-      SIGNAL_CHART_INTERVAL_MS['15s'],
+      SIGNAL_CHART_INTERVAL_MS[interval],
     );
+    expect(Number.isInteger(scanDecisionsPerMinute(interval))).toBe(true);
+  });
+
+  it('keeps the scanner backoff bounds in order', () => {
     expect(SIGNAL_SCAN_BACKOFF_MIN_MS).toBeLessThanOrEqual(SIGNAL_SCAN_BACKOFF_MAX_MS);
   });
 
-  it('keeps the scan ceiling between one pair and the broker window', () => {
-    expect(signalScanMaxPairs(MIN_SIGNAL_SCAN_PER_MINUTE)).toBe(1);
-    expect(signalScanMaxPairs(DEFAULT_SIGNAL_SCAN_PER_MINUTE)).toBe(25);
+  it('splits the scan ceiling into 13 pairs on 15s and 4 on 5s at the default (#382)', () => {
+    expect(signalScanPairs(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(13);
+    expect(signalScanPairs(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(4);
+    expect(signalScanPairs(MAX_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(26);
+    expect(signalScanPairs(MAX_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(8);
+    expect(signalScanPerMinute(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(52);
+    expect(signalScanPerMinute(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(48);
+    expect(
+      SIGNAL_SCAN_INTERVALS.reduce(
+        (sum, interval) => sum + SIGNAL_SCAN_SHARES_PERCENT[interval],
+        0,
+      ),
+    ).toBe(100);
+    expect(
+      SIGNAL_SCAN_INTERVALS.reduce(
+        (sum, interval) =>
+          sum +
+          signalScanPairs(DEFAULT_SIGNAL_SCAN_PER_MINUTE, interval) *
+            scanDecisionsPerMinute(interval),
+        0,
+      ),
+    ).toBeLessThanOrEqual(DEFAULT_SIGNAL_SCAN_PER_MINUTE);
+  });
+
+  it('keeps the scan ceiling between one pair on every interval and the broker window', () => {
+    expect(MIN_SIGNAL_SCAN_PER_MINUTE).toBe(25);
+    expect(signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(3);
+    expect(signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(1);
+    expect(signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE - 1, '5s')).toBe(0);
     expect(MAX_SIGNAL_SCAN_PER_MINUTE).toBeLessThan(BROKER_RATE_LIMIT_PER_MINUTE);
   });
 

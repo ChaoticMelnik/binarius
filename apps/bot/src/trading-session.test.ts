@@ -128,7 +128,11 @@ const LIVE_ROWS = [
 // SESSION_VIEW's own pair and duration
 const AGAIN = button(LABELS.sessionAgainButton, sessionStartCallbackData(PAIR_EURUSD.id, 15));
 // #350: the end of the path under a stopped session, after its refresh and «🔁 Ещё сессия»
-const TO_SIGNALS = [button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA)];
+// the list of the session's duration; the duration screen for one the demo no longer offers (#382)
+const toSignals = (durationSec: 5 | 15) => [
+  button(LABELS.toSignalsButton, `${DEMO_SIGNALS_CALLBACK_DATA}:${String(durationSec)}`),
+];
+const TO_DURATIONS = [button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA)];
 const MENU = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
 const newAnalysis = (durationSec: 5 | 15) => [
   button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, durationSec)),
@@ -137,7 +141,7 @@ const STOPPED_ROWS = [
   [button(LABELS.sessionRefreshButton, REFRESH)],
   [AGAIN],
   newAnalysis(15),
-  TO_SIGNALS,
+  toSignals(15),
   MENU,
 ];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
@@ -503,7 +507,7 @@ describe('«🔁 Ещё сессия»', () => {
       [button(LABELS.sessionRefreshButton, REFRESH)],
       [button(LABELS.sessionAgainButton, sessionStartCallbackData(PAIR_EURUSD.id, 5))],
       newAnalysis(5),
-      TO_SIGNALS,
+      toSignals(5),
       MENU,
     ]);
     expect(rows(SESSION_VIEW)).toEqual(LIVE_ROWS);
@@ -521,7 +525,7 @@ describe('«🔁 Ещё сессия»', () => {
     expect(
       sessionKeyboard({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 60 } })
         .inline_keyboard,
-    ).toEqual([refresh, TO_SIGNALS, MENU]);
+    ).toEqual([refresh, TO_DURATIONS, MENU]);
   });
 
   it('starts a new session of the same pair and duration through the session button', async () => {

@@ -56,11 +56,15 @@ export const HANDLER_CALLS = {
   menuButton: { backend: 2, telegram: 3 },
   // «🔄 Повторить» of /account or /settings (#350): answerCallbackQuery, then the command
   commandRetry: { backend: 1, telegram: 2 },
-  // the status card's button, the signals screen (#320): answerCallbackQuery ∥ readSignals ∥
-  // readPairs — the reads counted as sequential, as in confirm — then sendMessage
-  demo: { backend: 2, telegram: 2 },
-  // its «🔄 Обновить» and «↩️ К списку»: the same reads, then editMessageText refused as gone →
+  // the status card's button, the main path's duration screen (#382): answerCallbackQuery, then
+  // sendMessage; no read
+  demo: { backend: 0, telegram: 2 },
+  // «↩️ Длительность» and every old «🔄 Обновить», «↩️ К списку» and «📡 К сигналам» (`demo:sig`):
+  // the same screen in place, answerCallbackQuery, then editMessageText refused as gone →
   // sendMessage
+  demoDurations: { backend: 0, telegram: 3 },
+  // a duration's list (#320, #382): answerCallbackQuery ∥ readSignals ∥ readPairs — the reads
+  // counted as sequential, as in confirm — then editMessageText refused as gone → sendMessage
   demoSignals: { backend: 2, telegram: 3 },
   // a pair of the list (#320): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — counted the
   // same way — then editMessageText refused as gone → sendMessage
@@ -71,7 +75,8 @@ export const HANDLER_CALLS = {
   demoPage: { backend: 1, telegram: 3 },
   demoAsset: { backend: 1, telegram: 3 },
   demoDuration: { backend: 1, telegram: 3 },
-  // a button with a duration from before #313: answerCallbackQuery, then editMessageReplyMarkup
+  // a button with a duration from before #313, or a launch screen's or its picker's from before
+  // #382 (no duration): answerCallbackQuery, then editMessageReplyMarkup
   legacyDuration: { backend: 0, telegram: 2 },
   // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs, the «⏳» edit refused as gone →
   // sendMessage, evaluateSignal ∥ readTradingAccess (the stake label, #297) — counted as

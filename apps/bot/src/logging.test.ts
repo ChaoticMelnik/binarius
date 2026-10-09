@@ -14,7 +14,6 @@ import {
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
   type LogLevel,
-  DEMO_CALLBACK_DATA,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -671,7 +670,7 @@ describe('what the bot writes about the demo', () => {
   // #320
   it('names a failed signals read by error, code, status and reason, without the user', async () => {
     const { lines } = await linesFrom({
-      update: callbackUpdate(DEMO_CALLBACK_DATA),
+      update: callbackUpdate('demo:sig:15'),
       level: 'trace',
       readSignals: () =>
         Promise.reject(
@@ -690,7 +689,7 @@ describe('what the bot writes about the demo', () => {
   it('names a catalog the launch screen did not get by error and code, without the user or the amount', async () => {
     const { lines } = await linesFrom({
       update: callbackUpdate(
-        stakePresetCallbackData('5', { kind: 'pair', assetId: PAIR_EURUSD.id }),
+        stakePresetCallbackData('5', { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 15 }),
       ),
       level: 'trace',
       setDemoStake: (_id, amount) => Promise.resolve({ saved: amount }),
