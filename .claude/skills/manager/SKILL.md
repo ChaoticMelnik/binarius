@@ -174,7 +174,7 @@ Then `SendMessage` to the same agent with the answers (a fresh spawn with the an
 ## Budget
 
 On every transition — before a claim, before a spawn, after every notice — compare `date -u +%s` with `deadline` from `state.json`; the alarm only wakes the manager up, the clock decides. A lost notice therefore never extends the night beyond the next transition.
-- Less than the limit of CLAUDE.md → «Бюджет» (1,5 ч) left → no new task.
+- Less than the limit of CLAUDE.md → «Бюджет» (1,5 ч) left → no new task. A trial run takes its one named task regardless (its deadline is 1 h).
 - Deadline passed → the running phase finishes; no new phase or round starts. The task stays where that phase leaves it (a posted plan → In Progress; a PR → In Review), and the report says so. An open Blocker/Major → substitution 3.
 - Then the services snapshot against each task's last baseline, the final report (§ Report), `ended`, and the session's last message: the report URL, the local file path, one line per task.
 
