@@ -409,6 +409,8 @@ export async function transitionIntent(
 // app clock never enters a CAS
 export const millisecondsAgo = (ms: number): SQL =>
   sql`now() - (${ms}::int * interval '1 millisecond')`;
+export const millisecondsFromNow = (ms: number): SQL =>
+  sql`now() + (${ms}::int * interval '1 millisecond')`;
 
 export interface TakeIntentOptions {
   id: string;

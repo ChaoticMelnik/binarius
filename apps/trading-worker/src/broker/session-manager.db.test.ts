@@ -84,6 +84,7 @@ const CONFIG: SessionManagerConfig = {
   // long enough that no lease is renewed or fenced unless a case shortens them
   leaseTtlMs: 30_000,
   leaseRenewMs: 10_000,
+  leaseRenewTimeoutMs: 5_000,
   leaseFenceMs: 25_000,
 };
 // a negative wait, past the longest reconnection delay of TIMING

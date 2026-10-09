@@ -6,6 +6,7 @@ import {
   SESSION_IDLE_GRACE_MS,
   SESSION_LEASE_FENCE_MS,
   SESSION_LEASE_RENEW_MS,
+  SESSION_LEASE_RENEW_TIMEOUT_MS,
   SESSION_LEASE_TTL_MS,
   SESSION_MANAGER_CONFIG,
   SESSION_REFUSAL_RETRY_MS,
@@ -27,6 +28,7 @@ describe('the session constants', () => {
     expect(SESSION_IDLE_GRACE_MS).toBeLessThan(BALANCE_WATCH_WINDOW_MS);
     expect(2 * SESSION_LEASE_RENEW_MS).toBeLessThan(SESSION_LEASE_FENCE_MS);
     expect(SESSION_LEASE_FENCE_MS).toBeLessThan(SESSION_LEASE_TTL_MS);
+    expect(SESSION_LEASE_RENEW_TIMEOUT_MS).toBeLessThan(SESSION_LEASE_RENEW_MS);
     expect(SESSION_LEASE_TTL_MS).toBeLessThan(SESSION_RETRY_MS);
     expect(SESSION_MANAGER_CONFIG).toEqual({
       tickMs: SESSION_TICK_MS,
@@ -39,6 +41,7 @@ describe('the session constants', () => {
       watchWindowMs: BALANCE_WATCH_WINDOW_MS,
       leaseTtlMs: SESSION_LEASE_TTL_MS,
       leaseRenewMs: SESSION_LEASE_RENEW_MS,
+      leaseRenewTimeoutMs: SESSION_LEASE_RENEW_TIMEOUT_MS,
       leaseFenceMs: SESSION_LEASE_FENCE_MS,
     });
   });
@@ -57,6 +60,7 @@ describe('the session constants', () => {
     ['a fence as long as the lease', { leaseFenceMs: SESSION_LEASE_TTL_MS }],
     ['a busy retry before the lease could lapse', { leaseTtlMs: SESSION_RETRY_MS }],
     ['a fractional renewal', { leaseRenewMs: 1.5 }],
+    ['a renewal timeout as long as the interval', { leaseRenewTimeoutMs: SESSION_LEASE_RENEW_MS }],
   ])('refuses %s', (_label, patch) => {
     expect(sessionManagerConfigHolds({ ...SESSION_MANAGER_CONFIG, ...patch })).toBe(false);
   });

@@ -54,6 +54,7 @@ const CONFIG: SessionManagerConfig = {
   // long enough that no lease is renewed or fenced unless a case shortens them
   leaseTtlMs: 30_000,
   leaseRenewMs: 10_000,
+  leaseRenewTimeoutMs: 5_000,
   leaseFenceMs: 25_000,
 };
 // a negative wait, past the longest reconnection delay of TIMING
@@ -1295,6 +1296,53 @@ describe('the lease (#93)', () => {
     ]);
   });
 
+  // the same lease moves from the starting entry to the running one: a renewal answered across
+  // that handoff must still move the fence
+  it('L12 a renewal sent while the session was starting moves the running session fence', async () => {
+    const fakes = fakeClients();
+    let offset = 0;
+    const token = deferred<AccessTokenOutcome>();
+    let answer: (ids: string[]) => void = () => undefined;
+    const h = harness({
+      openClient: fakes.openClient,
+      monotonicNow: () => performance.now() + offset,
+      tokens: () => token.promise,
+      leases: { renew: () => new Promise<string[]>((resolve) => (answer = resolve)) },
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the token fetch', () => h.tokenCalls.length === 1);
+    // sent 15 s in, while starting: it holds until 40 s
+    offset = 15_000;
+    const renewal = h.manager.renewLeases();
+    await until('the renewal sent', () => h.leaseCalls.some((c) => c.op === 'renew'));
+    token.resolve(await grant('acc-1'));
+    await until('the client', () => fakes.made.length === 1);
+    fakes.made[0]!.hear({ type: 'user_data', user: USER_1 });
+    answer(['acc-1']);
+    await renewal;
+    // past the acquire's 25 s, inside the renewal's 40 s
+    offset = CONFIG.leaseFenceMs + 5_000;
+    expect(h.manager.sessionFor('acc-1')).toBe(fakes.made[0]);
+  });
+
+  it('L13 a renewal that hangs counts as failed at its timeout, and the next one is sent', async () => {
+    const fakes = fakeClients();
+    const h = harness({
+      openClient: fakes.openClient,
+      config: { leaseRenewTimeoutMs: 50 },
+      leases: { renew: () => new Promise(() => undefined) },
+    });
+    await verifiedSession(h, fakes);
+    await h.manager.renewLeases();
+    expect(h.logs('broker session lease renewal timed out')).toEqual([
+      expect.objectContaining({ level: LEVEL.warn, leases: 1 }),
+    ]);
+    await h.manager.renewLeases();
+    expect(h.leaseCalls.filter((c) => c.op === 'renew')).toHaveLength(2);
+    expect(h.manager.clientFor('acc-1')).toBe(fakes.made[0]);
+  });
+
   it('L9 a renewal answer leaves alone an entry started after it was sent', async () => {
     const fakes = fakeClients();
     let answer: (ids: string[]) => void = () => undefined;
@@ -1392,6 +1440,7 @@ describe('logs', () => {
       'broker session lease fenced',
       'broker session lease renewal failed',
       'broker session lease release failed',
+      'broker session lease renewal timed out',
     ]) {
       expect(messages, msg).toContain(msg);
     }

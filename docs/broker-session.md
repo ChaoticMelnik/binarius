@@ -178,10 +178,15 @@ container inherits nothing), `acquired_at`, `expires_at` (CHECK `expires_at > ac
   back `SESSION_RETRY_MS`, no token fetch. A throw → `broker session start failed`.
 - Every `SESSION_LEASE_RENEW_MS` one renewal for every entry whose acquire has answered (an
   acquire still in flight may not have committed yet, and a renewal missing its id would drop a
-  lease about to be ours). The answer applies to the same entry objects it was sent for: a
-  returned id moves the fence, a missing one drops the entry at once (`warn` `broker session lease
-  lost`, held back `SESSION_RETRY_MS`). A renewal that throws is logged (`broker session lease
-  renewal failed`) and changes nothing: the fence decides.
+  lease about to be ours). One acquire's lease is one object, shared by the starting entry and the
+  running one that replaces it, and the answer applies to an account that still holds the same
+  lease: a returned id moves its fence (also across the starting → running handoff), a missing one
+  drops the entry at once (`warn` `broker session lease lost`, held back `SESSION_RETRY_MS`). A
+  renewal that throws (`broker session lease renewal failed`) or takes longer than
+  `SESSION_LEASE_RENEW_TIMEOUT_MS` (`warn` `broker session lease renewal timed out`, `leases`; its
+  late answer is ignored, and the next renewal goes out on time) changes nothing: the fence
+  decides. Every acquire and renewal re-arms one timer for the earliest fence, scanning the
+  entries: about 250 000 cheap steps once while 500 sessions start (stated).
 - **The fence.** The database sets `expires_at = now() + TTL` with `now()` not earlier than the
   moment the statement was sent, so a lease sent at monotonic time `t0` holds until at least
   `t0 + SESSION_LEASE_TTL_MS`. The process trusts it until `t0 + SESSION_LEASE_FENCE_MS`
@@ -234,6 +239,7 @@ expected close.
 | `MAX_SESSIONS_PER_WORKER` | 500 | sessions (running + starting) one process holds; a safety cap, not a measured limit (#94) |
 | `SESSION_LEASE_TTL_MS` | 30 000 | how long a lease outlives its last acquire or renewal in the database (#93) |
 | `SESSION_LEASE_RENEW_MS` | 10 000 | the renewal interval |
+| `SESSION_LEASE_RENEW_TIMEOUT_MS` | 5 000 | how long one renewal may take before it counts as failed |
 | `SESSION_LEASE_FENCE_MS` | 25 000 | how long after sending an acquire or a renewal the process trusts it; past it the socket is closed |
 
 `SESSION_CHAIN_HOLDS`, thrown at import and restated in `session-config.test.ts`:
@@ -242,7 +248,8 @@ expected close.
 least one tick), `SESSION_IDLE_GRACE_MS < BALANCE_WATCH_WINDOW_MS` (an account the bot asked
 about keeps its session for the whole window), `2 × SESSION_LEASE_RENEW_MS <
 SESSION_LEASE_FENCE_MS < SESSION_LEASE_TTL_MS` (one failed renewal does not fence; the fence closes
-the socket 5 s before the database lets anyone else in), `SESSION_LEASE_TTL_MS < SESSION_RETRY_MS`
+the socket 5 s before the database lets anyone else in), `SESSION_LEASE_RENEW_TIMEOUT_MS <
+SESSION_LEASE_RENEW_MS` (a stuck renewal ends before the next one is due), `SESSION_LEASE_TTL_MS < SESSION_RETRY_MS`
 (a busy account is asked again only once its lease could have lapsed),
 `DEAD_LETTER_WRITE_TIMEOUT_MS < SESSION_STOP_BUDGET_MS`, every `*_MS` an integer in
 `[1, MAX_TIMER_MS]`.
@@ -288,6 +295,8 @@ redacted key).
 | `broker session lease lost` | warn | `accountId` — a renewal did not return it |
 | `broker session lease fenced` | warn | `accountId`, `lateMs` — its fence passed without a confirmed renewal |
 | `broker session lease renewal failed` | error | `err` |
+| `broker session lease renewal timed out` | warn | `leases` — the renewal took longer than its timeout; its answer is ignored |
+| `broker session lease renewal threw` | error | `err` — the bookkeeping after an answer, not the database |
 | `broker session lease release failed` | error | `err` |
 
 `session-manager.test.ts` U14 reads every line its cases wrote through a `logOptions('debug')`
@@ -314,7 +323,9 @@ present.
   account, `sessionFor` past the fence before its timer, the fence closing a socket whose renewal
   never answers, one failed renewal fencing nothing, the release after every client and within the
   budget, a release that throws, an entry started or re-created around a renewal, an acquire in
-  flight not renewed.
+  flight not renewed; L12 a renewal answered across the starting → running handoff moves the
+  running session's fence; L13 a renewal that hangs counts as failed at its timeout and the next
+  one is sent.
 - `session-lease.db.test.ts` (integration, real leases, the mock broker): M1 two managers whose
   scans both list the account open one socket — the acquire alone keeps the second out; M2 an
   owner that never renews is fenced before its lease lapses, and only then does another process

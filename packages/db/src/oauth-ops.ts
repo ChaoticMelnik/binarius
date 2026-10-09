@@ -16,7 +16,7 @@ import { grantLinkBonus, type LinkBonusGrant } from './link-bonus-ops';
 import { brokerAccounts } from './schema/broker-accounts';
 import { oauthStates } from './schema/oauth-states';
 import { users } from './schema/users';
-import type { Tx } from './trade-intent-ops';
+import { millisecondsFromNow, type Tx } from './trade-intent-ops';
 
 export type BrokerAccountRow = typeof brokerAccounts.$inferSelect;
 
@@ -55,7 +55,7 @@ export async function createOAuthState(
       stateHash: hashToken(state),
       telegramUserId: input.telegramUserId,
       redirectUri: input.redirectUri,
-      expiresAt: sql`now() + (${input.ttlMs}::int * interval '1 millisecond')`,
+      expiresAt: millisecondsFromNow(input.ttlMs),
     })
     .returning({ expiresAt: oauthStates.expiresAt });
   if (row === undefined) throw new Error('oauth_states insert returned no row');
