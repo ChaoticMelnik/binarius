@@ -938,7 +938,7 @@ describe('the analysis', () => {
     ['a data refusal', SIGNAL_DATA_REFUSAL, true],
     ['the broker rate-limiting the candles', SIGNAL_FETCH_FAILED, false],
   ])(
-    'shows %s with no «➕ Ещё», the session row: %s, and no warning',
+    'shows %s with no «➕ Ещё», the session row only where the candles were read, and no warning',
     async (_case, response, session) => {
       const { press, calls, logger } = setup({ evaluateSignal: () => Promise.resolve(response) });
       await press(DATA);
