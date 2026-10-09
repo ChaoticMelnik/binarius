@@ -931,11 +931,25 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   const badTextBody = (reply: FastifyReply, issues: unknown) =>
     reply.code(400).send({ error: AdminErrorCode.Validation, issues });
 
+  // Admin publishes are one queue a process: each reads the rows after the previous publish has
+  // been sent, so the last publish of a burst carries every admin save committed before its read
+  // (#361 review m1). The read belongs inside the link: two reads finishing out of snapshot order
+  // would send a stale menu last again. A failed link never blocks the next.
+  let publishing: Promise<unknown> = Promise.resolve();
+  const serialized = <T>(run: () => Promise<T>): Promise<T> => {
+    const next = publishing.then(run);
+    publishing = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
+
   // After the commit, never inside it: a Bot API call of up to BOT_PROFILE_PUBLISH_TIMEOUT_MS
   // would hold the session row past the pool's query_timeout for the next request of the same
   // session. The log keeps each failure's identity as it is; the answer and the row carry it as
   // the wire takes it.
-  const publishAfterCommit = async (
+  const publishAfterCommit = (
     request: FastifyRequest,
     input: {
       staffId: string;
@@ -944,26 +958,27 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
       key?: BotTextKey;
       methods: readonly BotProfileMethod[];
     },
-  ): Promise<AdminBotProfileMethodResult[]> => {
-    const results = await publishBotProfile(
-      deps.botProfileApi,
-      await readBotProfileSource(deps.db),
-      input.methods,
-    );
-    for (const result of results) {
-      if (!result.ok) request.log.warn({ ...result }, 'bot profile not published');
-    }
-    const published = results.map(toWirePublishResult);
-    const { staffId, path, trigger, key } = input;
-    await recordBotProfilePublish(deps.db, {
-      staffId,
-      path,
-      trigger,
-      ...(key === undefined ? {} : { key }),
-      methods: published,
+  ): Promise<AdminBotProfileMethodResult[]> =>
+    serialized(async () => {
+      const results = await publishBotProfile(
+        deps.botProfileApi,
+        await readBotProfileSource(deps.db),
+        input.methods,
+      );
+      for (const result of results) {
+        if (!result.ok) request.log.warn({ ...result }, 'bot profile not published');
+      }
+      const published = results.map(toWirePublishResult);
+      const { staffId, path, trigger, key } = input;
+      await recordBotProfilePublish(deps.db, {
+        staffId,
+        path,
+        trigger,
+        ...(key === undefined ? {} : { key }),
+        methods: published,
+      });
+      return published;
     });
-    return published;
-  };
 
   app.get('/admin/bot-texts', async (request, reply) => {
     const answer = await asStaff(request, reply, async (tx, ctx) => {

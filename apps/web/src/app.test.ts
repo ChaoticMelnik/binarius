@@ -2308,6 +2308,8 @@ describe('the bot texts pages (#300)', () => {
     for (const query of ['publish=junk', 'publish=setMyCommands%3Aok&publish=setMyCommands%3Aok']) {
       const ignored = await get(`/admin/bot-texts?notice=republished&${query}`, withCookie);
       expect(ignored.body).not.toContain('class="publish"');
+      // «Опубликовано заново:» over nothing has no plain counterpart: no notice at all
+      expect(ignored.body).not.toContain('class="notice"');
     }
 
     await rebuild({ botTexts: async () => ({ me: SAMPLE_ME, overrides: [] }) });
@@ -2391,14 +2393,23 @@ describe('the bot texts pages (#300)', () => {
     );
     expect(shown.body).toContain(TEXTS.botTextNotice.published);
     expect(shown.body).toContain('ошибка — HttpError (ETIMEDOUT)');
+    // a publish notice without a result that decodes falls back to the plain one
+    const editorAt = async (query: string) =>
+      (await get(`/admin/bot-texts/welcome?${query}`, withCookie)).body;
+    const junk = await editorAt('notice=published&publish=junk');
+    expect(junk).toContain(TEXTS.botTextNotice.saved);
+    expect(junk).not.toContain(TEXTS.botTextNotice.published);
+    expect(await editorAt('notice=reset_published')).toContain(TEXTS.botTextNotice.reset);
+    expect(await editorAt('notice=republished')).not.toContain('class="notice"');
+    // and a result shows only under a publish notice
+    expect(await editorAt('notice=saved&publish=setMyCommands%3Aok')).not.toContain(
+      'class="publish"',
+    );
 
     const missing = await get('/admin/bot-texts/zzz', withCookie);
     expect(missing.statusCode).toBe(404);
     expect(missing.body).toContain(TEXTS.botTextNotFoundTitle);
-    expect(calls.botText).toEqual([
-      [TOKEN, 'welcome'],
-      [TOKEN, 'welcome'],
-    ]);
+    expect(calls.botText).toEqual(Array.from({ length: 6 }, () => [TOKEN, 'welcome']));
   });
 
   it('W4 previews: CRLF normalized, the bubble converted, the draft kept, no inline style or script', async () => {

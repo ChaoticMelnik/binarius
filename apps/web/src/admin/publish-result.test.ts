@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AdminBotProfileMethodResult } from '@binarius/shared';
+import { ADMIN_BOT_PROFILE_IDENTITY_MAX, type AdminBotProfileMethodResult } from '@binarius/shared';
 import { decodePublishResults, encodePublishResults } from './publish-result';
 
 const through = (results: readonly AdminBotProfileMethodResult[]) =>
@@ -27,6 +27,20 @@ describe('the publish result in the query (#361)', () => {
     expect(through(results)).toEqual(results);
   });
 
+  it("W11 carries a name and a code of the wire's full length", () => {
+    const results: AdminBotProfileMethodResult[] = [
+      {
+        method: 'setMyCommands',
+        ok: false,
+        err: {
+          name: `E${'r'.repeat(ADMIN_BOT_PROFILE_IDENTITY_MAX - 1)}`,
+          code: 'C'.repeat(ADMIN_BOT_PROFILE_IDENTITY_MAX),
+        },
+      },
+    ];
+    expect(through(results)).toEqual(results);
+  });
+
   it('W11 carries what the page shows: no cause; a name or code outside the grammar falls back', () => {
     expect(
       through([
@@ -46,13 +60,19 @@ describe('the publish result in the query (#361)', () => {
   it.each([
     ['a method twice', 'setMyCommands:ok,setMyCommands:ok'],
     ['an unknown method', 'deleteMyCommands:ok'],
-    ['four segments', 'setMyCommands:ok,setMyDescription:ok,setMyShortDescription:ok,x:ok'],
+    [
+      'four segments by the grammar, a method repeated',
+      'setMyCommands:ok,setMyDescription:ok,setMyShortDescription:ok,setMyCommands:ok',
+    ],
     ['the key twice', ['setMyCommands:ok', 'setMyCommands:ok']],
     ['nothing', ''],
     ['a two-digit Telegram code', 'setMyCommands:GrammyError:40'],
     ['a name that starts with a digit', 'setMyCommands:1Error'],
     ['a prototype name', 'setMyCommands:__proto__'],
-    ['too long a value', `setMyCommands:${'E'.repeat(1100)}`],
+    [
+      'a name of one character more than the wire takes',
+      `setMyCommands:${'E'.repeat(ADMIN_BOT_PROFILE_IDENTITY_MAX + 1)}`,
+    ],
     ['no value', undefined],
   ])('W11 shows nothing for %s', (_label, value) => {
     expect(decodePublishResults(value)).toBeUndefined();
