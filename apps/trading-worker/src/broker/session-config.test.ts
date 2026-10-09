@@ -4,6 +4,9 @@ import {
   MAX_SESSIONS_PER_WORKER,
   SESSION_CHAIN_HOLDS,
   SESSION_IDLE_GRACE_MS,
+  SESSION_LEASE_FENCE_MS,
+  SESSION_LEASE_RENEW_MS,
+  SESSION_LEASE_TTL_MS,
   SESSION_MANAGER_CONFIG,
   SESSION_REFUSAL_RETRY_MS,
   SESSION_RETRY_MS,
@@ -22,6 +25,9 @@ describe('the session constants', () => {
     expect(SESSION_TICK_MS).toBeLessThan(SESSION_RETRY_MS);
     expect(SESSION_RETRY_MS).toBeLessThanOrEqual(SESSION_REFUSAL_RETRY_MS);
     expect(SESSION_IDLE_GRACE_MS).toBeLessThan(BALANCE_WATCH_WINDOW_MS);
+    expect(2 * SESSION_LEASE_RENEW_MS).toBeLessThan(SESSION_LEASE_FENCE_MS);
+    expect(SESSION_LEASE_FENCE_MS).toBeLessThan(SESSION_LEASE_TTL_MS);
+    expect(SESSION_LEASE_TTL_MS).toBeLessThan(SESSION_RETRY_MS);
     expect(SESSION_MANAGER_CONFIG).toEqual({
       tickMs: SESSION_TICK_MS,
       idleGraceMs: SESSION_IDLE_GRACE_MS,
@@ -31,6 +37,9 @@ describe('the session constants', () => {
       startConcurrency: SESSION_START_CONCURRENCY,
       stopBudgetMs: SESSION_STOP_BUDGET_MS,
       watchWindowMs: BALANCE_WATCH_WINDOW_MS,
+      leaseTtlMs: SESSION_LEASE_TTL_MS,
+      leaseRenewMs: SESSION_LEASE_RENEW_MS,
+      leaseFenceMs: SESSION_LEASE_FENCE_MS,
     });
   });
 
@@ -43,6 +52,11 @@ describe('the session constants', () => {
     ['a wait past the timer limit', { refusalRetryMs: MAX_TIMER_MS + 1 }],
     ['no session', { maxSessions: 0 }],
     ['no start worker', { startConcurrency: 0 }],
+    // #93: one failed renewal must not fence
+    ['a fence within two renewals', { leaseFenceMs: 2 * SESSION_LEASE_RENEW_MS }],
+    ['a fence as long as the lease', { leaseFenceMs: SESSION_LEASE_TTL_MS }],
+    ['a busy retry before the lease could lapse', { leaseTtlMs: SESSION_RETRY_MS }],
+    ['a fractional renewal', { leaseRenewMs: 1.5 }],
   ])('refuses %s', (_label, patch) => {
     expect(sessionManagerConfigHolds({ ...SESSION_MANAGER_CONFIG, ...patch })).toBe(false);
   });
