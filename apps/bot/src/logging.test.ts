@@ -23,6 +23,7 @@ import {
   DEMO_GROUPS_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
+  analysisMoreCallbackData,
   stakeCallbackData,
 } from './demo';
 import { intentCallbackData } from './demo-trade';
@@ -871,6 +872,121 @@ describe('what the bot writes about the demo', () => {
     });
     expect(lines.join('')).not.toContain('SECRET-DESC');
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'editMessageText']);
+  });
+
+  // #360: «➕ Ещё» reads access for the stake label and edits the keyboard alone
+  const expanded = () =>
+    callbackUpdate(analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up));
+
+  it('names an access read «➕ Ещё» did not get by error, code, status and reason, without the user', async () => {
+    const { lines, calls } = await linesFrom({
+      update: expanded(),
+      level: 'trace',
+      readTradingAccess: () =>
+        Promise.reject(
+          new BackendError(BackendErrorCode.HttpStatus, { status: 500, reason: 'internal' }),
+        ),
+    });
+    expect(lineWith(lines, 'trading access not read for the stake label')).toMatchObject({
+      level: 40,
+      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
+      backendStatus: 500,
+      backendReason: 'internal',
+    });
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'editMessageReplyMarkup',
+    ]);
+  });
+
+  it('writes the not-modified keyboard at info with the method and code, not its text', async () => {
+    const { lines } = await linesFrom({
+      update: expanded(),
+      level: 'trace',
+      apiErrors: [
+        [
+          'editMessageReplyMarkup',
+          {
+            ok: false,
+            error_code: 400,
+            description: 'Bad Request: message is not modified SECRET-DESC',
+          },
+        ],
+      ],
+    });
+    expect(lineWith(lines, 'the analysis keyboard already shows this')).toMatchObject({
+      level: 30,
+      method: 'editMessageReplyMarkup',
+      telegramErrorCode: 400,
+    });
+    expect(lines.join('')).not.toContain('SECRET-DESC');
+  });
+
+  it('names a gone analysis by method and code, and sends nothing', async () => {
+    const { lines, calls } = await linesFrom({
+      update: expanded(),
+      level: 'trace',
+      apiErrors: [
+        [
+          'editMessageReplyMarkup',
+          {
+            ok: false,
+            error_code: 400,
+            description: 'Bad Request: message to edit not found SECRET-DESC',
+          },
+        ],
+      ],
+    });
+    expect(lineWith(lines, 'the analysis keyboard was not expanded')).toMatchObject({
+      level: 40,
+      err: { name: 'GrammyError' },
+      method: 'editMessageReplyMarkup',
+      telegramErrorCode: 400,
+    });
+    expect(lines.join('')).not.toContain('SECRET-DESC');
+    expect(fieldsOf(lines)).not.toContain(String(USER.id));
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'editMessageReplyMarkup',
+    ]);
+  });
+
+  it('reports a keyboard edit lost in transport by identity, method and update, and drops the token', async () => {
+    const update = expanded();
+    const { lines, calls } = await linesFrom({
+      update,
+      level: 'trace',
+      apiErrors: [
+        [
+          'editMessageReplyMarkup',
+          new HttpError(
+            "Network request for 'editMessageReplyMarkup' failed!",
+            new Error(
+              `request to https://api.telegram.org/bot${TOKEN}/editMessageReplyMarkup failed`,
+            ),
+          ),
+        ],
+      ],
+    });
+    const logged = lineWith(
+      lines,
+      'the analysis keyboard edit failed in transport, sending nothing more',
+    );
+    expect(logged).toMatchObject({
+      level: 50,
+      err: { name: 'HttpError' },
+      method: 'editMessageReplyMarkup',
+      transportError: { name: 'Error' },
+      updateId: update.update_id,
+    });
+    expect(logged?.err).not.toHaveProperty('message');
+    expect(lineWith(lines, 'update handler failed')).toBeUndefined();
+    expect(calls.map((call) => call.method)).toEqual([
+      'answerCallbackQuery',
+      'editMessageReplyMarkup',
+    ]);
+    expect(lines.join('')).not.toContain('SECRET-TOKEN');
   });
 });
 

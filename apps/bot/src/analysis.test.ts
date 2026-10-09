@@ -195,6 +195,26 @@ describe('the analysis screen', () => {
     expect(analysisUnavailableScreen(PAIR_EURUSD, 5).stake).toBeNull();
   });
 
+  // #360: the session row on every decided answer, never where the candles were not read
+  it('offers the session on every decided answer, a signal or none, and never without candles', () => {
+    for (const response of [
+      signalOf(TradeAction.Up),
+      signalOf(TradeAction.Down),
+      ...RULE_REFUSAL_REASONS.map((reason) => ruleRefusalOf(reason)),
+      ...DATA_REFUSAL_REASONS.map(dataRefusalOf),
+    ]) {
+      expect(screenOf(response).session).toBe(true);
+    }
+    for (const response of [
+      SIGNAL_FETCH_FAILED,
+      { outcome: SignalFeedOutcome.FetchFailed, code: BrokerRestErrorCode.RateLimited },
+      { outcome: SignalFeedOutcome.FetchFailed, code: BrokerRestErrorCode.Unavailable },
+    ] satisfies TradingSignalResponse[]) {
+      expect(screenOf(response).session).toBe(false);
+    }
+    expect(analysisUnavailableScreen(PAIR_EURUSD, 5).session).toBe(false);
+  });
+
   // A7
   it('formats prices to the pair digits, RSI to a tenth and ATR% to a thousandth', () => {
     expect(formatPrice(1.085604, 2)).toBe('1.09');

@@ -14,6 +14,8 @@ import {
   type BackendClient,
 } from './backend-client';
 import { telegramErrorFields, type Logger } from './logging';
+import { durationOf, sessionFits } from './demo';
+import type { DemoDurationSec } from './demo-catalog';
 import { editRefusal } from './screen';
 import { intentStatusText, TEXTS } from './texts';
 
@@ -34,6 +36,17 @@ export const TRACKER_STOP_STATUSES: ReadonlySet<TradeIntentStatus> = new Set([
   ),
   TradeIntentStatus.Accepted,
 ]);
+
+// The session offer under a finished single trade (#360): the line and the row are drawn on a stop
+// status of a trade whose duration a session of today's set takes, and only then. The duration is
+// the row's datum; a trade from before #313 (60 s) gets neither.
+export const sessionOfferOf = (
+  view: Pick<TradeIntentView, 'status' | 'durationSec'>,
+): DemoDurationSec | undefined => {
+  if (!TRACKER_STOP_STATUSES.has(view.status)) return undefined;
+  const durationSec = durationOf(String(view.durationSec));
+  return durationSec !== undefined && sessionFits(durationSec) ? durationSec : undefined;
+};
 
 // the login dialog's bound: the oldest entry goes first, its message keeping the refresh button
 export const INTENT_TRACKER_MAX_ENTRIES = 10_000;
@@ -216,7 +229,13 @@ export function createIntentTracker({
     entry.view = view;
     const key = renderKey(view);
     if (key !== entry.rendered) {
-      const goOn = await editTo(entry, intentStatusText(entry.symbol, view), key);
+      const goOn = await editTo(
+        entry,
+        intentStatusText(entry.symbol, view, {
+          sessionOffer: sessionOfferOf(view) !== undefined,
+        }),
+        key,
+      );
       if (!goOn) return;
     }
     // a stop status ends the entry only once its edit has landed; otherwise the next poll
@@ -241,7 +260,11 @@ export function createIntentTracker({
     const stopped = TRACKER_STOP_STATUSES.has(entry.view.status);
     await editTo(
       entry,
-      intentStatusText(entry.symbol, entry.view, stopped ? {} : { deadline: true }),
+      intentStatusText(
+        entry.symbol,
+        entry.view,
+        stopped ? { sessionOffer: sessionOfferOf(entry.view) !== undefined } : { deadline: true },
+      ),
       stopped ? renderKey(entry.view) : 'deadline',
       stopped ? undefined : 'deadline',
     );

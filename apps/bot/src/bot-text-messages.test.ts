@@ -272,11 +272,14 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     [x(W.symbol + 10), null].flatMap((symbol) =>
       [...DEMO_DURATIONS_SEC, INT4_MAX].flatMap((durationSec) =>
         Object.values(TradeAction).flatMap((action) =>
-          intentViews.map((view) =>
-            intentStatusText(
-              symbol,
-              intentView({ ...view, action, durationSec, amount: STAKE, assetId: 9_999_999_999 }),
-              { deadline: true },
+          intentViews.flatMap((view) =>
+            // the two tails the callers draw, never both (#360)
+            [{ deadline: true }, { sessionOffer: true }].map((tail) =>
+              intentStatusText(
+                symbol,
+                intentView({ ...view, action, durationSec, amount: STAKE, assetId: 9_999_999_999 }),
+                tail,
+              ),
             ),
           ),
         ),
