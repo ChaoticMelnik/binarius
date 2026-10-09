@@ -307,8 +307,9 @@ outcome or the intent:
 
 1. `readHeldExposure` (`packages/db`, one statement, no locks): per mode, our open
    `broker_trades`, the count of the mode's intents created within the last 10 minutes
-   (`RECENT_INTENTS_WINDOW_MS`: bounded by the window, not by the account's history; one ageing
-   out between the reads only skips the compare), whether one is in flight (non-terminal and not
+   (`RECENT_INTENTS_WINDOW_MS`: bounded by the window, not by the account's history; the second
+   read counts from the first read's bound, so its window contains the first's and an intent
+   created between them always changes the count — B18), whether one is in flight (non-terminal and not
    `accepted` with an open linked trade), and whether an open trade is at or past its expected close
    by the database clock.
 2. The token with `mayRefresh: false` (Rule 12), then one `GET /v1/broker/user`.

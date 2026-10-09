@@ -4,6 +4,7 @@ import { BrokerRestErrorCode, TradeMode } from '@binarius/shared';
 import {
   brokerAccounts,
   readHeldExposure,
+  RECENT_INTENTS_WINDOW_MS,
   upsertBalanceSnapshot,
   type Db,
   type HeldExposure,
@@ -142,6 +143,11 @@ export function createBalanceCheck({ db, rest, tokens, logger }: BalanceCheckDep
       const after = await readHeldExposure(db, {
         brokerAccountId,
         held: { [TradeMode.Demo]: user.demo.held, [TradeMode.Real]: user.real.held },
+        // the first read's window, not a later one: an intent ageing out of a moving window could
+        // hide one created meanwhile
+        intentsSince: new Date(
+          byMode(before, TradeMode.Demo).readAt.getTime() - RECENT_INTENTS_WINDOW_MS,
+        ),
       });
       if (signal.aborted) return 'aborted';
       let compared = false;

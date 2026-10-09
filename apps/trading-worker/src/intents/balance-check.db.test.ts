@@ -3,8 +3,9 @@ import pino from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BrokerRestError } from '@binarius/broker-rest';
 import type { BrokerUser, DecimalString } from '@binarius/shared';
-import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
+import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
+  tradeIntents,
   applyBalanceEvent,
   hashToken,
   brokerBalanceSnapshots,
@@ -379,5 +380,47 @@ describe('createBalanceCheck (#92)', () => {
       demoHeld: '2.00000000',
       demoTotal: '3.00000000',
     });
+  });
+
+  // one intent ages out of the window while another is created and settled during the GET: a
+  // window moving with each read would see the same count and compare
+  it('B18 keeps the first read window, so an intent ageing out cannot hide a new one', async () => {
+    const a = await withOpenTrade();
+    await settleClosedTrades(tmp.db, {
+      brokerAccountId: a.brokerAccountId,
+      trades: [closedTradeFor(a.open)],
+    });
+    // 200 ms short of the window's edge at the first read
+    await tmp.db
+      .update(tradeIntents)
+      .set({ createdAt: sql`now() - interval '599.8 seconds'` })
+      .where(eq(tradeIntents.id, a.intent.id));
+    const h = harness(async () => {
+      // a GET long enough for it to cross the edge of a window measured from the second read
+      await until('the first intent past the window edge', async () => {
+        const [row] = (
+          await tmp.db.execute<{ aged: boolean }>(
+            sql`select now() - ${tradeIntents.createdAt} > interval '600 seconds' as aged
+                  from ${tradeIntents} where ${tradeIntents.id} = ${a.intent.id}`,
+          )
+        ).rows;
+        return row?.aged === true;
+      });
+      const { intent } = await createTradeIntent(
+        tmp.db,
+        intentRequest(a.telegramUserId, { durationSec: 5 }),
+      );
+      const open = await accept(intent);
+      await settleClosedTrades(tmp.db, {
+        brokerAccountId: a.brokerAccountId,
+        trades: [closedTradeFor(open)],
+      });
+      return userOf(a.brokerUserId, { demo: STAKE });
+    });
+    await h.run(a.brokerAccountId);
+    expect(h.all('balance check not compared')).toEqual([
+      expect.objectContaining({ mode: 'demo', reason: 'trades_changed' }),
+    ]);
+    expect(h.all('broker balance mismatch')).toEqual([]);
   });
 });
