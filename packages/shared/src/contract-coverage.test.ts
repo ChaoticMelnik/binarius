@@ -345,13 +345,16 @@ describe('contract coverage (issue #6)', () => {
   });
 
   it('Trading signals list (issue #343)', () => {
-    expectTypeOf<keyof TradingSignalsResponse>().toEqualTypeOf<
-      'asOf' | 'interval' | 'scanned' | 'signals'
+    expectTypeOf<keyof TradingSignalsResponse>().toEqualTypeOf<'asOf' | 'lists'>();
+    expectTypeOf<keyof TradingSignalsResponse['lists'][number]>().toEqualTypeOf<
+      'interval' | 'scanned' | 'signals'
     >();
-    expectTypeOf<keyof TradingSignalsResponse['signals'][number]>().toEqualTypeOf<
+    expectTypeOf<keyof TradingSignalsResponse['lists'][number]['signals'][number]>().toEqualTypeOf<
       'assetId' | 'action' | 'lastCandleTimestamp' | 'decidedAt' | 'ageMs'
     >();
-    expectTypeOf<TradingSignalsResponse['interval']>().toEqualTypeOf<'15s'>();
+    expectTypeOf<TradingSignalsResponse['lists'][number]['interval']>().toEqualTypeOf<
+      '15s' | '5s'
+    >();
   });
 
   it('Trading session view and refusal (issue #283)', () => {

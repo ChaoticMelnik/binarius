@@ -39,7 +39,7 @@ import {
   pairsOf,
   readDemoCatalog,
   readDemoTrade,
-  SIGNALS_DURATION_SEC,
+  SIGNALS_DURATIONS_SEC,
   type DemoAssetGroup,
   type DemoCatalogRead,
   type DemoDurationSec,
@@ -71,16 +71,21 @@ import {
   DEMO_GROUP_LABELS,
 } from './texts';
 
-// The demo's screens (#125, docs/bot-demo.md): the pairs with a signal now and the launch of a
-// cycle on one (#320); the asset types, one type's pairs by page, the durations of a pair, the
-// summary, and the analysis behind «📊 Анализ» (#126). The bot keeps no
-// state for them: what the user chose travels in the callback data, so a restart, an old message
-// and a second device all lead to the same screen, and every screen reads the catalog anew.
+// The demo's screens (#125, docs/bot-demo.md): the duration of the main path (#382), the pairs
+// with a signal now for it and the launch of a cycle on one (#320); the asset types, one type's
+// pairs by page, the durations of a pair, the summary, the analysis behind «📊 Анализ» (#126) and
+// the single trade behind its «➕ Ещё» (#360). The bot keeps no state for them: what the user chose
+// travels in the callback data, so a restart, an old message and a second device all lead to the
+// same screen, and every screen reads the catalog anew.
 
 // Bot API allows 1-64 bytes; the longest of the screens' data, `demo:t:cryptocurrency:9999`, is 26,
-// and `demo:l:2147483647` 17.
+// `demo:l:2147483647:15` 20 and `demo:sig:15` 11. `demo:sig` is the main path's duration screen
+// (#382): every old «🔄 Обновить», «↩️ К списку» and «📡 К сигналам» lands there.
 export const DEMO_SIGNALS_CALLBACK_DATA = 'demo:sig';
-export const demoLaunchCallbackData = (assetId: number): string => `demo:l:${assetId}`;
+export const demoSignalsCallbackData = (durationSec: DemoDurationSec): string =>
+  `${DEMO_SIGNALS_CALLBACK_DATA}:${durationSec}`;
+export const demoLaunchCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
+  `demo:l:${assetId}:${durationSec}`;
 export const DEMO_GROUPS_CALLBACK_DATA = 'demo:g';
 export const demoPageCallbackData = (group: DemoAssetGroup, page: number): string =>
   `demo:t:${group}:${page}`;
@@ -130,8 +135,8 @@ export const STAKE_PICKER_PREFIX = 'stk:';
 export const stakeMenuCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
   `${STAKE_PICKER_PREFIX}o:a:${assetId}:${durationSec}`;
 // the launch screen's «💵 Изменить ставку»: the picker whose way back is that launch screen
-export const launchStakeCallbackData = (assetId: number): string =>
-  `${STAKE_PICKER_PREFIX}o:p:${assetId}`;
+export const launchStakeCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
+  `${STAKE_PICKER_PREFIX}o:p:${assetId}:${durationSec}`;
 // The session button (#284, trading-session.ts) of the analysis screen, of a finished single trade
 // (#360, demo-trade.ts) and of the launch screen (#320). No nonce, by the owner's
 // decision: an old button starts a new session once the previous one has ended, and while one is
@@ -156,7 +161,6 @@ const DURATIONS = DEMO_DURATIONS_SEC.join('|');
 const LEGACY_DURATIONS = LEGACY_DEMO_DURATIONS_SEC.join('|');
 const DEMO_PAGE_PATTERN = /^demo:t:([a-z]{1,16}):(\d{1,4})$/;
 const DEMO_ASSET_PATTERN = /^demo:a:(\d{1,10})$/;
-const DEMO_LAUNCH_PATTERN = /^demo:l:(\d{1,10})$/;
 const demoDurationPattern = (durations: string) =>
   new RegExp(`^demo:d:(\\d{1,10}):(${durations})$`);
 const demoAnalysisPattern = (durations: string) =>
@@ -169,6 +173,8 @@ const stakeCallbackPattern = (durations: string) =>
   );
 const sessionStartPattern = (durations: string) =>
   new RegExp(`^${SESSION_START_PREFIX}(\\d{1,10}):(${durations})$`);
+const DEMO_SIGNALS_PATTERN = new RegExp(`^demo:sig:(${DURATIONS})$`);
+const DEMO_LAUNCH_PATTERN = new RegExp(`^demo:l:(\\d{1,10}):(${DURATIONS})$`);
 // no legacy shape: no button drawn before #360 carries it
 export const ANALYSIS_MORE_PATTERN = new RegExp(
   `^${ANALYSIS_MORE_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')})$`,
@@ -182,6 +188,8 @@ const LEGACY_DURATION_PATTERNS = [
   demoAnalysisPattern(LEGACY_DURATIONS),
   stakeCallbackPattern(LEGACY_DURATIONS),
   sessionStartPattern(LEGACY_DURATIONS),
+  // a launch screen's button from before #382, which carried no duration
+  /^demo:l:(\d{1,10})$/,
 ];
 
 // A button drawn before #313 with a duration the demo no longer offers, or before #314 with the
@@ -281,62 +289,92 @@ export function sessionStartDataOf(
   return { assetId, durationSec };
 }
 
-// The pairs with a signal on the scanner's last closed candle (#320), in the route's order, each
-// joined with the catalog for its symbol and payout. A pair the catalog does not list, that is
-// closed now or that does not take the scanner's duration has no button: the launch would refuse
-// it. The list is a snapshot; the cycle checks the signal again before each trade.
+// The main path's first screen (#382): the durations of SIGNALS_DURATIONS_SEC in one row, then the
+// manual choice. It reads nothing: the list behind each button reads anew.
+export function durationsScreen(): DemoScreen {
+  const keyboard = new InlineKeyboard();
+  for (const sec of SIGNALS_DURATIONS_SEC) {
+    keyboard.text(DEMO_DURATION_LABELS[sec], demoSignalsCallbackData(sec));
+  }
+  return {
+    text: TEXTS.demoChooseDurationMain,
+    keyboard: keyboard.row().text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA),
+  };
+}
+
+// The pairs with a signal on the last closed candle of the chosen duration's scanner (#320,
+// #382), in the route's order, each joined with the catalog for its symbol and payout. A pair the
+// catalog does not list, that is closed now or that does not take the duration has no button: the
+// launch would refuse it. The list is a snapshot; the cycle checks the signal again before each
+// trade. Undefined when the body has no list for the duration: a backend scanning other intervals.
 export function signalsScreen(
   signals: TradingSignalsResponse,
   catalog: PairsCatalogResponse,
+  durationSec: DemoDurationSec,
   nowMs: number,
-): DemoScreen {
+): DemoScreen | undefined {
+  const interval = intervalForDuration(durationSec);
+  const list = signals.lists.find((candidate) => candidate.interval === interval);
+  if (list === undefined) return undefined;
   const keyboard = new InlineKeyboard();
   let listed = 0;
-  for (const signal of signals.signals) {
-    const checked = checkDemoTrade(catalog, signal.assetId, SIGNALS_DURATION_SEC, nowMs);
+  for (const signal of list.signals) {
+    const checked = checkDemoTrade(catalog, signal.assetId, durationSec, nowMs);
     if (!checked.ok) continue;
     const { pair } = checked;
     keyboard
       .text(
         signalButtonLabel(pair.symbol, signal.action, pair.payout),
-        demoLaunchCallbackData(pair.id),
+        demoLaunchCallbackData(pair.id, durationSec),
       )
       .row();
     listed += 1;
   }
+  const label = DEMO_DURATION_LABELS[durationSec];
   return {
-    text: listed === 0 ? TEXTS.demoSignalsEmpty : TEXTS.demoSignalsHeader,
+    text: listed === 0 ? TEXTS.demoSignalsEmpty({ label }) : TEXTS.demoSignalsHeader({ label }),
     keyboard: keyboard
-      .text(LABELS.demoSignalsRefreshButton, DEMO_SIGNALS_CALLBACK_DATA)
+      .text(LABELS.demoSignalsRefreshButton, demoSignalsCallbackData(durationSec))
+      .row()
+      .text(LABELS.demoBackDurationsButton, DEMO_SIGNALS_CALLBACK_DATA)
       .row()
       .text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA),
   };
 }
 
-// The launch of a cycle of DEFAULT_SESSION_TRADES on a pair at the scanner's duration (#320):
+// The launch of a cycle of DEFAULT_SESSION_TRADES on a pair at the chosen duration (#320, #382):
 // the session start of the analysis screen (#284), the picker with its way back here, the list.
 // The picker draws it too, after a save (stake-picker.ts).
 export function launchScreen({
   assetId,
+  durationSec,
   firstName,
   symbol,
   amount,
   saved,
 }: {
   assetId: number;
+  durationSec: DemoDurationSec;
   firstName: string;
   symbol: string | null;
   amount: DecimalString | null;
   saved?: { amount: DecimalString | null };
 }): DemoScreen {
   return {
-    text: launchText({ firstName, symbol, amount, trades: DEFAULT_SESSION_TRADES, saved }),
+    text: launchText({
+      firstName,
+      durationSec,
+      symbol,
+      amount,
+      trades: DEFAULT_SESSION_TRADES,
+      saved,
+    }),
     keyboard: new InlineKeyboard()
-      .text(LABELS.launchCycleButton, sessionStartCallbackData(assetId, SIGNALS_DURATION_SEC))
+      .text(LABELS.launchCycleButton, sessionStartCallbackData(assetId, durationSec))
       .row()
-      .text(LABELS.stakeChangeButton, launchStakeCallbackData(assetId))
+      .text(LABELS.stakeChangeButton, launchStakeCallbackData(assetId, durationSec))
       .row()
-      .text(LABELS.backToListButton, DEMO_SIGNALS_CALLBACK_DATA),
+      .text(LABELS.backToListButton, demoSignalsCallbackData(durationSec)),
   };
 }
 
@@ -358,13 +396,26 @@ export function createDemoComposer<C extends Context>({
 
   composer.callbackQuery(LEGACY_DURATION_PATTERNS, (ctx) => removeLegacyKeyboard(ctx, logger));
 
+  // the card's button is under a photo: the duration screen goes as a new message
   composer.callbackQuery(DEMO_CALLBACK_DATA, async (ctx) => {
-    const screen = await answerAnd(ctx, readSignalsScreen(ctx));
+    const screen = durationsScreen();
+    await answerOnly(ctx);
     await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
   });
 
   composer.callbackQuery(DEMO_SIGNALS_CALLBACK_DATA, async (ctx) => {
-    const screen = await answerAnd(ctx, readSignalsScreen(ctx));
+    const screen = durationsScreen();
+    await answerOnly(ctx);
+    await editOrReply(ctx, screen.text, screen.keyboard);
+  });
+
+  composer.callbackQuery(DEMO_SIGNALS_PATTERN, async (ctx) => {
+    const durationSec = durationOf(ctx.match[1]);
+    if (durationSec === undefined) {
+      await answerOnly(ctx);
+      return;
+    }
+    const screen = await answerAnd(ctx, readSignalsScreen(ctx, durationSec));
     await editOrReply(ctx, screen.text, screen.keyboard);
   });
 
@@ -372,19 +423,23 @@ export function createDemoComposer<C extends Context>({
   // from; the signal is not read again, the cycle asks for it before each trade.
   composer.callbackQuery(DEMO_LAUNCH_PATTERN, async (ctx) => {
     const assetId = assetIdOf(ctx.match[1]);
-    if (assetId === undefined) {
+    const durationSec = durationOf(ctx.match[2]);
+    if (assetId === undefined || durationSec === undefined) {
       await answerOnly(ctx);
       return;
     }
     const [read, amount] = await answerAnd(
       ctx,
-      Promise.all([
-        readDemoTrade(backend, assetId, SIGNALS_DURATION_SEC, now),
-        stakeAmount(ctx.from.id),
-      ]),
+      Promise.all([readDemoTrade(backend, assetId, durationSec, now), stakeAmount(ctx.from.id)]),
     );
     const screen = read.ok
-      ? launchScreen({ assetId, firstName: ctx.from.first_name, symbol: read.pair.symbol, amount })
+      ? launchScreen({
+          assetId,
+          durationSec,
+          firstName: ctx.from.first_name,
+          symbol: read.pair.symbol,
+          amount,
+        })
       : tradeFailure(ctx, read, assetId);
     await editOrReply(ctx, screen.text, screen.keyboard);
   });
@@ -506,20 +561,27 @@ export function createDemoComposer<C extends Context>({
   }
 
   // The two reads together; a failed one is the screen's retry with the pressed data and the way
-  // to the manual choice. A failed catalog reads as the catalog's own failure.
-  async function readSignalsScreen(ctx: Context): Promise<DemoScreen> {
+  // to the manual choice. A failed catalog reads as the catalog's own failure. A body without the
+  // duration's list is a deploy mismatch, not «no signals»: the same retry, and one warn.
+  async function readSignalsScreen(
+    ctx: Context,
+    durationSec: DemoDurationSec,
+  ): Promise<DemoScreen> {
     const [signals, read] = await Promise.all([readSignals(), readDemoCatalog(backend)]);
     if (!read.ok) return withManual(catalogFailure(ctx, read));
-    if (signals === null) {
-      return withManual({
+    const retry = (): DemoScreen =>
+      withManual({
         text: TEXTS.unavailable,
         keyboard: new InlineKeyboard().text(
           LABELS.demoRetryButton,
-          ctx.callbackQuery?.data ?? DEMO_SIGNALS_CALLBACK_DATA,
+          ctx.callbackQuery?.data ?? demoSignalsCallbackData(durationSec),
         ),
       });
-    }
-    return signalsScreen(signals, read.catalog, now());
+    if (signals === null) return retry();
+    const screen = signalsScreen(signals, read.catalog, durationSec, now());
+    if (screen !== undefined) return screen;
+    logger.warn({ interval: intervalForDuration(durationSec) }, 'trading signals list missing');
+    return retry();
   }
 
   async function readSignals(): Promise<TradingSignalsResponse | null> {

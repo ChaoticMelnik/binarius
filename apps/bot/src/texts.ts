@@ -38,7 +38,7 @@ import {
   type TradingSessionView,
 } from '@binarius/shared';
 import type { BotCommand } from 'grammy/types';
-import { SIGNALS_DURATION_SEC, type DemoAssetGroup, type DemoDurationSec } from './demo-catalog';
+import type { DemoAssetGroup, DemoDurationSec } from './demo-catalog';
 
 // The texts live in the catalog (packages/shared/src/bot-texts.ts, docs/bot-texts.md). This file
 // is the bot's view of it: TEXTS, LABELS, PROFILE and the label maps keep the names they had,
@@ -593,18 +593,20 @@ const SIGNAL_ARROWS = {
 export const signalButtonLabel = (symbol: string, action: TradeAction, payout: number): string =>
   `${symbol} · ${SIGNAL_ARROWS[action]} · ${String(payout)}%`;
 
-// The launch screen (#320): the pair at the scanner's duration, the amount the cycle trades, what
-// the cycle does. A symbol the catalog did not give drops its line, an amount access did not give
-// reads as the broker's minimum; `saved` is what the picker has just saved, null for the reset to
-// the minimum.
+// The launch screen (#320): the pair at the chosen duration (#382), the amount the cycle trades,
+// what the cycle does. A symbol the catalog did not give drops its line, an amount access did not
+// give reads as the broker's minimum; `saved` is what the picker has just saved, null for the reset
+// to the minimum.
 export function launchText({
   firstName,
+  durationSec,
   symbol,
   amount,
   trades,
   saved,
 }: {
   firstName: string;
+  durationSec: DemoDurationSec;
   symbol: string | null;
   amount: DecimalString | null;
   trades: number;
@@ -617,7 +619,7 @@ export function launchText({
       : [
           TEXTS.launchHeader({
             ...context,
-            subject: `${symbol} · ${DEMO_DURATION_LABELS[SIGNALS_DURATION_SEC]}`,
+            subject: `${symbol} · ${DEMO_DURATION_LABELS[durationSec]}`,
           }),
         ]),
     amount === null

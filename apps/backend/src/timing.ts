@@ -15,8 +15,9 @@ import {
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import {
   SIGNAL_CHART_INTERVAL_MS,
-  SIGNAL_SCAN_INTERVAL,
+  SIGNAL_SCAN_INTERVALS,
   TRADING_SIGNAL_BUDGET_MS,
+  type ScanInterval,
 } from '@binarius/shared/signal';
 import { TRADING_SESSION_START_BUDGET_MS } from '@binarius/shared/trading-session';
 import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
@@ -125,9 +126,10 @@ export const SIGNAL_FETCH_BUDGET_MS = 3_000;
 export const SIGNAL_CACHE_MAX_TTL_MS = 30_000;
 
 // --- The signal scanner (#343) ----------------------------------------------------------------
-// docs/signal.md -> The scanner. One scan a 15s candle, this long after its boundary: the live
-// broker returned the just-closed candle 150 ms after the boundary (2026-10-08), and the rest
-// covers the host's clock against the broker's.
+// docs/signal.md -> The scanner. One scanner per interval of SIGNAL_SCAN_INTERVALS, one scan a
+// candle, this long after its boundary: the live broker returned the just-closed 15s candle 150 ms
+// after the boundary (2026-10-08), and the rest covers the host's clock against the broker's. The
+// 5s close was not observed (#382).
 export const SIGNAL_SCAN_SLACK_MS = 500;
 // chart GETs of one scan in flight at once
 export const SIGNAL_SCAN_CONCURRENCY = 4;
@@ -137,16 +139,37 @@ export const SIGNAL_SCAN_BACKOFF_MIN_MS = 15_000;
 export const SIGNAL_SCAN_BACKOFF_MAX_MS = 120_000;
 // the period of the scanner's `signal scanner` log line
 export const SIGNAL_SCAN_LOG_MS = 60_000;
+// Each interval's share of SIGNAL_SCAN_MAX_PER_MINUTE, in percent (integers, so the pair counts
+// are exact): 13 pairs on 15s and 4 on 5s at the default 100 (owner, 2026-10-09).
+export const SIGNAL_SCAN_SHARES_PERCENT = { '15s': 52, '5s': 48 } as const satisfies Record<
+  ScanInterval,
+  number
+>;
 // decisions a minute for one scanned pair: one a candle
-export const SIGNAL_SCAN_DECISIONS_PER_PAIR_PER_MINUTE =
-  60_000 / SIGNAL_CHART_INTERVAL_MS[SIGNAL_SCAN_INTERVAL];
-// SIGNAL_SCAN_MAX_PER_MINUTE's bounds: at least one pair, and below the whole per-IP window
-export const MIN_SIGNAL_SCAN_PER_MINUTE = SIGNAL_SCAN_DECISIONS_PER_PAIR_PER_MINUTE;
+export const scanDecisionsPerMinute = (interval: ScanInterval): number =>
+  60_000 / SIGNAL_CHART_INTERVAL_MS[interval];
+// one interval's chart GETs a minute under the ceiling
+export const signalScanPerMinute = (ceiling: number, interval: ScanInterval): number =>
+  (ceiling * SIGNAL_SCAN_SHARES_PERCENT[interval]) / 100;
+// the pairs one interval scans each candle under the ceiling
+export const signalScanPairs = (ceiling: number, interval: ScanInterval): number =>
+  Math.floor(
+    (ceiling * SIGNAL_SCAN_SHARES_PERCENT[interval]) / (100 * scanDecisionsPerMinute(interval)),
+  );
+// One interval's pacer bucket: a candle refills exactly one batch and the batch's takes are one
+// burst, so a fire a few ms earlier relative to its boundary than the one before finds the bucket
+// a fraction of a token short and skips a pair with no 429 behind it; the spare token absorbs it
+// (#382 review M1).
+export const signalScanCapacity = (ceiling: number, interval: ScanInterval): number =>
+  signalScanPairs(ceiling, interval) + 1;
+// SIGNAL_SCAN_MAX_PER_MINUTE's bounds: at least one pair on every interval, and below the whole
+// per-IP window
+export const MIN_SIGNAL_SCAN_PER_MINUTE = Math.max(
+  ...SIGNAL_SCAN_INTERVALS.map((interval) =>
+    Math.ceil((100 * scanDecisionsPerMinute(interval)) / SIGNAL_SCAN_SHARES_PERCENT[interval]),
+  ),
+);
 export const MAX_SIGNAL_SCAN_PER_MINUTE = 200;
-
-// the pairs scanned each candle under a ceiling of chart GETs a minute
-export const signalScanMaxPairs = (perMinute: number): number =>
-  Math.floor(perMinute / SIGNAL_SCAN_DECISIONS_PER_PAIR_PER_MINUTE);
 
 // --- Bot text overrides (#299) ------------------------------------------------------------------
 // docs/bot-texts.md → Loading. One SELECT of bot_text_overrides; a slower one counts as failed and
@@ -208,16 +231,30 @@ export const TIMING_CHAIN_HOLDS =
   SIGNAL_FETCH_BUDGET_MS < TRADING_SIGNAL_BUDGET_MS &&
   TRADING_SIGNAL_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SIGNAL_CACHE_MAX_TTL_MS < SIGNAL_CHART_INTERVAL_MS['1m'] &&
-  // a scan starts inside its candle and a call made at the scan moment, bounded by the cache, ends
-  // inside it too; the scanner takes no pair past the candle's end (scanner.ts)
-  SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[SIGNAL_SCAN_INTERVAL] &&
-  SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[SIGNAL_SCAN_INTERVAL] &&
+  // per scanned interval: a scan starts inside its candle and a call made at the scan moment,
+  // bounded by the cache, ends inside it too; the scanner takes no pair past the candle's end
+  // (scanner.ts)
+  SIGNAL_SCAN_INTERVALS.every(
+    (interval) =>
+      SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval] &&
+      SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval] &&
+      Number.isInteger(scanDecisionsPerMinute(interval)),
+  ) &&
+  // the shares split the whole ceiling. That the pairs at the default fit inside it follows from
+  // signalScanPairs' floor, and that MIN scans one pair on every interval from MIN's definition,
+  // so neither is a link; timing.test.ts pins the counts.
+  SIGNAL_SCAN_INTERVALS.reduce((sum, interval) => sum + SIGNAL_SCAN_SHARES_PERCENT[interval], 0) ===
+    100 &&
   SIGNAL_SCAN_BACKOFF_MIN_MS <= SIGNAL_SCAN_BACKOFF_MAX_MS &&
-  Number.isInteger(SIGNAL_SCAN_DECISIONS_PER_PAIR_PER_MINUTE) &&
   MIN_SIGNAL_SCAN_PER_MINUTE <= DEFAULT_SIGNAL_SCAN_PER_MINUTE &&
   DEFAULT_SIGNAL_SCAN_PER_MINUTE <= MAX_SIGNAL_SCAN_PER_MINUTE &&
-  MAX_SIGNAL_SCAN_PER_MINUTE < BROKER_RATE_LIMIT_PER_MINUTE &&
-  signalScanMaxPairs(MIN_SIGNAL_SCAN_PER_MINUTE) >= 1 &&
+  // the worst 60 s window of both scanners at the highest ceiling: the ceiling plus both buckets
+  MAX_SIGNAL_SCAN_PER_MINUTE +
+    SIGNAL_SCAN_INTERVALS.reduce(
+      (sum, interval) => sum + signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, interval),
+      0,
+    ) <
+    BROKER_RATE_LIMIT_PER_MINUTE &&
   // the worker's token route (#90): its longest path is one exchange under the account's row
   // lock, and the worker waits ACCESS_TOKEN_ROUTE_BUDGET_MS for it
   BROKER_HTTP_TIMEOUT_MS < ACCESS_TOKEN_ROUTE_BUDGET_MS &&

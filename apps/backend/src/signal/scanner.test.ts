@@ -2,9 +2,11 @@ import { pino } from 'pino';
 import {
   logOptions,
   SIGNAL_ALGORITHM_VERSION,
+  SIGNAL_CHART_INTERVAL_MS,
   type BinaryPair,
   type BrokerRestErrorCode,
   type PairsCatalogView,
+  type ScanInterval,
   type SignalDecision,
 } from '@binarius/shared';
 import {
@@ -14,18 +16,16 @@ import {
   type SignalEvaluation,
   type SignalFeedRequest,
 } from '@binarius/signal';
+import { DEFAULT_SIGNAL_SCAN_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { signalScanCapacity, signalScanPerMinute } from '../timing';
 import { createScanPacer, type ScanPacer } from './pacer';
-import {
-  createSignalScanner,
-  eligiblePairs,
-  freshSignals,
-  SCAN_INTERVAL_MS,
-  topPairs,
-} from './scanner';
+import { createSignalScanner, eligiblePairs, freshSignals, topPairs } from './scanner';
 
-// a 15 s boundary
+// a 15 s boundary, so a 5 s one too
 const B = 1_760_000_010_000;
+const CANDLE_15S_MS: number = SIGNAL_CHART_INTERVAL_MS['15s'];
+const CANDLE_5S_MS: number = SIGNAL_CHART_INTERVAL_MS['5s'];
 const SLACK_MS = 500;
 const LOG_EVERY_MS = 60_000;
 
@@ -64,8 +64,8 @@ const features = (lastCandleTimestamp: number) => ({
 });
 
 // the decision on the candle that closed at the last boundary before `nowMs`
-function signal(nowMs: number): SignalDecision {
-  const closed = Math.floor(nowMs / SCAN_INTERVAL_MS) * SCAN_INTERVAL_MS - SCAN_INTERVAL_MS;
+function signal(nowMs: number, candleMs = CANDLE_15S_MS): SignalDecision {
+  const closed = Math.floor(nowMs / candleMs) * candleMs - candleMs;
   return {
     kind: 'signal',
     version: SIGNAL_ALGORITHM_VERSION,
@@ -80,7 +80,7 @@ function decided(request: SignalFeedRequest, decision: SignalDecision): SignalEv
     entry: {
       assetId: request.assetId,
       interval: request.interval,
-      intervalMs: SCAN_INTERVAL_MS,
+      intervalMs: SIGNAL_CHART_INTERVAL_MS[request.interval],
       nowMs: Date.now(),
       fetch: { startTime: 0, limit: 60, rows: 0, durationMs: 1 },
       version: SIGNAL_ALGORITHM_VERSION,
@@ -97,7 +97,13 @@ const failed = (
   retryAfterSec?: number,
 ): SignalEvaluation => ({
   outcome: 'fetch_failed',
-  request: { ...request, intervalMs: SCAN_INTERVAL_MS, nowMs: Date.now(), startTime: 0, limit: 60 },
+  request: {
+    ...request,
+    intervalMs: SIGNAL_CHART_INTERVAL_MS[request.interval],
+    nowMs: Date.now(),
+    startTime: 0,
+    limit: 60,
+  },
   code,
   ...(retryAfterSec === undefined ? {} : { retryAfterSec }),
 });
@@ -106,6 +112,7 @@ type Answer = (request: SignalFeedRequest) => SignalEvaluation | Promise<SignalE
 
 function harness(
   options: {
+    interval?: ScanInterval;
     pairs?: BinaryPair[];
     answer?: Answer;
     maxPairs?: number;
@@ -119,13 +126,19 @@ function harness(
     // how far the scanner's clock reads behind the timers' clock
     skewMs: 0,
   };
+  const interval = options.interval ?? '15s';
   const calls: number[] = [];
-  const answer: Answer = options.answer ?? ((request) => decided(request, signal(Date.now())));
+  const intervals: string[] = [];
+  const answer: Answer =
+    options.answer ??
+    ((request) => decided(request, signal(Date.now(), SIGNAL_CHART_INTERVAL_MS[request.interval])));
   const logger = { info: vi.fn(), warn: vi.fn() };
   const scanner = createSignalScanner({
+    interval,
     feed: {
       evaluate: (request) => {
         calls.push(request.assetId);
+        intervals.push(request.interval);
         return Promise.resolve(answer(request));
       },
     },
@@ -146,12 +159,12 @@ function harness(
     concurrency: 4,
     logEveryMs: LOG_EVERY_MS,
   });
-  return { state, calls, logger, scanner };
+  return { state, calls, intervals, logger, scanner };
 }
 
 // to the scan moment of the candle that starts `candles` boundaries after B
-const toScan = async (candles: number) => {
-  await vi.advanceTimersByTimeAsync(B + candles * SCAN_INTERVAL_MS + SLACK_MS - Date.now());
+const toScan = async (candles: number, candleMs = CANDLE_15S_MS) => {
+  await vi.advanceTimersByTimeAsync(B + candles * candleMs + SLACK_MS - Date.now());
 };
 
 beforeEach(() => {
@@ -168,13 +181,33 @@ describe('signal scanner', () => {
   it('S1 nothing runs before the boundary plus the slack, then every candle', async () => {
     const h = harness();
     h.scanner.start();
-    await vi.advanceTimersByTimeAsync(B + SCAN_INTERVAL_MS + SLACK_MS - 1 - Date.now());
+    await vi.advanceTimersByTimeAsync(B + CANDLE_15S_MS + SLACK_MS - 1 - Date.now());
     expect(h.calls).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(h.calls).toEqual([1, 2]);
     await toScan(2);
     expect(h.calls).toEqual([1, 2, 1, 2]);
     await h.scanner.stop();
+  });
+
+  it('S1 a 5s scanner runs at its own boundary plus the slack, then every 5 s (#382)', async () => {
+    const h = harness({ interval: '5s' });
+    h.scanner.start();
+    // B + 3 s: the next 5 s boundary is B + 5 s
+    await vi.advanceTimersByTimeAsync(B + CANDLE_5S_MS + SLACK_MS - 1 - Date.now());
+    expect(h.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.calls).toEqual([1, 2]);
+    await toScan(2, CANDLE_5S_MS);
+    expect(h.calls).toEqual([1, 2, 1, 2]);
+    expect(new Set(h.intervals)).toEqual(new Set(['5s']));
+    await h.scanner.stop();
+  });
+
+  it('S2 only open pairs that accept the trade duration are scanned (#382)', () => {
+    const pairs = [pair(1, { minTimeframe: 15 }), pair(2)];
+    expect(eligiblePairs(view(pairs), B + 3_000, 5).map((p) => p.id)).toEqual([2]);
+    expect(eligiblePairs(view(pairs), B + 3_000, 15).map((p) => p.id)).toEqual([1, 2]);
   });
 
   it('S2 only open pairs that accept a 15 s trade are scanned', () => {
@@ -185,7 +218,7 @@ describe('signal scanner', () => {
       pair(4, { scheduledUntil: B - 1 }),
       pair(5),
     ];
-    expect(eligiblePairs(view(pairs), B + 3_000).map((p) => p.id)).toEqual([4, 5]);
+    expect(eligiblePairs(view(pairs), B + 3_000, 15).map((p) => p.id)).toEqual([4, 5]);
   });
 
   it('S3 the top pairs by payout, then by id', () => {
@@ -215,6 +248,7 @@ describe('signal scanner', () => {
       { fetchBudgetMs: 3_000, maxTtlMs: 30_000 },
     );
     const scanner = createSignalScanner({
+      interval: '15s',
       feed: cached,
       catalog: { read: () => view([pair(1)]) },
       pacer: createScanPacer({
@@ -250,6 +284,7 @@ describe('signal scanner', () => {
       { fetchBudgetMs: 3_000, maxTtlMs: 30_000 },
     );
     const scanner = createSignalScanner({
+      interval: '15s',
       feed: cached,
       catalog: { read: () => view([pair(1)]) },
       pacer: createScanPacer({
@@ -267,13 +302,13 @@ describe('signal scanner', () => {
       logEveryMs: LOG_EVERY_MS,
     });
     scanner.start();
-    await vi.advanceTimersByTimeAsync(B + SCAN_INTERVAL_MS - 200 - Date.now());
+    await vi.advanceTimersByTimeAsync(B + CANDLE_15S_MS - 200 - Date.now());
     const manual = cached.evaluate({ assetId: 1, interval: '15s' });
     await toScan(1);
     await vi.advanceTimersByTimeAsync(1_000);
     await manual;
     expect(getChart).toHaveBeenCalledTimes(2);
-    expect(scanner.snapshot().entries.get(1)?.decidedAtMs).toBe(B + SCAN_INTERVAL_MS + SLACK_MS);
+    expect(scanner.snapshot().entries.get(1)?.decidedAtMs).toBe(B + CANDLE_15S_MS + SLACK_MS);
     await scanner.stop();
   });
 
@@ -383,6 +418,7 @@ describe('signal scanner', () => {
     expect(message).toBe('signal scanner');
     // four candles in the minute: B+15 s, +30 s, +45 s, +60 s
     expect(fields).toEqual({
+      interval: '15s',
       eligible: 3,
       scanned: 3,
       signals: 1,
@@ -393,6 +429,25 @@ describe('signal scanner', () => {
       pausedMs: 0,
       lagMsP95: SLACK_MS,
     });
+    await h.scanner.stop();
+  });
+
+  it('S10 a 5s scanner logs twelve candles a minute with its interval (#382)', async () => {
+    const h = harness({
+      interval: '5s',
+      pairs: [pair(1)],
+      answer: (request) =>
+        decided(request, {
+          kind: 'no_signal',
+          version: SIGNAL_ALGORITHM_VERSION,
+          reason: 'insufficient_candles',
+          detail: { closedCandles: 0, required: 50 },
+        }),
+    });
+    h.scanner.start();
+    await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
+    const [fields] = h.logger.info.mock.calls[0] as [Record<string, unknown>];
+    expect(fields).toMatchObject({ interval: '5s', scanned: 1, noSignal: 12 });
     await h.scanner.stop();
   });
 
@@ -421,7 +476,7 @@ describe('signal scanner', () => {
     await toScan(1);
     await vi.advanceTimersByTimeAsync(10);
     expect(h.calls).toEqual([1, 2]);
-    await vi.advanceTimersByTimeAsync(B + 2 * SCAN_INTERVAL_MS + SLACK_MS + 1 - Date.now());
+    await vi.advanceTimersByTimeAsync(B + 2 * CANDLE_15S_MS + SLACK_MS + 1 - Date.now());
     expect(h.calls).toEqual([1, 2, 1, 2]);
     await h.scanner.stop();
   });
@@ -470,6 +525,34 @@ describe('signal scanner', () => {
     await h.scanner.stop();
   });
 
+  it('S18 the default 5s scanner scans its four pairs every candle under a jittery timer', async () => {
+    // the pacer reads the timers' clock this many ms late, per 5 s candle since B: a fire a few
+    // ms earlier relative to its boundary than the one before
+    const lags = [0, 1, 0, 2, 2, 1, 3, 0, 1, 0, 2, 2, 1];
+    const h = harness({
+      interval: '5s',
+      pairs: [1, 2, 3, 4].map((id) => pair(id)),
+      maxPairs: 4,
+      pacer: createScanPacer({
+        perMinute: signalScanPerMinute(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'),
+        capacity: signalScanCapacity(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'),
+        backoffMinMs: 15_000,
+        backoffMaxMs: 120_000,
+        now: () => Date.now() + (lags[Math.floor((Date.now() - B) / CANDLE_5S_MS)] ?? 0),
+      }),
+    });
+    h.scanner.start();
+    await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
+    expect(h.calls).toHaveLength(48);
+    expect(h.logger.info.mock.calls[0]?.[0]).toMatchObject({
+      interval: '5s',
+      scanned: 4,
+      skipped: 0,
+      rateLimited: 0,
+    });
+    await h.scanner.stop();
+  });
+
   it('S14 the log line counts no eligible pair while the catalog is stale', async () => {
     const h = harness();
     h.scanner.start();
@@ -509,11 +592,12 @@ describe('signal scanner logs (Rule 8)', () => {
 });
 
 describe('freshSignals', () => {
-  const closed = B - SCAN_INTERVAL_MS;
+  const closed = B - CANDLE_15S_MS;
   const entry = { kind: 'signal' as const, action: 'up' as const, decidedAtMs: B + 500 };
 
   it('serves a signal on the candle that closed most recently, with its age', () => {
     const snapshot = {
+      interval: '15s' as const,
       scanned: [1],
       entries: new Map([[1, { ...entry, lastCandleTimestamp: closed }]]),
     };
@@ -524,14 +608,34 @@ describe('freshSignals', () => {
 
   it('serves nothing once the candle changed without a recompute', () => {
     const snapshot = {
+      interval: '15s' as const,
       scanned: [1],
       entries: new Map([[1, { ...entry, lastCandleTimestamp: closed }]]),
     };
-    expect(freshSignals(snapshot, B + SCAN_INTERVAL_MS)).toEqual([]);
+    expect(freshSignals(snapshot, B + CANDLE_15S_MS)).toEqual([]);
+  });
+
+  it('serves a 5s signal on the 5 s candle closed last, and not one candle later (#382)', () => {
+    const snapshot = {
+      interval: '5s' as const,
+      scanned: [1],
+      entries: new Map([[1, { ...entry, lastCandleTimestamp: B - CANDLE_5S_MS }]]),
+    };
+    expect(freshSignals(snapshot, B + 2_000)).toEqual([
+      {
+        assetId: 1,
+        action: 'up',
+        lastCandleTimestamp: B - CANDLE_5S_MS,
+        decidedAt: B + 500,
+        ageMs: 2_000,
+      },
+    ]);
+    expect(freshSignals(snapshot, B + CANDLE_5S_MS)).toEqual([]);
   });
 
   it('serves nothing for a no_signal or a pair outside the scanned set', () => {
     const snapshot = {
+      interval: '15s' as const,
       scanned: [1],
       entries: new Map([
         [1, { kind: 'no_signal' as const, lastCandleTimestamp: closed, decidedAtMs: B + 500 }],

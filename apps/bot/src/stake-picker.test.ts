@@ -64,7 +64,7 @@ interface Button {
 
 const SETTINGS: StakeOrigin = { kind: 'settings' };
 const ANALYSIS: StakeOrigin = { kind: 'analysis', assetId: 101, durationSec: 5 };
-const PAIR: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id };
+const PAIR: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 15 };
 const ON_STAKE_STEP: LoginDialogState = { step: 'stake', origin: SETTINGS };
 const d = (value: string): DecimalString => decimalStringSchema.parse(value);
 
@@ -291,22 +291,27 @@ describe('the stake picker', () => {
     const longest = stakePresetCallbackData('999999999999.99999999', {
       kind: 'pair',
       assetId: 2_147_483_647,
+      durationSec: 15,
     });
-    expect(Buffer.byteLength(longest, 'utf8')).toBe(40);
-    expect(launchStakeCallbackData(PAIR_EURUSD.id)).toBe(stakeOpenCallbackData(PAIR));
-    expect(stakeOriginOf(`p:${PAIR_EURUSD.id}`)).toEqual(PAIR);
-    expect(stakeOriginOf('p:0')).toBeUndefined();
-    expect(stakeOriginOf('p:101:5')).toBeUndefined();
+    expect(Buffer.byteLength(longest, 'utf8')).toBe(43);
+    expect(launchStakeCallbackData(PAIR_EURUSD.id, 15)).toBe(stakeOpenCallbackData(PAIR));
+    expect(stakeOriginOf(`p:${PAIR_EURUSD.id}:15`)).toEqual(PAIR);
+    expect(stakeOriginOf('p:101:5')).toEqual({ kind: 'pair', assetId: 101, durationSec: 5 });
+    expect(stakeOriginOf('p:0:15')).toBeUndefined();
+    // a launch screen from before #382 carried no duration: the legacy handler takes it (#382)
+    expect(stakeOriginOf('p:101')).toBeUndefined();
+    expect(stakeOriginOf('p:101:60')).toBeUndefined();
   });
 });
 
 describe('the stake picker opened from a launch screen (#320)', () => {
   const BACK_LAUNCH = [
-    button(LABELS.stakeBackLaunchButton, demoLaunchCallbackData(PAIR_EURUSD.id)),
+    button(LABELS.stakeBackLaunchButton, demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
   ];
   const savedLaunch = (amount: DecimalString | null, symbol: string | null = PAIR_EURUSD.symbol) =>
     launchScreen({
       assetId: PAIR_EURUSD.id,
+      durationSec: 15,
       firstName: USER.first_name,
       symbol,
       amount,
@@ -343,6 +348,18 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       TEXTS.launchStake({ stake: d('5'), firstName: USER.first_name }).value,
     );
     expect(rowsOf(lastPayload(calls))).toEqual(screen.keyboard.inline_keyboard);
+  });
+
+  it('keeps the duration of the launch screen it returns to (#382)', async () => {
+    const at5: StakeOrigin = { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 5 };
+    const { press, calls } = setup();
+    await press(stakePresetCallbackData('5', at5));
+    expect(lastPayload(calls)?.text).toContain(`${PAIR_EURUSD.symbol} · ⏱ 5 с`);
+    expect(rowsOf(lastPayload(calls))).toEqual([
+      [button(LABELS.launchCycleButton, `demo:sess:${String(PAIR_EURUSD.id)}:5`)],
+      [button(LABELS.stakeChangeButton, `stk:o:p:${String(PAIR_EURUSD.id)}:5`)],
+      [button(LABELS.backToListButton, 'demo:sig:5')],
+    ]);
   });
 
   it('names the minimum after the reset', async () => {

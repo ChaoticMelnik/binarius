@@ -7,6 +7,7 @@ import {
   closeAll,
   createBotTextRefresher,
   errorLogFields,
+  SIGNAL_SCAN_INTERVALS,
 } from '@binarius/shared';
 import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-rest';
 import { createDb, createTokenCipher, listBotTextOverrides } from '@binarius/db';
@@ -38,7 +39,9 @@ import {
   SIGNAL_SCAN_CONCURRENCY,
   SIGNAL_SCAN_LOG_MS,
   SIGNAL_SCAN_SLACK_MS,
-  signalScanMaxPairs,
+  signalScanCapacity,
+  signalScanPairs,
+  signalScanPerMinute,
 } from './timing';
 
 const env = parseEnv(process.env);
@@ -106,30 +109,34 @@ const signalFeed = createCachedSignalFeed(
   { fetchBudgetMs: SIGNAL_FETCH_BUDGET_MS, maxTtlMs: SIGNAL_CACHE_MAX_TTL_MS },
 );
 
-// The background scan of the top pairs (docs/signal.md -> The scanner): through the same cache, so
-// a manual analysis of a scanned pair in that candle costs no second GET. Started with the other
-// loops after listen(), stopped in phase 1.
-const signalScanPairs = signalScanMaxPairs(env.signalScanMaxPerMinute);
-const signalScanner = createSignalScanner({
-  feed: signalFeed,
-  catalog: pairsCatalog,
-  pacer: createScanPacer({
-    perMinute: env.signalScanMaxPerMinute,
-    capacity: signalScanPairs,
-    backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
-    backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
+// The background scan of the top pairs (docs/signal.md -> The scanner), one scanner per interval,
+// each on its own pacer and share of the ceiling (#382): through the same cache, so a manual
+// analysis of a scanned pair in that candle costs no second GET. Started with the other loops
+// after listen(), stopped in phase 1.
+const signalScanners = SIGNAL_SCAN_INTERVALS.map((interval) => {
+  const pairs = signalScanPairs(env.signalScanMaxPerMinute, interval);
+  return createSignalScanner({
+    interval,
+    feed: signalFeed,
+    catalog: pairsCatalog,
+    pacer: createScanPacer({
+      perMinute: signalScanPerMinute(env.signalScanMaxPerMinute, interval),
+      capacity: signalScanCapacity(env.signalScanMaxPerMinute, interval),
+      backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
+      backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
+      now: Date.now,
+    }),
+    // the app's logger does not exist yet, and this one is first used by the first scan
+    logger: {
+      info: (object, message) => app.log.info(object, message),
+      warn: (object, message) => app.log.warn(object, message),
+    },
     now: Date.now,
-  }),
-  // the app's logger does not exist yet, and this one is first used by the first scan
-  logger: {
-    info: (object, message) => app.log.info(object, message),
-    warn: (object, message) => app.log.warn(object, message),
-  },
-  now: Date.now,
-  maxPairs: signalScanPairs,
-  slackMs: SIGNAL_SCAN_SLACK_MS,
-  concurrency: SIGNAL_SCAN_CONCURRENCY,
-  logEveryMs: SIGNAL_SCAN_LOG_MS,
+    maxPairs: pairs,
+    slackMs: SIGNAL_SCAN_SLACK_MS,
+    concurrency: SIGNAL_SCAN_CONCURRENCY,
+    logEveryMs: SIGNAL_SCAN_LOG_MS,
+  });
 });
 
 // created before the app so the routes can hold it; polling starts after listen()
@@ -177,7 +184,7 @@ const app = buildApp({
     internalApiToken: env.internalApiToken,
   },
   signals: {
-    scanner: signalScanner,
+    scanners: signalScanners,
     internalApiToken: env.internalApiToken,
   },
   auth: {
@@ -267,7 +274,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => publisher.stop(),
       () => adminBot.stop(),
       () => Promise.resolve(pairsCatalog.stop()),
-      () => signalScanner.stop(),
+      () => Promise.all(signalScanners.map((scanner) => scanner.stop())),
       () => balanceReconciler.stop(),
       () => botTexts.stop(),
     ],
@@ -307,7 +314,7 @@ if (!shuttingDown) {
 if (!shuttingDown) {
   publisher.start();
   balanceReconciler.start();
-  signalScanner.start();
+  for (const scanner of signalScanners) scanner.start();
   botTexts.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
