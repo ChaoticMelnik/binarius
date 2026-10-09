@@ -18,6 +18,7 @@ come from the worker's broker sessions ([broker-session.md](broker-session.md), 
 | Operations | `packages/db/src/balance-snapshot-ops.ts` | the only writers and readers of the table, `toBrokerBalanceView` |
 | Contract | `packages/shared/src/broker-balance.ts` | `BROKER_BALANCE_SLA_SEC`, `TRADING_ACCESS_BUDGET_MS`, `BALANCE_WATCH_WINDOW_MS` (shared with the worker's session candidates), `BrokerBalanceUnavailableReason`, `brokerBalanceViewSchema` |
 | Reconciler | `apps/backend/src/broker/balance-reconciler.ts` | `refresh()`, `tick()`, `start()`, `stop()` |
+| Check after a reconciliation (#92) | `apps/trading-worker/src/intents/balance-check.ts` | the worker's one GET after an outcome: the snapshot after the id check, then `held` against our open trades ([trade-intent-transport.md](trade-intent-transport.md) → Balance check after an outcome) |
 | Route | `apps/backend/src/trading/access.ts` | the `broker` section of `POST /trading/access` |
 | Constants | `apps/backend/src/timing.ts` | the interval, the per-minute ceiling, the windows, the route budget, and the chain between them |
 
@@ -211,8 +212,10 @@ on top of #99's socket client, which writes nothing itself:
   connection's `user.data` carried the account's `broker_user_id`; a `user.data` with another id
   ends the session in its handler and nothing more of that connection is written.
 - No `refresh()` after `accepted`: the `update_balance` the broker sends before
-  `open_trade.success` is the snapshot after the trade. #92 (after a reconciliation) is the
-  backend's. The trade command executor (#100) writes nothing.
+  `open_trade.success` is the snapshot after the trade. After a reconciliation outcome the
+  worker's balance check (#92) writes the snapshot itself through `upsertBalanceSnapshot`, after
+  the same id check, with `requested: false`; it records no refresh error (`last_refresh_error`
+  stays the backend's). The trade command executor (#100) writes nothing.
 
 ## Observed live
 
@@ -249,10 +252,18 @@ on top of #99's socket client, which writes nothing itself:
   committed in those milliseconds does not stop a request already sent. Nothing sets a block
   today. Future code that needs a hard guarantee revokes the user's accounts in the same
   transaction, in the order `users → broker_accounts`.
+- The worker's check after a reconciliation (#92) writes the row outside the backend's single
+  flight: the last write wins, and both are the broker's answer.
+- The check compares `held` only after reconciliation outcomes: a double open with no `unknown`
+  intent (a cross-socket answer, broker-session.md risk 4) is seen at the account's next
+  reconciliation. A trade the user placed by hand on the broker counts in `held` and in no row of
+  ours, so it alerts. `held` was observed on demo only (2026-10-03: up by the stake on open, back
+  on close); real is assumed to behave the same. Falsifiable: a `broker balance mismatch` on a
+  real account right after a clean `accepted` with no other trade.
 
 ## Boundaries
 
-- #101: the socket writers above, implemented. #92: a snapshot after a reconciliation (the worker has no `refresh()`; it is the backend balance reconciler).
+- #101: the socket writers above, implemented. #92 (shipped): the worker's check after a reconciliation outcome writes the snapshot and compares `held`; it has no `refresh()` and records no refresh error.
 - The bot's display, `BackendClient.readTradingAccess` and the link
   `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`: [bot-menu.md](bot-menu.md).
 - The money unit is whole currency units (live 2026-10-03, [broker-rest.md](broker-rest.md) →

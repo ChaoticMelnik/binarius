@@ -297,6 +297,42 @@ from `AccountHaltReason`, in one transaction. After the commit one line
 source for #69). A lost CAS writes and alerts nothing. Only an operator lifts the halt, writing
 both columns (the pair CHECK).
 
+**Balance check after an outcome (#92).** After every recorded `accepted`, `settled`,
+`manual_review` and `rejected` (the last has no producer until #274), and only while the pass is
+not stopping, the pass runs `createBalanceCheck` (`intents/balance-check.ts`) for the intent's
+account under its own deadline, `BALANCE_CHECK_TIMEOUT_MS` (15 s). The check never changes the
+outcome or the intent:
+
+1. `readHeldExposure` (`packages/db`, one statement, no locks): per mode, our open
+   `broker_trades`, the count of the mode's intents, whether one is in flight (non-terminal and not
+   `accepted` with an open linked trade), and whether an open trade is at or past its expected close
+   by the database clock.
+2. The token with `mayRefresh: false` (Rule 12), then one `GET /v1/broker/user`.
+3. The id check against `broker_accounts.broker_user_id`, then `upsertBalanceSnapshot` with the
+   answer (its domain check included). Another user's id or a value out of the domain writes
+   nothing and compares nothing.
+4. `readHeldExposure` again, now with the broker's `held` per mode: `held > sum(open amount)`
+   is compared in SQL `numeric` (Rule 2).
+5. Per mode, compare only when nothing of ours moved around the GET:
+   - an intent in flight at either read → `intent_unresolved`;
+   - an open trade past its expected close (the broker may already have settled it) →
+     `settlement_pending`;
+   - the open trade ids or the intent count differ between the reads → `trades_changed`.
+   A skip is `info` `balance check not compared` `{ brokerAccountId, mode, reason }`. Otherwise,
+   when the broker holds more than our open trades, the alert is
+   `error { brokerAccountId, mode, direction: 'broker_holds_more' } broker balance mismatch` —
+   alert only, no halt (owner, 2026-10-07). Holding less is settlement lag on the broker's side,
+   not an alert.
+
+The two reads, not the trade durations, keep a moving trade out of the compare: a 5 s trade
+(#313) that opens and settles inside one GET has an intent before the first read (in flight there,
+or with its trade in the first read's ids) or creates one after it (the count changes)
+(`balance-check.db.test.ts` B5b, B6, B6b). No amount reaches a log line. Failures are a `warn`
+`balance check failed` with `reason` (`token`, `account_not_found`, `broker` with `code`,
+`status`, `retryAfterSec`; the broker's `detail` is not logged); a `rate_limited` GET ends the
+tick like the attempt's own 429; a throw is `error` `balance check threw` and a deadline `warn`
+`balance check timed out`. The tick summary counts `balanceCompared` and `balanceMismatch`.
+
 **Settlement catch-up.** `listOverdueAcceptedIntents` (open time + duration + 10 s grace by the
 database clock; every 5 s, at most 3 intents a tick — sized in #313 for the demo's 5 and 15 s
 trades, which settle 10-15 s after their close while no close event arrives), then per intent the token with `mayRefresh: false`, the closed list (the same
@@ -315,11 +351,11 @@ read. Each ending:
 
 **Budget.** The broker allows 600 requests a minute per IP. The backend's balance refresh and
 its signal scanner take up to 100 each by default (the shares are in
-`packages/shared/src/broker-budget.ts`, docs/signal.md → The budget). The worker's worst case is 20 × 2 lists × 2 pages × 4 ticks + 3 × 2
-pages × 12 ticks = 392 GETs a minute, at most `WORKER_BROKER_GETS_PER_MINUTE` (400; checked at
+`packages/shared/src/broker-budget.ts`, docs/signal.md → The budget). The worker's worst case is 16 × (2 lists × 2 pages + 1 balance
+GET, #92) × 4 ticks + 3 × 2 pages × 12 ticks = 392 GETs a minute, at most `WORKER_BROKER_GETS_PER_MINUTE` (400; checked at
 import, with a whole number of ticks a minute for both loops). It is a
 true bound because both loops tick only on their intervals — the reconciliation job does not start
-a tick, and a tick never overlaps the next. Reconciliation handles at most 80 intents a minute; a
+a tick, and a tick never overlaps the next. Reconciliation handles at most 64 intents a minute; a
 new `reconciling` intent waits for the next tick (≤ 15 s). The catch-up settles at most 36 intents
 a minute (accepted, #313): when the `settlement catch-up tick` line shows `overdue` at 3 tick after
 tick, the lever is part of the reconciliation's share, in a new issue. A 429 ends a tick and the attempt is
@@ -344,7 +380,7 @@ backend's start, not enforced.
 | Outcome write                                                                                                                                     | none                                                                                                                                                                      | —                                                                                                                                                         | `accepted` writes the open `broker_trades` row in the same transaction; a trade that does not match the intent → `unknown` (`trade_mismatch`) + reconciliation row. A database failure here fails the job (dead letter); the intent stays `submitting` until the sweeper |
 | Stale `submitting` (redelivery or sweeper, every 15 s)                                                                                            | —                                                                                                                                                                         | `STALE_SUBMITTING_MS` 60 s ≥ `lockDuration` > max ack timeout                                                                                             | → `unknown` (`stale_submitting`) + reconciliation row                                                                                                                                                                                                                    |
 | Reconciliation job, topic `trading-reconciliation`                                                                                                | `attempts: 1`, as above                                                                                                                                                   | the BullMQ job options above                                                                                                                              | `unknown → reconciling`; the pass takes it on its next tick, within `RECONCILE_TICK_MS`; the job never asks the broker. A throw dead-letters with `topic`, and the outbox re-pends the row after 30 s while the intent is still `unknown`                                                                              |
-| Reconciliation attempt (the pass, every 15 s, at most 20 candidates, one after another)                                                           | after the lease: the claim (`reconcile_claimed_at = now()`, `version + 1`) is the first write and keeps the intent from being a candidate for `RECONCILE_RETRY_MS` (60 s) | `RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s) per `reconcile()` call (the token plus up to four GETs), enforced by the pass with `Promise.race`; the reconciler also receives an `AbortSignal`     | `unavailable`, a deadline or a throw write nothing beyond the claim; `rate_limited` ends the tick. Every outcome is a CAS on `status = reconciling` and the claim's `version`, so an attempt whose lease was re-claimed cannot write                                     |
+| Reconciliation attempt (the pass, every 15 s, at most 16 candidates, one after another)                                                           | after the lease: the claim (`reconcile_claimed_at = now()`, `version + 1`) is the first write and keeps the intent from being a candidate for `RECONCILE_RETRY_MS` (60 s) | `RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s) per `reconcile()` call (the token plus up to four GETs), enforced by the pass with `Promise.race`; the reconciler also receives an `AbortSignal`     | `unavailable`, a deadline or a throw write nothing beyond the claim; `rate_limited` ends the tick. Every outcome is a CAS on `status = reconciling` and the claim's `version`, so an attempt whose lease was re-claimed cannot write                                     |
 | Settlement catch-up (every 5 s, at most 3 overdue intents, one after another)                                                                     | an attempt that does not take its intent out of `accepted` holds the account back for `CATCHUP_STALLED_RETRY_MS` (30 s), in memory                                      | `CATCHUP_ATTEMPT_TIMEOUT_MS` (20 s): the token (`mayRefresh: false`) and up to two closed pages                                                          | `rate_limited` ends the tick and holds nobody; a throw is logged with `errorLogFields` and holds the account. `settleClosedTrades` is idempotent, so a repeat is safe                                     |
 
 Invariants these numbers encode (asserted at import in `apps/trading-worker/src/intents/config.ts`
@@ -367,14 +403,26 @@ sees `unknown`, not `submitting`) and reconciliation recovers the real result.
 
 ## Dead-letter queue
 
-`trading-intents-dead-letter` receives one entry per failed job of either topic: `{ intentId |
-null, topic, reason, failedAt }` with `reason` from the allowlist (`invalid_job` for a malformed payload or a missing
-intent, `processing_failed` otherwise). No exception text is stored — it can carry connection
+`trading-intents-dead-letter` receives one entry per failed job of either topic: `{ source:
+'intent_job', intentId | null, topic, reason, failedAt }` with `reason` from the allowlist
+(`invalid_job` for a malformed payload or a missing intent, `processing_failed` otherwise). A
+broker session write that throws (#92, [broker-session.md](broker-session.md)) leaves
+`{ source: 'user_data' | 'update_balance' | 'close_trade_success', accountId, mode, brokerTradeIds,
+reason: 'processing_failed', failedAt }`: the event's mode and trade ids, never its amounts or
+user object. The session manager awaits the write inside the account's write queue, so `stop()`
+waits for it too; the writes `stop()` drops are not failures and leave nothing. No exception text is stored — it can carry connection
 details — the log line next to it has the error. A failure to write the entry is logged as
 `dlq_publish_failed`; the worker keeps running. Writes started by jobs that fail during a
 shutdown drain are awaited before the queue connection closes. Nothing consumes the queue
 automatically; inspect it with the BullMQ tooling of your choice. A `trading-reconciliation`
 entry is a record, not a loss: the outbox re-publishes the row while the intent is `unknown`.
+
+Redis keeps the queue across restarts (#92): `compose.yaml` runs it with `--appendonly yes` on the
+named volume `redisdata`. AOF fsyncs every second, so a host crash can lose about a second of
+queue writes. **Deploy note:** the first start on `redisdata` replaces the image's anonymous
+`/data` volume, so Redis starts empty once — the dead-letter entries written before are gone,
+and a BullMQ job not yet taken is re-published by the backend's stale-published re-publish
+(`listStalePublished`).
 
 ## Persisted reasons and secrets
 
@@ -417,8 +465,8 @@ Worker (optional, code defaults in `apps/trading-worker/src/env.ts`):
 
 Fixed constants and why they relate the way they do: `apps/trading-worker/src/intents/config.ts`
 — among them the reconciliation pass's `RECONCILE_ATTEMPT_TIMEOUT_MS` (30 s),
-`RECONCILE_RETRY_MS` (60 s, the lease), `RECONCILE_TICK_MS` (15 s) and `RECONCILE_BATCH_SIZE`
-(20), the matching window and pages (`RECONCILE_WINDOW_*`, `RECONCILE_TRADES_PAGE_SIZE`,
+`RECONCILE_RETRY_MS` (60 s, the lease), `RECONCILE_TICK_MS` (15 s), `RECONCILE_BATCH_SIZE`
+(16) and the balance check's `BALANCE_CHECK_TIMEOUT_MS` (15 s), the matching window and pages (`RECONCILE_WINDOW_*`, `RECONCILE_TRADES_PAGE_SIZE`,
 `RECONCILE_MAX_TRADE_PAGES`) and the catch-up's `CATCHUP_*`; none has an environment variable.
 
 Trading itself is not configured by the environment: `REAL_TRADING_ENABLED` (#134) is gone, and
@@ -437,8 +485,8 @@ without a restart ([kill-switch.md](kill-switch.md)).
   catch-up and the backend's token route — Reconciliation matching above; it never releases a
   reserve on absence. **#274**: `not_found` and the release after the live probe. **#91**: no second open
   after `unknown` (the executor side is proven in #100, [trade-executor.md](trade-executor.md) →
-  The two-cases rule). **#92**: the broker balance check after a reconciliation and a
-  DLQ for unprocessable events.
+  The two-cases rule). **#92** (shipped): the broker balance check after a reconciliation
+  outcome and the session writers' dead letters (above).
 - **#101** (shipped): the session manager feeds `close_trade.success` into `settleClosedTrades` and
   takes `noTradeSessions`' place when `BROKER_WS_URL` is set ([broker-session.md](broker-session.md)).
   The operator tool for `manual_review` is a later issue.

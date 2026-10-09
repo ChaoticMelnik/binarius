@@ -134,8 +134,11 @@ of the same account queues behind what an earlier one left.
 | `user.<mode>.update_balance` | `applyBalanceEvent(db, { brokerAccountId, mode, balance })` | `no_snapshot` or `out_of_domain` → the same warn with `source: update_balance`, once per connection |
 | `user.<mode>.close_trade.success` | `settleClosedTrades(db, { brokerAccountId, trades })` | `settled` → `info` `intent settled from close_trade.success` (`intentId`, `brokerTradeId`); `not_ours`, `already_settled`, `intent_not_accepted` → `debug` `closed trade not applied` (`brokerTradeId`, `result`) |
 
-A writer's throw → `error` `broker session write failed` (`source`, `errorLogFields`); the queue
-goes on with the next write. No REST GET at session start (`user.data` is the snapshot) and none
+A writer's throw → `error` `broker session write failed` (`source`, `errorLogFields`), then a
+dead letter `{ source, accountId, mode, brokerTradeIds }` in the consumers' queue (#92,
+[trade-intent-transport.md → Dead-letter queue](trade-intent-transport.md#dead-letter-queue)),
+awaited inside the account's queue so `stop()` waits for it; the queue goes on with the next
+write. No REST GET at session start (`user.data` is the snapshot) and none
 after `accepted` (the `update_balance` before `open_trade.success` is it). `price.update`,
 `common.*` and the command answers are not the manager's: the answers are the executor's through
 `openTrade`.
@@ -240,10 +243,10 @@ present.
   session counted; U4/U5 the token answers and their hold-backs; U6/U6b/U7 `token_expired` and
   `auth_failed` with the same and with a new token, the fetch carrying the refused token's
   fingerprint; U6c a backend that marks it: the session waits and restarts with the exchanged one; U8 `disconnected_by_server`; U9/U9b/U9c the
-  identity gate (a burst with a foreign `user.data`, a reconnect); U10 a throwing writer; U11
+  identity gate (a burst with a foreign `user.data`, a reconnect); U10/U10b a throwing writer and its dead letter, ids only; U11
   `sessionFor` (U11b: only for a verified connection, again after a reconnect; U11c: none during
   the refresh after `token_expired`/`auth_failed`; U11d: none on `idle`, for a listener that
-  re-enters during the stop); U12/U12b `stop()` and its budget; U13 single-flight and a failing scan; U15 a tick
+  re-enters during the stop); U12/U12b/U12c `stop()` and its budget, a dead-letter write in flight included; U13 single-flight and a failing scan; U15 a tick
   returns while its starts are pending; U16 a candidate gone while starting; U17a/U17b
   `broker session start failed` from a throwing token source and from a client whose `start()`
   throws on the refresh path; U14 the log scan.
@@ -324,8 +327,8 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
 - ARCH-02: #93 the lease, #94 the measured per-process limit and sharding, #95 handoff and
   single-flight refresh across processes, #96 the emergency stop.
 - ARCH-05: #87 the load stand, #88 degradation.
-- #92 (a balance check after a reconciliation, DLQ), #274 (`not_found`),
-  #278, #279; #281 shipped (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)
+- #92 shipped: the writers' dead letters above, and the balance check after a reconciliation
+  (docs/trade-intent-transport.md). #274 (`not_found`), #278, #279; #281 shipped (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)
   keeps its account in work between trades through `touchBalanceRequested`, so its socket stays open.
 - `price.update` has no consumer in production: the signal feed reads the REST chart; E2 proves
   the subscription pipe only.
