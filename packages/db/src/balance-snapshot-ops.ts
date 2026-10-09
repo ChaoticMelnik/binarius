@@ -1,4 +1,4 @@
-import { and, eq, notInArray, sql, type SQL } from 'drizzle-orm';
+import { and, eq, notInArray, sql, type AnyColumn, type SQL } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
   TradeMode,
@@ -81,11 +81,14 @@ export interface UpsertBalanceSnapshotInput {
   requested: boolean;
   // the modes whose *_event_at moves to now() (the socket's user.data); the REST refresh passes none
   eventAt?: readonly TradeMode[];
+  // when the REST answer was asked for, database clock (#92): a mode whose socket event landed
+  // after it keeps its amounts, since the answer is older than what the row already holds
+  eventsAfter?: Date;
 }
 
 export async function upsertBalanceSnapshot(
   db: Db,
-  { brokerAccountId, user, requested, eventAt = [] }: UpsertBalanceSnapshotInput,
+  { brokerAccountId, user, requested, eventAt = [], eventsAfter }: UpsertBalanceSnapshotInput,
 ): Promise<BalanceSnapshotWrite> {
   const field = balanceSnapshotOutOfDomain(user);
   if (field !== undefined) return { written: false, field };
@@ -94,6 +97,11 @@ export async function upsertBalanceSnapshot(
   const now = sql`now()`;
   const realEvent = eventAt.includes(TradeMode.Real);
   const demoEvent = eventAt.includes(TradeMode.Demo);
+  // the incoming amount, or the stored one when the mode's socket event is newer than the answer
+  const amount = (eventCol: AnyColumn, stored: AnyColumn, incoming: string) =>
+    eventsAfter === undefined
+      ? sql.raw(`excluded.${incoming}`)
+      : sql`case when ${eventCol} > ${eventsAfter} then ${stored} else ${sql.raw(`excluded.${incoming}`)} end`;
   await db
     .insert(t)
     .values({
@@ -115,12 +123,12 @@ export async function upsertBalanceSnapshot(
     .onConflictDoUpdate({
       target: t.brokerAccountId,
       set: {
-        realAvailable: sql`excluded.real_available`,
-        realHeld: sql`excluded.real_held`,
-        realTotal: sql`excluded.real_total`,
-        demoAvailable: sql`excluded.demo_available`,
-        demoHeld: sql`excluded.demo_held`,
-        demoTotal: sql`excluded.demo_total`,
+        realAvailable: amount(t.realEventAt, t.realAvailable, 'real_available'),
+        realHeld: amount(t.realEventAt, t.realHeld, 'real_held'),
+        realTotal: amount(t.realEventAt, t.realTotal, 'real_total'),
+        demoAvailable: amount(t.demoEventAt, t.demoAvailable, 'demo_available'),
+        demoHeld: amount(t.demoEventAt, t.demoHeld, 'demo_held'),
+        demoTotal: amount(t.demoEventAt, t.demoTotal, 'demo_total'),
         minTradeAmount: sql`excluded.min_trade_amount`,
         levelCode: sql`excluded.level_code`,
         levelRank: sql`excluded.level_rank`,

@@ -1180,16 +1180,23 @@ export interface HeldExposure {
   mode: TradeMode;
   // our open broker_trades of the account in this mode, sorted
   openTradeIds: string[];
-  // every trade_intents row of the account in this mode: an intent created between two reads
-  // changes it
-  intentCount: number;
+  // trade_intents of the account in this mode created within RECENT_INTENTS_WINDOW_MS: an intent
+  // created between two reads changes it, even one whose creating transaction began before the
+  // first read. Bounded by the window, not by the account's history; an intent that ages out
+  // between the reads changes it too, which only skips the compare
+  recentIntentCount: number;
   // a non-terminal intent of this mode that is not `accepted` with an open linked trade
   unresolvedIntent: boolean;
   // an open linked trade at or past its expected close, by the database clock
   settlementPending: boolean;
   // held > the sum of the open amounts, compared as numeric; null when no held was passed
   heldExceedsOpen: boolean | null;
+  // the database clock at the read, the same in every row
+  readAt: Date;
 }
+
+// far longer than one balance check (BALANCE_CHECK_TIMEOUT_MS, 20 s)
+export const RECENT_INTENTS_WINDOW_MS = 10 * 60_000;
 
 // Our side of the broker balance check (#92): per mode, what we hold open at the broker and what
 // could make a compare with the broker's `held` meaningless. One statement, no locks; the money
@@ -1210,18 +1217,22 @@ export async function readHeldExposure(
   const { rows } = await exec.execute<{
     mode: TradeMode;
     open_trade_ids: string[];
-    intent_count: number;
+    recent_intent_count: number;
     unresolved_intent: boolean;
     settlement_pending: boolean;
     held_exceeds_open: boolean | null;
+    read_at: Date | string;
   }>(sql`
-    select m.mode,
+    select m.mode, now() as read_at,
       coalesce(
         (select array_agg(${brokerTrades.brokerTradeId} order by ${brokerTrades.brokerTradeId})
            from ${brokerTrades} where ${openOfMode}),
         '{}'
       ) as open_trade_ids,
-      (select count(*)::int from ${tradeIntents} where ${intentsOfMode}) as intent_count,
+      (select count(*)::int from ${tradeIntents}
+        where ${intentsOfMode}
+          and ${tradeIntents.createdAt} > ${millisecondsAgo(RECENT_INTENTS_WINDOW_MS)}
+      ) as recent_intent_count,
       exists (
         select 1 from ${tradeIntents}
          where ${intentsOfMode}
@@ -1253,10 +1264,11 @@ export async function readHeldExposure(
   return rows.map((row) => ({
     mode: row.mode,
     openTradeIds: row.open_trade_ids,
-    intentCount: row.intent_count,
+    recentIntentCount: row.recent_intent_count,
     unresolvedIntent: row.unresolved_intent,
     settlementPending: row.settlement_pending,
     heldExceedsOpen: row.held_exceeds_open,
+    readAt: new Date(row.read_at),
   }));
 }
 

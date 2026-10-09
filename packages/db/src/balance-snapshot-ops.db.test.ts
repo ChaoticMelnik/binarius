@@ -186,6 +186,37 @@ describe('upsertBalanceSnapshot', () => {
     expect(third.demoEventAt).toBeInstanceOf(Date);
     expect(third.realEventAt).toEqual(first.realEventAt);
   });
+  // #92: the worker's check asks at T1, a socket event lands at T2, the check writes at T3
+  it('keeps the amounts of a mode whose socket event is newer than the REST answer', async () => {
+    const { accountId } = await seedAccount();
+    await upsertBalanceSnapshot(tmp.db, { brokerAccountId: accountId, user: brokerUser(), requested: false });
+    const [asked] = (await tmp.db.execute<{ now: Date | string }>(sql`select now() as now`)).rows;
+    const askedAt = new Date(asked!.now);
+    await shift(accountId, 'rest_observed_at', '-1 second');
+    await applyBalanceEvent(tmp.db, {
+      brokerAccountId: accountId,
+      mode: TradeMode.Demo,
+      balance: { available: money('1'), held: money('2'), total: money('3') },
+    });
+    await upsertBalanceSnapshot(tmp.db, {
+      brokerAccountId: accountId,
+      user: brokerUser({
+        real: { available: money('7'), held: money('8'), total: money('15') },
+      }),
+      requested: false,
+      eventsAfter: askedAt,
+    });
+    expect((await snapshotRow(accountId))!.row).toMatchObject({
+      // the socket's demo amounts stay: they are newer than the answer
+      demoAvailable: '1.00000000',
+      demoHeld: '2.00000000',
+      demoTotal: '3.00000000',
+      // real had no event since: the answer replaces it
+      realAvailable: '7.00000000',
+      realHeld: '8.00000000',
+      realTotal: '15.00000000',
+    });
+  });
 });
 
 describe('the stored domain', () => {

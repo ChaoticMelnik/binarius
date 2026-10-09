@@ -758,6 +758,11 @@ describe('the identity gate and the writers', () => {
     ]);
     const text = JSON.stringify(h.deadLetters);
     for (const amount of ['5.00', '1.50', '1.27']) expect(text).not.toContain(amount);
+    // the log line carries the trade ids too: the hour's later dead letters are not written
+    expect(h.logs('broker session write failed')).toEqual([
+      expect.not.objectContaining({ brokerTradeIds: expect.anything() }),
+      expect.objectContaining({ source: 'close_trade_success', brokerTradeIds: ['71', '72'] }),
+    ]);
   });
 
   it('warns once per connection and source when a balance is not written', async () => {

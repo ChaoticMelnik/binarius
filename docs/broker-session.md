@@ -134,7 +134,8 @@ of the same account queues behind what an earlier one left.
 | `user.<mode>.update_balance` | `applyBalanceEvent(db, { brokerAccountId, mode, balance })` | `no_snapshot` or `out_of_domain` → the same warn with `source: update_balance`, once per connection |
 | `user.<mode>.close_trade.success` | `settleClosedTrades(db, { brokerAccountId, trades })` | `settled` → `info` `intent settled from close_trade.success` (`intentId`, `brokerTradeId`); `not_ours`, `already_settled`, `intent_not_accepted` → `debug` `closed trade not applied` (`brokerTradeId`, `result`) |
 
-A writer's throw → `error` `broker session write failed` (`source`, `errorLogFields`), then a
+A writer's throw → `error` `broker session write failed` (`source`, `brokerTradeIds` for a
+`close_trade_success`, `errorLogFields`), then a
 dead letter `{ source, accountId, mode, brokerTradeIds }` in the consumers' queue (#92,
 [trade-intent-transport.md → Dead-letter queue](trade-intent-transport.md#dead-letter-queue)),
 awaited inside the account's queue so `stop()` waits for it, for at most

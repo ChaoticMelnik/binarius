@@ -5,6 +5,7 @@ import { BrokerRestError } from '@binarius/broker-rest';
 import type { BrokerUser, DecimalString } from '@binarius/shared';
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import {
+  applyBalanceEvent,
   hashToken,
   brokerBalanceSnapshots,
   brokerTrades,
@@ -19,6 +20,7 @@ import {
   brokerAccountRow,
   createTempDatabase,
   intentRequest,
+  seedBalanceSnapshot,
   seedQueuedIntent,
   seedUserWithAccount,
   type TempDatabase,
@@ -358,5 +360,24 @@ describe('createBalanceCheck (#92)', () => {
     expect(await h.run(a.brokerAccountId, controller.signal)).toBe('aborted');
     expect(h.all('balance check failed')).toEqual([]);
     expect(h.gets()).toBe(0);
+  });
+
+  it('B17 keeps the socket amounts of a mode whose event landed during the GET', async () => {
+    const a = await withOpenTrade();
+    await seedBalanceSnapshot(tmp.db, a.brokerAccountId);
+    const h = harness(async () => {
+      await applyBalanceEvent(tmp.db, {
+        brokerAccountId: a.brokerAccountId,
+        mode: 'demo',
+        balance: { available: money('1'), held: money('2'), total: money('3') },
+      });
+      return userOf(a.brokerUserId, { demo: STAKE });
+    });
+    await h.run(a.brokerAccountId);
+    expect(await snapshotOf(a.brokerAccountId)).toMatchObject({
+      demoAvailable: '1.00000000',
+      demoHeld: '2.00000000',
+      demoTotal: '3.00000000',
+    });
   });
 });

@@ -35,15 +35,17 @@ export interface DeadLetterSink {
 }
 
 // One entry per account, source and UTC hour: BullMQ adds nothing while a job with the id exists,
-// and nothing consumes this queue, so a writer failing on every event cannot grow it without
-// bound. The log line still marks every failure. BullMQ refuses ':' in a custom id.
+// so a writer failing on every event adds at most three entries per account an hour. Nothing
+// consumes or trims the queue: the total still grows hour by hour until an operator drains it.
+// The log line marks every failure. BullMQ refuses ':' in a custom id.
 export const sessionDeadLetterJobId = (
   entry: Pick<SessionDeadLetter, 'accountId' | 'source' | 'failedAt'>,
 ) => `session.${entry.accountId}.${entry.source}.${entry.failedAt.slice(0, 13)}`;
 
 // Never rejects and never waits longer than timeoutMs: the session manager awaits it inside the
 // account's write queue, and the shared Redis connection queues a command while it is down
-// instead of failing it. A write cut by the timeout still lands once Redis is back.
+// instead of failing it. A write cut by the timeout lands once Redis is back, unless the worker
+// shuts down first (redis.quit() drops the queued command); it is logged once either way.
 export async function deadLetterSessionWrite(
   sink: DeadLetterSink,
   logger: Pick<pino.Logger, 'error'>,
@@ -61,15 +63,18 @@ export async function deadLetterSessionWrite(
   const timedOut = new Promise<'timeout'>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), timeoutMs);
   });
+  let gaveUp = false;
   const write = sink.add('dead', full, { jobId: sessionDeadLetterJobId(full) }).then(
     () => 'written' as const,
     (error: unknown) => {
-      logger.error({ ...errorLogFields(error), ...fields }, 'dlq_publish_failed');
+      // after the timeout line, a late failure of the same write is not a second one
+      if (!gaveUp) logger.error({ ...errorLogFields(error), ...fields }, 'dlq_publish_failed');
       return 'failed' as const;
     },
   );
   try {
     if ((await Promise.race([write, timedOut])) === 'timeout') {
+      gaveUp = true;
       logger.error({ ...fields, reason: 'timeout' }, 'dlq_publish_failed');
     }
   } finally {
