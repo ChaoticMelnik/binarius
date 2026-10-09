@@ -428,7 +428,7 @@ describe('a deploy whose old worker overruns its drain', () => {
     const w = startWorker('W1', { sockets: false, tuning: { phase1BudgetMs: DIRTY_PHASE1_MS } });
     const intentId = await newIntent(account);
     broker.rest.failNext('openTrade', { delayMs: HELD_REST_MS });
-    await publishPending();
+    await publishPending([intentId]);
     await until(
       'the submit held at the broker',
       async () => (await statusOf(intentId)) === TradeIntentStatus.Submitting,
@@ -461,7 +461,7 @@ describe('a deploy whose old worker overruns its drain', () => {
     const a = startWorker('A', { sockets: false, tuning: { phase1BudgetMs: DIRTY_PHASE1_MS } });
     const intentId = await newIntent(account);
     broker.rest.failNext('openTrade', { delayMs: HELD_REST_MS });
-    await publishPending();
+    await publishPending([intentId]);
     await until(
       'the submit held at the broker',
       async () => (await statusOf(intentId)) === TradeIntentStatus.Submitting,
@@ -472,7 +472,7 @@ describe('a deploy whose old worker overruns its drain', () => {
     if (!a.pool.ending) await a.pool.end();
 
     await until('the intent resolved through reconciliation', async () => {
-      await publishPending();
+      await publishPending([intentId]);
       return OPEN_OR_SETTLED.includes(await statusOf(intentId));
     });
     expect(recordedBy(a).has(intentId)).toBe(false);

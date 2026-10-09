@@ -68,7 +68,7 @@ import { TRADING_SESSION_CONFIG, type SessionOrchestratorConfig } from './tradin
 import { createSessionOrchestrator } from './trading-session/orchestrator';
 
 // scripts/deploy-worker.sh waits for this line before it stops the old container (#95)
-export const WORKER_READY_MSG = 'trading-worker started';
+const WORKER_READY_MSG = 'trading-worker started';
 
 // 'dirty': phase 1 overran or failed and phase 2 did not run, so the process must exit 1 without
 // closing the connections under a write in flight
@@ -306,16 +306,16 @@ export function createWorker({
   });
 
   // Phase 1 drains both consumers (active jobs finish, new ones are not taken) and then the
-  // dead-letter writes those jobs may have started — in that order, or a `failed` event fired
-  // by the drain would register its write after the wait — and stops the reconciliation pass
-  // (its attempt in flight plus one outcome write) and the settlement catch-up (its attempt in
-  // flight), and the trading session orchestrator (its attempt in flight; an attempt cut by the
-  // stop writes nothing). The broker sessions stop after the intents drain, so our own shutdown never cuts a
-  // submit waiting on its socket; their stop is bounded by SESSION_STOP_BUDGET_MS. Phase 2 closes the connections and runs
-  // only if phase 1 finished cleanly: closing them under an outcome write would abort it. A
-  // drain that overruns or fails is 'dirty' and the process exits hard; the intent stays
-  // submitting (the sweeper resolves it after the restart) or reconciling (the pass takes it
-  // again once its lease lapses).
+  // dead-letter writes those jobs may have started — in that order, or a `failed` event fired by
+  // the drain would register its write after the wait — and stops the reconciliation pass (its
+  // attempt in flight plus one outcome write), the settlement catch-up (its attempt in flight) and
+  // the trading session orchestrator (its attempt in flight; an attempt cut by the stop writes
+  // nothing). The broker sessions stop after the intents drain, so our own shutdown never cuts a
+  // submit waiting on its socket; their stop is bounded by tuning.sessions.stopBudgetMs
+  // (SESSION_STOP_BUDGET_MS in production). Phase 2 closes the connections and runs only if phase
+  // 1 finished cleanly: closing them under an outcome write would abort it. A drain that overruns
+  // or fails is 'dirty' and the process exits hard; the intent stays submitting (the sweeper
+  // resolves it after the restart) or reconciling (the pass takes it again once its lease lapses).
   async function runShutdown(signal: string): Promise<ShutdownResult> {
     logger.info({ signal }, 'shutting down');
     sweeper.stop();
