@@ -221,7 +221,7 @@ check. A cycle's entries — the signals list, the launch and the analysis's ses
 | `pair_missing` | the id is not in the catalog (delisted, or forged data) | «❌ Этот актив больше не доступен…» + «↩️ Типы» |
 | `pair_closed` | `scheduledUntil > now` on the bot's clock | «🔒 {symbol} сейчас закрыт по расписанию…» + «↩️ Активы» + «↩️ Типы» |
 | `duration_unsupported` | the duration is not one of `DEMO_DURATIONS_SEC` (#125 review m5: it arrives from callback data), or is outside `[minTimeframe, maxTimeframe]` | «❌ Эта длительность не подходит для {symbol}…» + «↩️ Длительность» + «↩️ Типы» |
-| `payout_too_low` (`checkDemoCycle` only, #379) | the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80) | the launch: `demoPayoutTooLow` + «↩️ К списку» + «🧭 Выбрать пару вручную»; the signals list: no button |
+| `payout_too_low` (`checkDemoCycle` only, #379) | the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80) | the launch, and the launch screen after a stake save (`pairPayoutAccepted` on the save's catalog, [bot-demo-trade.md](bot-demo-trade.md#the-stake-297)): `demoPayoutTooLow` + «↩️ К списку» + «🧭 Выбрать пару вручную»; the signals list: no button |
 
 «🔄 Повторить» carries the pressed data again, so a retry after `demo:d:…` lands on the summary
 once the catalog is back. A retry is always safe: nothing in the demo writes anything.

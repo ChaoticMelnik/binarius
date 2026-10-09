@@ -338,14 +338,22 @@ again until the orchestrator sees a decision that is not a signal in it (issue #
   created only once the pause had lifted (a `no_signal` cleared the column, or the signal changed),
   and the rule re-arms on the next settled loss, not on a refusal. Two refusals in a row still stop
   the session `rejected_twice` (E2), before the pause is checked.
+- **A session active at the deploy** that added the column (migration 0038) has it NULL, and no
+  backfill sets it: if its last two trades are already losses in one direction, its first signal in
+  that direction after the deploy trades once more, as it did before #379. A one-off per such
+  session; from that attempt on the column is written as below.
 - **"The signal has not changed since"** is the column `last_signal_action`, written by the
   intent's own transaction when an intent is created (`createTradeIntent` with `session`), by the
   ending with NULL on `no_signal` and with the paused action on the pause — so a lost ending (the
   deadline, a restart, a throw after the INSERT) cannot lose the traded action (P8); a lost
   `no_signal` ending leaves the previous action and costs one more wait, never a trade, and a lost
   pause ending rewrites the same value (stated). After the attempt that created the second losing
-  intent it holds that action, and it keeps holding it exactly as long as every later decision was
-  a signal in it. The fact is in the row, so a worker restart pauses the same way (P4).
+  intent it holds that action. Only those three write it: a `signal(B)` whose create is refused
+  (`active_intent_exists`, `client_request_id_conflict`: the attempt is rescheduled) or replayed
+  leaves it at `A`, so the next `signal(A)` waits once more although the signal changed — one extra
+  wait, never an extra trade; a `signal(B)` the sizer answers with `stake_stop` does not write it
+  either, and the session stops. The fact is in the row, so a worker restart pauses the same way
+  (P4).
 - **The rule:** `signal(A)` with `pausedDirection === A` and `last_signal_action === A` holds the
   session until the next candle boundary + `TRADING_SESSION_CANDLE_SLACK_MS` (P1). A `no_signal`
   clears the column, and the next `signal(A)` trades; `signal(B)` trades at once (P2). If that trade
