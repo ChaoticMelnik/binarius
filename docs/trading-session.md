@@ -294,7 +294,8 @@ The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code adde
 - **`stop()`** clears the timer, aborts the attempt's backend call and waits for the running tick:
   one attempt at most, which `intents/config.ts` keeps inside the shutdown's phase 1. An attempt cut
   by the stop writes nothing (E10).
-- **Hold-backs live in memory**, keyed by session id, in one worker container (#93 is the lease);
+- **Hold-backs live in memory**, keyed by session id, in one worker container (#94: several
+  processes; #93's lease covers the broker sockets only);
   a restart drops them, and the next attempt is idempotent.
 
 ## Backend calls
@@ -557,7 +558,7 @@ that takes 15 s, the default `DURATION_SEC`.) `ACCOUNT_ID` is needed only with m
    time only for Martingale, which is off.
 4. **One container.** The hold-backs live in memory and two workers would attempt the same session;
    the step key makes the second a replay or a `client_request_id_conflict` (reschedule), never a
-   second trade on the step. The lease is #93.
+   second trade on the step. Several workers are #94 (#93's lease covers the broker sockets only).
 5. **An intent past the deadline.** The scan and the history read guard the deadline on the
    database clock; a deadline that passes during the attempt's backend calls lets that attempt
    create its intent. The creation starts at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) late;
@@ -576,8 +577,8 @@ that takes 15 s, the default `DURATION_SEC`.) `ACCOUNT_ID` is needed only with m
   through the settlement catch-up.
 - #283 (shipped): the backend routes (start, status, stop — the writer of `user_stopped`); #284:
   the bot ([bot-session.md](bot-session.md)).
-- #131: restart recovery; #135: `grant_revoked` as a stop reason; #93: the lease for more than one
-  worker container.
+- #131: restart recovery; #135: `grant_revoked` as a stop reason; #94: the orchestrator under more than
+  one worker container (#93's lease covers the broker sockets only).
 - Real sessions: the schema takes `mode`, and `createTradingSession` refuses anything but `demo`
   (`mode_not_allowed`); real sessions (#121/#135) lift that refusal with their own fence. A real
   session row can only be written by hand (`seedTradingSession` in the tests).

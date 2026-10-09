@@ -1282,6 +1282,19 @@ describe('the lease (#93)', () => {
     expect(h.logs('broker session stop budget exceeded')).toHaveLength(1);
   });
 
+  it('L8b a release that throws is logged, and stop() still returns', async () => {
+    const fakes = fakeClients();
+    const h = harness({
+      openClient: fakes.openClient,
+      leases: { release: () => Promise.reject(new Error('database down')) },
+    });
+    await verifiedSession(h, fakes);
+    await h.manager.stop();
+    expect(h.logs('broker session lease release failed')).toEqual([
+      expect.objectContaining({ level: LEVEL.error, err: expect.objectContaining({ name: 'Error' }) }),
+    ]);
+  });
+
   it('L9 a renewal answer leaves alone an entry started after it was sent', async () => {
     const fakes = fakeClients();
     let answer: (ids: string[]) => void = () => undefined;
@@ -1374,6 +1387,11 @@ describe('logs', () => {
       'broker session writes dropped at stop',
       'broker session stop budget exceeded',
       'broker session start failed',
+      'broker session lease busy',
+      'broker session lease lost',
+      'broker session lease fenced',
+      'broker session lease renewal failed',
+      'broker session lease release failed',
     ]) {
       expect(messages, msg).toContain(msg);
     }

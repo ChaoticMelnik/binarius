@@ -151,7 +151,7 @@ export function createSessionOrchestrator({
   now = Date.now,
 }: SessionOrchestratorDeps): SessionOrchestrator {
   const stopping = new AbortController();
-  // session id -> when it may be attempted again; in memory, one worker container (#93)
+  // session id -> when it may be attempted again; in memory, one worker container (#94)
   const heldUntil = new Map<string, number>();
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | undefined;

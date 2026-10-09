@@ -17,9 +17,10 @@ TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius \
 
 | Part | Where | What |
 |---|---|---|
-| `createBrokerSessionManager(deps)` | `apps/trading-worker/src/broker/session-manager.ts` | the manager; implements `TradeSessionSource` (`sessionFor`), plus `start()`, `tick()`, `stop()`, `clientFor()`, `size` |
+| `createBrokerSessionManager(deps)` | `apps/trading-worker/src/broker/session-manager.ts` | the manager; implements `TradeSessionSource` (`sessionFor`), plus `start()`, `tick()`, `renewLeases()`, `stop()`, `clientFor()`, `size` |
 | Constants | `apps/trading-worker/src/broker/session-config.ts` | the table under [Constants](#constants) and `SESSION_CHAIN_HOLDS` |
 | Candidates | `listSessionCandidates` in `packages/db/src/balance-snapshot-ops.ts` | the accounts in work, `{ id, brokerUserId }` |
+| Lease | `broker_session_leases` (migration 0031), `packages/db/src/session-lease-ops.ts` (#93) | which process may hold an account's socket: acquire, renew, release ([The lease](#the-lease-93)) |
 | Writers | `upsertBalanceSnapshot`, `applyBalanceEvent` (same file), `settleClosedTrades` (`trade-intent-ops.ts`) | what a session hears, written once its connection proved whose it is |
 | Client | `BrokerSocketClient` ([broker-socket.md](broker-socket.md)) | one per session; the taint after an aborted command |
 | Token | `AccessTokenSource` (`broker/access-token.ts`) | `POST /trading/accounts/:id/access-token` on the backend, always `mayRefresh: false`; after `token_expired`/`auth_failed` with the refused token's fingerprint (#281) |
@@ -36,12 +37,14 @@ work before its first intent. Ordered by `broker_accounts.id`, with no limit: th
 see every account in work to tell a running session's account from an idle one, and applies its
 cap in memory. No token-expiry filter: the token is asked for with `mayRefresh: false` and an
 account whose token needs an exchange is held back. `exclude` is the manager's held-back set.
+`ownerId` (#93) leaves out an account whose live lease belongs to another process: an
+optimisation for several processes, not the guarantee — the acquire is.
 
 ## The lifecycle
 
 The manager holds, per account, at most one of: an entry `starting` (its token fetch in flight),
-an entry `running` (a started client), or a hold-back until a time. All of it is in memory: one
-worker container runs (accepted risk 5).
+an entry `running` (a started client), or a hold-back until a time. All of it is in memory; which
+process may hold an account's socket at all is the lease's ([The lease](#the-lease-93)).
 
 **The tick** (`SESSION_TICK_MS`, single-flight, the first at `start()`):
 
@@ -156,6 +159,47 @@ identity again before anything uses it — `sessionFor()` hands the client to th
 writers accept events, only after that connection's `user.data` matched the account; until then
 the executor's command goes over REST.
 
+## The lease (#93)
+
+One row per account in `broker_session_leases`: `owner_id` (a fresh `randomUUID()` per worker
+start, logged in `trading-worker started` as `sessionOwnerId`; never a hostname, so a restarted
+container inherits nothing), `acquired_at`, `expires_at` (CHECK `expires_at > acquired_at`, FK to
+`broker_accounts`). Each operation is one autocommit statement on the pool, outside the lock chain
+(Rule 5), with the database's clock:
+
+| Operation | Statement | Answer |
+|---|---|---|
+| `acquireSessionLease` | `insert … on conflict (broker_account_id) do update … where expires_at <= now() or owner_id = excluded.owner_id` | `true` for a free or lapsed lease, or our own; two concurrent acquires serialize on the row and the second re-checks the predicate against the first's commit, so one wins (`session-lease-ops.db.test.ts` A5) |
+| `renewSessionLeases` | `update … set expires_at = now() + ttl where owner_id = $me and id = any($ids) and expires_at > now()` | the ids still held; a lapsed lease is not renewed even when nobody took it — lapsed means lost |
+| `releaseSessionLeases` | `delete … where owner_id = $me` | at a graceful stop only |
+
+**The manager.**
+- `startOne` acquires before the token fetch. Refused → `debug` `broker session lease busy`, held
+  back `SESSION_RETRY_MS`, no token fetch. A throw → `broker session start failed`.
+- Every `SESSION_LEASE_RENEW_MS` one renewal for every entry whose acquire has answered (an
+  acquire still in flight may not have committed yet, and a renewal missing its id would drop a
+  lease about to be ours). The answer applies to the same entry objects it was sent for: a
+  returned id moves the fence, a missing one drops the entry at once (`warn` `broker session lease
+  lost`, held back `SESSION_RETRY_MS`). A renewal that throws is logged (`broker session lease
+  renewal failed`) and changes nothing: the fence decides.
+- **The fence.** The database sets `expires_at = now() + TTL` with `now()` not earlier than the
+  moment the statement was sent, so a lease sent at monotonic time `t0` holds until at least
+  `t0 + SESSION_LEASE_TTL_MS`. The process trusts it until `t0 + SESSION_LEASE_FENCE_MS`
+  (`performance.now()`, not the wall clock): a timer closes every socket past its fence (`warn`
+  `broker session lease fenced`, `lateMs`), and `sessionFor` refuses a client past it even before
+  that timer ran, so no command goes over a socket whose lease may have lapsed.
+- `stop()` closes every client, then releases our leases inside the same `SESSION_STOP_BUDGET_MS`:
+  a successor that takes an account after the delete never overlaps our socket. A release that
+  throws (`error` `broker session lease release failed`) or overruns leaves the leases to lapse.
+- An account dropped for another reason (idle, a refusal, `disconnected_by_server`) keeps its row
+  until it lapses: the same process re-acquires it, another one after the TTL. A per-drop delete
+  could race a later re-acquire by the same owner.
+
+A dead owner's account is picked up by another process within about TTL + one hold-back + one tick
+(~95 s; owner, 2026-10-09): until then it trades over REST. Falsifiable: `broker session lease
+busy` for one account longer than 95 s after its owner's last line. `compose.yaml` still runs one
+worker: more replicas, sharding and routing intent jobs to the owner are #94.
+
 ## Start and shutdown
 
 `index.ts` builds the manager only when `BROKER_WS_URL` is set and passes it to the trade command
@@ -164,11 +208,12 @@ the catch-up, and `trading-worker started` carries `sessions: true|false`.
 
 Shutdown phase 1: the intents consumer's step is `worker.close()` → `drainDeadLetters()` →
 `sessions.stop()`, so the sockets close after the jobs in flight finished and our own shutdown
-never cuts a submit waiting on its socket. `stop()`: the timer cleared, the token fetches aborted
+never cuts a submit waiting on its socket. `stop()`: the timers cleared (the scan, the lease
+renewal, the fence), the token fetches aborted
 (the pool exits), every client stopped (a command still waiting settles `unknown`/`state_changed`,
 and no event is delivered after it), the writes queued behind the one in flight dropped with one
 `warn` `broker session writes dropped at stop` (`dropped`), then the write in flight per account
-and the scan in flight awaited within `SESSION_STOP_BUDGET_MS`; past it `warn` `broker session
+the scan in flight and the release of our leases (#93) awaited within `SESSION_STOP_BUDGET_MS`; past it `warn` `broker session
 stop budget exceeded` (`pending`) and it returns (the statement finishes under phase 2's
 `pool.end()`). Dropping is safe: a snapshot is replaced by the next `user.data` or the backend
 tick, and a dropped close is settled by the catch-up within `CATCHUP_GRACE_MS` of the trade's
@@ -187,12 +232,20 @@ expected close.
 | `SESSION_START_CONCURRENCY` | 4 | token fetches in flight in the start pool |
 | `SESSION_STOP_BUDGET_MS` | 2 000 | how long `stop()` waits for the writes in flight |
 | `MAX_SESSIONS_PER_WORKER` | 500 | sessions (running + starting) one process holds; a safety cap, not a measured limit (#94) |
+| `SESSION_LEASE_TTL_MS` | 30 000 | how long a lease outlives its last acquire or renewal in the database (#93) |
+| `SESSION_LEASE_RENEW_MS` | 10 000 | the renewal interval |
+| `SESSION_LEASE_FENCE_MS` | 25 000 | how long after sending an acquire or a renewal the process trusts it; past it the socket is closed |
 
 `SESSION_CHAIN_HOLDS`, thrown at import and restated in `session-config.test.ts`:
 `SESSION_TICK_MS < SESSION_IDLE_GRACE_MS` (an account missing from one scan is not closed),
 `SESSION_TICK_MS < SESSION_RETRY_MS <= SESSION_REFUSAL_RETRY_MS` (a held-back account skips at
 least one tick), `SESSION_IDLE_GRACE_MS < BALANCE_WATCH_WINDOW_MS` (an account the bot asked
-about keeps its session for the whole window), every `*_MS` an integer in `[1, MAX_TIMER_MS]`.
+about keeps its session for the whole window), `2 × SESSION_LEASE_RENEW_MS <
+SESSION_LEASE_FENCE_MS < SESSION_LEASE_TTL_MS` (one failed renewal does not fence; the fence closes
+the socket 5 s before the database lets anyone else in), `SESSION_LEASE_TTL_MS < SESSION_RETRY_MS`
+(a busy account is asked again only once its lease could have lapsed),
+`DEAD_LETTER_WRITE_TIMEOUT_MS < SESSION_STOP_BUDGET_MS`, every `*_MS` an integer in
+`[1, MAX_TIMER_MS]`.
 
 The worker's chain (`intents/config.ts`, `TIMING_CHAIN_HOLDS`, restated in `config.test.ts`):
 `MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS` (32 s < 35 s: the
@@ -231,6 +284,11 @@ redacted key).
 | `broker session write failed` | error | `accountId`, `source`, `err` |
 | `broker session writes dropped at stop` | warn | `dropped` |
 | `broker session stop budget exceeded` | warn | `pending` |
+| `broker session lease busy` | debug | `accountId` — another process holds it (#93) |
+| `broker session lease lost` | warn | `accountId` — a renewal did not return it |
+| `broker session lease fenced` | warn | `accountId`, `lateMs` — its fence passed without a confirmed renewal |
+| `broker session lease renewal failed` | error | `err` |
+| `broker session lease release failed` | error | `err` |
 
 `session-manager.test.ts` U14 reads every line its cases wrote through a `logOptions('debug')`
 sink: no `SECRET-` sentinel (U17a's thrown error carries one in its message, which
@@ -251,7 +309,20 @@ present.
   re-enters during the stop); U12/U12b/U12c `stop()` and its budget, a dead-letter write in flight included; U13 single-flight and a failing scan; U15 a tick
   returns while its starts are pending; U16 a candidate gone while starting; U17a/U17b
   `broker session start failed` from a throwing token source and from a client whose `start()`
-  throws on the refresh path; U14 the log scan.
+  throws on the refresh path; U14 the log scan; L1–L11 and L8b the lease (#93): a busy account
+  costs no token fetch, an acquire that throws, the lease before the token, a renewal without the
+  account, `sessionFor` past the fence before its timer, the fence closing a socket whose renewal
+  never answers, one failed renewal fencing nothing, the release after every client and within the
+  budget, a release that throws, an entry started or re-created around a renewal, an acquire in
+  flight not renewed.
+- `session-lease.db.test.ts` (integration, real leases, the mock broker): M1 two managers whose
+  scans both list the account open one socket — the acquire alone keeps the second out; M2 an
+  owner that never renews is fenced before its lease lapses, and only then does another process
+  open the account's socket.
+- `packages/db/src/session-lease-ops.db.test.ts`: A1–A5 the acquire (A4 the `<=` boundary inside
+  one transaction, A5 two connections), R1–R4 the renewal, D1 the release; the candidates' lease
+  filter in `balance-snapshot-ops.db.test.ts`; the table's CHECK, FK and key in
+  `schema.db.test.ts`.
 - `session-manager.db.test.ts` (integration, `TEST_DATABASE_URL`): the end-to-end scenario on
   the mock broker with the production composition — `listSessionCandidates`, the production
   writers, `createTradeCommandExecutor({ sessions: manager, … })`,
@@ -304,8 +375,16 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
    a `fail` for a manual broker-web order would reject our intent while our order may be open, and
    a `success` with equal terms would link the manual trade. Not closable without an answer field;
    the probe of #285 decides, and until it has run `BROKER_WS_URL` stays unset.
-5. **One worker container**: two would open two sessions per account. `compose.yaml` runs one;
-   #93's lease is the fix.
+5. **No fencing at the broker** (#93). The lease is enforced on our side only: a process frozen
+   longer than `SESSION_LEASE_FENCE_MS` (an event-loop stall, a VM pause) keeps its TCP socket
+   until it resumes, while another process may open a second one after the TTL. On resume
+   `sessionFor` refuses commands before any timer runs; an event that arrives first can still be
+   written (the writers are idempotent). Lapsed means lost: a database stall longer than 25 s closes
+   every socket of the process, trading goes on over REST and the sessions restart on the next
+   ticks; a command in flight when the fence fires ends `unknown` and goes to reconciliation. An
+   acquire answered after `stop()` released leaves one row of the dead owner until it lapses.
+   Falsifiable: `broker session lease fenced` with `lateMs` above 5 000. One worker container still
+   runs; more is #94.
 6. **A revocation or a block reaches the session only through the candidates**, within 65 s; until
    then the session writes that account's balance events — rows of an account that cannot trade.
 7. **Writes queued at `stop()` are dropped**; the snapshot is rewritten by the next `user.data` or
@@ -326,7 +405,8 @@ docker compose logs -f trading-worker | grep -E 'broker socket ready|broker sess
 
 ## Boundaries
 
-- ARCH-02: #93 the lease, #94 the measured per-process limit and sharding, #95 handoff and
+- ARCH-02: #93 the lease (shipped, above), #94 the measured per-process limit, sharding and the
+  orchestrator and catch-up under several processes, #95 handoff and
   single-flight refresh across processes, #96 the emergency stop.
 - ARCH-05: #87 the load stand, #88 degradation.
 - #92 shipped: the writers' dead letters above, and the balance check after a reconciliation
