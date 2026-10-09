@@ -22,7 +22,19 @@ describe('parseEnv', () => {
       internalApiToken: valid.INTERNAL_API_TOKEN,
       brokerApiBaseUrl: valid.BROKER_API_BASE_URL,
       brokerWsUrl: undefined,
+      circuitBreaker: { windowMs: 120_000, minFailures: 10, failurePercent: 50 },
     });
+  });
+
+  it('reads the circuit breaker overrides (#96)', () => {
+    expect(
+      parseEnv({
+        ...valid,
+        CIRCUIT_BREAKER_WINDOW_MS: '300000',
+        CIRCUIT_BREAKER_MIN_FAILURES: '3',
+        CIRCUIT_BREAKER_FAILURE_PERCENT: '100',
+      }).circuitBreaker,
+    ).toEqual({ windowMs: 300_000, minFailures: 3, failurePercent: 100 });
   });
 
   it.each(['https://broker-ws.binodex.app', 'wss://broker-ws.binodex.app/socket'])(
@@ -85,6 +97,12 @@ describe('parseEnv', () => {
     ['WORKER_CONCURRENCY', '0', 'Env WORKER_CONCURRENCY must be between 1 and 100'],
     ['WORKER_CONCURRENCY', 'x', 'Env WORKER_CONCURRENCY must be an integer'],
     ['LOG_LEVEL', 'loud', 'Env LOG_LEVEL must be one of: fatal error warn info debug trace silent'],
+    // the window must outlast the socket loss grace (45 s)
+    ['CIRCUIT_BREAKER_WINDOW_MS', '45000', 'Env CIRCUIT_BREAKER_WINDOW_MS must be between 45001 and 3600000'],
+    ['CIRCUIT_BREAKER_WINDOW_MS', '', 'CIRCUIT_BREAKER_WINDOW_MS'],
+    ['CIRCUIT_BREAKER_MIN_FAILURES', '0', 'Env CIRCUIT_BREAKER_MIN_FAILURES must be between 1 and 10000'],
+    ['CIRCUIT_BREAKER_FAILURE_PERCENT', '0', 'Env CIRCUIT_BREAKER_FAILURE_PERCENT must be between 1 and 100'],
+    ['CIRCUIT_BREAKER_FAILURE_PERCENT', '101', 'Env CIRCUIT_BREAKER_FAILURE_PERCENT must be between 1 and 100'],
   ])('rejects %s=%s', (name, value, message) => {
     expect(() => parseEnv({ ...valid, [name]: value })).toThrow(message);
   });

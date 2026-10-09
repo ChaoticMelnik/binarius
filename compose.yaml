@@ -229,6 +229,10 @@ services:
       INTENT_MAX_AGE_MS:
       SUBMIT_ACK_TIMEOUT_MS:
       WORKER_CONCURRENCY:
+      # the circuit breaker's thresholds (#96, docs/runbook-broker-outage.md)
+      CIRCUIT_BREAKER_WINDOW_MS:
+      CIRCUIT_BREAKER_MIN_FAILURES:
+      CIRCUIT_BREAKER_FAILURE_PERCENT:
       # the token route (#90): the worker asks the backend for a broker access token behind the
       # internal bearer. No depends_on for it: the reconciler and the catch-up retry until the
       # backend answers.
