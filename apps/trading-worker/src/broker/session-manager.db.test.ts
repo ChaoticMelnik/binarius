@@ -81,6 +81,10 @@ const CONFIG: SessionManagerConfig = {
   startConcurrency: 4,
   stopBudgetMs: 500,
   watchWindowMs: 600_000,
+  // long enough that no lease is renewed or fenced unless a case shortens them
+  leaseTtlMs: 30_000,
+  leaseRenewMs: 10_000,
+  leaseFenceMs: 25_000,
 };
 // a negative wait, past the longest reconnection delay of TIMING
 const QUIET_MS = 100;
