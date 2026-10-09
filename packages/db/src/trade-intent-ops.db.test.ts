@@ -1398,6 +1398,21 @@ describe('readHeldExposure (#92)', () => {
     expect((await modeOf(first.brokerAccountId, 'demo')).recentIntentCount).toBe(1);
   });
 
+  it('H6b counts from the bound it is given instead of its own window (#92)', async () => {
+    const first = await acceptedIntent();
+    await tmp.db
+      .update(tradeIntents)
+      .set({ createdAt: sql`now() - interval '11 minutes'` })
+      .where(eq(tradeIntents.id, first.intent.id));
+    expect((await modeOf(first.brokerAccountId, 'demo')).recentIntentCount).toBe(0);
+    const since = new Date(Date.now() - 12 * 60_000);
+    const [demo] = await readHeldExposure(tmp.db, {
+      brokerAccountId: first.brokerAccountId,
+      intentsSince: since,
+    });
+    expect(demo!.recentIntentCount).toBe(1);
+  });
+
   it('H7 reads the database clock once, the same in both rows', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     const rows = await readHeldExposure(tmp.db, { brokerAccountId: seed.brokerAccountId });

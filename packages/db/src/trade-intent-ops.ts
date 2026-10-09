@@ -1180,10 +1180,11 @@ export interface HeldExposure {
   mode: TradeMode;
   // our open broker_trades of the account in this mode, sorted
   openTradeIds: string[];
-  // trade_intents of the account in this mode created within RECENT_INTENTS_WINDOW_MS: an intent
-  // created between two reads changes it, even one whose creating transaction began before the
-  // first read. Bounded by the window, not by the account's history; an intent that ages out
-  // between the reads changes it too, which only skips the compare
+  // trade_intents of the account in this mode created after `intentsSince` (default: within
+  // RECENT_INTENTS_WINDOW_MS of this read): bounded by the window, not by the account's history.
+  // A second read passes the first read's bound, so its window contains the first's and an intent
+  // created between them always changes the count, even one whose creating transaction began
+  // before the first read
   recentIntentCount: number;
   // a non-terminal intent of this mode that is not `accepted` with an open linked trade
   unresolvedIntent: boolean;
@@ -1207,7 +1208,12 @@ export async function readHeldExposure(
   {
     brokerAccountId,
     held = {},
-  }: { brokerAccountId: string; held?: Partial<Record<TradeMode, DecimalString>> },
+    intentsSince,
+  }: {
+    brokerAccountId: string;
+    held?: Partial<Record<TradeMode, DecimalString>>;
+    intentsSince?: Date;
+  },
 ): Promise<HeldExposure[]> {
   const openOfMode = sql`${brokerTrades.brokerAccountId} = ${brokerAccountId}
     and ${brokerTrades.mode} = m.mode
@@ -1231,7 +1237,7 @@ export async function readHeldExposure(
       ) as open_trade_ids,
       (select count(*)::int from ${tradeIntents}
         where ${intentsOfMode}
-          and ${tradeIntents.createdAt} > ${millisecondsAgo(RECENT_INTENTS_WINDOW_MS)}
+          and ${tradeIntents.createdAt} > ${intentsSince ?? millisecondsAgo(RECENT_INTENTS_WINDOW_MS)}
       ) as recent_intent_count,
       exists (
         select 1 from ${tradeIntents}
