@@ -128,6 +128,7 @@ describe('contract coverage (issue #6)', () => {
         | 'reconciliation_not_found'
         | 'reconciliation_ambiguous'
         | 'broker_unavailable'
+        | 'demo_only'
         | null;
       updatedAt: string;
     }>();
@@ -397,6 +398,7 @@ describe('contract coverage (issue #6)', () => {
       | 'insufficient_tokens'
       | 'trading_paused'
       | 'mode_not_allowed'
+      | 'demo_only'
       | 'active_session_exists'
       | 'session_too_long'
       | 'balance_unavailable'

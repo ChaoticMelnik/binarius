@@ -42,6 +42,8 @@ export interface TradingSessionRoutesDeps {
   catalog: Pick<PairsCatalog, 'read'>;
   balance: Pick<BalanceReconciler, 'refresh'>;
   internalApiToken: string;
+  // the process runs DEMO_ONLY (#396): createTradingSession refuses a real session
+  demoOnly: boolean;
   now?: () => number;
 }
 
@@ -58,6 +60,7 @@ const STATUS_OF = {
   insufficient_tokens: 409,
   trading_paused: 409,
   mode_not_allowed: 409,
+  demo_only: 409,
   active_session_exists: 409,
   session_too_long: 409,
   balance_unavailable: 409,
@@ -81,6 +84,7 @@ const DB_CODE_TO_WIRE = {
   active_session_exists: TradingSessionErrorCode.ActiveSessionExists,
   trading_paused: TradingSessionErrorCode.TradingPaused,
   mode_not_allowed: TradingSessionErrorCode.ModeNotAllowed,
+  demo_only: TradingSessionErrorCode.DemoOnly,
 } as const satisfies Record<TradingSessionDbErrorCode, ErrorCode>;
 
 const idParamSchema = z.uuid();
@@ -94,7 +98,7 @@ const refuse = (reply: FastifyReply, code: Exclude<ErrorCode, 'active_session_ex
 // way may have written the account's snapshot.
 export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> = async (
   app,
-  { db, catalog, balance, internalApiToken, now = Date.now },
+  { db, catalog, balance, internalApiToken, demoOnly, now = Date.now },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
 
@@ -204,12 +208,11 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
 
     let created;
     try {
-      created = await createTradingSession(db, {
-        telegramUserId,
-        brokerAccountId,
-        mode: TradeMode.Demo,
-        settings,
-      });
+      created = await createTradingSession(
+        db,
+        { telegramUserId, brokerAccountId, mode: TradeMode.Demo, settings },
+        { demoOnly },
+      );
     } catch (error) {
       if (!(error instanceof TradingSessionError)) throw error;
       const code = DB_CODE_TO_WIRE[error.code];

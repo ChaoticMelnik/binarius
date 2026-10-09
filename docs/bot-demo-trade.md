@@ -112,6 +112,7 @@ Every 4xx is answered before a row is committed, so a 4xx means nothing was crea
 | 409 `active_intent_exists` | «⏳ Предыдущая сделка ещё не завершена…» |
 | 409 `client_request_id_conflict` | «⚠️ Эта кнопка уже использована…» (the same button with a changed amount; the fingerprint normally refuses it first) |
 | 409 `trading_paused` | «⏸ Торговля временно приостановлена, попробуйте позже.» (the global switch, [kill-switch.md](kill-switch.md)) |
+| 409 `demo_only` | «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» (the backend runs `DEMO_ONLY`, #396; unreachable while the bot sends `demo`) |
 | 409 `balance_unavailable` | «⏳ Баланс Binodex ещё не получен…» (no snapshot to check the amount against) |
 | 409 `stake_below_minimum` | «⚠️ Минимальная ставка брокера сейчас $X…», X from this press's access read, + «💵 Сумма» |
 | 409 `insufficient_demo_balance` | «⚠️ На демо-счёте недостаточно средств для этой суммы…» + «💵 Сумма» |
@@ -220,7 +221,7 @@ session offer (#360) when the caller asks for one. The callers never ask for bot
 | unknown, reconciling | 🔎 Результат сделки уточняется у брокера. Токен пока зарезервирован. |
 | manual_review | 🛠 Сделка на ручной проверке — напиши в поддержку: /support |
 | rejected / executor_not_configured | ⚠️ Сделка не отправлена: исполнение сделок ещё не подключено. Токен возвращён. |
-| rejected / expired, broker_rejected, publish_failed, reconciliation_not_found, manual_rejected, trading_paused | each has its own line, ending «Токен возвращён.» (`trading_paused`: «⏸ Торговля временно приостановлена, попробуйте позже. Токен возвращён.») |
+| rejected / expired, broker_rejected, publish_failed, reconciliation_not_found, manual_rejected, trading_paused, demo_only | each has its own line, ending «Токен возвращён.» (`trading_paused`: «⏸ Торговля временно приостановлена, попробуйте позже. Токен возвращён.»; `demo_only`, #396: «⚠️ Сделка отклонена: реальные сделки на этом сервере отключены. Токен возвращён.») |
 | rejected / any other reason, or none | ❌ Сделка не открыта. Токен возвращён. |
 
 Both maps are exhaustive (`satisfies Record<…>`). `texts.test.ts` checks that «открыта» appears

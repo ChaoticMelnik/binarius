@@ -211,6 +211,15 @@ describe('the worker environment for the token route and the trade lists', () =>
     }
   });
 
+  // the demo-only fuse (#396): forwarded only when set, to exactly the two broker readers
+  it('forwards DEMO_ONLY through the broker anchor as a valueless entry', () => {
+    expect(brokerAnchorValue(composeYaml, 'DEMO_ONLY')).toBe('');
+    for (const service of ['backend', 'trading-worker']) {
+      expect(environmentMerge(composeYaml, service)).toContain('*broker-environment');
+      expect(composeServiceEnvValue(composeYaml, service, 'DEMO_ONLY')).toBeUndefined();
+    }
+  });
+
   it('gives the worker the internal token the backend checks, with no default', () => {
     const worker = composeServiceEnvValue(composeYaml, 'trading-worker', 'INTERNAL_API_TOKEN');
     expect(worker).toBe(composeServiceEnvValue(composeYaml, 'backend', 'INTERNAL_API_TOKEN'));

@@ -106,6 +106,7 @@ function appWith(
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
       accessToken: unusedAccessTokenDeps(),
+      demoOnly: false,
     },
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),

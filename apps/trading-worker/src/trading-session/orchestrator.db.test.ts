@@ -132,11 +132,13 @@ function orchestratorOf({
   pairs = pairsOf(),
   db = tmp.db,
   config = {},
+  demoOnly = false,
 }: {
   signals?: SignalSource;
   pairs?: PairsSource;
   db?: Db;
   config?: Partial<SessionOrchestratorConfig>;
+  demoOnly?: boolean;
 } = {}) {
   return createSessionOrchestrator({
     db,
@@ -144,6 +146,7 @@ function orchestratorOf({
     pairs,
     logger,
     config: { ...CONFIG, ...config },
+    demoOnly,
     now,
   });
 }
@@ -246,7 +249,12 @@ const processIntent = (intentId: string) =>
       db: tmp.db,
       executor: executor(),
       logger,
-      config: { intentMaxAgeMs: 60_000, submitAckTimeoutMs: 2_000, staleSubmittingMs: 60_000 },
+      config: {
+        intentMaxAgeMs: 60_000,
+        submitAckTimeoutMs: 2_000,
+        staleSubmittingMs: 60_000,
+        demoOnly: false,
+      },
     },
     { intentId },
   );
@@ -685,6 +693,37 @@ describe('the endings of an attempt (#287)', () => {
     const intents = await intentsOf(seed.session.id);
     expect(intents).toHaveLength(1);
     expect(intents[0]).toMatchObject({ mode: TradeMode.Real, amount: '1.00000000' });
+    await orchestrator.stop();
+  });
+
+  it('F1 DEMO_ONLY stops a real session as account_unavailable and creates nothing (#396)', async () => {
+    const seed = await seedSession({ mode: TradeMode.Real, real: '50.00', demo: '0.00' });
+    const orchestrator = orchestratorOf({ demoOnly: true });
+    await orchestrator.tick();
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.AccountUnavailable,
+    });
+    expect(await intentsOf(seed.session.id)).toEqual([]);
+    expect(await reservedOf(seed.userId)).toBe(0n);
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({
+        msg: 'trading session stopped',
+        reason: 'account_unavailable',
+        code: 'demo_only',
+      }),
+    );
+    await orchestrator.stop();
+  });
+
+  it('F2 DEMO_ONLY leaves a demo session trading (#396)', async () => {
+    const seed = await seedSession();
+    const orchestrator = orchestratorOf({ demoOnly: true });
+    await orchestrator.tick();
+    const intents = await intentsOf(seed.session.id);
+    expect(intents).toHaveLength(1);
+    expect(intents[0]).toMatchObject({ mode: TradeMode.Demo, status: TradeIntentStatus.Queued });
+    expect((await sessionRow(seed.session.id)).status).toBe(TradingSessionStatus.Active);
     await orchestrator.stop();
   });
 

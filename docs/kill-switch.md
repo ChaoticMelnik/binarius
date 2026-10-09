@@ -114,7 +114,8 @@ docker compose exec backend pnpm --filter @binarius/backend kill-switch off --re
 The migrations open trading, so the pilot behaves as follows from the moment they land:
 
 - before: demo traded, real was refused by `REAL_TRADING_ENABLED=false`;
-- after: demo trades as before, **and real is no longer refused by any switch**. What still
+- after: demo trades as before, **and real is no longer refused by any switch** unless the process
+  runs `DEMO_ONLY=true` (below), which the pilot never does. What still
   stands between a real intent and the broker is the per-request checks of creation (the user
   `active`, an available token, the user's own `active`, not halted account, one live intent),
   the token route, the broker's own checks, and that no caller of ours creates a real intent
@@ -156,6 +157,78 @@ with `via: circuit_breaker`. It never opens: migration 0033 adds
 Signals, thresholds and the operator's procedure:
 [runbook-broker-outage.md](runbook-broker-outage.md).
 
+## DEMO_ONLY (#396)
+
+A second, narrower fuse for stands an agent drives (#397): a process started with `DEMO_ONLY=true`
+does not send the broker an operation with real money; demo works as usual. It is not a switch:
+
+| | The trading switch | `DEMO_ONLY` |
+|---|---|---|
+| Covers | demo and real | real only |
+| Where | one database row, all processes | one process's environment |
+| Changed by | `kill-switch on/off`, the breaker, no restart | `.env`, then recreating the containers (`docker compose up -d backend trading-worker`; `restart` keeps the old environment) |
+| Default | open (the migration) | off (`false`; the pilot never sets it) |
+
+It is read once at start by `parseDemoOnlyEnv` (`packages/shared/src/env.ts`): only `true` or
+`false`; unset is `false`; an empty value or anything else (`1`, `TRUE`, `yes`) stops the process
+with «Env DEMO_ONLY must not be empty» / «Env DEMO_ONLY must be one of: true false». Compose
+forwards it to exactly `backend` and `trading-worker` (a valueless entry under
+`x-broker-environment`, so it arrives only when set).
+
+The readers and what each does with the flag on:
+
+| Reader | What it does |
+|---|---|
+| `POST /trading/intents` (backend) | a real intent answers 409 `demo_only`. The check runs after the replay (a retry still gets a real intent an earlier process created) and before the switch, the account and the reserve: nothing is read, reserved or woken |
+| `POST /trading/sessions` (backend) | `createTradingSession` refuses a real session `demo_only` before `mode_not_allowed` and before its transaction; the route sends demo today, so this guards #327's real sessions |
+| the intent job (worker) | a queued real intent is rejected before `takeIntent`: `queued → rejected`, `last_error = demo_only`, the token released, the executor never called (it never becomes `submitting`). This holds however the intent got into the queue, including one an earlier process without the flag created. The flag wins over the age: an old real intent is `demo_only`, not `expired`. A `submitting` intent left by an earlier process goes the stale path as before (`unknown` → reconciliation, which only reads) |
+| the session orchestrator (worker) | the attempt's intent creation refuses `demo_only` and the session stops as `account_unavailable`, logged `trading session stopped` with `code: demo_only`; no intent, no reserve |
+| the CLI `session-start` (worker) | reads the flag and passes it to `createTradingSession`; it creates demo sessions only, so the refusal is unreachable today |
+
+So the stand has two lines, as the switch does: creation in the backend and the take in the worker.
+They are not equal: the worker's line holds alone (a flagged worker rejects every queued real
+intent, whoever created it, and stops a real session at its first attempt), while the backend's
+alone only refuses new real intents and sessions created through it: a real intent already queued,
+or a real session row, still reaches an unflagged worker's executor. So the flag goes on both
+processes, which the compose anchor does from one `.env` value, and the check below reads both.
+The bot does not know the flag: it shows
+the refusal as «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» and the
+rejection as «⚠️ Сделка отклонена: реальные сделки на этом сервере отключены. Токен возвращён.»;
+the cashier (#11) must refuse `POST /deposit/widget-session` with 409 `demo_only` before it
+exchanges a token (a requirement on #11, not code yet).
+
+Not covered by a second check: the executor itself. Its only caller is `submitWithDeadline`
+(`processor.ts`), which runs after a successful take; the breaker's decorator (#96,
+`observe-executor.ts`) only wraps it. So the fence is before `submitting`, like the switch's:
+
+```bash
+grep -rn 'executor.submit' apps/trading-worker/src --include='*.ts' | grep -v '\.test\.ts'
+```
+
+Both processes log the flag at start, in both states:
+
+```
+{"level":30,…,"demoOnly":true,"msg":"backend started"}
+{"level":30,…,"concurrency":5,"sessions":false,"demoOnly":true,"msg":"trading-worker started"}
+```
+
+The lines are a report, not the gate: the flag is in the processor's and the orchestrator's
+configuration from the moment `createWorker` builds them, and the backend's routes from the moment
+`buildApp` registers them. To check a stand before working on it:
+
+```bash
+for s in backend trading-worker; do
+  docker compose logs --no-log-prefix "$s" | grep -F "\"msg\":\"$s started\"" | tail -1 |
+    grep -q '"demoOnly":true' && echo "$s: demo-only" || echo "$s: NOT demo-only"
+done
+```
+
+On a protected stand it prints exactly `backend: demo-only` and `trading-worker: demo-only`;
+anything else (a missing start line prints `NOT demo-only` too) means the stand is not protected:
+recreate the containers and run it again. It reads each service's latest start line, not a count:
+a container's log survives `docker compose restart` and `restart: unless-stopped`, so a count over
+both services can come from one of them, while recreation (`up -d`) starts a fresh log.
+
 ## Tests
 
 - `packages/db/src/trading-switch-ops.db.test.ts`: the seed (T1), the writers and their audit
@@ -169,3 +242,9 @@ Signals, thresholds and the operator's procedure:
 - `packages/db/src/trade-intent-ops.db.test.ts` P1–P4, `apps/backend/src/trading/routes.db.test.ts`,
   `access.db.test.ts`, `apps/trading-worker/src/intents/processor.db.test.ts` W1–W5,
   `packages/db/src/trading-session-ops.db.test.ts` C7 and S3, `apps/backend/src/cli/kill-switch*.test.ts`.
+- `DEMO_ONLY` (#396): `packages/shared/src/env.test.ts` and both apps' `env.test.ts` (the
+  spellings), `trade-intent-ops.db.test.ts` F1–F4, `trading-session-ops.db.test.ts` F1–F2,
+  `apps/backend/src/trading/routes.db.test.ts` → DEMO_ONLY, `processor.db.test.ts` F1–F6,
+  `orchestrator.db.test.ts` F1–F2, `cli/session-start.db.test.ts`, `worker.handoff.db.test.ts`
+  H5–H6 (the started line) and H7–H8 (the flag through `createWorker`: a queued real intent
+  rejected, a real session stopped), `intents/config.test.ts` (the compose entry).

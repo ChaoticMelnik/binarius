@@ -31,6 +31,8 @@ export interface TradingRoutesDeps {
   balance: TradingAccessDeps['balance'];
   // POST /trading/accounts/:id/access-token hands the worker a token through it (#90)
   accessToken: (accountId: string, options: AccessTokenOptions) => Promise<AccessTokenResult>;
+  // the process runs DEMO_ONLY (#396): a real intent answers 409 demo_only
+  demoOnly: boolean;
 }
 
 type Refusal = Extract<AccessTokenResult, { ok: false }>['reason'];
@@ -61,7 +63,7 @@ const readIntentQuerySchema = z.object({ telegramUserId: telegramUserIdSchema })
 // Registered as an encapsulated plugin so the auth hook covers exactly these routes
 export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
   app,
-  { db, internalApiToken, onIntentQueued, balance, accessToken },
+  { db, internalApiToken, onIntentQueued, balance, accessToken, demoOnly },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
   registerTradingAccess(app, { db, balance });
@@ -75,7 +77,10 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
     let result;
     try {
       // the only caller that asks for the demo-stake bounds (#297, Rule 29)
-      result = await createTradeIntent(db, parsed.data, undefined, { checkDemoStake: true });
+      result = await createTradeIntent(db, parsed.data, undefined, {
+        checkDemoStake: true,
+        demoOnly,
+      });
     } catch (error) {
       if (error instanceof TradeIntentError) {
         return reply.code(statusOf(error.code)).send({ error: error.code });

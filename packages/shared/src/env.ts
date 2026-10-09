@@ -141,6 +141,18 @@ export function parseLogLevelEnv(raw: string, name: string): LogLevel {
   return parseEnumEnv(raw, name, LOG_LEVELS);
 }
 
+// only the two lowercase spellings: a '1' or 'yes' that one reader took and another refused would
+// split a stand into a protected and an unprotected process
+export function parseBooleanEnv(raw: string, name: string): boolean {
+  return parseEnumEnv(raw, name, ['true', 'false'] as const) === 'true';
+}
+
+// The demo-only fuse (#396): the name, the default and the spellings live here so the backend and
+// the worker cannot read the same .env differently.
+export function parseDemoOnlyEnv(source: EnvSource): boolean {
+  return parseBooleanEnv(readEnv(source, 'DEMO_ONLY', 'false'), 'DEMO_ONLY');
+}
+
 // These values are pasted from .env straight into a URL, a header or a payload, where a stray
 // space or newline fails far from here and names nothing: a Bot API 404, a refused file id, a
 // bearer that never matches.

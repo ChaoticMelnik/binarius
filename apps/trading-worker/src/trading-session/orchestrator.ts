@@ -53,6 +53,8 @@ export interface SessionOrchestratorDeps {
   pairs: PairsSource;
   logger: Logger;
   config: SessionOrchestratorConfig;
+  // the process runs DEMO_ONLY (#396): createSessionIntent refuses a real session's intent
+  demoOnly: boolean;
   // the sizer's clock and the hold-backs, not the deadline (the database's)
   now?: () => number;
 }
@@ -127,6 +129,9 @@ const CREATE_REFUSALS = {
     kind: 'stop',
     reason: TradingSessionStopReason.StakeStop,
   },
+  // the process runs DEMO_ONLY and the session is real (#396): durable for this process;
+  // reachable only for a real session row (#327)
+  [TradeIntentErrorCode.DemoOnly]: accountUnavailable,
 } as const satisfies Record<TradeIntentErrorCode, CreateRefusal>;
 
 const TERMINAL = new Set<string>(TERMINAL_TRADE_INTENT_STATUSES);
@@ -171,6 +176,7 @@ export function createSessionOrchestrator({
   pairs,
   logger,
   config,
+  demoOnly,
   now = Date.now,
 }: SessionOrchestratorDeps): SessionOrchestrator {
   const stopping = new AbortController();
@@ -361,17 +367,21 @@ export function createSessionOrchestrator({
     checkpoint();
     let created;
     try {
-      created = await createSessionIntent(db, {
-        sessionId: session.id,
-        step,
-        telegramUserId: history.telegramUserId,
-        brokerAccountId: session.brokerAccountId,
-        mode: session.mode,
-        assetId: settings.assetId,
-        amount: decision.amount,
-        action,
-        durationSec: settings.durationSec,
-      });
+      created = await createSessionIntent(
+        db,
+        {
+          sessionId: session.id,
+          step,
+          telegramUserId: history.telegramUserId,
+          brokerAccountId: session.brokerAccountId,
+          mode: session.mode,
+          assetId: settings.assetId,
+          amount: decision.amount,
+          action,
+          durationSec: settings.durationSec,
+        },
+        { demoOnly },
+      );
     } catch (error) {
       if (error instanceof TradingSessionNotActiveError) {
         logger.info(ids, 'trading session stopped meanwhile');

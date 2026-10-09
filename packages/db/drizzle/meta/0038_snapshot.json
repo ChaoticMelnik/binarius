@@ -1,6 +1,6 @@
 {
-  "id": "8be7fe31-3f2b-4fd6-9433-6ebfae624bf0",
-  "prevId": "1f63c6a4-59a4-4ad1-8c9d-42c01a75c2b9",
+  "id": "012d4d9c-9d12-4e22-8b21-f4532eb591ec",
+  "prevId": "8be7fe31-3f2b-4fd6-9433-6ebfae624bf0",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -906,6 +906,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "last_signal_action": {
+          "name": "last_signal_action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -1022,6 +1028,10 @@
         "trading_sessions_stop_reason_check": {
           "name": "trading_sessions_stop_reason_check",
           "value": "\"trading_sessions\".\"stop_reason\" in ('completed', 'manual_review', 'rejected_twice', 'timeout', 'stake_stop', 'account_unavailable', 'pair_unavailable', 'balance_unavailable', 'invalid_settings', 'user_stopped', 'kill_switch')"
+        },
+        "trading_sessions_last_signal_action_check": {
+          "name": "trading_sessions_last_signal_action_check",
+          "value": "\"trading_sessions\".\"last_signal_action\" in ('up', 'down')"
         },
         "trading_sessions_stop_reason_pair_check": {
           "name": "trading_sessions_stop_reason_pair_check",

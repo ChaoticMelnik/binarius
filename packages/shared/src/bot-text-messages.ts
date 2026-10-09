@@ -311,6 +311,7 @@ const intentStatusLines = [
   'intentRejectedNotFound',
   'intentRejectedManual',
   'intentRejectedPaused',
+  'intentRejectedDemoOnly',
   'intentRejected',
 ] as const satisfies readonly BotHtmlKey[];
 

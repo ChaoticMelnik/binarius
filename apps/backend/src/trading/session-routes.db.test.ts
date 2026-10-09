@@ -144,6 +144,7 @@ function appWith(
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
       accessToken: unusedAccessTokenDeps(),
+      demoOnly: false,
     } satisfies TradingRoutesDeps,
     pairs: unusedPairsDeps(),
     sessions: {
@@ -156,6 +157,7 @@ function appWith(
       },
       balance: { refresh },
       internalApiToken: PAIRS_TEST_TOKEN,
+      demoOnly: false,
       now: () => NOW,
     },
     signal: unusedSignalDeps(),

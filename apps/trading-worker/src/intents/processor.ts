@@ -3,6 +3,7 @@ import {
   errorIdentity,
   TradeIntentFailureReason,
   TradeIntentStatus,
+  TradeMode,
   tradeIntentJobPayloadSchema,
 } from '@binarius/shared';
 import {
@@ -26,6 +27,8 @@ export interface ProcessorConfig {
   intentMaxAgeMs: number;
   submitAckTimeoutMs: number;
   staleSubmittingMs: number;
+  // the process runs DEMO_ONLY (#396): a queued real intent is rejected before the take
+  demoOnly: boolean;
 }
 
 export interface ProcessorDeps {
@@ -78,6 +81,24 @@ export async function processIntentJob(
 
 async function handleQueued(deps: ProcessorDeps, intent: TradeIntentRow): Promise<ProcessOutcome> {
   const { db, logger, config } = deps;
+  // before the take, so the intent never becomes submitting and the executor is never called;
+  // ahead of the expiry, so an old real intent carries the flag's reason
+  if (config.demoOnly && intent.mode === TradeMode.Real) {
+    const rejected = await db.transaction((tx) =>
+      rejectIntent(tx, {
+        id: intent.id,
+        from: TradeIntentStatus.Queued,
+        expectedVersion: intent.version,
+        reason: TradeIntentFailureReason.DemoOnly,
+      }),
+    );
+    if (rejected === undefined) {
+      logger.info({ intentId: intent.id }, 'duplicate intent job, intent already taken');
+      return 'noop';
+    }
+    logger.warn({ intentId: intent.id }, 'intent rejected: demo only');
+    return 'rejected';
+  }
   const taken = await takeIntent(db, {
     id: intent.id,
     expectedVersion: intent.version,

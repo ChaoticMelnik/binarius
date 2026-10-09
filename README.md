@@ -268,6 +268,31 @@ docker compose exec backend pnpm --filter @binarius/backend kill-switch off
 What each command prints, what a closed switch does to queued intents and sessions, and the
 deploy note are in [docs/kill-switch.md](docs/kill-switch.md).
 
+## Demo-only stand
+
+A stand an agent drives (#397) runs with `DEMO_ONLY=true` in `.env`: `backend` and
+`trading-worker` then refuse every real intent and real session (409 `demo_only`; a queued real
+intent is rejected before it reaches the broker), and demo trades as usual. Only `true` or
+`false`; unset is `false`; any other value stops the process at start. Never set it on the pilot.
+The flag is read at start, so a change needs the containers recreated (`docker compose up -d
+backend trading-worker`; `docker compose restart` does not re-read `.env`). Before working on a
+stand, the latest start line of each service must show it:
+
+```bash
+for s in backend trading-worker; do
+  docker compose logs --no-log-prefix "$s" | grep -F "\"msg\":\"$s started\"" | tail -1 |
+    grep -q '"demoOnly":true' && echo "$s: demo-only" || echo "$s: NOT demo-only"
+done
+```
+
+On a protected stand it prints exactly `backend: demo-only` and `trading-worker: demo-only`;
+anything else means the stand is not protected: recreate the containers and run it again. Each
+service is read on its own, by its latest line: a container's log keeps its earlier starts, so a
+count over both services can come from one of them.
+
+What each process does with it and how it differs from the trading switch:
+[docs/kill-switch.md](docs/kill-switch.md) → DEMO_ONLY.
+
 ## Bot texts
 
 The client bot's texts can be overridden without a deploy: the bot and the backend's push apply a

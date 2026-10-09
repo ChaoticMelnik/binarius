@@ -3,7 +3,7 @@ import pino from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import { MockSocketPayload, startMockBroker } from '@binarius/mock-broker';
-import { TradeIntentFailureReason, type OpenTrade } from '@binarius/shared';
+import { TradeIntentFailureReason, TradeMode, type OpenTrade } from '@binarius/shared';
 import { INTEGRATION_WAIT_CEILING_MS, openTradeFor } from '@binarius/shared/testing';
 import {
   brokerTrades,
@@ -80,7 +80,13 @@ const deps = (
   db: tmp.db,
   executor,
   logger,
-  config: { intentMaxAgeMs: 60_000, submitAckTimeoutMs: 200, staleSubmittingMs: 60_000, ...config },
+  config: {
+    intentMaxAgeMs: 60_000,
+    submitAckTimeoutMs: 200,
+    staleSubmittingMs: 60_000,
+    demoOnly: false,
+    ...config,
+  },
 });
 
 const statusOf = async (id: string) => (await findTradeIntent(tmp.db, id))!;
@@ -104,6 +110,117 @@ const topicsOf = async (intentId: string) =>
   )
     .map((r) => r.topic)
     .sort();
+
+describe('processIntentJob: DEMO_ONLY (#396)', () => {
+  const demoOnly = { demoOnly: true } as const;
+
+  async function newRealIntent() {
+    const seed = await seedQueuedIntent(tmp.db, { mode: TradeMode.Real });
+    return { intentId: seed.intent.id, userId: seed.userId, version: seed.intent.version };
+  }
+
+  const capture = () => {
+    const lines: string[] = [];
+    const sink = pino({ level: 'info' }, { write: (line: string) => void lines.push(line) });
+    return {
+      sink,
+      entries: () => lines.map((line) => JSON.parse(line) as Record<string, unknown>),
+    };
+  };
+
+  it('F1 rejects a queued real intent, releases the token, never calls the executor', async () => {
+    const { intentId, userId, version } = await newRealIntent();
+    const executor = acceptingExecutor();
+    const log = capture();
+    expect(
+      await processIntentJob({ ...deps(executor, demoOnly), logger: log.sink }, { intentId }),
+    ).toBe('rejected');
+    expect(executor.calls).toBe(0);
+    const row = await statusOf(intentId);
+    expect(row).toMatchObject({
+      status: 'rejected',
+      lastError: 'demo_only',
+      tokensReserved: 0n,
+      version: version + 1,
+    });
+    expect(row.submittedAt).toBeNull();
+    expect(await reservedOf(userId)).toBe(0n);
+    expect(await ledgerKinds(intentId)).toEqual(['reserve', 'release']);
+    expect(log.entries()).toContainEqual(
+      expect.objectContaining({ level: 40, intentId, msg: 'intent rejected: demo only' }),
+    );
+  });
+
+  it('F2 submits a queued demo intent under the flag', async () => {
+    const { intentId } = await newIntent();
+    const executor = acceptingExecutor();
+    expect(await processIntentJob(deps(executor, demoOnly), { intentId })).toBe('accepted');
+    expect(executor.calls).toBe(1);
+  });
+
+  it('F3 submits a queued real intent with the flag off', async () => {
+    const { intentId } = await newRealIntent();
+    const executor = acceptingExecutor();
+    expect(await processIntentJob(deps(executor), { intentId })).toBe('accepted');
+    expect(executor.calls).toBe(1);
+  });
+
+  it('F4 an expired real intent carries the flag, not the expiry', async () => {
+    const { intentId } = await newRealIntent();
+    await tmp.db
+      .update(tradeIntents)
+      .set({ createdAt: sql`now() - interval '2 minutes'` })
+      .where(eq(tradeIntents.id, intentId));
+    expect(await processIntentJob(deps(acceptingExecutor(), demoOnly), { intentId })).toBe(
+      'rejected',
+    );
+    expect((await statusOf(intentId)).lastError).toBe('demo_only');
+  });
+
+  it('F5 leaves a stale submitting real intent to the stale path', async () => {
+    const { intentId, version } = await newRealIntent();
+    await takeIntent(tmp.db, { id: intentId, expectedVersion: version, maxAgeMs: MAX_AGE_MS });
+    await tmp.db
+      .update(tradeIntents)
+      .set({ submittedAt: sql`now() - interval '2 minutes'` })
+      .where(eq(tradeIntents.id, intentId));
+    const executor = acceptingExecutor();
+    expect(await processIntentJob(deps(executor, demoOnly), { intentId })).toBe('stale_unknown');
+    expect((await statusOf(intentId)).lastError).toBe('stale_submitting');
+    expect(executor.calls).toBe(0);
+  });
+
+  // another worker moved the intent between this job's read and its rejection: the version CAS
+  // leaves it alone
+  it('F6 rejects nothing when the intent moved after the read', async () => {
+    const { intentId } = await newRealIntent();
+    let bumped = false;
+    const db = new Proxy(tmp.db, {
+      get(target, property) {
+        const value = Reflect.get(target, property) as unknown;
+        if (property === 'transaction') {
+          return async (...args: Parameters<typeof target.transaction>) => {
+            if (!bumped) {
+              bumped = true;
+              await target
+                .update(tradeIntents)
+                .set({ version: sql`${tradeIntents.version} + 1` })
+                .where(eq(tradeIntents.id, intentId));
+            }
+            return target.transaction(...args);
+          };
+        }
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    const executor = acceptingExecutor();
+    expect(await processIntentJob({ ...deps(executor, demoOnly), db }, { intentId })).toBe('noop');
+    expect(await statusOf(intentId)).toMatchObject({ status: 'queued', lastError: null });
+    expect(executor.calls).toBe(0);
+  });
+});
 
 describe('processIntentJob: the global trading switch (#144)', () => {
   afterEach(() => openTrading(tmp.db));

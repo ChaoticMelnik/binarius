@@ -49,6 +49,7 @@ function appWith(view: PairsCatalogView | undefined): FastifyInstance {
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
       accessToken: unusedAccessTokenDeps(),
+      demoOnly: false,
     },
     pairs: { catalog: fakeCatalog(view), internalApiToken: PAIRS_TEST_TOKEN },
     sessions: unusedSessionDeps(),

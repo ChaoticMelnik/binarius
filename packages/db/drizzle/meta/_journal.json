@@ -264,8 +264,15 @@
     {
       "idx": 37,
       "version": "7",
-      "when": 1791561298818,
-      "tag": "0037_trading_session_last_signal_action",
+      "when": 1791571121292,
+      "tag": "0037_demo_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1791577671289,
+      "tag": "0038_trading_session_last_signal_action",
       "breakpoints": true
     }
   ]

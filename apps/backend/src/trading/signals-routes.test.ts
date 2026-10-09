@@ -54,6 +54,7 @@ function appWith(snapshots: ScanSnapshot[], now = NOW): FastifyInstance {
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
       accessToken: unusedAccessTokenDeps(),
+      demoOnly: false,
     },
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),

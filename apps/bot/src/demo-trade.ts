@@ -125,6 +125,9 @@ const CREATE_REFUSALS = {
   [TradeIntentErrorCode.ClientRequestIdConflict]: { text: 'stakeButtonUsed' },
   // the global trading switch is closed (#144): demo and real alike
   [TradeIntentErrorCode.TradingPaused]: { text: 'tradingPaused' },
+  // the backend runs DEMO_ONLY (#396): a real press, refused before any write; the bot sends demo
+  // until #121
+  [TradeIntentErrorCode.DemoOnly]: { text: 'tradingDemoOnly' },
   // the demo-stake bounds against the account's snapshot (#297); stake_below_minimum names the
   // minimum when this press's access read had it (replyCreateFailure)
   [TradeIntentErrorCode.BalanceUnavailable]: { text: 'stakeBalanceMissing' },

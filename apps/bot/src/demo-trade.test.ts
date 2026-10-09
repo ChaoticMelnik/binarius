@@ -347,6 +347,7 @@ describe('the stake button', () => {
     [TradeIntentErrorCode.ActiveIntentExists, 409, TEXTS.stakeActiveIntent, BACK_ROWS],
     [TradeIntentErrorCode.ClientRequestIdConflict, 409, TEXTS.stakeButtonUsed, BACK_ROWS],
     [TradeIntentErrorCode.TradingPaused, 409, TEXTS.tradingPaused, BACK_ROWS],
+    [TradeIntentErrorCode.DemoOnly, 409, TEXTS.tradingDemoOnly, BACK_ROWS],
     [TradeIntentErrorCode.BalanceUnavailable, 409, TEXTS.stakeBalanceMissing, BACK_ROWS],
     [TradeIntentErrorCode.StakePrecision, 409, TEXTS.stakePrecision, STAKE_MENU_ROWS],
     [

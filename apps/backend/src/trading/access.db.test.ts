@@ -75,6 +75,7 @@ async function buildAccessApp(reconciler: BalanceReconciler): Promise<FastifyIns
     onIntentQueued: () => {},
     balance: reconciler,
     accessToken: unusedAccessTokenDeps(),
+    demoOnly: false,
   });
   await built.ready();
   return built;

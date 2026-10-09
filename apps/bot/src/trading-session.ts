@@ -106,6 +106,9 @@ export const START_REFUSALS = {
   [TradingSessionErrorCode.TradingPaused]: { text: 'tradingPaused' },
   // the bot asks for the backend's default mode, demo, which createTradingSession accepts
   [TradingSessionErrorCode.ModeNotAllowed]: { text: 'unavailable', log: true },
+  // the backend runs DEMO_ONLY (#396): a real session, refused before any write; the bot asks for
+  // demo until #327
+  [TradingSessionErrorCode.DemoOnly]: { text: 'tradingDemoOnly' },
   // reachable only if the bot's sessionFits and the backend's check drift apart
   [TradingSessionErrorCode.SessionTooLong]: { text: 'sessionTooLong' },
   [TradingSessionErrorCode.BalanceUnavailable]: { text: 'stakeBalanceMissing' },
