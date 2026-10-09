@@ -776,7 +776,7 @@ describe('the analysis', () => {
   const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 5));
   const MORE = button(
     LABELS.analysisMoreButton,
-    analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up),
+    analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true),
   );
 
   it('fingerprints the canonical amount, so a spelling never decides a mismatch', () => {
@@ -831,7 +831,7 @@ describe('the analysis', () => {
     expect(rowsOf(edits(calls).at(-1)?.payload)[1]).toEqual([
       button(
         LABELS.analysisMoreButton,
-        analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Down),
+        analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Down, true),
       ),
     ]);
   });
@@ -965,8 +965,62 @@ describe('the analysis', () => {
     expect(plainTextOf(TEXTS.analysisCycleUnavailable({ payoutFloor: '80' }))).toBe(
       '🚫 Цикл на этой паре не запускается: выплата ниже 80%.',
     );
-    expect(result?.text).toContain(TEXTS.analysisCycleUnavailable({ payoutFloor: '80' }).value);
-    expect(rowsOf(result)).toEqual([[MORE], [REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
+    // the note closes the payout block, before the disclaimer
+    expect(
+      plainTextOf(analysisScreen({ pair: low, durationSec: 5, response: SIGNAL_DECIDED }).text),
+    ).toContain('верных прогнозов.\n🚫 Цикл на этой паре не запускается: выплата ниже 80%.\n\n⚠️');
+    expect(rowsOf(result)).toEqual([
+      [
+        button(
+          LABELS.analysisMoreButton,
+          analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, false),
+        ),
+      ],
+      [REPEAT],
+      [BACK_EURUSD_DURATIONS, BACK_GROUPS],
+    ]);
+  });
+
+  it('offers the session first on a pair paying exactly the cycle floor, with no note', async () => {
+    const floor = { ...PAIR_EURUSD, payout: 80 };
+    const { press, calls } = setup({
+      readPairs: () => Promise.resolve(pairsResponse({ pairs: [floor] })),
+    });
+    await press(DATA);
+    const result = edits(calls).at(-1)?.payload;
+    expect(result?.text).not.toContain('Цикл на этой паре не запускается');
+    expect(rowsOf(result)).toEqual([
+      [SESSION],
+      [MORE],
+      [REPEAT],
+      [BACK_EURUSD_DURATIONS, BACK_GROUPS],
+    ]);
+  });
+
+  // #379: a refusal below the floor draws no session row either; the note is the last line
+  it.each([
+    ['a rule refusal', SIGNAL_NO_SIGNAL, 79, false],
+    ['a rule refusal', SIGNAL_NO_SIGNAL, 80, true],
+    ['a data refusal', SIGNAL_DATA_REFUSAL, 79, false],
+    ['a data refusal', SIGNAL_DATA_REFUSAL, 80, true],
+  ] as const)('on %s at %i %% offers the session: %s', async (_case, response, payout, offered) => {
+    const pair = { ...PAIR_EURUSD, payout };
+    const { press, calls } = setup({
+      readPairs: () => Promise.resolve(pairsResponse({ pairs: [pair] })),
+      evaluateSignal: () => Promise.resolve(response),
+    });
+    await press(DATA);
+    const result = edits(calls).at(-1)?.payload;
+    expect(result?.text).toBe(analysisScreen({ pair, durationSec: 5, response }).text.value);
+    const note = plainTextOf(TEXTS.analysisCycleUnavailable({ payoutFloor: '80' }));
+    const text = plainTextOf(analysisScreen({ pair, durationSec: 5, response }).text);
+    if (offered) expect(text).not.toContain(note);
+    else expect(text.endsWith(`\n${note}`)).toBe(true);
+    expect(rowsOf(result)).toEqual([
+      ...(offered ? [[SESSION]] : []),
+      [REPEAT],
+      [BACK_EURUSD_DURATIONS, BACK_GROUPS],
+    ]);
   });
 
   it('keeps the longest session datum inside the Bot API limit and reads it back', () => {
@@ -1117,7 +1171,7 @@ describe('the analysis', () => {
 
 // #360: «➕ Ещё» draws the single trade's row in place of the collapsed keyboard
 describe('«➕ Ещё» under the analysis', () => {
-  const DATA = analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up);
+  const DATA = analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true);
   const REPEAT = button(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
   const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 5));
   const STAKE_MENU = button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5));
@@ -1162,7 +1216,7 @@ describe('«➕ Ещё» under the analysis', () => {
 
   it('draws the direction the button carries', async () => {
     const { press, calls } = setup();
-    await press(analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Down));
+    await press(analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Down, true));
     const stake = rowsOf(expandedOf(calls)[0]?.payload)[1]?.[0];
     expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Down, '1.00000000'));
     expect(stakeOf(stake?.callback_data)).toMatchObject({
@@ -1282,15 +1336,36 @@ describe('«➕ Ещё» under the analysis', () => {
 
   it('keeps the longest datum inside the Bot API limit and reads it back', () => {
     const longest = Math.max(...DEMO_DURATIONS_SEC) as (typeof DEMO_DURATIONS_SEC)[number];
-    const data = analysisMoreCallbackData(2_147_483_647, longest, TradeAction.Down);
-    expect(data).toBe('demo:more:2147483647:15:down');
-    expect(Buffer.byteLength(data, 'utf8')).toBe(28);
+    const data = analysisMoreCallbackData(2_147_483_647, longest, TradeAction.Down, false);
+    expect(data).toBe('demo:more:2147483647:15:down:n');
+    expect(Buffer.byteLength(data, 'utf8')).toBe(30);
     expect(analysisMoreDataOf(ANALYSIS_MORE_PATTERN.exec(data) ?? '')).toEqual({
       assetId: 2_147_483_647,
       durationSec: 15,
       action: TradeAction.Down,
+      payoutAccepted: false,
     });
   });
+
+  // #379: the floor's verdict travels in the datum, taken at the render
+  it.each([
+    ['s', true],
+    ['n', false],
+    // a button #360 drew before #379: its row stays, the press meets the route's 409
+    [undefined, true],
+  ] as const)(
+    'reads the token %s as payoutAccepted %s and draws the session row by it',
+    async (token, accepted) => {
+      const { press, calls } = setup();
+      await press(
+        `demo:more:${String(PAIR_EURUSD.id)}:5:up${token === undefined ? '' : `:${token}`}`,
+      );
+      const rows = rowsOf(expandedOf(calls).at(-1)?.payload);
+      expect(rows.some((row) => row.some((b) => b.text === SESSION.text))).toBe(accepted);
+      if (accepted) expect(rows[0]).toEqual([SESSION]);
+      else expect(rows[0]?.[1]).toEqual(STAKE_MENU);
+    },
+  );
 
   it('does nothing outside a private chat', async () => {
     const { press, calls, readTradingAccess } = setup();
@@ -1389,6 +1464,8 @@ describe('demo data the bot did not draw', () => {
     'demo:more:101:60:up',
     'demo:more:101:5:flat',
     'demo:more:101:5',
+    'demo:more:101:5:up:x',
+    'demo:more:101:5:up:',
     'stk:o:a:101:120',
     'stk:o:s:300',
     'demo:t:currency:-1',

@@ -408,7 +408,8 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       ...features(true),
       '\n',
       k('demoPayout'),
-      // a pair paying below the cycle floor: no session button, the note says why
+      // a pair paying below the cycle floor: no session row, the note says why (on every
+      // decided answer, #379)
       oneOf([], ['\n', k('analysisCycleUnavailable')]),
       '\n\n',
       k('analysisDisclaimer'),
@@ -424,6 +425,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       k('analysisNoSignal', { reason: (m) => m.longest(...dataReasons) }),
       '\n\n',
       k('analysisDataHint'),
+      oneOf([], ['\n', k('analysisCycleUnavailable')]),
     ],
   },
   {
@@ -438,6 +440,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       ...features(false),
       '\n\n',
       k('analysisNoSignalHint'),
+      oneOf([], ['\n', k('analysisCycleUnavailable')]),
     ],
   },
   {

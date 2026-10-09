@@ -42,7 +42,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
-demo:more:<assetId>:<sec>:<up|down>   («➕ Ещё» under the analysis, #360)
+demo:more:<assetId>:<sec>:<up|down>:<s|n>   («➕ Ещё» under the analysis, #360; the floor's token, #379)
   bot → answerCallbackQuery ∥ POST /trading/access
   bot → editMessageReplyMarkup: the stake button (a new nonce, the amount's fingerprint) and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
@@ -236,8 +236,12 @@ status has an edge out of it in the shared graph (accepted until it settles); on
 of that trade — the session button's own data, so its press is the start handler with its
 refusals and its `{ active }` answer: a press while a session runs shows the running one and starts
 none ([bot-session.md](bot-session.md#the-button)). One predicate decides the line and the row,
-`sessionOfferOf(view)`: the status is a stop status, the duration is one of `DEMO_DURATIONS_SEC`
-and a session of five fits it. A trade from before #313 (60 s) gets neither, as it gets no
+`sessionOfferOf(view, payoutAccepted)`: the status is a stop status, the duration is one of
+`DEMO_DURATIONS_SEC`, a session of five fits it, and the pair paid at least the cycle floor (#379)
+as the catalog had it at the press (the tracker carries the fact, `IntentTrackRequest.payoutAccepted`)
+or at the refresh; unknown — the refresh's catalog read failed or the id is not listed — draws no
+offer. The payout can move during a 5–15 s trade: the message shows the press-time fact, and a
+press after the change meets the route's 409 `payout_too_low`. A trade from before #313 (60 s) gets neither, as it gets no
 «📊 Новый анализ». The tracker's edits and «🔄 Обновить статус» draw it; the message right after
 the press (`planned`) never does; the deadline edit of a live status carries the hint and no
 offer, and the deadline edit of a stop status whose edit never landed carries the offer; the 404

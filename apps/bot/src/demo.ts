@@ -95,14 +95,17 @@ export const demoDurationCallbackData = (assetId: number, durationSec: DemoDurat
 export const demoAnalysisCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
   `demo:an:${assetId}:${durationSec}`;
 // «➕ Ещё» under the analysis on a signal (#360): the press draws the single trade's row in place
-// of the collapsed keyboard. The direction is the signal's at the render, so the expansion asks
-// for nothing again. The longest, `demo:more:2147483647:15:down`, is 28 bytes.
+// of the collapsed keyboard. The direction and the payout floor's verdict (`s` the session row
+// was drawn, `n` withheld, #379) are the render's, so the expansion asks for nothing again. The
+// longest, `demo:more:2147483647:15:down:n`, is 30 bytes.
 const ANALYSIS_MORE_PREFIX = 'demo:more:';
 export const analysisMoreCallbackData = (
   assetId: number,
   durationSec: DemoDurationSec,
   action: TradeAction,
-): string => `${ANALYSIS_MORE_PREFIX}${assetId}:${durationSec}:${action}`;
+  payoutAccepted: boolean,
+): string =>
+  `${ANALYSIS_MORE_PREFIX}${assetId}:${durationSec}:${action}:${payoutAccepted ? 's' : 'n'}`;
 // The stake button behind «➕ Ещё» (#126, #360); the press opens the trade (#127, demo-trade.ts).
 // The nonce is drawn once per expansion and is the trade's idempotency key: the same button
 // pressed again replays its intent, a new expansion allows a new trade. The fingerprint is the amount the
@@ -174,9 +177,9 @@ const stakeCallbackPattern = (durations: string) =>
   );
 const sessionStartPattern = (durations: string) =>
   new RegExp(`^${SESSION_START_PREFIX}(\\d{1,10}):(${durations})$`);
-// no legacy shape: no button drawn before #360 carries it
+// the floor's token is optional: a button #360 drew before #379 has none
 export const ANALYSIS_MORE_PATTERN = new RegExp(
-  `^${ANALYSIS_MORE_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')})$`,
+  `^${ANALYSIS_MORE_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')})(?::(s|n))?$`,
 );
 const DEMO_DURATION_PATTERN = demoDurationPattern(DURATIONS);
 const DEMO_ANALYSIS_PATTERN = demoAnalysisPattern(DURATIONS);
@@ -259,16 +262,23 @@ export function stakeDataOf(match: RegExpMatchArray | string): StakeData | undef
   return { assetId, durationSec, action, nonce, fingerprint: match[5] };
 }
 
-// «➕ Ещё»'s data from an ANALYSIS_MORE_PATTERN match, undefined when forged.
-export function analysisMoreDataOf(
-  match: RegExpMatchArray | string,
-): { assetId: number; durationSec: DemoDurationSec; action: TradeAction } | undefined {
+// «➕ Ещё»'s data from an ANALYSIS_MORE_PATTERN match, undefined when forged. A datum without
+// the floor's token was drawn before #379 and keeps its session row: that press meets the route's
+// 409 payout_too_low, as every pre-#379 session button does.
+export function analysisMoreDataOf(match: RegExpMatchArray | string):
+  | {
+      assetId: number;
+      durationSec: DemoDurationSec;
+      action: TradeAction;
+      payoutAccepted: boolean;
+    }
+  | undefined {
   if (typeof match === 'string') return undefined;
   const assetId = assetIdOf(match[1]);
   const durationSec = durationOf(match[2]);
   const action = actionOf(match[3]);
   if (assetId === undefined || durationSec === undefined || action === undefined) return undefined;
-  return { assetId, durationSec, action };
+  return { assetId, durationSec, action, payoutAccepted: match[4] !== 'n' };
 }
 
 // The session button's data from a SESSION_START_PATTERN match, undefined when forged or when
@@ -485,7 +495,10 @@ export function createDemoComposer<C extends Context>({
       return;
     }
     const amount = await answerAnd(ctx, stakeAmount(ctx.from.id));
-    await editKeyboard(ctx, expandedKeyboard(data.assetId, data.durationSec, data.action, amount));
+    await editKeyboard(
+      ctx,
+      expandedKeyboard(data.assetId, data.durationSec, data.action, amount, data.payoutAccepted),
+    );
   });
 
   // A thrown call (unreachable, a non-2xx, a broken body) and every fetch_failed but
@@ -564,12 +577,13 @@ export function createDemoComposer<C extends Context>({
     pair: PairView,
   ): InlineKeyboard {
     const keyboard = new InlineKeyboard();
-    if (screen.session && pairPayoutAccepted(pair)) appendSessionRow(keyboard, assetId, durationSec);
+    const payoutAccepted = pairPayoutAccepted(pair);
+    if (screen.session) appendSessionRow(keyboard, assetId, durationSec, payoutAccepted);
     if (screen.stake !== null) {
       keyboard
         .text(
           LABELS.analysisMoreButton,
-          analysisMoreCallbackData(assetId, durationSec, screen.stake),
+          analysisMoreCallbackData(assetId, durationSec, screen.stake, payoutAccepted),
         )
         .row();
     }
@@ -582,8 +596,9 @@ export function createDemoComposer<C extends Context>({
     durationSec: DemoDurationSec,
     action: TradeAction,
     amount: DecimalString | null,
+    payoutAccepted: boolean,
   ): InlineKeyboard {
-    const keyboard = appendSessionRow(new InlineKeyboard(), assetId, durationSec)
+    const keyboard = appendSessionRow(new InlineKeyboard(), assetId, durationSec, payoutAccepted)
       .text(
         stakeButtonLabel(action, amount),
         stakeCallbackData(assetId, durationSec, action, newStakeNonce(), stakeFingerprint(amount)),
@@ -599,8 +614,9 @@ export function createDemoComposer<C extends Context>({
     keyboard: InlineKeyboard,
     assetId: number,
     durationSec: DemoDurationSec,
+    payoutAccepted: boolean,
   ): InlineKeyboard {
-    if (!sessionFits(durationSec)) return keyboard;
+    if (!sessionFits(durationSec) || !payoutAccepted) return keyboard;
     return keyboard
       .text(
         sessionStartButtonLabel(DEFAULT_SESSION_TRADES),

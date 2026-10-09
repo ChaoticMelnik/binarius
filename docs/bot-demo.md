@@ -82,7 +82,7 @@ demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить ан
   bot  → POST /trading/signal { assetId, interval: intervalForDuration(sec) }
   bot  → editMessageText: the analysis screen with its keyboard: the session first on every
          decided answer, «➕ Ещё» on a signal (#360)
-demo:more:<assetId>:<sec>:<up|down>           («➕ Ещё», #360)
+demo:more:<assetId>:<sec>:<up|down>:<s|n>     («➕ Ещё», #360; the floor's token, #379)
   bot  → answerCallbackQuery ∥ POST /trading/access
   bot  → editMessageReplyMarkup: the keyboard expanded in place: the stake button and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>  (the stake button) → the trade, bot-demo-trade.md
@@ -99,7 +99,8 @@ device lead to the same screen.
 
 The callback data is at most 49 bytes (`demo:stake:2147483647:15:down:0123456789ab:0a1b2c`), inside
 the Bot API 64.
-`demo:sig` is 8 bytes, `demo:l:2147483647` 17 and `demo:more:2147483647:15:down` 28 (#360).
+`demo:sig` is 8 bytes, `demo:l:2147483647` 17 and `demo:more:2147483647:15:down:n` 30 (#360,
+#379).
 `<group>` is one of `DEMO_ASSET_GROUPS`, never the broker's own string; `<page>` is up to four
 digits; `<assetId>` is up to ten digits, parsed by `createTradeIntentRequestSchema.shape.assetId`
 (a positive int4, what #127 sends); `<sec>` is one of `DEMO_DURATIONS_SEC`, written into the
@@ -107,7 +108,8 @@ pattern, so `demo:an:101:120`, `demo:more:101:60:up` and `demo:stake:101:120:up:
 match nothing; `<up|down>` is a `TradeAction`; `<nonce>` is 12 lowercase hex characters. Data that
 matches a pattern but fails its check (`demo:a:0`, `demo:l:0`, `demo:t:bond:0`, `demo:more:0:5:up`)
 stops the spinner and sends nothing; data that matches no pattern is not answered at all.
-`demo:more` has no legacy pattern: no button drawn before #360 carries it.
+`demo:more` has no legacy pattern: no button drawn before #360 carries it. Its `:<s|n>` token is
+optional: a button drawn between #360 and #379 has none and reads as `s` (below).
 
 **Old duration buttons (#313).** The set was 60/300/900/1800/3600 s before #313
 (`LEGACY_DEMO_DURATIONS_SEC`). Every shape that carries a duration — `demo:d`, `demo:an`,
@@ -247,12 +249,13 @@ not a fresh catalog.
 - **Analysis (#360).** On every `decided` answer — a signal or «сигнала нет» — «🚀 Сессия из 5
   сделок» alone in the first row where `sessionFitsDeadline(5, sec)` holds, at every duration of
   the set (#284, [bot-session.md](bot-session.md#the-button)), and the pair pays at least the cycle
-  floor (`pairPayoutAccepted`, #379; below it the screen says why); on a signal, «➕ Ещё» alone in
+  floor (`pairPayoutAccepted`, #379; the expansion carries the fact in `demo:more`'s token; below
+  it the screen says why); on a signal, «➕ Ещё» alone in
   the next row; then «🔄 Повторить анализ» (the same `demo:an` data); then «↩️ Длительность» and
   «↩️ Типы». On `fetch_failed` and when the signal call threw: the last two rows only.
   «⏳ Анализирую…» has no keyboard, so «📊 Анализ» cannot be pressed twice while the signal is
   asked for.
-- **Analysis expanded by «➕ Ещё» (#360).** The session row, then «🚀 Открыть сделку: ⬆️ Вверх ·
+- **Analysis expanded by «➕ Ещё» (#360).** The session row (not below the cycle floor), then «🚀 Открыть сделку: ⬆️ Вверх ·
   $5.00» (or «⬇️ Вниз») and «💵 Сумма» in one row, then the repeat and the way back — the same
   message, only its keyboard edited. «🔄 Повторить анализ» draws the collapsed form again.
 
@@ -298,8 +301,8 @@ The screen (`analysisScreen`) is built from this press's pair and the answer onl
 | Answer | Headline | Body | Buttons above the repeat (#360) |
 |---|---|---|---|
 | `decided`, `signal` | «📈 Сигнал: ⬆️ Вверх» / «📉 Сигнал: ⬇️ Вниз» | the feature lines, the payout with the break-even share, on a pair below the cycle floor «🚫 Цикл на этой паре не запускается: выплата ниже 80%.» (`analysisCycleUnavailable`, #379), «⚠️ Сигнал — не прогноз результата и не гарантия…» | the session (not below the cycle floor), «➕ Ещё» by the decision's action |
-| `decided`, a rule refusal (`volatility_too_low`, `volatility_too_high`, `volatility_below_tick_floor`, `trend_flat`, `rsi_neutral`, `trend_momentum_disagree`, `rsi_overbought`, `rsi_oversold`) | «⏸ Сигнала нет: {reason in words}» | the feature lines, «Без сигнала разовую сделку бот не предлагает. Автосессия дождётся сигнала сама…» | the session (not below the cycle floor) |
-| `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) | «⏸ Сигнала нет: {reason in words}» | «Повтори анализ через несколько секунд…»; no feature line, the decision carries none | the session (not below the cycle floor) |
+| `decided`, a rule refusal (`volatility_too_low`, `volatility_too_high`, `volatility_below_tick_floor`, `trend_flat`, `rsi_neutral`, `trend_momentum_disagree`, `rsi_overbought`, `rsi_oversold`) | «⏸ Сигнала нет: {reason in words}» | the feature lines, «Без сигнала разовую сделку бот не предлагает. Автосессия дождётся сигнала сама…», below the cycle floor the note as the last line | the session (not below the cycle floor) |
+| `decided`, a data refusal (`insufficient_candles`, `candle_gap`, `stale`, `invalid_candle`) | «⏸ Сигнала нет: {reason in words}» | «Повтори анализ через несколько секунд…», below the cycle floor the note as the last line; no feature line, the decision carries none | the session (not below the cycle floor) |
 | `fetch_failed` `rate_limited` with `retryAfterSec` | «⚠️ Брокер ограничил запросы. Попробуй через N с.» | — | none |
 | any other `fetch_failed`, `rate_limited` without `retryAfterSec` | «⚠️ Не удалось получить свечи у брокера…»; `warn` `signal not evaluated` with `signalCode` (not for `rate_limited`) | — | none |
 | `evaluateSignal` threw (unreachable, a timeout, a non-2xx, a broken body) | the same; `warn` `signal not evaluated` with the error | — | none |
@@ -327,13 +330,18 @@ backend tuned to other periods prints those (`analysis.test.ts` A2 runs on non-d
 
 «➕ Ещё» is drawn only on a signal, which is reached only after `readDemoTrade` was `ok` on this
 press: the pair open by its schedule and the duration inside its range on a fresh catalog. Its
-data `demo:more:<assetId>:<sec>:<up|down>` carries the signal's direction at the render
-(`analysisMoreDataOf` parses it with `createTradeIntentRequestSchema.shape.assetId`, the duration
-set and `TradeAction`), so the expansion asks for no signal and reads no catalog: the stake press
-reads the catalog and refuses a pair closed since (#127).
+data `demo:more:<assetId>:<sec>:<up|down>:<s|n>` carries the signal's direction and the payout
+floor's verdict at the render (`s` the session row was drawn, `n` withheld by
+`pairPayoutAccepted`, #379; `analysisMoreDataOf` parses it with
+`createTradeIntentRequestSchema.shape.assetId`, the duration set and `TradeAction`), so the
+expansion asks for no signal and reads no catalog: the stake press reads the catalog and refuses a
+pair closed since (#127). A datum without the token was drawn before #379: its expansion keeps the
+session row, whose press meets the route's 409 `payout_too_low` and `sessionPayoutTooLow`, as
+every session button drawn before #379 does.
 
 **«➕ Ещё» (#360).** The press answers the query beside `POST /trading/access` and edits only the
-keyboard of the same message (`editMessageReplyMarkup`, no text): the session row stays first,
+keyboard of the same message (`editMessageReplyMarkup`, no text): the session row stays first
+where the datum's token is `s`,
 then «🚀 Открыть сделку: ⬆️ Вверх · $5.00» and «💵 Сумма» (`stk:o:a:<assetId>:<sec>`) in one row,
 then the repeat and the way back. The label names the amount the press would trade, the saved demo
 stake or the broker's minimum (#297), read at this press; a failed read only drops the amount from

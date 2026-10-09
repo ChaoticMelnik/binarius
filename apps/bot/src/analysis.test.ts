@@ -180,7 +180,21 @@ describe('the analysis screen', () => {
     expect(low[payoutAt + 1]).toBe(note);
     expect(screenOf(SIGNAL_DECIDED, { ...PAIR_EURUSD, payout: 79 }).stake).toBe(TradeAction.Up);
     expect(linesOf(SIGNAL_DECIDED, { ...PAIR_EURUSD, payout: 80 })).not.toContain(note);
-    expect(linesOf(SIGNAL_NO_SIGNAL, { ...PAIR_EURUSD, payout: 79 })).not.toContain(note);
+  });
+
+  // #379: every decided answer below the floor withholds the session row, so the note follows the
+  // hint as the last line; candles not read draw no session row anywhere, so no note
+  it('notes under a refusal on a pair paying below 80 % that no cycle starts on it', () => {
+    const note = '🚫 Цикл на этой паре не запускается: выплата ниже 80%.';
+    const low = { ...PAIR_EURUSD, payout: 79 };
+    const rule = linesOf(SIGNAL_NO_SIGNAL, low);
+    expect(rule.at(-2)).toBe(plainTextOf(TEXTS.analysisNoSignalHint));
+    expect(rule.at(-1)).toBe(note);
+    const data = linesOf(dataRefusalOf(DATA_REFUSAL_REASONS[0]), low);
+    expect(data.at(-2)).toBe(plainTextOf(TEXTS.analysisDataHint));
+    expect(data.at(-1)).toBe(note);
+    expect(linesOf(SIGNAL_NO_SIGNAL, { ...PAIR_EURUSD, payout: 80 })).not.toContain(note);
+    expect(linesOf(SIGNAL_FETCH_FAILED, low)).not.toContain(note);
   });
 
   it('formats the break-even share to a tenth, a dash where the payout gives none', () => {

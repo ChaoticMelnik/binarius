@@ -128,11 +128,7 @@ ${body}`,
   const { decision, params } = response;
   if (decision.kind === SignalKind.Signal) {
     const features = featureLines(decision.features, params, pair, VOLATILITY_WORDS.normal);
-    // a pair below the cycle floor gets no session button (demo.ts); the note says why
-    const payout = pairPayoutAccepted(pair)
-      ? payoutText(pair)
-      : telegramHtml`${payoutText(pair)}
-${TEXTS.analysisCycleUnavailable({ payoutFloor: String(MIN_CYCLE_PAYOUT_PCT) })}`;
+    const payout = withCycleNote(payoutText(pair), pair);
     return {
       text: telegramHtml`${header}
 ${textOf(SIGNAL_HEADLINES[decision.action])}
@@ -151,7 +147,7 @@ ${TEXTS.analysisDisclaimer}`,
       text: telegramHtml`${header}
 ${headline}
 
-${TEXTS.analysisDataHint}`,
+${withCycleNote(TEXTS.analysisDataHint, pair)}`,
       stake: null,
       session: true,
     };
@@ -163,11 +159,19 @@ ${headline}
 
 ${featureLines(decision.features, params, pair, volatility)}
 
-${TEXTS.analysisNoSignalHint}`,
+${withCycleNote(TEXTS.analysisNoSignalHint, pair)}`,
     stake: null,
     session: true,
   };
 }
+
+// Every `decided` answer of a pair below the cycle floor gets no session row (demo.ts, #379):
+// the note under the block that would precede it says why.
+const withCycleNote = (block: TelegramHtml, pair: PairView): TelegramHtml =>
+  pairPayoutAccepted(pair)
+    ? block
+    : telegramHtml`${block}
+${TEXTS.analysisCycleUnavailable({ payoutFloor: String(MIN_CYCLE_PAYOUT_PCT) })}`;
 
 // What the handler shows when the backend did not answer with a body it could read.
 export const analysisUnavailableScreen = (

@@ -3,6 +3,7 @@ import {
   BrokerBalanceUnavailableReason,
   DEFAULT_SESSION_TRADES,
   errorLogFields,
+  pairPayoutAccepted,
   TradeIntentErrorCode,
   TradeMode,
   UserStatus,
@@ -63,16 +64,17 @@ export const INTENT_CALLBACK_PATTERN =
   /^intent:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 // «🔄 Обновить статус» while the trade can still move (accepted until it settles); once the
-// tracker stops following it, the session offer (#360) and the end of the path (#350): a new
-// analysis, the signals, the menu.
+// tracker stops following it, the session offer (#360, not below the cycle floor, #379) and the
+// end of the path (#350): a new analysis, the signals, the menu.
 export function intentKeyboard(
   view: Pick<TradeIntentView, 'id' | 'status' | 'assetId' | 'durationSec'>,
+  payoutAccepted: boolean,
 ): InlineKeyboard {
   const keyboard =
     TRADE_INTENT_TRANSITIONS[view.status].length > 0
       ? new InlineKeyboard().text(LABELS.refreshIntentButton, intentCallbackData(view.id))
       : new InlineKeyboard();
-  const offer = sessionOfferOf(view);
+  const offer = sessionOfferOf(view, payoutAccepted);
   if (offer !== undefined) {
     keyboard
       .row()
@@ -223,7 +225,8 @@ export function createDemoTradeComposer<C extends Context>({
     const [, read, catalog] = await Promise.all([
       ctx.answerCallbackQuery().catch(logAnswerFailure),
       settle(backend.readIntent(intentId, String(ctx.from.id))),
-      // the symbol only, so any catalog will do, a stale one included
+      // the symbol and the payout floor's verdict only, so any catalog will do, a stale one
+      // included
       settle(backend.readPairs()),
     ]);
     if (!read.ok) {
@@ -244,16 +247,20 @@ export function createDemoTradeComposer<C extends Context>({
       return;
     }
     const view = read.value;
-    const symbol = catalog.ok
-      ? (catalog.value.pairs.find((pair) => pair.id === view.assetId)?.symbol ?? null)
-      : null;
+    const pair = catalog.ok
+      ? catalog.value.pairs.find((listed) => listed.id === view.assetId)
+      : undefined;
+    // an unknown payout (the read failed, the id not listed) draws no session offer
+    const payoutAccepted = pair !== undefined && pairPayoutAccepted(pair);
     // no tracker follows the message a refresh draws, so a live status gets the menu too (#350)
     const keyboard = TRACKER_STOP_STATUSES.has(view.status)
-      ? intentKeyboard(view)
-      : withMenu(intentKeyboard(view));
+      ? intentKeyboard(view, payoutAccepted)
+      : withMenu(intentKeyboard(view, payoutAccepted));
     await refreshInPlace(
       ctx,
-      intentStatusText(symbol, view, { sessionOffer: sessionOfferOf(view) !== undefined }),
+      intentStatusText(pair?.symbol ?? null, view, {
+        sessionOffer: sessionOfferOf(view, payoutAccepted) !== undefined,
+      }),
       keyboard,
     );
   });
@@ -384,11 +391,14 @@ export function createDemoTradeComposer<C extends Context>({
   // (a replay of a finished trade). A replay of a live intent the tracker already follows sends
   // this message untracked: track() of a tracked id is a no-op.
   async function sendStatus(ctx: Context, pair: PairView, intent: TradeIntentView): Promise<void> {
+    const payoutAccepted = pairPayoutAccepted(pair);
     const sent = await replyHtml(
       ctx,
-      intentStatusText(pair.symbol, intent, { sessionOffer: sessionOfferOf(intent) !== undefined }),
+      intentStatusText(pair.symbol, intent, {
+        sessionOffer: sessionOfferOf(intent, payoutAccepted) !== undefined,
+      }),
       {
-        reply_markup: intentKeyboard(intent),
+        reply_markup: intentKeyboard(intent, payoutAccepted),
       },
     );
     if (TRACKER_STOP_STATUSES.has(intent.status)) return;
@@ -396,6 +406,7 @@ export function createDemoTradeComposer<C extends Context>({
       intentId: intent.id,
       telegramUserId: intent.telegramUserId,
       symbol: pair.symbol,
+      payoutAccepted,
       view: intent,
       edit: (text, view, end) =>
         editMessageTextByIdHtml(ctx.api, sent.chat.id, sent.message_id, text, {
@@ -403,8 +414,8 @@ export function createDemoTradeComposer<C extends Context>({
             end === 'not_found'
               ? menuKeyboard()
               : end === 'deadline'
-                ? withMenu(intentKeyboard(view))
-                : intentKeyboard(view),
+                ? withMenu(intentKeyboard(view, payoutAccepted))
+                : intentKeyboard(view, payoutAccepted),
         }),
     });
   }
