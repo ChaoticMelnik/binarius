@@ -21,7 +21,7 @@ import {
 import { brokerSessionLeases } from './schema/broker-session-leases';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { users } from './schema/users';
-import { millisecondsAgo } from './trade-intent-ops';
+import { millisecondsAgo, millisecondsFromNow } from './trade-intent-ops';
 
 // The only writers of broker_balance_snapshots (#235, part 1 of #137).
 //
@@ -328,7 +328,7 @@ export async function listBalanceRefreshCandidates(
     .where(
       and(
         activeAccountOfActiveUser,
-        sql`${brokerAccounts.accessTokenExpiresAt} > now() + (${accessSkewMs}::int * interval '1 millisecond')`,
+        sql`${brokerAccounts.accessTokenExpiresAt} > ${millisecondsFromNow(accessSkewMs)}`,
         inWork(watchWindowMs),
         notInArray(brokerAccounts.id, [...exclude]),
       ),

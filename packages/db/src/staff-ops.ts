@@ -2,7 +2,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Db } from './client';
 import { hashToken } from './oauth-ops';
-import { millisecondsFromNow, type DbExecutor, type Tx } from './trade-intent-ops';
+import { millisecondsAgo, millisecondsFromNow, type DbExecutor, type Tx } from './trade-intent-ops';
 import { AuditAction, AuditActorType, AuditEntityType } from '@binarius/shared';
 import { auditLog } from './schema/audit-log';
 import { sqlLiteralList } from './schema/columns';
@@ -63,7 +63,7 @@ async function readRunningLockout(executor: DbExecutor, staffId: string): Promis
 const liveStaffSession = (idleMs: number): SQL =>
   sql`${staffSessions.revokedAt} is null
       and ${staffSessions.expiresAt} > now()
-      and ${staffSessions.lastSeenAt} > now() - (${idleMs}::int * interval '1 millisecond')`;
+      and ${staffSessions.lastSeenAt} > ${millisecondsAgo(idleMs)}`;
 
 // --- Audit ---------------------------------------------------------------------------------
 

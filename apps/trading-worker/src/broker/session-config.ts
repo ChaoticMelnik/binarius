@@ -20,15 +20,18 @@ import { isTimerMs } from './socket-config';
 //   SESSION_LEASE_TTL_MS       — how long an account's lease outlives its last acquire or renewal
 //                                in the database (#93, broker-session.md → The lease)
 //   SESSION_LEASE_RENEW_MS     — the renewal interval
-//   SESSION_LEASE_RENEW_TIMEOUT_MS — how long one renewal may take before it counts as failed
+//   SESSION_LEASE_RENEW_TIMEOUT_MS — how long one acquire or renewal may take before it counts as
+//                                failed
 //   SESSION_LEASE_FENCE_MS     — how long after sending an acquire or a renewal the process trusts
 //                                it; past it the socket is closed
 // The chain: an account missing from one scan is not closed (TICK < IDLE_GRACE); a held-back
 // account skips at least one tick (TICK < RETRY ≤ REFUSAL_RETRY); an account the bot asked about
 // keeps its session for the whole watch window (IDLE_GRACE < BALANCE_WATCH_WINDOW_MS); one failed
-// renewal does not fence, and the fence closes the socket before the database lets anyone else in
-// (2 × LEASE_RENEW < LEASE_FENCE < LEASE_TTL), and a stuck renewal ends before the next is due
-// (LEASE_RENEW_TIMEOUT < LEASE_RENEW); an account busy under another owner is asked again
+// renewal does not fence: a lease sent at s joins a renewal by s + TIMEOUT + RENEW, and if that
+// one fails the next answers by s + 2 × TIMEOUT + 2 × RENEW, before the fence
+// (2 × LEASE_RENEW + 2 × LEASE_RENEW_TIMEOUT < LEASE_FENCE); the fence closes the socket before
+// the database lets anyone else in (LEASE_FENCE < LEASE_TTL); a stuck renewal ends before the next
+// is due (LEASE_RENEW_TIMEOUT < LEASE_RENEW); an account busy under another owner is asked again
 // only once that lease could have lapsed (LEASE_TTL < RETRY); every *_MS is an integer in
 // [1, MAX_TIMER_MS]. The links to the shutdown budget are in intents/config.ts.
 export const SESSION_TICK_MS = 5_000;
@@ -38,8 +41,8 @@ export const SESSION_REFUSAL_RETRY_MS = 300_000;
 export const SESSION_START_CONCURRENCY = 4;
 export const SESSION_STOP_BUDGET_MS = 2_000;
 export const SESSION_LEASE_TTL_MS = 30_000;
-export const SESSION_LEASE_RENEW_MS = 10_000;
-export const SESSION_LEASE_RENEW_TIMEOUT_MS = 5_000;
+export const SESSION_LEASE_RENEW_MS = 6_000;
+export const SESSION_LEASE_RENEW_TIMEOUT_MS = 3_000;
 export const SESSION_LEASE_FENCE_MS = 25_000;
 // how long a session write that threw waits for its dead letter (#92): below the stop budget, so
 // stop() never waits on Redis longer than on the write itself
@@ -96,7 +99,7 @@ export function sessionManagerConfigHolds(config: SessionManagerConfig): boolean
     config.tickMs < config.retryMs &&
     config.retryMs <= config.refusalRetryMs &&
     config.idleGraceMs < config.watchWindowMs &&
-    2 * config.leaseRenewMs < config.leaseFenceMs &&
+    2 * config.leaseRenewMs + 2 * config.leaseRenewTimeoutMs < config.leaseFenceMs &&
     config.leaseRenewTimeoutMs < config.leaseRenewMs &&
     config.leaseFenceMs < config.leaseTtlMs &&
     config.leaseTtlMs < config.retryMs

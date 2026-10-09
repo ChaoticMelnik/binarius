@@ -53,8 +53,8 @@ const CONFIG: SessionManagerConfig = {
   watchWindowMs: 600_000,
   // long enough that no lease is renewed or fenced unless a case shortens them
   leaseTtlMs: 30_000,
-  leaseRenewMs: 10_000,
-  leaseRenewTimeoutMs: 5_000,
+  leaseRenewMs: 6_000,
+  leaseRenewTimeoutMs: 3_000,
   leaseFenceMs: 25_000,
 };
 // a negative wait, past the longest reconnection delay of TIMING
@@ -1343,6 +1343,41 @@ describe('the lease (#93)', () => {
     expect(h.manager.clientFor('acc-1')).toBe(fakes.made[0]);
   });
 
+  it('L14 an acquire that hangs past its timeout starts nothing, and the account is held back', async () => {
+    const fakes = fakeClients();
+    const h = harness({
+      openClient: fakes.openClient,
+      config: { leaseRenewTimeoutMs: 50 },
+      leases: { acquire: () => new Promise(() => undefined) },
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the timeout', () => h.logs('broker session lease acquire timed out').length === 1);
+    expect(h.tokenCalls).toEqual([]);
+    expect(fakes.made).toEqual([]);
+    expect(h.manager.size).toBe(0);
+  });
+
+  // an event-loop stall can deliver the token answer before the overdue fence timer runs
+  it('L15 a token answered past the fence opens no socket', async () => {
+    const fakes = fakeClients();
+    let offset = 0;
+    const token = deferred<AccessTokenOutcome>();
+    const h = harness({
+      openClient: fakes.openClient,
+      monotonicNow: () => performance.now() + offset,
+      tokens: () => token.promise,
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the token fetch', () => h.tokenCalls.length === 1);
+    offset = CONFIG.leaseFenceMs + 1;
+    token.resolve(await grant('acc-1'));
+    await until('the fence', () => h.logs('broker session lease fenced').length === 1);
+    expect(fakes.made).toEqual([]);
+    expect(h.manager.size).toBe(0);
+  });
+
   it('L9 a renewal answer leaves alone an entry started after it was sent', async () => {
     const fakes = fakeClients();
     let answer: (ids: string[]) => void = () => undefined;
@@ -1441,6 +1476,7 @@ describe('logs', () => {
       'broker session lease renewal failed',
       'broker session lease release failed',
       'broker session lease renewal timed out',
+      'broker session lease acquire timed out',
     ]) {
       expect(messages, msg).toContain(msg);
     }
