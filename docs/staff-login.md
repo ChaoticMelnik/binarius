@@ -182,6 +182,7 @@ a token, a raw error object, or the login someone typed for an account that does
 | trading sessions listed | `trading_sessions_viewed` |
 | token ledger listed or filtered | `tokens_viewed` |
 | deposits listed or filtered | `deposits_viewed` |
+| broker accounts listed or filtered | `broker_accounts_viewed` |
 | audit log listed or filtered | `audit_log_viewed` |
 | own password changed | `staff_password_changed` |
 | own password change refused: wrong current password, locked out, state changed under the KDF | `staff_password_change_failed` |
