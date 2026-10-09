@@ -27,7 +27,7 @@ latest_activity() {
     t=$(gh api "repos/$REPO/branches/$branch" \
       --jq '.commit.commit.committer.date | fromdateiso8601' 2>/dev/null || true)
     [[ $t =~ ^[0-9]+$ ]] && ((t > last)) && last=$t
-    t=$(gh pr list --repo "$REPO" --head "$branch" --state all --json updatedAt,comments,reviews \
+    t=$(gh pr list --repo "$REPO" --head "$branch" --state all --limit 10 --json updatedAt,comments,reviews \
       --jq '[.[] | .updatedAt, (.comments[].createdAt), (.reviews[].submittedAt)]
             | map(select(. != null) | fromdateiso8601) | max // empty' 2>/dev/null || true)
     [[ $t =~ ^[0-9]+$ ]] && ((t > last)) && last=$t
