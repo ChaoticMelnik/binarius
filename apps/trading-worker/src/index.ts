@@ -18,6 +18,7 @@ import { createBrokerSessionManager } from './broker/session-manager';
 import { noTradeSessions } from './broker/trade-session';
 import { parseEnv } from './env';
 import {
+  BALANCE_CHECK_TIMEOUT_MS,
   CATCHUP_ATTEMPT_TIMEOUT_MS,
   CATCHUP_BATCH_SIZE,
   CATCHUP_GRACE_MS,
@@ -39,6 +40,7 @@ import {
   SWEEP_BATCH_SIZE,
   SWEEP_INTERVAL_MS,
 } from './intents/config';
+import { createBalanceCheck } from './intents/balance-check';
 import { startIntentConsumer } from './intents/consumer';
 import { processIntentJob } from './intents/processor';
 import { createReconciliationPass, processReconciliationJob } from './intents/reconciliation';
@@ -134,12 +136,14 @@ const pass = createReconciliationPass({
       maxPages: RECONCILE_MAX_TRADE_PAGES,
     },
   }),
+  balanceCheck: createBalanceCheck({ db, rest: brokerRest, tokens, logger }),
   logger,
   config: {
     tickMs: RECONCILE_TICK_MS,
     retryMs: RECONCILE_RETRY_MS,
     attemptTimeoutMs: RECONCILE_ATTEMPT_TIMEOUT_MS,
     batchSize: RECONCILE_BATCH_SIZE,
+    balanceCheckTimeoutMs: BALANCE_CHECK_TIMEOUT_MS,
   },
 });
 

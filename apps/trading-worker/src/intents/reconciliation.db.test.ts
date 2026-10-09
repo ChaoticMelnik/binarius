@@ -26,6 +26,7 @@ import {
   seedUnknownIntent,
   type TempDatabase,
 } from '@binarius/db/testing';
+import type { BalanceCheck, BalanceCheckEnding } from './balance-check';
 import { InvalidJobError } from './processor';
 import type { IntentReconciler, ReconcileResult } from './reconciler';
 import { createRestReconciler } from './rest-reconciler';
@@ -54,7 +55,20 @@ afterEach(async () => {
     .update(tradeIntents)
     .set({ reconcileClaimedAt: sql`now() + interval '1 day'` })
     .where(eq(tradeIntents.status, TradeIntentStatus.Reconciling));
+  checkCalls.length = 0;
+  checkAnswer = () => Promise.resolve('compared');
 });
+
+// the balance check after an outcome (#92): every call recorded by account; a case swaps the answer
+const checkCalls: string[] = [];
+let checkAnswer: (signal: AbortSignal) => Promise<BalanceCheckEnding> = () =>
+  Promise.resolve('compared');
+const balanceCheck: BalanceCheck = {
+  check: (brokerAccountId, signal) => {
+    checkCalls.push(brokerAccountId);
+    return checkAnswer(signal);
+  },
+};
 
 const RETRY_MS = 60_000;
 const silent = pino({ level: 'silent' });
@@ -103,12 +117,14 @@ const passOf = (
   createReconciliationPass({
     db: tmp.db,
     reconciler,
+    balanceCheck,
     logger,
     config: {
       tickMs: 60_000,
       retryMs: RETRY_MS,
       attemptTimeoutMs: 1_000,
       batchSize: 50,
+      balanceCheckTimeoutMs: 1_000,
       ...config,
     },
   });
@@ -575,8 +591,133 @@ describe('the reconciliation pass: the order and the lease', () => {
         skipped: 0,
         dropped: 0,
         failed: 0,
+        balanceCompared: 3,
+        balanceMismatch: 0,
       }),
     ]);
+  });
+});
+
+describe('the reconciliation pass: the balance check (#92)', () => {
+  it('R1 runs once after accepted, settled, manual_review and rejected, for the intent account', async () => {
+    const accepted = await reconcilingIntent();
+    const settled = await reconcilingIntent();
+    const parked = await reconcilingIntent();
+    const missing = await reconcilingIntent();
+    await tickOnce(
+      reconcilerOf({
+        [accepted.intent.id]: (row) => ({ outcome: 'found', trade: openTradeFor(row) }),
+        [settled.intent.id]: (row) => ({
+          outcome: 'found',
+          trade: closedTradeFor(openTradeFor(row)),
+        }),
+        [parked.intent.id]: () => ({ outcome: 'ambiguous' }),
+        [missing.intent.id]: () => ({ outcome: 'not_found' }),
+      }),
+    );
+    expect([...checkCalls].sort()).toEqual(
+      [
+        accepted.brokerAccountId,
+        settled.brokerAccountId,
+        parked.brokerAccountId,
+        missing.brokerAccountId,
+      ].sort(),
+    );
+  });
+
+  it('R2 does not run after unavailable or a throwing reconciler', async () => {
+    const unavailable = await reconcilingIntent();
+    const throwing = await reconcilingIntent();
+    await tickOnce(
+      reconcilerOf({
+        [unavailable.intent.id]: () => ({ outcome: 'unavailable', reason: 'token_unavailable' }),
+        [throwing.intent.id]: () => {
+          throw new Error('reconciler bug');
+        },
+      }),
+    );
+    expect(checkCalls).toEqual([]);
+  });
+
+  it('R3 logs a throwing check and leaves the outcome as recorded', async () => {
+    const { intent, brokerAccountId } = await reconcilingIntent();
+    checkAnswer = () => Promise.reject(new TypeError('check bug'));
+    const log = capture('info');
+    await tickOnce(reconcilerOf({ [intent.id]: () => ({ outcome: 'ambiguous' }) }), log.logger);
+    expect((await rowOf(intent.id)).status).toBe('manual_review');
+    expect(log.line('balance check threw')).toMatchObject({
+      brokerAccountId,
+      err: { name: 'TypeError' },
+    });
+    expect(log.line('reconciliation tick')).toMatchObject({ manualReview: 1, failed: 0 });
+  });
+
+  it('R4 cuts a check at its deadline, aborting its signal, and the tick goes on', async () => {
+    const a = await reconcilingIntent();
+    const b = await reconcilingIntent();
+    let aborted = false;
+    checkAnswer = (signal) =>
+      new Promise(() => {
+        signal.addEventListener('abort', () => {
+          aborted = true;
+        });
+      });
+    const log = capture('info');
+    const reconciler = reconcilerOf({
+      [a.intent.id]: () => ({ outcome: 'ambiguous' }),
+      [b.intent.id]: () => ({ outcome: 'ambiguous' }),
+    });
+    await tickOnce(reconciler, log.logger, { balanceCheckTimeoutMs: 50 });
+    expect(reconciler.calls).toHaveLength(2);
+    expect(aborted).toBe(true);
+    expect(log.parsed().filter((l) => l.msg === 'balance check timed out')).toHaveLength(2);
+  });
+
+  it('R5 ends the tick when the check is rate limited', async () => {
+    const a = await reconcilingIntent();
+    const b = await reconcilingIntent();
+    checkAnswer = () => Promise.resolve('rate_limited');
+    const reconciler = reconcilerOf({
+      [a.intent.id]: () => ({ outcome: 'ambiguous' }),
+      [b.intent.id]: () => ({ outcome: 'ambiguous' }),
+    });
+    await tickOnce(reconciler);
+    expect(reconciler.calls).toHaveLength(1);
+  });
+
+  it('R6 starts no check once stop() was called', async () => {
+    const { intent } = await reconcilingIntent();
+    const reconciler = reconcilerOf({
+      [intent.id]: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return { outcome: 'ambiguous' };
+      },
+    });
+    const pass = passOf(reconciler);
+    void pass.tick();
+    await until('the attempt', () => reconciler.calls.length === 1);
+    await pass.stop();
+    expect((await rowOf(intent.id)).status).toBe('manual_review');
+    expect(checkCalls).toEqual([]);
+  });
+
+  it('counts the compared checks and the mismatches in the summary', async () => {
+    const a = await reconcilingIntent();
+    const b = await reconcilingIntent();
+    const answers: BalanceCheckEnding[] = ['mismatch', 'not_compared'];
+    checkAnswer = () => Promise.resolve(answers.shift()!);
+    const log = capture('info');
+    await tickOnce(
+      reconcilerOf({
+        [a.intent.id]: () => ({ outcome: 'ambiguous' }),
+        [b.intent.id]: () => ({ outcome: 'ambiguous' }),
+      }),
+      log.logger,
+    );
+    expect(log.line('reconciliation tick')).toMatchObject({
+      balanceCompared: 1,
+      balanceMismatch: 1,
+    });
   });
 });
 
