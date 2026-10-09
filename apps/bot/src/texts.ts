@@ -6,6 +6,7 @@ import {
   BrokerAccountStatus,
   confirmButtonLabel,
   createBotTexts,
+  DEFAULT_SESSION_TRADES,
   defaultBotTextSource,
   formatStake,
   formatUsd,
@@ -355,11 +356,12 @@ const statusLineOfIntent = ({ status, lastError }: IntentStatusView): TelegramHt
     : textOf(INTENT_STATUS_LINES[status]);
 
 // The demo trade's one message (#127). `symbol` is the pair's as the catalog spells it, or null
-// when the catalog could not say (the refresh button): the asset's id stands in for it.
+// when the catalog could not say (the refresh button): the asset's id stands in for it. The
+// callers never ask for the deadline hint and the session offer (#360) together.
 export function intentStatusText(
   symbol: string | null,
   view: IntentStatusView,
-  { deadline = false }: { deadline?: boolean } = {},
+  { deadline = false, sessionOffer = false }: { deadline?: boolean; sessionOffer?: boolean } = {},
 ): TelegramHtml {
   const asset =
     symbol === null
@@ -371,13 +373,22 @@ export function intentStatusText(
     durationLabelOf(view.durationSec),
     plain.intentStake({ amount: formatStake(view.amount) }),
   ].join(' · ');
-  const tail = deadline
-    ? [
-        telegramHtml`
+  const tail = [
+    ...(deadline
+      ? [
+          telegramHtml`
 
 ${TEXTS.intentDeadline}`,
-      ]
-    : [];
+        ]
+      : []),
+    ...(sessionOffer
+      ? [
+          telegramHtml`
+
+${TEXTS.intentSessionOffer({ trades: tradesCount(DEFAULT_SESSION_TRADES) })}`,
+        ]
+      : []),
+  ];
   return telegramHtml`${TEXTS.intentHeader}
 ${TEXTS.intentTrade({ line: trade })}
 
@@ -412,7 +423,8 @@ export function pluralTrades(count: number): string {
 }
 const tradesCount = (count: number): string => `${String(count)} ${pluralTrades(count)}`;
 
-// the analysis screen's session button, with the number of trades it starts
+// the session button of the analysis screen and of a finished trade (#360), with the number of
+// trades it starts
 export const sessionStartButtonLabel = (trades: number): string =>
   plain.sessionStartButton({ trades: tradesCount(trades) });
 

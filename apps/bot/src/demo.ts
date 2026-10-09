@@ -94,9 +94,18 @@ export const demoDurationCallbackData = (assetId: number, durationSec: DemoDurat
   `demo:d:${assetId}:${durationSec}`;
 export const demoAnalysisCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
   `demo:an:${assetId}:${durationSec}`;
-// The analysis screen's button (#126); the press opens the trade (#127, demo-trade.ts). The nonce
-// is drawn once per analysis render and is the trade's idempotency key: the same button pressed
-// again replays its intent, a new render allows a new trade. The fingerprint is the amount the
+// «➕ Ещё» under the analysis on a signal (#360): the press draws the single trade's row in place
+// of the collapsed keyboard. The direction is the signal's at the render, so the expansion asks
+// for nothing again. The longest, `demo:more:2147483647:15:down`, is 28 bytes.
+const ANALYSIS_MORE_PREFIX = 'demo:more:';
+export const analysisMoreCallbackData = (
+  assetId: number,
+  durationSec: DemoDurationSec,
+  action: TradeAction,
+): string => `${ANALYSIS_MORE_PREFIX}${assetId}:${durationSec}:${action}`;
+// The stake button behind «➕ Ещё» (#126, #360); the press opens the trade (#127, demo-trade.ts).
+// The nonce is drawn once per expansion and is the trade's idempotency key: the same button
+// pressed again replays its intent, a new expansion allows a new trade. The fingerprint is the amount the
 // label shows (#297): the press refuses when the amount in effect now is another one. The longest,
 // `demo:stake:2147483647:15:down:0123456789ab:0a1b2c`, is 49 bytes.
 const STAKE_CALLBACK_PREFIX = 'demo:stake:';
@@ -128,7 +137,8 @@ export const stakeMenuCallbackData = (assetId: number, durationSec: DemoDuration
 // the launch screen's «💵 Изменить ставку»: the picker whose way back is that launch screen
 export const launchStakeCallbackData = (assetId: number): string =>
   `${STAKE_PICKER_PREFIX}o:p:${assetId}`;
-// The analysis screen's session button (#284, trading-session.ts). No nonce, by the owner's
+// The session button (#284, trading-session.ts) of the analysis screen, of a finished single trade
+// (#360, demo-trade.ts) and of the launch screen (#320). No nonce, by the owner's
 // decision: an old button starts a new session once the previous one has ended, and while one is
 // active the backend answers with it. The longest, `demo:sess:2147483647:15`, is 23 bytes.
 const SESSION_START_PREFIX = 'demo:sess:';
@@ -164,6 +174,10 @@ const stakeCallbackPattern = (durations: string) =>
   );
 const sessionStartPattern = (durations: string) =>
   new RegExp(`^${SESSION_START_PREFIX}(\\d{1,10}):(${durations})$`);
+// no legacy shape: no button drawn before #360 carries it
+export const ANALYSIS_MORE_PATTERN = new RegExp(
+  `^${ANALYSIS_MORE_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')})$`,
+);
 const DEMO_DURATION_PATTERN = demoDurationPattern(DURATIONS);
 const DEMO_ANALYSIS_PATTERN = demoAnalysisPattern(DURATIONS);
 export const STAKE_CALLBACK_PATTERN = stakeCallbackPattern(DURATIONS);
@@ -243,6 +257,18 @@ export function stakeDataOf(match: RegExpMatchArray | string): StakeData | undef
     return undefined;
   }
   return { assetId, durationSec, action, nonce, fingerprint: match[5] };
+}
+
+// «➕ Ещё»'s data from an ANALYSIS_MORE_PATTERN match, undefined when forged.
+export function analysisMoreDataOf(
+  match: RegExpMatchArray | string,
+): { assetId: number; durationSec: DemoDurationSec; action: TradeAction } | undefined {
+  if (typeof match === 'string') return undefined;
+  const assetId = assetIdOf(match[1]);
+  const durationSec = durationOf(match[2]);
+  const action = actionOf(match[3]);
+  if (assetId === undefined || durationSec === undefined || action === undefined) return undefined;
+  return { assetId, durationSec, action };
 }
 
 // The session button's data from a SESSION_START_PATTERN match, undefined when forged or when
@@ -442,14 +468,24 @@ export function createDemoComposer<C extends Context>({
       NO_NEXT_STEP_REASONS.InProgress,
     );
     if (waiting === 'unknown') return;
-    const [screen, amount] = await Promise.all([
-      evaluate(read.pair, durationSec),
-      stakeAmount(ctx.from.id),
-    ]);
-    const keyboard = analysisKeyboard(assetId, durationSec, screen, amount, read.pair);
+    const screen = await evaluate(read.pair, durationSec);
+    const keyboard = analysisKeyboard(assetId, durationSec, screen, read.pair);
     // «⏳» went as a new message: the result follows it rather than editing the summary again
     if (waiting === 'sent') await replyHtml(ctx, screen.text, { reply_markup: keyboard });
     else await editOrReply(ctx, screen.text, keyboard);
+  });
+
+  // «➕ Ещё» (#360): only the keyboard of the pressed analysis changes. The amount is read at this
+  // press, and the stake button gets a fresh nonce, as a render of the analysis gives. The catalog
+  // is not read: the stake press reads it and refuses a pair closed since.
+  composer.callbackQuery(ANALYSIS_MORE_PATTERN, async (ctx) => {
+    const data = analysisMoreDataOf(ctx.match);
+    if (data === undefined) {
+      await answerOnly(ctx);
+      return;
+    }
+    const amount = await answerAnd(ctx, stakeAmount(ctx.from.id));
+    await editKeyboard(ctx, expandedKeyboard(data.assetId, data.durationSec, data.action, amount));
   });
 
   // A thrown call (unreachable, a non-2xx, a broken body) and every fetch_failed but
@@ -503,9 +539,9 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // The amount for the stake button's label (#297) and the launch screen (#320). A failed read
-  // only drops the amount: the signal or the pair decides the screen, and the press reads access
-  // again anyway.
+  // The amount for the stake button's label (#297), drawn by «➕ Ещё» (#360), and the launch
+  // screen (#320). A failed read only drops the amount: the signal or the pair decides the screen,
+  // and the press reads access again anyway.
   async function stakeAmount(telegramUserId: number): Promise<DecimalString | null> {
     try {
       return effectiveStake(await backend.readTradingAccess(String(telegramUserId)));
@@ -518,41 +554,66 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // the stake and session buttons on a signal only, then «🔄 Повторить анализ» and the way back;
-  // no session button on a pair below the cycle payout floor (#379), the screen says why
+  // The session row first on every `decided` answer (#360) of a pair paying at least the cycle
+  // floor (#379, the screen says why otherwise), «➕ Ещё» on a signal, then «🔄 Повторить анализ»
+  // and the way back
   function analysisKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
     screen: AnalysisScreen,
-    amount: DecimalString | null,
     pair: PairView,
   ): InlineKeyboard {
     const keyboard = new InlineKeyboard();
+    if (screen.session && pairPayoutAccepted(pair)) appendSessionRow(keyboard, assetId, durationSec);
     if (screen.stake !== null) {
       keyboard
         .text(
-          stakeButtonLabel(screen.stake, amount),
-          stakeCallbackData(
-            assetId,
-            durationSec,
-            screen.stake,
-            newStakeNonce(),
-            stakeFingerprint(amount),
-          ),
+          LABELS.analysisMoreButton,
+          analysisMoreCallbackData(assetId, durationSec, screen.stake),
         )
-        .text(LABELS.stakeMenuButton, stakeMenuCallbackData(assetId, durationSec))
         .row();
-      // its own row: the session's trades follow the orchestrator's signal at each trade, not
-      // this screen's direction
-      if (sessionFits(durationSec) && pairPayoutAccepted(pair)) {
-        keyboard
-          .text(
-            sessionStartButtonLabel(DEFAULT_SESSION_TRADES),
-            sessionStartCallbackData(assetId, durationSec),
-          )
-          .row();
-      }
     }
+    return appendAnalysisTail(keyboard, assetId, durationSec);
+  }
+
+  // what «➕ Ещё» draws in place of the collapsed keyboard: the stake row joins it
+  function expandedKeyboard(
+    assetId: number,
+    durationSec: DemoDurationSec,
+    action: TradeAction,
+    amount: DecimalString | null,
+  ): InlineKeyboard {
+    const keyboard = appendSessionRow(new InlineKeyboard(), assetId, durationSec)
+      .text(
+        stakeButtonLabel(action, amount),
+        stakeCallbackData(assetId, durationSec, action, newStakeNonce(), stakeFingerprint(amount)),
+      )
+      .text(LABELS.stakeMenuButton, stakeMenuCallbackData(assetId, durationSec))
+      .row();
+    return appendAnalysisTail(keyboard, assetId, durationSec);
+  }
+
+  // its own row: the session's trades follow the orchestrator's signal at each trade, not this
+  // screen's direction
+  function appendSessionRow(
+    keyboard: InlineKeyboard,
+    assetId: number,
+    durationSec: DemoDurationSec,
+  ): InlineKeyboard {
+    if (!sessionFits(durationSec)) return keyboard;
+    return keyboard
+      .text(
+        sessionStartButtonLabel(DEFAULT_SESSION_TRADES),
+        sessionStartCallbackData(assetId, durationSec),
+      )
+      .row();
+  }
+
+  function appendAnalysisTail(
+    keyboard: InlineKeyboard,
+    assetId: number,
+    durationSec: DemoDurationSec,
+  ): InlineKeyboard {
     return keyboard
       .text(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(assetId, durationSec))
       .row()
@@ -617,6 +678,39 @@ export function createDemoComposer<C extends Context>({
           'the demo screen edit failed in transport, sending nothing more',
         );
         return 'unknown';
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  // «➕ Ещё»'s edit: only the keyboard, so there is no text to send anew. Already shown is done; a
+  // message gone or not editable gets nothing — the analysis the button sat under is not on
+  // screen; a transport failure sends nothing more; any other refusal goes to bot.catch.
+  async function editKeyboard(ctx: Context, reply_markup: InlineKeyboard): Promise<void> {
+    try {
+      await ctx.editMessageReplyMarkup({ reply_markup });
+    } catch (error) {
+      const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
+      if (refusal === 'shown') {
+        logger.info(
+          { ...telegramErrorFields(error, 'editMessageReplyMarkup') },
+          'the analysis keyboard already shows this',
+        );
+      } else if (refusal === 'gone') {
+        logger.warn(
+          { ...errorLogFields(error), ...telegramErrorFields(error, 'editMessageReplyMarkup') },
+          'the analysis keyboard was not expanded',
+        );
+      } else if (error instanceof HttpError) {
+        logger.error(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error, 'editMessageReplyMarkup'),
+            updateId: ctx.update.update_id,
+          },
+          'the analysis keyboard edit failed in transport, sending nothing more',
+        );
       } else {
         throw error;
       }

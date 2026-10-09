@@ -54,7 +54,7 @@ bot caches nothing; every `/start` and `/menu` reads the route again.
 ⏳ Баланс Binodex ещё не получен — попробуй /menu через минуту.   ← no snapshot
 ⚠️ Подключено несколько аккаунтов Binodex, баланс не выбран — напиши в поддержку: /support   ← ambiguous_account
 
-💡 Демо без риска — деньги не нужны.
+💡 Автосессия: бот сам проводит серию демо-сделок — деньги не нужны.
 ```
 
 At most one of the three status lines is printed.
@@ -174,8 +174,9 @@ pnpm test --project unit apps/bot/src
 
 - **#125** — the asset picker behind the button: [bot-demo.md](bot-demo.md).
 - **#126** — the analysis behind «📊 Анализ»: [bot-demo.md](bot-demo.md#the-analysis).
-- **#127 / #284** — the demo trade and the session of five ([bot-demo-trade.md](bot-demo-trade.md),
-  [bot-session.md](bot-session.md)); the callback data stays.
+- **#127 / #284 / #360** — the demo trade and the session of five ([bot-demo-trade.md](bot-demo-trade.md),
+  [bot-session.md](bot-session.md)); the callback data stays. Since #360 the hint names the
+  autosession as the main scenario.
 - **#201** — levels and their progress on this card.
 - Real mode — the header reads REAL once a user can trade on real; #144's `tradingOpen` is
   the backend's switch, not a user's mode.

@@ -61,7 +61,8 @@ writes — `demo:stake:`, `demo:sess:`, `session:stop:`, `confirm:`, `resend`, `
 `level:` — never gets it: its failure leads back to where it was pressed (the analysis, the
 menu), so a lost answer never becomes a second trade or session. `testing.ts` → `captureApi` throws
 on any message whose «🔄 Повторить» carries one of those prefixes, in every scene of every bot test
-(`WRITE_CALLBACK_PREFIXES`, `testing.test.ts`).
+(`WRITE_CALLBACK_PREFIXES`, `testing.test.ts`). «➕ Ещё» (`demo:more:`, #360) is a read that sends
+no message: it gets no «🔄 Повторить» of its own, and its failure leaves the analysis on screen.
 
 ## Message → buttons
 
@@ -84,12 +85,13 @@ on any message whose «🔄 Повторить» carries one of those prefixes, 
 | login: `emailPrompt`, `emailInvalid`, `codeRequestStale`, a refusal without the code buttons, `unavailable` | 🏠 В меню (the dialog is left as `/menu` leaves it) |
 | login: `codeSent`, `codeSentUnknown`, `codeInvalid`, a refusal with them | 📨 / ✏️ (unchanged) |
 | demo screens, the signals and launch screens (#320), the picker | their own keyboards (unchanged) |
+| the analysis (#360) | 🚀 Сессия из 5 сделок on every `decided` answer · ➕ Ещё on a signal · 🔄 Повторить анализ · ↩️ Длительность ↩️ Типы; «➕ Ещё» expands it in place: the session, 🚀 Открыть сделку · 💵 Сумма, the repeat, the way back |
 | the stake press refused or failed before or at the create (`unavailable`, `stakeOutcomeUnknown`, `statusAmbiguous`, `stakeBalanceMissing`, a refusal without its own button) | ↩️ Назад к анализу · 🏠 В меню |
 | the session start refused or failed, `sessionJustEnded` | ↩️ Назад к анализу · 🏠 В меню |
 | the trade's refresh failed | 🔄 Повторить (`intent:<id>`) · 🏠 В меню; `intentStatusUnavailable` (404) → 🏠 В меню |
 | the session's refresh or stop failed | 🔄 Обновить (`session:<id>`) · 🏠 В меню; `sessionStatusUnavailable` (404) → 🏠 В меню |
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить статус while the tracker follows the message; its last edit at the deadline, and the message «🔄 Обновить статус» redraws (no tracker follows that one), add 🏠 В меню; a 404 while tracking leaves 🏠 В меню only |
-| trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
+| trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 сделок (#360, on a duration the demo still offers) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
 | session status, live | 🔄 Обновить · ⏹ Остановить сессию; a 404 while tracking leaves 🏠 В меню only |
 | session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню; without `settings` only 🔄 Обновить · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |
 | `stakeInputInvalid` | the picker's way back |

@@ -31,8 +31,9 @@ or, when nothing was sent, over REST, and which answer means what, is in
 them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md); what
 `/account` shows about a user's Binodex links is in [docs/bot-account.md](docs/bot-account.md);
 what a connected user sees as the bot's home — the status card with the balances and the tokens —
-is in [docs/bot-menu.md](docs/bot-menu.md); what the demo button leads to — the asset, the
-duration, the check on a fresh catalog and the analysis screen — is in
+is in [docs/bot-menu.md](docs/bot-menu.md); what the demo button leads to — the signals, the
+launch of a cycle, and behind «🧭 Выбрать пару вручную» the asset, the duration, the check on a
+fresh catalog and the analysis screen — is in
 [docs/bot-demo.md](docs/bot-demo.md); how the stake button opens a demo trade and its status
 message follows the intent is in [docs/bot-demo-trade.md](docs/bot-demo-trade.md); how the session
 button starts a demo session of five trades, follows it in one message and stops it is in
