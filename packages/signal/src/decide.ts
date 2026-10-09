@@ -1,4 +1,5 @@
 import {
+  MAX_PAIR_DIGITS,
   MomentumDirection,
   NoSignalReason,
   SIGNAL_ALGORITHM_VERSION,
@@ -49,8 +50,10 @@ export interface SignalDeciderV1 {
 }
 
 export function assertDigits(digits: number): void {
-  if (!Number.isInteger(digits) || digits < 0) {
-    throw new RangeError(`signal input: digits must be a non-negative integer, got ${digits}`);
+  if (!Number.isInteger(digits) || digits < 0 || digits > MAX_PAIR_DIGITS) {
+    throw new RangeError(
+      `signal input: digits must be an integer from 0 to ${MAX_PAIR_DIGITS}, got ${digits}`,
+    );
   }
 }
 

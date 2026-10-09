@@ -1,5 +1,6 @@
 import {
   BrokerRestErrorCode,
+  MAX_PAIR_DIGITS,
   MIN_CYCLE_PAYOUT_PCT,
   MomentumDirection,
   NoSignalReason,
@@ -79,11 +80,9 @@ const SIGNAL_HEADLINES = {
   [TradeAction.Down]: 'analysisSignalDown',
 } as const satisfies Record<TradeAction, BotStaticHtmlKey>;
 
-// toFixed throws outside 0-100; the broker's digits are 2-7 today, and a value outside a sane
-// range is printed at the nearest bound rather than failing the screen
-const MAX_PRICE_DIGITS = 10;
+// a value outside the sane range is printed at the nearest bound rather than failing the screen
 export const formatPrice = (value: number, digits: number): string =>
-  value.toFixed(Math.min(Math.max(Math.trunc(digits), 0), MAX_PRICE_DIGITS));
+  value.toFixed(Math.min(Math.max(Math.trunc(digits), 0), MAX_PAIR_DIGITS));
 export const formatRsi = (value: number): string => value.toFixed(1);
 // a live 1m ATR% sits in the hundredths and thousandths: two decimals would print 0.00
 export const formatAtrPct = (value: number): string => value.toFixed(3);

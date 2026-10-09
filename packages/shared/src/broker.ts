@@ -6,6 +6,12 @@ import { tradeActionSchema, type TradeAction } from './trading';
 
 // --- BinaryPair -------------------------------------------------------------------------------
 
+// The upper bound of a pair's digits where they enter arithmetic (#379): the decider's
+// atr × 10^digits, the bot's toFixed. The catalog's live range is 2-7 (read 2026-10-09); at 10 the
+// product stays finite and exact for any catalog ATR, and toFixed takes 0-100. Not enforced on the
+// wire: a bound there would drop the whole catalog for one pair, while the decider refuses per pair.
+export const MAX_PAIR_DIGITS = 10;
+
 export const binaryPairWireSchema = z.object({
   // confirmed numeric (#8), unlike the other Binodex ids (see ids.ts)
   id: z.int(),

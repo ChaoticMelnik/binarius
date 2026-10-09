@@ -1,4 +1,5 @@
 import {
+  MAX_PAIR_DIGITS,
   SIGNAL_ALGORITHM_VERSION,
   signalDecisionSchema,
   signalDecisionV1Schema,
@@ -287,5 +288,15 @@ describe('createSignalDecider', () => {
 
   it.each([-1, 2.5, Number.NaN])('D24 digits %s throw before any decision', (digits) => {
     expect(() => decide(trending(60, 0.5), undefined, digits)).toThrow(RangeError);
+  });
+
+  // #379 review m3: 10 ** 309 is Infinity, which would pass the tick floor and not replay
+  it('D25 digits above MAX_PAIR_DIGITS throw; at the bound atrTicks stays finite', () => {
+    expect(MAX_PAIR_DIGITS).toBe(10);
+    expect(() => decide(trending(60, 0.5), undefined, 11)).toThrow(RangeError);
+    expect(() => decide(trending(60, 0.5), undefined, 309)).toThrow(RangeError);
+    const decision = decide(trending(60, 0.5), undefined, 10);
+    if (!('features' in decision)) throw new Error('expected features');
+    expect(Number.isFinite(decision.features.atrTicks)).toBe(true);
   });
 });

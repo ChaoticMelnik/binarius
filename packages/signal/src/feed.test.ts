@@ -353,10 +353,10 @@ describe('createSignalFeed', () => {
     expect(replaySignalJournalEntry(line.signal)).toStrictEqual(entry.decision);
   });
 
-  it('F11 digits that are not a non-negative integer throw before any broker call', async () => {
+  it.each([-1, 11])('F11 digits %i throw before any broker call', async (digits) => {
     const getChart = vi.fn(() => Promise.resolve(trending(60, 0.5)));
     const feed = createSignalFeed({ rest: { getChart }, logger: sink() });
-    await expect(feed.evaluate({ assetId: 101, interval: '1m', digits: -1 })).rejects.toThrow(
+    await expect(feed.evaluate({ assetId: 101, interval: '1m', digits })).rejects.toThrow(
       RangeError,
     );
     expect(getChart).not.toHaveBeenCalled();

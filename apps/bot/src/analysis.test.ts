@@ -272,6 +272,8 @@ describe('the analysis screen', () => {
   it('formats prices to the pair digits, RSI to a tenth and ATR% to a thousandth', () => {
     expect(formatPrice(1.085604, 2)).toBe('1.09');
     expect(formatPrice(1.085604, 7)).toBe('1.0856040');
+    // clamped at MAX_PAIR_DIGITS (#379)
+    expect(formatPrice(1.085604, 11)).toBe('1.0856040000');
     expect(formatRsi(62.34)).toBe('62.3');
     expect(formatAtrPct(0.0412)).toBe('0.041');
   });

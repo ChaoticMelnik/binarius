@@ -55,11 +55,16 @@ candles ──> prepareCandles ──> EMA / RSI / ATR ──> gates ──> dec
 | `candles` | `readonly Candle[]` (`@binarius/shared`) | ascending by `timestamp`; never mutated |
 | `intervalMs` | number | a positive integer, the candle step |
 | `nowMs` | number | finite, `>= 0`; the caller's clock |
-| `digits` (v2) | number | a non-negative integer: the pair's `digits` from the catalog, one quote step = 10^-digits |
+| `digits` (v2) | number | an integer from 0 to `MAX_PAIR_DIGITS` (10, `packages/shared/src/broker.ts`, #379): the pair's `digits` from the catalog, one quote step = 10^-digits |
 
 `volume` is never read: the live chart sends 5-element tuples without it (docs/broker-rest.md).
-A wrong `intervalMs`, `nowMs` or `digits` throws a `RangeError`. So do wrong parameters, at
-`createSignalDecider`. A bad candle never throws.
+A wrong `intervalMs`, `nowMs` or `digits` throws a `RangeError`; `digits` above
+`MAX_PAIR_DIGITS` too (D25): the catalog's live range is 2–7, and at 10 `atr × 10^digits` stays
+finite and exact, where `10^309` would be `Infinity`, pass the tick floor and print `null` in the
+journal. The wire schema of a pair does not bound it — that would drop the whole catalog for one
+pair — so such a pair is refused per pair: the scanner's `signal scan failed`, the route's 500,
+the worker's `backend_status` hold. So do wrong parameters, at `createSignalDecider`. A bad candle
+never throws.
 
 ## Data policy
 
@@ -224,8 +229,8 @@ interval outside the table is a `RangeError` before any fetch.
 ### The window
 
 `evaluate` reads the clock once (`nowMs`, `Date.now` unless `now` is passed) and checks it with
-`assertSignalClock`, and `digits` with `assertDigits`, before any broker call (`feed.test.ts`
-F11). It then requests
+`assertSignalClock`, and `digits` with `assertDigits` (0 to `MAX_PAIR_DIGITS`), before any broker
+call (`feed.test.ts` F11). It then requests
 `chartWindow(nowMs, intervalMs, SIGNAL_CHART_LIMIT)`:
 `startTime = floor(nowMs / intervalMs) × intervalMs − (limit − 1) × intervalMs`. That is `limit`
 candle starts ending on the current interval boundary. The last of them is the forming candle,
