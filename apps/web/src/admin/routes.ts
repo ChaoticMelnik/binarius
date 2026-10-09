@@ -11,6 +11,7 @@ import {
   CLIENT_USER_AGENT_MAX_LENGTH,
   errorLogFields,
   safeParseAdminAuditQuery,
+  safeParseAdminBrokerAccountsQuery,
   safeParseAdminChangePasswordRequest,
   safeParseAdminDepositsQuery,
   safeParseAdminIntentsQuery,
@@ -38,6 +39,8 @@ import {
   botTextsPage,
   type BotTextPageOptions,
   auditPage,
+  brokerAccountsHref,
+  brokerAccountsPage,
   confirmPage,
   depositsHref,
   depositsPage,
@@ -419,6 +422,40 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         reply,
         200,
         depositsPage(deposits, { filters, cursor, nextCursor, login: me.login }),
+      );
+    }),
+  );
+
+  app.get('/admin/broker-accounts', async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      // a blank `status=` or `halted=` is dropped here: no filter, as on the other lists
+      const query = compactQuery(request.query);
+      // the filters first, without the cursor, as on the token ledger
+      const parsed = safeParseAdminBrokerAccountsQuery({ ...query, cursor: undefined });
+      if (!parsed.success) {
+        return sendHtml(
+          reply,
+          400,
+          brokerAccountsPage([], {
+            filters: {},
+            nextCursor: null,
+            message: TEXTS.brokerAccountsBadFilter,
+          }),
+        );
+      }
+      const filters = parsed.data;
+      const cursor = query.cursor;
+      if (cursor !== undefined && (typeof cursor !== 'string' || !UUID_PATTERN.test(cursor))) {
+        return reply.redirect(brokerAccountsHref(filters), 302);
+      }
+      const { me, accounts, nextCursor } = await backend.brokerAccounts(token, {
+        ...filters,
+        cursor,
+      });
+      return sendHtml(
+        reply,
+        200,
+        brokerAccountsPage(accounts, { filters, cursor, nextCursor, login: me.login }),
       );
     }),
   );

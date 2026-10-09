@@ -4,6 +4,9 @@ import {
   ADMIN_ACTIVE_WINDOW_MINUTES,
   ADMIN_PAGE_SIZE,
   ADMIN_USER_RECENT_LEDGER,
+  AccountHaltReason,
+  adminBrokerAccountListItemSchema,
+  adminBrokerAccountViewSchema,
   AuthRevokedReason,
   BrokerAccountStatus,
   TokenLedgerKind,
@@ -14,11 +17,15 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 import {
+  adminBrokerAccountColumns,
   classifyUserSearch,
+  listBrokerAccountsForAdmin,
   listUsersForAdmin,
   readAdminOverview,
   readUserForAdmin,
+  toAdminBrokerAccountListItem,
   toAdminBrokerAccountView,
+  type AdminBrokerAccountFilters,
   toAdminOverview,
   toAdminUserDetail,
   type UserSearch,
@@ -495,5 +502,180 @@ describe('readAdminOverview — intents by status (#330)', () => {
       expect(execute).toHaveBeenCalledTimes(1);
       expect(select).not.toHaveBeenCalled();
     });
+  });
+});
+
+const listAccounts = (
+  db: Db,
+  options: { filters?: AdminBrokerAccountFilters; cursor?: string; limit?: number } = {},
+) =>
+  db.transaction((tx) =>
+    listBrokerAccountsForAdmin(tx, { filters: {}, limit: ADMIN_PAGE_SIZE, ...options }),
+  );
+
+// seedBrokerAccount takes no created_at; the keyset oracles need one each
+const insertAccount = async (
+  db: Db,
+  userId: string,
+  at: ReturnType<typeof sql>,
+  patch: Parameters<typeof seedBrokerAccount>[2] = {},
+) => {
+  const id = await seedBrokerAccount(db, userId, patch);
+  await db.update(brokerAccounts).set({ createdAt: at }).where(eq(brokerAccounts.id, id));
+  return id;
+};
+
+describe('listBrokerAccountsForAdmin — pages', () => {
+  const db = withDatabase();
+  const ids: string[] = [];
+
+  beforeAll(async () => {
+    const { userId } = await seedUser(db());
+    // newest first: ids[0] is the newest
+    for (let i = 0; i < ADMIN_PAGE_SIZE + 1; i += 1) {
+      ids.push(await insertAccount(db(), userId, sql`now() - make_interval(secs => ${i + 1})`));
+    }
+  });
+
+  it('shows ADMIN_PAGE_SIZE rows and a cursor at the last one shown when one more exists', async () => {
+    const page = await listAccounts(db());
+    expect(page.rows.map((r) => r.id)).toEqual(ids.slice(0, ADMIN_PAGE_SIZE));
+    expect(page.nextCursor).toBe(ids[ADMIN_PAGE_SIZE - 1]);
+    const next = await listAccounts(db(), { cursor: page.nextCursor ?? undefined });
+    expect(next.rows.map((r) => r.id)).toEqual([ids[ADMIN_PAGE_SIZE]]);
+    expect(next.nextCursor).toBeNull();
+  });
+
+  it('gives no cursor when exactly ADMIN_PAGE_SIZE rows remain', async () => {
+    const page = await listAccounts(db(), { cursor: ids[0] });
+    expect(page.rows).toHaveLength(ADMIN_PAGE_SIZE);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it('answers an id with no row with an empty page, not an error', async () => {
+    const page = await listAccounts(db(), { cursor: '00000000-0000-4000-8000-00000000dead' });
+    expect(page).toEqual({ rows: [], nextCursor: null });
+  });
+
+  it('selects the column constant and the owner, and nothing secret', async () => {
+    const page = await listAccounts(db(), { limit: 1 });
+    const keys = Object.keys(page.rows[0] ?? {});
+    expect(keys).toEqual([...Object.keys(adminBrokerAccountColumns), 'userId', 'telegramUserId']);
+    expect(keys.join(',')).not.toMatch(/Enc|Hash|KeyId/);
+  });
+});
+
+describe('listBrokerAccountsForAdmin — equal created_at across a page boundary', () => {
+  const db = withDatabase();
+
+  it('breaks the tie by id, with no row skipped or repeated', async () => {
+    const { userId } = await seedUser(db());
+    const at = sql`'2026-10-01T00:00:00.123456Z'::timestamptz`;
+    const seeded = [
+      await insertAccount(db(), userId, at),
+      await insertAccount(db(), userId, at),
+      await insertAccount(db(), userId, at),
+    ];
+    const expected = [...seeded].sort().reverse();
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < 3; i += 1) {
+      const page = await listAccounts(db(), { limit: 1, cursor });
+      seen.push(...page.rows.map((r) => r.id));
+      cursor = page.nextCursor ?? undefined;
+    }
+    expect(seen).toEqual(expected);
+    expect(cursor).toBeUndefined();
+  });
+});
+
+describe('listBrokerAccountsForAdmin — filters', () => {
+  const db = withDatabase();
+  const seeded = { active: '', activeHalted: '', revoked: '', pendingHalted: '' };
+  let ada = { userId: '', telegramUserId: '' };
+  let bob = { userId: '', telegramUserId: '' };
+
+  beforeAll(async () => {
+    ada = await seedUser(db());
+    bob = await seedUser(db());
+    seeded.active = await insertAccount(db(), ada.userId, sql`now() - interval '5 seconds'`);
+    seeded.activeHalted = await insertAccount(db(), ada.userId, sql`now() - interval '4 seconds'`, {
+      tradingHalted: true,
+      haltedReason: AccountHaltReason.TradeMismatch,
+    });
+    seeded.revoked = await insertAccount(db(), bob.userId, sql`now() - interval '3 seconds'`, {
+      status: BrokerAccountStatus.Revoked,
+    });
+    seeded.pendingHalted = await insertAccount(
+      db(),
+      bob.userId,
+      sql`now() - interval '2 seconds'`,
+      {
+        status: BrokerAccountStatus.Pending,
+        tradingHalted: true,
+        haltedReason: AccountHaltReason.ReconciliationAmbiguous,
+      },
+    );
+  });
+
+  const ids = async (filters: AdminBrokerAccountFilters, limit?: number) =>
+    (await listAccounts(db(), { filters, ...(limit === undefined ? {} : { limit }) })).rows.map(
+      (r) => r.id,
+    );
+
+  it('lists every account newest first with its own owner', async () => {
+    const { rows } = await listAccounts(db());
+    expect(rows.map((r) => r.id)).toEqual([
+      seeded.pendingHalted,
+      seeded.revoked,
+      seeded.activeHalted,
+      seeded.active,
+    ]);
+    expect(rows.map((r) => [r.userId, r.telegramUserId.toString()])).toEqual([
+      [bob.userId, bob.telegramUserId],
+      [bob.userId, bob.telegramUserId],
+      [ada.userId, ada.telegramUserId],
+      [ada.userId, ada.telegramUserId],
+    ]);
+  });
+
+  it('keeps one status', async () => {
+    expect(await ids({ status: BrokerAccountStatus.Revoked })).toEqual([seeded.revoked]);
+  });
+
+  it('keeps the halted accounts whatever their status', async () => {
+    expect(await ids({ halted: true })).toEqual([seeded.pendingHalted, seeded.activeHalted]);
+  });
+
+  it('intersects the two, and honours the limit', async () => {
+    expect(await ids({ status: BrokerAccountStatus.Active, halted: true })).toEqual([
+      seeded.activeHalted,
+    ]);
+    expect(await ids({ halted: true }, 1)).toEqual([seeded.pendingHalted]);
+  });
+});
+
+describe('toAdminBrokerAccountListItem', () => {
+  const db = withDatabase();
+
+  it('is the card view and the owner, in the wire order, a blank address as none', async () => {
+    const { userId, telegramUserId } = await seedUser(db());
+    const accountId = await seedBrokerAccount(db(), userId);
+    await db().update(brokerAccounts).set({ email: ' ' }).where(eq(brokerAccounts.id, accountId));
+    const { rows } = await listAccounts(db());
+    const row = rows[0];
+    if (row === undefined) throw new Error('no row');
+    const item = toAdminBrokerAccountListItem(row);
+    expect(Object.keys(item)).toEqual(Object.keys(adminBrokerAccountListItemSchema.shape));
+    expect(adminBrokerAccountListItemSchema.safeParse(item).success).toBe(true);
+    expect(item).toEqual({ ...toAdminBrokerAccountView(row), userId, telegramUserId });
+    expect(item.email).toBeNull();
+    expect(item.createdAt).toBe(row.createdAt.toISOString());
+  });
+
+  it("names the card view's columns and no other", () => {
+    expect(Object.keys(adminBrokerAccountColumns)).toEqual(
+      Object.keys(adminBrokerAccountViewSchema.shape),
+    );
   });
 });

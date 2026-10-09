@@ -59,6 +59,8 @@ export const AuditAction = {
   BotProfilePublished: 'bot_profile_published',
   // admin deposits page (#341)
   DepositsViewed: 'deposits_viewed',
+  // admin broker accounts page (#342)
+  BrokerAccountsViewed: 'broker_accounts_viewed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);

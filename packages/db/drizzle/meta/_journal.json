@@ -246,6 +246,13 @@
       "when": 1791543910939,
       "tag": "0034_admin_deposits_action",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791550683996,
+      "tag": "0035_admin_broker_accounts_action",
+      "breakpoints": true
     }
   ]
 }

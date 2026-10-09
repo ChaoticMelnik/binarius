@@ -6,6 +6,8 @@ import {
   SAMPLE_AUDIT_ENTRY,
   SAMPLE_BOT_TEXT,
   SAMPLE_BOT_TEXTS,
+  SAMPLE_BROKER_ACCOUNT_ITEM,
+  SAMPLE_BROKER_ACCOUNTS,
   SAMPLE_DEPOSIT,
   SAMPLE_DEPOSITS,
   SAMPLE_INTENT,
@@ -462,6 +464,54 @@ describe('the deposits call (#341)', () => {
   ])('refuses %s with a key the contract does not name', async (_label, body) => {
     const { client } = await prefixed(body);
     const error = await rejectionOf(client.deposits(SESSION, {}));
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+describe('the broker accounts call (#342)', () => {
+  const SESSION = 's'.repeat(43);
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+
+  const prefixed = async (body: unknown) => {
+    const served = await serve((response) => {
+      json(response, 200, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+
+  it('asks for the page with the filters in the schema order, the bearer and the staff session, under the prefix', async () => {
+    const { client, captured } = await prefixed(SAMPLE_BROKER_ACCOUNTS);
+    expect(
+      await client.brokerAccounts(SESSION, { cursor: CURSOR, halted: 'true', status: 'active' }),
+    ).toEqual(SAMPLE_BROKER_ACCOUNTS);
+    expect(captured.url).toBe(
+      `/api/admin/broker-accounts?status=active&halted=true&cursor=${CURSOR}`,
+    );
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+    expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('sends no query string for no filters', async () => {
+    const { client, captured } = await prefixed(SAMPLE_BROKER_ACCOUNTS);
+    await client.brokerAccounts(SESSION, {});
+    expect(captured.url).toBe('/api/admin/broker-accounts');
+  });
+
+  it.each([
+    [
+      'a row',
+      {
+        ...SAMPLE_BROKER_ACCOUNTS,
+        accounts: [{ ...SAMPLE_BROKER_ACCOUNT_ITEM, accessTokenEnc: 'x' }],
+      },
+    ],
+    ['the page', { ...SAMPLE_BROKER_ACCOUNTS, extra: 1 }],
+  ])('refuses %s with a key the contract does not name', async (_label, body) => {
+    const { client } = await prefixed(body);
+    const error = await rejectionOf(client.brokerAccounts(SESSION, {}));
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
   });
 });

@@ -22,6 +22,12 @@ import {
   adminUsersQuerySchema,
   adminUsersResponseSchema,
   adminUsersSearchParams,
+  adminBrokerAccountListItemSchema,
+  adminBrokerAccountsQuerySchema,
+  adminBrokerAccountsResponseSchema,
+  adminBrokerAccountsSearchParams,
+  adminBrokerAccountViewSchema,
+  safeParseAdminBrokerAccountsQuery,
   adminConfirmRequestSchema,
   adminConfirmResponseSchema,
   adminDepositsQuerySchema,
@@ -61,6 +67,7 @@ import {
   AuditEntityType,
   auditEntityTypeSchema,
 } from './audit';
+import { BrokerAccountStatus } from './oauth';
 import { TradeIntentStatus } from './trading';
 import { STAFF_LOGIN_CORPUS } from './testing';
 
@@ -801,6 +808,139 @@ describe('deposit contracts (#341)', () => {
       expect(depositEventStatusSchema.safeParse(value).success).toBe(true);
     }
     expect(depositEventStatusSchema.safeParse('bogus').success).toBe(false);
+  });
+});
+
+describe('broker accounts contracts (#342)', () => {
+  const U1 = '00000000-0000-4000-8000-000000000010';
+  const halted = {
+    id: '00000000-0000-4000-8000-000000000020',
+    brokerUserId: 'broker-7',
+    email: null,
+    isPartnerClient: true,
+    status: 'revoked',
+    authRevokedReason: 'refresh_invalid_grant',
+    tradingHalted: true,
+    haltedReason: 'trade_mismatch',
+    accessTokenExpiresAt: AT,
+    tokenRotatedAt: AT,
+    createdAt: AT,
+    updatedAt: AT,
+    userId: U1,
+    telegramUserId: '4242',
+  };
+  const pending = {
+    ...halted,
+    email: 'ada@example.com',
+    status: 'pending',
+    authRevokedReason: null,
+    tradingHalted: false,
+    haltedReason: null,
+    tokenRotatedAt: null,
+  };
+  const list = { me: ME, accounts: [halted, pending], nextCursor: CURSOR };
+
+  it('accepts a revoked halted row without an address, and a pending row without reasons', () => {
+    expect(adminBrokerAccountListItemSchema.safeParse(halted).success).toBe(true);
+    expect(adminBrokerAccountListItemSchema.safeParse(pending).success).toBe(true);
+  });
+
+  it("carries the card view's keys and the owner's two, in that order", () => {
+    expect(Object.keys(adminBrokerAccountListItemSchema.shape)).toEqual([
+      ...Object.keys(adminBrokerAccountViewSchema.shape),
+      'userId',
+      'telegramUserId',
+    ]);
+    expect(Object.keys(adminBrokerAccountListItemSchema.shape)).toHaveLength(14);
+  });
+
+  const withoutOwner = Object.fromEntries(Object.entries(halted).filter(([k]) => k !== 'userId'));
+  it.each([
+    ['an extra key', { ...halted, extra: 1 }],
+    ['the access-token ciphertext', { ...halted, accessTokenEnc: 'x' }],
+    ['the refresh-token hash', { ...halted, refreshTokenHash: 'x' }],
+    ['no owner id', withoutOwner],
+    ['a numeric Telegram id', { ...halted, telegramUserId: 4242 }],
+  ])('refuses a row with %s', (_label, row) => {
+    expect(adminBrokerAccountListItemSchema.safeParse(row).success).toBe(false);
+  });
+
+  it('accepts a page and refuses an extra key at each level, a bad cursor and a 51st row', () => {
+    expect(adminBrokerAccountsResponseSchema.safeParse(list).success).toBe(true);
+    expect(adminBrokerAccountsResponseSchema.safeParse({ ...list, nextCursor: null }).success).toBe(
+      true,
+    );
+    expect(adminBrokerAccountsResponseSchema.safeParse({ ...list, extra: 1 }).success).toBe(false);
+    expect(
+      adminBrokerAccountsResponseSchema.safeParse({ ...list, me: { ...ME, extra: 1 } }).success,
+    ).toBe(false);
+    expect(
+      adminBrokerAccountsResponseSchema.safeParse({ ...list, accounts: [{ ...halted, extra: 1 }] })
+        .success,
+    ).toBe(false);
+    expect(
+      adminBrokerAccountsResponseSchema.safeParse({ ...list, nextCursor: 'bad' }).success,
+    ).toBe(false);
+    const at = Array.from({ length: ADMIN_PAGE_SIZE }, () => halted);
+    expect(adminBrokerAccountsResponseSchema.safeParse({ ...list, accounts: at }).success).toBe(
+      true,
+    );
+    expect(
+      adminBrokerAccountsResponseSchema.safeParse({ ...list, accounts: [...at, halted] }).success,
+    ).toBe(false);
+  });
+
+  describe('adminBrokerAccountsQuerySchema', () => {
+    it('takes no key as an empty query, each key alone, and every account status', () => {
+      expect(adminBrokerAccountsQuerySchema.parse({})).toEqual({});
+      for (const query of [{ status: 'active' }, { halted: 'true' }, { cursor: CURSOR }]) {
+        expect(adminBrokerAccountsQuerySchema.parse(query)).toEqual(query);
+      }
+      for (const status of Object.values(BrokerAccountStatus)) {
+        expect(adminBrokerAccountsQuerySchema.safeParse({ status }).success).toBe(true);
+      }
+    });
+
+    it.each([
+      ['status', 'bogus'],
+      ['status', ''],
+      ['status', ['active', 'revoked']],
+      ['halted', 'on'],
+      ['halted', 'false'],
+      ['halted', ''],
+      ['halted', ['true', 'true']],
+      ['halted', true],
+      ['cursor', 'bad'],
+    ])('refuses %s = %j', (key, value) => {
+      expect(adminBrokerAccountsQuerySchema.safeParse({ [key]: value }).success).toBe(false);
+    });
+
+    it('strips keys it does not declare', () => {
+      expect(adminBrokerAccountsQuerySchema.parse({ halted: 'true', utm: '1' })).toEqual({
+        halted: 'true',
+      });
+    });
+  });
+
+  describe('adminBrokerAccountsSearchParams', () => {
+    it('writes keys in the schema order, whatever order the caller used', () => {
+      const params = adminBrokerAccountsSearchParams({
+        cursor: CURSOR,
+        halted: 'true',
+        status: 'active',
+      });
+      expect([...params].map(([k]) => k)).toEqual(['status', 'halted', 'cursor']);
+    });
+
+    it('round-trips a query through its own serialization', () => {
+      const query = { status: 'revoked', halted: 'true', cursor: CURSOR } as const;
+      const params = adminBrokerAccountsSearchParams(query);
+      expect(safeParseAdminBrokerAccountsQuery(Object.fromEntries(params)).data).toEqual(query);
+    });
+
+    it('writes nothing for an empty query', () => {
+      expect(adminBrokerAccountsSearchParams({}).size).toBe(0);
+    });
   });
 });
 

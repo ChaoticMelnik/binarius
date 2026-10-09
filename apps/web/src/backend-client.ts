@@ -16,6 +16,7 @@ import {
   type AdminBotTextsResponse,
   adminIntentsSearchParams,
   adminAuditSearchParams,
+  adminBrokerAccountsSearchParams,
   adminDepositsSearchParams,
   adminTokensSearchParams,
   adminTradingSessionsSearchParams,
@@ -24,6 +25,7 @@ import {
   safeParseAdminIntentsResponse,
   safeParseAdminOverviewResponse,
   safeParseAdminAuditResponse,
+  safeParseAdminBrokerAccountsResponse,
   safeParseAdminDepositsResponse,
   safeParseAdminTokensResponse,
   safeParseAdminTradingSessionsResponse,
@@ -47,6 +49,8 @@ import {
   type AdminAuditQuery,
   type AdminAuditResponse,
   type AdminChangePasswordRequest,
+  type AdminBrokerAccountsQuery,
+  type AdminBrokerAccountsResponse,
   type AdminDepositsQuery,
   type AdminDepositsResponse,
   type AdminTokensQuery,
@@ -118,6 +122,10 @@ export interface BackendClient {
   ): Promise<AdminTradingSessionsResponse>;
   tokens(token: string, query: AdminTokensQuery): Promise<AdminTokensResponse>;
   deposits(token: string, query: AdminDepositsQuery): Promise<AdminDepositsResponse>;
+  brokerAccounts(
+    token: string,
+    query: AdminBrokerAccountsQuery,
+  ): Promise<AdminBrokerAccountsResponse>;
   audit(token: string, query: AdminAuditQuery): Promise<AdminAuditResponse>;
   changePassword(
     token: string,
@@ -283,6 +291,11 @@ export function createBackendClient({
       const params = adminDepositsSearchParams(query);
       const path = params.size > 0 ? `admin/deposits?${params}` : 'admin/deposits';
       return parsed(safeParseAdminDepositsResponse, await call('GET', path, { session }));
+    },
+    async brokerAccounts(session, query) {
+      const params = adminBrokerAccountsSearchParams(query);
+      const path = params.size > 0 ? `admin/broker-accounts?${params}` : 'admin/broker-accounts';
+      return parsed(safeParseAdminBrokerAccountsResponse, await call('GET', path, { session }));
     },
     async audit(session, query) {
       const params = adminAuditSearchParams(query);

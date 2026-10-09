@@ -44,6 +44,7 @@ export const TEXTS = {
   navAudit: 'Аудит',
   navBotTexts: 'Тексты бота',
   navDeposits: 'Депозиты',
+  navBrokerAccounts: 'Брокерские аккаунты',
   navLabel: 'Разделы админки',
 
   overviewTitle: 'Сводка',
@@ -83,7 +84,6 @@ export const TEXTS = {
   userMain: 'Основное',
   userTokens: 'Токены',
   userBrokerAccounts: 'Брокерские аккаунты',
-  userNoAccounts: 'Аккаунтов нет.',
   fieldId: 'ID',
   fieldLanguage: 'Язык',
   fieldAcquisitionSource: 'Источник',
@@ -209,6 +209,20 @@ export const TEXTS = {
   userDeposits: 'Депозиты',
   userDepositsRecent: (n: number) => `Последние ${n}`,
   userDepositsAll: 'Все записи →',
+
+  brokerAccountsTitle: 'Брокерские аккаунты',
+  brokerAccountsHeading: 'Брокерские аккаунты',
+  brokerAccountsFilterStatus: 'Статус',
+  brokerAccountsFilterAny: 'любой',
+  brokerAccountsFilterHalted: 'Только с остановленной торговлей',
+  brokerAccountsFilterSubmit: 'Показать',
+  brokerAccountsFilterHint: 'Только точное совпадение.',
+  // the list's and the user card's: one fact
+  brokerAccountsEmpty: 'Аккаунтов нет.',
+  brokerAccountsNext: 'Далее',
+  brokerAccountsFirst: 'В начало',
+  brokerAccountsBadFilter:
+    'Фильтр не подходит: статус — из списка, остановка торговли — только флажок',
 
   auditTitle: 'Журнал аудита',
   auditHeading: 'Журнал аудита',

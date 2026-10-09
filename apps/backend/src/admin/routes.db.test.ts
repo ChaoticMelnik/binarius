@@ -19,6 +19,9 @@ import {
   AdminErrorCode,
   adminAuditEntryViewSchema,
   adminAuditResponseSchema,
+  AccountHaltReason,
+  adminBrokerAccountListItemSchema,
+  adminBrokerAccountsResponseSchema,
   adminDepositsResponseSchema,
   adminDepositViewSchema,
   AuditAction,
@@ -34,6 +37,7 @@ import {
   adminTradingSessionViewSchema,
   adminUserResponseSchema,
   adminUsersResponseSchema,
+  BrokerAccountStatus,
   DepositEventStatus,
   staffSessionsResponseSchema,
   TokenLedgerKind,
@@ -2364,6 +2368,130 @@ describe('the deposits page and the card section (#341)', () => {
     await withSession('POST', '/admin/auth/logout', token);
 
     expect((await withSession('GET', '/admin/deposits', token)).statusCode).toBe(401);
+  });
+});
+
+describe('the broker accounts page (#342)', () => {
+  const ITEM_KEYS = Object.keys(adminBrokerAccountListItemSchema.shape);
+
+  it('refuses /admin/broker-accounts without a live session and writes nothing', async () => {
+    const before = await auditCount();
+    for (const headers of [BEARER, { ...BEARER, 'x-staff-session': 'a'.repeat(43) }]) {
+      const response = await app.inject({ method: 'GET', url: '/admin/broker-accounts', headers });
+      expect([response.statusCode, response.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.SessionInvalid },
+      ]);
+    }
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('lists accounts newest first with their owners, exactly the wire keys, nothing secret', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const ada = await seedUser(tmp.db);
+    const adaAccount = await seedBrokerAccount(tmp.db, ada.userId);
+    const bob = await seedUser(tmp.db);
+    const bobAccount = await seedBrokerAccount(tmp.db, bob.userId, {
+      status: BrokerAccountStatus.Revoked,
+    });
+    const before = await auditCount();
+
+    const response = await readOnce(seeded.staffId, '/admin/broker-accounts', token);
+
+    expect(response.statusCode).toBe(200);
+    expect(await auditCount()).toBe(before + 1);
+    expect(response.body).not.toMatch(/Enc|Hash|KeyId|_enc|_hash|key_id/);
+    const raw = response.json<{ accounts: Record<string, unknown>[] }>();
+    expect(Object.keys(raw)).toEqual(['me', 'accounts', 'nextCursor']);
+    for (const account of raw.accounts) expect(Object.keys(account)).toEqual(ITEM_KEYS);
+    const body = adminBrokerAccountsResponseSchema.parse(raw);
+    expect(body.accounts.slice(0, 2).map((a) => [a.id, a.userId, a.telegramUserId])).toEqual([
+      [bobAccount, bob.userId, bob.telegramUserId],
+      [adaAccount, ada.userId, ada.telegramUserId],
+    ]);
+    expect(body.accounts[0]?.status).toBe(BrokerAccountStatus.Revoked);
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.BrokerAccountsViewed,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: '/admin/broker-accounts' },
+    });
+  });
+
+  it('keeps only the halted accounts and records halted as the JSON true', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db);
+    const running = await seedBrokerAccount(tmp.db, userId);
+    const halted = await seedBrokerAccount(tmp.db, userId, {
+      status: BrokerAccountStatus.Pending,
+      tradingHalted: true,
+      haltedReason: AccountHaltReason.TradeMismatch,
+    });
+
+    const response = await readOnce(seeded.staffId, '/admin/broker-accounts?halted=true', token);
+
+    expect(response.statusCode).toBe(200);
+    const body = adminBrokerAccountsResponseSchema.parse(response.json());
+    const ids = body.accounts.map((a) => a.id);
+    expect(ids[0]).toBe(halted);
+    expect(ids).not.toContain(running);
+    expect(body.accounts.every((a) => a.tradingHalted)).toBe(true);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/broker-accounts',
+      halted: true,
+    });
+  });
+
+  it('records the status, halted and the cursor it was given, and drops unknown keys', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const cursor = randomUUID();
+
+    const page = await readOnce(
+      seeded.staffId,
+      `/admin/broker-accounts?status=revoked&halted=true&cursor=${cursor}&utm=1`,
+      token,
+    );
+    expect(page.statusCode).toBe(200);
+    expect(adminBrokerAccountsResponseSchema.parse(page.json()).accounts).toEqual([]);
+    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
+      path: '/admin/broker-accounts',
+      status: 'revoked',
+      halted: true,
+      cursor,
+    });
+  });
+
+  it.each([
+    ['an unknown status', 'status=bogus'],
+    ['status twice', 'status=active&status=revoked'],
+    ['halted from a checkbox without a value', 'halted=on'],
+    ['halted false', 'halted=false'],
+    ['halted blank', 'halted='],
+    ['halted twice', 'halted=true&halted=true'],
+    ['a cursor that is not a uuid', 'cursor=bad'],
+  ])('refuses %s with 400 before the session, writing nothing', async (_label, query) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const before = await auditCount();
+
+    const response = await withSession('GET', `/admin/broker-accounts?${query}`, token);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(await auditCount()).toBe(before);
+  });
+
+  it('refuses the next read once the session has ended', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    expect((await withSession('GET', '/admin/broker-accounts', token)).statusCode).toBe(200);
+    await withSession('POST', '/admin/auth/logout', token);
+
+    expect((await withSession('GET', '/admin/broker-accounts', token)).statusCode).toBe(401);
   });
 });
 

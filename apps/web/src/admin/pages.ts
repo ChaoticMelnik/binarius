@@ -18,6 +18,7 @@ import {
   ADMIN_USER_RECENT_INTENTS,
   ADMIN_USER_RECENT_LEDGER,
   adminAuditSearchParams,
+  adminBrokerAccountsSearchParams,
   adminDepositsSearchParams,
   adminIntentsSearchParams,
   adminTokensSearchParams,
@@ -25,6 +26,7 @@ import {
   adminUsersSearchParams,
   AuditAction,
   AuditEntityType,
+  BrokerAccountStatus,
   DepositEventStatus,
   TokenLedgerKind,
   TradeIntentStatus,
@@ -32,6 +34,8 @@ import {
   UUID_PATTERN,
   type AdminAuditEntryView,
   type AdminAuditQuery,
+  type AdminBrokerAccountListItem,
+  type AdminBrokerAccountsQuery,
   type AdminBrokerAccountView,
   type AdminDepositsQuery,
   type AdminDepositView,
@@ -131,7 +135,8 @@ export type AdminNavKey =
   | 'tokens'
   | 'audit'
   | 'botTexts'
-  | 'deposits';
+  | 'deposits'
+  | 'brokerAccounts';
 
 const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'overview', href: '/admin/overview', label: TEXTS.navOverview },
@@ -143,6 +148,7 @@ const NAV: readonly { key: AdminNavKey; href: string; label: string }[] = [
   { key: 'audit', href: '/admin/audit', label: TEXTS.navAudit },
   { key: 'botTexts', href: '/admin/bot-texts', label: TEXTS.navBotTexts },
   { key: 'deposits', href: '/admin/deposits', label: TEXTS.navDeposits },
+  { key: 'brokerAccounts', href: '/admin/broker-accounts', label: TEXTS.navBrokerAccounts },
 ];
 
 /**
@@ -391,20 +397,51 @@ export const usersPage = (
       </p>`,
   });
 
-const accountRow = (account: AdminBrokerAccountView): SafeHtml =>
-  html`<tr>
-    <td>${account.brokerUserId}</td>
-    <td>${orNone(account.email)}</td>
-    <td>${yesNo(account.isPartnerClient)}</td>
-    <td>${TEXTS.accountStatus[account.status]}</td>
-    <td>${orNone(account.authRevokedReason)}</td>
-    <td>${yesNo(account.tradingHalted)}</td>
-    <td>${orNone(account.haltedReason)}</td>
-    <td>${when(account.accessTokenExpiresAt)}</td>
-    <td>${whenOrNone(account.tokenRotatedAt)}</td>
-    <td>${when(account.createdAt)}</td>
-    <td>${when(account.updatedAt)}</td>
-  </tr>`;
+// The accounts table of the list (#342, with the owner column) and of the user card (without it):
+// one set of columns. The account id is the uuid the ledger's «Основание» and the intent card print.
+const brokerAccountsTable = <T extends AdminBrokerAccountView>(
+  accounts: readonly T[],
+  owner?: (account: T) => SafeHtml,
+): SafeHtml =>
+  html`<table>
+    <thead>
+      <tr>
+        ${owner === undefined ? '' : html`<th>${TEXTS.columnTelegramId}</th>`}
+        <th>${TEXTS.columnAccountId}</th>
+        <th>${TEXTS.columnBrokerUserId}</th>
+        <th>${TEXTS.columnEmail}</th>
+        <th>${TEXTS.columnPartner}</th>
+        <th>${TEXTS.columnStatus}</th>
+        <th>${TEXTS.columnAuthRevokedReason}</th>
+        <th>${TEXTS.columnTradingHalted}</th>
+        <th>${TEXTS.columnHaltedReason}</th>
+        <th>${TEXTS.columnTokenExpiresAt}</th>
+        <th>${TEXTS.columnTokenRotatedAt}</th>
+        <th>${TEXTS.columnUserCreatedAt}</th>
+        <th>${TEXTS.columnUpdatedAt}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${accounts.map(
+        (account) =>
+          html`<tr>
+            ${owner === undefined ? '' : html`<td>${owner(account)}</td>`}
+            <td><code>${account.id}</code></td>
+            <td>${account.brokerUserId}</td>
+            <td>${orNone(account.email)}</td>
+            <td>${yesNo(account.isPartnerClient)}</td>
+            <td>${TEXTS.accountStatus[account.status]}</td>
+            <td>${orNone(account.authRevokedReason)}</td>
+            <td>${yesNo(account.tradingHalted)}</td>
+            <td>${orNone(account.haltedReason)}</td>
+            <td>${when(account.accessTokenExpiresAt)}</td>
+            <td>${whenOrNone(account.tokenRotatedAt)}</td>
+            <td>${when(account.createdAt)}</td>
+            <td>${when(account.updatedAt)}</td>
+          </tr>`,
+      )}
+    </tbody>
+  </table>`;
 
 export const userPage = (
   { user, brokerAccounts, intents, ledger, deposits }: Omit<AdminUserResponse, 'me'>,
@@ -454,27 +491,8 @@ export const userPage = (
       <h2>${TEXTS.userBrokerAccounts}</h2>
       ${
         brokerAccounts.length === 0
-          ? html`<p>${TEXTS.userNoAccounts}</p>`
-          : html`<table>
-              <thead>
-                <tr>
-                  <th>${TEXTS.columnBrokerUserId}</th>
-                  <th>${TEXTS.columnEmail}</th>
-                  <th>${TEXTS.columnPartner}</th>
-                  <th>${TEXTS.columnStatus}</th>
-                  <th>${TEXTS.columnAuthRevokedReason}</th>
-                  <th>${TEXTS.columnTradingHalted}</th>
-                  <th>${TEXTS.columnHaltedReason}</th>
-                  <th>${TEXTS.columnTokenExpiresAt}</th>
-                  <th>${TEXTS.columnTokenRotatedAt}</th>
-                  <th>${TEXTS.columnUserCreatedAt}</th>
-                  <th>${TEXTS.columnUpdatedAt}</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${brokerAccounts.map(accountRow)}
-              </tbody>
-            </table>`
+          ? html`<p>${TEXTS.brokerAccountsEmpty}</p>`
+          : brokerAccountsTable(brokerAccounts)
       }
       <h2>${TEXTS.userTrading}</h2>
       <p>${TEXTS.userIntentsCounts(intents.total, intents.active)}</p>
@@ -1091,6 +1109,79 @@ export const depositsPage = (
             ? ''
             : html`<a href="${depositsHref({ ...filters, cursor: options.nextCursor })}"
                 >${TEXTS.depositsNext}</a
+              >`
+        }
+      </p>`,
+  });
+};
+
+// --- Broker accounts (#342, docs/admin-pages.md → Broker accounts) -----------------------------
+
+/** The broker accounts list URL, through the shared serializer as the other lists. */
+export const brokerAccountsHref = (query: AdminBrokerAccountsQuery): string => {
+  const params = adminBrokerAccountsSearchParams(query);
+  return params.size > 0 ? `/admin/broker-accounts?${params}` : '/admin/broker-accounts';
+};
+
+export const brokerAccountsPage = (
+  accounts: readonly AdminBrokerAccountListItem[],
+  options: {
+    filters: Omit<AdminBrokerAccountsQuery, 'cursor'>;
+    cursor?: string;
+    nextCursor: string | null;
+    login?: string;
+    message?: string;
+  },
+): SafeHtml => {
+  const { filters } = options;
+  return adminShell({
+    title: TEXTS.brokerAccountsTitle,
+    active: 'brokerAccounts',
+    login: options.login,
+    body: html`<h1>${TEXTS.brokerAccountsHeading}</h1>
+      ${error(options.message)}
+      <form class="search" method="get" action="/admin/broker-accounts">
+        <label
+          >${TEXTS.brokerAccountsFilterStatus}
+          <select name="status">
+            ${option('', TEXTS.brokerAccountsFilterAny, filters.status ?? '')}
+            ${Object.values(BrokerAccountStatus).map((s) =>
+              option(s, TEXTS.accountStatus[s], filters.status),
+            )}
+          </select>
+        </label>
+        <label
+          ><input
+            type="checkbox"
+            name="halted"
+            value="true"
+            ${filters.halted === undefined ? '' : html` checked`}
+          />
+          ${TEXTS.brokerAccountsFilterHalted}</label
+        >
+        <button type="submit">${TEXTS.brokerAccountsFilterSubmit}</button>
+      </form>
+      <p class="hint">${TEXTS.brokerAccountsFilterHint}</p>
+      ${
+        accounts.length === 0
+          ? html`<p>${TEXTS.brokerAccountsEmpty}</p>`
+          : brokerAccountsTable(
+              accounts,
+              (account) =>
+                html`<a href="/admin/users/${account.userId}">${account.telegramUserId}</a>`,
+            )
+      }
+      <p class="pager">
+        ${
+          options.cursor !== undefined || accounts.length === 0
+            ? html`<a href="${brokerAccountsHref(filters)}">${TEXTS.brokerAccountsFirst}</a>`
+            : ''
+        }
+        ${
+          options.nextCursor === null
+            ? ''
+            : html`<a href="${brokerAccountsHref({ ...filters, cursor: options.nextCursor })}"
+                >${TEXTS.brokerAccountsNext}</a
               >`
         }
       </p>`,
