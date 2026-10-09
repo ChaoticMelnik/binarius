@@ -30,6 +30,11 @@ import {
 } from './socket';
 import type { BrokerSocketTiming } from './socket-config';
 import type { TradeSessionSource } from './trade-session';
+import {
+  deadLetterSessionWrite,
+  type DeadLetterSink,
+  type SessionDeadLetter,
+} from '../intents/consumer';
 
 // One BrokerSocketClient per broker account in work (docs/broker-session.md). The manager opens
 // no trade and reconciles nothing: it keeps the sessions the executor sends commands over, and
@@ -61,6 +66,8 @@ export interface BrokerSessionManagerDeps {
   }) => Promise<SessionCandidate[]>;
   tokens: AccessTokenSource;
   writers: SessionWriters;
+  // a writer that throws leaves its event here (#92)
+  deadLetters: DeadLetterSink;
   logger: SessionLogger;
   config: SessionManagerConfig;
   // passed to every client (tests shorten the waits)
@@ -83,7 +90,8 @@ export interface BrokerSessionManager extends TradeSessionSource {
   readonly size: number;
 }
 
-type WriteSource = 'user_data' | 'update_balance' | 'close_trade_success';
+type WriteSource = SessionDeadLetter['source'];
+type WriteRef = Pick<SessionDeadLetter, 'mode' | 'brokerTradeIds'>;
 
 interface StartingEntry {
   kind: 'starting';
@@ -204,7 +212,12 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     });
   }
 
-  function enqueue(accountId: string, source: WriteSource, write: () => Promise<void>) {
+  function enqueue(
+    accountId: string,
+    source: WriteSource,
+    ref: WriteRef,
+    write: () => Promise<void>,
+  ) {
     let queue = queues.get(accountId);
     if (queue === undefined) {
       queue = { tasks: [] };
@@ -218,6 +231,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
           { accountId, source, ...errorLogFields(error) },
           'broker session write failed',
         );
+        // inside the task: the account's queue and stop()'s wait both include it
+        await deadLetterSessionWrite(deps.deadLetters, logger, { source, accountId, ...ref });
       }
     });
     pump(accountId, queue);
@@ -273,7 +288,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
           return;
         }
         entry.verified = true;
-        enqueue(accountId, 'user_data', async () => {
+        enqueue(accountId, 'user_data', { mode: null, brokerTradeIds: [] }, async () => {
           const result = await writers.snapshot(accountId, user, [TradeMode.Demo, TradeMode.Real]);
           noteBalanceWrite(entry, 'user_data', result);
         });
@@ -282,7 +297,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       case BrokerEventType.BalanceUpdate: {
         if (!verifiedFor(entry, event.type)) return;
         const { mode, balance } = event;
-        enqueue(accountId, 'update_balance', async () => {
+        enqueue(accountId, 'update_balance', { mode, brokerTradeIds: [] }, async () => {
           const result = await writers.balanceEvent(accountId, mode, balance);
           noteBalanceWrite(entry, 'update_balance', result);
         });
@@ -290,8 +305,9 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       }
       case BrokerEventType.CloseTradeSuccess: {
         if (!verifiedFor(entry, event.type)) return;
-        const { trades } = event;
-        enqueue(accountId, 'close_trade_success', async () => {
+        const { mode, trades } = event;
+        const ref = { mode, brokerTradeIds: trades.map((trade) => trade.id) };
+        enqueue(accountId, 'close_trade_success', ref, async () => {
           noteClosedTrades(accountId, await writers.closedTrades(accountId, trades));
         });
         return;
