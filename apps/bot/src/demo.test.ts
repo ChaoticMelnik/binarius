@@ -588,18 +588,22 @@ describe('the launch screen', () => {
     },
   );
 
-  it.each([15, 5] as const)('launches a pair paying exactly 80 %% at %i s', async (durationSec) => {
-    const { press, calls } = setup({
-      readPairs: () => Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 80 }] })),
-    });
-    await press(demoLaunchCallbackData(PAIR_EURUSD.id, durationSec));
+  it.each([15, 5] as const)(
+    'launches a pair paying exactly 80 percent at %i s',
+    async (durationSec) => {
+      const { press, calls } = setup({
+        readPairs: () =>
+          Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 80 }] })),
+      });
+      await press(demoLaunchCallbackData(PAIR_EURUSD.id, durationSec));
 
-    expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
-      [button(LABELS.launchCycleButton, sessionStartCallbackData(PAIR_EURUSD.id, durationSec))],
-      [button(LABELS.stakeChangeButton, launchStakeCallbackData(PAIR_EURUSD.id, durationSec))],
-      [button(LABELS.backToListButton, demoSignalsCallbackData(durationSec))],
-    ]);
-  });
+      expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
+        [button(LABELS.launchCycleButton, sessionStartCallbackData(PAIR_EURUSD.id, durationSec))],
+        [button(LABELS.stakeChangeButton, launchStakeCallbackData(PAIR_EURUSD.id, durationSec))],
+        [button(LABELS.backToListButton, demoSignalsCallbackData(durationSec))],
+      ]);
+    },
+  );
 
   it('only stops the spinner on an id the backend would refuse', async () => {
     const { press, calls, readPairs } = setup();
@@ -1163,29 +1167,32 @@ describe('the analysis', () => {
 
   // #379: a refusal below the floor draws no session row either; the note is the last line
   it.each([
-    ['a rule refusal', SIGNAL_NO_SIGNAL, 79, false],
-    ['a rule refusal', SIGNAL_NO_SIGNAL, 80, true],
-    ['a data refusal', SIGNAL_DATA_REFUSAL, 79, false],
-    ['a data refusal', SIGNAL_DATA_REFUSAL, 80, true],
-  ] as const)('on %s at %i %% offers the session: %s', async (_case, response, payout, offered) => {
-    const pair = { ...PAIR_EURUSD, payout };
-    const { press, calls } = setup({
-      readPairs: () => Promise.resolve(pairsResponse({ pairs: [pair] })),
-      evaluateSignal: () => Promise.resolve(response),
-    });
-    await press(DATA);
-    const result = edits(calls).at(-1)?.payload;
-    expect(result?.text).toBe(analysisScreen({ pair, durationSec: 5, response }).text.value);
-    const note = plainTextOf(TEXTS.analysisCycleUnavailable({ payoutFloor: '80' }));
-    const text = plainTextOf(analysisScreen({ pair, durationSec: 5, response }).text);
-    if (offered) expect(text).not.toContain(note);
-    else expect(text.endsWith(`\n${note}`)).toBe(true);
-    expect(rowsOf(result)).toEqual([
-      ...(offered ? [[SESSION]] : []),
-      [REPEAT],
-      [BACK_EURUSD_DURATIONS, BACK_GROUPS],
-    ]);
-  });
+    ['a rule refusal', 79, false, SIGNAL_NO_SIGNAL],
+    ['a rule refusal', 80, true, SIGNAL_NO_SIGNAL],
+    ['a data refusal', 79, false, SIGNAL_DATA_REFUSAL],
+    ['a data refusal', 80, true, SIGNAL_DATA_REFUSAL],
+  ] as const)(
+    'on %s at %i percent offers the session: %s',
+    async (_case, payout, offered, response) => {
+      const pair = { ...PAIR_EURUSD, payout };
+      const { press, calls } = setup({
+        readPairs: () => Promise.resolve(pairsResponse({ pairs: [pair] })),
+        evaluateSignal: () => Promise.resolve(response),
+      });
+      await press(DATA);
+      const result = edits(calls).at(-1)?.payload;
+      expect(result?.text).toBe(analysisScreen({ pair, durationSec: 5, response }).text.value);
+      const note = plainTextOf(TEXTS.analysisCycleUnavailable({ payoutFloor: '80' }));
+      const text = plainTextOf(analysisScreen({ pair, durationSec: 5, response }).text);
+      if (offered) expect(text).not.toContain(note);
+      else expect(text.endsWith(`\n${note}`)).toBe(true);
+      expect(rowsOf(result)).toEqual([
+        ...(offered ? [[SESSION]] : []),
+        [REPEAT],
+        [BACK_EURUSD_DURATIONS, BACK_GROUPS],
+      ]);
+    },
+  );
 
   it('keeps the longest session datum inside the Bot API limit and reads it back', () => {
     const data = sessionStartCallbackData(2_147_483_647, 15);

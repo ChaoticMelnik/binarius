@@ -233,7 +233,7 @@ describe('the stake button', () => {
     it.each([
       [79, false],
       [80, true],
-    ] as const)('at %i %% offers the session: %s', async (payout, offered) => {
+    ] as const)('at %i percent offers the session: %s', async (payout, offered) => {
       const { press, calls } = setup({
         readPairs: catalogAt(payout),
         createIntent: () => Promise.resolve(settled),
@@ -248,7 +248,7 @@ describe('the stake button', () => {
       [79, false],
       [80, true],
     ] as const)(
-      'at %i %% hands the tracker payoutAccepted %s, its edits following it',
+      'at %i percent hands the tracker payoutAccepted %s, its edits following it',
       async (payout, offered) => {
         const { press, calls, intentTracker } = setup({ readPairs: catalogAt(payout) });
         await press(STAKE);
@@ -735,7 +735,7 @@ describe('the refresh button', () => {
   it.each([
     [79, false],
     [80, true],
-  ] as const)('at %i %% draws the session offer: %s', async (payout, offered) => {
+  ] as const)('at %i percent draws the session offer: %s', async (payout, offered) => {
     const settled = intentView({ status: TradeIntentStatus.Settled });
     const { press, calls } = setup({
       readIntent: () => Promise.resolve(settled),

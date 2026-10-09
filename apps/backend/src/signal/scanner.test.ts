@@ -533,7 +533,7 @@ describe('signal scanner', () => {
     ['15s', 15, CANDLE_15S_MS],
     ['5s', 5, CANDLE_5S_MS],
   ] as const)(
-    'S19 on the %s scanner a pair paying 79 %% is not eligible, not scanned and not served',
+    'S19 on the %s scanner a pair paying 79 percent is not eligible, not scanned and not served',
     async (interval, durationSec, candleMs) => {
       const h = harness({ interval, pairs: [pair(1, { payout: 79 }), pair(2, { payout: 80 })] });
       expect(eligiblePairs(h.state.view!, B + 3_000, durationSec).map((p) => p.id)).toEqual([2]);
