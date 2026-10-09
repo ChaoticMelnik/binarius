@@ -17,8 +17,9 @@ import { telegramErrorFields } from '../telegram-logging';
 import { BOT_PROFILE_PUBLISH_TIMEOUT_MS } from '../timing';
 
 // Publishing the client bot's command menu and profile (#301, docs/bot-texts.md → Publishing):
-// the CLI after its save or reset of a `commands`/`profile` key and on `bot-text publish`, the
-// admin section in #361. apps/bot publishes the same three at its start.
+// the CLI and the admin section (#361), each after its save or reset of a `commands`/`profile` key
+// and on its republish (`bot-text publish`, «Опубликовать заново»). apps/bot publishes the same
+// three at its start.
 
 export type BotProfileApi = Pick<Api, BotProfileMethod>;
 

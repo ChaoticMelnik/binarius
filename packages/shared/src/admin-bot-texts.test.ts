@@ -8,9 +8,10 @@ import {
   ADMIN_BOT_TEXT_REASON_MAX,
   adminBotTextReason,
   adminBotTextPreviewResponseSchema,
+  adminBotTextResetResponseSchema,
   adminBotTextResponseSchema,
+  adminBotTextSaveResponseSchema,
   adminBotTextSaveRequestSchema,
-  isAdminBotTextEditable,
   renderBotTextPreview,
 } from './admin-bot-texts';
 import { BotTextProblemCode } from './bot-text-template';
@@ -24,20 +25,6 @@ const me = {
   sessionId: '00000000-0000-4000-8000-000000000002',
 };
 const text = { key: 'welcome', override: null, rejection: null, fragments: [] };
-
-describe('the read-only fence of the admin (#300)', () => {
-  it('holds exactly the commands and the profile', () => {
-    const readOnly = keys.filter((key) => !isAdminBotTextEditable(key));
-    expect(readOnly).toEqual(
-      keys.filter((key) => ['commands', 'profile'].includes(BOT_TEXT_CATALOG[key].group)),
-    );
-    expect(readOnly).toContain('profileDescription');
-    expect(readOnly).toContain('startCommand');
-    for (const key of ['welcome', 'connectButton', 'levelAll'] as const) {
-      expect(isAdminBotTextEditable(key)).toBe(true);
-    }
-  });
-});
 
 describe('adminBotTextReason', () => {
   it('cuts a long reason to the wire limit and leaves a short one alone', () => {
@@ -120,7 +107,7 @@ describe('the publish result (#361)', () => {
   const parses = (published: unknown) =>
     adminBotProfilePublishedSchema.safeParse(published).success;
 
-  it('S6 takes one result a method by identity, and refuses what the backend grew', () => {
+  it('S4 takes one result a method by identity, and refuses what the backend grew', () => {
     expect(parses([])).toBe(true);
     expect(parses([ok, failed, timedOut])).toBe(true);
     expect(parses([{ ...failed, description: 'Bad Request: SECRET' }])).toBe(false);
@@ -131,6 +118,33 @@ describe('the publish result (#361)', () => {
     expect(parses([{ ...failed, err: { name: '' } }])).toBe(false);
     expect(parses([{ ...failed, err: { name: 'E'.repeat(129) } }])).toBe(false);
     expect(parses([ok, failed, timedOut, ok])).toBe(false);
+  });
+
+  it('S5 no answer is read-only any more: every key of the catalog is written and published', () => {
+    const readOnly = { me, text, outcome: 'read_only' };
+    expect(adminBotTextPreviewResponseSchema.safeParse(readOnly).success).toBe(false);
+    expect(adminBotTextSaveResponseSchema.safeParse(readOnly).success).toBe(false);
+    expect(adminBotTextResetResponseSchema.safeParse(readOnly).success).toBe(false);
+  });
+
+  it('S6 a save or a reset that wrote always says what it published', () => {
+    const saved = { me, text, outcome: 'saved', version: 3 };
+    expect(adminBotTextSaveResponseSchema.safeParse(saved).success).toBe(false);
+    expect(adminBotTextSaveResponseSchema.safeParse({ ...saved, published: [] }).success).toBe(
+      true,
+    );
+    expect(adminBotTextSaveResponseSchema.safeParse({ ...saved, published: [ok] }).success).toBe(
+      true,
+    );
+    const reset = { me, text: null, outcome: 'reset' };
+    expect(adminBotTextResetResponseSchema.safeParse(reset).success).toBe(false);
+    expect(adminBotTextResetResponseSchema.safeParse({ ...reset, published: [] }).success).toBe(
+      true,
+    );
+    expect(
+      adminBotTextSaveResponseSchema.safeParse({ me, text, outcome: 'unchanged', published: [] })
+        .success,
+    ).toBe(false);
   });
 
   it('S7 takes a republish answer with three results and refuses a key the backend grew', () => {

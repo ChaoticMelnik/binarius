@@ -1,4 +1,8 @@
-import { ADMIN_SEARCH_MAX_LENGTH, BOT_TEXTS_APPLIED_WITHIN_S } from '@binarius/shared';
+import {
+  ADMIN_SEARCH_MAX_LENGTH,
+  BOT_TEXTS_APPLIED_WITHIN_S,
+  type BotProfileMethod,
+} from '@binarius/shared';
 
 // Everything the admin pages say. Russian, per the project's language convention.
 
@@ -239,7 +243,6 @@ export const TEXTS = {
   botTextChanged: (version: number, login: string | null) =>
     `изменён: версия ${version}, ${login ?? 'CLI'},`,
   botTextRejected: (reason: string) => `Не действует — ${reason}. Показан исходный текст.`,
-  botTextReadOnly: 'Только чтение: команды и профиль бота пока нельзя править из админки',
   botTextOrphansHeading: 'Строки без ключа в каталоге',
   botTextOrphansHint: 'Ключа нет в каталоге этой версии — строка не действует.',
   columnBotTextVersion: 'Версия',
@@ -248,12 +251,16 @@ export const TEXTS = {
     removed: 'Строка удалена.',
     gone: 'Строки уже нет.',
     changed: 'Строку успели изменить — проверьте версию и повторите.',
+    republished: 'Опубликовано заново:',
   },
   botTextNotice: {
     saved: `Сохранено. Бот применит текст в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с`,
     reset: `Исходный текст возвращён. Бот применит его в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с`,
     already_default: 'Текст уже исходный.',
     unchanged: 'Текст не изменился — сохранять нечего.',
+    published: 'Сохранено. Публикация в Telegram:',
+    reset_published: 'Исходный текст возвращён. Публикация в Telegram:',
+    republished: 'Опубликовано заново:',
   },
   botTextNotFoundTitle: 'Текст не найден',
   botTextNotFoundBody: 'Такого ключа нет в каталоге текстов.',
@@ -281,6 +288,28 @@ export const TEXTS = {
   botTextUsedIn: 'Используется в:',
   botTextOutcomeUnknown:
     'Не удалось подтвердить результат. Текст мог сохраниться — откройте его заново и проверьте версию.',
+  botProfileWriteOutcomeUnknown:
+    'Не удалось подтвердить результат. Текст мог сохраниться — откройте его заново: если он сохранён, нажмите «Опубликовать заново».',
+  botProfileOutcomeUnknown:
+    'Результат публикации неизвестен — нажмите «Опубликовать заново» ещё раз.',
+  // the command menu and the profile in Telegram (#361); tsc holds the list complete
+  botProfileMethod: {
+    setMyCommands: 'Меню команд',
+    setMyDescription: 'Описание бота',
+    setMyShortDescription: 'Короткое описание',
+  } satisfies Record<BotProfileMethod, string>,
+  botProfilePublished: 'опубликовано',
+  botProfileFailed: (name: string, code?: string, telegramErrorCode?: number) =>
+    `ошибка — ${name}${code === undefined ? '' : ` (${code})`}${
+      telegramErrorCode === undefined ? '' : `, Telegram ${telegramErrorCode}`
+    }`,
+  botProfilePublishFailedHint:
+    'Текст сохранён, но Telegram не принял публикацию. После восстановления нажмите «Опубликовать заново».',
+  botProfileRepublish: 'Опубликовать заново',
+  botProfileHint:
+    'Меню команд и профиль бота публикуются в Telegram при сохранении и сбросе. «Опубликовать заново» публикует все три из текущих текстов.',
+  botProfileCommandHint: `Сохранение и сброс публикуют этот текст в меню команд Telegram сразу; /help в боте применяет его в течение ${BOT_TEXTS_APPLIED_WITHIN_S} с.`,
+  botProfileProfileHint: 'Сохранение и сброс публикуют этот текст в профиль бота в Telegram сразу.',
 
   invalidCredentials: 'Неверный логин или пароль',
   tooManyAttempts: 'Слишком много попыток. Подождите и попробуйте снова',

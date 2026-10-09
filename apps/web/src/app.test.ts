@@ -33,6 +33,8 @@ import {
   SAMPLE_AUDIT_ENTRY_NULLS,
   SAMPLE_BOT_TEXT,
   SAMPLE_BOT_TEXTS,
+  SAMPLE_PUBLISHED,
+  SAMPLE_PUBLISHED_QUERY,
   SAMPLE_INTENT,
   SAMPLE_INTENT_RESPONSE,
   SAMPLE_INTENTS,
@@ -97,6 +99,7 @@ interface Calls {
   previewBotText: unknown[][];
   saveBotText: unknown[][];
   resetBotText: unknown[][];
+  publishBotProfile: unknown[];
 }
 
 let calls: Calls;
@@ -124,6 +127,7 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     previewBotText: [],
     saveBotText: [],
     resetBotText: [],
+    publishBotProfile: [],
   };
   lines = [];
   const client: BackendClient = {
@@ -203,11 +207,21 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     },
     saveBotText: async (token, key, request) => {
       calls.saveBotText.push([token, key, request]);
-      return { me: SAMPLE_ME, text: SAMPLE_BOT_TEXT, outcome: 'saved', version: 8 };
+      return {
+        me: SAMPLE_ME,
+        text: SAMPLE_BOT_TEXT,
+        outcome: 'saved',
+        version: 8,
+        published: [],
+      };
     },
     resetBotText: async (token, key, request) => {
       calls.resetBotText.push([token, key, request]);
-      return { me: SAMPLE_ME, text: SAMPLE_BOT_TEXT, outcome: 'reset' };
+      return { me: SAMPLE_ME, text: SAMPLE_BOT_TEXT, outcome: 'reset', published: [] };
+    },
+    publishBotProfile: async (token) => {
+      calls.publishBotProfile.push(token);
+      return { me: SAMPLE_ME, published: SAMPLE_PUBLISHED };
     },
     oauthCallback: async () => {
       throw new Error('the admin pages never forward an OAuth callback');
@@ -2256,7 +2270,19 @@ describe('the bot texts pages (#300)', () => {
     expect(body).toContain(TEXTS.botTextChanged(7, 'ada'));
     expect(body).toContain(TEXTS.botTextChanged(3, null));
     expect(body).toContain(TEXTS.botTextRejected('Пустой текст'));
-    expect(body.split(TEXTS.botTextReadOnly)).toHaveLength(3);
+    expect(body).not.toContain('Только чтение');
+    // #361: one hint and one «Опубликовать заново», right above the command descriptions
+    const republish = '<form method="post" action="/admin/bot-texts/publish">';
+    expect(body.split(republish)).toHaveLength(2);
+    expect(body.split(TEXTS.botProfileHint)).toHaveLength(2);
+    const groups = Object.values(BotTextGroup);
+    const commandsAt = body.indexOf(`<h2>${BOT_TEXT_GROUP_TITLES[BotTextGroup.Commands]}</h2>`);
+    const previous = groups[groups.indexOf(BotTextGroup.Commands) - 1]!;
+    expect(body.indexOf(republish)).toBeLessThan(commandsAt);
+    expect(body.indexOf(republish)).toBeGreaterThan(
+      body.indexOf(`<h2>${BOT_TEXT_GROUP_TITLES[previous]}</h2>`),
+    );
+    expect(body).not.toContain('class="publish"');
     expect(body).toContain(TEXTS.botTextOrphansHeading);
     expect(body).toMatch(
       /<form method="post" action="\/admin\/bot-texts\/zzz\/reset">\s*<input type="hidden" name="version" value="9" \/>/,
@@ -2265,6 +2291,24 @@ describe('the bot texts pages (#300)', () => {
     expect(removed.body).toContain(TEXTS.botTextsNotice.removed);
     const junk = await get('/admin/bot-texts?notice=toString', withCookie);
     expect(junk.body).not.toContain('class="notice"');
+
+    const republished = await get(
+      `/admin/bot-texts?notice=republished&publish=${SAMPLE_PUBLISHED_QUERY}`,
+      withCookie,
+    );
+    expect(republished.body).toContain(TEXTS.botTextsNotice.republished);
+    expect(republished.body).toMatch(
+      /<li>\s*Меню команд \(setMyCommands\):\s*опубликовано\s*<\/li>/,
+    );
+    expect(republished.body).toMatch(
+      /<li class="error">\s*Описание бота \(setMyDescription\):\s*ошибка — GrammyError, Telegram 400\s*<\/li>/,
+    );
+    expect(republished.body).toContain(TEXTS.botProfilePublishFailedHint);
+    expect(republished.body).not.toMatch(/<style|<script/);
+    for (const query of ['publish=junk', 'publish=setMyCommands%3Aok&publish=setMyCommands%3Aok']) {
+      const ignored = await get(`/admin/bot-texts?notice=republished&${query}`, withCookie);
+      expect(ignored.body).not.toContain('class="publish"');
+    }
 
     await rebuild({ botTexts: async () => ({ me: SAMPLE_ME, overrides: [] }) });
     const empty = await get('/admin/bot-texts', withCookie);
@@ -2317,24 +2361,44 @@ describe('the bot texts pages (#300)', () => {
     );
   });
 
-  it('W3 keeps a commands key read-only and answers a key outside the catalog with a 404', async () => {
-    await rebuild({
-      botText: async (token, key) => {
-        calls.botText.push([token, key]);
-        return {
-          me: SAMPLE_ME,
-          text: { key: 'startCommand', override: null, rejection: null, fragments: [] },
-        };
-      },
-    });
-    const readOnly = await get('/admin/bot-texts/startCommand', withCookie);
-    expect(readOnly.body).toContain(TEXTS.botTextReadOnly);
-    expect(readOnly.body).not.toContain('<form method="post" action="/admin/bot-texts');
+  it('W3 edits a commands or a profile key with «Опубликовать заново», and 404s a key outside the catalog', async () => {
+    const editorOf = async (key: string) => {
+      await rebuild({
+        botText: async (token, asked) => {
+          calls.botText.push([token, asked]);
+          return { me: SAMPLE_ME, text: { key, override: null, rejection: null, fragments: [] } };
+        },
+      });
+      return (await get(`/admin/bot-texts/${key}`, withCookie)).body;
+    };
+    const start = await editorOf('startCommand');
+    expect(start).toContain('<textarea');
+    expect(start).toContain('action="/admin/bot-texts/startCommand/save"');
+    expect(start).toContain('<form method="post" action="/admin/bot-texts/startCommand/publish">');
+    expect(start).toContain(TEXTS.botProfileCommandHint);
+    const profile = await editorOf('profileDescription');
+    expect(profile).toContain('action="/admin/bot-texts/profileDescription/publish"');
+    expect(profile).toContain(TEXTS.botProfileProfileHint);
+    expect(profile).not.toContain(TEXTS.botProfileCommandHint);
+    await rebuild({});
+    const welcome = (await get('/admin/bot-texts/welcome', withCookie)).body;
+    expect(welcome).not.toContain('/publish"');
+    expect(welcome).not.toContain(TEXTS.botProfileCommandHint);
+
+    const shown = await get(
+      `/admin/bot-texts/welcome?notice=published&publish=setMyCommands%3AHttpError.ETIMEDOUT`,
+      withCookie,
+    );
+    expect(shown.body).toContain(TEXTS.botTextNotice.published);
+    expect(shown.body).toContain('ошибка — HttpError (ETIMEDOUT)');
 
     const missing = await get('/admin/bot-texts/zzz', withCookie);
     expect(missing.statusCode).toBe(404);
     expect(missing.body).toContain(TEXTS.botTextNotFoundTitle);
-    expect(calls.botText).toEqual([[TOKEN, 'startCommand']]);
+    expect(calls.botText).toEqual([
+      [TOKEN, 'welcome'],
+      [TOKEN, 'welcome'],
+    ]);
   });
 
   it('W4 previews: CRLF normalized, the bubble converted, the draft kept, no inline style or script', async () => {
@@ -2431,6 +2495,31 @@ describe('the bot texts pages (#300)', () => {
       [TOKEN, 'welcome', { source: 'Привет', expectedVersion: 7 }],
     ]);
 
+    for (const [published, publish] of [
+      [[{ method: 'setMyCommands', ok: true }], 'setMyCommands%3Aok'],
+      [
+        [
+          {
+            method: 'setMyCommands',
+            ok: false,
+            err: { name: 'GrammyError' },
+            cause: { name: 'Error' },
+            telegramErrorCode: 400,
+          },
+        ],
+        'setMyCommands%3AGrammyError%3A400',
+      ],
+    ] as const) {
+      await rebuild({
+        saveBotText: async () => answering({ outcome: 'saved', version: 8, published }),
+      });
+      const response = await post('/admin/bot-texts/startCommand/save', form(), withCookie);
+      expect([response.statusCode, response.headers.location]).toEqual([
+        303,
+        `/admin/bot-texts/startCommand?notice=published&publish=${publish}`,
+      ]);
+    }
+
     const outcomes: [Record<string, unknown>, number, string][] = [
       [{ outcome: 'unchanged' }, 200, TEXTS.botTextNotice.unchanged],
       [
@@ -2443,7 +2532,6 @@ describe('the bot texts pages (#300)', () => {
         400,
         'Пустой текст',
       ],
-      [{ outcome: 'read_only' }, 400, TEXTS.botTextReadOnly],
     ];
     for (const [outcome, status, shown] of outcomes) {
       await rebuild({ saveBotText: async () => answering(outcome) });
@@ -2467,6 +2555,23 @@ describe('the bot texts pages (#300)', () => {
 
     await rebuild({
       resetBotText: async () =>
+        answering({
+          outcome: 'reset',
+          published: [{ method: 'setMyShortDescription', ok: true }],
+        }),
+    });
+    const published = await post(
+      '/admin/bot-texts/profileShortDescription/reset',
+      { version: '7' },
+      withCookie,
+    );
+    expect([published.statusCode, published.headers.location]).toEqual([
+      303,
+      '/admin/bot-texts/profileShortDescription?notice=reset_published&publish=setMyShortDescription%3Aok',
+    ]);
+
+    await rebuild({
+      resetBotText: async () =>
         answering({ outcome: 'version_conflict', currentVersion: 12, currentSource: 'Чужой' }),
     });
     const conflict = await post('/admin/bot-texts/welcome/reset', { version: '7' }, withCookie);
@@ -2487,6 +2592,7 @@ describe('the bot texts pages (#300)', () => {
             outcome,
             currentVersion: 10,
             currentSource: 'x',
+            published: [],
           } as never;
         },
       });
@@ -2555,5 +2661,48 @@ describe('the bot texts pages (#300)', () => {
     const all = lines.join('\n');
     expect(all).toContain('the bot text write outcome is unknown');
     expect(all).not.toContain('СЕКРЕТНЫЙ-ЧЕРНОВИК');
+
+    // #361: a commands key may have been saved and published, or not
+    const publishing = await post('/admin/bot-texts/startCommand/save', form(), withCookie);
+    expect(publishing.statusCode).toBe(500);
+    expect(publishing.body).toContain(TEXTS.botProfileWriteOutcomeUnknown);
+  });
+
+  it('W10 republishes from the list and from an editor, back to the same page with the result', async () => {
+    const fromList = await post('/admin/bot-texts/publish', {}, withCookie);
+    expect([fromList.statusCode, fromList.headers.location]).toEqual([
+      303,
+      `/admin/bot-texts?notice=republished&publish=${SAMPLE_PUBLISHED_QUERY}`,
+    ]);
+    const fromEditor = await post('/admin/bot-texts/profileDescription/publish', {}, withCookie);
+    expect([fromEditor.statusCode, fromEditor.headers.location]).toEqual([
+      303,
+      `/admin/bot-texts/profileDescription?notice=republished&publish=${SAMPLE_PUBLISHED_QUERY}`,
+    ]);
+    expect(calls.publishBotProfile).toEqual([TOKEN, TOKEN]);
+
+    for (const key of ['welcome', 'zzz', 'not-a-key']) {
+      const refused = await post(`/admin/bot-texts/${key}/publish`, {}, withCookie);
+      expect(refused.statusCode).toBe(404);
+    }
+    expect(calls.publishBotProfile).toEqual([TOKEN, TOKEN]);
+
+    const malformed = await post('/admin/bot-texts/publish', {}, { [SESSION_COOKIE]: 'short' });
+    expect([malformed.statusCode, malformed.headers.location]).toEqual([302, '/admin/login']);
+
+    for (const failure of [new BackendError(BackendErrorCode.Unreachable), httpFailure(500)]) {
+      await rebuild({ publishBotProfile: async () => Promise.reject(failure) });
+      const unknown = await post('/admin/bot-texts/publish', {}, withCookie);
+      expect(unknown.statusCode).toBe(500);
+      expect(unknown.body).toContain(TEXTS.botProfileOutcomeUnknown);
+    }
+    expect(lines.join('\n')).toContain('the bot profile publish outcome is unknown');
+
+    await rebuild({
+      publishBotProfile: async () =>
+        Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+    });
+    const gone = await post('/admin/bot-texts/publish', {}, withCookie);
+    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
   });
 });
