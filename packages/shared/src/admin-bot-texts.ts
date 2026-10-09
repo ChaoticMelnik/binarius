@@ -2,6 +2,7 @@ import * as z from 'zod';
 import { adminMeSchema } from './admin';
 import { BotTextKind, type BotTextSource } from './bot-text-template';
 import {
+  BOT_PROFILE_METHODS,
   BOT_TEXT_KEY_PATTERN,
   BOT_TEXT_OVERRIDES_MAX,
   BOT_TEXT_SOURCE_MAX,
@@ -175,6 +176,51 @@ export const adminBotTextResetResponseSchema = z.discriminatedUnion('outcome', [
 ]);
 export type AdminBotTextResetResponse = z.infer<typeof adminBotTextResetResponseSchema>;
 
+// An error's name or code the result carries; adminBotProfileIdentity holds one to it.
+export const ADMIN_BOT_PROFILE_IDENTITY_MAX = 128;
+const identity = z.strictObject({
+  name: z.string().min(1).max(ADMIN_BOT_PROFILE_IDENTITY_MAX),
+  code: z.string().min(1).max(ADMIN_BOT_PROFILE_IDENTITY_MAX).optional(),
+});
+type Identity = z.infer<typeof identity>;
+
+// The outcome of one Bot API call of a publish (#361): identity only (rule 8), no description.
+export const adminBotProfileMethodResultSchema = z.discriminatedUnion('ok', [
+  z.strictObject({ method: z.enum(BOT_PROFILE_METHODS), ok: z.literal(true) }),
+  z.strictObject({
+    method: z.enum(BOT_PROFILE_METHODS),
+    ok: z.literal(false),
+    err: identity,
+    cause: identity.optional(),
+    telegramErrorCode: z.int().min(100).max(599).optional(),
+  }),
+]);
+export type AdminBotProfileMethodResult = z.infer<typeof adminBotProfileMethodResultSchema>;
+// [] when the key publishes nothing; at most one result a method
+export const adminBotProfilePublishedSchema = z
+  .array(adminBotProfileMethodResultSchema)
+  .max(BOT_PROFILE_METHODS.length);
+
+export const adminBotProfilePublishResponseSchema = z.strictObject({
+  me: strictMe,
+  published: adminBotProfilePublishedSchema,
+});
+export type AdminBotProfilePublishResponse = z.infer<typeof adminBotProfilePublishResponseSchema>;
+
+const clipIdentity = (value: string) => value.slice(0, ADMIN_BOT_PROFILE_IDENTITY_MAX);
+
+/**
+ * An error identity as the wire takes it: errorIdentity puts no bound on a name or a code, and
+ * one the schema refuses would make web report a saved text's publish as unknown. The log keeps
+ * the identity as it was.
+ */
+export function adminBotProfileIdentity(value: { name: string; code?: string }): Identity {
+  const name = value.name === '' ? 'Error' : clipIdentity(value.name);
+  return value.code === undefined || value.code === ''
+    ? { name }
+    : { name, code: clipIdentity(value.code) };
+}
+
 export const safeParseAdminBotTextsResponse = (input: unknown) =>
   adminBotTextsResponseSchema.safeParse(input);
 export const safeParseAdminBotTextResponse = (input: unknown) =>
@@ -191,6 +237,8 @@ export const safeParseAdminBotTextSaveResponse = (input: unknown) =>
   adminBotTextSaveResponseSchema.safeParse(input);
 export const safeParseAdminBotTextResetResponse = (input: unknown) =>
   adminBotTextResetResponseSchema.safeParse(input);
+export const safeParseAdminBotProfilePublishResponse = (input: unknown) =>
+  adminBotProfilePublishResponseSchema.safeParse(input);
 
 // An outcome the operation cannot give for this request (already_default from a save): ours to
 // fix, a 500. Only `name`, as every error here (rule 8).

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ADMIN_BOT_PROFILE_IDENTITY_MAX,
   ADMIN_BOT_TEXT_FRAGMENTS_MAX,
+  adminBotProfileIdentity,
+  adminBotProfilePublishedSchema,
+  adminBotProfilePublishResponseSchema,
   ADMIN_BOT_TEXT_REASON_MAX,
   adminBotTextReason,
   adminBotTextPreviewResponseSchema,
@@ -96,6 +100,63 @@ describe('the wire schemas', () => {
       adminBotTextSaveRequestSchema.safeParse({ source, expectedVersion: 0 }).success;
     expect(save('😀'.repeat(16384))).toBe(true);
     expect(save('😀'.repeat(16385))).toBe(false);
+  });
+});
+
+describe('the publish result (#361)', () => {
+  const ok = { method: 'setMyCommands', ok: true } as const;
+  const failed = {
+    method: 'setMyDescription',
+    ok: false,
+    err: { name: 'GrammyError' },
+    telegramErrorCode: 400,
+  } as const;
+  const timedOut = {
+    method: 'setMyShortDescription',
+    ok: false,
+    err: { name: 'HttpError' },
+    cause: { name: 'AbortError', code: 'ETIMEDOUT' },
+  } as const;
+  const parses = (published: unknown) =>
+    adminBotProfilePublishedSchema.safeParse(published).success;
+
+  it('S6 takes one result a method by identity, and refuses what the backend grew', () => {
+    expect(parses([])).toBe(true);
+    expect(parses([ok, failed, timedOut])).toBe(true);
+    expect(parses([{ ...failed, description: 'Bad Request: SECRET' }])).toBe(false);
+    expect(parses([{ ...ok, method: 'deleteMyCommands' }])).toBe(false);
+    expect(parses([{ ...ok, err: { name: 'GrammyError' } }])).toBe(false);
+    expect(parses([{ ...ok, ok: 'true' }])).toBe(false);
+    expect(parses([{ ...failed, telegramErrorCode: 40 }])).toBe(false);
+    expect(parses([{ ...failed, err: { name: '' } }])).toBe(false);
+    expect(parses([{ ...failed, err: { name: 'E'.repeat(129) } }])).toBe(false);
+    expect(parses([ok, failed, timedOut, ok])).toBe(false);
+  });
+
+  it('S7 takes a republish answer with three results and refuses a key the backend grew', () => {
+    const answer = { me, published: [ok, failed, timedOut] };
+    expect(adminBotProfilePublishResponseSchema.safeParse(answer).success).toBe(true);
+    expect(
+      adminBotProfilePublishResponseSchema.safeParse({ ...answer, me: { ...me, x: 1 } }).success,
+    ).toBe(false);
+    expect(adminBotProfilePublishResponseSchema.safeParse({ me }).success).toBe(false);
+  });
+
+  it('S8 holds an identity to what the wire takes', () => {
+    const max = ADMIN_BOT_PROFILE_IDENTITY_MAX;
+    expect(adminBotProfileIdentity({ name: '' })).toEqual({ name: 'Error' });
+    expect(
+      adminBotProfileIdentity({ name: 'E'.repeat(max + 1), code: 'C'.repeat(max + 1) }),
+    ).toEqual({ name: 'E'.repeat(max), code: 'C'.repeat(max) });
+    expect(adminBotProfileIdentity({ name: 'HttpError', code: '' })).toEqual({ name: 'HttpError' });
+    expect(adminBotProfileIdentity({ name: 'string' })).toEqual({ name: 'string' });
+    expect(adminBotProfileIdentity({ name: 'GrammyError', code: 'E1' })).toEqual({
+      name: 'GrammyError',
+      code: 'E1',
+    });
+    for (const value of [{ name: '' }, { name: 'E'.repeat(max + 1), code: 'C'.repeat(max + 1) }]) {
+      expect(parses([{ ...failed, err: adminBotProfileIdentity(value) }])).toBe(true);
+    }
   });
 });
 
