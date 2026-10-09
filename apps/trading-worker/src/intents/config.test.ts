@@ -116,6 +116,24 @@ describe('timing constants', () => {
   });
 });
 
+describe('Redis persistence (#92)', () => {
+  // the lines of one service's block, up to the next two-space key
+  const serviceBlock = (service: string) => {
+    const lines = composeYaml.split('\n');
+    const start = lines.indexOf(`  ${service}:`);
+    const end = lines.findIndex((line, index) => index > start && /^ {2}\S/.test(line));
+    return lines.slice(start, end === -1 ? undefined : end);
+  };
+
+  it('runs Redis with AOF on a named volume', () => {
+    expect(composeServiceValue(composeYaml, 'redis', 'command')).toBe(
+      '["redis-server", "--appendonly", "yes"]',
+    );
+    expect(serviceBlock('redis')).toContain('      - redisdata:/data');
+    expect(composeYaml.split('\n')).toContain('  redisdata:');
+  });
+});
+
 // the same entry under backend is pinned in apps/backend/src/timing.test.ts
 describe('the session manager in the shutdown budget (#101)', () => {
   it('stops after the drain inside phase 1, and nothing it cannot cut outlasts phase 1', () => {
