@@ -141,10 +141,11 @@ function toSessionTrade(intent: SessionHistoryIntent): SessionTrade {
   return { kind: SessionTradeKind.Unresolved };
 }
 
-// docs/trading-session.md -> The pause after two losses (#379): the direction of the session's
-// last two trades when both are settled losses in it. A rejected intent is not a trade and is
-// skipped; any other intent (a tie, a win, manual_review, settled without a profit) breaks it.
+// docs/trading-session.md -> The pause after two losses (#379). A rejected intent between the two
+// losses is not a trade, so it neither breaks nor extends the streak. A trailing one was created
+// only once the pause had lifted, and a refusal is not a new loss to re-arm it on.
 export function pausedDirection(intents: readonly SessionHistoryIntent[]): TradeAction | undefined {
+  if (intents.at(-1)?.status === TradeIntentStatus.Rejected) return undefined;
   const trades = intents.filter((intent) => intent.status !== TradeIntentStatus.Rejected);
   const lastTwo = trades.slice(-2);
   if (lastTwo.length < 2) return undefined;

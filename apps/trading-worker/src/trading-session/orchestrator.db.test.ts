@@ -956,6 +956,36 @@ describe('the pause after two losses (#379)', () => {
     await orchestrator.stop();
   });
 
+  // #379 review m2: the intent after the second loss exists only because the pause had lifted
+  it('P9 a rejected intent after the lifted pause does not re-arm it', async () => {
+    const seed = await seedSession({ settings: sessionSettings({ trades: 10 }) });
+    let answer = signalTo(TradeAction.Down);
+    const orchestrator = orchestratorOf({ signals: signalsOf(() => answer) });
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    answer = { ok: true, response: noSignalAnswer() };
+    await orchestrator.tick();
+    expect((await sessionRow(seed.session.id)).lastSignalAction).toBeNull();
+
+    answer = signalTo(TradeAction.Down);
+    advance(CANDLE_WAIT);
+    await orchestrator.tick();
+    broker.rest.failNext('openTrade', { status: 400 });
+    expect(await processIntent((await intentsOf(seed.session.id)).at(-1)!.id)).toBe('rejected');
+
+    advance(CANDLE_WAIT);
+    await orchestrator.tick();
+    const intents = await intentsOf(seed.session.id);
+    expect(intents.map((i) => [i.action, i.status])).toEqual([
+      [TradeAction.Down, TradeIntentStatus.Settled],
+      [TradeAction.Down, TradeIntentStatus.Settled],
+      [TradeAction.Down, TradeIntentStatus.Rejected],
+      [TradeAction.Down, TradeIntentStatus.Queued],
+    ]);
+    expect(pauseLines(seed.session.id)).toEqual([]);
+    await orchestrator.stop();
+  });
+
   it('P6 a pair paying below the floor holds the session for retryMs and asks no signal', async () => {
     const seed = await seedSession();
     const signals = signalsOf();
@@ -1028,6 +1058,15 @@ describe('the pause after two losses (#379)', () => {
         loss(TradeAction.Up),
       ],
       TradeAction.Up,
+    ],
+    [
+      'a rejected intent after two losses',
+      [
+        loss(TradeAction.Up),
+        loss(TradeAction.Up),
+        intent(TradeAction.Up, TradeIntentStatus.Rejected, null),
+      ],
+      undefined,
     ],
   ])('P7 %s', (_, intents, expected) => {
     expect(pausedDirection(intents)).toBe(expected);

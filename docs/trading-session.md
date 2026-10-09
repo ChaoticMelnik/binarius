@@ -334,7 +334,10 @@ again until the orchestrator sees a decision that is not a signal in it (issue #
   being an intent that is not `rejected`; both `settled` with a linked profit below zero
   (`parseAmount(profit) < 0n`, the sizer's reading), in the same `action`. A tie, a win, a
   `manual_review` intent or a `settled` one without its profit breaks it (P7); a `rejected` intent
-  between the two is skipped (P5).
+  between the two is skipped (P5); after the second loss it ends the pause (P9): that intent was
+  created only once the pause had lifted (a `no_signal` cleared the column, or the signal changed),
+  and the rule re-arms on the next settled loss, not on a refusal. Two refusals in a row still stop
+  the session `rejected_twice` (E2), before the pause is checked.
 - **"The signal has not changed since"** is the column `last_signal_action`, written by the
   intent's own transaction when an intent is created (`createTradeIntent` with `session`), by the
   ending with NULL on `no_signal` and with the paused action on the pause — so a lost ending (the
