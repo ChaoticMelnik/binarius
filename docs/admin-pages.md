@@ -1,13 +1,14 @@
 # Admin pages
 
 Pages for support and debugging, behind the staff login ([staff-login.md](staff-login.md)). All
-but two are read-only: they write to no table other than `staff_sessions` (the session touch) and
+but three are read-only: they write to no table other than `staff_sessions` (the session touch) and
 `audit_log` (the record of the view). The exceptions submit a change, each in its own section
 below: «Сменить пароль» (#79), through the backend operation of #78, which writes `staff`, the
 staff member's other sessions and open challenges ([staff-login.md](staff-login.md) → Changing
-your own password); and «Тексты бота» (#300), which saves and resets the client bot's texts in
+your own password); «Тексты бота» (#300), which saves and resets the client bot's texts in
 `bot_text_overrides` through the writer of #299 ([bot-texts.md](bot-texts.md) → Overrides) and
-publishes the command menu and the profile to Telegram after such a write (#361). #107
+publishes the command menu and the profile to Telegram after such a write (#361); and «Корректировка
+токенов» on the user card (#246), which writes a `token_ledger` row and the balance in `users`. #107
 adds the overview, the user list with search, and
 the user card; #108 adds the intents list and the intent card; #330 adds the trading sessions
 list, the trading section of the user card and the breakdown of the overview by status; #109 adds
@@ -20,7 +21,8 @@ deposits list and the card's deposits section; #342 adds the broker accounts lis
 backend under the staff session — a `GET` for every read page, the `POST /admin/auth/password` of
 #78 for a password change (its own section below; its backend phases are in staff-login.md), a
 `POST /admin/bot-texts/:key/preview|save|reset` and `POST /admin/bot-texts/publish` for the bot
-texts (Bot texts below). A read page
+texts (Bot texts below), a `POST /admin/users/:id/tokens` for a token adjustment (Корректировка
+токенов below). A read page
 goes like this:
 
 1. `web` reads the `admin_session` cookie. A cookie of the wrong shape counts as none: it is
@@ -43,7 +45,9 @@ The reads lock nothing: `users`, `broker_accounts`, `trade_intents`, `trading_se
 touch is the only `UPDATE` of a read page. The password change is not a read: it locks the `staff`
 row first and
 writes under it (staff-login.md → Changing your own password). A bot text save or reset touches the
-session, then locks `bot_text_overrides` (Bot texts below).
+session, then locks `bot_text_overrides` (Bot texts below). A token adjustment touches the session,
+then locks the `users` row (Rule 5) and writes `token_ledger` and `users` (Корректировка токенов
+below).
 
 How `web` acts on a backend answer:
 
@@ -55,6 +59,7 @@ How `web` acts on a backend answer:
 | 404 `not_found` (user card) | 404 «Пользователь не найден»; the row is already written |
 | 404 `not_found` (intent card) | 404 «Заявка не найдена»; the row is already written |
 | 404 `not_found` (bot text) | 404 «Текст не найден»: web's catalog has a key the backend's lacks; the row is already written |
+| 404 `not_found` (token adjustment) | 404 «Пользователь не найден»; the row is already written, nothing else |
 | anything else | 500, cookie kept, the error logged by name and code |
 
 ## Pages
@@ -96,6 +101,7 @@ it received. What writes `users.updated_at`:
   the settlement of a trade, which the worker runs, trading sessions included
   (`trade-intent-ops.ts`);
 - `grantLinkBonus` (`link-bonus-ops.ts`);
+- `adjustTokens` — a staff member's token adjustment (`token-adjustment-ops.ts`, #246);
 - `upsertUser` on an OAuth login, insert only (`oauth-ops.ts`).
 
 So a user whose session trade just settled counts as active without touching the bot. The
@@ -138,7 +144,8 @@ The `users` row and its `broker_accounts`, newest first. Sections:
   bot cannot reach the user, notification level, demo stake (empty = «минимальная ставка
   брокера»), created and updated. The card only shows the notification level and the blocked
   time; what decides a send is still `deliverable()` (Rule 19).
-- **Токены** — balance, reserved, available (`balance - reserved`, computed in `bigint`).
+- **Токены** — balance, reserved, available (`balance - reserved`, computed in `bigint`), and under
+  them the «Корректировка» form (#246, its own section below).
 - **Брокерские аккаунты** — the account id (the uuid the ledger's «Основание» and the intent card
   print), broker id, address (a blank one is shown as «—»), partner client, status, revocation
   reason, halt and its reason, token expiry and rotation, created and updated: the same table as
@@ -167,6 +174,56 @@ a ledger row written or a deposit recorded in between may or may not show, and e
 at its moment — the balance in «Токены» and the rows of «Движения токенов» can disagree by such a
 row, and so can «Движения токенов» and «Депозиты». The sections are part of the
 card's read: they write no row of their own (the one `user_viewed` row stays as it was).
+
+### Корректировка токенов — `POST /admin/users/:id/tokens`
+
+The one write on the user card (#246): under «Токены», «Корректировка» — «Начислить» or «Списать»
+(radio, «Начислить» by default), a whole number of tokens from 1 to `TOKEN_ADJUSTMENT_MAX_TOKENS`
+(1000) and a mandatory «Причина» of 1 to `TOKEN_LEDGER_NOTE_MAX` (512) characters without control
+characters. A hidden field carries the balance the card showed. Any staff member with a live session
+may adjust, a user of any status; there is no second-staff confirmation and no role: the record is
+the `token_adjusted` row with the staff member as actor, and the reason in the ledger row.
+
+`web` turns the form into one signed `delta` (`-50` for «Списать» 50) and sends
+`{ delta, note, expectedBalance }`; the backend parses it with `adminTokenAdjustmentRequestSchema`
+(`packages/shared/src/admin.ts`) — `note` trimmed, both bounds through `checkTokenAdjustment`
+(`packages/shared/src/ledger.ts`), the same function the writer calls — and runs `adjustTokens`
+(`packages/db/src/token-adjustment-ops.ts`) in the `asStaff` transaction. The writer locks the
+`users` row `FOR NO KEY UPDATE` (the only lock, first in the Rule 5 order) and, under it:
+
+| Under the lock | Outcome | Written |
+|---|---|---|
+| no `users` row | `not_found` | the audit row only |
+| `token_balance ≠ expectedBalance` | `balance_changed` | the audit row only |
+| `token_balance + delta < token_reserved` | `insufficient_available` | the audit row only |
+| otherwise | `adjusted` | a `token_ledger` row (`kind = adjustment`, `balance_delta = delta`, `reserved_delta = 0`, `note`, no reference) and `users.token_balance += delta`, in the one transaction |
+
+The stale-balance check comes first: a refusal by a moved balance shows the fresh numbers, and only
+a deliberate retry meets the refusal by what is available. A debit can never go below the reserve
+of open intents (available = balance − reserved): their reserve is not touched, and no session or
+intent is stopped. A credit is never refused by the reserve. The `UPDATE` repeats the reserve check
+in its predicate as a backstop; with the lock held it cannot miss, and if it did the transaction
+throws (the cache and the ledger diverged). The limit is policy, not a CHECK: the database checks
+only the note (`token_ledger_adjustment_note_check`: present, 1–512 code points, for `adjustment`
+rows). The ledger row names no reference (`ref_type`/`ref_id` stay NULL): the audit row carries the
+ledger row's id (`ledgerEntryId`), which is how one finds who made it.
+
+The backend answers 200 on every outcome but `not_found` (404); `web` picks the status:
+
+| Backend | `web` |
+|---|---|
+| 200 `adjusted` | 303 to `/admin/users/<id>?notice=adjusted`: the card with «Токены скорректированы.» over the form |
+| 200 `insufficient_available` | 409: the card from the answer, «Недостаточно доступных токенов: доступно N…», the form as sent |
+| 200 `balance_changed` | 409: the card from the answer, «Баланс изменился с момента открытия карточки: сейчас N…», the form as sent |
+| 404 `not_found` | 404 «Пользователь не найден» |
+| 401 `session_invalid` | cookie cleared, 302 to login |
+| not answered, a 2xx outside the contract, a 5xx | 500 «Результат неизвестен»: the adjustment may have committed — open the card, its balance and the first row of «Движения токенов» show it; do not send the form again before checking |
+| any other 4xx | 500, our own failure |
+
+A 409 page carries the balance of the answer it was built from in the hidden field, on purpose: the
+next send is checked against what the staff member now sees. Sending one form twice (a double click,
+two tabs, two staff members on one card) gets `balance_changed` the second time; a reload after the
+303 repeats the `GET`, not the `POST`. Nothing tells the user: there is no notification.
 
 ### Intents — `GET /admin/intents?status=&mode=&user=&session=&cursor=`
 
@@ -228,7 +285,7 @@ other lists: one `SELECT` joined to `users` for the Telegram id. Columns: the ti
 owner's Telegram id (a link to the user card), the kind as its code, the change of the balance and
 of the reserve, the reference, the note. The changes are the stored `bigint`s printed with their
 sign (`release` and `settle` move the reserve down, an `adjustment` either way); nothing is computed
-from them. A note is printed as text, an empty one as «—».
+from them. A note is printed as text, a missing (null) one as «—».
 
 **Основание** is the one reference a row may carry (`token_ledger_reference_check`): an intent is a
 link to its card; a deposit is printed as its id (the deposits list has no filter by id); a broker
@@ -248,10 +305,11 @@ positions, it does not filter, as on the intents list. The form, the next and fi
 redirect and the request to the backend go through `adminTokensSearchParams`
 (`packages/shared/src/admin.ts`), in the order `user, kind, cursor`.
 
-What the page shows on production: the reserve of every intent and its `release` or `settle`, and
-the starter `bonus` of a linked account (with the account id). `purchase` (#117) and `adjustment`
-(#246) have no writer yet. The page only shows rows: it does not compare their sum with the cached
-balance in `users` — keeping that equal is the writers' rule (Rule 2), not something a view checks.
+What the page shows on production: the reserve of every intent and its `release` or `settle`, the
+starter `bonus` of a linked account (with the account id), and the `adjustment` rows the card's form
+writes (#246). `purchase` (#117) has no writer yet. The page only shows rows: it does not compare
+their sum with the cached balance in `users` — keeping that equal is the writers' rule (Rule 2), not
+something a view checks.
 
 ### Deposits — `GET /admin/deposits?user=&status=&cursor=`
 
@@ -547,6 +605,9 @@ named and bounded; nothing else is recorded.
 | bot text reset, written | `bot_text_reset` | `bot_text` | the same with `result: 'reset'`; an orphan's `oldText` is the row's text and its `newText` is `null`, as from the CLI |
 | bot text save or reset, refused | `bot_text_saved` / `bot_text_reset` | `bot_text` | `{ path, key?, result }` — `version_conflict`, `unchanged`, `already_default`, `refused` or `not_found`; no text |
 | the command menu or the profile published (#361) | `bot_profile_published` | `bot_text` | `{ path, trigger, key?, methods }` — `trigger` is `save`, `reset` or `republish`; `key` only for a save or reset; `methods` is the `published` of the answer |
+| token adjustment, applied (#246) | `token_adjusted` | `user`, the id | `{ path: '/admin/users/:id/tokens', result: 'adjusted', userId, ledgerEntryId, delta, note, balanceBefore, balanceAfter, reserved }` — the amounts as decimal strings |
+| token adjustment, refused | `token_adjusted` | `user`, the id | `{ path, result, userId, delta, expectedBalance, balance, reserved }` — `result` is `insufficient_available` or `balance_changed`; no `note`: it was written nowhere |
+| token adjustment, no user | `token_adjusted` | — | `{ path, result: 'not_found', userId }`; an id that is not a uuid (direct backend call): `{ path, result: 'not_found' }` |
 
 A bot text row has `entity_type = 'bot_text'` and `entity_id = NULL`, like the CLI's (a key is not a
 uuid), so the audit page finds them by `entityType=bot_text`. Every request writes one row, with
@@ -588,7 +649,10 @@ What `web` refuses before asking the backend, with no row:
   `STAFF_PASSWORD_MAX_LENGTH`, equal to each other) → 400 with the form, no backend call;
 - a bot text key not in the catalog (a key not matching `BOT_TEXT_KEY_PATTERN` on a reset) → 404;
   a bot text form outside its shape (a field given twice, a version that is not digits, a text over
-  `BOT_TEXT_SOURCE_MAX` code points) → 400.
+  `BOT_TEXT_SOURCE_MAX` code points) → 400;
+- a token adjustment for a user id that is not a uuid → 404; a form outside its shape or the shared
+  schema (a field given twice, an unknown direction, an amount that is not 1–1000 without a leading
+  zero, a blank or over-long reason, a control character, no balance) → 400 with the message.
 
 An empty value (`q=`, `status=` from the form's empty option, a typed `halted=`) is no parameter: the whole list. Unknown query keys (`utm_*`, a
 bookmark's leftovers) are dropped on both sides.
@@ -596,7 +660,8 @@ bookmark's leftovers) are dropped on both sides.
 What the backend refuses before the session, with no row: a bad bearer (401 `unauthorized`), a
 session token of the wrong shape (401 `session_invalid`), a list query outside the schema (400
 `validation`), a bot text body outside its schema (400 `validation`) or over
-`ADMIN_BOT_TEXT_BODY_LIMIT_BYTES` (413). A card id that is not a uuid is checked *inside* the
+`ADMIN_BOT_TEXT_BODY_LIMIT_BYTES` (413), a token adjustment body outside its schema (400
+`validation`) or over 4 KiB (413). A card id that is not a uuid is checked *inside* the
 session, so the attempt leaves a row, without the id; so is a bot text key.
 
 Not enforced by code: a new route in `apps/backend/src/admin/routes.ts` must go through `asStaff`.
@@ -628,6 +693,14 @@ who pressed the button even if the session is revoked between the check and the 
   `SELECT`s (the user card).
 - The password change is one backend call under the same timeout; a timeout shows «Результат
   неизвестен» — the change may have committed.
+- A token adjustment: at most `TOKEN_ADJUSTMENT_MAX_TOKENS` (1000) tokens either way per request and
+  a reason of at most `TOKEN_LEDGER_NOTE_MAX` (512) code points, both in `packages/shared/src/ledger.ts`;
+  no limit on how many adjustments. It waits for the `users` row while a writer of that user holds it
+  — the short transactions of `createInTransaction`, `rejectIntent`, `settleIntent`,
+  `confirmBrokerAccount`, `setNotificationLevel`, `markTelegramBlocked`, milliseconds — with no
+  timeout of its own; `BACKEND_REQUEST_TIMEOUT_MS` bounds what `web` waits for, and a timeout is
+  «Результат неизвестен». A refusal reads the card in the same transaction: the card's six `SELECT`s
+  under the lock.
 - The audit log: `audit_log_created_at_idx` serves the order and the dates, `audit_log_entity_idx`
   the filter by entity (the link from the user card); `action` and `actorId` have no index and scan.
   Assumed: up to 1 000 000 rows; if `explain analyze` of a page passes 200 ms there, add an index on
@@ -728,6 +801,14 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `seed <script>` as text; the bonus with the account id. `?kind=bonus` — one row. The user card:
    «Токены» — balance 7; «Движения токенов» — both rows, and «Все записи →» opens the list filtered
    by this user. `?kind=bogus` — 400, the form, no «Выйти».
+   Then a token adjustment on the card (#246): under «Токены», «Корректировка». «Начислить» 50,
+   reason «Проверка» → back on the card with «Токены скорректированы.», balance 57, and the first row
+   of «Движения токенов» an `adjustment` `50` with «—» in «Основание» and the note «Проверка».
+   «Списать» 1000 → 409 «Недостаточно доступных токенов: доступно 57», the form as typed. Open the
+   card in two tabs; in the first «Списать» 7 → balance 50; in the second send the old form → 409
+   «Баланс изменился с момента открытия карточки: сейчас 50». `/admin/tokens?kind=adjustment` — the
+   adjustments; the overview counts the user as «active now». «Аудит» → «Все события по пользователю
+   →»: `token_adjusted` rows, the applied one with `balanceBefore` `7` and `balanceAfter` `57`.
    Then two deposits — an unattributed postback (status by default `received`) and one of the user
    through its account (the owner-pair CHECK wants the account). There is no postback writer yet
    (#141/#142), so they are written directly; separate statements, so each row has its own `now()`:
@@ -801,6 +882,8 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `userId` — each only on its own request; `deposits_viewed` with `status`, with `userId`, or with
    only `path` — each only on its own request; `broker_accounts_viewed` with `"halted": true`, with
    `status` and `halted`, with `status`, or with only `path` — each only on its own request;
+   `token_adjusted` with `result` `adjusted` (with the note), `insufficient_available` and
+   `balance_changed` (without it), entity `user`;
    `audit_log_viewed` with `action`, with `entityType` and
    `entityId`, or with `from` and `to` — each only on its own request; still one `user_viewed` per
    opening of the card; `bot_texts_viewed`, `bot_text_viewed`, `bot_text_previewed`, a
