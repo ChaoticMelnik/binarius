@@ -65,7 +65,7 @@ Estimate from Step 4's file list, calibrated on this repo's actuals rather than 
 When the plan exhausts an open set — a `Record<Key, …>` over a catalog, a description per message, a case per status — list the In Progress and open-PR issues that add members to that set, and add their likely growth to the estimate. #299 (2026-10-07) was estimated at 2.7k against a catalog that #284 and then #297 extended while it was in flight: the PR grew to 3.4k, needed two size exceptions, and a whole review round went to describing #297's screens.
 
 - ≤ 2000 → proceed.
-- 2000-3000 → proceed only if no split yields parts that are each mergeable on their own; say why in the plan.
+- 2000-3000 → proceed only if no split yields parts that are each mergeable on their own; say why in the plan, and name the fallback split line the implementer uses if the actual diff passes 3000. Not a question to the owner (`.claude/CLAUDE.md` → Постоянные ответы владельца).
 - \> 3000 → split before the plan: each part is an independently mergeable issue that leaves `main` working, every acceptance criterion of the original lands in exactly one part. Create the parts with `/github` ("Create an issue" + "Add issue to Project #2"), rewrite this issue's body to the first part with links to the rest and their order, and plan only that first part. Report the split in the hand-off. The owner pre-authorized creating split issues without a separate confirmation (2026-09-30).
 
 ### Step 5: Clarifying questions (every issue)
