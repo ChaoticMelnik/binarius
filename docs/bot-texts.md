@@ -9,7 +9,8 @@ The catalog is part 1 of #240. Part 2 (#299) stores overrides in the database, a
 the bot and the backend without a deploy and edits them from a CLI ([Overrides](#overrides)). The
 admin section «Тексты бота» (#300) edits them too ([admin-pages.md](admin-pages.md) → Bot texts).
 Part 4 (#301) makes the command descriptions and the profile editable from the CLI and republishes
-them to Telegram when they change ([Publishing](#publishing)); the admin page does so in #361.
+them to Telegram when they change ([Publishing](#publishing)); the admin page edits and publishes
+them too (#361).
 
 Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the owner's decision of
 2026-10-02) and the Mini App pages (`apps/web/src/oauth/texts.ts`).
@@ -43,9 +44,10 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
 - `packages/db/src/bot-text-ops.ts` — the table's reader and its one writer;
   `apps/backend/src/cli/bot-text.ts` — the CLI; `apps/backend/src/bot-texts/routes.ts` — the bot's
   read; `apps/backend/src/bot-texts/publish.ts` — publishing the menu and the profile.
-- The admin section (#300): `packages/shared/src/admin-bot-texts.ts` (wire shapes, the admin's
-  read-only groups, `renderBotTextPreview`), `packages/db/src/admin-bot-text-ops.ts` (the read with
-  the writer's login), `apps/web/src/admin/telegram-preview.ts` (the preview as browser HTML).
+- The admin section (#300): `packages/shared/src/admin-bot-texts.ts` (wire shapes, the publish
+  result's shape, `renderBotTextPreview`), `packages/db/src/admin-bot-text-ops.ts` (the read with
+  the writer's login), `apps/web/src/admin/telegram-preview.ts` (the preview as browser HTML),
+  `apps/web/src/admin/publish-result.ts` (the publish result in the redirect, #361).
 
 ## An entry
 
@@ -312,8 +314,9 @@ writes. Every save and reset writes `audit_log` in the same transaction: `bot_te
 in effect before and after; a reset of a key outside the catalog records the row's text as
 `oldText`, the only copy there is. The admin's row adds `path` and `result`, and a refused admin
 request writes the same action with `result` and no texts (admin-pages.md → Audit actions). The
-admin also keeps `commands` and `profile` read-only by its own list,
-`ADMIN_BOT_TEXT_READ_ONLY_GROUPS`, until it republishes them (#361).
+admin publishes the command menu and the profile after a save or reset of their keys, as the CLI
+does, and records the result in its own row, `bot_profile_published` (admin-pages.md → Bot texts →
+Publishing).
 
 ## Loading
 
@@ -377,6 +380,10 @@ text of a request:
   (`setMyDescription` or `setMyShortDescription`): after the commit, only the method of that key.
   A save or reset that writes nothing publishes nothing.
 - **`bot-text publish`**: all three, for a failed publish or a row written by hand.
+- **The admin section (#361)**, the same two ways: after the commit of a save or reset of a key of
+  the two groups, only that key's method; «Опубликовать заново» (`POST /admin/bot-texts/publish`),
+  all three. Each writes `bot_profile_published` with the result by method (admin-pages.md → Bot
+  texts → Publishing).
 
 ```bash
 docker compose exec backend pnpm --filter @binarius/backend bot-text publish
@@ -394,15 +401,17 @@ saved — and other keys never need it.
 attempt per method, one call after another, each caught on its own, one result per method sent. It
 uses a bare grammY `Api` on the public bot's token, which polls nothing. Each call is bounded by
 `BOT_PROFILE_PUBLISH_TIMEOUT_MS` (2 s) and the three by `BOT_PROFILE_PUBLISH_BUDGET_MS` (6 s,
-`packages/shared`), the bound web sizes its request timeout against when the admin page publishes
-(#361). The backend's timing chain holds both. The CLI's publish is not audited; its save or reset
-is.
+`packages/shared`), the bound web's request timeout sits above, since the admin routes publish
+inside a request (`apps/web/src/timing.ts`, #361). The backend's timing chain holds both. The CLI's
+publish is not audited, its save or reset is; the admin's publish is (`bot_profile_published`).
+`BOT_PROFILE_METHODS` and `botProfileMethodsOf` live in `packages/shared/src/bot-text-overrides.ts`,
+for the backend and web alike; a new `profile` key does not compile until it names its method.
 
-The bot's start and a CLI run may publish at the same time. Both publish the resolved rows, and the
-last call wins. A save committed after the bot resolved its first load and before its
+The bot's start, a CLI run and the admin may publish at the same time. Each publishes the resolved
+rows, and the last call wins. A save committed after the bot resolved its first load and before its
 `setMyCommands` leaves the old menu in Telegram until the next publish. The CLI's own publish
 follows its commit, so a CLI run ends with its value in Telegram unless its publish failed, and
-then it says so.
+then it says so; the admin's does the same, and «Опубликовать заново» mends a menu left behind.
 
 ## Assembled messages
 
