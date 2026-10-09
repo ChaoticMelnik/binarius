@@ -11,6 +11,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import {
+  TradeAction,
   TradeMode,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -42,6 +43,9 @@ export const tradingSessions = pgTable(
     endedAt: timestamp('ended_at', { withTimezone: true }),
     // the order key of the runnable scan; NULL until the first attempt reached an ending
     lastDecisionAt: timestamp('last_decision_at', { withTimezone: true }),
+    // the direction of the last attempt that decided anything, NULL after a no_signal or before
+    // any decision: the pause after two losses holds while it stays the losing direction (#379)
+    lastSignalAction: text('last_signal_action').$type<TradeAction>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -53,6 +57,7 @@ export const tradingSessions = pgTable(
     inList('trading_sessions_mode_check', t.mode, TradeMode),
     inList('trading_sessions_status_check', t.status, TradingSessionStatus),
     inList('trading_sessions_stop_reason_check', t.stopReason, TradingSessionStopReason),
+    inList('trading_sessions_last_signal_action_check', t.lastSignalAction, TradeAction),
     // Two CHECKs, not one: a single `(stopped) = (reason and end)` accepts paused/reason/NULL and
     // active/NULL/now, because false = false holds. Each pair alone pins its column to `stopped`.
     check(

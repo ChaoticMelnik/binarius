@@ -2523,6 +2523,29 @@ describe('trading_sessions (#130)', () => {
     });
   });
 
+  // #379: the pause after two losses reads the direction the last deciding attempt saw
+  it.each([null, 'up', 'down'] as const)('accepts last_signal_action %s', async (action) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradingSessions)
+        .values(session(seed.accountId, { lastSignalAction: action }))
+        .returning();
+      expect(row!.lastSignalAction).toBe(action);
+    });
+  });
+
+  it.each(['bogus', ''])('rejects last_signal_action %j', async (action) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(tradingSessions).values(session(seed.accountId, { lastSignalAction: action })),
+        '23514',
+        'trading_sessions_last_signal_action_check',
+      );
+    });
+  });
+
   it.each([
     ['active', null, false],
     ['stopped', 'completed', true],

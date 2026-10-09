@@ -514,6 +514,17 @@ describe('listRunnableSessions', () => {
     expect(ids).toContain(within.id);
     expect(ids).not.toContain(expired.id);
   });
+
+  it('R5 carries last_signal_action: NULL after insert, the value once written (#379)', async () => {
+    const seed = await seedSessionAccount();
+    const listed = async () =>
+      (await listRunnableSessions(tmp.db, { limit: 1000, maxDurationMs: HOUR_MS })).find(
+        (s) => s.id === seed.session.id,
+      );
+    expect(await listed()).toMatchObject({ lastSignalAction: null });
+    await markSessionDecision(tmp.db, { id: seed.session.id, signalAction: TradeAction.Down });
+    expect(await listed()).toMatchObject({ lastSignalAction: 'down' });
+  });
 });
 
 describe('the stop sweeps', () => {
@@ -651,12 +662,20 @@ describe('readSessionHistory', () => {
       intents: [
         {
           id: first.id,
+          action: 'up',
           status: 'settled',
           amount: '1.00000000',
           profit: '0.82000000',
           lastError: null,
         },
-        { id: second.id, status: 'queued', amount: '1.00000000', profit: null, lastError: null },
+        {
+          id: second.id,
+          action: 'down',
+          status: 'queued',
+          amount: '1.00000000',
+          profit: null,
+          lastError: null,
+        },
       ],
     });
     expect(
@@ -705,6 +724,38 @@ describe('stopTradingSession and markSessionDecision', () => {
     await tmp.db.execute(sql`select pg_sleep(0.01)`);
     await markSessionDecision(tmp.db, { id: stopped.session.id });
     expect((await sessionOf(stopped.session.id))!.lastDecisionAt).toEqual(row.lastDecisionAt);
+  });
+
+  // #379: the pause's memory, written at every deciding ending
+  it('D2 signalAction sets last_signal_action', async () => {
+    const seed = await seedSessionAccount();
+    await markSessionDecision(tmp.db, { id: seed.session.id, signalAction: TradeAction.Up });
+    expect((await sessionOf(seed.session.id))!.lastSignalAction).toBe('up');
+  });
+
+  it('D3 signalAction null clears it', async () => {
+    const seed = await seedSessionAccount();
+    await markSessionDecision(tmp.db, { id: seed.session.id, signalAction: TradeAction.Up });
+    await markSessionDecision(tmp.db, { id: seed.session.id, signalAction: null });
+    expect((await sessionOf(seed.session.id))!.lastSignalAction).toBeNull();
+  });
+
+  it('D4 without signalAction the column is left as it was', async () => {
+    const seed = await seedSessionAccount();
+    await markSessionDecision(tmp.db, { id: seed.session.id, signalAction: TradeAction.Down });
+    const before = (await sessionOf(seed.session.id))!.lastDecisionAt!;
+    await tmp.db.execute(sql`select pg_sleep(0.01)`);
+    await markSessionDecision(tmp.db, { id: seed.session.id });
+    const row = (await sessionOf(seed.session.id))!;
+    expect(row.lastSignalAction).toBe('down');
+    expect(row.lastDecisionAt!.getTime()).toBeGreaterThan(before.getTime());
+  });
+
+  it('D5 a stopped session is not written', async () => {
+    const seed = await seedSessionAccount();
+    await stopTradingSession(tmp.db, { id: seed.session.id, reason: 'timeout' });
+    await markSessionDecision(tmp.db, { id: seed.session.id, signalAction: TradeAction.Up });
+    expect((await sessionOf(seed.session.id))!.lastSignalAction).toBeNull();
   });
 });
 
