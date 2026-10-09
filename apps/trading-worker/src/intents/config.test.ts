@@ -13,6 +13,7 @@ import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-confi
 import { BROKER_SOCKET_CONNECT_TIMEOUT_MS } from '../broker/socket-config';
 import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 import {
+  BALANCE_CHECK_TIMEOUT_MS,
   CATCHUP_ATTEMPT_TIMEOUT_MS,
   CATCHUP_BATCH_SIZE,
   CATCHUP_GRACE_MS,
@@ -85,12 +86,21 @@ describe('timing constants', () => {
 
   it('keep the worst case of broker GETs within the worker share of the IP limit (#90)', () => {
     expect(WORKER_BROKER_GETS_WORST_CASE).toBe(
-      RECONCILE_BATCH_SIZE * 2 * RECONCILE_MAX_TRADE_PAGES * (60_000 / RECONCILE_TICK_MS) +
+      RECONCILE_BATCH_SIZE * (2 * RECONCILE_MAX_TRADE_PAGES + 1) * (60_000 / RECONCILE_TICK_MS) +
         CATCHUP_BATCH_SIZE * CATCHUP_MAX_TRADE_PAGES * (60_000 / CATCHUP_TICK_MS),
     );
     expect(WORKER_BROKER_GETS_WORST_CASE).toBeLessThanOrEqual(WORKER_BROKER_GETS_PER_MINUTE);
     expect(Number.isInteger(60_000 / CATCHUP_TICK_MS)).toBe(true);
     expect(Number.isInteger(60_000 / RECONCILE_TICK_MS)).toBe(true);
+  });
+
+  it('keep the balance check inside its budget and the reconciliation batch at 16 (#92)', () => {
+    // with the balance GET a batch of 20 would be 20 * 5 * 4 + 72 = 472 > 400
+    expect(RECONCILE_BATCH_SIZE).toBe(16);
+    expect(ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS).toBeLessThan(
+      BALANCE_CHECK_TIMEOUT_MS,
+    );
+    expect(BALANCE_CHECK_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   // #313: a 5 s trade with no close event settles by grace + one tick, not minutes later
