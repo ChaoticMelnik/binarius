@@ -138,6 +138,7 @@ beforeAll(async () => {
   };
   manager = createBrokerSessionManager({
     url: broker.url,
+    deadLetters: { add: () => Promise.resolve() },
     candidates: (options) => listSessionCandidates(db, options),
     tokens: {
       accessToken: (): Promise<AccessTokenOutcome> => {

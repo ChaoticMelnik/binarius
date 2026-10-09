@@ -16,6 +16,7 @@ import {
   type AccessTokenOptions,
   type AccessTokenOutcome,
 } from './access-token';
+import type { DeadLetter, DeadLetterSink } from '../intents/consumer';
 import type { BrokerEvent } from './events';
 import type { SessionManagerConfig } from './session-config';
 import {
@@ -96,6 +97,7 @@ interface HarnessOptions {
   tokens?: (accountId: string, options: AccessTokenOptions) => Promise<AccessTokenOutcome>;
   writers?: (writes: Write[]) => SessionWriters;
   openClient?: (options: BrokerSocketClientOptions) => BrokerSocketClient;
+  deadLetters?: DeadLetterSink;
 }
 
 function recordingWriters(writes: Write[]): SessionWriters {
@@ -129,8 +131,15 @@ function harness(options: HarnessOptions = {}) {
   const candidateCalls: (readonly string[])[] = [];
   const tokenCalls: { accountId: string; options: AccessTokenOptions }[] = [];
   const writes: Write[] = [];
+  const deadLetters: DeadLetter[] = [];
   const manager = createBrokerSessionManager({
     url: broker.url,
+    deadLetters: options.deadLetters ?? {
+      add: (_name, entry) => {
+        deadLetters.push(entry);
+        return Promise.resolve();
+      },
+    },
     candidates: ({ exclude }) => {
       candidateCalls.push(exclude);
       if (state.failCandidates) return Promise.reject(new Error('database down'));
@@ -155,6 +164,7 @@ function harness(options: HarnessOptions = {}) {
     candidateCalls,
     tokenCalls,
     writes,
+    deadLetters,
     lines,
     logs: (msg: string) =>
       lines.map((line) => JSON.parse(line) as LogEntry).filter((entry) => entry.msg === msg),
@@ -704,6 +714,50 @@ describe('the identity gate and the writers', () => {
     ]);
     broker.socket.emitRaw({ userId: 1 }, 'user.demo.update_balance', balanceWire('5.00'));
     await until('the balance write', () => h.writes.length === 1);
+    expect(h.deadLetters).toEqual([
+      {
+        source: 'user_data',
+        accountId: 'acc-1',
+        mode: null,
+        brokerTradeIds: [],
+        reason: 'processing_failed',
+        failedAt: expect.any(String),
+      },
+    ]);
+  });
+
+  it('U10b every throwing writer leaves its event in the dead-letter queue, ids only (#92)', async () => {
+    const h = harness({
+      writers: (writes) => ({
+        ...recordingWriters(writes),
+        balanceEvent: () => Promise.reject(new Error('connection terminated')),
+        closedTrades: () => Promise.reject(new Error('connection terminated')),
+      }),
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await readyFor(h, 'acc-1');
+    broker.socket.emitRaw({ userId: 1 }, 'user.demo.update_balance', balanceWire('5.00'));
+    broker.socket.emitRaw({ userId: 1 }, 'user.demo.close_trade.success', {
+      trades: [closedWire(71), closedWire(72)],
+    });
+    await until('two dead letters', () => h.deadLetters.length === 2);
+    expect(h.deadLetters).toEqual([
+      expect.objectContaining({
+        source: 'update_balance',
+        accountId: 'acc-1',
+        mode: 'demo',
+        brokerTradeIds: [],
+      }),
+      expect.objectContaining({
+        source: 'close_trade_success',
+        accountId: 'acc-1',
+        mode: 'demo',
+        brokerTradeIds: ['71', '72'],
+      }),
+    ]);
+    const text = JSON.stringify(h.deadLetters);
+    for (const amount of ['5.00', '1.50', '1.27']) expect(text).not.toContain(amount);
   });
 
   it('warns once per connection and source when a balance is not written', async () => {
@@ -920,6 +974,33 @@ describe('sessionFor, stop() and the tick', () => {
     await until('no socket', () => broker.socket.sockets().length === 0);
     expect(h.writes).toEqual([]);
     expect(h.manager.size).toBe(0);
+  });
+
+  it('U12c stop() waits for a dead-letter write in flight (#92)', async () => {
+    const sink = deferred<unknown>();
+    let added = 0;
+    const h = harness({
+      config: { stopBudgetMs: 2_000 },
+      writers: (writes) => ({
+        ...recordingWriters(writes),
+        snapshot: () => Promise.reject(new Error('connection terminated')),
+      }),
+      deadLetters: {
+        add: () => {
+          added += 1;
+          return sink.promise;
+        },
+      },
+    });
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await readyFor(h, 'acc-1');
+    await until('the dead-letter write in flight', () => added === 1);
+    const stopping = track(h.manager.stop());
+    await quiet();
+    expect(stopping.settled).toBe(false);
+    sink.resolve(undefined);
+    await until('stop() returned', () => stopping.settled);
   });
 
   it('U12b stop() waits for the write in flight when it ends within the budget', async () => {

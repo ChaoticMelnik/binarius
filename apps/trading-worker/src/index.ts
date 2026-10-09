@@ -1,7 +1,13 @@
+import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import pino from 'pino';
-import { errorLogFields, closeAll, logOptions } from '@binarius/shared';
+import {
+  errorLogFields,
+  closeAll,
+  logOptions,
+  TRADING_INTENTS_DEAD_LETTER_QUEUE,
+} from '@binarius/shared';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import {
   applyBalanceEvent,
@@ -41,7 +47,7 @@ import {
   SWEEP_INTERVAL_MS,
 } from './intents/config';
 import { createBalanceCheck } from './intents/balance-check';
-import { startIntentConsumer } from './intents/consumer';
+import { startIntentConsumer, type DeadLetter } from './intents/consumer';
 import { processIntentJob } from './intents/processor';
 import { createReconciliationPass, processReconciliationJob } from './intents/reconciliation';
 import { createRestReconciler } from './intents/rest-reconciler';
@@ -73,12 +79,18 @@ const tokens = createBackendAccessTokenSource({
 });
 
 // The broker sessions only with BROKER_WS_URL set (docs/broker-session.md); unset, every order
-// goes over REST.
-const sessions =
+// goes over REST. A writer that throws leaves its event in the consumers' dead-letter queue (#92):
+// its own instance, because the manager is built before the consumers.
+const sessionDeadLetters =
   env.brokerWsUrl === undefined
+    ? undefined
+    : new Queue<DeadLetter>(TRADING_INTENTS_DEAD_LETTER_QUEUE, { connection: redis });
+const sessions =
+  env.brokerWsUrl === undefined || sessionDeadLetters === undefined
     ? undefined
     : createBrokerSessionManager({
         url: env.brokerWsUrl,
+        deadLetters: sessionDeadLetters,
         candidates: (options) => listSessionCandidates(db, options),
         tokens,
         writers: {
@@ -229,6 +241,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     [
       () => consumer.dlq.close(),
       () => reconciliationConsumer.dlq.close(),
+      () => sessionDeadLetters?.close() ?? Promise.resolve(),
       () => redis.quit(),
       () => pool.end(),
     ],

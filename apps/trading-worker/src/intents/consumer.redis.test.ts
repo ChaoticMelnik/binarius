@@ -11,7 +11,15 @@ import {
   seedUnknownIntent,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { deadLetter, startIntentConsumer, type DeadLetter, type IntentConsumer } from './consumer';
+import {
+  deadLetter,
+  deadLetterSessionWrite,
+  startIntentConsumer,
+  type DeadLetter,
+  type IntentConsumer,
+  type JobDeadLetter,
+  type SessionDeadLetter,
+} from './consumer';
 import { InvalidJobError, processIntentJob } from './processor';
 import { processReconciliationJob } from './reconciliation';
 
@@ -85,7 +93,7 @@ async function withConsumer<T>(
   }
 }
 
-const dlqEntries = async (): Promise<DeadLetter[]> => {
+const allDlqEntries = async (): Promise<DeadLetter[]> => {
   const dlq = new Queue<DeadLetter>('trading-intents-dead-letter', { connection: redis, prefix });
   try {
     const jobs = await dlq.getJobs([
@@ -101,6 +109,8 @@ const dlqEntries = async (): Promise<DeadLetter[]> => {
     await dlq.close();
   }
 };
+const dlqEntries = async (): Promise<JobDeadLetter[]> =>
+  (await allDlqEntries()).filter((entry): entry is JobDeadLetter => entry.source === 'intent_job');
 
 describe('startIntentConsumer', () => {
   it('processes a queued intent end to end with the default executor', async () => {
@@ -161,6 +171,7 @@ describe('startIntentConsumer', () => {
     const entries = (await dlqEntries()).filter((entry) => entry.intentId === intentId);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
+      source: 'intent_job',
       intentId,
       topic: 'trading-intents',
       reason: 'processing_failed',
@@ -230,6 +241,7 @@ describe('startIntentConsumer on trading-reconciliation (#89)', () => {
     const entries = (await dlqEntries()).filter((entry) => entry.intentId === intentId);
     expect(entries).toEqual([
       expect.objectContaining({
+        source: 'intent_job',
         intentId,
         topic: 'trading-reconciliation',
         reason: 'processing_failed',
@@ -281,5 +293,54 @@ describe('deadLetter', () => {
       deadLetter(sink, quiet, OutboxTopic.TradingIntents, undefined, new Error('boom')),
     ).resolves.toBeUndefined();
     expect(messages.some((line) => line.includes('dlq_publish_failed'))).toBe(true);
+  });
+});
+
+describe('deadLetterSessionWrite (#92)', () => {
+  it('writes the session entry into the shared dead-letter queue, ids only', async () => {
+    const dlq = new Queue<DeadLetter>('trading-intents-dead-letter', { connection: redis, prefix });
+    const accountId = `acc-${randomBytes(4).toString('hex')}`;
+    try {
+      await deadLetterSessionWrite(dlq, pino({ level: 'silent' }), {
+        source: 'close_trade_success',
+        accountId,
+        mode: 'demo',
+        brokerTradeIds: ['bt-1', 'bt-2'],
+      });
+    } finally {
+      await dlq.close();
+    }
+    const entries = (await allDlqEntries()).filter(
+      (entry): entry is SessionDeadLetter =>
+        entry.source !== 'intent_job' && entry.accountId === accountId,
+    );
+    expect(entries).toEqual([
+      {
+        source: 'close_trade_success',
+        accountId,
+        mode: 'demo',
+        brokerTradeIds: ['bt-1', 'bt-2'],
+        reason: 'processing_failed',
+        failedAt: expect.any(String),
+      },
+    ]);
+  });
+
+  it('survives a sink that rejects and never throws', async () => {
+    const messages: Record<string, unknown>[] = [];
+    const quiet = pino(
+      { level: 'error' },
+      { write: (line: string) => void messages.push(JSON.parse(line) as Record<string, unknown>) },
+    );
+    await expect(
+      deadLetterSessionWrite(
+        { add: () => Promise.reject(new Error('redis gone')) },
+        quiet,
+        { source: 'user_data', accountId: 'acc-1', mode: null, brokerTradeIds: [] },
+      ),
+    ).resolves.toBeUndefined();
+    expect(messages).toEqual([
+      expect.objectContaining({ msg: 'dlq_publish_failed', accountId: 'acc-1', source: 'user_data' }),
+    ]);
   });
 });
