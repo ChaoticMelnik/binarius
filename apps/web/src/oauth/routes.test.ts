@@ -52,6 +52,7 @@ beforeEach(() => {
     previewBotText: unused,
     saveBotText: unused,
     resetBotText: unused,
+    publishBotProfile: unused,
     oauthCallback: (request) => {
       forwarded.push(request);
       return answer();

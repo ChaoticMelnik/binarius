@@ -3,6 +3,7 @@ import * as z from 'zod';
 import {
   AdminErrorCode,
   BOT_TEXT_KEY_PATTERN,
+  botProfileMethodsOf,
   isBotTextKey,
   safeParseAdminBotTextResetRequest,
   safeParseAdminBotTextSaveRequest,
@@ -20,6 +21,7 @@ import {
   staffLoginCodeSchema,
   staffLoginSchema,
   UUID_PATTERN,
+  type AdminBotProfileMethodResult,
   type AdminBotTextView,
   type AdminMe,
 } from '@binarius/shared';
@@ -53,6 +55,7 @@ import {
   usersHref,
   usersPage,
 } from './pages';
+import { decodePublishResults } from './publish-result';
 import { APP_CSS } from './static';
 import { TEXTS } from './texts';
 
@@ -104,6 +107,27 @@ const changedOf = (query: unknown): number | undefined => {
     Number.isSafeInteger(Number(value))
     ? Number(value)
     : undefined;
+};
+
+// A publish notice reads «…Публикация в Telegram:» over the result it names; without a result
+// that decodes it falls back to the plain notice, and «Опубликовано заново:» has none (#361).
+const PUBLISH_NOTICE_FALLBACK: Record<string, string | undefined> = {
+  published: 'saved',
+  reset_published: 'reset',
+  republished: undefined,
+};
+
+/** `?notice=` with the `?publish=` result it carries; a result only under a publish notice. */
+const noticeWithResult = <K extends string>(
+  query: unknown,
+  notices: Record<K, string>,
+): { notice?: K; published?: AdminBotProfileMethodResult[] } => {
+  const notice = noticeOf(query, notices);
+  if (notice === undefined || !Object.hasOwn(PUBLISH_NOTICE_FALLBACK, notice)) return { notice };
+  const published = decodePublishResults((query as { publish?: unknown } | undefined)?.publish);
+  return published === undefined
+    ? { notice: PUBLISH_NOTICE_FALLBACK[notice] as K | undefined }
+    : { notice, published };
 };
 
 /** `?notice=` as one of the page's own notices; anything else, a repeated key included, is none. */
@@ -596,12 +620,45 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
     const answered = outcome(error);
     return answered?.status === 404 && answered.code === AdminErrorCode.NotFound;
   };
-  // not answered or a 5xx: the write may have happened; the editor shows the version and the text
-  const writeOutcomeUnknown = (request: FastifyRequest, reply: FastifyReply, error: unknown) => {
+  // Not answered or a 5xx: the write may have happened; the editor shows the version and the
+  // text. A key whose write publishes may also have been published, or not (#361).
+  const writeOutcomeUnknown = (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    error: unknown,
+    key?: string,
+  ) => {
     const answered = outcome(error);
     if (answered !== undefined && answered.status < 500) return undefined;
     request.log.error(errorLogFields(error), 'the bot text write outcome is unknown');
-    return sendHtml(reply, 500, noticePage(TEXTS.outcomeUnknownTitle, TEXTS.botTextOutcomeUnknown));
+    const body =
+      key !== undefined && isBotTextKey(key) && botProfileMethodsOf(key).length > 0
+        ? TEXTS.botProfileWriteOutcomeUnknown
+        : TEXTS.botTextOutcomeUnknown;
+    return sendHtml(reply, 500, noticePage(TEXTS.outcomeUnknownTitle, body));
+  };
+  // «Опубликовать заново» (#361): not answered or a 5xx may have published; pressing it again is
+  // harmless, it sends the texts in effect
+  const publishBotProfile = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    token: string,
+    href: (published: AdminBotProfileMethodResult[]) => string,
+  ) => {
+    let answer;
+    try {
+      answer = await backend.publishBotProfile(token);
+    } catch (error) {
+      const answered = outcome(error);
+      if (answered !== undefined && answered.status < 500) throw error;
+      request.log.error(errorLogFields(error), 'the bot profile publish outcome is unknown');
+      return sendHtml(
+        reply,
+        500,
+        noticePage(TEXTS.outcomeUnknownTitle, TEXTS.botProfileOutcomeUnknown),
+      );
+    }
+    return reply.redirect(href(answer.published), 303);
   };
   // The editor after a POST: the draft and the version from the form, the rest from the answer.
   const editorAfterPost = (
@@ -625,9 +682,17 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
   app.get(BOT_TEXTS_PATH, async (request, reply) =>
     withStaffSession(request, reply, async (token) => {
       const { me, overrides } = await backend.botTexts(token);
-      const notice = noticeOf(request.query, TEXTS.botTextsNotice);
-      return sendHtml(reply, 200, botTextsPage(overrides, { login: me.login, notice }));
+      const { notice, published } = noticeWithResult(request.query, TEXTS.botTextsNotice);
+      return sendHtml(reply, 200, botTextsPage(overrides, { login: me.login, notice, published }));
     }),
+  );
+
+  app.post(`${BOT_TEXTS_PATH}/publish`, async (request, reply) =>
+    withStaffSession(request, reply, async (token) =>
+      publishBotProfile(request, reply, token, (published) =>
+        botTextsHref('republished', published),
+      ),
+    ),
   );
 
   app.get(`${BOT_TEXTS_PATH}/:key`, async (request, reply) =>
@@ -636,8 +701,8 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       if (!isBotTextKey(key)) return textNotFound(reply);
       try {
         const { me, text } = await backend.botText(token, key);
-        const notice = noticeOf(request.query, TEXTS.botTextNotice);
-        return sendHtml(reply, 200, botTextPage(text, { login: me.login, notice }));
+        const { notice, published } = noticeWithResult(request.query, TEXTS.botTextNotice);
+        return sendHtml(reply, 200, botTextPage(text, { login: me.login, notice, published }));
       } catch (error) {
         // the backend's catalog lacks a key web's has: the two were deployed apart
         if (isNotFound(error)) return textNotFound(reply);
@@ -664,8 +729,6 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
           return editorAfterPost(reply, answer, form, 200, { rendered: answer.rendered });
         case 'refused':
           return editorAfterPost(reply, answer, form, 400, { problems: answer.problems });
-        case 'read_only':
-          return editorAfterPost(reply, answer, form, 400, { message: TEXTS.botTextReadOnly });
       }
     }),
   );
@@ -681,13 +744,18 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         answer = await backend.saveBotText(token, key, form);
       } catch (error) {
         if (isNotFound(error)) return textNotFound(reply);
-        const unknown = writeOutcomeUnknown(request, reply, error);
+        const unknown = writeOutcomeUnknown(request, reply, error, key);
         if (unknown !== undefined) return unknown;
         throw error;
       }
       switch (answer.outcome) {
         case 'saved':
-          return reply.redirect(botTextHref(key, 'saved'), 303);
+          return reply.redirect(
+            answer.published.length > 0
+              ? botTextHref(key, 'published', answer.published)
+              : botTextHref(key, 'saved'),
+            303,
+          );
         case 'unchanged':
           return editorAfterPost(reply, answer, form, 200, { notice: 'unchanged' });
         case 'version_conflict':
@@ -699,8 +767,6 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
           });
         case 'refused':
           return editorAfterPost(reply, answer, form, 400, { problems: answer.problems });
-        case 'read_only':
-          return editorAfterPost(reply, answer, form, 400, { message: TEXTS.botTextReadOnly });
       }
     }),
   );
@@ -716,7 +782,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       try {
         answer = await backend.resetBotText(token, key, form);
       } catch (error) {
-        const unknown = writeOutcomeUnknown(request, reply, error);
+        const unknown = writeOutcomeUnknown(request, reply, error, key);
         if (unknown !== undefined) return unknown;
         throw error;
       }
@@ -730,7 +796,6 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
             return reply.redirect(botTextsHref('changed'), 303);
           // a key outside the catalog takes no effect and is in no group
           case 'refused':
-          case 'read_only':
             throw new UnexpectedBotTextOutcome();
         }
       }
@@ -739,7 +804,12 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       const editor = { me: answer.me, text };
       switch (answer.outcome) {
         case 'reset':
-          return reply.redirect(botTextHref(key, 'reset'), 303);
+          return reply.redirect(
+            answer.published.length > 0
+              ? botTextHref(key, 'reset_published', answer.published)
+              : botTextHref(key, 'reset'),
+            303,
+          );
         case 'already_default':
           return reply.redirect(botTextHref(key, 'already_default'), 303);
         case 'version_conflict':
@@ -751,9 +821,18 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
           });
         case 'refused':
           return editorAfterPost(reply, editor, form, 400, { problems: answer.problems });
-        case 'read_only':
-          return editorAfterPost(reply, editor, form, 400, { message: TEXTS.botTextReadOnly });
       }
+    }),
+  );
+
+  // only on the editor of a key whose write publishes; the backend publishes all three
+  app.post(`${BOT_TEXTS_PATH}/:key/publish`, async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const key = keyParamOf(request);
+      if (!isBotTextKey(key) || botProfileMethodsOf(key).length === 0) return textNotFound(reply);
+      return publishBotProfile(request, reply, token, (published) =>
+        botTextHref(key, 'republished', published),
+      );
     }),
   );
 

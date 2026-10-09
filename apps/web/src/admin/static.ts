@@ -33,6 +33,7 @@ form.editor { display: grid; gap: 0.5rem; }
 form.editor .buttons { display: flex; gap: var(--gap); }
 p.notice { font-weight: 600; }
 ul.error { color: #b00020; }
+ul.publish li.error { color: #b00020; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* pre-wrap: the template's own line breaks and indentation would show, so pages.ts writes the bubble without any */
 .tg-bubble { white-space: pre-wrap; max-width: 32rem; padding: 0.75rem 1rem; border: 1px solid #8884; border-radius: 1rem; }

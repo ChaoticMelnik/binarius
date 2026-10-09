@@ -138,7 +138,8 @@ describe('broker balance timing', () => {
     expect(BOT_TEXTS_LOAD_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
-  // web's link, BOT_PROFILE_PUBLISH_BUDGET_MS < its BACKEND_REQUEST_TIMEOUT_MS (8 s), is #361's
+  // web's link, BOT_PROFILE_PUBLISH_BUDGET_MS < its BACKEND_REQUEST_TIMEOUT_MS, is in
+  // apps/web/src/timing.ts (#361)
   it('fits one publish of the menu and the profile in its budget and inside phase 1 (#301)', () => {
     expect(BOT_PROFILE_PUBLISH_CALLS * BOT_PROFILE_PUBLISH_TIMEOUT_MS).toBeLessThanOrEqual(
       BOT_PROFILE_PUBLISH_BUDGET_MS,

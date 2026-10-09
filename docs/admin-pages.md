@@ -6,7 +6,8 @@ but two are read-only: they write to no table other than `staff_sessions` (the s
 below: «Сменить пароль» (#79), through the backend operation of #78, which writes `staff`, the
 staff member's other sessions and open challenges ([staff-login.md](staff-login.md) → Changing
 your own password); and «Тексты бота» (#300), which saves and resets the client bot's texts in
-`bot_text_overrides` through the writer of #299 ([bot-texts.md](bot-texts.md) → Overrides). #107
+`bot_text_overrides` through the writer of #299 ([bot-texts.md](bot-texts.md) → Overrides) and
+publishes the command menu and the profile to Telegram after such a write (#361). #107
 adds the overview, the user list with search, and
 the user card; #108 adds the intents list and the intent card; #330 adds the trading sessions
 list, the trading section of the user card and the breakdown of the overview by status; #109 adds
@@ -18,7 +19,8 @@ broker accounts list (#341, #342) follow through the same mechanism.
 `apps/web` never talks to the database (`no-db-access.test.ts`); each request is one call to the
 backend under the staff session — a `GET` for every read page, the `POST /admin/auth/password` of
 #78 for a password change (its own section below; its backend phases are in staff-login.md), a
-`POST /admin/bot-texts/:key/preview|save|reset` for the bot texts (Bot texts below). A read page
+`POST /admin/bot-texts/:key/preview|save|reset` and `POST /admin/bot-texts/publish` for the bot
+texts (Bot texts below). A read page
 goes like this:
 
 1. `web` reads the `admin_session` cookie. A cookie of the wrong shape counts as none: it is
@@ -334,7 +336,7 @@ given once; anything else shows no result line.
 The form never renders the values it was submitted with (the inputs have no `value`), and `web`
 logs no request body: no password reaches the HTML or the log of `web`.
 
-### Bot texts — `GET /admin/bot-texts`, `GET /admin/bot-texts/:key`, `POST …/preview|save|reset`
+### Bot texts — `GET /admin/bot-texts`, `GET /admin/bot-texts/:key`, `POST …/preview|save|reset`, `POST /admin/bot-texts/publish`
 
 The client bot's texts ([bot-texts.md](bot-texts.md)). The wire shapes are in
 `packages/shared/src/admin-bot-texts.ts`, the reads in `packages/db/src/admin-bot-text-ops.ts`.
@@ -361,13 +363,39 @@ reports the result of a write («Сохранено. Бот применит т�
 `BOT_TEXTS_APPLIED_WITHIN_S`, which `apps/bot/src/timing.test.ts` holds at least the refresh plus
 the load timeout).
 
-**Read-only keys.** The `commands` and `profile` groups are read-only in the admin
-(`ADMIN_BOT_TEXT_READ_ONLY_GROUPS`, its own fence, apart from the writer's): the admin does not
-republish the command menu and the profile after a change; that is #361. The list marks the two
-groups, the editor shows the text with «Только чтение: команды и профиль бота пока нельзя править
-из админки» and no form, and the backend answers every POST for such a key `read_only` before the
-writer. The CLI edits and publishes them since #301 ([bot-texts.md](bot-texts.md) → Publishing); an
-override it saved shows here as «изменён» with the editor still read-only.
+**Publishing (#361).** Every catalog key has the form, the `commands` and `profile` groups
+included. A save or reset of a key of those two groups publishes it to Telegram after the
+transaction committed — never inside it: a Bot API call of up to `BOT_PROFILE_PUBLISH_TIMEOUT_MS`
+would hold the session row past the pool's `query_timeout` for the next request of the same
+session. Only the key's own method is sent (`botProfileMethodsOf`, `packages/shared`: a command
+description → `setMyCommands`, `profileDescription` → `setMyDescription`, `profileShortDescription`
+→ `setMyShortDescription`), from the rows as the loaders resolve them after the commit, one attempt
+(`publishBotProfile`, [bot-texts.md](bot-texts.md) → Publishing). The admin's publishes are one queue
+a backend process (`publishAfterCommit`): each reads the rows after the previous one was sent, so the
+last publish of a burst carries every admin save or reset committed before its read; the CLI, the
+bot's start and a second backend process are outside that queue, and the last call wins there. The
+override is kept whatever
+Telegram answers (В6 #240). The answer of `saved` and `reset` always carries `published`: one result
+per method sent — `{ method, ok: true }` or `{ method, ok: false, err, cause?, telegramErrorCode? }`,
+identity only —, `[]` for any other key and for an orphan. The backend logs each failure (`bot
+profile not published`) with the identity as it was, and holds the one in the answer and the row to
+the wire: an empty name becomes `Error`, a name or code is cut to 128 characters, a Telegram code
+outside 100–599 is left out. «Опубликовать заново» — one button above «Команды: описания» on the list
+and one in the editor of each key of the two groups — is `POST /admin/bot-texts/publish`: all three
+methods from the rows, whatever their state; it is shown always (no state of the last publish is
+kept). The list says «Меню команд и профиль бота публикуются в Telegram при сохранении и сбросе»; the
+editor of such a key says what its save publishes.
+
+The page after a publish learns the result from the redirect (`?notice=published|reset_published|
+republished&publish=…`): one segment a method, `method:ok` or `method:Name[.code][:telegramErrorCode]`,
+joined by `,` (`apps/web/src/admin/publish-result.ts`). It shows one line a method — «Меню команд
+(setMyCommands): опубликовано», «Описание бота (setMyDescription): ошибка — GrammyError, Telegram
+400» — and, after a failure, «Текст сохранён, но Telegram не принял публикацию. После восстановления
+нажмите «Опубликовать заново».». A value outside the grammar — an unknown or repeated method, a
+name or code longer than the wire takes (128), the key given twice — shows no list: the notice falls
+back to the plain one («Сохранено…», «Исходный текст возвращён…»), and «Опубликовано заново:», which
+has none, is not shown. A result shows only under a publish notice. A name or code the grammar does
+not take is sent as `Error` or left out. F5 on that page sends nothing.
 
 **The preview** renders the draft as the bot would: the backend checks it with
 `botTextChangeProblems` (as a save would), then renders it through the bot's own views with the
@@ -398,16 +426,18 @@ optimistic check. Only the 409 page sets the current version, on purpose.
 | Backend `outcome` | `web` |
 |---|---|
 | `rendered` (preview) | 200, the editor with the preview, the draft and the submitted version in the forms |
-| `saved` / `reset` / `already_default` | 303 to the editor with the notice (post/redirect/get) |
+| `saved` / `reset` / `already_default` | 303 to the editor with the notice (post/redirect/get); after a `saved` or `reset` that sent a method, `?notice=published` or `reset_published` with `&publish=…` |
 | `unchanged` | 200, the editor with «Текст не изменился» |
 | `version_conflict` | 409: «Текст уже изменил другой сотрудник (версия N)», the text there now under it, the draft in the field and the hidden version set to N, so «Сохранить» again overwrites knowingly (the old text stays in `audit_log`) |
 | `refused` | 400, the reasons in Russian, the draft and the submitted version in the forms |
-| `read_only` | 400 with the message |
 | 404 `not_found` | 404 «Текст не найден» |
-| no answer or a 5xx on save or reset | 500 «Результат неизвестен»: the write may have happened; reopening the editor shows the version and the text |
+| no answer or a 5xx on save or reset | 500 «Результат неизвестен»: the write may have happened; reopening the editor shows the version and the text. For a key of `commands` or `profile` the page also says to press «Опубликовать заново» if the text is saved |
+| «Опубликовать заново» answered | 303 back to the list or the editor with `?notice=republished&publish=…` |
+| «Опубликовать заново»: no answer or a 5xx | 500 «Результат публикации неизвестен — нажмите «Опубликовать заново» ещё раз» (it publishes the texts in effect, so a second press is harmless) |
 
 A delete of an orphan redirects to the list: `reset` → `?notice=removed`, `already_default` →
-`gone`, `version_conflict` → `changed`.
+`gone`, `version_conflict` → `changed`. `POST /admin/bot-texts/:key/publish` on `web` takes only a key
+of the two groups (404 for any other, no backend call) and calls the same backend route.
 
 ## Audit actions
 
@@ -433,13 +463,19 @@ named and bounded; nothing else is recorded.
 | bot texts list | `bot_texts_viewed` | — | `{ path: '/admin/bot-texts' }` |
 | bot text editor, found | `bot_text_viewed` | `bot_text`, no id | `{ path: '/admin/bot-texts/:key', key, result: 'found' }` |
 | bot text editor, a key not in the catalog | `bot_text_viewed` | — | `{ path, result: 'not_found', key? }` — `key` only when it matches `BOT_TEXT_KEY_PATTERN` |
-| bot text preview | `bot_text_previewed` | `bot_text` | `{ path, key?, result }` — `rendered`, `refused`, `read_only` or `not_found`; no text |
+| bot text preview | `bot_text_previewed` | `bot_text` | `{ path, key?, result }` — `rendered`, `refused` or `not_found`; no text |
 | bot text save, written | `bot_text_saved` | `bot_text` | `{ path, result: 'saved', key, action, oldText, newText, oldVersion, newVersion }` — the CLI's payload plus `path` and `result` |
 | bot text reset, written | `bot_text_reset` | `bot_text` | the same with `result: 'reset'`; an orphan's `oldText` is the row's text and its `newText` is `null`, as from the CLI |
-| bot text save or reset, refused | `bot_text_saved` / `bot_text_reset` | `bot_text` | `{ path, key?, result }` — `version_conflict`, `unchanged`, `already_default`, `refused`, `read_only` or `not_found`; no text |
+| bot text save or reset, refused | `bot_text_saved` / `bot_text_reset` | `bot_text` | `{ path, key?, result }` — `version_conflict`, `unchanged`, `already_default`, `refused` or `not_found`; no text |
+| the command menu or the profile published (#361) | `bot_profile_published` | `bot_text` | `{ path, trigger, key?, methods }` — `trigger` is `save`, `reset` or `republish`; `key` only for a save or reset; `methods` is the `published` of the answer |
 
 A bot text row has `entity_type = 'bot_text'` and `entity_id = NULL`, like the CLI's (a key is not a
-uuid), so the audit page finds them by `entityType=bot_text`. Every request writes one row.
+uuid), so the audit page finds them by `entityType=bot_text`. Every request writes one row, with
+two exceptions: a save or reset that publishes writes its own row in the transaction and
+`bot_profile_published` after the Bot API calls (a row inside could not carry their result), and
+«Опубликовать заново» writes only `bot_profile_published`. A `bot_text_saved` without the
+`bot_profile_published` after it means the process stopped between the two; «Опубликовать заново»
+mends the menu.
 
 The card's trading and ledger sections and the overview's breakdown are parts of `user_viewed` and
 `overview_viewed`; they add no row and no payload key.
@@ -480,7 +516,12 @@ session, so the attempt leaves a row, without the id; so is a bot text key.
 
 Not enforced by code: a new route in `apps/backend/src/admin/routes.ts` must go through `asStaff`.
 The `Tx` parameter guarantees a transaction, not the audit row; a route opening `db.transaction`
-around these reads directly is caught only in review.
+around these reads directly is caught only in review. The one exception is `POST
+/admin/bot-texts/publish` (#361): it checks the live session with `readLiveStaffContext`
+(`packages/db/src/staff-ops.ts`) — the predicate of `runAsStaff`, without the touch and without a
+row —, calls Telegram and then writes its `bot_profile_published` row: a Bot API call cannot run
+inside the transaction, and the row has to carry the result. Its row is written by the staff member
+who pressed the button even if the session is revoked between the check and the insert.
 
 ## Limits
 
@@ -513,6 +554,13 @@ around these reads directly is caught only in review.
   source of `BOT_TEXT_SOURCE_MAX` code points). A save holds the table lock and the session row for
   the check of the whole set: 7–10 ms with 150 overrides in the #300 plan's probe, well inside
   `BACKEND_REQUEST_TIMEOUT_MS`.
+- A save or reset of a `commands`/`profile` key adds one Bot API call of up to
+  `BOT_PROFILE_PUBLISH_TIMEOUT_MS` after the commit; «Опубликовать заново», three. Both stay inside
+  `BOT_PROFILE_PUBLISH_BUDGET_MS`, which `apps/web/src/timing.ts` holds below
+  `BACKEND_REQUEST_TIMEOUT_MS` at import — for one publish in flight. A second one queued behind it
+  may not fit: web then says the outcome is unknown, and the backend finishes it and writes its row.
+  Telegram's limits on `setMy*` are not documented; a 429 shows as the method's error, and a repeat
+  is by hand.
 
 ## Running it locally
 
@@ -608,13 +656,17 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    no «Выйти»; the current password wrong — 401 with the form; a real change — «Пароль изменён.
    Завершено других сессий: 0» (1 if a second browser was logged in; its next page is the login
    form). Log out and in with the new password.
-   Then «Тексты бота» (last in the nav): every group, each key «исходный»; «Команды: описания» and
-   «Профиль бота» marked read-only. Open `welcome`: «Плейсхолдеры» lists `{connectButton}` with its
+   Then «Тексты бота» (last in the nav): every group, each key «исходный»; above «Команды:
+   описания», the publishing hint and «Опубликовать заново». Open `welcome`: «Плейсхолдеры» lists `{connectButton}` with its
    text. Change the first line, «Предпросмотр»: the bubble with the bold heading and the button's
    text, the draft still in the field; «Сохранить» → «Сохранено. Бот применит текст в течение 35 с».
    `<b>тест` → «Битый HTML: `<b>` is never closed», the draft kept. Open the editor in a second tab,
    save in the first, then in the second → 409 with the first tab's text under the form. «Вернуть
-   исходный» → «Исходный текст возвращён». `startCommand` — the text, no form. Then an orphan row:
+   исходный» → «Исходный текст возвращён». A save of `startCommand` publishes the command menu of
+   the bot whose token is `TELEGRAM_BOT_TOKEN` — a dev bot of your own, never the server's: change
+   the description, «Сохранить» → «Сохранено. Публикация в Telegram: Меню команд (setMyCommands):
+   опубликовано», and the bot's menu in the client shows it. «Опубликовать заново» on the list →
+   three lines. Then an orphan row:
    ```bash
    docker compose exec postgres psql -U binarius -d binarius -c "insert into bot_text_overrides
      (key, source) values ('zzz', 'x')"
@@ -633,7 +685,8 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `userId` — each only on its own request; `audit_log_viewed` with `action`, with `entityType` and
    `entityId`, or with `from` and `to` — each only on its own request; still one `user_viewed` per
    opening of the card; `bot_texts_viewed`, `bot_text_viewed`, `bot_text_previewed`, a
-   `bot_text_saved` with both texts, one with `result: 'version_conflict'` and no texts, and
-   `bot_text_reset` rows (`?entityType=bot_text` on «Аудит» lists them). The refused 257-character search, `?status=bogus`, `?kind=bogus`,
+   `bot_text_saved` with both texts, one with `result: 'version_conflict'` and no texts,
+   `bot_text_reset` rows, and `bot_profile_published` after the save of `startCommand` and for
+   «Опубликовать заново» (`?entityType=bot_text` on «Аудит» lists them). The refused 257-character search, `?status=bogus`, `?kind=bogus`,
    `?action=bogus` and the card id that is not a uuid wrote nothing.
 7. `docker compose down -v` when done.

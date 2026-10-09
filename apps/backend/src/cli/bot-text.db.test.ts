@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { GrammyError } from 'grammy';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { BOT_TEXT_CATALOG } from '@binarius/shared';
+import { BOT_TEXT_CATALOG, type BotProfileMethod } from '@binarius/shared';
 import { auditLog, botTextOverrides, listBotTextOverrides } from '@binarius/db';
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import {
@@ -12,7 +12,7 @@ import {
   streamAtMost,
   type BotTextCliDeps,
 } from './bot-text';
-import type { BotProfileApi, BotProfileMethod } from '../bot-texts/publish';
+import type { BotProfileApi } from '../bot-texts/publish';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {

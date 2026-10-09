@@ -2,10 +2,13 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import {
   ADMIN_ACTIVE_WINDOW_MINUTES,
   ADMIN_BOT_TEXT_BODY_LIMIT_BYTES,
+  adminBotProfileIdentity,
   adminBotTextProblems,
+  isAdminTelegramErrorCode,
+  BOT_PROFILE_METHODS,
   BOT_TEXT_KEY_PATTERN,
+  botProfileMethodsOf,
   botTextChangeProblems,
-  isAdminBotTextEditable,
   isBotTextKey,
   renderBotTextPreview,
   resolveBotTextOverrides,
@@ -13,10 +16,13 @@ import {
   safeParseAdminBotTextResetRequest,
   safeParseAdminBotTextSaveRequest,
   UnexpectedBotTextOutcome,
+  type AdminBotProfileMethodResult,
+  type AdminBotProfilePublishResponse,
   type AdminBotTextPreviewResponse,
   type AdminBotTextResetResponse,
   type AdminBotTextResponse,
   type AdminBotTextSaveResponse,
+  type BotProfileMethod,
   type BotTextKey,
   ADMIN_PAGE_SIZE,
   AdminErrorCode,
@@ -62,7 +68,9 @@ import {
   markChallengePromptSent,
   readAdminOverview,
   readIntentForAdmin,
+  readLiveStaffContext,
   readUserForAdmin,
+  recordBotProfilePublish,
   recordLoginLockout,
   recordPasswordChangeLockout,
   recordLoginRefusal,
@@ -94,6 +102,12 @@ import { internalBearerAuth } from '../auth/internal';
 import { createKeyedWindow, createWindow } from '../auth/rate-window';
 import { createPasswordQueue, PasswordQueueOverflow, type PasswordQueue } from './password-queue';
 import { telegramErrorFields } from '../telegram-logging';
+import {
+  publishBotProfile,
+  readBotProfileSource,
+  type BotProfileApi,
+  type BotProfileMethodResult,
+} from '../bot-texts/publish';
 import type { AdminTelegram } from './telegram';
 
 // Ceilings on the two unauthenticated routes, taken before the body is read: they bound how
@@ -114,6 +128,8 @@ export interface AdminRoutesDeps {
   db: Db;
   adminWebToken: string;
   telegram: AdminTelegram;
+  // the public bot's command menu and profile, published after a save or reset (#361)
+  botProfileApi: BotProfileApi;
   // the seams the tests need; production takes every default
   passwordQueue?: PasswordQueue;
   verify?: (stored: string, password: string) => Promise<boolean>;
@@ -915,6 +931,55 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   const badTextBody = (reply: FastifyReply, issues: unknown) =>
     reply.code(400).send({ error: AdminErrorCode.Validation, issues });
 
+  // Admin publishes are one queue a process: each reads the rows after the previous publish has
+  // been sent, so the last publish of a burst carries every admin save committed before its read
+  // (#361 review m1). The read belongs inside the link: two reads finishing out of snapshot order
+  // would send a stale menu last again. A failed link never blocks the next.
+  let publishing: Promise<unknown> = Promise.resolve();
+  const serialized = <T>(run: () => Promise<T>): Promise<T> => {
+    const next = publishing.then(run);
+    publishing = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
+
+  // After the commit, never inside it: a Bot API call of up to BOT_PROFILE_PUBLISH_TIMEOUT_MS
+  // would hold the session row past the pool's query_timeout for the next request of the same
+  // session. The log keeps each failure's identity as it is; the answer and the row carry it as
+  // the wire takes it.
+  const publishAfterCommit = (
+    request: FastifyRequest,
+    input: {
+      staffId: string;
+      path: string;
+      trigger: 'save' | 'reset' | 'republish';
+      key?: BotTextKey;
+      methods: readonly BotProfileMethod[];
+    },
+  ): Promise<AdminBotProfileMethodResult[]> =>
+    serialized(async () => {
+      const results = await publishBotProfile(
+        deps.botProfileApi,
+        await readBotProfileSource(deps.db),
+        input.methods,
+      );
+      for (const result of results) {
+        if (!result.ok) request.log.warn({ ...result }, 'bot profile not published');
+      }
+      const published = results.map(toWirePublishResult);
+      const { staffId, path, trigger, key } = input;
+      await recordBotProfilePublish(deps.db, {
+        staffId,
+        path,
+        trigger,
+        ...(key === undefined ? {} : { key }),
+        methods: published,
+      });
+      return published;
+    });
+
   app.get('/admin/bot-texts', async (request, reply) => {
     const answer = await asStaff(request, reply, async (tx, ctx) => {
       const { rows, resolved } = await readTexts(tx);
@@ -970,9 +1035,6 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         if (known === undefined) return { result: null, audit: audit('not_found') };
         const { rows, resolved } = await readTexts(tx);
         const base = { me: meOf(ctx), text: toAdminBotTextView(known, rows, resolved) };
-        if (!isAdminBotTextEditable(known)) {
-          return { result: { ...base, outcome: 'read_only' }, audit: audit('read_only') };
-        }
         const problems = botTextChangeProblems(known, source, rows);
         if (problems.length > 0) {
           return {
@@ -1008,17 +1070,10 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     const answer = await asStaff(
       request,
       reply,
-      async (tx, ctx): Promise<StaffActionResult<AdminBotTextSaveResponse | null>> => {
+      async (tx, ctx): Promise<StaffActionResult<Unpublished<AdminBotTextSaveResponse> | null>> => {
         const audit = (result: AdminBotTextSaveResponse['outcome'] | 'not_found') =>
           textAudit(AuditAction.BotTextSaved, path, key, result);
         if (known === undefined) return { result: null, audit: audit('not_found') };
-        if (!isAdminBotTextEditable(known)) {
-          const text = await textViewOf(tx, known);
-          return {
-            result: { me: meOf(ctx), text, outcome: 'read_only' },
-            audit: audit('read_only'),
-          };
-        }
         const applied = await applyBotTextSave(tx, {
           key: known,
           source,
@@ -1062,7 +1117,19 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     );
     if (answer === undefined) return reply;
     if (answer === null) return reply.code(404).send({ error: AdminErrorCode.NotFound });
-    return reply.send(answer);
+    if (answer.outcome !== 'saved') return reply.send(answer);
+    const methods = known === undefined ? [] : botProfileMethodsOf(known);
+    const published =
+      methods.length === 0
+        ? []
+        : await publishAfterCommit(request, {
+            staffId: answer.me.staffId,
+            path,
+            trigger: 'save',
+            key: known,
+            methods,
+          });
+    return reply.send({ ...answer, published } satisfies AdminBotTextSaveResponse);
   });
 
   // a key outside the catalog can be reset: a row left behind by a renamed key
@@ -1075,18 +1142,14 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     const answer = await asStaff(
       request,
       reply,
-      async (tx, ctx): Promise<StaffActionResult<AdminBotTextResetResponse | null>> => {
+      async (
+        tx,
+        ctx,
+      ): Promise<StaffActionResult<Unpublished<AdminBotTextResetResponse> | null>> => {
         const audit = (result: AdminBotTextResetResponse['outcome'] | 'not_found') =>
           textAudit(AuditAction.BotTextReset, path, key, result);
         if (key === undefined) return { result: null, audit: audit('not_found') };
         const viewNow = () => (known === undefined ? null : textViewOf(tx, known));
-        if (known !== undefined && !isAdminBotTextEditable(known)) {
-          const text = await viewNow();
-          return {
-            result: { me: meOf(ctx), text, outcome: 'read_only' },
-            audit: audit('read_only'),
-          };
-        }
         const applied = await applyBotTextReset(tx, { key, expectedVersion });
         const base = { me: meOf(ctx), text: await viewNow() };
         if (applied.ok) {
@@ -1127,9 +1190,59 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     );
     if (answer === undefined) return reply;
     if (answer === null) return reply.code(404).send({ error: AdminErrorCode.NotFound });
-    return reply.send(answer);
+    if (answer.outcome !== 'reset') return reply.send(answer);
+    const methods = known === undefined ? [] : botProfileMethodsOf(known);
+    const published =
+      methods.length === 0
+        ? []
+        : await publishAfterCommit(request, {
+            staffId: answer.me.staffId,
+            path,
+            trigger: 'reset',
+            key: known,
+            methods,
+          });
+    return reply.send({ ...answer, published } satisfies AdminBotTextResetResponse);
+  });
+
+  // «Опубликовать заново» (#361): the one admin route outside asStaff. Its Bot API calls cannot
+  // run inside the transaction, and its row has to carry their result, so it checks the session
+  // by the same predicate without the touch, publishes, and writes its row after.
+  app.post('/admin/bot-texts/publish', async (request, reply) => {
+    const token = tokenOf(request);
+    const ctx =
+      token === undefined ? undefined : await readLiveStaffContext(deps.db, { token, idleMs });
+    if (ctx === undefined) {
+      request.log.info('a staff session was refused');
+      return reply.code(401).send({ error: AdminErrorCode.SessionInvalid });
+    }
+    const published = await publishAfterCommit(request, {
+      staffId: ctx.staffId,
+      path: '/admin/bot-texts/publish',
+      trigger: 'republish',
+      methods: BOT_PROFILE_METHODS,
+    });
+    return reply.send({ me: meOf(ctx), published } satisfies AdminBotProfilePublishResponse);
   });
 };
+
+// a save's or a reset's answer as the transaction builds it: what it published is added after
+type Unpublished<T> = T extends { published: unknown } ? Omit<T, 'published'> : T;
+
+function toWirePublishResult(result: BotProfileMethodResult): AdminBotProfileMethodResult {
+  if (result.ok) return { method: result.method, ok: true };
+  const { telegramErrorCode } = result;
+  return {
+    method: result.method,
+    ok: false,
+    err: adminBotProfileIdentity(result.err),
+    ...(result.cause === undefined ? {} : { cause: adminBotProfileIdentity(result.cause) }),
+    // a code the wire refuses is left out, as an identity is held to it: the log has it
+    ...(telegramErrorCode !== undefined && isAdminTelegramErrorCode(telegramErrorCode)
+      ? { telegramErrorCode }
+      : {}),
+  };
+}
 
 // The allowlist that keeps a column added to staff_sessions from reaching the browser. The
 // token hash, the owner's staff id and their Telegram id are not here, and the shape is the

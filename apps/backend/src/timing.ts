@@ -156,7 +156,7 @@ export const BOT_TEXTS_LOAD_BUDGET_MS = 3_000;
 // --- Publishing the command menu and the profile (#301) ---------------------------------------
 // docs/bot-texts.md → Publishing. Each Bot API call of publishBotProfile (grammY's
 // ApiClientOptions.timeoutSeconds), one attempt, made one after another; the calls of one
-// publish, which bot-texts/publish.test.ts compares with BOT_PROFILE_METHODS.
+// publish, which bot-texts/publish.test.ts compares with BOT_PROFILE_METHODS (@binarius/shared).
 export const BOT_PROFILE_PUBLISH_TIMEOUT_MS = 2_000;
 export const BOT_PROFILE_PUBLISH_CALLS = 3;
 
@@ -226,7 +226,7 @@ export const TIMING_CHAIN_HOLDS =
   BOT_TEXTS_LOAD_BUDGET_MS < BOT_TEXTS_REFRESH_MS &&
   BOT_TEXTS_LOAD_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // one publish of the menu and the profile inside its contract constant, which web sizes its
-  // request timeout above when the admin section publishes (#361), and inside phase 1
+  // request timeout above (the admin routes publish inside a request, #361), and inside phase 1
   BOT_PROFILE_PUBLISH_CALLS * BOT_PROFILE_PUBLISH_TIMEOUT_MS <= BOT_PROFILE_PUBLISH_BUDGET_MS &&
   BOT_PROFILE_PUBLISH_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS;
 if (!TIMING_CHAIN_HOLDS) {

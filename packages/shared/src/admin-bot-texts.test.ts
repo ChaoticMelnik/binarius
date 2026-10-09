@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ADMIN_BOT_PROFILE_IDENTITY_MAX,
   ADMIN_BOT_TEXT_FRAGMENTS_MAX,
+  adminBotProfileIdentity,
+  adminBotProfilePublishedSchema,
+  adminBotProfilePublishResponseSchema,
   ADMIN_BOT_TEXT_REASON_MAX,
   adminBotTextReason,
   adminBotTextPreviewResponseSchema,
+  adminBotTextResetResponseSchema,
   adminBotTextResponseSchema,
+  adminBotTextSaveResponseSchema,
   adminBotTextSaveRequestSchema,
-  isAdminBotTextEditable,
   renderBotTextPreview,
 } from './admin-bot-texts';
 import { BotTextProblemCode } from './bot-text-template';
@@ -20,20 +25,6 @@ const me = {
   sessionId: '00000000-0000-4000-8000-000000000002',
 };
 const text = { key: 'welcome', override: null, rejection: null, fragments: [] };
-
-describe('the read-only fence of the admin (#300)', () => {
-  it('holds exactly the commands and the profile', () => {
-    const readOnly = keys.filter((key) => !isAdminBotTextEditable(key));
-    expect(readOnly).toEqual(
-      keys.filter((key) => ['commands', 'profile'].includes(BOT_TEXT_CATALOG[key].group)),
-    );
-    expect(readOnly).toContain('profileDescription');
-    expect(readOnly).toContain('startCommand');
-    for (const key of ['welcome', 'connectButton', 'levelAll'] as const) {
-      expect(isAdminBotTextEditable(key)).toBe(true);
-    }
-  });
-});
 
 describe('adminBotTextReason', () => {
   it('cuts a long reason to the wire limit and leaves a short one alone', () => {
@@ -96,6 +87,90 @@ describe('the wire schemas', () => {
       adminBotTextSaveRequestSchema.safeParse({ source, expectedVersion: 0 }).success;
     expect(save('😀'.repeat(16384))).toBe(true);
     expect(save('😀'.repeat(16385))).toBe(false);
+  });
+});
+
+describe('the publish result (#361)', () => {
+  const ok = { method: 'setMyCommands', ok: true } as const;
+  const failed = {
+    method: 'setMyDescription',
+    ok: false,
+    err: { name: 'GrammyError' },
+    telegramErrorCode: 400,
+  } as const;
+  const timedOut = {
+    method: 'setMyShortDescription',
+    ok: false,
+    err: { name: 'HttpError' },
+    cause: { name: 'AbortError', code: 'ETIMEDOUT' },
+  } as const;
+  const parses = (published: unknown) =>
+    adminBotProfilePublishedSchema.safeParse(published).success;
+
+  it('S4 takes one result a method by identity, and refuses what the backend grew', () => {
+    expect(parses([])).toBe(true);
+    expect(parses([ok, failed, timedOut])).toBe(true);
+    expect(parses([{ ...failed, description: 'Bad Request: SECRET' }])).toBe(false);
+    expect(parses([{ ...ok, method: 'deleteMyCommands' }])).toBe(false);
+    expect(parses([{ ...ok, err: { name: 'GrammyError' } }])).toBe(false);
+    expect(parses([{ ...ok, ok: 'true' }])).toBe(false);
+    expect(parses([{ ...failed, telegramErrorCode: 40 }])).toBe(false);
+    expect(parses([{ ...failed, err: { name: '' } }])).toBe(false);
+    expect(parses([{ ...failed, err: { name: 'E'.repeat(129) } }])).toBe(false);
+    expect(parses([ok, failed, timedOut, ok])).toBe(false);
+  });
+
+  it('S5 no answer is read-only any more: every key of the catalog is written and published', () => {
+    const readOnly = { me, text, outcome: 'read_only' };
+    expect(adminBotTextPreviewResponseSchema.safeParse(readOnly).success).toBe(false);
+    expect(adminBotTextSaveResponseSchema.safeParse(readOnly).success).toBe(false);
+    expect(adminBotTextResetResponseSchema.safeParse(readOnly).success).toBe(false);
+  });
+
+  it('S6 a save or a reset that wrote always says what it published', () => {
+    const saved = { me, text, outcome: 'saved', version: 3 };
+    expect(adminBotTextSaveResponseSchema.safeParse(saved).success).toBe(false);
+    expect(adminBotTextSaveResponseSchema.safeParse({ ...saved, published: [] }).success).toBe(
+      true,
+    );
+    expect(adminBotTextSaveResponseSchema.safeParse({ ...saved, published: [ok] }).success).toBe(
+      true,
+    );
+    const reset = { me, text: null, outcome: 'reset' };
+    expect(adminBotTextResetResponseSchema.safeParse(reset).success).toBe(false);
+    expect(adminBotTextResetResponseSchema.safeParse({ ...reset, published: [] }).success).toBe(
+      true,
+    );
+    expect(
+      adminBotTextSaveResponseSchema.safeParse({ me, text, outcome: 'unchanged', published: [] })
+        .success,
+    ).toBe(false);
+  });
+
+  it('S7 takes a republish answer with three results and refuses a key the backend grew', () => {
+    const answer = { me, published: [ok, failed, timedOut] };
+    expect(adminBotProfilePublishResponseSchema.safeParse(answer).success).toBe(true);
+    expect(
+      adminBotProfilePublishResponseSchema.safeParse({ ...answer, me: { ...me, x: 1 } }).success,
+    ).toBe(false);
+    expect(adminBotProfilePublishResponseSchema.safeParse({ me }).success).toBe(false);
+  });
+
+  it('S8 holds an identity to what the wire takes', () => {
+    const max = ADMIN_BOT_PROFILE_IDENTITY_MAX;
+    expect(adminBotProfileIdentity({ name: '' })).toEqual({ name: 'Error' });
+    expect(
+      adminBotProfileIdentity({ name: 'E'.repeat(max + 1), code: 'C'.repeat(max + 1) }),
+    ).toEqual({ name: 'E'.repeat(max), code: 'C'.repeat(max) });
+    expect(adminBotProfileIdentity({ name: 'HttpError', code: '' })).toEqual({ name: 'HttpError' });
+    expect(adminBotProfileIdentity({ name: 'string' })).toEqual({ name: 'string' });
+    expect(adminBotProfileIdentity({ name: 'GrammyError', code: 'E1' })).toEqual({
+      name: 'GrammyError',
+      code: 'E1',
+    });
+    for (const value of [{ name: '' }, { name: 'E'.repeat(max + 1), code: 'C'.repeat(max + 1) }]) {
+      expect(parses([{ ...failed, err: adminBotProfileIdentity(value) }])).toBe(true);
+    }
   });
 });
 

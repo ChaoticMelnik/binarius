@@ -12,6 +12,7 @@ import { createBrokerRestClient, createPairsCatalog } from '@binarius/broker-res
 import { createDb, createTokenCipher, listBotTextOverrides } from '@binarius/db';
 import { createCachedSignalFeed, createSignalFeed } from '@binarius/signal';
 import { createAdminBot } from './admin/telegram';
+import { createBotProfileApi } from './bot-texts/publish';
 import { buildApp } from './app';
 import type { TradingRoutesDeps } from './trading/routes';
 import { createLinkNotifier } from './auth/link-notifier';
@@ -202,6 +203,7 @@ const app = buildApp({
     db,
     adminWebToken: env.adminWebToken,
     telegram: adminBot,
+    botProfileApi: createBotProfileApi({ token: env.telegramBotToken }),
   },
 });
 

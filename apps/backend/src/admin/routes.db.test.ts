@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
+import { GrammyError } from 'grammy';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   ADMIN_BOT_TEXT_BODY_LIMIT_BYTES,
@@ -10,6 +11,8 @@ import {
   adminBotTextResponseSchema,
   adminBotTextSaveResponseSchema,
   adminBotTextsResponseSchema,
+  adminBotProfilePublishResponseSchema,
+  BOT_COMMAND_SCOPE,
   BOT_TEXT_CATALOG,
   ADMIN_SEARCH_MAX_LENGTH,
   ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS,
@@ -67,7 +70,7 @@ import {
 } from '@binarius/db/testing';
 import { buildApp } from '../app';
 import { createPasswordQueue } from './password-queue';
-import { stubTelegram, unusedAdminDeps } from './testing';
+import { fakeBotProfileApi, stubTelegram, unusedAdminDeps } from './testing';
 import {
   unusedAccessTokenDeps,
   unusedBalanceDeps,
@@ -2350,6 +2353,7 @@ describe('the bot texts pages (#300)', () => {
     ['POST', '/admin/bot-texts/welcome/preview', { source: 'x' }],
     ['POST', '/admin/bot-texts/welcome/save', { source: 'x', expectedVersion: 0 }],
     ['POST', '/admin/bot-texts/welcome/reset', { expectedVersion: 0 }],
+    ['POST', '/admin/bot-texts/publish', undefined],
   ] as const)(
     'T1 refuses %s %s without a live session and writes nothing',
     async (method, url, payload) => {
@@ -2560,22 +2564,73 @@ describe('the bot texts pages (#300)', () => {
     });
   });
 
-  it.each(['preview', 'save', 'reset'])(
-    'T9 keeps a commands key read-only on %s, before the writer',
-    async (action) => {
-      const { seeded, token } = await signedIn();
-      const { status, body } = await post(token, textUrl('startCommand', action), {
-        ...(action === 'reset' ? {} : { source: 'Старт' }),
-        ...(action === 'preview' ? {} : { expectedVersion: 0 }),
-      });
-      expect([status, body.outcome]).toEqual([200, 'read_only']);
-      expect(await botTextRows()).toEqual([]);
-      expect((await lastEntry(seeded.staffId))?.payload).toMatchObject({
+  // the menu publishBotProfile sends with the catalog's defaults (#301), /start overridden
+  const menuWithStart = (start: string) => [
+    { command: 'start', description: start },
+    { command: 'menu', description: 'Главное меню' },
+    { command: 'account', description: 'Аккаунт Binodex' },
+    { command: 'settings', description: 'Настройки уведомлений' },
+    { command: 'help', description: 'Помощь' },
+    { command: 'support', description: 'Поддержка' },
+  ];
+  const withProfileApi = async (options: Parameters<typeof fakeBotProfileApi>[0] = {}) => {
+    const fake = fakeBotProfileApi(options);
+    await app.close();
+    app = build({ botProfileApi: fake.api });
+    return fake;
+  };
+  const publishRows = async (staffId: string) =>
+    (await entriesFor(staffId)).filter((row) => row.action === AuditAction.BotProfilePublished);
+
+  it('T9 previews and saves a commands key, then publishes the menu from the committed rows', async () => {
+    // inside the call, on another connection of the pool: the row is there only after the commit
+    const seenByTelegram: string[][] = [];
+    const fake = await withProfileApi({
+      onCall: async () => {
+        seenByTelegram.push((await botTextRows()).map((row) => row.source));
+      },
+    });
+    const { seeded, token } = await signedIn();
+    const preview = await post(token, textUrl('startCommand', 'preview'), { source: 'Старт' });
+    expect(preview.body).toMatchObject({
+      outcome: 'rendered',
+      rendered: { kind: 'plain', text: 'Старт' },
+    });
+    expect(fake.calls).toEqual([]);
+    const before = (await entriesFor(seeded.staffId)).length;
+
+    const { status, body } = await post(token, textUrl('startCommand', 'save'), {
+      source: 'Старт',
+      expectedVersion: 0,
+    });
+    expect(status).toBe(200);
+    expect(adminBotTextSaveResponseSchema.parse(body)).toMatchObject({
+      outcome: 'saved',
+      published: [{ method: 'setMyCommands', ok: true }],
+    });
+    expect(await botTextRows()).toMatchObject([{ key: 'startCommand', source: 'Старт' }]);
+    expect(seenByTelegram).toEqual([['Старт']]);
+    expect(fake.calls).toEqual([
+      { method: 'setMyCommands', args: [menuWithStart('Старт'), { scope: BOT_COMMAND_SCOPE }] },
+    ]);
+    const added = (await entriesFor(seeded.staffId)).slice(before);
+    expect(added.map((row) => row.action)).toEqual([
+      AuditAction.BotTextSaved,
+      AuditAction.BotProfilePublished,
+    ]);
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.BotProfilePublished,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.BotText,
+      entityId: null,
+      payload: {
+        path: '/admin/bot-texts/:key/save',
+        trigger: 'save',
         key: 'startCommand',
-        result: 'read_only',
-      });
-    },
-  );
+        methods: [{ method: 'setMyCommands', ok: true }],
+      },
+    });
+  });
 
   it('T10 resets: the row goes, the default is the new text; a stale version, a default, an orphan', async () => {
     const { seeded, token } = await signedIn();
@@ -2658,6 +2713,286 @@ describe('the bot texts pages (#300)', () => {
       key: 'zzz',
       result: 'not_found',
     });
+  });
+
+  it('T13 saves a key that publishes nothing without calling Telegram or writing a second row', async () => {
+    const fake = await withProfileApi();
+    const { seeded, token } = await signedIn();
+    const before = (await entriesFor(seeded.staffId)).length;
+    const { body } = await post(token, textUrl('welcome', 'save'), {
+      source: 'Привет',
+      expectedVersion: 0,
+    });
+    expect(adminBotTextSaveResponseSchema.parse(body)).toMatchObject({
+      outcome: 'saved',
+      published: [],
+    });
+    expect(fake.calls).toEqual([]);
+    expect((await entriesFor(seeded.staffId)).length).toBe(before + 1);
+  });
+
+  it('T14 keeps the text when Telegram refuses, and reports the refusal by identity only', async () => {
+    const lines: string[] = [];
+    const fake = fakeBotProfileApi({
+      fail: {
+        setMyCommands: new GrammyError(
+          'Call to setMyCommands failed!',
+          { ok: false, error_code: 400, description: 'Bad Request: SECRET' },
+          'setMyCommands',
+          {},
+        ),
+      },
+    });
+    await app.close();
+    app = build({ botProfileApi: fake.api }, { write: (line) => void lines.push(line) }, 'warn');
+    const { seeded, token } = await signedIn();
+
+    const response = await postAsStaff(textUrl('menuCommand', 'save'), token, {
+      source: 'Меню',
+      expectedVersion: 0,
+    });
+    const failed = {
+      method: 'setMyCommands',
+      ok: false,
+      err: { name: 'GrammyError' },
+      telegramErrorCode: 400,
+    };
+    expect(response.statusCode).toBe(200);
+    expect(adminBotTextSaveResponseSchema.parse(response.json())).toMatchObject({
+      outcome: 'saved',
+    });
+    expect(response.json<{ published: unknown }>().published).toStrictEqual([failed]);
+    expect(await botTextRows()).toMatchObject([{ key: 'menuCommand', source: 'Меню' }]);
+    expect((await publishRows(seeded.staffId)).map((row) => row.payload)).toEqual([
+      {
+        path: '/admin/bot-texts/:key/save',
+        trigger: 'save',
+        key: 'menuCommand',
+        methods: [failed],
+      },
+    ]);
+    const warned = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.msg === 'bot profile not published');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatchObject({
+      method: 'setMyCommands',
+      err: { name: 'GrammyError' },
+      telegramErrorCode: 400,
+    });
+    expect(lines.join('\n')).not.toContain('SECRET');
+    expect(response.body).not.toContain('SECRET');
+  });
+
+  it('T15 resets a profile key and publishes its method; an orphan publishes nothing', async () => {
+    const fake = await withProfileApi();
+    const { seeded, token } = await signedIn();
+    const saved = await cliSave('profileShortDescription', 'Коротко');
+    if (!saved.ok) throw new Error('the seed save failed');
+
+    const { body } = await post(token, textUrl('profileShortDescription', 'reset'), {
+      expectedVersion: saved.version,
+    });
+    expect(adminBotTextResetResponseSchema.parse(body)).toMatchObject({
+      outcome: 'reset',
+      published: [{ method: 'setMyShortDescription', ok: true }],
+    });
+    expect(fake.calls).toEqual([
+      {
+        method: 'setMyShortDescription',
+        args: [BOT_TEXT_CATALOG.profileShortDescription.source],
+      },
+    ]);
+    expect((await publishRows(seeded.staffId)).map((row) => row.payload)).toEqual([
+      {
+        path: '/admin/bot-texts/:key/reset',
+        trigger: 'reset',
+        key: 'profileShortDescription',
+        methods: [{ method: 'setMyShortDescription', ok: true }],
+      },
+    ]);
+
+    await tmp.db.insert(botTextOverrides).values({ key: 'zzz', source: 'x' });
+    const [orphan] = await tmp.db
+      .select()
+      .from(botTextOverrides)
+      .where(eq(botTextOverrides.key, 'zzz'));
+    const removed = await post(token, textUrl('zzz', 'reset'), {
+      expectedVersion: orphan!.version,
+    });
+    expect(removed.body).toMatchObject({ outcome: 'reset', text: null, published: [] });
+    expect(fake.calls).toHaveLength(1);
+    expect(await publishRows(seeded.staffId)).toHaveLength(1);
+  });
+
+  it('T16 republishes all three from the rows under a live session: one row, no touch', async () => {
+    const fake = await withProfileApi({
+      fail: { setMyDescription: Object.assign(new Error('boom'), { name: 'HttpError' }) },
+    });
+    const { seeded, token } = await signedIn();
+    await cliSave('startCommand', 'Поехали');
+    await cliSave('profileDescription', 'Про бота');
+    const lastSeen = async () => {
+      const [row] = await tmp.db
+        .select({ lastSeenAt: staffSessions.lastSeenAt })
+        .from(staffSessions)
+        .where(eq(staffSessions.staffId, seeded.staffId));
+      return row?.lastSeenAt.toISOString();
+    };
+    await tmp.db
+      .update(staffSessions)
+      .set({
+        createdAt: sql`now() - interval '5 minutes'`,
+        lastSeenAt: sql`now() - interval '5 minutes'`,
+      })
+      .where(eq(staffSessions.staffId, seeded.staffId));
+    const seenBefore = await lastSeen();
+    const before = (await entriesFor(seeded.staffId)).length;
+
+    const response = await postAsStaff('/admin/bot-texts/publish', token, {});
+    const published = [
+      { method: 'setMyCommands', ok: true },
+      { method: 'setMyDescription', ok: false, err: { name: 'HttpError' } },
+      { method: 'setMyShortDescription', ok: true },
+    ];
+    expect(response.statusCode).toBe(200);
+    expect(adminBotProfilePublishResponseSchema.parse(response.json())).toEqual({
+      me: { staffId: seeded.staffId, login: seeded.login, sessionId: expect.any(String) },
+      published,
+    });
+    expect(fake.calls).toEqual([
+      { method: 'setMyCommands', args: [menuWithStart('Поехали'), { scope: BOT_COMMAND_SCOPE }] },
+      { method: 'setMyDescription', args: ['Про бота'] },
+      {
+        method: 'setMyShortDescription',
+        args: [BOT_TEXT_CATALOG.profileShortDescription.source],
+      },
+    ]);
+    const added = (await entriesFor(seeded.staffId)).slice(before);
+    expect(added).toEqual([
+      {
+        action: AuditAction.BotProfilePublished,
+        payload: { path: '/admin/bot-texts/publish', trigger: 'republish', methods: published },
+      },
+    ]);
+    expect(await lastSeen()).toBe(seenBefore);
+  });
+
+  it.each([
+    ['unchanged', BOT_TEXT_CATALOG.startCommand.source, 0],
+    ['version_conflict', 'Старт', 1000],
+    ['refused', 'Старт\nещё', 0],
+  ] as const)(
+    'T17 publishes nothing on a save that ends %s',
+    async (outcome, source, expectedVersion) => {
+      const fake = await withProfileApi();
+      const { seeded, token } = await signedIn();
+      const { body } = await post(token, textUrl('startCommand', 'save'), {
+        source,
+        expectedVersion,
+      });
+      expect(body.outcome).toBe(outcome);
+      expect(fake.calls).toEqual([]);
+      expect(await publishRows(seeded.staffId)).toEqual([]);
+    },
+  );
+
+  it('T18 holds a failure identity to what the wire takes; the log keeps it whole', async () => {
+    const lines: string[] = [];
+    const long = 'E'.repeat(200);
+    const fake = fakeBotProfileApi({
+      fail: {
+        // a code outside an HTTP status is left out of the answer, as a bad name is replaced
+        setMyCommands: Object.assign(
+          new GrammyError(
+            'Call to setMyCommands failed!',
+            { ok: false, error_code: 99, description: 'x' },
+            'setMyCommands',
+            {},
+          ),
+          { name: '' },
+        ),
+        setMyDescription: Object.assign(new Error('x'), { name: long, code: 'C'.repeat(200) }),
+        setMyShortDescription: 'not an error',
+      },
+    });
+    await app.close();
+    app = build({ botProfileApi: fake.api }, { write: (line) => void lines.push(line) }, 'warn');
+    const { seeded, token } = await signedIn();
+
+    const response = await postAsStaff('/admin/bot-texts/publish', token, {});
+    const published = [
+      { method: 'setMyCommands', ok: false, err: { name: 'Error' } },
+      {
+        method: 'setMyDescription',
+        ok: false,
+        err: { name: 'E'.repeat(128), code: 'C'.repeat(128) },
+      },
+      { method: 'setMyShortDescription', ok: false, err: { name: 'string' } },
+    ];
+    expect(adminBotProfilePublishResponseSchema.parse(response.json()).published).toEqual(
+      published,
+    );
+    expect((await publishRows(seeded.staffId)).map((row) => row.payload)).toEqual([
+      { path: '/admin/bot-texts/publish', trigger: 'republish', methods: published },
+    ]);
+    const warned = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.msg === 'bot profile not published');
+    expect(warned[0]).toMatchObject({ telegramErrorCode: 99 });
+    expect(warned.map((line) => line.err)).toEqual([
+      { name: '' },
+      { name: long, code: 'C'.repeat(200) },
+      { name: 'string' },
+    ]);
+  });
+
+  it('T19 queues the admin publishes: the second reads the rows only after the first was sent', async () => {
+    let token = '';
+    let second: ReturnType<typeof post> | undefined;
+    let callsWhileHeld = -1;
+    // the first call is held here: inside it the second save commits and gets every chance to send
+    const fake = await withProfileApi({
+      onCall: async () => {
+        if (second !== undefined) return;
+        second = post(token, textUrl('menuCommand', 'save'), {
+          source: 'Меню',
+          expectedVersion: 0,
+        });
+        await until('the second save to commit', async () =>
+          (await botTextRows()).some((row) => row.key === 'menuCommand'),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        callsWhileHeld = fake.calls.length;
+      },
+    });
+    const signed = await signedIn();
+    token = signed.token;
+
+    const first = await post(token, textUrl('startCommand', 'save'), {
+      source: 'Старт',
+      expectedVersion: 0,
+    });
+    const later = await second!;
+
+    expect(callsWhileHeld).toBe(1);
+    for (const answer of [first, later]) {
+      expect(answer.body).toMatchObject({
+        outcome: 'saved',
+        published: [{ method: 'setMyCommands', ok: true }],
+      });
+    }
+    const withMenu = (menu: string) =>
+      menuWithStart('Старт').map((command) =>
+        command.command === 'menu' ? { ...command, description: menu } : command,
+      );
+    expect(fake.calls).toEqual([
+      { method: 'setMyCommands', args: [withMenu('Главное меню'), { scope: BOT_COMMAND_SCOPE }] },
+      { method: 'setMyCommands', args: [withMenu('Меню'), { scope: BOT_COMMAND_SCOPE }] },
+    ]);
+    expect(
+      (await publishRows(signed.seeded.staffId)).map((row) => (row.payload as { key: string }).key),
+    ).toEqual(['startCommand', 'menuCommand']);
   });
 });
 

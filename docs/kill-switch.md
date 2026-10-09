@@ -28,7 +28,7 @@ Holders of open trades get no notice.
 
 ## The row
 
-`trading_switch` (`packages/db/src/schema/trading-switch.ts`, migrations 0019, 0020 and 0032):
+`trading_switch` (`packages/db/src/schema/trading-switch.ts`, migrations 0019, 0020 and 0033):
 
 | Column | Rule |
 |---|---|
@@ -149,7 +149,7 @@ The falsifiable sign that real is trading: `select count(*) from trade_intents w
 
 The worker closes the switch on its own when the broker stops answering:
 `stopTrading({ source: circuit_breaker, reason: «Автостоп: …» })`, demo and real together, audited
-with `via: circuit_breaker`. It never opens: migration 0032 adds
+with `via: circuit_breaker`. It never opens: migration 0033 adds
 `trading_switch_open_source_check check (not trading_enabled or source in ('migration',
 'operator'))`, and `openTrading` writes `source = operator` in the same UPDATE, so the operator's
 `kill-switch off` is the way back. `status` shows «… источник circuit_breaker): Автостоп: …».

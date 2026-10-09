@@ -4,6 +4,8 @@
 import type { Api, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
+import type { BotProfileMethod } from '@binarius/shared';
+import type { BotProfileApi } from '../bot-texts/publish';
 import type { AdminRoutesDeps } from './routes';
 
 export const ADMIN_BOT_INFO: UserFromGetMe = {
@@ -174,4 +176,43 @@ export const unusedAdminDeps = (): AdminRoutesDeps => ({
   db: {} as never,
   adminWebToken: 'admin-web-token-for-tests',
   telegram: stubTelegram(false),
+  botProfileApi: fakeBotProfileApi({
+    onCall: () => {
+      throw new Error('unused');
+    },
+  }).api,
 });
+
+export interface BotProfileCall {
+  method: BotProfileMethod;
+  args: unknown[];
+}
+
+/**
+ * A BotProfileApi that records each call. `fail` names the methods that throw instead, and
+ * `onCall` runs inside the call, before it answers — where a test looks at the database.
+ */
+export function fakeBotProfileApi(
+  options: {
+    fail?: Partial<Record<BotProfileMethod, unknown>>;
+    onCall?: (method: BotProfileMethod) => Promise<void> | void;
+  } = {},
+) {
+  const calls: BotProfileCall[] = [];
+  const method =
+    (name: BotProfileMethod) =>
+    async (...args: unknown[]): Promise<true> => {
+      calls.push({ method: name, args });
+      await options.onCall?.(name);
+      if (options.fail !== undefined && Object.hasOwn(options.fail, name)) {
+        throw options.fail[name];
+      }
+      return true;
+    };
+  const api: BotProfileApi = {
+    setMyCommands: method('setMyCommands'),
+    setMyDescription: method('setMyDescription'),
+    setMyShortDescription: method('setMyShortDescription'),
+  };
+  return { api, calls };
+}

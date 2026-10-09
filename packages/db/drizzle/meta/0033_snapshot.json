@@ -1,6 +1,6 @@
 {
-  "id": "088b5c4e-34bb-48c7-aca2-61dcb75f2861",
-  "prevId": "e77de7df-6abd-4392-aa56-e7e7a26b3cea",
+  "id": "57eca267-36aa-4afb-b7eb-d082893fbdc9",
+  "prevId": "088b5c4e-34bb-48c7-aca2-61dcb75f2861",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2636,11 +2636,15 @@
         },
         "trading_switch_source_check": {
           "name": "trading_switch_source_check",
-          "value": "\"trading_switch\".\"source\" in ('migration', 'operator')"
+          "value": "\"trading_switch\".\"source\" in ('migration', 'operator', 'circuit_breaker')"
         },
         "trading_switch_stop_reason_check": {
           "name": "trading_switch_stop_reason_check",
           "value": "\"trading_switch\".\"trading_enabled\" or \"trading_switch\".\"reason\" is not null"
+        },
+        "trading_switch_open_source_check": {
+          "name": "trading_switch_open_source_check",
+          "value": "not \"trading_switch\".\"trading_enabled\" or \"trading_switch\".\"source\" in ('migration', 'operator')"
         },
         "trading_switch_reason_length_check": {
           "name": "trading_switch_reason_length_check",

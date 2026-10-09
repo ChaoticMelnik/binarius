@@ -7,6 +7,7 @@ import {
   SAMPLE_BOT_TEXT,
   SAMPLE_BOT_TEXTS,
   SAMPLE_INTENT,
+  SAMPLE_PUBLISHED,
   SAMPLE_INTENT_RESPONSE,
   SAMPLE_INTENTS,
   SAMPLE_LEDGER_ENTRY,
@@ -497,7 +498,7 @@ describe('the bot texts calls (#300)', () => {
       'POST',
       '/api/admin/bot-texts/a%20b/preview',
       { source: 'x' },
-      { ...text, outcome: 'read_only' },
+      { ...text, outcome: 'refused', problems: [{ key: 'welcome', reason: 'Пустой текст' }] },
     ],
     [
       'saveBotText',
@@ -505,7 +506,7 @@ describe('the bot texts calls (#300)', () => {
       'POST',
       '/api/admin/bot-texts/welcome/save',
       { source: 'x', expectedVersion: 7 },
-      { ...text, outcome: 'saved', version: 8 },
+      { ...text, outcome: 'saved', version: 8, published: [] },
     ],
     [
       'resetBotText',
@@ -513,7 +514,15 @@ describe('the bot texts calls (#300)', () => {
       'POST',
       '/api/admin/bot-texts/zzz/reset',
       { expectedVersion: 9 },
-      { me: SAMPLE_ME, text: null, outcome: 'reset' },
+      { me: SAMPLE_ME, text: null, outcome: 'reset', published: [] },
+    ],
+    [
+      'publishBotProfile',
+      [],
+      'POST',
+      '/api/admin/bot-texts/publish',
+      undefined,
+      { me: SAMPLE_ME, published: SAMPLE_PUBLISHED },
     ],
   ] as const)(
     '%s sends its path, the bearer, the session and the body',
@@ -535,6 +544,27 @@ describe('the bot texts calls (#300)', () => {
     const { client } = await prefixed({ ...text, outcome: 'unchanged', extra: 1 });
     const save = client.saveBotText(SESSION, 'welcome', { source: 'x', expectedVersion: 0 });
     expect(await rejectionOf(save)).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('C6 publishes with no body, and refuses an answer the contract does not take', async () => {
+    const { client, captured } = await prefixed({ me: SAMPLE_ME, published: SAMPLE_PUBLISHED });
+    await client.publishBotProfile(SESSION);
+    expect(captured.body ?? '').toBe('');
+    expect(captured.headers?.['content-type']).toBeUndefined();
+
+    for (const answer of [
+      { me: SAMPLE_ME, published: SAMPLE_PUBLISHED, extra: 1 },
+      { me: SAMPLE_ME, published: [...SAMPLE_PUBLISHED, SAMPLE_PUBLISHED[0]] },
+      {
+        me: SAMPLE_ME,
+        published: [{ method: 'setMyCommands', ok: false, err: { name: 'E', message: 'x' } }],
+      },
+    ]) {
+      const refused = await prefixed(answer);
+      expect(await rejectionOf(refused.client.publishBotProfile(SESSION))).toMatchObject({
+        code: BackendErrorCode.ContractViolation,
+      });
+    }
   });
 
   it('refuses a 2xx with a preview Telegram would refuse', async () => {

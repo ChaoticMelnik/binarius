@@ -229,8 +229,15 @@
     {
       "idx": 32,
       "version": "7",
-      "when": 1791530135988,
-      "tag": "0032_trading_switch_circuit_breaker",
+      "when": 1791531887964,
+      "tag": "0032_bot_profile_published",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1791534807323,
+      "tag": "0033_trading_switch_circuit_breaker",
       "breakpoints": true
     }
   ]

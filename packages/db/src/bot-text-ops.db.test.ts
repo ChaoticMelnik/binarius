@@ -7,6 +7,7 @@ import {
   applyBotTextSave,
   listBotTextOverrides,
   lockBotTextOverrides,
+  recordBotProfilePublish,
   resetBotTextOverride,
   saveBotTextOverride,
   type BotTextActor,
@@ -299,5 +300,66 @@ describe('applyBotTextSave / applyBotTextReset (#300)', () => {
       currentVersion: 0,
       currentSource: BOT_TEXT_CATALOG.welcome.source,
     });
+  });
+});
+
+describe('recordBotProfilePublish (#361)', () => {
+  const STAFF_ID = '00000000-0000-4000-8000-000000000361';
+  const publishRows = () =>
+    tmp.db
+      .select({
+        actorType: auditLog.actorType,
+        actorId: auditLog.actorId,
+        entityType: auditLog.entityType,
+        entityId: auditLog.entityId,
+        payload: auditLog.payload,
+      })
+      .from(auditLog)
+      .where(
+        sql`${auditLog.createdAt} >= ${auditMark}::timestamptz and ${auditLog.action} = 'bot_profile_published'`,
+      )
+      .orderBy(auditLog.createdAt);
+
+  it('B17 writes one admin row a publish, with the key only for a save or a reset', async () => {
+    const failed = {
+      method: 'setMyCommands',
+      ok: false,
+      err: { name: 'GrammyError' },
+      telegramErrorCode: 400,
+    } as const;
+    await recordBotProfilePublish(tmp.db, {
+      staffId: STAFF_ID,
+      path: '/admin/bot-texts/:key/save',
+      trigger: 'save',
+      key: 'startCommand',
+      methods: [failed],
+    });
+    await recordBotProfilePublish(tmp.db, {
+      staffId: STAFF_ID,
+      path: '/admin/bot-texts/publish',
+      trigger: 'republish',
+      methods: [{ method: 'setMyDescription', ok: true }],
+    });
+
+    const row = { actorType: 'admin', actorId: STAFF_ID, entityType: 'bot_text', entityId: null };
+    expect(await publishRows()).toStrictEqual([
+      {
+        ...row,
+        payload: {
+          path: '/admin/bot-texts/:key/save',
+          trigger: 'save',
+          key: 'startCommand',
+          methods: [failed],
+        },
+      },
+      {
+        ...row,
+        payload: {
+          path: '/admin/bot-texts/publish',
+          trigger: 'republish',
+          methods: [{ method: 'setMyDescription', ok: true }],
+        },
+      },
+    ]);
   });
 });
