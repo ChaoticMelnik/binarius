@@ -66,6 +66,15 @@ export interface SessionLeases {
   release(): Promise<unknown>;
 }
 
+// The socket signal of the circuit breaker (#96): a session lost to the broker, once per loss. Not
+// our own drops (idle, the fence of #93, a refusal, stop()) and not token_expired/auth_failed.
+export interface SessionLossObserver {
+  lost(accountId: string): void;
+  // how long a session that was ready may stay not ready before it counts: longer than one full
+  // reconnect, so a broker restart that reconnects everyone does not count
+  graceMs: number;
+}
+
 export interface BrokerSessionManagerDeps {
   url: string;
   // production: listSessionCandidates over the worker's database
@@ -80,6 +89,7 @@ export interface BrokerSessionManagerDeps {
   leases: SessionLeases;
   // the fence's clock: monotonic, so a wall-clock jump neither extends nor cuts a lease
   monotonicNow?: () => number;
+  lossObserver?: SessionLossObserver;
   logger: SessionLogger;
   config: SessionManagerConfig;
   // passed to every client (tests shorten the waits)
@@ -103,6 +113,8 @@ export interface BrokerSessionManager extends TradeSessionSource {
   clientFor(accountId: string): BrokerSocketClient | undefined;
   // running + starting
   readonly size: number;
+  // running only: the socket share's denominator (#96)
+  readonly running: number;
 }
 
 type WriteSource = SessionDeadLetter['source'];
@@ -135,6 +147,10 @@ interface RunningEntry {
   idleSince?: number;
   // warn-once keys of the current connection
   warned: Set<string>;
+  // #96: ready at least once; when it left ready (Date.now()); this loss already reported
+  everReady: boolean;
+  lostSince?: number;
+  lossReported: boolean;
 }
 
 type Entry = StartingEntry | RunningEntry;
@@ -472,19 +488,27 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       case BrokerSocketState.Idle:
         entry.verified = false;
         entry.warned.clear();
+        // a ready session that left ready: a loss once it outlasts the grace (the tick decides)
+        if (change.from === BrokerSocketState.Ready) entry.lostSince ??= Date.now();
         return;
-      // the client closed its socket: no session while the token is fetched again
+      // the client closed its socket: no session while the token is fetched again. Credentials,
+      // not the connection: no loss
       case BrokerSocketState.TokenExpired:
       case BrokerSocketState.AuthFailed:
         entry.verified = false;
         entry.warned.clear();
+        entry.lostSince = undefined;
         if (!entry.refreshing) void refresh(entry, change.to);
         return;
       case BrokerSocketState.DisconnectedByServer:
         logger.info({ accountId, reason: change.to }, 'broker session closed');
+        if (entry.everReady && !entry.lossReported) deps.lossObserver?.lost(accountId);
         drop(accountId, config.retryMs);
         return;
       case BrokerSocketState.Ready:
+        entry.everReady = true;
+        entry.lostSince = undefined;
+        entry.lossReported = false;
         return;
     }
   }
@@ -600,6 +624,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       verified: false,
       refreshing: false,
       warned: new Set(),
+      everReady: false,
+      lossReported: false,
     };
     entries.set(accountId, entry);
     entry.client.onEvent((event) => onEvent(entry, event));
@@ -625,8 +651,22 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       void worker();
   }
 
+  // a session still not ready a grace after it left ready: one report per loss
+  function reportLosses(at: number) {
+    const observer = deps.lossObserver;
+    if (observer === undefined) return;
+    for (const [accountId, entry] of entries) {
+      if (entry.kind !== 'running' || entry.lostSince === undefined || entry.lossReported) continue;
+      if (at - entry.lostSince < observer.graceMs) continue;
+      entry.lossReported = true;
+      observer.lost(accountId);
+    }
+  }
+
   async function runTick() {
     const now = Date.now();
+    // before the scan: a database that fails the scan must not hide the broker's losses
+    reportLosses(now);
     for (const [accountId, until] of heldBack) {
       if (until <= now) heldBack.delete(accountId);
     }
@@ -780,6 +820,11 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     clientFor,
     get size() {
       return entries.size;
+    },
+    get running() {
+      let running = 0;
+      for (const entry of entries.values()) if (entry.kind === 'running') running += 1;
+      return running;
     },
   };
 }
