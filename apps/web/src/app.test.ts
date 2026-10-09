@@ -785,11 +785,16 @@ describe('the read pages (#107)', () => {
     expect(response.body).toContain(TEXTS.demoStakeDefault);
     expect(response.body).toContain('broker-7');
     expect(response.body).toContain(`<dd>${SAMPLE_USER.user.tokens.available}</dd>`);
-    // the shared accounts table (#342): the account id first, no owner column on the card
-    expect(response.body).toContain(`<td><code>${SAMPLE_BROKER_ACCOUNT_ITEM.id}</code></td>`);
+    // the shared accounts table (#342): the account id first, no owner column on the card; the
+    // section alone, since the deposits section prints the same account id
     const section = response.body.slice(
       response.body.indexOf(`<h2>${TEXTS.userBrokerAccounts}</h2>`),
       response.body.indexOf(`<h2>${TEXTS.userTrading}</h2>`),
+    );
+    expect(section).toMatch(
+      new RegExp(
+        `<tr>\\s*<td><code>${SAMPLE_BROKER_ACCOUNT_ITEM.id}</code></td>\\s*<td>broker-7</td>`,
+      ),
     );
     expect(section).toMatch(new RegExp(`<tr>\\s*<th>${TEXTS.columnAccountId}</th>`));
     expect(section).not.toContain(`<th>${TEXTS.columnTelegramId}</th>`);
