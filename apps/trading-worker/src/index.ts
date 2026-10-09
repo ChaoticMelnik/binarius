@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
@@ -10,11 +11,14 @@ import {
 } from '@binarius/shared';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import {
+  acquireSessionLease,
   applyBalanceEvent,
   createDb,
   listLinkedBrokerTradeIds,
   listSessionCandidates,
   OutboxTopic,
+  releaseSessionLeases,
+  renewSessionLeases,
   settleClosedTrades,
   upsertBalanceSnapshot,
 } from '@binarius/db';
@@ -85,13 +89,24 @@ const tokens = createBackendAccessTokenSource({
 const sessionDeadLetters = new Queue<DeadLetter>(TRADING_INTENTS_DEAD_LETTER_QUEUE, {
   connection: redis,
 });
+// this process's lease owner (#93): a fresh id per start, so a restarted container inherits no
+// lease it cannot prove it still fences
+const sessionOwnerId = randomUUID();
 const sessions =
   env.brokerWsUrl === undefined
     ? undefined
     : createBrokerSessionManager({
         url: env.brokerWsUrl,
         deadLetters: sessionDeadLetters,
-        candidates: (options) => listSessionCandidates(db, options),
+        leases: {
+          acquire: (accountId, ttlMs) =>
+            acquireSessionLease(db, { accountId, ownerId: sessionOwnerId, ttlMs }),
+          renew: (accountIds, ttlMs) =>
+            renewSessionLeases(db, { ownerId: sessionOwnerId, accountIds, ttlMs }),
+          release: () => releaseSessionLeases(db, { ownerId: sessionOwnerId }),
+        },
+        candidates: (options) =>
+          listSessionCandidates(db, { ...options, ownerId: sessionOwnerId }),
         tokens,
         writers: {
           snapshot: (brokerAccountId, user, modes) =>
@@ -255,7 +270,11 @@ process.once('SIGTERM', (signal) => void shutdown(signal));
 process.once('SIGINT', (signal) => void shutdown(signal));
 
 logger.info(
-  { concurrency: env.workerConcurrency, sessions: sessions !== undefined },
+  {
+    concurrency: env.workerConcurrency,
+    sessions: sessions !== undefined,
+    ...(sessions === undefined ? {} : { sessionOwnerId }),
+  },
   'trading-worker started',
 );
 // after the consumers: the first tick picks up the reconciling intents a dead process left

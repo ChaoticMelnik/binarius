@@ -57,6 +57,15 @@ export interface SessionWriters {
   closedTrades(accountId: string, trades: readonly ClosedTrade[]): Promise<ClosedTradeOutcome[]>;
 }
 
+// The account's lease (#93, docs/broker-session.md → The lease), bound to this process's owner id
+// by the caller: production is session-lease-ops.ts over the worker's database.
+export interface SessionLeases {
+  acquire(accountId: string, ttlMs: number): Promise<boolean>;
+  // the ids still held; a missing id is a lease lost
+  renew(accountIds: readonly string[], ttlMs: number): Promise<string[]>;
+  release(): Promise<unknown>;
+}
+
 export interface BrokerSessionManagerDeps {
   url: string;
   // production: listSessionCandidates over the worker's database
@@ -68,6 +77,9 @@ export interface BrokerSessionManagerDeps {
   writers: SessionWriters;
   // a writer that throws leaves its event here (#92)
   deadLetters: DeadLetterSink;
+  leases: SessionLeases;
+  // the fence's clock: monotonic, so a wall-clock jump neither extends nor cuts a lease
+  monotonicNow?: () => number;
   logger: SessionLogger;
   config: SessionManagerConfig;
   // passed to every client (tests shorten the waits)
@@ -81,6 +93,9 @@ export interface BrokerSessionManager extends TradeSessionSource {
   start(): void;
   // single-flight; the scan and the bookkeeping only, never waits for a start; never rejects
   tick(): Promise<void>;
+  // single-flight; one renewal of every lease the entries hold, every leaseRenewMs once started;
+  // never rejects
+  renewLeases(): Promise<void>;
   // the timer, the start pool, every client, then the write in flight per account within
   // stopBudgetMs; the writes queued behind it are dropped
   stop(): Promise<void>;
@@ -96,11 +111,14 @@ type WriteRef = Pick<SessionDeadLetter, 'mode' | 'brokerTradeIds'>;
 interface StartingEntry {
   kind: 'starting';
   candidate: SessionCandidate;
+  // the fence: monotonic time until which the lease is ours; unset until the acquire answered
+  leaseUntil?: number;
 }
 
 interface RunningEntry {
   kind: 'running';
   candidate: SessionCandidate;
+  leaseUntil: number;
   client: BrokerSocketClient;
   token: string;
   // this connection's user.data carried the account's broker user id
@@ -122,8 +140,9 @@ interface WriteQueue {
 }
 
 export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): BrokerSessionManager {
-  const { config, logger, tokens, writers } = deps;
+  const { config, logger, tokens, writers, leases } = deps;
   const openClient = deps.openClient ?? createBrokerSocketClient;
+  const now = deps.monotonicNow ?? (() => performance.now());
   const entries = new Map<string, Entry>();
   const heldBack = new Map<string, number>();
   const queues = new Map<string, WriteQueue>();
@@ -132,6 +151,9 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   let workers = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   let ticking: Promise<void> | undefined;
+  let renewTimer: ReturnType<typeof setInterval> | undefined;
+  let renewing: Promise<void> | undefined;
+  let fenceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const isCurrent = (accountId: string, entry: Entry) => entries.get(accountId) === entry;
 
@@ -146,6 +168,76 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     entries.delete(accountId);
     if (holdBackMs !== undefined) holdBack(accountId, holdBackMs);
     if (entry?.kind === 'running') entry.client.stop();
+  }
+
+  // A lease acquired or renewed by a statement sent at t0 holds in the database until at least
+  // t0 + leaseTtlMs (the database's now() is not earlier than the send), so the process trusts it
+  // until t0 + leaseFenceMs and closes the socket then, before anyone else may open one.
+  function armFence() {
+    if (fenceTimer !== undefined) clearTimeout(fenceTimer);
+    fenceTimer = undefined;
+    if (stopping.signal.aborted) return;
+    let earliest = Infinity;
+    for (const entry of entries.values()) {
+      if (entry.leaseUntil !== undefined) earliest = Math.min(earliest, entry.leaseUntil);
+    }
+    if (earliest === Infinity) return;
+    fenceTimer = setTimeout(fence, Math.max(0, earliest - now()));
+  }
+
+  function fence() {
+    fenceTimer = undefined;
+    const at = now();
+    for (const [accountId, entry] of [...entries]) {
+      if (entry.leaseUntil === undefined || entry.leaseUntil > at) continue;
+      logger.warn({ accountId, lateMs: Math.round(at - entry.leaseUntil) }, 'broker session lease fenced');
+      drop(accountId, config.retryMs);
+    }
+    armFence();
+  }
+
+  // Only the entries whose acquire has answered: an acquire still in flight may not have
+  // committed, and a renewal that misses its id would drop a lease about to be ours. The answer
+  // applies to the same entry objects it was sent for.
+  async function runRenewal() {
+    const sent = [...entries].filter(([, entry]) => entry.leaseUntil !== undefined);
+    if (sent.length === 0) return;
+    const t0 = now();
+    let held: string[];
+    try {
+      held = await leases.renew(
+        sent.map(([accountId]) => accountId),
+        config.leaseTtlMs,
+      );
+    } catch (error) {
+      // the fence decides: one failed renewal leaves every lease trusted (2 × renew < fence)
+      logger.error(errorLogFields(error), 'broker session lease renewal failed');
+      return;
+    }
+    if (stopping.signal.aborted) return;
+    const kept = new Set(held);
+    for (const [accountId, entry] of sent) {
+      if (!isCurrent(accountId, entry)) continue;
+      if (kept.has(accountId)) {
+        entry.leaseUntil = Math.max(entry.leaseUntil ?? 0, t0 + config.leaseFenceMs);
+        continue;
+      }
+      logger.warn({ accountId }, 'broker session lease lost');
+      drop(accountId, config.retryMs);
+    }
+    armFence();
+  }
+
+  function renewLeases(): Promise<void> {
+    if (stopping.signal.aborted) return Promise.resolve();
+    renewing ??= runRenewal()
+      .catch((error: unknown) => {
+        logger.error(errorLogFields(error), 'broker session lease renewal failed');
+      })
+      .finally(() => {
+        renewing = undefined;
+      });
+    return renewing;
   }
 
   // the hold-back a non-ok answer earns, with its log line; undefined while stopping
@@ -416,6 +508,24 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     const accountId = candidate.id;
     const starting: StartingEntry = { kind: 'starting', candidate };
     entries.set(accountId, starting);
+    // the lease before the token: an account another process holds costs no token fetch
+    const sentAt = now();
+    let acquired: boolean;
+    try {
+      acquired = await leases.acquire(accountId, config.leaseTtlMs);
+    } catch (error) {
+      if (stopping.signal.aborted || !isCurrent(accountId, starting)) return;
+      startFailed(accountId, error);
+      return;
+    }
+    if (stopping.signal.aborted || !isCurrent(accountId, starting)) return;
+    if (!acquired) {
+      logger.debug({ accountId }, 'broker session lease busy');
+      drop(accountId, config.retryMs);
+      return;
+    }
+    starting.leaseUntil = sentAt + config.leaseFenceMs;
+    armFence();
     let outcome: AccessTokenOutcome;
     try {
       outcome = await fetchToken(accountId);
@@ -432,6 +542,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     const entry: RunningEntry = {
       kind: 'running',
       candidate,
+      leaseUntil: starting.leaseUntil,
       client: openClient({
         url: deps.url,
         logger: logger.child({ accountId }),
@@ -547,12 +658,24 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     if (stopping.signal.aborted) return;
     if (timer !== undefined) clearInterval(timer);
     timer = undefined;
+    if (renewTimer !== undefined) clearInterval(renewTimer);
+    renewTimer = undefined;
+    if (fenceTimer !== undefined) clearTimeout(fenceTimer);
+    fenceTimer = undefined;
     stopping.abort();
     startQueue = [];
     for (const entry of entries.values()) {
       if (entry.kind === 'running') entry.client.stop();
     }
     entries.clear();
+    // after every socket closed: a successor that takes an account after the delete never
+    // overlaps ours. A release that fails or overruns only leaves the leases to lapse
+    const released = leases.release().then(
+      () => undefined,
+      (error: unknown) => {
+        logger.error(errorLogFields(error), 'broker session lease release failed');
+      },
+    );
 
     let dropped = 0;
     const inFlight: Promise<void>[] = [];
@@ -563,7 +686,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     }
     if (dropped > 0) logger.warn({ dropped }, 'broker session writes dropped at stop');
     if (ticking !== undefined) inFlight.push(ticking);
-    if (inFlight.length === 0) return;
+    inFlight.push(released);
 
     let pending = inFlight.length;
     const settled = Promise.all(
@@ -592,14 +715,19 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       if (stopping.signal.aborted || timer !== undefined) return;
       void tick();
       timer = setInterval(() => void tick(), config.tickMs);
+      renewTimer = setInterval(() => void renewLeases(), config.leaseRenewMs);
     },
     tick,
+    renewLeases,
     stop,
     // the executor gets the client only once this connection's user.data matched the account;
-    // until then its command goes over REST (the executor's no-session case)
+    // until then its command goes over REST (the executor's no-session case). Never past the
+    // fence, even before its timer has run: a late timer must not let a command through (#93)
     sessionFor(accountId) {
       const entry = entries.get(accountId);
-      return entry?.kind === 'running' && entry.verified ? entry.client : undefined;
+      return entry?.kind === 'running' && entry.verified && now() < entry.leaseUntil
+        ? entry.client
+        : undefined;
     },
     clientFor,
     get size() {
