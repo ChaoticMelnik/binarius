@@ -289,22 +289,28 @@ export const safeParseTradingSignalResponse = (input: unknown) =>
 
 export const TRADING_SIGNALS_PATH = '/trading/signals';
 
-// The one interval the backend's scanner decides (docs/signal.md -> The scanner): 5s trades keep
-// the on-demand analysis, the broker's budget does not fit both.
-export const SIGNAL_SCAN_INTERVAL = '15s' satisfies SignalInterval;
+// The intervals the backend's scanner decides, one scanner instance each, on its own share of the
+// budget (docs/signal.md -> The scanner); the order is the bot's main-path button order (#382).
+export const SIGNAL_SCAN_INTERVALS = ['15s', '5s'] as const satisfies readonly SignalInterval[];
+export type ScanInterval = (typeof SIGNAL_SCAN_INTERVALS)[number];
 
-// Only the pairs with a signal on the candle that closed most recently; times are unix ms.
+// One list per scanned interval; each holds only the pairs with a signal on that interval's candle
+// that closed most recently. Times are unix ms.
 export const tradingSignalsResponseSchema = z.strictObject({
   asOf: z.int().nonnegative(),
-  interval: z.literal(SIGNAL_SCAN_INTERVAL),
-  scanned: z.int().nonnegative(),
-  signals: z.array(
+  lists: z.array(
     z.strictObject({
-      assetId: createTradeIntentRequestSchema.shape.assetId,
-      action: tradeActionSchema,
-      lastCandleTimestamp: z.number(),
-      decidedAt: z.int().nonnegative(),
-      ageMs: z.int().nonnegative(),
+      interval: z.enum(SIGNAL_SCAN_INTERVALS),
+      scanned: z.int().nonnegative(),
+      signals: z.array(
+        z.strictObject({
+          assetId: createTradeIntentRequestSchema.shape.assetId,
+          action: tradeActionSchema,
+          lastCandleTimestamp: z.number(),
+          decidedAt: z.int().nonnegative(),
+          ageMs: z.int().nonnegative(),
+        }),
+      ),
     }),
   ),
 });

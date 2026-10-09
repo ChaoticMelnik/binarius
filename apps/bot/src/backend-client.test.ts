@@ -553,16 +553,21 @@ describe('readBotTexts (#299)', () => {
 describe('readSignals', () => {
   const SIGNALS = {
     asOf: 1_760_000_016_000,
-    interval: '15s',
-    scanned: 25,
-    signals: [
+    lists: [
       {
-        assetId: 101,
-        action: 'up',
-        lastCandleTimestamp: 1_760_000_000_000,
-        decidedAt: 1_760_000_015_500,
-        ageMs: 1_000,
+        interval: '15s',
+        scanned: 13,
+        signals: [
+          {
+            assetId: 101,
+            action: 'up',
+            lastCandleTimestamp: 1_760_000_000_000,
+            decidedAt: 1_760_000_015_500,
+            ageMs: 1_000,
+          },
+        ],
       },
+      { interval: '5s', scanned: 4, signals: [] },
     ],
   };
 
@@ -579,7 +584,15 @@ describe('readSignals', () => {
 
   it('reports an answer that fails the schema as a contract violation', async () => {
     const { baseUrl } = await serve((_request, reply) => {
-      json(reply, 200, { ...SIGNALS, interval: '5s' });
+      json(reply, 200, { ...SIGNALS, lists: [{ ...SIGNALS.lists[1], interval: '1m' }] });
+    });
+    const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readSignals());
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('reports the flat body from before #382 as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { asOf: SIGNALS.asOf, ...SIGNALS.lists[0] });
     });
     const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readSignals());
     expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });

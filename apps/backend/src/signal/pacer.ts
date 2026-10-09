@@ -1,6 +1,8 @@
 // The signal scanner's share of the broker's per-IP window (docs/signal.md -> The scanner): a
-// token bucket refilled at perMinute / 60 s and holding at most one candle's batch, so a batch
-// goes out right after the boundary and any 60 s window carries at most perMinute plus one batch.
+// token bucket refilled at perMinute / 60 s and holding at most one candle's batch plus one spare
+// token (signalScanCapacity in timing.ts), so a batch goes out right after the boundary even when
+// the timer fires a few ms earlier than the candle before, and any 60 s window carries at most
+// perMinute plus the capacity.
 // A rate_limited answer pauses it: for Retry-After held to [backoffMinMs, backoffMaxMs] when the
 // broker sent one, otherwise for a backoff that doubles from backoffMinMs to backoffMaxMs and
 // resets on the next decided answer. The calls in flight answer one 429 burst together, so a 429

@@ -20,6 +20,8 @@ import {
   NotificationLevel,
   SignalFeedOutcome,
   SIGNAL_ALGORITHM_VERSION,
+  SIGNAL_CHART_INTERVAL_MS,
+  SIGNAL_SCAN_INTERVALS,
   SignalKind,
   TradeAction,
   TradeIntentStatus,
@@ -35,6 +37,7 @@ import {
   type PairsCatalogResponse,
   type PairView,
   type PendingLinkedAccountView,
+  type ScanInterval,
   type SignalDecision,
   type SignalFeatures,
   type SignalParams,
@@ -42,6 +45,7 @@ import {
   type TradingAccessResponse,
   type TradingSessionView,
   type TradingSignalResponse,
+  type TradingSignalsResponse,
   type UserAccountView,
   type UserStartView,
   BOT_TEXT_CATALOG,
@@ -223,6 +227,41 @@ export const PAIR_MINUTE_ONLY: PairView = {
   maxTimeframe: 3600,
   scheduledUntil: 0,
 };
+// accepts 15 s and not 5 s: a signal on the 5 s list has no button for it (#382)
+export const PAIR_15S_ONLY: PairView = {
+  id: 606,
+  symbol: 'NZD/USD OTC',
+  isOtc: true,
+  type: 'currency',
+  digits: 5,
+  payout: 83,
+  maxPayout: 88,
+  minTimeframe: 15,
+  maxTimeframe: 3600,
+  scheduledUntil: 0,
+};
+
+// GET /trading/signals (#382): a list for every interval of SIGNAL_SCAN_INTERVALS, in the route's
+// order, with the given signals (none where an interval is not named); the times are the
+// scanner's, which the bot ignores
+export const signalsResponse = (
+  nowMs: number,
+  signals: Partial<Record<ScanInterval, readonly (readonly [number, TradeAction])[]>> = {},
+): TradingSignalsResponse => ({
+  asOf: nowMs - 500,
+  lists: SIGNAL_SCAN_INTERVALS.map((interval) => ({
+    interval,
+    scanned: signals[interval]?.length ?? 0,
+    signals: (signals[interval] ?? []).map(([assetId, action]) => ({
+      assetId,
+      action,
+      lastCandleTimestamp: nowMs - 500 - SIGNAL_CHART_INTERVAL_MS[interval],
+      decidedAt: nowMs - 500,
+      ageMs: 500,
+    })),
+  })),
+});
+
 export const PAIRS_RESPONSE: PairsCatalogResponse = {
   pairs: [PAIR_EURUSD, PAIR_CLOSED, PAIR_SHORT, PAIR_OTHER_TYPE, PAIR_MINUTE_ONLY],
   fetchedAt: 1_790_000_000_000,

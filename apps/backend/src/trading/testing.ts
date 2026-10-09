@@ -58,11 +58,13 @@ export const unusedSignalDeps = (): SignalRoutesDeps => ({
 
 // for suites that never call GET /trading/signals
 export const unusedSignalsDeps = (): SignalsRoutesDeps => ({
-  scanner: {
-    snapshot: () => {
-      throw new Error('the signal scanner is not wired in this test');
+  scanners: [
+    {
+      snapshot: () => {
+        throw new Error('the signal scanner is not wired in this test');
+      },
     },
-  },
+  ],
   internalApiToken: PAIRS_TEST_TOKEN,
 });
 

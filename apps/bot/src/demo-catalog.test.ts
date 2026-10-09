@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PairsCatalogErrorCode, type PairView } from '@binarius/shared';
+import {
+  intervalForDuration,
+  PairsCatalogErrorCode,
+  SIGNAL_SCAN_INTERVALS,
+  type PairView,
+} from '@binarius/shared';
 import { BackendError, BackendErrorCode } from './backend-client';
 import {
   checkDemoCycle,
@@ -17,6 +22,7 @@ import {
   readDemoCatalog,
   readDemoCycle,
   readDemoTrade,
+  SIGNALS_DURATIONS_SEC,
 } from './demo-catalog';
 import {
   PAIR_CLOSED,
@@ -36,6 +42,14 @@ const pairs = (count: number): PairView[] =>
     id: 1000 + index,
     symbol: `P${String(index).padStart(2, '0')}`,
   }));
+
+describe('SIGNALS_DURATIONS_SEC (#382)', () => {
+  it('holds the demo durations, 15 s first, each on its scanner interval', () => {
+    expect(SIGNALS_DURATIONS_SEC).toEqual([15, 5]);
+    expect([...SIGNALS_DURATIONS_SEC].sort((a, b) => a - b)).toEqual([...DEMO_DURATIONS_SEC]);
+    expect(SIGNALS_DURATIONS_SEC.map(intervalForDuration)).toEqual([...SIGNAL_SCAN_INTERVALS]);
+  });
+});
 
 describe('groupOf', () => {
   it.each(['currency', 'commodity', 'stock', 'cryptocurrency', 'index'])(

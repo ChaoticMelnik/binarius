@@ -233,8 +233,6 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   sessionWon: { count: () => w.sessionCount },
   sessionLost: { count: () => w.sessionCount },
   sessionTied: { count: () => w.sessionCount },
-  // the demo launch screen: the pair is always traded at 15 s (texts.ts → launchText)
-  launchHeader: { subject: (m) => w.symbol + SEPARATOR + m.length('demoDuration15') },
   // shown only with an amount; launchStakeMinimum stands in without one
   launchStake: { stake: () => w.stake },
   // the offer under a finished trade names the session its row starts, always

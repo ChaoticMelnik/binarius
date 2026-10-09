@@ -11,6 +11,7 @@ import {
   SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_ALGORITHM_VERSION,
   SIGNAL_ALGORITHM_VERSIONS,
+  SIGNAL_SCAN_INTERVALS,
   SIGNAL_SHORTEST_INTERVAL_MS,
   signalDecisionSchema,
   signalDecisionV1Schema,
@@ -203,20 +204,31 @@ describe('GET /trading/signals contract', () => {
     decidedAt: 1_760_000_015_500,
     ageMs: 500,
   };
-  const answer = { asOf: 1_760_000_016_000, interval: '15s', scanned: 25, signals: [item] };
+  const list15 = { interval: '15s', scanned: 13, signals: [item] };
+  const list5 = { interval: '5s', scanned: 4, signals: [] };
+  const answer = { asOf: 1_760_000_016_000, lists: [list15, list5] };
 
-  it.each([answer, { ...answer, signals: [] }])('S6 accepts the response %j', (response) => {
-    expect(safeParseTradingSignalsResponse(response).data).toEqual(response);
+  it('S6 scans 15s then 5s', () => {
+    expect(SIGNAL_SCAN_INTERVALS).toEqual(['15s', '5s']);
   });
 
+  it.each([answer, { ...answer, lists: [{ ...list15, signals: [] }, list5] }])(
+    'S6 accepts the response %j',
+    (response) => {
+      expect(safeParseTradingSignalsResponse(response).data).toEqual(response);
+    },
+  );
+
   it.each([
-    { ...answer, interval: '5s' },
-    { ...answer, scanned: -1 },
-    { ...answer, signals: [{ ...item, action: 'sideways' }] },
-    { ...answer, signals: [{ ...item, ageMs: -1 }] },
-    { ...answer, signals: [{ ...item, assetId: 0 }] },
-    { ...answer, signals: [{ ...item, reason: 'flat_trend' }] },
-    { asOf: answer.asOf, interval: '15s', signals: [] },
+    { ...answer, lists: [{ ...list15, interval: '1m' }] },
+    { ...answer, lists: [{ ...list15, scanned: -1 }] },
+    { ...answer, lists: [{ ...list15, signals: [{ ...item, action: 'sideways' }] }] },
+    { ...answer, lists: [{ ...list15, signals: [{ ...item, ageMs: -1 }] }] },
+    { ...answer, lists: [{ ...list15, signals: [{ ...item, assetId: 0 }] }] },
+    { ...answer, lists: [{ ...list15, signals: [{ ...item, reason: 'flat_trend' }] }] },
+    { ...answer, lists: [{ interval: '15s', signals: [] }] },
+    { asOf: answer.asOf },
+    { asOf: answer.asOf, interval: '15s', scanned: 25, signals: [item] },
   ])('S6 refuses the response %j', (response) => {
     expect(safeParseTradingSignalsResponse(response).success).toBe(false);
   });

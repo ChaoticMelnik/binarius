@@ -1,9 +1,11 @@
-# The demo: the signals, an asset, a duration and the analysis on a fresh catalog (issues #125, #126, #320)
+# The demo: the signals, an asset, a duration and the analysis on a fresh catalog (issues #125, #126, #320, #382)
 
-The status card's «🎮 Демо-торговля» button (#24, [bot-menu.md](bot-menu.md)) opens «Сигналы
-сейчас» (#320, [The signals screen](#the-signals-screen-320)): the pairs with a signal on the
-backend scanner's last closed 15 s candle, each leading to the launch of a cycle of trades. Its
-«🧭 Выбрать пару вручную» leads to five more screens in one message: the asset types, one type's
+The status card's «🎮 Демо-торговля» button (#24, [bot-menu.md](bot-menu.md)) opens the choice of
+the trade's duration, «⏱ 15 с» or «⏱ 5 с» (#382, [The duration screen](#the-duration-screen-382)),
+and the duration opens «Сигналы сейчас» (#320, [The signals screen](#the-signals-screen-320)): the
+pairs with a signal on the last closed candle of that duration's backend scanner, each leading to
+the launch of a cycle of trades at that duration. Both screens have
+«🧭 Выбрать пару вручную», which leads to five more screens in one message: the asset types, one type's
 pairs by page, the durations of a pair, the summary of the choice with «📊 Анализ», and the
 analysis. Every screen reads the broker's pairs again through
 `GET /trading/pairs` ([pairs-catalog.md](pairs-catalog.md)) and draws nothing from an earlier
@@ -19,20 +21,20 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
 ## Components
 
 - `apps/bot/src/demo-catalog.ts` — the check, with no Telegram and no texts:
-  `DEMO_ASSET_GROUPS`, `DEMO_DURATIONS_SEC`, `SIGNALS_DURATION_SEC` (#320), `DEMO_PAGE_SIZE`,
+  `DEMO_ASSET_GROUPS`, `DEMO_DURATIONS_SEC`, `SIGNALS_DURATIONS_SEC` (#382), `DEMO_PAGE_SIZE`,
   `groupOf`, `isOpen`, `pairsOf`,
   `openPairsOf`, `pageOf`, `pageIndexOf`, `durationOptions`, `checkDemoPair`, `checkDemoTrade`,
   `checkDemoCycle` (#379),
   `readDemoCatalog`, `readDemoTrade`, `readDemoCycle` (#379).
 - `apps/bot/src/demo.ts` — `createDemoComposer({ backend, logger, now })`: the nine handlers,
   the callback data builders (`DEMO_CALLBACK_DATA`, `DEMO_SIGNALS_CALLBACK_DATA`,
-  `demoLaunchCallbackData`, `launchStakeCallbackData`, `DEMO_GROUPS_CALLBACK_DATA`,
+  `demoSignalsCallbackData`, `demoLaunchCallbackData`, `launchStakeCallbackData`, `DEMO_GROUPS_CALLBACK_DATA`,
   `demoPageCallbackData`, `demoAssetCallbackData`, `demoDurationCallbackData`,
   `demoAnalysisCallbackData`, `analysisMoreCallbackData` (#360), `stakeCallbackData`),
   `ANALYSIS_MORE_PATTERN` and `analysisMoreDataOf` (#360), `STAKE_CALLBACK_PATTERN`, `stakeDataOf`
-  and `newStakeNonce` (#127), `signalsScreen` and `launchScreen` (#320, the latter drawn by the
-  stake picker too), the keyboards, `editOrReply`, which returns its outcome, and `editKeyboard`
-  («➕ Ещё»'s edit of the keyboard alone, #360). `bot.ts`
+  and `newStakeNonce` (#127), `durationsScreen` (#382), `signalsScreen` and `launchScreen` (#320,
+  the latter drawn by the stake picker too), the keyboards, `editOrReply`, which returns its
+  outcome, and `editKeyboard` («➕ Ещё»'s edit of the keyboard alone, #360). `bot.ts`
   mounts it once under its private-chat filter, after `/help` and before the text handler, and
   mounts #127's `createDemoTradeComposer` (the stake press) right after it.
 - `apps/bot/src/analysis.ts` — the analysis screen as a pure function (#126): `analysisScreen`,
@@ -54,8 +56,9 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
   `LABELS.repeatAnalysisButton` (#126); `signalButtonLabel` and `launchText` (#320); the texts
   are catalog entries
   ([bot-texts.md](bot-texts.md)).
-- `apps/bot/src/timing.ts` — `HANDLER_CALLS.demo`, `.demoSignals`, `.demoLaunch`, `.demoGroups`,
-  `.demoPage`, `.demoAsset`, `.demoDuration`, `.demoAnalysis`, `.analysisMore` (#360); the link
+- `apps/bot/src/timing.ts` — `HANDLER_CALLS.demo`, `.demoDurations`, `.demoSignals`, `.demoLaunch`,
+  `.demoGroups`, `.demoPage`, `.demoAsset`, `.demoDuration`, `.demoAnalysis`, `.analysisMore`
+  (#360); the link
   `TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`.
 - `packages/broker-rest/src/pairs-catalog.ts` and `packages/shared/src/catalog.ts` — the `fresh`
   flag of the catalog ([Fresh](#fresh)).
@@ -64,11 +67,14 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
 
 ```text
 demo                      (the card's button)
+  bot  → answerCallbackQuery; no read
+  bot  → sendMessage: «Сигналы сейчас», «⏱ 15 с» «⏱ 5 с», «🧭 Выбрать пару вручную»
+demo:sig                  («↩️ Длительность»; every old «🔄 Обновить», «↩️ К списку», «📡 К сигналам») → the same screen, edited in place
+demo:sig:<sec>            (a duration, «🔄 Обновить», «↩️ К списку», «📡 К сигналам»)
   bot  → answerCallbackQuery ∥ GET /trading/signals ∥ GET /trading/pairs
-  bot  → sendMessage: «Сигналы сейчас», a pair with a signal a row, «🔄 Обновить», «🧭 Выбрать пару вручную»
-demo:sig                  («🔄 Обновить», «↩️ К списку») → the same screen, edited in place
-demo:l:<assetId>          (a pair of the list, «↩️ К запуску»)
-  bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoCycle(15 s) ∥ POST /trading/access
+  bot  → editMessageText: «Сигналы сейчас · ⏱ <sec> с», a pair with a signal a row, «🔄 Обновить», «↩️ Длительность», «🧭 Выбрать пару вручную»
+demo:l:<assetId>:<sec>    (a pair of the list, «↩️ К запуску»)
+  bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoCycle(<sec>) ∥ POST /trading/access
   bot  → editMessageText: the launch screen
 demo:g                    («🧭 Выбрать пару вручную», «↩️ Типы»)
   bot  → answerCallbackQuery ∥ GET /trading/pairs
@@ -87,27 +93,30 @@ demo:more:<assetId>:<sec>:<up|down>:<s|n>     («➕ Ещё», #360; the floor's
   bot  → editMessageReplyMarkup: the keyboard expanded in place: the stake button and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>  (the stake button) → the trade, bot-demo-trade.md
 demo:sess:<assetId>:<sec>                     (the session button, «🚀 Запустить цикл», «🔁 Ещё сессия», the row under a finished trade) → the session, bot-session.md
-stk:o:p:<assetId>                             («💵 Изменить ставку») → the picker, bot-demo-trade.md
+stk:o:p:<assetId>:<sec>                       («💵 Изменить ставку») → the picker, bot-demo-trade.md
 demo:d|an|stake|sess and stk:… with a <sec> of before #313 → the keyboard removed, nothing sent
+demo:l:<assetId> and stk:…:p:<assetId> from before #382 → the keyboard removed, nothing sent
 ```
 
 Each press after the first answers the query and reads the catalog at the same time, then
-edits the message the button is under. `demo` is the exception: the card is a photo, whose caption
-cannot be turned into another screen, so it sends a new message. The bot keeps no state for the
+edits the message the button is under; the duration screen (`demo`, `demo:sig`) reads nothing.
+`demo` is the exception: the card is a photo, whose caption cannot be turned into another screen,
+so it sends a new message. The duration is not remembered (owner, #382): it rides in the data. The bot keeps no state for the
 demo: what the user chose travels in the callback data, so a restart, an old message and a second
 device lead to the same screen.
 
 The callback data is at most 49 bytes (`demo:stake:2147483647:15:down:0123456789ab:0a1b2c`), inside
 the Bot API 64.
-`demo:sig` is 8 bytes, `demo:l:2147483647` 17 and `demo:more:2147483647:15:down:n` 30 (#360,
-#379).
+`demo:sig` is 8 bytes, `demo:sig:15` 11, `demo:l:2147483647:15` 20 and
+`demo:more:2147483647:15:down:n` 30 (#360, #379).
 `<group>` is one of `DEMO_ASSET_GROUPS`, never the broker's own string; `<page>` is up to four
 digits; `<assetId>` is up to ten digits, parsed by `createTradeIntentRequestSchema.shape.assetId`
 (a positive int4, what #127 sends); `<sec>` is one of `DEMO_DURATIONS_SEC`, written into the
 pattern, so `demo:an:101:120`, `demo:more:101:60:up` and `demo:stake:101:120:up:0123456789ab`
 match nothing; `<up|down>` is a `TradeAction`; `<nonce>` is 12 lowercase hex characters. Data that
-matches a pattern but fails its check (`demo:a:0`, `demo:l:0`, `demo:t:bond:0`, `demo:more:0:5:up`)
-stops the spinner and sends nothing; data that matches no pattern is not answered at all.
+matches a pattern but fails its check (`demo:a:0`, `demo:l:0:15`, `demo:t:bond:0`,
+`demo:more:0:5:up`) stops the spinner and sends nothing; data that matches no pattern
+(`demo:sig:60`, `demo:l:101:60`) is not answered at all.
 `demo:more` has no legacy pattern: no button drawn before #360 carries it. Its `:<s|n>` token is
 optional: a button drawn between #360 and #379 has none and reads as `s` (below).
 
@@ -124,30 +133,52 @@ matches no pattern. The legacy patterns are registered before the current ones, 
 must stay disjoint (`demo-catalog.test.ts`): a duration in both would lose its keyboard instead of
 reaching its screen.
 
+**Old launch buttons (#382).** Before #382 the launch screen's data carried no duration
+(`demo:l:<assetId>`, every such screen was 15 s), nor did its picker's origin
+(`stk:o|s|z|c:…:p:<assetId>`). Both are legacy patterns, anchored, so they never match the current
+`demo:l:<assetId>:<sec>` and `p:<assetId>:<sec>`; a press is handled like an old duration button
+above. The old lists' «🔄 Обновить» and «↩️ К списку» and the end of path's «📡 К сигналам» carried
+`demo:sig`, which is now the duration screen, so they need no legacy handling.
+
+## The duration screen (#382)
+
+`demo` (a new message under the card) and `demo:sig` (in place) draw `durationsScreen`: the text
+«📡 Сигналы сейчас / Выбери длительность сделки — бот покажет пары, у которых есть сигнал для неё.»
+(`demoChooseDurationMain`), one row with a button per duration of `SIGNALS_DURATIONS_SEC` — «⏱ 15 с»
+(`demo:sig:15`) first, then «⏱ 5 с» (`demo:sig:5`), the owner's order — and «🧭 Выбрать пару
+вручную» (`demo:g`) in its own row. It reads nothing, so it has no failure of its own.
+`SIGNALS_DURATIONS_SEC` is checked at import against `SIGNAL_SCAN_INTERVALS`: element by element
+its `intervalForDuration` is the scanner's interval, and its members are those of
+`DEMO_DURATIONS_SEC` (`demo-catalog.test.ts`).
+
 ## The signals screen (#320)
 
-`demo` and `demo:sig` read `GET /trading/signals` ([signal.md → The scanner](signal.md#the-scanner-343)) and the
-catalog together, and `signalsScreen` joins them: the route carries no symbol or payout (#343), so
-the catalog gives both. A signal gets a button only if `checkDemoCycle(catalog, assetId, 15, now)`
-is `ok` — the pair is listed, open on the bot's clock, takes 15 s and pays at least the cycle floor
-(`MIN_CYCLE_PAYOUT_PCT` 80, #379; the scanner skips such pairs already, this is the press's own
-read), so the launch would not refuse it. The order is the route's (the scanner's payout order, then id), not re-sorted. Each
-button is «EUR/USD OTC · ⬆️ · 85%»: the symbol, the scanner's direction as an arrow (a data mark
-like the payout, not a catalog text) and the payout; one per row, then «🔄 Обновить» (`demo:sig`)
+`demo:sig:<sec>` reads `GET /trading/signals` ([signal.md → The scanner](signal.md#the-scanner-343)) and the
+catalog together, and `signalsScreen` takes the list of the duration's interval
+(`intervalForDuration(sec)`: `15s` or `5s`, #382) and joins it with the catalog: the route carries
+no symbol or payout (#343), so the catalog gives both. A signal gets a button only if
+`checkDemoCycle(catalog, assetId, sec, now)` is `ok` — the pair is listed, open on the bot's clock,
+takes that duration and pays at least the cycle floor (`MIN_CYCLE_PAYOUT_PCT` 80, #379; the
+scanners skip such pairs already, this is the press's own read), so the launch would not refuse it
+(a `min_timeframe` 15 pair has no button at 5 s). The order is the route's (the scanner's payout
+order, then id), not re-sorted. Each button is «EUR/USD OTC · ⬆️ · 85%» (`demo:l:<assetId>:<sec>`):
+the symbol, the scanner's direction as an arrow (a data mark like the payout, not a catalog text)
+and the payout; one per row, then «🔄 Обновить» (`demo:sig:<sec>`), «↩️ Длительность» (`demo:sig`)
 and «🧭 Выбрать пару вручную» (`demo:g`), each in its own row.
 
-The list is a snapshot of the candle that closed last: «Сигнал действует одну 15-секундную свечу;
-перед каждой сделкой бот проверяет его заново». A press never reads the signal again — the session's
+The list is a snapshot of the duration's candle that closed last: «Сигнал держится одну свечу
+(⏱ 15 с); перед каждой сделкой бот проверяет его заново». A press never reads the signal again — the session's
 orchestrator asks for it before every trade (#287), so a stale pick costs a «сигнала нет» wait, not a
 trade against the signal. The button's arrow is the scanner's at `asOf`; the launch screen shows no
 direction, since the session decides it per trade.
 
 | Outcome | What the bot shows |
 |---|---|
-| one or more pairs left after the join | `demoSignalsHeader` + the rows + refresh + manual |
-| none left (no signal, every one closed or delisted, the scanner's first candle after a start) | `demoSignalsEmpty` + refresh + manual |
+| one or more pairs left after the join | `demoSignalsHeader` with the duration's label + the rows + refresh + durations + manual |
+| none left (no signal, every one closed or delisted, the scanner's first candle after a start) | `demoSignalsEmpty` («📡 Для ⏱ 5 с сигналов сейчас нет — …») + refresh + durations + manual |
 | the catalog's three failures ([The check](#the-check)) | that row's text + «🔄 Повторить» (the pressed data) + manual; a stale catalog draws no list |
 | `readSignals` threw (unreachable, a non-2xx, a broken body) | «⚠️ Сервис временно недоступен…» + «🔄 Повторить» + manual; `warn` `trading signals not read` |
+| the body has no list for the duration (a backend scanning other intervals: a deploy mismatch) | the same unavailable screen, never an empty list; `warn` `trading signals list missing` with `interval` |
 
 The catalog's failure is shown first when both fail. `readSignals` logs `trading signals not read`;
 the catalog logs as in [The check](#the-check): only `backend_failed`, since the backend logs a
@@ -155,20 +186,20 @@ missing or stale snapshot itself.
 
 ## The launch screen (#320)
 
-`demo:l:<assetId>` reads the catalog and access together: `readDemoCycle(backend, assetId, 15,
-now)` on the catalog read at this press, and the amount the cycle trades (`effectiveStake`: the
-saved demo stake, or the broker's minimum). Three lines — «🎯 {symbol} · ⏱ 15 с», «💵 Ставка: $X»,
-«🤖 Бот проведёт 5 сделок подряд…» — and three rows: «🚀 Запустить цикл»
-(`demo:sess:<assetId>:15`, the session button's own data, so the start handler and its refusals are
-unchanged, [bot-session.md](bot-session.md#the-button)), «💵 Изменить ставку» (`stk:o:p:<assetId>`,
-the picker whose way back is this screen, [bot-demo-trade.md](bot-demo-trade.md#the-stake-297)),
-«↩️ К списку» (`demo:sig`). A failed access read draws «💵 Ставка: минимальная брокера» and logs
+`demo:l:<assetId>:<sec>` reads the catalog and access together: `readDemoCycle(backend, assetId,
+sec, now)` on the catalog read at this press, and the amount the cycle trades (`effectiveStake`:
+the saved demo stake, or the broker's minimum). Three lines — «🎯 {symbol} · ⏱ {sec} с»,
+«💵 Ставка: $X», «🤖 Бот проведёт 5 сделок подряд…» — and three rows: «🚀 Запустить цикл»
+(`demo:sess:<assetId>:<sec>`, the session button's own data, so the start handler and its refusals
+are unchanged, [bot-session.md](bot-session.md#the-button)), «💵 Изменить ставку»
+(`stk:o:p:<assetId>:<sec>`, the picker whose way back is this screen,
+[bot-demo-trade.md](bot-demo-trade.md#the-stake-297)), «↩️ К списку» (`demo:sig:<sec>`). A failed access read draws «💵 Ставка: минимальная брокера» and logs
 `warn` `trading access not read for the stake label`; access's refusals (no account, blocked) are
 left to the start, which answers them. A pair refused by the check is the table below, as on the
 manual path; a pair whose payout fell below the floor since the list was drawn (`payout_too_low`,
 #379) says «🚫 {symbol}: выплата {payout}% — ниже 80%, цикл на этой паре не запускается.
 Безубыточность при такой выплате — {breakEven}% верных прогнозов.» (`demoPayoutTooLow`) with
-«↩️ К списку» (`demo:sig`) and «🧭 Выбрать пару вручную» (`demo:g`), whose single trade the floor
+«↩️ К списку» (`demo:sig:<sec>`) and «🧭 Выбрать пару вручную» (`demo:g`), whose single trade the floor
 does not restrict. Access is read in parallel as on every launch press, its amount unused. The screen writes nothing: the stake is read where it is shown and the start reads it
 again (Rule 29).
 
@@ -242,9 +273,13 @@ not a fresh catalog.
 - **Durations.** The admitted durations of `⏱ 5 с` and `⏱ 15 с`, in one row, then «↩️ Активы»
   (the pair's type, the page it is listed on) and «↩️ Типы». A pair that admits none says so, with
   the two back buttons.
-- **Signals (#320).** A pair with a signal a row, then «🔄 Обновить» and «🧭 Выбрать пару
-  вручную»; the scanner's set is 25 pairs by default, so 27 buttons (Telegram allows 100).
-- **Launch (#320).** «🚀 Запустить цикл», «💵 Изменить ставку», «↩️ К списку», one a row.
+- **Durations of the main path (#382).** «⏱ 15 с» and «⏱ 5 с» in one row, then «🧭 Выбрать пару
+  вручную».
+- **Signals (#320).** A pair with a signal a row, then «🔄 Обновить», «↩️ Длительность» and
+  «🧭 Выбрать пару вручную»; the scanners scan 13 pairs at 15 s and 4 at 5 s by default, so at most
+  16 buttons (26 + 3 at the maximum ceiling; Telegram allows 100).
+- **Launch (#320).** «🚀 Запустить цикл», «💵 Изменить ставку», «↩️ К списку», one a row; each carries
+  the duration.
 - **Summary.** «📊 Анализ», then «↩️ Длительность» and «↩️ Типы».
 - **Analysis (#360).** On every `decided` answer — a signal or «сигнала нет» — «🚀 Сессия из 5
   сделок» alone in the first row where `sessionFitsDeadline(5, sec)` holds, at every duration of
@@ -384,10 +419,11 @@ failed expansion changes nothing on screen.
 
 ## Timing
 
-`HANDLER_CALLS.demo` is two backend calls and two Bot API calls (the answer beside the signals
-and the catalog reads, then the new message): 26 s; `.demoSignals` and `.demoLaunch` are two
-backend calls (the signals or access read beside the catalog) and up to three Bot API calls: 34 s
-(#320). Each of `.demoGroups`, `.demoPage`, `.demoAsset` and
+`HANDLER_CALLS.demo` is no backend call and two Bot API calls (the answer, then the duration
+screen as a new message, #382): 16 s; `.demoDurations` (`demo:sig`, the same screen in place) is
+no backend call and up to three Bot API calls: 24 s; `.demoSignals` (`demo:sig:<sec>`) and
+`.demoLaunch` are two backend calls (the signals or access read beside the catalog) and up to three
+Bot API calls: 34 s (#320). Each of `.demoGroups`, `.demoPage`, `.demoAsset` and
 `.demoDuration` is one backend call and up to three Bot API calls (the edit refused as gone,
 then the message sent anew): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is two backend calls
 (the catalog beside the answer, then the signal; the access read for the stake label moved to
@@ -399,7 +435,8 @@ more): 21 s. The longest declared path is `confirm`'s 45 s, so `HANDLER_BUDGET_M
 ([bot-demo-trade.md](bot-demo-trade.md#timing));
 `HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS` (50 s) `< COMPOSE_STOP_GRACE_PERIOD_MS` (55 s) is
 checked at import (`TIMING_CHAIN_HOLDS`). `.legacyDuration` (#313, an old duration button) is
-no backend call and two Bot API calls, the answer and the keyboard's removal: 16 s. The answer
+no backend call and two Bot API calls, the answer and the keyboard's removal: 16 s; it covers the
+launch and picker data from before #382 too. The answer
 and the read run together and are counted as sequential, as for confirm. `timing.test.ts` runs
 every terminal branch of each handler named here through the real handlers — the page of a type
 with no listed pair (#329) included. The pairs route reads the cache in memory; the signal route
@@ -412,6 +449,8 @@ makes at most one chart GET, inside `TRADING_SIGNAL_BUDGET_MS` (4 s), and
 - `demo catalog not read` (`warn`) — `err` with the `BackendError`'s name and code,
   `backendStatus`, `backendReason`; no Telegram id, no symbol.
 - `trading signals not read` (`warn`, #320) — the same fields.
+- `trading signals list missing` (`warn`, #382) — `interval` only: the parsed body has no list for
+  the pressed duration.
 - `signal not evaluated` (`warn`, #126) — for a thrown call, `err` with the error's name and code,
   `backendStatus`, `backendReason`; for a `fetch_failed` other than `rate_limited`, `signalCode`
   alone. No Telegram id, no symbol, nothing of the broker's text.

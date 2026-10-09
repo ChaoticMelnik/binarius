@@ -175,7 +175,7 @@ describe('parseEnv', () => {
     ['BALANCE_RECONCILE_INTERVAL_MS', '60000', 'balanceReconcileIntervalMs', 60_000],
     ['BALANCE_POLL_MAX_PER_MINUTE', '1', 'balancePollMaxPerMinute', 1],
     ['BALANCE_POLL_MAX_PER_MINUTE', '500', 'balancePollMaxPerMinute', 500],
-    ['SIGNAL_SCAN_MAX_PER_MINUTE', '4', 'signalScanMaxPerMinute', 4],
+    ['SIGNAL_SCAN_MAX_PER_MINUTE', '25', 'signalScanMaxPerMinute', 25],
     ['SIGNAL_SCAN_MAX_PER_MINUTE', '200', 'signalScanMaxPerMinute', 200],
   ] as const)('accepts %s=%s at its bound', (name, value, key, expected) => {
     expect(parseEnv({ ...valid, [name]: value })[key]).toBe(expected);
@@ -188,8 +188,8 @@ describe('parseEnv', () => {
     ['BALANCE_POLL_MAX_PER_MINUTE', '0', 'must be between 1 and 500'],
     ['BALANCE_POLL_MAX_PER_MINUTE', '501', 'must be between 1 and 500'],
     ['BALANCE_POLL_MAX_PER_MINUTE', '1.5', 'must be an integer'],
-    ['SIGNAL_SCAN_MAX_PER_MINUTE', '3', 'must be between 4 and 200'],
-    ['SIGNAL_SCAN_MAX_PER_MINUTE', '201', 'must be between 4 and 200'],
+    ['SIGNAL_SCAN_MAX_PER_MINUTE', '24', 'must be between 25 and 200'],
+    ['SIGNAL_SCAN_MAX_PER_MINUTE', '201', 'must be between 25 and 200'],
     ['SIGNAL_SCAN_MAX_PER_MINUTE', '', 'must not be empty'],
   ])('rejects %s=%s', (name, value, message) => {
     expect(() => parseEnv({ ...valid, [name]: value })).toThrow(`Env ${name} ${message}`);

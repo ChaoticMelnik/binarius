@@ -159,9 +159,11 @@ buttons, two accounts, no balance yet) with the way back.
 | `stk:c:<origin>` | custom: the input step, the prompt in place with «↩️ Назад» → `stk:o:<origin>` |
 
 `<origin>` is `s` (/settings, way back `settings`), `a:<assetId>:<sec>` (way back
-`demo:an:<assetId>:<sec>`, a fresh analysis with a new nonce) or `p:<assetId>` (#320, the launch
-screen, way back `demo:l:<assetId>`). The longest datum is still
-`stk:s:999999999999.99999999:a:2147483647:15`, 43 bytes; the launch origin's is 40. The three
+`demo:an:<assetId>:<sec>`, a fresh analysis with a new nonce) or `p:<assetId>:<sec>` (#320, the
+launch screen, way back `demo:l:<assetId>:<sec>`; the duration since #382, and `p:<assetId>` from
+before it is a legacy origin whose press removes the keyboard). The longest datum is
+`stk:s:999999999999.99999999:a:2147483647:15`, 43 bytes, and the launch origin's is the same
+length. The three
 switches over the origin (`originData`, `backTo`, `savedScreen`) are exhaustive (`satisfies
 never`), so a fourth kind fails `tsc` until each of them handles it; the parser `stakeOriginOf` and
 the `PICKER` pattern are extended by hand.
