@@ -39,6 +39,7 @@ import {
   SIGNAL_SCAN_CONCURRENCY,
   SIGNAL_SCAN_LOG_MS,
   SIGNAL_SCAN_SLACK_MS,
+  signalScanCapacity,
   signalScanPairs,
   signalScanPerMinute,
 } from './timing';
@@ -120,7 +121,7 @@ const signalScanners = SIGNAL_SCAN_INTERVALS.map((interval) => {
     catalog: pairsCatalog,
     pacer: createScanPacer({
       perMinute: signalScanPerMinute(env.signalScanMaxPerMinute, interval),
-      capacity: pairs,
+      capacity: signalScanCapacity(env.signalScanMaxPerMinute, interval),
       backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
       backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
       now: Date.now,

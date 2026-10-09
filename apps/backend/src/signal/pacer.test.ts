@@ -1,4 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_SIGNAL_SCAN_PER_MINUTE } from '@binarius/shared/broker-budget';
+import { SIGNAL_CHART_INTERVAL_MS } from '@binarius/shared/signal';
+import {
+  MAX_SIGNAL_SCAN_PER_MINUTE,
+  MIN_SIGNAL_SCAN_PER_MINUTE,
+  SIGNAL_SCAN_BACKOFF_MAX_MS,
+  SIGNAL_SCAN_BACKOFF_MIN_MS,
+  signalScanCapacity,
+  signalScanPairs,
+  signalScanPerMinute,
+} from '../timing';
 import { createScanPacer } from './pacer';
 
 function pacer(overrides: { perMinute?: number; capacity?: number } = {}) {
@@ -28,8 +39,8 @@ describe('scan pacer', () => {
     expect(takeAll()).toBe(25);
   });
 
-  it('P2 any 60 s window carries at most the ceiling plus one batch', () => {
-    const { clock, p } = pacer();
+  it('P2 any 60 s window carries at most the ceiling plus one batch plus one', () => {
+    const { clock, p } = pacer({ capacity: 25 + 1 });
     const taken: number[] = [];
     for (let t = 0; t < 180_000; t += 100) {
       while (p.tryTake()) taken.push(clock.now);
@@ -37,10 +48,40 @@ describe('scan pacer', () => {
     }
     for (const start of taken) {
       const inWindow = taken.filter((at) => at >= start && at < start + 60_000).length;
-      expect(inWindow).toBeLessThanOrEqual(100 + 25);
+      expect(inWindow).toBeLessThanOrEqual(100 + 26);
     }
-    expect(taken.length).toBeLessThanOrEqual(25 + 3 * 100);
+    expect(taken.length).toBeLessThanOrEqual(26 + 3 * 100);
   });
+
+  // #382 review M1: the takes of a batch are one burst at the timer's millisecond, and a candle
+  // refills exactly one batch, so a fire earlier relative to its boundary than the one before
+  // must still find the whole batch
+  it.each([
+    [DEFAULT_SIGNAL_SCAN_PER_MINUTE, '15s'],
+    [DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'],
+    [MIN_SIGNAL_SCAN_PER_MINUTE, '5s'],
+    [MAX_SIGNAL_SCAN_PER_MINUTE, '15s'],
+    [MAX_SIGNAL_SCAN_PER_MINUTE, '5s'],
+  ] as const)(
+    'P9 at the ceiling %i the %s pacer gives the whole batch every candle under a jittery timer',
+    (ceiling, interval) => {
+      const start = 1_000_000;
+      const clock = { now: start };
+      const p = createScanPacer({
+        perMinute: signalScanPerMinute(ceiling, interval),
+        capacity: signalScanCapacity(ceiling, interval),
+        backoffMinMs: SIGNAL_SCAN_BACKOFF_MIN_MS,
+        backoffMaxMs: SIGNAL_SCAN_BACKOFF_MAX_MS,
+        now: () => clock.now,
+      });
+      const batch = signalScanPairs(ceiling, interval);
+      const taken = [1, 0, 2, 2, 1, 3, 0].map((lag, candle) => {
+        clock.now = start + candle * SIGNAL_CHART_INTERVAL_MS[interval] + 500 + lag;
+        return Array.from({ length: batch }, () => p.tryTake()).filter(Boolean).length;
+      });
+      expect(taken).toEqual(Array.from({ length: 7 }, () => batch));
+    },
+  );
 
   it('P3 a 429 with Retry-After pauses for exactly that long', () => {
     const { clock, p } = pacer();

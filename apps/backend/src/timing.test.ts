@@ -48,6 +48,7 @@ import {
   SIGNAL_SCAN_SHARES_PERCENT,
   SIGNAL_SCAN_SLACK_MS,
   scanDecisionsPerMinute,
+  signalScanCapacity,
   signalScanPairs,
   signalScanPerMinute,
   TRADING_ACCESS_REFRESH_BUDGET_MS,
@@ -160,6 +161,15 @@ describe('broker balance timing', () => {
         0,
       ),
     ).toBeLessThanOrEqual(DEFAULT_SIGNAL_SCAN_PER_MINUTE);
+  });
+
+  it('gives each pacer one candle of pairs plus one spare token (#382 review M1)', () => {
+    expect(signalScanCapacity(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(14);
+    expect(signalScanCapacity(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(5);
+    expect(signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(27);
+    expect(signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(9);
+    expect(signalScanCapacity(MIN_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(4);
+    expect(signalScanCapacity(MIN_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(2);
   });
 
   it('keeps the scan ceiling between one pair on every interval and the broker window', () => {

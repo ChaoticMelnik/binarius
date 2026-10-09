@@ -156,6 +156,12 @@ export const signalScanPairs = (ceiling: number, interval: ScanInterval): number
   Math.floor(
     (ceiling * SIGNAL_SCAN_SHARES_PERCENT[interval]) / (100 * scanDecisionsPerMinute(interval)),
   );
+// One interval's pacer bucket: a candle refills exactly one batch and the batch's takes are one
+// burst, so a fire a few ms earlier relative to its boundary than the one before finds the bucket
+// a fraction of a token short and skips a pair with no 429 behind it; the spare token absorbs it
+// (#382 review M1).
+export const signalScanCapacity = (ceiling: number, interval: ScanInterval): number =>
+  signalScanPairs(ceiling, interval) + 1;
 // SIGNAL_SCAN_MAX_PER_MINUTE's bounds: at least one pair on every interval, and below the whole
 // per-IP window
 export const MIN_SIGNAL_SCAN_PER_MINUTE = Math.max(

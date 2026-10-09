@@ -16,7 +16,9 @@ import {
   type SignalEvaluation,
   type SignalFeedRequest,
 } from '@binarius/signal';
+import { DEFAULT_SIGNAL_SCAN_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { signalScanCapacity, signalScanPerMinute } from '../timing';
 import { createScanPacer, type ScanPacer } from './pacer';
 import { createSignalScanner, eligiblePairs, freshSignals, topPairs } from './scanner';
 
@@ -520,6 +522,34 @@ describe('signal scanner', () => {
     expect(h.calls).toEqual([1, 2]);
     await vi.advanceTimersByTimeAsync(5_010);
     expect(h.calls).toEqual([1, 2, 1, 2]);
+    await h.scanner.stop();
+  });
+
+  it('S18 the default 5s scanner scans its four pairs every candle under a jittery timer', async () => {
+    // the pacer reads the timers' clock this many ms late, per 5 s candle since B: a fire a few
+    // ms earlier relative to its boundary than the one before
+    const lags = [0, 1, 0, 2, 2, 1, 3, 0, 1, 0, 2, 2, 1];
+    const h = harness({
+      interval: '5s',
+      pairs: [1, 2, 3, 4].map((id) => pair(id)),
+      maxPairs: 4,
+      pacer: createScanPacer({
+        perMinute: signalScanPerMinute(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'),
+        capacity: signalScanCapacity(DEFAULT_SIGNAL_SCAN_PER_MINUTE, '5s'),
+        backoffMinMs: 15_000,
+        backoffMaxMs: 120_000,
+        now: () => Date.now() + (lags[Math.floor((Date.now() - B) / CANDLE_5S_MS)] ?? 0),
+      }),
+    });
+    h.scanner.start();
+    await vi.advanceTimersByTimeAsync(LOG_EVERY_MS);
+    expect(h.calls).toHaveLength(48);
+    expect(h.logger.info.mock.calls[0]?.[0]).toMatchObject({
+      interval: '5s',
+      scanned: 4,
+      skipped: 0,
+      rateLimited: 0,
+    });
     await h.scanner.stop();
   });
 
