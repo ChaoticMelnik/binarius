@@ -8,7 +8,10 @@ import {
 } from './admin-trading';
 import { auditActionSchema, auditActorTypeSchema, auditEntityTypeSchema } from './audit';
 import {
+  checkTokenDelta,
+  checkTokenNote,
   depositEventStatusSchema,
+  TOKEN_LEDGER_NOTE_MAX,
   tokenLedgerKindSchema,
   tokenLedgerRefTypeSchema,
 } from './ledger';
@@ -279,7 +282,9 @@ export const adminLedgerEntrySchema = z.strictObject({
   depositEventId: z.uuid().nullable(),
   brokerAccountId: z.uuid().nullable(),
   refType: tokenLedgerRefTypeSchema.nullable(),
-  refId: z.uuid().nullable(),
+  // the bare uuid column, so UUID_PATTERN rather than z.uuid(): zod 4's RFC 9562 check refuses
+  // ids PostgreSQL stores, and one such row would fail every page that lists it (#348)
+  refId: z.string().regex(UUID_PATTERN).nullable(),
   note: z.string().nullable(),
   createdAt: isoDateTime,
 });
@@ -313,13 +318,18 @@ export const adminUserDepositsSectionSchema = z.strictObject({
 });
 export type AdminUserDepositsSection = z.infer<typeof adminUserDepositsSectionSchema>;
 
-export const adminUserResponseSchema = z.strictObject({
-  me: adminStrictMeSchema,
+// The card without `me`: the user page's answer and a refused token adjustment's (#246) carry it.
+const adminUserCardShape = {
   user: adminUserDetailSchema,
   brokerAccounts: z.array(adminBrokerAccountViewSchema),
   intents: adminUserIntentsSectionSchema,
   ledger: adminUserLedgerSectionSchema,
   deposits: adminUserDepositsSectionSchema,
+};
+
+export const adminUserResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  ...adminUserCardShape,
 });
 export type AdminUserResponse = z.infer<typeof adminUserResponseSchema>;
 
@@ -564,6 +574,55 @@ export const adminBrokerAccountsResponseSchema = z.strictObject({
 });
 export type AdminBrokerAccountsResponse = z.infer<typeof adminBrokerAccountsResponseSchema>;
 
+// --- Token adjustment (#246) --------------------------------------------------------------------
+
+// A signed whole number of tokens, never 0, within TOKEN_ADJUSTMENT_MAX_TOKENS. zod 4 runs the
+// refine even after the regex failed, so the refine checks the form itself before BigInt().
+export const adminTokenDeltaSchema = z
+  .string()
+  .regex(/^-?[1-9]\d{0,18}$/, { error: 'expected a signed whole number without leading zeros' })
+  .refine((value) => /^-?\d+$/.test(value) && checkTokenDelta(BigInt(value)) === null, {
+    error: 'expected a non-zero amount within the adjustment limit',
+  });
+
+// Trimmed first, then the same bounds the writer checks.
+export const tokenLedgerNoteSchema = z
+  .string()
+  .trim()
+  .refine((note) => checkTokenNote(note) === null, {
+    error: `expected 1-${TOKEN_LEDGER_NOTE_MAX} characters without control characters`,
+  });
+
+// expectedBalance is the balance the staff member saw: the writer refuses when it moved (#246 В4).
+export const adminTokenAdjustmentRequestSchema = z.strictObject({
+  delta: adminTokenDeltaSchema,
+  note: tokenLedgerNoteSchema,
+  expectedBalance: tokenCountSchema,
+});
+export type AdminTokenAdjustmentRequest = z.infer<typeof adminTokenAdjustmentRequestSchema>;
+
+// A refusal carries the card as it is now, so web redraws it with the fresh balance.
+export const adminTokenAdjustmentResponseSchema = z.discriminatedUnion('outcome', [
+  z.strictObject({
+    me: adminStrictMeSchema,
+    outcome: z.literal('adjusted'),
+    entry: adminLedgerEntrySchema,
+    tokens: tokenBalanceViewSchema,
+  }),
+  z.strictObject({
+    me: adminStrictMeSchema,
+    outcome: z.literal('insufficient_available'),
+    ...adminUserCardShape,
+  }),
+  z.strictObject({
+    me: adminStrictMeSchema,
+    outcome: z.literal('balance_changed'),
+    ...adminUserCardShape,
+  }),
+]);
+export type AdminTokenAdjustmentResponse = z.infer<typeof adminTokenAdjustmentResponseSchema>;
+export type AdminTokenAdjustmentOutcome = AdminTokenAdjustmentResponse['outcome'];
+
 export const safeParseAdminLoginRequest = (input: unknown) =>
   adminLoginRequestSchema.safeParse(input);
 export const safeParseAdminConfirmRequest = (input: unknown) =>
@@ -613,3 +672,7 @@ export const safeParseAdminBrokerAccountsQuery = (input: unknown) =>
   adminBrokerAccountsQuerySchema.safeParse(input);
 export const safeParseAdminBrokerAccountsResponse = (input: unknown) =>
   adminBrokerAccountsResponseSchema.safeParse(input);
+export const safeParseAdminTokenAdjustmentRequest = (input: unknown) =>
+  adminTokenAdjustmentRequestSchema.safeParse(input);
+export const safeParseAdminTokenAdjustmentResponse = (input: unknown) =>
+  adminTokenAdjustmentResponseSchema.safeParse(input);

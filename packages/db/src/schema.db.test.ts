@@ -211,21 +211,21 @@ describe('enum and uniqueness constraints', () => {
       'token_ledger_ref_type_check',
       (tx: Tx) =>
         tx.execute(
-          sql`insert into token_ledger (user_id, kind, balance_delta, ref_type, ref_id) values (gen_random_uuid(), 'adjustment', 1, 'bogus', gen_random_uuid())`,
+          sql`insert into token_ledger (user_id, kind, balance_delta, ref_type, ref_id, note) values (gen_random_uuid(), 'adjustment', 1, 'bogus', gen_random_uuid(), 'n')`,
         ),
     ],
     [
       'token_ledger_ref_pair_check',
       (tx: Tx) =>
         tx.execute(
-          sql`insert into token_ledger (user_id, kind, balance_delta, ref_type) values (gen_random_uuid(), 'adjustment', 1, 'manual')`,
+          sql`insert into token_ledger (user_id, kind, balance_delta, ref_type, note) values (gen_random_uuid(), 'adjustment', 1, 'manual', 'n')`,
         ),
     ],
     [
       'token_ledger_delta_check',
       (tx: Tx) =>
         tx.execute(
-          sql`insert into token_ledger (user_id, kind) values (gen_random_uuid(), 'adjustment')`,
+          sql`insert into token_ledger (user_id, kind, note) values (gen_random_uuid(), 'adjustment', 'n')`,
         ),
     ],
     [
@@ -978,7 +978,7 @@ describe('users and token_ledger', () => {
     ['a purchase without a deposit reference', { kind: 'purchase' as const, balanceDelta: 10n }],
     [
       'an adjustment occupying a deposit slot',
-      { kind: 'adjustment' as const, balanceDelta: 10n, useDeposit: true },
+      { kind: 'adjustment' as const, balanceDelta: 10n, note: 'n', useDeposit: true },
     ],
   ])('rejects %s', async (_label, patch) => {
     await rolledBack(async (tx) => {
@@ -997,7 +997,7 @@ describe('users and token_ledger', () => {
   it.each([
     ['a reserve', { kind: 'reserve' as const, reservedDelta: 1n }, 'intent'],
     ['a purchase', { kind: 'purchase' as const, balanceDelta: 10n }, 'deposit'],
-    ['an adjustment', { kind: 'adjustment' as const, balanceDelta: 10n }, 'none'],
+    ['an adjustment', { kind: 'adjustment' as const, balanceDelta: 10n, note: 'n' }, 'none'],
     ['a bonus that also names a deposit', { kind: 'bonus' as const, balanceDelta: 10n }, 'deposit'],
   ])('rejects %s carrying a broker account reference', async (_label, values, other) => {
     await rolledBack(async (tx) => {
@@ -1082,7 +1082,7 @@ describe('users and token_ledger', () => {
       const seed = await seedAccount(tx);
       const [row] = await tx
         .insert(tokenLedger)
-        .values({ userId: seed.userId, kind: 'adjustment', balanceDelta: 10n })
+        .values({ userId: seed.userId, kind: 'adjustment', balanceDelta: 10n, note: 'n' })
         .returning({ id: tokenLedger.id });
       await rejectsAsAppendOnly(mutate(tx, row!.id), 'token_ledger', 'append_only');
     });
@@ -1106,6 +1106,48 @@ describe('users and token_ledger', () => {
         'audit_log',
         'append_only',
       );
+    });
+  });
+});
+
+// The reason is mandatory for a manual adjustment and bounded in code points (#246); other kinds
+// keep a free, optional note.
+describe('token_ledger_adjustment_note_check (#246)', () => {
+  it.each([
+    ['no note', null],
+    ['an empty note', ''],
+    ['a note of 513 characters', 'ж'.repeat(513)],
+  ])('rejects an adjustment with %s', async (_label, note) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx
+          .insert(tokenLedger)
+          .values({ userId: seed.userId, kind: 'adjustment', balanceDelta: 1n, note }),
+        '23514',
+        'token_ledger_adjustment_note_check',
+      );
+    });
+  });
+
+  // a blank note passes here: refusing it is the writer's checkTokenNote, which is stricter
+  it.each([
+    ['one character', 'x'],
+    ['512 two-byte characters', 'ж'.repeat(512)],
+    ['a blank note', ' '],
+  ])('accepts an adjustment with %s', async (_label, note) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await tx
+        .insert(tokenLedger)
+        .values({ userId: seed.userId, kind: 'adjustment', balanceDelta: 1n, note });
+    });
+  });
+
+  it('leaves the note of every other kind optional', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await tx.insert(tokenLedger).values({ userId: seed.userId, kind: 'bonus', balanceDelta: 1n });
     });
   });
 });
@@ -1626,7 +1668,9 @@ describe('foreign keys', () => {
       // no intent or deposit: both ownership composites are skipped
       'token_ledger_user_id_users_id_fk',
       (tx) =>
-        tx.insert(tokenLedger).values({ userId: dangling, kind: 'adjustment', balanceDelta: 1n }),
+        tx
+          .insert(tokenLedger)
+          .values({ userId: dangling, kind: 'adjustment', balanceDelta: 1n, note: 'n' }),
     ],
     [
       'trading_sessions_broker_account_id_broker_accounts_id_fk',

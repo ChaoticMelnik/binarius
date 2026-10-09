@@ -37,14 +37,17 @@ import {
   safeParseAdminDepositsQuery,
   safeParseAdminIntentsQuery,
   safeParseAdminLoginRequest,
+  safeParseAdminTokenAdjustmentRequest,
   safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
   safeParseAdminUsersQuery,
   STAFF_SESSION_TOKEN_PATTERN,
   UUID_PATTERN,
+  type AdminTokenAdjustmentResponse,
   type StaffSessionView,
 } from '@binarius/shared';
 import {
+  adjustTokens,
   applyBotTextReset,
   applyBotTextSave,
   applyStaffPasswordChange,
@@ -96,6 +99,7 @@ import {
   toAdminUserDetail,
   toAdminUserListItem,
   verifyPassword,
+  type AdminUserCard,
   type Db,
   type StaffActionResult,
   type StaffContext,
@@ -685,18 +689,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
         };
       }
       return {
-        result: {
-          me: meOf(ctx),
-          user: toAdminUserDetail(card.user),
-          brokerAccounts: card.brokerAccounts.map(toAdminBrokerAccountView),
-          intents: {
-            recent: card.intents.recent.map(toAdminTradeIntentView),
-            total: card.intents.total,
-            active: card.intents.active,
-          },
-          ledger: { recent: card.ledger.map(toAdminLedgerEntry) },
-          deposits: { recent: card.deposits.map(toAdminDepositView) },
-        },
+        result: { me: meOf(ctx), ...toAdminUserCard(card) },
         audit: {
           action: AuditAction.UserViewed,
           entity: { type: AuditEntityType.User, id: userId },
@@ -1308,7 +1301,124 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
     });
     return reply.send({ me: meOf(ctx), published } satisfies AdminBotProfilePublishResponse);
   });
+
+  // --- Token adjustment (#246, docs/admin-pages.md → Корректировка токенов) ---------------------
+
+  // 200 on every outcome, as the bot text save: web picks the status. No lockStaff — only the
+  // caller's own session row is touched and `staff` is not written; adjustTokens then locks the
+  // users row (Rule 5).
+  app.post(
+    '/admin/users/:id/tokens',
+    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      // before the session: a body outside the schema costs no transaction and leaves no row
+      const parsed = safeParseAdminTokenAdjustmentRequest(request.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+      }
+      const { delta, note, expectedBalance } = parsed.data;
+      const userId = (request.params as { id?: unknown }).id;
+      const path = '/admin/users/:id/tokens';
+      const answer = await asStaff(
+        request,
+        reply,
+        async (tx, ctx): Promise<StaffActionResult<AdminTokenAdjustmentResponse | null>> => {
+          const audit = (payload: Record<string, unknown>, entityId?: string) => ({
+            action: AuditAction.TokenAdjusted,
+            ...(entityId === undefined
+              ? {}
+              : { entity: { type: AuditEntityType.User, id: entityId } }),
+            payload: { path, ...payload },
+          });
+          // an id that is not a uuid is arbitrary input, so it is not recorded (as user_viewed)
+          if (typeof userId !== 'string' || !UUID_PATTERN.test(userId)) {
+            return { result: null, audit: audit({ result: 'not_found' }) };
+          }
+          const applied = await adjustTokens(tx, {
+            userId,
+            delta: BigInt(delta),
+            note,
+            expectedBalance: BigInt(expectedBalance),
+          });
+          switch (applied.outcome) {
+            case 'not_found':
+              return { result: null, audit: audit({ result: 'not_found', userId }) };
+            case 'adjusted': {
+              const { entry, balanceBefore, balanceAfter, reserved } = applied;
+              return {
+                result: {
+                  me: meOf(ctx),
+                  outcome: 'adjusted',
+                  entry: toAdminLedgerEntry(entry),
+                  tokens: {
+                    balance: balanceAfter.toString(),
+                    reserved: reserved.toString(),
+                    available: (balanceAfter - reserved).toString(),
+                  },
+                },
+                // amounts as strings, never JSON numbers (Rule 2)
+                audit: audit(
+                  {
+                    result: 'adjusted',
+                    userId,
+                    ledgerEntryId: entry.id,
+                    delta,
+                    note,
+                    balanceBefore: balanceBefore.toString(),
+                    balanceAfter: balanceAfter.toString(),
+                    reserved: reserved.toString(),
+                  },
+                  userId,
+                ),
+              };
+            }
+            case 'insufficient_available':
+            case 'balance_changed': {
+              // the row is under this transaction's lock, so it is there
+              const card = await readUserForAdmin(tx, userId);
+              if (card === undefined) throw new Error('the adjusted user disappeared under lock');
+              // the note is not recorded on a refusal: it was written nowhere
+              return {
+                result: { me: meOf(ctx), outcome: applied.outcome, ...toAdminUserCard(card) },
+                audit: audit(
+                  {
+                    result: applied.outcome,
+                    userId,
+                    delta,
+                    expectedBalance,
+                    balance: applied.balance.toString(),
+                    reserved: applied.reserved.toString(),
+                  },
+                  userId,
+                ),
+              };
+            }
+          }
+        },
+      );
+      if (answer === undefined) return reply;
+      if (answer === null) return reply.code(404).send({ error: AdminErrorCode.NotFound });
+      return reply.send(answer);
+    },
+  );
 };
+
+// The user card's projection: the page's answer and a refused token adjustment's (#246).
+function toAdminUserCard(card: AdminUserCard) {
+  return {
+    user: toAdminUserDetail(card.user),
+    brokerAccounts: card.brokerAccounts.map(toAdminBrokerAccountView),
+    intents: {
+      recent: card.intents.recent.map(toAdminTradeIntentView),
+      total: card.intents.total,
+      active: card.intents.active,
+    },
+    ledger: { recent: card.ledger.map(toAdminLedgerEntry) },
+    deposits: { recent: card.deposits.map(toAdminDepositView) },
+  };
+}
 
 // a save's or a reset's answer as the transaction builds it: what it published is added after
 type Unpublished<T> = T extends { published: unknown } ? Omit<T, 'published'> : T;

@@ -17,6 +17,8 @@ import {
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
   DepositEventStatus,
+  TOKEN_ADJUSTMENT_MAX_TOKENS,
+  TOKEN_LEDGER_NOTE_MAX,
   TokenLedgerKind,
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
@@ -33,6 +35,7 @@ import { buildWebApp } from './app';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { SESSION_COOKIE, CHALLENGE_COOKIE } from './admin/routes';
 import {
+  SAMPLE_ADJUSTED,
   SAMPLE_AUDIT,
   SAMPLE_AUDIT_ENTRY_NULLS,
   SAMPLE_BOT_TEXT,
@@ -60,6 +63,7 @@ import {
   SAMPLE_TRADING_SESSIONS,
   SAMPLE_USER,
   SAMPLE_USER_ID,
+  sampleAdjustmentRefusal,
 } from './admin/testing';
 import { TEXTS } from './admin/texts';
 
@@ -103,6 +107,7 @@ interface Calls {
   tradingSessions: [string, AdminTradingSessionsQuery][];
   tokens: [string, AdminTokensQuery][];
   deposits: [string, AdminDepositsQuery][];
+  adjustTokens: unknown[][];
   brokerAccounts: [string, AdminBrokerAccountsQuery][];
   audit: [string, AdminAuditQuery][];
   changePassword: unknown[][];
@@ -133,6 +138,7 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     tradingSessions: [],
     tokens: [],
     deposits: [],
+    adjustTokens: [],
     brokerAccounts: [],
     audit: [],
     changePassword: [],
@@ -196,6 +202,10 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     deposits: async (token, query) => {
       calls.deposits.push([token, query]);
       return SAMPLE_DEPOSITS;
+    },
+    adjustTokens: async (token, id, request) => {
+      calls.adjustTokens.push([token, id, request]);
+      return SAMPLE_ADJUSTED;
     },
     brokerAccounts: async (token, query) => {
       calls.brokerAccounts.push([token, query]);
@@ -3192,5 +3202,185 @@ describe('the bot texts pages (#300)', () => {
     });
     const gone = await post('/admin/bot-texts/publish', {}, withCookie);
     expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+  });
+});
+
+describe('the token adjustment form (#246)', () => {
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+  const url = `/admin/users/${SAMPLE_USER_ID}/tokens`;
+  const valid = { direction: 'credit', amount: '50', note: ' Компенсация ', balance: '5' };
+  const rebuild = async (backend: Partial<BackendClient>) => {
+    await app.close();
+    app = build(backend);
+  };
+  const badForm = TEXTS.tokenAdjustBadForm(TOKEN_ADJUSTMENT_MAX_TOKENS, TOKEN_LEDGER_NOTE_MAX);
+  const raw = (payload: string, cookies: Record<string, string> = withCookie) =>
+    app.inject({
+      method: 'POST',
+      url,
+      headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+      payload,
+      cookies,
+    });
+
+  it('W1 puts the form under «Токены» with the balance the card shows and the shared limits', async () => {
+    const { body } = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+    const formAt = body.indexOf(`<form class="stack" method="post" action="${url}">`);
+    expect(formAt).toBeGreaterThan(body.indexOf(`<h2>${TEXTS.userTokens}</h2>`));
+    expect(formAt).toBeLessThan(body.indexOf(`<h2>${TEXTS.userBrokerAccounts}</h2>`));
+    expect(body).toContain('<input type="hidden" name="balance" value="5" />');
+    expect(body).toMatch(/<input type="radio" name="direction" value="credit" checked \/>/);
+    expect(body).toMatch(/<input type="radio" name="direction" value="debit"\s+\/>/);
+    expect(body).toMatch(/name="amount"\s+min="1"\s+max="1000"\s+step="1"\s+value=""\s+required/);
+    expect(body).toMatch(/name="note"\s+maxlength="512"\s+value=""\s+required/);
+    expect(body).not.toContain(TEXTS.userNotice.adjusted);
+  });
+
+  it.each([
+    ['notice=adjusted', true],
+    ['notice=bogus', false],
+    ['notice=adjusted&notice=x', false],
+  ])('W1 shows the success notice for ?%s only when it is the one notice', async (query, shown) => {
+    const { body } = await get(`/admin/users/${SAMPLE_USER_ID}?${query}`, withCookie);
+    expect(body.includes(`<p class="notice">${TEXTS.userNotice.adjusted}</p>`)).toBe(shown);
+  });
+
+  it('W2 sends a credit as a positive delta and a debit as a negative one, then back to the card', async () => {
+    const credit = await post(url, valid, withCookie);
+    expect([credit.statusCode, credit.headers.location]).toEqual([
+      303,
+      `/admin/users/${SAMPLE_USER_ID}?notice=adjusted`,
+    ]);
+    await post(url, { ...valid, direction: 'debit' }, withCookie);
+    expect(calls.adjustTokens).toEqual([
+      [TOKEN, SAMPLE_USER_ID, { delta: '50', note: 'Компенсация', expectedBalance: '5' }],
+      [TOKEN, SAMPLE_USER_ID, { delta: '-50', note: 'Компенсация', expectedBalance: '5' }],
+    ]);
+  });
+
+  it.each([
+    ['a zero amount', 'direction=credit&amount=0&note=x&balance=5'],
+    ['an amount over the limit', 'direction=credit&amount=1001&note=x&balance=5'],
+    ['a fraction', 'direction=credit&amount=1.5&note=x&balance=5'],
+    ['an empty amount', 'direction=credit&amount=&note=x&balance=5'],
+    ['a leading zero', 'direction=credit&amount=050&note=x&balance=5'],
+    ['an unknown direction', 'direction=bogus&amount=5&note=x&balance=5'],
+    ['no balance', 'direction=credit&amount=5&note=x'],
+    ['a blank note', 'direction=credit&amount=5&note=%20%20%20&balance=5'],
+    ['an amount sent twice', 'direction=credit&amount=5&amount=6&note=x&balance=5'],
+  ])('W3 refuses %s with 400, without calling the backend', async (_label, payload) => {
+    const response = await raw(payload);
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toContain(badForm);
+    expect(calls.adjustTokens).toEqual([]);
+  });
+
+  it('W4 redraws the card on insufficient_available with the answer, the form as sent and the fresh balance', async () => {
+    await rebuild({
+      adjustTokens: async () =>
+        sampleAdjustmentRefusal('insufficient_available', {
+          balance: '7',
+          reserved: '2',
+          available: '5',
+        }),
+    });
+    const response = await post(
+      url,
+      { ...valid, direction: 'debit', note: 'Списание <b>' },
+      withCookie,
+    );
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toContain(TEXTS.tokenAdjustInsufficient('5'));
+    expect(response.body).toContain('<input type="hidden" name="balance" value="7" />');
+    expect(response.body).toMatch(/<input type="radio" name="direction" value="debit" checked \/>/);
+    expect(response.body).toMatch(/<input type="radio" name="direction" value="credit"\s+\/>/);
+    expect(response.body).toMatch(/name="amount"[^>]*value="50"/);
+    expect(response.body).toMatch(/name="note"[^>]*value="Списание &lt;b&gt;"/);
+  });
+
+  it('W4 redraws the card on balance_changed with the current balance', async () => {
+    await rebuild({
+      adjustTokens: async () =>
+        sampleAdjustmentRefusal('balance_changed', { balance: '9', reserved: '0', available: '9' }),
+    });
+    const response = await post(url, valid, withCookie);
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toContain(TEXTS.tokenAdjustBalanceChanged('9'));
+    expect(response.body).toContain('<input type="hidden" name="balance" value="9" />');
+  });
+
+  it('W5 refuses an id that is not a uuid before the backend, and shows a 404 from it', async () => {
+    let called = 0;
+    await rebuild({
+      adjustTokens: async () => {
+        called += 1;
+        throw httpFailure(404, AdminErrorCode.NotFound);
+      },
+    });
+    const shape = await post('/admin/users/not-a-uuid/tokens', valid, withCookie);
+    expect(shape.statusCode).toBe(404);
+    expect(called).toBe(0);
+
+    const missing = await post(url, valid, withCookie);
+    expect(missing.statusCode).toBe(404);
+    expect(missing.body).toContain(TEXTS.userNotFoundBody);
+    expect(called).toBe(1);
+  });
+
+  it('W5 clears a session the backend calls gone', async () => {
+    await rebuild({
+      adjustTokens: async () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+    });
+    const gone = await post(url, valid, withCookie);
+    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+  });
+
+  it.each([
+    [
+      'unreachable',
+      new BackendError(BackendErrorCode.Unreachable),
+      { name: 'BackendError', code: 'unreachable' },
+    ],
+    [
+      'a 2xx outside the contract',
+      new BackendError(BackendErrorCode.ContractViolation),
+      { name: 'BackendError', code: 'contract_violation' },
+    ],
+    ['a 500', httpFailure(500), { name: 'BackendError', code: 'http_status' }],
+  ])('W5 says the outcome is unknown when %s, keeping the cookie', async (_label, failure, err) => {
+    await rebuild({ adjustTokens: async () => Promise.reject(failure) });
+    const response = await post(url, { ...valid, note: 'СЕКРЕТНАЯ-ПРИЧИНА' }, withCookie);
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toContain(TEXTS.tokenAdjustOutcomeUnknown);
+    expect(response.headers['set-cookie']).toBeUndefined();
+    const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    const entry = logged.find((line) => line.msg === 'the token adjustment outcome is unknown');
+    expect(entry?.err).toEqual(err);
+    expect(lines.join('\n')).not.toContain('СЕКРЕТНАЯ-ПРИЧИНА');
+  });
+
+  it('W5 answers another 4xx from the backend as our own failure', async () => {
+    await rebuild({
+      adjustTokens: async () => Promise.reject(httpFailure(400, AdminErrorCode.Validation)),
+    });
+    const response = await post(url, valid, withCookie);
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toContain(TEXTS.errorBody);
+  });
+
+  it('W6 refuses a POST from another origin before the backend is asked', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url,
+      headers: {
+        origin: 'https://evil.example',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: new URLSearchParams(valid).toString(),
+      cookies: withCookie,
+    });
+    expect(response.statusCode).toBe(403);
+    expect(calls.adjustTokens).toEqual([]);
   });
 });

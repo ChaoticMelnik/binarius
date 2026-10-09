@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, index, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { TokenLedgerKind, TokenLedgerRefType } from '@binarius/shared';
+import { TOKEN_LEDGER_NOTE_MAX, TokenLedgerKind, TokenLedgerRefType } from '@binarius/shared';
 import { brokerAccounts } from './broker-accounts';
 import { createdAt, id, inList, literal, sqlLiteralList, tokenAmount } from './columns';
 import { depositEvents } from './deposit-events';
@@ -28,8 +28,10 @@ const kind = (value: TokenLedgerKind) => literal(value);
 // Dedupe keys by kind: reserve/release/settle are keyed by intent, purchase and a
 // deposit-linked bonus by (deposit, kind), the starter pack (a bonus naming a broker account)
 // by user. A bonus that names neither — a promo — has NO database-level dedupe key, and #13 must bring one when it defines those; an
-// `adjustment` is a deliberate manual act and carries `note` instead. The ledger is not
-// self-protecting for those two.
+// `adjustment` is a deliberate manual act and carries a mandatory `note`
+// (token_ledger_adjustment_note_check); its writer is adjustTokens (token-adjustment-ops.ts, #246),
+// and its only dedupe is the writer's `expectedBalance`. The ledger is not self-protecting for
+// those two.
 export const tokenLedger = pgTable(
   'token_ledger',
   {
@@ -98,6 +100,12 @@ export const tokenLedger = pgTable(
             when ${kind(TokenLedgerKind.Bonus)} then ${t.balanceDelta} > 0 and ${t.reservedDelta} = 0
             else true
           end`,
+    ),
+    // The reason is the only record of why a manual row exists. Blank-only text passes here and is
+    // refused by the writer's checkTokenNote: the writer is stricter, never the other way round.
+    check(
+      'token_ledger_adjustment_note_check',
+      sql`${t.kind} <> ${kind(TokenLedgerKind.Adjustment)} or (${t.note} is not null and char_length(${t.note}) between 1 and ${sql.raw(String(TOKEN_LEDGER_NOTE_MAX))})`,
     ),
     uniqueIndex('token_ledger_reserve_intent_idx')
       .on(t.intentId)

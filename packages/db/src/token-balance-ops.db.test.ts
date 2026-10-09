@@ -2,7 +2,6 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   BrokerAccountStatus,
-  TokenLedgerKind,
   TradeIntentFailureReason,
   UserStatus,
   tokenBalanceViewSchema,
@@ -22,6 +21,7 @@ import {
 import { LINK_BONUS_TOKENS } from './link-bonus-ops';
 import { confirmBrokerAccount } from './oauth-ops';
 import { tokenLedger, users } from './schema/index';
+import { adjustTokens } from './token-adjustment-ops';
 import { readTokenBalance, toTradingAccessView } from './token-balance-ops';
 import {
   TOKENS_PER_INTENT,
@@ -49,21 +49,14 @@ beforeAll(async () => {
 });
 afterAll(() => tmp.drop());
 
-// Credits the way a ledger writer must: the row and the cache in one transaction. Users are
-// seeded with balance 0 and credited through here, so cache = sum(ledger) holds from the start.
+// Credits through the real writer, the manual adjustment (#246): the row and the cache in one
+// transaction. Users are seeded with balance 0 and credited through here, so cache = sum(ledger)
+// holds from the start.
 async function creditTokens(userId: string, tokens: bigint): Promise<void> {
-  await tmp.db.transaction(async (tx) => {
-    await tx.insert(tokenLedger).values({
-      userId,
-      kind: TokenLedgerKind.Adjustment,
-      balanceDelta: tokens,
-      note: 'test credit',
-    });
-    await tx
-      .update(users)
-      .set({ tokenBalance: sql`${users.tokenBalance} + ${tokens}` })
-      .where(eq(users.id, userId));
-  });
+  const result = await tmp.db.transaction((tx) =>
+    adjustTokens(tx, { userId, delta: tokens, note: 'test credit' }),
+  );
+  expect(result.outcome).toBe('adjusted');
 }
 
 async function creditedUser(tokens: bigint, status: UserStatus = UserStatus.Active) {
@@ -105,6 +98,15 @@ describe('readTokenBalance', () => {
       status: UserStatus.Active,
       tokens: { balance: '7', reserved: '0', available: '7' },
     });
+    await expectCacheEqualsLedger(user);
+  });
+
+  it('follows a manual adjustment up and down, equal to the ledger at both points', async () => {
+    const user = await creditedUser(7n);
+    expect(await read(user)).toMatchObject({ balance: 7n, reserved: 0n });
+    await expectCacheEqualsLedger(user);
+    await creditTokens(user.userId, -2n);
+    expect(await read(user)).toMatchObject({ balance: 5n, reserved: 0n });
     await expectCacheEqualsLedger(user);
   });
 

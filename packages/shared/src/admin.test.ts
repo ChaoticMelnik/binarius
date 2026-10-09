@@ -50,10 +50,17 @@ import {
   staffSessionsResponseSchema,
   staffSessionViewSchema,
   tokenDeltaSchema,
+  safeParseAdminTokenAdjustmentRequest,
+  safeParseAdminTokenAdjustmentResponse,
 } from './admin';
 import {
+  checkTokenAdjustment,
+  checkTokenDelta,
+  checkTokenNote,
   DepositEventStatus,
   depositEventStatusSchema,
+  TOKEN_ADJUSTMENT_MAX_TOKENS,
+  TOKEN_LEDGER_NOTE_MAX,
   TokenLedgerKind,
   tokenLedgerKindSchema,
   TokenLedgerRefType,
@@ -1202,5 +1209,157 @@ describe('the password change contract (#78)', () => {
     ]) {
       expect(safeParseChangePasswordResponse(bad).success).toBe(false);
     }
+  });
+});
+
+describe('token adjustment contracts (#246)', () => {
+  const ASTRAL = '\u{10348}';
+  const user = {
+    id: '00000000-0000-4000-8000-000000000010',
+    telegramUserId: '4242',
+    displayName: null,
+    languageCode: null,
+    status: 'blocked',
+    acquisitionSource: null,
+    acquiredAt: null,
+    telegramBlockedAt: null,
+    notificationLevel: 'all',
+    demoStake: null,
+    tokens: { balance: '5', reserved: '0', available: '5' },
+    createdAt: AT,
+    updatedAt: AT,
+  };
+  const card = {
+    user,
+    brokerAccounts: [],
+    intents: { recent: [], total: 0, active: 0 },
+    ledger: { recent: [] },
+    deposits: { recent: [] },
+  };
+  const entry = {
+    id: '00000000-0000-4000-8000-000000000050',
+    userId: user.id,
+    telegramUserId: '4242',
+    kind: 'adjustment',
+    balanceDelta: '50',
+    reservedDelta: '0',
+    intentId: null,
+    depositEventId: null,
+    brokerAccountId: null,
+    refType: null,
+    refId: null,
+    note: 'Компенсация',
+    createdAt: AT,
+  };
+  const adjusted = {
+    me: ME,
+    outcome: 'adjusted',
+    entry,
+    tokens: { balance: '55', reserved: '0', available: '55' },
+  };
+  const body = { delta: '50', note: 'Компенсация', expectedBalance: '5' };
+  const cardWithoutDeposits = {
+    user: card.user,
+    brokerAccounts: card.brokerAccounts,
+    intents: card.intents,
+    ledger: card.ledger,
+  };
+
+  it.each([
+    [0n, 'zero'],
+    [1001n, 'over_limit'],
+    [-1001n, 'over_limit'],
+    [1000n, null],
+    [-1000n, null],
+    [1n, null],
+    [-1n, null],
+  ])('checkTokenDelta(%s) is %j', (delta, problem) => {
+    expect(checkTokenDelta(delta)).toBe(problem);
+  });
+
+  it.each([
+    ['blank', ' ', 'note_empty'],
+    ['empty', '', 'note_empty'],
+    ['513 code points', 'ж'.repeat(513), 'note_too_long'],
+    ['513 astral code points (1026 UTF-16 units)', ASTRAL.repeat(513), 'note_too_long'],
+    ['512 astral code points', ASTRAL.repeat(512), null],
+    ['512 code points', 'ж'.repeat(512), null],
+    ['a NUL', 'a\x00b', 'note_control_chars'],
+    ['a zero-width space', 'a​b', 'note_control_chars'],
+    ['plain text', 'Компенсация', null],
+  ])('checkTokenNote(%s) is %j', (_label, note, problem) => {
+    expect(checkTokenNote(note)).toBe(problem);
+  });
+
+  it('checks the delta before the note', () => {
+    expect(checkTokenAdjustment(0n, '')).toBe('zero');
+    expect(checkTokenAdjustment(5n, '')).toBe('note_empty');
+    expect(checkTokenAdjustment(5n, 'ok')).toBeNull();
+  });
+
+  it('keeps the limits where the plan put them, the token one inside a bigint column', () => {
+    expect(TOKEN_ADJUSTMENT_MAX_TOKENS).toBe(1000n);
+    expect(TOKEN_ADJUSTMENT_MAX_TOKENS <= 9_223_372_036_854_775_807n).toBe(true);
+    expect(TOKEN_LEDGER_NOTE_MAX).toBe(512);
+  });
+
+  it.each(['50', '-50', '1000', '-1000', '1'])('takes the delta %j', (delta) => {
+    expect(safeParseAdminTokenAdjustmentRequest({ ...body, delta }).success).toBe(true);
+  });
+
+  it('returns the note trimmed', () => {
+    const parsed = safeParseAdminTokenAdjustmentRequest({ ...body, note: ' Компенсация ' });
+    expect(parsed.data).toEqual({ delta: '50', note: 'Компенсация', expectedBalance: '5' });
+  });
+
+  it.each([
+    ['a zero delta', { ...body, delta: '0' }],
+    ['a plus sign', { ...body, delta: '+50' }],
+    ['a leading zero', { ...body, delta: '050' }],
+    ['a fraction', { ...body, delta: '1.5' }],
+    ['a delta over the limit', { ...body, delta: '1001' }],
+    ['a negative delta over the limit', { ...body, delta: '-1001' }],
+    ['a numeric delta', { ...body, delta: 50 }],
+    ['an empty note', { ...body, note: '' }],
+    ['a blank note', { ...body, note: '   ' }],
+    ['a note too long', { ...body, note: 'x'.repeat(513) }],
+    ['a negative expected balance', { ...body, expectedBalance: '-1' }],
+    ['no delta', { note: body.note, expectedBalance: body.expectedBalance }],
+    ['no note', { delta: body.delta, expectedBalance: body.expectedBalance }],
+    ['no expected balance', { delta: body.delta, note: body.note }],
+    ['an extra key', { ...body, extra: 1 }],
+  ])('refuses a request with %s', (_label, request) => {
+    expect(safeParseAdminTokenAdjustmentRequest(request).success).toBe(false);
+  });
+
+  it('accepts each of the three outcomes', () => {
+    expect(safeParseAdminTokenAdjustmentResponse(adjusted).success).toBe(true);
+    for (const outcome of ['insufficient_available', 'balance_changed']) {
+      expect(safeParseAdminTokenAdjustmentResponse({ me: ME, outcome, ...card }).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it.each([
+    ['adjusted with an extra key', { ...adjusted, extra: 1 }],
+    ['adjusted with the card', { ...adjusted, ...card }],
+    [
+      'a refusal without deposits',
+      { me: ME, outcome: 'insufficient_available', ...cardWithoutDeposits },
+    ],
+    ['a refusal with an entry', { me: ME, outcome: 'balance_changed', ...card, entry }],
+    ['an unknown outcome', { me: ME, outcome: 'not_found', ...card }],
+  ])('refuses %s', (_label, response) => {
+    expect(safeParseAdminTokenAdjustmentResponse(response).success).toBe(false);
+  });
+
+  it('reads a ledger reference by UUID_PATTERN, as the bare uuid column stores it (#348)', () => {
+    const manual = { ...entry, refType: 'manual' };
+    const nonRfc = '00000000-0000-0000-0000-000000000001';
+    expect(adminLedgerEntrySchema.safeParse({ ...manual, refId: nonRfc }).success).toBe(true);
+    expect(adminLedgerEntrySchema.safeParse({ ...manual, refId: 'not-a-uuid' }).success).toBe(
+      false,
+    );
   });
 });

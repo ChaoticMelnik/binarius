@@ -253,6 +253,24 @@ export const TEXTS = {
   userAudit: 'Аудит',
   userAuditAll: 'Все события по пользователю →',
 
+  // the manual token adjustment on the user card (#246)
+  userAdjustHeading: 'Корректировка',
+  userAdjustDirection: 'Операция',
+  userAdjustCredit: 'Начислить',
+  userAdjustDebit: 'Списать',
+  userAdjustAmount: (max: bigint) => `Токены (1–${max})`,
+  userAdjustNote: 'Причина',
+  userAdjustSubmit: 'Применить',
+  userNotice: { adjusted: 'Токены скорректированы.' },
+  tokenAdjustBadForm: (max: bigint, noteMax: number) =>
+    `Проверьте форму: количество — целое число от 1 до ${max}, причина — от 1 до ${noteMax} символов без управляющих символов`,
+  tokenAdjustInsufficient: (available: string) =>
+    `Недостаточно доступных токенов: доступно ${available}. Списать можно не больше доступного — резерв открытых заявок не трогается.`,
+  tokenAdjustBalanceChanged: (balance: string) =>
+    `Баланс изменился с момента открытия карточки: сейчас ${balance}. Проверьте и отправьте снова.`,
+  tokenAdjustOutcomeUnknown:
+    'Корректировка могла примениться — откройте карточку пользователя: баланс и первая строка «Движений токенов» покажут это. Не повторяйте отправку, не проверив.',
+
   passwordTitle: 'Смена пароля',
   passwordHeading: 'Сменить пароль',
   passwordLink: 'Сменить пароль',
