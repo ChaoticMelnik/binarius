@@ -49,13 +49,13 @@ describe('parseEnv', () => {
       ...valid,
       LOG_LEVEL: 'debug',
       INTENT_MAX_AGE_MS: '30000',
-      SUBMIT_ACK_TIMEOUT_MS: '5000',
+      SUBMIT_ACK_TIMEOUT_MS: '8000',
       WORKER_CONCURRENCY: '1',
     });
     expect(env).toMatchObject({
       logLevel: 'debug',
       intentMaxAgeMs: 30_000,
-      submitAckTimeoutMs: 5_000,
+      submitAckTimeoutMs: 8_000,
       workerConcurrency: 1,
     });
   });
@@ -92,8 +92,9 @@ describe('parseEnv', () => {
   it.each([
     ['INTENT_MAX_AGE_MS', '999', 'Env INTENT_MAX_AGE_MS must be between 1000 and 600000'],
     ['INTENT_MAX_AGE_MS', '600001', 'Env INTENT_MAX_AGE_MS must be between 1000 and 600000'],
-    ['SUBMIT_ACK_TIMEOUT_MS', '499', 'Env SUBMIT_ACK_TIMEOUT_MS must be between 500 and 30000'],
-    ['SUBMIT_ACK_TIMEOUT_MS', '30001', 'Env SUBMIT_ACK_TIMEOUT_MS must be between 500 and 30000'],
+    // the floor sits above the transports' own timeouts, 5 s (#96)
+    ['SUBMIT_ACK_TIMEOUT_MS', '5999', 'Env SUBMIT_ACK_TIMEOUT_MS must be between 6000 and 30000'],
+    ['SUBMIT_ACK_TIMEOUT_MS', '30001', 'Env SUBMIT_ACK_TIMEOUT_MS must be between 6000 and 30000'],
     ['WORKER_CONCURRENCY', '0', 'Env WORKER_CONCURRENCY must be between 1 and 100'],
     ['WORKER_CONCURRENCY', 'x', 'Env WORKER_CONCURRENCY must be an integer'],
     ['LOG_LEVEL', 'loud', 'Env LOG_LEVEL must be one of: fatal error warn info debug trace silent'],

@@ -25,6 +25,7 @@ import {
   type BrokerSocketClientOptions,
 } from '../broker/socket';
 import type { TradeSessionSource } from '../broker/trade-session';
+import { observeExecutor } from '../circuit-breaker/observe-executor';
 import { createTradeCommandExecutor } from './trade-command-executor';
 
 const TOKEN = 'SECRET-TOKEN-of-user-1';
@@ -89,11 +90,12 @@ const grantingTokens = () => tokenSource(async () => ({ ok: true, accessToken: T
 async function sessionFor(
   state: BrokerSocketState = BrokerSocketState.Ready,
   openSocket?: BrokerSocketClientOptions['openSocket'],
+  timing: BrokerSocketClientOptions['timing'] = TIMING,
 ) {
   const client = createBrokerSocketClient({
     url: broker.url,
     logger: logger(),
-    timing: TIMING,
+    timing,
     ...(openSocket === undefined ? {} : { openSocket }),
   });
   clients.push(client);
@@ -232,6 +234,37 @@ describe('over the socket', () => {
     ]);
     expect(socketOpens()).toHaveLength(1);
     expect(restOpens()).toHaveLength(1);
+  });
+
+  // M2 of review round 2: the broker's silence ends on the client's own command timer, before
+  // the processor's deadline, so the circuit breaker counts it
+  it('S10 a broker silent past the command timeout: unknown before the deadline, counted', async () => {
+    const client = await sessionFor(BrokerSocketState.Ready, undefined, {
+      ...TIMING,
+      commandTimeoutMs: 60,
+    });
+    broker.socket.failNext('openTrade', { silent: true });
+    const records: [string, boolean][] = [];
+    const observed = observeExecutor(executor(client), {
+      rest: (id, failed) => {
+        records.push([id, failed]);
+      },
+    });
+    // the processor's deadline
+    const deadline = AbortSignal.timeout(400);
+    const result = await observed.submit(intentOf(), deadline);
+    expect(deadline.aborted).toBe(false);
+    expect(result).toEqual({ outcome: 'unknown', reason: 'broker_unavailable' });
+    expect(logs('trade command outcome unknown')).toEqual([
+      expect.objectContaining({
+        intentId: 'intent-1',
+        transport: 'socket',
+        reason: 'timeout',
+        sessionState: BrokerSocketState.Ready,
+      }),
+    ]);
+    expectSentOnceOverSocket();
+    expect(records).toEqual([['intent-1', true]]);
   });
 
   it('a signal already aborted sends nothing anywhere', async () => {

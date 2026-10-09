@@ -165,8 +165,9 @@ export function createTradeCommandExecutor(deps: TradeCommandExecutorDeps): Trad
         case 'unknown':
           break;
       }
-      // emitted with no answer, or the processor's deadline already passed: its own outcome
-      // has been written and this one is dropped
+      // emitted with no answer: the session changed state, the client's command timer ran out
+      // (the broker silent; counted by the circuit breaker), or the processor's deadline already
+      // passed: its own outcome has been written and this one is dropped
       logger.warn(
         { intentId: intent.id, transport, reason: result.reason, sessionState: result.state },
         'trade command outcome unknown',

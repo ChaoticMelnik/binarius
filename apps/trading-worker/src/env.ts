@@ -19,11 +19,10 @@ import {
   MAX_CIRCUIT_BREAKER_WINDOW_MS,
   SOCKET_LOSS_GRACE_MS,
 } from './circuit-breaker/config';
-import { MAX_SUBMIT_ACK_TIMEOUT_MS } from './intents/config';
+import { MAX_SUBMIT_ACK_TIMEOUT_MS, MIN_SUBMIT_ACK_TIMEOUT_MS } from './intents/config';
 
 const MIN_INTENT_MAX_AGE_MS = 1_000;
 const MAX_INTENT_MAX_AGE_MS = 600_000;
-const MIN_SUBMIT_ACK_TIMEOUT_MS = 500;
 const MAX_WORKER_CONCURRENCY = 100;
 // the backend is reached over the compose network in plain http, as the bot reaches it
 export const BACKEND_URL_RULES: UrlEnvRules = {
@@ -66,8 +65,9 @@ export function parseEnv(source: EnvSource): Env {
       MIN_INTENT_MAX_AGE_MS,
       MAX_INTENT_MAX_AGE_MS,
     ),
-    // capped below the stale-submitting threshold: a redelivered job must never declare an
-    // intent unknown while its first worker could still be waiting for the broker
+    // floored above the transports' own timeouts (#96), so the broker's silence ends as their
+    // result and is counted, and capped below the stale-submitting threshold: a redelivered job
+    // must never declare an intent unknown while its first worker could still be waiting
     submitAckTimeoutMs: parseBoundedIntegerEnv(
       readEnv(source, 'SUBMIT_ACK_TIMEOUT_MS', '10000'),
       'SUBMIT_ACK_TIMEOUT_MS',
