@@ -66,6 +66,14 @@ export interface SessionLeases {
   release(): Promise<unknown>;
 }
 
+// The socket signal of the circuit breaker (#96): every ready session on every check, and a session
+// lost to the broker once per loss. Not our own drops (idle, the fence of #93, a refusal, stop())
+// and not token_expired/auth_failed.
+export interface SessionLossObserver {
+  lost(accountId: string): void;
+  ready(accountId: string): void;
+}
+
 export interface BrokerSessionManagerDeps {
   url: string;
   // production: listSessionCandidates over the worker's database
@@ -80,6 +88,7 @@ export interface BrokerSessionManagerDeps {
   leases: SessionLeases;
   // the fence's clock: monotonic, so a wall-clock jump neither extends nor cuts a lease
   monotonicNow?: () => number;
+  lossObserver?: SessionLossObserver;
   logger: SessionLogger;
   config: SessionManagerConfig;
   // passed to every client (tests shorten the waits)
@@ -96,6 +105,9 @@ export interface BrokerSessionManager extends TradeSessionSource {
   // single-flight; one renewal of every lease the entries hold, every leaseRenewMs once started;
   // never rejects
   renewLeases(): Promise<void>;
+  // the loss observer's check (#96): every tickMs once started, on its own timer, so a scan stuck
+  // on the database does not hide the broker's losses
+  observeSessions(): void;
   // the timer, the start pool, every client, then the write in flight per account within
   // stopBudgetMs; the writes queued behind it are dropped
   stop(): Promise<void>;
@@ -135,6 +147,12 @@ interface RunningEntry {
   idleSince?: number;
   // warn-once keys of the current connection
   warned: Set<string>;
+  // #96: ready at least once; when it left ready (monotonic); this loss already reported; the
+  // next connection after a token refresh counts as leaving ready
+  everReady: boolean;
+  lostSince?: number;
+  lossReported: boolean;
+  rearmed: boolean;
 }
 
 type Entry = StartingEntry | RunningEntry;
@@ -161,6 +179,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   let renewTimer: ReturnType<typeof setInterval> | undefined;
   let renewing: Promise<void> | undefined;
   let fenceTimer: ReturnType<typeof setTimeout> | undefined;
+  let observeTimer: ReturnType<typeof setInterval> | undefined;
 
   const isCurrent = (accountId: string, entry: Entry) => entries.get(accountId) === entry;
 
@@ -472,19 +491,33 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       case BrokerSocketState.Idle:
         entry.verified = false;
         entry.warned.clear();
+        // a ready session that left ready, or the first connection after its token refresh: a loss
+        // once it outlasts the grace (observeSessions decides)
+        if (change.from === BrokerSocketState.Ready || entry.rearmed) {
+          entry.lostSince ??= now();
+          entry.rearmed = false;
+        }
         return;
-      // the client closed its socket: no session while the token is fetched again
+      // the client closed its socket: no session while the token is fetched again. Credentials,
+      // not the connection: no loss
       case BrokerSocketState.TokenExpired:
       case BrokerSocketState.AuthFailed:
         entry.verified = false;
         entry.warned.clear();
+        entry.lostSince = undefined;
+        entry.rearmed = entry.everReady;
         if (!entry.refreshing) void refresh(entry, change.to);
         return;
       case BrokerSocketState.DisconnectedByServer:
         logger.info({ accountId, reason: change.to }, 'broker session closed');
+        if (entry.everReady && !entry.lossReported) deps.lossObserver?.lost(accountId);
         drop(accountId, config.retryMs);
         return;
       case BrokerSocketState.Ready:
+        entry.everReady = true;
+        entry.lostSince = undefined;
+        entry.lossReported = false;
+        entry.rearmed = false;
         return;
     }
   }
@@ -600,6 +633,9 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       verified: false,
       refreshing: false,
       warned: new Set(),
+      everReady: false,
+      lossReported: false,
+      rearmed: false,
     };
     entries.set(accountId, entry);
     entry.client.onEvent((event) => onEvent(entry, event));
@@ -623,6 +659,26 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   function startWorkers() {
     while (!stopping.signal.aborted && workers < config.startConcurrency && startQueue.length > 0)
       void worker();
+  }
+
+  // every ready session is reported ready, so the breaker's window holds every session in work with
+  // its latest state; a session still not ready config.lossGraceMs after it left ready is one loss
+  // (monotonic, like the fence: a wall-clock jump neither hides nor invents a loss)
+  function observeSessions() {
+    const observer = deps.lossObserver;
+    if (observer === undefined || stopping.signal.aborted) return;
+    const at = now();
+    for (const [accountId, entry] of entries) {
+      if (entry.kind !== 'running') continue;
+      if (entry.client.state === BrokerSocketState.Ready) {
+        observer.ready(accountId);
+        continue;
+      }
+      if (entry.lostSince === undefined || entry.lossReported) continue;
+      if (at - entry.lostSince < config.lossGraceMs) continue;
+      entry.lossReported = true;
+      observer.lost(accountId);
+    }
   }
 
   async function runTick() {
@@ -710,6 +766,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     renewTimer = undefined;
     if (fenceTimer !== undefined) clearTimeout(fenceTimer);
     fenceTimer = undefined;
+    if (observeTimer !== undefined) clearInterval(observeTimer);
+    observeTimer = undefined;
     stopping.abort();
     startQueue = [];
     for (const entry of entries.values()) {
@@ -764,9 +822,13 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       void tick();
       timer = setInterval(() => void tick(), config.tickMs);
       renewTimer = setInterval(() => void renewLeases(), config.leaseRenewMs);
+      if (deps.lossObserver !== undefined) {
+        observeTimer = setInterval(observeSessions, config.tickMs);
+      }
     },
     tick,
     renewLeases,
+    observeSessions,
     stop,
     // the executor gets the client only once this connection's user.data matched the account;
     // until then its command goes over REST (the executor's no-session case). Never past the

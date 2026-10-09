@@ -65,7 +65,9 @@ export function stopTrading(
             .returning()
         : [inserted];
     if (updated === undefined) return { changed: false, state: await lockedState(tx) };
-    await audit(tx, AuditAction.TradingStopped, { via: 'cli', source, reason });
+    // the operator stops through the CLI; the breaker (#96) is its own channel
+    const via = source === TradingSwitchSource.CircuitBreaker ? 'circuit_breaker' : 'cli';
+    await audit(tx, AuditAction.TradingStopped, { via, source, reason });
     return { changed: true, state: updated };
   });
 }
@@ -75,7 +77,8 @@ export interface OpenTradingInput {
 }
 
 // The only writer of trading_enabled = true, and it always writes source = operator: only an
-// operator opens trading (#144 decision 6; stated, test T8 in trading-switch-ops.db.test.ts).
+// operator opens trading (#144 decision 6). Enforced by trading_switch_open_source_check (#96),
+// and T8 (trading-switch-writers.test.ts) keeps this the only open write in the code.
 export function openTrading(
   db: Db,
   { reason }: OpenTradingInput = {},

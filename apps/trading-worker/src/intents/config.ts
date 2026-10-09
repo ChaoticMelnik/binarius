@@ -2,7 +2,10 @@ import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
-import { BROKER_SOCKET_CONNECT_TIMEOUT_MS } from '../broker/socket-config';
+import {
+  BROKER_SOCKET_COMMAND_TIMEOUT_MS,
+  BROKER_SOCKET_CONNECT_TIMEOUT_MS,
+} from '../broker/socket-config';
 import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 
 // The worker's time constants form one chain, and every link has a reason:
@@ -17,10 +20,14 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 // The phase-1 budget covers the ack deadline plus the outcome write; a database that times out
 // every statement is the exit(1) path (intent left submitting, resolved by the sweeper).
 // A side link: BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS, so a job that makes a broker
-// REST call without a deadline of its own still finishes inside the drain. It is deliberately not
-// ordered against SUBMIT_ACK_TIMEOUT_MS: the processor passes its own signal, and a REST call ends
-// at the earlier of the two (docs/broker-rest.md). The constant is the REST client's own
-// (packages/broker-rest/src/rest.ts).
+// REST call without a deadline of its own still finishes inside the drain. The constant is the
+// REST client's own (packages/broker-rest/src/rest.ts).
+// The submit deadline's floor (#96):
+//   BROKER_SOCKET_COMMAND_TIMEOUT_MS < MIN_SUBMIT_ACK_TIMEOUT_MS and BROKER_REST_TIMEOUT_MS
+//     < MIN_SUBMIT_ACK_TIMEOUT_MS ≤ MAX_SUBMIT_ACK_TIMEOUT_MS — the transports' own timeouts end a
+//     submit the broker left unanswered before the processor's deadline can: the circuit breaker
+//     counts the broker's silence only as the transport's own result, and a submit cut by the
+//     deadline's signal is not counted (circuit-breaker/observe-executor.ts)
 // The reconciliation pass (#89) adds three links:
 //   BROKER_REST_TIMEOUT_MS < RECONCILE_ATTEMPT_TIMEOUT_MS < RECONCILE_RETRY_MS — one REST call fits
 //     an attempt, and a live attempt is never re-claimed by another replica's lease check
@@ -61,6 +68,7 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 // The trading session orchestrator (#287, trading-session/config.ts) adds one:
 //   TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS — phase 1 waits for its stop()
 //     alongside the other steps: one attempt at most
+export const MIN_SUBMIT_ACK_TIMEOUT_MS = 6_000;
 export const MAX_SUBMIT_ACK_TIMEOUT_MS = 30_000;
 export const SHUTDOWN_PHASE1_BUDGET_MS = 35_000;
 export const SHUTDOWN_PHASE2_BUDGET_MS = 4_000;
@@ -122,6 +130,9 @@ export const WORKER_BROKER_GETS_WORST_CASE =
 
 // the chain above is the invariant; a constant edited out of order fails at import, not in prod
 export const TIMING_CHAIN_HOLDS =
+  BROKER_SOCKET_COMMAND_TIMEOUT_MS < MIN_SUBMIT_ACK_TIMEOUT_MS &&
+  BROKER_REST_TIMEOUT_MS < MIN_SUBMIT_ACK_TIMEOUT_MS &&
+  MIN_SUBMIT_ACK_TIMEOUT_MS <= MAX_SUBMIT_ACK_TIMEOUT_MS &&
   MAX_SUBMIT_ACK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS &&
   COMPOSE_STOP_GRACE_PERIOD_MS < LOCK_DURATION_MS &&

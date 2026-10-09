@@ -83,6 +83,26 @@ describe('stopTrading', () => {
     ]);
   });
 
+  it('T2b a circuit-breaker stop writes its own channel in the audit row (#96)', async () => {
+    const result = await stopTrading(tmp.db, {
+      source: 'circuit_breaker',
+      reason: 'Автостоп: брокер не отвечает',
+    });
+    expect(result.changed).toBe(true);
+    expect(result.state).toMatchObject({ tradingEnabled: false, source: 'circuit_breaker' });
+    expect(await switchAudits()).toEqual([
+      {
+        action: 'trading_stopped',
+        entityType: 'trading_switch',
+        payload: {
+          via: 'circuit_breaker',
+          source: 'circuit_breaker',
+          reason: 'Автостоп: брокер не отвечает',
+        },
+      },
+    ]);
+  });
+
   it('T3 on a closed switch changes nothing and writes no audit row', async () => {
     await stopTrading(tmp.db, { source: 'operator', reason: 'первая' });
     const again = await stopTrading(tmp.db, { source: 'operator', reason: 'вторая' });
@@ -112,6 +132,13 @@ describe('openTrading', () => {
         payload: { via: 'cli', reason: 'брокер в норме' },
       },
     ]);
+  });
+
+  it('T9 reopens after a circuit-breaker stop, as the operator (#96)', async () => {
+    await stopTrading(tmp.db, { source: 'circuit_breaker', reason: 'Автостоп' });
+    const result = await openTrading(tmp.db, { reason: 'брокер в норме' });
+    expect(result.changed).toBe(true);
+    expect(result.state).toMatchObject({ tradingEnabled: true, source: 'operator' });
   });
 
   it('T5 on the open seed changes nothing: no audit row, source stays migration', async () => {

@@ -1,7 +1,11 @@
 import { sql } from 'drizzle-orm';
 import { boolean, check, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
-import { TRADING_SWITCH_REASON_MAX, TradingSwitchSource } from '@binarius/shared';
-import { inList } from './columns';
+import {
+  TRADING_SWITCH_OPENING_SOURCES,
+  TRADING_SWITCH_REASON_MAX,
+  TradingSwitchSource,
+} from '@binarius/shared';
+import { inList, sqlLiteralList } from './columns';
 
 // The global trading switch (#144, docs/kill-switch.md): one row at most. Every reader takes a
 // missing row as closed (tradingOpenSql), so a DELETE by hand stops trading and never opens it.
@@ -18,6 +22,11 @@ export const tradingSwitch = pgTable(
     check('trading_switch_singleton_check', sql`${t.id}`),
     inList('trading_switch_source_check', t.source, TradingSwitchSource),
     check('trading_switch_stop_reason_check', sql`${t.tradingEnabled} or ${t.reason} is not null`),
+    // only the seed and the operator open (#96): an automatic closer can never leave trading open
+    check(
+      'trading_switch_open_source_check',
+      sql`not ${t.tradingEnabled} or ${t.source} in (${sqlLiteralList(TRADING_SWITCH_OPENING_SOURCES)})`,
+    ),
     check(
       'trading_switch_reason_length_check',
       sql`char_length(${t.reason}) between 1 and ${sql.raw(String(TRADING_SWITCH_REASON_MAX))}`,

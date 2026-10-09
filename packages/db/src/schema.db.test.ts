@@ -2607,7 +2607,10 @@ describe('trading_switch (#144)', () => {
     await rolledBack(async (tx) => {
       await reset(tx);
       await rejectsWith(
-        tx.update(tradingSwitch).set({ source: 'circuit' as never }),
+        // a closed row: an open one with an unknown source would hit the open-source CHECK first
+        tx
+          .update(tradingSwitch)
+          .set({ tradingEnabled: false, reason: 'x', source: 'circuit' as never }),
         '23514',
         'trading_switch_source_check',
       );
@@ -2653,6 +2656,54 @@ describe('trading_switch (#144)', () => {
         .set({ tradingEnabled: false, source: 'operator', reason })
         .returning();
       expect(row!.reason).toBe(reason);
+    });
+  });
+
+  // #96: only the seed and the operator leave trading open; the circuit breaker only closes
+  it.each([
+    ['open by the migration', { tradingEnabled: true, source: 'migration', reason: null }],
+    ['open by the operator', { tradingEnabled: true, source: 'operator', reason: null }],
+    ['closed by the breaker', { tradingEnabled: false, source: 'circuit_breaker', reason: 'x' }],
+    ['closed by the operator', { tradingEnabled: false, source: 'operator', reason: 'x' }],
+  ] as const)('accepts a row %s', async (_label, row) => {
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      await tx.update(tradingSwitch).set(row);
+    });
+  });
+
+  it('refuses an open row whose source is the breaker, so reopening goes through the operator', async () => {
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      await rejectsWith(
+        tx
+          .update(tradingSwitch)
+          .set({ tradingEnabled: true, source: 'circuit_breaker', reason: null }),
+        '23514',
+        'trading_switch_open_source_check',
+      );
+    });
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      await tx
+        .update(tradingSwitch)
+        .set({ tradingEnabled: false, source: 'circuit_breaker', reason: 'x' });
+      // a direct reopen keeping the breaker's source is refused...
+      await rejectsWith(
+        tx.update(tradingSwitch).set({ tradingEnabled: true }),
+        '23514',
+        'trading_switch_open_source_check',
+      );
+    });
+    await rolledBack(async (tx) => {
+      await reset(tx);
+      await tx
+        .update(tradingSwitch)
+        .set({ tradingEnabled: false, source: 'circuit_breaker', reason: 'x' });
+      // ...and the operator's, writing its own source in the same update, passes
+      await tx
+        .update(tradingSwitch)
+        .set({ tradingEnabled: true, source: 'operator', reason: null });
     });
   });
 });

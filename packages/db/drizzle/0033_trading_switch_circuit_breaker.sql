@@ -1,0 +1,3 @@
+ALTER TABLE "trading_switch" DROP CONSTRAINT "trading_switch_source_check";--> statement-breakpoint
+ALTER TABLE "trading_switch" ADD CONSTRAINT "trading_switch_open_source_check" CHECK (not "trading_switch"."trading_enabled" or "trading_switch"."source" in ('migration', 'operator'));--> statement-breakpoint
+ALTER TABLE "trading_switch" ADD CONSTRAINT "trading_switch_source_check" CHECK ("trading_switch"."source" in ('migration', 'operator', 'circuit_breaker'));

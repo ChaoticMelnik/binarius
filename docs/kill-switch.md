@@ -28,13 +28,13 @@ Holders of open trades get no notice.
 
 ## The row
 
-`trading_switch` (`packages/db/src/schema/trading-switch.ts`, migrations 0019 and 0020):
+`trading_switch` (`packages/db/src/schema/trading-switch.ts`, migrations 0019, 0020 and 0033):
 
 | Column | Rule |
 |---|---|
 | `id boolean primary key default true` | `trading_switch_singleton_check check (id)`: one row at most |
 | `trading_enabled boolean not null` | the state; open is `true` |
-| `source text not null` | `trading_switch_source_check`: `migration` (the seed) or `operator` (the CLI) |
+| `source text not null` | `trading_switch_source_check`: `migration` (the seed), `operator` (the CLI) or `circuit_breaker` (the worker, #96); `trading_switch_open_source_check`: an open row's source is `migration` or `operator` |
 | `reason text` | `trading_switch_stop_reason_check`: a closed row always has one; `trading_switch_reason_length_check`: 1–200 characters |
 | `changed_at timestamptz not null` | the database's `now()` of the last change |
 
@@ -44,9 +44,10 @@ Holders of open trades get no notice.
 - **A new database starts open.** Migration 0020 inserts `(true, 'migration', NULL)` (owner's
   decision 2026-10-07).
 - **Only an operator opens trading.** `openTrading` is the only writer of `trading_enabled =
-  true` and always writes `source = operator`; `stopTrading` writes only `false`. This is
-  `stated`, held by a test that lists the writers (`trading-switch-writers.test.ts`), not by a
-  CHECK — see For #96 below.
+  true` and always writes `source = operator`; `stopTrading` writes only `false`. Enforced by
+  `trading_switch_open_source_check` (#96: an open row with any source but the seed or the
+  operator is refused, so the circuit breaker cannot open), and the writers are listed by
+  `trading-switch-writers.test.ts` (T8).
 - The CHECK holds the reason's length only. The content rule (trimmed, no control characters) is
   `tradingSwitchReasonSchema`, applied by the CLI.
 - Rows of 0012–0018 that carried the retired reason `real_trading_disabled` are rewritten to
@@ -98,8 +99,9 @@ docker compose exec backend pnpm --filter @binarius/backend kill-switch off --re
 | a database failure (pool, statement, commit) | «Не удалось выполнить команду: <name and code>. Состояние могло измениться — проверьте командой status.» (`status`: «Не удалось прочитать состояние: …») | 1 |
 
 - Each change is one transaction: the switch UPDATE (or the INSERT of a missing row) and, only
-  when a row changed, an `audit_log` row: `trading_stopped` with `{ via: 'cli', source, reason }`
-  or `trading_resumed` with `{ via: 'cli', reason }`, `actor_type = system`,
+  when a row changed, an `audit_log` row: `trading_stopped` with `{ via, source, reason }` (`via`
+  is `cli` for the operator, `circuit_breaker` for the worker's breaker) or `trading_resumed` with
+  `{ via: 'cli', reason }`, `actor_type = system`,
   `entity_type = trading_switch`. A repeated command changes nothing and writes no audit row.
 - `on` and `off` recreate a missing row (closed or open respectively).
 - The failure line names the error and its cause by name and code only (Rule 8). It never says
@@ -143,21 +145,25 @@ The falsifiable sign that real is trading: `select count(*) from trade_intents w
   creation transaction.
 - Backend and worker restarts change nothing: no process holds the state.
 
-## For #96
+## The circuit breaker (#96)
 
-The automatic circuit breaker appends `circuit_breaker` to `TradingSwitchSource` in its own
-migration and calls `stopTrading` with it. The same migration adds
+The worker closes the switch on its own when the broker stops answering:
+`stopTrading({ source: circuit_breaker, reason: «Автостоп: …» })`, demo and real together, audited
+with `via: circuit_breaker`. It never opens: migration 0033 adds
 `trading_switch_open_source_check check (not trading_enabled or source in ('migration',
-'operator'))`, so the database itself keeps that source from opening trading. Until a source
-exists that must not open, such a CHECK would admit every valid value and could not be observed
-failing, so #144 does not add it.
+'operator'))`, and `openTrading` writes `source = operator` in the same UPDATE, so the operator's
+`kill-switch off` is the way back. `status` shows «… источник circuit_breaker): Автостоп: …».
+Signals, thresholds and the operator's procedure:
+[runbook-broker-outage.md](runbook-broker-outage.md).
 
 ## Tests
 
 - `packages/db/src/trading-switch-ops.db.test.ts`: the seed (T1), the writers and their audit
-  rows (T2–T5), the missing row (T6).
+  rows (T2–T5; T2b the breaker's `via`), the missing row (T6), a reopen after a breaker stop (T9).
+- `apps/trading-worker/src/circuit-breaker/*.test.ts`: the window (W1–W6), the breaker (B1–B6),
+  the submit decorator (D1–D5), the constants and the env overrides.
 - `packages/db/src/schema.db.test.ts` → `trading_switch (#144)`: every CHECK at NULL and the
-  boundaries.
+  boundaries; the open-source CHECK on every source × state (#96).
 - `packages/db/src/trading-switch-migration.db.test.ts`: the 0019 rewrite (S6).
 - `packages/db/src/trading-switch-writers.test.ts`: the writers of an open switch (T8).
 - `packages/db/src/trade-intent-ops.db.test.ts` P1–P4, `apps/backend/src/trading/routes.db.test.ts`,

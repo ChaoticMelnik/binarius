@@ -128,10 +128,12 @@ checked where that process's chain lives:
 Each `*_CHAIN_HOLDS` throws at import when its link breaks. The backend waits on no REST call
 during shutdown: its one caller, the pairs catalog, is aborted by `stop()` in phase 1.
 
-It is deliberately not ordered against `SUBMIT_ACK_TIMEOUT_MS` (500–30 000, env). The processor
-passes its own signal, and a request ends at whichever comes first: the caller's signal or the
-timeout. With a 30 s ack timeout, a REST open still gives up after 5 s, the same value the
-backend uses for its broker client (`BROKER_HTTP_TIMEOUT_MS`).
+Ordered below the deadline's env floor: `BROKER_REST_TIMEOUT_MS < MIN_SUBMIT_ACK_TIMEOUT_MS`
+(6 000) in `apps/trading-worker/src/intents/config.ts` (#96): a POST the broker leaves unanswered
+ends as `unavailable` (the client's own timeout) before the processor's deadline can cut it as
+`aborted`, so the circuit breaker counts it. A request still ends at whichever comes first, the
+caller's signal or the timeout: with a 30 s ack timeout a REST open gives up after 5 s, the same
+value the backend uses for its broker client (`BROKER_HTTP_TIMEOUT_MS`).
 
 ## Money
 

@@ -17,7 +17,7 @@ TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius \
 
 | Part | Where | What |
 |---|---|---|
-| `createBrokerSessionManager(deps)` | `apps/trading-worker/src/broker/session-manager.ts` | the manager; implements `TradeSessionSource` (`sessionFor`), plus `start()`, `tick()`, `renewLeases()`, `stop()`, `clientFor()`, `size` |
+| `createBrokerSessionManager(deps)` | `apps/trading-worker/src/broker/session-manager.ts` | the manager; implements `TradeSessionSource` (`sessionFor`), plus `start()`, `tick()`, `renewLeases()`, `observeSessions()`, `stop()`, `clientFor()`, `size` |
 | Constants | `apps/trading-worker/src/broker/session-config.ts` | the table under [Constants](#constants) and `SESSION_CHAIN_HOLDS` |
 | Candidates | `listSessionCandidates` in `packages/db/src/balance-snapshot-ops.ts` | the accounts in work, `{ id, brokerUserId }` |
 | Lease | `broker_session_leases` (migration 0031), `packages/db/src/session-lease-ops.ts` (#93) | which process may hold an account's socket: acquire, renew, release ([The lease](#the-lease-93)) |
@@ -211,6 +211,22 @@ A dead owner's account is picked up by another process within about TTL + one ho
 busy` for one account longer than 95 s after its owner's last line. `compose.yaml` still runs one
 worker: more replicas, sharding and routing intent jobs to the owner are #94.
 
+## Losses for the circuit breaker (#96)
+
+With a `lossObserver` (`index.ts` passes the circuit breaker's), `observeSessions()` runs every
+`SESSION_TICK_MS` on its own timer (not inside the tick, so a scan stuck on the database does not
+hide the broker's losses). It reports every running session in `ready` as ready — so the
+breaker's window holds every session in work during the window with its latest state, also after
+we drop it — and a session lost to the broker once per loss: one that was `ready` and left it
+(`connecting`/`reconnecting`/`authenticating`/`idle`), or whose token was refreshed and whose new
+connection began, and is still not ready `SOCKET_LOSS_GRACE_MS` (45 s, `session-config.ts`,
+the config's `lossGraceMs`, measured on the manager's monotonic clock) later. A session closed with `disconnected_by_server` after it was
+ready is reported lost at once. Not a loss: `token_expired`/`auth_failed` while the token is
+fetched (credentials, however long it takes), a session that never became ready, and every drop
+of our own — idle, the lease fence or a lost lease (#93), a refusal, `stop()` — whose entry is no
+longer current. Tests: `session-manager.test.ts` S1–S9 (S9: the check's own timer from
+`start()`, while a scan hangs, cleared by `stop()`).
+
 ## Start and shutdown
 
 `index.ts` builds the manager only when `BROKER_WS_URL` is set and passes it to the trade command
@@ -220,7 +236,7 @@ the catch-up, and `trading-worker started` carries `sessions: true|false`.
 Shutdown phase 1: the intents consumer's step is `worker.close()` → `drainDeadLetters()` →
 `sessions.stop()`, so the sockets close after the jobs in flight finished and our own shutdown
 never cuts a submit waiting on its socket. `stop()`: the timers cleared (the scan, the lease
-renewal, the fence), the token fetches aborted
+renewal, the fence, the loss check), the token fetches aborted
 (the pool exits), every client stopped (a command still waiting settles `unknown`/`state_changed`,
 and no event is delivered after it), the writes queued behind the one in flight dropped with one
 `warn` `broker session writes dropped at stop` (`dropped`), then the write in flight per account
@@ -247,6 +263,7 @@ expected close.
 | `SESSION_LEASE_RENEW_MS` | 6 000 | the renewal interval |
 | `SESSION_LEASE_RENEW_TIMEOUT_MS` | 3 000 | how long one acquire or renewal may take before it counts as failed |
 | `SESSION_LEASE_FENCE_MS` | 25 000 | how long after sending an acquire or a renewal the process trusts it; past it the socket is closed |
+| `SOCKET_LOSS_GRACE_MS` | 45 000 | how long a session that was ready may stay not ready before the loss observer counts it (#96); longer than one full reconnect — the circuit breaker's chain in `circuit-breaker/config.ts` |
 
 `SESSION_CHAIN_HOLDS`, thrown at import and restated in `session-config.test.ts`:
 `SESSION_TICK_MS < SESSION_IDLE_GRACE_MS` (an account missing from one scan is not closed),
@@ -260,6 +277,7 @@ SESSION_LEASE_TTL_MS` (the fence closes the socket 5 s before the database lets 
 `SESSION_LEASE_RENEW_TIMEOUT_MS < SESSION_LEASE_RENEW_MS` (a stuck renewal ends before the next one
 is due), `SESSION_LEASE_TTL_MS < SESSION_RETRY_MS`
 (a busy account is asked again only once its lease could have lapsed),
+`SESSION_TICK_MS < SOCKET_LOSS_GRACE_MS` (the loss check sees a loss within the grace),
 `DEAD_LETTER_WRITE_TIMEOUT_MS < SESSION_STOP_BUDGET_MS`, every `*_MS` an integer in
 `[1, MAX_TIMER_MS]`.
 

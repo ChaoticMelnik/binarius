@@ -10,7 +10,10 @@ import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
-import { BROKER_SOCKET_CONNECT_TIMEOUT_MS } from '../broker/socket-config';
+import {
+  BROKER_SOCKET_COMMAND_TIMEOUT_MS,
+  BROKER_SOCKET_CONNECT_TIMEOUT_MS,
+} from '../broker/socket-config';
 import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 import {
   BALANCE_CHECK_TIMEOUT_MS,
@@ -23,6 +26,7 @@ import {
   COMPOSE_STOP_GRACE_PERIOD_MS,
   LOCK_DURATION_MS,
   MAX_SUBMIT_ACK_TIMEOUT_MS,
+  MIN_SUBMIT_ACK_TIMEOUT_MS,
   RECONCILE_ATTEMPT_TIMEOUT_MS,
   RECONCILE_BATCH_SIZE,
   RECONCILE_MAX_TRADE_PAGES,
@@ -52,6 +56,16 @@ describe('timing constants', () => {
     expect(COMPOSE_STOP_GRACE_PERIOD_MS).toBeLessThan(LOCK_DURATION_MS);
     expect(LOCK_DURATION_MS).toBeLessThanOrEqual(STALE_SUBMITTING_MS);
     expect(BROKER_REST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  // #96: the broker's silence ends as the transport's own result, which the breaker counts,
+  // before the processor's deadline can cut the submit
+  it('keep the socket command and the REST call below the submit deadline floor', () => {
+    expect(MIN_SUBMIT_ACK_TIMEOUT_MS).toBe(6_000);
+    expect(BROKER_SOCKET_COMMAND_TIMEOUT_MS).toBe(5_000);
+    expect(BROKER_SOCKET_COMMAND_TIMEOUT_MS).toBeLessThan(MIN_SUBMIT_ACK_TIMEOUT_MS);
+    expect(BROKER_REST_TIMEOUT_MS).toBeLessThan(MIN_SUBMIT_ACK_TIMEOUT_MS);
+    expect(MIN_SUBMIT_ACK_TIMEOUT_MS).toBeLessThanOrEqual(MAX_SUBMIT_ACK_TIMEOUT_MS);
   });
 
   it('keep one REST call inside a reconciliation attempt, the attempt inside its lease and phase 1', () => {

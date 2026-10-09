@@ -17,9 +17,9 @@ pnpm test --project integration apps/trading-worker/src/intents/processor.db.tes
 
 | Part | Where | What |
 |---|---|---|
-| `createTradeCommandExecutor` | `intents/trade-command-executor.ts` | the worker's one production executor, passed to the processor as is (`index.ts`). No gate wraps it: the trading switch (#144) is a predicate of `takeIntent`, before the intent becomes `submitting`, so an executor never sees an intent taken while trading was closed ([kill-switch.md](kill-switch.md)) |
+| `createTradeCommandExecutor` | `intents/trade-command-executor.ts` | the worker's one production executor, passed to the processor wrapped only by `observeExecutor` (`circuit-breaker/observe-executor.ts`, #96), which records each result for the circuit breaker and returns it unchanged (a throw passes on untouched; [runbook-broker-outage.md](runbook-broker-outage.md)). No gate wraps it: the trading switch (#144) is a predicate of `takeIntent`, before the intent becomes `submitting`, so an executor never sees an intent taken while trading was closed ([kill-switch.md](kill-switch.md)) |
 | `TradeSessionSource` | `broker/trade-session.ts` | `sessionFor(brokerAccountId)` → the account's live socket client or `undefined`. Production: the session manager ([broker-session.md](broker-session.md), #101) when `BROKER_WS_URL` is set, `noTradeSessions` (always `undefined`) otherwise |
-| `BrokerSocketClient.openTrade` | `broker/socket.ts` | the socket command and its correlation ([broker-socket.md](broker-socket.md) → The trade command) |
+| `BrokerSocketClient.openTrade` | `broker/socket.ts` | the socket command, its correlation and its command timer ([broker-socket.md](broker-socket.md) → The trade command) |
 | `AccessTokenSource` | `broker/access-token.ts` | the account's broker token for the REST path (#90: `createBackendAccessTokenSource` over the backend's internal route; the backend refreshes when needed). `ok: false` for every expected failure, a refusal or the backend unavailable; a throw is a bug |
 | `BrokerRestClient.openTrade` | `packages/broker-rest` | the REST fallback ([broker-rest.md](broker-rest.md) → Errors) |
 
@@ -48,6 +48,7 @@ test that proves each (`trade-command-executor.test.ts`):
 |---|---|---|
 | before send (no session, a session not `ready`, or a tainted connection) | one REST POST, `rest_fallback` | S3, S4, S9 |
 | after send, before any answer (the transport drops) | `unknown`, no REST request, nothing re-emitted on the next connection | S5 |
+| after send, no answer within 5 s (the broker silent) | `unknown`, the connection tainted, no REST request | S10 |
 | before the success (the server drops the socket; the trade did open) | `unknown`, no REST request | S6 |
 | after the success | `accepted` | S7 |
 
@@ -59,13 +60,16 @@ goes over REST, the socket journal still holds one `open_trade`.
 ## Outcomes
 
 `signal` (the processor's `SUBMIT_ACK_TIMEOUT_MS`) is passed to the socket wait, the token
-fetch and the REST call; the executor has no timer of its own.
+fetch and the REST call; the executor has no timer of its own — the socket wait and the REST call
+have theirs (`BROKER_SOCKET_COMMAND_TIMEOUT_MS`, `BROKER_REST_TIMEOUT_MS`, both 5 s, below the
+deadline's floor `MIN_SUBMIT_ACK_TIMEOUT_MS` 6 s), so the broker's silence ends as the
+transport's own `unknown` before the deadline and the circuit breaker counts it (#96).
 
 | Stage | Answer | `SubmitResult` | `last_error` |
 |---|---|---|---|
 | socket | `success` | `accepted`, `transport: socket`, the broker's trade | — |
 | socket | `fail` | `rejected`, `detail` = the messages joined with `; `, cut to 200 | `broker_rejected` |
-| socket | `unknown` (`state_changed`, `aborted`) | `unknown` | `broker_unavailable` |
+| socket | `unknown` (`state_changed`, `aborted`, `timeout`) | `unknown` | `broker_unavailable` |
 | socket | `not_sent`/`not_ready` | → REST | — |
 | socket | `not_sent`/`aborted` (the deadline already passed) | `unknown`, dropped by the processor | `broker_unavailable` |
 | no session | — | → REST | — |

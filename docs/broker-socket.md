@@ -190,6 +190,7 @@ socket id from the fixture's journal: one `user.auth`, then `ceil(n / 40)` `pric
 | `not_sent` (`reason: aborted`, `state`) | the caller's signal was already aborted | no |
 | `unknown` (`reason: state_changed`, `state`) | any state change while waiting: `ready → reconnecting` (a transport drop), a terminal state, `idle` (`stop()`) | yes |
 | `unknown` (`reason: aborted`, `state`) | the caller's signal aborted while waiting | yes |
+| `unknown` (`reason: timeout`, `state`) | no answer within `BROKER_SOCKET_COMMAND_TIMEOUT_MS` on the connection the command went out on (#96) | yes |
 
 - The readiness check and the emit are one synchronous unit (no await between them), so the state
   the caller is answered by is the state the command went out in. The payload is parsed with
@@ -210,9 +211,9 @@ socket id from the fixture's journal: one `user.auth`, then `ceil(n / 40)` `pric
   listeners.
 - The taint (#101, the m4 finding of the #100 review). A command that ends without its answer
   while its connection is alive — the caller's signal aborted while waiting, the processor's
-  deadline included — leaves an answer that may still come on that connection, and a late
-  `fail` cannot be told from the next command's own by content. So the abort marks the
-  connection `tainted`, the client writes `broker socket connection tainted` (`connection`) and
+  deadline included, or the client's own command timer — leaves an answer that may still come on
+  that connection, and a late `fail` cannot be told from the next command's own by content. So
+  the abort or the timer marks the connection `tainted`, the client writes `broker socket connection tainted` (`connection`) and
   drops it with `socket.io.engine.close()`, the transport-loss mechanism of the auth timeout:
   `reconnecting` (`forced close`) → `authenticating` → `ready` on a new connection, whose answers
   a late answer of the old one can no longer reach. Until that `ready`, `openTrade()` answers
@@ -246,6 +247,7 @@ of the kind has been observed.
 |---|---|---|
 | `BROKER_SOCKET_CONNECT_TIMEOUT_MS = 10_000` | the engine open of one attempt (the WebSocket upgrade and the engine.io handshake); the namespace CONNECT after it is not bounded | `timeout` |
 | `BROKER_SOCKET_AUTH_TIMEOUT_MS = 5_000` | `user.auth` sent → `user.auth.success` (live ~50 ms) | the client's timer |
+| `BROKER_SOCKET_COMMAND_TIMEOUT_MS = 5_000` | `open_trade` emitted → its answer (the same bound as one REST call) | the client's timer |
 | `BROKER_SOCKET_RECONNECT_DELAY_MS = 1_000` | the first wait between attempts | `reconnectionDelay` |
 | `BROKER_SOCKET_RECONNECT_DELAY_MAX_MS = 10_000` | the longest wait | `reconnectionDelayMax` |
 | `BROKER_SOCKET_RECONNECT_JITTER = 0.5` | the randomisation of each wait | `randomizationFactor` |
@@ -253,9 +255,13 @@ of the kind has been observed.
 The chain (every `*_MS` an integer in `[1, MAX_TIMER_MS]` — `2^31 - 1`, Node's `setTimeout`
 limit, past which a delay fires after 1 ms — first wait ≤ longest wait, auth timeout ≤ connect
 timeout, 0 ≤ jitter < 1, since at 1 a wait could shrink to 0) is checked at import for the
-defaults and by `resolveBrokerSocketTiming` at construction for a `timing` override. Its link
-to the worker's shutdown budget is in `intents/config.ts`: `BROKER_SOCKET_CONNECT_TIMEOUT_MS <
-SHUTDOWN_PHASE1_BUDGET_MS` ([broker-session.md → Constants](broker-session.md#constants)).
+defaults and by `resolveBrokerSocketTiming` at construction for a `timing` override; the command
+timeout is a separate operation, not ordered against the others. Its links to the worker are in
+`intents/config.ts`: `BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`
+([broker-session.md → Constants](broker-session.md#constants)) and
+`BROKER_SOCKET_COMMAND_TIMEOUT_MS < MIN_SUBMIT_ACK_TIMEOUT_MS` (6 000, the floor of the submit
+deadline, #96): a broker that leaves the command unanswered ends it as `unknown`/`timeout` before
+the processor's deadline can cut it, so the circuit breaker counts it.
 
 Not bounded: a namespace CONNECT the server never answers. The client adds no timer for it (it
 would race `Manager.open`'s own); it has not been seen live. It shows as a `start()` whose
@@ -283,7 +289,7 @@ connection and reset on `connect`.
 | `broker socket state listener threw` | warn | an `onState` listener throws; the others still run | `to`, `err` |
 | `broker socket state` | debug | every state change | `from`, `to`, `reason` |
 | `broker socket open_trade sent` | debug | each command emitted | `mode`, `connection` |
-| `broker socket connection tainted` | warn | a command aborted while waiting on a live connection; the client drops it | `connection` |
+| `broker socket connection tainted` | warn | a command ended without its answer on a live connection (the caller's abort or the command timer); the client drops it | `connection` |
 | `broker socket open_trade answer mismatch` | warn | a success of the command's mode whose terms are not the command's | `connection`, `mode`, `field` (`asset`, `action`, `amount`) |
 
 `IGNORED_BROKER_EVENTS` holds the same names as the mock's `OBSERVED_EXTRA_EVENTS`; a test keeps

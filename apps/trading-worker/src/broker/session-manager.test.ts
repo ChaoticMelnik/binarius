@@ -10,7 +10,7 @@ import { AccessTokenRefusal, BrokerSocketEvent, logOptions, TradeMode } from '@b
 import { until } from '@binarius/shared/testing';
 import pino from 'pino';
 import { io } from 'socket.io-client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AccessTokenUnavailable,
   type AccessTokenOptions,
@@ -23,6 +23,7 @@ import {
   createBrokerSessionManager,
   type BrokerSessionManager,
   type SessionLeases,
+  type SessionLossObserver,
   type SessionWriters,
 } from './session-manager';
 import {
@@ -56,6 +57,7 @@ const CONFIG: SessionManagerConfig = {
   leaseRenewMs: 6_000,
   leaseRenewTimeoutMs: 3_000,
   leaseFenceMs: 25_000,
+  lossGraceMs: 2_000,
 };
 // a negative wait, past the longest reconnection delay of TIMING
 const QUIET_MS = 100;
@@ -106,6 +108,7 @@ interface HarnessOptions {
   deadLetters?: DeadLetterSink;
   leases?: Partial<SessionLeases>;
   monotonicNow?: () => number;
+  lossObserver?: SessionLossObserver;
 }
 
 function recordingWriters(writes: Write[]): SessionWriters {
@@ -135,7 +138,12 @@ function harness(options: HarnessOptions = {}) {
       allLines.push(line);
     },
   });
-  const state = { candidates: [] as SessionCandidate[], failCandidates: false };
+  const state = {
+    candidates: [] as SessionCandidate[],
+    failCandidates: false,
+    // set: every scan from now on waits for it, a scan stuck on the database
+    hangCandidates: undefined as ReturnType<typeof deferred<void>> | undefined,
+  };
   const candidateCalls: (readonly string[])[] = [];
   const tokenCalls: { accountId: string; options: AccessTokenOptions }[] = [];
   const writes: Write[] = [];
@@ -160,6 +168,7 @@ function harness(options: HarnessOptions = {}) {
     url: broker.url,
     leases,
     ...(options.monotonicNow === undefined ? {} : { monotonicNow: options.monotonicNow }),
+    ...(options.lossObserver === undefined ? {} : { lossObserver: options.lossObserver }),
     deadLetters: options.deadLetters ?? {
       add: (_name, entry) => {
         deadLetters.push(entry);
@@ -169,7 +178,9 @@ function harness(options: HarnessOptions = {}) {
     candidates: ({ exclude }) => {
       candidateCalls.push(exclude);
       if (state.failCandidates) return Promise.reject(new Error('database down'));
-      return Promise.resolve(state.candidates.filter((c) => !exclude.includes(c.id)));
+      const found = () => state.candidates.filter((c) => !exclude.includes(c.id));
+      if (state.hangCandidates !== undefined) return state.hangCandidates.promise.then(found);
+      return Promise.resolve(found());
     },
     tokens: {
       accessToken: (accountId, tokenOptions = {}) => {
@@ -282,7 +293,9 @@ interface FakeClient extends BrokerSocketClient {
   hear(event: BrokerEvent): void;
 }
 
-function fakeClients() {
+function fakeClients({
+  readyOnStart = true,
+}: { readyOnStart?: boolean | (() => boolean) } = {}) {
   const made: FakeClient[] = [];
   const openClient = (): BrokerSocketClient => {
     const stateListeners = new Set<(change: BrokerSocketStateChange) => void>();
@@ -302,7 +315,8 @@ function fakeClients() {
       },
       start(credentials) {
         client.starts.push(credentials.accessToken);
-        publish(BrokerSocketState.Ready);
+        const ready = typeof readyOnStart === 'function' ? readyOnStart() : readyOnStart;
+        publish(ready ? BrokerSocketState.Ready : BrokerSocketState.Authenticating);
       },
       stop() {
         client.stops += 1;
@@ -1458,6 +1472,192 @@ describe('the lease (#93)', () => {
     await renewal;
     expect(h.manager.clientFor('acc-1')).toBe(fakes.made[1]);
     expect(h.logs('broker session lease lost')).toEqual([]);
+  });
+});
+
+describe('the socket loss signal (#96)', () => {
+  const GRACE = 60;
+  // the grace runs on the manager's monotonic clock: a case moves it past the grace at once
+  const clock = { offset: 0 };
+  const monotonicNow = () => performance.now() + clock.offset;
+  beforeEach(() => {
+    clock.offset = 0;
+  });
+  function observed(fakes: ReturnType<typeof fakeClients>, config: Partial<SessionManagerConfig> = {}) {
+    const lost: string[] = [];
+    const ready: string[] = [];
+    const h = harness({
+      openClient: fakes.openClient,
+      config: { lossGraceMs: GRACE, ...config },
+      monotonicNow,
+      lossObserver: {
+        lost: (accountId) => lost.push(accountId),
+        ready: (accountId) => ready.push(accountId),
+      },
+    });
+    return { h, lost, ready };
+  }
+  async function started(h: Harness, fakes: ReturnType<typeof fakeClients>) {
+    h.state.candidates = [candidate(1)];
+    await h.manager.tick();
+    await until('the client', () => fakes.made.length === 1);
+    return fakes.made[0]!;
+  }
+  const pastGrace = () => {
+    clock.offset += GRACE + 1;
+  };
+
+  it('S1 a reconnect within the grace is not a loss', async () => {
+    const fakes = fakeClients();
+    const { h, lost } = observed(fakes);
+    const client = await started(h, fakes);
+    client.fire(BrokerSocketState.Reconnecting);
+    client.fire(BrokerSocketState.Ready);
+    pastGrace();
+    h.manager.observeSessions();
+    expect(lost).toEqual([]);
+  });
+
+  it('S2 a session still not ready after the grace is one loss, not one per tick', async () => {
+    const fakes = fakeClients();
+    const { h, lost } = observed(fakes);
+    const client = await started(h, fakes);
+    client.fire(BrokerSocketState.Reconnecting);
+    h.manager.observeSessions();
+    expect(lost).toEqual([]);
+    pastGrace();
+    h.manager.observeSessions();
+    h.manager.observeSessions();
+    expect(lost).toEqual(['acc-1']);
+  });
+
+  it('S3 disconnected_by_server after ready is a loss at once', async () => {
+    const fakes = fakeClients();
+    const { h, lost } = observed(fakes);
+    const client = await started(h, fakes);
+    client.fire(BrokerSocketState.DisconnectedByServer);
+    expect(lost).toEqual(['acc-1']);
+    expect(h.manager.clientFor('acc-1')).toBeUndefined();
+  });
+
+  // the token refresh it starts may outlast the grace: the session must not count meanwhile
+  it.each([BrokerSocketState.TokenExpired, BrokerSocketState.AuthFailed])(
+    'S4 %s is credentials, not a loss, however long the refresh takes',
+    async (state) => {
+      const fakes = fakeClients();
+      const refreshed = deferred<AccessTokenOutcome>();
+      let fetches = 0;
+      const lost: string[] = [];
+      const h = harness({
+        openClient: fakes.openClient,
+        tokens: (accountId) => {
+          fetches += 1;
+          return fetches === 1 ? grant(accountId) : refreshed.promise;
+        },
+        config: { lossGraceMs: GRACE },
+        monotonicNow,
+        lossObserver: {
+          lost: (accountId) => lost.push(accountId),
+          ready: () => undefined,
+        },
+      });
+      const client = await started(h, fakes);
+      client.fire(BrokerSocketState.Reconnecting);
+      client.fire(state);
+      pastGrace();
+      h.manager.observeSessions();
+      expect(lost).toEqual([]);
+    },
+  );
+
+  it('S5 our own idle drop is not a loss', async () => {
+    const fakes = fakeClients();
+    const { h, lost } = observed(fakes, { idleGraceMs: 20 });
+    await started(h, fakes);
+    h.state.candidates = [];
+    h.manager.observeSessions();
+    await tickUntil(h, 'the idle drop', () => h.manager.size === 0);
+    pastGrace();
+    h.manager.observeSessions();
+    expect(lost).toEqual([]);
+  });
+
+  it('S6 a session that never reached ready is not a loss', async () => {
+    const fakes = fakeClients({ readyOnStart: false });
+    const { h, lost } = observed(fakes);
+    const client = await started(h, fakes);
+    client.fire(BrokerSocketState.Reconnecting);
+    pastGrace();
+    h.manager.observeSessions();
+    client.fire(BrokerSocketState.DisconnectedByServer);
+    expect(lost).toEqual([]);
+  });
+  it('S7 every ready session is reported ready on every check, and a lost one is not', async () => {
+    const fakes = fakeClients();
+    const { h, ready } = observed(fakes);
+    const client = await started(h, fakes);
+    h.manager.observeSessions();
+    h.manager.observeSessions();
+    expect(ready).toEqual(['acc-1', 'acc-1']);
+    client.fire(BrokerSocketState.Reconnecting);
+    h.manager.observeSessions();
+    expect(ready).toEqual(['acc-1', 'acc-1']);
+  });
+
+  it('S8 the connection after a token refresh that never gets ready is one loss', async () => {
+    let starts = 0;
+    const fakes = fakeClients({ readyOnStart: () => (starts += 1) === 1 });
+    let issued = 0;
+    const lost: string[] = [];
+    const h = harness({
+      openClient: fakes.openClient,
+      tokens: () => Promise.resolve({ ok: true, accessToken: `SECRET-${(issued += 1)}` }),
+      config: { lossGraceMs: GRACE },
+      monotonicNow,
+      lossObserver: { lost: (accountId) => lost.push(accountId), ready: () => undefined },
+    });
+    const client = await started(h, fakes);
+    client.fire(BrokerSocketState.TokenExpired);
+    await until('the restart', () => client.starts.length === 2);
+    pastGrace();
+    h.manager.observeSessions();
+    expect(lost).toEqual(['acc-1']);
+  });
+
+  // n1 of review round 2: the check runs on its own timer from start(), with no call from the case
+  // and with the scan stuck, and stop() clears that timer
+  it('S9 start() runs the check on its own timer while a scan hangs; stop() clears it', async () => {
+    const armed = vi.spyOn(globalThis, 'setInterval');
+    const cleared = vi.spyOn(globalThis, 'clearInterval');
+    try {
+      const fakes = fakeClients();
+      const lost: string[] = [];
+      const h = harness({
+        openClient: fakes.openClient,
+        config: { tickMs: 50, lossGraceMs: GRACE },
+        lossObserver: { lost: (accountId) => lost.push(accountId), ready: () => undefined },
+      });
+      h.state.candidates = [candidate(1)];
+      h.manager.start();
+      await until('the client ready', () => fakes.made[0]?.state === BrokerSocketState.Ready);
+      const scan = deferred<void>();
+      h.state.hangCandidates = scan;
+      fakes.made[0]!.fire(BrokerSocketState.Reconnecting);
+      await until('the loss', () => lost.length === 1);
+      expect(lost).toEqual(['acc-1']);
+      const observeCall = armed.mock.calls.findIndex(
+        ([callback]) => callback === h.manager.observeSessions,
+      );
+      expect(observeCall).not.toBe(-1);
+      const handle = armed.mock.results[observeCall]?.value as unknown;
+      await h.manager.stop();
+      expect(h.logs('broker session stop budget exceeded')).toHaveLength(1);
+      expect(cleared).toHaveBeenCalledWith(handle);
+      scan.resolve();
+    } finally {
+      armed.mockRestore();
+      cleared.mockRestore();
+    }
   });
 });
 
