@@ -2946,6 +2946,54 @@ describe('the bot texts pages (#300)', () => {
       { name: 'string' },
     ]);
   });
+
+  it('T19 queues the admin publishes: the second reads the rows only after the first was sent', async () => {
+    let token = '';
+    let second: ReturnType<typeof post> | undefined;
+    let callsWhileHeld = -1;
+    // the first call is held here: inside it the second save commits and gets every chance to send
+    const fake = await withProfileApi({
+      onCall: async () => {
+        if (second !== undefined) return;
+        second = post(token, textUrl('menuCommand', 'save'), {
+          source: 'Меню',
+          expectedVersion: 0,
+        });
+        await until('the second save to commit', async () =>
+          (await botTextRows()).some((row) => row.key === 'menuCommand'),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        callsWhileHeld = fake.calls.length;
+      },
+    });
+    const signed = await signedIn();
+    token = signed.token;
+
+    const first = await post(token, textUrl('startCommand', 'save'), {
+      source: 'Старт',
+      expectedVersion: 0,
+    });
+    const later = await second!;
+
+    expect(callsWhileHeld).toBe(1);
+    for (const answer of [first, later]) {
+      expect(answer.body).toMatchObject({
+        outcome: 'saved',
+        published: [{ method: 'setMyCommands', ok: true }],
+      });
+    }
+    const withMenu = (menu: string) =>
+      menuWithStart('Старт').map((command) =>
+        command.command === 'menu' ? { ...command, description: menu } : command,
+      );
+    expect(fake.calls).toEqual([
+      { method: 'setMyCommands', args: [withMenu('Главное меню'), { scope: BOT_COMMAND_SCOPE }] },
+      { method: 'setMyCommands', args: [withMenu('Меню'), { scope: BOT_COMMAND_SCOPE }] },
+    ]);
+    expect(
+      (await publishRows(signed.seeded.staffId)).map((row) => (row.payload as { key: string }).key),
+    ).toEqual(['startCommand', 'menuCommand']);
+  });
 });
 
 describe('the password the fixtures use', () => {

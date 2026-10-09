@@ -109,9 +109,26 @@ const changedOf = (query: unknown): number | undefined => {
     : undefined;
 };
 
-/** `?publish=` as the publish result it carries (#361); anything else is none. */
-const publishedOf = (query: unknown) =>
-  decodePublishResults((query as { publish?: unknown } | undefined)?.publish);
+// A publish notice reads «…Публикация в Telegram:» over the result it names; without a result
+// that decodes it falls back to the plain notice, and «Опубликовано заново:» has none (#361).
+const PUBLISH_NOTICE_FALLBACK: Record<string, string | undefined> = {
+  published: 'saved',
+  reset_published: 'reset',
+  republished: undefined,
+};
+
+/** `?notice=` with the `?publish=` result it carries; a result only under a publish notice. */
+const noticeWithResult = <K extends string>(
+  query: unknown,
+  notices: Record<K, string>,
+): { notice?: K; published?: AdminBotProfileMethodResult[] } => {
+  const notice = noticeOf(query, notices);
+  if (notice === undefined || !Object.hasOwn(PUBLISH_NOTICE_FALLBACK, notice)) return { notice };
+  const published = decodePublishResults((query as { publish?: unknown } | undefined)?.publish);
+  return published === undefined
+    ? { notice: PUBLISH_NOTICE_FALLBACK[notice] as K | undefined }
+    : { notice, published };
+};
 
 /** `?notice=` as one of the page's own notices; anything else, a repeated key included, is none. */
 const noticeOf = <K extends string>(query: unknown, notices: Record<K, string>): K | undefined => {
@@ -665,8 +682,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
   app.get(BOT_TEXTS_PATH, async (request, reply) =>
     withStaffSession(request, reply, async (token) => {
       const { me, overrides } = await backend.botTexts(token);
-      const notice = noticeOf(request.query, TEXTS.botTextsNotice);
-      const published = publishedOf(request.query);
+      const { notice, published } = noticeWithResult(request.query, TEXTS.botTextsNotice);
       return sendHtml(reply, 200, botTextsPage(overrides, { login: me.login, notice, published }));
     }),
   );
@@ -685,8 +701,7 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       if (!isBotTextKey(key)) return textNotFound(reply);
       try {
         const { me, text } = await backend.botText(token, key);
-        const notice = noticeOf(request.query, TEXTS.botTextNotice);
-        const published = publishedOf(request.query);
+        const { notice, published } = noticeWithResult(request.query, TEXTS.botTextNotice);
         return sendHtml(reply, 200, botTextPage(text, { login: me.login, notice, published }));
       } catch (error) {
         // the backend's catalog lacks a key web's has: the two were deployed apart
