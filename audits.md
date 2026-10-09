@@ -2465,5 +2465,43 @@ Taken by this session on the owner's instruction: «#78, #79 и #300 запус�
 ### Process improvement proposals
 
 1. **Tech-lead Step 7: in a worktree-isolated session, implementers run one at a time in the session's worktree; extra worktrees only for read-only architects** — **внедрено в #378: .claude/skills/tech-lead/SKILL.md → Step 7**
-2. **Implementer clarify: do not offer a split «each layer is green» when the contract change in shared breaks the callers** — **открыто (2026-10-09, tech-lead)**
+2. **Implementer clarify: do not offer a split «each layer is green» when the contract change in shared breaks the callers** — **закрыто: commit split is no longer an owner question (#388)**
 3. **Remaining Minor** — **вынесено в #364, #369, #371, #375**
+
+## #301, #361 — bot commands and profile republished to Telegram, the admin's publishing from «Тексты бота» (2026-10-09)
+
+Taken by this session on the owner's instruction «Запускай 301 и 361 в очередь»; #361 was started from `main` only after #301 merged. Both merged with rebase.
+
+| Issue | PR | Review rounds | Added lines (without snapshot) | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #301 commands and profile from overrides | #385 | 1 | 1183 | — | skipped (limit until 14.10) | m1–m5 folded into #361 (the owner) |
+| #361 admin publishing | #393 | 2 | 1702 | 0032 | r2: skipped (limit until 14.10) | → #398 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Plans | Fable. #301 — Plan Update against `main` after #300/#358 with an explicit contract for #361 (K1–K9); #361 — plan written against the open PR #385, re-checked by the implementer against `main` after the merge: K1–K9 matched. Codex was not used in planning — the owner's decision of 2026-10-08. |
+| Implementer | Clarify | #301: 4 questions. #361: 4 questions, 2 of them from plan defects found by the implementer (a real-Telegram runtime check in Step 8; an error identity outside the wire schema's bounds). Round-2 fix: no questions — the Plan Update left no fork (floor of the standing owner answers, #388). |
+| Implementer | Runtime | #301 — tests only (the owner). #361 — a scratch harness with a Bot API stub and Playwright, dummy tokens; no call reached api.telegram.org. The harness was not re-run at the round-2 head; round-2 changes are covered by T19/W2/W3/W11. |
+| Reviewer | #301 | r1: 5 Minor, no Blocker/Major; the owner folded them into #361, which edits the same files. |
+| Reviewer | #361 | r1: Major M1 — migration 0031 collided with #93, merged into `main` after the branch was cut (PR CONFLICTING) + 5 Minor; the owner chose to fix m1–m3 in round 2. r2 (whole-feature, including the rebase across #93): 2 new Minor, no Blocker/Major. |
+| Tech Lead | Merges | `AskUserQuestion` before each merge; `--match-head-commit` on both. Unfixed Minor of #361 → #398 (Backlog) without a question — the standing owner answers (#388). The shared test DB `binarius` is left contaminated by another branch's `broker_session_leases` (the owner: work on own DBs); implementers and reviewers ran on their own DBs. |
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| #361: migration number taken by #93 merged meanwhile | Major → fixed (rebase, 0032) | env-parity | Nobody checks the PR's mergeability or the next free migration number on `main` between the push and the review; a whole review round was spent on a mechanical conflict | Tech Lead before the reviewer spawn |
+| #361 plan: Step 8 runtime check against the real Telegram on dev tokens | Plan defect | other | The session's no-real-Telegram rule (2026-10-03 collision) is not in the architect skill | Architect plan → replaced in clarify |
+| #361 plan: the error identity is unbounded while the wire schema caps it at 1..128 | Plan defect → fixed (normalization) | unverified-claim | `errorIdentity`'s output range was not checked against the schema | Architect plan |
+| #361: concurrent admin publishes could land a stale send last | Minor → fixed (per-process queue) | instance-vs-class | The plan ordered publish after commit but did not consider two commits in flight | Architect plan |
+| #361 Plan Update: D14 test oracle (the regex bound only decides in the encoder) | Plan defect | unverified-claim | The mutation's expected red was not probed | Architect Plan Update → fixed by the implementer |
+| Reviewer brief for #361 r1 named `main`'s head as the PR base | Process | other | Tech-lead took `baseRefOid` from `gh pr view` without noticing that it is the base branch's current head, not the merge base | Tech Lead brief |
+
+### Process improvement proposals
+
+1. **Tech-lead: before spawning a reviewer, check `gh pr view --json mergeable,mergeStateStatus`; a CONFLICTING PR goes back to the implementer for a rebase (and a regenerated migration) without a review round** — **открыто (2026-10-09, tech-lead)**
+2. **Architect: the no-real-Telegram rule for runtime checks (dummy tokens + a Bot API stub) belongs in the plan template** — **открыто (2026-10-09, tech-lead)**
+3. **#358 entry, proposal 2 (implementer clarify split)** — **закрыто: commit split is no longer an owner question (#388, standing owner answers)**
+4. **Remaining Minor** — **вынесено в #398**
