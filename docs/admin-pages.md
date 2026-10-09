@@ -11,8 +11,9 @@ publishes the command menu and the profile to Telegram after such a write (#361)
 adds the overview, the user list with search, and
 the user card; #108 adds the intents list and the intent card; #330 adds the trading sessions
 list, the trading section of the user card and the breakdown of the overview by status; #109 adds
-the token ledger list and the card's ledger section; #110 adds the audit log; deposits and the
-broker accounts list (#341, #342) follow through the same mechanism.
+the token ledger list and the card's ledger section; #110 adds the audit log; #341 adds the
+deposits list and the card's deposits section; the broker accounts list (#342) follows through the
+same mechanism.
 
 ## Mechanism
 
@@ -39,8 +40,9 @@ refuses a call outside a transaction. That a route's transaction is the one `asS
 so writes its row — is enforced by review only (see Boundaries).
 
 The reads lock nothing: `users`, `broker_accounts`, `trade_intents`, `trading_sessions`,
-`token_ledger`, `audit_log` and `staff` are read without `FOR …`, and the session touch is the only
-`UPDATE` of a read page. The password change is not a read: it locks the `staff` row first and
+`token_ledger`, `deposit_events`, `audit_log` and `staff` are read without `FOR …`, and the session
+touch is the only `UPDATE` of a read page. The password change is not a read: it locks the `staff`
+row first and
 writes under it (staff-login.md → Changing your own password). A bot text save or reset touches the
 session, then locks `bot_text_overrides` (Bot texts below).
 
@@ -59,7 +61,7 @@ How `web` acts on a backend answer:
 ## Pages
 
 Every page has the same nav (Сводка | Пользователи | Сессии сотрудников | Заявки | Торговые сессии |
-Токены | Аудит | Тексты бота) and the account block («Сменить пароль · login — Выйти»: the link to the password
+Токены | Аудит | Тексты бота | Депозиты) and the account block («Сменить пароль · login — Выйти»: the link to the password
 page and the logout button). The login shown is the one in the `me` of the backend answer the page
 was built from; a page rendered without asking the backend (a refused search, a refused password
 form) shows no account block.
@@ -151,13 +153,18 @@ The `users` row and its `broker_accounts`, newest first. Sections:
   in the columns of the token ledger list (or «Движений нет.»), and «Все записи →»: the list filtered
   by this user. Read by the list's own query. The section does not add its rows up: the balance is
   the one in «Токены», and the section is the newest rows, not all of them.
+- **Депозиты** (#341) — the `ADMIN_USER_RECENT_LEDGER` newest `deposit_events` rows of the user in
+  the columns of the deposits list (or «Депозитов нет.»), and «Все записи →»: the list filtered by
+  this user. Read by the list's own query. The owner of a deposit is `deposit_events.user_id` alone:
+  a row that names one of the user's accounts but no user is not in the section.
 - **Аудит** (#110) — only a link, «Все события по пользователю →»: the audit log filtered by
   `entityType=user&entityId=<id>`. The card does not read `audit_log`.
 
-The card is five `SELECT`s without a shared snapshot — the user, the accounts, the recent intents,
-the two counters, the recent ledger rows: an account linked, an intent created or a ledger row
-written in between may or may not show, and each answer was true at its moment — the balance in
-«Токены» and the rows of «Движения токенов» can disagree by such a row. The sections are part of the
+The card is six `SELECT`s without a shared snapshot — the user, the accounts, the recent intents,
+the two counters, the recent ledger rows, the recent deposits: an account linked, an intent created,
+a ledger row written or a deposit recorded in between may or may not show, and each answer was true
+at its moment — the balance in «Токены» and the rows of «Движения токенов» can disagree by such a
+row, and so can «Движения токенов» and «Депозиты». The sections are part of the
 card's read: they write no row of their own (the one `user_viewed` row stays as it was).
 
 ### Intents — `GET /admin/intents?status=&mode=&user=&session=&cursor=`
@@ -223,8 +230,9 @@ sign (`release` and `settle` move the reserve down, an `adjustment` either way);
 from them. A note is printed as text, an empty one as «—».
 
 **Основание** is the one reference a row may carry (`token_ledger_reference_check`): an intent is a
-link to its card; a deposit and a broker account are printed as their ids (they have no page yet); a
-manual reference as `manual:<id>`; a row with none (an `adjustment` without one) shows «—».
+link to its card; a deposit is printed as its id (the deposits list has no filter by id); a broker
+account as its id (it has no page); a manual reference as `manual:<id>`; a row with none (an
+`adjustment` without one) shows «—».
 
 **Filters are exact matches**, each optional, both combined:
 
@@ -242,6 +250,41 @@ What the page shows on production: the reserve of every intent and its `release`
 the starter `bonus` of a linked account (with the account id). `purchase` (#117) and `adjustment`
 (#246) have no writer yet. The page only shows rows: it does not compare their sum with the cached
 balance in `users` — keeping that equal is the writers' rule (Rule 2), not something a view checks.
+
+### Deposits — `GET /admin/deposits?user=&status=&cursor=`
+
+`deposit_events`, newest first, `ADMIN_PAGE_SIZE` per page, keyset on `(created_at, id)` as on the
+other lists: one `SELECT` left-joined to `users` for the owner's Telegram id (`listDepositsForAdmin`,
+`packages/db/src/admin-ledger-ops.ts`). Columns: the time of the row, the owner's Telegram id (a link
+to the user card), the broker account id, the postback id, the payment id, the amount, the currency,
+the status as its code, the time it was processed. The amount is the stored `numeric(20,8)` as
+PostgreSQL prints it (`10.50000000`); nothing is computed from it. An empty value is shown as «—».
+
+**The raw postback is not shown.** `deposit_events.payload` is not in the projection of the
+`SELECT`: it does not leave the database, let alone the backend, and the row's strict schema
+(`adminDepositViewSchema`) has no key for it.
+
+**The owner is `deposit_events.user_id` alone.** An unattributed postback has neither a user nor an
+account; a row may also name an account but no user (`deposit_events_owner_pair_check` forbids only
+the reverse). Both show «—» in the Telegram ID column — the second one with its account id in the
+next column — and neither is in a `user` filter.
+
+**Filters are exact matches**, each optional, both combined:
+
+| Parameter | Matches |
+|---|---|
+| `status` | one `DepositEventStatus` (`received`, `credited`, `ignored`, `failed`) |
+| `user` | the user's id (a uuid); a deposit without a user is never in it |
+
+A `user` with no deposits, or with no row at all, gives an empty page, not an error. The cursor
+positions, it does not filter, as on the intents list. The form, the next and first links, the
+redirect and the request to the backend go through `adminDepositsSearchParams`
+(`packages/shared/src/admin.ts`), in the order `user, status, cursor`.
+
+What the page shows on production: nothing until the postback writer exists (#141/#142); the view
+row is written all the same. `status` and `amount` stay mutable after a ledger row references the
+deposit (the writer's rule, `packages/db/src/schema/deposit-events.ts`): the page shows the row as it
+is now and says nothing about its history.
 
 ### Audit log — `GET /admin/audit?action=&entityType=&entityId=&actorId=&from=&to=&cursor=`
 
@@ -457,6 +500,7 @@ named and bounded; nothing else is recorded.
 | intent card, an id that is not a uuid (direct backend call) | `intent_viewed` | — | `{ path, result: 'not_found' }` |
 | trading sessions | `trading_sessions_viewed` | — | `{ path: '/admin/trading-sessions', cursor? }` — `cursor` only when given |
 | token ledger | `tokens_viewed` | — | `{ path: '/admin/tokens', userId?, kind?, cursor? }` — a key only when the parameter was given |
+| deposits | `deposits_viewed` | — | `{ path: '/admin/deposits', userId?, status?, cursor? }` — a key only when the parameter was given |
 | audit log | `audit_log_viewed` | — | `{ path: '/admin/audit', action?, entityType?, entityId?, actorId?, from?, to?, cursor? }` — a key only when the parameter was given; every value is an enum, a uuid or a date |
 | password page, `GET` | `staff_sessions_viewed` | — | `{ path: '/admin/sessions', sessionId }` — the backend's sessions read, as on the sessions page |
 | password change, `POST` | `staff_password_changed` / `staff_password_change_failed` | `staff`, the caller | staff-login.md → What is written down (#78) |
@@ -477,7 +521,7 @@ two exceptions: a save or reset that publishes writes its own row in the transac
 `bot_profile_published` after it means the process stopped between the two; «Опубликовать заново»
 mends the menu.
 
-The card's trading and ledger sections and the overview's breakdown are parts of `user_viewed` and
+The card's trading, ledger and deposits sections and the overview's breakdown are parts of `user_viewed` and
 `overview_viewed`; they add no row and no payload key.
 
 ## Boundaries
@@ -492,6 +536,9 @@ What `web` refuses before asking the backend, with no row:
   message, whatever the cursor says;
 - a token ledger filter outside the schema (an unknown kind, a `user` that is not a uuid — a value
   of blanks included —, a parameter given twice) → 400 with the form and the message, whatever the
+  cursor says;
+- a deposits filter outside the schema (an unknown status, a `user` that is not a uuid — a value of
+  blanks included —, a parameter given twice) → 400 with the form and the message, whatever the
   cursor says;
 - an audit filter outside the schema (an unknown action or entity type, an `entityId` or `actorId`
   that is not a uuid — a value of blanks included —, a date that is not `YYYY-MM-DD`, `from` after
@@ -529,14 +576,16 @@ who pressed the button even if the session is revoked between the check and the 
   `ADMIN_ACTIVE_WINDOW_MINUTES` for «active now» — all in `packages/shared/src/admin.ts`.
 - No rate ceiling on these reads, as on `/admin/sessions`: `web` is a trusted process behind the
   bearer, and the sessions are staff sessions.
-- `users`, `trade_intents`, `trading_sessions` and `token_ledger` have no index on
+- `users`, `trade_intents`, `trading_sessions`, `token_ledger` and `deposit_events` have no index on
   `(created_at, id)`; the lists and the overview scan them. The intents filters `user` and `session`
   and the card's trading section use `trade_intents_user_id_idx` and `trade_intents_session_id_idx`;
   the token ledger filter `user` and the card's ledger section use `token_ledger_user_created_idx`;
+  the deposits filter `user` and the card's deposits section use `deposit_events_user_id_idx`;
   the order is still a sort. Assumed: up to 100 000 users, 1 000 000 intents, 100 000 trading
-  sessions and 1 000 000 ledger rows (two per trade) on the pilot. If `explain analyze` of a list or
-  the overview passes 200 ms at those sizes, add a `(created_at, id)` index in its own migration.
-- The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most five
+  sessions, 1 000 000 ledger rows (two per trade) and 100 000 deposits (one postback each) on the
+  pilot. If `explain analyze` of a list or the overview passes 200 ms at those sizes, add a
+  `(created_at, id)` index in its own migration.
+- The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most six
   `SELECT`s (the user card).
 - The password change is one backend call under the same timeout; a timeout shows «Результат
   неизвестен» — the change may have committed.
@@ -640,6 +689,22 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `seed <script>` as text; the bonus with the account id. `?kind=bonus` — one row. The user card:
    «Токены» — balance 7; «Движения токенов» — both rows, and «Все записи →» opens the list filtered
    by this user. `?kind=bogus` — 400, the form, no «Выйти».
+   Then two deposits — an unattributed postback (status by default `received`) and one of the user
+   through its account (the owner-pair CHECK wants the account). There is no postback writer yet
+   (#141/#142), so they are written directly; separate statements, so each row has its own `now()`:
+   ```bash
+   docker compose exec postgres psql -U binarius -d binarius -c "insert into deposit_events
+     (postback_id, payload) values ('pb-local', '{}')"
+   docker compose exec postgres psql -U binarius -d binarius -c "insert into deposit_events
+     (user_id, broker_account_id, postback_id, payment_id, amount, currency, status, processed_at,
+     payload) select u.id, a.id, 'pb-local-2', 'pay-1', 10.5, 'USD', 'credited', now(), '{}'
+     from users u join broker_accounts a on a.user_id = u.id where a.broker_user_id = 'seed-broker-1'"
+   ```
+   Open «Депозиты» (last in the nav): two rows, the user's first — the Telegram ID a link to the
+   card, `10.50000000`, `USD`, `credited`, the processing time; `pb-local` has «—» in six columns
+   (Telegram ID, account, payment, amount, currency, processed). `?status=credited` — one row. The
+   user card: «Депозиты» between «Движения токенов» and «Аудит», one row, and «Все записи →» opens
+   the list filtered by this user, without `pb-local`. `?status=bogus` — 400, the form, no «Выйти».
    Then the audit log. Open «Аудит» twice: the second page shows the first one's `audit_log_viewed`
    on top, its payload `{"path": "/admin/audit"}`. `?action=audit_log_viewed` — only those. From the
    user card, «Все события по пользователю →» (`?entityType=user&entityId=<id>`): the `user_viewed`
@@ -656,7 +721,7 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    no «Выйти»; the current password wrong — 401 with the form; a real change — «Пароль изменён.
    Завершено других сессий: 0» (1 if a second browser was logged in; its next page is the login
    form). Log out and in with the new password.
-   Then «Тексты бота» (last in the nav): every group, each key «исходный»; above «Команды:
+   Then «Тексты бота»: every group, each key «исходный»; above «Команды:
    описания», the publishing hint and «Опубликовать заново». Open `welcome`: «Плейсхолдеры» lists `{connectButton}` with its
    text. Change the first line, «Предпросмотр»: the bubble with the bold heading and the button's
    text, the draft still in the field; «Сохранить» → «Сохранено. Бот применит текст в течение 35 с».
@@ -682,11 +747,12 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    `users_viewed` with only `path`, and `overview_viewed`; `intents_viewed` with `status`, `mode`,
    `tradingSessionId` or `userId` — each only on its own request —, `intent_viewed` with entity
    `trade_intent`, `trading_sessions_viewed` with only `path`, and `tokens_viewed` with `kind` or
-   `userId` — each only on its own request; `audit_log_viewed` with `action`, with `entityType` and
+   `userId` — each only on its own request; `deposits_viewed` with `status`, with `userId`, or with
+   only `path` — each only on its own request; `audit_log_viewed` with `action`, with `entityType` and
    `entityId`, or with `from` and `to` — each only on its own request; still one `user_viewed` per
    opening of the card; `bot_texts_viewed`, `bot_text_viewed`, `bot_text_previewed`, a
    `bot_text_saved` with both texts, one with `result: 'version_conflict'` and no texts,
    `bot_text_reset` rows, and `bot_profile_published` after the save of `startCommand` and for
-   «Опубликовать заново» (`?entityType=bot_text` on «Аудит» lists them). The refused 257-character search, `?status=bogus`, `?kind=bogus`,
-   `?action=bogus` and the card id that is not a uuid wrote nothing.
+   «Опубликовать заново» (`?entityType=bot_text` on «Аудит» lists them). The refused 257-character search, both `?status=bogus` (intents and
+   deposits), `?kind=bogus`, `?action=bogus` and the card id that is not a uuid wrote nothing.
 7. `docker compose down -v` when done.
