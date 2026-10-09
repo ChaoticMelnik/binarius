@@ -667,9 +667,12 @@ describe('the reconciliation pass: the balance check (#92)', () => {
       [a.intent.id]: () => ({ outcome: 'ambiguous' }),
       [b.intent.id]: () => ({ outcome: 'ambiguous' }),
     });
-    await tickOnce(reconciler, log.logger, { balanceCheckTimeoutMs: 50 });
-    expect(reconciler.calls).toHaveLength(2);
+    const pass = passOf(reconciler, log.logger, { balanceCheckTimeoutMs: 50 });
+    await pass.tick();
+    // the deadline aborted it, not stop()
     expect(aborted).toBe(true);
+    await pass.stop();
+    expect(reconciler.calls).toHaveLength(2);
     expect(log.parsed().filter((l) => l.msg === 'balance check timed out')).toHaveLength(2);
   });
 
