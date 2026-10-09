@@ -102,8 +102,8 @@ services:
       # when set, code defaults otherwise (docs/broker-balance.md)
       BALANCE_RECONCILE_INTERVAL_MS:
       BALANCE_POLL_MAX_PER_MINUTE:
-      # the signal scanners' chart GETs per minute, split 52/48 between 15s and 5s: 25-200; forwarded
-      # only when set, code default otherwise (docs/signal.md -> The budget)
+      # the signal scanners' chart GETs per minute, split 52/48 between 15s and 5s: 25-200;
+      # forwarded only when set, code default otherwise (docs/signal.md -> The budget)
       SIGNAL_SCAN_MAX_PER_MINUTE:
       # The broker redirects to the callback page `web` serves, so the default is WEB_PUBLIC_URL
       # plus that page's path (tied by apps/web/src/timing.test.ts). A login completes only when

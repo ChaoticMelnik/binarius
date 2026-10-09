@@ -71,11 +71,12 @@ import {
   DEMO_GROUP_LABELS,
 } from './texts';
 
-// The demo's screens (#125, docs/bot-demo.md): the duration of the main path (#382), the pairs with
-// a signal now for it and the launch of a cycle on one (#320); the asset types, one type's pairs by page, the durations of a pair, the
-// summary, and the analysis behind «📊 Анализ» (#126). The bot keeps no
-// state for them: what the user chose travels in the callback data, so a restart, an old message
-// and a second device all lead to the same screen, and every screen reads the catalog anew.
+// The demo's screens (#125, docs/bot-demo.md): the duration of the main path (#382), the pairs
+// with a signal now for it and the launch of a cycle on one (#320); the asset types, one type's
+// pairs by page, the durations of a pair, the summary, the analysis behind «📊 Анализ» (#126) and
+// the single trade behind its «➕ Ещё» (#360). The bot keeps no state for them: what the user chose
+// travels in the callback data, so a restart, an old message and a second device all lead to the
+// same screen, and every screen reads the catalog anew.
 
 // Bot API allows 1-64 bytes; the longest of the screens' data, `demo:t:cryptocurrency:9999`, is 26,
 // `demo:l:2147483647:15` 20 and `demo:sig:15` 11. `demo:sig` is the main path's duration screen
@@ -160,8 +161,6 @@ const DURATIONS = DEMO_DURATIONS_SEC.join('|');
 const LEGACY_DURATIONS = LEGACY_DEMO_DURATIONS_SEC.join('|');
 const DEMO_PAGE_PATTERN = /^demo:t:([a-z]{1,16}):(\d{1,4})$/;
 const DEMO_ASSET_PATTERN = /^demo:a:(\d{1,10})$/;
-const demoSignalsPattern = (durations: string) => new RegExp(`^demo:sig:(${durations})$`);
-const demoLaunchPattern = (durations: string) => new RegExp(`^demo:l:(\\d{1,10}):(${durations})$`);
 const demoDurationPattern = (durations: string) =>
   new RegExp(`^demo:d:(\\d{1,10}):(${durations})$`);
 const demoAnalysisPattern = (durations: string) =>
@@ -174,8 +173,8 @@ const stakeCallbackPattern = (durations: string) =>
   );
 const sessionStartPattern = (durations: string) =>
   new RegExp(`^${SESSION_START_PREFIX}(\\d{1,10}):(${durations})$`);
-const DEMO_SIGNALS_PATTERN = demoSignalsPattern(DURATIONS);
-const DEMO_LAUNCH_PATTERN = demoLaunchPattern(DURATIONS);
+const DEMO_SIGNALS_PATTERN = new RegExp(`^demo:sig:(${DURATIONS})$`);
+const DEMO_LAUNCH_PATTERN = new RegExp(`^demo:l:(\\d{1,10}):(${DURATIONS})$`);
 // no legacy shape: no button drawn before #360 carries it
 export const ANALYSIS_MORE_PATTERN = new RegExp(
   `^${ANALYSIS_MORE_PREFIX}(\\d{1,10}):(${DURATIONS}):(${Object.values(TradeAction).join('|')})$`,
