@@ -233,27 +233,28 @@ export const TIMING_CHAIN_HOLDS =
   SIGNAL_CACHE_MAX_TTL_MS < SIGNAL_CHART_INTERVAL_MS['1m'] &&
   // per scanned interval: a scan starts inside its candle and a call made at the scan moment,
   // bounded by the cache, ends inside it too; the scanner takes no pair past the candle's end
-  // (scanner.ts); the minimum ceiling scans at least one pair
+  // (scanner.ts)
   SIGNAL_SCAN_INTERVALS.every(
     (interval) =>
       SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval] &&
       SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < SIGNAL_CHART_INTERVAL_MS[interval] &&
-      Number.isInteger(scanDecisionsPerMinute(interval)) &&
-      signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE, interval) >= 1,
+      Number.isInteger(scanDecisionsPerMinute(interval)),
   ) &&
-  // the shares split the whole ceiling, and the pairs at the default fit inside it
+  // the shares split the whole ceiling. That the pairs at the default fit inside it follows from
+  // signalScanPairs' floor, and that MIN scans one pair on every interval from MIN's definition,
+  // so neither is a link; timing.test.ts pins the counts.
   SIGNAL_SCAN_INTERVALS.reduce((sum, interval) => sum + SIGNAL_SCAN_SHARES_PERCENT[interval], 0) ===
     100 &&
-  SIGNAL_SCAN_INTERVALS.reduce(
-    (sum, interval) =>
-      sum +
-      signalScanPairs(DEFAULT_SIGNAL_SCAN_PER_MINUTE, interval) * scanDecisionsPerMinute(interval),
-    0,
-  ) <= DEFAULT_SIGNAL_SCAN_PER_MINUTE &&
   SIGNAL_SCAN_BACKOFF_MIN_MS <= SIGNAL_SCAN_BACKOFF_MAX_MS &&
   MIN_SIGNAL_SCAN_PER_MINUTE <= DEFAULT_SIGNAL_SCAN_PER_MINUTE &&
   DEFAULT_SIGNAL_SCAN_PER_MINUTE <= MAX_SIGNAL_SCAN_PER_MINUTE &&
-  MAX_SIGNAL_SCAN_PER_MINUTE < BROKER_RATE_LIMIT_PER_MINUTE &&
+  // the worst 60 s window of both scanners at the highest ceiling: the ceiling plus both buckets
+  MAX_SIGNAL_SCAN_PER_MINUTE +
+    SIGNAL_SCAN_INTERVALS.reduce(
+      (sum, interval) => sum + signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, interval),
+      0,
+    ) <
+    BROKER_RATE_LIMIT_PER_MINUTE &&
   // the worker's token route (#90): its longest path is one exchange under the account's row
   // lock, and the worker waits ACCESS_TOKEN_ROUTE_BUDGET_MS for it
   BROKER_HTTP_TIMEOUT_MS < ACCESS_TOKEN_ROUTE_BUDGET_MS &&

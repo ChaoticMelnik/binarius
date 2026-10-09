@@ -152,15 +152,6 @@ describe('broker balance timing', () => {
         0,
       ),
     ).toBe(100);
-    expect(
-      SIGNAL_SCAN_INTERVALS.reduce(
-        (sum, interval) =>
-          sum +
-          signalScanPairs(DEFAULT_SIGNAL_SCAN_PER_MINUTE, interval) *
-            scanDecisionsPerMinute(interval),
-        0,
-      ),
-    ).toBeLessThanOrEqual(DEFAULT_SIGNAL_SCAN_PER_MINUTE);
   });
 
   it('gives each pacer one candle of pairs plus one spare token (#382 review M1)', () => {
@@ -172,12 +163,22 @@ describe('broker balance timing', () => {
     expect(signalScanCapacity(MIN_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(2);
   });
 
-  it('keeps the scan ceiling between one pair on every interval and the broker window', () => {
+  it('scans one pair on every interval at the minimum ceiling, and none on 5s below it', () => {
     expect(MIN_SIGNAL_SCAN_PER_MINUTE).toBe(25);
     expect(signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE, '15s')).toBe(3);
     expect(signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE, '5s')).toBe(1);
     expect(signalScanPairs(MIN_SIGNAL_SCAN_PER_MINUTE - 1, '5s')).toBe(0);
-    expect(MAX_SIGNAL_SCAN_PER_MINUTE).toBeLessThan(BROKER_RATE_LIMIT_PER_MINUTE);
+  });
+
+  it("keeps the scanners' worst 60 s window at the highest ceiling below the broker window", () => {
+    const worst =
+      MAX_SIGNAL_SCAN_PER_MINUTE +
+      SIGNAL_SCAN_INTERVALS.reduce(
+        (sum, interval) => sum + signalScanCapacity(MAX_SIGNAL_SCAN_PER_MINUTE, interval),
+        0,
+      );
+    expect(worst).toBe(236);
+    expect(worst).toBeLessThan(BROKER_RATE_LIMIT_PER_MINUTE);
   });
 
   it('ends a bot texts load before the next one starts and inside phase 1', () => {
