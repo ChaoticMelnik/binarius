@@ -85,7 +85,9 @@ not awaited — the processor races the submit against its deadline, and an exch
 would turn a sure `rejected` into `executor_timeout` (`trade-command-executor.test.ts` R7). The
 processor clears its deadline once the submit has answered, so the report is bounded only by the
 source's own budget (`ACCESS_TOKEN_ROUTE_BUDGET_MS`), and shutdown does not wait for it. Its
-answer is only logged, and a throw out of it is caught (R6).
+answer is only logged, and a throw out of it is caught (R6). Because it is not awaited, the next
+intent of the same account can reach the row lock before the report and take the refused token
+once more: one more `broker_rejected` within one backend round trip (stated).
 
 `rejected` only where the order certainly did not go out; `unknown` everywhere it may exist. An
 accepted trade that does not match the intent is the processor's `trade_mismatch` (#17), not the
@@ -106,6 +108,7 @@ line below and finds no `SECRET-` sentinel and no broker host.
 | `trade command falls back to rest` | info | `intentId`, `sessionState` (`none` without a session) |
 | `refused token reported` | info | `intentId`, `brokerAccountId`, `answer` (`ok` or the refusal reason) — after a REST 401 (#281) |
 | `refused token not reported` | warn | `intentId`, `brokerAccountId`, `failure`, `status` — the backend never answered for the token |
+| `refused token report cut` | info | `intentId`, `brokerAccountId` — the caller's own signal cut the report; the mark may have landed |
 | `refused token report failed` | error | `intentId`, `brokerAccountId`, `err` (name and code) |
 
 ## Accepted risks

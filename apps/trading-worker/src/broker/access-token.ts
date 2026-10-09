@@ -71,6 +71,11 @@ export async function reportRefusedToken(
       logger.info({ ...ids, answer: answer.ok ? 'ok' : answer.reason }, 'refused token reported');
       return;
     }
+    // the caller's own deadline or stop() cut it: the backend may have written the mark anyway
+    if (options.signal?.aborted === true) {
+      logger.info(ids, 'refused token report cut');
+      return;
+    }
     // the backend never answered for the token: the mark may not have been written, and the next
     // 401 reports it again
     logger.warn(
