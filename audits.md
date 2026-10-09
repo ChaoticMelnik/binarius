@@ -2464,6 +2464,6 @@ Taken by this session on the owner's instruction: «#78, #79 и #300 запус�
 
 ### Process improvement proposals
 
-1. **Tech-lead Step 7: in a worktree-isolated session, implementers run one at a time in the session's worktree; extra worktrees only for read-only architects** — **внедрено в #<PR>: .claude/skills/tech-lead/SKILL.md → Step 7**
+1. **Tech-lead Step 7: in a worktree-isolated session, implementers run one at a time in the session's worktree; extra worktrees only for read-only architects** — **внедрено в #378: .claude/skills/tech-lead/SKILL.md → Step 7**
 2. **Implementer clarify: do not offer a split «each layer is green» when the contract change in shared breaks the callers** — **открыто (2026-10-09, tech-lead)**
 3. **Remaining Minor** — **вынесено в #364, #369, #371, #375**
