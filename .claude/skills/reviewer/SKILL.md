@@ -14,7 +14,7 @@ Two modes:
 
 Post findings immediately, no additional approval needed. Codex (Step 3a; repeated in Step 6-pre only when 3a no longer matches the head) is a required independent reviewer in both modes.
 
-**How this role runs.** In the pipeline, `/tech-lead` starts it as an `Agent` spawn (`subagent_type: "general-purpose"`, `model: "opus"`), and the spawned agent's first action is `Skill(skill: "reviewer")`. The spawn's `model` decides the model (`.claude/CLAUDE.md` → Модели по ролям pipeline); the `model: opus` frontmatter above only matters when the owner invokes `/reviewer` directly. The review sub-agents of Steps 3b-3d are this agent's own nested spawns, each with an explicit `model` — never inherited. A spawned reviewer has no `AskUserQuestion`: the merge question goes back to tech-lead (Step 6b).
+**How this role runs.** In the pipeline, `/tech-lead` starts it as an `Agent` spawn (`subagent_type: "general-purpose"`, `model: "opus"`), and the spawned agent's first action is `Skill(skill: "reviewer")`. The spawn's `model` decides the model (`.claude/CLAUDE.md` → Модели по ролям pipeline); the `model: opus` frontmatter above only matters when the owner invokes `/reviewer` directly. The review sub-agents of Steps 3b-3d are this agent's own nested spawns, each with an explicit `model` — never inherited. A spawned reviewer has no `AskUserQuestion`: the merge question goes back to tech-lead (Step 6b). Spawned by `/manager` (`.claude/skills/manager/SKILL.md`) the same way: questions and the merge request go back to the spawner, which answers by the rules of `.claude/CLAUDE.md` → Режим manager.
 
 ## Mode Detection
 
