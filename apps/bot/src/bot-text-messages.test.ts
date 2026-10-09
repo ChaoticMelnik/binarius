@@ -41,7 +41,6 @@ import {
   type TradingSignalResponse,
 } from '@binarius/shared';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
-import { BOT_COMMANDS } from './commands';
 import { DEMO_DURATIONS_SEC, type DemoAssetGroup, type DemoDurationSec } from './demo-catalog';
 import {
   brokerBalance,
@@ -62,12 +61,12 @@ import {
   helpText,
   intentStatusText,
   sessionStatusText,
-  LABELS,
   setBotTextSource,
   settingsText,
   stakePickerText,
   statusCard,
   TEXTS,
+  botCommands,
   userContextOf,
   type StatusCardInput,
 } from './texts';
@@ -230,12 +229,6 @@ const STOP_REASONS = Object.values(TradingSessionStopReason).filter(
   (reason) => reason !== TradingSessionStopReason.Completed,
 );
 
-const liveCommands = () =>
-  BOT_COMMANDS.map(({ command }) => ({
-    command,
-    description: LABELS[`${command}Command` as 'startCommand'],
-  }));
-
 // every variant of each message, built by the bot's own code at the widest inputs
 const REAL: Record<string, () => TelegramHtml[]> = {
   accountCard: () =>
@@ -243,7 +236,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
       grants.map((grant) => accountCard({ firstName, email: x(W.email), grant })),
     ),
   statusCard: statusCards,
-  help: () => [helpText(liveCommands())],
+  help: () => [helpText(botCommands())],
   account: accountLists,
   analysisFailed: () => [
     ...screens([

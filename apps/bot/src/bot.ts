@@ -40,7 +40,6 @@ import {
   backendErrorFields,
   type BackendClient,
 } from './backend-client';
-import { BOT_COMMANDS } from './commands';
 import { createDemoComposer, removeLegacyKeyboard } from './demo';
 import { demoKeyboard, menuKeyboard, retryKeyboard, supportKeyboard, withMenu } from './keyboards';
 import { createDemoTradeComposer } from './demo-trade';
@@ -60,6 +59,7 @@ import { editMessageTextHtml, replyHtml, replyWithPhotoHtml, replyWithVideoHtml 
 import {
   accountCard,
   accountStatus,
+  botCommands,
   currentLevelLabel,
   helpText,
   LABELS,
@@ -412,7 +412,7 @@ export function createBot({
 
   // No backend call, like /support: the same answer for everyone, during an outage too (#184).
   privateChats.command('help', async (ctx) => {
-    await replyHtml(ctx, helpText(BOT_COMMANDS), { reply_markup: menuKeyboard() });
+    await replyHtml(ctx, helpText(botCommands()), { reply_markup: menuKeyboard() });
   });
 
   // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries

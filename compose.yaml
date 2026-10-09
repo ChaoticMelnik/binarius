@@ -114,9 +114,10 @@ services:
       BROKER_PARTNER_REF: ${BROKER_PARTNER_REF:?set it in .env; see .env.example}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?set it in .env; see .env.example}
       TOKEN_ENCRYPTION_KEY_ID: ${TOKEN_ENCRYPTION_KEY_ID:?set it in .env; see .env.example}
-      # The public bot's token, for the one sendMessage after the OAuth callback (#128). The
-      # backend never polls it — the `bot` service is its one poller — and refuses to start
-      # when it equals ADMIN_BOT_TOKEN.
+      # The public bot's token, for the one sendMessage after the OAuth callback (#128) and for
+      # the `bot-text` CLI publishing the command menu and the profile (#301). The backend never
+      # polls it — the `bot` service is its one poller — and refuses to start when it equals
+      # ADMIN_BOT_TOKEN.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set it in .env; see .env.example}
       # Staff login (#68). The bot is a second grammY instance inside this process, on its own
       # token: two pollers on one token fight over getUpdates. The web token is a narrow

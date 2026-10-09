@@ -2255,9 +2255,7 @@ describe('the bot texts pages (#300)', () => {
     expect(body).toContain(BOT_TEXT_CATALOG.welcome.description);
     expect(body).toContain(TEXTS.botTextChanged(7, 'ada'));
     expect(body).toContain(TEXTS.botTextChanged(3, null));
-    expect(body).toContain(
-      TEXTS.botTextRejected('Только чтение: команды и профиль правятся после #301'),
-    );
+    expect(body).toContain(TEXTS.botTextRejected('Пустой текст'));
     expect(body.split(TEXTS.botTextReadOnly)).toHaveLength(3);
     expect(body).toContain(TEXTS.botTextOrphansHeading);
     expect(body).toMatch(

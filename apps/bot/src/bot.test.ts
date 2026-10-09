@@ -35,7 +35,6 @@ import {
   createBot,
   levelCallbackData,
 } from './bot';
-import { BOT_COMMANDS } from './commands';
 
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import { SETTINGS_CALLBACK_DATA } from './stake-picker';
@@ -86,6 +85,7 @@ import {
   settingsText,
   statusCard,
   TEXTS,
+  botCommands,
   userContextOf,
   type AccountCardInput,
 } from './texts';
@@ -2165,7 +2165,7 @@ describe('text outside the dialog', () => {
 
   it('ignores a command in the middle of the dialog and keeps the step', async () => {
     // a command nothing answers; the sample must not become a real command unnoticed
-    expect(BOT_COMMANDS.map((entry) => entry.command)).not.toContain('unknown');
+    expect(botCommands().map((entry) => entry.command)).not.toContain('unknown');
     const { bot, backend, calls, dialog } = setup({ dialog: ON_CODE_STEP });
     await bot.handleUpdate(textUpdate('/unknown'));
     expect(calls).toEqual([]);
@@ -2526,7 +2526,7 @@ describe('/help', () => {
   it('sends the help text once, with the menu and no backend call', async () => {
     const { backend, sends, calls } = await helpSends('/help');
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
-    expect(sends[0]?.payload.text).toBe(helpText(BOT_COMMANDS).value);
+    expect(sends[0]?.payload.text).toBe(helpText(botCommands()).value);
     expect(inlineButtons(sends[0]?.payload)).toEqual(MENU_BUTTONS);
     expect(backend.recordStart).not.toHaveBeenCalled();
     expect(backend.readAccount).not.toHaveBeenCalled();
@@ -2536,7 +2536,7 @@ describe('/help', () => {
   it('lists every command of the menu', async () => {
     const { sends } = await helpSends('/help');
     const lines = plainTextOf(String(sends[0]?.payload.text)).split('\n');
-    for (const { command, description } of BOT_COMMANDS) {
+    for (const { command, description } of botCommands()) {
       expect(lines).toContain(`/${command} — ${description}`);
     }
   });
@@ -2544,7 +2544,7 @@ describe('/help', () => {
   it.each(['/help@binarius_bot', '/help please'])('answers %s the same way', async (text) => {
     const { sends } = await helpSends(text);
     expect(sends).toHaveLength(1);
-    expect(sends[0]?.payload.text).toBe(helpText(BOT_COMMANDS).value);
+    expect(sends[0]?.payload.text).toBe(helpText(botCommands()).value);
   });
 
   it.each(['group', 'supergroup'])('ignores the command in a %s', async (chatType) => {
@@ -2638,6 +2638,15 @@ describe('the text source', () => {
     const { bot, calls } = setup({ recordStart: unreachable(), readAccount: unreachable() });
     await bot.handleUpdate(textUpdate('/help'));
     expect(sentPayload(calls, 'sendMessage')?.text).toContain(stubText('helpAbout'));
+  });
+
+  it('H1 lists the command descriptions of the source in place (#301)', async () => {
+    setBotTextSource(stubTextSource('startCommand'));
+    const { bot, calls } = setup({ recordStart: unreachable(), readAccount: unreachable() });
+    await bot.handleUpdate(textUpdate('/help'));
+    const lines = plainTextOf(String(sentPayload(calls, 'sendMessage')?.text)).split('\n');
+    expect(lines).toContain(`/start — ${stubText('startCommand')}`);
+    expect(lines).toContain('/menu — Главное меню');
   });
 
   it('refuses a confirmation with the source in place', async () => {

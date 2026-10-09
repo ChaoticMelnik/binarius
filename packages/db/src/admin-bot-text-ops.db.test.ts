@@ -81,16 +81,24 @@ describe('the admin bot texts reads (#300)', () => {
   });
 
   it('A4 gives a row the loaders reject its reason in Russian, and none to one in effect', async () => {
-    await tmp.db.insert(botTextOverrides).values({ key: 'startCommand', source: 'Старт' });
+    await tmp.db.insert(botTextOverrides).values({ key: 'startCommand', source: 'Старт\nещё' });
     await save('welcome', 'Привет', null);
+    // a profile text the CLI saved (#301) is in effect: no reason
+    await tmp.db
+      .insert(botTextOverrides)
+      .values({ key: 'profileShortDescription', source: 'Коротко' });
     const current = await rows();
     const resolved = resolveBotTextOverrides(current);
-    const view = (key: 'startCommand' | 'welcome') =>
+    const view = (key: 'startCommand' | 'welcome' | 'profileShortDescription') =>
       adminBotTextViewSchema.parse(toAdminBotTextView(key, current, resolved));
     expect(view('startCommand')).toMatchObject({
-      override: { source: 'Старт', updatedByLogin: null },
-      rejection: expect.stringContaining('Только чтение'),
+      override: { source: 'Старт\nещё', updatedByLogin: null },
+      rejection: 'Перенос строки в однострочном тексте',
     });
     expect(view('welcome')).toMatchObject({ override: { source: 'Привет' }, rejection: null });
+    expect(view('profileShortDescription')).toMatchObject({
+      override: { source: 'Коротко' },
+      rejection: null,
+    });
   });
 });

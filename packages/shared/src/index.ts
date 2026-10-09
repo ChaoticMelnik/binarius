@@ -32,5 +32,6 @@ export * from './bot-text-format';
 export * from './bot-text-vars';
 export * from './bot-texts';
 export * from './bot-text-messages';
+export * from './bot-commands';
 export * from './bot-text-overrides';
 export * from './admin-bot-texts';

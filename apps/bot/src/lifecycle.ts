@@ -1,10 +1,9 @@
 import type { Api, PollingOptions } from 'grammy';
-import { closeAll, errorLogFields } from '@binarius/shared';
-import { BOT_COMMANDS, BOT_COMMAND_SCOPE } from './commands';
+import { BOT_COMMAND_SCOPE, closeAll, errorLogFields } from '@binarius/shared';
 import type { IntentTracker } from './intent-tracker';
 import type { SessionTracker } from './session-tracker';
 import { telegramErrorFields, type Logger } from './logging';
-import { PROFILE } from './texts';
+import { botCommands, PROFILE } from './texts';
 import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './timing';
 
 // Only the update kinds this bot handles: Telegram then stops delivering the rest, and a new
@@ -29,8 +28,9 @@ export interface RunBotOptions {
   tracker: Pick<IntentTracker, 'stop'>;
   // the demo sessions' status tracker (#284), drained the same way
   sessionTracker: Pick<SessionTracker, 'stop'>;
-  // the text overrides' refresher (#299): its load in flight waited for
-  botTexts: { stop(): Promise<void> };
+  // the text overrides' refresher (#299): its load in flight waited for, and its first load
+  // awaited before the menu and the profile are published (#301)
+  botTexts: { stop(): Promise<void>; loaded(): Promise<void> };
   logger: Logger;
   exit: (code: number) => void;
   shutdownBudgetMs?: number;
@@ -59,12 +59,13 @@ export function runBot({
   // failed one costs that part of the profile and nothing else — the next call is still made, no
   // update is lost and Telegram keeps the last value that did register — while a throw out of
   // onStart would reject start() and exit 1. The next start registers again. The number of
-  // calls is STARTUP_CALLS in timing.ts.
+  // calls is STARTUP_CALLS in timing.ts. The values are the texts in effect — the overrides of the
+  // first load, or the defaults when it failed (#301).
   const registrations = [
     {
       method: 'setMyCommands',
       failure: 'bot commands not registered',
-      call: () => bot.api.setMyCommands(BOT_COMMANDS, { scope: BOT_COMMAND_SCOPE }),
+      call: () => bot.api.setMyCommands(botCommands(), { scope: BOT_COMMAND_SCOPE }),
     },
     {
       method: 'setMyDescription',
@@ -94,6 +95,10 @@ export function runBot({
     // grammY awaits this after getMe and deleteWebhook and before the first getUpdates, so
     // `bot started` still means polling begins now
     onStart: async () => {
+      // A failed load settles it too, and the defaults are published. A signal while it is
+      // pending releases it through botTexts.stop(); publishing then would only hold the drain.
+      await botTexts.loaded();
+      if (stopping) return;
       await registerProfile();
       logger.info('bot started');
     },

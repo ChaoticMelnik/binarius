@@ -366,7 +366,8 @@ the load timeout).
 republish the command menu and the profile after a change; that is #361. The list marks the two
 groups, the editor shows the text with «Только чтение: команды и профиль бота пока нельзя править
 из админки» and no form, and the backend answers every POST for such a key `read_only` before the
-writer.
+writer. The CLI edits and publishes them since #301 ([bot-texts.md](bot-texts.md) → Publishing); an
+override it saved shows here as «изменён» with the editor still read-only.
 
 **The preview** renders the draft as the bot would: the backend checks it with
 `botTextChangeProblems` (as a save would), then renders it through the bot's own views with the

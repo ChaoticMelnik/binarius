@@ -6,7 +6,7 @@ import {
   estimateBotTextMessage,
   type BotTextMessage,
 } from './bot-text-messages';
-import { BOT_TEXT_CATALOG, BotTextGroup, botTextProblems, type BotTextKey } from './bot-texts';
+import { BOT_TEXT_CATALOG, botTextProblems, type BotTextKey } from './bot-texts';
 import { errorLogFields } from './logging';
 
 // Overrides of the client bot's texts (docs/bot-texts.md → Overrides): stored by @binarius/db,
@@ -24,14 +24,13 @@ export const BOT_TEXTS_REFRESH_MS = 30_000;
 // what the CLI and the admin section promise: a refresh plus a load's budget (apps/bot timing.test)
 export const BOT_TEXTS_APPLIED_WITHIN_S = 35;
 export const BOT_TEXTS_PATH = '/bot-texts';
-
-// edited only once the commands and the profile are republished on a change (#301)
-const READ_ONLY_GROUPS: readonly BotTextGroup[] = [BotTextGroup.Commands, BotTextGroup.Profile];
+// One publish of the command menu and the profile (#301): three Bot API calls, each bounded by the
+// backend's BOT_PROFILE_PUBLISH_TIMEOUT_MS (its timing chain holds the product to this). Here
+// because web sizes its request timeout against it when the admin section publishes (#361).
+export const BOT_PROFILE_PUBLISH_BUDGET_MS = 6_000;
 
 export const isBotTextKey = (key: string): key is BotTextKey =>
   Object.hasOwn(BOT_TEXT_CATALOG, key);
-export const isBotTextWritable = (key: string): key is BotTextKey =>
-  isBotTextKey(key) && !READ_ONLY_GROUPS.includes(BOT_TEXT_CATALOG[key].group);
 
 // A key outside this build's catalog passes: the bot and the backend can run different catalogs,
 // and the resolver ignores what it does not know.
@@ -55,7 +54,6 @@ export interface BotTextOverrideRow {
 
 export const BotTextRejectionCode = {
   UnknownKey: 'unknown_key',
-  ReadOnlyGroup: 'read_only_group',
   Invalid: 'invalid',
   BreaksHost: 'breaks_host',
   MessageOverflow: 'message_overflow',
@@ -64,7 +62,6 @@ export type BotTextRejectionCode = (typeof BotTextRejectionCode)[keyof typeof Bo
 
 type Rejection =
   | { code: typeof BotTextRejectionCode.UnknownKey }
-  | { code: typeof BotTextRejectionCode.ReadOnlyGroup }
   | { code: typeof BotTextRejectionCode.Invalid; problems: BotTextProblem[] }
   | { code: typeof BotTextRejectionCode.BreaksHost; host: BotTextKey; problems: BotTextProblem[] }
   | {
@@ -145,9 +142,7 @@ export function resolveBotTextOverrides(rows: readonly BotTextOverrideRow[]): Re
   const texts = new Map<BotTextKey, string>();
   for (const key of CATALOG_KEYS) {
     const row = byKey.get(key);
-    if (row === undefined) continue;
-    if (isBotTextWritable(key)) texts.set(key, row.source);
-    else reject(key, { code: BotTextRejectionCode.ReadOnlyGroup });
+    if (row !== undefined) texts.set(key, row.source);
   }
   for (let failure = firstFailure(texts); failure !== undefined; failure = firstFailure(texts)) {
     for (const [key, rejection] of failure) {
@@ -227,8 +222,6 @@ export function botTextRejectionMessage(rejection: BotTextRejection, key: string
   switch (rejection.code) {
     case BotTextRejectionCode.UnknownKey:
       return 'Неизвестный ключ — игнорируется';
-    case BotTextRejectionCode.ReadOnlyGroup:
-      return 'Только чтение: команды и профиль правятся после #301';
     case BotTextRejectionCode.Invalid:
       return problemsText(key as BotTextKey, rejection.problems);
     case BotTextRejectionCode.BreaksHost:
@@ -258,6 +251,9 @@ export interface BotTextRefresherOptions {
 export interface BotTextRefresher {
   start(): void;
   stop(): Promise<void>;
+  // Settles once the first load has, whether it applied the overrides or failed (a load never
+  // rejects), or on stop() before any load: the bot publishes its menu and profile after it (#301).
+  loaded(): Promise<void>;
 }
 
 /**
@@ -270,6 +266,10 @@ export function createBotTextRefresher(options: BotTextRefresherOptions): BotTex
   let inFlight: Promise<void> | undefined;
   let stopped = false;
   let reported = '';
+  let settleFirst: () => void = () => undefined;
+  const first = new Promise<void>((resolve) => {
+    settleFirst = resolve;
+  });
 
   const withinBudget = <T>(work: Promise<T>): Promise<T> => {
     let budget: ReturnType<typeof setTimeout> | undefined;
@@ -318,6 +318,7 @@ export function createBotTextRefresher(options: BotTextRefresherOptions): BotTex
   function tick(): void {
     if (stopped) return;
     inFlight = load();
+    void inFlight.then(settleFirst);
     timer = setTimeout(tick, options.intervalMs);
   }
 
@@ -329,7 +330,9 @@ export function createBotTextRefresher(options: BotTextRefresherOptions): BotTex
     async stop() {
       stopped = true;
       clearTimeout(timer);
+      if (inFlight === undefined) settleFirst();
       await inFlight;
     },
+    loaded: () => first,
   };
 }

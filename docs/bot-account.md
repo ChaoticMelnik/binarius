@@ -18,7 +18,8 @@ recorded — `/start`, `/menu` and `/settings`, all through `POST /users/start`
 - `apps/bot/src/` — `backend-client.ts` (`readAccount`), `texts.ts` (the `account*` entries,
   `accountStatus`, `LABELS.accountCommand`; the texts are catalog entries,
   [bot-texts.md](bot-texts.md)), `bot.ts` (the handler, `accountKeyboard`,
-  `addConnectButtons`), `commands.ts` (the menu entry), `timing.ts` (`HANDLER_CALLS.account`).
+  `addConnectButtons`), `timing.ts` (`HANDLER_CALLS.account`); the menu entry is in
+  `packages/shared/src/bot-commands.ts`.
 
 ## Sequence
 

@@ -55,7 +55,6 @@ import {
   demoPageCallbackData,
 } from './demo';
 import { DEMO_ASSET_GROUPS, DEMO_DURATIONS_SEC } from './demo-catalog';
-import { BOT_COMMANDS } from './commands';
 import {
   ACTION_LABELS,
   accountCard,
@@ -82,6 +81,7 @@ import {
   stakeButtonLabel,
   statusCard,
   TEXTS,
+  botCommands,
   type AccountCardInput,
   type StatusCardInput,
 } from './texts';
@@ -443,12 +443,14 @@ describe('texts', () => {
       `/${command} — ${description}`;
 
     it('keeps the message valid Telegram HTML, inside the message limit', () => {
-      expect(telegramTextProblems(helpText(BOT_COMMANDS), TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
+      expect(telegramTextProblems(helpText(botCommands()), TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
     });
 
     it('is the three blocks one blank line apart, the command lines after the last', () => {
-      const lines = BOT_COMMANDS.map((entry) => `\n${lineOf(entry)}`).join('');
-      expect(helpText(BOT_COMMANDS).value).toBe(
+      const lines = botCommands()
+        .map((entry) => `\n${lineOf(entry)}`)
+        .join('');
+      expect(helpText(botCommands()).value).toBe(
         [TEXTS.helpAbout.value, TEXTS.helpConnect.value, TEXTS.helpCommands.value + lines].join(
           '\n\n',
         ),
@@ -457,9 +459,21 @@ describe('texts', () => {
 
     // every command once, in the menu's order: a presence check would pass a duplicate
     it('lists exactly the commands of the menu, in its order', () => {
-      const lines = plainTextOf(helpText(BOT_COMMANDS)).split('\n');
+      const lines = plainTextOf(helpText(botCommands())).split('\n');
       const after = lines.slice(lines.indexOf(plainTextOf(TEXTS.helpCommands)) + 1);
-      expect(after).toEqual(BOT_COMMANDS.map(lineOf));
+      expect(after).toEqual(botCommands().map(lineOf));
+    });
+
+    it('reads the command descriptions from the source in place (#301)', () => {
+      setBotTextSource(stubTextSource('supportCommand'));
+      try {
+        expect(botCommands().at(-1)).toEqual({
+          command: 'support',
+          description: stubText('supportCommand'),
+        });
+      } finally {
+        setBotTextSource(defaultBotTextSource);
+      }
     });
 
     it('shows a command and its description as they are, escaped in the markup', () => {

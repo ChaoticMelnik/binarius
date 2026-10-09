@@ -6,7 +6,7 @@ import {
   DEFAULT_BALANCE_POLL_PER_MINUTE,
   DEFAULT_SIGNAL_SCAN_PER_MINUTE,
 } from '@binarius/shared/broker-budget';
-import { BOT_TEXTS_REFRESH_MS } from '@binarius/shared';
+import { BOT_PROFILE_PUBLISH_BUDGET_MS, BOT_TEXTS_REFRESH_MS } from '@binarius/shared';
 import {
   BALANCE_WATCH_WINDOW_MS,
   BROKER_BALANCE_SLA_MS,
@@ -153,6 +153,13 @@ export const signalScanMaxPairs = (perMinute: number): number =>
 // the push keeps the texts it had. The SELECT itself is bounded by the pool's query_timeout.
 export const BOT_TEXTS_LOAD_BUDGET_MS = 3_000;
 
+// --- Publishing the command menu and the profile (#301) ---------------------------------------
+// docs/bot-texts.md → Publishing. Each Bot API call of publishBotProfile (grammY's
+// ApiClientOptions.timeoutSeconds), one attempt, made one after another; the calls of one
+// publish, which bot-texts/publish.test.ts compares with BOT_PROFILE_METHODS.
+export const BOT_PROFILE_PUBLISH_TIMEOUT_MS = 2_000;
+export const BOT_PROFILE_PUBLISH_CALLS = 3;
+
 // the broker call is the other bounded operation phase 1 can be waiting on: a login handler
 // holds no lock, but a refresh does, and its transaction must fit in the budget
 export const TIMING_CHAIN_HOLDS =
@@ -217,7 +224,11 @@ export const TIMING_CHAIN_HOLDS =
   ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // a load ends before the next one starts, and inside phase 1
   BOT_TEXTS_LOAD_BUDGET_MS < BOT_TEXTS_REFRESH_MS &&
-  BOT_TEXTS_LOAD_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS;
+  BOT_TEXTS_LOAD_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // one publish of the menu and the profile inside its contract constant, which web sizes its
+  // request timeout above when the admin section publishes (#361), and inside phase 1
+  BOT_PROFILE_PUBLISH_CALLS * BOT_PROFILE_PUBLISH_TIMEOUT_MS <= BOT_PROFILE_PUBLISH_BUDGET_MS &&
+  BOT_PROFILE_PUBLISH_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }

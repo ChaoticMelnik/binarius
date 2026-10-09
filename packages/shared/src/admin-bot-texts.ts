@@ -23,7 +23,7 @@ import { telegramHtmlProblems } from './telegram-html';
 // the few rules web and the backend must agree on.
 
 // Read-only in the admin until it republishes the commands and the profile on a change (#361);
-// its own fence, apart from the writer's isBotTextWritable (#301).
+// its own fence: the writer, the CLI and the loaders take these groups (#301).
 export const ADMIN_BOT_TEXT_READ_ONLY_GROUPS: readonly BotTextGroup[] = [
   BotTextGroup.Commands,
   BotTextGroup.Profile,
