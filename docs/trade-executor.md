@@ -78,11 +78,13 @@ fetch and the REST call; the executor has no timer of its own.
 | REST | any other throw | propagates: the processor's `unknown`/`executor_error` | — |
 
 On a REST 401 the executor reports the token's fingerprint through the same source with the
-default `mayRefresh: true` and the same signal (#281,
+default `mayRefresh: true` (#281,
 [binodex-oauth.md → A refused token](binodex-oauth.md#a-refused-token-is-an-expired-token-281)):
 the backend marks the token expired and may exchange it for the user's next trade. The report is
 not awaited — the processor races the submit against its deadline, and an exchange outlasting it
-would turn a sure `rejected` into `executor_timeout` (`trade-command-executor.test.ts` R7); its
+would turn a sure `rejected` into `executor_timeout` (`trade-command-executor.test.ts` R7). The
+processor clears its deadline once the submit has answered, so the report is bounded only by the
+source's own budget (`ACCESS_TOKEN_ROUTE_BUDGET_MS`), and shutdown does not wait for it. Its
 answer is only logged, and a throw out of it is caught (R6).
 
 `rejected` only where the order certainly did not go out; `unknown` everywhere it may exist. An
@@ -102,8 +104,9 @@ line below and finds no `SECRET-` sentinel and no broker host.
 | `trade command refused` | warn | `intentId`, `transport`; socket: `failures` (count), `detail`; token: `stage: token`, `reason`, `status`; REST: `stage: rest`, `code`, `status`, `retryAfterSec`, `detail` |
 | `trade command outcome unknown` | warn | `intentId`, `transport`; socket: `reason`, `sessionState`; REST: `stage: rest`, `code`, `status` |
 | `trade command falls back to rest` | info | `intentId`, `sessionState` (`none` without a session) |
-| `refused token reported` | info | `intentId`, `answer` (`ok` or the refusal reason) — after a REST 401 (#281) |
-| `refused token report failed` | error | `intentId`, `err` (name and code) |
+| `refused token reported` | info | `intentId`, `brokerAccountId`, `answer` (`ok` or the refusal reason) — after a REST 401 (#281) |
+| `refused token not reported` | warn | `intentId`, `brokerAccountId`, `failure`, `status` — the backend never answered for the token |
+| `refused token report failed` | error | `intentId`, `brokerAccountId`, `err` (name and code) |
 
 ## Accepted risks
 
@@ -128,8 +131,8 @@ line below and finds no `SECRET-` sentinel and no broker host.
    decides; a fetch cut before the POST sent nothing, so the reconciler finds no trade and parks
    the intent in `manual_review` with the account halted (no `not_found` in `main`, #274). The
    report after a REST 401 (#281) is a third fetch that may exchange, but it is not awaited, so it
-   never holds the outcome past the deadline; cut by the deadline's abort, it is reported again on
-   the next 401.
+   never holds the outcome past the deadline. Bounded by the source's 7 s and not awaited by
+   shutdown: one cut at exit is reported again on the next 401.
 4. A late answer of an earlier command on the same connection is closed by #101: a command that
    ends without its answer taints its connection and the client drops it, and a `success` is the
    answer only with the command's asset, action and amount ([broker-socket.md → The trade

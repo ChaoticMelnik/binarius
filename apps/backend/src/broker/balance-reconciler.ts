@@ -121,8 +121,15 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
   // A 401 on a token we believed valid: its fingerprint goes back so the backend marks it expired
   // (#281). mayRefresh: false on both paths - the tick is a timer (Rule 12), and the route's
   // budget is shorter than an exchange; the user's next call exchanges it. The answer changes
-  // nothing here, and a throw must not turn the recorded 401 into a throw.
-  async function reportRefused(accountId: string, accessToken: string): Promise<void> {
+  // nothing here, and a throw must not turn the recorded 401 into a throw. ensureFreshAccessToken
+  // takes no signal: an attempt already stopped (stop(), the route's budget) skips the report, and
+  // one under way waits at most for another caller's exchange on the row lock.
+  async function reportRefused(
+    accountId: string,
+    accessToken: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (signal.aborted) return;
     try {
       const answer = await deps.accessToken(accountId, {
         mayRefresh: false,
@@ -194,7 +201,7 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
         'balance refresh failed',
       );
       if (error.code === BrokerRestErrorCode.Unauthorized) {
-        await reportRefused(accountId, token.accessToken);
+        await reportRefused(accountId, token.accessToken, signal);
       }
       return fail(accountId, BROKER_FAILURE[error.code]);
     }

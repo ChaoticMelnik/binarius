@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBrokerRestClient } from '@binarius/broker-rest';
+import { BrokerRestError, createBrokerRestClient } from '@binarius/broker-rest';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import { BrokerAccountStatus, logOptions } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
@@ -238,6 +238,32 @@ describe('refresh', () => {
     });
     expect(lines.join('\n')).not.toContain(account.token);
     expect(lines.join('\n')).not.toContain(hashToken(account.token));
+  });
+
+  it('skips the report once the attempt was stopped', async () => {
+    const account = await linked();
+    await reconciler().refresh(account.accountId);
+    let stopped: Promise<void> | undefined;
+    const balance = createBalanceReconciler({
+      db: tmp.db,
+      client: {
+        getUser: () => {
+          stopped = balance.stop();
+          return Promise.reject(new BrokerRestError('unauthorized', { status: 401 }));
+        },
+      },
+      accessToken: async (accountId, options) => {
+        tokenCalls.push({ accountId, options });
+        return { ok: true, accessToken: account.token };
+      },
+      logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
+      config: { intervalMs: 60_000, maxPerMinute: 200 },
+    });
+    tokenCalls.length = 0;
+
+    expect(await balance.refresh(account.accountId)).toBe('unauthorized');
+    await stopped;
+    expect(tokenCalls).toHaveLength(1);
   });
 
   it('keeps the recorded 401 when the report throws', async () => {

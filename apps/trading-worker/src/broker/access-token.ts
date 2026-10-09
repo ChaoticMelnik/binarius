@@ -39,9 +39,8 @@ export interface AccessTokenOptions {
   // the user waits on). A timer passes false.
   mayRefresh?: boolean;
   // sha256 (hashToken) of the token the broker just refused: the backend marks it expired when it
-  // is still the stored one (#281). Sent only when set, so a backend that predates the field
-  // still takes the body.
-  refusedToken?: string;
+  // is still the stored one (#281). A backend that predates the field answers 400 to it.
+  refusedToken?: string | undefined;
 }
 
 export interface AccessTokenSource {
@@ -58,20 +57,28 @@ export const isAccessTokenRefusal = (reason: string): reason is AccessTokenRefus
 // does not turn into a throw.
 export async function reportRefusedToken(
   tokens: AccessTokenSource,
-  logger: Pick<pino.Logger, 'info' | 'error'>,
-  fields: Record<string, unknown>,
-  brokerAccountId: string,
+  logger: Pick<pino.Logger, 'info' | 'warn' | 'error'>,
+  ids: { brokerAccountId: string; intentId?: string },
   accessToken: string,
   options: Omit<AccessTokenOptions, 'refusedToken'>,
 ): Promise<void> {
   try {
-    const answer = await tokens.accessToken(brokerAccountId, {
+    const answer = await tokens.accessToken(ids.brokerAccountId, {
       ...options,
       refusedToken: hashToken(accessToken),
     });
-    logger.info({ ...fields, answer: answer.ok ? 'ok' : answer.reason }, 'refused token reported');
+    if (answer.ok || isAccessTokenRefusal(answer.reason)) {
+      logger.info({ ...ids, answer: answer.ok ? 'ok' : answer.reason }, 'refused token reported');
+      return;
+    }
+    // the backend never answered for the token: the mark may not have been written, and the next
+    // 401 reports it again
+    logger.warn(
+      { ...ids, failure: answer.reason, status: answer.status },
+      'refused token not reported',
+    );
   } catch (error) {
-    logger.error({ ...fields, ...errorLogFields(error) }, 'refused token report failed');
+    logger.error({ ...ids, ...errorLogFields(error) }, 'refused token report failed');
   }
 }
 
@@ -119,10 +126,7 @@ export function createBackendAccessTokenSource({
             'content-type': 'application/json',
             accept: 'application/json',
           },
-          body: JSON.stringify({
-            mayRefresh,
-            ...(refusedToken === undefined ? {} : { refusedToken }),
-          }),
+          body: JSON.stringify({ mayRefresh, refusedToken }),
           signal: signal === undefined ? timeout : AbortSignal.any([timeout, signal]),
         });
         status = response.status;

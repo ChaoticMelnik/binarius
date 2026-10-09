@@ -67,9 +67,7 @@ const unavailable = (reason: ReconcileUnavailableReason): ReconcileResult => ({
 
 const REST_ERROR_REASON: Record<BrokerRestErrorCode, ReconcileUnavailableReason> = {
   [BrokerRestErrorCode.RateLimited]: ReconcileUnavailableReason.RateLimited,
-  // 401 on a token the backend just handed out: the attempt reports its fingerprint back (#281),
-  // the backend marks it expired and exchanges it there (mayRefresh: true), and the next attempt
-  // by lease takes the new token
+  // the token is reported back first (#281); the next attempt by lease takes the exchanged one
   [BrokerRestErrorCode.Unauthorized]: ReconcileUnavailableReason.TokenUnavailable,
   [BrokerRestErrorCode.Rejected]: ReconcileUnavailableReason.BrokerContract,
   [BrokerRestErrorCode.ContractViolation]: ReconcileUnavailableReason.BrokerContract,
@@ -172,7 +170,7 @@ export function createRestReconciler({
           'reconciliation trade list failed',
         );
         if (error.code === BrokerRestErrorCode.Unauthorized) {
-          await reportRefusedToken(tokens, logger, ids, intent.brokerAccountId, token.accessToken, {
+          await reportRefusedToken(tokens, logger, ids, token.accessToken, {
             mayRefresh: true,
             signal,
           });

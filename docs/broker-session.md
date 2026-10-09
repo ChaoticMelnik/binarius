@@ -217,7 +217,7 @@ redacted key).
 | `broker session waits for a token exchange` | info | `accountId` |
 | `broker session token unavailable` | warn | `accountId`, `reason`, `status` |
 | `broker session token refused` | warn | `accountId`, `refusal` |
-| `broker session token unchanged` | warn | `accountId`, `sessionState`; only from a backend that ignores `refusedToken` (#281) |
+| `broker session token unchanged` | warn | `accountId`, `sessionState`; the backend did not mark the refusal (#281) — not expected; restarting with the same token at once would loop `user.auth` against the per-IP limit |
 | `broker session user mismatch` | error | `accountId`, `expected`, `received` |
 | `broker session event before user.data` | warn, once per connection | `accountId`, `type` |
 | `balance snapshot not written` | warn, once per connection and source | `accountId`, `source`, `reason`, `field` |

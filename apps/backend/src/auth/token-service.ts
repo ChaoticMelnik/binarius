@@ -72,7 +72,7 @@ export interface AccessTokenOptions {
   // under the row lock: a match marks it expired and the decision goes on as for an expired
   // token; another token means someone already rotated the pair, and the stored one is returned
   // (#281)
-  refusedToken?: string;
+  refusedToken?: string | undefined;
 }
 
 // Returns a usable access token for the account, refreshing it when needed.
@@ -171,7 +171,15 @@ async function refreshUnderLock(
       );
       return revoked(tx, account.id, AuthRevokedReason.StorageInconsistent);
     }
-    if (options.refusedToken === undefined || hashToken(accessToken) !== options.refusedToken) {
+    const refused =
+      options.refusedToken !== undefined && hashToken(accessToken) === options.refusedToken;
+    if (refused) {
+      logger.warn(
+        { accountId: account.id, mayRefresh: options.mayRefresh !== false },
+        'broker refused the stored access token, marking it expired',
+      );
+      await markAccessTokenExpired(tx, account.id);
+    } else {
       // a row linked before the hash column existed gets it filled in here, under the lock.
       // Only the hash: token_rotated_at dates the refresh token, and moving it would give a
       // token that is already months old another ninety days of life.
@@ -180,11 +188,6 @@ async function refreshUnderLock(
       }
       return { ok: true, accessToken };
     }
-    logger.warn(
-      { accountId: account.id, mayRefresh: options.mayRefresh !== false },
-      'broker refused the stored access token, marking it expired',
-    );
-    await markAccessTokenExpired(tx, account.id);
   }
 
   if (options.mayRefresh === false) return { ok: false, reason: 'refresh_needed' };

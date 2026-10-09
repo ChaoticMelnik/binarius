@@ -113,7 +113,9 @@ row's values.
 token's fingerprint back with `mayRefresh: false` on the route and on the tick (#281): the token
 is marked expired, and the account leaves the tick's candidates until the user's next action
 exchanges it (Rule 12). Nothing revokes on it. The report changes nothing in the attempt, and a
-throw out of it is logged, not raised
+throw out of it is logged, not raised. `ensureFreshAccessToken` takes no signal: an attempt
+already stopped (`stop()`, the route's budget) skips the report, and one under way waits at most
+for another caller's exchange on the row lock
 ([binodex-oauth.md → A refused token](binodex-oauth.md#a-refused-token-is-an-expired-token-281)).
 
 ## The background tick
