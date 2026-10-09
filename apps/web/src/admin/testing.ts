@@ -15,6 +15,7 @@ import {
   UserStatus,
   type AdminAuditEntryView,
   type AdminAuditResponse,
+  type AdminBotProfileMethodResult,
   type AdminBotTextsResponse,
   type AdminBotTextView,
   type AdminIntentResponse,
@@ -292,6 +293,16 @@ export const SAMPLE_BOT_TEXTS: AdminBotTextsResponse = {
     },
   ],
 };
+
+// A publish of all three (#361): the description refused by Telegram, the rest through.
+export const SAMPLE_PUBLISHED: AdminBotProfileMethodResult[] = [
+  { method: 'setMyCommands', ok: true },
+  { method: 'setMyDescription', ok: false, err: { name: 'GrammyError' }, telegramErrorCode: 400 },
+  { method: 'setMyShortDescription', ok: true },
+];
+// what it puts in the query, encoded
+export const SAMPLE_PUBLISHED_QUERY =
+  'setMyCommands%3Aok%2CsetMyDescription%3AGrammyError%3A400%2CsetMyShortDescription%3Aok';
 
 export const SAMPLE_BOT_TEXT: AdminBotTextView = {
   key: 'welcome',

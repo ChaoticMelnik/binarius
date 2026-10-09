@@ -1,9 +1,11 @@
 import {
+  safeParseAdminBotProfilePublishResponse,
   safeParseAdminBotTextPreviewResponse,
   safeParseAdminBotTextResetResponse,
   safeParseAdminBotTextResponse,
   safeParseAdminBotTextSaveResponse,
   safeParseAdminBotTextsResponse,
+  type AdminBotProfilePublishResponse,
   type AdminBotTextPreviewRequest,
   type AdminBotTextPreviewResponse,
   type AdminBotTextResetRequest,
@@ -133,6 +135,8 @@ export interface BackendClient {
     key: string,
     request: AdminBotTextResetRequest,
   ): Promise<AdminBotTextResetResponse>;
+  /** «Опубликовать заново»: the command menu and the profile from the texts in effect (#361) */
+  publishBotProfile(token: string): Promise<AdminBotProfilePublishResponse>;
   /** the backend's public OAuth callback; carries no bearer */
   oauthCallback(request: OAuthCallbackRequest): Promise<OAuthCallbackResponse>;
 }
@@ -309,6 +313,12 @@ export function createBackendClient({
       return parsed(
         safeParseAdminBotTextResetResponse,
         await call('POST', `${botTextPath(key)}/reset`, { body: request, session }),
+      );
+    },
+    async publishBotProfile(session) {
+      return parsed(
+        safeParseAdminBotProfilePublishResponse,
+        await call('POST', 'admin/bot-texts/publish', { session }),
       );
     },
     // The route is public on the backend and checks no bearer; this one opens /admin/*, and a

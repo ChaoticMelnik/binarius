@@ -1,13 +1,13 @@
 import {
-  ADMIN_BOT_TEXT_READ_ONLY_GROUPS,
   BOT_TEXT_CATALOG,
   BOT_TEXT_VARS,
   BOT_TEXT_GROUP_TITLES,
   BOT_TEXT_SOURCE_MAX,
   BotTextGroup,
   BotTextKind,
+  botProfileMethodsOf,
   botTextKeysOf,
-  isAdminBotTextEditable,
+  type AdminBotProfileMethodResult,
   type AdminBotTextOverrideView,
   type AdminBotTextProblem,
   type AdminBotTextRendered,
@@ -44,6 +44,7 @@ import {
   type StaffSessionView,
 } from '@binarius/shared';
 import { html, layout, type SafeHtml } from '../html';
+import { encodePublishResults } from './publish-result';
 import { telegramPreview } from './telegram-preview';
 import { TEXTS } from './texts';
 
@@ -989,13 +990,56 @@ export const BOT_TEXTS_PATH = '/admin/bot-texts';
 export type BotTextsNotice = keyof typeof TEXTS.botTextsNotice;
 export type BotTextNotice = keyof typeof TEXTS.botTextNotice;
 
-export const botTextsHref = (notice?: BotTextsNotice): string =>
-  notice === undefined ? BOT_TEXTS_PATH : `${BOT_TEXTS_PATH}?${new URLSearchParams({ notice })}`;
+const withQuery = (
+  path: string,
+  notice: string | undefined,
+  published: readonly AdminBotProfileMethodResult[] | undefined,
+): string => {
+  if (notice === undefined) return path;
+  const query = new URLSearchParams({ notice });
+  if (published !== undefined) query.set('publish', encodePublishResults(published));
+  return `${path}?${query}`;
+};
+export const botTextsHref = (
+  notice?: BotTextsNotice,
+  published?: readonly AdminBotProfileMethodResult[],
+): string => withQuery(BOT_TEXTS_PATH, notice, published);
 // the key is a catalog key or matches BOT_TEXT_KEY_PATTERN: [a-zA-Z0-9] only, nothing to encode
-export const botTextHref = (key: string, notice?: BotTextNotice): string =>
-  notice === undefined
-    ? `${BOT_TEXTS_PATH}/${key}`
-    : `${BOT_TEXTS_PATH}/${key}?${new URLSearchParams({ notice })}`;
+export const botTextHref = (
+  key: string,
+  notice?: BotTextNotice,
+  published?: readonly AdminBotProfileMethodResult[],
+): string => withQuery(`${BOT_TEXTS_PATH}/${key}`, notice, published);
+
+const publishesProfile = (key: BotTextKey): boolean => botProfileMethodsOf(key).length > 0;
+
+// one line a method sent; a failure by name and code only (rule 8)
+const publishBlock = (published: readonly AdminBotProfileMethodResult[] | undefined) =>
+  published === undefined || published.length === 0
+    ? ''
+    : html`<ul class="publish">
+          ${published.map((result) =>
+            result.ok
+              ? html`<li>
+                  ${TEXTS.botProfileMethod[result.method]} (${result.method}):
+                  ${TEXTS.botProfilePublished}
+                </li>`
+              : html`<li class="error">
+                  ${TEXTS.botProfileMethod[result.method]} (${result.method}):
+                  ${TEXTS.botProfileFailed(result.err.name, result.err.code, result.telegramErrorCode)}
+                </li>`,
+          )}
+        </ul>
+        ${
+          published.some((result) => !result.ok)
+            ? html`<p class="error">${TEXTS.botProfilePublishFailedHint}</p>`
+            : ''
+        }`;
+
+const republishForm = (action: string): SafeHtml =>
+  html`<form method="post" action="${action}">
+    <button type="submit">${TEXTS.botProfileRepublish}</button>
+  </form>`;
 
 const notice = (text: string | undefined): SafeHtml | string =>
   text === undefined ? '' : html`<p class="notice">${text}</p>`;
@@ -1026,24 +1070,38 @@ const orphanRow = (row: AdminBotTextOverrideView): SafeHtml =>
 
 export const botTextsPage = (
   overrides: readonly AdminBotTextOverrideView[],
-  { login, notice: shown }: { login: string; notice?: BotTextsNotice },
+  {
+    login,
+    notice: shown,
+    published,
+  }: {
+    login: string;
+    notice?: BotTextsNotice;
+    published?: readonly AdminBotProfileMethodResult[];
+  },
 ): SafeHtml => {
   const byKey = new Map(overrides.map((row) => [row.key, row]));
   const orphans = overrides.filter((row) => !Object.hasOwn(BOT_TEXT_CATALOG, row.key));
+  // the hint and the button once, above the first group whose texts are published
+  const firstPublished = Object.values(BotTextGroup).find((group) =>
+    botTextKeysOf(group).some(publishesProfile),
+  );
   return adminShell({
     title: TEXTS.botTextsTitle,
     active: 'botTexts',
     login,
     body: html`<h1>${TEXTS.botTextsHeading}</h1>
       ${notice(shown === undefined ? undefined : TEXTS.botTextsNotice[shown])}
+      ${publishBlock(published)}
       ${Object.values(BotTextGroup).map(
         (group) =>
-          html`<h2>${BOT_TEXT_GROUP_TITLES[group]}</h2>
-            ${
-              ADMIN_BOT_TEXT_READ_ONLY_GROUPS.includes(group)
-                ? html`<p class="hint">${TEXTS.botTextReadOnly}</p>`
+          html`${
+              group === firstPublished
+                ? html`<p class="hint">${TEXTS.botProfileHint}</p>
+                    ${republishForm(`${BOT_TEXTS_PATH}/publish`)}`
                 : ''
             }
+            <h2>${BOT_TEXT_GROUP_TITLES[group]}</h2>
             <table>
               <thead>
                 <tr>
@@ -1156,7 +1214,7 @@ export interface BotTextPageOptions {
   rendered?: AdminBotTextRendered;
   problems?: readonly AdminBotTextProblem[];
   conflict?: { currentVersion: number; currentSource: string };
-  message?: string;
+  published?: readonly AdminBotProfileMethodResult[];
 }
 
 // The textarea's content starts with a line feed: the HTML parser drops exactly one right after
@@ -1165,7 +1223,7 @@ export const botTextPage = (text: AdminBotTextView, options: BotTextPageOptions)
   const key = text.key as BotTextKey;
   const entry = BOT_TEXT_CATALOG[key];
   const { override } = text;
-  const editable = isAdminBotTextEditable(key);
+  const publishes = publishesProfile(key);
   // A page after a POST belongs to the editing session opened on the submitted version; the
   // fresher one the backend read for it would void the optimistic check (#373 M1). Only the 409
   // page moves to the current version, on purpose.
@@ -1180,7 +1238,7 @@ export const botTextPage = (text: AdminBotTextView, options: BotTextPageOptions)
       <p>${override === null ? TEXTS.botTextDefault : changedState(override)}</p>
       ${rejected(text.rejection)}
       ${notice(options.notice === undefined ? undefined : TEXTS.botTextNotice[options.notice])}
-      ${error(options.message)}
+      ${publishBlock(options.published)}
       ${
         options.conflict === undefined
           ? ''
@@ -1202,26 +1260,32 @@ export const botTextPage = (text: AdminBotTextView, options: BotTextPageOptions)
       }
       ${placeholderHints(text)}
       ${
-        editable
-          ? html`<form class="editor" method="post" action="${botTextHref(key)}/save">
-                <label for="source">${TEXTS.botTextSourceField}</label>
-                <textarea id="source" name="source" maxlength="${BOT_TEXT_SOURCE_MAX}" rows="12">
-${value}</textarea>
-                <input type="hidden" name="version" value="${version}" />
-                <div class="buttons">
-                  <button type="submit" formaction="${botTextHref(key)}/preview">
-                    ${TEXTS.botTextPreviewSubmit}
-                  </button>
-                  <button type="submit">${TEXTS.botTextSaveSubmit}</button>
-                </div>
-              </form>
+        publishes
+          ? html`<p class="hint">
               ${
-                override !== null && override.source === entry.source
-                  ? html`<p class="hint">${TEXTS.botTextSameAsDefault}</p>`
-                  : ''
-              }`
-          : html`<p class="hint">${TEXTS.botTextReadOnly}</p>
-              <pre>${value}</pre>`
+                entry.group === BotTextGroup.Commands
+                  ? TEXTS.botProfileCommandHint
+                  : TEXTS.botProfileProfileHint
+              }
+            </p>`
+          : ''
+      }
+      <form class="editor" method="post" action="${botTextHref(key)}/save">
+        <label for="source">${TEXTS.botTextSourceField}</label>
+        <textarea id="source" name="source" maxlength="${BOT_TEXT_SOURCE_MAX}" rows="12">
+${value}</textarea>
+        <input type="hidden" name="version" value="${version}" />
+        <div class="buttons">
+          <button type="submit" formaction="${botTextHref(key)}/preview">
+            ${TEXTS.botTextPreviewSubmit}
+          </button>
+          <button type="submit">${TEXTS.botTextSaveSubmit}</button>
+        </div>
+      </form>
+      ${
+        override !== null && override.source === entry.source
+          ? html`<p class="hint">${TEXTS.botTextSameAsDefault}</p>`
+          : ''
       }
       ${options.rendered === undefined ? '' : previewBlock(options.rendered)}
       ${
@@ -1231,14 +1295,11 @@ ${value}</textarea>
                 <summary>${TEXTS.botTextDefaultSource}</summary>
                 <pre>${entry.source}</pre>
               </details>
-              ${
-                editable
-                  ? html`<form method="post" action="${botTextHref(key)}/reset">
-                      <input type="hidden" name="version" value="${version}" />
-                      <button type="submit">${TEXTS.botTextResetSubmit}</button>
-                    </form>`
-                  : ''
-              }`
-      }`,
+              <form method="post" action="${botTextHref(key)}/reset">
+                <input type="hidden" name="version" value="${version}" />
+                <button type="submit">${TEXTS.botTextResetSubmit}</button>
+              </form>`
+      }
+      ${publishes ? republishForm(`${botTextHref(key)}/publish`) : ''}`,
   });
 };

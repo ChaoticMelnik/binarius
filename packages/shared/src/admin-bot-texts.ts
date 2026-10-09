@@ -12,7 +12,6 @@ import {
 } from './bot-text-overrides';
 import {
   BOT_TEXT_CATALOG,
-  BotTextGroup,
   createBotTexts,
   type BotHtmlKey,
   type BotPlainKey,
@@ -22,15 +21,6 @@ import { telegramHtmlProblems } from './telegram-html';
 
 // The admin section «Тексты бота» (#300, docs/admin-pages.md → Bot texts): its wire shapes and
 // the few rules web and the backend must agree on.
-
-// Read-only in the admin until it republishes the commands and the profile on a change (#361);
-// its own fence: the writer, the CLI and the loaders take these groups (#301).
-export const ADMIN_BOT_TEXT_READ_ONLY_GROUPS: readonly BotTextGroup[] = [
-  BotTextGroup.Commands,
-  BotTextGroup.Profile,
-];
-export const isAdminBotTextEditable = (key: BotTextKey): boolean =>
-  !ADMIN_BOT_TEXT_READ_ONLY_GROUPS.includes(BOT_TEXT_CATALOG[key].group);
 
 // a rejection worded in Russian; adminBotTextReason cuts a longer one
 export const ADMIN_BOT_TEXT_REASON_MAX = 512;
@@ -133,49 +123,6 @@ export const adminBotTextRenderedSchema = z.discriminatedUnion('kind', [
 ]);
 export type AdminBotTextRendered = z.infer<typeof adminBotTextRenderedSchema>;
 
-const outcome = <
-  O extends string,
-  T extends z.ZodType<AdminBotTextView | null>,
-  S extends z.ZodRawShape,
->(
-  name: O,
-  text: T,
-  shape: S,
-) => z.strictObject({ me: strictMe, text, outcome: z.literal(name), ...shape });
-
-const view = adminBotTextViewSchema;
-const conflict = {
-  currentVersion: adminBotTextVersionSchema,
-  currentSource: adminBotTextSourceSchema,
-};
-
-export const adminBotTextPreviewResponseSchema = z.discriminatedUnion('outcome', [
-  outcome('rendered', view, { rendered: adminBotTextRenderedSchema }),
-  outcome('refused', view, { problems: problemsSchema }),
-  outcome('read_only', view, {}),
-]);
-export type AdminBotTextPreviewResponse = z.infer<typeof adminBotTextPreviewResponseSchema>;
-
-export const adminBotTextSaveResponseSchema = z.discriminatedUnion('outcome', [
-  outcome('saved', view, { version }),
-  outcome('unchanged', view, {}),
-  outcome('version_conflict', view, conflict),
-  outcome('refused', view, { problems: problemsSchema }),
-  outcome('read_only', view, {}),
-]);
-export type AdminBotTextSaveResponse = z.infer<typeof adminBotTextSaveResponseSchema>;
-
-// text is null for a key outside the catalog: a row left behind by a renamed key
-const nullableView = adminBotTextViewSchema.nullable();
-export const adminBotTextResetResponseSchema = z.discriminatedUnion('outcome', [
-  outcome('reset', nullableView, {}),
-  outcome('already_default', nullableView, {}),
-  outcome('version_conflict', nullableView, conflict),
-  outcome('refused', nullableView, { problems: problemsSchema }),
-  outcome('read_only', nullableView, {}),
-]);
-export type AdminBotTextResetResponse = z.infer<typeof adminBotTextResetResponseSchema>;
-
 // An error's name or code the result carries; adminBotProfileIdentity holds one to it.
 export const ADMIN_BOT_PROFILE_IDENTITY_MAX = 128;
 const identity = z.strictObject({
@@ -183,6 +130,10 @@ const identity = z.strictObject({
   code: z.string().min(1).max(ADMIN_BOT_PROFILE_IDENTITY_MAX).optional(),
 });
 type Identity = z.infer<typeof identity>;
+// Telegram's error_code is an HTTP status
+const telegramErrorCode = z.int().min(100).max(599);
+export const isAdminTelegramErrorCode = (code: number): boolean =>
+  telegramErrorCode.safeParse(code).success;
 
 // The outcome of one Bot API call of a publish (#361): identity only (rule 8), no description.
 export const adminBotProfileMethodResultSchema = z.discriminatedUnion('ok', [
@@ -192,7 +143,7 @@ export const adminBotProfileMethodResultSchema = z.discriminatedUnion('ok', [
     ok: z.literal(false),
     err: identity,
     cause: identity.optional(),
-    telegramErrorCode: z.int().min(100).max(599).optional(),
+    telegramErrorCode: telegramErrorCode.optional(),
   }),
 ]);
 export type AdminBotProfileMethodResult = z.infer<typeof adminBotProfileMethodResultSchema>;
@@ -220,6 +171,46 @@ export function adminBotProfileIdentity(value: { name: string; code?: string }):
     ? { name }
     : { name, code: clipIdentity(value.code) };
 }
+
+const outcome = <
+  O extends string,
+  T extends z.ZodType<AdminBotTextView | null>,
+  S extends z.ZodRawShape,
+>(
+  name: O,
+  text: T,
+  shape: S,
+) => z.strictObject({ me: strictMe, text, outcome: z.literal(name), ...shape });
+
+const view = adminBotTextViewSchema;
+const conflict = {
+  currentVersion: adminBotTextVersionSchema,
+  currentSource: adminBotTextSourceSchema,
+};
+
+export const adminBotTextPreviewResponseSchema = z.discriminatedUnion('outcome', [
+  outcome('rendered', view, { rendered: adminBotTextRenderedSchema }),
+  outcome('refused', view, { problems: problemsSchema }),
+]);
+export type AdminBotTextPreviewResponse = z.infer<typeof adminBotTextPreviewResponseSchema>;
+
+export const adminBotTextSaveResponseSchema = z.discriminatedUnion('outcome', [
+  outcome('saved', view, { version, published: adminBotProfilePublishedSchema }),
+  outcome('unchanged', view, {}),
+  outcome('version_conflict', view, conflict),
+  outcome('refused', view, { problems: problemsSchema }),
+]);
+export type AdminBotTextSaveResponse = z.infer<typeof adminBotTextSaveResponseSchema>;
+
+// text is null for a key outside the catalog: a row left behind by a renamed key
+const nullableView = adminBotTextViewSchema.nullable();
+export const adminBotTextResetResponseSchema = z.discriminatedUnion('outcome', [
+  outcome('reset', nullableView, { published: adminBotProfilePublishedSchema }),
+  outcome('already_default', nullableView, {}),
+  outcome('version_conflict', nullableView, conflict),
+  outcome('refused', nullableView, { problems: problemsSchema }),
+]);
+export type AdminBotTextResetResponse = z.infer<typeof adminBotTextResetResponseSchema>;
 
 export const safeParseAdminBotTextsResponse = (input: unknown) =>
   adminBotTextsResponseSchema.safeParse(input);

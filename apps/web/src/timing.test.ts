@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ADMIN_LOGIN_BUDGET_MS } from '@binarius/shared';
+import { ADMIN_LOGIN_BUDGET_MS, BOT_PROFILE_PUBLISH_BUDGET_MS } from '@binarius/shared';
 import { OAUTH_CALLBACK_BUDGET_MS, OAUTH_CALLBACK_PATH } from '@binarius/shared/oauth';
 import {
   composeDurationMs,
@@ -26,6 +26,8 @@ describe('web timing', () => {
   it('waits longer than the backend may spend, and shuts down inside the grace period', () => {
     // the cross-process link: the backend's own chain fits inside this same number
     expect(ADMIN_LOGIN_BUDGET_MS).toBeLessThan(BACKEND_REQUEST_TIMEOUT_MS);
+    // a publish after a bot text write, or «Опубликовать заново» (#361)
+    expect(BOT_PROFILE_PUBLISH_BUDGET_MS).toBeLessThan(BACKEND_REQUEST_TIMEOUT_MS);
     expect(OAUTH_CALLBACK_BUDGET_MS).toBeLessThan(OAUTH_CALLBACK_REQUEST_TIMEOUT_MS);
     expect(BACKEND_REQUEST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
     expect(OAUTH_CALLBACK_REQUEST_TIMEOUT_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
