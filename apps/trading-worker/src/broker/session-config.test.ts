@@ -72,7 +72,8 @@ describe('the session constants', () => {
     ['a renewal timeout as long as the interval', { leaseRenewTimeoutMs: SESSION_LEASE_RENEW_MS }],
     // #96: the loss check must see a loss within the grace
     ['a loss grace no longer than a scan', { lossGraceMs: SESSION_TICK_MS }],
-    ['a fractional loss grace', { lossGraceMs: 1.5 }],
+    // above the scan, so only the integer check refuses it
+    ['a fractional loss grace', { lossGraceMs: SESSION_TICK_MS + 0.5 }],
   ])('refuses %s', (_label, patch) => {
     expect(sessionManagerConfigHolds({ ...SESSION_MANAGER_CONFIG, ...patch })).toBe(false);
   });
