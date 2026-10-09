@@ -15,6 +15,7 @@ import {
   botTextOverrides,
   brokerAccounts,
   brokerBalanceSnapshots,
+  brokerSessionLeases,
   brokerTrades,
   depositEvents,
   oauthStates,
@@ -2367,6 +2368,74 @@ describe('broker_balance_snapshots', () => {
         tx.insert(brokerBalanceSnapshots).values(snapshot(randomUUID())),
         '23503',
         'broker_balance_snapshots_account_fk',
+      );
+    });
+  });
+});
+
+// --- broker_session_leases (#93) ------------------------------------------------------------
+
+describe('broker_session_leases (#93)', () => {
+  const lease = (accountId: string, acquiredAt: string, expiresAt: string) => ({
+    brokerAccountId: accountId,
+    ownerId: randomUUID(),
+    acquiredAt: sql`${acquiredAt}::timestamptz`,
+    expiresAt: sql`${expiresAt}::timestamptz`,
+  });
+
+  it('refuses a lease that expires when it is acquired, and accepts one a microsecond later', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx
+          .insert(brokerSessionLeases)
+          .values(lease(seed.accountId, '2026-10-09 10:00:00+00', '2026-10-09 10:00:00+00')),
+        '23514',
+        'broker_session_leases_expiry_check',
+      );
+    });
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await tx
+        .insert(brokerSessionLeases)
+        .values(lease(seed.accountId, '2026-10-09 10:00:00+00', '2026-10-09 10:00:00.000001+00'));
+    });
+  });
+
+  it('refuses a missing time and a second row for the account', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const error = await tx
+        .execute(
+          sql`insert into broker_session_leases (broker_account_id, owner_id, acquired_at, expires_at)
+              values (${seed.accountId}, ${randomUUID()}, now(), null)`,
+        )
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column: 'expires_at' });
+    });
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const row = lease(seed.accountId, '2026-10-09 10:00:00+00', '2026-10-09 10:00:30+00');
+      await tx.insert(brokerSessionLeases).values(row);
+      await rejectsWith(
+        tx.insert(brokerSessionLeases).values({ ...row, ownerId: randomUUID() }),
+        '23505',
+        'broker_session_leases_pkey',
+      );
+    });
+  });
+
+  it('rejects a lease of an account that does not exist', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx
+          .insert(brokerSessionLeases)
+          .values(lease(randomUUID(), '2026-10-09 10:00:00+00', '2026-10-09 10:00:30+00')),
+        '23503',
+        'broker_session_leases_account_fk',
       );
     });
   });
