@@ -225,6 +225,13 @@
       "when": 1791526925708,
       "tag": "0031_broker_session_leases",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791530135988,
+      "tag": "0032_trading_switch_circuit_breaker",
+      "breakpoints": true
     }
   ]
 }
