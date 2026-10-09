@@ -28,6 +28,7 @@ import {
   resolveTradingAccount,
   toTradeIntentView,
   uniqueViolation,
+  type CreateTradeIntentOptions,
   type CreateTradeIntentResult,
   type DbExecutor,
 } from './trade-intent-ops';
@@ -53,6 +54,8 @@ export const TradingSessionDbErrorCode = {
   TradingPaused: 'trading_paused',
   // sessions are demo only: nothing else fences a real session's intents (#144 review m1)
   ModeNotAllowed: 'mode_not_allowed',
+  // a real session on a DEMO_ONLY process (#396), before mode_not_allowed
+  DemoOnly: 'demo_only',
 } as const;
 export type TradingSessionDbErrorCode =
   (typeof TradingSessionDbErrorCode)[keyof typeof TradingSessionDbErrorCode];
@@ -72,10 +75,21 @@ export interface CreateTradingSessionInput {
   settings: TradingSessionSettings;
 }
 
+export interface CreateTradingSessionOptions {
+  // required, not optional: no route test can send a real session on main, so the type is what
+  // proves every caller passes the process's flag (#396)
+  demoOnly: boolean;
+}
+
 export async function createTradingSession(
   db: Db,
   input: CreateTradingSessionInput,
+  options: CreateTradingSessionOptions,
 ): Promise<TradingSessionRow> {
+  // before mode_not_allowed, so the guard outlives the demo-only rule of sessions (#327)
+  if (options.demoOnly && input.mode === TradeMode.Real) {
+    throw new TradingSessionError(TradingSessionDbErrorCode.DemoOnly);
+  }
   if (input.mode !== TradeMode.Demo) {
     throw new TradingSessionError(TradingSessionDbErrorCode.ModeNotAllowed);
   }
@@ -388,6 +402,7 @@ export interface CreateSessionIntentInput {
 export async function createSessionIntent(
   db: Db,
   input: CreateSessionIntentInput,
+  options?: Pick<CreateTradeIntentOptions, 'demoOnly'>,
 ): Promise<CreateTradeIntentResult> {
   return createTradeIntent(
     db,
@@ -402,6 +417,7 @@ export async function createSessionIntent(
       clientRequestId: `session:${input.sessionId}:${input.step}`,
     },
     { id: input.sessionId },
+    options,
   );
 }
 

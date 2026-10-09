@@ -196,4 +196,24 @@ describe('session-start (#287)', () => {
       expect(result.err[0]).toMatch(/^Env (TELEGRAM_USER_ID|ACCOUNT_ID|TRADES) /);
     }
   });
+
+  it('starts a demo session with DEMO_ONLY=true (#396)', async () => {
+    const user = await seedUser(tmp.db);
+    const brokerAccountId = await account(user.userId);
+    const result = await run({ TELEGRAM_USER_ID: user.telegramUserId, DEMO_ONLY: 'true' });
+    expect(result.err).toEqual([]);
+    expect(result.code).toBe(0);
+    expect(await sessionsOf(brokerAccountId)).toEqual([
+      expect.objectContaining({ mode: TradeMode.Demo }),
+    ]);
+  });
+
+  it('refuses DEMO_ONLY=1 before it writes anything (#396)', async () => {
+    const user = await seedUser(tmp.db);
+    const brokerAccountId = await account(user.userId);
+    const result = await run({ TELEGRAM_USER_ID: user.telegramUserId, DEMO_ONLY: '1' });
+    expect(result.code).toBe(1);
+    expect(result.err).toEqual(['Env DEMO_ONLY must be one of: true false']);
+    expect(await sessionsOf(brokerAccountId)).toEqual([]);
+  });
 });

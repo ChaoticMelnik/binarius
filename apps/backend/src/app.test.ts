@@ -29,6 +29,7 @@ const unusedTrading: TradingRoutesDeps = {
   onIntentQueued: () => {},
   balance: unusedBalanceDeps(),
   accessToken: unusedAccessTokenDeps(),
+  demoOnly: false,
 };
 
 const unusedAuth: AuthRoutesDeps = {

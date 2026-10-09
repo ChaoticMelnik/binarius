@@ -11,6 +11,9 @@ x-broker-environment: &broker-environment
   BROKER_WS_URL:
   # the REST host: the backend's OAuth exchange and balance reads, the worker's trade lists (#90)
   BROKER_API_BASE_URL: ${BROKER_API_BASE_URL:-https://api.binodex.app}
+  # the demo-only fuse (#396): forwarded only when set; true refuses every real intent and real
+  # session in this process; see README -> Demo-only stand
+  DEMO_ONLY:
 
 x-app: &app
   build: .

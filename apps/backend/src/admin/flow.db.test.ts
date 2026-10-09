@@ -78,6 +78,7 @@ beforeAll(async () => {
       onIntentQueued: () => undefined,
       balance: unusedBalanceDeps(),
       accessToken: unusedAccessTokenDeps(),
+      demoOnly: false,
     },
     auth: {
       db: tmp.db,

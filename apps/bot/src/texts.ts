@@ -323,6 +323,7 @@ const REJECTED_LINES = {
   [TradeIntentFailureReason.ReconciliationNotFound]: 'intentRejectedNotFound',
   [TradeIntentFailureReason.ManualRejected]: 'intentRejectedManual',
   [TradeIntentFailureReason.TradingPaused]: 'intentRejectedPaused',
+  [TradeIntentFailureReason.DemoOnly]: 'intentRejectedDemoOnly',
   [TradeIntentFailureReason.ExecutorTimeout]: 'intentRejected',
   [TradeIntentFailureReason.ExecutorError]: 'intentRejected',
   [TradeIntentFailureReason.StaleSubmitting]: 'intentRejected',

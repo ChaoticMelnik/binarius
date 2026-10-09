@@ -14,6 +14,7 @@ import {
   INT4_MAX,
   MAX_SESSION_TRADES,
   parseBoundedIntegerEnv,
+  parseDemoOnlyEnv,
   parseUrlEnv,
   readEnv,
   telegramUserIdSchema,
@@ -39,6 +40,7 @@ interface CliEnv {
   assetId: number;
   durationSec: number;
   trades: number;
+  demoOnly: boolean;
 }
 
 export function parseSessionStartEnv(source: NodeJS.ProcessEnv): CliEnv {
@@ -67,6 +69,8 @@ export function parseSessionStartEnv(source: NodeJS.ProcessEnv): CliEnv {
       1,
       MAX_SESSION_TRADES,
     ),
+    // the same fuse as the worker's (#396): a future real mode of this CLI meets the guard
+    demoOnly: parseDemoOnlyEnv(source),
   };
 }
 
@@ -133,12 +137,16 @@ export async function runSessionStartCli(
       err(PLAN_REFUSALS[plan.reason]);
       return EXIT_FAILED;
     }
-    const session = await createTradingSession(db, {
-      telegramUserId: env.telegramUserId,
-      brokerAccountId,
-      mode: TradeMode.Demo,
-      settings: plan.settings,
-    });
+    const session = await createTradingSession(
+      db,
+      {
+        telegramUserId: env.telegramUserId,
+        brokerAccountId,
+        mode: TradeMode.Demo,
+        settings: plan.settings,
+      },
+      { demoOnly: env.demoOnly },
+    );
     out(session.id);
     return EXIT_OK;
   } catch (error) {

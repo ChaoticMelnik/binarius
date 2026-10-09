@@ -268,6 +268,7 @@ describe('the session button', () => {
 
   it('answers the closed switch and the missing tokens with their own texts', () => {
     expect(START_REFUSALS[TradingSessionErrorCode.TradingPaused].text).toBe('tradingPaused');
+    expect(START_REFUSALS[TradingSessionErrorCode.DemoOnly]).toEqual({ text: 'tradingDemoOnly' });
     expect(START_REFUSALS[TradingSessionErrorCode.InsufficientTokens].text).toBe(
       'sessionInsufficientTokens',
     );

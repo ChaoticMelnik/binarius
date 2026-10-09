@@ -110,6 +110,9 @@ export const TradeIntentFailureReason = {
   // the order was sent (a socket emit, or a REST POST that got no classifiable answer) and no
   // answer says whether it opened; reconciliation decides (#89/#90)
   BrokerUnavailable: 'broker_unavailable',
+  // a queued real intent met a DEMO_ONLY worker (#396, before takeIntent); nothing was sent and
+  // the reserve is released
+  DemoOnly: 'demo_only',
 } as const;
 export type TradeIntentFailureReason =
   (typeof TradeIntentFailureReason)[keyof typeof TradeIntentFailureReason];
@@ -135,6 +138,9 @@ export const TradeIntentErrorCode = {
   StakePrecision: DemoStakeRefusal.Precision,
   StakeBelowMinimum: DemoStakeRefusal.BelowMinimum,
   InsufficientDemoBalance: DemoStakeRefusal.AboveAvailable,
+  // the process runs DEMO_ONLY (#396): a real intent is refused after the replay, before the
+  // switch, the account and the reserve
+  DemoOnly: 'demo_only',
 } as const;
 export type TradeIntentErrorCode = (typeof TradeIntentErrorCode)[keyof typeof TradeIntentErrorCode];
 

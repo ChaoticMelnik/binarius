@@ -71,4 +71,5 @@ export const unusedSessionDeps = (): TradingSessionRoutesDeps => ({
   catalog: fakeCatalog(undefined),
   balance: unusedBalanceDeps(),
   internalApiToken: PAIRS_TEST_TOKEN,
+  demoOnly: false,
 });

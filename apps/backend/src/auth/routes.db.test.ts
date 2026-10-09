@@ -137,6 +137,7 @@ const testApp = (auth: AuthRoutesDeps, logs?: { write(line: string): void }) =>
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
       accessToken: unusedAccessTokenDeps(),
+      demoOnly: false,
     },
     auth,
     users: { db: tmp.db, internalApiToken: TOKEN },

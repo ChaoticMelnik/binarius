@@ -44,6 +44,7 @@ describe('parseEnv', () => {
       telegramBotToken: valid.TELEGRAM_BOT_TOKEN,
       adminBotToken: valid.ADMIN_BOT_TOKEN,
       adminWebToken: valid.ADMIN_WEB_TOKEN,
+      demoOnly: false,
     });
   });
 
@@ -56,13 +57,21 @@ describe('parseEnv', () => {
       BROKER_PAIRS_TTL_MS: '45000',
       BALANCE_RECONCILE_INTERVAL_MS: '30000',
       BALANCE_POLL_MAX_PER_MINUTE: '150',
+      DEMO_ONLY: 'true',
     });
+    expect(env.demoOnly).toBe(true);
     expect(env.balanceReconcileIntervalMs).toBe(30_000);
     expect(env.balancePollMaxPerMinute).toBe(150);
     expect(env.port).toBe(8080);
     expect(env.brokerPairsTtlMs).toBe(45_000);
     expect(env.logLevel).toBe('debug');
     expect(env.healthTimeoutMs).toBe(2500);
+  });
+
+  it('refuses DEMO_ONLY=1 (#396)', () => {
+    expect(() => parseEnv({ ...valid, DEMO_ONLY: '1' })).toThrow(
+      'Env DEMO_ONLY must be one of: true false',
+    );
   });
 
   it('accepts the postgresql and rediss schemes', () => {

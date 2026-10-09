@@ -79,6 +79,7 @@ function appWith(feed: SignalRoutesDeps['feed']): FastifyInstance {
       onIntentQueued: () => {},
       balance: unusedBalanceDeps(),
       accessToken: unusedAccessTokenDeps(),
+      demoOnly: false,
     },
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),

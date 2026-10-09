@@ -84,6 +84,9 @@ export interface CreateTradeIntentOptions {
   // account's stored snapshot. The orchestrator's session intents rely on the sizer (Rule 23); a
   // future non-session creator of demo intents must pass it too.
   checkDemoStake?: true;
+  // the process runs DEMO_ONLY (#396): a real intent is refused. Both creators pass it
+  // (POST /trading/intents, createSessionIntent); absent is off.
+  demoOnly?: boolean;
 }
 
 export interface CreateTradeIntentResult {
@@ -130,6 +133,12 @@ async function createInTransaction(
   // or the account revoked in the meantime
   const replay = await findReplay(tx, user.id, input);
   if (replay !== undefined) return replay;
+
+  // after the replay, so a retry finds a real intent an earlier process created; before the
+  // switch, the account and the reserve, so the refusal reads no row and touches no balance
+  if (options?.demoOnly === true && input.mode === TradeMode.Real) {
+    throw new TradeIntentError(TradeIntentErrorCode.DemoOnly);
+  }
 
   // after the replay, so a retry still finds an intent created while trading was open; before
   // the account and the reserve, so a refusal reads no account and touches no balance. Any mode:

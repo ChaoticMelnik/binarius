@@ -50,6 +50,7 @@ import {
   stopPausedSessions,
   stopTradingSession,
   type CreateSessionIntentInput,
+  type CreateTradingSessionInput,
 } from './trading-session-ops';
 import { openTrading } from './trading-switch-ops';
 
@@ -138,9 +139,13 @@ function holdLock(
   return { lockTaken, release, done };
 }
 
+// the process's flag off: these cases are about the session, not DEMO_ONLY (#396)
+const createSessionRow = (input: CreateTradingSessionInput) =>
+  createTradingSession(tmp.db, input, { demoOnly: false });
+
 async function seedSessionAccount(options: { balance?: bigint } = {}) {
   const seed = await seedUserWithAccount(tmp.db, options);
-  const session = await createTradingSession(tmp.db, {
+  const session = await createSessionRow({
     telegramUserId: seed.telegramUserId,
     brokerAccountId: seed.brokerAccountId,
     mode: TradeMode.Demo,
@@ -205,7 +210,7 @@ describe('createTradingSession', () => {
   it('C1 inserts an active session with the settings as given and started_at from the database', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     const settings = sessionSettings({ trades: 3, assetId: 7 });
-    const row = await createTradingSession(tmp.db, {
+    const row = await createSessionRow({
       telegramUserId: seed.telegramUserId,
       brokerAccountId: seed.brokerAccountId,
       mode: TradeMode.Demo,
@@ -227,7 +232,7 @@ describe('createTradingSession', () => {
   it('C2 refuses a second active session of the account and leaves the first untouched', async () => {
     const seed = await seedSessionAccount();
     await sessionFailsWith(
-      createTradingSession(tmp.db, {
+      createSessionRow({
         telegramUserId: seed.telegramUserId,
         brokerAccountId: seed.brokerAccountId,
         mode: TradeMode.Demo,
@@ -245,7 +250,7 @@ describe('createTradingSession', () => {
   it('C3 a stopped session does not block a new one', async () => {
     const seed = await seedSessionAccount();
     await stopTradingSession(tmp.db, { id: seed.session.id, reason: 'completed' });
-    const next = await createTradingSession(tmp.db, {
+    const next = await createSessionRow({
       telegramUserId: seed.telegramUserId,
       brokerAccountId: seed.brokerAccountId,
       mode: TradeMode.Demo,
@@ -261,7 +266,7 @@ describe('createTradingSession', () => {
     const user = await seedUser(tmp.db);
     const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId, { status });
     await sessionFailsWith(
-      createTradingSession(tmp.db, {
+      createSessionRow({
         telegramUserId: user.telegramUserId,
         brokerAccountId,
         mode: 'demo',
@@ -274,7 +279,7 @@ describe('createTradingSession', () => {
   it('C6 refuses a real session before it reads anything, and writes no row', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     await sessionFailsWith(
-      createTradingSession(tmp.db, {
+      createSessionRow({
         telegramUserId: seed.telegramUserId,
         brokerAccountId: seed.brokerAccountId,
         mode: TradeMode.Real,
@@ -297,7 +302,7 @@ describe('createTradingSession', () => {
       haltedReason: AccountHaltReason.TradeMismatch,
     });
     await sessionFailsWith(
-      createTradingSession(tmp.db, {
+      createSessionRow({
         telegramUserId: user.telegramUserId,
         brokerAccountId: halted,
         mode: 'demo',
@@ -308,7 +313,7 @@ describe('createTradingSession', () => {
     const blocked = await seedUser(tmp.db, { status: 'blocked' });
     const ofBlocked = await seedBrokerAccount(tmp.db, blocked.userId);
     await sessionFailsWith(
-      createTradingSession(tmp.db, {
+      createSessionRow({
         telegramUserId: blocked.telegramUserId,
         brokerAccountId: ofBlocked,
         mode: 'demo',
@@ -317,7 +322,7 @@ describe('createTradingSession', () => {
       TradingSessionDbErrorCode.UserNotActive,
     );
     await sessionFailsWith(
-      createTradingSession(tmp.db, {
+      createSessionRow({
         telegramUserId: user.telegramUserId,
         brokerAccountId: '00000000-0000-4000-8000-000000000000',
         mode: 'demo',
@@ -336,7 +341,7 @@ describe('createTradingSession', () => {
     const owner = await seedUserWithAccount(tmp.db);
     const stranger = await seedUser(tmp.db);
     await sessionFailsWith(
-      createTradingSession(tmp.db, {
+      createSessionRow({
         telegramUserId: stranger.telegramUserId,
         brokerAccountId: owner.brokerAccountId,
         mode: 'demo',
@@ -359,7 +364,7 @@ describe('createTradingSession', () => {
     });
     await holder.lockTaken;
     const creating = thrown(
-      createTradingSession(tmp.db, {
+      createSessionRow({
         telegramUserId: seed.telegramUserId,
         brokerAccountId: seed.brokerAccountId,
         mode: 'demo',
@@ -390,7 +395,7 @@ describe('createTradingSession', () => {
     });
     await holder.lockTaken;
     const creating = thrown(
-      createTradingSession(tmp.db, {
+      createSessionRow({
         telegramUserId: seed.telegramUserId,
         brokerAccountId: seed.brokerAccountId,
         mode: 'demo',
@@ -406,13 +411,55 @@ describe('createTradingSession', () => {
   });
 });
 
+describe('createTradingSession: DEMO_ONLY (#396)', () => {
+  it('F1 refuses a real session before it reads anything, ahead of mode_not_allowed', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    // an unknown account: a guard that read the account first would answer account_not_found
+    const input = {
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: '00000000-0000-4000-8000-000000000000',
+      mode: TradeMode.Real,
+      settings: sessionSettings(),
+    };
+    await sessionFailsWith(
+      createTradingSession(tmp.db, input, { demoOnly: true }),
+      TradingSessionDbErrorCode.DemoOnly,
+    );
+    await sessionFailsWith(
+      createTradingSession(tmp.db, input, { demoOnly: false }),
+      TradingSessionDbErrorCode.ModeNotAllowed,
+    );
+    expect(
+      await tmp.db
+        .select()
+        .from(tradingSessions)
+        .where(eq(tradingSessions.brokerAccountId, seed.brokerAccountId)),
+    ).toEqual([]);
+  });
+
+  it('F2 creates a demo session under the flag', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const row = await createTradingSession(
+      tmp.db,
+      {
+        telegramUserId: seed.telegramUserId,
+        brokerAccountId: seed.brokerAccountId,
+        mode: TradeMode.Demo,
+        settings: sessionSettings(),
+      },
+      { demoOnly: true },
+    );
+    expect(row).toMatchObject({ mode: 'demo', status: 'active' });
+  });
+});
+
 describe('createTradingSession: the global trading switch (#144)', () => {
   it('C7 refuses while trading is closed and writes no row', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     await closeTradingSwitch(tmp.db);
     try {
       await sessionFailsWith(
-        createTradingSession(tmp.db, {
+        createSessionRow({
           telegramUserId: seed.telegramUserId,
           brokerAccountId: seed.brokerAccountId,
           mode: TradeMode.Demo,
