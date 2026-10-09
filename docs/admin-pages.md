@@ -370,7 +370,11 @@ would hold the session row past the pool's `query_timeout` for the next request 
 session. Only the key's own method is sent (`botProfileMethodsOf`, `packages/shared`: a command
 description → `setMyCommands`, `profileDescription` → `setMyDescription`, `profileShortDescription`
 → `setMyShortDescription`), from the rows as the loaders resolve them after the commit, one attempt
-(`publishBotProfile`, [bot-texts.md](bot-texts.md) → Publishing). The override is kept whatever
+(`publishBotProfile`, [bot-texts.md](bot-texts.md) → Publishing). The admin's publishes are one queue
+a backend process (`publishAfterCommit`): each reads the rows after the previous one was sent, so the
+last publish of a burst carries every admin save or reset committed before its read; the CLI, the
+bot's start and a second backend process are outside that queue, and the last call wins there. The
+override is kept whatever
 Telegram answers (В6 #240). The answer of `saved` and `reset` always carries `published`: one result
 per method sent — `{ method, ok: true }` or `{ method, ok: false, err, cause?, telegramErrorCode? }`,
 identity only —, `[]` for any other key and for an orphan. The backend logs each failure (`bot
@@ -387,9 +391,11 @@ republished&publish=…`): one segment a method, `method:ok` or `method:Name[.co
 joined by `,` (`apps/web/src/admin/publish-result.ts`). It shows one line a method — «Меню команд
 (setMyCommands): опубликовано», «Описание бота (setMyDescription): ошибка — GrammyError, Telegram
 400» — and, after a failure, «Текст сохранён, но Telegram не принял публикацию. После восстановления
-нажмите «Опубликовать заново».». A value outside the grammar — an unknown or repeated method, more
-than three segments, the key given twice — shows nothing, as an unknown `?notice=` does; a name or
-code the grammar does not take is sent as `Error` or left out. F5 on that page sends nothing.
+нажмите «Опубликовать заново».». A value outside the grammar — an unknown or repeated method, a
+name or code longer than the wire takes (128), the key given twice — shows no list: the notice falls
+back to the plain one («Сохранено…», «Исходный текст возвращён…»), and «Опубликовано заново:», which
+has none, is not shown. A result shows only under a publish notice. A name or code the grammar does
+not take is sent as `Error` or left out. F5 on that page sends nothing.
 
 **The preview** renders the draft as the bot would: the backend checks it with
 `botTextChangeProblems` (as a save would), then renders it through the bot's own views with the
@@ -551,8 +557,10 @@ who pressed the button even if the session is revoked between the check and the 
 - A save or reset of a `commands`/`profile` key adds one Bot API call of up to
   `BOT_PROFILE_PUBLISH_TIMEOUT_MS` after the commit; «Опубликовать заново», three. Both stay inside
   `BOT_PROFILE_PUBLISH_BUDGET_MS`, which `apps/web/src/timing.ts` holds below
-  `BACKEND_REQUEST_TIMEOUT_MS` at import. Telegram's limits on `setMy*` are not documented; a 429
-  shows as the method's error, and a repeat is by hand.
+  `BACKEND_REQUEST_TIMEOUT_MS` at import — for one publish in flight. A second one queued behind it
+  may not fit: web then says the outcome is unknown, and the backend finishes it and writes its row.
+  Telegram's limits on `setMy*` are not documented; a 429 shows as the method's error, and a repeat
+  is by hand.
 
 ## Running it locally
 

@@ -411,7 +411,10 @@ The bot's start, a CLI run and the admin may publish at the same time. Each publ
 rows, and the last call wins. A save committed after the bot resolved its first load and before its
 `setMyCommands` leaves the old menu in Telegram until the next publish. The CLI's own publish
 follows its commit, so a CLI run ends with its value in Telegram unless its publish failed, and
-then it says so; the admin's does the same, and «Опубликовать заново» mends a menu left behind.
+then it says so. The admin's publishes are one queue a backend process: each reads the rows after
+the previous one has been sent, so the last publish of a burst carries every admin save or reset
+committed before its read; the CLI, the bot's start and a second backend process are outside that
+queue — the last call wins — and «Опубликовать заново» mends a menu left behind.
 
 ## Assembled messages
 
