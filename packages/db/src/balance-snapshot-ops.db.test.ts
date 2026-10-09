@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -32,6 +33,7 @@ import {
   seedUser,
   type TempDatabase,
 } from './testing';
+import { acquireSessionLease } from './session-lease-ops';
 import { rejectIntent } from './trade-intent-ops';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -687,6 +689,31 @@ describe('listSessionCandidates', () => {
       .where(eq(brokerAccounts.id, accountId));
     return row!.brokerUserId;
   }
+
+  // #93: an account whose live lease is another process's is not queued here
+  it('leaves out an account another owner holds a live lease on, and keeps a lapsed or own one', async () => {
+    const owner = randomUUID();
+    const [foreignLive, foreignLapsed, own_] = [
+      await asked('-1 minute'),
+      await asked('-1 minute'),
+      await asked('-1 minute'),
+    ];
+    await acquireSessionLease(own.db, { accountId: foreignLive, ownerId: randomUUID(), ttlMs: 30_000 });
+    await acquireSessionLease(own.db, { accountId: foreignLapsed, ownerId: randomUUID(), ttlMs: 30_000 });
+    await own.db.execute(
+      sql`update broker_session_leases set acquired_at = now() - interval '1 minute',
+            expires_at = now() - interval '1 millisecond' where broker_account_id = ${foreignLapsed}`,
+    );
+    await acquireSessionLease(own.db, { accountId: own_, ownerId: owner, ttlMs: 30_000 });
+    const ids = (
+      await listSessionCandidates(own.db, { watchWindowMs: WINDOW_MS, ownerId: owner })
+    ).map((c) => c.id);
+    expect(ids).not.toContain(foreignLive);
+    expect(ids).toContain(foreignLapsed);
+    expect(ids).toContain(own_);
+    // without an owner the filter is off
+    expect((await list()).map((c) => c.id)).toContain(foreignLive);
+  });
 });
 
 describe('resolveBalanceAccount', () => {
