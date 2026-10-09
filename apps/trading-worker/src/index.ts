@@ -20,6 +20,7 @@ import {
   releaseSessionLeases,
   renewSessionLeases,
   settleClosedTrades,
+  stopTrading,
   upsertBalanceSnapshot,
 } from '@binarius/db';
 import { createBackendAccessTokenSource } from './broker/access-token';
@@ -50,6 +51,9 @@ import {
   SWEEP_BATCH_SIZE,
   SWEEP_INTERVAL_MS,
 } from './intents/config';
+import { createCircuitBreaker } from './circuit-breaker/breaker';
+import { SOCKET_LOSS_GRACE_MS } from './circuit-breaker/config';
+import { observeExecutor } from './circuit-breaker/observe-executor';
 import { createBalanceCheck } from './intents/balance-check';
 import type { DeadLetter } from './dead-letter';
 import { startIntentConsumer } from './intents/consumer';
@@ -92,6 +96,14 @@ const sessionDeadLetters = new Queue<DeadLetter>(TRADING_INTENTS_DEAD_LETTER_QUE
 // this process's lease owner (#93): a fresh id per start, so a restarted container inherits no
 // lease it cannot prove it still fences
 const sessionOwnerId = randomUUID();
+// the circuit breaker (#96, docs/runbook-broker-outage.md): closes the global switch when the
+// broker stops answering submits or the sessions are lost; never opens it
+const breaker = createCircuitBreaker({
+  stopTrading: (input) => stopTrading(db, input),
+  logger,
+  config: env.circuitBreaker,
+  runningSessions: () => sessions?.running ?? 0,
+});
 const sessions =
   env.brokerWsUrl === undefined
     ? undefined
@@ -116,16 +128,24 @@ const sessions =
           closedTrades: (brokerAccountId, trades) =>
             settleClosedTrades(db, { brokerAccountId, trades }),
         },
+        lossObserver: {
+          lost: (accountId) => breaker.socketLost(accountId),
+          graceMs: SOCKET_LOSS_GRACE_MS,
+        },
         logger,
         config: SESSION_MANAGER_CONFIG,
       });
 
-const executor = createTradeCommandExecutor({
-  sessions: sessions ?? noTradeSessions,
-  rest: brokerRest,
-  tokens,
-  logger,
-});
+// every submit's answer feeds the breaker's REST signal; the executor itself is untouched
+const executor = observeExecutor(
+  createTradeCommandExecutor({
+    sessions: sessions ?? noTradeSessions,
+    rest: brokerRest,
+    tokens,
+    logger,
+  }),
+  breaker,
+);
 
 const consumer = startIntentConsumer({
   topic: OutboxTopic.TradingIntents,
@@ -245,6 +265,8 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => pass.stop(),
       () => catchup.stop(),
       () => tradingSessions.stop(),
+      // no trip starts after it; a trip in flight is one stopTrading transaction
+      () => breaker.stop(),
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
