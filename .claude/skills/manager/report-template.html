@@ -1,0 +1,184 @@
+<title>Ночная сессия Binarius</title>
+<!--
+  Template of the manager's night report (.claude/skills/manager/SKILL.md → Report).
+  Copy to .claude/worktrees/manager/report-<YYYY-MM-DD>.html, replace every {{…}} and every
+  <tr class="example"> row with real content, delete rows and sections that stay empty only when
+  the section says so. No external scripts or stylesheets: the page is static.
+-->
+<style>
+  /* layout: one reading column, tables scroll inside their own box on a phone */
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --fg: #1c2330;
+    --muted: #5b6577;
+    --line: #d9dee7;
+    --accent: #2f5fb3;
+    --ok: #1f7a4d;
+    --warn: #9a6200;
+    --bad: #b3261e;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12161d;
+      --surface: #1a2029;
+      --fg: #e4e8ef;
+      --muted: #9aa4b5;
+      --line: #2c3442;
+      --accent: #7fa6ec;
+      --ok: #5cc595;
+      --warn: #e0a940;
+      --bad: #f08a80;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161d;
+    --surface: #1a2029;
+    --fg: #e4e8ef;
+    --muted: #9aa4b5;
+    --line: #2c3442;
+    --accent: #7fa6ec;
+    --ok: #5cc595;
+    --warn: #e0a940;
+    --bad: #f08a80;
+    color-scheme: dark;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.55 var(--font-body);
+    padding-inline: 16px;
+    padding-block: 24px 48px;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  main { max-width: 60rem; margin-inline: auto; display: grid; gap: 28px; }
+  h1, h2 { text-wrap: balance; line-height: 1.25; margin: 0; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.15rem; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1rem; margin: 0; }
+  section { display: grid; gap: 12px; min-width: 0; }
+  p, ul, ol { margin: 0; }
+  ul, ol { padding-left: 1.2rem; display: grid; gap: 4px; }
+  a { color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  code { font-family: var(--font-mono); font-size: 0.88em; overflow-wrap: anywhere; }
+  .meta { color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 18px; font-variant-numeric: tabular-nums; }
+  .label { font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td.behaviour { min-width: 16rem; }
+  .task { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; display: grid; gap: 10px; min-width: 0; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.8rem; border: 1px solid currentColor; white-space: nowrap; }
+  .pill.ok { color: var(--ok); }
+  .pill.warn { color: var(--warn); }
+  .pill.bad { color: var(--bad); }
+  .example td { color: var(--muted); font-style: italic; }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<main>
+  <header style="display:grid;gap:8px">
+    <span class="label">Режим manager</span>
+    <h1>Ночная сессия {{YYYY-MM-DD}}</h1>
+    <p class="meta">
+      <span>Старт {{HH:MM MSK}}</span>
+      <span>Дедлайн {{HH:MM MSK}}</span>
+      <span>Статус: <span class="pill {{ok|warn|bad}}">{{идёт | завершена | досрочный финал: причина}}</span></span>
+      <span>Обновлено {{HH:MM MSK}}</span>
+    </p>
+  </header>
+
+  <section id="start-state">
+    <h2>Исходное состояние</h2>
+    <p><span class="label">main</span> <code>{{sha}}</code>; последние коммиты: {{5 строк git log --oneline}}</p>
+    <p><span class="label">Открытые PR</span> {{#номер ветка — заголовок; или «нет»}}</p>
+    <p><span class="label">Доска</span> In Progress: {{…}}; In Review: {{…}}; Todo: {{…}}</p>
+    <p><span class="label">Ветки за 24 ч и worktree</span> {{…}}</p>
+    <p><span class="label">Стенд DEMO_ONLY</span> {{строка лога trading-worker started … demoOnly: true, или «проверка по .env, строка лога — фаза X»}}</p>
+  </section>
+
+  <section id="tasks">
+    <h2>Задачи</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Задача</th><th>Поведение</th><th>PR</th><th>Ревью</th><th>Решения</th><th>Модель плана</th><th>Проверка руками</th></tr>
+        </thead>
+        <tbody>
+          <tr class="example">
+            <td>#{{N}} {{заголовок}}</td>
+            <td class="behaviour">{{что меняется для пользователя, денег, торговли; «не меняется» — тоже ответ}}</td>
+            <td>#{{PR}} {{In Review}}</td>
+            <td><span class="pill ok">{{LGTM | Minor-only | открытые Blocker/Major}}</span> круг {{k}}</td>
+            <td>{{n}} — <a href="#">комментарии «Решение менеджера»</a></td>
+            <td>{{Fable | Opus (лимит Fable HH:MM)}}</td>
+            <td>{{раздел «Как проверить руками» issue + test plan PR}}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="task-details">
+    <h2>По задачам подробно</h2>
+    <article class="task">
+      <h3>#{{N}} {{заголовок}}</h3>
+      <p><span class="label">Изменения поведения</span> {{пользователь / деньги / торговля}}</p>
+      <p><span class="label">PR и ревью</span> {{PR, head, Codex: job id или строка пропуска, gh pr checks}}</p>
+      <p><span class="label">Открытые находки</span> {{severity — ссылка на комментарий; или «нет»}}</p>
+      <p><span class="label">Решения менеджера</span> {{вопрос → выбор (рекомендуемый | постоянный ответ), ссылка}}</p>
+      <p><span class="label">DEMO_ONLY</span> {{строка лога из hand-off фазы, поднимавшей стенд; или «стенд не поднимался»}}</p>
+      <p><span class="label">Где остановилась</span> {{фаза и Pipeline Status на конец сессии}}</p>
+    </article>
+  </section>
+
+  <section id="merge-order">
+    <h2>Порядок мержа</h2>
+    <ol><li>{{#PR (база) → #PR (зависимый, Merge after #…); или «независимые PR, любой порядок»}}</li></ol>
+  </section>
+
+  <section id="skipped">
+    <h2>Пропущенные задачи</h2>
+    <ul><li>#{{N}} — {{SPIKE | занята: сигнал | база в цикле ревью | мало времени}}</li></ul>
+  </section>
+
+  <section id="owner-steps">
+    <h2>Шаги владельца</h2>
+    <ul><li>{{нужды сервера, отказы в разрешениях, что-то, что ночью делать нельзя; или «нет»}}</li></ul>
+  </section>
+
+  <section id="process">
+    <h2>Предложения по процессу</h2>
+    <ul><li>{{наблюдение → предлагаемая правка файла и секции}}</li></ul>
+  </section>
+
+  <section id="created">
+    <h2>Созданные задачи Backlog</h2>
+    <ul><li>{{#N — откуда (split из #M); или «нет»}}</li></ul>
+  </section>
+
+  <section id="time">
+    <h2>Время</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Задача</th><th>Начало</th><th>Конец</th><th>Минут</th></tr></thead>
+        <tbody>
+          <tr class="example"><td>#{{N}}</td><td>{{HH:MM}}</td><td>{{HH:MM}}</td><td>{{m}}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="meta"><span>Всего {{h ч m мин}}</span></p>
+  </section>
+
+  <section id="stops">
+    <h2>Остановки и лимиты</h2>
+    <ul><li>{{фаза остановлена по простою; лимит Fable/Opus/Codex HH:MM; сбой публикации отчёта; или «нет»}}</li></ul>
+  </section>
+</main>
