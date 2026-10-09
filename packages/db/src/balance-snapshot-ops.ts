@@ -18,6 +18,7 @@ import {
   LEVEL_RANK_SCALE,
   brokerBalanceSnapshots,
 } from './schema/broker-balance-snapshots';
+import { brokerSessionLeases } from './schema/broker-session-leases';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { users } from './schema/users';
 import { millisecondsAgo } from './trade-intent-ops';
@@ -349,6 +350,9 @@ export interface SessionCandidatesOptions {
   watchWindowMs: number;
   // accounts the caller holds back for now
   exclude?: readonly string[];
+  // the caller's lease owner id (#93): an account whose live lease belongs to another owner is
+  // left out. An optimisation for several processes; the acquire is the guarantee
+  ownerId?: string;
 }
 
 // The accounts the worker keeps a broker session for: the balance tick's "in work". No limit:
@@ -357,18 +361,23 @@ export interface SessionCandidatesOptions {
 // mayRefresh: false and holds back an account whose token needs an exchange.
 export async function listSessionCandidates(
   db: Db,
-  { watchWindowMs, exclude = [] }: SessionCandidatesOptions,
+  { watchWindowMs, exclude = [], ownerId }: SessionCandidatesOptions,
 ): Promise<SessionCandidate[]> {
+  const l = brokerSessionLeases;
   return db
     .select({ id: brokerAccounts.id, brokerUserId: brokerAccounts.brokerUserId })
     .from(brokerAccounts)
     .innerJoin(users, eq(users.id, brokerAccounts.userId))
     .leftJoin(brokerBalanceSnapshots, eq(brokerBalanceSnapshots.brokerAccountId, brokerAccounts.id))
+    .leftJoin(l, eq(l.brokerAccountId, brokerAccounts.id))
     .where(
       and(
         activeAccountOfActiveUser,
         inWork(watchWindowMs),
         notInArray(brokerAccounts.id, [...exclude]),
+        ownerId === undefined
+          ? undefined
+          : sql`(${l.brokerAccountId} is null or ${l.expiresAt} <= now() or ${l.ownerId} = ${ownerId})`,
       ),
     )
     .orderBy(brokerAccounts.id);
