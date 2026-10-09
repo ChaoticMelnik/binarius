@@ -235,7 +235,7 @@ longer current. Tests: `session-manager.test.ts` S1–S9 (S9: the check's own ti
 
 `worker.ts` builds the manager only when `BROKER_WS_URL` is set and passes it to the trade command
 executor in place of `noTradeSessions`; `sessions?.start()` runs after the reconciliation pass and
-the catch-up, and `trading-worker started` carries `sessions: true|false`.
+the catch-up, and `trading-worker started` carries `sessions: true|false` (and `demoOnly`, #396).
 
 Shutdown phase 1: the intents consumer's step is `worker.close()` → `drainDeadLetters()` →
 `sessions.stop()`, so the sockets close after the jobs in flight finished and our own shutdown

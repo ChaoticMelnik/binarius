@@ -96,6 +96,7 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 | 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_halted` | the same | the single trade's texts |
 | 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.» |
 | 409 `trading_paused` | the same ([kill-switch.md](kill-switch.md)) | «⏸ Торговля временно приостановлена, попробуйте позже.» |
+| 409 `demo_only` | the backend runs `DEMO_ONLY` and the session is real (#396; unreachable while the bot asks for demo) | «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» |
 | 409 `session_too_long` | the same; reachable only if `sessionFits` and the backend drift apart | «⏱ Сессия на этой длительности не уложится в час.» |
 | 409 `balance_unavailable` | the same (no snapshot, or a zero minimum) | «⏳ Баланс Binodex ещё не получен — попробуй через минуту.» |
 | 409 `pair_unavailable` | the same | «⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.» |
