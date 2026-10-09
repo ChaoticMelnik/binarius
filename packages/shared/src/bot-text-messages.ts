@@ -142,7 +142,7 @@ const result = (m: BotTextMeasure) =>
   m.longest('sessionTradeOne', 'sessionTradeFew', 'sessionTradeMany') +
   DASH +
   score(m);
-// `${word} — ATR14 0.041% · 8.4 шагов котировки` (analysis.ts → featureLines)
+// `${word} — ATR14 0.041% · 8.4 шага котировки` (analysis.ts → featureLines)
 const volatility = (m: BotTextMeasure, word: number) =>
   word + DASH + indicator(w.atrPct + '%'.length) + SEPARATOR + m.length('analysisAtrTicks');
 

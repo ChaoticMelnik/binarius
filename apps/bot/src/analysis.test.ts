@@ -123,7 +123,7 @@ describe('the analysis screen', () => {
 
 📐 Тренд по EMA: вверх — EMA7 1.08542 выше EMA25 1.08511
 ⚡ Импульс по RSI: вверх — RSI10 62.3
-🌊 Волатильность по ATR: в норме — ATR12 0.041% · 44.7 шагов котировки
+🌊 Волатильность по ATR: в норме — ATR12 0.041% · 44.7 шага котировки
 🕯 Закрытых свечей: 59
 💲 Последняя цена: 1.08560
 💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность. Безубыточность: 54.1% верных прогнозов.
@@ -154,7 +154,7 @@ describe('the analysis screen', () => {
       /: слишком высокая — /,
     );
     expect(volatilityOf(ruleRefusalOf(NoSignalReason.VolatilityBelowTickFloor))).toMatch(
-      /: меньше порога в шагах котировки — ATR12 0\.041% · 44\.7 шагов котировки$/,
+      /: меньше порога в шагах котировки — ATR12 0\.041% · 44\.7 шага котировки$/,
     );
     expect(volatilityOf(ruleRefusalOf(NoSignalReason.RsiOverbought))).toMatch(/: в норме — /);
     expect(volatilityOf(SIGNAL_NO_SIGNAL)).toMatch(/: в норме — /);

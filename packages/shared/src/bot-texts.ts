@@ -813,7 +813,7 @@ export const BOT_TEXT_CATALOG = {
   analysisAtrTicks: plain(
     g.Analysis,
     'Анализ: ATR в шагах котировки, в строке волатильности.',
-    '{count} шагов котировки',
+    '{count} шага котировки',
     { vars: ['count'] },
   ),
   emaAbove: plain(g.Analysis, 'Анализ: быстрая EMA выше медленной, в строке тренда.', 'выше'),

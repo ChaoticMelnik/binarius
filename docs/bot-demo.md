@@ -318,8 +318,9 @@ The feature lines, every number from the answer:
   вверх / вниз / не определён.
 - «⚡ Импульс по RSI: вверх — RSI{params.rsiPeriod} {features.rsi}» — вверх / вниз / нейтральный.
 - «🌊 Волатильность по ATR: в норме — ATR{params.atrPeriod} {features.atrPct}% · {features.atrTicks}
-  шагов котировки» — told by the refusal (слишком низкая / слишком высокая / меньше порога в шагах
-  котировки, #379), since the decider checks volatility first; the bot holds no bounds of its own.
+  шага котировки» (always a tenth, so «шага») — told by the refusal (слишком низкая / слишком
+  высокая / меньше порога в шагах котировки, #379), since the decider checks volatility first; the
+  bot holds no bounds of its own.
   The three v2 reasons in words: «цена движется на считаные шаги котировки», «RSI слишком высокий
   для входа вверх», «RSI слишком низкий для входа вниз».
 - «🕯 Закрытых свечей: {features.closedCandles}» and «💲 Последняя цена: {features.lastClose}».

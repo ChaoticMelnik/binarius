@@ -334,7 +334,6 @@ export function createSessionOrchestrator({
       return { kind: 'hold', ms: untilNextCandle(), signalAction: null };
     }
     const action: TradeAction = response.decision.action;
-    // the last two trades lost in this direction and every decision since was this signal
     if (pausedDirection(history.intents) === action && session.lastSignalAction === action) {
       logger.info({ ...ids, action }, 'trading session waits for the signal to change');
       return { kind: 'hold', ms: untilNextCandle(), signalAction: action };
