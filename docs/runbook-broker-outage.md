@@ -13,11 +13,13 @@ The worker closes the global trading switch on its own when, within the last 120
 
 | Signal | A failure | An answer |
 |---|---|---|
-| REST / submit | a submit the broker left without an answer: `unknown` with `broker_unavailable` (`trade command outcome unknown`) | an `accepted` or a `rejected` submit |
+| REST / submit | a submit the broker left without an answer: `unknown` with `broker_unavailable` — on the socket `reason: timeout` (no answer within `BROKER_SOCKET_COMMAND_TIMEOUT_MS`, 5 s) or `state_changed`, over REST `code: unavailable` (its own 5 s timeout or a network error) or `contract_violation` (`trade command outcome unknown`) | an `accepted` or a `rejected` submit |
 | sockets (only with `BROKER_WS_URL` set) | a session that was ready and is still not ready 45 s later (`SOCKET_LOSS_GRACE_MS`, longer than one full reconnect, 30 s; also its first connection after a token refresh), or one closed by the server after it was ready | a session ready at a check (every 5 s); every session in work during the window counts with its latest state, also once it was dropped, so dropping sessions does not shrink the share |
 
 Counted once per intent (REST) or account (sockets) in the window, by its latest state. Not
-counted: a submit cut by its own deadline or a stop (our limit), a token refusal or a broker 429
+counted: a submit cut by its own deadline or a stop (`aborted`: our limit — the transports' own
+timeouts, 5 s, sit below the deadline's floor of 6 s (`MIN_SUBMIT_ACK_TIMEOUT_MS`), so the
+broker's silence is always cut by them first and counted), a token refusal or a broker 429
 (counted as an answer, so they dilute the REST share), `token_expired`/`auth_failed`
 (credentials), our own drops (idle, the lease fence of #93, a refusal, a stop) beyond the state
 they had. The thresholds can be raised or lowered through the
@@ -51,10 +53,13 @@ There is no alert channel (ops alerts were cancelled, 2026-10-08): watch the wor
 
 ## First checks
 
-1. Is the broker answering? Its status page and a submit in the bot. The REST failures are the
-   `trade command outcome unknown` lines: `transport: rest_fallback` with `code: unavailable`,
-   `contract_violation` or `aborted`, and `transport: socket` (an order emitted with no answer, or
-   one not sent because the session dropped).
+1. Is the broker answering? Its status page and a submit in the bot. The REST signal counts the
+   `trade command outcome unknown` lines that end as the transport's own `unknown`:
+   `transport: rest_fallback` with `code: unavailable` or `code: contract_violation`, and
+   `transport: socket` with `reason: timeout` or `reason: state_changed`. Not counted:
+   `code: aborted` and `reason: aborted` (either form, `not_sent` or `unknown`) — the processor's
+   deadline or a stop cut the submit; with the default 10 s deadline that is a token fetch that
+   ate the budget ([trade-executor.md](trade-executor.md) → Accepted risks 3).
 2. The sockets: `broker session closed` with `reason: disconnected_by_server`, `broker socket
    connect error`, and whether a `connect_error` carries a 429 (the per-IP limit,
    [broker-session.md](broker-session.md) → Accepted risks 10).
