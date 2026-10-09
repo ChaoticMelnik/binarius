@@ -23,7 +23,7 @@ Every phase is an `Agent` spawn with an explicit `model` (`.claude/CLAUDE.md` �
 Spawn prompt — every phase gets these, in this order:
 1. Role and issue: "You are the <ROLE> phase for GitHub issue #<N> (ChaoticMelnik/binarius, working dir <path>)."
 2. "First action: `Skill(skill: \"<role>\")`, then follow it."
-3. "You have no `AskUserQuestion`. Return every question for the owner in your final message: ≥3 for a clarify round, each with 2-4 options, the recommended one first, in Russian. Make no edits in a clarify round."
+3. "You have no `AskUserQuestion`. Return every question for the owner in your final message: ≥3 for an architect clarify round, ≥1 for an implementer one, none on a topic with a standing answer (`.claude/CLAUDE.md` → Постоянные ответы владельца), each with 2-4 options, the recommended one first, in Russian. Make no edits in a clarify round."
 4. Node: `eval "$(fnm env)" && fnm use`.
 5. What to return: the role's own hand-off (plan comment URL / PR URL and commit list / review verdict with merge request) plus deviations and anything unfinished.
 6. For an architect Plan Update: the review round it follows and "Codex re-check: yes" (new cycle, Phase 4 iteration 2) or "Codex re-check: no" (iteration 1).
@@ -281,7 +281,7 @@ Once the PR exists and the issue is In Review:
 
 Track the iteration count (starts at 1 for the first review). **Hard limit: 3 review rounds per issue** (owner's rule, 2026-09-30) — there is no round 4.
 
-Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (reviewer → Severity Guide). A Minor-only verdict goes to the merge relay below as a clean PR; the merge question names the open Minors, and the owner decides whether they are fixed in another round, go to a follow-up issue, or are accepted.
+Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (reviewer → Severity Guide). A Minor-only verdict goes to the merge relay below as a clean PR; the merge question names the open Minors, and the owner decides whether they are fixed in another round first. Minors still open at the merge go, without a question, into one new Backlog issue (`/github`: "Create an issue" + "Add issue to Project #2", body with `Refs #<N>`, the PR link and each finding with severity and comment link); its number goes into the report (`.claude/CLAUDE.md` → Постоянные ответы владельца).
 
 **If the reviewer finds a Blocker or Major:**
 1. Iteration 1 → the architect first (Plan Update **without** Codex re-check; the issue returns to In Progress), then the implementer, then the reviewer again for this issue. When the architect's model is unavailable (the Fable weekly limit), the owner is asked: a Plan Update on Opus, or the findings straight to the implementer with "исправления без Plan Update архитектора" recorded as a deviation — never the latter by default (#130, #287, #284 on 2026-10-07).
@@ -292,7 +292,8 @@ Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (
    The new cycle's Plan Update or plan **gets** the Codex re-check (architect → Returned from Review, Step 2). Do not spawn the implementer until the owner picked one. Round 3 is the last one; say so in the question.
 3. Iteration 3 → no further round. The remaining findings do not go into a follow-up list — they go into **one new separate issue**:
    - Any **Blocker** left → the merge is held; ask the owner via `AskUserQuestion` what to do (fix it in this PR outside the round count / close the PR / other). Nothing is merged without that answer.
-   - Only Major/Minor left → ask the owner via `AskUserQuestion` to confirm the new issue: its draft title and the full list of findings it carries (each with severity and the PR comment link). Only on a yes: create it with `/github` ("Create an issue" + "Add issue to Project #2"), body with `Refs #<N>` and the PR link. Then the merge relay below, as for a clean PR — the merge question names the findings left open and the new issue. A no → ask what the owner wants instead; do not merge before that.
+   - Only Minor left → create the new issue in Backlog without a question, as for a Minor-only verdict above, then the merge relay below — the merge question names the findings left open and the new issue.
+   - A Major among them → ask the owner via `AskUserQuestion` to confirm the new issue: its draft title and the full list of findings it carries (each with severity and the PR comment link). Only on a yes: create it with `/github` ("Create an issue" + "Add issue to Project #2"), body with `Refs #<N>` and the PR link. Then the merge relay below, as for a clean PR — the merge question names the findings left open and the new issue. A no → ask what the owner wants instead; do not merge before that.
    The reviewer does not post LGTM for such a PR; the audit records it as "merged at the round limit, findings in #<new>".
 
 **If the reviewer reports the PR is clean:**
