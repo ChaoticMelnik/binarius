@@ -165,12 +165,14 @@ One row per account in `broker_session_leases`: `owner_id` (a fresh `randomUUID(
 start, logged in `trading-worker started` as `sessionOwnerId`; never a hostname, so a restarted
 container inherits nothing), `acquired_at`, `expires_at` (CHECK `expires_at > acquired_at`, FK to
 `broker_accounts`). Each operation is one autocommit statement on the pool, outside the lock chain
-(Rule 5), with the database's clock:
+(Rule 5), with the database's clock. No statement shortens a lease (`greatest`): a renewal that
+stalled in the database and commits after a later one leaves the later expiry, so a lease sent at
+`t0` holds until at least `t0 + TTL`:
 
 | Operation | Statement | Answer |
 |---|---|---|
-| `acquireSessionLease` | `insert … on conflict (broker_account_id) do update … where expires_at <= now() or owner_id = excluded.owner_id` | `true` for a free or lapsed lease, or our own; two concurrent acquires serialize on the row and the second re-checks the predicate against the first's commit, so one wins (`session-lease-ops.db.test.ts` A5) |
-| `renewSessionLeases` | `update … set expires_at = now() + ttl where owner_id = $me and id = any($ids) and expires_at > now()` | the ids still held; a lapsed lease is not renewed even when nobody took it — lapsed means lost |
+| `acquireSessionLease` | `insert … on conflict (broker_account_id) do update set … expires_at = greatest(expires_at, excluded.expires_at) where expires_at <= now() or owner_id = excluded.owner_id` | `true` for a free or lapsed lease, or our own; two concurrent acquires serialize on the row and the second re-checks the predicate against the first's commit, so one wins (`session-lease-ops.db.test.ts` A5) |
+| `renewSessionLeases` | `update … set expires_at = greatest(expires_at, now() + ttl) where owner_id = $me and id = any($ids) and expires_at > now()` | the ids still held; a lapsed lease is not renewed even when nobody took it — lapsed means lost |
 | `releaseSessionLeases` | `delete … where owner_id = $me` | at a graceful stop only |
 
 **The manager.**
@@ -334,13 +336,13 @@ present.
   flight not renewed; L12 a renewal answered across the starting → running handoff moves the
   running session's fence; L13 a renewal that hangs counts as failed at its timeout and the next
   one is sent; L14 an acquire that hangs starts nothing; L15 a token answered past the fence opens
-  no socket. `session-config.test.ts` refuses a fence within two renewals and two timeouts.
+  no socket; L16 a token refreshed past the fence restarts none. `session-config.test.ts` refuses a fence within two renewals and two timeouts.
 - `session-lease.db.test.ts` (integration, real leases, the mock broker): M1 two managers whose
   scans both list the account open one socket — the acquire alone keeps the second out; M2 an
   owner that never renews is fenced before its lease lapses, and only then does another process
   open the account's socket.
 - `packages/db/src/session-lease-ops.db.test.ts`: A1–A5 the acquire (A4 the `<=` boundary inside
-  one transaction, A5 two connections), R1–R4 the renewal, D1 the release; the candidates' lease
+  one transaction, A5 two connections), R1–R5 the renewal (R5: neither a renewal nor a re-acquire shortens a lease), D1 the release; the candidates' lease
   filter in `balance-snapshot-ops.db.test.ts`; the table's CHECK, FK and key in
   `schema.db.test.ts`.
 - `session-manager.db.test.ts` (integration, `TEST_DATABASE_URL`): the end-to-end scenario on
