@@ -1,9 +1,9 @@
 <title>Ночная сессия Binarius</title>
 <!--
   Template of the manager's night report (.claude/skills/manager/SKILL.md → Report).
-  Copy to .claude/worktrees/manager/report-<YYYY-MM-DD>.html, replace every {{…}} and every
-  <tr class="example"> row with real content, delete rows and sections that stay empty only when
-  the section says so. No external scripts or stylesheets: the page is static.
+  Copy to $ROOT/.claude/worktrees/manager/report-<YYYY-MM-DD>.html, replace every {{…}} and every
+  <tr class="example"> row with real content. An empty section stays and says «нет».
+  No external scripts or stylesheets: the page is static.
 -->
 <style>
   /* layout: one reading column, tables scroll inside their own box on a phone */
@@ -80,7 +80,6 @@
   .pill.warn { color: var(--warn); }
   .pill.bad { color: var(--bad); }
   .example td { color: var(--muted); font-style: italic; }
-  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 </style>
 
 <main>
@@ -101,7 +100,7 @@
     <p><span class="label">Открытые PR</span> {{#номер ветка — заголовок; или «нет»}}</p>
     <p><span class="label">Доска</span> In Progress: {{…}}; In Review: {{…}}; Todo: {{…}}</p>
     <p><span class="label">Ветки за 24 ч и worktree</span> {{…}}</p>
-    <p><span class="label">Стенд DEMO_ONLY</span> {{строка лога trading-worker started … demoOnly: true, или «проверка по .env, строка лога — фаза X»}}</p>
+    <p><span class="label">Стенд DEMO_ONLY</span> {{stand: allowed — строка {"…","demoOnly":true,…,"msg":"trading-worker started"} целиком; или stand: forbidden — причина}}</p>
   </section>
 
   <section id="tasks">
@@ -134,7 +133,7 @@
       <p><span class="label">PR и ревью</span> {{PR, head, Codex: job id или строка пропуска, gh pr checks}}</p>
       <p><span class="label">Открытые находки</span> {{severity — ссылка на комментарий; или «нет»}}</p>
       <p><span class="label">Решения менеджера</span> {{вопрос → выбор (рекомендуемый | постоянный ответ), ссылка}}</p>
-      <p><span class="label">DEMO_ONLY</span> {{строка лога из hand-off фазы, поднимавшей стенд; или «стенд не поднимался»}}</p>
+      <p><span class="label">DEMO_ONLY</span> {{строки "msg":"backend started" / "msg":"trading-worker started" с "demoOnly":true из hand-off фазы и имя compose-проекта; или «стенд не поднимался»}}</p>
       <p><span class="label">Где остановилась</span> {{фаза и Pipeline Status на конец сессии}}</p>
     </article>
   </section>
