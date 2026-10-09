@@ -591,7 +591,7 @@ describe('the reconciliation pass: the order and the lease', () => {
         skipped: 0,
         dropped: 0,
         failed: 0,
-        balanceCompared: 3,
+        balanceCompared: 2,
         balanceMismatch: 0,
       }),
     ]);
@@ -599,7 +599,7 @@ describe('the reconciliation pass: the order and the lease', () => {
 });
 
 describe('the reconciliation pass: the balance check (#92)', () => {
-  it('R1 runs once after accepted, settled, manual_review and rejected, for the intent account', async () => {
+  it('R1 runs once after accepted, settled and rejected, never after manual_review', async () => {
     const accepted = await reconcilingIntent();
     const settled = await reconcilingIntent();
     const parked = await reconcilingIntent();
@@ -616,13 +616,9 @@ describe('the reconciliation pass: the balance check (#92)', () => {
       }),
     );
     expect([...checkCalls].sort()).toEqual(
-      [
-        accepted.brokerAccountId,
-        settled.brokerAccountId,
-        parked.brokerAccountId,
-        missing.brokerAccountId,
-      ].sort(),
+      [accepted.brokerAccountId, settled.brokerAccountId, missing.brokerAccountId].sort(),
     );
+    expect(checkCalls).not.toContain(parked.brokerAccountId);
   });
 
   it('R2 does not run after unavailable or a throwing reconciler', async () => {
@@ -643,13 +639,16 @@ describe('the reconciliation pass: the balance check (#92)', () => {
     const { intent, brokerAccountId } = await reconcilingIntent();
     checkAnswer = () => Promise.reject(new TypeError('check bug'));
     const log = capture('info');
-    await tickOnce(reconcilerOf({ [intent.id]: () => ({ outcome: 'ambiguous' }) }), log.logger);
-    expect((await rowOf(intent.id)).status).toBe('manual_review');
+    await tickOnce(
+      reconcilerOf({ [intent.id]: (row) => ({ outcome: 'found', trade: openTradeFor(row) }) }),
+      log.logger,
+    );
+    expect((await rowOf(intent.id)).status).toBe('accepted');
     expect(log.line('balance check threw')).toMatchObject({
       brokerAccountId,
       err: { name: 'TypeError' },
     });
-    expect(log.line('reconciliation tick')).toMatchObject({ manualReview: 1, failed: 0 });
+    expect(log.line('reconciliation tick')).toMatchObject({ accepted: 1, failed: 0 });
   });
 
   it('R4 cuts a check at its deadline, aborting its signal, and the tick goes on', async () => {
@@ -664,8 +663,8 @@ describe('the reconciliation pass: the balance check (#92)', () => {
       });
     const log = capture('info');
     const reconciler = reconcilerOf({
-      [a.intent.id]: () => ({ outcome: 'ambiguous' }),
-      [b.intent.id]: () => ({ outcome: 'ambiguous' }),
+      [a.intent.id]: (row) => ({ outcome: 'found', trade: openTradeFor(row) }),
+      [b.intent.id]: (row) => ({ outcome: 'found', trade: openTradeFor(row) }),
     });
     const pass = passOf(reconciler, log.logger, { balanceCheckTimeoutMs: 50 });
     await pass.tick();
@@ -681,8 +680,8 @@ describe('the reconciliation pass: the balance check (#92)', () => {
     const b = await reconcilingIntent();
     checkAnswer = () => Promise.resolve('rate_limited');
     const reconciler = reconcilerOf({
-      [a.intent.id]: () => ({ outcome: 'ambiguous' }),
-      [b.intent.id]: () => ({ outcome: 'ambiguous' }),
+      [a.intent.id]: (row) => ({ outcome: 'found', trade: openTradeFor(row) }),
+      [b.intent.id]: (row) => ({ outcome: 'found', trade: openTradeFor(row) }),
     });
     await tickOnce(reconciler);
     expect(reconciler.calls).toHaveLength(1);
@@ -691,16 +690,16 @@ describe('the reconciliation pass: the balance check (#92)', () => {
   it('R6 starts no check once stop() was called', async () => {
     const { intent } = await reconcilingIntent();
     const reconciler = reconcilerOf({
-      [intent.id]: async () => {
+      [intent.id]: async (row) => {
         await new Promise((resolve) => setTimeout(resolve, 200));
-        return { outcome: 'ambiguous' };
+        return { outcome: 'found', trade: openTradeFor(row) };
       },
     });
     const pass = passOf(reconciler);
     void pass.tick();
     await until('the attempt', () => reconciler.calls.length === 1);
     await pass.stop();
-    expect((await rowOf(intent.id)).status).toBe('manual_review');
+    expect((await rowOf(intent.id)).status).toBe('accepted');
     expect(checkCalls).toEqual([]);
   });
 
@@ -712,8 +711,8 @@ describe('the reconciliation pass: the balance check (#92)', () => {
     const log = capture('info');
     await tickOnce(
       reconcilerOf({
-        [a.intent.id]: () => ({ outcome: 'ambiguous' }),
-        [b.intent.id]: () => ({ outcome: 'ambiguous' }),
+        [a.intent.id]: (row) => ({ outcome: 'found', trade: openTradeFor(row) }),
+        [b.intent.id]: (row) => ({ outcome: 'found', trade: openTradeFor(row) }),
       }),
       log.logger,
     );

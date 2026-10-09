@@ -8,7 +8,11 @@ import {
   type Db,
   type HeldExposure,
 } from '@binarius/db';
-import { isAccessTokenRefusal, type AccessTokenSource } from '../broker/access-token';
+import {
+  isAccessTokenRefusal,
+  reportRefusedToken,
+  type AccessTokenSource,
+} from '../broker/access-token';
 import type { Logger } from './processor';
 
 // The broker balance check after a reconciliation outcome (#92, docs/trade-intent-transport.md →
@@ -60,6 +64,8 @@ export function createBalanceCheck({ db, rest, tokens, logger }: BalanceCheckDep
 
       // a timer's question: the backend never exchanges a token for it (Rule 12)
       const token = await tokens.accessToken(brokerAccountId, { mayRefresh: false, signal });
+      // the deadline or stop() cut the fetch: not a backend failure
+      if (signal.aborted) return 'aborted';
       if (!token.ok) {
         logger.warn(
           {
@@ -100,8 +106,16 @@ export function createBalanceCheck({ db, rest, tokens, logger }: BalanceCheckDep
           },
           'balance check failed',
         );
+        if (error.code === BrokerRestErrorCode.Unauthorized) {
+          await reportRefusedToken(tokens, logger, { brokerAccountId }, token.accessToken, {
+            mayRefresh: false,
+            signal,
+          });
+        }
         return error.code === BrokerRestErrorCode.RateLimited ? 'rate_limited' : 'failed';
       }
+      // the pass has given up on this check: an orphan writes and alerts nothing
+      if (signal.aborted) return 'aborted';
 
       if (user.id !== account.brokerUserId) {
         logger.warn(
@@ -123,6 +137,7 @@ export function createBalanceCheck({ db, rest, tokens, logger }: BalanceCheckDep
         brokerAccountId,
         held: { [TradeMode.Demo]: user.demo.held, [TradeMode.Real]: user.real.held },
       });
+      if (signal.aborted) return 'aborted';
       let compared = false;
       let mismatch = false;
       for (const mode of Object.values(TradeMode)) {

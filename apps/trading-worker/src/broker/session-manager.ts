@@ -20,7 +20,7 @@ import {
   type AccessTokenSource,
 } from './access-token';
 import { BrokerEventType, type BrokerEvent } from './events';
-import type { SessionManagerConfig } from './session-config';
+import { DEAD_LETTER_WRITE_TIMEOUT_MS, type SessionManagerConfig } from './session-config';
 import {
   BrokerSocketState,
   createBrokerSocketClient,
@@ -34,7 +34,7 @@ import {
   deadLetterSessionWrite,
   type DeadLetterSink,
   type SessionDeadLetter,
-} from '../intents/consumer';
+} from '../dead-letter';
 
 // One BrokerSocketClient per broker account in work (docs/broker-session.md). The manager opens
 // no trade and reconciles nothing: it keeps the sessions the executor sends commands over, and
@@ -232,7 +232,12 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
           'broker session write failed',
         );
         // inside the task: the account's queue and stop()'s wait both include it
-        await deadLetterSessionWrite(deps.deadLetters, logger, { source, accountId, ...ref });
+        await deadLetterSessionWrite(
+          deps.deadLetters,
+          logger,
+          { source, accountId, ...ref },
+          DEAD_LETTER_WRITE_TIMEOUT_MS,
+        );
       }
     });
     pump(accountId, queue);

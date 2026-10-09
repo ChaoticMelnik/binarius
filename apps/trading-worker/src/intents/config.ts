@@ -46,8 +46,8 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //   the worst case of broker GETs a minute ≤ WORKER_BROKER_GETS_PER_MINUTE (below), with
 //     60_000 / CATCHUP_TICK_MS and 60_000 / RECONCILE_TICK_MS whole ticks a minute
 // The balance check after a reconciliation outcome (#92) adds these:
-//   ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < BALANCE_CHECK_TIMEOUT_MS - the token
-//     and the one GET fit a check
+//   2 × ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < BALANCE_CHECK_TIMEOUT_MS - the
+//     token, the one GET and, on a 401, the report of the refused token (#281) fit a check
 //   BALANCE_CHECK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS - phase 1 waits for pass.stop(); no
 //     check starts after stop(), so it waits for the attempt or the check in flight, never both
 // The session manager (#101, broker/session-config.ts) adds these:
@@ -83,9 +83,9 @@ export const RECONCILE_TICK_MS = 15_000;
 // one balance GET (#92), and the worker's share of the IP's rate limit is
 // WORKER_BROKER_GETS_PER_MINUTE
 export const RECONCILE_BATCH_SIZE = 16;
-// one balance check after a reconciliation outcome (#92): the token, one GET /v1/broker/user and
-// three autocommit statements
-export const BALANCE_CHECK_TIMEOUT_MS = 15_000;
+// one balance check after a reconciliation outcome (#92): the token, one GET /v1/broker/user, the
+// report of a refused token on a 401, and three autocommit statements
+export const BALANCE_CHECK_TIMEOUT_MS = 20_000;
 
 // The matching window on a trade's open_timestamp around the intent's submitted_at, inclusive on
 // both sides (docs/trade-intent-transport.md -> Reconciliation matching)
@@ -145,7 +145,7 @@ export const TIMING_CHAIN_HOLDS =
   Number.isInteger(60_000 / CATCHUP_TICK_MS) &&
   Number.isInteger(60_000 / RECONCILE_TICK_MS) &&
   WORKER_BROKER_GETS_WORST_CASE <= WORKER_BROKER_GETS_PER_MINUTE &&
-  ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < BALANCE_CHECK_TIMEOUT_MS &&
+  2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < BALANCE_CHECK_TIMEOUT_MS &&
   BALANCE_CHECK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&

@@ -5,40 +5,11 @@ import {
   TRADING_INTENTS_DEAD_LETTER_QUEUE,
   TradeIntentFailureReason,
   tradeIntentJobPayloadSchema,
-  type TradeMode,
 } from '@binarius/shared';
 import { OutboxTopic } from '@binarius/db';
+import type { DeadLetter, DeadLetterSink, JobDeadLetter } from '../dead-letter';
 import { LOCK_DURATION_MS, MAX_STALLED_COUNT, STALLED_INTERVAL_MS } from './config';
 import { InvalidJobError, type Logger } from './processor';
-
-export interface JobDeadLetter {
-  source: 'intent_job';
-  intentId: string | null;
-  // the queue the job came from; both consumers share one dead-letter queue
-  topic: OutboxTopic;
-  reason: TradeIntentFailureReason;
-  failedAt: string;
-}
-
-// A broker session write that threw (#92): which event of which account, never its payload - no
-// amount, balance or user object, only the ids an operator needs to look the event up.
-export interface SessionDeadLetter {
-  source: 'user_data' | 'update_balance' | 'close_trade_success';
-  accountId: string;
-  // update_balance and close_trade_success
-  mode: TradeMode | null;
-  // close_trade_success: the event's trade ids
-  brokerTradeIds: string[];
-  reason: typeof TradeIntentFailureReason.ProcessingFailed;
-  // the worker's clock, like a job entry's
-  failedAt: string;
-}
-
-export type DeadLetter = JobDeadLetter | SessionDeadLetter;
-
-export interface DeadLetterSink {
-  add(name: string, data: DeadLetter): Promise<unknown>;
-}
 
 export interface ConsumerDeps<Outcome extends string> {
   // trading-intents (the executor) or trading-reconciliation (#89, the hand-off to the pass)
@@ -88,26 +59,6 @@ export async function deadLetter(
     await sink.add('dead', entry);
   } catch (sinkError) {
     logger.error({ ...errorLogFields(sinkError), intentId: entry.intentId }, 'dlq_publish_failed');
-  }
-}
-
-// Never rejects: the session manager awaits it inside the account's write queue.
-export async function deadLetterSessionWrite(
-  sink: DeadLetterSink,
-  logger: Pick<Logger, 'error'>,
-  entry: Omit<SessionDeadLetter, 'reason' | 'failedAt'>,
-): Promise<void> {
-  try {
-    await sink.add('dead', {
-      ...entry,
-      reason: TradeIntentFailureReason.ProcessingFailed,
-      failedAt: new Date().toISOString(),
-    });
-  } catch (sinkError) {
-    logger.error(
-      { ...errorLogFields(sinkError), accountId: entry.accountId, source: entry.source },
-      'dlq_publish_failed',
-    );
   }
 }
 

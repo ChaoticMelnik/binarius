@@ -12,14 +12,12 @@ import {
   type TempDatabase,
 } from '@binarius/db/testing';
 import {
-  deadLetter,
   deadLetterSessionWrite,
-  startIntentConsumer,
   type DeadLetter,
-  type IntentConsumer,
   type JobDeadLetter,
   type SessionDeadLetter,
-} from './consumer';
+} from '../dead-letter';
+import { deadLetter, startIntentConsumer, type IntentConsumer } from './consumer';
 import { InvalidJobError, processIntentJob } from './processor';
 import { processReconciliationJob } from './reconciliation';
 
@@ -297,16 +295,20 @@ describe('deadLetter', () => {
 });
 
 describe('deadLetterSessionWrite (#92)', () => {
-  it('writes the session entry into the shared dead-letter queue, ids only', async () => {
+  it('writes one session entry per account, source and hour into the shared queue, ids only', async () => {
     const dlq = new Queue<DeadLetter>('trading-intents-dead-letter', { connection: redis, prefix });
     const accountId = `acc-${randomBytes(4).toString('hex')}`;
+    const write = (brokerTradeIds: string[]) =>
+      deadLetterSessionWrite(
+        dlq,
+        pino({ level: 'silent' }),
+        { source: 'close_trade_success', accountId, mode: 'demo', brokerTradeIds },
+        1_000,
+      );
     try {
-      await deadLetterSessionWrite(dlq, pino({ level: 'silent' }), {
-        source: 'close_trade_success',
-        accountId,
-        mode: 'demo',
-        brokerTradeIds: ['bt-1', 'bt-2'],
-      });
+      await write(['bt-1', 'bt-2']);
+      // the same account, source and hour: BullMQ keeps the first entry
+      await write(['bt-3']);
     } finally {
       await dlq.close();
     }
@@ -337,10 +339,30 @@ describe('deadLetterSessionWrite (#92)', () => {
         { add: () => Promise.reject(new Error('redis gone')) },
         quiet,
         { source: 'user_data', accountId: 'acc-1', mode: null, brokerTradeIds: [] },
+        1_000,
       ),
     ).resolves.toBeUndefined();
     expect(messages).toEqual([
       expect.objectContaining({ msg: 'dlq_publish_failed', accountId: 'acc-1', source: 'user_data' }),
+    ]);
+  });
+
+  // a Redis that is down holds the command instead of failing it (maxRetriesPerRequest: null)
+  it('gives up waiting after its timeout and says so', async () => {
+    const messages: Record<string, unknown>[] = [];
+    const quiet = pino(
+      { level: 'error' },
+      { write: (line: string) => void messages.push(JSON.parse(line) as Record<string, unknown>) },
+    );
+    await deadLetterSessionWrite(
+      { add: () => new Promise(() => undefined) },
+      quiet,
+      { source: 'update_balance', accountId: 'acc-2', mode: 'demo', brokerTradeIds: [] },
+      50,
+    );
+    // the sink never answers, so returning at all is the timeout's doing
+    expect(messages).toEqual([
+      expect.objectContaining({ msg: 'dlq_publish_failed', accountId: 'acc-2', reason: 'timeout' }),
     ]);
   });
 });

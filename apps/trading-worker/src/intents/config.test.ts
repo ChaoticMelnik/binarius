@@ -97,7 +97,7 @@ describe('timing constants', () => {
   it('keep the balance check inside its budget and the reconciliation batch at 16 (#92)', () => {
     // with the balance GET a batch of 20 would be 20 * 5 * 4 + 72 = 472 > 400
     expect(RECONCILE_BATCH_SIZE).toBe(16);
-    expect(ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS).toBeLessThan(
+    expect(2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS).toBeLessThan(
       BALANCE_CHECK_TIMEOUT_MS,
     );
     expect(BALANCE_CHECK_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);

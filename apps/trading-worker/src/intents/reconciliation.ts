@@ -114,13 +114,10 @@ export interface TickSummary {
 
 type Ending = Exclude<keyof TickSummary, 'candidates' | 'balanceCompared' | 'balanceMismatch'>;
 
-// an outcome that changed what we hold at the broker, or proved what we do not (#92)
-const CHECKED_ENDINGS: ReadonlySet<Ending> = new Set([
-  'accepted',
-  'settled',
-  'manualReview',
-  'rejected',
-]);
+// an outcome that changed what we hold at the broker, or proved what we do not (#92). Not
+// manualReview: the account is halted and alerted already, and the parked intent keeps its mode
+// out of any compare
+const CHECKED_ENDINGS: ReadonlySet<Ending> = new Set(['accepted', 'settled', 'rejected']);
 
 export function createReconciliationPass({
   db,
@@ -273,7 +270,7 @@ export function createReconciliationPass({
     const ending = await persist(claimed, result);
     if (stopped || !CHECKED_ENDINGS.has(ending)) return { ending, rateLimited };
     const check = await checkWithDeadline(claimed.brokerAccountId);
-    return { ending, rateLimited: rateLimited || check === 'rate_limited', check };
+    return { ending, rateLimited: check === 'rate_limited', check };
   }
 
   async function runTick(): Promise<void> {
