@@ -78,11 +78,8 @@ export const eligiblePairs = (
   );
 
 // payout desc, then id asc, so the choice does not depend on the catalog's order
-export const topPairs = (eligible: readonly BinaryPair[], maxPairs: number): number[] =>
-  [...eligible]
-    .sort((a, b) => b.payout - a.payout || a.id - b.id)
-    .slice(0, maxPairs)
-    .map((pair) => pair.id);
+export const topPairs = (eligible: readonly BinaryPair[], maxPairs: number): BinaryPair[] =>
+  [...eligible].sort((a, b) => b.payout - a.payout || a.id - b.id).slice(0, maxPairs);
 
 interface FreshSignal {
   assetId: number;
@@ -228,11 +225,7 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     staleStreak = false;
     const eligible = eligiblePairs(view, nowMs, durationSec);
     period.eligible = eligible.length;
-    const digitsOf = new Map(eligible.map((pair) => [pair.id, pair.digits]));
-    return topPairs(eligible, maxPairs).flatMap((id) => {
-      const digits = digitsOf.get(id);
-      return digits === undefined ? [] : [{ id, digits }];
-    });
+    return topPairs(eligible, maxPairs).map(({ id, digits }) => ({ id, digits }));
   }
 
   function rateLimited(retryAfterSec: number | undefined): void {

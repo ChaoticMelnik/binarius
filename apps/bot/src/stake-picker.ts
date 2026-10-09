@@ -7,10 +7,12 @@ import {
   errorLogFields,
   formatStake,
   normalizeDecimal,
+  pairPayoutAccepted,
   parseDemoStakeInput,
   tradeAmountSchema,
   TradeMode,
   UserStatus,
+  telegramHtml,
   type DecimalString,
   type TelegramHtml,
   type TradingAccessResponse,
@@ -28,6 +30,7 @@ import {
   demoLaunchCallbackData,
   durationOf,
   launchScreen,
+  payoutTooLowScreen,
   removeLegacyKeyboard,
   STAKE_PICKER_PREFIX,
 } from './demo';
@@ -371,8 +374,10 @@ export function createStakePicker<C extends Context>({
     return { text: TEXTS.unavailable, keyboard: backKeyboard(origin) };
   }
 
-  // The symbol only, so any catalog will do, a stale one included; without one the screen drops
-  // its symbol line and the launch stays, since the session start checks the pair itself.
+  // Any catalog will do, a stale one included: the symbol, and the payout, so a pair below the
+  // cycle floor gets the launch press's refusal under the saved line rather than a cycle button
+  // the session start would refuse (#379). Without a catalog, or without the pair in it, the
+  // screen drops its symbol line and the launch stays, since the session start checks the pair.
   async function savedLaunchScreen(
     { assetId, durationSec }: { assetId: number; durationSec: DemoDurationSec },
     amount: DecimalString | null,
@@ -385,10 +390,26 @@ export function createStakePicker<C extends Context>({
         'pairs not read for the launch screen',
       );
     }
-    const symbol = catalog.ok
-      ? (catalog.value.pairs.find((pair) => pair.id === assetId)?.symbol ?? null)
-      : null;
-    return launchScreen({ assetId, durationSec, firstName, symbol, amount, saved: { amount } });
+    const pair = catalog.ok
+      ? catalog.value.pairs.find((listed) => listed.id === assetId)
+      : undefined;
+    if (pair !== undefined && !pairPayoutAccepted(pair)) {
+      const refusal = payoutTooLowScreen(pair, durationSec);
+      return {
+        text: telegramHtml`${TEXTS.stakeSavedLine({ firstName, stake: amount })}
+
+${refusal.text}`,
+        keyboard: refusal.keyboard,
+      };
+    }
+    return launchScreen({
+      assetId,
+      durationSec,
+      firstName,
+      symbol: pair?.symbol ?? null,
+      amount,
+      saved: { amount },
+    });
   }
 
   // only the stake step: a login the user has open is left alone

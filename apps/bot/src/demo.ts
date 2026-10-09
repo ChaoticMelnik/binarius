@@ -360,7 +360,8 @@ export function signalsScreen(
 
 // The launch of a cycle of DEFAULT_SESSION_TRADES on a pair at the chosen duration (#320, #382):
 // the session start of the analysis screen (#284), the picker with its way back here, the list.
-// The picker draws it too, after a save (stake-picker.ts).
+// The picker draws it too, after a save, unless the pair pays below the cycle floor
+// (stake-picker.ts).
 export function launchScreen({
   assetId,
   durationSec,
@@ -391,6 +392,24 @@ export function launchScreen({
       .text(LABELS.stakeChangeButton, launchStakeCallbackData(assetId, durationSec))
       .row()
       .text(LABELS.backToListButton, demoSignalsCallbackData(durationSec)),
+  };
+}
+
+// A launch refused for a pair below the cycle floor (#379): the way back to the list and to the
+// manual path, whose single trade the floor does not restrict. The launch press draws it, and so
+// does the picker after a save (stake-picker.ts).
+export function payoutTooLowScreen(pair: PairView, durationSec: DemoDurationSec): DemoScreen {
+  return {
+    text: TEXTS.demoPayoutTooLow({
+      symbol: pair.symbol,
+      payout: String(pair.payout),
+      payoutFloor: String(MIN_CYCLE_PAYOUT_PCT),
+      breakEven: formatBreakEven(pair.payout),
+    }),
+    keyboard: new InlineKeyboard()
+      .text(LABELS.backToListButton, demoSignalsCallbackData(durationSec))
+      .row()
+      .text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA),
   };
 }
 
@@ -842,8 +861,6 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // The launch press refuses a pair below the cycle floor with the way back to the list and to the
-  // manual path, whose single trade the floor does not restrict (#379)
   function launchFailure(
     ctx: Context,
     read: Exclude<DemoCycleRead, { ok: true }>,
@@ -851,19 +868,7 @@ export function createDemoComposer<C extends Context>({
     durationSec: DemoDurationSec,
   ): DemoScreen {
     if (read.reason !== 'payout_too_low') return tradeFailure(ctx, read, assetId);
-    const { pair } = read;
-    return {
-      text: TEXTS.demoPayoutTooLow({
-        symbol: pair.symbol,
-        payout: String(pair.payout),
-        payoutFloor: String(MIN_CYCLE_PAYOUT_PCT),
-        breakEven: formatBreakEven(pair.payout),
-      }),
-      keyboard: new InlineKeyboard()
-        .text(LABELS.backToListButton, demoSignalsCallbackData(durationSec))
-        .row()
-        .text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA),
-    };
+    return payoutTooLowScreen(read.pair, durationSec);
   }
 
   // The types present in the catalog, each with its count of open pairs; a type with no pair

@@ -23,8 +23,9 @@ import { atrTicksText, DEMO_DURATION_LABELS, labelsOf, payoutText, TEXTS, textOf
 
 // The analysis screen (#126, docs/bot-demo.md): pure, from the pair read at the press and the
 // backend's answer. Every number on it is the answer's — a feature, or a period from `params` —
-// or the pair's payout and the break-even share computed from it; nothing is the bot's own. Which buttons go under it is demo.ts's. The
-// words are catalog keys (bot-texts.ts), read when a screen is built.
+// or the pair's payout and the break-even share computed from it; nothing is the bot's own.
+// Which buttons go under it is demo.ts's. The words are catalog keys (bot-texts.ts), read when a
+// screen is built.
 
 // `satisfies Record<NoSignalReason, …>`: a reason added to shared's constant fails tsc here.
 export const NO_SIGNAL_REASON_TEXT = labelsOf({
@@ -199,7 +200,8 @@ function featureLines(
   const slow = `EMA${params.emaSlow} ${formatPrice(f.emaSlow, pair.digits)}`;
   const trend = `${TREND_WORDS[f.trend]} — ${fast} ${relation} ${slow}`;
   const momentum = `${MOMENTUM_WORDS[f.momentum]} — RSI${params.rsiPeriod} ${formatRsi(f.rsi)}`;
-  const atr = `${volatility} — ATR${params.atrPeriod} ${formatAtrPct(f.atrPct)}% · ${atrTicksText(formatAtrTicks(f.atrTicks))}`;
+  const ticks = atrTicksText(formatAtrTicks(f.atrTicks));
+  const atr = `${volatility} — ATR${params.atrPeriod} ${formatAtrPct(f.atrPct)}% · ${ticks}`;
   return telegramHtml`${TEXTS.analysisTrend({ value: trend })}
 ${TEXTS.analysisMomentum({ value: momentum })}
 ${TEXTS.analysisVolatility({ value: atr })}

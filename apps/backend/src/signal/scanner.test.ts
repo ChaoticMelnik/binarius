@@ -230,7 +230,7 @@ describe('signal scanner', () => {
       pair(8, { payout: 90 }),
       pair(6, { payout: 70 }),
     ];
-    expect(topPairs(pairs, 2)).toEqual([8, 9]);
+    expect(topPairs(pairs, 2).map((p) => p.id)).toEqual([8, 9]);
   });
 
   it("S4 a catalog change between candles changes the next candle's set", async () => {
