@@ -540,7 +540,9 @@ each bounded on its own. The table lives in `packages/shared/src/broker-budget.t
   backend writes one `warn` `broker budget over the per-IP limit` at start, and the scanner's pause
   on a 429 is the backstop.
 - Nothing counts the three processes together at run time (stated).
-- A worker deploy runs two workers for up to ~41 s ([worker-deploy.md](worker-deploy.md), #95):
+- A worker deploy runs two workers for its overlap, the readiness wait (≤ `READY_TIMEOUT_S`, 120 s)
+  plus the drain (≤ 40 s), longer after an interrupted run until an operator resolves it
+  ([worker-deploy.md](worker-deploy.md), #95):
   for that window the worker's share can double (accepted there, risk 1).
 - Manual analysis, OAuth, token exchanges and the pairs catalog are outside every share.
 

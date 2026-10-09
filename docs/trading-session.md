@@ -294,8 +294,9 @@ The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code adde
 - **`stop()`** clears the timer, aborts the attempt's backend call and waits for the running tick:
   one attempt at most, which `intents/config.ts` keeps inside the shutdown's phase 1. An attempt cut
   by the stop writes nothing (E10).
-- **Hold-backs live in memory**, keyed by session id, in one worker container (two only during a
-  deploy's overlap, #95; #94: several processes; #93's lease covers the broker sockets only);
+- **Hold-backs live in memory**, keyed by session id, in one worker container (two during a
+  deploy's overlap or until an operator resolves an interrupted run, #95, worker-deploy.md; #94:
+  several processes; #93's lease covers the broker sockets only);
   a restart drops them, and the next attempt is idempotent.
 
 ## Backend calls
@@ -558,9 +559,10 @@ that takes 15 s, the default `DURATION_SEC`.) `ACCOUNT_ID` is needed only with m
    time only for Martingale, which is off.
 4. **One container, two during a deploy.** The hold-backs live in memory and two workers would attempt the same session;
    the step key makes the second a replay or a `client_request_id_conflict` (reschedule), never a
-   second trade on the step. Two workers run for up to ~41 s of every deploy
-   ([worker-deploy.md](worker-deploy.md), #95, `worker.handoff.db.test.ts` H4); several workers
-   are #94 (#93's lease covers the broker sockets only).
+   second trade on the step. Two workers run for the deploy's overlap, the readiness wait (up to
+   `READY_TIMEOUT_S`, 120 s) plus the drain (≤ 40 s), or until an operator resolves an interrupted
+   run ([worker-deploy.md](worker-deploy.md) → The overlap's length, #95, `worker.handoff.db.test.ts`
+   H4); several workers are #94 (#93's lease covers the broker sockets only).
 5. **An intent past the deadline.** The scan and the history read guard the deadline on the
    database clock; a deadline that passes during the attempt's backend calls lets that attempt
    create its intent. The creation starts at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) late;

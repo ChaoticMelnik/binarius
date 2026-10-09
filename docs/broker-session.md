@@ -209,9 +209,10 @@ stalled in the database and commits after a later one leaves the later expiry, s
 A dead owner's account is picked up by another process within about TTL + one hold-back + one tick
 (~95 s; owner, 2026-10-09): until then it trades over REST. Falsifiable: `broker session lease
 busy` for one account longer than 95 s after its owner's last line. `compose.yaml` still runs one
-worker; two run only during a deploy's overlap (`scripts/deploy-worker.sh`, #95,
-[worker-deploy.md](worker-deploy.md)): the old process's `stop()` deletes its rows after closing its
-sockets, and the new one, whose scan skipped those accounts while another owner held them, opens
+worker; two run during a deploy's overlap, the readiness wait and the drain, or until an operator
+resolves an interrupted run (`scripts/deploy-worker.sh`, #95, [worker-deploy.md](worker-deploy.md)
+→ The overlap's length): the old process's `stop()` deletes its rows after closing its sockets,
+and the new one, whose scan skipped those accounts while another owner held them, opens
 them on its next tick. More replicas, sharding and routing intent jobs to the owner are #94.
 
 ## Losses for the circuit breaker (#96)
@@ -434,8 +435,8 @@ The plain `up -d` recreates the worker with a gap in which no process takes jobs
    ticks; a command in flight when the fence fires ends `unknown` and goes to reconciliation. An
    acquire answered after `stop()` released leaves one row of the dead owner until it lapses.
    Falsifiable: `broker session lease fenced` with `lateMs` above 5 000. One worker container
-   runs, two only during a deploy's overlap (#95, [worker-deploy.md](worker-deploy.md)); more is
-   #94.
+   runs, two during a deploy's overlap or until an operator resolves an interrupted run (#95,
+   [worker-deploy.md](worker-deploy.md)); more is #94.
 6. **A revocation or a block reaches the session only through the candidates**, within 65 s; until
    then the session writes that account's balance events — rows of an account that cannot trade.
 7. **Writes queued at `stop()` are dropped**; the snapshot is rewritten by the next `user.data` or
