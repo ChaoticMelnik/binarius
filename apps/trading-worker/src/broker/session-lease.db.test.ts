@@ -57,8 +57,8 @@ const CONFIG: SessionManagerConfig = {
   stopBudgetMs: 500,
   watchWindowMs: 600_000,
   leaseTtlMs: 30_000,
-  leaseRenewMs: 10_000,
-  leaseRenewTimeoutMs: 5_000,
+  leaseRenewMs: 6_000,
+  leaseRenewTimeoutMs: 3_000,
   leaseFenceMs: 25_000,
 };
 

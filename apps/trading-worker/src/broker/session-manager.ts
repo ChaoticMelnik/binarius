@@ -192,14 +192,18 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     fenceTimer = setTimeout(fence, Math.max(0, earliest - now()));
   }
 
+  // true when the lease has passed its fence: the entry is dropped as the fence timer would
+  function fencedNow(accountId: string, lease: Lease | undefined, at = now()): boolean {
+    if (lease === undefined || lease.until > at) return false;
+    logger.warn({ accountId, lateMs: Math.round(at - lease.until) }, 'broker session lease fenced');
+    drop(accountId, config.retryMs);
+    return true;
+  }
+
   function fence() {
     fenceTimer = undefined;
     const at = now();
-    for (const [accountId, entry] of [...entries]) {
-      if (entry.lease === undefined || entry.lease.until > at) continue;
-      logger.warn({ accountId, lateMs: Math.round(at - entry.lease.until) }, 'broker session lease fenced');
-      drop(accountId, config.retryMs);
-    }
+    for (const [accountId, entry] of [...entries]) fencedNow(accountId, entry.lease, at);
     armFence();
   }
 
@@ -511,6 +515,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       drop(accountId, config.retryMs);
       return;
     }
+    if (fencedNow(accountId, entry.lease)) return;
     entry.token = outcome.accessToken;
     entry.verified = false;
     startClient(entry, outcome.accessToken);
@@ -536,15 +541,30 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     entries.set(accountId, starting);
     // the lease before the token: an account another process holds costs no token fetch
     const sentAt = now();
-    let acquired: boolean;
+    let acquired: boolean | 'timeout';
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      acquired = await leases.acquire(accountId, config.leaseTtlMs);
+      // bounded like a renewal: the one-failed-renewal guarantee counts on it
+      acquired = await Promise.race([
+        leases.acquire(accountId, config.leaseTtlMs),
+        new Promise<'timeout'>((resolve) => {
+          timeout = setTimeout(() => resolve('timeout'), config.leaseRenewTimeoutMs);
+        }),
+      ]);
     } catch (error) {
       if (stopping.signal.aborted || !isCurrent(accountId, starting)) return;
       startFailed(accountId, error);
       return;
+    } finally {
+      clearTimeout(timeout);
     }
     if (stopping.signal.aborted || !isCurrent(accountId, starting)) return;
+    // a late commit leaves our row, which lapses or which we take again
+    if (acquired === 'timeout') {
+      logger.warn({ accountId }, 'broker session lease acquire timed out');
+      drop(accountId, config.retryMs);
+      return;
+    }
     if (!acquired) {
       logger.debug({ accountId }, 'broker session lease busy');
       drop(accountId, config.retryMs);
@@ -565,6 +585,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       drop(accountId, holdBackFor(accountId, outcome));
       return;
     }
+    // a stall can deliver the token before the overdue fence timer: no socket past the fence
+    if (fencedNow(accountId, starting.lease)) return;
     const entry: RunningEntry = {
       kind: 'running',
       candidate,

@@ -26,7 +26,9 @@ describe('the session constants', () => {
     expect(SESSION_TICK_MS).toBeLessThan(SESSION_RETRY_MS);
     expect(SESSION_RETRY_MS).toBeLessThanOrEqual(SESSION_REFUSAL_RETRY_MS);
     expect(SESSION_IDLE_GRACE_MS).toBeLessThan(BALANCE_WATCH_WINDOW_MS);
-    expect(2 * SESSION_LEASE_RENEW_MS).toBeLessThan(SESSION_LEASE_FENCE_MS);
+    expect(2 * SESSION_LEASE_RENEW_MS + 2 * SESSION_LEASE_RENEW_TIMEOUT_MS).toBeLessThan(
+      SESSION_LEASE_FENCE_MS,
+    );
     expect(SESSION_LEASE_FENCE_MS).toBeLessThan(SESSION_LEASE_TTL_MS);
     expect(SESSION_LEASE_RENEW_TIMEOUT_MS).toBeLessThan(SESSION_LEASE_RENEW_MS);
     expect(SESSION_LEASE_TTL_MS).toBeLessThan(SESSION_RETRY_MS);
@@ -56,7 +58,12 @@ describe('the session constants', () => {
     ['no session', { maxSessions: 0 }],
     ['no start worker', { startConcurrency: 0 }],
     // #93: one failed renewal must not fence
-    ['a fence within two renewals', { leaseFenceMs: 2 * SESSION_LEASE_RENEW_MS }],
+    // one acquire answered at its timeout, one failed renewal, one answered at its timeout (#93)
+    [
+      'a fence within two renewals and two timeouts',
+      { leaseFenceMs: 2 * SESSION_LEASE_RENEW_MS + 2 * SESSION_LEASE_RENEW_TIMEOUT_MS },
+    ],
+    ['the review case: renew 10 s, timeout 9 s, fence 21 s', { leaseRenewMs: 10_000, leaseRenewTimeoutMs: 9_000, leaseFenceMs: 21_000 }],
     ['a fence as long as the lease', { leaseFenceMs: SESSION_LEASE_TTL_MS }],
     ['a busy retry before the lease could lapse', { leaseTtlMs: SESSION_RETRY_MS }],
     ['a fractional renewal', { leaseRenewMs: 1.5 }],
