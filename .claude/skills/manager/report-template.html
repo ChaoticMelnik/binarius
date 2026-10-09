@@ -100,7 +100,7 @@
     <p><span class="label">Открытые PR</span> {{#номер ветка — заголовок; или «нет»}}</p>
     <p><span class="label">Доска</span> In Progress: {{…}}; In Review: {{…}}; Todo: {{…}}</p>
     <p><span class="label">Ветки за 24 ч и worktree</span> {{…}}</p>
-    <p><span class="label">Стенд DEMO_ONLY</span> {{stand: allowed — строка {"…","demoOnly":true,…,"msg":"trading-worker started"} целиком; или stand: forbidden — причина}}</p>
+    <p><span class="label">Стенд DEMO_ONLY</span> {{stand: allowed — последняя строка {"…","demoOnly":true,…,"msg":"trading-worker started"} целиком; или stand: forbidden — причина}}</p>
   </section>
 
   <section id="tasks">
@@ -133,7 +133,7 @@
       <p><span class="label">PR и ревью</span> {{PR, head, Codex: job id или строка пропуска, gh pr checks}}</p>
       <p><span class="label">Открытые находки</span> {{severity — ссылка на комментарий; или «нет»}}</p>
       <p><span class="label">Решения менеджера</span> {{вопрос → выбор (рекомендуемый | постоянный ответ), ссылка}}</p>
-      <p><span class="label">DEMO_ONLY</span> {{строки "msg":"backend started" / "msg":"trading-worker started" с "demoOnly":true из hand-off фазы и имя compose-проекта; или «стенд не поднимался»}}</p>
+      <p><span class="label">DEMO_ONLY</span> {{вывод stand check фазы (backend: demo-only / trading-worker: demo-only), последняя строка "msg":"… started" каждого сервиса и имя compose-проекта; или «стенд не поднимался»}}</p>
       <p><span class="label">Где остановилась</span> {{фаза и Pipeline Status на конец сессии}}</p>
     </article>
   </section>
