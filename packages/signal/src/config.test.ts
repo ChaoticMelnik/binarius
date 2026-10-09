@@ -1,6 +1,12 @@
 import type { SignalParams } from '@binarius/shared';
 import { describe, expect, it } from 'vitest';
-import { assertSignalParams, DEFAULT_SIGNAL_PARAMS, minClosedCandlesFloor } from './config';
+import {
+  assertSignalParams,
+  assertSignalParamsV1,
+  DEFAULT_SIGNAL_PARAMS,
+  DEFAULT_SIGNAL_PARAMS_V1,
+  minClosedCandlesFloor,
+} from './config';
 
 const withParams = (patch: Partial<SignalParams>): SignalParams => ({
   ...DEFAULT_SIGNAL_PARAMS,
@@ -57,5 +63,41 @@ describe('signal params', () => {
 
   it('K10 a violation is a RangeError', () => {
     expect(() => assertSignalParams(withParams({ emaSlow: 1 }))).toThrow(RangeError);
+  });
+
+  it.each([5, 4, Number.NaN])('K11 rsiExtremeBand %s (not above rsiBand 5) throws', (band) => {
+    expect(() => assertSignalParams(withParams({ rsiExtremeBand: band }))).toThrow(
+      /rsiExtremeBand/,
+    );
+    expect(() => assertSignalParams(withParams({ rsiExtremeBand: 5.5 }))).not.toThrow();
+  });
+
+  it('K12 rsiExtremeBand above 50 throws, 50 passes', () => {
+    expect(() => assertSignalParams(withParams({ rsiExtremeBand: 50.5 }))).toThrow(
+      /rsiExtremeBand/,
+    );
+    expect(() => assertSignalParams(withParams({ rsiExtremeBand: 50 }))).not.toThrow();
+  });
+
+  it.each([0, 2.5, -1])('K13 minAtrTicks %s throws', (ticks) => {
+    expect(() => assertSignalParams(withParams({ minAtrTicks: ticks }))).toThrow(/minAtrTicks/);
+  });
+
+  it('K14 the v2 defaults are 15 and 5; the v1 defaults pass v1 only', () => {
+    expect(DEFAULT_SIGNAL_PARAMS).toMatchObject({ rsiExtremeBand: 15, minAtrTicks: 5 });
+    expect(DEFAULT_SIGNAL_PARAMS).toStrictEqual({
+      ...DEFAULT_SIGNAL_PARAMS_V1,
+      rsiExtremeBand: 15,
+      minAtrTicks: 5,
+    });
+    expect(() => assertSignalParamsV1(DEFAULT_SIGNAL_PARAMS_V1)).not.toThrow();
+    expect(() => assertSignalParams(DEFAULT_SIGNAL_PARAMS_V1 as SignalParams)).toThrow(
+      /rsiExtremeBand/,
+    );
+  });
+
+  it('K15 the v2 assert keeps every v1 rule', () => {
+    expect(() => assertSignalParams(withParams({ rsiBand: 50 }))).toThrow(/rsiBand/);
+    expect(() => assertSignalParamsV1(withParams({ minAtrTicks: 0 }))).not.toThrow();
   });
 });

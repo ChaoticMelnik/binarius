@@ -7,13 +7,15 @@ import {
   type SignalInterval,
 } from '@binarius/shared';
 import { assertSignalClock } from './candles';
-import { createSignalDecider, type SignalDecider } from './decide';
+import { assertDigits, createSignalDecider, type SignalDecider } from './decide';
 import { assertFeedLimit, SIGNAL_CHART_LIMIT } from './feed-config';
 import { toJournalCandle, type SignalJournalEntry } from './journal';
 
 export interface SignalFeedRequest {
   assetId: number;
   interval: SignalInterval;
+  // the pair's quote precision from the caller's catalog read (#379)
+  digits: number;
 }
 
 export interface SignalFetchFacts {
@@ -74,14 +76,15 @@ export function createSignalFeed(deps: SignalFeedDeps): SignalFeed {
 
   return {
     decider,
-    async evaluate({ assetId, interval }, options) {
+    async evaluate({ assetId, interval, digits }, options) {
       const intervalMs: number | undefined = SIGNAL_CHART_INTERVAL_MS[interval];
       if (intervalMs === undefined) {
         throw new RangeError(`signal feed: unknown interval ${String(interval)}`);
       }
       const nowMs = now();
-      // a broken clock costs no broker call
+      // a broken clock or digits cost no broker call
       assertSignalClock(intervalMs, nowMs);
+      assertDigits(digits);
       const window = chartWindow(nowMs, intervalMs, SIGNAL_CHART_LIMIT);
       const request: SignalFetchFacts = { assetId, interval, intervalMs, nowMs, ...window };
 
@@ -109,10 +112,11 @@ export function createSignalFeed(deps: SignalFeedDeps): SignalFeed {
       }
       const durationMs = Math.round(performance.now() - started);
 
-      const decision = decider.decide({ candles, intervalMs, nowMs });
+      const decision = decider.decide({ candles, intervalMs, nowMs, digits });
       const entry: SignalJournalEntry = {
         assetId,
         interval,
+        digits,
         intervalMs,
         nowMs,
         fetch: { ...window, rows: candles.length, durationMs },

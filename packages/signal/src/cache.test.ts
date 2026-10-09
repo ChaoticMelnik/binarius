@@ -38,6 +38,7 @@ function decided(request: SignalFeedRequest): SignalEvaluation {
     entry: {
       assetId,
       interval,
+      digits: request.digits,
       intervalMs,
       nowMs,
       fetch: { startTime: 0, limit: 60, rows: 0, durationMs: 1 },
@@ -87,9 +88,10 @@ const at = (offsetMs: number) => {
   clock = B + offsetMs;
 };
 
-const req = (interval: SignalInterval = '1m', assetId = 101): SignalFeedRequest => ({
+const req = (interval: SignalInterval = '1m', assetId = 101, digits = 5): SignalFeedRequest => ({
   assetId,
   interval,
+  digits,
 });
 
 function deferred() {
@@ -328,6 +330,19 @@ describe('createCachedSignalFeed', () => {
     at(1_000);
     expect(await cache.evaluate(req('15s'))).toBe(after);
     expect(calls).toHaveLength(2);
+  });
+
+  // digits are the pair's, not the request's: one pair cannot change them inside one candle
+  // unless the catalog did, and then the first caller's digits answer both (#379)
+  it('C14 two requests for one key with different digits in one candle share one fetch', async () => {
+    const { feed, calls } = stubFeed();
+    const cache = cached(feed);
+    at(10_000);
+    const first = await cache.evaluate(req('1m', 101, 5));
+    at(20_000);
+    const second = await cache.evaluate(req('1m', 101, 3));
+    expect(calls).toStrictEqual([req('1m', 101, 5)]);
+    expect(second).toBe(first);
   });
 
   it('exposes the inner decider', () => {

@@ -7,29 +7,54 @@ import {
   TrendDirection,
   type Candle,
   type RuleRefusalReason,
+  type RuleRefusalReasonV1,
   type SignalDecision,
+  type SignalDecisionV1,
   type SignalFeatures,
+  type SignalFeaturesV1,
   type SignalParams,
+  type SignalParamsV1,
 } from '@binarius/shared';
 import { prepareCandles } from './candles';
-import { assertSignalParams, DEFAULT_SIGNAL_PARAMS } from './config';
+import {
+  assertSignalParams,
+  assertSignalParamsV1,
+  DEFAULT_SIGNAL_PARAMS,
+  DEFAULT_SIGNAL_PARAMS_V1,
+} from './config';
 import { atr, ema, rsi } from './indicators';
 
-export interface SignalInput {
+export interface SignalInputV1 {
   candles: readonly Candle[];
   intervalMs: number;
   nowMs: number;
 }
 
-type Version = typeof SIGNAL_ALGORITHM_VERSION;
+export interface SignalInput extends SignalInputV1 {
+  // the pair's quote precision from the catalog: one quote step is 10^-digits
+  digits: number;
+}
 
 export interface SignalDecider {
-  version: Version;
+  version: typeof SIGNAL_ALGORITHM_VERSION;
   params: Readonly<SignalParams>;
   decide(input: SignalInput): SignalDecision;
 }
 
-function features(closed: readonly Candle[], params: SignalParams): SignalFeatures {
+// Replays v1's journal lines only (journal.ts); every runtime caller decides with v2.
+export interface SignalDeciderV1 {
+  version: 'v1';
+  params: Readonly<SignalParamsV1>;
+  decide(input: SignalInputV1): SignalDecisionV1;
+}
+
+export function assertDigits(digits: number): void {
+  if (!Number.isInteger(digits) || digits < 0) {
+    throw new RangeError(`signal input: digits must be a non-negative integer, got ${digits}`);
+  }
+}
+
+function features(closed: readonly Candle[], params: SignalParamsV1): SignalFeaturesV1 {
   const closes = closed.map((candle) => candle.close);
   const fastSeries = ema(closes, params.emaFast);
   const slowSeries = ema(closes, params.emaSlow);
@@ -65,7 +90,10 @@ function features(closed: readonly Candle[], params: SignalParams): SignalFeatur
   };
 }
 
-function ruleRefusal(f: SignalFeatures, params: SignalParams): RuleRefusalReason | undefined {
+function ruleRefusalV1(
+  f: SignalFeaturesV1,
+  params: SignalParamsV1,
+): RuleRefusalReasonV1 | undefined {
   if (f.atrPct < params.minAtrPct) return NoSignalReason.VolatilityTooLow;
   if (f.atrPct > params.maxAtrPct) return NoSignalReason.VolatilityTooHigh;
   if (f.trend === TrendDirection.Flat) return NoSignalReason.TrendFlat;
@@ -73,6 +101,27 @@ function ruleRefusal(f: SignalFeatures, params: SignalParams): RuleRefusalReason
   if (f.trend !== f.momentum) return NoSignalReason.TrendMomentumDisagree;
   return undefined;
 }
+
+// The tick floor is a volatility gate and sits with them; the RSI extremes come last, so they are
+// named only when trend and momentum already agreed.
+function ruleRefusalV2(f: SignalFeatures, params: SignalParams): RuleRefusalReason | undefined {
+  if (f.atrPct < params.minAtrPct) return NoSignalReason.VolatilityTooLow;
+  if (f.atrPct > params.maxAtrPct) return NoSignalReason.VolatilityTooHigh;
+  if (f.atrTicks < params.minAtrTicks) return NoSignalReason.VolatilityBelowTickFloor;
+  if (f.trend === TrendDirection.Flat) return NoSignalReason.TrendFlat;
+  if (f.momentum === MomentumDirection.Neutral) return NoSignalReason.RsiNeutral;
+  if (f.trend !== f.momentum) return NoSignalReason.TrendMomentumDisagree;
+  if (f.trend === TrendDirection.Up && f.rsi >= 50 + params.rsiExtremeBand) {
+    return NoSignalReason.RsiOverbought;
+  }
+  if (f.trend === TrendDirection.Down && f.rsi <= 50 - params.rsiExtremeBand) {
+    return NoSignalReason.RsiOversold;
+  }
+  return undefined;
+}
+
+const actionOf = (f: SignalFeaturesV1): TradeAction =>
+  f.trend === TrendDirection.Up ? TradeAction.Up : TradeAction.Down;
 
 export function createSignalDecider(params: SignalParams = DEFAULT_SIGNAL_PARAMS): SignalDecider {
   assertSignalParams(params);
@@ -82,16 +131,40 @@ export function createSignalDecider(params: SignalParams = DEFAULT_SIGNAL_PARAMS
   return {
     version,
     params: frozen,
+    decide({ candles, intervalMs, nowMs, digits }) {
+      assertDigits(digits);
+      const prepared = prepareCandles(candles, intervalMs, nowMs, frozen);
+      if (!prepared.ok) return { kind: SignalKind.NoSignal, version, ...prepared.refusal };
+      const base = features(prepared.closed, frozen);
+      const f: SignalFeatures = { ...base, atrTicks: base.atr * 10 ** digits };
+      const reason = ruleRefusalV2(f, frozen);
+      if (reason !== undefined) {
+        return { kind: SignalKind.NoSignal, version, reason, features: f };
+      }
+      return { kind: SignalKind.Signal, version, action: actionOf(f), features: f };
+    },
+  };
+}
+
+export function createSignalDeciderV1(
+  params: SignalParamsV1 = DEFAULT_SIGNAL_PARAMS_V1,
+): SignalDeciderV1 {
+  assertSignalParamsV1(params);
+  const frozen: Readonly<SignalParamsV1> = Object.freeze({ ...params });
+  const version = 'v1';
+
+  return {
+    version,
+    params: frozen,
     decide({ candles, intervalMs, nowMs }) {
       const prepared = prepareCandles(candles, intervalMs, nowMs, frozen);
       if (!prepared.ok) return { kind: SignalKind.NoSignal, version, ...prepared.refusal };
       const f = features(prepared.closed, frozen);
-      const reason = ruleRefusal(f, frozen);
+      const reason = ruleRefusalV1(f, frozen);
       if (reason !== undefined) {
         return { kind: SignalKind.NoSignal, version, reason, features: f };
       }
-      const action = f.trend === TrendDirection.Up ? TradeAction.Up : TradeAction.Down;
-      return { kind: SignalKind.Signal, version, action, features: f };
+      return { kind: SignalKind.Signal, version, action: actionOf(f), features: f };
     },
   };
 }
