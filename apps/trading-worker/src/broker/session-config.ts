@@ -20,13 +20,15 @@ import { isTimerMs } from './socket-config';
 //   SESSION_LEASE_TTL_MS       — how long an account's lease outlives its last acquire or renewal
 //                                in the database (#93, broker-session.md → The lease)
 //   SESSION_LEASE_RENEW_MS     — the renewal interval
+//   SESSION_LEASE_RENEW_TIMEOUT_MS — how long one renewal may take before it counts as failed
 //   SESSION_LEASE_FENCE_MS     — how long after sending an acquire or a renewal the process trusts
 //                                it; past it the socket is closed
 // The chain: an account missing from one scan is not closed (TICK < IDLE_GRACE); a held-back
 // account skips at least one tick (TICK < RETRY ≤ REFUSAL_RETRY); an account the bot asked about
 // keeps its session for the whole watch window (IDLE_GRACE < BALANCE_WATCH_WINDOW_MS); one failed
 // renewal does not fence, and the fence closes the socket before the database lets anyone else in
-// (2 × LEASE_RENEW < LEASE_FENCE < LEASE_TTL); an account busy under another owner is asked again
+// (2 × LEASE_RENEW < LEASE_FENCE < LEASE_TTL), and a stuck renewal ends before the next is due
+// (LEASE_RENEW_TIMEOUT < LEASE_RENEW); an account busy under another owner is asked again
 // only once that lease could have lapsed (LEASE_TTL < RETRY); every *_MS is an integer in
 // [1, MAX_TIMER_MS]. The links to the shutdown budget are in intents/config.ts.
 export const SESSION_TICK_MS = 5_000;
@@ -37,6 +39,7 @@ export const SESSION_START_CONCURRENCY = 4;
 export const SESSION_STOP_BUDGET_MS = 2_000;
 export const SESSION_LEASE_TTL_MS = 30_000;
 export const SESSION_LEASE_RENEW_MS = 10_000;
+export const SESSION_LEASE_RENEW_TIMEOUT_MS = 5_000;
 export const SESSION_LEASE_FENCE_MS = 25_000;
 // how long a session write that threw waits for its dead letter (#92): below the stop budget, so
 // stop() never waits on Redis longer than on the write itself
@@ -54,6 +57,7 @@ export interface SessionManagerConfig {
   watchWindowMs: number;
   leaseTtlMs: number;
   leaseRenewMs: number;
+  leaseRenewTimeoutMs: number;
   leaseFenceMs: number;
 }
 
@@ -68,6 +72,7 @@ export const SESSION_MANAGER_CONFIG: Readonly<SessionManagerConfig> = {
   watchWindowMs: BALANCE_WATCH_WINDOW_MS,
   leaseTtlMs: SESSION_LEASE_TTL_MS,
   leaseRenewMs: SESSION_LEASE_RENEW_MS,
+  leaseRenewTimeoutMs: SESSION_LEASE_RENEW_TIMEOUT_MS,
   leaseFenceMs: SESSION_LEASE_FENCE_MS,
 };
 
@@ -83,6 +88,7 @@ export function sessionManagerConfigHolds(config: SessionManagerConfig): boolean
     isTimerMs(config.watchWindowMs) &&
     isTimerMs(config.leaseTtlMs) &&
     isTimerMs(config.leaseRenewMs) &&
+    isTimerMs(config.leaseRenewTimeoutMs) &&
     isTimerMs(config.leaseFenceMs) &&
     isCount(config.maxSessions) &&
     isCount(config.startConcurrency) &&
@@ -91,6 +97,7 @@ export function sessionManagerConfigHolds(config: SessionManagerConfig): boolean
     config.retryMs <= config.refusalRetryMs &&
     config.idleGraceMs < config.watchWindowMs &&
     2 * config.leaseRenewMs < config.leaseFenceMs &&
+    config.leaseRenewTimeoutMs < config.leaseRenewMs &&
     config.leaseFenceMs < config.leaseTtlMs &&
     config.leaseTtlMs < config.retryMs
   );

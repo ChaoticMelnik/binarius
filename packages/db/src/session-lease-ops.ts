@@ -1,12 +1,11 @@
 import { sql } from 'drizzle-orm';
 import type { Db } from './client';
 import { brokerSessionLeases } from './schema/broker-session-leases';
+import { millisecondsFromNow } from './trade-intent-ops';
 
 // The broker session lease (#93, docs/broker-session.md → The lease). Each operation is one
 // autocommit statement on the pool and locks nothing else, so it stays outside the lock chain;
 // every time is the database's, a duration goes in as milliseconds.
-
-const ttl = (ttlMs: number) => sql`now() + (${ttlMs}::int * interval '1 millisecond')`;
 
 // Takes a free or lapsed lease, or moves our own: one statement, the predicate inside
 // `on conflict ... where`. Two acquires of one key serialize on the row, and the second
@@ -18,7 +17,7 @@ export async function acquireSessionLease(
   const l = brokerSessionLeases;
   const rows = await db
     .insert(l)
-    .values({ brokerAccountId: accountId, ownerId, acquiredAt: sql`now()`, expiresAt: ttl(ttlMs) })
+    .values({ brokerAccountId: accountId, ownerId, acquiredAt: sql`now()`, expiresAt: millisecondsFromNow(ttlMs) })
     .onConflictDoUpdate({
       target: l.brokerAccountId,
       set: {
@@ -42,7 +41,7 @@ export async function renewSessionLeases(
   const l = brokerSessionLeases;
   const rows = await db
     .update(l)
-    .set({ expiresAt: ttl(ttlMs) })
+    .set({ expiresAt: millisecondsFromNow(ttlMs) })
     .where(
       sql`${l.ownerId} = ${ownerId}
         and ${l.brokerAccountId} = any(${sql.param([...accountIds])}::uuid[])

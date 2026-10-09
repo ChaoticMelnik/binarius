@@ -2,7 +2,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Db } from './client';
 import { hashToken } from './oauth-ops';
-import type { DbExecutor, Tx } from './trade-intent-ops';
+import { millisecondsFromNow, type DbExecutor, type Tx } from './trade-intent-ops';
 import { AuditAction, AuditActorType, AuditEntityType } from '@binarius/shared';
 import { auditLog } from './schema/audit-log';
 import { sqlLiteralList } from './schema/columns';
@@ -38,8 +38,6 @@ const CHALLENGE_RETENTION = sql`interval '1 hour'`;
 const CLEANUP_BATCH = 100;
 
 const OPEN_STATUS_LIST = sql`(${sqlLiteralList(OPEN_CHALLENGE_STATUSES)})`;
-
-const afterMs = (ms: number): SQL => sql`now() + (${ms}::int * interval '1 millisecond')`;
 
 /** `locked_until` while a lockout is running, by the database's clock; NULL once it expired. */
 const runningLockout = () =>
@@ -194,7 +192,7 @@ export async function countPasswordFailure(
     .set({
       failedPasswordAttempts: attempts,
       lockedUntil: sql`case
-          when (${attempts}) >= ${STAFF_MAX_PASSWORD_ATTEMPTS} then ${afterMs(STAFF_LOCKOUT_MS)}
+          when (${attempts}) >= ${STAFF_MAX_PASSWORD_ATTEMPTS} then ${millisecondsFromNow(STAFF_LOCKOUT_MS)}
           else null
         end`,
       updatedAt: sql`now()`,
@@ -421,7 +419,7 @@ export async function startLoginChallenge(
         staffId: input.staffId,
         ip: input.ip,
         userAgent: input.userAgent,
-        expiresAt: afterMs(ttlMs),
+        expiresAt: millisecondsFromNow(ttlMs),
       })
       .returning({ id: staffLoginChallenges.id, expiresAt: staffLoginChallenges.expiresAt });
     if (created === undefined) throw new Error('staff_login_challenges insert returned no row');
@@ -711,7 +709,7 @@ export async function completeLogin(
         tokenHash: hashToken(sessionToken),
         ip: input.ip,
         userAgent: input.userAgent,
-        expiresAt: afterMs(ttlMs),
+        expiresAt: millisecondsFromNow(ttlMs),
       })
       .returning({ id: staffSessions.id, expiresAt: staffSessions.expiresAt });
     if (session === undefined) throw new Error('staff_sessions insert returned no row');

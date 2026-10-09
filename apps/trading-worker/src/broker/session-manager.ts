@@ -108,17 +108,24 @@ export interface BrokerSessionManager extends TradeSessionSource {
 type WriteSource = SessionDeadLetter['source'];
 type WriteRef = Pick<SessionDeadLetter, 'mode' | 'brokerTradeIds'>;
 
+// One acquire's lease, shared by the starting entry and the running one that replaces it, so a
+// renewal answered across that handoff still moves the fence. `until` is the fence: monotonic
+// time until which the lease is ours.
+interface Lease {
+  until: number;
+}
+
 interface StartingEntry {
   kind: 'starting';
   candidate: SessionCandidate;
-  // the fence: monotonic time until which the lease is ours; unset until the acquire answered
-  leaseUntil?: number;
+  // unset until the acquire answered
+  lease?: Lease;
 }
 
 interface RunningEntry {
   kind: 'running';
   candidate: SessionCandidate;
-  leaseUntil: number;
+  lease: Lease;
   client: BrokerSocketClient;
   token: string;
   // this connection's user.data carried the account's broker user id
@@ -179,7 +186,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     if (stopping.signal.aborted) return;
     let earliest = Infinity;
     for (const entry of entries.values()) {
-      if (entry.leaseUntil !== undefined) earliest = Math.min(earliest, entry.leaseUntil);
+      if (entry.lease !== undefined) earliest = Math.min(earliest, entry.lease.until);
     }
     if (earliest === Infinity) return;
     fenceTimer = setTimeout(fence, Math.max(0, earliest - now()));
@@ -189,37 +196,55 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     fenceTimer = undefined;
     const at = now();
     for (const [accountId, entry] of [...entries]) {
-      if (entry.leaseUntil === undefined || entry.leaseUntil > at) continue;
-      logger.warn({ accountId, lateMs: Math.round(at - entry.leaseUntil) }, 'broker session lease fenced');
+      if (entry.lease === undefined || entry.lease.until > at) continue;
+      logger.warn({ accountId, lateMs: Math.round(at - entry.lease.until) }, 'broker session lease fenced');
       drop(accountId, config.retryMs);
     }
     armFence();
   }
 
-  // Only the entries whose acquire has answered: an acquire still in flight may not have
+  // Only the leases whose acquire has answered: an acquire still in flight may not have
   // committed, and a renewal that misses its id would drop a lease about to be ours. The answer
-  // applies to the same entry objects it was sent for.
+  // applies to an account that still holds the same lease, whichever entry carries it now.
   async function runRenewal() {
-    const sent = [...entries].filter(([, entry]) => entry.leaseUntil !== undefined);
+    const sent: [string, Lease][] = [];
+    for (const [accountId, entry] of entries) {
+      if (entry.lease !== undefined) sent.push([accountId, entry.lease]);
+    }
     if (sent.length === 0) return;
     const t0 = now();
-    let held: string[];
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<'timeout'>((resolve) => {
+      timeout = setTimeout(() => resolve('timeout'), config.leaseRenewTimeoutMs);
+    });
+    let held: string[] | 'timeout';
     try {
-      held = await leases.renew(
-        sent.map(([accountId]) => accountId),
-        config.leaseTtlMs,
-      );
+      held = await Promise.race([
+        leases.renew(
+          sent.map(([accountId]) => accountId),
+          config.leaseTtlMs,
+        ),
+        timedOut,
+      ]);
     } catch (error) {
       // the fence decides: one failed renewal leaves every lease trusted (2 × renew < fence)
       logger.error(errorLogFields(error), 'broker session lease renewal failed');
       return;
+    } finally {
+      clearTimeout(timeout);
+    }
+    // a statement stuck on the pool must not hold the next renewal back: it counts as one
+    // failure, and its late answer is ignored
+    if (held === 'timeout') {
+      logger.warn({ leases: sent.length }, 'broker session lease renewal timed out');
+      return;
     }
     if (stopping.signal.aborted) return;
     const kept = new Set(held);
-    for (const [accountId, entry] of sent) {
-      if (!isCurrent(accountId, entry)) continue;
+    for (const [accountId, lease] of sent) {
+      if (entries.get(accountId)?.lease !== lease) continue;
       if (kept.has(accountId)) {
-        entry.leaseUntil = Math.max(entry.leaseUntil ?? 0, t0 + config.leaseFenceMs);
+        lease.until = Math.max(lease.until, t0 + config.leaseFenceMs);
         continue;
       }
       logger.warn({ accountId }, 'broker session lease lost');
@@ -232,7 +257,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     if (stopping.signal.aborted) return Promise.resolve();
     renewing ??= runRenewal()
       .catch((error: unknown) => {
-        logger.error(errorLogFields(error), 'broker session lease renewal failed');
+        // the bookkeeping after an answer threw, not the database
+        logger.error(errorLogFields(error), 'broker session lease renewal threw');
       })
       .finally(() => {
         renewing = undefined;
@@ -524,7 +550,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       drop(accountId, config.retryMs);
       return;
     }
-    starting.leaseUntil = sentAt + config.leaseFenceMs;
+    starting.lease = { until: sentAt + config.leaseFenceMs };
     armFence();
     let outcome: AccessTokenOutcome;
     try {
@@ -542,7 +568,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     const entry: RunningEntry = {
       kind: 'running',
       candidate,
-      leaseUntil: starting.leaseUntil,
+      lease: starting.lease,
       client: openClient({
         url: deps.url,
         logger: logger.child({ accountId }),
@@ -725,7 +751,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     // fence, even before its timer has run: a late timer must not let a command through (#93)
     sessionFor(accountId) {
       const entry = entries.get(accountId);
-      return entry?.kind === 'running' && entry.verified && now() < entry.leaseUntil
+      return entry?.kind === 'running' && entry.verified && now() < entry.lease.until
         ? entry.client
         : undefined;
     },
