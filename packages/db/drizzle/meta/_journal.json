@@ -225,6 +225,13 @@
       "when": 1791526925708,
       "tag": "0031_broker_session_leases",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791531887964,
+      "tag": "0032_bot_profile_published",
+      "breakpoints": true
     }
   ]
 }

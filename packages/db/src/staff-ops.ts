@@ -982,6 +982,30 @@ export async function findStaffForPasswordChange(
 }
 
 /**
+ * The staff member behind a live session, by the same predicate as runAsStaff, without the touch
+ * and without an audit row. Its one caller is POST /admin/bot-texts/publish (#361): its Bot API
+ * calls cannot run inside a transaction that holds the session row, and its audit row has to
+ * carry their result, so the route writes that row itself after the calls.
+ */
+export async function readLiveStaffContext(
+  db: Db,
+  { token, idleMs = STAFF_SESSION_IDLE_MS }: { token: string; idleMs?: number },
+): Promise<StaffContext | undefined> {
+  const [row] = await db
+    .select({ sessionId: staffSessions.id, staffId: staff.id, login: staff.login })
+    .from(staffSessions)
+    .innerJoin(staff, eq(staff.id, staffSessions.staffId))
+    .where(
+      and(
+        eq(staffSessions.tokenHash, hashToken(token)),
+        eq(staff.status, StaffStatus.Active),
+        liveStaffSession(idleMs),
+      ),
+    );
+  return row;
+}
+
+/**
  * The change form's refusal under a running lockout (#78), the same shape as recordLoginLockout:
  * re-read in the recording transaction, `null` when it ended in between. Outside runAsStaff on
  * purpose — a refusal before any work, so a locked staff member hammering the form does not

@@ -23,6 +23,7 @@ import {
   failChallengeDelivery,
   findStaffForLogin,
   findStaffForPasswordChange,
+  readLiveStaffContext,
   listLiveStaffSessions,
   markChallengeCodeSent,
   markChallengePromptSent,
@@ -1364,6 +1365,82 @@ describe('changing your own password (#78)', () => {
         .where(eq(staff.id, seeded.staffId));
 
       expect(await findStaffForPasswordChange(tmp.db, { token })).toBeUndefined();
+    });
+  });
+
+  // the republish route's session check (#361); here for this block's session helper
+  describe('readLiveStaffContext', () => {
+    const seen = async (token: string) => {
+      const [row] = await tmp.db
+        .select({ lastSeenAt: staffSessions.lastSeenAt })
+        .from(staffSessions)
+        .where(eq(staffSessions.id, await sessionIdFor(token)));
+      return row?.lastSeenAt.toISOString();
+    };
+    const auditRows = async () => (await tmp.db.select({ id: auditLog.id }).from(auditLog)).length;
+
+    it('L1 answers the staff member of a live session without touching it or writing a row', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const token = await session(seeded);
+      await backdateSession(await sessionIdFor(token), '5 minutes');
+      const before = await seen(token);
+      const rows = await auditRows();
+
+      expect(await readLiveStaffContext(tmp.db, { token })).toEqual({
+        sessionId: await sessionIdFor(token),
+        staffId: seeded.staffId,
+        login: seeded.login,
+      });
+      expect(await seen(token)).toBe(before);
+      expect(await auditRows()).toBe(rows);
+    });
+
+    it.each([
+      ['a token nobody holds', async () => 'b'.repeat(43)],
+      [
+        'a revoked session',
+        async (token: string) => {
+          await tmp.db
+            .update(staffSessions)
+            .set({ revokedAt: sql`now()` })
+            .where(eq(staffSessions.id, await sessionIdFor(token)));
+          return token;
+        },
+      ],
+      [
+        'a session idle past the window',
+        async (token: string) => {
+          await backdateSession(await sessionIdFor(token), '61 minutes');
+          return token;
+        },
+      ],
+      [
+        'a session past its absolute lifetime',
+        async (token: string) => {
+          await tmp.db
+            .update(staffSessions)
+            .set({
+              createdAt: sql`now() - interval '25 hours'`,
+              expiresAt: sql`now() - interval '1 hour'`,
+            })
+            .where(eq(staffSessions.id, await sessionIdFor(token)));
+          return token;
+        },
+      ],
+    ])('L2 answers nothing for %s', async (_name, spoil) => {
+      const seeded = await seedStaff(tmp.db);
+      const token = await spoil(await session(seeded));
+      expect(await readLiveStaffContext(tmp.db, { token })).toBeUndefined();
+    });
+
+    it('L2 answers nothing once the owner is disabled', async () => {
+      const seeded = await seedStaff(tmp.db);
+      const token = await session(seeded);
+      await tmp.db
+        .update(staff)
+        .set({ status: StaffStatus.Disabled })
+        .where(eq(staff.id, seeded.staffId));
+      expect(await readLiveStaffContext(tmp.db, { token })).toBeUndefined();
     });
   });
 

@@ -8,11 +8,13 @@ import {
   botTextChangeProblems,
   isBotTextKey,
   resolveBotTextOverrides,
+  type AdminBotProfileMethodResult,
   type BotTextChangeProblem,
+  type BotTextKey,
   type BotTextRejection,
   AuditAction,
+  AuditActorType,
   AuditEntityType,
-  type AuditActorType,
 } from '@binarius/shared';
 import type { Db } from './client';
 import { auditLog } from './schema/audit-log';
@@ -232,6 +234,33 @@ async function recorded(
     return { ok: false, reason: result.reason, currentVersion: result.currentVersion };
   }
   return result;
+}
+
+export interface BotProfilePublishRecord {
+  staffId: string;
+  path: string;
+  trigger: 'save' | 'reset' | 'republish';
+  // the key whose save or reset published; none for a republish
+  key?: BotTextKey;
+  methods: readonly AdminBotProfileMethodResult[];
+}
+
+/**
+ * The admin's publish of the command menu and the profile (#361), on its own after the Bot API
+ * calls: a row inside the write's transaction could not carry their result, and the calls never
+ * run inside one. Written whatever Telegram answered.
+ */
+export async function recordBotProfilePublish(
+  db: DbExecutor,
+  { staffId, path, trigger, key, methods }: BotProfilePublishRecord,
+): Promise<void> {
+  await db.insert(auditLog).values({
+    actorType: AuditActorType.Admin,
+    actorId: staffId,
+    action: AuditAction.BotProfilePublished,
+    entityType: AuditEntityType.BotText,
+    payload: { path, trigger, ...(key === undefined ? {} : { key }), methods },
+  });
 }
 
 // The writers' lock: conflicts with itself and with every row write, not with a plain SELECT.
