@@ -89,8 +89,13 @@ export type SocketOpenTradeResult =
   | { outcome: 'fail'; failures: OpenTradeFailure[] }
   // nothing was emitted: the client is not ready, or the caller's signal was already aborted
   | { outcome: 'not_sent'; reason: 'not_ready' | 'aborted'; state: BrokerSocketState }
-  // emitted, and no answer: the session changed state, or the caller aborted while waiting
-  | { outcome: 'unknown'; reason: 'state_changed' | 'aborted'; state: BrokerSocketState };
+  // emitted, and no answer: the session changed state, the caller aborted while waiting, or no
+  // answer came within the command timeout
+  | {
+      outcome: 'unknown';
+      reason: 'state_changed' | 'aborted' | 'timeout';
+      state: BrokerSocketState;
+    };
 
 export type BrokerSocketLogger = Pick<pino.Logger, 'debug' | 'info' | 'warn' | 'error'>;
 
@@ -117,9 +122,9 @@ export interface BrokerSocketClient {
   subscriptions(): number[];
   // emits user.<mode>.open_trade only while ready on an untainted connection; the answer is the
   // first open_trade.fail of that mode, or the first open_trade.success of that mode with the
-  // command's asset, action and amount, on the same connection. A command aborted while waiting
-  // taints its connection: the client drops it and takes no command until the next ready. At
-  // most one command at a time: a second one throws.
+  // command's asset, action and amount, on the same connection, within the command timeout. A
+  // command aborted or timed out while waiting taints its connection: the client drops it and
+  // takes no command until the next ready. At most one command at a time: a second one throws.
   openTrade(
     mode: TradeMode,
     request: SocketOpenTradeRequest,
@@ -513,26 +518,35 @@ export function createBrokerSocketClient(options: BrokerSocketClientOptions): Br
         request,
         settle: (result) => {
           signal.removeEventListener('abort', onAbort);
+          clearTimeout(timer);
           resolve(result);
         },
       };
-      function onAbort() {
-        if (pending !== command) return;
-        settleCommand({ outcome: 'unknown', reason: 'aborted', state });
-        const owner = command.session;
-        const live = owner.connection;
-        if (sessionEnded(owner) || live?.ordinal !== command.connection) return;
-        // A late answer of this command would answer the next one: the connection takes no
-        // command until it is replaced. engine.io's close is a transport loss to socket.io, whose
-        // backoff reconnects; with packets still in its write buffer engine.io drains them first
-        // and `disconnect` comes later, so the flag covers the window until it does.
-        live.tainted = true;
-        logger.warn({ connection: command.connection }, 'broker socket connection tainted');
-        owner.socket.io.engine.close();
-      }
+      const onAbort = () => endWithoutAnswer(command, 'aborted');
+      const timer = setTimeout(
+        () => unit(() => endWithoutAnswer(command, 'timeout')),
+        timing.commandTimeoutMs,
+      );
       pending = command;
       signal.addEventListener('abort', onAbort);
     });
+  }
+
+  // the command's own timer or the caller's abort: the command ends with no answer on a connection
+  // that may still be live
+  function endWithoutAnswer(command: PendingCommand, reason: 'aborted' | 'timeout') {
+    if (pending !== command) return;
+    settleCommand({ outcome: 'unknown', reason, state });
+    const owner = command.session;
+    const live = owner.connection;
+    if (sessionEnded(owner) || live?.ordinal !== command.connection) return;
+    // A late answer of this command would answer the next one: the connection takes no command
+    // until it is replaced. engine.io's close is a transport loss to socket.io, whose backoff
+    // reconnects; with packets still in its write buffer engine.io drains them first and
+    // `disconnect` comes later, so the flag covers the window until it does.
+    live.tainted = true;
+    logger.warn({ connection: command.connection }, 'broker socket connection tainted');
+    owner.socket.io.engine.close();
   }
 
   function dispatch(current: Session, event: BrokerEvent) {

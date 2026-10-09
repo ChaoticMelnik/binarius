@@ -28,6 +28,7 @@ describe('broker socket timing', () => {
       resolveBrokerSocketTiming({
         connectTimeoutMs: 200,
         authTimeoutMs: 200,
+        commandTimeoutMs: 70,
         reconnectDelayMs: 40,
         reconnectDelayMaxMs: 40,
         jitter: 0,
@@ -35,6 +36,7 @@ describe('broker socket timing', () => {
     ).toEqual({
       connectTimeoutMs: 200,
       authTimeoutMs: 200,
+      commandTimeoutMs: 70,
       reconnectDelayMs: 40,
       reconnectDelayMaxMs: 40,
       jitter: 0,
@@ -51,6 +53,7 @@ describe('broker socket timing', () => {
     ['a connect timeout above the timer limit', { connectTimeoutMs: 2 ** 31 }],
     ['NaN', { authTimeoutMs: Number.NaN }],
     ['a zero auth timeout', { authTimeoutMs: 0 }],
+    ['a zero command timeout', { commandTimeoutMs: 0 }],
     ['a negative first wait', { reconnectDelayMs: -1 }],
     ['an infinite connect timeout', { connectTimeoutMs: Number.POSITIVE_INFINITY }],
     ['a NaN jitter', { jitter: Number.NaN }],

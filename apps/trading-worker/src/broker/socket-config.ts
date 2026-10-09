@@ -4,16 +4,21 @@
 //                                          namespace CONNECT after it is not bounded by socket.io
 //   BROKER_SOCKET_AUTH_TIMEOUT_MS        — user.auth sent → user.auth.success received; live
 //                                          ~50 ms (2026-10-03), the same bound as one REST call
+//   BROKER_SOCKET_COMMAND_TIMEOUT_MS     — user.<mode>.open_trade sent → its answer
+//                                          (open_trade.success / fail) on the same connection;
+//                                          the same bound as one REST call
 //   BROKER_SOCKET_RECONNECT_DELAY_MS     — the first wait between attempts (`reconnectionDelay`)
 //   BROKER_SOCKET_RECONNECT_DELAY_MAX_MS — the longest wait between attempts
 //                                          (`reconnectionDelayMax`)
 //   BROKER_SOCKET_RECONNECT_JITTER       — the randomisation of each wait (`randomizationFactor`)
 // The chain: every *_MS is an integer in [1, MAX_TIMER_MS], the first wait does not exceed the
 // longest one, a handshake is not allowed longer than a connection attempt, and the jitter is in
-// [0, 1) — at 1 a wait could shrink to 0. The link to the worker's shutdown budget is in
-// intents/config.ts.
+// [0, 1) — at 1 a wait could shrink to 0. The command timeout is a separate operation, not ordered
+// against the others here. The links to the worker's shutdown budget and to the submit deadline's
+// floor are in intents/config.ts.
 export const BROKER_SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 export const BROKER_SOCKET_AUTH_TIMEOUT_MS = 5_000;
+export const BROKER_SOCKET_COMMAND_TIMEOUT_MS = 5_000;
 export const BROKER_SOCKET_RECONNECT_DELAY_MS = 1_000;
 export const BROKER_SOCKET_RECONNECT_DELAY_MAX_MS = 10_000;
 export const BROKER_SOCKET_RECONNECT_JITTER = 0.5;
@@ -21,6 +26,7 @@ export const BROKER_SOCKET_RECONNECT_JITTER = 0.5;
 export interface BrokerSocketTiming {
   connectTimeoutMs: number;
   authTimeoutMs: number;
+  commandTimeoutMs: number;
   reconnectDelayMs: number;
   reconnectDelayMaxMs: number;
   jitter: number;
@@ -29,6 +35,7 @@ export interface BrokerSocketTiming {
 export const DEFAULT_BROKER_SOCKET_TIMING: Readonly<BrokerSocketTiming> = {
   connectTimeoutMs: BROKER_SOCKET_CONNECT_TIMEOUT_MS,
   authTimeoutMs: BROKER_SOCKET_AUTH_TIMEOUT_MS,
+  commandTimeoutMs: BROKER_SOCKET_COMMAND_TIMEOUT_MS,
   reconnectDelayMs: BROKER_SOCKET_RECONNECT_DELAY_MS,
   reconnectDelayMaxMs: BROKER_SOCKET_RECONNECT_DELAY_MAX_MS,
   jitter: BROKER_SOCKET_RECONNECT_JITTER,
@@ -45,6 +52,7 @@ export function brokerSocketTimingHolds(timing: BrokerSocketTiming): boolean {
   return (
     isTimerMs(timing.connectTimeoutMs) &&
     isTimerMs(timing.authTimeoutMs) &&
+    isTimerMs(timing.commandTimeoutMs) &&
     isTimerMs(timing.reconnectDelayMs) &&
     isTimerMs(timing.reconnectDelayMaxMs) &&
     Number.isFinite(timing.jitter) &&

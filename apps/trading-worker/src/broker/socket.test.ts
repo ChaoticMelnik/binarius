@@ -1053,6 +1053,59 @@ describe('openTrade', () => {
     expect(typesOf(h.events)).not.toContain(BrokerEventType.OpenTradeSuccess);
   });
 
+  it('answers unknown on its own timer when the broker is silent, and drops the connection', async () => {
+    const h = harness({ timing: { ...TIMING, commandTimeoutMs: 60 } });
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    broker.socket.failNext('openTrade', { delayMs: 200 });
+    const signal = new AbortController().signal;
+    expect(await h.client.openTrade(TradeMode.Demo, REQUEST, signal)).toEqual({
+      outcome: 'unknown',
+      reason: 'timeout',
+      state: BrokerSocketState.Ready,
+    });
+    expect(signal.aborted).toBe(false);
+    await ready(h, 2);
+    expect(h.states.map(({ to, reason }) => ({ to, reason })).slice(3)).toEqual([
+      { to: BrokerSocketState.Reconnecting, reason: 'forced close' },
+      { to: BrokerSocketState.Authenticating, reason: undefined },
+      { to: BrokerSocketState.Ready, reason: undefined },
+    ]);
+    expect(h.logs('broker socket connection tainted')).toEqual([
+      expect.objectContaining({ level: LEVEL.warn, connection: 1 }),
+    ]);
+    expect(openTradeRecords()).toHaveLength(1);
+    broker.socket.failNext('openTrade', { fail: [{ message: 'second' }] });
+    expect(await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal)).toEqual(
+      { outcome: 'fail', failures: [{ message: 'second' }] },
+    );
+  });
+
+  it('clears the command timer once answered', async () => {
+    const armed: unknown[] = [];
+    const setTimer = globalThis.setTimeout;
+    const commandTimeoutMs = 4_321;
+    // the client's only timer with this delay; socket.io's own use other delays
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: () => void,
+      delay?: number,
+    ) => {
+      const handle = setTimer(handler, delay);
+      if (delay === commandTimeoutMs) armed.push(handle);
+      return handle;
+    }) as typeof setTimeout);
+    const cleared = vi.spyOn(globalThis, 'clearTimeout');
+    const h = harness({ timing: { ...TIMING, commandTimeoutMs } });
+    h.client.start(CREDENTIALS);
+    await ready(h);
+    broker.socket.failNext('openTrade', { fail: [{ message: 'refused' }] });
+    expect(await h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal)).toEqual(
+      { outcome: 'fail', failures: [{ message: 'refused' }] },
+    );
+    expect(armed).toHaveLength(1);
+    expect(cleared).toHaveBeenCalledWith(armed[0]);
+  });
+
   describe('a command that ended without its answer', () => {
     // the real socket, its engine.close() recorded and not run: a broker slow to notice the drop,
     // so a late answer of the aborted command can still arrive on its connection
@@ -1107,6 +1160,38 @@ describe('openTrade', () => {
       expect(h.logs('broker socket connection tainted')).toEqual([
         expect.objectContaining({ level: LEVEL.warn, connection: 1 }),
       ]);
+    });
+
+    it('a late fail of the timed-out command never answers the next one', async () => {
+      const kept = keepConnectionOpen();
+      const h = harness({
+        openSocket: kept.openSocket,
+        timing: { ...TIMING, commandTimeoutMs: 60 },
+      });
+      h.client.start(CREDENTIALS);
+      await ready(h);
+      // EUR/USD min_timeframe is 60: the store refuses the first command once its delay is over
+      broker.socket.failNext('openTrade', { delayMs: 200 });
+      broker.socket.failNext('openTrade', { silent: true });
+      expect(
+        await h.client.openTrade(
+          TradeMode.Demo,
+          { ...REQUEST, durationSec: 1 },
+          new AbortController().signal,
+        ),
+      ).toEqual({ outcome: 'unknown', reason: 'timeout', state: BrokerSocketState.Ready });
+      const second = track(
+        h.client.openTrade(TradeMode.Demo, REQUEST, new AbortController().signal),
+      );
+      await until('the late fail', () => typesOf(h.events).includes(BrokerEventType.OpenTradeFail));
+      await until('the second command answered', () => second.settled);
+      expect(await second.promise).toEqual({
+        outcome: 'not_sent',
+        reason: 'not_ready',
+        state: BrokerSocketState.Ready,
+      });
+      expect(openTradeRecords()).toHaveLength(1);
+      expect(kept.closes).toHaveLength(1);
     });
 
     it('drops the tainted connection; the next one answers its own command', async () => {
