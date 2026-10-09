@@ -157,7 +157,7 @@ line below and finds no `SECRET-` sentinel and no broker host.
 ## Boundaries
 
 - **#90**: the token source and its backend route, `BROKER_API_BASE_URL`, `BACKEND_URL`,
-  `INTERNAL_API_TOKEN`, the REST client in `index.ts`, the reconciler and the catch-up.
+  `INTERNAL_API_TOKEN`, the REST client in `worker.ts` (`index.ts` until #95), the reconciler and the catch-up.
 - **#101**: implemented — the session manager ([broker-session.md](broker-session.md)) and the
   taint; no `refresh()` after `accepted` (the `update_balance` before `open_trade.success` is it).
 - **#91**: the "REST only before send" rule and the four stages are proven here.

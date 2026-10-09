@@ -212,7 +212,7 @@ finishes on its own path.
 ## The orchestrator
 
 `createSessionOrchestrator({ db, signals, pairs, logger, config })` in the worker, started in
-`index.ts` after the settlement catch-up. It runs whether or not a session exists: an idle tick is
+`worker.ts` (`start()`) after the settlement catch-up. It runs whether or not a session exists: an idle tick is
 three UPDATEs that match nothing and one indexed scan. There is no env variable.
 
 **The tick** (every `TRADING_SESSION_TICK_MS`, one at a time, the first at `start()`), in this
@@ -294,8 +294,8 @@ The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code adde
 - **`stop()`** clears the timer, aborts the attempt's backend call and waits for the running tick:
   one attempt at most, which `intents/config.ts` keeps inside the shutdown's phase 1. An attempt cut
   by the stop writes nothing (E10).
-- **Hold-backs live in memory**, keyed by session id, in one worker container (#94: several
-  processes; #93's lease covers the broker sockets only);
+- **Hold-backs live in memory**, keyed by session id, in one worker container (two only during a
+  deploy's overlap, #95; #94: several processes; #93's lease covers the broker sockets only);
   a restart drops them, and the next attempt is idempotent.
 
 ## Backend calls
@@ -556,9 +556,11 @@ that takes 15 s, the default `DURATION_SEC`.) `ACCOUNT_ID` is needed only with m
 3. **Two clocks.** The deadline is the database's; the hold-backs, the candle boundary and the
    sizer's `nowMs` are the worker's. Both run on one host under compose; the sizer reads elapsed
    time only for Martingale, which is off.
-4. **One container.** The hold-backs live in memory and two workers would attempt the same session;
+4. **One container, two during a deploy.** The hold-backs live in memory and two workers would attempt the same session;
    the step key makes the second a replay or a `client_request_id_conflict` (reschedule), never a
-   second trade on the step. Several workers are #94 (#93's lease covers the broker sockets only).
+   second trade on the step. Two workers run for up to ~41 s of every deploy
+   ([worker-deploy.md](worker-deploy.md), #95, `worker.handoff.db.test.ts` H4); several workers
+   are #94 (#93's lease covers the broker sockets only).
 5. **An intent past the deadline.** The scan and the history read guard the deadline on the
    database clock; a deadline that passes during the attempt's backend calls lets that attempt
    create its intent. The creation starts at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) late;
