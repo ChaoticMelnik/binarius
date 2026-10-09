@@ -363,7 +363,8 @@ its signal scanner take up to 100 each by default (the shares are in
 `packages/shared/src/broker-budget.ts`, docs/signal.md → The budget). The worker's worst case is 16 × (2 lists × 2 pages + 1 balance
 GET, #92) × 4 ticks + 3 × 2 pages × 12 ticks = 392 GETs a minute, at most `WORKER_BROKER_GETS_PER_MINUTE` (400; checked at
 import, with a whole number of ticks a minute for both loops), per worker process: a deploy's
-overlap runs two for up to ~41 s ([worker-deploy.md](worker-deploy.md), #95). It is a
+overlap runs two for the readiness wait (≤ 120 s) plus the drain (≤ 40 s), or until an operator
+resolves an interrupted run ([worker-deploy.md](worker-deploy.md) → The overlap's length, #95). It is a
 true bound because both loops tick only on their intervals — the reconciliation job does not start
 a tick, and a tick never overlaps the next. Reconciliation handles at most 64 intents a minute; a
 new `reconciling` intent waits for the next tick (≤ 15 s). The catch-up settles at most 36 intents
