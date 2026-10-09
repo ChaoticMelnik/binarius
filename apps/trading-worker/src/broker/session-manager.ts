@@ -227,8 +227,14 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       try {
         await write();
       } catch (error) {
+        // the trade ids too: the dead letter keeps only the hour's first event's
         logger.error(
-          { accountId, source, ...errorLogFields(error) },
+          {
+            accountId,
+            source,
+            ...(ref.brokerTradeIds.length === 0 ? {} : { brokerTradeIds: ref.brokerTradeIds }),
+            ...errorLogFields(error),
+          },
           'broker session write failed',
         );
         // inside the task: the account's queue and stop()'s wait both include it

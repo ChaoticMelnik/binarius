@@ -347,6 +347,30 @@ describe('deadLetterSessionWrite (#92)', () => {
     ]);
   });
 
+  it('logs a write that fails after its timeout once, not twice', async () => {
+    const messages: Record<string, unknown>[] = [];
+    const quiet = pino(
+      { level: 'error' },
+      { write: (line: string) => void messages.push(JSON.parse(line) as Record<string, unknown>) },
+    );
+    let fail: (error: Error) => void = () => undefined;
+    const late = new Promise<unknown>((_resolve, reject) => {
+      fail = reject;
+    });
+    await deadLetterSessionWrite(
+      { add: () => late },
+      quiet,
+      { source: 'user_data', accountId: 'acc-3', mode: null, brokerTradeIds: [] },
+      20,
+    );
+    fail(new Error('connection closed'));
+    await late.catch(() => undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(messages.filter((m) => m.msg === 'dlq_publish_failed')).toEqual([
+      expect.objectContaining({ reason: 'timeout' }),
+    ]);
+  });
+
   // a Redis that is down holds the command instead of failing it (maxRetriesPerRequest: null)
   it('gives up waiting after its timeout and says so', async () => {
     const messages: Record<string, unknown>[] = [];

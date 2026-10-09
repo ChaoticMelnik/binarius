@@ -39,7 +39,7 @@ type SkipReason = 'intent_unresolved' | 'settlement_pending' | 'trades_changed';
 const byMode = (rows: HeldExposure[], mode: TradeMode) => rows.find((row) => row.mode === mode)!;
 
 const sameTrades = (before: HeldExposure, after: HeldExposure) =>
-  before.intentCount === after.intentCount &&
+  before.recentIntentCount === after.recentIntentCount &&
   before.openTradeIds.length === after.openTradeIds.length &&
   before.openTradeIds.every((id, i) => id === after.openTradeIds[i]);
 
@@ -124,7 +124,13 @@ export function createBalanceCheck({ db, rest, tokens, logger }: BalanceCheckDep
         );
         return 'failed';
       }
-      const written = await upsertBalanceSnapshot(db, { brokerAccountId, user, requested: false });
+      // a socket event since the first read is newer than this answer and keeps its mode
+      const written = await upsertBalanceSnapshot(db, {
+        brokerAccountId,
+        user,
+        requested: false,
+        eventsAfter: byMode(before, TradeMode.Demo).readAt,
+      });
       if (!written.written) {
         logger.warn(
           { brokerAccountId, field: written.field },

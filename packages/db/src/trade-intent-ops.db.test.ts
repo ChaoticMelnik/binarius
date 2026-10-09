@@ -1320,18 +1320,20 @@ describe('readHeldExposure (#92)', () => {
       {
         mode: 'demo',
         openTradeIds: [],
-        intentCount: 0,
+        recentIntentCount: 0,
         unresolvedIntent: false,
         settlementPending: false,
         heldExceedsOpen: false,
+        readAt: expect.any(Date),
       },
       {
         mode: 'real',
         openTradeIds: [],
-        intentCount: 0,
+        recentIntentCount: 0,
         unresolvedIntent: false,
         settlementPending: false,
         heldExceedsOpen: null,
+        readAt: expect.any(Date),
       },
     ]);
     expect(
@@ -1374,19 +1376,33 @@ describe('readHeldExposure (#92)', () => {
     expect(await modeOf(seed.brokerAccountId, 'real', { real: money('1') })).toEqual({
       mode: 'real',
       openTradeIds: [],
-      intentCount: 0,
+      recentIntentCount: 0,
       unresolvedIntent: false,
       settlementPending: false,
       heldExceedsOpen: true,
+      readAt: expect.any(Date),
     });
   });
 
-  it('H6 counts every intent of the mode, so one created between two reads shows', async () => {
+  it('H6 counts the recent intents of the mode, so one created between two reads shows', async () => {
     const first = await acceptedIntent();
-    expect((await modeOf(first.brokerAccountId, 'demo')).intentCount).toBe(1);
+    expect((await modeOf(first.brokerAccountId, 'demo')).recentIntentCount).toBe(1);
     await settle(first.intent, closedTradeFor(first.open));
     await createTradeIntent(tmp.db, intentRequest(first.telegramUserId));
-    expect((await modeOf(first.brokerAccountId, 'demo')).intentCount).toBe(2);
+    expect((await modeOf(first.brokerAccountId, 'demo')).recentIntentCount).toBe(2);
+    // past the window an intent no longer counts: the count is bounded by it, not by history
+    await tmp.db
+      .update(tradeIntents)
+      .set({ createdAt: sql`now() - interval '11 minutes'` })
+      .where(eq(tradeIntents.id, first.intent.id));
+    expect((await modeOf(first.brokerAccountId, 'demo')).recentIntentCount).toBe(1);
+  });
+
+  it('H7 reads the database clock once, the same in both rows', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const rows = await readHeldExposure(tmp.db, { brokerAccountId: seed.brokerAccountId });
+    expect(rows[0]!.readAt).toBeInstanceOf(Date);
+    expect(rows[1]!.readAt.getTime()).toBe(rows[0]!.readAt.getTime());
   });
 });
 

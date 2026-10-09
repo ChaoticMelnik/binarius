@@ -214,8 +214,10 @@ on top of #99's socket client, which writes nothing itself:
 - No `refresh()` after `accepted`: the `update_balance` the broker sends before
   `open_trade.success` is the snapshot after the trade. After a reconciliation outcome the
   worker's balance check (#92) writes the snapshot itself through `upsertBalanceSnapshot`, after
-  the same id check, with `requested: false`; it records no refresh error (`last_refresh_error`
-  stays the backend's). The trade command executor (#100) writes nothing.
+  the same id check, with `requested: false` and `eventsAfter` (the database clock of its first
+  read): a mode whose `<mode>_event_at` is newer keeps its amounts, since the socket event is
+  newer than the answer. Like any successful write it clears `last_refresh_error`; it never records
+  one (a failed check only logs). The trade command executor (#100) writes nothing.
 
 ## Observed live
 
@@ -253,7 +255,8 @@ on top of #99's socket client, which writes nothing itself:
   today. Future code that needs a hard guarantee revokes the user's accounts in the same
   transaction, in the order `users → broker_accounts`.
 - The worker's check after a reconciliation (#92) writes the row outside the backend's single
-  flight: the last write wins, and both are the broker's answer.
+  flight: the last write wins, and both are the broker's answer. A socket event that lands during
+  the check's GET keeps its mode (`eventsAfter`); the backend's REST refresh passes none.
 - The check compares `held` only after reconciliation outcomes: a double open with no `unknown`
   intent (a cross-socket answer, broker-session.md risk 4) is seen at the account's next
   reconciliation. A trade the user placed by hand on the broker counts in `held` and in no row of
@@ -263,7 +266,7 @@ on top of #99's socket client, which writes nothing itself:
 
 ## Boundaries
 
-- #101: the socket writers above, implemented. #92 (shipped): the worker's check after a reconciliation outcome writes the snapshot and compares `held`; it has no `refresh()` and records no refresh error.
+- #101: the socket writers above, implemented. #92 (shipped): the worker's check after a reconciliation outcome writes the snapshot and compares `held`; it has no `refresh()` and never records a refresh error.
 - The bot's display, `BackendClient.readTradingAccess` and the link
   `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`: [bot-menu.md](bot-menu.md).
 - The money unit is whole currency units (live 2026-10-03, [broker-rest.md](broker-rest.md) →

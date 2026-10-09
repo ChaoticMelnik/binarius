@@ -306,12 +306,15 @@ alerted, and the parked intent keeps its mode out of any compare. The check neve
 outcome or the intent:
 
 1. `readHeldExposure` (`packages/db`, one statement, no locks): per mode, our open
-   `broker_trades`, the count of the mode's intents, whether one is in flight (non-terminal and not
+   `broker_trades`, the count of the mode's intents created within the last 10 minutes
+   (`RECENT_INTENTS_WINDOW_MS`: bounded by the window, not by the account's history; one ageing
+   out between the reads only skips the compare), whether one is in flight (non-terminal and not
    `accepted` with an open linked trade), and whether an open trade is at or past its expected close
    by the database clock.
 2. The token with `mayRefresh: false` (Rule 12), then one `GET /v1/broker/user`.
 3. The id check against `broker_accounts.broker_user_id`, then `upsertBalanceSnapshot` with the
-   answer (its domain check included). Another user's id or a value out of the domain writes
+   answer (its domain check included) and `eventsAfter` = the first read's database clock: a mode
+   whose socket event landed since keeps the newer amounts. Another user's id or a value out of the domain writes
    nothing and compares nothing.
 4. `readHeldExposure` again, now with the broker's `held` per mode: `held > sum(open amount)`
    is compared in SQL `numeric` (Rule 2).
@@ -319,7 +322,7 @@ outcome or the intent:
    - an intent in flight at either read → `intent_unresolved`;
    - an open trade past its expected close (the broker may already have settled it) →
      `settlement_pending`;
-   - the open trade ids or the intent count differ between the reads → `trades_changed`.
+   - the open trade ids or the recent intent count differ between the reads → `trades_changed`.
    A skip is `info` `balance check not compared` `{ brokerAccountId, mode, reason }`. Otherwise,
    when the broker holds more than our open trades, the alert is
    `error { brokerAccountId, mode, direction: 'broker_holds_more' } broker balance mismatch` —
@@ -421,7 +424,10 @@ the log line marks every failure. The session manager awaits the write inside th
 write queue, so `stop()` waits for it too, but never longer than `DEAD_LETTER_WRITE_TIMEOUT_MS`
 (1 s, below `SESSION_STOP_BUDGET_MS`): the worker's Redis connection holds a command while
 Redis is down instead of failing it, and the queue then goes on after an `error`
-`dlq_publish_failed` with `reason: 'timeout'` (the entry lands once Redis is back). The writes
+`dlq_publish_failed` with `reason: 'timeout'` (the entry lands once Redis is back, unless the
+worker shuts down first: `redis.quit()` drops the queued command; a later failure of the same
+write is not logged again). The log line `broker session write failed` carries the event's trade
+ids, so the ids of the hour's later failures are not lost with their dead letters. The writes
 `stop()` drops are not failures and leave nothing. No exception text is stored — it can carry connection
 details — the log line next to it has the error. A failure to write the entry is logged as
 `dlq_publish_failed`; the worker keeps running. Writes started by jobs that fail during a
