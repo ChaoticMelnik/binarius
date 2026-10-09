@@ -86,12 +86,15 @@ the code today moves the cache in the same transaction as its ledger row:
 
 - `createInTransaction` (reserve, `trade-intent-ops.ts`);
 - `releaseTokens` (release, through `rejectIntent` / `rejectExpiredIntent`);
-- `grantLinkBonus` (the starter pack, through `confirmBrokerAccount`, `link-bonus-ops.ts`).
+- `grantLinkBonus` (the starter pack, through `confirmBrokerAccount`, `link-bonus-ops.ts`);
+- `consumeTokens` (settle, through `settleIntent`, `trade-intent-ops.ts`, #17);
+- `adjustTokens` (the admin's manual adjustment, `token-adjustment-ops.ts`, #246;
+  [admin-pages.md](admin-pages.md) → Корректировка токенов).
 
 `users_token_reserved_check` keeps `0 <= reserved <= balance` per statement.
-`token-balance-ops.db.test.ts` checks that the cache equals the ledger sums after each of those
-writers and under a concurrent burst of reserves. That equality is held by the writers, not by a
-trigger. A new writer — purchases (#117), manual adjustments (#246), settlement (ARCH-04) — must
+`token-balance-ops.db.test.ts` and `token-adjustment-ops.db.test.ts` check that the cache equals the
+ledger sums after each of those writers and under a concurrent burst of reserves. That equality is held by the writers, not by a
+trigger. A new writer — purchases (#117), settlement (ARCH-04) — must
 write its ledger row and the cache in one transaction, or this endpoint will be off by the
 missing delta.
 
@@ -212,6 +215,7 @@ may save: the stake is a preference, and trades refuse at creation.
 - The bot's display and `BackendClient.readTradingAccess`: [bot-menu.md](bot-menu.md).
 - **#121**: may read `tradingOpen` for the start screen; it is one switch for demo and real
   (#144). **#135** (a revoked grant and running sessions) is separate from it.
-- **#117, #246, ARCH-04**: future ledger writers, bound by the same-transaction rule above.
+- **#117, ARCH-04**: future ledger writers, bound by the same-transaction rule above; **#246** —
+  `adjustTokens`, the admin's manual adjustment ([admin-pages.md](admin-pages.md)).
 - `/users/start` and `/users/account` carry no balance, by design: their views stay allowlists
   without it.

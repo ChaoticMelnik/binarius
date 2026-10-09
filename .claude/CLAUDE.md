@@ -106,7 +106,7 @@ PostgreSQL + Drizzle ORM (решение зафиксировано 2026-09-21, 
 - **Major — только дефект поведения.** Качество доказательств (тест, который не мог упасть; формулировка сильнее кода) — Minor, если этот тест не единственная защита инварианта или свойства безопасности/денег/целостности данных (`.claude/skills/reviewer/SKILL.md` → Severity Guide).
 - Доменные инварианты, подтверждённые кодом (полный список с местами, где они enforced, — `.claude/skills/architect/SKILL.md` → Architecture Rules; здесь — только короткая памятка):
   1. Статусы — `text` + CHECK из одной `as const`-константы; литералы значений вне её файла ESLint `local/no-status-literal` ловит частично (что не ловит — Architecture Rules п.1).
-  2. Деньги/токены — `bigint`/`numeric` string-mode + `DecimalString`, никогда JS `number`.
+  2. Деньги/токены — `bigint`/`numeric` string-mode + `DecimalString`, никогда JS `number`; кэш `users` пишут пять писателей леджера в одной транзакции со строкой (Rule 2).
   3. `token_ledger` и `audit_log` — append-only, включая TRUNCATE (триггеры).
   4. Владение строк — композитными FK, не проверками в коде.
   5. Порядок блокировок `users → broker_accounts → trading_sessions → trade_intents`, `broker_accounts` — `FOR NO KEY UPDATE`; домен staff — строка `staff` первой (`FOR NO KEY UPDATE`: CLI, `startLoginChallenge`, `runAsStaff({ lockStaff: true })` у смены пароля и revoke), пара сессий разных сотрудников — #151.
