@@ -102,7 +102,6 @@ const breaker = createCircuitBreaker({
   stopTrading: (input) => stopTrading(db, input),
   logger,
   config: env.circuitBreaker,
-  runningSessions: () => sessions?.running ?? 0,
 });
 const sessions =
   env.brokerWsUrl === undefined
@@ -130,6 +129,7 @@ const sessions =
         },
         lossObserver: {
           lost: (accountId) => breaker.socketLost(accountId),
+          ready: (accountId) => breaker.socketReady(accountId),
           graceMs: SOCKET_LOSS_GRACE_MS,
         },
         logger,

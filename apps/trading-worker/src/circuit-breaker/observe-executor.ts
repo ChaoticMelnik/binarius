@@ -14,6 +14,9 @@ export function observeExecutor(
   return {
     async submit(intent: TradeIntentRow, signal: AbortSignal) {
       const result = await executor.submit(intent, signal);
+      // cut by the processor's deadline or a stop: our own limit, not the broker's silence (the
+      // time may have gone to the token route)
+      if (signal.aborted) return result;
       if (result.outcome === 'unknown') {
         // another unknown reason is not the broker's silence; none exists today
         if (result.reason === TradeIntentFailureReason.BrokerUnavailable) {

@@ -161,7 +161,7 @@ Signals, thresholds and the operator's procedure:
 - `packages/db/src/trading-switch-ops.db.test.ts`: the seed (T1), the writers and their audit
   rows (T2–T5; T2b the breaker's `via`), the missing row (T6), a reopen after a breaker stop (T9).
 - `apps/trading-worker/src/circuit-breaker/*.test.ts`: the window (W1–W6), the breaker (B1–B6),
-  the submit decorator (D1–D4), the constants and the env overrides.
+  the submit decorator (D1–D5), the constants and the env overrides.
 - `packages/db/src/schema.db.test.ts` → `trading_switch (#144)`: every CHECK at NULL and the
   boundaries; the open-source CHECK on every source × state (#96).
 - `packages/db/src/trading-switch-migration.db.test.ts`: the 0019 rewrite (S6).

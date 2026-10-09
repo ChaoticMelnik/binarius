@@ -285,7 +285,9 @@ interface FakeClient extends BrokerSocketClient {
   hear(event: BrokerEvent): void;
 }
 
-function fakeClients({ readyOnStart = true }: { readyOnStart?: boolean } = {}) {
+function fakeClients({
+  readyOnStart = true,
+}: { readyOnStart?: boolean | (() => boolean) } = {}) {
   const made: FakeClient[] = [];
   const openClient = (): BrokerSocketClient => {
     const stateListeners = new Set<(change: BrokerSocketStateChange) => void>();
@@ -305,7 +307,8 @@ function fakeClients({ readyOnStart = true }: { readyOnStart?: boolean } = {}) {
       },
       start(credentials) {
         client.starts.push(credentials.accessToken);
-        publish(readyOnStart ? BrokerSocketState.Ready : BrokerSocketState.Authenticating);
+        const ready = typeof readyOnStart === 'function' ? readyOnStart() : readyOnStart;
+        publish(ready ? BrokerSocketState.Ready : BrokerSocketState.Authenticating);
       },
       stop() {
         client.stops += 1;
@@ -1468,12 +1471,17 @@ describe('the socket loss signal (#96)', () => {
   const GRACE = 60;
   function observed(fakes: ReturnType<typeof fakeClients>, config: Partial<SessionManagerConfig> = {}) {
     const lost: string[] = [];
+    const ready: string[] = [];
     const h = harness({
       openClient: fakes.openClient,
       config,
-      lossObserver: { lost: (accountId) => lost.push(accountId), graceMs: GRACE },
+      lossObserver: {
+        lost: (accountId) => lost.push(accountId),
+        ready: (accountId) => ready.push(accountId),
+        graceMs: GRACE,
+      },
     });
-    return { h, lost };
+    return { h, lost, ready };
   }
   async function started(h: Harness, fakes: ReturnType<typeof fakeClients>) {
     h.state.candidates = [candidate(1)];
@@ -1481,7 +1489,7 @@ describe('the socket loss signal (#96)', () => {
     await until('the client', () => fakes.made.length === 1);
     return fakes.made[0]!;
   }
-  // the next tick reads Date.now() against the moment the session left ready
+  // the next check reads Date.now() against the moment the session left ready
   const pastGrace = () => {
     const mark = Date.now();
     return until('past the grace', () => Date.now() > mark + GRACE);
@@ -1494,7 +1502,7 @@ describe('the socket loss signal (#96)', () => {
     client.fire(BrokerSocketState.Reconnecting);
     client.fire(BrokerSocketState.Ready);
     await pastGrace();
-    await h.manager.tick();
+    h.manager.observeSessions();
     expect(lost).toEqual([]);
   });
 
@@ -1503,13 +1511,12 @@ describe('the socket loss signal (#96)', () => {
     const { h, lost } = observed(fakes);
     const client = await started(h, fakes);
     client.fire(BrokerSocketState.Reconnecting);
-    await h.manager.tick();
+    h.manager.observeSessions();
     expect(lost).toEqual([]);
     await pastGrace();
-    await h.manager.tick();
-    await h.manager.tick();
+    h.manager.observeSessions();
+    h.manager.observeSessions();
     expect(lost).toEqual(['acc-1']);
-    expect(h.manager.running).toBe(1);
   });
 
   it('S3 disconnected_by_server after ready is a loss at once', async () => {
@@ -1518,7 +1525,7 @@ describe('the socket loss signal (#96)', () => {
     const client = await started(h, fakes);
     client.fire(BrokerSocketState.DisconnectedByServer);
     expect(lost).toEqual(['acc-1']);
-    expect(h.manager.running).toBe(0);
+    expect(h.manager.clientFor('acc-1')).toBeUndefined();
   });
 
   // the token refresh it starts may outlast the grace: the session must not count meanwhile
@@ -1535,13 +1542,17 @@ describe('the socket loss signal (#96)', () => {
           fetches += 1;
           return fetches === 1 ? grant(accountId) : refreshed.promise;
         },
-        lossObserver: { lost: (accountId) => lost.push(accountId), graceMs: GRACE },
+        lossObserver: {
+          lost: (accountId) => lost.push(accountId),
+          ready: () => undefined,
+          graceMs: GRACE,
+        },
       });
       const client = await started(h, fakes);
       client.fire(BrokerSocketState.Reconnecting);
       client.fire(state);
       await pastGrace();
-      await h.manager.tick();
+      h.manager.observeSessions();
       expect(lost).toEqual([]);
     },
   );
@@ -1551,10 +1562,10 @@ describe('the socket loss signal (#96)', () => {
     const { h, lost } = observed(fakes, { idleGraceMs: 20 });
     await started(h, fakes);
     h.state.candidates = [];
-    await h.manager.tick();
+    h.manager.observeSessions();
     await tickUntil(h, 'the idle drop', () => h.manager.size === 0);
     await pastGrace();
-    await h.manager.tick();
+    h.manager.observeSessions();
     expect(lost).toEqual([]);
   });
 
@@ -1564,9 +1575,38 @@ describe('the socket loss signal (#96)', () => {
     const client = await started(h, fakes);
     client.fire(BrokerSocketState.Reconnecting);
     await pastGrace();
-    await h.manager.tick();
+    h.manager.observeSessions();
     client.fire(BrokerSocketState.DisconnectedByServer);
     expect(lost).toEqual([]);
+  });
+  it('S7 every ready session is reported ready on every check, and a lost one is not', async () => {
+    const fakes = fakeClients();
+    const { h, ready } = observed(fakes);
+    const client = await started(h, fakes);
+    h.manager.observeSessions();
+    h.manager.observeSessions();
+    expect(ready).toEqual(['acc-1', 'acc-1']);
+    client.fire(BrokerSocketState.Reconnecting);
+    h.manager.observeSessions();
+    expect(ready).toEqual(['acc-1', 'acc-1']);
+  });
+
+  it('S8 the connection after a token refresh that never gets ready is one loss', async () => {
+    let starts = 0;
+    const fakes = fakeClients({ readyOnStart: () => (starts += 1) === 1 });
+    let issued = 0;
+    const lost: string[] = [];
+    const h = harness({
+      openClient: fakes.openClient,
+      tokens: () => Promise.resolve({ ok: true, accessToken: `SECRET-${(issued += 1)}` }),
+      lossObserver: { lost: (accountId) => lost.push(accountId), ready: () => undefined, graceMs: GRACE },
+    });
+    const client = await started(h, fakes);
+    client.fire(BrokerSocketState.TokenExpired);
+    await until('the restart', () => client.starts.length === 2);
+    await pastGrace();
+    h.manager.observeSessions();
+    expect(lost).toEqual(['acc-1']);
   });
 });
 

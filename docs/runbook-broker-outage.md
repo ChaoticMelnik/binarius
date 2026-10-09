@@ -14,11 +14,13 @@ The worker closes the global trading switch on its own when, within the last 120
 | Signal | A failure | An answer |
 |---|---|---|
 | REST / submit | a submit the broker left without an answer: `unknown` with `broker_unavailable` (`trade command outcome unknown`) | an `accepted` or a `rejected` submit |
-| sockets (only with `BROKER_WS_URL` set) | a session that was ready and is still not ready 45 s later (`SOCKET_LOSS_GRACE_MS`, longer than one full reconnect, 30 s), or one closed by the server after it was ready | the denominator is the sessions running |
+| sockets (only with `BROKER_WS_URL` set) | a session that was ready and is still not ready 45 s later (`SOCKET_LOSS_GRACE_MS`, longer than one full reconnect, 30 s; also its first connection after a token refresh), or one closed by the server after it was ready | a session ready at a check (every 5 s); every session in work during the window counts with its latest state, also once it was dropped, so dropping sessions does not shrink the share |
 
-Counted once per intent (REST) or account (sockets) in the window. Not counted: a token refusal or
-a broker 429 (an answer), `token_expired`/`auth_failed` (credentials), our own drops (idle, the
-lease fence of #93, a refusal, a stop). The thresholds can be raised or lowered through the
+Counted once per intent (REST) or account (sockets) in the window, by its latest state. Not
+counted: a submit cut by its own deadline or a stop (our limit), a token refusal or a broker 429
+(counted as an answer, so they dilute the REST share), `token_expired`/`auth_failed`
+(credentials), our own drops (idle, the lease fence of #93, a refusal, a stop) beyond the state
+they had. The thresholds can be raised or lowered through the
 worker's env (`.env.example`); a window not longer than the 45 s grace stops the worker at start.
 
 It closes **demo and real together**, writes the audit row `trading_stopped` with
@@ -49,9 +51,10 @@ There is no alert channel (ops alerts were cancelled, 2026-10-08): watch the wor
 
 ## First checks
 
-1. Is the broker answering? Its status page and a submit in the bot. The REST failures are
-   `trade command outcome unknown` lines (`transport: rest_fallback`, `code: unavailable` or
-   `contract_violation`).
+1. Is the broker answering? Its status page and a submit in the bot. The REST failures are the
+   `trade command outcome unknown` lines: `transport: rest_fallback` with `code: unavailable`,
+   `contract_violation` or `aborted`, and `transport: socket` (an order emitted with no answer, or
+   one not sent because the session dropped).
 2. The sockets: `broker session closed` with `reason: disconnected_by_server`, `broker socket
    connect error`, and whether a `connect_error` carries a 429 (the per-IP limit,
    [broker-session.md](broker-session.md) → Accepted risks 10).
@@ -72,7 +75,10 @@ Intents left `unknown` by the outage go to reconciliation as usual; an ambiguous
 ## Reopening
 
 Only when the broker answers again and the failure lines have stopped for a few minutes. A reopen
-during the storm trips again on the next qualifying window.
+during the storm trips again on REST once enough new submits fail; on sockets only once enough
+new sessions are lost — a session already counted is not counted again, so a reopen while the
+sockets stay down does not re-trip by itself (and neither does a trip that failed, `circuit
+breaker trip failed`: check `status` and stop by hand).
 
 ```bash
 docker compose exec backend pnpm --filter @binarius/backend kill-switch off --reason "брокер в норме"
@@ -99,7 +105,11 @@ prints «Торговля остановлена. Новые заявки отк
 When every session drops at once (a broker restart, a network blip):
 
 - the sockets reconnect by themselves with backoff (up to 10 s between attempts, ±50 %); a
-  restart that reconnects everyone within one cycle is not counted by the breaker;
+  restart that reconnects everyone within one cycle is not counted by the breaker. Two known
+  ways a routine restart can still trip: a broker that refuses the reconnects at its namespace
+  middleware while it warms up (that closes the sessions as `disconnected_by_server`, counted at
+  once), and the per-IP limit if the handshake counts against it (unknown, broker-session.md risk
+  10) keeping more than half not ready past 45 s;
 - sessions closed by the server are held back `SESSION_RETRY_MS` (60 s) and restarted by the next
   ticks; their trades go over REST meanwhile;
 - the broker allows 600 requests a minute per IP: restarting the worker by hand makes every

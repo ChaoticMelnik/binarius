@@ -60,4 +60,10 @@ describe('observeExecutor (#96)', () => {
     await expect(wrapped.submit(intent, signal)).rejects.toBe(boom);
     expect(records).toEqual([]);
   });
+
+  it('D5 a submit cut by its own signal (the deadline, a stop) is not counted', async () => {
+    const { wrapped, records } = observed({ outcome: 'unknown', reason: 'broker_unavailable' });
+    await wrapped.submit(intent, AbortSignal.abort());
+    expect(records).toEqual([]);
+  });
 });

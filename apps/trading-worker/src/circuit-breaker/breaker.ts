@@ -8,7 +8,7 @@ import { createFailureWindow, tripsAt } from './window';
 // each, the same thresholds: REST submits left without an answer, and broker sessions lost. Per
 // process: with one worker that is the whole system (several are #94).
 
-export type BreakerSignal = 'rest' | 'socket';
+type BreakerSignal = 'rest' | 'socket';
 
 export interface CircuitBreakerConfig {
   windowMs: number;
@@ -23,9 +23,6 @@ export interface CircuitBreakerDeps {
   }) => Promise<{ changed: boolean }>;
   logger: Pick<pino.Logger, 'error'>;
   config: CircuitBreakerConfig;
-  // the sessions running now: the socket share's denominator, so a session dropped after its loss
-  // does not shrink it below the losses
-  runningSessions?: () => number;
   now?: () => number;
 }
 
@@ -34,6 +31,9 @@ export interface CircuitBreaker {
   rest(intentId: string, failed: boolean): void;
   // one session lost (a confirmed loss, not our own drop)
   socketLost(accountId: string): void;
+  // one session ready: reported on every check, so every session in work during the window is in
+  // the socket share's denominator with its latest state, also once we dropped it
+  socketReady(accountId: string): void;
   // no trip starts after it; awaits the one in flight
   stop(): Promise<void>;
 }
@@ -56,10 +56,11 @@ export function createCircuitBreaker(deps: CircuitBreakerDeps): CircuitBreaker {
   let stopped = false;
 
   async function trip(signal: BreakerSignal, failures: number, total: number) {
-    const reason = tradingSwitchReasonSchema.parse(
-      reasonOf(signal, failures, total, config.windowMs),
-    );
     try {
+      // inside the try: a reason the switch refuses is logged, never an unhandled rejection
+      const reason = tradingSwitchReasonSchema.parse(
+        reasonOf(signal, failures, total, config.windowMs),
+      );
       const { changed } = await deps.stopTrading({
         source: TradingSwitchSource.CircuitBreaker,
         reason,
@@ -79,10 +80,8 @@ export function createCircuitBreaker(deps: CircuitBreakerDeps): CircuitBreaker {
   function evaluate(signal: BreakerSignal) {
     if (stopped || tripping !== undefined) return;
     const stats = windows[signal].stats(now());
-    const total =
-      signal === 'socket' ? Math.max(stats.total, deps.runningSessions?.() ?? 0) : stats.total;
-    if (!tripsAt({ failures: stats.failures, total }, config)) return;
-    tripping = trip(signal, stats.failures, total).finally(() => {
+    if (!tripsAt(stats, config)) return;
+    tripping = trip(signal, stats.failures, stats.total).finally(() => {
       tripping = undefined;
     });
   }
@@ -95,6 +94,9 @@ export function createCircuitBreaker(deps: CircuitBreakerDeps): CircuitBreaker {
     socketLost(accountId) {
       windows.socket.record(accountId, true, now());
       evaluate('socket');
+    },
+    socketReady(accountId) {
+      windows.socket.record(accountId, false, now());
     },
     async stop() {
       stopped = true;

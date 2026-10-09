@@ -66,10 +66,12 @@ export interface SessionLeases {
   release(): Promise<unknown>;
 }
 
-// The socket signal of the circuit breaker (#96): a session lost to the broker, once per loss. Not
-// our own drops (idle, the fence of #93, a refusal, stop()) and not token_expired/auth_failed.
+// The socket signal of the circuit breaker (#96): every ready session on every check, and a session
+// lost to the broker once per loss. Not our own drops (idle, the fence of #93, a refusal, stop())
+// and not token_expired/auth_failed.
 export interface SessionLossObserver {
   lost(accountId: string): void;
+  ready(accountId: string): void;
   // how long a session that was ready may stay not ready before it counts: longer than one full
   // reconnect, so a broker restart that reconnects everyone does not count
   graceMs: number;
@@ -106,6 +108,9 @@ export interface BrokerSessionManager extends TradeSessionSource {
   // single-flight; one renewal of every lease the entries hold, every leaseRenewMs once started;
   // never rejects
   renewLeases(): Promise<void>;
+  // the loss observer's check (#96): every tickMs once started, on its own timer, so a scan stuck
+  // on the database does not hide the broker's losses
+  observeSessions(): void;
   // the timer, the start pool, every client, then the write in flight per account within
   // stopBudgetMs; the writes queued behind it are dropped
   stop(): Promise<void>;
@@ -113,8 +118,6 @@ export interface BrokerSessionManager extends TradeSessionSource {
   clientFor(accountId: string): BrokerSocketClient | undefined;
   // running + starting
   readonly size: number;
-  // running only: the socket share's denominator (#96)
-  readonly running: number;
 }
 
 type WriteSource = SessionDeadLetter['source'];
@@ -147,10 +150,12 @@ interface RunningEntry {
   idleSince?: number;
   // warn-once keys of the current connection
   warned: Set<string>;
-  // #96: ready at least once; when it left ready (Date.now()); this loss already reported
+  // #96: ready at least once; when it left ready (Date.now()); this loss already reported; the
+  // next connection after a token refresh counts as leaving ready
   everReady: boolean;
   lostSince?: number;
   lossReported: boolean;
+  rearmed: boolean;
 }
 
 type Entry = StartingEntry | RunningEntry;
@@ -177,6 +182,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
   let renewTimer: ReturnType<typeof setInterval> | undefined;
   let renewing: Promise<void> | undefined;
   let fenceTimer: ReturnType<typeof setTimeout> | undefined;
+  let observeTimer: ReturnType<typeof setInterval> | undefined;
 
   const isCurrent = (accountId: string, entry: Entry) => entries.get(accountId) === entry;
 
@@ -488,8 +494,12 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       case BrokerSocketState.Idle:
         entry.verified = false;
         entry.warned.clear();
-        // a ready session that left ready: a loss once it outlasts the grace (the tick decides)
-        if (change.from === BrokerSocketState.Ready) entry.lostSince ??= Date.now();
+        // a ready session that left ready, or the first connection after its token refresh: a loss
+        // once it outlasts the grace (observeSessions decides)
+        if (change.from === BrokerSocketState.Ready || entry.rearmed) {
+          entry.lostSince ??= Date.now();
+          entry.rearmed = false;
+        }
         return;
       // the client closed its socket: no session while the token is fetched again. Credentials,
       // not the connection: no loss
@@ -498,6 +508,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
         entry.verified = false;
         entry.warned.clear();
         entry.lostSince = undefined;
+        entry.rearmed = entry.everReady;
         if (!entry.refreshing) void refresh(entry, change.to);
         return;
       case BrokerSocketState.DisconnectedByServer:
@@ -509,6 +520,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
         entry.everReady = true;
         entry.lostSince = undefined;
         entry.lossReported = false;
+        entry.rearmed = false;
         return;
     }
   }
@@ -626,6 +638,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       warned: new Set(),
       everReady: false,
       lossReported: false,
+      rearmed: false,
     };
     entries.set(accountId, entry);
     entry.client.onEvent((event) => onEvent(entry, event));
@@ -651,12 +664,19 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       void worker();
   }
 
-  // a session still not ready a grace after it left ready: one report per loss
-  function reportLosses(at: number) {
+  // every ready session is reported ready, so the breaker's window holds every session in work with
+  // its latest state; a session still not ready a grace after it left ready is one loss
+  function observeSessions() {
     const observer = deps.lossObserver;
-    if (observer === undefined) return;
+    if (observer === undefined || stopping.signal.aborted) return;
+    const at = Date.now();
     for (const [accountId, entry] of entries) {
-      if (entry.kind !== 'running' || entry.lostSince === undefined || entry.lossReported) continue;
+      if (entry.kind !== 'running') continue;
+      if (entry.client.state === BrokerSocketState.Ready) {
+        observer.ready(accountId);
+        continue;
+      }
+      if (entry.lostSince === undefined || entry.lossReported) continue;
       if (at - entry.lostSince < observer.graceMs) continue;
       entry.lossReported = true;
       observer.lost(accountId);
@@ -665,8 +685,6 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
 
   async function runTick() {
     const now = Date.now();
-    // before the scan: a database that fails the scan must not hide the broker's losses
-    reportLosses(now);
     for (const [accountId, until] of heldBack) {
       if (until <= now) heldBack.delete(accountId);
     }
@@ -750,6 +768,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     renewTimer = undefined;
     if (fenceTimer !== undefined) clearTimeout(fenceTimer);
     fenceTimer = undefined;
+    if (observeTimer !== undefined) clearInterval(observeTimer);
+    observeTimer = undefined;
     stopping.abort();
     startQueue = [];
     for (const entry of entries.values()) {
@@ -804,9 +824,13 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       void tick();
       timer = setInterval(() => void tick(), config.tickMs);
       renewTimer = setInterval(() => void renewLeases(), config.leaseRenewMs);
+      if (deps.lossObserver !== undefined) {
+        observeTimer = setInterval(observeSessions, config.tickMs);
+      }
     },
     tick,
     renewLeases,
+    observeSessions,
     stop,
     // the executor gets the client only once this connection's user.data matched the account;
     // until then its command goes over REST (the executor's no-session case). Never past the
@@ -820,11 +844,6 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     clientFor,
     get size() {
       return entries.size;
-    },
-    get running() {
-      let running = 0;
-      for (const entry of entries.values()) if (entry.kind === 'running') running += 1;
-      return running;
     },
   };
 }

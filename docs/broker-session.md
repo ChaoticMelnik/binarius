@@ -213,16 +213,18 @@ worker: more replicas, sharding and routing intent jobs to the owner are #94.
 
 ## Losses for the circuit breaker (#96)
 
-With a `lossObserver` (`index.ts` passes the circuit breaker's), the manager reports a session
-lost to the broker, once per loss: a session that was `ready` and left it
-(`connecting`/`reconnecting`/`authenticating`/`idle`) and is still not ready
-`SOCKET_LOSS_GRACE_MS` (45 s, `circuit-breaker/config.ts`) later, checked at the start of every
-tick (before the scan, so a database that fails the scan does not hide them); or one closed with
-`disconnected_by_server` after it was ready, at once. Not a loss: `token_expired`/`auth_failed`
-(credentials; also while their token refresh takes longer than the grace), a session that never
-became ready, and every drop of our own — idle, the lease fence or a lost lease (#93), a refusal,
-`stop()` — whose entry is no longer current. `running` (entries of kind `running`) is the
-breaker's denominator for the socket share. Tests: `session-manager.test.ts` S1–S6.
+With a `lossObserver` (`index.ts` passes the circuit breaker's), `observeSessions()` runs every
+`SESSION_TICK_MS` on its own timer (not inside the tick, so a scan stuck on the database does not
+hide the broker's losses). It reports every running session in `ready` as ready — so the
+breaker's window holds every session in work during the window with its latest state, also after
+we drop it — and a session lost to the broker once per loss: one that was `ready` and left it
+(`connecting`/`reconnecting`/`authenticating`/`idle`), or whose token was refreshed and whose new
+connection began, and is still not ready `SOCKET_LOSS_GRACE_MS` (45 s,
+`circuit-breaker/config.ts`) later. A session closed with `disconnected_by_server` after it was
+ready is reported lost at once. Not a loss: `token_expired`/`auth_failed` while the token is
+fetched (credentials, however long it takes), a session that never became ready, and every drop
+of our own — idle, the lease fence or a lost lease (#93), a refusal, `stop()` — whose entry is no
+longer current. Tests: `session-manager.test.ts` S1–S8.
 
 ## Start and shutdown
 

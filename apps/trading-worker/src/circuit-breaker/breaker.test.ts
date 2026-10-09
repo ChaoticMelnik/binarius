@@ -119,19 +119,39 @@ describe('the circuit breaker (#96)', () => {
     expect([...reason].length).toBeLessThanOrEqual(TRADING_SWITCH_REASON_MAX);
   });
 
-  it('counts the socket share against the sessions running, not only the losses', async () => {
-    let running = 30;
-    const h = harness({ runningSessions: () => running });
-    for (let i = 0; i < 12; i += 1) h.breaker.socketLost(`acc-${i}`);
+  // every session in work during the window is a key with its latest state: dropping a lost or a
+  // fenced session does not shrink the share's denominator
+  it('counts the socket share against every session in work during the window', async () => {
+    const h = harness();
+    for (let i = 0; i < 30; i += 1) h.breaker.socketReady(`acc-${i}`);
+    // 10 of 30 closed by the server: a third, under half
+    for (let i = 0; i < 10; i += 1) h.breaker.socketLost(`acc-${i}`);
     await settle();
-    // 12 of 30: under half
     expect(h.stops).toEqual([]);
-    running = 10;
-    h.breaker.socketLost('acc-12');
+    // five more: 15 of 30
+    for (let i = 10; i < 15; i += 1) h.breaker.socketLost(`acc-${i}`);
     await until('the trip', () => h.stops.length === 1);
     expect(h.stops[0]!.reason).toBe(
-      'Автостоп: потеряна связь с брокером (сокеты: 13 из 13 сессий за 120 с)',
+      'Автостоп: потеряна связь с брокером (сокеты: 15 из 30 сессий за 120 с)',
     );
+  });
+
+  it('does not trip when we dropped most sessions ourselves and a few of the rest are lost', async () => {
+    const h = harness();
+    // 100 in work; 80 fenced by our own database stall report nothing more, yet stay counted
+    for (let i = 0; i < 100; i += 1) h.breaker.socketReady(`acc-${i}`);
+    for (let i = 80; i < 90; i += 1) h.breaker.socketLost(`acc-${i}`);
+    await settle();
+    expect(h.stops).toEqual([]);
+  });
+
+  it('a session ready again is an answer, not a loss', async () => {
+    const h = harness();
+    for (let i = 0; i < 9; i += 1) h.breaker.socketLost(`acc-${i}`);
+    for (let i = 0; i < 9; i += 1) h.breaker.socketReady(`acc-${i}`);
+    h.breaker.socketLost('acc-9');
+    await settle();
+    expect(h.stops).toEqual([]);
   });
 
   it('starts no trip after stop(), and stop() waits for the one in flight', async () => {

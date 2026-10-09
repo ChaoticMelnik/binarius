@@ -33,14 +33,11 @@ export const ONE_RECONNECT_MS =
   BROKER_SOCKET_CONNECT_TIMEOUT_MS +
   BROKER_SOCKET_AUTH_TIMEOUT_MS;
 
-export const CIRCUIT_BREAKER_CHAIN_HOLDS =
+// the numeric bounds of the three thresholds are env.ts's; the chain is the ordering
+const chainHolds =
   ONE_RECONNECT_MS < SOCKET_LOSS_GRACE_MS &&
   SESSION_TICK_MS < SOCKET_LOSS_GRACE_MS &&
-  SOCKET_LOSS_GRACE_MS < CIRCUIT_BREAKER_WINDOW_MS &&
-  CIRCUIT_BREAKER_WINDOW_MS <= MAX_CIRCUIT_BREAKER_WINDOW_MS &&
-  CIRCUIT_BREAKER_MIN_FAILURES >= 1 &&
-  CIRCUIT_BREAKER_FAILURE_PERCENT >= 1 &&
-  CIRCUIT_BREAKER_FAILURE_PERCENT <= 100;
-if (!CIRCUIT_BREAKER_CHAIN_HOLDS) {
+  SOCKET_LOSS_GRACE_MS < CIRCUIT_BREAKER_WINDOW_MS;
+if (!chainHolds) {
   throw new Error('circuit breaker constants are out of order (see circuit-breaker/config.ts)');
 }
