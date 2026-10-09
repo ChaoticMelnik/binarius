@@ -438,9 +438,10 @@ interval (`timing.test.ts`).
   candle's length, 15 or 5 s (`pairAcceptsDuration`; `eligiblePairs(view, nowMs, durationSec)`).
   A `min_timeframe` 60 pair is never scanned; a `min_timeframe` 15 pair is scanned on `15s` only.
 - The scan set is the interval's top `signalScanPairs` eligible pairs by `payout` desc, then `id`
-  asc, each decided once a candle of that interval. The `5s` top 4 is inside the `15s` top 13 by
-  the same order: a pair in both has two cache keys and two decisions, each counted in its own
-  share.
+  asc, each decided once a candle of that interval. The two sets overlap but neither contains the
+  other: a `min_timeframe` 15 pair ranks on `15s` only, so when enough of them pay more, the `5s`
+  top 4 holds pairs outside the `15s` top 13. A pair in both has two cache keys and two decisions,
+  each counted in its own share.
 - The set is recomputed every candle, so it follows the catalog's refresh. A pair that left the set
   leaves the snapshot at that candle.
 
@@ -480,11 +481,17 @@ at most one candle's batch is wasted when the bot already asked for every scanne
 
 **The pacer** (`pacer.ts`), one per instance, is a token bucket refilled at the interval's share,
 `signalScanPerMinute(SIGNAL_SCAN_MAX_PER_MINUTE, interval) / 60 s`, with room for one candle's
-batch. A batch goes out right after the boundary, and any 60 s window carries at most each share
-plus one batch of each (`pacer.test.ts` P2). A 429 pauses the pacer whose call got it; the other
-instance's next call meets the same per-IP window and pauses on its own 429. Only the scanner takes
-tokens: `POST /trading/signal` never waits for it, and a 429 the bot gets is the route's own
-answer.
+batch plus one spare token (`signalScanCapacity` in `timing.ts`: 14 on `15s` and 5 on `5s` at the
+default). A candle refills exactly one batch, and the batch's takes are one burst at the timer's
+millisecond (4 pairs, 4 workers on `5s`), so without the spare a fire a few ms earlier relative to
+its boundary than the one before finds the bucket a fraction of a token short and skips a pair with
+no 429 behind it (#382 review M1; `pacer.test.ts` P9 over every exposed shape, `scanner.test.ts`
+S18 through the real scan loop). A batch goes out right after the boundary, and any 60 s window
+carries at most each share plus its bucket: 52 + 14 and 48 + 5 at the default (119 together),
+104 + 27 and 96 + 9 at the maximum (236; `pacer.test.ts` P2 measures the bound on its own
+fixture). A 429 pauses the pacer whose call got it; the other instance's next call meets the same
+per-IP window and pauses on its own 429. Only the scanner takes tokens: `POST /trading/signal`
+never waits for it, and a 429 the bot gets is the route's own answer.
 
 **Stop.** Each instance's `stop()` runs in shutdown phase 1. It clears the timers and waits for the calls in flight.
 Each call is bounded by the cache's `SIGNAL_FETCH_BUDGET_MS` (3 s), already in the phase-1 chain.
@@ -562,9 +569,10 @@ docker compose logs --no-log-prefix --since 10m backend | grep -F '"msg":"signal
 ```
 
 Expected: the body has `lists` for `15s` and `5s`; the `5s` line shows `scanned: 4` and, over ten
-minutes, `signals` above 0 at least once; the latency histogram sits under 1 000. If it sits at
-≥ 5 500 for every line, the `5s` close comes after the slack: the 5 s list stays empty until a
-slack per interval is added; the rest of the feature stands.
+minutes, `signals` above 0 at least once; `skipped: 0` on both lines while `rateLimited` is 0 — a
+`skipped` above 0 without a 429 is #382 review round 1's M1; the latency histogram sits under
+1 000. If it sits at ≥ 5 500 for every line, the `5s` close comes after the slack: the 5 s list
+stays empty until a slack per interval is added; the rest of the feature stands.
 
 ### The budget
 
@@ -584,7 +592,9 @@ each bounded on its own. The table lives in `packages/shared/src/broker-budget.t
 - Ceilings set in env above their defaults may sum over it. That is an operator's choice: the
   backend writes one `warn` `broker budget over the per-IP limit` at start, and the scanner's pause
   on a 429 is the backstop.
-- Nothing counts the three processes together at run time (stated).
+- Nothing counts the three processes together at run time (stated). The scanners' worst 60 s
+  window above their share is their two buckets (19 at the default, 36 at the maximum), bounded at
+  import at the maximum only.
 - A worker deploy runs two workers for its overlap, the readiness wait (≤ `READY_TIMEOUT_S`, 120 s)
   plus the drain (≤ 40 s), longer after an interrupted run until an operator resolves it
   ([worker-deploy.md](worker-deploy.md), #95):
@@ -597,10 +607,14 @@ The backend's `TIMING_CHAIN_HOLDS` adds the scanner's links, checked at import a
   `SIGNAL_FETCH_BUDGET_MS + SIGNAL_SCAN_SLACK_MS < L` with `L` the candle (3 500 < 5 000 on `5s`):
   a scan starts inside its candle, and a call made at the scan moment ends inside it. A whole scan
   is bounded by the candle's end check, not by this chain; the decisions a pair a minute are an
-  integer, and the minimum ceiling scans at least one pair;
-- the shares sum to 100 %, and the pairs at the default fit inside it (13 × 4 + 4 × 12 = 100);
+  integer;
+- the shares sum to 100 % (the pairs at the default, 13 × 4 + 4 × 12 = 100, follow from `floor`,
+  and one pair on every interval at the minimum from its definition; pinned by `timing.test.ts`,
+  not links);
 - `SIGNAL_SCAN_BACKOFF_MIN_MS ≤ SIGNAL_SCAN_BACKOFF_MAX_MS`;
-- the env bounds around the default and below the window.
+- the env bounds around the default;
+- the worst 60 s window of both scanners at the highest ceiling, the ceiling plus both buckets
+  (200 + 27 + 9 = 236), below the broker's window. It is checked at the maximum only.
 
 ## What it is not
 
