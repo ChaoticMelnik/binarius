@@ -7,6 +7,7 @@ import {
   TradeIntentStatus,
   UserStatus,
   type AdminIntentsByStatus,
+  type AdminBrokerAccountListItem,
   type AdminBrokerAccountView,
   type AdminOverview,
   type AdminUserDetail,
@@ -25,7 +26,8 @@ import { users } from './schema/users';
 import type { Tx } from './trade-intent-ops';
 
 // The admin read pages (#107, the trading section and the overview breakdown #330, the token
-// ledger section #109, the deposits section #341; docs/admin-pages.md). Every function takes a Tx, not a Db: each
+// ledger section #109, the deposits section #341, the broker accounts list #342;
+// docs/admin-pages.md). Every function takes a Tx, not a Db: each
 // runs inside the staff transaction that also writes its audit row (runAsStaff), and none of
 // them locks anything — only the staff_sessions touch is an UPDATE.
 
@@ -140,6 +142,23 @@ export type AdminBrokerAccountRow = Pick<
   | 'updatedAt'
 >;
 
+// The one place that says which broker_accounts columns the admin reads: the ciphertexts, the key
+// id and the refresh-token hash are not here, so no select built from it can carry them.
+export const adminBrokerAccountColumns = {
+  id: brokerAccounts.id,
+  brokerUserId: brokerAccounts.brokerUserId,
+  email: brokerAccounts.email,
+  isPartnerClient: brokerAccounts.isPartnerClient,
+  status: brokerAccounts.status,
+  authRevokedReason: brokerAccounts.authRevokedReason,
+  tradingHalted: brokerAccounts.tradingHalted,
+  haltedReason: brokerAccounts.haltedReason,
+  accessTokenExpiresAt: brokerAccounts.accessTokenExpiresAt,
+  tokenRotatedAt: brokerAccounts.tokenRotatedAt,
+  createdAt: brokerAccounts.createdAt,
+  updatedAt: brokerAccounts.updatedAt,
+};
+
 export interface AdminUserCard {
   user: AdminUserRow;
   brokerAccounts: AdminBrokerAccountRow[];
@@ -174,20 +193,7 @@ export async function readUserForAdmin(tx: Tx, userId: string): Promise<AdminUse
     .where(eq(users.id, userId));
   if (user === undefined) return undefined;
   const accounts = await tx
-    .select({
-      id: brokerAccounts.id,
-      brokerUserId: brokerAccounts.brokerUserId,
-      email: brokerAccounts.email,
-      isPartnerClient: brokerAccounts.isPartnerClient,
-      status: brokerAccounts.status,
-      authRevokedReason: brokerAccounts.authRevokedReason,
-      tradingHalted: brokerAccounts.tradingHalted,
-      haltedReason: brokerAccounts.haltedReason,
-      accessTokenExpiresAt: brokerAccounts.accessTokenExpiresAt,
-      tokenRotatedAt: brokerAccounts.tokenRotatedAt,
-      createdAt: brokerAccounts.createdAt,
-      updatedAt: brokerAccounts.updatedAt,
-    })
+    .select(adminBrokerAccountColumns)
     .from(brokerAccounts)
     .where(eq(brokerAccounts.userId, userId))
     .orderBy(desc(brokerAccounts.createdAt), desc(brokerAccounts.id));
@@ -330,6 +336,17 @@ export function toAdminBrokerAccountView(row: AdminBrokerAccountRow): AdminBroke
   };
 }
 
+// The card's projection, spread, plus the owner: what the row carries beyond it is not copied.
+export function toAdminBrokerAccountListItem(
+  row: AdminBrokerAccountListRow,
+): AdminBrokerAccountListItem {
+  return {
+    ...toAdminBrokerAccountView(row),
+    userId: row.userId,
+    telegramUserId: row.telegramUserId.toString(),
+  };
+}
+
 export function toAdminOverview(
   row: AdminOverviewRow,
   activeWindowMinutes: AdminOverview['activeWindowMinutes'],
@@ -356,5 +373,58 @@ export function toAdminOverview(
     activeWindowMinutes,
     dayStartsAt: row.dayStartsAt.toISOString(),
     asOf: row.asOf.toISOString(),
+  };
+}
+
+// --- The broker accounts list (#342) -----------------------------------------------------------
+
+export type AdminBrokerAccountListRow = AdminBrokerAccountRow & {
+  userId: string;
+  telegramUserId: bigint;
+};
+
+export interface AdminBrokerAccountFilters {
+  status?: BrokerAccountStatus;
+  halted?: true;
+}
+
+export interface AdminBrokerAccountPage {
+  rows: AdminBrokerAccountListRow[];
+  // the id of the last row shown, only when at least one more row exists
+  nextCursor: string | null;
+}
+
+// Every account whatever its user's status, newest first, the same keyset as listUsersForAdmin.
+// The filters intersect; `halted` asks for trading_halted alone, whatever the account's status.
+export async function listBrokerAccountsForAdmin(
+  tx: Tx,
+  options: { filters: AdminBrokerAccountFilters; cursor?: string; limit: number },
+): Promise<AdminBrokerAccountPage> {
+  const { status, halted } = options.filters;
+  const conditions: (SQL | undefined)[] = [
+    status === undefined ? undefined : eq(brokerAccounts.status, status),
+    halted === undefined ? undefined : eq(brokerAccounts.tradingHalted, halted),
+  ];
+  if (options.cursor !== undefined) {
+    conditions.push(
+      sql`(${brokerAccounts.createdAt}, ${brokerAccounts.id}) < (select c.created_at, c.id from ${brokerAccounts} as c where c.id = ${options.cursor})`,
+    );
+  }
+  const rows = await tx
+    .select({
+      ...adminBrokerAccountColumns,
+      userId: brokerAccounts.userId,
+      telegramUserId: users.telegramUserId,
+    })
+    .from(brokerAccounts)
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .where(and(...conditions))
+    .orderBy(desc(brokerAccounts.createdAt), desc(brokerAccounts.id))
+    .limit(options.limit + 1);
+  const page = rows.slice(0, options.limit);
+  const last = page.at(-1);
+  return {
+    rows: page,
+    nextCursor: rows.length > options.limit && last !== undefined ? last.id : null,
   };
 }

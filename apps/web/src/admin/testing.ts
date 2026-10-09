@@ -1,7 +1,9 @@
 import {
+  AccountHaltReason,
   AuditAction,
   AuditActorType,
   AuditEntityType,
+  AuthRevokedReason,
   BrokerAccountStatus,
   DepositEventStatus,
   NotificationLevel,
@@ -19,6 +21,9 @@ import {
   type AdminBotProfileMethodResult,
   type AdminBotTextsResponse,
   type AdminBotTextView,
+  type AdminBrokerAccountListItem,
+  type AdminBrokerAccountsResponse,
+  type AdminBrokerAccountView,
   type AdminDepositsResponse,
   type AdminDepositView,
   type AdminIntentResponse,
@@ -35,7 +40,7 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 
-// Backend answers for the read pages (#107, #108, #330, #109, #110, #341), valid against their strict schemas. Shared by
+// Backend answers for the read pages (#107, #108, #330, #109, #110, #341, #342), valid against their strict schemas. Shared by
 // the client's and the pages' tests.
 
 const AT = '2026-10-07T08:00:00.000Z';
@@ -170,6 +175,21 @@ export const SAMPLE_DEPOSIT_UNOWNED: AdminDepositView = {
   createdAt: AT,
 };
 
+export const SAMPLE_BROKER_ACCOUNT: AdminBrokerAccountView = {
+  id: '00000000-0000-4000-8000-0000000000d1',
+  brokerUserId: 'broker-7',
+  email: 'ada@example.com',
+  isPartnerClient: true,
+  status: BrokerAccountStatus.Active,
+  authRevokedReason: null,
+  tradingHalted: false,
+  haltedReason: null,
+  accessTokenExpiresAt: AT,
+  tokenRotatedAt: null,
+  createdAt: AT,
+  updatedAt: AT,
+};
+
 export const SAMPLE_USER: AdminUserResponse = {
   me: SAMPLE_ME,
   user: {
@@ -187,22 +207,7 @@ export const SAMPLE_USER: AdminUserResponse = {
     createdAt: AT,
     updatedAt: AT,
   },
-  brokerAccounts: [
-    {
-      id: '00000000-0000-4000-8000-0000000000d1',
-      brokerUserId: 'broker-7',
-      email: 'ada@example.com',
-      isPartnerClient: true,
-      status: BrokerAccountStatus.Active,
-      authRevokedReason: null,
-      tradingHalted: false,
-      haltedReason: null,
-      accessTokenExpiresAt: AT,
-      tokenRotatedAt: null,
-      createdAt: AT,
-      updatedAt: AT,
-    },
-  ],
+  brokerAccounts: [SAMPLE_BROKER_ACCOUNT],
   intents: { recent: [SAMPLE_INTENT], total: 3, active: 1 },
   ledger: { recent: [SAMPLE_LEDGER_ENTRY] },
   deposits: { recent: [SAMPLE_DEPOSIT] },
@@ -307,6 +312,32 @@ export const SAMPLE_AUDIT: AdminAuditResponse = {
 export const SAMPLE_DEPOSITS: AdminDepositsResponse = {
   me: SAMPLE_ME,
   deposits: [SAMPLE_DEPOSIT, SAMPLE_DEPOSIT_UNOWNED],
+  nextCursor: null,
+};
+
+// The broker accounts list (#342): the card's account with its owner, and a revoked, halted one
+// with no address, no rotation and a broker id that must print as text.
+export const SAMPLE_BROKER_ACCOUNT_ITEM: AdminBrokerAccountListItem = {
+  ...SAMPLE_BROKER_ACCOUNT,
+  userId: SAMPLE_USER_ID,
+  telegramUserId: '4242',
+};
+
+export const SAMPLE_BROKER_ACCOUNT_HALTED: AdminBrokerAccountListItem = {
+  ...SAMPLE_BROKER_ACCOUNT_ITEM,
+  id: '00000000-0000-4000-8000-0000000000d2',
+  brokerUserId: 'broker-<b>',
+  email: null,
+  isPartnerClient: false,
+  status: BrokerAccountStatus.Revoked,
+  authRevokedReason: AuthRevokedReason.RefreshInvalidGrant,
+  tradingHalted: true,
+  haltedReason: AccountHaltReason.TradeMismatch,
+};
+
+export const SAMPLE_BROKER_ACCOUNTS: AdminBrokerAccountsResponse = {
+  me: SAMPLE_ME,
+  accounts: [SAMPLE_BROKER_ACCOUNT_HALTED, SAMPLE_BROKER_ACCOUNT_ITEM],
   nextCursor: null,
 };
 

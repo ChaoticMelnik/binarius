@@ -31,6 +31,7 @@ import {
   errorIdentity,
   errorLogFields,
   safeParseAdminAuditQuery,
+  safeParseAdminBrokerAccountsQuery,
   safeParseAdminChangePasswordRequest,
   safeParseAdminConfirmRequest,
   safeParseAdminDepositsQuery,
@@ -62,6 +63,7 @@ import {
   hashPassword,
   listIntentsForAdmin,
   listAuditForAdmin,
+  listBrokerAccountsForAdmin,
   listDepositsForAdmin,
   listLedgerForAdmin,
   listLiveStaffSessions,
@@ -83,6 +85,7 @@ import {
   StaffStatus,
   startLoginChallenge,
   STAFF_SESSION_IDLE_MS,
+  toAdminBrokerAccountListItem,
   toAdminBrokerAccountView,
   toAdminAuditEntryView,
   toAdminDepositView,
@@ -929,6 +932,45 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
             path: '/admin/deposits',
             ...(user === undefined ? {} : { userId: user }),
             ...(status === undefined ? {} : { status }),
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        },
+      };
+    });
+    if (answer === undefined) return reply;
+    return reply.send(answer);
+  });
+
+  // --- Broker accounts (#342, docs/admin-pages.md) -----------------------------------------------
+
+  app.get('/admin/broker-accounts', async (request, reply) => {
+    // before the session: a query outside the schema costs no transaction and leaves no row
+    const parsed = safeParseAdminBrokerAccountsQuery(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+    }
+    const { status, halted, cursor } = parsed.data;
+    const answer = await asStaff(request, reply, async (tx, ctx) => {
+      const page = await listBrokerAccountsForAdmin(tx, {
+        filters: { status, ...(halted === undefined ? {} : { halted: true }) },
+        cursor,
+        limit: ADMIN_PAGE_SIZE,
+      });
+      return {
+        result: {
+          me: meOf(ctx),
+          accounts: page.rows.map(toAdminBrokerAccountListItem),
+          nextCursor: page.nextCursor,
+        },
+        audit: {
+          action: AuditAction.BrokerAccountsViewed,
+          payload: {
+            path: '/admin/broker-accounts',
+            ...(status === undefined ? {} : { status }),
+            // the JSON true, not the query's string
+            ...(halted === undefined ? {} : { halted: true }),
             ...(cursor === undefined ? {} : { cursor }),
           },
         },

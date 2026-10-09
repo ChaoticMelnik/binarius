@@ -526,6 +526,44 @@ export const adminDepositsResponseSchema = z.strictObject({
 });
 export type AdminDepositsResponse = z.infer<typeof adminDepositsResponseSchema>;
 
+// --- Broker accounts (#342) ---------------------------------------------------------------------
+
+// Exact-match filters, intersected; unknown keys are stripped, as on the other lists. `halted` is
+// the checkbox's own value and nothing else: an unchecked box sends no key, so there is no
+// "only running" filter, and `on` (a checkbox without a value) is refused rather than guessed.
+export const adminBrokerAccountsQuerySchema = z.object({
+  status: z.enum(BrokerAccountStatus).optional(),
+  halted: z.literal('true').optional(),
+  cursor: z.string().regex(UUID_PATTERN).optional(),
+});
+export type AdminBrokerAccountsQuery = z.infer<typeof adminBrokerAccountsQuerySchema>;
+
+export function adminBrokerAccountsSearchParams(query: AdminBrokerAccountsQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of Object.keys(
+    adminBrokerAccountsQuerySchema.shape,
+  ) as (keyof AdminBrokerAccountsQuery)[]) {
+    const value = query[key];
+    if (value !== undefined) params.set(key, value);
+  }
+  return params;
+}
+
+// The card's account view plus its owner: the same allowlist, two keys longer.
+export const adminBrokerAccountListItemSchema = z.strictObject({
+  ...adminBrokerAccountViewSchema.shape,
+  userId: z.uuid(),
+  telegramUserId: telegramUserIdSchema,
+});
+export type AdminBrokerAccountListItem = z.infer<typeof adminBrokerAccountListItemSchema>;
+
+export const adminBrokerAccountsResponseSchema = z.strictObject({
+  me: adminStrictMeSchema,
+  accounts: z.array(adminBrokerAccountListItemSchema).max(ADMIN_PAGE_SIZE),
+  nextCursor: z.string().regex(UUID_PATTERN).nullable(),
+});
+export type AdminBrokerAccountsResponse = z.infer<typeof adminBrokerAccountsResponseSchema>;
+
 export const safeParseAdminLoginRequest = (input: unknown) =>
   adminLoginRequestSchema.safeParse(input);
 export const safeParseAdminConfirmRequest = (input: unknown) =>
@@ -571,3 +609,7 @@ export const safeParseAdminDepositsQuery = (input: unknown) =>
   adminDepositsQuerySchema.safeParse(input);
 export const safeParseAdminDepositsResponse = (input: unknown) =>
   adminDepositsResponseSchema.safeParse(input);
+export const safeParseAdminBrokerAccountsQuery = (input: unknown) =>
+  adminBrokerAccountsQuerySchema.safeParse(input);
+export const safeParseAdminBrokerAccountsResponse = (input: unknown) =>
+  adminBrokerAccountsResponseSchema.safeParse(input);

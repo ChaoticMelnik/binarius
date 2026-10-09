@@ -12,6 +12,7 @@ import {
   BotTextGroup,
   AuditAction,
   AuditEntityType,
+  BrokerAccountStatus,
   adminChangePasswordRequestSchema,
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
@@ -20,6 +21,7 @@ import {
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
   type AdminAuditQuery,
+  type AdminBrokerAccountsQuery,
   type AdminDepositsQuery,
   type AdminIntentsQuery,
   type AdminTokensQuery,
@@ -35,6 +37,9 @@ import {
   SAMPLE_AUDIT_ENTRY_NULLS,
   SAMPLE_BOT_TEXT,
   SAMPLE_BOT_TEXTS,
+  SAMPLE_BROKER_ACCOUNT_HALTED,
+  SAMPLE_BROKER_ACCOUNT_ITEM,
+  SAMPLE_BROKER_ACCOUNTS,
   SAMPLE_DEPOSIT,
   SAMPLE_DEPOSIT_UNOWNED,
   SAMPLE_DEPOSITS,
@@ -98,6 +103,7 @@ interface Calls {
   tradingSessions: [string, AdminTradingSessionsQuery][];
   tokens: [string, AdminTokensQuery][];
   deposits: [string, AdminDepositsQuery][];
+  brokerAccounts: [string, AdminBrokerAccountsQuery][];
   audit: [string, AdminAuditQuery][];
   changePassword: unknown[][];
   botTexts: unknown[];
@@ -127,6 +133,7 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     tradingSessions: [],
     tokens: [],
     deposits: [],
+    brokerAccounts: [],
     audit: [],
     changePassword: [],
     botTexts: [],
@@ -189,6 +196,10 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     deposits: async (token, query) => {
       calls.deposits.push([token, query]);
       return SAMPLE_DEPOSITS;
+    },
+    brokerAccounts: async (token, query) => {
+      calls.brokerAccounts.push([token, query]);
+      return SAMPLE_BROKER_ACCOUNTS;
     },
     audit: async (token, query) => {
       calls.audit.push([token, query]);
@@ -774,6 +785,14 @@ describe('the read pages (#107)', () => {
     expect(response.body).toContain(TEXTS.demoStakeDefault);
     expect(response.body).toContain('broker-7');
     expect(response.body).toContain(`<dd>${SAMPLE_USER.user.tokens.available}</dd>`);
+    // the shared accounts table (#342): the account id first, no owner column on the card
+    expect(response.body).toContain(`<td><code>${SAMPLE_BROKER_ACCOUNT_ITEM.id}</code></td>`);
+    const section = response.body.slice(
+      response.body.indexOf(`<h2>${TEXTS.userBrokerAccounts}</h2>`),
+      response.body.indexOf(`<h2>${TEXTS.userTrading}</h2>`),
+    );
+    expect(section).toMatch(new RegExp(`<tr>\\s*<th>${TEXTS.columnAccountId}</th>`));
+    expect(section).not.toContain(`<th>${TEXTS.columnTelegramId}</th>`);
   });
 
   it('answers an id that is not a uuid with 404, before the backend is asked', async () => {
@@ -1049,6 +1068,7 @@ describe('the trading sessions page, the card section and the overview breakdown
     TEXTS.navAudit,
     TEXTS.navBotTexts,
     TEXTS.navDeposits,
+    TEXTS.navBrokerAccounts,
   ];
 
   it.each([
@@ -1063,7 +1083,8 @@ describe('the trading sessions page, the card section and the overview breakdown
     '/admin/audit',
     '/admin/bot-texts',
     '/admin/deposits',
-  ])('%s carries the nine nav items in order, staff sessions named as such', async (url) => {
+    '/admin/broker-accounts',
+  ])('%s carries the ten nav items in order, staff sessions named as such', async (url) => {
     const response = await get(url, withCookie);
 
     expect(response.statusCode).toBe(200);
@@ -1077,6 +1098,7 @@ describe('the trading sessions page, the card section and the overview breakdown
       'Аудит',
       'Тексты бота',
       'Депозиты',
+      'Брокерские аккаунты',
     ]);
     expect(navOf(response.body)).toEqual(NAV_LABELS);
     expect(response.body).toContain('<a href="/admin/trading-sessions"');
@@ -1242,7 +1264,12 @@ describe('the trading sessions page, the card section and the overview breakdown
 
     const response = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
 
-    expect(response.body).toContain(TEXTS.userNoAccounts);
+    const accountsSection = response.body.slice(
+      response.body.indexOf(`<h2>${TEXTS.userBrokerAccounts}</h2>`),
+      response.body.indexOf(`<h2>${TEXTS.userTrading}</h2>`),
+    );
+    expect(accountsSection).toContain(`<p>${TEXTS.brokerAccountsEmpty}</p>`);
+    expect(accountsSection).not.toContain('<table');
     expect(response.body).toContain(`<h2>${TEXTS.userTrading}</h2>`);
     expect(response.body).toContain(TEXTS.userIntentsCounts(0, 0));
     expect(response.body).toContain(TEXTS.intentsEmpty);
@@ -1712,7 +1739,7 @@ describe('the deposits page and the card section (#341)', () => {
   const cellsOf = (row: string): string[] =>
     [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => (m[1] ?? '').trim());
 
-  it('marks Депозиты as the current page, last in the nav, and carries the login', async () => {
+  it('marks Депозиты as the current page, right before «Брокерские аккаунты», and carries the login', async () => {
     const response = await get('/admin/deposits', withCookie);
 
     expect(response.statusCode).toBe(200);
@@ -1720,7 +1747,9 @@ describe('the deposits page and the card section (#341)', () => {
     expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
     expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
     const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
-    expect(nav.trimEnd()).toMatch(/>\s*Депозиты\s*<\/a\s*>$/);
+    expect(nav.trimEnd()).toMatch(
+      /aria-current="page"\s*>\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*Брокерские аккаунты\s*<\/a\s*>$/,
+    );
   });
 
   it('asks for the whole list when every field of the form was left empty', async () => {
@@ -1912,6 +1941,209 @@ describe('the deposits page and the card section (#341)', () => {
     expect(section).toContain(TEXTS.depositsEmpty);
     expect(section).not.toContain(TEXTS.userDepositsRecent(ADMIN_USER_RECENT_LEDGER));
     expect(hrefOf(section, TEXTS.userDepositsAll)).toBe(`/admin/deposits?user=${SAMPLE_USER_ID}`);
+  });
+});
+
+describe('the broker accounts page (#342)', () => {
+  const CURSOR = '00000000-0000-4000-8000-0000000000ee';
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+
+  const hrefOf = (body: string, label: string): string | undefined => {
+    const match = new RegExp(`<a href="([^"]*)"\\s*>\\s*${label}\\s*</a`).exec(body);
+    return match?.[1]?.replaceAll('&amp;', '&');
+  };
+  const rowsOf = (body: string): string[] => body.split('<tr>').slice(2);
+  const cellsOf = (row: string): string[] =>
+    [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => (m[1] ?? '').trim());
+  const time = (iso: string) => `<time datetime="${iso}">${iso}</time>`;
+  const CHECKBOX_UNCHECKED = /<input\s+type="checkbox"\s+name="halted"\s+value="true"\s*\/>/;
+  const CHECKBOX_CHECKED =
+    /<input\s+type="checkbox"\s+name="halted"\s+value="true"\s+checked\s*\/>/;
+
+  it('marks «Брокерские аккаунты» as the current page, last in the nav, and carries the login', async () => {
+    const response = await get('/admin/broker-accounts', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatch(/<a href="\/admin\/broker-accounts"\s+aria-current="page"/);
+    expect(response.body.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(response.body).toContain(`ada — ${TEXTS.logoutSubmit}`);
+    const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/.exec(response.body)?.[1] ?? '';
+    expect(nav.trimEnd()).toMatch(/>\s*Брокерские аккаунты\s*<\/a\s*>$/);
+  });
+
+  it.each([
+    ['every field left empty', 'status='],
+    ['a blank halted', 'halted='],
+    ['both blank', 'status=&halted='],
+  ])('asks for the whole list with %s', async (_label, query) => {
+    const response = await get(`/admin/broker-accounts?${query}`, withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(calls.brokerAccounts).toEqual([[TOKEN, {}]]);
+  });
+
+  it('offers every status by its code with the Russian label, an empty option first, and selects the filter', async () => {
+    const response = await get('/admin/broker-accounts?status=revoked', withCookie);
+
+    const options = [...response.body.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)</g)].map(
+      (m) => [m[1], m[2]],
+    );
+    expect(options).toEqual([
+      ['', TEXTS.brokerAccountsFilterAny],
+      ...Object.values(BrokerAccountStatus).map((s) => [s, TEXTS.accountStatus[s]]),
+    ]);
+    expect(response.body).toMatch(/<option value="revoked"\s+selected/);
+    expect(response.body.match(/\sselected/g)).toHaveLength(1);
+    expect(response.body).toMatch(CHECKBOX_UNCHECKED);
+    expect(calls.brokerAccounts).toEqual([[TOKEN, { status: 'revoked' }]]);
+  });
+
+  it('carries both filters and the cursor through the next link, and keeps them in the form', async () => {
+    await app.close();
+    app = build({
+      brokerAccounts: (token, query) => {
+        calls.brokerAccounts.push([token, query]);
+        return Promise.resolve({ ...SAMPLE_BROKER_ACCOUNTS, nextCursor: CURSOR });
+      },
+    });
+    const filters = { status: 'active', halted: 'true' };
+
+    const first = await get(`/admin/broker-accounts?${new URLSearchParams(filters)}`, withCookie);
+    expect(first.body).toMatch(/<option value="active"\s+selected/);
+    expect(first.body).toMatch(CHECKBOX_CHECKED);
+    expect(first.body).not.toContain(TEXTS.brokerAccountsFirst);
+    const next = hrefOf(first.body, TEXTS.brokerAccountsNext);
+    expect(next).toBe(
+      `/admin/broker-accounts?${new URLSearchParams({ ...filters, cursor: CURSOR })}`,
+    );
+    const second = await get(next ?? '', withCookie);
+
+    expect(calls.brokerAccounts.map(([, query]) => query)).toEqual([
+      filters,
+      { ...filters, cursor: CURSOR },
+    ]);
+    expect(hrefOf(second.body, TEXTS.brokerAccountsFirst)).toBe(
+      `/admin/broker-accounts?${new URLSearchParams(filters)}`,
+    );
+  });
+
+  it('drops a malformed cursor and keeps the filters', async () => {
+    const response = await get('/admin/broker-accounts?cursor=bad&status=active', withCookie);
+
+    expect([response.statusCode, response.headers.location]).toEqual([
+      302,
+      '/admin/broker-accounts?status=active',
+    ]);
+    expect(calls.brokerAccounts).toEqual([]);
+  });
+
+  it.each([
+    ['a halted from a checkbox without a value, even with a bad cursor', 'cursor=bad&halted=on'],
+    ['a halted from a checkbox without a value', 'halted=on'],
+    ['halted false', 'halted=false'],
+    ['halted twice', 'halted=true&halted=true'],
+    ['an unknown status', 'status=bogus'],
+    ['status twice', 'status=active&status=revoked'],
+  ])('refuses %s with the form, before the backend is asked', async (_label, query) => {
+    const response = await get(`/admin/broker-accounts?${query}`, withCookie);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers.location).toBeUndefined();
+    expect(calls.brokerAccounts).toEqual([]);
+    expect(response.body).toContain(TEXTS.brokerAccountsBadFilter);
+    expect(response.body).toContain('action="/admin/broker-accounts"');
+    // no answer from the backend, so no login to show: the account block is left out
+    expect(response.body).toContain('<nav');
+    expect(response.body).not.toContain('action="/admin/logout"');
+  });
+
+  it("lists each account with its owner's link, its id, the status label and none for what is empty", async () => {
+    const response = await get('/admin/broker-accounts', withCookie);
+
+    const [headRow = ''] = response.body.split('<tr>').slice(1);
+    expect(headRow).toMatch(
+      new RegExp(`^\\s*<th>${TEXTS.columnTelegramId}</th>\\s*<th>${TEXTS.columnAccountId}</th>`),
+    );
+    const rows = rowsOf(response.body);
+    expect(rows).toHaveLength(2);
+    const [halted = '', active = ''] = rows;
+    const h = SAMPLE_BROKER_ACCOUNT_HALTED;
+    expect(cellsOf(halted)).toEqual([
+      `<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`,
+      `<code>${h.id}</code>`,
+      'broker-&lt;b&gt;',
+      TEXTS.none,
+      TEXTS.no,
+      TEXTS.accountStatus.revoked,
+      'refresh_invalid_grant',
+      TEXTS.yes,
+      'trade_mismatch',
+      time(h.accessTokenExpiresAt),
+      TEXTS.none,
+      time(h.createdAt),
+      time(h.updatedAt),
+    ]);
+    const a = SAMPLE_BROKER_ACCOUNT_ITEM;
+    expect(cellsOf(active)).toEqual([
+      `<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`,
+      `<code>${a.id}</code>`,
+      'broker-7',
+      'ada@example.com',
+      TEXTS.yes,
+      TEXTS.accountStatus.active,
+      TEXTS.none,
+      TEXTS.no,
+      TEXTS.none,
+      time(a.accessTokenExpiresAt),
+      TEXTS.none,
+      time(a.createdAt),
+      time(a.updatedAt),
+    ]);
+    expect(response.body).not.toContain(h.brokerUserId);
+    expect(response.body).not.toContain(TEXTS.brokerAccountsNext);
+    expect(response.body).not.toContain(TEXTS.brokerAccountsFirst);
+  });
+
+  it('says so when there are no accounts, and keeps the filter in the form and the first-page link', async () => {
+    await app.close();
+    app = build({
+      brokerAccounts: () => Promise.resolve({ ...SAMPLE_BROKER_ACCOUNTS, accounts: [] }),
+    });
+
+    const response = await get('/admin/broker-accounts?halted=true', withCookie);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain(`<p>${TEXTS.brokerAccountsEmpty}</p>`);
+    expect(response.body).not.toContain('<table');
+    expect(response.body).toMatch(CHECKBOX_CHECKED);
+    expect(hrefOf(response.body, TEXTS.brokerAccountsFirst)).toBe(
+      '/admin/broker-accounts?halted=true',
+    );
+  });
+
+  it('drops a session the backend no longer knows, and keeps the cookie on its own failure', async () => {
+    await app.close();
+    app = build({
+      brokerAccounts: () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
+    });
+    const gone = await get('/admin/broker-accounts', withCookie);
+    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
+    expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+
+    await app.close();
+    app = build({ brokerAccounts: () => Promise.reject(httpFailure(500)) });
+    const failed = await get('/admin/broker-accounts', withCookie);
+    expect(failed.statusCode).toBe(500);
+    expect(cookieOf(failed, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it('treats a malformed session cookie as none, before the backend is asked', async () => {
+    const response = await get('/admin/broker-accounts', {
+      [SESSION_COOKIE]: 'not-a-session-token',
+    });
+
+    expect([response.statusCode, response.headers.location]).toEqual([302, '/admin/login']);
+    expect(calls.brokerAccounts).toEqual([]);
   });
 });
 
@@ -2490,12 +2722,12 @@ describe('the bot texts pages (#300)', () => {
   const versionsOf = (body: string) =>
     [...body.matchAll(/name="version" value="(\d+)"/g)].map((match) => match[1]);
 
-  // «Депозиты» (#341) was appended after it
+  // «Депозиты» (#341) and «Брокерские аккаунты» (#342) were appended after it
   it('W1 puts «Тексты бота» in the nav right before «Депозиты» and marks it current', async () => {
     const response = await get('/admin/bot-texts', withCookie);
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatch(
-      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*Тексты бота\s*<\/a\s*>\s*<a href="\/admin\/deposits"\s*>\s*Депозиты\s*<\/a\s*>\s*<\/nav>/,
+      /<a href="\/admin\/bot-texts"\s+aria-current="page"\s*>\s*Тексты бота\s*<\/a\s*>\s*<a href="\/admin\/deposits"\s*>\s*Депозиты\s*<\/a\s*>\s*<a href="\/admin\/broker-accounts"\s*>\s*Брокерские аккаунты\s*<\/a\s*>\s*<\/nav>/,
     );
   });
 
