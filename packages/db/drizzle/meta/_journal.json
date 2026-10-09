@@ -253,6 +253,13 @@
       "when": 1791550683996,
       "tag": "0035_admin_broker_accounts_action",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791553282858,
+      "tag": "0036_token_adjustment",
+      "breakpoints": true
     }
   ]
 }

@@ -61,6 +61,8 @@ export const AuditAction = {
   DepositsViewed: 'deposits_viewed',
   // admin broker accounts page (#342)
   BrokerAccountsViewed: 'broker_accounts_viewed',
+  // the manual token adjustment (#246)
+  TokenAdjusted: 'token_adjusted',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);

@@ -31,6 +31,7 @@ import {
   type AdminLedgerEntry,
   type AdminMe,
   type AdminOverviewResponse,
+  type AdminTokenAdjustmentResponse,
   type AdminTokensResponse,
   type AdminTradeIntentView,
   type AdminTradingSessionsResponse,
@@ -40,8 +41,9 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 
-// Backend answers for the read pages (#107, #108, #330, #109, #110, #341, #342), valid against their strict schemas. Shared by
-// the client's and the pages' tests.
+// Backend answers for the read pages (#107, #108, #330, #109, #110, #341, #342) and the token
+// adjustment (#246), valid against their strict schemas. Shared by the client's and the pages'
+// tests.
 
 const AT = '2026-10-07T08:00:00.000Z';
 
@@ -212,6 +214,29 @@ export const SAMPLE_USER: AdminUserResponse = {
   ledger: { recent: [SAMPLE_LEDGER_ENTRY] },
   deposits: { recent: [SAMPLE_DEPOSIT] },
 };
+
+// The token adjustment (#246): a credit of 50 on the sample user's balance of 5, and the two
+// refusals, which carry the card as it is now.
+export const SAMPLE_ADJUSTED: AdminTokenAdjustmentResponse = {
+  me: SAMPLE_ME,
+  outcome: 'adjusted',
+  entry: {
+    ...SAMPLE_LEDGER_ADJUSTMENT,
+    id: '00000000-0000-4000-8000-0000000000b3',
+    balanceDelta: '50',
+    note: 'Компенсация',
+  },
+  tokens: { balance: '55', reserved: '2', available: '53' },
+};
+
+export const sampleAdjustmentRefusal = (
+  outcome: 'insufficient_available' | 'balance_changed',
+  tokens: AdminUserResponse['user']['tokens'] = SAMPLE_USER.user.tokens,
+): AdminTokenAdjustmentResponse => ({
+  ...SAMPLE_USER,
+  outcome,
+  user: { ...SAMPLE_USER.user, tokens },
+});
 
 export const SAMPLE_INTENTS: AdminIntentsResponse = {
   me: SAMPLE_ME,

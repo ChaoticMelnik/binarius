@@ -27,6 +27,7 @@ import {
   safeParseAdminAuditResponse,
   safeParseAdminBrokerAccountsResponse,
   safeParseAdminDepositsResponse,
+  safeParseAdminTokenAdjustmentResponse,
   safeParseAdminTokensResponse,
   safeParseAdminTradingSessionsResponse,
   safeParseAdminUserResponse,
@@ -53,6 +54,8 @@ import {
   type AdminBrokerAccountsResponse,
   type AdminDepositsQuery,
   type AdminDepositsResponse,
+  type AdminTokenAdjustmentRequest,
+  type AdminTokenAdjustmentResponse,
   type AdminTokensQuery,
   type AdminTokensResponse,
   type AdminTradingSessionsQuery,
@@ -122,6 +125,12 @@ export interface BackendClient {
   ): Promise<AdminTradingSessionsResponse>;
   tokens(token: string, query: AdminTokensQuery): Promise<AdminTokensResponse>;
   deposits(token: string, query: AdminDepositsQuery): Promise<AdminDepositsResponse>;
+  /** the manual token adjustment (#246); a refusal is an outcome, not an error */
+  adjustTokens(
+    token: string,
+    userId: string,
+    request: AdminTokenAdjustmentRequest,
+  ): Promise<AdminTokenAdjustmentResponse>;
   brokerAccounts(
     token: string,
     query: AdminBrokerAccountsQuery,
@@ -291,6 +300,15 @@ export function createBackendClient({
       const params = adminDepositsSearchParams(query);
       const path = params.size > 0 ? `admin/deposits?${params}` : 'admin/deposits';
       return parsed(safeParseAdminDepositsResponse, await call('GET', path, { session }));
+    },
+    async adjustTokens(session, userId, request) {
+      return parsed(
+        safeParseAdminTokenAdjustmentResponse,
+        await call('POST', `admin/users/${encodeURIComponent(userId)}/tokens`, {
+          body: request,
+          session,
+        }),
+      );
     },
     async brokerAccounts(session, query) {
       const params = adminBrokerAccountsSearchParams(query);

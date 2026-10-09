@@ -31,6 +31,7 @@ import {
   adminIntentsResponseSchema,
   adminLedgerEntrySchema,
   adminOverviewResponseSchema,
+  adminTokenAdjustmentResponseSchema,
   adminTokensResponseSchema,
   adminTradeIntentViewSchema,
   adminTradingSessionsResponseSchema,
@@ -42,6 +43,7 @@ import {
   staffSessionsResponseSchema,
   TokenLedgerKind,
   TradeIntentStatus,
+  UserStatus,
   type LogLevel,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
@@ -59,6 +61,7 @@ import {
   StaffStatus,
   tokenLedger,
   tradeIntents,
+  users,
   hashPassword,
   resetStaffPassword,
   verifyPassword,
@@ -2063,11 +2066,18 @@ describe('the trading sessions page, the card section and the overview breakdown
 describe('the token ledger page and the card section (#109)', () => {
   const ENTRY_KEYS = Object.keys(adminLedgerEntrySchema.shape);
 
-  // no writer yet (#246): written directly, every reference and the ref pair left null
+  // written directly (the writer is adjustTokens, #246): the shape of a row with every reference
+  // null
   const insertAdjustment = async (userId: string) => {
     const [row] = await tmp.db
       .insert(tokenLedger)
-      .values({ userId, kind: TokenLedgerKind.Adjustment, balanceDelta: -3n, reservedDelta: 0n })
+      .values({
+        userId,
+        kind: TokenLedgerKind.Adjustment,
+        balanceDelta: -3n,
+        reservedDelta: 0n,
+        note: 'seed',
+      })
       .returning({ id: tokenLedger.id });
     if (row === undefined) throw new Error('insertAdjustment: insert returned no row');
     return row.id;
@@ -2112,7 +2122,7 @@ describe('the token ledger page and the card section (#109)', () => {
       telegramUserId: target.telegramUserId,
       balanceDelta: '-3',
       intentId: null,
-      note: null,
+      note: 'seed',
     });
     expect(body.entries[1]).toMatchObject({ intentId: target.intent.id, reservedDelta: '1' });
     expect(body.nextCursor).toBeNull();
@@ -3307,6 +3317,228 @@ describe('the bot texts pages (#300)', () => {
     expect(
       (await publishRows(signed.seeded.staffId)).map((row) => (row.payload as { key: string }).key),
     ).toEqual(['startCommand', 'menuCommand']);
+  });
+});
+
+describe('the token adjustment (#246)', () => {
+  const PATH = '/admin/users/:id/tokens';
+  const NOTE = 'Компенсация';
+  const urlOf = (userId: string) => `/admin/users/${userId}/tokens`;
+  const body = (patch: Record<string, unknown> = {}) => ({
+    delta: '50',
+    note: NOTE,
+    expectedBalance: '5',
+    ...patch,
+  });
+  const userCache = async (userId: string) => {
+    const [row] = await tmp.db
+      .select({ balance: users.tokenBalance, reserved: users.tokenReserved })
+      .from(users)
+      .where(eq(users.id, userId));
+    return row;
+  };
+  const ledgerOf = (userId: string) =>
+    tmp.db.select().from(tokenLedger).where(eq(tokenLedger.userId, userId));
+
+  it('refuses without a live session and writes nothing', async () => {
+    const { userId } = await seedUser(tmp.db);
+    const before = await auditCount();
+    for (const token of [undefined, 'a'.repeat(43), 'short']) {
+      const response = await postAsStaff(urlOf(userId), token, body());
+      expect([response.statusCode, response.json()]).toEqual([
+        401,
+        { error: AdminErrorCode.SessionInvalid },
+      ]);
+    }
+    expect(await auditCount()).toBe(before);
+    expect(await ledgerOf(userId)).toEqual([]);
+  });
+
+  it.each([
+    ['a zero delta', body({ delta: '0' })],
+    ['a delta over the limit', body({ delta: '1001' })],
+    ['a plus sign', body({ delta: '+5' })],
+    ['an empty note', body({ note: '' })],
+    ['a note of 513 characters', body({ note: 'x'.repeat(513) })],
+    ['no expected balance', { delta: '50', note: NOTE }],
+    ['an extra key', body({ extra: 1 })],
+  ])('refuses %s with 400 before the session, writing nothing', async (_label, payload) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db);
+    const before = await auditCount();
+
+    const response = await postAsStaff(urlOf(userId), token, payload);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
+    expect(await auditCount()).toBe(before);
+    expect(await ledgerOf(userId)).toEqual([]);
+  });
+
+  it('applies a credit: the entry, the tokens, the cache and one token_adjusted row', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId, telegramUserId } = await seedUser(tmp.db, { balance: 5n });
+    const before = (await entriesFor(seeded.staffId)).length;
+
+    const response = await postAsStaff(urlOf(userId), token, body({ note: ` ${NOTE} ` }));
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<Record<string, unknown>>();
+    expect(Object.keys(raw)).toEqual(['me', 'outcome', 'entry', 'tokens']);
+    const answer = adminTokenAdjustmentResponseSchema.parse(raw);
+    if (answer.outcome !== 'adjusted') throw new Error(`unexpected ${answer.outcome}`);
+    expect(answer.me.staffId).toBe(seeded.staffId);
+    expect(answer.entry).toMatchObject({
+      userId,
+      telegramUserId,
+      kind: TokenLedgerKind.Adjustment,
+      balanceDelta: '50',
+      reservedDelta: '0',
+      note: NOTE,
+      refType: null,
+      refId: null,
+    });
+    expect(answer.tokens).toEqual({ balance: '55', reserved: '0', available: '55' });
+    expect(await userCache(userId)).toEqual({ balance: 55n, reserved: 0n });
+    expect((await ledgerOf(userId)).map((row) => row.id)).toEqual([answer.entry.id]);
+    expect((await entriesFor(seeded.staffId)).length).toBe(before + 1);
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.TokenAdjusted,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.User,
+      entityId: userId,
+      payload: {
+        path: PATH,
+        result: 'adjusted',
+        userId,
+        ledgerEntryId: answer.entry.id,
+        delta: '50',
+        note: NOTE,
+        balanceBefore: '5',
+        balanceAfter: '55',
+        reserved: '0',
+      },
+    });
+  });
+
+  it('refuses a debit past the available tokens with the card, 200, and no note in the row', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db, { balance: 5n });
+
+    const response = await postAsStaff(urlOf(userId), token, body({ delta: '-10' }));
+
+    expect(response.statusCode).toBe(200);
+    const raw = response.json<Record<string, unknown>>();
+    expect(Object.keys(raw)).toEqual([
+      'me',
+      'outcome',
+      'user',
+      'brokerAccounts',
+      'intents',
+      'ledger',
+      'deposits',
+    ]);
+    const answer = adminTokenAdjustmentResponseSchema.parse(raw);
+    if (answer.outcome !== 'insufficient_available') throw new Error(`got ${answer.outcome}`);
+    expect(answer.user.tokens).toEqual({ balance: '5', reserved: '0', available: '5' });
+    expect(await ledgerOf(userId)).toEqual([]);
+    expect(await userCache(userId)).toEqual({ balance: 5n, reserved: 0n });
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.TokenAdjusted,
+      actorType: AuditActorType.Admin,
+      entityType: AuditEntityType.User,
+      entityId: userId,
+      payload: {
+        path: PATH,
+        result: 'insufficient_available',
+        userId,
+        delta: '-10',
+        expectedBalance: '5',
+        balance: '5',
+        reserved: '0',
+      },
+    });
+  });
+
+  it('answers a second send of the same form balance_changed, with the balance after the first', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db, { balance: 5n });
+    const before = (await entriesFor(seeded.staffId)).length;
+
+    const first = await postAsStaff(urlOf(userId), token, body());
+    const second = await postAsStaff(urlOf(userId), token, body());
+
+    expect(adminTokenAdjustmentResponseSchema.parse(first.json()).outcome).toBe('adjusted');
+    expect(second.statusCode).toBe(200);
+    const answer = adminTokenAdjustmentResponseSchema.parse(second.json());
+    if (answer.outcome !== 'balance_changed') throw new Error(`got ${answer.outcome}`);
+    expect(answer.user.tokens.balance).toBe('55');
+    expect(await ledgerOf(userId)).toHaveLength(1);
+    expect(await userCache(userId)).toEqual({ balance: 55n, reserved: 0n });
+    const rows = (await entriesFor(seeded.staffId)).slice(before);
+    expect(rows.map((row) => [row.action, (row.payload as { result: string }).result])).toEqual([
+      [AuditAction.TokenAdjusted, 'adjusted'],
+      [AuditAction.TokenAdjusted, 'balance_changed'],
+    ]);
+  });
+
+  it.each([
+    ['a uuid with no user', () => randomUUID(), true],
+    ['an id that is not a uuid', () => 'not-a-uuid', false],
+  ])('answers 404 for %s, recording the attempt', async (_label, idOf, recordsId) => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const id = idOf();
+    const before = await tmp.db.select({ n: sql<number>`count(*)::int` }).from(tokenLedger);
+
+    const response = await postAsStaff(urlOf(id), token, body());
+
+    expect([response.statusCode, response.json()]).toEqual([
+      404,
+      { error: AdminErrorCode.NotFound },
+    ]);
+    expect(await tmp.db.select({ n: sql<number>`count(*)::int` }).from(tokenLedger)).toEqual(
+      before,
+    );
+    expect(await lastEntry(seeded.staffId)).toEqual({
+      action: AuditAction.TokenAdjusted,
+      actorType: AuditActorType.Admin,
+      entityType: null,
+      entityId: null,
+      payload: { path: PATH, result: 'not_found', ...(recordsId ? { userId: id } : {}) },
+    });
+  });
+
+  it('adjusts a blocked user', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db, { balance: 5n, status: UserStatus.Blocked });
+
+    const response = await postAsStaff(urlOf(userId), token, body({ delta: '-5' }));
+
+    expect(adminTokenAdjustmentResponseSchema.parse(response.json())).toMatchObject({
+      outcome: 'adjusted',
+      tokens: { balance: '0', reserved: '0', available: '0' },
+    });
+  });
+
+  it('shows the written row on /admin/tokens?kind=adjustment with its note and no reference', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const token = await openSession(seeded);
+    const { userId } = await seedUser(tmp.db, { balance: 5n });
+    const applied = adminTokenAdjustmentResponseSchema.parse(
+      (await postAsStaff(urlOf(userId), token, body())).json(),
+    );
+    if (applied.outcome !== 'adjusted') throw new Error(`got ${applied.outcome}`);
+
+    const page = await withSession('GET', `/admin/tokens?kind=adjustment&user=${userId}`, token);
+
+    expect(adminTokensResponseSchema.parse(page.json()).entries).toEqual([applied.entry]);
+    expect(applied.entry).toMatchObject({ note: NOTE, refId: null, refType: null });
   });
 });
 

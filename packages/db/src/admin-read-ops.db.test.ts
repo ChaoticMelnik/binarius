@@ -375,6 +375,7 @@ describe('readUserForAdmin — the token ledger section (#109)', () => {
         kind: TokenLedgerKind.Adjustment,
         balanceDelta: 1n,
         reservedDelta: 0n,
+        note: 'seed',
         createdAt: sql`'2026-10-01T12:00:00.000000Z'::timestamptz - make_interval(secs => ${secondsAgo})`,
       })
       .returning({ id: tokenLedger.id });

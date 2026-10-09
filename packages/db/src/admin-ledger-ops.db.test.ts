@@ -57,9 +57,10 @@ const list = (
     listLedgerForAdmin(tx, { filters: {}, limit: ADMIN_PAGE_SIZE, ...options }),
   );
 
-// Written directly: adjustment and a bonus naming nothing have no writer yet (#246, #13), and
-// neither needs a reference. created_at is explicit — two inserts in one transaction would share
-// now(). These rows do not move the users cache; the databases are temporary.
+// Written directly, bypassing adjustTokens: these suites test the reads, and a bonus naming
+// nothing still has no writer (#13); neither needs a reference. created_at is explicit — two
+// inserts in one transaction would share now(). These rows do not move the users cache; the
+// databases are temporary.
 async function insertEntry(
   db: Db,
   row: {
@@ -77,7 +78,8 @@ async function insertEntry(
       kind: row.kind,
       balanceDelta: row.balanceDelta ?? 1n,
       reservedDelta: 0n,
-      note: row.note ?? null,
+      // token_ledger_adjustment_note_check (#246): an adjustment always carries its reason
+      note: row.note ?? (row.kind === TokenLedgerKind.Adjustment ? 'seed' : null),
       createdAt: sql`'2026-10-01T12:00:00.000000Z'::timestamptz - make_interval(secs => ${row.secondsAgo})`,
     })
     .returning({ id: tokenLedger.id });
@@ -274,6 +276,7 @@ describe('toAdminLedgerEntry', () => {
         reservedDelta: 0n,
         refType: TokenLedgerRefType.Manual,
         refId,
+        note: 'seed',
       })
       .returning({ id: tokenLedger.id });
     const page = await list(db(), { filters: { userId: seeded.userId } });

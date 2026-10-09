@@ -8,6 +8,7 @@ export * from './trading-switch-ops';
 export * from './oauth-ops';
 export * from './link-bonus-ops';
 export * from './token-balance-ops';
+export * from './token-adjustment-ops';
 export * from './balance-snapshot-ops';
 export * from './session-lease-ops';
 export * from './user-ops';

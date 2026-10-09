@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  SAMPLE_ADJUSTED,
   SAMPLE_AUDIT,
   SAMPLE_AUDIT_ENTRY,
   SAMPLE_BOT_TEXT,
@@ -23,6 +24,7 @@ import {
   SAMPLE_TRADING_SESSIONS,
   SAMPLE_USER,
   SAMPLE_USER_ID,
+  sampleAdjustmentRefusal,
 } from './admin/testing';
 import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
 
@@ -669,5 +671,60 @@ describe('the bot texts calls (#300)', () => {
     });
     const preview = client.previewBotText(SESSION, 'welcome', { source: 'x' });
     expect(await rejectionOf(preview)).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+});
+
+describe('the token adjustment call (#246)', () => {
+  const SESSION = 's'.repeat(43);
+  const REQUEST = { delta: '-50', note: 'Компенсация', expectedBalance: '5' };
+  const prefixed = async (status: number, body: unknown) => {
+    const served = await serve((response) => {
+      json(response, status, body);
+    });
+    return {
+      client: createBackendClient({ baseUrl: `${served.baseUrl}/api`, token: TOKEN }),
+      captured: served.captured,
+    };
+  };
+
+  it('posts the request with the bearer and the staff session to the user path', async () => {
+    const { client, captured } = await prefixed(200, SAMPLE_ADJUSTED);
+    expect(await client.adjustTokens(SESSION, SAMPLE_USER_ID, REQUEST)).toEqual(SAMPLE_ADJUSTED);
+    expect([captured.method, captured.url]).toEqual([
+      'POST',
+      `/api/admin/users/${SAMPLE_USER_ID}/tokens`,
+    ]);
+    expect(captured.headers?.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(captured.headers?.['x-staff-session']).toBe(SESSION);
+    expect(captured.headers?.['content-type']).toBe('application/json');
+    expect(JSON.parse(captured.body ?? '')).toEqual(REQUEST);
+  });
+
+  it.each(['insufficient_available', 'balance_changed'] as const)(
+    'reads the %s refusal as an answer, with the card',
+    async (outcome) => {
+      const refusal = sampleAdjustmentRefusal(outcome);
+      const { client } = await prefixed(200, refusal);
+      expect(await client.adjustTokens(SESSION, SAMPLE_USER_ID, REQUEST)).toEqual(refusal);
+    },
+  );
+
+  it('refuses a 2xx with a key the contract does not name', async () => {
+    const { client } = await prefixed(200, { ...SAMPLE_ADJUSTED, extra: 1 });
+    const adjusting = client.adjustTokens(SESSION, SAMPLE_USER_ID, REQUEST);
+    expect(await rejectionOf(adjusting)).toMatchObject({
+      code: BackendErrorCode.ContractViolation,
+    });
+  });
+
+  it('carries a 404 as its status and code', async () => {
+    const { client } = await prefixed(404, { error: 'not_found' });
+    const error = await rejectionOf(client.adjustTokens(SESSION, SAMPLE_USER_ID, REQUEST));
+    expect(error).toBeInstanceOf(BackendError);
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: 'not_found',
+    });
   });
 });

@@ -28,6 +28,8 @@ import {
   AuditEntityType,
   BrokerAccountStatus,
   DepositEventStatus,
+  TOKEN_ADJUSTMENT_MAX_TOKENS,
+  TOKEN_LEDGER_NOTE_MAX,
   TokenLedgerKind,
   TradeIntentStatus,
   TradeMode,
@@ -443,9 +445,71 @@ const brokerAccountsTable = <T extends AdminBrokerAccountView>(
     </tbody>
   </table>`;
 
+/** What the staff member submitted, put back into the form after a refusal (#246). */
+export interface TokenAdjustmentForm {
+  direction: 'credit' | 'debit';
+  amount: string;
+  note: string;
+}
+
+export interface UserPageOptions {
+  notice?: keyof typeof TEXTS.userNotice;
+  adjustment?: { message: string; form?: TokenAdjustmentForm };
+}
+
+// The hidden balance is the one this page shows: the backend refuses when it moved (#246 В4). A
+// 409 page carries the balance of the answer it was built from, on purpose.
+const tokenAdjustmentForm = (
+  user: AdminUserResponse['user'],
+  { notice, adjustment }: UserPageOptions,
+): SafeHtml => {
+  const form = adjustment?.form;
+  const debit = form?.direction === 'debit';
+  return html`<h3>${TEXTS.userAdjustHeading}</h3>
+    ${notice === undefined ? '' : html`<p class="notice">${TEXTS.userNotice[notice]}</p>`}
+    ${error(adjustment?.message)}
+    <form class="stack" method="post" action="/admin/users/${user.id}/tokens">
+      <input type="hidden" name="balance" value="${user.tokens.balance}" />
+      <fieldset>
+        <legend>${TEXTS.userAdjustDirection}</legend>
+        <label class="choice"
+          ><input type="radio" name="direction" value="credit" ${debit ? '' : html`checked`} />
+          ${TEXTS.userAdjustCredit}</label
+        >
+        <label class="choice"
+          ><input type="radio" name="direction" value="debit" ${debit ? html`checked` : ''} />
+          ${TEXTS.userAdjustDebit}</label
+        >
+      </fieldset>
+      <label
+        >${TEXTS.userAdjustAmount(TOKEN_ADJUSTMENT_MAX_TOKENS)}
+        <input
+          type="number"
+          name="amount"
+          min="1"
+          max="${TOKEN_ADJUSTMENT_MAX_TOKENS}"
+          step="1"
+          value="${form?.amount ?? ''}"
+          required
+        />
+      </label>
+      <label
+        >${TEXTS.userAdjustNote}
+        <input
+          name="note"
+          maxlength="${TOKEN_LEDGER_NOTE_MAX}"
+          value="${form?.note ?? ''}"
+          required
+        />
+      </label>
+      <button type="submit">${TEXTS.userAdjustSubmit}</button>
+    </form>`;
+};
+
 export const userPage = (
   { user, brokerAccounts, intents, ledger, deposits }: Omit<AdminUserResponse, 'me'>,
   login: string,
+  options: UserPageOptions = {},
 ): SafeHtml =>
   adminShell({
     title: TEXTS.userTitle,
@@ -488,6 +552,7 @@ export const userPage = (
         <dt>${TEXTS.fieldAvailable}</dt>
         <dd>${user.tokens.available}</dd>
       </dl>
+      ${tokenAdjustmentForm(user, options)}
       <h2>${TEXTS.userBrokerAccounts}</h2>
       ${
         brokerAccounts.length === 0

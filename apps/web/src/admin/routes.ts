@@ -15,12 +15,15 @@ import {
   safeParseAdminChangePasswordRequest,
   safeParseAdminDepositsQuery,
   safeParseAdminIntentsQuery,
+  safeParseAdminTokenAdjustmentRequest,
   safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
   safeParseAdminUsersQuery,
   STAFF_PASSWORD_MAX_LENGTH,
   STAFF_SESSION_TOKEN_PATTERN,
   staffLoginCodeSchema,
+  TOKEN_ADJUSTMENT_MAX_TOKENS,
+  TOKEN_LEDGER_NOTE_MAX,
   staffLoginSchema,
   UUID_PATTERN,
   type AdminBotProfileMethodResult,
@@ -166,6 +169,15 @@ const resetFormOf = (body: unknown) => {
   return parsed.success ? parsed.data : undefined;
 };
 
+// Only the body's shape (a field sent twice arrives as an array), then the shared schema: the
+// limit and the note's bounds live there, so web holds no second copy of them.
+const adjustForm = z.object({
+  direction: z.enum(['credit', 'debit']),
+  amount: z.string().regex(/^[1-9]\d{0,18}$/),
+  note: z.string(),
+  balance: z.string().regex(/^\d{1,19}$/),
+});
+
 /**
  * A query string before its schema: a key whose value is the empty string is no key — an
  * emptied search box submits `q=`, and that is a request for the whole list, not a refusal.
@@ -294,7 +306,8 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       }
       try {
         const { me, ...card } = await backend.user(token, id);
-        return sendHtml(reply, 200, userPage(card, me.login));
+        const notice = noticeOf(request.query, TEXTS.userNotice);
+        return sendHtml(reply, 200, userPage(card, me.login, { notice }));
       } catch (error) {
         const answered = outcome(error);
         if (answered?.status === 404 && answered.code === AdminErrorCode.NotFound) {
@@ -898,6 +911,69 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       if (!isBotTextKey(key) || botProfileMethodsOf(key).length === 0) return textNotFound(reply);
       return publishBotProfile(request, reply, token, (published) =>
         botTextHref(key, 'republished', published),
+      );
+    }),
+  );
+
+  // --- Token adjustment (#246, docs/admin-pages.md → Корректировка токенов) ---------------------
+
+  const userNotFound = (reply: FastifyReply) =>
+    sendHtml(reply, 404, noticePage(TEXTS.userNotFoundTitle, TEXTS.userNotFoundBody));
+
+  app.post('/admin/users/:id/tokens', async (request, reply) =>
+    withStaffSession(request, reply, async (token) => {
+      const { id } = request.params as { id: string };
+      // a shape it cannot be is refused here, before the backend is asked (see revoke above)
+      if (!UUID_PATTERN.test(id)) return userNotFound(reply);
+      const form = adjustForm.safeParse(request.body);
+      const parsed = form.success
+        ? safeParseAdminTokenAdjustmentRequest({
+            delta: form.data.direction === 'debit' ? `-${form.data.amount}` : form.data.amount,
+            note: form.data.note,
+            expectedBalance: form.data.balance,
+          })
+        : undefined;
+      if (!form.success || parsed?.success !== true) {
+        return sendHtml(
+          reply,
+          400,
+          noticePage(
+            TEXTS.userTitle,
+            TEXTS.tokenAdjustBadForm(TOKEN_ADJUSTMENT_MAX_TOKENS, TOKEN_LEDGER_NOTE_MAX),
+          ),
+        );
+      }
+      let answer;
+      try {
+        answer = await backend.adjustTokens(token, id, parsed.data);
+      } catch (error) {
+        if (isNotFound(error)) return userNotFound(reply);
+        const answered = outcome(error);
+        // not answered (unreachable, a 2xx outside the contract) or a 5xx: the commit may have
+        // happened, so the staff member reads the card rather than sending the form again
+        if (answered === undefined || answered.status >= 500) {
+          request.log.error(errorLogFields(error), 'the token adjustment outcome is unknown');
+          return sendHtml(
+            reply,
+            500,
+            noticePage(TEXTS.outcomeUnknownTitle, TEXTS.tokenAdjustOutcomeUnknown),
+          );
+        }
+        // session_invalid clears the cookie in withStaffSession; anything else is our failure
+        throw error;
+      }
+      if (answer.outcome === 'adjusted') {
+        return reply.redirect(`/admin/users/${id}?notice=adjusted`, 303);
+      }
+      const { me, outcome: refusal, ...card } = answer;
+      const message =
+        refusal === 'insufficient_available'
+          ? TEXTS.tokenAdjustInsufficient(card.user.tokens.available)
+          : TEXTS.tokenAdjustBalanceChanged(card.user.tokens.balance);
+      return sendHtml(
+        reply,
+        409,
+        userPage(card, me.login, { adjustment: { message, form: form.data } }),
       );
     }),
   );
