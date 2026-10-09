@@ -18,6 +18,9 @@ import {
   type BotTextKey,
   type BotTextVarName,
   AuditActorType,
+  BOT_PROFILE_METHODS,
+  botProfileMethodsOf,
+  type BotProfileMethod,
 } from '@binarius/shared';
 import {
   createDb,
@@ -28,13 +31,10 @@ import {
   type BotTextWriteResult,
 } from '@binarius/db';
 import {
-  BOT_PROFILE_METHODS,
-  botProfileMethodsOf,
   createBotProfileApi,
   publishBotProfile,
   readBotProfileSource,
   type BotProfileApi,
-  type BotProfileMethod,
   type BotProfileMethodResult,
   type CreateBotProfileApiOptions,
 } from '../bot-texts/publish';

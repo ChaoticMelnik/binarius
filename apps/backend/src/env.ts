@@ -173,9 +173,10 @@ function parseSharedSecrets(source: EnvSource): Pick<Env, 'internalApiToken' | '
 
 // Both bot tokens, validated together because the pair is what matters. TELEGRAM_BOT_TOKEN is the
 // public bot apps/bot polls; this process only sends on it (the push after the OAuth callback)
-// and never polls it. The bot-text CLI reads it on its own to publish the menu and the profile. ADMIN_BOT_TOKEN is the staff bot this process polls: one value in both is
-// two pollers on one bot, which Telegram settles with a 409 to one of them, and the staff bot
-// would be reachable from the public bot's chats.
+// and never polls it. The bot-text CLI reads it on its own to publish the menu and the profile.
+// ADMIN_BOT_TOKEN is the staff bot this process polls: one value in both is two pollers on one
+// bot, which Telegram settles with a 409 to one of them, and the staff bot would be reachable
+// from the public bot's chats.
 function parseBotTokens(source: EnvSource): Pick<Env, 'telegramBotToken' | 'adminBotToken'> {
   const telegramBotToken = parseNoWhitespaceEnv(
     readEnv(source, 'TELEGRAM_BOT_TOKEN'),
