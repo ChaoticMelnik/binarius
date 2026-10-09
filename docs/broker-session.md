@@ -17,7 +17,7 @@ TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius \
 
 | Part | Where | What |
 |---|---|---|
-| `createBrokerSessionManager(deps)` | `apps/trading-worker/src/broker/session-manager.ts` | the manager; implements `TradeSessionSource` (`sessionFor`), plus `start()`, `tick()`, `renewLeases()`, `stop()`, `clientFor()`, `size` |
+| `createBrokerSessionManager(deps)` | `apps/trading-worker/src/broker/session-manager.ts` | the manager; implements `TradeSessionSource` (`sessionFor`), plus `start()`, `tick()`, `renewLeases()`, `stop()`, `clientFor()`, `size`, `running` |
 | Constants | `apps/trading-worker/src/broker/session-config.ts` | the table under [Constants](#constants) and `SESSION_CHAIN_HOLDS` |
 | Candidates | `listSessionCandidates` in `packages/db/src/balance-snapshot-ops.ts` | the accounts in work, `{ id, brokerUserId }` |
 | Lease | `broker_session_leases` (migration 0031), `packages/db/src/session-lease-ops.ts` (#93) | which process may hold an account's socket: acquire, renew, release ([The lease](#the-lease-93)) |
@@ -210,6 +210,19 @@ A dead owner's account is picked up by another process within about TTL + one ho
 (~95 s; owner, 2026-10-09): until then it trades over REST. Falsifiable: `broker session lease
 busy` for one account longer than 95 s after its owner's last line. `compose.yaml` still runs one
 worker: more replicas, sharding and routing intent jobs to the owner are #94.
+
+## Losses for the circuit breaker (#96)
+
+With a `lossObserver` (`index.ts` passes the circuit breaker's), the manager reports a session
+lost to the broker, once per loss: a session that was `ready` and left it
+(`connecting`/`reconnecting`/`authenticating`/`idle`) and is still not ready
+`SOCKET_LOSS_GRACE_MS` (45 s, `circuit-breaker/config.ts`) later, checked at the start of every
+tick (before the scan, so a database that fails the scan does not hide them); or one closed with
+`disconnected_by_server` after it was ready, at once. Not a loss: `token_expired`/`auth_failed`
+(credentials; also while their token refresh takes longer than the grace), a session that never
+became ready, and every drop of our own — idle, the lease fence or a lost lease (#93), a refusal,
+`stop()` — whose entry is no longer current. `running` (entries of kind `running`) is the
+breaker's denominator for the socket share. Tests: `session-manager.test.ts` S1–S6.
 
 ## Start and shutdown
 
