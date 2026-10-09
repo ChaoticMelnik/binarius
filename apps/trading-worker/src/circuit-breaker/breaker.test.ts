@@ -136,11 +136,14 @@ describe('the circuit breaker (#96)', () => {
 
   it('starts no trip after stop(), and stop() waits for the one in flight', async () => {
     let release: () => void = () => undefined;
+    let calls = 0;
     const h = harness({
-      stopTrading: () =>
-        new Promise((resolve) => {
+      stopTrading: () => {
+        calls += 1;
+        return new Promise((resolve) => {
           release = () => resolve({ changed: true });
-        }),
+        });
+      },
     });
     for (let i = 0; i < 10; i += 1) h.breaker.rest(`a${i}`, true);
     let stopped = false;
@@ -154,6 +157,6 @@ describe('the circuit breaker (#96)', () => {
     // a whole new storm after stop(): enough to trip, and nothing starts
     for (let i = 0; i < 10; i += 1) h.breaker.rest(`later${i}`, true);
     await settle();
-    expect(h.logs('circuit breaker tripped')).toHaveLength(1);
+    expect(calls).toBe(1);
   });
 });
