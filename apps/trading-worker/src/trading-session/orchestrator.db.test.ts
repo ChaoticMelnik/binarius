@@ -920,6 +920,42 @@ describe('the pause after two losses (#379)', () => {
     await orchestrator.stop();
   });
 
+  // #379 review m1: the deadline or a restart between the INSERT and the ending loses the
+  // ending; the direct createSessionIntent is that state (no seam inside the attempt fires the
+  // deadline between the two)
+  it('P8 an intent whose ending was lost still counts: the next signal in its direction waits', async () => {
+    const seed = await seedSession();
+    let answer = signalTo(TradeAction.Down);
+    const orchestrator = orchestratorOf({ signals: signalsOf(() => answer) });
+    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+    answer = { ok: true, response: noSignalAnswer() };
+    advance(CANDLE_WAIT);
+    await orchestrator.tick();
+    expect((await sessionRow(seed.session.id)).lastSignalAction).toBeNull();
+
+    const { intent } = await createSessionIntent(tmp.db, {
+      sessionId: seed.session.id,
+      step: 2,
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Demo,
+      assetId: 101,
+      amount: '1' as DecimalString,
+      action: TradeAction.Down,
+      durationSec: 60,
+    });
+    expect(await processIntent(intent.id)).toBe('accepted');
+    await settle(seed, intent.id, MockTradeOutcome.Loss);
+
+    answer = signalTo(TradeAction.Down);
+    advance(CANDLE_WAIT);
+    await orchestrator.tick();
+    expect(await intentsOf(seed.session.id)).toHaveLength(2);
+    expect(pauseLines(seed.session.id)).toHaveLength(1);
+    expect((await sessionRow(seed.session.id)).lastSignalAction).toBe(TradeAction.Down);
+    await orchestrator.stop();
+  });
+
   it('P6 a pair paying below the floor holds the session for retryMs and asks no signal', async () => {
     const seed = await seedSession();
     const signals = signalsOf();

@@ -852,4 +852,27 @@ describe('createSessionIntent', () => {
     ]);
     expect(await tokenReservedOf(seed.userId)).toBe(TOKENS_PER_INTENT);
   });
+
+  // #379 review m1: the pause's memory is written by the intent's own transaction, so an ending
+  // lost after the INSERT cannot lose the traded action
+  it('D6 writes the intent action to last_signal_action; a replay and a refused session leave it', async () => {
+    const seed = await seedSessionAccount();
+    const first = await createSessionIntent(tmp.db, intentInput(seed, { action: TradeAction.Down }));
+    expect(first.created).toBe(true);
+    expect((await sessionOf(seed.session.id))!.lastSignalAction).toBe('down');
+
+    await markSessionDecision(tmp.db, { id: seed.session.id, signalAction: null });
+    const again = await createSessionIntent(tmp.db, intentInput(seed, { action: TradeAction.Down }));
+    expect(again.created).toBe(false);
+    expect((await sessionOf(seed.session.id))!.lastSignalAction).toBeNull();
+
+    const stopped = await seedSessionAccount();
+    await markSessionDecision(tmp.db, { id: stopped.session.id, signalAction: TradeAction.Up });
+    await stopTradingSession(tmp.db, { id: stopped.session.id, reason: 'user_stopped' });
+    const error = await thrown(
+      createSessionIntent(tmp.db, intentInput(stopped, { action: TradeAction.Down })),
+    );
+    expect(error).toBeInstanceOf(TradingSessionNotActiveError);
+    expect((await sessionOf(stopped.session.id))!.lastSignalAction).toBe('up');
+  });
 });

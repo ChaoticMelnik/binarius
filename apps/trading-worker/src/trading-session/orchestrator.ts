@@ -65,11 +65,12 @@ export interface SessionOrchestrator {
   stop(): Promise<void>;
 }
 
-// signalAction: what the attempt decided, written to last_signal_action (#379) — the traded
-// action, null after a no_signal, the paused action; absent where nothing was decided
+// A hold must say whether the pause's memory (last_signal_action, #379) is cleared (null after a
+// no_signal) or kept (the paused action). The traded action travels with the intent row
+// (createTradeIntent), never through an ending: an ending can be lost after the INSERT.
 type Ending =
   | { kind: 'stop'; reason: TradingSessionStopReason; fields?: Record<string, unknown> }
-  | { kind: 'created'; signalAction: TradeAction }
+  | { kind: 'created' }
   | { kind: 'reschedule' }
   | { kind: 'hold'; ms: number; signalAction?: TradeAction | null }
   // the session is no longer active: nothing to write
@@ -392,7 +393,7 @@ export function createSessionOrchestrator({
       { ...ids, step, intentId: created.intent.id, action },
       'trading session intent created',
     );
-    return { kind: 'created', signalAction: action };
+    return { kind: 'created' };
   }
 
   // The race bounds the tick's wait, not a statement: an abort does not cancel a pg query, so a
@@ -444,8 +445,6 @@ export function createSessionOrchestrator({
         await markSessionDecision(db, { id: session.id, signalAction: ending.signalAction });
         return;
       case 'created':
-        await markSessionDecision(db, { id: session.id, signalAction: ending.signalAction });
-        return;
       case 'reschedule':
         await markSessionDecision(db, { id: session.id });
         return;

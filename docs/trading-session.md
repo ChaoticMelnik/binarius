@@ -121,7 +121,7 @@ stop it ([The payout floor](#the-payout-floor-379)).
 | `stopTradingSession(db, { id, reason })` | one UPDATE | CAS on `status = active`: a second stop finds nothing and the first reason stays |
 | `markSessionDecision(db, { id, signalAction? })` | one UPDATE | `last_decision_at = now()` on an active session; `signalAction` (#379): absent leaves `last_signal_action`, `null` clears it, an action sets it |
 | `readSessionHistory(db, sessionId, { maxDurationMs })` | two selects | the owner's `telegram_user_id`, `expired` (the same deadline boundary, database clock, at this read) and the session's own intents in creation order with `action`, `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
-| `createSessionIntent(db, input)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below |
+| `createSessionIntent(db, input)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below; after the INSERT, `last_signal_action` = the intent's action on the session row the transaction holds (#379, D6) — a replay and a refused session leave it |
 
 Every stop writes `ended_at`, `last_decision_at` and `updated_at` as `now()`; every UPDATE that
 changes `status` carries `status = 'active'` in its WHERE.
@@ -269,7 +269,7 @@ keeps the first reason.
 | | `signal` | the action |
 | the sizer (`nowMs = max(now, started_at)`, E11) | `stop` | stop `stake_stop`, the code in the line (E3) |
 | | `stake` | the amount |
-| `createSessionIntent` (step = the session's intents + 1) | `created: true` | done; `last_signal_action` = the action |
+| `createSessionIntent` (step = the session's intents + 1) | `created: true` | done; `last_signal_action` was written by the intent's own transaction (D6) |
 | | `created: false` (a replay) | reschedule (E9g) |
 | | `trading_paused` | stop `kill_switch` (K2) |
 | | `account_halted` | stop `manual_review` (E9b) |
@@ -285,8 +285,9 @@ The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code adde
   reschedule, every hold-back — moves `last_decision_at` (`markSessionDecision`), and every
   hold-back is at least one tick. So a session never sits at the head of the scan twice in a row,
   and with a full batch the head rotates. Only "no ending written" leaves the key unmoved, and it
-  is a hold-back in memory. The same write carries `last_signal_action` on the three endings that
-  decided a direction (done, `no_signal`, the pause); every other ending leaves it.
+  is a hold-back in memory. The same write carries `last_signal_action` on the two hold-backs that
+  decided a direction (`no_signal`, the pause); the traded action is written by the intent's own
+  transaction; every other ending leaves it.
 - **The step comes from the database.** The step is the session's intents + 1 and the request key
   `session:<id>:<step>`, so a new process continues where the old one stopped (E8), and a repeated
   step is a replay.
@@ -334,11 +335,14 @@ again until the orchestrator sees a decision that is not a signal in it (issue #
   (`parseAmount(profit) < 0n`, the sizer's reading), in the same `action`. A tie, a win, a
   `manual_review` intent or a `settled` one without its profit breaks it (P7); a `rejected` intent
   between the two is skipped (P5).
-- **"The signal has not changed since"** is the column `last_signal_action`, written with every
-  deciding ending: the traded action when an intent is created, NULL on `no_signal`, the paused
-  action on the pause. After the attempt that created the second losing intent it holds that
-  action, and it keeps holding it exactly as long as every later decision was a signal in it. The
-  fact is in the row, so a worker restart pauses the same way (P4).
+- **"The signal has not changed since"** is the column `last_signal_action`, written by the
+  intent's own transaction when an intent is created (`createTradeIntent` with `session`), by the
+  ending with NULL on `no_signal` and with the paused action on the pause — so a lost ending (the
+  deadline, a restart, a throw after the INSERT) cannot lose the traded action (P8); a lost
+  `no_signal` ending leaves the previous action and costs one more wait, never a trade, and a lost
+  pause ending rewrites the same value (stated). After the attempt that created the second losing
+  intent it holds that action, and it keeps holding it exactly as long as every later decision was
+  a signal in it. The fact is in the row, so a worker restart pauses the same way (P4).
 - **The rule:** `signal(A)` with `pausedDirection === A` and `last_signal_action === A` holds the
   session until the next candle boundary + `TRADING_SESSION_CANDLE_SLACK_MS` (P1). A `no_signal`
   clears the column, and the next `signal(A)` trades; `signal(B)` trades at once (P2). If that trade
