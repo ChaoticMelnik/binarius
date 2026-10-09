@@ -3,10 +3,14 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hashToken } from '@binarius/db';
 import { accessTokenPath, safeParseAccessTokenRequest } from '@binarius/shared';
+import pino from 'pino';
+import { logOptions } from '@binarius/shared';
 import {
   createBackendAccessTokenSource,
   isAccessTokenRefusal,
   notConfiguredAccessTokenSource,
+  reportRefusedToken,
+  type AccessTokenOutcome,
   type AccessTokenSource,
 } from './access-token';
 
@@ -167,6 +171,55 @@ describe('createBackendAccessTokenSource (#90)', () => {
       expect(text).not.toContain(BEARER);
       expect(text).not.toContain('127.0.0.1');
     }
+  });
+});
+
+describe('reportRefusedToken (#281)', () => {
+  const reportWith = async (answer: AccessTokenOutcome) => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = pino(logOptions('info'), {
+      write: (line: string) => void lines.push(JSON.parse(line) as Record<string, unknown>),
+    });
+    await reportRefusedToken(
+      { accessToken: () => Promise.resolve(answer) },
+      logger,
+      { brokerAccountId: ACCOUNT, intentId: 'intent-1' },
+      SECRET,
+      { mayRefresh: false },
+    );
+    return lines;
+  };
+
+  it.each<AccessTokenOutcome>([
+    { ok: true, accessToken: 'another' },
+    { ok: false, reason: 'refresh_needed' },
+  ])('logs an answer of the backend as reported: %o', async (answer) => {
+    const lines = await reportWith(answer);
+    expect(lines).toEqual([
+      expect.objectContaining({
+        level: 30,
+        msg: 'refused token reported',
+        brokerAccountId: ACCOUNT,
+        intentId: 'intent-1',
+        answer: answer.ok ? 'ok' : answer.reason,
+      }),
+    ]);
+  });
+
+  it.each<AccessTokenOutcome>([
+    { ok: false, reason: 'backend_status', status: 400 },
+    { ok: false, reason: 'backend_unreachable' },
+    { ok: false, reason: 'contract_violation', status: 200 },
+  ])('warns when the backend never answered for the token: %o', async (answer) => {
+    const lines = await reportWith(answer);
+    expect(lines).toEqual([
+      expect.objectContaining({
+        level: 40,
+        msg: 'refused token not reported',
+        failure: answer.ok ? undefined : answer.reason,
+      }),
+    ]);
+    expect(JSON.stringify(lines)).not.toContain(SECRET);
   });
 });
 

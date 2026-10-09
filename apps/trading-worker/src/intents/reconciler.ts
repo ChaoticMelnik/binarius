@@ -4,8 +4,7 @@ import type { TradeIntentRow } from '@binarius/db';
 export const ReconcileUnavailableReason = {
   // nothing that can answer is wired behind the reconciler (a stub in the pass's own tests)
   NotConfigured: 'not_configured',
-  // the backend refused the token (blocked user, revoked account, ...) or the broker answered 401,
-  // and that token was reported back (#281, Rule 12)
+  // the backend refused the token (blocked user, revoked account, ...) or the broker answered 401
   TokenUnavailable: 'token_unavailable',
   BrokerUnavailable: 'broker_unavailable',
   // ends the pass's tick: the rest of the candidates would only be refused too

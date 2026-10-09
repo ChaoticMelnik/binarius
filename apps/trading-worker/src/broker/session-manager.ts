@@ -181,7 +181,7 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
     return tokens.accessToken(accountId, {
       mayRefresh: false,
       signal: stopping.signal,
-      ...(refusedToken === undefined ? {} : { refusedToken }),
+      refusedToken,
     });
   }
 
@@ -359,7 +359,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       drop(accountId, holdBackFor(accountId, outcome));
       return;
     }
-    // unreachable with a backend that reads refusedToken; kept for one that does not (#281)
+    // the same token means the backend did not mark the refusal (#281); restarting with it at
+    // once would loop user.auth against the broker's per-IP limit
     if (outcome.accessToken === entry.token) {
       logger.warn({ accountId, sessionState: state }, 'broker session token unchanged');
       drop(accountId, config.retryMs);

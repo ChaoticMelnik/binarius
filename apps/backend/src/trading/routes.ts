@@ -106,10 +106,7 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
       return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
     }
     const { mayRefresh, refusedToken } = parsed.data;
-    const result = await accessToken(id.data, {
-      mayRefresh,
-      ...(refusedToken === undefined ? {} : { refusedToken }),
-    });
+    const result = await accessToken(id.data, { mayRefresh, refusedToken });
     if (!result.ok) return reply.code(REFUSAL_STATUS[result.reason]).send({ error: result.reason });
     return reply.send({ accessToken: result.accessToken });
   });

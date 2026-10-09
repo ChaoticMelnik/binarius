@@ -622,8 +622,13 @@ A 429, a 5xx, `unavailable`, `contract_violation` and an abort report nothing.
   the user's next action — what the weekly expiry costs anyway.
 - **Convergence** waits for the user's next action or a reconciliation: until then the balance
   tick skips the account (its token is expired) and the session manager holds it back.
-- **Deploy window.** The worker puts the key in the body only when it has a fingerprint; a
-  backend that predates the field answers 400, which every caller treats as `backend_status`.
+- **Deploy window.** A backend that predates the field answers 400 to a body that carries it,
+  which every caller treats as `backend_status`: the session manager holds the account back
+  `SESSION_RETRY_MS`, a 401 reporter logs `refused token not reported`. Bodies without a
+  fingerprint pass as before. Compose ships both images together.
+- **Not reported** is a `warn` (`failure`, `status`): the backend never answered for the token,
+  the mark may be missing, and the next 401 reports again. A throw out of the source is an
+  `error` `refused token report failed`.
 
 ## Broker contract (verified 2026-10-01)
 

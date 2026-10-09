@@ -40,7 +40,9 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //     held-back account misses at least one tick
 //   2 × ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < RECONCILE_ATTEMPT_TIMEOUT_MS and
 //     < CATCHUP_ATTEMPT_TIMEOUT_MS — a 401 on the first page and the report of its token (#281)
-//     fit one attempt
+//     fit one attempt. A 401 on a later page (the token refused mid-attempt) can outlast it
+//     (34 s and 24 s): the report is cut by the attempt's signal, and the next attempt meets the
+//     401 on its first page and reports in time (stated)
 //   the worst case of broker GETs a minute ≤ WORKER_BROKER_GETS_PER_MINUTE (below), with
 //     60_000 / CATCHUP_TICK_MS and 60_000 / RECONCILE_TICK_MS whole ticks a minute
 // The session manager (#101, broker/session-config.ts) adds these:

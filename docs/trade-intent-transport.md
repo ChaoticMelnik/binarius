@@ -283,8 +283,11 @@ route refusing (`token_unavailable`) or failing (`backend_unavailable`) and ever
 `broker_contract`, `unavailable`, `aborted` → `timeout`) answer `unavailable` with a `warn`;
 anything else is thrown and the pass logs it by name. A 401 first reports the token's fingerprint
 with `mayRefresh: true` (#281): the backend marks it expired and exchanges it, and the next
-attempt by lease takes the new token; the token, the 401 and the report fit one attempt
-(`2 × ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS`, `TIMING_CHAIN_HOLDS`).
+attempt by lease takes the new token; the token, a 401 on the first page and the report fit one
+attempt (`2 × ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS`, `TIMING_CHAIN_HOLDS`). A
+401 on a later page (the token refused mid-attempt) can outlast it — 34 s here, 24 s in the
+catch-up: the report is cut by the attempt's signal, and the next attempt meets the 401 on its
+first page and reports in time (stated).
 
 **Halt and alert.** Every `manual_review` the pass writes — `ambiguous`, `unresolved`
 (`reconciliation_not_found`) and a found trade that does not match (`trade_mismatch`) — goes through `haltAccountForManualReview`: `broker_accounts`
