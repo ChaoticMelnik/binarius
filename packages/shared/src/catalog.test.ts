@@ -142,7 +142,7 @@ describe('the cycle payout floor (#379)', () => {
     [79.99, false],
     [80, true],
     [81, true],
-  ])('a pair paying %d%% is accepted: %s', (payout, accepted) => {
+  ])('a pair paying %s percent is accepted: %s', (payout, accepted) => {
     expect(MIN_CYCLE_PAYOUT_PCT).toBe(80);
     expect(pairPayoutAccepted({ payout })).toBe(accepted);
   });
@@ -152,7 +152,7 @@ describe('the cycle payout floor (#379)', () => {
     [68.9, 59.21],
     [100, 50],
     [0, 100],
-  ])('at %d%% the break-even share is %d%%', (payout, share) => {
+  ])('at a payout of %s percent the break-even share is %s percent', (payout, share) => {
     expect(breakEvenPct(payout)).toBeCloseTo(share, 2);
   });
 

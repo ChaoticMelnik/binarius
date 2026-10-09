@@ -13,6 +13,8 @@ import {
   SIGNAL_CHART_INTERVAL_MS,
   TRADING_SIGNAL_PATH,
   safeParseTradingSignalResponse,
+  type BinaryPair,
+  type PairsCatalogView,
 } from '@binarius/shared';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -23,6 +25,7 @@ import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
 import type { SignalRoutesDeps } from './signal-routes';
 import {
+  fakeCatalog,
   fakeSignalFeed,
   PAIRS_TEST_TOKEN,
   unusedAccessTokenDeps,
@@ -45,10 +48,30 @@ const facts = {
   limit: 60,
 };
 
+// the mock broker's two pairs with their digits (packages/mock-broker/src/state.ts)
+const catalogPair = (id: number, digits: number): BinaryPair => ({
+  id,
+  symbol: `PAIR${id}`,
+  type: 'currency',
+  digits,
+  payout: 85,
+  maxPayout: 90,
+  minTimeframe: 5,
+  maxTimeframe: 3600,
+  scheduledUntil: 0,
+});
+const catalogOf = (fresh = true): PairsCatalogView => ({
+  pairs: [catalogPair(101, 5), catalogPair(202, 2)],
+  fetchedAt: T - 1_000,
+  ageMs: 1_000,
+  fresh,
+});
+
 const decidedEvaluation: SignalEvaluation = {
   outcome: 'decided',
   entry: {
     ...facts,
+    digits: 5,
     fetch: { startTime: facts.startTime, limit: 60, rows: 60, durationMs: 12 },
     version: SIGNAL_ALGORITHM_VERSION,
     params: DEFAULT_SIGNAL_PARAMS,
@@ -66,7 +89,11 @@ let app: FastifyInstance | undefined;
 let lines: string[] = [];
 const parsedLines = () => lines.map((line) => JSON.parse(line) as Record<string, unknown>);
 
-function appWith(feed: SignalRoutesDeps['feed']): FastifyInstance {
+function appWith(
+  feed: SignalRoutesDeps['feed'],
+  // null: the cache holds no snapshot
+  catalog: PairsCatalogView | null = catalogOf(),
+): FastifyInstance {
   lines = [];
   app = buildApp({
     checkPostgres: () => Promise.resolve(),
@@ -82,7 +109,11 @@ function appWith(feed: SignalRoutesDeps['feed']): FastifyInstance {
     },
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
-    signal: { feed, internalApiToken: PAIRS_TEST_TOKEN },
+    signal: {
+      feed,
+      catalog: fakeCatalog(catalog ?? undefined),
+      internalApiToken: PAIRS_TEST_TOKEN,
+    },
     signals: unusedSignalsDeps(),
     auth: { internalApiToken: PAIRS_TEST_TOKEN } as AuthRoutesDeps,
     users: { db: {} as UsersRoutesDeps['db'], internalApiToken: PAIRS_TEST_TOKEN },
@@ -124,7 +155,7 @@ describe('POST /trading/signal', () => {
     const { feed, calls } = fakeSignalFeed(decidedEvaluation);
     const response = await post(appWith(feed), { assetId: 202, interval });
     expect(response.statusCode).toBe(200);
-    expect(calls).toStrictEqual([{ assetId: 202, interval }]);
+    expect(calls).toStrictEqual([{ assetId: 202, interval, digits: 2 }]);
   });
 
   it.each([
@@ -154,7 +185,7 @@ describe('POST /trading/signal', () => {
       decision: decidedEvaluation.outcome === 'decided' && decidedEvaluation.entry.decision,
     });
     expect(safeParseTradingSignalResponse(body).success).toBe(true);
-    expect(calls).toStrictEqual([{ assetId: 101, interval: '1m' }]);
+    expect(calls).toStrictEqual([{ assetId: 101, interval: '1m', digits: 5 }]);
   });
 
   it.each([
@@ -227,5 +258,35 @@ describe('POST /trading/signal', () => {
     });
     expect(parsedLines().filter((line) => line.msg === 'signal fetch failed')).toHaveLength(1);
     expect(broker.rest.journal.filter((entry) => entry.endpoint === 'chart')).toHaveLength(2);
+  });
+  // #379: the pair's digits come from the pairs cache, looked up before any chart GET
+  it.each([
+    ['no snapshot', null],
+    ['a stale snapshot', catalogOf(false)],
+  ])('R7 %s is 503 catalog_unavailable and the feed is not called', async (_, catalog) => {
+    const { feed, calls } = fakeSignalFeed(decidedEvaluation);
+    const response = await post(appWith(feed, catalog), { assetId: 101, interval: '1m' });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toStrictEqual({ error: 'catalog_unavailable' });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('R8 an id the catalog does not list is 409 pair_unknown and the feed is not called', async () => {
+    const { feed, calls } = fakeSignalFeed(decidedEvaluation);
+    const response = await post(appWith(feed), { assetId: 303, interval: '1m' });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toStrictEqual({ error: 'pair_unknown' });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('R9 the feed receives the digits of the catalog pair the request names', async () => {
+    const { feed, calls } = fakeSignalFeed(decidedEvaluation);
+    const target = appWith(feed);
+    await post(target, { assetId: 101, interval: '15s' });
+    await post(target, { assetId: 202, interval: '15s' });
+    expect(calls).toStrictEqual([
+      { assetId: 101, interval: '15s', digits: 5 },
+      { assetId: 202, interval: '15s', digits: 2 },
+    ]);
   });
 });

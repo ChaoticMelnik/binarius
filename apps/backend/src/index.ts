@@ -174,6 +174,7 @@ const app = buildApp({
   },
   signal: {
     feed: signalFeed,
+    catalog: pairsCatalog,
     internalApiToken: env.internalApiToken,
   },
   signals: {

@@ -3,6 +3,7 @@ import {
   errorLogFields,
   isPairOpen,
   pairAcceptsDuration,
+  pairPayoutAccepted,
   SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SCAN_INTERVAL,
   SignalFeedOutcome,
@@ -65,9 +66,13 @@ export interface SignalScanner {
   snapshot(): ScanSnapshot;
 }
 
+// a pair below the cycle payout floor is neither scanned nor served: no cycle starts on it (#379)
 export const eligiblePairs = (view: PairsCatalogView, nowMs: number): BinaryPair[] =>
   view.pairs.filter(
-    (pair) => isPairOpen(pair, nowMs) && pairAcceptsDuration(pair, SCAN_DURATION_SEC),
+    (pair) =>
+      isPairOpen(pair, nowMs) &&
+      pairAcceptsDuration(pair, SCAN_DURATION_SEC) &&
+      pairPayoutAccepted(pair),
   );
 
 // payout desc, then id asc, so the choice does not depend on the catalog's order
@@ -193,7 +198,8 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     );
   }
 
-  function choose(nowMs: number): number[] {
+  // the chosen pairs in order, each with its digits for the decider's tick floor (#379)
+  function choose(nowMs: number): { id: number; digits: number }[] {
     const view = catalog.read();
     if (view === undefined || !view.fresh) {
       if (!staleStreak)
@@ -205,7 +211,11 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     staleStreak = false;
     const eligible = eligiblePairs(view, nowMs);
     period.eligible = eligible.length;
-    return topPairs(eligible, maxPairs);
+    const digitsOf = new Map(eligible.map((pair) => [pair.id, pair.digits]));
+    return topPairs(eligible, maxPairs).flatMap((id) => {
+      const digits = digitsOf.get(id);
+      return digits === undefined ? [] : [{ id, digits }];
+    });
   }
 
   function rateLimited(retryAfterSec: number | undefined): void {
@@ -213,9 +223,9 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     period.pausedMs += pacer.onRateLimited(retryAfterSec);
   }
 
-  async function decide(assetId: number, boundary: number): Promise<void> {
+  async function decide(assetId: number, digits: number, boundary: number): Promise<void> {
     try {
-      const result = await feed.evaluate({ assetId, interval: SIGNAL_SCAN_INTERVAL });
+      const result = await feed.evaluate({ assetId, interval: SIGNAL_SCAN_INTERVAL, digits });
       if (result.outcome === SignalFeedOutcome.FetchFailed) {
         period.failed[result.code] = (period.failed[result.code] ?? 0) + 1;
         if (result.code === BrokerRestErrorCode.RateLimited) rateLimited(result.retryAfterSec);
@@ -247,13 +257,14 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     if (boundary === lastBoundary) return;
     lastBoundary = boundary;
     const candleEnd = boundary + SCAN_INTERVAL_MS;
-    scanned = choose(now());
+    const chosen = choose(now());
+    scanned = chosen.map((pair) => pair.id);
     for (const assetId of entries.keys()) {
       if (!scanned.includes(assetId)) entries.delete(assetId);
     }
-    const queue = [...scanned];
+    const queue = [...chosen];
     const worker = async () => {
-      for (let assetId = queue.shift(); assetId !== undefined; assetId = queue.shift()) {
+      for (let pair = queue.shift(); pair !== undefined; pair = queue.shift()) {
         if (stopped) return;
         // past its candle a scan would spend the next candle's tokens on stale work, and a call
         // inside the next slack could see that candle's close still unpublished
@@ -263,7 +274,7 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
           queue.length = 0;
           return;
         }
-        await decide(assetId, boundary);
+        await decide(pair.id, pair.digits, boundary);
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));

@@ -61,6 +61,7 @@ const features = (lastCandleTimestamp: number) => ({
   closedCandles: 59,
   trend: 'up' as const,
   momentum: 'up' as const,
+  atrTicks: 100,
 });
 
 // the decision on the candle that closed at the last boundary before `nowMs`
@@ -80,6 +81,7 @@ function decided(request: SignalFeedRequest, decision: SignalDecision): SignalEv
     entry: {
       assetId: request.assetId,
       interval: request.interval,
+      digits: request.digits,
       intervalMs: SCAN_INTERVAL_MS,
       nowMs: Date.now(),
       fetch: { startTime: 0, limit: 60, rows: 0, durationMs: 1 },
@@ -120,12 +122,14 @@ function harness(
     skewMs: 0,
   };
   const calls: number[] = [];
+  const requests: SignalFeedRequest[] = [];
   const answer: Answer = options.answer ?? ((request) => decided(request, signal(Date.now())));
   const logger = { info: vi.fn(), warn: vi.fn() };
   const scanner = createSignalScanner({
     feed: {
       evaluate: (request) => {
         calls.push(request.assetId);
+        requests.push(request);
         return Promise.resolve(answer(request));
       },
     },
@@ -146,7 +150,7 @@ function harness(
     concurrency: 4,
     logEveryMs: LOG_EVERY_MS,
   });
-  return { state, calls, logger, scanner };
+  return { state, calls, requests, logger, scanner };
 }
 
 // to the scan moment of the candle that starts `candles` boundaries after B
@@ -235,7 +239,7 @@ describe('signal scanner', () => {
     await toScan(1);
     expect(getChart).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(5_000);
-    await cached.evaluate({ assetId: 1, interval: '15s' });
+    await cached.evaluate({ assetId: 1, interval: '15s', digits: 5 });
     expect(getChart).toHaveBeenCalledTimes(1);
     await scanner.stop();
   });
@@ -268,7 +272,7 @@ describe('signal scanner', () => {
     });
     scanner.start();
     await vi.advanceTimersByTimeAsync(B + SCAN_INTERVAL_MS - 200 - Date.now());
-    const manual = cached.evaluate({ assetId: 1, interval: '15s' });
+    const manual = cached.evaluate({ assetId: 1, interval: '15s', digits: 5 });
     await toScan(1);
     await vi.advanceTimersByTimeAsync(1_000);
     await manual;
@@ -467,6 +471,34 @@ describe('signal scanner', () => {
     expect(h.calls).toEqual([1, 2]);
     await vi.advanceTimersByTimeAsync(5_010);
     expect(h.calls).toEqual([1, 2, 1, 2]);
+    await h.scanner.stop();
+  });
+
+  // #379: no cycle starts on a pair paying less than the floor, so the scanner neither decides
+  // nor serves it; the log line's `eligible` counts the pairs at or above it
+  it('S18 a pair paying 79 % is not eligible, not scanned and not served', async () => {
+    const h = harness({ pairs: [pair(1, { payout: 79 }), pair(2, { payout: 80 })] });
+    expect(eligiblePairs(h.state.view!, B + 3_000).map((p) => p.id)).toEqual([2]);
+    h.scanner.start();
+    await toScan(1);
+    expect(h.calls).toEqual([2]);
+    const snapshot = h.scanner.snapshot();
+    expect(snapshot.scanned).toEqual([2]);
+    expect(freshSignals(snapshot, Date.now()).map((s) => s.assetId)).toEqual([2]);
+    await vi.advanceTimersByTimeAsync(B + 3_000 + LOG_EVERY_MS - Date.now());
+    const [fields] = h.logger.info.mock.calls[0] as [Record<string, unknown>];
+    expect(fields).toMatchObject({ eligible: 1, scanned: 1 });
+    await h.scanner.stop();
+  });
+
+  it("S19 every evaluation carries the pair's digits from the catalog", async () => {
+    const h = harness({ pairs: [pair(1, { digits: 3 }), pair(2, { digits: 7 })] });
+    h.scanner.start();
+    await toScan(1);
+    expect(h.requests).toStrictEqual([
+      { assetId: 1, interval: '15s', digits: 3 },
+      { assetId: 2, interval: '15s', digits: 7 },
+    ]);
     await h.scanner.stop();
   });
 

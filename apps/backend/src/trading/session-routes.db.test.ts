@@ -398,6 +398,27 @@ describe('POST /trading/sessions', () => {
     await expectRefusal(response, 409, 'pair_unavailable', before);
   });
 
+  // #379: no cycle on a pair paying less than MIN_CYCLE_PAYOUT_PCT; refused before the balance
+  it('R19 a pair paying 79 % is 409 payout_too_low, before any balance refresh', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const before = await sessionCount();
+    const response = await start(
+      appWith({ catalog: freshCatalog([{ ...pair, payout: 79 }]) }),
+      bodyFor(seed),
+    );
+    await expectRefusal(response, 409, 'payout_too_low', before);
+    expect(refreshCalls).toEqual([]);
+  });
+
+  it('R20 a pair paying exactly 80 % starts', async () => {
+    const seed = await seedReady();
+    const response = await start(
+      appWith({ catalog: freshCatalog([{ ...pair, payout: 80 }]) }),
+      bodyFor(seed),
+    );
+    expect(response.statusCode).toBe(201);
+  });
+
   it('R8 a pair with a past scheduledUntil is open', async () => {
     const seed = await seedReady();
     const response = await start(
