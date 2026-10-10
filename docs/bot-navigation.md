@@ -132,6 +132,8 @@ call: the keyboards ride on the messages already sent.
 
 - **#202** — reminders to a user who connected and never started the demo: sent through
   `client-push.ts` with the demo button ([mailing.md](mailing.md)).
-- **#121 / #326 / #327** — the real-mode screens: the seam types make them comply.
+- **#326 / #327** — the real stake and real sessions; the mode screen (#121) already complies:
+  every refusal carries «⚙️ Режим» and the menu, and its two switches are in
+  `WRITE_CALLBACK_PREFIXES` ([trading-mode.md](trading-mode.md)).
 - **#321** — «📤 Поделиться» under the session's summary card (#318), added to
   `sessionCardKeyboard`'s rows: the card is sent with its keyboard, so it needs no exception.

@@ -83,7 +83,7 @@ demo:t:<group>:<page>     (a type, «◀️», «▶️») → the type's open p
 demo:a:<assetId>          (a pair, «↩️ Длительность»)  → the check of the pair, then its durations
 demo:d:<assetId>:<sec>    (a duration)       → readDemoTrade, then the summary with «📊 Анализ»
 demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Повторить анализ»)
-  bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade
+  bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade ∥ POST /trading/access (the mode)
   bot  → editMessageText: «⏳ Анализирую EUR/USD OTC · ⏱ 15 с…», no keyboard
   bot  → POST /trading/signal { assetId, interval: intervalForDuration(sec) }
   bot  → editMessageText: the analysis screen with its keyboard: the session first on every
@@ -293,6 +293,11 @@ not a fresh catalog.
 - **Analysis expanded by «➕ Ещё» (#360).** The session row (not below the cycle floor), then «🚀 Открыть сделку: ⬆️ Вверх ·
   $5.00» (or «⬇️ Вниз») and «💵 Сумма» in one row, then the repeat and the way back — the same
   message, only its keyboard edited. «🔄 Повторить анализ» draws the collapsed form again.
+- **Real mode (#121, [trading-mode.md](trading-mode.md)).** The analysis reads access for the
+  user's mode beside the catalog: in real mode no session row (sessions are demo only), and the
+  expansion draws only «🚀 Открыть сделку: ⬆️ Вверх · $1.00 · REAL» at the broker's minimum, its
+  fingerprint over `real:<amount>`; no «💵 Сумма». A failed read draws the demo keyboard. The
+  launch screen in real mode shows `launchRealMode` with «📊 Анализ пары» and «↩️ К списку».
 
 At most 15 buttons on a manual screen. Labels are
 plain strings; every label but a pair's starts with an emoji.
@@ -430,9 +435,10 @@ then the message sent anew): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is two b
 (the catalog beside the answer, then the signal; the access read for the stake label moved to
 «➕ Ещё», #360) and up to four Bot API calls — the answer, then «⏳» refused as gone and sent
 anew, the result sent; or the answer, «⏳» edited, the result's edit refused as gone and sent anew:
-2 × 5 000 + 4 × 8 000 = 42 s. `.analysisMore` (#360) is one backend call (access beside the
+2 × 5 000 + 4 × 8 000 = 42 s; since #121 the access read for the mode beside the catalog makes
+it 3 × 5 000 + 4 × 8 000 = 47 s. `.analysisMore` (#360) is one backend call (access beside the
 answer) and two Bot API calls (the answer, the keyboard's edit; a refused edit sends nothing
-more): 21 s. The longest declared path is `confirm`'s 45 s, so `HANDLER_BUDGET_MS` is 45 s
+more): 21 s. The longest declared path is `demoAnalysis`'s 47 s, so `HANDLER_BUDGET_MS` is 47 s
 ([bot-demo-trade.md](bot-demo-trade.md#timing));
 `HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS` (50 s) `< COMPOSE_STOP_GRACE_PERIOD_MS` (55 s) is
 checked at import (`TIMING_CHAIN_HOLDS`). `.legacyDuration` (#313, an old duration button) is
@@ -461,8 +467,8 @@ makes at most one chart GET, inside `TRADING_SIGNAL_BUDGET_MS` (4 s), and
   `the analysis keyboard was not expanded` (`warn`), `the analysis keyboard edit failed in
   transport, sending nothing more` (`error`, with the update id): the method
   (`editMessageReplyMarkup`) and the Telegram error code, never the description.
-- `trading access not read for the stake label` (`warn`) — written by «➕ Ещё» (#360) and the
-  launch screen (#320): `err` with the `BackendError`'s name and code, `backendStatus`,
+- `trading access not read for the stake label` (`warn`) — written by «➕ Ещё» (#360), the
+  launch screen (#320) and the analysis (#121): `err` with the `BackendError`'s name and code, `backendStatus`,
   `backendReason`; no Telegram id, no amount.
 - `answering the callback query failed` (`warn`) — the method and the code; from an old button
   (#313, #314) also its `callbackData`.

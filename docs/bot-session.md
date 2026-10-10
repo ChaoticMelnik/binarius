@@ -122,7 +122,8 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 | 409 `payout_too_low` | the same: the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80, #379) — an old analysis message or «🔁 Ещё сессия» on a pair whose payout fell; the bot's own screens offer no session there | «🚫 Выплата по паре сейчас ниже порога — сессия на ней не запускается. Открой анализ заново.» (`sessionPayoutTooLow`) + the way back to the analysis, which, re-read, shows the note and no session button |
 | 409 `stake_precision`, `stake_below_minimum`, `insufficient_demo_balance` | the same: the saved demo stake against the snapshot (#297) | the single trade's texts, without naming the minimum (this press reads no access), + «💵 Сумма» → `stk:o:a:<assetId>:<sec>` |
 | 503 `catalog_unavailable` | the same: the route reads the catalog before it creates anything | `demoCatalogUnavailable`, **no retry** |
-| 404 `user_not_found`, 409 `mode_not_allowed`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |
+| 409 `mode_not_allowed` | the user is in real mode (#121): a session button of an earlier render; sessions are demo only | «Сессии пока доступны только в демо-режиме — вернись в демо через меню.» (`sessionRealMode`), no log |
+| 404 `user_not_found`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |
 | any other 5xx, no answer, a broken body (a 409 `active_session_exists` whose body is not the contract's included) | unknown: the session may have been committed | one more `startSession` with the same request. A committed first attempt answers 409 with its session; otherwise the session is created once. Still unknown → «⚠️ Не удалось узнать, запущена ли сессия…» and `warn` `trading session not started` |
 
 `START_REFUSALS` is `satisfies Record<TradingSessionErrorCode, …>`, so a code added to the
@@ -255,6 +256,11 @@ asset by its id. One message answers, always with a keyboard (Rule 31):
   the balance GET of a finished session (#337), a read.
 - **The summary card of #318** comes through the same `track()`, as after the stop button; `/stop`
   has no code of its own for it, and the two-or-more answer tracks nothing.
+- **Back to demo (#121).** `/stop` also calls `setTradingMode(demo)` beside the stop: on
+  `changed: true` the line «🎮 Режим: DEMO — следующие сделки пойдут на демо.» goes first, with
+  «🏠 В меню»; a user already in demo gets the message above alone; a failed switch sends «⚠️ Режим
+  не переключён — открой /menu.» and `warn` `trading mode not reset`
+  ([trading-mode.md](trading-mode.md)).
 - **In the email dialog** `/stop` answers and leaves the step as it was, as `/help`; in groups it is
   ignored. `/stop@bot` and a trailing text are the command (grammY `command()`).
 - **Two or more** active sessions are not reachable from the bot (one account per start, and two
@@ -300,11 +306,10 @@ One entry per session id, in process memory, like the intent tracker
 - `HANDLER_CALLS.sessionRefresh` = 2 / 3: the edit refused as gone, then sent anew: 34 s.
 - `HANDLER_CALLS.sessionStop` = 3 / 3: `stopSession`, the read after a 409, the edit refused as
   gone and sent anew: 39 s.
-- `HANDLER_CALLS.stop` = 2 / 1 (#122): `stopSessions` beside `readPairs` (counted as sequential),
-  then the message: 18 s.
-- All stay below the longest path (`confirm`, 45 s; `demoAnalysis` is 42 s since #360 —
-  [bot-demo-trade.md](bot-demo-trade.md#timing)), so `HANDLER_BUDGET_MS` and the shutdown
-  budget do not move. `timing.test.ts` runs every terminal branch of the four.
+- `HANDLER_CALLS.stop` = 3 / 2 (#122, #121): `stopSessions` beside `readPairs` and
+  `setTradingMode(demo)` (counted as sequential), then the mode line and the message: 31 s.
+- All stay below the longest path (`demoAnalysis`, 47 s since #121 —
+  [bot-demo-trade.md](bot-demo-trade.md#timing)), inside the shutdown budget. `timing.test.ts` runs every terminal branch of the four.
 - `SESSION_TRACK_FIRST_POLL_MS` = 3 s, `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
   cycle is at least the worker's catch-up grace, 10 s), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
   `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 2 × 8 s = 26 s: an attempt's read and edit, then the card's
@@ -323,7 +328,7 @@ id or the symbol.
 - `trading session not started`
 - `trading session status not read`
 - `trading session not stopped`
-- `trading sessions not stopped` (`/stop`, #122)
+- `trading sessions not stopped` (`/stop`, #122); `trading mode not reset` (`/stop`, #121)
 - `trading session message not edited`
 - `trading session tracking failed` (`error`)
 - `trading session card not sent` (#318): the claim failed (`backendStatus`, `backendReason`), the
@@ -449,4 +454,6 @@ its own, which no runtime check of this issue used.
 - **#297** — choosing the stake; its new start refusals join `START_REFUSALS`.
 - **#360** — the button first on every `decided` analysis, and under a finished single trade.
 - **#321** — «📤 Поделиться» under the summary card, added to `sessionCardKeyboard`'s rows.
-- **#121** — real mode; it extends `/stop` with the switch of the mode. **#201** — levels and rewards.
+- **#121** — real mode: `/stop` also returns the user to demo, and a session button pressed in
+  real mode answers `sessionRealMode` ([trading-mode.md](trading-mode.md)). **#201** — levels and
+  rewards.

@@ -46,6 +46,8 @@ scanner keeps the top pairs' signals for `GET /trading/signals` within the broke
 is in [docs/signal.md](docs/signal.md); how the worker sizes the next
 stake and when a session stops is in [docs/stake.md](docs/stake.md); how the backend answers a
 user's token balance and broker balance is in [docs/trading-access.md](docs/trading-access.md);
+how a user switches between demo and real, and what real mode changes, is in
+[docs/trading-mode.md](docs/trading-mode.md);
 where the broker balance snapshot comes from and how fresh it is kept is in
 [docs/broker-balance.md](docs/broker-balance.md); how the broker's Deposit and FTD postbacks are
 received, journaled and deduplicated (nothing is credited yet) is in

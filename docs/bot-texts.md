@@ -234,6 +234,7 @@ compile.
 | `level` | `NotificationLevel` | its button label | — |
 | `stake` | the saved demo stake or `null` | `formatStake` | `stakeMinimumLabel` |
 | `minStake`, `demoAvailable` | the broker's bounds | `formatStake` | — |
+| `realAvailable` | `real.available` of the access read, the mode screen (#121) | `formatUsd` | — |
 | `age` | seconds | `formatAge` | — |
 | `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318) | `formatSignedUsd` | — |
 | `botUsername` | the bot's `ctx.me.username`, without `@` (#318) | as is | — |

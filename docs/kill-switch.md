@@ -118,8 +118,9 @@ The migrations open trading, so the pilot behaves as follows from the moment the
   runs `DEMO_ONLY=true` (below), which the pilot never does. What still
   stands between a real intent and the broker is the per-request checks of creation (the user
   `active`, an available token, the user's own `active`, not halted account, one live intent),
-  the token route, the broker's own checks, and that no caller of ours creates a real intent
-  (the bot sends only `demo`). A real intent today comes only from a direct internal-API call.
+  the token route, the broker's own checks, and the user's trading mode: a real intent is created
+  only for a user who switched real mode on in the bot ([trading-mode.md](trading-mode.md), Rule
+  36), at the broker's minimum stake.
 
 Steps:
 
