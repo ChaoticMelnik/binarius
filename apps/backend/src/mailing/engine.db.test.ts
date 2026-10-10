@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { HttpError } from 'grammy';
 import { pino } from 'pino';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FIRST_SESSION_CHAIN,
   logOptions,
@@ -28,6 +28,7 @@ import {
 import { captureApi, callsTo, inlineButtons } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS } from '../auth/texts';
+import { MAILING_SEND_PER_SECOND } from '../timing';
 import { createMailingEngine, type MailingConfig } from './engine';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -81,9 +82,10 @@ async function linked(minutes: number): Promise<Linked> {
 // a user whose last step is due
 const dueUser = () => linked(72 * 60 + 1);
 
+// 'default': the engine's own clock, which the case then probes by stepping the wall clock
 function engine(
   config: Partial<MailingConfig> = {},
-  clock = { now: 0 },
+  clock: { now: number } | 'default' = { now: 0 },
   sleep: (ms: number) => Promise<void> = async () => {},
 ) {
   const push = createClientPush({ token: PUSH_TOKEN });
@@ -94,7 +96,7 @@ function engine(
     push,
     logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
     config,
-    now: () => clock.now,
+    ...(clock === 'default' ? {} : { now: () => clock.now }),
     sleep,
   });
   const logs = () => lines.map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -379,6 +381,78 @@ describe('the rate', () => {
     await mailing.sendTick();
     expect(sentAt.length).toBeGreaterThanOrEqual(3);
     expect(sentAt.map((at, index) => at - index * 500)).toEqual(sentAt.map(() => 0));
+    await mailing.stop();
+  });
+});
+
+// Date.now stepped by `stepMs` more on every read, the way NTP steps a wall clock
+async function withWallClockStepping<T>(stepMs: number, run: () => Promise<T>): Promise<T> {
+  const start = Date.now();
+  let reads = 0;
+  const spy = vi.spyOn(Date, 'now').mockImplementation(() => start + stepMs * ++reads);
+  try {
+    return await run();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+describe('the clock', () => {
+  it('spaces the sends on a monotonic clock: a wall clock stepped back stretches no gap', async () => {
+    await dueUser();
+    await dueUser();
+    const slept: number[] = [];
+    const { mailing, captured } = engine({}, 'default', async (ms) => {
+      slept.push(ms);
+    });
+    await mailing.planTick();
+    await withWallClockStepping(-60_000, () => mailing.sendTick());
+    expect(callsTo(captured.calls, 'sendMessage').length).toBeGreaterThanOrEqual(2);
+    // the sleep returns at once, so each gap adds to the next: the n-th wait is at most n gaps,
+    // where a wall clock stepped back 60 s on every read would ask for a minute more each time
+    const gap = 1000 / MAILING_SEND_PER_SECOND;
+    slept.forEach((ms, index) => expect(ms).toBeLessThanOrEqual((index + 1) * gap));
+    await mailing.stop();
+  });
+
+  it('holds Telegram’s pause on a monotonic clock: a wall clock stepped on does not end it', async () => {
+    await dueUser();
+    const { mailing, captured } = engine({}, 'default');
+    await mailing.planTick();
+    captured.apiErrors.set('sendMessage', {
+      ok: false,
+      error_code: 429,
+      description: 'Too Many Requests: retry after 30',
+      parameters: { retry_after: 30 },
+    });
+    await mailing.sendTick();
+    captured.apiErrors.delete('sendMessage');
+    await dueUser();
+    await mailing.planTick();
+    await withWallClockStepping(600_000, () => mailing.sendTick());
+    expect(callsTo(captured.calls, 'sendMessage')).toHaveLength(1);
+    await mailing.stop();
+  });
+});
+
+describe('the tick’s log', () => {
+  it('counts what Telegram answered apart: delivered, refused, deferred, retried, unknown', async () => {
+    await dueUser();
+    await dueUser();
+    const { mailing, captured, logs } = engine();
+    let call = 0;
+    captured.answers.set('sendMessage', () => {
+      call += 1;
+      if (call === 2) {
+        throw new HttpError("Network request for 'sendMessage' failed!", new Error('timed out'));
+      }
+      return { message_id: call };
+    });
+    await mailing.planTick();
+    await mailing.sendTick();
+    expect(logs().filter((entry) => entry.msg === 'mailing tick')).toMatchObject([
+      { delivered: 1, refused: 0, deferred: 0, retry: 0, unknown: 1, canceled: 0 },
+    ]);
     await mailing.stop();
   });
 });

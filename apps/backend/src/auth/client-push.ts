@@ -34,9 +34,6 @@ export type LinkPushOutcome =
       kind: Exclude<LinkPushKind, typeof LinkPushKind.Pending | typeof LinkPushKind.Active>;
     };
 
-// Every push carries its next step, as the bot's own messages do (#350, docs/bot-navigation.md):
-// the buttons are the bot's, built from bot-navigation.ts, so a press lands on its handler.
-
 // the demo (#320's entry): the next step of a re-login and of every first-session reminder
 export const demoKeyboard = () =>
   new InlineKeyboard().text(CLIENT_LABELS.demoButton, DEMO_CALLBACK_DATA);
@@ -77,7 +74,9 @@ export function linkPushMessage(outcome: LinkPushOutcome): ClientPushMessage {
 }
 
 // A message the backend sends a Telegram user on its own: a link push, or a mailing
-// (apps/backend/src/mailing). It carries its next step, as every message of the bot does.
+// (apps/backend/src/mailing). It carries its next step, as every message of the bot does (#350,
+// docs/bot-navigation.md): the buttons are the bot's, built from bot-navigation.ts, so a press
+// lands on its handler.
 export interface ClientPushMessage {
   text: TelegramHtml;
   reply_markup: InlineKeyboardMarkup;

@@ -52,7 +52,9 @@ export interface MailingEngineDeps {
   push: Pick<ClientPush, 'sendMailing'>;
   logger: FastifyBaseLogger;
   config?: Partial<MailingConfig>;
-  // the tests' clock and sleep; the engine's own pacing and pause read only these
+  // the tests' clock and sleep; the engine's own pacing and pause read only these. The clock is
+  // monotonic (performance.now by default): a wall-clock step neither stretches nor cuts a gap or
+  // Telegram's pause
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -97,7 +99,7 @@ const lastErrorOf = (error: unknown): string => {
 export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
   const { db, push, logger } = deps;
   const config = { ...DEFAULT_MAILING_CONFIG, ...deps.config };
-  const now = deps.now ?? Date.now;
+  const now = deps.now ?? (() => performance.now());
   const pace = createSendPacer({
     perSecond: config.perSecond,
     now,
@@ -152,8 +154,8 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
     }
   }
 
-  // Resolves to the pause Telegram asked for, if it did.
-  async function deliver(job: ClaimedMailingJob): Promise<number | undefined> {
+  // Resolves to what became of the job; undefined when Telegram's answer is unknown.
+  async function deliver(job: ClaimedMailingJob): Promise<MailingOutcome | undefined> {
     let message: ClientPushMessage;
     try {
       message = mailingMessage(job.kind);
@@ -162,8 +164,9 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
         { jobId: job.id, kind: job.kind, ...errorLogFields(error) },
         'mailing not built',
       );
-      await settle(job, retryOutcome(error));
-      return undefined;
+      const outcome = retryOutcome(error);
+      await settle(job, outcome);
+      return outcome;
     }
     try {
       await push.sendMailing(job.telegramUserId, message);
@@ -184,32 +187,34 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
       if (outcome.kind === 'refused') {
         await recordTelegramSendFailure({ db, log: logger }, job.telegramUserId, error);
       }
-      return outcome.kind === 'deferred' ? outcome.afterMs : undefined;
+      return outcome;
     }
-    await settle(job, { kind: 'delivered' });
-    return undefined;
+    const delivered: MailingOutcome = { kind: 'delivered' };
+    await settle(job, delivered);
+    return delivered;
   }
 
   async function runSendTick(): Promise<void> {
     if (now() < pausedUntil) return;
-    let sent = 0;
-    let canceled = 0;
+    const counts = { delivered: 0, refused: 0, deferred: 0, retry: 0, unknown: 0, canceled: 0 };
     for (let index = 0; index < config.sendBatch; index += 1) {
       await pace();
       // after the pace, so a stop during its sleep claims nothing more
       if (stopped) break;
       const claim = await claimMailingJob(db, { scan: config.claimScan });
-      canceled += claim.canceled;
+      counts.canceled += claim.canceled;
       if (claim.job === undefined) break;
-      sent += 1;
-      const pauseMs = await deliver(claim.job);
-      if (pauseMs !== undefined) {
+      const outcome = await deliver(claim.job);
+      counts[outcome?.kind ?? 'unknown'] += 1;
+      if (outcome?.kind === 'deferred') {
+        const pauseMs = outcome.afterMs;
         pausedUntil = now() + pauseMs;
         logger.warn({ pauseMs }, 'mailing paused: Telegram asked to wait');
         break;
       }
     }
-    if (sent > 0 || canceled > 0) logger.info({ sent, canceled }, 'mailing sent');
+    // what Telegram answered for each claimed job; only `delivered` reached a user for certain
+    if (Object.values(counts).some((count) => count > 0)) logger.info(counts, 'mailing tick');
   }
 
   // a tick longer than its interval makes the next one a no-op
