@@ -526,7 +526,8 @@ spellings) that refuses real intents and sessions in it, read at start
   The operator tool for `manual_review` is a later issue.
 - Real-mode eligibility: **#144** replaced #134's env flag with the global trading switch, one
   for demo and real ([kill-switch.md](kill-switch.md)); **#135** what a revoked grant does to
-  running sessions; **#21/#121** starting real mode from the bot. Country
+  running sessions; **#121** real mode from the bot: a real intent only for a user in real mode,
+  409 `real_mode_off` from the reserve UPDATE ([trading-mode.md](trading-mode.md)). Country
   restrictions are deferred: there is no data source (`GET /v1/broker/user` has no country, the
   Partner API reports `country` as `unknown`, #14). There are no per-account real-mode flags;
   the account predicates `status = active` and `trading_halted = false` apply as before. #15 is
