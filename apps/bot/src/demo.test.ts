@@ -41,6 +41,7 @@ import {
 } from './demo';
 import { DEMO_DURATIONS_SEC } from './demo-catalog';
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
+import { sessionCardKeyboard } from './trading-session';
 import {
   ACCESS_VIEW,
   BOT_INFO,
@@ -69,6 +70,8 @@ import {
   messageAnswer,
   pairsResponse,
   rejectionOf,
+  sessionView,
+  SESSION_VIEW,
   signalsResponse,
   signalDecided,
   type ApiCall,
@@ -186,6 +189,12 @@ const EDIT_GONE: ApiError = {
   ok: false,
   error_code: 400,
   description: 'Bad Request: message to edit not found',
+};
+// a message whose text is a caption: a photo, the session's summary card (#318)
+const NO_TEXT: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: there is no text in the message to edit',
 };
 const EDIT_NOT_MODIFIED: ApiError = {
   ok: false,
@@ -1749,5 +1758,99 @@ describe('the demo and the email dialog', () => {
     // a press that touched the dialog would have restarted its lifetime
     dialogClock.at = NOW + LOGIN_DIALOG_TTL_MS;
     expect(loginDialog.get(USER.id)).toBeUndefined();
+  });
+});
+
+// #318: the summary card is a photo, so a button under it that edits the pressed message is
+// refused with «there is no text in the message to edit»; the screen then goes as a new message.
+describe('a press under the session card (a photo)', () => {
+  const editsOf = (calls: readonly ApiCall[]) =>
+    calls.filter((call) => call.method === 'editMessageText');
+  const sendsOf = (calls: readonly ApiCall[]) =>
+    calls.filter((call) => call.method === 'sendMessage');
+  // the card's buttons that edit the pressed message: «🔁 Ещё сессия» replies (K7 in
+  // trading-session.test.ts) and «🏠 В меню» replies too
+  const editingButtons = (durationSec: number) =>
+    sessionCardKeyboard(sessionView({ settings: { ...SESSION_VIEW.settings!, durationSec } }))
+      .inline_keyboard.flat()
+      .map((key) => ('callback_data' in key ? key.callback_data : undefined))
+      .filter(
+        (data): data is string =>
+          data !== undefined && data.startsWith('demo:') && !data.startsWith('demo:sess:'),
+      );
+  const pressOnPhoto = async (data: string, options: Parameters<typeof setup>[0] = {}) => {
+    const scene = setup(options);
+    scene.apiErrors.set('editMessageText', NO_TEXT);
+    await scene.press(data);
+    expect(scene.logger.warn.mock.calls.map((call) => call[1])).toContain(
+      'the demo screen was not edited, sending it anew',
+    );
+    expect(scene.logger.error).not.toHaveBeenCalled();
+    return scene;
+  };
+
+  it('pins the buttons this covers; a button added to the card needs its press here', () => {
+    expect(editingButtons(15)).toEqual([
+      demoAnalysisCallbackData(PAIR_EURUSD.id, 15),
+      demoSignalsCallbackData(15),
+    ]);
+    expect(editingButtons(60)).toEqual([DEMO_SIGNALS_CALLBACK_DATA]);
+  });
+
+  it('C1 «📡 К сигналам» sends the signals of the duration as a new message', async () => {
+    const { calls, logger } = await pressOnPhoto(demoSignalsCallbackData(15));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(TEXTS.demoSignalsEmpty({ label: '⏱ 15 с' }).value);
+    expect(rowsOf(sent)).toEqual(listFooter(15));
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0]?.[0]).toMatchObject({
+      method: 'editMessageText',
+      telegramErrorCode: 400,
+    });
+  });
+
+  it('C2 «📡 К сигналам» on a duration no longer offered sends the duration screen anew', async () => {
+    const { calls } = await pressOnPhoto(DEMO_SIGNALS_CALLBACK_DATA);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(TEXTS.demoChooseDurationMain.value);
+    expect(rowsOf(sent)).toEqual(rowsOf(payloadOf(calls, 'editMessageText')));
+  });
+
+  it('C3 «📊 Новый анализ» sends «⏳» anew, asks for the signal once, and sends the result after it', async () => {
+    const { calls, evaluateSignal } = await pressOnPhoto(
+      demoAnalysisCallbackData(PAIR_EURUSD.id, 15),
+    );
+    expect(methods(calls)).toEqual([
+      'answerCallbackQuery',
+      'editMessageText',
+      'sendMessage',
+      'sendMessage',
+    ]);
+    expect(editsOf(calls)).toHaveLength(1);
+    expect(evaluateSignal).toHaveBeenCalledTimes(1);
+    const [waiting, result] = sendsOf(calls);
+    expect(waiting?.payload.text).toBe(TEXTS.analyzing({ subject: 'EUR/USD OTC · ⏱ 15 с' }).value);
+    expect(waiting?.payload.reply_markup).toBeUndefined();
+    expect(result?.payload.text).toBe(
+      analysisScreen({ pair: PAIR_EURUSD, durationSec: 15, response: SIGNAL_DECIDED }).text.value,
+    );
+    expect(rowsOf(result?.payload).flat()).toContainEqual(
+      button(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15)),
+    );
+  });
+
+  it('C4 «📊 Новый анализ» with the catalog unreadable sends the failure screen anew', async () => {
+    const { calls, evaluateSignal } = await pressOnPhoto(
+      demoAnalysisCallbackData(PAIR_EURUSD.id, 15),
+      { readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)) },
+    );
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
+    const edited = payloadOf(calls, 'editMessageText');
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(edited?.text);
+    expect(sent?.reply_markup).toEqual(edited?.reply_markup);
+    expect(evaluateSignal).not.toHaveBeenCalled();
   });
 });

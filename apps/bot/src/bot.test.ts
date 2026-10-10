@@ -2378,6 +2378,15 @@ describe('/settings', () => {
           description: 'Bad Request: message to edit not found',
         },
       ],
+      // a message whose text is a caption (a photo, the session card, #318)
+      [
+        'there is no text in the message to edit',
+        {
+          ok: false as const,
+          error_code: 400,
+          description: 'Bad Request: there is no text in the message to edit',
+        },
+      ],
     ])(
       'sends the same text and keyboard as a new message when the edit is refused: %s',
       async (_label, refusal) => {
