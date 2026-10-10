@@ -365,8 +365,8 @@ uses.
 ## Blocking the bot (#119)
 
 When a user blocks the bot, the backend marks them unreachable until they come back and cancels
-their pending notification jobs. Nothing sends mailings today, so nothing reads the mark yet; what
-it will hold back is the senders' part, below. The fact lives in one column,
+their pending notification jobs; the mailing engine reads the mark and sends such a user nothing
+([mailing.md](mailing.md)). The fact lives in one column,
 `users.telegram_blocked_at` (NULL = deliverable, migration 0009), independent of `users.status`,
 which is the admin block: neither path writes the other.
 
@@ -382,7 +382,7 @@ the user unblocks the bot
   back → markTelegramReachable: telegram_blocked_at = NULL
 the user sends /start or /settings
   the /users/start upsert sets telegram_blocked_at = NULL: they have just written to the bot
-a send is refused with 403 (today: the link push after the callback)
+a send is refused with 403 (the link push after the callback, a mailing)
   back → recordTelegramSendFailure → markTelegramBlocked, as above
 ```
 
@@ -395,15 +395,17 @@ rows are created by `POST /users/start` (`/start` and `/settings`).
 
 A 403 on a send that is reported counts as "cannot deliver" — blocked, deactivated, never started
 — and the mark clears on the user's next `/start` or `/settings` (both upsert through
-`/users/start`) or unblock. Today the only send that reports one is the link push after the OAuth
-callback (`apps/backend/src/auth/routes.ts`), the only send that calls `recordTelegramSendFailure`.
-On this path Telegram's `description` is neither compared nor logged.
+`/users/start`) or unblock. Two sends report one, through `recordTelegramSendFailure`: the link
+push after the OAuth callback (`apps/backend/src/auth/routes.ts`) and the mailing engine
+(`apps/backend/src/mailing/engine.ts`, #202). On neither path is Telegram's `description` compared
+or logged.
 
-What a sender must do (#123, #124, #202, none of which exists yet; `stated`, enforced by nothing
-until a sender exists): claim its jobs with `acceptsMailing()` — which includes `deliverable()` —
-in the claim query (joining `users`) instead of spelling the columns, and hand every send error to
-`recordTelegramSendFailure`. A job claimed a moment before the block lands may then still be
-attempted once; that attempt is the 403 that marks the user, and no second one follows.
+What a sender does (#202's engine, [mailing.md](mailing.md); #123 and #124 are scenarios of the
+same engine): it claims its jobs with `acceptsMailing()` — which includes `deliverable()` — in the
+claim statement (joining `users`) instead of spelling the columns, and hands a 403 to
+`recordTelegramSendFailure` (`mailing-ops.db.test.ts` M6, `engine.db.test.ts` M7). A job claimed a moment before the block
+lands may then still be attempted once; that attempt is the 403 that marks the user, and no second
+one follows.
 
 Deliberately not done: no message on unblock (the user's next `/start` answers as usual); blocks
 from before the deploy are not replayed — Telegram does not resend old `my_chat_member` updates,
@@ -439,8 +441,8 @@ A user chooses how often the bot may write to them unasked: `users.notification_
 existing user included), `reduced` or `off`. It is a preference beside `telegram_blocked_at` and
 `status`; none of the three writes another. The level never governs the replies to the user's
 commands and buttons, the push after a site login (#128) or the results of the user's own trades
-(the owner, 2026-10-03). Nothing sends mailings yet, so today the choice is stored and `off`
-cancels what is pending, and nothing else changes for the user.
+(the owner, 2026-10-03). It governs the mailings ([mailing.md](mailing.md)): `off` cancels what
+is pending and the engine sends nothing more, `reduced` holds a second mailing within the window.
 
 ```text
 /settings
@@ -549,9 +551,10 @@ defeats the type, as it defeats any.
 **Two seams.** `parse_mode` is set and `TelegramHtml` is unwrapped in two places only:
 `apps/bot/src/send.ts` (`replyHtml`, `replyWithVideoHtml`, `replyWithPhotoHtml`,
 `editMessageTextHtml`) and
-`apps/backend/src/auth/link-notifier.ts`; a caller's extra can neither override `parse_mode` nor
+`apps/backend/src/auth/client-push.ts` (the link push and the mailings, #202); a caller's extra can neither override `parse_mode` nor
 pass `entities`. ESLint (`eslint.config.js`, the Telegram block) forbids grammY's send methods by
-name everywhere else in `apps/bot/src` and `apps/backend/src/auth`, outside tests; it does not see a
+name everywhere else in `apps/bot/src`, `apps/backend/src/auth` and `apps/backend/src/mailing`,
+outside tests; it does not see a
 method held in a variable. The list is `RAW_TELEGRAM_SEND_METHODS` in `eslint.config.js`: every
 Bot API method that takes parsed text and every grammY alias of one, derived from
 `@grammyjs/types` 5.0.0 and grammy 1.46.0 by the two commands in the comment above it.
@@ -859,8 +862,9 @@ written only when a step really did run out of time.
   bot no longer sends (#314); the `initData` check they rely on is the backend's (#113,
   binodex-oauth.md).
 - **#35** — end-to-end coverage against the mock broker.
-- **#123, #124, #202** — the senders that claim with `acceptsMailing()`, record each mailing as a
-  `sent` job and call `recordTelegramSendFailure` ([Blocking the bot](#blocking-the-bot-119)).
+- **#123, #124** — scenarios of the mailing engine (#202, [mailing.md](mailing.md)), which claims
+  with `acceptsMailing()`, records each mailing as a `sent` job and calls
+  `recordTelegramSendFailure` ([Blocking the bot](#blocking-the-bot-119)).
 - **#220** — a permanent support account in place of the temporary `SUPPORT.telegramUsername`.
 - Per-kind toggles, a daily digest, quiet hours — not asked (#120).
 - **#185** — `/account`, the state of the Binodex link: [bot-account.md](bot-account.md).

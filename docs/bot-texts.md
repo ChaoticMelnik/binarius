@@ -2,7 +2,8 @@
 
 Every text the client bot shows — messages, button labels, the command descriptions and the
 bot's profile — is written once, in `packages/shared/src/bot-texts.ts` (`BOT_TEXT_CATALOG`).
-The bot and the backend's push after an OAuth login both render from it. The texts quoted in this
+The bot, the backend's push after an OAuth login and the backend's mailings ([mailing.md](mailing.md))
+render from it. The texts quoted in this
 repository's other docs and comments are the catalog's defaults.
 
 The catalog is part 1 of #240. Part 2 (#299) stores overrides in the database, applies them in
@@ -37,7 +38,8 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
 - `packages/shared/src/bot-commands.ts` — the command menu: `BOT_COMMANDS` (each command's name and
   its description's key), `BOT_COMMAND_SCOPE`, `botCommandsOf(plain)`.
 - `apps/backend/src/auth/texts.ts` — the backend's view: `CLIENT_TEXTS`, `CLIENT_LABELS`,
-  `setBotTextSource`.
+  `setBotTextSource`; read by the push (`auth/client-push.ts`) and the mailings
+  (`mailing/messages.ts`).
 - `packages/shared/src/bot-text-overrides.ts` — the resolver, the writer's check, the Russian
   messages, the refresher and the wire schema of `GET /bot-texts`.
 - `packages/shared/src/bot-text-messages.ts` — the assembled messages and their estimate.
@@ -58,7 +60,9 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
   never escaped.
 - **group** — the screen or scenario the admin section lists it under: `start`, `card`,
   `account`, `menu`, `settings`, `support`, `help`, `demo`, `analysis`, `trade`, `session`,
-  `buttons`, `commands`, `profile`. `buttons` is exactly the bot's `LABELS` buttons plus
+  `mailing`, `buttons`, `commands`, `profile`. `mailing` holds the texts only the backend's
+  mailing engine sends (#202), so the bot's `TEXTS` leaves the group out. `buttons` is exactly
+  the bot's `LABELS` buttons plus
   `confirmButtonNoEmail`, `commands` the `*Command` descriptions; a label shown on one screen
   only (the levels, the asset types, the durations, the directions) sits in that screen's group.
   `bot-texts.test.ts` pins both lists.
@@ -191,7 +195,7 @@ now hold keys (`textOf(key)`), while the label maps (`ACTION_LABELS`, `DEMO_GROU
 `DEMO_DURATION_LABELS`, the analysis words) are getters over keys (`labelsOf`). `botCommands()`
 included (#301): `/help` lists the descriptions in effect, and the menu published at start is
 built when it is published. The tests of the source swap hold one place each (`bot.test.ts`, `demo-trade.test.ts`,
-`texts.test.ts`, `analysis.test.ts`, `link-notifier.test.ts`).
+`texts.test.ts`, `analysis.test.ts`, `client-push.test.ts`).
 
 ## What stays in code
 
