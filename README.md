@@ -47,7 +47,9 @@ is in [docs/signal.md](docs/signal.md); how the worker sizes the next
 stake and when a session stops is in [docs/stake.md](docs/stake.md); how the backend answers a
 user's token balance and broker balance is in [docs/trading-access.md](docs/trading-access.md);
 where the broker balance snapshot comes from and how fresh it is kept is in
-[docs/broker-balance.md](docs/broker-balance.md).
+[docs/broker-balance.md](docs/broker-balance.md); how the broker's Deposit and FTD postbacks are
+received, journaled and deduplicated (nothing is credited yet) is in
+[docs/postbacks.md](docs/postbacks.md).
 
 ## Requirements
 
@@ -313,3 +315,20 @@ the admin or with the CLI `set`/`reset`, publishes it at once and shows the resu
 «Опубликовать заново» in the admin or `publish` sends the menu and both profile texts again (after a
 failed publish, for example). The bot also publishes them at every start. What the writer refuses, how the texts are loaded and published:
 [docs/bot-texts.md](docs/bot-texts.md).
+
+## Postbacks
+
+The broker's Deposit and FTD postbacks arrive on `GET /postbacks/binodex/<secret>`, a route the
+backend registers only while `POSTBACK_URL_SECRET` is set. Each delivery is journaled and each
+payment becomes one deposit; nothing is credited yet (#386). Deposits are on the admin page
+«Депозиты»; what each delivery carried is read with the CLI, on the same migrated database as
+above:
+
+```bash
+docker compose exec backend pnpm --filter @binarius/backend deposit list
+docker compose exec backend pnpm --filter @binarius/backend deposit list --limit 100
+docker compose exec backend pnpm --filter @binarius/backend deposit show <payment_id>
+```
+
+The route, its answers, the cabinet setup and the migration's precondition are in
+[docs/postbacks.md](docs/postbacks.md).

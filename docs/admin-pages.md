@@ -316,18 +316,22 @@ something a view checks.
 `deposit_events`, newest first, `ADMIN_PAGE_SIZE` per page, keyset on `(created_at, id)` as on the
 other lists: one `SELECT` left-joined to `users` for the owner's Telegram id (`listDepositsForAdmin`,
 `packages/db/src/admin-ledger-ops.ts`). Columns: the time of the row, the owner's Telegram id (a link
-to the user card), the broker account id, the postback id, the payment id, the amount, the currency,
-the status as its code, the time it was processed. The amount is the stored `numeric(20,8)` as
-PostgreSQL prints it (`10.50000000`); nothing is computed from it. An empty value is shown as «—».
+to the user card), the broker account id, the trader id the postback named (`broker_user_id`), the
+payment id, the amount, the currency, the status as its code, the time it was processed. The amount
+is the stored `numeric(20,8)` as PostgreSQL prints it (`10.50000000`); nothing is computed from it.
+An empty value is shown as «—»; the trader id, the payment id and the amount are never empty
+(#141: `NOT NULL`).
 
-**The raw postback is not shown.** `deposit_events.payload` is not in the projection of the
-`SELECT`: it does not leave the database, let alone the backend, and the row's strict schema
-(`adminDepositViewSchema`) has no key for it.
+**The raw postback is not shown.** Since #141 a deposit is one row per payment and each delivery's
+query is a row of `postback_deliveries` ([docs/postbacks.md](postbacks.md)), which no admin read
+selects; the row's strict schema (`adminDepositViewSchema`) has no key for it. The journal is read
+with the `deposit` CLI.
 
 **The owner is `deposit_events.user_id` alone.** An unattributed postback has neither a user nor an
-account; a row may also name an account but no user (`deposit_events_owner_pair_check` forbids only
-the reverse). Both show «—» in the Telegram ID column — the second one with its account id in the
-next column — and neither is in a `user` filter.
+account, only its trader id — the account that trader confirms later takes it over
+([docs/postbacks.md](postbacks.md) → Attribution); a row may also name an account but no user
+(`deposit_events_owner_pair_check` forbids only the reverse). Both show «—» in the Telegram ID
+column — the second one with its account id in the next column — and neither is in a `user` filter.
 
 **Filters are exact matches**, each optional, both combined:
 
@@ -341,8 +345,9 @@ positions, it does not filter, as on the intents list. The form, the next and fi
 redirect and the request to the backend go through `adminDepositsSearchParams`
 (`packages/shared/src/admin.ts`), in the order `user, status, cursor`.
 
-What the page shows on production: nothing until the postback writer exists (#141/#142); the view
-row is written all the same. `status` and `amount` stay mutable after a ledger row references the
+What the page shows on production: rows appear once the route is on (`POSTBACK_URL_SECRET`,
+[docs/postbacks.md](postbacks.md)), all `received`: crediting is #386; the view row is written all
+the same. `status` and `amount` stay mutable after a ledger row references the
 deposit (the writer's rule, `packages/db/src/schema/deposit-events.ts`): the page shows the row as it
 is now and says nothing about its history.
 
@@ -688,7 +693,7 @@ who pressed the button even if the session is revoked between the check and the 
   the token ledger filter `user` and the card's ledger section use `token_ledger_user_created_idx`;
   the deposits filter `user` and the card's deposits section use `deposit_events_user_id_idx`;
   the order is still a sort. Assumed: up to 100 000 users, 1 000 000 intents, 100 000 trading
-  sessions, 1 000 000 ledger rows (two per trade), 100 000 deposits (one postback each) and 100 000
+  sessions, 1 000 000 ledger rows (two per trade), 100 000 deposits (one or two deliveries each) and 100 000
   broker accounts on the pilot. If `explain analyze` of a list or the overview passes 200 ms at those sizes, add a
   `(created_at, id)` index in its own migration.
 - The backend request timeout (`BACKEND_REQUEST_TIMEOUT_MS`) covers each page: at most six
@@ -811,22 +816,23 @@ From a clean volume, with a real `ADMIN_BOT_TOKEN` (the login needs the Telegram
    «Баланс изменился с момента открытия карточки: сейчас 50». `/admin/tokens?kind=adjustment` — the
    adjustments; the overview counts the user as «active now». «Аудит» → «Все события по пользователю
    →»: `token_adjusted` rows, the applied one with `balanceBefore` `7` and `balanceAfter` `57`.
-   Then two deposits — an unattributed postback (status by default `received`) and one of the user
-   through its account (the owner-pair CHECK wants the account). There is no postback writer yet
-   (#141/#142), so they are written directly; separate statements, so each row has its own `now()`:
+   Then two deposits through the postback route (#141, [docs/postbacks.md](postbacks.md)): one of a
+   trader no account has, and one of `seed-broker-1`, which is `active` here and so is attributed
+   at once. Set a secret in `.env` (`POSTBACK_URL_SECRET=` the output of `openssl rand -hex 32`),
+   recreate the backend so it reads it, and send the two deliveries:
    ```bash
-   docker compose exec postgres psql -U binarius -d binarius -c "insert into deposit_events
-     (postback_id, payload) values ('pb-local', '{}')"
-   docker compose exec postgres psql -U binarius -d binarius -c "insert into deposit_events
-     (user_id, broker_account_id, postback_id, payment_id, amount, currency, status, processed_at,
-     payload) select u.id, a.id, 'pb-local-2', 'pay-1', 10.5, 'USD', 'credited', now(), '{}'
-     from users u join broker_accounts a on a.user_id = u.id where a.broker_user_id = 'seed-broker-1'"
+   docker compose up -d backend
+   SECRET=$(grep '^POSTBACK_URL_SECRET=' .env | cut -d= -f2)
+   curl -sS "http://127.0.0.1:3000/postbacks/binodex/$SECRET?event=deposit&id=pb-local&payment_id=pay-0&a=unknown-trader&amount=5"
+   curl -sS "http://127.0.0.1:3000/postbacks/binodex/$SECRET?event=deposit&id=pb-local-2&payment_id=pay-1&a=seed-broker-1&amount=10.5&coin=USD"
    ```
-   Open «Депозиты»: two rows, the user's first — the Telegram ID a link to the
-   card, `10.50000000`, `USD`, `credited`, the processing time; `pb-local` has «—» in six columns
-   (Telegram ID, account, payment, amount, currency, processed). `?status=credited` — one row. The
-   user card: «Депозиты» between «Движения токенов» and «Аудит», one row, and «Все записи →» opens
-   the list filtered by this user, without `pb-local`. `?status=bogus` — 400, the form, no «Выйти».
+   Each prints `{"outcome":"recorded"}`. Open «Депозиты»: two rows, newest first — the user's: the
+   Telegram ID a link to the card, the account id, `seed-broker-1`, `pay-1`, `10.50000000`, `USD`,
+   `received`, «—» for processed; then `unknown-trader`'s with «—» in four columns (Telegram ID,
+   account, currency, processed) and `pay-0`, `5.00000000`. `?status=received` — both rows;
+   `?status=credited` — «Депозитов нет.» (nothing credits before #386). The user card: «Депозиты»
+   between «Движения токенов» and «Аудит», one row, and «Все записи →» opens the list filtered by
+   this user, without `unknown-trader`'s. `?status=bogus` — 400, the form, no «Выйти».
    Then open «Брокерские аккаунты» (last in the nav): one row — `1`, a link to the card, the account
    uuid, `seed-broker-1`, `Ada@Example.com`, «нет», «активен», «—», «нет», «—», the token expiry,
    «—», created, updated. `?halted=true` — «Аккаунтов нет.». Then halt the account (the reason goes
