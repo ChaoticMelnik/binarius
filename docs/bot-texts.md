@@ -235,6 +235,7 @@ compile.
 | `stake` | the saved demo stake or `null` | `formatStake` | `stakeMinimumLabel` |
 | `minStake`, `demoAvailable` | the broker's bounds | `formatStake` | — |
 | `age` | seconds | `formatAge` | — |
+| `profit` | `trades.profit` of the session view, the SQL sum (#337) | `formatSignedUsd` | — |
 
 The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, …) are a line's value the
 caller has already put into words from the catalog and its data, printed as is; their description
@@ -247,8 +248,9 @@ the account card, `/account` and the backend's push. A formatter gets nothing bu
 stand-in texts; no handler reads anything more for a text (`HANDLER_CALLS`, held by
 `apps/bot/src/timing.test.ts`). New data for a text is a code change, not an override. A static
 text sent from many places (`unavailable`, `blocked`, `accountNone`, `statusAmbiguous`,
-`confirmPrompt`, …) has no variables, and `statusStale` and `stakeBelowMinimum`, each sent from two
-places, have only what both hold.
+`confirmPrompt`, …) has no variables, and `statusStale` and `stakeBelowMinimum`, each sent from
+more than one place, have only what every sender holds: `statusStale` is also the age line under a
+session's result (#337), and every sender holds the age.
 
 **A stale value is never shown as current** (owner, 2026-10-08). `{demoBalance}`/`{realBalance}`
 print a number only from a fresh snapshot (`fresh`, the backend's `isBalanceFresh`); stale or
