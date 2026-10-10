@@ -297,7 +297,8 @@ not a fresh catalog.
   user's mode beside the catalog: in real mode no session row (sessions are demo only), and the
   expansion draws only «🚀 Открыть сделку: ⬆️ Вверх · $1.00 · REAL» at the broker's minimum, its
   fingerprint over `real:<amount>`; no «💵 Сумма». A failed read draws the demo keyboard. The
-  launch screen in real mode shows `launchRealMode` with «📊 Анализ пары» and «↩️ К списку».
+  launch screen in real mode has no stake line: `launchRealMode` with «📊 Анализ пары» and «↩️ К
+  списку».
 
 At most 15 buttons on a manual screen. Labels are
 plain strings; every label but a pair's starts with an emoji.

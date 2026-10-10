@@ -256,11 +256,6 @@ asset by its id. One message answers, always with a keyboard (Rule 31):
   the balance GET of a finished session (#337), a read.
 - **The summary card of #318** comes through the same `track()`, as after the stop button; `/stop`
   has no code of its own for it, and the two-or-more answer tracks nothing.
-- **Back to demo (#121).** `/stop` also calls `setTradingMode(demo)` beside the stop: on
-  `changed: true` the line «🎮 Режим: DEMO — следующие сделки пойдут на демо.» goes first, with
-  «🏠 В меню»; a user already in demo gets the message above alone; a failed switch sends «⚠️ Режим
-  не переключён — открой /menu.» and `warn` `trading mode not reset`
-  ([trading-mode.md](trading-mode.md)).
 - **In the email dialog** `/stop` answers and leaves the step as it was, as `/help`; in groups it is
   ignored. `/stop@bot` and a trailing text are the command (grammY `command()`).
 - **Two or more** active sessions are not reachable from the bot (one account per start, and two
@@ -306,8 +301,8 @@ One entry per session id, in process memory, like the intent tracker
 - `HANDLER_CALLS.sessionRefresh` = 2 / 3: the edit refused as gone, then sent anew: 34 s.
 - `HANDLER_CALLS.sessionStop` = 3 / 3: `stopSession`, the read after a 409, the edit refused as
   gone and sent anew: 39 s.
-- `HANDLER_CALLS.stop` = 3 / 2 (#122, #121): `stopSessions` beside `readPairs` and
-  `setTradingMode(demo)` (counted as sequential), then the mode line and the message: 31 s.
+- `HANDLER_CALLS.stop` = 2 / 1 (#122): `stopSessions` beside `readPairs` (counted as sequential),
+  then the message: 18 s.
 - All stay below the longest path (`demoAnalysis`, 47 s since #121 —
   [bot-demo-trade.md](bot-demo-trade.md#timing)), inside the shutdown budget. `timing.test.ts` runs every terminal branch of the four.
 - `SESSION_TRACK_FIRST_POLL_MS` = 3 s, `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
@@ -328,7 +323,7 @@ id or the symbol.
 - `trading session not started`
 - `trading session status not read`
 - `trading session not stopped`
-- `trading sessions not stopped` (`/stop`, #122); `trading mode not reset` (`/stop`, #121)
+- `trading sessions not stopped` (`/stop`, #122)
 - `trading session message not edited`
 - `trading session tracking failed` (`error`)
 - `trading session card not sent` (#318): the claim failed (`backendStatus`, `backendReason`), the
@@ -454,6 +449,6 @@ its own, which no runtime check of this issue used.
 - **#297** — choosing the stake; its new start refusals join `START_REFUSALS`.
 - **#360** — the button first on every `decided` analysis, and under a finished single trade.
 - **#321** — «📤 Поделиться» under the summary card, added to `sessionCardKeyboard`'s rows.
-- **#121** — real mode: `/stop` also returns the user to demo, and a session button pressed in
-  real mode answers `sessionRealMode` ([trading-mode.md](trading-mode.md)). **#201** — levels and
-  rewards.
+- **#121** — real mode: a session button pressed in real mode answers `sessionRealMode`
+  ([trading-mode.md](trading-mode.md)); **#473** extends `/stop` with the switch back to demo.
+  **#201** — levels and rewards.
