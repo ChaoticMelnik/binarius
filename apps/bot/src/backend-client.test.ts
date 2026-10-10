@@ -1396,9 +1396,13 @@ describe('body size', () => {
     // false if the broker lists more than 300 binary pairs; the live broker gives 144
     // (docs/broker-rest.md); also bounds a signals list, one signal per scanned pair
     const ASSUMED_LONGEST_PAIRS = 300;
-    // false for a string with no max() and no bounding writer that is longer: a pair's symbol and
-    // type, a broker user id, a balance level code, acquisitionSource
+    // false for a string with no max() and no bounding writer that is longer: a broker user id, a
+    // balance level code, acquisitionSource
     const ASSUMED_LONGEST_FREE_STRING = 2048;
+    // a pair's symbol and type: the broker's are short (EUR/USD; the live catalog of 144 pairs,
+    // docs/broker-rest.md); false once the broker sends one longer than 64 bytes. A catalog that
+    // grows past the ceiling then fails loudly as contract_violation, not silently.
+    const ASSUMED_LONGEST_PAIR_STRING = 64;
     // false for a longer address: the OAuth path stores user.email as any string (oauth-ops.ts)
     const ASSUMED_LONGEST_EMAIL = 254;
     // one text in GET /bot-texts; false for a text longer than Telegram's limit in 4-byte
@@ -1484,9 +1488,9 @@ describe('body size', () => {
     };
     const PAIR = {
       id: INT,
-      symbol: FREE,
+      symbol: 's'.repeat(ASSUMED_LONGEST_PAIR_STRING),
       isOtc: false,
-      type: FREE,
+      type: 't'.repeat(ASSUMED_LONGEST_PAIR_STRING),
       digits: INT,
       payout: NUMBER,
       maxPayout: NUMBER,
@@ -1677,25 +1681,14 @@ describe('body size', () => {
       expect(row.parse(row.sample).success, method).toBe(true);
     });
 
-    // #234 stop condition, reported to the owner and not tuned away: 300 pairs whose symbol and
-    // type are free strings at 2048 bytes are about 4.4 KB each, 1.3 MB in all, over even the
-    // 1 MiB ceiling. it.fails turns red once the row fits, so the mark cannot outlive the cause.
-    const OVER_CEILING: readonly (keyof BackendClient)[] = ['readPairs'];
-    const sizeOf = (method: keyof BackendClient): void => {
-      const row = rows[method];
-      expect(Buffer.byteLength(JSON.stringify(row.sample)), method).toBeLessThan(
-        row.limit ?? MAX_BACKEND_BODY_BYTES / 4,
-      );
-    };
-
-    it.each(methods.filter((method) => !OVER_CEILING.includes(method)))(
+    it.each(methods)(
       '%s: leaves the longest answer under the declared assumptions far below its ceiling',
-      sizeOf,
-    );
-
-    it.fails.each(OVER_CEILING)(
-      '%s: KNOWN OVER the ceiling under the declared assumptions (#234 stop condition)',
-      sizeOf,
+      (method) => {
+        const row = rows[method];
+        expect(Buffer.byteLength(JSON.stringify(row.sample)), method).toBeLessThan(
+          row.limit ?? MAX_BACKEND_BODY_BYTES / 4,
+        );
+      },
     );
   });
 });

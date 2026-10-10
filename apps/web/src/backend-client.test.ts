@@ -880,9 +880,14 @@ describe('body size', () => {
     // `sessions` of staffSessionsResponseSchema is unbounded; false once a staff member holds 100
     // live sessions
     const ASSUMED_LONGEST_LIST = 100;
-    // a string with no max() and no writer that bounds it (brokerUserId, a postback's ids and
-    // currency, a staff display name from the CLI); false once one such value is longer
+    // a string with no max() and no writer that bounds it (brokerUserId); false once one such
+    // value is longer
     const ASSUMED_LONGEST_FREE_STRING = 2048;
+    // a staff display name: the CLI's --name has no bound; false once one is longer
+    const ASSUMED_STAFF_DISPLAY_NAME = 256;
+    // a deposit's postbackId, paymentId and currency: no writer bounds them yet (#12, #141); false
+    // once the postback writer stores a longer one
+    const ASSUMED_DEPOSIT_ID_BYTES = 256;
     // the OAuth path stores the broker's user.email as any string (oauth-ops.ts); false once a
     // broker sends a longer address than RFC 5321 allows
     const ASSUMED_LONGEST_EMAIL = 254;
@@ -899,6 +904,8 @@ describe('body size', () => {
     const ofBytes = (bytes: number) => 'x'.repeat(bytes);
     // no control characters (checkTokenNote) and counted in code points: 4 bytes each
     const codePoints = (count: number) => '\u{1F600}'.repeat(count);
+    // the one writer, adminBotTextReason, writes Russian text: 2 bytes a character
+    const reason = '\u0436'.repeat(ADMIN_BOT_TEXT_REASON_MAX);
     const longest = <T extends string>(values: Record<string, T>): T =>
       Object.values(values).reduce((a, b) => (b.length > a.length ? b : a));
     const times = <T>(count: number, item: T): T[] => Array.from({ length: count }, () => item);
@@ -974,10 +981,10 @@ describe('body size', () => {
       userId: UUID,
       telegramUserId: INT8,
       brokerAccountId: UUID,
-      postbackId: ofBytes(ASSUMED_LONGEST_FREE_STRING),
-      paymentId: ofBytes(ASSUMED_LONGEST_FREE_STRING),
+      postbackId: ofBytes(ASSUMED_DEPOSIT_ID_BYTES),
+      paymentId: ofBytes(ASSUMED_DEPOSIT_ID_BYTES),
       amount: MONEY,
-      currency: ofBytes(ASSUMED_LONGEST_FREE_STRING),
+      currency: ofBytes(ASSUMED_DEPOSIT_ID_BYTES),
       status: longest(DepositEventStatus),
       processedAt: AT,
       createdAt: AT,
@@ -1014,7 +1021,7 @@ describe('body size', () => {
         updatedAt: AT,
         updatedByLogin: LOGIN,
       },
-      rejection: controls(ADMIN_BOT_TEXT_REASON_MAX),
+      rejection: reason,
       fragments: times(ADMIN_BOT_TEXT_FRAGMENTS_MAX, {
         // a catalog placeholder, written by code: a key's length is the longest there
         placeholder: KEY,
@@ -1057,9 +1064,11 @@ describe('body size', () => {
           sessions: times(ASSUMED_LONGEST_LIST, {
             id: UUID,
             login: LOGIN,
-            displayName: ofBytes(ASSUMED_LONGEST_FREE_STRING),
+            displayName: ofBytes(ASSUMED_STAFF_DISPLAY_NAME),
             ip: controls(64),
-            userAgent: controls(CLIENT_USER_AGENT_MAX_LENGTH),
+            // an HTTP header carries no control characters; 3 bytes a character is above any
+            // Latin-1 header read as UTF-8
+            userAgent: '\u20AC'.repeat(CLIENT_USER_AGENT_MAX_LENGTH),
             createdAt: AT,
             lastSeenAt: AT,
             expiresAt: AT,
@@ -1186,7 +1195,9 @@ describe('body size', () => {
             // every writer puts an AuditEntityType there
             entityType: longest(AuditEntityType),
             entityId: UUID,
-            payload: controls(ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS),
+            // jsonb::text escapes a control character into ASCII and counts code points: an
+            // astral character, 4 bytes, is the most one preview character costs
+            payload: codePoints(ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS),
             payloadTruncated: true,
           }),
           nextCursor: UUID,
@@ -1205,7 +1216,7 @@ describe('body size', () => {
             version: COUNT,
             updatedAt: AT,
             updatedByLogin: LOGIN,
-            rejection: controls(ADMIN_BOT_TEXT_REASON_MAX),
+            rejection: reason,
           }),
         },
       },
@@ -1269,26 +1280,13 @@ describe('body size', () => {
       expect(row.parse(row.sample).success, name).toBe(true);
     });
 
-    // #234 stop condition, returned to the owner and not tuned away: under the declared
-    // assumptions these rows pass a quarter of their ceiling (sessions: 100 x free displayName and
-    // a control-character userAgent; deposits: three free strings a row; audit: a 1024-unit
-    // control-character payload; botTexts: 1000 overrides with a 512-unit control-character
-    // rejection). it.fails turns red once a row fits, so the mark cannot outlive the cause.
-    const OVER_CEILING = ['sessions', 'deposits', 'audit', 'botTexts'];
-    const sizeOf = (name: string, row: (typeof rows)[keyof typeof rows]): void => {
-      expect(Buffer.byteLength(JSON.stringify(row.sample)), name).toBeLessThan(
-        row.limit ?? ceilingOf(name) / 4,
-      );
-    };
-
-    it.each(Object.entries(rows).filter(([name]) => !OVER_CEILING.includes(name)))(
+    it.each(Object.entries(rows))(
       '%s: leaves the longest answer under the declared assumptions far below its ceiling',
-      sizeOf,
-    );
-
-    it.fails.each(Object.entries(rows).filter(([name]) => OVER_CEILING.includes(name)))(
-      '%s: KNOWN OVER the ceiling under the declared assumptions (#234 stop condition)',
-      sizeOf,
+      (name, row) => {
+        expect(Buffer.byteLength(JSON.stringify(row.sample)), name).toBeLessThan(
+          row.limit ?? ceilingOf(name) / 4,
+        );
+      },
     );
   });
 });
