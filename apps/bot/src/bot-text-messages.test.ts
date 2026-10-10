@@ -176,10 +176,13 @@ const allFeatures = Object.values(TrendDirection).flatMap((trend) =>
     [-999_999_999.5, 1, -999_999_999.75].map((emaSlow) => featuresOf(trend, momentum, emaSlow)),
   ),
 );
+// in both modes: the disclaimer and the hint follow the user's mode (#121)
 const screens = (responses: TradingSignalResponse[]) =>
   responses.flatMap((response) =>
-    DEMO_DURATIONS_SEC.map(
-      (durationSec) => analysisScreen({ pair: widePair, durationSec, response }).text,
+    DEMO_DURATIONS_SEC.flatMap((durationSec) =>
+      Object.values(TradeMode).map(
+        (mode) => analysisScreen({ mode, pair: widePair, durationSec, response }).text,
+      ),
     ),
   );
 const DATA_DETAILS = {

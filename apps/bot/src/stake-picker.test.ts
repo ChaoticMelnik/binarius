@@ -458,6 +458,21 @@ describe('the stake picker opened from a launch screen (#320)', () => {
   });
 
   // #379: the screen a save returns to offers no cycle the session start would refuse
+  // Plan 5 (28.3): a real-mode user below the cycle floor gets the real launch, not the refusal
+  it('returns a user in real mode to the real launch on a pair below the cycle floor', async () => {
+    const { press, calls } = setup({
+      readPairs: () => Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 79 }] })),
+      readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
+    });
+    await press(stakePresetCallbackData('5', PAIR));
+    const text = plainTextOf(lastPayload(calls)?.text as string);
+    expect(text).toContain('✅ Демо-ставка сохранена: $5.00');
+    expect(text).toContain(plainTextOf(TEXTS.launchRealMode));
+    expect(rowsOf(lastPayload(calls))[0]).toEqual([
+      button(LABELS.modeAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15)),
+    ]);
+  });
+
   it.each([15, 5] as const)(
     'returns the cycle floor refusal under the saved line for a pair paying 79 percent at %i s',
     async (durationSec) => {

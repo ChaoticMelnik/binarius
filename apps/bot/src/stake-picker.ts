@@ -408,7 +408,8 @@ export function createStakePicker<C extends Context>({
     const pair = catalog.ok
       ? catalog.value.pairs.find((listed) => listed.id === assetId)
       : undefined;
-    if (pair !== undefined && !pairPayoutAccepted(pair)) {
+    // the cycle floor is a demo cycle's: real mode has no cycle (#121)
+    if (real === undefined && pair !== undefined && !pairPayoutAccepted(pair)) {
       const refusal = payoutTooLowScreen(pair, durationSec);
       return {
         text: telegramHtml`${TEXTS.stakeSavedLine({ firstName, stake: amount })}

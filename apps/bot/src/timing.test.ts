@@ -9,6 +9,7 @@ import {
   NotificationLevel,
   OAuthErrorCode,
   TradeAction,
+  TradeMode,
   TradeIntentErrorCode,
   SESSION_MAX_DURATION_MS,
   TRADING_ACCESS_BUDGET_MS,
@@ -958,7 +959,10 @@ const DEMO_ANALYSIS = {
 // «➕ Ещё» (#360): the access read for the stake label, then the keyboard edited in place;
 // a refused edit sends nothing more
 const moreUpdate = (chatType?: string) =>
-  callbackUpdate(analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, true), chatType);
+  callbackUpdate(
+    analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, true, TradeMode.Demo),
+    chatType,
+  );
 const MARKUP_TRANSPORT = new HttpError(
   "Network request for 'editMessageReplyMarkup' failed!",
   new Error('The operation was aborted due to timeout'),

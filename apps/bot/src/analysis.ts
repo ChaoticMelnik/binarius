@@ -9,6 +9,7 @@ import {
   SignalKind,
   telegramHtml,
   TradeAction,
+  TradeMode,
   TrendDirection,
   type BotPlainKey,
   type BotStaticHtmlKey,
@@ -105,13 +106,25 @@ export interface AnalysisScreenInput {
   pair: PairView;
   durationSec: DemoDurationSec;
   response: TradingSignalResponse;
+  // the user's mode as the analysis's access read gave it (#121): the disclaimer and the hint
+  // follow it, and real mode has no cycle to refuse
+  mode: TradeMode;
 }
 
 export function analysisScreen({
   pair,
   durationSec,
   response,
+  mode,
 }: AnalysisScreenInput): AnalysisScreen {
+  const real = mode === TradeMode.Real;
+  // Every `decided` answer of a demo pair below the cycle floor gets no session row (demo.ts,
+  // #379): the note under the block that would precede it says why
+  const withCycleNote = (block: TelegramHtml): TelegramHtml =>
+    real || pairPayoutAccepted(pair)
+      ? block
+      : telegramHtml`${block}
+${TEXTS.analysisCycleUnavailable({ payoutFloor: String(MIN_CYCLE_PAYOUT_PCT) })}`;
   const header = TEXTS.analysisHeader({ subject: analysisSubject(pair, durationSec) });
   if (response.outcome === SignalFeedOutcome.FetchFailed) {
     const body =
@@ -128,7 +141,7 @@ ${body}`,
   const { decision, params } = response;
   if (decision.kind === SignalKind.Signal) {
     const features = featureLines(decision.features, params, pair, VOLATILITY_WORDS.normal);
-    const payout = withCycleNote(payoutText(pair), pair);
+    const payout = withCycleNote(payoutText(pair));
     return {
       text: telegramHtml`${header}
 ${textOf(SIGNAL_HEADLINES[decision.action])}
@@ -136,7 +149,7 @@ ${textOf(SIGNAL_HEADLINES[decision.action])}
 ${features}
 ${payout}
 
-${TEXTS.analysisDisclaimer}`,
+${real ? TEXTS.analysisDisclaimerReal : TEXTS.analysisDisclaimer}`,
       stake: decision.action,
       session: true,
     };
@@ -147,7 +160,7 @@ ${TEXTS.analysisDisclaimer}`,
       text: telegramHtml`${header}
 ${headline}
 
-${withCycleNote(TEXTS.analysisDataHint, pair)}`,
+${withCycleNote(TEXTS.analysisDataHint)}`,
       stake: null,
       session: true,
     };
@@ -159,19 +172,11 @@ ${headline}
 
 ${featureLines(decision.features, params, pair, volatility)}
 
-${withCycleNote(TEXTS.analysisNoSignalHint, pair)}`,
+${withCycleNote(real ? TEXTS.analysisNoSignalHintReal : TEXTS.analysisNoSignalHint)}`,
     stake: null,
     session: true,
   };
 }
-
-// Every `decided` answer of a pair below the cycle floor gets no session row (demo.ts, #379):
-// the note under the block that would precede it says why.
-const withCycleNote = (block: TelegramHtml, pair: PairView): TelegramHtml =>
-  pairPayoutAccepted(pair)
-    ? block
-    : telegramHtml`${block}
-${TEXTS.analysisCycleUnavailable({ payoutFloor: String(MIN_CYCLE_PAYOUT_PCT) })}`;
 
 // What the handler shows when the backend did not answer with a body it could read.
 export const analysisUnavailableScreen = (
