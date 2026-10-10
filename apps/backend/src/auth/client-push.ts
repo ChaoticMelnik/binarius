@@ -37,6 +37,10 @@ export type LinkPushOutcome =
 // Every push carries its next step, as the bot's own messages do (#350, docs/bot-navigation.md):
 // the buttons are the bot's, built from bot-navigation.ts, so a press lands on its handler.
 
+// the demo (#320's entry): the next step of a re-login and of every first-session reminder
+export const demoKeyboard = () =>
+  new InlineKeyboard().text(CLIENT_LABELS.demoButton, DEMO_CALLBACK_DATA);
+
 // a failed login: connect again, or the menu
 const connectAgain = () =>
   new InlineKeyboard()
@@ -57,7 +61,7 @@ export function linkPushMessage(outcome: LinkPushOutcome): ClientPushMessage {
     case LinkPushKind.Active:
       return {
         text: CLIENT_TEXTS.linkedActive({ email: outcome.email }),
-        reply_markup: new InlineKeyboard().text(CLIENT_LABELS.demoButton, DEMO_CALLBACK_DATA),
+        reply_markup: demoKeyboard(),
       };
     case LinkPushKind.Blocked:
       return {

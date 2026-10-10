@@ -204,8 +204,10 @@ describe('broker balance timing', () => {
     expect(BOT_PROFILE_PUBLISH_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
-  it('ends a mailing send inside its tick and phase 1, and keeps the rate under Telegram’s (#202)', () => {
-    expect(CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  it('ends a mailing stop inside phase 1 and a send inside its tick, and keeps the rate under Telegram’s (#202)', () => {
+    expect(1000 / MAILING_SEND_PER_SECOND + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(
+      SHUTDOWN_PHASE1_BUDGET_MS,
+    );
     expect(CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(MAILING_SEND_TICK_MS);
     expect((MAILING_SEND_BATCH * 1000) / MAILING_SEND_PER_SECOND).toBeLessThanOrEqual(
       MAILING_SEND_TICK_MS,

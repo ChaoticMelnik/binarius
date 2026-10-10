@@ -289,10 +289,13 @@ export const TIMING_CHAIN_HOLDS =
   // request timeout above (the admin routes publish inside a request, #361), and inside phase 1
   BOT_PROFILE_PUBLISH_CALLS * BOT_PROFILE_PUBLISH_TIMEOUT_MS <= BOT_PROFILE_PUBLISH_BUDGET_MS &&
   BOT_PROFILE_PUBLISH_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  // the mailing engine: stop() waits for the one send in flight, which ends inside its tick;
-  // a tick's batch at the rate fits the tick; the rate is under Telegram's; the planner runs
-  // within the earliest step
-  CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the mailing engine: stop() waits for the job in flight — the pace's gap, then the claim, the
+  // one send, the settle and the 403 mark — and for a planner tick (one statement per kind); the
+  // statements are ordinary latency, as phase 1's own comment counts them, so the gap and the
+  // send are the bound. The send ends inside its tick; a tick's batch at the rate fits the tick;
+  // the rate is under Telegram's; the planner runs within the earliest step
+  1000 / MAILING_SEND_PER_SECOND + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <
+    SHUTDOWN_PHASE1_BUDGET_MS &&
   CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < MAILING_SEND_TICK_MS &&
   (MAILING_SEND_BATCH * 1000) / MAILING_SEND_PER_SECOND <= MAILING_SEND_TICK_MS &&
   MAILING_SEND_PER_SECOND < TELEGRAM_BOT_SENDS_PER_SECOND &&
