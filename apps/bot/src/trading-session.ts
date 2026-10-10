@@ -2,8 +2,6 @@ import { Composer, GrammyError, HttpError, InlineKeyboard, InputFile, type Conte
 import {
   DEFAULT_SESSION_TRADES,
   errorLogFields,
-  TradeMode,
-  TradingModeErrorCode,
   TradingSessionErrorCode,
   TradingSessionStatus,
   type BotStaticHtmlKey,
@@ -102,7 +100,6 @@ export interface TradingSessionDeps {
     | 'stopSession'
     | 'claimSessionSummary'
     | 'stopSessions'
-    | 'setTradingMode'
   >;
   logger: Logger;
   sessionTracker: Pick<SessionTracker, 'track'>;
@@ -287,8 +284,7 @@ export function createTradingSessionComposer<C extends Context>({
     await showInPlace(ctx, telegramUserId, symbolOf(catalog, view), view);
   });
 
-  // /stop (#122): every active session of the user, one message whatever the count, and the user
-  // back in demo mode (#121): a line before that message only when the mode did change. No
+  // /stop (#122): every active session of the user, one message whatever the count. No
   // confirmation and no retry, as the stop button: an unknown outcome shows in the session's own
   // status message, and a second /stop is harmless («Активных сессий нет.»). Every answer carries
   // «🏠 В меню» or the session's keyboard (Rule 31).
@@ -296,12 +292,10 @@ export function createTradingSessionComposer<C extends Context>({
     const from = ctx.from;
     if (from === undefined) return;
     const telegramUserId = String(from.id);
-    const [stopped, catalog, reset] = await Promise.all([
+    const [stopped, catalog] = await Promise.all([
       settle(backend.stopSessions(telegramUserId)),
       settle(backend.readPairs()),
-      settle(backend.setTradingMode(telegramUserId, TradeMode.Demo)),
     ]);
-    await replyModeReset(ctx, reset);
     if (!stopped.ok) {
       logger.warn(
         { ...errorLogFields(stopped.error), ...backendErrorFields(stopped.error) },
@@ -328,32 +322,6 @@ export function createTradingSessionComposer<C extends Context>({
     });
     track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
   });
-
-  // The mode line of /stop (#121). No users row has no mode to reset: nothing to say. Any other
-  // failure, the 5xx included, says the mode may not have changed; the card is the truth.
-  async function replyModeReset(
-    ctx: Context,
-    reset: Settled<Awaited<ReturnType<BackendClient['setTradingMode']>>>,
-  ): Promise<void> {
-    if (reset.ok) {
-      if (!reset.value.changed) return;
-      await replyHtml(ctx, TEXTS.modeStopReset, { reply_markup: menuKeyboard() });
-      return;
-    }
-    const { error } = reset;
-    if (
-      error instanceof BackendError &&
-      error.code === BackendErrorCode.HttpStatus &&
-      error.reason === TradingModeErrorCode.UserNotFound
-    ) {
-      return;
-    }
-    logger.warn(
-      { ...errorLogFields(error), ...backendErrorFields(error) },
-      'trading mode not reset',
-    );
-    await replyHtml(ctx, TEXTS.modeNotReset, { reply_markup: menuKeyboard() });
-  }
 
   async function start(request: CreateTradingSessionRequest): Promise<StartOutcome> {
     try {

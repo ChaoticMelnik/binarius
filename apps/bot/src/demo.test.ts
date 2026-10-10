@@ -528,6 +528,10 @@ describe('the launch screen', () => {
     );
     expect(edited?.text).toContain(TEXTS.launchRealMode.value);
     expect(edited?.text).not.toContain('Бот проведёт');
+    // decision 22: no stake line in real mode
+    expect(plainTextOf(edited?.text as string)).toBe(
+      `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с\n${plainTextOf(TEXTS.launchRealMode)}`,
+    );
   });
 
   it('keeps the demo launch when access cannot say the mode', async () => {

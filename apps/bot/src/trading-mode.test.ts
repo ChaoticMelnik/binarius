@@ -25,12 +25,14 @@ import {
   messageAnswer,
   stubSessionTracker,
   stubTracker,
+  WRITE_CALLBACK_PREFIXES,
   type ApiCall,
 } from './testing';
 import {
   MODE_CONFIRM_CALLBACK_DATA,
   MODE_DEMO_CALLBACK_DATA,
   MODE_REAL_CALLBACK_DATA,
+  MODE_SCREEN_CALLBACK_DATA,
 } from './trading-mode';
 import { LABELS, TEXTS, tradingModeConfirm, tradingModeScreen } from './texts';
 
@@ -78,7 +80,7 @@ const lines = (logger: ReturnType<typeof fakeLogger>, level: 'warn' | 'error') =
   logger[level].mock.calls.map((call) => call[1] as string);
 
 const MENU = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
-const SCREEN_AND_MENU = [[button(LABELS.modeScreenButton, MODE_CALLBACK_DATA)], MENU];
+const SCREEN_AND_MENU = [[button(LABELS.modeScreenButton, MODE_SCREEN_CALLBACK_DATA)], MENU];
 const REAL = accessView({ tradingMode: TradeMode.Real });
 const EDIT_GONE: ApiError = {
   ok: false,
@@ -213,7 +215,7 @@ describe('the confirm step (#121)', () => {
     expect(rowsOf(lastPayload(calls))).toEqual([
       [
         button(LABELS.modeConfirmButton, MODE_REAL_CALLBACK_DATA),
-        button(LABELS.modeCancelButton, MODE_CALLBACK_DATA),
+        button(LABELS.modeCancelButton, MODE_SCREEN_CALLBACK_DATA),
       ],
     ]);
   });
@@ -231,6 +233,55 @@ describe('the confirm step (#121)', () => {
     apiErrors.set('editMessageText', EDIT_GONE);
     await press(MODE_CONFIRM_CALLBACK_DATA);
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
+  });
+});
+
+// Plan Update 4 (review round 1, Major 1): «↩️ Отмена» and «⚙️ Режим» redraw the screen in place,
+// so a cancelled confirm keeps no «✅ Подтверждаю»
+describe('the screen in place (#121, `mode:x`)', () => {
+  const carries = (payload: Record<string, unknown> | undefined, data: string) =>
+    rowsOf(payload).some((row) => row.some((b) => b.callback_data === data));
+
+  it('«↩️ Отмена» edits the confirm into the screen and sends nothing new', async () => {
+    const { press, calls } = setup();
+    await press(MODE_CONFIRM_CALLBACK_DATA);
+    calls.length = 0;
+    await press(MODE_SCREEN_CALLBACK_DATA);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    const edited = lastPayload(calls);
+    expect(edited?.text).toBe(
+      tradingModeScreen({ mode: TradeMode.Demo, broker: ACCESS_VIEW.broker, tradingOpen: true })
+        .value,
+    );
+    expect(carries(edited, MODE_REAL_CALLBACK_DATA)).toBe(false);
+    expect(rowsOf(edited)[0]).toEqual([
+      button(LABELS.modeEnableButton, MODE_CONFIRM_CALLBACK_DATA),
+    ]);
+  });
+
+  it('«⚙️ Режим» under a refusal edits that message into the screen', async () => {
+    const { press, calls } = setup({
+      setTradingMode: () => Promise.reject(httpError(409, 'real_balance_below_minimum')),
+    });
+    await press(MODE_REAL_CALLBACK_DATA);
+    expect(rowsOf(lastPayload(calls))).toEqual(SCREEN_AND_MENU);
+    calls.length = 0;
+    await press(MODE_SCREEN_CALLBACK_DATA);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(plainTextOf(lastPayload(calls)?.text as string)).toContain('Сейчас: DEMO');
+  });
+
+  it('sends the screen anew when the message is gone', async () => {
+    const { press, calls, apiErrors } = setup();
+    apiErrors.set('editMessageText', EDIT_GONE);
+    await press(MODE_SCREEN_CALLBACK_DATA);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
+  });
+
+  it('is a read: no write prefix covers it', () => {
+    expect(
+      WRITE_CALLBACK_PREFIXES.some((prefix) => MODE_SCREEN_CALLBACK_DATA.startsWith(prefix)),
+    ).toBe(false);
   });
 });
 

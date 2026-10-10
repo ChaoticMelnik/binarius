@@ -1372,14 +1372,13 @@ const SESSION_STOP_BRANCHES: readonly Branch[] = [
   SESSION_STOP_WORST_CASE,
 ];
 
-// /stop (#122): one message whatever the count, so every path is stopSessions ∥ readPairs ∥
-// setTradingMode (#121) and one sendMessage, after the mode line when the mode changed (the stub's
-// default)
+// /stop (#122): one message whatever the count, so every path is stopSessions ∥ readPairs and
+// one sendMessage
 const stopUpdate = (chatType?: string) => textUpdate('/stop', chatType);
 const STOP_WORST_CASE: Branch = {
   label: 'one session is stopped and its status is sent',
   update: stopUpdate(),
-  expected: { backend: 3, telegram: 2 },
+  expected: { backend: 2, telegram: 1 },
 };
 const STOP_BRANCHES: readonly Branch[] = [
   {
@@ -1397,37 +1396,25 @@ const STOP_BRANCHES: readonly Branch[] = [
     label: 'no session was active',
     update: stopUpdate(),
     stopSessions: () => Promise.resolve([]),
-    expected: { backend: 3, telegram: 2 },
+    expected: { backend: 2, telegram: 1 },
   },
   {
     label: 'two sessions are stopped',
     update: stopUpdate(),
     stopSessions: () => Promise.resolve([STOPPED_SESSION, STOPPED_SESSION]),
-    expected: { backend: 3, telegram: 2 },
+    expected: { backend: 2, telegram: 1 },
   },
   {
     label: 'the stop fails',
     update: stopUpdate(),
     stopSessions: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 3, telegram: 2 },
+    expected: { backend: 2, telegram: 1 },
   },
   {
     label: 'the catalog fails',
     update: stopUpdate(),
     readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 3, telegram: 2 },
-  },
-  {
-    label: 'the user was in demo already',
-    update: stopUpdate(),
-    setTradingMode: (_id, tradingMode) => Promise.resolve({ tradingMode, changed: false }),
-    expected: { backend: 3, telegram: 1 },
-  },
-  {
-    label: 'the switch to demo fails',
-    update: stopUpdate(),
-    setTradingMode: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 3, telegram: 2 },
+    expected: { backend: 2, telegram: 1 },
   },
 ];
 
@@ -1484,6 +1471,38 @@ const MODE_CONFIRM_BRANCHES: readonly Branch[] = [
     expected: { backend: 1, telegram: 2 },
   },
   MODE_CONFIRM_WORST_CASE,
+];
+// `mode:x` (Plan Update 4): «↩️ Отмена» and «⚙️ Режим» redraw the screen in place
+const MODE_IN_PLACE_WORST_CASE: Branch = {
+  label: 'the edit is refused as gone and the screen is sent anew',
+  update: callbackUpdate('mode:x'),
+  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  expected: { backend: 1, telegram: 3 },
+};
+const MODE_IN_PLACE_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate('mode:x', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the screen is edited in',
+    update: callbackUpdate('mode:x'),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the edit fails in transport and nothing more is sent',
+    update: callbackUpdate('mode:x'),
+    apiErrors: [['editMessageText', EDIT_TRANSPORT]],
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the access read fails',
+    update: callbackUpdate('mode:x'),
+    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 2 },
+  },
+  MODE_IN_PLACE_WORST_CASE,
 ];
 const MODE_SET_WORST_CASE: Branch = {
   label: 'the outcome is unknown, access is read again and the edit is refused as gone',
@@ -2605,6 +2624,15 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
       MODE_CONFIRM_BRANCHES,
       MODE_CONFIRM_WORST_CASE,
       HANDLER_CALLS.modeConfirm,
+    );
+  });
+
+  it('the mode screen in place (#121, mode:x)', async () => {
+    await checkHandler(
+      'modeInPlace',
+      MODE_IN_PLACE_BRANCHES,
+      MODE_IN_PLACE_WORST_CASE,
+      HANDLER_CALLS.modeInPlace,
     );
   });
 

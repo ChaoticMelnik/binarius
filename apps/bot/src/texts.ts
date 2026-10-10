@@ -175,7 +175,9 @@ export const userContextOf = (
   demoBalance: balanceOf(broker, TradeMode.Demo),
   realBalance: balanceOf(broker, TradeMode.Real),
   mode,
-  stake: demoStake,
+  // the amount a trade stakes in that mode: the broker's minimum in real (#121), null without a
+  // snapshot (the text prints «минимальная ставка брокера»)
+  stake: mode === TradeMode.Real ? (broker?.minTradeAmount ?? null) : demoStake,
 });
 
 // The /help message: the three blocks, then one line per command in the menu's order.
@@ -688,8 +690,8 @@ export const signalButtonLabel = (symbol: string, action: TradeAction, payout: n
 // The launch screen (#320): the pair at the chosen duration (#382), the amount the cycle trades,
 // what the cycle does. A symbol the catalog did not give drops its line, an amount access did not
 // give reads as the broker's minimum; `saved` is what the picker has just saved, null for the reset
-// to the minimum. In real mode (#121) the cycle's line gives way to the single trade's: cycles are
-// demo only.
+// to the minimum. In real mode (#121) the stake and cycle lines give way to the single trade's:
+// cycles are demo only, and `amount` is the broker's minimum the real trade stakes.
 export function launchText({
   firstName,
   durationSec,
@@ -717,12 +719,15 @@ export function launchText({
             subject: `${symbol} · ${DEMO_DURATION_LABELS[durationSec]}`,
           }),
         ]),
-    amount === null
-      ? TEXTS.launchStakeMinimum(context)
-      : TEXTS.launchStake({ ...context, stake: amount }),
-    mode === TradeMode.Real
-      ? TEXTS.launchRealMode
-      : TEXTS.launchCycle({ ...context, trades: tradesCount(trades) }),
+    // real mode: no stake line, the single trade's line in place of the cycle's (decision 22)
+    ...(mode === TradeMode.Real
+      ? [TEXTS.launchRealMode]
+      : [
+          amount === null
+            ? TEXTS.launchStakeMinimum(context)
+            : TEXTS.launchStake({ ...context, stake: amount }),
+          TEXTS.launchCycle({ ...context, trades: tradesCount(trades) }),
+        ]),
   ];
   if (saved === undefined) return joinLines(lines);
   return telegramHtml`${TEXTS.stakeSavedLine({ firstName, stake: saved.amount })}

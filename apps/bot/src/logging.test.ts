@@ -1505,18 +1505,4 @@ describe('what the bot writes about the trading mode (#121)', () => {
     });
     noUserNoAmount(lines);
   });
-
-  it('names a /stop that could not return the user to demo', async () => {
-    const { lines } = await linesFrom({
-      update: textUpdate('/stop'),
-      level: 'trace',
-      setTradingMode: () => Promise.reject(failed(503)),
-    });
-    expect(lineWith(lines, 'trading mode not reset')).toMatchObject({
-      level: 40,
-      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
-      backendStatus: 503,
-    });
-    noUserNoAmount(lines);
-  });
 });

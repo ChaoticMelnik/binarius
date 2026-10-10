@@ -38,7 +38,7 @@ export const MODE_CALLBACK_DATA = 'mode';
 // The status card's: the entry and the mode button in one row, then the invite (#115). The entry
 // keeps DEMO_CALLBACK_DATA in both modes: the path is mode-agnostic up to the stake button (#121).
 // The account card keeps demoKeyboard.
-export const statusCardKeyboard = (mode: TradeMode = TradeMode.Demo): InlineKeyboard =>
+export const statusCardKeyboard = (mode: TradeMode): InlineKeyboard =>
   (mode === TradeMode.Real
     ? new InlineKeyboard()
         .text(LABELS.tradeButton, DEMO_CALLBACK_DATA)

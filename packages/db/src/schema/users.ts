@@ -47,7 +47,8 @@ export const users = pgTable(
     demoStake: money('demo_stake'),
     // The mode of the user's next single trade (#121, docs/trading-mode.md). Written only by
     // setTradingMode; a real intent is created only while it is `real` (createInTransaction's
-    // reserve UPDATE), a session only while it is `demo` (checkTradingSessionStart).
+    // reserve UPDATE), a session through the route only while it is `demo`
+    // (checkTradingSessionStart; the CLI session-start does not read it).
     tradingMode: text('trading_mode').$type<TradeMode>().notNull().default(TradeMode.Demo),
     tokenBalance: tokenAmount('token_balance'),
     tokenReserved: tokenAmount('token_reserved'),

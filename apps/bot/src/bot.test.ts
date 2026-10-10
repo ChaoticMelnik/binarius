@@ -151,8 +151,7 @@ function setup(
     claimSessionSummary: vi.fn(() => Promise.reject(new Error('not used here'))),
     stopSessions: vi.fn(() => Promise.reject(new Error('not used here'))),
     setDemoStake: vi.fn(() => Promise.reject(new Error('not used here'))),
-    // /stop's reset to demo (#121): a user already in demo, so nothing more is sent
-    setTradingMode: vi.fn(() => Promise.resolve({ tradingMode: TradeMode.Demo, changed: false })),
+    setTradingMode: vi.fn(() => Promise.reject(new Error('not used here'))),
     readBotTexts: vi.fn(() => Promise.reject(new Error('not used here'))),
   };
   const logger = fakeLogger();

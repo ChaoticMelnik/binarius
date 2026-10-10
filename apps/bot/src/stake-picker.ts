@@ -29,6 +29,7 @@ import {
   demoAnalysisCallbackData,
   demoLaunchCallbackData,
   durationOf,
+  effectiveStake,
   launchScreen,
   payoutTooLowScreen,
   removeLegacyKeyboard,
@@ -396,6 +397,8 @@ export function createStakePicker<C extends Context>({
         'trading access not read for the launch screen',
       );
     }
+    const real =
+      access.ok && access.value.tradingMode === TradeMode.Real ? access.value : undefined;
     if (!catalog.ok) {
       logger.warn(
         { ...errorLogFields(catalog.error), ...backendErrorFields(catalog.error) },
@@ -419,9 +422,10 @@ ${refusal.text}`,
       durationSec,
       firstName,
       symbol: pair?.symbol ?? null,
-      amount,
+      // in real mode the launch names the broker's minimum the real trade stakes (decision 22)
+      amount: real === undefined ? amount : effectiveStake(real),
       saved: { amount },
-      mode: access.ok ? access.value.tradingMode : TradeMode.Demo,
+      mode: real === undefined ? TradeMode.Demo : TradeMode.Real,
     });
   }
 

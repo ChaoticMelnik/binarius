@@ -1431,6 +1431,29 @@ describe('the facades over the catalog', () => {
 describe('the text source', () => {
   afterEach(() => setBotTextSource(defaultBotTextSource));
 
+  // Plan Update 4 (Minor 3): `{stake}` is the amount a trade stakes in the user's mode
+  it('gives the card {stake} as the minimum in real mode and the demo stake in demo', () => {
+    setBotTextSource({
+      sourceOf: (key) =>
+        key === 'statusHint' || key === 'statusHintReal'
+          ? 'ставка {stake}'
+          : defaultBotTextSource.sourceOf(key),
+    });
+    const card = (mode: TradeMode) =>
+      plainTextOf(
+        statusCard({
+          firstName: 'Ада',
+          mode,
+          tokens: ACCESS_VIEW.tokens,
+          broker: brokerBalance({ minTradeAmount: d('1') }),
+          brokerUnavailable: null,
+          demoStake: d('2.5'),
+        }),
+      );
+    expect(card(TradeMode.Real)).toMatch(/ставка \$1\.00$/);
+    expect(card(TradeMode.Demo)).toMatch(/ставка \$2\.50$/);
+  });
+
   it('shows a live status line from the source in place', () => {
     setBotTextSource(stubTextSource('intentAccepted'));
     const text = intentStatusText('X', intentView({ status: TradeIntentStatus.Accepted }));

@@ -20,11 +20,15 @@ import { editRefusal } from './screen';
 import { editMessageTextHtml, replyHtml } from './send';
 import { LABELS, TEXTS, tradingModeConfirm, tradingModeScreen } from './texts';
 
-// The mode screen (#121, docs/trading-mode.md): the user's trading mode, switched only here (and
-// back to demo by /stop). `mode` opens it — from the status card, a photo, so as a new message —
-// `mode:r` asks to confirm real, `mode:r:ok` switches to real, `mode:d` back to demo; the last
-// three edit in place. The two switches are writes (WRITE_CALLBACK_PREFIXES): no «🔄 Повторить»
-// ever carries them, every failure leads to «⚙️ Режим» and the menu.
+// The mode screen (#121, docs/trading-mode.md): the user's trading mode, switched only here (/stop
+// returning the user to demo is #121's follow-up). `mode` opens it from the status card — a photo, or text by the fallback,
+// never edited — as a new message; `mode:x` redraws it in place under the screen's own messages
+// («↩️ Отмена» of the confirm, «⚙️ Режим» under a refusal), so a cancelled confirm loses its
+// «✅ Подтверждаю»; `mode:r` asks to confirm real, `mode:r:ok` switches to real, `mode:d` back to
+// demo; all but `mode` edit in place. The two switches are writes (WRITE_CALLBACK_PREFIXES): no
+// «🔄 Повторить» ever carries them, every failure leads to «⚙️ Режим» and the menu; `mode:x` and
+// `mode:r` are reads.
+export const MODE_SCREEN_CALLBACK_DATA = 'mode:x';
 export const MODE_CONFIRM_CALLBACK_DATA = 'mode:r';
 export const MODE_REAL_CALLBACK_DATA = 'mode:r:ok';
 export const MODE_DEMO_CALLBACK_DATA = 'mode:d';
@@ -50,7 +54,7 @@ const settle = <T>(promise: Promise<T>): Promise<Settled<T>> =>
 
 // the way back to the screen, then the menu: under every refusal and every unknown outcome
 const backToScreen = (): InlineKeyboard =>
-  withMenu(new InlineKeyboard().text(LABELS.modeScreenButton, MODE_CALLBACK_DATA));
+  withMenu(new InlineKeyboard().text(LABELS.modeScreenButton, MODE_SCREEN_CALLBACK_DATA));
 
 // A switch the backend refused before its write, by code: the text and «⚙️ Режим». Exhaustive, so
 // a code added to the contract fails tsc here; user_not_found is logged (the access read that drew
@@ -83,6 +87,14 @@ export function createTradingModeComposer<C extends Context>({
     await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard });
   });
 
+  composer.callbackQuery(MODE_SCREEN_CALLBACK_DATA, async (ctx) => {
+    const [, access] = await Promise.all([answer(ctx), readAccess(ctx.from.id)]);
+    await editOrReply(
+      ctx,
+      accessScreen(access, (value) => modeScreen(value)),
+    );
+  });
+
   // the confirm names the amount the first real trade stakes, so access is read again for it
   composer.callbackQuery(MODE_CONFIRM_CALLBACK_DATA, async (ctx) => {
     const [, access] = await Promise.all([answer(ctx), readAccess(ctx.from.id)]);
@@ -93,7 +105,7 @@ export function createTradingModeComposer<C extends Context>({
             text: tradingModeConfirm(value.broker.minTradeAmount),
             keyboard: new InlineKeyboard()
               .text(LABELS.modeConfirmButton, MODE_REAL_CALLBACK_DATA)
-              .text(LABELS.modeCancelButton, MODE_CALLBACK_DATA),
+              .text(LABELS.modeCancelButton, MODE_SCREEN_CALLBACK_DATA),
           },
     );
     await editOrReply(ctx, screen);
