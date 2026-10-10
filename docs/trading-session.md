@@ -113,7 +113,7 @@ stop it ([The payout floor](#the-payout-floor-379)).
 |---|---|---|
 | `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings }, { demoOnly })` | one transaction | with `demoOnly` (required: the process's `DEMO_ONLY`, #396) refuses a `real` session first (`demo_only`); refuses any mode but `demo` before it reads anything (`mode_not_allowed`, #144 review m1: since #144 nothing else fences a real session's intents); reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`), then `broker_accounts` `FOR NO KEY UPDATE` (`account_revoked`, `account_not_confirmed` for `pending`, `account_halted`), then reads the trading switch without a lock (`trading_paused` while it is closed or its row is missing, #144); the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a `TradingSessionDbErrorCode`, not a wire contract: the start route maps each one ([Routes](#routes)) |
 | `checkTradingSessionStart(db, { telegramUserId, brokerAccountId? })` | plain selects, no lock | the start route's refusals, the first that applies wins: the trading switch (`trading_paused` while it is closed, #144), the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
-| `readTradingSessionView(db, id, telegramUserId)` | three selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined`; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`. `settings` that fail v1 read as `null` with `planned: 0` |
+| `readTradingSessionView(db, id, telegramUserId)` | four selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined` before the other selects run; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`; the settled intents joined to their broker trades by `created_at asc, id asc`, at most `MAX_SESSION_TRADES` (`settledTrades`, #464). `settings` that fail v1 read as `null` with `planned: 0` |
 | `readActiveTradingSessionView(db, brokerAccountId, telegramUserId)` | two reads | the account's active session as its owner sees it; `undefined` when none, or when it ended between the reads |
 | `listRunnableSessions(db, { limit, maxDurationMs, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, within the deadline (`started_at >= now() − maxDurationMs`, the expiry sweep's boundary on the database clock, so a session the capped sweep left over is never listed), and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw, `last_signal_action` with the row |
 | `stopExpiredSessions(db, { maxDurationMs, limit })` | one UPDATE | `started_at < now() − maxDurationMs` → `stopped`/`timeout` |
@@ -198,10 +198,20 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 `not_found` with the same body (Rule 13); a missing `telegramUserId` is 400.
 
 The view is an allowlist built key by key: `{ id, mode, status, stopReason, settings, startedAt,
-endedAt, trades: { planned, settled, rejected, won, lost, tied, profit }, lastIntent, balance }` —
-`planned` is `settings.trades`, `lastIntent` the same view `GET /trading/intents/:id` answers, or
-`null`. Bounded: counters, one settings object, one intent; no list.
+endedAt, trades: { planned, settled, rejected, won, lost, tied, profit }, lastIntent, balance,
+settledTrades }` — `planned` is `settings.trades`, `lastIntent` the same view
+`GET /trading/intents/:id` answers, or `null`. Bounded: counters, one settings object, one intent,
+and at most `MAX_SESSION_TRADES` (20) trade lines.
 
+- `settledTrades` (#464) is the session's `settled` intents in creation order, each
+  `{ action, amount, profit, result }`: `amount` is `trade_intents.amount` (the broker trade's by
+  Rule 15), `profit` the linked `broker_trades.profit`, both `DecimalString` at scale 8, and
+  `result` (`SessionTradeResult`: `won`/`lost`/`tied`) a SQL `case` on the sign of that profit,
+  the counters' own comparison. Rejected, live and `manual_review` intents are not in it, nor a
+  bot trade of the same account. Read in the same snapshot as the counters, so its length is
+  `trades.settled`; the schema's `max(MAX_SESSION_TRADES)` and the query's `limit` bound it, and
+  the orchestrator completes a session at `settings.trades` settled, so only a hand-written row
+  could have more (the first 20 are listed). No migration: a wire field, not a column.
 - `trades.profit` (#337) is `coalesce(sum(broker_trades.profit) filter (where settled), round(0, 8))`
   in the same REPEATABLE READ snapshot as the counters: a `DecimalString` at scale 8
   (`'-0.15000000'`, `'0.00000000'` with no settled trade), never summed in JS (Rule 2).

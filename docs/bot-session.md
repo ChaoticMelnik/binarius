@@ -150,7 +150,9 @@ the same 404 `not_found`.
 🎮 Демо-сессия
 📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00
 🔢 Сделка 3 из 5
-📊 Счёт: 1 в плюс, 1 в минус · -$0.50    (from the first settled trade; «в ноль» only when tied > 0)
+1. ⬆️ $1.00 → ✅ +$0.85                  (one line per settled trade, #464)
+2. ⬇️ $1.00 → ❌ -$1.00
+📊 Счёт: 1 в плюс, 1 в минус · -$0.15    (from the first settled trade; «в ноль» only when tied > 0)
 
 ✅ Сделка открыта у брокера.             (the last trade's line from the demo trade's texts)
 ```
@@ -162,8 +164,13 @@ A finished one (#337):
 📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00
 
 🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус
-💰 Результат: +$2.50
-🧪 Демобаланс: $10 002.50
+1. ⬆️ $1.00 → ✅ +$0.85
+2. ⬇️ $1.00 → ❌ -$1.00
+3. ⬆️ $1.00 → ✅ +$0.85
+4. ⬆️ $1.00 → ✅ +$0.85
+5. ⬇️ $1.00 → ❌ -$1.00
+💰 Результат: +$0.55
+🧪 Демобаланс: $10 000.55
 🕒 Баланс Binodex обновлён 1 мин назад.  (only when the balance predates the last trade)
 ```
 
@@ -177,14 +184,29 @@ A finished one (#337):
   newer than the session's last settlement) adds the `/menu` card's age line `statusStale`. No
   snapshot (`balance: null`): the result alone.
 - Both lines appear only once a trade settled (`settled > 0`), under every stop reason.
+- **The trade list** (#464) is `settledTrades` of the view: the session's `settled` trades in
+  creation order, one line each, «N. <direction> <stake> → <icon> <profit>». N counts settled
+  trades only (a trade the broker rejected gets no line and no number); the direction is an arrow
+  (`sessionTradeUp`/`sessionTradeDown`); the stake is the trade's own `amount` through
+  `formatStake` (a Martingale stake differs from line to line, #450); the profit is the trade's
+  own through `formatSignedUsd`. The icon is the `result` the backend computed in SQL by the sign
+  of `broker_trades.profit`, the same comparison as the counters: ✅ `sessionTradeWon`,
+  ❌ `sessionTradeLost`, ➖ `sessionTradeTied`. A loss under a cent prints «❌ $0.00», as the score
+  counts it «в минус». The bot adds nothing: «💰 Результат» stays `trades.profit`, the backend's
+  sum, and may differ from the lines added up by the truncated cents. A trade still open, on
+  manual review or open at the stop has no line; its status line stays under the list as before.
+  The list sits under «🔢 Сделка …» in a live session, under «🏁 …» in a completed one, and under
+  «📊 Итог: …» in a session stopped for another reason, always above «💰 Результат». At most
+  `MAX_SESSION_TRADES` (20) lines; 20 of the widest fit Telegram's 4096 characters by the
+  assembled-message estimate (`sessionRunning`, `sessionCompleted`, `sessionStopped`).
 
 - **Live** (`status` is not `stopped`): the trade number is `min(settled + 1, planned)`; the last
   line is the last trade's status line when it is live, otherwise «🔎 Ждём сигнал для следующей
   сделки…».
-- **Completed**: «🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус», then the result, the
-  balance and its age line (above).
+- **Completed**: «🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус», then the trade list, the
+  result, the balance and its age line (above).
 - **Stopped for another reason**: the reason's line, then «📊 Итог: …» when a trade settled, the
-  result, the balance and its age line, then the last trade's line while it is live, and «⏳ Открытая сделка доиграет до конца.» only when the
+  trade list, the result, the balance and its age line, then the last trade's line while it is live, and «⏳ Открытая сделка доиграет до конца.» only when the
   worker carries it to its end without a person (live and not `manual_review`). Under the
   `manual_review` stop a trade on manual review gets no line of its own: the stop line already says
   it and points at /support (one text for both sources, owner's decision). The backend does not
@@ -194,7 +216,7 @@ A finished one (#337):
 - **`settings: null`** (a hand-written row): the header and «⚠️ Настройки сессии не прочитаны —
   напиши в поддержку: /support».
 - The symbol is capped at 64 characters; without a catalog «актив #<id>» stands in. The stake is
-  `settings.stake.baseStake` through `formatUsd`, never a number.
+  `settings.stake.baseStake` through `formatStake`, never a number.
 
 | Stop reason | Line |
 | --- | --- |
