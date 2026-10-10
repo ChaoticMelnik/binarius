@@ -166,16 +166,22 @@ export function createAdminBot({
   privateChats.callbackQuery(LOGIN_LINK_CALLBACK, async (ctx) => {
     const issued = await issueLoginLink(db, { telegramUserId: BigInt(ctx.from.id) });
     if (!issued.ok && issued.reason === 'rate_limited') {
-      await ctx.answerCallbackQuery({ text: ADMIN_TEXTS.linkRateLimited, show_alert: true });
+      await answerQuietly(() =>
+        ctx.answerCallbackQuery({ text: ADMIN_TEXTS.linkRateLimited, show_alert: true }),
+      );
       return;
     }
     if (!issued.ok) {
       const text = ADMIN_TEXTS.noAccess(String(ctx.from.id));
       const disabledStaffId = issued.reason === 'disabled' ? issued.staffId : undefined;
       await refuse(
+        // the spinner is answered whether or not the refusal reached the chat
         async () => {
-          await ctx.reply(text);
-          await answerQuietly(() => ctx.answerCallbackQuery());
+          try {
+            await ctx.reply(text);
+          } finally {
+            await answerQuietly(() => ctx.answerCallbackQuery());
+          }
         },
         disabledStaffId,
         'button',

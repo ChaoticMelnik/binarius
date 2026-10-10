@@ -300,6 +300,51 @@ describe('the login link button', () => {
     });
   });
 
+  // review round 1, m1: no spinner is left on the button when the refusal cannot be sent
+  it('answers the button even when the refusal cannot be sent, and still records it', async () => {
+    const disabled = await seedStaff(tmp.db, { status: StaffStatus.Disabled });
+    api.apiErrors.set('sendMessage', {
+      ok: false,
+      error_code: 403,
+      description: 'bot was blocked',
+    });
+
+    await admin.bot.handleUpdate(
+      callbackUpdate(LOGIN_LINK_CALLBACK, staffUser(disabled.telegramUserId)),
+    );
+
+    expect(api.calls.map((call) => call.method)).toEqual(['sendMessage', 'answerCallbackQuery']);
+    expect(await refusalsFor(disabled.staffId)).toHaveLength(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.objectContaining({ name: 'GrammyError' }) }),
+      'the staff bot refusal could not be delivered',
+    );
+  });
+
+  // review round 1, m2: a refused answer ("query is too old") is a warn, not a failed update
+  it('keeps a refused rate-limit answer out of the update error handler', async () => {
+    const staff = await seedStaff(tmp.db);
+    for (let press = 1; press <= STAFF_LOGIN_LINK_MAX_PER_WINDOW; press += 1) {
+      await issueLoginLink(tmp.db, { telegramUserId: staff.telegramUserId });
+    }
+    api.apiErrors.set('answerCallbackQuery', {
+      ok: false,
+      error_code: 400,
+      description: 'query is too old',
+    });
+
+    await admin.bot.handleUpdate(
+      callbackUpdate(LOGIN_LINK_CALLBACK, staffUser(staff.telegramUserId)),
+    );
+
+    expect(callsTo(api.calls, 'answerCallbackQuery')).toHaveLength(1);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ telegramErrorCode: 400 }),
+      'answering the staff login callback failed',
+    );
+  });
+
   // the URL is the credential for five minutes: the failure line names the link by id only
   it('says so when the link cannot be delivered, and logs neither the token nor the URL', async () => {
     const staff = await seedStaff(tmp.db);
