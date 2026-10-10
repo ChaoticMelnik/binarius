@@ -34,6 +34,13 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
 |---|---|---|
 | `in_progress` | the analysis' «⏳ Анализирую…» (`demo.ts`, an edit, or a new message when the summary is gone) | the result replaces it with its keyboard within the signal's budget; a keyboard on it would let «📊 Анализ» be pressed twice. Residual: when the result's edit fails in transport or is refused for an unlisted reason, the bot sends nothing more (#126: a second message after an unknown delivery is worse than none), and «⏳» stays without a keyboard; the summary above it and /menu remain |
 
+One more exception is not a `NoNextStepReason`, because it is not a message in the user's own
+chat with the bot:
+
+| Answer | Where | Why |
+|---|---|---|
+| the inline share result (#321) | `answerInlineQueryPhotoHtml` and `answerInlineQueryEmpty` (`send.ts`), from `session-share.ts`; their types take no `reply_markup` | the card is posted, «via @bot», into a chat the user picked; the bot's buttons there would act for whoever presses them. The link in its caption (`t.me/<bot>?start=share`) is the way into the bot |
+
 ## Shared buttons
 
 - `packages/shared/src/bot-navigation.ts`: `DEMO_CALLBACK_DATA` (`demo`), `CONNECT_CALLBACK_DATA`
@@ -106,7 +113,7 @@ no repeat.
 | session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 🔄 Обновить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |
 | `/stop` (#122), one session stopped | the session's status keyboard (the two rows above) |
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
-| the session's summary card (#318, a photo) | 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 👥 Пригласить друга (#115) · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`screen.ts`) |
+| the session's summary card (#318, a photo) | 📤 Поделиться (#321, by an edit right after the send; the card keeps the rest when the edit fails) · 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 👥 Пригласить друга (#115) · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`screen.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 
 «📊 Новый анализ» opens the analysis of the same pair and duration (`demo:an:<assetId>:<sec>`), never
@@ -133,5 +140,6 @@ call: the keyboards ride on the messages already sent.
 - **#202** — reminders to a user who connected and never started the demo: sent through
   `client-push.ts` with the demo button ([mailing.md](mailing.md)).
 - **#121 / #326 / #327** — the real-mode screens: the seam types make them comply.
-- **#321** — «📤 Поделиться» under the session's summary card (#318), added to
-  `sessionCardKeyboard`'s rows: the card is sent with its keyboard, so it needs no exception.
+- **#321** — «📤 Поделиться» under the session's summary card (#318), on top of
+  `sessionCardKeyboard`'s rows; the inline result it posts is the exception above
+  ([bot-session.md](bot-session.md#sharing-the-card-321)).
