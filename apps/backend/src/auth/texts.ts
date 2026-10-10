@@ -1,6 +1,8 @@
 import {
   createBotTexts,
   defaultBotTextSource,
+  type BotHtmlTexts,
+  type BotPlainTexts,
   type BotTextKey,
   type BotTextSource,
 } from '@binarius/shared';
@@ -14,5 +16,6 @@ export const setBotTextSource = (source: BotTextSource<BotTextKey>): void => {
 };
 const { html, plain } = createBotTexts({ sourceOf: (key) => active.sourceOf(key) });
 
-export const CLIENT_TEXTS = html;
-export const CLIENT_LABELS = plain;
+// annotated: the inferred type of the whole catalog is past what tsc serializes into a .d.ts
+export const CLIENT_TEXTS: BotHtmlTexts = html;
+export const CLIENT_LABELS: BotPlainTexts = plain;

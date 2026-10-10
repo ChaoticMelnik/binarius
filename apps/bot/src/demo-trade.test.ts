@@ -382,7 +382,7 @@ describe('the stake button', () => {
 
     it('trades the saved stake, not the broker minimum', async () => {
       const { press, createIntent } = setup({ readTradingAccess: saved('2.5') });
-      await press(stakeFor(stakeFingerprint(decimalStringSchema.parse('2.5'))));
+      await press(stakeFor(stakeFingerprint(decimalStringSchema.parse('2.5'), TradeMode.Demo)));
       expect(createIntent.mock.calls[0]?.[0].amount).toBe('2.5');
     });
 
@@ -397,12 +397,12 @@ describe('the stake button', () => {
       [
         'drawn for a stake, reset since',
         () => Promise.resolve(ACCESS_VIEW),
-        stakeFor(stakeFingerprint(decimalStringSchema.parse('2.5'))),
+        stakeFor(stakeFingerprint(decimalStringSchema.parse('2.5'), TradeMode.Demo)),
       ],
       [
         'drawn without an amount',
         () => Promise.resolve(ACCESS_VIEW),
-        stakeFor(stakeFingerprint(null)),
+        stakeFor(stakeFingerprint(null, TradeMode.Demo)),
       ],
       [
         'from before the fingerprint',
@@ -432,10 +432,77 @@ describe('the stake button', () => {
           ),
         createIntent: () => Promise.reject(httpError(409, TradeIntentErrorCode.StakeBelowMinimum)),
       });
-      await press(stakeFor(stakeFingerprint(decimalStringSchema.parse('2'))));
+      await press(stakeFor(stakeFingerprint(decimalStringSchema.parse('2'), TradeMode.Demo)));
       expect(payloadOf(calls, 'sendMessage')?.text).toBe(
         TEXTS.stakeBelowMinimum({ minStake: decimalStringSchema.parse('5') }).value,
       );
+    });
+  });
+
+  // #121: the press trades in the user's mode, at the broker's minimum in real mode
+  describe('in real mode', () => {
+    const REAL_ACCESS = accessView({
+      tradingMode: TradeMode.Real,
+      demoStake: decimalStringSchema.parse('2.5'),
+    });
+    const real = () => Promise.resolve(REAL_ACCESS);
+    const REAL_STAKE = stakeCallbackData(
+      PAIR_EURUSD.id,
+      5,
+      TradeAction.Up,
+      STAKE_NONCE,
+      stakeFingerprint(ACCESS_VIEW.broker!.minTradeAmount, TradeMode.Real),
+    );
+    const realView = intentView({ mode: TradeMode.Real });
+
+    it('sends mode real, the broker minimum and a key that names the mode', async () => {
+      const { press, calls, createIntent } = setup({
+        readTradingAccess: real,
+        createIntent: () => Promise.resolve(realView),
+      });
+      await press(REAL_STAKE);
+      expect(createIntent.mock.calls[0]?.[0]).toMatchObject({
+        mode: TradeMode.Real,
+        amount: ACCESS_VIEW.broker?.minTradeAmount,
+        clientRequestId: `real:${USER.id}:${STAKE_NONCE}`,
+      });
+      const sent = payloadOf(calls, 'sendMessage');
+      expect(sent?.text).toBe(statusOf(realView));
+      expect(sent?.text).toContain('💼 <b>Реальная сделка</b>');
+    });
+
+    it('offers no session under a settled real trade', async () => {
+      const settled = intentView({ mode: TradeMode.Real, status: TradeIntentStatus.Settled });
+      const { press, calls } = setup({
+        readTradingAccess: real,
+        createIntent: () => Promise.resolve(settled),
+      });
+      await press(REAL_STAKE);
+      const sent = payloadOf(calls, 'sendMessage');
+      expect(sent?.text).not.toContain(OFFER);
+      expect(rowsOf(sent)).toEqual(END_ROWS);
+    });
+
+    it.each([
+      ['drawn in demo, pressed in real', real, STAKE],
+      ['drawn in real, pressed in demo', () => Promise.resolve(ACCESS_VIEW), REAL_STAKE],
+    ])('refuses a button %s and creates nothing', async (_case, readTradingAccess, data) => {
+      const { press, calls, createIntent } = setup({ readTradingAccess });
+      await press(data);
+      expect(createIntent).not.toHaveBeenCalled();
+      expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.stakeAmountChanged.value);
+    });
+
+    it('answers real_mode_off with its text and the way back, and logs nothing', async () => {
+      const { press, calls, logger } = setup({
+        readTradingAccess: real,
+        createIntent: () => Promise.reject(httpError(409, TradeIntentErrorCode.RealModeOff)),
+      });
+      await press(REAL_STAKE);
+      const sent = payloadOf(calls, 'sendMessage');
+      expect(sent?.text).toBe(TEXTS.stakeRealModeOff.value);
+      expect(rowsOf(sent)).toEqual(BACK_ROWS);
+      expect(warnings(logger)).toEqual([]);
     });
   });
 

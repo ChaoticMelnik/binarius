@@ -21,6 +21,7 @@ import { internalBearerAuth } from '../auth/internal';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
 import { registerTradingAccess, type TradingAccessDeps } from './access';
 import { registerDemoStake } from './demo-stake';
+import { registerTradingMode } from './trading-mode';
 
 export interface TradingRoutesDeps {
   db: Db;
@@ -68,6 +69,7 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesDeps> = async (
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
   registerTradingAccess(app, { db, balance });
   registerDemoStake(app, { db });
+  registerTradingMode(app, { db, demoOnly });
 
   app.post('/trading/intents', async (request, reply) => {
     const parsed = safeParseCreateTradeIntentRequest(request.body);

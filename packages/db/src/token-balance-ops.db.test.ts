@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   BrokerAccountStatus,
   TradeIntentFailureReason,
+  TradeMode,
   UserStatus,
   tokenBalanceViewSchema,
 } from '@binarius/shared';
@@ -93,12 +94,25 @@ describe('readTokenBalance', () => {
   it('reads the cache of a credited user, equal to the ledger', async () => {
     const user = await creditedUser(7n);
     const snapshot = await read(user);
-    expect(snapshot).toEqual({ status: UserStatus.Active, balance: 7n, reserved: 0n });
+    expect(snapshot).toEqual({
+      status: UserStatus.Active,
+      balance: 7n,
+      reserved: 0n,
+      tradingMode: TradeMode.Demo,
+    });
     expect(toTradingAccessView(snapshot!)).toEqual({
       status: UserStatus.Active,
       tokens: { balance: '7', reserved: '0', available: '7' },
+      tradingMode: TradeMode.Demo,
     });
     await expectCacheEqualsLedger(user);
+  });
+
+  // #121: the column, not a constant
+  it("reads the user's trading mode", async () => {
+    const user = await seedUser(tmp.db, { tradingMode: TradeMode.Real });
+    expect(await read(user)).toMatchObject({ tradingMode: TradeMode.Real });
+    expect(toTradingAccessView((await read(user))!).tradingMode).toBe(TradeMode.Real);
   });
 
   it('follows a manual adjustment up and down, equal to the ledger at both points', async () => {
@@ -231,7 +245,12 @@ describe('readTokenBalance', () => {
 
   it('returns a blocked user with their balance', async () => {
     const user = await creditedUser(3n, UserStatus.Blocked);
-    expect(await read(user)).toEqual({ status: UserStatus.Blocked, balance: 3n, reserved: 0n });
+    expect(await read(user)).toEqual({
+      status: UserStatus.Blocked,
+      balance: 3n,
+      reserved: 0n,
+      tradingMode: TradeMode.Demo,
+    });
     await expectCacheEqualsLedger(user);
   });
 
@@ -297,7 +316,12 @@ describe('readTokenBalance', () => {
       } finally {
         clearTimeout(timer);
       }
-      expect(outcome).toEqual({ status: UserStatus.Active, balance: 5n, reserved: 0n });
+      expect(outcome).toEqual({
+        status: UserStatus.Active,
+        balance: 5n,
+        reserved: 0n,
+        tradingMode: TradeMode.Demo,
+      });
     } finally {
       release();
       await holder;
@@ -309,7 +333,12 @@ describe('readTokenBalance', () => {
 describe('toTradingAccessView', () => {
   it('refuses a reserve above the balance instead of a signed count', () => {
     expect(() =>
-      toTradingAccessView({ status: UserStatus.Active, balance: 1n, reserved: 2n }),
+      toTradingAccessView({
+        status: UserStatus.Active,
+        balance: 1n,
+        reserved: 2n,
+        tradingMode: TradeMode.Demo,
+      }),
     ).toThrow('token reserve exceeds balance');
   });
 });

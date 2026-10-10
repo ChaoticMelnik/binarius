@@ -27,6 +27,7 @@ import {
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   safeParseTradingSessionsStoppedResponse,
+  safeParseSetTradingModeResponse,
   safeParseTradingSignalResponse,
   safeParseTradingSignalsResponse,
   safeParseUserAccountResponse,
@@ -535,6 +536,52 @@ describe('setDemoStake (#297)', () => {
     });
     const error = await rejectionOf(
       createBackendClient({ baseUrl, token: TOKEN }).setDemoStake('4242', '5' as DecimalString),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status, reason });
+  });
+});
+
+describe('setTradingMode (#121)', () => {
+  it.each([
+    ['real', true],
+    ['demo', false],
+  ] as const)('posts %s under the bearer and returns the answer', async (mode, changed) => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { tradingMode: mode, changed });
+    });
+    expect(
+      await createBackendClient({ baseUrl, token: TOKEN }).setTradingMode('4242', mode),
+    ).toEqual({ tradingMode: mode, changed });
+    expect(capture.url).toBe('/trading/mode');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242', mode });
+  });
+
+  it.each([
+    ['without changed', { tradingMode: 'real' }],
+    ['with an unknown mode', { tradingMode: 'paper', changed: true }],
+  ])('reports a 200 %s as a contract violation', async (_case, body) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, body);
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).setTradingMode('4242', 'real'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it.each([
+    [409, 'real_balance_below_minimum'],
+    [409, 'balance_unavailable'],
+    [409, 'demo_only'],
+    [404, 'user_not_found'],
+    [400, 'validation'],
+  ])('throws a %i %s with its reason', async (status, reason) => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, status, { error: reason, issues: ['x'] });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).setTradingMode('4242', 'real'),
     );
     expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status, reason });
   });
@@ -1603,6 +1650,7 @@ describe('body size', () => {
           brokerUnavailable: null,
           tradingOpen: false,
           demoStake: DECIMAL,
+          tradingMode: longest(Object.values(TradeMode)),
         },
       },
       readPairs: {
@@ -1693,6 +1741,11 @@ describe('body size', () => {
           error: longest(Object.values(DemoStakeRefusal)),
           limits: { minTradeAmount: DECIMAL, demoAvailable: DECIMAL, scale: NONNEGATIVE_INT },
         },
+      },
+      // the 2xx: every refusal carries its code alone
+      setTradingMode: {
+        parse: safeParseSetTradingModeResponse,
+        sample: { tradingMode: longest(Object.values(TradeMode)), changed: false },
       },
       // Reds when the catalog grows to about 500 keys: then the ceiling is revisited, not the
       // assumption.

@@ -69,6 +69,7 @@ import {
   settingsText,
   stakePickerText,
   statusCard,
+  tradingModeScreen,
   TEXTS,
   botCommands,
   userContextOf,
@@ -190,6 +191,7 @@ const DATA_DETAILS = {
   [NoSignalReason.InvalidCandle]: { detail: { index: 1, problem: 'ohlc_order' } },
 };
 
+// each in both modes: the header follows the view's mode (#121)
 const intentViews = [
   ...Object.values(TradeIntentStatus)
     .filter((status) => status !== TradeIntentStatus.Rejected)
@@ -198,7 +200,7 @@ const intentViews = [
     status: TradeIntentStatus.Rejected,
     lastError,
   })),
-];
+].flatMap((view) => Object.values(TradeMode).map((mode) => ({ ...view, mode })));
 
 const N = 999;
 // none, one read before the last trade at the widest age statusCards uses, one read after (#337)
@@ -353,17 +355,29 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     [undefined, { amount: null }, { amount: STAKE }].flatMap((saved) =>
       [null, STAKE].flatMap((amount) =>
         [999, 992, 991].flatMap((trades) =>
-          DEMO_DURATIONS_SEC.map((durationSec: DemoDurationSec) =>
-            launchText({
-              firstName: NAME,
-              durationSec,
-              symbol: pair.symbol,
-              amount,
-              trades,
-              saved,
-            }),
+          DEMO_DURATIONS_SEC.flatMap((durationSec: DemoDurationSec) =>
+            // real mode (#121): the single trade's line in place of the cycle's
+            Object.values(TradeMode).map((mode) =>
+              launchText({
+                firstName: NAME,
+                durationSec,
+                symbol: pair.symbol,
+                amount,
+                trades,
+                saved,
+                mode,
+              }),
+            ),
           ),
         ),
+      ),
+    ),
+  // the mode screen (#121): both modes, with and without a snapshot, the switch open and closed
+  tradingMode: () =>
+    Object.values(TradeMode).flatMap((mode) =>
+      [null, { real: { available: USD, held: USD, total: USD }, minTradeAmount: STAKE }].flatMap(
+        (broker) =>
+          [true, false].map((tradingOpen) => tradingModeScreen({ mode, broker, tradingOpen })),
       ),
     ),
 };

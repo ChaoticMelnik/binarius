@@ -2,8 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  AuditAction,
   BrokerAccountStatus,
   NotificationLevel,
+  TradeMode,
   START_PAYLOAD_PATTERN,
   UserStatus,
   startPayloadSchema,
@@ -16,8 +18,14 @@ import { createTokenCipher } from './crypto';
 import { setNotificationLevel } from './delivery-ops';
 import { confirmBrokerAccount, linkBrokerAccount } from './oauth-ops';
 import { createTempDatabase, seedBrokerAccount, type TempDatabase } from './testing';
-import { brokerAccounts, referralCodes, referrals, users } from './schema/index';
-import { readDemoStake, recordUserStart, setDemoStake, toUserStartView } from './user-ops';
+import { auditLog, brokerAccounts, referralCodes, referrals, users } from './schema/index';
+import {
+  readDemoStake,
+  recordUserStart,
+  setDemoStake,
+  setTradingMode,
+  toUserStartView,
+} from './user-ops';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -459,6 +467,125 @@ describe('setDemoStake / readDemoStake (#297)', () => {
     )[0]!;
     expect({ ...after, demoStake: before.demoStake, updatedAt: before.updatedAt }).toEqual(before);
     expect(after.demoStake).toBe('7.00000000');
+  });
+});
+
+// The one writer of users.trading_mode (#121, Rule 36).
+describe('setTradingMode (#121)', () => {
+  const modeOf = async (telegramUserId: bigint) =>
+    (
+      await tmp.db
+        .select({ tradingMode: users.tradingMode, id: users.id })
+        .from(users)
+        .where(eq(users.telegramUserId, telegramUserId))
+    )[0];
+  const auditRowsOf = (userId: string) =>
+    tmp.db
+      .select({
+        actorType: auditLog.actorType,
+        actorId: auditLog.actorId,
+        action: auditLog.action,
+        entityType: auditLog.entityType,
+        entityId: auditLog.entityId,
+        payload: auditLog.payload,
+      })
+      .from(auditLog)
+      .where(eq(auditLog.entityId, userId));
+
+  it('U-mode 1 starts in demo, writes the column and one audit row per change', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId);
+    const { id, tradingMode } = (await modeOf(telegramUserId))!;
+    expect(tradingMode).toBe(TradeMode.Demo);
+
+    expect(await setTradingMode(tmp.db, telegramUserId, TradeMode.Real)).toEqual({
+      tradingMode: TradeMode.Real,
+      changed: true,
+    });
+    expect((await modeOf(telegramUserId))!.tradingMode).toBe(TradeMode.Real);
+    expect(await auditRowsOf(id)).toEqual([
+      {
+        actorType: 'user',
+        actorId: telegramUserId.toString(),
+        action: AuditAction.TradingModeChanged,
+        entityType: 'user',
+        entityId: id,
+        payload: { from: 'demo', to: 'real' },
+      },
+    ]);
+
+    expect(await setTradingMode(tmp.db, telegramUserId, TradeMode.Demo)).toEqual({
+      tradingMode: TradeMode.Demo,
+      changed: true,
+    });
+    expect((await auditRowsOf(id)).map((row) => row.payload)).toEqual([
+      { from: 'demo', to: 'real' },
+      { from: 'real', to: 'demo' },
+    ]);
+  });
+
+  it('U-mode 2 writes nothing for the mode the user is in already', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId);
+    const { id } = (await modeOf(telegramUserId))!;
+    expect(await setTradingMode(tmp.db, telegramUserId, TradeMode.Demo)).toEqual({
+      tradingMode: TradeMode.Demo,
+      changed: false,
+    });
+    await setTradingMode(tmp.db, telegramUserId, TradeMode.Real);
+    expect(await setTradingMode(tmp.db, telegramUserId, TradeMode.Real)).toEqual({
+      tradingMode: TradeMode.Real,
+      changed: false,
+    });
+    expect(await auditRowsOf(id)).toHaveLength(1);
+  });
+
+  it('U-mode 3 answers undefined for an unknown user and writes nothing', async () => {
+    const telegramUserId = nextTelegramUserId();
+    expect(await setTradingMode(tmp.db, telegramUserId, TradeMode.Real)).toBeUndefined();
+    expect(await modeOf(telegramUserId)).toBeUndefined();
+  });
+
+  it('U-mode 4 two concurrent switches to real write one audit row', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId);
+    const { id } = (await modeOf(telegramUserId))!;
+    const results = await Promise.all([
+      setTradingMode(tmp.db, telegramUserId, TradeMode.Real),
+      setTradingMode(tmp.db, telegramUserId, TradeMode.Real),
+    ]);
+    expect(results.map((result) => result?.changed).sort()).toEqual([false, true]);
+    expect(await auditRowsOf(id)).toHaveLength(1);
+  });
+
+  // the audit row is in the switch's transaction: a refused audit insert leaves the mode as it was
+  it('U-mode 5 keeps the mode when its audit row cannot be written', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId);
+    await tmp.pool.query(
+      `alter table audit_log add constraint audit_log_no_mode_check check (action <> 'trading_mode_changed') not valid`,
+    );
+    try {
+      await expect(setTradingMode(tmp.db, telegramUserId, TradeMode.Real)).rejects.toThrow();
+    } finally {
+      await tmp.pool.query('alter table audit_log drop constraint audit_log_no_mode_check');
+    }
+    expect((await modeOf(telegramUserId))!.tradingMode).toBe(TradeMode.Demo);
+  });
+
+  it('touches only trading_mode and updated_at', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await start(telegramUserId, { startPayload: 'src_mode' });
+    const before = (
+      await tmp.db.select().from(users).where(eq(users.telegramUserId, telegramUserId))
+    )[0]!;
+    await setTradingMode(tmp.db, telegramUserId, TradeMode.Real);
+    const after = (
+      await tmp.db.select().from(users).where(eq(users.telegramUserId, telegramUserId))
+    )[0]!;
+    expect({ ...after, tradingMode: before.tradingMode, updatedAt: before.updatedAt }).toEqual(
+      before,
+    );
   });
 });
 

@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import type { TradingAccessResponse, UserStatus } from '@binarius/shared';
+import type { TradeMode, TradingAccessResponse, UserStatus } from '@binarius/shared';
 import { users } from './schema/users';
 import type { DbExecutor } from './trade-intent-ops';
 
@@ -21,6 +21,7 @@ export interface TokenBalanceSnapshot {
   status: UserStatus;
   balance: bigint;
   reserved: bigint;
+  tradingMode: TradeMode;
 }
 
 export async function readTokenBalance(
@@ -28,7 +29,12 @@ export async function readTokenBalance(
   telegramUserId: bigint,
 ): Promise<TokenBalanceSnapshot | undefined> {
   const [row] = await exec
-    .select({ status: users.status, balance: users.tokenBalance, reserved: users.tokenReserved })
+    .select({
+      status: users.status,
+      balance: users.tokenBalance,
+      reserved: users.tokenReserved,
+      tradingMode: users.tradingMode,
+    })
     .from(users)
     .where(eq(users.telegramUserId, telegramUserId));
   return row;
@@ -38,7 +44,8 @@ export function toTradingAccessView({
   status,
   balance,
   reserved,
-}: TokenBalanceSnapshot): Pick<TradingAccessResponse, 'status' | 'tokens'> {
+  tradingMode,
+}: TokenBalanceSnapshot): Pick<TradingAccessResponse, 'status' | 'tokens' | 'tradingMode'> {
   const available = balance - reserved;
   // unreachable under users_token_reserved_check; a signed count must not reach the wire
   if (available < 0n) throw new Error('token reserve exceeds balance');
@@ -49,5 +56,6 @@ export function toTradingAccessView({
       reserved: reserved.toString(),
       available: available.toString(),
     },
+    tradingMode,
   };
 }
