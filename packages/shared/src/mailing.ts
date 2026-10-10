@@ -6,6 +6,9 @@ export const NotificationKind = {
   FirstSession1h: 'first_session_1h',
   FirstSession24h: 'first_session_24h',
   FirstSession72h: 'first_session_72h',
+  TokensHalf: 'tokens_half',
+  TokensLow: 'tokens_low',
+  TokensOut: 'tokens_out',
 } as const;
 export type NotificationKind = (typeof NotificationKind)[keyof typeof NotificationKind];
 
@@ -17,7 +20,16 @@ export const FIRST_SESSION_CHAIN = [
   { kind: NotificationKind.FirstSession72h, afterHours: 72 },
 ] as const satisfies readonly { kind: NotificationKind; afterHours: number }[];
 
-// the earliest a scenario plans anything after its fact; the planner's tick must be shorter
+// The low-token nudge (#123, owner 2026-10-08 and 2026-10-10): the share of the starter pack used,
+// lowest first. A user gets one push for the highest threshold reached, never a lower one later.
+export const TOKEN_NUDGES = [
+  { kind: NotificationKind.TokensHalf, usedPercent: 50 },
+  { kind: NotificationKind.TokensLow, usedPercent: 80 },
+  { kind: NotificationKind.TokensOut, usedPercent: 100 },
+] as const satisfies readonly { kind: NotificationKind; usedPercent: number }[];
+
+// the first step of the chain: the planner's tick must be shorter, so no step is planned after the
+// next one is due (the token nudges have no offset and are planned on the next tick)
 export const MAILING_MIN_OFFSET_HOURS = Math.min(
   ...FIRST_SESSION_CHAIN.map((step) => step.afterHours),
 );

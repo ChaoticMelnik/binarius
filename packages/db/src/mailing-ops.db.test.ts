@@ -5,6 +5,7 @@ import {
   FIRST_SESSION_CHAIN,
   NotificationKind,
   NotificationLevel,
+  TOKEN_NUDGES,
   TokenLedgerKind,
   UserStatus,
 } from '@binarius/shared';
@@ -25,7 +26,7 @@ import {
   tokenLedger,
   users,
 } from './schema/index';
-import { LINK_BONUS_RULE_CODE } from './link-bonus-ops';
+import { LINK_BONUS_RULE_CODE, LINK_BONUS_TOKENS } from './link-bonus-ops';
 import { markTelegramBlocked, setNotificationLevel } from './delivery-ops';
 import {
   claimMailingJob,
@@ -66,16 +67,18 @@ interface Linked {
 }
 
 // A user whose account was connected `minutes` ago: an active account and the starter pack's
-// ledger row, as the activation transaction writes them, backdated on the database clock.
-async function linked(minutes: number): Promise<Linked> {
-  const user = await seedUser(tmp.db);
+// ledger row, as the activation transaction writes them, backdated on the database clock. The
+// cached balance is the pack, as grantLinkBonus leaves it, or `balance` — what the settles of the
+// trades spent since would leave (the token nudges read the cache only).
+async function linked(minutes: number, balance = LINK_BONUS_TOKENS): Promise<Linked> {
+  const user = await seedUser(tmp.db, { balance });
   const accountId = await seedBrokerAccount(tmp.db, user.userId, { isPartnerClient: true });
   const [row] = await tmp.db
     .insert(tokenLedger)
     .values({
       userId: user.userId,
       kind: TokenLedgerKind.Bonus,
-      balanceDelta: 100n,
+      balanceDelta: LINK_BONUS_TOKENS,
       brokerAccountId: accountId,
       note: LINK_BONUS_RULE_CODE,
       createdAt: sql`now() - make_interval(mins => ${minutes})`,
@@ -219,12 +222,14 @@ describe('planMailingJobs', () => {
     }
   });
 
-  it('seeds every kind’s cutoff from the migration, at one moment', async () => {
+  it('seeds every kind’s cutoff from the migration, the chain’s at one moment', async () => {
     const fresh = await createTempDatabase(baseUrl);
     try {
       const rows = await fresh.db.select().from(notificationKinds);
       expect(rows.map((row) => row.kind).sort()).toEqual(Object.values(NotificationKind).sort());
-      expect(new Set(rows.map((row) => row.plansFrom.getTime())).size).toBe(1);
+      const chain: readonly NotificationKind[] = FIRST_SESSION_CHAIN.map((step) => step.kind);
+      const chainRows = rows.filter((row) => chain.includes(row.kind));
+      expect(new Set(chainRows.map((row) => row.plansFrom.getTime())).size).toBe(1);
     } finally {
       await fresh.drop();
     }
@@ -480,5 +485,168 @@ describe('settleMailingJob', () => {
         .from(notificationJobs)
         .where(and(eq(notificationJobs.id, id), eq(notificationJobs.attempts, 0))),
     ).toHaveLength(1);
+  });
+});
+
+// #123: the cached balance against the starter pack, one push for the highest threshold reached.
+describe('the low-token nudge', () => {
+  const [HALF, LOW, OUT] = TOKEN_NUDGES;
+  const TOKEN_KINDS: readonly NotificationKind[] = TOKEN_NUDGES.map((nudge) => nudge.kind);
+
+  const cancelPending = () =>
+    tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Canceled })
+      .where(eq(notificationJobs.status, NotificationJobStatus.Pending));
+
+  // the earlier cases' users are planned and set aside once, so a claim here takes this block's own
+  beforeAll(async () => {
+    await plansFromMinutesAgo(hours(200));
+    await planMailingJobs(tmp.db);
+    await cancelPending();
+  });
+  beforeEach(cancelPending);
+
+  const tokenJobsOf = async (userId: string) =>
+    (await jobsOf(userId)).filter((job) => TOKEN_KINDS.includes(job.kind));
+
+  const setBalance = (userId: string, balance: bigint) =>
+    tmp.db.update(users).set({ tokenBalance: balance }).where(eq(users.id, userId));
+
+  const insertJob = async (
+    userId: string,
+    kind: NotificationKind,
+    status: NotificationJobStatus = NotificationJobStatus.Pending,
+  ) => {
+    const nudge = TOKEN_NUDGES.find((n) => n.kind === kind)!;
+    const [job] = await tmp.db
+      .insert(notificationJobs)
+      .values({
+        userId,
+        kind,
+        status,
+        dedupeKey: `tokens:${nudge.usedPercent}`,
+        scheduledAt: sql`now() - interval '1 minute'`,
+      })
+      .returning({ id: notificationJobs.id });
+    return job!.id;
+  };
+
+  it('T1 plans the one nudge whose band holds the balance, now, once', async () => {
+    const started = (await tmp.db.execute<{ at: string }>(sql`select now()::text as at`)).rows[0]!
+      .at;
+    const cases = [
+      [100n, []],
+      [51n, []],
+      [50n, [HALF]],
+      [21n, [HALF]],
+      [20n, [LOW]],
+      [1n, [LOW]],
+      [0n, [OUT]],
+    ] as const;
+    const seeded = await Promise.all(cases.map(([balance]) => linked(0, balance)));
+
+    await planMailingJobs(tmp.db);
+    const again = await planMailingJobs(tmp.db);
+
+    for (const [i, [, expected]] of cases.entries()) {
+      const jobs = await tokenJobsOf(seeded[i]!.userId);
+      expect(jobs.map((job) => [job.kind, job.status, job.dedupeKey])).toEqual(
+        expected.map((nudge) => [
+          nudge.kind,
+          NotificationJobStatus.Pending,
+          `tokens:${nudge.usedPercent}`,
+        ]),
+      );
+      for (const job of jobs) {
+        expect(job.scheduledAt.getTime()).toBeGreaterThanOrEqual(new Date(started).getTime());
+      }
+    }
+    for (const kind of TOKEN_KINDS) expect(again[kind]).toBe(0);
+  });
+
+  it('T2 gives a user past several thresholds at the deploy one push, the highest, and never a lower one later', async () => {
+    // connected long before the kinds were switched on, as at the deploy
+    const at90 = await linked(hours(100), 10n);
+    const at100 = await linked(hours(100), 0n);
+    for (const kind of TOKEN_KINDS) await plansFromMinutesAgo(0, kind);
+    try {
+      await planMailingJobs(tmp.db);
+      expect((await tokenJobsOf(at90.userId)).map((job) => job.kind)).toEqual([LOW.kind]);
+      expect((await tokenJobsOf(at100.userId)).map((job) => job.kind)).toEqual([OUT.kind]);
+
+      // an adjustment lifts the balances back into the lower bands
+      await setBalance(at90.userId, 40n);
+      await setBalance(at100.userId, 15n);
+      await planMailingJobs(tmp.db);
+      expect((await tokenJobsOf(at90.userId)).map((job) => job.kind)).toEqual([LOW.kind]);
+      expect((await tokenJobsOf(at100.userId)).map((job) => job.kind)).toEqual([OUT.kind]);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+
+  it('T3 plans nothing for a user without the starter pack, blocked by the admin, or unreachable', async () => {
+    const noPack = await seedUser(tmp.db, { balance: 0n });
+    await seedBrokerAccount(tmp.db, noPack.userId);
+    const adminBlocked = await linked(0, 0n);
+    await tmp.db
+      .update(users)
+      .set({ status: UserStatus.Blocked })
+      .where(eq(users.id, adminBlocked.userId));
+    const off = await linked(0, 0n);
+    await setNotificationLevel(tmp.db, off.telegramUserId, NotificationLevel.Off);
+
+    await planMailingJobs(tmp.db);
+
+    for (const userId of [noPack.userId, adminBlocked.userId, off.userId]) {
+      expect(await tokenJobsOf(userId)).toEqual([]);
+    }
+  });
+
+  it('T4 sends only the highest of two nudges planned before the send, and cancels the lower', async () => {
+    const user = await linked(0, 0n);
+    const lower = await insertJob(user.userId, HALF.kind);
+    const higher = await insertJob(user.userId, OUT.kind);
+
+    const { job, canceled } = await claimMailingJob(tmp.db, { scan: SCAN });
+    expect(job?.id).toBe(higher);
+    expect(canceled).toBe(1);
+    expect((await jobRow(lower)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('T5 cancels a lower nudge once a higher one has a job, whatever the balance', async () => {
+    // the 80 % push went out, then an adjustment lifted the balance back to the 50 % band
+    const user = await linked(0, 40n);
+    await insertJob(user.userId, LOW.kind, NotificationJobStatus.Sent);
+    const lower = await insertJob(user.userId, HALF.kind);
+
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(lower)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('T6 cancels a nudge whose user got tokens back before the send', async () => {
+    const user = await linked(0, 50n);
+    await planMailingJobs(tmp.db);
+    const [planned] = await tokenJobsOf(user.userId);
+    expect(planned?.kind).toBe(HALF.kind);
+    await setBalance(user.userId, 80n);
+
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(planned!.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('CUT plans nothing for a nudge without its notification_kinds row', async () => {
+    await tmp.db.delete(notificationKinds).where(eq(notificationKinds.kind, OUT.kind));
+    try {
+      const user = await linked(0, 0n);
+      await planMailingJobs(tmp.db);
+      expect(await tokenJobsOf(user.userId)).toEqual([]);
+    } finally {
+      await tmp.db.insert(notificationKinds).values({
+        kind: OUT.kind,
+        plansFrom: sql`now() - interval '200 hours'`,
+      });
+    }
   });
 });

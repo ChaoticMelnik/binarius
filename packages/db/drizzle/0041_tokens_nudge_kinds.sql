@@ -1,0 +1,4 @@
+ALTER TABLE "notification_jobs" DROP CONSTRAINT "notification_jobs_kind_check";--> statement-breakpoint
+ALTER TABLE "notification_kinds" DROP CONSTRAINT "notification_kinds_kind_check";--> statement-breakpoint
+ALTER TABLE "notification_jobs" ADD CONSTRAINT "notification_jobs_kind_check" CHECK ("notification_jobs"."kind" in ('first_session_1h', 'first_session_24h', 'first_session_72h', 'tokens_half', 'tokens_low', 'tokens_out'));--> statement-breakpoint
+ALTER TABLE "notification_kinds" ADD CONSTRAINT "notification_kinds_kind_check" CHECK ("notification_kinds"."kind" in ('first_session_1h', 'first_session_24h', 'first_session_72h', 'tokens_half', 'tokens_low', 'tokens_out'));
