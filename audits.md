@@ -2543,3 +2543,43 @@ Taken by this session on the owner's choice of the next admin tasks (#342, #341,
 1. **#301/#361 entry, proposal 1 (mergeability check before the reviewer spawn)** — **применено вручную в этой волне; в tech-lead SKILL.md ещё не внесено — открыто**
 2. **Tech-lead merge in a worktree session: after `gh pr merge`, check `git ls-remote --heads origin <branch>` and delete the remote branch by hand when `gh` failed to switch to `main`** — **открыто (2026-10-09, tech-lead)**
 3. **Remaining Minor** — **вынесено в #403, #408, #410; flaky test #95 → #411**
+
+---
+
+## #396, #397 — DEMO_ONLY fuse, the manager role (2026-10-09/10)
+
+The owner asked this session (created for writing issues) to carry both issues through the pipeline; the plans had been written earlier by another session's architects. #396 merged first (the manager's precondition), then #397. Both merged with rebase.
+
+| Issue | PR | Review rounds | Added lines (without snapshot) | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #396 DEMO_ONLY | #417 | 2 | ≈ 850 | 0037 | skipped (limit until 14.10) | → #422; CI flake → #423 |
+| #397 manager | #416 | 3 | ≈ 475 | — | skipped (limit until 14.10) | → #426; night stands split → #421 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Plans | Fable, written by another session at `4a95ad0`. By implementation time, six PRs had merged on top of #396's base, and #397 was meant to branch from #353's branch, which was 155 commits behind `main` and conflicted with it. Both implementers caught this in their clarify rounds (6 and 7 plan defects), and Plan Updates were written before any edit. No Codex in planning (owner's rule 2026-10-08). |
+| Implementer | Clarify | #396: 3 questions; #397: 4. All answered by the owner. The standing answers (#388) kept commit split, mutation-evidence form and size off the list. |
+| Implementer | Runtime | #396: live check in the owner's В1 form (processes from the worktree, a throwaway DB, Redis db 5, dummy bot tokens, the broker unreachable). #397: six `claude -p` probes, then a real trial run (#156 → PR #425, report artifact, `main` unchanged). |
+| Reviewer | #417 | Round 1: 3 Minor, all fixed on the owner's choice (H7/H8 wiring tests: each turns red only under its own mutation). Round 2: 3 new Minor → #422. |
+| Reviewer | #416 | Round 1: 4 Major (DEMO_ONLY not a gate, watchdog, another-manager window, untrusted content). Round 2: 4 Major (a `gh` list capped at 30, a dead `pid` after resume, phase stands, `down -v` by an unchecked name). New cycle: the owner removed night stands (→ #421). Round 3: 10 Minor → #426. |
+| Tech Lead | Merges | `AskUserQuestion` before each merge. #416's «Merge after #353» was waived by the owner. Remaining Minor went to Backlog without a question (#388). The one-line global `~/.claude/CLAUDE.md` exception for «Режим manager» was added after the merge, as the owner decided. |
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| #396 implementer stopped processes with `pkill -INT -f "tsx src/index.ts"`, which matches any session's dev processes | Major (process) | other | Step 7 rule missing: kill only processes you started, by PID | Implementer runtime check |
+| #396 implementer's first `pnpm check` of round 2 started beside two foreign vitest runs (the guard printed instead of blocking) | Minor | unverified-claim | The guard one-liner did not block, despite Step 7 | Implementer |
+| Both plans were stale at implementation time (another session's plans, many merges later; #397 based on an unmerged branch 155 commits behind) | Plan defect → Plan Updates | preflight | Plans sat in Todo while `main` moved; nobody re-based the plan before the implementer spawn | Tech Lead Phase 0 |
+| #416 round 2 brought new Majors from round 1's fixes (`gh pr list` without `--limit`; stand checks the manager could not enforce) | Major ×4 | instance-vs-class | Fixes covered the instance; the `gh` list class and the stand class were not searched | Implementer round 1 fix |
+| The trial manager ran `pnpm db:migrate` on the shared test DB, which holds PR #415's unmerged 0037 (applied by another session) | Process | env-parity | The skill neither allowed nor forbade it; the shared DB was already contaminated | Manager skill (→ #426, owner: forbid) |
+| CI flake U10b (`not.toContain('5.00')` over JSON with timestamps) | Minor | other | Time-dependent assertion from #92/#96 | — (→ #423) |
+
+### Process improvement proposals
+
+1. **Tech-lead Step 7: stop only your own processes, by PID; never `pkill -f`/`killall` by pattern** — **внедрено в этом docs-PR: `.claude/skills/tech-lead/SKILL.md` → Step 7**
+2. **Tech-lead Phase 0: before spawning the implementer on a plan written by another session or more than a day old, compare its base with `origin/main` (`git log --oneline <plan base>..origin/main`) and send it to the architect for a Plan Update when files it names have moved** — **открыто (2026-10-10, tech-lead)**
+3. **Shared test DB `binarius` holds PR #415's unmerged migration (Step 7 violation by another session); once #415 is renumbered to 0038 it will try to apply the same changes again** — **открыто (2026-10-10, владелец / сессия #415)**
+4. **Remaining Minor** — **вынесено в #422, #426; flaky test → #423; night stands → #421**
