@@ -2613,3 +2613,35 @@ Picked by tech-lead on the owner's «Отбери сам следующую за
 
 1. **Merge relay: re-check `mergeable` right before `gh pr merge`; on CONFLICTING send the implementer a rebase-only task, verify with `git range-diff`, re-take the mutation table and ask the owner again for the new head** — **применено в этом PR; в tech-lead SKILL.md ещё не внесено — открыто (2026-10-10, tech-lead)**
 2. **Remaining Minor** — **вынесено в #433**
+
+## #448 — admin login by a one-time link from the staff bot (2026-10-10)
+
+Picked by tech-lead on the owner's «Выбирай следующую … не задублируй с менеджером, твоя цель Админка»: the manager's set was read from its worktrees and «Решение менеджера» comments (#115, #122, #131, #141, #154, #156, #234, #239, #318, #337, plus its #440, #445); #391 fits the manager's pool (plan > 24 h, no branch) and was left alone; #448 was fresh, unplanned and admin. Claimed at once: In Progress + a «busy» comment.
+
+| Issue | PR | Review rounds | Added lines (without snapshot) | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #448 login link from the staff bot | #449 | 2 | 2363 | 0042 (was 0041 before the rebase over #318) | skipped (limit until 14.10) | → #453 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify + plan | Fable still at its limit (a probe spawn got 429) → Opus per the owner's 2026-10-10 decision. 6 questions; the owner took the recommended option on 5 and chose «audit only for known staff» on refusals, narrowing the issue's decision 3 — stated in the plan. |
+| Tech Lead | Coordination | A note in #158 about the new `used_at` column in its clock class; a rebase note in the manager's PR #446 after #449 merged first (owner's choice). |
+| Implementer | Code | No clarify questions. 2312 lines in round 1 (above the 1.86k estimate, inside 2000–3000 → one PR). The log key became `linkState` because `state` is on the logger's redact list. |
+| Reviewer | Round 1 | No Blocker/Major, 6 Minor; the security focus (token hash-only, single-use CAS under concurrent POSTs, identical refusal, Rule 5, no token in logs) checked clean. The PR turned CONFLICTING after #436 merged. |
+| Tech Lead | Minor fixes | The owner chose to fix m1–m3 with the rebase; sent straight to the implementer with the review as the spec, without an architect Plan Update (the fixes were line-specific). Migration regenerated to 0042 after #318 took 0041. |
+| Reviewer | Round 2 | Whole-feature pass over the rebased diff: the audit CHECK keeps every action on `main`, no #337/#318 change lost; 2 cosmetic Minor. |
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| sl:l refusal left the button spinning when the reply failed; a refused rate-limit answer reached `bot.catch` | Minor → fixed in round 2 | instance-vs-class | The plan's «send, then answer» order from #446 was applied to the issue path, not to the refusal and rate-limit paths | Architect plan / Implementer |
+| Login CSRF between two staff members via a forwarded link (the page does not name the account) | Minor → #453 | other | The plan considered a stranger with a link, not a colleague's link | Architect plan |
+| Fixing owner-chosen Minors without a Plan Update | Process | other | No written rule for Minor fixes the owner asks for before the merge; #334 is the open item on it | Tech Lead |
+
+### Process improvement proposals
+
+1. **Owner-chosen Minor fixes before a merge: the implementer may take the review findings as the spec when they name the lines and the fix, without a Plan Update; a design change still goes through the architect** — **открыто (2026-10-10, tech-lead); связано с #334**
+2. **Remaining Minor** — **вынесено в #453**
