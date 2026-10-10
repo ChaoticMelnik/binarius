@@ -2951,3 +2951,48 @@ The eighth issue of the 2026-10-10 manager night (wave facts — the #337 entry)
 1. **Manager checks a fact before a recommended answer rests on it** — **внедрено в этом docs-PR: `.claude/skills/manager/SKILL.md` → Substitutions → 1**
 2. **After a rebase, new commits that add an assumption or change test oracles (not just conflict resolution) get a reviewer pass before the merge question; disclosure alone is the current practice (#154, #234)** — **открыто (2026-10-10, tech-lead)**
 3. **Remaining Minor** — **вынесено в #462**
+
+---
+
+## #141 — Постбэки: приём, хранение и дедупликация (2026-10-10)
+
+The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry). Merged at 20:09Z, with all three review rounds used.
+
+| Issue | PR | Review rounds | Added lines | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #141 postbacks | #442 | 3 | ≈ 2 670 without snapshot (6 501 in total) | 0044_postbacks (was 0041) | skipped (limit until 14.10) | → #465; CLI split → #443 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Spawn | The first Fable architect spawn went out with a truncated prompt that lacked the night rules. It died on 429 before acting, so nothing reached GitHub or a worktree. It was re-spawned on Opus (limit at 15:58). |
+| Architect | Plan Update r0 | Opus. Clarify 3 questions (manager): the migration guard stays and gets a test; the deposits page shows «ID трейдера»; the CLI stays. ~2 370 lines, migration 0041, Rule 35. |
+| Implementer | Clarify | Plan defect: `packages/db` has no logger for the mismatch `warn` → Plan Update 2 (the function returns a flag, the route writes the `warn`; HEAD → 404). |
+| Reviewer | Round 1 | **2 Major**. (1) A secret of 101–128 characters is allowed by config, but Fastify cuts the param at 100, and the 414 answer returns the path with the secret. (2) The rate window is taken before the secret check, so anyone can fill it. → Todo, Plan Update (Opus). |
+| Reviewer | Round 2 | **Major**: the Caddy `handle /postbacks/*` from the docs matches the cleaned path, but the backend decodes `%2F` in a param. So `/admin/users/..%2F..%2Fpostbacks%2Fx` would reach the admin and internal param routes past the network isolation. |
+| Architect | Re-plan from scratch | Night rule after round 2 (Opus, limit at 17:03). Clarify 4 questions (manager). Two layers: a Caddy matcher on the raw URI, and a backend hook that answers 404 to proxied requests everywhere except the postback route. The CLI was split to #443 to stay under the 3000 ceiling (~3 090 otherwise). The matcher was validated on Caddy 2.6.2 in a throwaway container: 13 traversal variants refused. |
+| Implementer | Fix | Commits for the CLI split, masking, the proxy guard, docs and the guard-test stabilisation. **Slip:** the docs commit `7f79643` came after a `pnpm check` that exited 1 on a flaky migration-guard test. This was disclosed in the PR and fixed by the next commit. |
+| Reviewer | Round 3 (last) | No Blocker/Major, 4 Minor. Round 2's Major is closed in both layers; a masking fuzz of 135 requests showed no secret leak. |
+| Tech Lead (day) | Merge | Three rebases onto a moving `main`. The migration was renumbered 0041 → `0044_postbacks`, with the two hand edits of the generated SQL re-applied. After the third rebase, the test-only commit `7b138a9` replaced #234's `ASSUMED_DEPOSIT_ID_BYTES` with the real writer limit. No review round followed (3 rounds used); the merge question disclosed it. Owner step before deploy: `deposit_events` must be empty, or migration 0044 refuses. |
+
+### Review iterations: 3
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Plan put a `warn` inside `packages/db`, which has no logger | Plan defect → Plan Update 2 | unverified-claim | The plan named a dependency the package does not have | Architect Plan Update (caught by implementer clarify) |
+| A secret of 101–128 characters → Fastify 414 echoes the path with the secret | Major → fixed in round 2 | env-parity | The config bound and the router's param limit were set separately; the router's own error answers were not in the plan's answers table | Architect Plan Update |
+| Rate window consumed before the secret check | Major → fixed in round 2 | other | The order of checks favoured cost, not availability | Architect Plan Update |
+| Caddy `%2F` traversal from the public postback route to internal param routes | Major → fixed in round 3 (re-plan) | instance-vs-class | The round-1 fix covered the postback route's own answers, not the class «what else is reachable through the public matcher» | Architect Plan Update r1 |
+| Docs commit after a red `pnpm check` (flaky guard test) | Process | other | The implementer treated the failure as a flake before fixing it | Implementer (disclosed) |
+| Manager's first Fable spawn had a truncated prompt without the night rules | Process | other | The spawn prompt was assembled by hand | Manager (no effect: died on 429 before acting) |
+| Test-only rebase commit `7b138a9` changed a test assumption with no review round | Process | other | Same shape as #234 `0580dee` | Tech Lead merge relay (disclosed) |
+| Round-3 Minors m1–m4: stale comments, docs promise a `warn` where the router logs `info`, G6 cannot fail without the guard, an unused export | Minor → #465 | unverified-claim (m2, m3), other | — | Implementer |
+
+### Process improvement proposals
+
+1. **After a rebase, new commits that add an assumption or change test oracles get a reviewer pass before the merge question** — **открыто (2026-10-10, tech-lead)** (#234 entry, proposal 2; second case)
+2. **Manager: build each phase spawn prompt from tech-lead's items plus the night additions in one template, and check the night lines are present before the spawn** — **открыто (2026-10-10, tech-lead)**
+3. **Remaining Minor** — **вынесено в #465; CLI → #443**
