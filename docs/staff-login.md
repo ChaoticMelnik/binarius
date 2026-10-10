@@ -13,7 +13,12 @@ do, and what is written down. Issue #68.
 2. **The button.** The backend's staff bot sends that person a message naming the account, the
    address, the browser and the time, with **«Подтвердить вход»** and **«Это не я»**. Pressing
    the first issues a six-digit code and sends it; pressing the second closes the attempt and
-   records it — and nothing else: the password stays valid (Limits).
+   records it — and nothing else: the password stays valid (Limits). The button's own answer
+   follows the send, not the press: «Код отправлен.» once the code is in the chat and recorded
+   as sent; if Telegram would not take the code, the challenge is closed, the button answers
+   with an alert saying so, and the next login opens a new one. A press whose code a later press
+   has already replaced — delivered or not — answers nothing: the newer code is the one that
+   works.
 3. **The code.** `POST /admin/login/confirm` sends the code to `POST /admin/auth/confirm`. The
    challenge id travels in a cookie; `web` forwards it only if it matches `UUID_PATTERN`, and the
    backend's schema reads it with that same pattern, so a value `web` lets through is never
