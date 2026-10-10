@@ -1,6 +1,8 @@
 import { and, asc, desc, eq, isNull, notInArray, sql } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
+  MAX_SESSION_TRADES,
+  SessionTradeResult,
   TokenLedgerKind,
   TradingSessionErrorCode,
   TradeIntentStatus,
@@ -10,6 +12,7 @@ import {
   UserStatus,
   type DecimalString,
   type SessionSummary,
+  type SessionTradeLine,
   type TradeAction,
   type TradeIntentFailureReason,
   type TradingSessionSettings,
@@ -583,9 +586,13 @@ const sessionBalanceCurrent = sql<boolean>`not exists (
      and ${tokenLedger.createdAt} > ${sessionObservedAt}
 )`;
 
+// a settled trade's class by the same comparisons as the won/lost/tied counters
+const sessionTradeResultSql = sql<SessionTradeResult>`case when ${brokerTrades.profit} > 0 then ${literal(SessionTradeResult.Won)} when ${brokerTrades.profit} < 0 then ${literal(SessionTradeResult.Lost)} else ${literal(SessionTradeResult.Tied)} end`;
+
 // The session as the owner's bot sees it (#283). Scoped by the owner: another user's session and
-// a missing id are both undefined (Rule 13). The row, the counters and the last intent come from
-// one REPEATABLE READ snapshot, so the counters never disagree with lastIntent.
+// a missing id are both undefined (Rule 13). The row, the counters, the settled trades' list
+// (#464) and the last intent come from one REPEATABLE READ snapshot, so the counters never
+// disagree with lastIntent and the list is as long as trades.settled.
 export async function readTradingSessionView(
   db: Db,
   id: string,
@@ -638,6 +645,26 @@ export async function readTradingSessionView(
         .orderBy(desc(tradeIntents.createdAt), desc(tradeIntents.id))
         .limit(1);
 
+      // the orchestrator completes a session at settings.trades (<= MAX_SESSION_TRADES) settled,
+      // so the limit only bounds a hand-written row
+      const lines = await tx
+        .select({
+          action: tradeIntents.action,
+          amount: tradeIntents.amount,
+          profit: brokerTrades.profit,
+          result: sessionTradeResultSql,
+        })
+        .from(tradeIntents)
+        .innerJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+        .where(
+          and(
+            eq(tradeIntents.tradingSessionId, id),
+            eq(tradeIntents.status, TradeIntentStatus.Settled),
+          ),
+        )
+        .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id))
+        .limit(MAX_SESSION_TRADES);
+
       const parsed = safeParseTradingSessionSettings(session.settings);
       const settings = parsed.success ? parsed.data : null;
       return {
@@ -662,6 +689,18 @@ export async function readTradingSessionView(
           session.available === null || session.ageSec === null
             ? null
             : { available: session.available, ageSec: session.ageSec, current: session.current },
+        settledTrades: lines.map((line): SessionTradeLine => {
+          // broker_trades_settlement_check: a settled intent's trade is closed (settleIntent)
+          if (line.profit === null) {
+            throw new Error(`settled intent of session ${id} has an open broker trade`);
+          }
+          return {
+            action: line.action,
+            amount: line.amount,
+            profit: line.profit,
+            result: line.result,
+          };
+        }),
       };
     },
     { isolationLevel: 'repeatable read', accessMode: 'read only' },

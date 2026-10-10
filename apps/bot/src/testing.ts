@@ -22,6 +22,7 @@ import {
   SIGNAL_ALGORITHM_VERSION,
   SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SCAN_INTERVALS,
+  SessionTradeResult,
   SignalKind,
   TradeAction,
   TradeIntentStatus,
@@ -38,6 +39,7 @@ import {
   type PairView,
   type PendingLinkedAccountView,
   type ScanInterval,
+  type SessionTradeLine,
   type SignalDecision,
   type SignalFeatures,
   type SignalParams,
@@ -392,9 +394,19 @@ export const SESSION_VIEW: TradingSessionView = tradingSessionViewSchema.parse({
   trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0, profit: '0.00000000' },
   lastIntent: null,
   balance: null,
+  settledTrades: [],
 });
 export const sessionView = (patch: Partial<TradingSessionView> = {}): TradingSessionView => ({
   ...SESSION_VIEW,
+  ...patch,
+});
+
+// a settled trade's line of the view (#464): a won $1 trade up unless patched
+export const settledTrade = (patch: Partial<SessionTradeLine> = {}): SessionTradeLine => ({
+  action: TradeAction.Up,
+  amount: '1.00000000' as SessionTradeLine['amount'],
+  profit: '0.85000000' as SessionTradeLine['profit'],
+  result: SessionTradeResult.Won,
   ...patch,
 });
 

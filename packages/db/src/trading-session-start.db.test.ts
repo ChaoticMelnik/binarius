@@ -31,8 +31,11 @@ import {
 import {
   createTradeIntent,
   markIntentAccepted,
+  markIntentManualReview,
+  markIntentUnknown,
   rejectIntent,
   settleIntent,
+  startReconciling,
   takeIntent,
   type TradeIntentRow,
 } from './trade-intent-ops';
@@ -271,6 +274,7 @@ const sessionIntent = (
   sessionId: string,
   step: number,
   mode: TradeMode = TradeMode.Demo,
+  { amount = '1', action = TradeAction.Up }: { amount?: string; action?: TradeAction } = {},
 ) =>
   createSessionIntent(tmp.db, {
     sessionId,
@@ -279,8 +283,8 @@ const sessionIntent = (
     brokerAccountId: seed.brokerAccountId,
     mode,
     assetId: 101,
-    amount: decimalStringSchema.parse('1'),
-    action: TradeAction.Up,
+    amount: decimalStringSchema.parse(amount),
+    action,
     durationSec: 60,
   });
 
@@ -568,6 +572,102 @@ describe('readActiveTradingSessionView', () => {
     expect(
       await readActiveTradingSessionView(tmp.db, seed.brokerAccountId, seed.telegramUserId),
     ).toBeUndefined();
+  });
+});
+
+describe('readTradingSessionView: the trade list (#464)', () => {
+  const line = (action: TradeAction, amount: string, profit: string, result: string) => ({
+    action,
+    amount,
+    profit,
+    result,
+  });
+
+  it('V11 only settled trades, in creation order, with their own stake and the SQL class', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settle((await sessionIntent(seed, session.id, 1)).intent, '0.85');
+    await reject((await sessionIntent(seed, session.id, 2)).intent);
+    const down = { amount: '2', action: TradeAction.Down };
+    await settle((await sessionIntent(seed, session.id, 3, TradeMode.Demo, down)).intent, '-2');
+    await settle((await sessionIntent(seed, session.id, 4)).intent, '0');
+    await accept((await sessionIntent(seed, session.id, 5)).intent);
+
+    const view = await readTradingSessionView(tmp.db, session.id, seed.telegramUserId);
+    expect(safeParseTradingSessionResponse({ session: view }).success).toBe(true);
+    expect(view!.settledTrades).toEqual([
+      line(TradeAction.Up, '1.00000000', '0.85000000', 'won'),
+      line(TradeAction.Down, '2.00000000', '-2.00000000', 'lost'),
+      line(TradeAction.Up, '1.00000000', '0.00000000', 'tied'),
+    ]);
+    expect(view!.settledTrades).toHaveLength(view!.trades.settled);
+    expect(view!.lastIntent).toMatchObject({ status: 'accepted' });
+  });
+
+  it('V12 a trade on manual review is not a line; the settled ones are', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settle((await sessionIntent(seed, session.id, 1)).intent, '-1');
+    const { intent } = await sessionIntent(seed, session.id, 2);
+    const taken = (await takeIntent(tmp.db, {
+      id: intent.id,
+      expectedVersion: intent.version,
+      maxAgeMs: 60_000,
+    }))!;
+    const unknown = (await tmp.db.transaction((tx) =>
+      markIntentUnknown(tx, {
+        id: taken.id,
+        expectedVersion: taken.version,
+        reason: TradeIntentFailureReason.ExecutorTimeout,
+      }),
+    ))!;
+    const reconciling = (await startReconciling(tmp.db, {
+      id: unknown.id,
+      expectedVersion: unknown.version,
+    }))!;
+    expect(
+      await markIntentManualReview(tmp.db, {
+        id: reconciling.id,
+        expectedVersion: reconciling.version,
+        reason: TradeIntentFailureReason.ReconciliationNotFound,
+      }),
+    ).toMatchObject({ status: 'manual_review' });
+    await stopTradingSession(tmp.db, {
+      id: session.id,
+      reason: TradingSessionStopReason.ManualReview,
+    });
+
+    const view = await readTradingSessionView(tmp.db, session.id, seed.telegramUserId);
+    expect(view!.settledTrades).toEqual([
+      line(TradeAction.Up, '1.00000000', '-1.00000000', 'lost'),
+    ]);
+    expect(view!.lastIntent).toMatchObject({ id: intent.id, status: 'manual_review' });
+  });
+
+  it('V13 a session without a settled trade has an empty list', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await reject((await sessionIntent(seed, session.id, 1)).intent);
+    const view = await readTradingSessionView(tmp.db, session.id, seed.telegramUserId);
+    expect(view!.settledTrades).toEqual([]);
+  });
+
+  it("V14 the account's own bot trade between the steps is not a line of the session", async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settle((await sessionIntent(seed, session.id, 1)).intent, '0.85');
+    const { intent: botIntent } = await createTradeIntent(
+      tmp.db,
+      intentRequest(seed.telegramUserId),
+    );
+    await settle(botIntent, '5');
+    await settle((await sessionIntent(seed, session.id, 2)).intent, '0');
+
+    const view = await readTradingSessionView(tmp.db, session.id, seed.telegramUserId);
+    expect(view!.settledTrades).toEqual([
+      line(TradeAction.Up, '1.00000000', '0.85000000', 'won'),
+      line(TradeAction.Up, '1.00000000', '0.00000000', 'tied'),
+    ]);
   });
 });
 

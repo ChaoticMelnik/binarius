@@ -5,6 +5,7 @@ import {
   createTradeIntentRequestSchema,
   TRADE_INTENT_TRANSITIONS,
   telegramUserIdSchema,
+  tradeActionSchema,
   tradeAmountSchema,
   tradeIntentViewSchema,
   tradeModeSchema,
@@ -196,6 +197,21 @@ export const tradingSessionBalanceSchema = z.strictObject({
   current: z.boolean(),
 });
 
+// A settled trade's class by the SQL sign of its broker trade's profit, the counters' own
+// predicate: the bot never reads a sign out of a decimal string. Wire-only, not a column.
+export const SessionTradeResult = { Won: 'won', Lost: 'lost', Tied: 'tied' } as const;
+export type SessionTradeResult = (typeof SessionTradeResult)[keyof typeof SessionTradeResult];
+export const sessionTradeResultSchema = z.enum(SessionTradeResult);
+
+// amount is the intent's stake (Rule 15: equal to the broker trade's), profit the broker trade's
+export const sessionTradeLineSchema = z.strictObject({
+  action: tradeActionSchema,
+  amount: tradeAmountSchema,
+  profit: decimalStringSchema,
+  result: sessionTradeResultSchema,
+});
+export type SessionTradeLine = z.infer<typeof sessionTradeLineSchema>;
+
 export const tradingSessionViewSchema = z.strictObject({
   id: z.uuid(),
   mode: tradeModeSchema,
@@ -209,6 +225,8 @@ export const tradingSessionViewSchema = z.strictObject({
   lastIntent: tradeIntentViewSchema.nullable(),
   // null while the account has no snapshot
   balance: tradingSessionBalanceSchema.nullable(),
+  // the session's settled trades in creation order, from the same snapshot as trades (#464)
+  settledTrades: z.array(sessionTradeLineSchema).max(MAX_SESSION_TRADES),
 });
 export type TradingSessionView = z.infer<typeof tradingSessionViewSchema>;
 

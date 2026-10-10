@@ -13,6 +13,7 @@ import {
   resolveBotTextOverrides,
   INT4_MAX,
   LinkBonusSkipReason,
+  MAX_SESSION_TRADES,
   NotificationLevel,
   MomentumDirection,
   NoSignalReason,
@@ -22,6 +23,7 @@ import {
   DATA_REFUSAL_REASONS,
   SIGNAL_ALGORITHM_VERSION,
   SignalFeedOutcome,
+  SessionTradeResult,
   SignalKind,
   TradeAction,
   TradeIntentFailureReason,
@@ -206,6 +208,16 @@ const SESSION_BALANCES: TradingSessionView['balance'][] = [
   { available: USD, ageSec: 99_999 * 60, current: false },
   { available: USD, ageSec: 0, current: true },
 ];
+// the view's widest trade lines (#464), every result and direction among them
+const ACTIONS = Object.values(TradeAction);
+const RESULTS = Object.values(SessionTradeResult);
+const widestTrades = (settled: number): TradingSessionView['settledTrades'] =>
+  Array.from({ length: Math.min(settled, MAX_SESSION_TRADES) }, (_, index) => ({
+    action: ACTIONS[index % ACTIONS.length]!,
+    amount: STAKE,
+    profit: USD,
+    result: RESULTS[index % RESULTS.length]!,
+  }));
 const sessionTexts = (
   status: TradingSessionStatus,
   stopReasons: (TradingSessionStopReason | null)[],
@@ -241,6 +253,7 @@ const sessionTexts = (
                       },
                       lastIntent,
                       balance,
+                      settledTrades: widestTrades(settled),
                     }),
                     { deadline: true },
                   ),

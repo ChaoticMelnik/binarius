@@ -1131,6 +1131,26 @@ export const BOT_TEXT_CATALOG = {
     'Сессия: слово после остальных чисел («5 сделок», «11 сделок»).',
     'сделок',
   ),
+  sessionTradeWon: html(
+    g.Session,
+    'Сессия: строка закрытой сделки в плюс — номер, направление, ставка, результат.',
+    `{count}. {direction} {amount} → ✅ {profit}`,
+    { vars: ['count', 'direction', 'amount', 'profit'] },
+  ),
+  sessionTradeLost: html(
+    g.Session,
+    'Сессия: строка закрытой сделки в минус — номер, направление, ставка, результат.',
+    `{count}. {direction} {amount} → ❌ {profit}`,
+    { vars: ['count', 'direction', 'amount', 'profit'] },
+  ),
+  sessionTradeTied: html(
+    g.Session,
+    'Сессия: строка закрытой сделки в ноль — номер, направление, ставка, результат.',
+    `{count}. {direction} {amount} → ➖ {profit}`,
+    { vars: ['count', 'direction', 'amount', 'profit'] },
+  ),
+  sessionTradeUp: plain(g.Session, 'Сессия: направление «вверх» в строке списка, стрелкой.', '⬆️'),
+  sessionTradeDown: plain(g.Session, 'Сессия: направление «вниз» в строке списка, стрелкой.', '⬇️'),
   sessionWaitingSignal: html(
     g.Session,
     'Сессия: пока следующая сделка не открыта.',

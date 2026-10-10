@@ -171,6 +171,7 @@ const view = {
   trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0, profit: '0.00000000' },
   lastIntent: null,
   balance: null,
+  settledTrades: [] as unknown[],
 };
 
 describe('tradingSessionViewSchema', () => {
@@ -222,6 +223,36 @@ describe('tradingSessionViewSchema', () => {
       safeParseTradingSessionResponse({ session: { ...view, balance: { ...balance, extra: 1 } } })
         .success,
     ).toBe(false);
+  });
+});
+
+describe('tradingSessionViewSchema: settledTrades (#464)', () => {
+  const line = { action: 'up', amount: '1.00000000', profit: '0.85000000', result: 'won' };
+
+  it('is required and takes up to MAX_SESSION_TRADES lines', () => {
+    const withoutList: Partial<typeof view> = { ...view };
+    delete withoutList.settledTrades;
+    expect(safeParseTradingSessionResponse({ session: withoutList }).success).toBe(false);
+    const full = Array.from({ length: MAX_SESSION_TRADES }, () => line);
+    expect(
+      safeParseTradingSessionResponse({ session: { ...view, settledTrades: full } }).success,
+    ).toBe(true);
+    expect(
+      safeParseTradingSessionResponse({ session: { ...view, settledTrades: [...full, line] } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('refuses an unknown result, an extra key and a missing profit', () => {
+    const parse = (settledTrade: unknown) =>
+      safeParseTradingSessionResponse({ session: { ...view, settledTrades: [settledTrade] } })
+        .success;
+    expect(parse(line)).toBe(true);
+    expect(parse({ ...line, result: 'rejected' })).toBe(false);
+    expect(parse({ ...line, extra: 1 })).toBe(false);
+    const withoutProfit: Partial<typeof line> = { ...line };
+    delete withoutProfit.profit;
+    expect(parse(withoutProfit)).toBe(false);
   });
 });
 

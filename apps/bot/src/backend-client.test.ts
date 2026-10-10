@@ -45,6 +45,7 @@ import {
   USER_ACCOUNT_LIST_LIMIT,
   UserStatus,
   userReferralResponseSchema,
+  SessionTradeResult,
   TradeAction,
   TradeIntentErrorCode,
   TradeMode,
@@ -1495,6 +1496,12 @@ describe('body size', () => {
       },
       lastIntent: INTENT,
       balance: { available: DECIMAL, ageSec: NONNEGATIVE_INT, current: false },
+      settledTrades: Array.from({ length: MAX_SESSION_TRADES }, () => ({
+        action: longest(Object.values(TradeAction)),
+        amount: AMOUNT,
+        profit: DECIMAL,
+        result: longest(Object.values(SessionTradeResult)),
+      })),
     };
     const PAIR = {
       id: INT,

@@ -23,6 +23,7 @@ import {
   TradeMode,
   TradingSessionStatus,
   TradingSessionStopReason,
+  SessionTradeResult,
   type BrokerBalanceView,
   type DecimalString,
   type LinkBonusGrantView,
@@ -45,6 +46,7 @@ import {
   intentView,
   sessionView,
   SESSION_VIEW,
+  settledTrade,
   stubText,
   stubTextSource,
 } from './testing';
@@ -129,6 +131,7 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   result: text,
   trades: text,
   action: text,
+  direction: text,
   botUsername: text,
   referralLink: text,
 });
@@ -1194,6 +1197,100 @@ describe('the demo session status', () => {
     ]);
   });
 
+  // #464: one line per settled trade, above the total; the total is the backend's sum
+  const lost = settledTrade({
+    action: TradeAction.Down,
+    profit: d('-1'),
+    result: SessionTradeResult.Lost,
+  });
+  const won = settledTrade();
+
+  it('T8 a live session lists its settled trades between the trade number and the score', () => {
+    const view = sessionView({
+      trades: settled({ settled: 2, won: 1, lost: 1, profit: d('-0.15') }),
+      lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
+      settledTrades: [won, lost],
+    });
+    expect(plainOf('X', view).split('\n').slice(2)).toEqual([
+      '🔢 Сделка 3 из 5',
+      '1. ⬆️ $1.00 → ✅ +$0.85',
+      '2. ⬇️ $1.00 → ❌ -$1.00',
+      '📊 Счёт: 1 в плюс, 1 в минус · -$0.15',
+      '',
+      '✅ Сделка открыта у брокера.',
+    ]);
+  });
+
+  it('T9 a completed session lists every trade between its line and the result', () => {
+    const lines = [won, lost, won, won, lost];
+    const view = finished({ settledTrades: lines });
+    expect(plainOf('X', view).split('\n').slice(3)).toEqual([
+      '🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус',
+      '1. ⬆️ $1.00 → ✅ +$0.85',
+      '2. ⬇️ $1.00 → ❌ -$1.00',
+      '3. ⬆️ $1.00 → ✅ +$0.85',
+      '4. ⬆️ $1.00 → ✅ +$0.85',
+      '5. ⬇️ $1.00 → ❌ -$1.00',
+      '💰 Результат: +$2.50',
+      nbsp('🧪 Демобаланс: $10 002.50'),
+    ]);
+  });
+
+  it("T10 the result is the backend's sum, not the lines added up", () => {
+    const view = finished({
+      trades: settled({ settled: 2, won: 1, lost: 1, profit: d('7.77') }),
+      settledTrades: [won, lost],
+    });
+    const text = plainOf('X', view);
+    expect(text).toContain('💰 Результат: +$7.77');
+    expect(text).not.toContain('-$0.15');
+  });
+
+  it('T11 a stopped session lists its settled trades; the live one keeps its status line only', () => {
+    const view = stopped(TradingSessionStopReason.UserStopped, {
+      trades: settled({ settled: 2, won: 1, lost: 1, rejected: 1, profit: d('-0.15') }),
+      lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
+      settledTrades: [won, lost],
+    });
+    expect(plainOf('X', view).split('\n').slice(3)).toEqual([
+      '⏹ Сессия остановлена по твоей команде.',
+      '📊 Итог: 2 сделки — 1 в плюс, 1 в минус',
+      '1. ⬆️ $1.00 → ✅ +$0.85',
+      '2. ⬇️ $1.00 → ❌ -$1.00',
+      '💰 Результат: -$0.15',
+      '✅ Сделка открыта у брокера.',
+      '⏳ Открытая сделка доиграет до конца.',
+    ]);
+  });
+
+  it('T12 manual review lists the settled trades and no line for the trade on review', () => {
+    const view = stopped(TradingSessionStopReason.ManualReview, {
+      trades: settled({ settled: 1, lost: 1, profit: d('-1') }),
+      lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
+      settledTrades: [lost],
+    });
+    expect(plainOf('X', view).split('\n').slice(3)).toEqual([
+      '🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support',
+      '📊 Итог: 1 сделка — 0 в плюс, 1 в минус',
+      '1. ⬇️ $1.00 → ❌ -$1.00',
+      '💰 Результат: -$1.00',
+    ]);
+  });
+
+  it("T13 a tie, a Martingale stake and a profit under a cent print each trade's own values", () => {
+    const view = sessionView({
+      trades: settled({ settled: 3, won: 0, lost: 1, tied: 1, profit: d('-0.004') }),
+      settledTrades: [
+        settledTrade({ profit: d('0'), result: SessionTradeResult.Tied }),
+        settledTrade({ amount: d('0.005'), profit: d('-0.004'), result: SessionTradeResult.Lost }),
+      ],
+    });
+    expect(plainOf('X', view).split('\n').slice(3, 5)).toEqual([
+      '1. ⬆️ $1.00 → ➖ $0.00',
+      '2. ⬆️ $0.005 → ❌ $0.00',
+    ]);
+  });
+
   // the owner's wording for both sources of manual_review: a trade or the account (#284 clarify)
   it('asks for support on manual review', () => {
     expect(plainOf('X', stopped(TradingSessionStopReason.ManualReview))).toContain(
@@ -1293,6 +1390,13 @@ describe('the demo session status', () => {
         },
         balance: { available: d('999999999999.99999999'), ageSec: 2_147_483_647, current: false },
         lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
+        settledTrades: Array.from({ length: 20 }, () =>
+          settledTrade({
+            amount: d('999999999999.99999999'),
+            profit: d('-999999999999.99999999'),
+            result: SessionTradeResult.Lost,
+          }),
+        ),
       });
       for (const deadline of [false, true]) {
         const text = sessionStatusText(`<&>"`.repeat(20), widest, { deadline });
@@ -1438,6 +1542,26 @@ describe('the text source', () => {
       }),
     );
     expect(text.value).toContain(stubText('intentRejectedByBroker'));
+  });
+
+  it('shows a settled trade line and its direction from the source in place', () => {
+    setBotTextSource(stubTextSource('sessionTradeWon', 'sessionTradeDown'));
+    const text = sessionStatusText(
+      'X',
+      sessionView({
+        trades: { ...SESSION_VIEW.trades, settled: 2, won: 2, profit: d('1.7') },
+        settledTrades: [
+          settledTrade(),
+          settledTrade({
+            action: TradeAction.Down,
+            profit: d('0'),
+            result: SessionTradeResult.Tied,
+          }),
+        ],
+      }),
+    );
+    expect(plainTextOf(text)).toContain('ЗАГЛУШКА sessionTradeWon 1 ⬆️ $1.00 +$0.85');
+    expect(plainTextOf(text)).toContain(`2. ${stubText('sessionTradeDown')} $1.00 → ➖ $0.00`);
   });
 
   it('shows a session stop line from the source in place', () => {

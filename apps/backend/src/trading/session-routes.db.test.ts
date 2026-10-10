@@ -652,6 +652,7 @@ describe('GET /trading/sessions/:id', () => {
       status: 'active',
       trades: { profit: '0.00000000' },
       balance: null,
+      settledTrades: [],
     });
     expect(refreshCalls).toEqual([]);
   });
@@ -758,6 +759,10 @@ describe('GET /trading/sessions/:id: the balance after a finished session (#337)
     expect(sessionOf(response)).toMatchObject({
       trades: { settled: 1, profit: '0.85000000' },
       balance: { available: '10000.85000000', ageSec: 0, current: true },
+      // #464: the finished session's trade list rides the same answer
+      settledTrades: [
+        { action: TradeAction.Up, amount: '1.00000000', profit: '0.85000000', result: 'won' },
+      ],
     });
     expect(refreshCalls).toHaveLength(1);
     expect(refreshCalls[0]!.accountId).toBe(seed.brokerAccountId);

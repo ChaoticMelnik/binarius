@@ -235,11 +235,11 @@ compile.
 | `stake` | the saved demo stake or `null` | `formatStake` | `stakeMinimumLabel` |
 | `minStake`, `demoAvailable` | the broker's bounds | `formatStake` | — |
 | `age` | seconds | `formatAge` | — |
-| `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318) | `formatSignedUsd` | — |
+| `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318); a settled trade's own `profit` in the session's trade list (#464) | `formatSignedUsd` | — |
 | `botUsername` | the bot's `ctx.me.username`, without `@` (#318) | as is | — |
 | `referralLink` | the user's personal link, `referralLinkOf` (#115) | as is | — |
 
-The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, …) are a line's value the
+The rest (`amount`, `count`, `direction`, `symbol`, `subject`, `line`, `trades`, …) are a line's value the
 caller has already put into words from the catalog and its data, printed as is; their description
 names what they hold.
 

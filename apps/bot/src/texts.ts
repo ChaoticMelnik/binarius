@@ -14,6 +14,7 @@ import {
   LinkBonusSkipReason,
   BrokerBalanceUnavailableReason,
   NotificationLevel,
+  SessionTradeResult,
   telegramHtml,
   TradeAction,
   TRADE_INTENT_TRANSITIONS,
@@ -33,6 +34,7 @@ import {
   type LinkBonusGrantView,
   type LinkedAccountView,
   type PairView,
+  type SessionTradeLine,
   type TelegramHtml,
   type TradeIntentView,
   type TradingAccessResponse,
@@ -453,8 +455,37 @@ const intentPlaysOut = (intent: TradeIntentView | null): intent is TradeIntentVi
 // What the session message shows of a session; nothing else of the view.
 type SessionStatusView = Pick<
   TradingSessionView,
-  'mode' | 'status' | 'stopReason' | 'settings' | 'trades' | 'lastIntent' | 'balance'
+  | 'mode'
+  | 'status'
+  | 'stopReason'
+  | 'settings'
+  | 'trades'
+  | 'lastIntent'
+  | 'balance'
+  | 'settledTrades'
 >;
+
+const SESSION_TRADE_DIRECTIONS = labelsOf({
+  [TradeAction.Up]: 'sessionTradeUp',
+  [TradeAction.Down]: 'sessionTradeDown',
+} as const satisfies Record<TradeAction, BotStaticPlainKey>);
+const SESSION_TRADE_LINES = {
+  [SessionTradeResult.Won]: 'sessionTradeWon',
+  [SessionTradeResult.Lost]: 'sessionTradeLost',
+  [SessionTradeResult.Tied]: 'sessionTradeTied',
+} as const satisfies Record<SessionTradeResult, keyof typeof TEXTS>;
+
+// One line per settled trade (#464), numbered in the order the backend sent them. Each prints
+// its own stake and profit as text; the icon is the class the backend computed in SQL (Rule 2).
+const tradeLines = (settledTrades: readonly SessionTradeLine[]): TelegramHtml[] =>
+  settledTrades.map((trade, index) =>
+    TEXTS[SESSION_TRADE_LINES[trade.result]]({
+      count: String(index + 1),
+      direction: SESSION_TRADE_DIRECTIONS[trade.action],
+      amount: formatStake(trade.amount),
+      profit: trade.profit,
+    }),
+  );
 
 const SESSION_BALANCE_LINES = {
   [TradeMode.Demo]: 'sessionBalanceDemo',
@@ -539,6 +570,7 @@ ${TEXTS.sessionSettingsUnavailable}`;
   if (view.status !== TradingSessionStatus.Stopped) {
     const step = Math.min(trades.settled + 1, trades.planned);
     head.push(TEXTS.sessionStep({ step: `${String(step)} из ${String(trades.planned)}` }));
+    head.push(...tradeLines(view.settledTrades));
     if (trades.settled > 0) {
       head.push(TEXTS.sessionScore({ score: scoreOf(trades), profit: trades.profit }));
     }
@@ -546,11 +578,15 @@ ${TEXTS.sessionSettingsUnavailable}`;
       sessionIntentLive(lastIntent) ? statusLineOfIntent(lastIntent) : TEXTS.sessionWaitingSignal,
     );
   } else if (view.stopReason === TradingSessionStopReason.Completed) {
-    body.push(TEXTS.sessionCompleted({ result: resultOf(trades) }), ...outcomeLines(view));
+    body.push(
+      TEXTS.sessionCompleted({ result: resultOf(trades) }),
+      ...tradeLines(view.settledTrades),
+      ...outcomeLines(view),
+    );
   } else {
     if (view.stopReason !== null) body.push(textOf(SESSION_STOP_LINES[view.stopReason]));
     if (trades.settled > 0) body.push(TEXTS.sessionTotal({ result: resultOf(trades) }));
-    body.push(...outcomeLines(view));
+    body.push(...tradeLines(view.settledTrades), ...outcomeLines(view));
     // manual_review's stop line already says it and points at /support: one text for both of its
     // sources (owner, #284 clarify), so the trade's own review line is not repeated under it
     const reviewRepeated =
