@@ -67,7 +67,7 @@ export const AuditAction = {
   StaffLoginLinkIssued: 'staff_login_link_issued',
   StaffLoginLinkRefused: 'staff_login_link_refused',
   StaffLoginLinkCompleted: 'staff_login_link_completed',
-  // a user switched users.trading_mode from the mode screen or /stop (#121)
+  // a user's users.trading_mode switched through POST /trading/mode (#121)
   TradingModeChanged: 'trading_mode_changed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

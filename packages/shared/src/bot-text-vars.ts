@@ -113,11 +113,6 @@ export const BOT_TEXT_VARS = {
     sample: formatStake('9990'),
     format: (amount: DecimalString) => formatStake(amount),
   }),
-  realAvailable: variable({
-    description: 'Доступно на реальном счёте, как на экране режима',
-    sample: formatUsd('1234.56'),
-    format: (amount: DecimalString) => formatUsd(amount),
-  }),
   age: variable({
     description: 'Возраст снимка баланса',
     sample: '5 мин',

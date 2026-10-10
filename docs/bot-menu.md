@@ -3,10 +3,10 @@
 A user with an active Binodex account gets the **status card** (#24) as the bot's home: on
 `/start` (in place of the old «👋 С возвращением!») and on `/menu`. The card is the account card's
 picture with a caption of the trading mode, the real balance, the demo balance, the tokens, a
-status or age line when the broker balance is missing or old, a hint, the entry and the mode
-button in one row — «🎮 Демо-торговля» (#320) and «💼 Реальный режим», or in real mode «🚀
-Торговать» and «🎮 Вернуться в демо» (#121, [trading-mode.md](trading-mode.md)) — and «👥
-Пригласить друга» (#115, [referrals.md](referrals.md)). It is pinned in place of whatever was pinned before.
+status or age line when the broker balance is missing or old, a hint, and two buttons, each in
+its own row: «🎮 Демо-торговля» (#320; «🚀 Торговать» in real mode, #121,
+[trading-mode.md](trading-mode.md)) and «👥 Пригласить друга» (#115,
+[referrals.md](referrals.md)). It is pinned in place of whatever was pinned before.
 
 ## Components
 
@@ -23,7 +23,7 @@ button in one row — «🎮 Демо-торговля» (#320) and «💼 Ре�
   `userContextOf`, `LABELS.menuCommand`, `LABELS.demoButton`; the texts are
   catalog entries ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/bot.ts` — `/start` and `/menu` on one path (`answerHome`), `sendStatusCard` with
-  `statusCardKeyboard(mode)` (`keyboards.ts`: the `demo` and `mode` buttons, then the `invite`
+  `statusCardKeyboard(mode)` (`keyboards.ts`: the `demo` button by mode, then the `invite`
   button, #115),
   `pinCard`.
 - `packages/shared/src/bot-commands.ts` — `/menu` «Главное меню», right after `/start`.
@@ -182,7 +182,7 @@ pnpm test --project unit apps/bot/src
   [bot-session.md](bot-session.md)); the callback data stays. Since #360 the hint names the
   autosession as the main scenario.
 - **#201** — levels and their progress on this card.
-- Real mode — the mode screen behind «💼 Реальный режим» ([trading-mode.md](trading-mode.md));
+- **#474** — the mode screen and the card's mode button ([trading-mode.md](trading-mode.md));
   #144's `tradingOpen` is the backend's switch, not a user's mode.
 - A «🔄 Обновить» button that edits the caption in place — not asked; `/menu` sends a new card.
   The account card carries «🎮 Демо-торговля» since #350 ([bot-navigation.md](bot-navigation.md)).
