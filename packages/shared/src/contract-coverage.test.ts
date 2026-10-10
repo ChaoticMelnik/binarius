@@ -387,7 +387,15 @@ describe('contract coverage (issue #6)', () => {
       | 'trades'
       | 'lastIntent'
       | 'balance'
+      | 'settledTrades'
     >();
+    // #464: one line per settled trade, the class by SQL
+    expectTypeOf<TradingSessionView['settledTrades'][number]>().toEqualTypeOf<{
+      action: 'up' | 'down';
+      amount: DecimalString;
+      profit: DecimalString;
+      result: 'won' | 'lost' | 'tied';
+    }>();
     expectTypeOf<TradingSessionView['status']>().toEqualTypeOf<'active' | 'paused' | 'stopped'>();
     expectTypeOf<TradingSessionView['trades']>().toEqualTypeOf<{
       planned: number;

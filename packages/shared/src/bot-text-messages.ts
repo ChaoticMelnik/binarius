@@ -12,7 +12,7 @@ import {
 } from './bot-texts';
 import type { BotTextVarName } from './bot-text-vars';
 import { plainTextOf, TELEGRAM_CAPTION_LIMIT, TELEGRAM_MESSAGE_LIMIT } from './telegram-html';
-import { DEFAULT_SESSION_TRADES } from './trading-session';
+import { DEFAULT_SESSION_TRADES, MAX_SESSION_TRADES } from './trading-session';
 
 // The messages the client bot assembles from several catalog keys (docs/bot-texts.md → Assembled
 // messages). A key's own limit is checked with its variables' samples; these descriptions bound
@@ -207,6 +207,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   trades: (m) => w.sessionCount + 1 + trades(m),
   // the direction, then the stake when known (texts.ts → stakeButtonLabel)
   action: (m) => m.longest('actionUp', 'actionDown') + SEPARATOR + w.stake,
+  direction: (m) => m.longest('sessionTradeUp', 'sessionTradeDown'),
   botUsername: () => w.botUsername,
   // referralLinkOf
   referralLink: () =>
@@ -216,6 +217,9 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
     REFERRAL_PAYLOAD_PREFIX.length +
     REFERRAL_CODE_LENGTH,
 };
+
+// a trade's number in its session (#464)
+const tradeNumber = String(MAX_SESSION_TRADES).length;
 
 // Where a key's real assembly is narrower than a variable's default width.
 export const BOT_TEXT_VAR_WIDTHS: Readonly<
@@ -246,6 +250,11 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   sessionWon: { count: () => w.sessionCount },
   sessionLost: { count: () => w.sessionCount },
   sessionTied: { count: () => w.sessionCount },
+  // a settled trade's line (#464): its number in the session and its own stake (formatStake);
+  // the assembled list narrows the number to each line's own (sessionTradeList)
+  sessionTradeWon: { count: () => tradeNumber, amount: () => w.stake },
+  sessionTradeLost: { count: () => tradeNumber, amount: () => w.stake },
+  sessionTradeTied: { count: () => tradeNumber, amount: () => w.stake },
   sessionBalanceDemo: { amount: () => w.usd },
   sessionBalanceReal: { amount: () => w.usd },
   // the card's column: a trade's number in its session, at most MAX_SESSION_TRADES
@@ -353,6 +362,22 @@ const sessionStopLines = [
   'tradingPaused',
 ] as const satisfies readonly BotHtmlKey[];
 const sessionHead = [k('sessionHeader'), '\n', k('sessionSettings')];
+// the settled trades' lines (#464, texts.ts → tradeLines): the view carries at most this many,
+// numbered from 1, so each line is measured at its own number's width
+const sessionTradeList: BotTextSegment[] = Array.from(
+  { length: MAX_SESSION_TRADES },
+  (_, index): BotTextSegment[] => {
+    const count = () => String(index + 1).length;
+    return [
+      '\n',
+      oneOf(
+        [k('sessionTradeWon', { count })],
+        [k('sessionTradeLost', { count })],
+        [k('sessionTradeTied', { count })],
+      ),
+    ];
+  },
+).flat();
 // a finished session's result and the balance after it, by mode, with the age when it predates
 // the last trade (#337, texts.ts → outcomeLines)
 const sessionOutcome = [
@@ -520,6 +545,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       ...sessionHead,
       '\n',
       k('sessionStep'),
+      ...sessionTradeList,
       '\n',
       k('sessionScore'),
       '\n\n',
@@ -532,7 +558,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     id: 'sessionCompleted',
     title: 'Сессия завершена',
     limit: TELEGRAM_MESSAGE_LIMIT,
-    body: [...sessionHead, '\n\n', k('sessionCompleted'), ...sessionOutcome],
+    body: [...sessionHead, '\n\n', k('sessionCompleted'), ...sessionTradeList, ...sessionOutcome],
   },
   {
     id: 'sessionStopped',
@@ -544,6 +570,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       anyOf(...sessionStopLines, 'sessionStatusUnavailable'),
       '\n',
       k('sessionTotal'),
+      ...sessionTradeList,
       ...sessionOutcome,
       '\n',
       anyOf(...liveIntentLines),
