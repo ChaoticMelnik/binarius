@@ -2,12 +2,18 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hashToken } from '@binarius/db';
-import { accessTokenPath, safeParseAccessTokenRequest } from '@binarius/shared';
+import {
+  accessTokenPath,
+  safeParseAccessTokenRefusalResponse,
+  safeParseAccessTokenRequest,
+  safeParseAccessTokenResponse,
+} from '@binarius/shared';
 import pino from 'pino';
 import { logOptions } from '@binarius/shared';
 import {
   createBackendAccessTokenSource,
   isAccessTokenRefusal,
+  MAX_BACKEND_BODY_BYTES,
   notConfiguredAccessTokenSource,
   reportRefusedToken,
   type AccessTokenOutcome,
@@ -164,6 +170,10 @@ describe('createBackendAccessTokenSource (#90)', () => {
         reply = (res) => json(res, 200, { accessToken: SECRET, extra: SECRET });
         return source().accessToken(ACCOUNT);
       })(),
+      await (async () => {
+        reply = (res) => overCeiling(res, 200, JSON.stringify({ accessToken: SECRET }));
+        return source().accessToken(ACCOUNT);
+      })(),
     ];
     for (const failure of failures) {
       const text = JSON.stringify(failure);
@@ -245,5 +255,79 @@ describe('notConfiguredAccessTokenSource', () => {
     const outcome = await notConfiguredAccessTokenSource.accessToken(ACCOUNT);
     expect(outcome).toEqual({ ok: false, reason: 'not_configured' });
     expect(!outcome.ok && isAccessTokenRefusal(outcome.reason)).toBe(false);
+  });
+});
+
+const noop = (): void => undefined;
+
+// a valid body, then whitespace past the ceiling: only a reader that stops at the ceiling refuses it
+function overCeiling(res: ServerResponse, status: number, body: string) {
+  res.on('error', noop);
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.write(body);
+  const padding = ' '.repeat(64 * 1024);
+  for (let written = 0; written <= MAX_BACKEND_BODY_BYTES; written += padding.length) {
+    res.write(padding);
+  }
+  res.end();
+}
+
+// a body that never ends: a reader without a ceiling waits for the client's timeout
+function endless(res: ServerResponse, status: number, head: string) {
+  res.on('error', noop);
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.write(head);
+  const chunk = 'x'.repeat(16 * 1024);
+  const pump = (): void => {
+    while (!res.destroyed && res.write(chunk));
+    if (!res.destroyed) res.once('drain', pump);
+  };
+  pump();
+}
+
+describe('body size (#234)', () => {
+  it('refuses a 2xx over MAX_BACKEND_BODY_BYTES as a contract violation', async () => {
+    reply = (res) => overCeiling(res, 200, JSON.stringify({ accessToken: SECRET }));
+    expect(await source(60_000).accessToken(ACCOUNT)).toEqual({
+      ok: false,
+      reason: 'contract_violation',
+      status: 200,
+    });
+  });
+
+  it('refuses an endless refusal body as a contract violation', async () => {
+    reply = (res) => endless(res, 409, '{"error":"user_blocked",');
+    expect(await source(60_000).accessToken(ACCOUNT)).toEqual({
+      ok: false,
+      reason: 'contract_violation',
+      status: 409,
+    });
+  }, 2_000);
+
+  it('answers an endless body on another status by the status', async () => {
+    reply = (res) => endless(res, 500, '{"error":"internal",');
+    expect(await source(60_000).accessToken(ACCOUNT)).toEqual({
+      ok: false,
+      reason: 'backend_status',
+      status: 500,
+    });
+  }, 2_000);
+
+  // Assumed, in bytes: the token is JWT-shaped (live 2026-10-01) and under 4 KiB. False if the
+  // broker starts issuing longer tokens.
+  const ASSUMED_LONGEST_TOKEN = 4096;
+
+  it('leaves the longest answer under the declared assumptions far below MAX_BACKEND_BODY_BYTES', () => {
+    const rows = [
+      {
+        parse: safeParseAccessTokenResponse,
+        sample: { accessToken: 'x'.repeat(ASSUMED_LONGEST_TOKEN) },
+      },
+      { parse: safeParseAccessTokenRefusalResponse, sample: { error: 'account_not_found' } },
+    ];
+    for (const { parse, sample } of rows) {
+      expect(parse(sample).success).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(sample))).toBeLessThan(MAX_BACKEND_BODY_BYTES / 4);
+    }
   });
 });

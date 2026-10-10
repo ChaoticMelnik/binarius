@@ -1,9 +1,18 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TRADING_PAIRS_PATH, TRADING_SIGNAL_PATH } from '@binarius/shared';
+import {
+  TRADING_PAIRS_PATH,
+  TRADING_SIGNAL_PATH,
+  safeParsePairsCatalogResponse,
+  safeParseTradingSignalResponse,
+} from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
-import { createBackendPairsSource, createBackendSignalSource } from './backend';
+import {
+  createBackendPairsSource,
+  createBackendSignalSource,
+  MAX_BACKEND_BODY_BYTES,
+} from './backend';
 import { eurUsd, fetchFailedAnswer, signalAnswer } from './testing';
 
 const BEARER = 'internal-token-for-tests-0123456789';
@@ -55,6 +64,33 @@ const text = (status: number, body: string) => (res: ServerResponse) => {
   res.writeHead(status, { 'content-type': 'text/plain' });
   res.end(body);
 };
+
+const noop = (): void => undefined;
+
+// a body, then whitespace past the ceiling: only a reader that stops at the ceiling refuses it
+function overCeiling(res: ServerResponse, status: number, body: string) {
+  res.on('error', noop);
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.write(body);
+  const padding = ' '.repeat(64 * 1024);
+  for (let written = 0; written <= MAX_BACKEND_BODY_BYTES; written += padding.length) {
+    res.write(padding);
+  }
+  res.end();
+}
+
+// a body that never ends: a reader without a ceiling waits for the client's timeout
+function endless(res: ServerResponse, status: number, head: string) {
+  res.on('error', noop);
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.write(head);
+  const chunk = 'x'.repeat(16 * 1024);
+  const pump = (): void => {
+    while (!res.destroyed && res.write(chunk));
+    if (!res.destroyed) res.once('drain', pump);
+  };
+  pump();
+}
 
 const signals = (timeoutMs?: number) =>
   createBackendSignalSource({ baseUrl, token: BEARER, timeoutMs });
@@ -145,6 +181,10 @@ describe('createBackendSignalSource (#287)', () => {
     failures.push(await signals().evaluate({ assetId: 101, interval: '1m' }));
     reply = text(503, MARKER);
     failures.push(await pairs().read());
+    reply = (res) => overCeiling(res, 200, JSON.stringify({ outcome: MARKER }));
+    failures.push(await signals(60_000).evaluate({ assetId: 101, interval: '1m' }));
+    reply = (res) => overCeiling(res, 503, `{"error":"catalog_unavailable","m":"${MARKER}"}`);
+    failures.push(await pairs(60_000).read());
     for (const failure of failures) {
       const serialized = JSON.stringify(failure);
       expect(failure.ok).toBe(false);
@@ -198,5 +238,71 @@ describe('createBackendPairsSource (#287)', () => {
     controller.abort();
     expect(await pending).toEqual({ ok: false, reason: 'backend_unreachable' });
     expect(Date.now() - startedAt).toBeLessThan(UNIT_WAIT_CEILING_MS);
+  });
+});
+
+describe('body size (#234)', () => {
+  it('S1 refuses a signal 200 over MAX_BACKEND_BODY_BYTES as a contract violation', async () => {
+    reply = (res) => overCeiling(res, 200, JSON.stringify(signalAnswer('up')));
+    expect(await signals(60_000).evaluate({ assetId: 101, interval: '1m' })).toEqual({
+      ok: false,
+      reason: 'contract_violation',
+      status: 200,
+    });
+  });
+
+  it("S2 refuses an endless body on the pairs' own 503 as a contract violation", async () => {
+    reply = (res) => endless(res, 503, '{"error":"catalog_unavailable",');
+    expect(await pairs(60_000).read()).toEqual({
+      ok: false,
+      reason: 'contract_violation',
+      status: 503,
+    });
+  }, 2_000);
+
+  it('S3 answers an endless pairs body on another status by the status', async () => {
+    reply = (res) => endless(res, 500, '{"error":"internal",');
+    expect(await pairs(60_000).read()).toEqual({
+      ok: false,
+      reason: 'backend_status',
+      status: 500,
+    });
+  }, 2_000);
+
+  // Assumptions in UTF-8 bytes or items, each false on the condition named:
+  // the catalog holds at most 300 pairs (the live broker lists 144, docs/broker-rest.md);
+  const ASSUMED_LONGEST_PAIRS = 300;
+  // symbol and type have no max() and no bounding writer: at most 2 KiB each.
+  const ASSUMED_LONGEST_FREE_STRING = 2048;
+
+  const longestPairs = {
+    ...catalog(),
+    pairs: Array.from({ length: ASSUMED_LONGEST_PAIRS }, (_, index) =>
+      eurUsd({
+        id: Number.MAX_SAFE_INTEGER - index,
+        symbol: 's'.repeat(ASSUMED_LONGEST_FREE_STRING),
+        type: 't'.repeat(ASSUMED_LONGEST_FREE_STRING),
+      }),
+    ),
+  };
+
+  it('S4 leaves the longest signal answer far below MAX_BACKEND_BODY_BYTES', () => {
+    // numbers and enums only: the decided answer is the longer of the two
+    const sample = signalAnswer('up');
+    expect(safeParseTradingSignalResponse(sample).success).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(sample))).toBeLessThan(MAX_BACKEND_BODY_BYTES / 4);
+  });
+
+  it('S5 the longest pairs sample passes the parser', () => {
+    expect(safeParsePairsCatalogResponse(longestPairs).success).toBe(true);
+  });
+
+  // #234 stop condition, returned to the owner and not tuned away: 300 pairs whose symbol and type
+  // are free strings at 2048 bytes come to about 1.3 MB, over even the 1 MiB ceiling. it.fails
+  // turns red once the row fits, so the mark cannot outlive the cause.
+  it.fails('S5 KNOWN OVER the ceiling under the declared assumptions (#234 stop condition)', () => {
+    expect(Buffer.byteLength(JSON.stringify(longestPairs))).toBeLessThan(
+      MAX_BACKEND_BODY_BYTES / 4,
+    );
   });
 });

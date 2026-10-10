@@ -5,6 +5,7 @@ import {
   AccessTokenRefusal,
   accessTokenPath,
   errorLogFields,
+  readBody,
   safeParseAccessTokenRefusalResponse,
   safeParseAccessTokenResponse,
 } from '@binarius/shared';
@@ -19,7 +20,8 @@ export const AccessTokenUnavailable = {
   BackendUnreachable: 'backend_unreachable',
   // any status the route does not answer with: 401 (our bearer is not the backend's), 400, 5xx
   BackendStatus: 'backend_status',
-  // a 2xx without the token, or a 404/409 whose code the contract does not know
+  // a 2xx without the token, a 404/409 whose code the contract does not know, or a body of
+  // either longer than MAX_BACKEND_BODY_BYTES
   ContractViolation: 'contract_violation',
   NotConfigured: 'not_configured',
 } as const;
@@ -97,11 +99,18 @@ export interface BackendAccessTokenSourceOptions {
   timeoutMs?: number;
 }
 
+// The ceiling on the route's body, 2xx or not (Architecture Rule 26): the longest answer the
+// contract has is { accessToken: <JWT> }.
+export const MAX_BACKEND_BODY_BYTES = 1024 * 1024;
+
 const unavailable = (
   reason: AccessTokenUnavailable,
   status?: number,
 ): Extract<AccessTokenOutcome, { ok: false }> =>
   status === undefined ? { ok: false, reason } : { ok: false, reason, status };
+
+const isContractStatus = (status: number): boolean =>
+  (status >= 200 && status < 300) || status === 404 || status === 409;
 
 function parseJson(text: string): unknown {
   try {
@@ -122,7 +131,7 @@ export function createBackendAccessTokenSource({
     async accessToken(brokerAccountId, { signal, mayRefresh = true, refusedToken } = {}) {
       const timeout = AbortSignal.timeout(timeoutMs);
       let status: number;
-      let text: string;
+      let text: string | undefined;
       try {
         const response = await fetch(new URL(accessTokenPath(brokerAccountId), baseUrl), {
           method: 'POST',
@@ -135,9 +144,19 @@ export function createBackendAccessTokenSource({
           signal: signal === undefined ? timeout : AbortSignal.any([timeout, signal]),
         });
         status = response.status;
-        text = await response.text();
+        text = await readBody(response, MAX_BACKEND_BODY_BYTES);
       } catch {
         return unavailable(AccessTokenUnavailable.BackendUnreachable);
+      }
+      if (text === undefined) {
+        // over the ceiling: a 2xx or a refusal status breaks the contract, whose bodies are tiny;
+        // any other status was never decided by its body
+        return unavailable(
+          isContractStatus(status)
+            ? AccessTokenUnavailable.ContractViolation
+            : AccessTokenUnavailable.BackendStatus,
+          status,
+        );
       }
       if (status >= 200 && status < 300) {
         const granted = safeParseAccessTokenResponse(parseJson(text));
