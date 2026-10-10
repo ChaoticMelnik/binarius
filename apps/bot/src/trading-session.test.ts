@@ -27,6 +27,7 @@ import {
 import type { SessionTrackRequest } from './session-tracker';
 import {
   BOT_INFO,
+  CARD_MESSAGE_ID,
   PAIR_EURUSD,
   PAIRS_RESPONSE,
   SESSION_ID,
@@ -39,6 +40,7 @@ import {
   fakeLogger,
   intentView,
   messageAnswer,
+  photoAnswer,
   sessionView,
   stubSessionTracker,
   stubTracker,
@@ -55,8 +57,12 @@ import {
   START_REFUSALS,
 } from './trading-session';
 import { INVITE_CALLBACK_DATA } from './keyboards';
+import { INLINE_QUERY_LIMIT, shareQuery } from './session-share';
 
 const START = sessionStartCallbackData(PAIR_EURUSD.id, 5);
+// the sizes of the card's sendPhoto result, smallest first (#321)
+const SMALL_FILE_ID = 'AgACAgIAAxkBAAIBsmall';
+const CARD_FILE_ID = 'AgACAgIAAxkBAAIBlarge';
 const REFRESH = sessionRefreshCallbackData(SESSION_ID);
 const STOP = sessionStopCallbackData(SESSION_ID);
 
@@ -124,6 +130,7 @@ function setup(
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
+  api.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, [SMALL_FILE_ID, CARD_FILE_ID]));
   const press = (data: string, chatType?: string) =>
     bot.handleUpdate(callbackUpdate(data, chatType));
   const send = (text: string, chatType?: string) => bot.handleUpdate(textUpdate(text, chatType));
@@ -821,6 +828,81 @@ describe('the summary card (#318)', () => {
     expect(scene.logger.error).not.toHaveBeenCalled();
   });
 
+  // #321: «📤 Поделиться» on top, by one edit after the send, since the file id exists only then
+  const SHARE_ROW = [
+    {
+      text: LABELS.sessionShareButton,
+      switch_inline_query_chosen_chat: {
+        query: shareQuery(SESSION_ID, CARD_FILE_ID),
+        allow_user_chats: true,
+        allow_group_chats: true,
+        allow_channel_chats: true,
+      },
+    },
+  ];
+
+  it("K8 puts «📤 Поделиться» over the card's own rows, with the largest size's file id", async () => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE) });
+    await (await entryOf(scene)).card(DONE);
+    const sends = methods(scene.calls).filter((method) =>
+      ['sendPhoto', 'editMessageReplyMarkup'].includes(method),
+    );
+    expect(sends).toEqual(['sendPhoto', 'editMessageReplyMarkup']);
+    const edit = payloadOf(scene.calls, 'editMessageReplyMarkup');
+    expect(edit?.chat_id).toBe(USER.id);
+    expect(edit?.message_id).toBe(CARD_MESSAGE_ID);
+    const rows = rowsOf(edit) as unknown[][];
+    expect(rows[0]).toEqual(SHARE_ROW);
+    expect(rows.slice(1)).toEqual(CARD_ROWS);
+    expect(scene.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('K9 a refused edit is a warning only: the card keeps its keyboard, no retry, no «not sent»', async () => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE) });
+    scene.apiErrors.set('editMessageReplyMarkup', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: message to edit not found',
+    });
+    await (await entryOf(scene)).card(DONE);
+    expect(
+      methods(scene.calls).filter((method) => method === 'editMessageReplyMarkup'),
+    ).toHaveLength(1);
+    expect(rowsOf(payloadOf(scene.calls, 'sendPhoto'))).toEqual(CARD_ROWS);
+    expect(warnings(scene.logger)).toEqual(['trading session share button not attached']);
+    expect(scene.logger.warn.mock.calls[0]?.[0]).toMatchObject({
+      method: 'editMessageReplyMarkup',
+      telegramErrorCode: 400,
+      sessionId: SESSION_ID,
+    });
+  });
+
+  it.each([
+    ['the result has no photo sizes', [], 'no_file_id'],
+    [
+      'the query would pass the inline query limit',
+      ['x'.repeat(INLINE_QUERY_LIMIT - shareQuery(SESSION_ID, '').length + 1)],
+      'query_too_long',
+    ],
+  ] as const)('K10 no edit when %s, and a warning', async (_label, fileIds, reason) => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE) });
+    scene.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, fileIds));
+    await (await entryOf(scene)).card(DONE);
+    expect(methods(scene.calls)).toContain('sendPhoto');
+    expect(methods(scene.calls)).not.toContain('editMessageReplyMarkup');
+    expect(warnings(scene.logger)).toEqual(['trading session share button not attached']);
+    expect(scene.logger.warn.mock.calls[0]?.[0]).toEqual({ sessionId: SESSION_ID, reason });
+  });
+
+  it('K11 a query exactly at the limit still gets the button', async () => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE) });
+    const longest = 'x'.repeat(INLINE_QUERY_LIMIT - shareQuery(SESSION_ID, '').length);
+    scene.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, [longest]));
+    await (await entryOf(scene)).card(DONE);
+    expect(methods(scene.calls)).toContain('editMessageReplyMarkup');
+    expect(scene.logger.warn).not.toHaveBeenCalled();
+  });
+
   it("K6 without settings, the asset is the last trade's and the keyboard the invite and the menu", async () => {
     const bare = sessionView({ ...DONE, settings: null });
     const scene = setup({ readSession: () => Promise.resolve(bare) });
@@ -834,5 +916,10 @@ describe('the summary card (#318)', () => {
       }).value,
     );
     expect(rowsOf(photo)).toEqual([INVITE, MENU]);
+    expect(rowsOf(payloadOf(scene.calls, 'editMessageReplyMarkup'))).toEqual([
+      SHARE_ROW,
+      INVITE,
+      MENU,
+    ]);
   });
 });

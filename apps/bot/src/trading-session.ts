@@ -36,6 +36,7 @@ import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml, sendPhotoByIdHtml } from './send';
 import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
+import { attachShareButton } from './session-share';
 import { SESSION_NOT_FOUND, type SessionTracker } from './session-tracker';
 import { LABELS, sessionAssetLabel, sessionStatusText, TEXTS, textOf } from './texts';
 
@@ -464,7 +465,8 @@ export function createTradingSessionComposer<C extends Context>({
       const assetId = view.settings?.assetId ?? view.lastIntent?.assetId;
       if (assetId === undefined) throw new Error('a claimed session names no asset');
       const png = renderSessionCard(sessionCardSvg(sessionCardModel(summary, symbol, assetId)));
-      await sendPhotoByIdHtml(
+      const keyboard = sessionCardKeyboard(view);
+      const sent = await sendPhotoByIdHtml(
         ctx.api,
         chatId,
         new InputFile(png, 'session.png'),
@@ -473,8 +475,10 @@ export function createTradingSessionComposer<C extends Context>({
           profit: summary.result,
           botUsername,
         }),
-        { reply_markup: sessionCardKeyboard(view) },
+        { reply_markup: keyboard },
       );
+      // «📤 Поделиться» (#321): catches its own failures, so the warning below is the send's only
+      await attachShareButton(ctx.api, logger, view.id, sent, keyboard);
     } catch (error) {
       logger.warn(
         {

@@ -551,6 +551,28 @@ export const callbackUpdate = (data: string, chatType = 'private'): Update =>
     },
   }) as unknown as Update;
 
+// An inline query (#321): no chat, only the type of the chat it is typed in, when the client says
+export const inlineQueryUpdate = (
+  query: string,
+  { from = USER, chatType }: { from?: User; chatType?: string } = {},
+): Update =>
+  ({
+    update_id: ++updateId,
+    inline_query: {
+      id: `inline-${String(updateId)}`,
+      from,
+      query,
+      offset: '',
+      ...(chatType === undefined ? {} : { chat_type: chatType }),
+    },
+  }) as unknown as Update;
+
+export const chosenInlineResultUpdate = (resultId: string, query: string): Update =>
+  ({
+    update_id: ++updateId,
+    chosen_inline_result: { result_id: resultId, from: USER, query },
+  }) as unknown as Update;
+
 export interface ApiCall {
   method: string;
   payload: Record<string, unknown>;
@@ -651,6 +673,22 @@ export function failFromSecondCall(
 export const CARD_MESSAGE_ID = 501;
 export const TEXT_CARD_MESSAGE_ID = 502;
 
+// A sendPhoto's result with its sizes, smallest first as Telegram lists them: the summary card
+// reads the last one's file_id for «📤 Поделиться» (#321).
+export const photoAnswer =
+  (message_id: number, fileIds: readonly string[]): ApiAnswer =>
+  () => ({
+    message_id,
+    date: 1,
+    chat: { id: USER.id, type: 'private', first_name: USER.first_name },
+    photo: fileIds.map((file_id, index) => ({
+      file_id,
+      file_unique_id: `unique-${String(index)}`,
+      width: 100 * (index + 1),
+      height: 100 * (index + 1),
+    })),
+  });
+
 // The result of a send: grammY passes it through unchecked, and the bot reads only message_id.
 export const messageAnswer =
   (message_id: number): ApiAnswer =>
@@ -673,6 +711,7 @@ export const inlineButtons = (payload: Record<string, unknown> | undefined) =>
         callback_data?: string;
         url?: string;
         web_app?: { url: string };
+        switch_inline_query_chosen_chat?: Record<string, unknown>;
       }[][];
     }
   )?.inline_keyboard?.flat() ?? [];

@@ -106,3 +106,29 @@ export const sendPhotoByIdHtml = (
   caption: TelegramHtml,
   extra: WithNextStep<PhotoByIdExtra>,
 ) => api.sendPhoto(chatId, photo, { ...extra, caption: caption.value, parse_mode: 'HTML' });
+
+// The inline answers (#321, session-share.ts): the shared summary card, posted «via @bot» into a
+// chat the user picked. No keyboard by type, an exception to the rule above
+// (docs/bot-navigation.md → Exceptions): the bot's buttons there would act for whoever presses
+// them. The found answer is personal; the empty one is not cached, so a passing failure does not
+// hide the card from the owner for Telegram's default 300 s.
+export const answerInlineQueryPhotoHtml = (
+  ctx: Context,
+  result: { id: string; fileId: string },
+  caption: TelegramHtml,
+) =>
+  ctx.answerInlineQuery(
+    [
+      {
+        type: 'photo',
+        id: result.id,
+        photo_file_id: result.fileId,
+        caption: caption.value,
+        parse_mode: 'HTML',
+      },
+    ],
+    { is_personal: true },
+  );
+
+export const answerInlineQueryEmpty = (ctx: Context) =>
+  ctx.answerInlineQuery([], { cache_time: 0, is_personal: true });

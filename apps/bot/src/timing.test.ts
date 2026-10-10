@@ -54,6 +54,7 @@ import {
 } from './demo';
 import { intentCallbackData } from './demo-trade';
 import { sessionRefreshCallbackData, sessionStopCallbackData } from './trading-session';
+import { shareQuery } from './session-share';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCESS_VIEW,
@@ -85,6 +86,8 @@ import {
   USER_VIEW,
   captureApi,
   callbackUpdate,
+  chosenInlineResultUpdate,
+  inlineQueryUpdate,
   failFromSecondCall,
   chatMemberUpdate,
   fakeLogger,
@@ -1311,6 +1314,64 @@ const SESSION_REFRESH_BRANCHES: readonly Branch[] = [
   },
 ];
 
+// #321: «📤 Поделиться»'s inline query and its chosen result. No chat filter: a group's query is
+// answered like any other.
+const SHARE_QUERY = shareQuery(SESSION_VIEW.id, 'AgACAgIAAxkBAAIBcard');
+const DONE_SESSION = sessionView({
+  status: TradingSessionStatus.Stopped,
+  stopReason: TradingSessionStopReason.Completed,
+  trades: { ...SESSION_VIEW.trades, settled: 5, won: 3, lost: 2 },
+});
+const SESSION_SHARE_WORST_CASE: Branch = {
+  label: "the owner's finished session is answered with the card",
+  update: inlineQueryUpdate(SHARE_QUERY),
+  readSession: () => Promise.resolve(DONE_SESSION),
+  expected: { backend: 2, telegram: 1 },
+};
+const SESSION_SHARE_BRANCHES: readonly Branch[] = [
+  {
+    label: 'a query of another shape is answered empty at once',
+    update: inlineQueryUpdate('hello'),
+    expected: { backend: 0, telegram: 1 },
+  },
+  {
+    label: "another user's session is answered empty",
+    update: inlineQueryUpdate(SHARE_QUERY),
+    readSession: () => Promise.reject(sessionHttpError(404, 'not_found')),
+    expected: { backend: 2, telegram: 1 },
+  },
+  {
+    label: 'the read fails',
+    update: inlineQueryUpdate(SHARE_QUERY),
+    readSession: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 2, telegram: 1 },
+  },
+  {
+    label: 'a live session is answered empty',
+    update: inlineQueryUpdate(SHARE_QUERY),
+    expected: { backend: 2, telegram: 1 },
+  },
+  SESSION_SHARE_WORST_CASE,
+  {
+    label: 'the query typed in a group is answered the same',
+    update: inlineQueryUpdate(SHARE_QUERY, { chatType: 'group' }),
+    readSession: () => Promise.resolve(DONE_SESSION),
+    expected: { backend: 2, telegram: 1 },
+  },
+  {
+    label: 'the answer is refused',
+    update: inlineQueryUpdate(SHARE_QUERY),
+    readSession: () => Promise.resolve(DONE_SESSION),
+    apiErrors: [['answerInlineQuery', VIDEO_REFUSED]],
+    expected: { backend: 2, telegram: 1 },
+  },
+];
+const SESSION_SHARED_WORST_CASE: Branch = {
+  label: 'the chosen result is logged',
+  update: chosenInlineResultUpdate(SESSION_VIEW.id, SHARE_QUERY),
+  expected: { backend: 0, telegram: 0 },
+};
+
 const sessionStopUpdate = (chatType?: string) =>
   callbackUpdate(sessionStopCallbackData(SESSION_VIEW.id), chatType);
 const notActive = () =>
@@ -2463,6 +2524,24 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     );
   });
 
+  it("«📤 Поделиться»'s inline query (#321)", async () => {
+    await checkHandler(
+      'sessionShare',
+      SESSION_SHARE_BRANCHES,
+      SESSION_SHARE_WORST_CASE,
+      HANDLER_CALLS.sessionShare,
+    );
+  });
+
+  it('the chosen inline result (#321)', async () => {
+    await checkHandler(
+      'sessionShared',
+      [SESSION_SHARED_WORST_CASE],
+      SESSION_SHARED_WORST_CASE,
+      HANDLER_CALLS.sessionShared,
+    );
+  });
+
   it('/stop (#122)', async () => {
     await checkHandler('stop', STOP_BRANCHES, STOP_WORST_CASE, HANDLER_CALLS.stop);
   });
@@ -2562,10 +2641,10 @@ describe("the demo session tracker's bounds", () => {
     expect(SESSION_MAX_DURATION_MS).toBeLessThan(SESSION_TRACK_DEADLINE_MS);
   });
 
-  it("drains a read, an edit and the summary card's claim and photo inside the shutdown budget", () => {
-    // readSession + edit, then the card's claim + sendPhoto (#318)
+  it("drains a read, an edit, the summary card's claim and photo and its share button inside the shutdown budget", () => {
+    // readSession + edit, then the card's claim + sendPhoto (#318) + editMessageReplyMarkup (#321)
     expect(SESSION_TRACK_DRAIN_MS).toBe(
-      2 * BACKEND_REQUEST_TIMEOUT_MS + 2 * TELEGRAM_API_TIMEOUT_MS,
+      2 * BACKEND_REQUEST_TIMEOUT_MS + 3 * TELEGRAM_API_TIMEOUT_MS,
     );
     expect(SESSION_TRACK_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
   });

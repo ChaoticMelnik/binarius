@@ -52,6 +52,7 @@ import {
 } from './keyboards';
 import { showInvite } from './invite';
 import { createDemoTradeComposer } from './demo-trade';
+import { createSessionShareComposer } from './session-share';
 import { createTradingSessionComposer } from './trading-session';
 import type { IntentTracker } from './intent-tracker';
 import {
@@ -474,6 +475,10 @@ export function createBot({
       connectKeyboard: welcomeKeyboard,
     }),
   );
+
+  // «📤 Поделиться» under the session's card (#321): on the bot, not on privateChats — an inline
+  // query and its chosen result carry no chat, so the private-chat filter would drop them
+  bot.use(createSessionShareComposer({ backend, logger }));
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {
     loginDialog.set(ctx.from.id, { step: 'email' });

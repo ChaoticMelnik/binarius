@@ -5,6 +5,8 @@
 import type { Api, Context, InlineKeyboard } from 'grammy';
 import type { TelegramHtml } from '@binarius/shared';
 import {
+  answerInlineQueryEmpty,
+  answerInlineQueryPhotoHtml,
   editMessageTextByIdHtml,
   editMessageTextHtml,
   replyHtml,
@@ -74,3 +76,19 @@ export const viaPhotoByIdReplyKeyboard = sendPhotoByIdHtml(api, 1, 'id', text, {
   // @ts-expect-error nor a reply keyboard (TS2353)
   reply_markup: { keyboard: [] },
 });
+
+// #321: the inline share answer takes TelegramHtml as its caption, and no keyboard at all
+// @ts-expect-error a raw string caption does not compile (TS2345)
+export const viaInlineRaw = answerInlineQueryPhotoHtml(ctx, { id: 'a', fileId: 'b' }, 'raw');
+// @ts-expect-error nor a fourth argument with a keyboard (TS2554)
+export const viaInlineKeyboard = answerInlineQueryPhotoHtml(ctx, { id: 'a', fileId: 'b' }, text, {
+  reply_markup: keyboard,
+});
+export const viaInlineResultKeyboard = answerInlineQueryPhotoHtml(
+  ctx,
+  // @ts-expect-error nor a keyboard on the result (TS2353)
+  { id: 'a', fileId: 'b', reply_markup: keyboard },
+  text,
+);
+// @ts-expect-error the empty answer takes nothing to send (TS2554)
+export const viaInlineEmptyResults = answerInlineQueryEmpty(ctx, []);
