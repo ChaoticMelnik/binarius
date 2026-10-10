@@ -2910,3 +2910,44 @@ Process Improvement Report (Phase 5 step 2) posted on #318.
 3. **Manager: check a fact before a recommended answer rests on it** (#234's «3 Б на символ») — **внедрено в этом docs-PR: `.claude/skills/manager/SKILL.md` → Substitutions → 1**
 4. **Owner step `git pull` in the main checkout before `/manager`** — **открыто (2026-10-10, tech-lead)**: the edit of `manager/SKILL.md` → Launch was refused by the session's permission classifier.
 5. **Architect: clarify rule for a round-0 Plan Update** — **открыто (2026-10-10, tech-lead)** (#131 entry, proposal 1)
+
+---
+
+## #234 — OAuth-клиент: чтение ответа брокера без лимита размера (2026-10-10)
+
+The eighth issue of the 2026-10-10 manager night (wave facts — the #337 entry). Merged last, at 19:58Z.
+
+| Issue | PR | Review rounds | Added lines | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #234 bounded response bodies | #447 | 1 | 1 664 | — | skipped (limit until 14.10) | → #462 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Claim | Taken at 18:29 with ~1 h 58 min left (threshold 1,5 h); plan of 2026-10-06 stale. |
+| Architect | Plan Update r0 | Opus (Fable 429 at 18:29). Clarify 4 questions (manager): it found a fifth unbounded client (worker → backend), now in scope; a separate 8 MiB ceiling for bot texts, 1 MiB elsewhere; 503 over the ceiling on pairs is a contract error. ~990 lines. |
+| Implementer | Stop condition S5 | 6 rows of the longest-answer tables were over the threshold. The implementer stopped on the plan's stop condition and did not tune the assumptions. The pairs row (300 × 2048 B strings ≈ 1,3 MB, against the plan's ≈ 45 KB estimate) went to the architect as a plan defect. For sessions, deposits/audit and bot texts the manager took the recommended assumptions. |
+| Manager | Assumption | The audit payload was answered as «`jsonb::text` ≤ 3 B per character» from an unverified fact. The architect's probe on Postgres 18 disproved it: control characters are escaped, non-ASCII is printed as is → 4 B per character (≈ 225 KB, passes). |
+| Architect | Plan Update S5 | Pair strings assumed 64 B (the 1 MiB ceiling stays); the payload at 4 B per character. |
+| Implementer | Code | 3 commits; the `it.fails` marks became plain tests; 24 mutations. |
+| Reviewer | Round 1 | No Blocker/Major, 4 Minor. m1: the falsifier of the 8 MiB bot-texts ceiling is wrong (the validator counts visible text only, so markup and `href` are uncounted). The reviewer's local `pnpm check` passed on the third try (a 30 min hang, then a foreign `57P01`); CI was green. |
+| Tech Lead (day) | Merge | Two rebases onto a moving `main`. After them, a test-only commit (`0580dee`) added longest-answer rows for the merged methods with a new assumption, `ASSUMED_USER_BROKER_ACCOUNTS = 10`. No new review round; the merge question disclosed this to the owner. |
+
+### Review iterations: 1
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| The plan's pairs estimate (≈ 45 KB) was off by ~30× (2048 B strings) | Plan defect → Plan Update | unverified-claim | The size of the longest answer was estimated, not computed from the schema | Architect Plan Update |
+| The manager's «≤ 3 B per character» answer for `jsonb::text` | Process | unverified-claim | A recommended assumption rested on an unchecked fact about Postgres | Manager clarify answer (now `manager/SKILL.md` → Substitution 1) |
+| m1: the 8 MiB bot-texts falsifier is wrong; an inflated text could make `readBotTexts` return `contract_violation` | Minor → #462 | unverified-claim | The falsifier counted the validator's visible length, not the stored source | Architect / Implementer |
+| m2–m4: 8 MiB wiring in web tested for one method of five; worker source table not per S5; wrong `zod max()` comment | Minor → #462 | instance-vs-class (m2), other | — | Implementer |
+| Rows for merged methods, with a new assumption, added after the review and merged without a review round | Process | other | No rule says whether test-only rebase commits that add assumptions need a reviewer pass | Tech Lead merge relay |
+
+### Process improvement proposals
+
+1. **Manager checks a fact before a recommended answer rests on it** — **внедрено в этом docs-PR: `.claude/skills/manager/SKILL.md` → Substitutions → 1**
+2. **After a rebase, new commits that add an assumption or change test oracles (not just conflict resolution) get a reviewer pass before the merge question; disclosure alone is the current practice (#154, #234)** — **открыто (2026-10-10, tech-lead)**
+3. **Remaining Minor** — **вынесено в #462**
