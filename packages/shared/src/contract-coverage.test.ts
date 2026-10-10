@@ -57,6 +57,7 @@ import * as brokerBudget from './broker-budget';
 import * as catalog from './catalog';
 import * as demoStake from './demo-stake';
 import * as env from './env';
+import * as exhaustive from './exhaustive';
 import * as ids from './ids';
 import * as ledger from './ledger';
 import * as linkConfirmation from './link-confirmation';
@@ -490,6 +491,7 @@ describe('contract coverage (issue #6)', () => {
       botTexts,
       botTextMessages,
       botTextOverrides,
+      exhaustive,
     };
     for (const [moduleName, module] of Object.entries(modules)) {
       for (const [key, value] of Object.entries(module)) {

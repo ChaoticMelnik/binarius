@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, getTableColumns, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import {
   addressOrNull,
   AuthRevokedReason,
@@ -238,18 +238,27 @@ async function upsertUser(tx: Tx, telegramUserId: bigint): Promise<{ id: string 
 }
 
 // users is read, not locked: locking it here would invert users → broker_accounts (Rule 5), and
-// locking it first would hold it through the token exchange
+// locking it first would hold it through the token exchange. It is read in a statement of its
+// own after the lock is granted: under READ COMMITTED a users row joined into the locking
+// statement comes from that statement's snapshot, so a block committed while the lock was
+// waited for would go unseen (#239)
 export async function lockAccountForRefresh(
   tx: Tx,
   accountId: string,
 ): Promise<(BrokerAccountRow & { userStatus: UserStatus }) | undefined> {
   const [row] = await tx
-    .select({ ...getTableColumns(brokerAccounts), userStatus: users.status })
+    .select()
     .from(brokerAccounts)
-    .innerJoin(users, eq(users.id, brokerAccounts.userId))
     .where(eq(brokerAccounts.id, accountId))
-    .for('no key update', { of: brokerAccounts });
-  return row;
+    .for('no key update');
+  if (row === undefined) return undefined;
+  return { ...row, userStatus: await readUserStatus(tx, row.userId) };
+}
+
+export async function readUserStatus(tx: Tx, userId: string): Promise<UserStatus> {
+  const [row] = await tx.select({ status: users.status }).from(users).where(eq(users.id, userId));
+  if (row === undefined) throw new Error('user vanished under a locked account');
+  return row.status;
 }
 
 export async function applyRotatedTokens(

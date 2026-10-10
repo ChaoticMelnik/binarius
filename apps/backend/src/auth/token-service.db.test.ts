@@ -12,7 +12,12 @@ import {
   TokenField,
   type BrokerAccountRow,
 } from '@binarius/db';
-import { brokerAccountRow, createTempDatabase, type TempDatabase } from '@binarius/db/testing';
+import {
+  brokerAccountRow,
+  createTempDatabase,
+  lockWaiters,
+  type TempDatabase,
+} from '@binarius/db/testing';
 import { until } from '@binarius/shared/testing';
 import { createBrokerOAuthClient, type BrokerOAuthClient } from '../broker/oauth-client';
 import { startOAuthStub, type OAuthStub } from '../broker/testing/oauth-stub';
@@ -690,8 +695,9 @@ describe('ensureFreshAccessToken with mayRefresh: false', () => {
   });
 });
 
-// Rule 12: the token of a blocked user's account is never handed out. users.status is read by the
-// statement that locks the account, and users itself is not locked (Rule 5).
+// Rule 12: the token of a blocked user's account is never handed out. users.status is read in its
+// own statement right after the account lock, and again after an exchange; users itself is not
+// locked (Rule 5).
 describe('ensureFreshAccessToken for a blocked user', () => {
   const block = (account: BrokerAccountRow) =>
     tmp.db.update(users).set({ status: 'blocked' }).where(eq(users.id, account.userId));
@@ -728,46 +734,123 @@ describe('ensureFreshAccessToken for a blocked user', () => {
     await untouched(account);
   });
 
-  it('does not lock the users row while it holds the account', async () => {
-    const slow = await startOAuthStub({
+  // an expired account whose tokens came from a stub of its own, so its exchange can be held
+  // there while the account row stays locked
+  async function slowExpiredAccount(slow: OAuthStub) {
+    const patient = createBrokerOAuthClient({
+      baseUrl: slow.url,
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
+      timeoutMs: 5_000,
+    });
+    const n = ++seq;
+    const tokens = await patient.exchangeCode({
+      code: slow.issueCode({ brokerUserId: `svc-broker-${n}` }),
       redirectUri: REDIRECT_URI,
     });
+    const linked = await linkBrokerAccount(tmp.db, {
+      telegramUserId: BigInt(900_000 + n),
+      tokens,
+      cipher,
+      activate: true,
+    });
+    if (!linked.ok) throw new Error(`link failed: ${linked.reason}`);
+    await expireAccessToken(linked.account.id);
+    return { patient, account: linked.account };
+  }
+
+  const startSlowStub = () =>
+    startOAuthStub({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, redirectUri: REDIRECT_URI });
+
+  it('does not lock the users row while it holds the account', async () => {
+    const slow = await startSlowStub();
     let refreshing: Promise<unknown> | undefined;
     try {
-      const patient = createBrokerOAuthClient({
-        baseUrl: slow.url,
-        clientId: CLIENT_ID,
-        clientSecret: CLIENT_SECRET,
-        timeoutMs: 5_000,
-      });
-      const n = ++seq;
-      const tokens = await patient.exchangeCode({
-        code: slow.issueCode({ brokerUserId: `svc-broker-${n}` }),
-        redirectUri: REDIRECT_URI,
-      });
-      const telegramUserId = BigInt(900_000 + n);
-      const linked = await linkBrokerAccount(tmp.db, {
-        telegramUserId,
-        tokens,
-        cipher,
-        activate: true,
-      });
-      if (!linked.ok) throw new Error(`link failed: ${linked.reason}`);
-      await expireAccessToken(linked.account.id);
+      const { patient, account } = await slowExpiredAccount(slow);
 
       slow.hang = true;
-      refreshing = ensureFreshAccessToken(deps({ broker: patient }), linked.account.id);
+      refreshing = ensureFreshAccessToken(deps({ broker: patient }), account.id);
       // the exchange is held at the stub: the account row is locked until it answers
       await until('the exchange to reach the stub', () => slow.pendingHangs === 1);
 
       await tmp.db.transaction(async (tx) => {
         await tx.execute(sql`set local lock_timeout = '300ms'`);
-        await tx.update(users).set({ status: 'active' }).where(eq(users.id, linked.account.userId));
+        await tx.update(users).set({ status: 'active' }).where(eq(users.id, account.userId));
       });
       slow.release();
       expect(await refreshing).toMatchObject({ ok: true });
+    } finally {
+      await slow.close();
+      await refreshing?.catch(() => undefined);
+    }
+  });
+
+  // #239: a statement that joins users while it waits for the account lock keeps the users row
+  // of its own snapshot, so the block committed during the wait would go unseen
+  it('B1 sees a block committed while it waited for the account lock', async () => {
+    const account = await linkedAccount();
+    const before = stub.tokenRequests;
+    const holder = await tmp.pool.connect();
+    let refreshing: Promise<unknown> | undefined;
+    try {
+      await holder.query('begin');
+      // the mode a refresh in flight on the route holds
+      await holder.query('select 1 from broker_accounts where id = $1 for no key update', [
+        account.id,
+      ]);
+      refreshing = ensureFreshAccessToken(deps(), account.id);
+      await until(
+        'the refresh to wait for the account lock',
+        async () => (await lockWaiters(tmp.db)) === 1,
+      );
+      await block(account);
+      await holder.query('commit');
+      expect(await refreshing).toEqual({ ok: false, reason: 'user_blocked' });
+      expect(stub.tokenRequests).toBe(before);
+      await untouched(account);
+    } finally {
+      await holder.query('rollback').catch(() => undefined);
+      holder.release();
+      await refreshing?.catch(() => undefined);
+    }
+  });
+
+  it('B2 sees a block committed during the exchange, and keeps the rotated pair', async () => {
+    const slow = await startSlowStub();
+    let refreshing: Promise<unknown> | undefined;
+    try {
+      const { patient, account } = await slowExpiredAccount(slow);
+      const before = slow.tokenRequests;
+
+      slow.hang = true;
+      refreshing = ensureFreshAccessToken(deps({ broker: patient }), account.id);
+      await until('the exchange to reach the stub', () => slow.pendingHangs === 1);
+      await block(account);
+      slow.release();
+      expect(await refreshing).toEqual({ ok: false, reason: 'user_blocked' });
+
+      const row = await rowOf(account.id);
+      expect(row).toMatchObject({ status: 'active', authRevokedReason: null });
+      expect(row.refreshTokenHash).not.toBe(account.refreshTokenHash);
+      expect(row.refreshTokenHash).toBe(
+        hashToken(
+          cipher.decrypt(row.refreshTokenEnc, { accountId: row.id, field: TokenField.Refresh }),
+        ),
+      );
+      expect(row.tokenRotatedAt?.getTime() ?? 0).toBeGreaterThan(
+        account.tokenRotatedAt?.getTime() ?? 0,
+      );
+      expect(slow.tokenRequests).toBe(before + 1);
+
+      // the stored pair is the newest of its family: once unblocked, the next exchange is served
+      // rather than refused as a replay
+      slow.hang = false;
+      await tmp.db.update(users).set({ status: 'active' }).where(eq(users.id, account.userId));
+      await expireAccessToken(account.id);
+      expect(await ensureFreshAccessToken(deps({ broker: patient }), account.id)).toMatchObject({
+        ok: true,
+      });
+      expect(slow.tokenRequests).toBe(before + 2);
     } finally {
       await slow.close();
       await refreshing?.catch(() => undefined);
