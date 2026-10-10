@@ -120,6 +120,11 @@ export const HANDLER_CALLS = {
   // «⏹ Остановить сессию»: answerCallbackQuery ∥ stopSession ∥ readPairs, readSession after a
   // 409 session_not_active, then editMessageText refused as gone → sendMessage
   sessionStop: { backend: 3, telegram: 3 },
+  // «📤 Поделиться»'s inline query (#321): readSession ∥ readPairs — counted as sequential, as in
+  // confirm — then answerInlineQuery; a query of another shape is answered empty at once
+  sessionShare: { backend: 2, telegram: 1 },
+  // the chosen result (/setinlinefeedback): one log line
+  sessionShared: { backend: 0, telegram: 0 },
   // answerCallbackQuery, then sendMessage asking for the address
   connect: { backend: 0, telegram: 2 },
   // an old site sign-in button (#314 hid it): answerCallbackQuery, then editMessageReplyMarkup,
@@ -206,8 +211,9 @@ export const SESSION_TRACK_FIRST_POLL_MS = 3_000;
 export const SESSION_TRACK_POLL_MS = 10_000;
 export const SESSION_TRACK_DEADLINE_MS = SESSION_MAX_DURATION_MS + 600_000;
 // What sessionTracker.stop() can be waiting for: an attempt's readSession and edit, then for a
-// finished session its summary card's claim and sendPhoto (#318).
-export const SESSION_TRACK_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 2 * TELEGRAM_API_TIMEOUT_MS;
+// finished session its summary card's claim and sendPhoto (#318) and the editMessageReplyMarkup
+// that puts «📤 Поделиться» on it (#321).
+export const SESSION_TRACK_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 3 * TELEGRAM_API_TIMEOUT_MS;
 
 // TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS, TRADING_SESSION_START_BUDGET_MS and
 // TRADING_SESSION_VIEW_BUDGET_MS are the backend's upper estimates of POST /trading/access, POST
