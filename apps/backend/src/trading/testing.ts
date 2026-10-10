@@ -52,6 +52,7 @@ export const unusedSignalDeps = (): SignalRoutesDeps => ({
       throw new Error('the signal feed is not wired in this test');
     },
   },
+  catalog: fakeCatalog(undefined),
   internalApiToken: PAIRS_TEST_TOKEN,
 });
 

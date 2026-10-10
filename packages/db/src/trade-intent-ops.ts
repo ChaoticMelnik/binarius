@@ -247,6 +247,21 @@ async function createInTransaction(
     .returning();
   if (planned === undefined) throw new Error('trade_intents insert returned no row');
 
+  // The pause after two losses (#379) compares the next signal with the action traded last. It is
+  // written with the intent row, on the session row this transaction already holds, so an ending
+  // lost after the INSERT (the attempt's deadline, a restart) cannot lose it.
+  if (session !== undefined) {
+    await tx
+      .update(tradingSessions)
+      .set({ lastSignalAction: input.action, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(tradingSessions.id, session.id),
+          eq(tradingSessions.status, TradingSessionStatus.Active),
+        ),
+      );
+  }
+
   await tx.insert(tokenLedger).values({
     userId: user.id,
     kind: TokenLedgerKind.Reserve,

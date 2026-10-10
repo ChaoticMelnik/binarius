@@ -110,6 +110,8 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   group: text,
   page: text,
   payout: text,
+  breakEven: text,
+  payoutFloor: text,
   label: text,
   subject: text,
   reason: text,
@@ -756,6 +758,14 @@ describe('the demo screens', () => {
     },
   );
 
+  // #379: a pair screen that names the payout names the break-even share at it
+  it.each([
+    ['durations', screens.durations],
+    ['summary', screens.summary],
+  ])('names the break-even share once on the %s screen', (_name, text) => {
+    expect(plainTextOf(text).split('Безубыточность: 50.0% верных прогнозов.')).toHaveLength(2);
+  });
+
   it('shows the symbol as the broker spells it, escaped once in the markup', () => {
     for (const text of [screens.durations, screens.summary]) {
       expect(plainTextOf(text)).toContain(SYMBOL);
@@ -775,7 +785,7 @@ describe('the demo screens', () => {
     expect(plainTextOf(demoSummary(PAIR_EURUSD, 15))).toBe(
       `🎯 Актив: EUR/USD OTC
 ⏱ Длительность: ⏱ 15 с
-💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность.
+💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность. Безубыточность: 54.1% верных прогнозов.
 
 Дальше — анализ свечей, а за ним кнопка автосессии: бот сам проведёт серию сделок по сигналу.`,
     );

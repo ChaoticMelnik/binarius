@@ -113,6 +113,8 @@ export const START_REFUSALS = {
   [TradingSessionErrorCode.SessionTooLong]: { text: 'sessionTooLong' },
   [TradingSessionErrorCode.BalanceUnavailable]: { text: 'stakeBalanceMissing' },
   [TradingSessionErrorCode.PairUnavailable]: { text: 'sessionPairUnavailable' },
+  // an old analysis message or «🔁 Ещё сессия» on a pair whose payout fell below the floor (#379)
+  [TradingSessionErrorCode.PayoutTooLow]: { text: 'sessionPayoutTooLow' },
   [TradingSessionErrorCode.CatalogUnavailable]: { text: 'demoCatalogUnavailable' },
   // the client returns it as { active }, so it never arrives here
   [TradingSessionErrorCode.ActiveSessionExists]: { text: 'unavailable', log: true },

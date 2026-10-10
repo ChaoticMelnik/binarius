@@ -38,12 +38,14 @@ export const TRACKER_STOP_STATUSES: ReadonlySet<TradeIntentStatus> = new Set([
 ]);
 
 // The session offer under a finished single trade (#360): the line and the row are drawn on a stop
-// status of a trade whose duration a session of today's set takes, and only then. The duration is
-// the row's datum; a trade from before #313 (60 s) gets neither.
+// status of a trade whose duration a session of today's set takes, on a pair paying at least the
+// cycle floor (#379), and only then. The duration is the row's datum; a trade from before #313
+// (60 s) gets neither.
 export const sessionOfferOf = (
   view: Pick<TradeIntentView, 'status' | 'durationSec'>,
+  payoutAccepted: boolean,
 ): DemoDurationSec | undefined => {
-  if (!TRACKER_STOP_STATUSES.has(view.status)) return undefined;
+  if (!payoutAccepted || !TRACKER_STOP_STATUSES.has(view.status)) return undefined;
   const durationSec = durationOf(String(view.durationSec));
   return durationSec !== undefined && sessionFits(durationSec) ? durationSec : undefined;
 };
@@ -61,6 +63,8 @@ export interface IntentTrackRequest {
   telegramUserId: string;
   // the pair's symbol as the catalog spelled it at the press
   symbol: string;
+  // the pair's payout against the cycle floor as the catalog had it at the press (#379)
+  payoutAccepted: boolean;
   // what the message shows now
   view: TradeIntentView;
   // edits the status message; the keyboard follows the view (#350: the end of the path once
@@ -232,7 +236,7 @@ export function createIntentTracker({
       const goOn = await editTo(
         entry,
         intentStatusText(entry.symbol, view, {
-          sessionOffer: sessionOfferOf(view) !== undefined,
+          sessionOffer: sessionOfferOf(view, entry.payoutAccepted) !== undefined,
         }),
         key,
       );
@@ -263,7 +267,9 @@ export function createIntentTracker({
       intentStatusText(
         entry.symbol,
         entry.view,
-        stopped ? { sessionOffer: sessionOfferOf(entry.view) !== undefined } : { deadline: true },
+        stopped
+          ? { sessionOffer: sessionOfferOf(entry.view, entry.payoutAccepted) !== undefined }
+          : { deadline: true },
       ),
       stopped ? renderKey(entry.view) : 'deadline',
       stopped ? undefined : 'deadline',

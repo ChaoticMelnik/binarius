@@ -3,7 +3,7 @@ import {
   NoSignalReason,
   type Candle,
   type SignalDataRefusal,
-  type SignalParams,
+  type SignalParamsV1,
 } from '@binarius/shared';
 
 export type PreparedCandles =
@@ -39,7 +39,7 @@ export function prepareCandles(
   candles: readonly Candle[],
   intervalMs: number,
   nowMs: number,
-  params: SignalParams,
+  params: SignalParamsV1,
 ): PreparedCandles {
   assertSignalClock(intervalMs, nowMs);
 

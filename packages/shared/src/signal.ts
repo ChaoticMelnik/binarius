@@ -1,12 +1,16 @@
 import * as z from 'zod';
 import { BrokerRestErrorCode } from './broker';
+import { PairsCatalogErrorCode } from './catalog';
 import { createTradeIntentRequestSchema, tradeActionSchema } from './trading';
 
-// The wire shape of a Signal module v1 decision (docs/signal.md). The decider itself lives in
+// The wire shape of a Signal module decision (docs/signal.md). The decider itself lives in
 // packages/signal; the codes and shapes live here because the backend's POST /trading/signal
-// carries a decision to the bot, which does not depend on that package.
+// carries a decision to the bot, which does not depend on that package. The wire is the current
+// version; the older version's shapes stay so that its journal lines still replay (#379).
 
-export const SIGNAL_ALGORITHM_VERSION = 'v1';
+export const SIGNAL_ALGORITHM_VERSIONS = ['v1', 'v2'] as const;
+export type SignalAlgorithmVersion = (typeof SIGNAL_ALGORITHM_VERSIONS)[number];
+export const SIGNAL_ALGORITHM_VERSION = 'v2' satisfies SignalAlgorithmVersion;
 
 export const SignalKind = { Signal: 'signal', NoSignal: 'no_signal' } as const;
 export type SignalKind = (typeof SignalKind)[keyof typeof SignalKind];
@@ -18,9 +22,12 @@ export const NoSignalReason = {
   InsufficientCandles: 'insufficient_candles',
   VolatilityTooLow: 'volatility_too_low',
   VolatilityTooHigh: 'volatility_too_high',
+  VolatilityBelowTickFloor: 'volatility_below_tick_floor',
   TrendFlat: 'trend_flat',
   RsiNeutral: 'rsi_neutral',
   TrendMomentumDisagree: 'trend_momentum_disagree',
+  RsiOverbought: 'rsi_overbought',
+  RsiOversold: 'rsi_oversold',
 } as const;
 export type NoSignalReason = (typeof NoSignalReason)[keyof typeof NoSignalReason];
 
@@ -33,12 +40,20 @@ export const DATA_REFUSAL_REASONS = [
 ] as const;
 export type DataRefusalReason = (typeof DATA_REFUSAL_REASONS)[number];
 
-export const RULE_REFUSAL_REASONS = [
+export const RULE_REFUSAL_REASONS_V1 = [
   NoSignalReason.VolatilityTooLow,
   NoSignalReason.VolatilityTooHigh,
   NoSignalReason.TrendFlat,
   NoSignalReason.RsiNeutral,
   NoSignalReason.TrendMomentumDisagree,
+] as const;
+export type RuleRefusalReasonV1 = (typeof RULE_REFUSAL_REASONS_V1)[number];
+
+export const RULE_REFUSAL_REASONS = [
+  ...RULE_REFUSAL_REASONS_V1,
+  NoSignalReason.VolatilityBelowTickFloor,
+  NoSignalReason.RsiOverbought,
+  NoSignalReason.RsiOversold,
 ] as const;
 export type RuleRefusalReason = (typeof RULE_REFUSAL_REASONS)[number];
 
@@ -61,7 +76,7 @@ export type MomentumDirection = (typeof MomentumDirection)[keyof typeof Momentum
 // --- Parameters -------------------------------------------------------------------------------
 
 // The shape only; the rules between fields and the defaults are packages/signal's config.ts.
-export const signalParamsSchema = z.strictObject({
+export const signalParamsV1Schema = z.strictObject({
   emaFast: z.int().positive(),
   emaSlow: z.int().positive(),
   // slope = slowEma[last] - slowEma[last - slopeLookback]
@@ -76,6 +91,14 @@ export const signalParamsSchema = z.strictObject({
   minClosedCandles: z.int().positive(),
   // the last closed candle may have closed at most this many intervals before nowMs
   maxStaleIntervals: z.int().positive(),
+});
+export type SignalParamsV1 = z.infer<typeof signalParamsV1Schema>;
+
+export const signalParamsSchema = signalParamsV1Schema.extend({
+  // no up at RSI >= 50 + rsiExtremeBand, no down at RSI <= 50 - rsiExtremeBand
+  rsiExtremeBand: z.number().nonnegative(),
+  // ATR in the pair's quote steps (10^-digits)
+  minAtrTicks: z.int().positive(),
 });
 export type SignalParams = z.infer<typeof signalParamsSchema>;
 
@@ -126,7 +149,7 @@ export function intervalForDuration(durationSec: number): SignalInterval {
 // --- The decision -----------------------------------------------------------------------------
 
 // z.number() refuses NaN and ±Infinity, which JSON would turn into null anyway.
-export const signalFeaturesSchema = z.strictObject({
+export const signalFeaturesV1Schema = z.strictObject({
   emaFast: z.number(),
   emaSlow: z.number(),
   emaSlowSlope: z.number(),
@@ -138,6 +161,12 @@ export const signalFeaturesSchema = z.strictObject({
   closedCandles: z.int().nonnegative(),
   trend: z.enum(TrendDirection),
   momentum: z.enum(MomentumDirection),
+});
+export type SignalFeaturesV1 = z.infer<typeof signalFeaturesV1Schema>;
+
+export const signalFeaturesSchema = signalFeaturesV1Schema.extend({
+  // atr x 10^digits of the pair
+  atrTicks: z.number(),
 });
 export type SignalFeatures = z.infer<typeof signalFeaturesSchema>;
 
@@ -172,27 +201,41 @@ export const signalDataRefusalSchema = z.discriminatedUnion('reason', [
 ]);
 export type SignalDataRefusal = z.infer<typeof signalDataRefusalSchema>;
 
-const version = z.literal(SIGNAL_ALGORITHM_VERSION);
-const noSignalHead = { kind: z.literal(SignalKind.NoSignal), version };
-
 // Nested by kind, then by reason: zod refuses one flat union with five `no_signal` options
 // ("Duplicate discriminator value").
-export const signalDecisionSchema = z.discriminatedUnion('kind', [
-  z.strictObject({
-    kind: z.literal(SignalKind.Signal),
-    version,
-    action: tradeActionSchema,
-    features: signalFeaturesSchema,
-  }),
-  z.discriminatedUnion('reason', [
+function decisionSchema<
+  V extends SignalAlgorithmVersion,
+  F extends typeof signalFeaturesV1Schema | typeof signalFeaturesSchema,
+  R extends readonly [RuleRefusalReason, ...RuleRefusalReason[]],
+>(versionName: V, features: F, ruleReasons: R) {
+  const version = z.literal(versionName);
+  const noSignalHead = { kind: z.literal(SignalKind.NoSignal), version };
+  return z.discriminatedUnion('kind', [
     z.strictObject({
-      ...noSignalHead,
-      reason: z.enum(RULE_REFUSAL_REASONS),
-      features: signalFeaturesSchema,
+      kind: z.literal(SignalKind.Signal),
+      version,
+      action: tradeActionSchema,
+      features,
     }),
-    ...signalDataRefusalSchema.options.map((option) => option.extend(noSignalHead)),
-  ]),
-]);
+    z.discriminatedUnion('reason', [
+      z.strictObject({ ...noSignalHead, reason: z.enum(ruleReasons), features }),
+      ...signalDataRefusalSchema.options.map((option) => option.extend(noSignalHead)),
+    ]),
+  ]);
+}
+
+export const signalDecisionV1Schema = decisionSchema(
+  'v1',
+  signalFeaturesV1Schema,
+  RULE_REFUSAL_REASONS_V1,
+);
+export type SignalDecisionV1 = z.infer<typeof signalDecisionV1Schema>;
+
+export const signalDecisionSchema = decisionSchema(
+  SIGNAL_ALGORITHM_VERSION,
+  signalFeaturesSchema,
+  RULE_REFUSAL_REASONS,
+);
 export type SignalDecision = z.infer<typeof signalDecisionSchema>;
 
 // --- POST /trading/signal (#258) --------------------------------------------------------------
@@ -202,6 +245,15 @@ export const TRADING_SIGNAL_PATH = '/trading/signal';
 // Upper estimate of the whole answer: one bounded chart GET (the backend's own budget sits below
 // it) and the decision. The bot sizes its request timeout above it (#126).
 export const TRADING_SIGNAL_BUDGET_MS = 4_000;
+
+// The route's own refusals, before any chart GET: the pair's digits come from the backend's pairs
+// cache (#379), so a missing or stale catalog and an id it does not list are refused.
+export const TradingSignalErrorCode = {
+  PairUnknown: 'pair_unknown',
+  CatalogUnavailable: PairsCatalogErrorCode.Unavailable,
+} as const;
+export type TradingSignalErrorCode =
+  (typeof TradingSignalErrorCode)[keyof typeof TradingSignalErrorCode];
 
 export const SignalFeedOutcome = { Decided: 'decided', FetchFailed: 'fetch_failed' } as const;
 export type SignalFeedOutcome = (typeof SignalFeedOutcome)[keyof typeof SignalFeedOutcome];

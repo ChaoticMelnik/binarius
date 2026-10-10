@@ -1,4 +1,4 @@
-import type { SignalParams } from '@binarius/shared';
+import type { SignalParamsV1 } from '@binarius/shared';
 import { DEFAULT_SIGNAL_PARAMS } from './config';
 
 // the window holds this many candle starts; the last one is the forming candle
@@ -6,7 +6,7 @@ export const SIGNAL_CHART_LIMIT = 60;
 
 // the forming candle and up to maxStaleIntervals trailing rows the broker has not published yet
 // leave limit - 1 - maxStaleIntervals closed candles in the worst accepted case
-export function assertFeedLimit(limit: number, params: SignalParams): void {
+export function assertFeedLimit(limit: number, params: SignalParamsV1): void {
   const required = 1 + params.maxStaleIntervals + params.minClosedCandles;
   if (!Number.isInteger(limit) || limit < required) {
     throw new RangeError(

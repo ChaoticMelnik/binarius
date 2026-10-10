@@ -938,7 +938,7 @@ const DEMO_ANALYSIS = {
 // «➕ Ещё» (#360): the access read for the stake label, then the keyboard edited in place;
 // a refused edit sends nothing more
 const moreUpdate = (chatType?: string) =>
-  callbackUpdate(analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up), chatType);
+  callbackUpdate(analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, true), chatType);
 const MARKUP_TRANSPORT = new HttpError(
   "Network request for 'editMessageReplyMarkup' failed!",
   new Error('The operation was aborted due to timeout'),

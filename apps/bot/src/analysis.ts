@@ -1,7 +1,10 @@
 import {
   BrokerRestErrorCode,
+  MAX_PAIR_DIGITS,
+  MIN_CYCLE_PAYOUT_PCT,
   MomentumDirection,
   NoSignalReason,
+  pairPayoutAccepted,
   SignalFeedOutcome,
   SignalKind,
   telegramHtml,
@@ -16,20 +19,24 @@ import {
   type TradingSignalResponse,
 } from '@binarius/shared';
 import type { DemoDurationSec } from './demo-catalog';
-import { DEMO_DURATION_LABELS, labelsOf, TEXTS, textOf } from './texts';
+import { atrTicksText, DEMO_DURATION_LABELS, labelsOf, payoutText, TEXTS, textOf } from './texts';
 
 // The analysis screen (#126, docs/bot-demo.md): pure, from the pair read at the press and the
 // backend's answer. Every number on it is the answer's — a feature, or a period from `params` —
-// or the pair's payout; nothing is the bot's own. Which buttons go under it is demo.ts's. The
-// words are catalog keys (bot-texts.ts), read when a screen is built.
+// or the pair's payout and the break-even share computed from it; nothing is the bot's own.
+// Which buttons go under it is demo.ts's. The words are catalog keys (bot-texts.ts), read when a
+// screen is built.
 
 // `satisfies Record<NoSignalReason, …>`: a reason added to shared's constant fails tsc here.
 export const NO_SIGNAL_REASON_TEXT = labelsOf({
   [NoSignalReason.VolatilityTooLow]: 'noSignalVolatilityTooLow',
   [NoSignalReason.VolatilityTooHigh]: 'noSignalVolatilityTooHigh',
+  [NoSignalReason.VolatilityBelowTickFloor]: 'noSignalVolatilityBelowTickFloor',
   [NoSignalReason.TrendFlat]: 'noSignalTrendFlat',
   [NoSignalReason.RsiNeutral]: 'noSignalRsiNeutral',
   [NoSignalReason.TrendMomentumDisagree]: 'noSignalTrendMomentumDisagree',
+  [NoSignalReason.RsiOverbought]: 'noSignalRsiOverbought',
+  [NoSignalReason.RsiOversold]: 'noSignalRsiOversold',
   [NoSignalReason.InsufficientCandles]: 'noSignalInsufficientCandles',
   [NoSignalReason.CandleGap]: 'noSignalCandleGap',
   [NoSignalReason.Stale]: 'noSignalStale',
@@ -48,13 +55,20 @@ export const MOMENTUM_WORDS = labelsOf({
   [MomentumDirection.Neutral]: 'momentumNeutral',
 } as const satisfies Record<MomentumDirection, BotPlainKey>);
 
-// Told by the refusal, not by comparing ATR% with bounds: the decider checks volatility first,
-// so any later rule refusal and a signal both had it inside the bounds.
+// Told by the refusal, not by comparing ATR with bounds: the decider checks volatility first (the
+// tick floor among it, #379), so any later rule refusal and a signal both had it inside the bounds.
 export const VOLATILITY_WORDS = labelsOf({
   normal: 'volatilityNormal',
   low: 'volatilityLow',
   high: 'volatilityHigh',
+  tickFloor: 'volatilityTickFloor',
 } as const);
+
+const REFUSAL_VOLATILITY: Partial<Record<NoSignalReason, keyof typeof VOLATILITY_WORDS>> = {
+  [NoSignalReason.VolatilityTooLow]: 'low',
+  [NoSignalReason.VolatilityTooHigh]: 'high',
+  [NoSignalReason.VolatilityBelowTickFloor]: 'tickFloor',
+};
 
 const EMA_RELATION_WORDS = labelsOf({
   above: 'emaAbove',
@@ -67,14 +81,14 @@ const SIGNAL_HEADLINES = {
   [TradeAction.Down]: 'analysisSignalDown',
 } as const satisfies Record<TradeAction, BotStaticHtmlKey>;
 
-// toFixed throws outside 0-100; the broker's digits are 2-7 today, and a value outside a sane
-// range is printed at the nearest bound rather than failing the screen
-const MAX_PRICE_DIGITS = 10;
+// a value outside the sane range is printed at the nearest bound rather than failing the screen
 export const formatPrice = (value: number, digits: number): string =>
-  value.toFixed(Math.min(Math.max(Math.trunc(digits), 0), MAX_PRICE_DIGITS));
+  value.toFixed(Math.min(Math.max(Math.trunc(digits), 0), MAX_PAIR_DIGITS));
 export const formatRsi = (value: number): string => value.toFixed(1);
 // a live 1m ATR% sits in the hundredths and thousandths: two decimals would print 0.00
 export const formatAtrPct = (value: number): string => value.toFixed(3);
+// the ATR in the pair's quote steps (#379)
+export const formatAtrTicks = (value: number): string => value.toFixed(1);
 
 export const analysisSubject = (pair: PairView, durationSec: DemoDurationSec): string =>
   `${pair.symbol} · ${DEMO_DURATION_LABELS[durationSec]}`;
@@ -114,12 +128,13 @@ ${body}`,
   const { decision, params } = response;
   if (decision.kind === SignalKind.Signal) {
     const features = featureLines(decision.features, params, pair, VOLATILITY_WORDS.normal);
+    const payout = withCycleNote(payoutText(pair), pair);
     return {
       text: telegramHtml`${header}
 ${textOf(SIGNAL_HEADLINES[decision.action])}
 
 ${features}
-${TEXTS.demoPayout({ payout: String(pair.payout) })}
+${payout}
 
 ${TEXTS.analysisDisclaimer}`,
       stake: decision.action,
@@ -132,28 +147,31 @@ ${TEXTS.analysisDisclaimer}`,
       text: telegramHtml`${header}
 ${headline}
 
-${TEXTS.analysisDataHint}`,
+${withCycleNote(TEXTS.analysisDataHint, pair)}`,
       stake: null,
       session: true,
     };
   }
-  const volatility =
-    decision.reason === NoSignalReason.VolatilityTooLow
-      ? VOLATILITY_WORDS.low
-      : decision.reason === NoSignalReason.VolatilityTooHigh
-        ? VOLATILITY_WORDS.high
-        : VOLATILITY_WORDS.normal;
+  const volatility = VOLATILITY_WORDS[REFUSAL_VOLATILITY[decision.reason] ?? 'normal'];
   return {
     text: telegramHtml`${header}
 ${headline}
 
 ${featureLines(decision.features, params, pair, volatility)}
 
-${TEXTS.analysisNoSignalHint}`,
+${withCycleNote(TEXTS.analysisNoSignalHint, pair)}`,
     stake: null,
     session: true,
   };
 }
+
+// Every `decided` answer of a pair below the cycle floor gets no session row (demo.ts, #379):
+// the note under the block that would precede it says why.
+const withCycleNote = (block: TelegramHtml, pair: PairView): TelegramHtml =>
+  pairPayoutAccepted(pair)
+    ? block
+    : telegramHtml`${block}
+${TEXTS.analysisCycleUnavailable({ payoutFloor: String(MIN_CYCLE_PAYOUT_PCT) })}`;
 
 // What the handler shows when the backend did not answer with a body it could read.
 export const analysisUnavailableScreen = (
@@ -182,7 +200,8 @@ function featureLines(
   const slow = `EMA${params.emaSlow} ${formatPrice(f.emaSlow, pair.digits)}`;
   const trend = `${TREND_WORDS[f.trend]} — ${fast} ${relation} ${slow}`;
   const momentum = `${MOMENTUM_WORDS[f.momentum]} — RSI${params.rsiPeriod} ${formatRsi(f.rsi)}`;
-  const atr = `${volatility} — ATR${params.atrPeriod} ${formatAtrPct(f.atrPct)}%`;
+  const ticks = atrTicksText(formatAtrTicks(f.atrTicks));
+  const atr = `${volatility} — ATR${params.atrPeriod} ${formatAtrPct(f.atrPct)}% · ${ticks}`;
   return telegramHtml`${TEXTS.analysisTrend({ value: trend })}
 ${TEXTS.analysisMomentum({ value: momentum })}
 ${TEXTS.analysisVolatility({ value: atr })}

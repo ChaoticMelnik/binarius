@@ -1,5 +1,6 @@
 import { formatAge, formatCount, formatStake, formatUsd } from './bot-text-format';
 import type { BotTextVariable } from './bot-text-template';
+import { MIN_CYCLE_PAYOUT_PCT } from './catalog';
 import type { DecimalString } from './money';
 import { TradeMode } from './trading';
 import { NotificationLevel } from './users';
@@ -122,6 +123,8 @@ export const BOT_TEXT_VARS = {
   group: shown('Тип актива', '💱 Валюты'),
   page: shown('Страница списка', '2 из 4'),
   payout: shown('Выплата актива, %', '92'),
+  breakEven: shown('Безубыточность при выплате актива: доля верных прогнозов, %', '55.6'),
+  payoutFloor: shown('Порог выплаты для цикла сделок, %', String(MIN_CYCLE_PAYOUT_PCT)),
   label: shown('Длительность сделки, подпись', '⏱ 15 с'),
   subject: shown('Актив и длительность', 'EUR/USD OTC · ⏱ 15 с'),
   reason: shown('Причина «сигнала нет»', 'тренд не определён'),

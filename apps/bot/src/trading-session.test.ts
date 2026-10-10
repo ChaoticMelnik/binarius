@@ -5,6 +5,7 @@ import {
   TradingSessionErrorCode,
   TradingSessionStatus,
   TradingSessionStopReason,
+  plainTextOf,
   telegramHtml,
   type TradingSessionView,
   CONNECT_CALLBACK_DATA,
@@ -268,6 +269,16 @@ describe('the session button', () => {
       expect(START_REFUSALS[code], code).toMatchObject({ stakeMenu: true });
     }
     expect(STAKE_MENU_ROWS[0]?.[0]?.callback_data).toMatch(/^stk:o:a:\d+:\d+$/);
+  });
+
+  // #379: an old analysis message or «🔁 Ещё сессия» on a pair whose payout fell below the floor
+  it('answers payout_too_low with its own text and the way back to the analysis', () => {
+    expect(START_REFUSALS[TradingSessionErrorCode.PayoutTooLow]).toEqual({
+      text: 'sessionPayoutTooLow',
+    });
+    expect(plainTextOf(TEXTS.sessionPayoutTooLow)).toBe(
+      '🚫 Выплата по паре сейчас ниже порога — сессия на ней не запускается. Открой анализ заново.',
+    );
   });
 
   it('answers the closed switch and the missing tokens with their own texts', () => {

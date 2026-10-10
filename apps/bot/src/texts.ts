@@ -2,6 +2,7 @@ import {
   botCommandsOf,
   botTextKeysOf,
   BotTextGroup,
+  breakEvenPct,
   BrokerAccountStatus,
   confirmButtonLabel,
   createBotTexts,
@@ -571,18 +572,30 @@ export const demoPairsScreen = (
   telegramHtml`${TEXTS.demoPairsHeader({ group: DEMO_GROUP_LABELS[group] })}
 ${TEXTS.demoPage({ page: `${page + 1} из ${pageCount}` })}`;
 
+// The share of right forecasts at which a fixed stake breaks even, one decimal (#379); a dash
+// where the payout gives none. At most «100.0» (BOT_TEXT_WIDTHS.breakEven).
+export const formatBreakEven = (payout: number): string =>
+  Number.isFinite(payout) && payout > 0 ? breakEvenPct(payout).toFixed(1) : '—';
+
+// every pair screen that names the payout names the break-even share too (#379)
+export const payoutText = (pair: PairView): TelegramHtml =>
+  TEXTS.demoPayout({ payout: String(pair.payout), breakEven: formatBreakEven(pair.payout) });
+
 export const demoDurationsScreen = (pair: PairView): TelegramHtml =>
   telegramHtml`${TEXTS.demoAsset({ symbol: pair.symbol })}
-${TEXTS.demoPayout({ payout: String(pair.payout) })}
+${payoutText(pair)}
 
 ${TEXTS.demoChooseDuration}`;
 
 export const demoSummary = (pair: PairView, durationSec: DemoDurationSec): TelegramHtml =>
   telegramHtml`${TEXTS.demoAsset({ symbol: pair.symbol })}
 ${TEXTS.demoDurationLine({ label: DEMO_DURATION_LABELS[durationSec] })}
-${TEXTS.demoPayout({ payout: String(pair.payout) })}
+${payoutText(pair)}
 
 ${TEXTS.demoNext}`;
+
+// the analysis screen's ATR in quote steps (#379)
+export const atrTicksText = (count: string): string => plain.analysisAtrTicks({ count });
 
 // The signals screen's arrow (#320): a data mark like the pair's payout, so it stays out of the
 // catalog, and the word labels would not fit a row of pairs.

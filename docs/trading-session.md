@@ -43,6 +43,7 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | `stop_reason` | one of `TradingSessionStopReason` (CHECK `trading_sessions_stop_reason_check`) |
 | `started_at`, `ended_at` | the insert's `now()`; the stop's `now()` |
 | `last_decision_at` | the runnable scan's order key; NULL until the orchestrator first reached an ending |
+| `last_signal_action` | `up`/`down` (CHECK `trading_sessions_last_signal_action_check` from `TradeAction`) or NULL: the direction the last deciding attempt saw — the traded action, the paused one — and NULL after a `no_signal` or before any decision ([The pause after two losses](#the-pause-after-two-losses-379), #379) |
 
 - **One active session per account:** `trading_sessions_active_account_idx`, unique on
   `broker_account_id` where `status = 'active'`. Stopped sessions are unlimited.
@@ -102,6 +103,9 @@ sizer steps on. The CLI `session-start` keeps the broker minimum.
 | `user_stopped` | the stop route | #283 |
 | `kill_switch` | the global trading switch is closed ([kill-switch.md](kill-switch.md)) | `stopPausedSessions` (#144), the tick's first sweep; the attempt on `trading_paused` |
 
+Unchanged by #379: a pair whose payout fell below the floor makes the session wait, it does not
+stop it ([The payout floor](#the-payout-floor-379)).
+
 ## Operations
 
 | Operation | Statement | Notes |
@@ -110,14 +114,14 @@ sizer steps on. The CLI `session-start` keeps the broker minimum.
 | `checkTradingSessionStart(db, { telegramUserId, brokerAccountId? })` | plain selects, no lock | the start route's refusals, the first that applies wins: the trading switch (`trading_paused` while it is closed, #144), the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
 | `readTradingSessionView(db, id, telegramUserId)` | three selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined`; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`. `settings` that fail v1 read as `null` with `planned: 0` |
 | `readActiveTradingSessionView(db, brokerAccountId, telegramUserId)` | two reads | the account's active session as its owner sees it; `undefined` when none, or when it ended between the reads |
-| `listRunnableSessions(db, { limit, maxDurationMs, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, within the deadline (`started_at >= now() − maxDurationMs`, the expiry sweep's boundary on the database clock, so a session the capped sweep left over is never listed), and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw |
+| `listRunnableSessions(db, { limit, maxDurationMs, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, within the deadline (`started_at >= now() − maxDurationMs`, the expiry sweep's boundary on the database clock, so a session the capped sweep left over is never listed), and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw, `last_signal_action` with the row |
 | `stopExpiredSessions(db, { maxDurationMs, limit })` | one UPDATE | `started_at < now() − maxDurationMs` → `stopped`/`timeout` |
 | `stopHaltedSessions(db, { limit })` | one UPDATE | the account `trading_halted`, or an intent of the session in `manual_review` → `stopped`/`manual_review` |
 | `stopPausedSessions(db, { limit })` | one UPDATE | every active session while the trading switch is closed (`not tradingOpenSql`) → `stopped`/`kill_switch` (#144); only a person starts one again. The orchestrator's tick runs it first |
 | `stopTradingSession(db, { id, reason })` | one UPDATE | CAS on `status = active`: a second stop finds nothing and the first reason stays |
-| `markSessionDecision(db, { id })` | one UPDATE | `last_decision_at = now()` on an active session |
-| `readSessionHistory(db, sessionId, { maxDurationMs })` | two selects | the owner's `telegram_user_id`, `expired` (the same deadline boundary, database clock, at this read) and the session's own intents in creation order with `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
-| `createSessionIntent(db, input)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below |
+| `markSessionDecision(db, { id, signalAction? })` | one UPDATE | `last_decision_at = now()` on an active session; `signalAction` (#379): absent leaves `last_signal_action`, `null` clears it, an action sets it |
+| `readSessionHistory(db, sessionId, { maxDurationMs })` | two selects | the owner's `telegram_user_id`, `expired` (the same deadline boundary, database clock, at this read) and the session's own intents in creation order with `action`, `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
+| `createSessionIntent(db, input)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below; after the INSERT, `last_signal_action` = the intent's action on the session row the transaction holds (#379, D6) — a replay and a refused session leave it |
 
 Every stop writes `ended_at`, `last_decision_at` and `updated_at` as `now()`; every UPDATE that
 changes `status` carries `status = 'active'` in its WHERE.
@@ -160,6 +164,7 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 | 3 | `checkTradingSessionStart` | 409 `trading_paused` first; 404 `user_not_found` / `broker_account_not_found`; 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_revoked`, `account_halted`, `insufficient_tokens`, `active_session_exists` |
 | 4 | the pairs cache: missing or not `fresh` | 503 `catalog_unavailable` (the string `GET /trading/pairs` answers) |
 | 4 | the pair absent, `!isPairOpen(pair, now)`, or `!pairAcceptsDuration(pair, durationSec)` | 409 `pair_unavailable` |
+| 4b | `!pairPayoutAccepted(pair)`: the payout below `MIN_CYCLE_PAYOUT_PCT` (#379) | 409 `payout_too_low` (R19; exactly 80 starts, R20) |
 | 5 | `touchBalanceRequested`, then the stored balance snapshot, of any age (the sizer checks the balance before every trade) | — |
 | 5a | no snapshot and the access token expires within `ACCESS_SKEW_MS`: the refresh runs in the background | 409 `balance_unavailable` at once; the caller retries |
 | 5b | no snapshot: `balance.refresh` awaited for at most `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s), then a re-read | 409 `balance_unavailable` when still none |
@@ -256,13 +261,15 @@ keeps the first reason.
 | `pairs.read` | `catalog_unavailable`, a backend failure, or `fresh: false` | hold back `TRADING_SESSION_RETRY_MS` (E9f) |
 | | the pair absent, or `!pairAcceptsDuration(pair, durationSec)` | stop `pair_unavailable` (E9c, E9d) |
 | | `!isPairOpen(pair, now)` | hold back `min(scheduledUntil − now, TRADING_SESSION_RETRY_MS)` (E9e) |
+| | `!pairPayoutAccepted(pair)`: the payout below `MIN_CYCLE_PAYOUT_PCT` (#379) | hold back `TRADING_SESSION_RETRY_MS`, no signal asked; `last_signal_action` untouched (P6) |
 | `signals.evaluate({ assetId, interval: intervalForDuration(durationSec) })` | a backend failure | hold back `TRADING_SESSION_RETRY_MS` (E5) |
 | | `fetch_failed` | hold back `retryAfterSec` when given (0 included), else `TRADING_SESSION_RETRY_MS` (E5) |
-| | `no_signal` | hold back until the next candle boundary + `TRADING_SESSION_CANDLE_SLACK_MS` (E4) |
+| | `no_signal` | hold back until the next candle boundary + `TRADING_SESSION_CANDLE_SLACK_MS` (E4); `last_signal_action` = NULL |
+| | `signal` in the paused direction while `last_signal_action` holds it ([the pause](#the-pause-after-two-losses-379)) | hold back as for `no_signal`; `last_signal_action` stays the action (P1) |
 | | `signal` | the action |
 | the sizer (`nowMs = max(now, started_at)`, E11) | `stop` | stop `stake_stop`, the code in the line (E3) |
 | | `stake` | the amount |
-| `createSessionIntent` (step = the session's intents + 1) | `created: true` | done |
+| `createSessionIntent` (step = the session's intents + 1) | `created: true` | done; `last_signal_action` was written by the intent's own transaction (D6) |
 | | `created: false` (a replay) | reschedule (E9g) |
 | | `trading_paused` | stop `kill_switch` (K2) |
 | | `account_halted` | stop `manual_review` (E9b) |
@@ -278,7 +285,9 @@ The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code adde
   reschedule, every hold-back — moves `last_decision_at` (`markSessionDecision`), and every
   hold-back is at least one tick. So a session never sits at the head of the scan twice in a row,
   and with a full batch the head rotates. Only "no ending written" leaves the key unmoved, and it
-  is a hold-back in memory.
+  is a hold-back in memory. The same write carries `last_signal_action` on the two hold-backs that
+  decided a direction (`no_signal`, the pause); the traded action is written by the intent's own
+  transaction; every other ending leaves it.
 - **The step comes from the database.** The step is the session's intents + 1 and the request key
   `session:<id>:<step>`, so a new process continues where the old one stopped (E8), and a repeated
   step is a replay.
@@ -298,6 +307,60 @@ The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code adde
   deploy's overlap or until an operator resolves an interrupted run, #95, worker-deploy.md; #94:
   several processes; #93's lease covers the broker sockets only);
   a restart drops them, and the next attempt is idempotent.
+
+## The payout floor (#379)
+
+`MIN_CYCLE_PAYOUT_PCT = 80` (`packages/shared/src/catalog.ts`, `pairPayoutAccepted`): no cycle of
+trades starts or continues on a pair paying less. A win pays `stake × payout / 100`, a loss costs
+the stake, so a fixed stake breaks even at `100 / (100 + payout)` right forecasts
+(`breakEvenPct`). The owner's seven demo sessions of 2026-10-07…08 (Signal v1) had three on pairs
+paying 54–56 %, which break even only at 64–65 % right forecasts; at 80 % the share is 55.6 %. The
+value is an expert one (owner, 2026-10-09); the backtest stand (#381) tunes it.
+
+Where it applies — every place a cycle starts or runs: the start route (step 4b, 409
+`payout_too_low`), the orchestrator's attempt (a wait, not a stop: owner's choice, the deadline
+ends a session whose payout never returns), the backend's scanner (a pair below the floor is
+neither scanned nor served, [signal.md](signal.md) → The scanner), and the bot's cycle entries
+([bot-demo.md](bot-demo.md) → The check). The manual path's single trade and its pair lists are
+not restricted (owner, #379); the pair screens show the payout and the break-even share.
+
+## The pause after two losses (#379)
+
+After two consecutive settled losses in one direction the session does not enter that direction
+again until the orchestrator sees a decision that is not a signal in it (issue #379, session
+`716ed06d`: five `down` in a row, four lost after the price turned).
+
+- **The streak** (`pausedDirection(history.intents)`): the last two trades of the session, a trade
+  being an intent that is not `rejected`; both `settled` with a linked profit below zero
+  (`parseAmount(profit) < 0n`, the sizer's reading), in the same `action`. A tie, a win, a
+  `manual_review` intent or a `settled` one without its profit breaks it (P7); a `rejected` intent
+  between the two is skipped (P5); after the second loss it ends the pause (P9): that intent was
+  created only once the pause had lifted (a `no_signal` cleared the column, or the signal changed),
+  and the rule re-arms on the next settled loss, not on a refusal. Two refusals in a row still stop
+  the session `rejected_twice` (E2), before the pause is checked.
+- **A session active at the deploy** that added the column (migration 0038) has it NULL, and no
+  backfill sets it: if its last two trades are already losses in one direction, its first signal in
+  that direction after the deploy trades once more, as it did before #379. A one-off per such
+  session; from that attempt on the column is written as below.
+- **"The signal has not changed since"** is the column `last_signal_action`, written by the
+  intent's own transaction when an intent is created (`createTradeIntent` with `session`), by the
+  ending with NULL on `no_signal` and with the paused action on the pause — so a lost ending (the
+  deadline, a restart, a throw after the INSERT) cannot lose the traded action (P8); a lost
+  `no_signal` ending leaves the previous action and costs one more wait, never a trade, and a lost
+  pause ending rewrites the same value (stated). After the attempt that created the second losing
+  intent it holds that action. Only those three write it: a `signal(B)` whose create is refused
+  (`active_intent_exists`, `client_request_id_conflict`: the attempt is rescheduled) or replayed
+  leaves it at `A`, so the next `signal(A)` waits once more although the signal changed — one extra
+  wait, never an extra trade; a `signal(B)` the sizer answers with `stake_stop` does not write it
+  either, and the session stops. The fact is in the row, so a worker restart pauses the same way
+  (P4).
+- **The rule:** `signal(A)` with `pausedDirection === A` and `last_signal_action === A` holds the
+  session until the next candle boundary + `TRADING_SESSION_CANDLE_SLACK_MS` (P1). A `no_signal`
+  clears the column, and the next `signal(A)` trades; `signal(B)` trades at once (P2). If that trade
+  loses too, the two most recent trades are again losses in `A` and the pause re-arms — that is the
+  rule, not a repeat bug.
+- **Seen at the attempts only** (stated): a signal that flipped and came back inside one candle is
+  not a change.
 
 ## Backend calls
 
@@ -352,6 +415,8 @@ line is in it with its level.
 | `trading session signal unavailable` | warn | the signal call failed (`reason`, `status`) |
 | `trading session signal fetch failed` | warn | the backend answered `fetch_failed` (`code`, `retryAfterSec`) |
 | `trading session waits for the next candle` | info | `no_signal` (`reason`) |
+| `trading session waits for the payout` | info | the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (`assetId`, `payout`, `floor`; #379) |
+| `trading session waits for the signal to change` | info | the pause after two losses in `action` (#379) |
 | `trading session intent refused` | warn | `active_intent_exists` or `client_request_id_conflict` (`step`, `code`) |
 | `trading session stopped meanwhile` | info | `TradingSessionNotActiveError`: another writer stopped it during the attempt |
 | `trading session step replayed` | info | `createSessionIntent` answered `created: false` (`step`, `intentId`) |
@@ -546,7 +611,18 @@ docker compose logs -f trading-worker | grep -E 'trading session|intent outcome 
 ```
 
 (REPLACE_WITH_TG_ID: your Telegram id; REPLACE_WITH_PAIR_ID: an open pair from `GET /trading/pairs`
-that takes 15 s, the default `DURATION_SEC`.) `ACCOUNT_ID` is needed only with more than one active account.
+that takes 15 s, the default `DURATION_SEC`, and pays at least 80 %: below the floor the CLI's
+session waits for the payout.) `ACCOUNT_ID` is needed only with more than one active account.
+
+After the #379 deploy (the owner's step: the agent has no SSH, and these ran on no pilot before
+the merge), the floor and the pause:
+
+```bash
+# every listed signal is on a pair paying >= 80; scanned <= 25
+docker compose exec -T backend sh -c 'wget -qO- --header "Authorization: Bearer $INTERNAL_API_TOKEN" http://127.0.0.1:3000/trading/signals'
+# the pause and the payout wait inside a session
+docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to change|waits for the payout|intent created'
+```
 
 ## Accepted risks (#287)
 

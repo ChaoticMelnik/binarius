@@ -42,7 +42,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
-demo:more:<assetId>:<sec>:<up|down>   («➕ Ещё» under the analysis, #360)
+demo:more:<assetId>:<sec>:<up|down>:<s|n>   («➕ Ещё» under the analysis, #360; the floor's token, #379)
   bot → answerCallbackQuery ∥ POST /trading/access
   bot → editMessageReplyMarkup: the stake button (a new nonce, the amount's fingerprint) and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
@@ -172,10 +172,13 @@ the `PICKER` pattern are extended by hand.
 **The return to the launch screen (#320).** A save opened from a launch screen (a preset, the
 reset or a typed amount) returns to that screen, not to «✅ Сумма»: «✅ Ставка сохранена: $5.00»
 above the three lines, with «💵 Ставка» at the saved amount (after the reset, «минимальная брокера»)
-and the screen's three buttons. Only the symbol needs a read: `readPairs`, any catalog, a stale one
-included, as the session start reads it. Without one the symbol line is dropped and `warn` `pairs
-not read for the launch screen` is logged; the launch stays, since the start checks the pair
-itself. A preset or the reset edits in place, a typed amount sends the screen as a new message. A
+and the screen's three buttons. One read gives the symbol and the payout: `readPairs`, any
+catalog, a stale one included, as the session start reads it. A pair in it paying below the cycle
+floor (`!pairPayoutAccepted`, #379) gets, under «✅ Ставка сохранена», the launch press's refusal
+`demoPayoutTooLow` with «↩️ К списку» and «🧭 Выбрать пару вручную» instead of «🚀 Запустить цикл»
+(`stake-picker.test.ts`, at 79 and 80 % on 15 and 5 s). Without a catalog the symbol line is
+dropped and `warn` `pairs not read for the launch screen` is logged; without a catalog or without
+the pair in it the launch stays, since the start checks the pair itself. A preset or the reset edits in place, a typed amount sends the screen as a new message. A
 refusal keeps the picker's texts with «💵 Сумма» and «↩️ К запуску», and reads no catalog.
 
 **The custom input** is a step of the login dialog store (`login-dialog.ts`): one entry per user,
@@ -239,8 +242,12 @@ status has an edge out of it in the shared graph (accepted until it settles); on
 of that trade — the session button's own data, so its press is the start handler with its
 refusals and its `{ active }` answer: a press while a session runs shows the running one and starts
 none ([bot-session.md](bot-session.md#the-button)). One predicate decides the line and the row,
-`sessionOfferOf(view)`: the status is a stop status, the duration is one of `DEMO_DURATIONS_SEC`
-and a session of five fits it. A trade from before #313 (60 s) gets neither, as it gets no
+`sessionOfferOf(view, payoutAccepted)`: the status is a stop status, the duration is one of
+`DEMO_DURATIONS_SEC`, a session of five fits it, and the pair paid at least the cycle floor (#379)
+as the catalog had it at the press (the tracker carries the fact, `IntentTrackRequest.payoutAccepted`)
+or at the refresh; unknown — the refresh's catalog read failed or the id is not listed — draws no
+offer. The payout can move during a 5–15 s trade: the message shows the press-time fact, and a
+press after the change meets the route's 409 `payout_too_low`. A trade from before #313 (60 s) gets neither, as it gets no
 «📊 Новый анализ». The tracker's edits and «🔄 Обновить статус» draw it; the message right after
 the press (`planned`) never does; the deadline edit of a live status carries the hint and no
 offer, and the deadline edit of a stop status whose edit never landed carries the offer; the 404
@@ -300,7 +307,7 @@ gets `warn` and nothing more. This press never starts tracking.
   then sent anew. That is 34 s.
 - The picker (#297): `stakePickerOpen` and `settingsShow` are 1 / 3 (29 s), `stakeCustom` 0 / 3
   (24 s). `stakePreset` and `stakeReset` are 2 / 3 (34 s) and `stakeText` 2 / 1 (18 s) since #320:
-  a save opened from a launch screen reads the catalog for its symbol.
+  a save opened from a launch screen reads the catalog for its symbol and payout (#379 adds no read).
 - `HANDLER_CALLS.demoAnalysis` is 2 / 4 = 42 s since #360: the access read for the label (#297)
   moved to «➕ Ещё», `HANDLER_CALLS.analysisMore` = 1 / 2 = 21 s. The longest path is `confirm`'s
   45 s; the chain holds below `SHUTDOWN_BUDGET_MS` (50 s), with 5 s to spare.

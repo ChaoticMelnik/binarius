@@ -138,6 +138,8 @@ export const TradingSessionErrorCode = {
   SessionTooLong: 'session_too_long',
   BalanceUnavailable: 'balance_unavailable',
   PairUnavailable: 'pair_unavailable',
+  // the pair pays less than MIN_CYCLE_PAYOUT_PCT (#379)
+  PayoutTooLow: 'payout_too_low',
   // the string of PairsCatalogErrorCode.Unavailable: the same cache answers both routes
   CatalogUnavailable: 'catalog_unavailable',
   NotFound: 'not_found',

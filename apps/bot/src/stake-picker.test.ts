@@ -43,13 +43,21 @@ import {
   messageAnswer,
   PAIR_EURUSD,
   PAIRS_RESPONSE,
+  pairsResponse,
   stubSessionTracker,
   stubTracker,
   textUpdate,
   userView,
   type ApiCall,
 } from './testing';
-import { LABELS, settingsText, stakePickerText, TEXTS, userContextOf } from './texts';
+import {
+  formatBreakEven,
+  LABELS,
+  settingsText,
+  stakePickerText,
+  TEXTS,
+  userContextOf,
+} from './texts';
 
 const pickerContext = () => ({
   ...userContextOf(USER.first_name, TradeMode.Demo, accessView()),
@@ -390,6 +398,54 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     expect(rowsOf(lastPayload(calls))).toEqual(screen.keyboard.inline_keyboard);
     expect(warnings(logger)).toEqual(['pairs not read for the launch screen']);
   });
+
+  // #379: the screen a save returns to offers no cycle the session start would refuse
+  it.each([15, 5] as const)(
+    'returns the cycle floor refusal under the saved line for a pair paying 79 percent at %i s',
+    async (durationSec) => {
+      const { press, calls } = setup({
+        readPairs: () =>
+          Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 79 }] })),
+      });
+      await press(stakePresetCallbackData('5', { ...PAIR, durationSec }));
+      expect(plainTextOf(lastPayload(calls)?.text as string)).toBe(
+        `✅ Ставка сохранена: $5.00\n\n🚫 ${PAIR_EURUSD.symbol}: выплата 79% — ниже 80%, цикл на этой паре не запускается. Безубыточность при такой выплате — ${formatBreakEven(79)}% верных прогнозов.`,
+      );
+      expect(rowsOf(lastPayload(calls))).toEqual([
+        [button(LABELS.backToListButton, `demo:sig:${String(durationSec)}`)],
+        [button(LABELS.demoManualButton, 'demo:g')],
+      ]);
+    },
+  );
+
+  it.each([15, 5] as const)(
+    'returns the launch with its cycle button for a pair paying exactly 80 percent at %i s',
+    async (durationSec) => {
+      const { press, calls } = setup({
+        readPairs: () =>
+          Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 80 }] })),
+      });
+      await press(stakePresetCallbackData('5', { ...PAIR, durationSec }));
+      const screen = launchScreen({
+        assetId: PAIR_EURUSD.id,
+        durationSec,
+        firstName: USER.first_name,
+        symbol: PAIR_EURUSD.symbol,
+        amount: d('5'),
+        saved: { amount: d('5') },
+      });
+      const payload = lastPayload(calls);
+      expect({ text: payload?.text, firstRow: rowsOf(payload)[0] }).toEqual({
+        text: screen.text.value,
+        firstRow: [
+          button(
+            LABELS.launchCycleButton,
+            `demo:sess:${String(PAIR_EURUSD.id)}:${String(durationSec)}`,
+          ),
+        ],
+      });
+    },
+  );
 
   it('offers another try and the way back to the launch on a refusal, reading no catalog', async () => {
     const { press, calls, readPairs } = setup({

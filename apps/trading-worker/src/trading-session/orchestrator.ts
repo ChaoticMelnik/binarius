@@ -21,7 +21,9 @@ import {
   errorLogFields,
   intervalForDuration,
   isPairOpen,
+  MIN_CYCLE_PAYOUT_PCT,
   pairAcceptsDuration,
+  pairPayoutAccepted,
   safeParseTradingSessionSettings,
   SIGNAL_CHART_INTERVAL_MS,
   SignalFeedOutcome,
@@ -35,6 +37,7 @@ import {
 } from '@binarius/shared';
 import type { Logger } from '../intents/processor';
 import { SessionTradeKind, StakeKind, StakeStrategy } from '../stake/codes';
+import { parseAmount } from '../stake/money';
 import { createStakeSizer, type SessionTrade, type StakeSizer } from '../stake/size';
 import type { PairsSource, SignalSource } from './backend';
 import type { SessionOrchestratorConfig } from './config';
@@ -64,11 +67,14 @@ export interface SessionOrchestrator {
   stop(): Promise<void>;
 }
 
+// A hold must say whether the pause's memory (last_signal_action, #379) is cleared (null after a
+// no_signal) or kept (the paused action). The traded action travels with the intent row
+// (createTradeIntent), never through an ending: an ending can be lost after the INSERT.
 type Ending =
   | { kind: 'stop'; reason: TradingSessionStopReason; fields?: Record<string, unknown> }
   | { kind: 'created' }
   | { kind: 'reschedule' }
-  | { kind: 'hold'; ms: number }
+  | { kind: 'hold'; ms: number; signalAction?: TradeAction | null }
   // the session is no longer active: nothing to write
   | { kind: 'gone' }
   // no ending written: the deadline, a throw or the stop signal
@@ -138,6 +144,23 @@ function toSessionTrade(intent: SessionHistoryIntent): SessionTrade {
     return { kind: SessionTradeKind.Settled, stake: intent.amount, profit: intent.profit };
   }
   return { kind: SessionTradeKind.Unresolved };
+}
+
+// docs/trading-session.md -> The pause after two losses (#379). A rejected intent between the two
+// losses is not a trade, so it neither breaks nor extends the streak. A trailing one was created
+// only once the pause had lifted, and a refusal is not a new loss to re-arm it on.
+export function pausedDirection(intents: readonly SessionHistoryIntent[]): TradeAction | undefined {
+  if (intents.at(-1)?.status === TradeIntentStatus.Rejected) return undefined;
+  const trades = intents.filter((intent) => intent.status !== TradeIntentStatus.Rejected);
+  const lastTwo = trades.slice(-2);
+  if (lastTwo.length < 2) return undefined;
+  const lost = lastTwo.every((intent) => {
+    if (intent.status !== TradeIntentStatus.Settled || intent.profit === null) return false;
+    const profit = parseAmount(intent.profit);
+    return profit !== undefined && profit < 0n;
+  });
+  const [first, second] = lastTwo;
+  return lost && first.action === second.action ? second.action : undefined;
 }
 
 class AttemptAborted extends Error {
@@ -274,6 +297,14 @@ export function createSessionOrchestrator({
       logger.info({ ...ids, assetId: pair.id }, 'trading session waits for the pair to open');
       return { kind: 'hold', ms: Math.min(pair.scheduledUntil - nowMs, config.retryMs) };
     }
+    // no cycle trades a pair paying less than the floor; the session waits for it (owner, #379)
+    if (!pairPayoutAccepted(pair)) {
+      logger.info(
+        { ...ids, assetId: pair.id, payout: pair.payout, floor: MIN_CYCLE_PAYOUT_PCT },
+        'trading session waits for the payout',
+      );
+      return { kind: 'hold', ms: config.retryMs };
+    }
 
     const interval = intervalForDuration(settings.durationSec);
     const answer = await signals.evaluate({ assetId: settings.assetId, interval }, { signal });
@@ -296,17 +327,23 @@ export function createSessionOrchestrator({
         ms: response.retryAfterSec !== undefined ? response.retryAfterSec * 1000 : config.retryMs,
       };
     }
-    if (response.decision.kind === SignalKind.NoSignal) {
+    const untilNextCandle = () => {
       const decidedAt = now();
       const intervalMs = SIGNAL_CHART_INTERVAL_MS[interval];
-      const nextCandle = Math.ceil(decidedAt / intervalMs) * intervalMs + config.candleSlackMs;
+      return Math.ceil(decidedAt / intervalMs) * intervalMs + config.candleSlackMs - decidedAt;
+    };
+    if (response.decision.kind === SignalKind.NoSignal) {
       logger.info(
         { ...ids, reason: response.decision.reason },
         'trading session waits for the next candle',
       );
-      return { kind: 'hold', ms: nextCandle - decidedAt };
+      return { kind: 'hold', ms: untilNextCandle(), signalAction: null };
     }
     const action: TradeAction = response.decision.action;
+    if (pausedDirection(history.intents) === action && session.lastSignalAction === action) {
+      logger.info({ ...ids, action }, 'trading session waits for the signal to change');
+      return { kind: 'hold', ms: untilNextCandle(), signalAction: action };
+    }
 
     const startedAtMs = session.startedAt.getTime();
     const decision = sizer.next({
@@ -415,7 +452,7 @@ export function createSessionOrchestrator({
       }
       case 'hold':
         hold(session.id, ending.ms);
-        await markSessionDecision(db, { id: session.id });
+        await markSessionDecision(db, { id: session.id, signalAction: ending.signalAction });
         return;
       case 'created':
       case 'reschedule':

@@ -8,7 +8,7 @@ import { createSignalDecider } from './decide';
 import { chartWindow, createSignalFeed, type SignalEvaluation } from './feed';
 import { SIGNAL_CHART_LIMIT } from './feed-config';
 import { replaySignalJournalEntry, type SignalJournalEntry } from './journal';
-import { closedNow, INTERVAL_MS, seriesFrom, trending } from './testing';
+import { closedNow, INTERVAL_MS, mildRise, seriesFrom, tickSeries, trending } from './testing';
 
 // Docker's log copier reads 16 KiB per line; a longer line reaches some drivers split in two
 const LOG_LINE_BUDGET = 16 * 1024;
@@ -65,7 +65,7 @@ describe('createSignalFeed', () => {
       logger: sink(),
     });
 
-    const entry = decided(await feed.evaluate({ assetId: 101, interval: '1m' }));
+    const entry = decided(await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 }));
 
     const { startTime } = chartWindow(T, I, SIGNAL_CHART_LIMIT);
     expect(entry.fetch).toMatchObject({ startTime, limit: SIGNAL_CHART_LIMIT });
@@ -97,7 +97,8 @@ describe('createSignalFeed', () => {
     expect(line.signal).toStrictEqual(JSON.parse(JSON.stringify(entry)));
     expect(line.signal.nowMs).toBe(T);
     expect(line.signal.params).toStrictEqual(DEFAULT_SIGNAL_PARAMS);
-    expect(line.signal.version).toBe('v1');
+    expect(line.signal.version).toBe('v2');
+    expect(line.signal.digits).toBe(5);
     expect(replaySignalJournalEntry(line.signal)).toStrictEqual(entry.decision);
     expect(lines[0]).not.toContain('[Redacted]');
     expect(lines[0]).not.toContain(broker.url);
@@ -117,7 +118,7 @@ describe('createSignalFeed', () => {
         logger: sink(),
       });
 
-      const entry = decided(await feed.evaluate({ assetId: 202, interval }));
+      const entry = decided(await feed.evaluate({ assetId: 202, interval, digits: 2 }));
 
       const { startTime } = chartWindow(now, step, SIGNAL_CHART_LIMIT);
       expect(broker.rest.journal[0]?.query).toMatchObject({
@@ -156,7 +157,7 @@ describe('createSignalFeed', () => {
         logger: sink(),
       });
 
-      const result = await feed.evaluate({ assetId: 101, interval: '1m' });
+      const result = await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 });
 
       const request = {
         assetId: 101,
@@ -196,7 +197,7 @@ describe('createSignalFeed', () => {
     await closed.close();
     const feed = createSignalFeed({ rest: createBrokerRestClient({ baseUrl }), logger: sink() });
 
-    const result = await feed.evaluate({ assetId: 101, interval: '1m' });
+    const result = await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 });
 
     expect(result).toMatchObject({ outcome: 'fetch_failed', code: 'unavailable' });
     expect(parsedLines()).toMatchObject([{ level: 40, msg: 'signal fetch failed' }]);
@@ -209,7 +210,7 @@ describe('createSignalFeed', () => {
     });
 
     const result = await feed.evaluate(
-      { assetId: 101, interval: '1m' },
+      { assetId: 101, interval: '1m', digits: 5 },
       { signal: AbortSignal.abort() },
     );
 
@@ -225,7 +226,7 @@ describe('createSignalFeed', () => {
       logger: sink(),
     });
 
-    await expect(feed.evaluate({ assetId: 101, interval: '1m' })).rejects.toBe(thrown);
+    await expect(feed.evaluate({ assetId: 101, interval: '1m', digits: 5 })).rejects.toBe(thrown);
     expect(lines).toHaveLength(0);
   });
 
@@ -236,7 +237,9 @@ describe('createSignalFeed', () => {
       now: () => Number.NaN,
     });
 
-    await expect(feed.evaluate({ assetId: 101, interval: '1m' })).rejects.toThrow(RangeError);
+    await expect(feed.evaluate({ assetId: 101, interval: '1m', digits: 5 })).rejects.toThrow(
+      RangeError,
+    );
     expect(broker.rest.journal).toHaveLength(0);
     expect(lines).toHaveLength(0);
   });
@@ -249,7 +252,7 @@ describe('createSignalFeed', () => {
     );
   });
 
-  const rising = trending(60, 0.5);
+  const rising = mildRise();
   const flat = seriesFrom(Array<number>(60).fill(100), { wick: 0 });
   const gap = trending(61, 0.5).filter((_, i) => i !== 30);
   const few = trending(10, 0.5);
@@ -282,7 +285,7 @@ describe('createSignalFeed', () => {
     async (_, candles, nowMs, expected) => {
       const feed = createSignalFeed({ rest: stubRest(candles), logger: sink(), now: () => nowMs });
 
-      const entry = decided(await feed.evaluate({ assetId: 101, interval: '1m' }));
+      const entry = decided(await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 }));
 
       expect(entry.decision).toMatchObject(expected);
       expect(replaySignalJournalEntry(entry)).toStrictEqual(entry.decision);
@@ -299,7 +302,7 @@ describe('createSignalFeed', () => {
           rest: stubRest(candles),
           logger: sink(),
           now: () => nowMs,
-        }).evaluate({ assetId: 101, interval: '1m' }),
+        }).evaluate({ assetId: 101, interval: '1m', digits: 5 }),
       );
 
     const entry = await evaluate(withVolume);
@@ -324,9 +327,38 @@ describe('createSignalFeed', () => {
       now: () => closedNow(candles),
     });
 
-    await feed.evaluate({ assetId: 101, interval: '1m' });
+    await feed.evaluate({ assetId: 101, interval: '1m', digits: 5 });
 
     expect(lines).toHaveLength(1);
     expect(lines[0]?.length).toBeLessThan(LOG_LINE_BUDGET);
+  });
+
+  // 2e25e081's one-step drift: the request's digits decide the tick floor, and the line keeps them
+  it.each([
+    [5, 'volatility_below_tick_floor'],
+    [7, 'rsi_overbought'],
+  ])('F10 the line carries digits %i and replays to %s', async (digits, reason) => {
+    const candles = tickSeries(0.0124, 5);
+    const feed = createSignalFeed({
+      rest: stubRest(candles),
+      logger: sink(),
+      now: () => closedNow(candles),
+    });
+
+    const entry = decided(await feed.evaluate({ assetId: 101, interval: '1m', digits }));
+
+    const [line] = parsedLines() as [{ signal: SignalJournalEntry }];
+    expect(line.signal.digits).toBe(digits);
+    expect(entry.decision).toMatchObject({ reason });
+    expect(replaySignalJournalEntry(line.signal)).toStrictEqual(entry.decision);
+  });
+
+  it.each([-1, 11])('F11 digits %i throw before any broker call', async (digits) => {
+    const getChart = vi.fn(() => Promise.resolve(trending(60, 0.5)));
+    const feed = createSignalFeed({ rest: { getChart }, logger: sink() });
+    await expect(feed.evaluate({ assetId: 101, interval: '1m', digits })).rejects.toThrow(
+      RangeError,
+    );
+    expect(getChart).not.toHaveBeenCalled();
   });
 });
