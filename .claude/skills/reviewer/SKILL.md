@@ -77,7 +77,7 @@ Merge the agents' results, collapse duplicates. Discard findings that just resta
 
 ### Step 6-pre: Final Codex pass (before any LGTM)
 
-Runs when Steps 3-5 found no Blocker/Major, and on round 3 whatever they found. The round comes from the spawn prompt (tech-lead → Phases run as spawned agents, item 7); invoked directly, count the PR's earlier `## Review round` comments. The companion script from Bash, not `Skill(codex:rescue)` (that needs `AskUserQuestion` and a main-context `Agent`, which a spawned reviewer does not have):
+Runs when Steps 3-5 found no Blocker/Major, and on round 3 whatever they found. The round comes from the spawn prompt (tech-lead → Phases run as spawned agents, item 7); invoked directly, `gh pr view <N> --json reviews --jq '[.reviews[].body | select(startswith("## Review round "))] | length'` + 1 (PR reviews, not issue comments; each round's review opens with the Step 6a heading). The companion script from Bash, not `Skill(codex:rescue)` (that needs `AskUserQuestion` and a main-context `Agent`, which a spawned reviewer does not have):
   1. Fill `.claude/codex-review-prompt.md` into a file (issue, goal, the plan's "Accepted risks" with the instruction not to re-raise them). For a diff that touches `.claude/**` or `audits.md`, inline `~/.claude/CLAUDE.md` into its Process-docs block — the Codex sandbox cannot read it.
   2. Build the prompt file and start the job with the marker `Whole-feature pass`:
      ```bash
@@ -98,19 +98,25 @@ Runs when Steps 3-5 found no Blocker/Major, and on round 3 whatever they found. 
      } > "$out"
      node "$COMPANION" task --background --fresh --model gpt-5.6-sol --effort high --prompt-file "$out"
      ```
-     The first line is what tech-lead's audit finds and re-hashes; the diff after it is the same one `gh pr diff` shows (merge base to head). `task` without `--write` runs read-only.
+     The first line is what tech-lead's audit finds and re-hashes; the diff after it is the same one `gh pr diff` shows (merge base to head). `task` without `--write` runs read-only. Model and effort are pinned in the command, not taken from `~/.codex/config.toml`.
   3. `node "$COMPANION" status <job-id> --wait --timeout-ms 540000` (repeat until the job leaves `running`), then `node "$COMPANION" result <job-id>`. Consolidate as in Step 4; a Blocker/Major goes to Step 6a (on round 3, together with the round's findings), and the next round runs Codex again only when it, too, reaches this step.
-  4. **Usage limit** — the job fails with "You've hit your usage limit … try again at HH:MM", or the spawn prompt's preflight line names a limit whose reset time has not passed: no second attempt, no question. The skip line «Codex пропущен: лимит до HH:MM (job <id>), правило 2026-10-08» goes into the round's review comment (Step 6a) or into the ready-to-merge comment (Step 6b). Any other failure: 2 attempts, then stop and return to tech-lead (direct invocation: ask the owner). Model and effort are pinned in the command, not taken from `~/.codex/config.toml`.
+  4. **Usage limit** — the job's summary contains `hit your usage limit … try again at <time>` (match from `hit`: the apostrophe in "You’ve" is U+2019), or the spawn prompt's preflight line names a limit whose reset time has not passed: no second attempt, no question. Any other failure: 2 attempts, then stop and return to tech-lead (direct invocation: ask the owner); on the owner's skip, the second line below. The skip line goes into the round's review (Step 6a) or into the ready-to-merge comment (Step 6b). This item is the only place that holds the skip-line texts:
+     - usage limit: «Codex пропущен: лимит до ДД.ММ HH:MM (job <id>), правило 2026-10-08»;
+     - the owner's explicit skip after two other failures, by day: «Codex пропущен: решение владельца ДД.ММ.ГГГГ после <сбой> (job <id>)»;
+     - at night (manager only, `.claude/CLAUDE.md` → «Codex ночью»): «Codex пропущен: сбой <ошибка> после двух попыток, решение владельца 2026-10-10».
 
 The run must be at the PR's current `headRefOid` (`gh pr view <N> --json headRefOid`): if commits land after it, run it again. No LGTM, and no round-3 verdict, without a completed run at the current head or the skip line — tech-lead's audit re-hashes the diff from the marker (`tech-lead` → Mode 1).
 
 ### Step 6a: Blocker/Major found — post comments, return to Todo
 
-A Minor-only review does not come here: post the Minors as a comment and go to Step 6b; the merge question names them (Severity Guide).
+A Minor-only review does not come here: post the Minors as a review (same heading as below) and go to Step 6b; the merge question names them (Severity Guide).
 
 ```bash
-gh pr review <N> --repo ChaoticMelnik/binarius --comment --body "..."
+gh pr review <N> --repo ChaoticMelnik/binarius --comment --body "## Review round <k> - head <short sha>
+..."
 ```
+
+The review body's first line is always `## Review round <k> - head <short sha>`, on every round: Step 6-pre counts rounds by it.
 
 Each comment: quote the exact problematic code/line, explain what's wrong and why, suggest the fix. Then move the issue to **Todo** via `/github` skill immediately — no additional approval needed. Stays in Todo until the Architect posts a Plan Update, and the Architect moves it back to In Progress.
 
