@@ -10,6 +10,7 @@ import {
   NotificationLevel,
   SignalFeedOutcome,
   TradeAction,
+  TradeMode,
   TradeIntentErrorCode,
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
@@ -878,7 +879,9 @@ describe('what the bot writes about the demo', () => {
 
   // #360: «➕ Ещё» reads access for the stake label and edits the keyboard alone
   const expanded = () =>
-    callbackUpdate(analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true));
+    callbackUpdate(
+      analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Demo),
+    );
 
   it('names an access read «➕ Ещё» did not get by error, code, status and reason, without the user', async () => {
     const { lines, calls } = await linesFrom({
