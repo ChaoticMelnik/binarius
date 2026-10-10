@@ -256,7 +256,7 @@ a token, a raw error object, or the login someone typed for an account that does
 | own password changed | `staff_password_changed` |
 | own password change refused: wrong current password, locked out, state changed under the KDF | `staff_password_change_failed` |
 | login link sent by the bot (#448) | `staff_login_link_issued` |
-| login link refused: the bot to a disabled account, the per-staff limit, or a used, expired, superseded or revoked link opened | `staff_login_link_refused` |
+| login link refused: the bot to a disabled account (`reason: disabled`, `via: start` or `button`), the per-staff limit (`rate_limited`), or a link opened that is `used`, `expired`, `superseded` or `revoked`, or whose owner is disabled (`disabled`); `state_changed` when the CAS missed a link the re-read still finds usable, which nothing in this feature produces | `staff_login_link_refused` |
 | session created from a login link | `staff_login_link_completed` |
 
 The read pages behind the session, and what each of their rows carries, are in
