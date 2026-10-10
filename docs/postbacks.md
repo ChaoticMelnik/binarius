@@ -8,8 +8,9 @@ admin's view of deposits is «Депозиты» ([admin-pages.md](admin-pages.m
 ## Mechanism
 
 - **The route** `GET /postbacks/binodex/<secret>` exists only while `POSTBACK_URL_SECRET` is set
-  on `backend`. The secret is the whole gate until #142: a path segment of 32-128 characters of
-  `[A-Za-z0-9_-]`, compared as sha256 digests in constant time (`secretMatches`,
+  on `backend`. The secret is the whole gate until #142: a path segment of 32-100 characters of
+  `[A-Za-z0-9_-]` (100 is Fastify's default `maxParamLength`: a longer segment never reaches the
+  route), compared as sha256 digests in constant time (`secretMatches`,
   `apps/backend/src/auth/internal.ts`).
 - **The writer** is `recordPostback` (`packages/db/src/postback-ops.ts`), one transaction per
   delivery. It writes two tables and nothing else: `postback_deliveries`, the journal, and
@@ -66,22 +67,29 @@ back.
 | Request | Answer | Journaled |
 |---|---|---|
 | GET with the right secret, a flat query | 200 with the outcome above | yes, except `duplicate` |
-| GET with the right secret, a repeated key (`a=1&a=2`), more than 64 keys, a key over 64 or a value over 256 characters | 400 `{"error":"validation"}` | no |
-| a wrong secret | 404 `{"error":"not_found"}`, one `warn` `postback refused` | no |
+| GET with the right secret, a repeated key (`a=1&a=2`), more than 64 keys, a key over 64 or a value over 256 characters, a NUL (`%00`) in a key or a value | 400 `{"error":"validation"}` | no |
+| a wrong secret | 404 `{"error":"not_found"}`, one `warn` `postback refused`; takes no slot of the window | no |
 | the route off (`POSTBACK_URL_SECRET` unset) | 404 `{"error":"not_found"}` from the not-found handler | no |
+| a segment over 100 characters or with a malformed percent-encoding (`%ZZ`), route on or off | 404 `{"error":"not_found"}`: Fastify's router answers these itself (414 / 400, echoing the path), and `frameworkErrors` in `buildApp` turns both into the not-found answer | no |
 | HEAD with the right secret | 404 from the not-found handler (`exposeHeadRoute: false`) | no |
 | any other method | 404 | no |
-| over `POSTBACK_MAX_PER_MINUTE` (600 per process), secret or not | 429 `{"error":"too_many_requests"}` | no |
+| past the secret, over `POSTBACK_MAX_PER_MINUTE` (600 per process) | 429 `{"error":"too_many_requests"}` | no |
 | a database failure | 500 `{"error":"internal"}` | rolled back |
 
 Everything past the secret answers 200, so a broker that retries on a non-2xx has nothing to retry
-but a `duplicate`. The broker's own reaction to 4xx, 429 and 500 is unknown. A wrong secret and
-a route that is off answer the same body: a probe cannot tell them apart.
+but a `duplicate`. The broker's own reaction to 4xx, 429 and 500 is unknown. A wrong secret, a
+segment of any length or spelling and a route that is off answer the same 404 body: a probe cannot
+tell them apart. The window is taken only past the secret, so a flood without it cannot crowd out
+the broker's deliveries; it bounds the writes of a holder of the secret.
 
 Logs: one `info` `postback received` per delivery with the outcome, the reason, the event and the
 postback id. The secret never enters our lines; Fastify's own lines (the request line, the
 not-found line) carry the url through `withoutSecrets` (`apps/backend/src/app.ts`), which replaces
-the segment after `/postbacks/binodex/` with `redacted` (case-insensitively).
+everything after the first `/postbacks` (any case) up to the query with `/redacted`: a logged url
+of this family reads `/postbacks/redacted?…`, whatever the template's typo (a doubled slash, an
+encoded `%2F`). A wrong-secret request writes one `warn` line and no row; a flood of them is
+bounded only by Caddy and the host (accepted: at pilot traffic under 1 MB of log a day — if the
+log shows more, a refusal counter that logs once per window is the fix).
 
 ## Attribution
 
@@ -96,8 +104,8 @@ A deposit belongs to the account whose `broker_user_id` equals the postback's tr
   `broker_user_id`.
 - **At activation:** `attachDepositsToAccount` runs in the two activation transactions — the bot's
   confirm (`confirmBrokerAccount`) and the email login (`linkBrokerAccount` with `activate`) —
-  and attaches every unowned deposit of that trader in one `UPDATE`. Both results carry
-  `attachedDeposits`. Nothing is credited at attachment either.
+  and attaches every unowned deposit of that trader in one `UPDATE`. Nothing is credited at
+  attachment either.
 
 Lock order: ingest takes `broker_accounts` `FOR SHARE`, then `deposit_events`, then the journal;
 activation takes `users` → `broker_accounts` (`FOR NO KEY UPDATE`) → `deposit_events`. The
