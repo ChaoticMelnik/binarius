@@ -108,7 +108,7 @@ device lead to the same screen.
 The callback data is at most 49 bytes (`demo:stake:2147483647:15:down:0123456789ab:0a1b2c`), inside
 the Bot API 64.
 `demo:sig` is 8 bytes, `demo:sig:15` 11, `demo:l:2147483647:15` 20 and
-`demo:more:2147483647:15:down:n` 30 (#360, #379).
+`demo:more:2147483647:15:down:n:r` 32 (#360, #379, #121).
 `<group>` is one of `DEMO_ASSET_GROUPS`, never the broker's own string; `<page>` is up to four
 digits; `<assetId>` is up to ten digits, parsed by `createTradeIntentRequestSchema.shape.assetId`
 (a positive int4, what #127 sends); `<sec>` is one of `DEMO_DURATIONS_SEC`, written into the
@@ -294,11 +294,21 @@ not a fresh catalog.
   $5.00» (or «⬇️ Вниз») and «💵 Сумма» in one row, then the repeat and the way back — the same
   message, only its keyboard edited. «🔄 Повторить анализ» draws the collapsed form again.
 - **Real mode (#121, [trading-mode.md](trading-mode.md)).** The analysis reads access for the
-  user's mode beside the catalog: in real mode no session row (sessions are demo only), and the
-  expansion draws only «🚀 Открыть сделку: ⬆️ Вверх · $1.00 · REAL» at the broker's minimum, its
-  fingerprint over `real:<amount>`; no «💵 Сумма». A failed read draws the demo keyboard. The
-  launch screen in real mode has no stake line: `launchRealMode` with «📊 Анализ пары» and «↩️ К
-  списку».
+  user's mode beside the catalog: in real mode no session row (sessions are demo only), the
+  disclaimer is `analysisDisclaimerReal` («…Реальный режим: сделка идёт на реальные деньги.»), the
+  rule refusal's hint is `analysisNoSignalHintReal`, and no `analysisCycleUnavailable` line (no
+  cycle to refuse). A failed read draws the demo text and keyboard. «➕ Ещё» carries the mode the
+  text was drawn in (`:d`/`:r`; a datum without it is from before #121 and reads as `d`); the
+  expansion draws a stake button only when its own access read gives that mode, otherwise just
+  «🔄 Повторить анализ» and the way back. In real mode the expansion draws only «🚀 Открыть
+  сделку: ⬆️ Вверх · $1.00 · REAL» at the broker's minimum, its fingerprint over `real:<amount>`;
+  no «💵 Сумма». The launch screen in real mode has no stake line: `launchRealMode` with «📊 Анализ
+  пары» and «↩️ К списку», also on a pair below the cycle floor (real mode has no cycle).
+- **The shared screens** — the signals, the types, a type's pairs and the summary — read no mode,
+  so their default texts hold in both (#121): «📡 Сигналы сейчас … Выбери пару.», «🧭 Выбор
+  пары», «Дальше — анализ свечей: бот покажет сигнал и что можно сделать по нему.». The demo note
+  («деньги не нужны», the cycle) is on the screens that know the mode: the demo launch and the
+  demo analysis.
 
 At most 15 buttons on a manual screen. Labels are
 plain strings; every label but a pair's starts with an emoji.

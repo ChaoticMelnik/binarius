@@ -90,8 +90,22 @@ The mode comes from `POST /trading/access` only (`tradingMode`, required: a back
 cancel in place, back to demo, the card's mode button) is #474; `/stop` returning the user to demo
 is #473, after it.
 
+**The class rule** (Plan 5): the screens of the real path that read no mode (the signals, the
+manual choice, the summary) have neutral default texts; the screens that read the mode (the card,
+the launch, the analysis and its expansion, the trade's status) speak of it. `real-path.test.ts`
+walks every screen a real-mode user can reach on the catalog's defaults and fails on any demo
+wording, with a demo control case; a new screen on the path is added to its scenes. Staff
+overrides of the texts are not checked by it. The first-session reminders («🎮 Демо-торговля»)
+are planned and sent only to a user in demo ([mailing.md](mailing.md)); the «🎮 Демо-торговля»
+button under `/account`, the account card and the re-login push stays for a real-mode user too
+(accepted: it leads to the neutral duration screen, and every screen with a real-money button
+after it says REAL).
+
 **The single trade.** `effectiveStake` is `broker.minTradeAmount` in real mode, whatever the demo
-stake. The analysis reads access for the mode: in real mode no session row, «➕ Ещё» on a signal.
+stake. The analysis reads access for the mode: in real mode no session row, «➕ Ещё» on a signal,
+the real disclaimer and hint, no cycle-floor note ([bot-demo.md](bot-demo.md) → Keyboards). «➕ Ещё»
+carries the mode its text was drawn in and draws a stake button only when the expansion's read
+gives the same mode.
 The expansion in real mode draws only the stake button, labelled `… · $Y · REAL`; no «💵 Сумма»
 (#326), no session row (#327). The fingerprint hashes `real:<amount>` in real mode and the bare
 amount in demo (as before #121, so an older demo button still trades): a button drawn in one mode
@@ -103,7 +117,8 @@ message's header is «💼 Реальная сделка» for a real view, and 
 
 **The launch screen** in real mode keeps the pair's line, has no stake line, and shows «💼 Циклы —
 только в демо; в реальном режиме — разовая сделка по анализу.» with «📊 Анализ пары» (the analysis)
-and «↩️ К списку»; its `{stake}` is the broker's minimum. A stake saved from a launch screen reads
+and «↩️ К списку», also on a pair below the cycle floor (real mode has no cycle); its `{stake}`
+is the broker's minimum. A stake saved from a launch screen reads
 the mode the same way and draws the same screen under «✅ Демо-ставка сохранена: $X» (the saved
 amount is the demo stake). The card's `{stake}` is the minimum in real mode too. A failed access read
 keeps the demo screen: its cycle press gets `mode_not_allowed` → «Сессии пока доступны только в
@@ -124,14 +139,23 @@ every terminal branch.
 
 ## Running it locally
 
-Against the mock broker only, with the stand of [trading-access.md](trading-access.md) plus the
-worker: `/menu` → «💼 Реальный режим» → «💼 Включить реальный режим» → «✅ Подтверждаю»; `/menu`
-shows REAL; «🚀 Торговать» → a duration → a pair → «📊 Анализ пары» → «➕ Ещё» → the REAL stake
-button; the status message reads «💼 Реальная сделка»; «🎮 Вернуться в демо» on the card returns
-the user to demo.
+Against the mock broker only, `DEMO_ONLY` unset, with the stand of
+[trading-access.md](trading-access.md) plus the worker and the bot:
+
+1. Switch the user to real with the `access` helper of trading-access.md (the internal bearer):
+   `access /trading/mode '{"telegramUserId":"<id>","mode":"real"}'` → 200
+   `{"tradingMode":"real","changed":true}`.
+2. `/menu` shows REAL, the real hint and «🚀 Торговать»; «Сигналы сейчас» has no «запустит цикл».
+3. A pair opens the launch screen with «💼 Циклы — только в демо…» and «📊 Анализ пары»; the
+   analysis ends with «Реальный режим: сделка идёт на реальные деньги»; «➕ Ещё» shows
+   «… · $1.00 · REAL»; the press gives «💼 Реальная сделка». The manual choice reads «🧭 Выбор
+   пары».
+4. Switch back with `"mode":"demo"`: the card is DEMO, and the old REAL button answers «Режим или
+   сумма сделки изменились». With `DEMO_ONLY=true`, `"mode":"real"` → 409 `demo_only`.
 
 ## Boundaries
 
+- **#474** — the mode screen in the bot; then **#473** — `/stop` returning the user to demo.
 - **#326** — the real stake amount and its picker. **#327** — real sessions: lifting
   `mode_not_allowed`, the session route in the user's mode.
 - **#37** — the grant for real trades with Binodex. The real branch of `open_trade` was not

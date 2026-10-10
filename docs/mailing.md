@@ -53,9 +53,11 @@ promise no profit; they are overridable like every catalog text and are read whe
   account active (the bot's confirm and the email login alike). One per user
   (`token_ledger_link_bonus_user_idx`). An account that is not a partner client earns no pack,
   and so gets no chain.
-- **The chain applies** while the user is not blocked by the admin, has an active account, and
-  has no `trading_sessions` row of any status on any of their accounts (the owner, 2026-10-07: the
-  chain leads to the first session). A session started at any moment ends it: a step already
+- **The chain applies** while the user is not blocked by the admin, trades demo
+  (`users.trading_mode = 'demo'`, #121: the chain leads into the demo; a step planned before a
+  switch to real is canceled at the claim), has an active account, and has no `trading_sessions`
+  row of any status on any of their accounts (the owner, 2026-10-07: the chain leads to the first
+  session). A session started at any moment ends it: a step already
   planned is canceled when the sender reaches it.
 - **One step at a time.** A step is sent only until the next one is due; the last has no end.
   After a backend outage longer than a step, the user gets the latest step, not the missed ones
