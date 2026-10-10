@@ -513,6 +513,8 @@ describe('recordUserStart: referral (#115)', () => {
   );
 
   it('R4 records nothing for an unknown code and answers the /start as before', async () => {
+    // another code exists, so a statement that ignored the code would find one
+    await seedInviter();
     const started = await start(nextTelegramUserId(), { startPayload: 'ref_Unkn0wn1' });
     expect(started.referred).toBe(false);
     expect(await referralsOf(started.row.id)).toEqual([]);
