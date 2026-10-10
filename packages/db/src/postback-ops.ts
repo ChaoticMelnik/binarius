@@ -82,6 +82,8 @@ export async function recordPostback(
 
   try {
     return await db.transaction(async (tx) => {
+      // a fast path that skips the account lock and the deposit write for a plain re-delivery;
+      // the guard is the journal's `on conflict` below, which also settles a concurrent twin
       const [seen] = await tx
         .select({ id: postbackDeliveries.id })
         .from(postbackDeliveries)

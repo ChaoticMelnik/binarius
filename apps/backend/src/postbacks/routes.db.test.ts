@@ -329,3 +329,103 @@ describe('without POSTBACK_URL_SECRET', () => {
     }
   });
 });
+
+// D2 (#141, review round 2): a request that came through the proxy reaches only the postback route
+describe('the proxy guard', () => {
+  const PROXIED = { 'x-forwarded-for': '203.0.113.1' };
+  let guarded: ReturnType<typeof buildApp>;
+  const routes: { method: string; url: string }[] = [];
+
+  beforeAll(async () => {
+    guarded = testApp({ secret: SECRET });
+    guarded.addHook('onRoute', (route) => {
+      for (const method of [route.method].flat()) routes.push({ method, url: route.url });
+    });
+    await guarded.ready();
+    // registered by buildApp itself, before this hook could see it
+    routes.push({ method: 'GET', url: '/health' });
+  });
+  afterAll(() => guarded.close());
+
+  it('G1 refuses a proxied request on every route but the postback route', async () => {
+    const urls = routes.map((route) => route.url);
+    for (const url of [
+      '/admin/users/:id',
+      '/trading/intents/:id',
+      '/admin/sessions/:id/revoke',
+      '/postbacks/binodex/:secret',
+    ]) {
+      expect(urls).toContain(url);
+    }
+    const others = routes.filter((route) => route.url !== '/postbacks/binodex/:secret');
+    expect(others.length).toBeGreaterThan(20);
+    for (const route of others) {
+      const response = await guarded.inject({
+        method: route.method as 'GET',
+        url: route.url.replace(/:[A-Za-z]+/g, 'x'),
+        headers: { ...PROXIED, authorization: `Bearer ${TOKEN}` },
+      });
+      expect([route.method, route.url, response.statusCode, response.body]).toEqual([
+        route.method,
+        route.url,
+        404,
+        route.method === 'HEAD' ? '' : '{"error":"not_found"}',
+      ]);
+    }
+  });
+
+  const TRAVERSAL = '/admin/users/..%2F..%2F..%2Fpostbacks%2Fx';
+
+  it.each([
+    ['x-forwarded-for', '203.0.113.1'],
+    ['x-forwarded-host', 'binarius.example'],
+    ['x-forwarded-proto', 'https'],
+    ['forwarded', 'for=203.0.113.1'],
+  ])('G2 refuses the traversal with %s alone', async (name, value) => {
+    const response = await guarded.inject({
+      method: 'GET',
+      url: TRAVERSAL,
+      headers: { [name]: value },
+    });
+    expect([response.statusCode, response.body]).toEqual([404, '{"error":"not_found"}']);
+  });
+
+  it('G3 lets the same requests through without a proxy header', async () => {
+    lines.length = 0;
+    const traversal = await guarded.inject({ method: 'GET', url: TRAVERSAL });
+    expect(traversal.statusCode).not.toBe(404);
+    expect(linesOf('proxied request refused')).toEqual([]);
+    expect((await guarded.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+  });
+
+  it('G4 records a proxied delivery on the postback route', async () => {
+    const keys = fresh();
+    const response = await guarded.inject({
+      method: 'GET',
+      url: deliveryUrl(keys),
+      headers: PROXIED,
+    });
+    expect([response.statusCode, response.json<unknown>()]).toEqual([200, { outcome: 'recorded' }]);
+    expect((await rowsFor(keys.payment_id)).deposits).toHaveLength(1);
+  });
+
+  it('G5 logs one refusal line, with the secret masked and no not-found line', async () => {
+    lines.length = 0;
+    const response = await guarded.inject({
+      method: 'GET',
+      url: `/admin/users/..%2F..%2Fpostbacks%2Fbinodex%2F${SECRET}`,
+      headers: PROXIED,
+    });
+    expect(response.statusCode).toBe(404);
+    const refused = linesOf('proxied request refused');
+    expect(refused).toEqual([expect.objectContaining({ level: 40 })]);
+    expect(refused[0]!.url).toContain('redacted');
+    expect(linesOf('route not found')).toEqual([]);
+    expect(JSON.stringify(lines)).not.toContain(SECRET);
+  });
+
+  it('G6 answers a proxied unmatched path with the not-found body', async () => {
+    const response = await guarded.inject({ method: 'GET', url: '/nowhere', headers: PROXIED });
+    expect([response.statusCode, response.body]).toEqual([404, '{"error":"not_found"}']);
+  });
+});

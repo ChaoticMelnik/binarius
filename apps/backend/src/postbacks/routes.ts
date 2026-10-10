@@ -34,7 +34,8 @@ export const postbackRoutes: FastifyPluginAsync<PostbackRoutesDeps> = async (sco
   scope.get<{ Params: { secret: string } }>(
     `${POSTBACK_PATH_PREFIX}:secret`,
     // HEAD would run this handler and journal the delivery; it falls to the not-found handler
-    { exposeHeadRoute: false },
+    // the only route a proxied request reaches (refuseProxied in app.ts)
+    { exposeHeadRoute: false, config: { publicThroughProxy: true } },
     async (request, reply) => {
       // the not-found body: a probe cannot tell a wrong secret from a route that is off
       if (!secretMatches(request.params.secret, expected)) {
