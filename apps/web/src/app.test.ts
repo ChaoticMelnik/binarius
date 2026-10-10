@@ -2065,7 +2065,7 @@ describe('the deposits page and the card section (#341)', () => {
       `<time datetime="${SAMPLE_DEPOSIT.createdAt}">${SAMPLE_DEPOSIT.createdAt}</time>`,
       `<a href="/admin/users/${USER}">4242</a>`,
       `<code>${SAMPLE_DEPOSIT.brokerAccountId}</code>`,
-      '<code>pb-1</code>',
+      '<code>broker-7</code>',
       '<code>pay-1</code>',
       '10.50000000',
       'USD',
@@ -2077,14 +2077,14 @@ describe('the deposits page and the card section (#341)', () => {
       `<time datetime="${SAMPLE_DEPOSIT_UNOWNED.createdAt}">${SAMPLE_DEPOSIT_UNOWNED.createdAt}</time>`,
       TEXTS.none,
       TEXTS.none,
-      '<code>pb-&lt;b&gt;</code>',
-      TEXTS.none,
-      TEXTS.none,
+      '<code>trader-&lt;b&gt;</code>',
+      '<code>pay-2</code>',
+      '5.00000000',
       TEXTS.none,
       '<code>received</code>',
       TEXTS.none,
     ]);
-    expect(response.body).not.toContain(SAMPLE_DEPOSIT_UNOWNED.postbackId);
+    expect(response.body).not.toContain(SAMPLE_DEPOSIT_UNOWNED.brokerUserId);
     expect(response.body).not.toContain(TEXTS.depositsNext);
     expect(response.body).not.toContain(TEXTS.depositsFirst);
   });
@@ -2154,7 +2154,7 @@ describe('the deposits page and the card section (#341)', () => {
     expect(auditAt).toBeGreaterThan(depositsAt);
     const section = response.body.slice(depositsAt, auditAt);
     expect(section).toContain(TEXTS.userDepositsRecent(ADMIN_USER_RECENT_LEDGER));
-    expect(section).toContain('<code>pb-1</code>');
+    expect(section).toContain('<code>broker-7</code>');
     expect(section).toContain('<td class="num">10.50000000</td>');
     expect(hrefOf(section, TEXTS.userDepositsAll)).toBe(`/admin/deposits?user=${SAMPLE_USER_ID}`);
   });

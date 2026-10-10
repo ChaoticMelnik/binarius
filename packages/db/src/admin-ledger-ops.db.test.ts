@@ -5,6 +5,7 @@ import {
   adminDepositViewSchema,
   adminLedgerEntrySchema,
   DepositEventStatus,
+  PostbackSource,
   TokenLedgerKind,
   TokenLedgerRefType,
   type DecimalString,
@@ -306,8 +307,10 @@ const listDeposits = (
 
 let postbackSeq = 0;
 
-// Written directly: deposit_events has no writer yet (#141/#142), so a row's status and amount
-// here are the test's choice, not a postback contract. created_at is explicit, as in insertEntry.
+// Written directly rather than through recordPostback (#141): a row's status, processed_at and
+// created_at here are the test's choice, and nothing writes a credited deposit until #386.
+// The trader id of an attributed row is its account's, as deposit_events_account_trader_fk
+// demands.
 async function insertDeposit(
   db: Db,
   row: {
@@ -324,11 +327,15 @@ async function insertDeposit(
     .values({
       userId: row.userId ?? null,
       brokerAccountId: row.brokerAccountId ?? null,
-      postbackId: `pb-${++postbackSeq}`,
-      amount: row.amount === undefined ? null : (row.amount as DecimalString),
+      source: PostbackSource.Binodex,
+      brokerUserId:
+        row.brokerAccountId === undefined
+          ? `trader-${++postbackSeq}`
+          : sql`(select broker_user_id from broker_accounts where id = ${row.brokerAccountId})`,
+      paymentId: `pay-${++postbackSeq}`,
+      amount: (row.amount ?? '1') as DecimalString,
       status: row.status ?? DepositEventStatus.Received,
       processedAt: row.processedAt ?? null,
-      payload: { secret: 'raw postback' },
       createdAt: sql`'2026-10-01T12:00:00.000000Z'::timestamptz - make_interval(secs => ${row.secondsAgo})`,
     })
     .returning({ id: depositEvents.id });
@@ -470,7 +477,7 @@ describe('listDepositsForAdmin — filters', () => {
 describe('toAdminDepositView', () => {
   const db = withDatabase();
 
-  it('selects no payload and projects a row to exactly the wire keys', async () => {
+  it('projects a row to exactly the wire keys', async () => {
     const { userId, brokerAccountId, telegramUserId } = await seedUserWithAccount(db());
     const id = await insertDeposit(db(), {
       userId,
@@ -487,7 +494,7 @@ describe('toAdminDepositView', () => {
       'id',
       'userId',
       'brokerAccountId',
-      'postbackId',
+      'brokerUserId',
       'paymentId',
       'amount',
       'currency',
@@ -521,8 +528,6 @@ describe('toAdminDepositView', () => {
       userId: null,
       telegramUserId: null,
       brokerAccountId: null,
-      paymentId: null,
-      amount: null,
       currency: null,
       status: DepositEventStatus.Received,
       processedAt: null,

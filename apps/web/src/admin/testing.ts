@@ -153,7 +153,7 @@ export const SAMPLE_DEPOSIT: AdminDepositView = {
   userId: SAMPLE_USER_ID,
   telegramUserId: '4242',
   brokerAccountId: '00000000-0000-4000-8000-0000000000d1',
-  postbackId: 'pb-1',
+  brokerUserId: 'broker-7',
   paymentId: 'pay-1',
   amount: '10.50000000' as DecimalString,
   currency: 'USD',
@@ -162,15 +162,15 @@ export const SAMPLE_DEPOSIT: AdminDepositView = {
   createdAt: AT,
 };
 
-// an unattributed postback: every nullable key null, a postback id that must print as text
+// an unattributed postback: every nullable key null, a trader id that must print as text
 export const SAMPLE_DEPOSIT_UNOWNED: AdminDepositView = {
   id: '00000000-0000-4000-8000-000000000072',
   userId: null,
   telegramUserId: null,
   brokerAccountId: null,
-  postbackId: 'pb-<b>',
-  paymentId: null,
-  amount: null,
+  brokerUserId: 'trader-<b>',
+  paymentId: 'pay-2',
+  amount: '5.00000000' as DecimalString,
   currency: null,
   status: DepositEventStatus.Received,
   processedAt: null,

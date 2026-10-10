@@ -19,6 +19,7 @@ import {
   brokerTrades,
   depositEvents,
   oauthStates,
+  postbackDeliveries,
   outboxEvents,
   referralCodes,
   referrals,
@@ -128,21 +129,34 @@ async function seedAccount(tx: Tx) {
       accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
     })
     .returning({ id: brokerAccounts.id });
-  return { userId: user!.id, accountId: account!.id };
+  return { userId: user!.id, accountId: account!.id, brokerUserId: `broker-${n}` };
 }
 
-async function seedDeposit(tx: Tx, seed: { accountId: string; userId: string }): Promise<string> {
+async function seedDeposit(
+  tx: Tx,
+  seed: { accountId: string; userId: string; brokerUserId: string },
+): Promise<string> {
   const [row] = await tx
     .insert(depositEvents)
     .values({
+      source: 'binodex',
       userId: seed.userId,
       brokerAccountId: seed.accountId,
-      postbackId: `pb-${++seq}`,
-      payload: {},
+      brokerUserId: seed.brokerUserId,
+      paymentId: `pay-${++seq}`,
+      amount: '10' as DecimalString,
     })
     .returning({ id: depositEvents.id });
   return row!.id;
 }
+
+// the columns every deposit_events row needs (#141), unattributed
+const depositShape = () => ({
+  source: 'binodex' as const,
+  brokerUserId: `trader-${++seq}`,
+  paymentId: `pay-${++seq}`,
+  amount: '10' as DecimalString,
+});
 
 // a finished intent holds no reserve and a live one holds its token
 // (trade_intents_terminal_reserve_check), so the reserve follows the status unless patched
@@ -235,7 +249,7 @@ describe('enum and uniqueness constraints', () => {
       'deposit_events_status_check',
       (tx: Tx) =>
         tx.execute(
-          sql`insert into deposit_events (postback_id, payload, status) values ('x', '{}'::jsonb, 'bogus')`,
+          sql`insert into deposit_events (source, broker_user_id, payment_id, amount, status) values ('binodex', 't', 'x', 1, 'bogus')`,
         ),
     ],
     [
@@ -461,8 +475,9 @@ describe('enum and uniqueness constraints', () => {
   it.each([
     ['bonus_rules_code_idx', sql`insert into bonus_rules (code, kind) values ('dup', 'k')`],
     [
-      'deposit_events_payment_id_idx',
-      sql`insert into deposit_events (postback_id, payment_id, payload) values (gen_random_uuid()::text, 'pay-1', '{}'::jsonb)`,
+      // the second trader id does not matter: one deposit per payment of a source
+      'deposit_events_source_payment_idx',
+      sql`insert into deposit_events (source, broker_user_id, payment_id, amount) values ('binodex', gen_random_uuid()::text, 'pay-1', 1)`,
     ],
   ])('enforces %s', async (constraint, statement) => {
     await rolledBack(async (tx) => {
@@ -503,11 +518,12 @@ describe('enum and uniqueness constraints', () => {
     });
   });
 
-  // these five cannot be violated by an insert — a composite unique on (id, …) is unreachable
+  // these six cannot be violated by an insert — a composite unique on (id, …) is unreachable
   // while id is the PK — so they are covered by asserting the catalog, and registered in the
   // coverage set only once that assertion has passed
   it('keeps the composite FK targets in place', async () => {
     const expected = [
+      'broker_accounts_id_broker_user_id_key',
       'broker_accounts_id_user_id_key',
       'deposit_events_id_user_key',
       'trade_intents_id_account_mode_key',
@@ -1543,16 +1559,39 @@ describe('trade_intents state machine', () => {
 });
 
 describe('deposit_events', () => {
+  it('accepts a deposit attributed to the account of its own trader', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await seedDeposit(tx, seed);
+    });
+  });
+
+  // #141: the account named must be the one whose broker_user_id the postback carried
+  it('rejects a deposit naming the account of another trader', async () => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(depositEvents).values({
+          ...depositShape(),
+          userId: seed.userId,
+          brokerAccountId: seed.accountId,
+        }),
+        '23503',
+        'deposit_events_account_trader_fk',
+      );
+    });
+  });
+
   it('rejects a deposit whose account belongs to another user', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
       const other = await seedAccount(tx);
       await rejectsWith(
         tx.insert(depositEvents).values({
+          ...depositShape(),
+          brokerUserId: seed.brokerUserId,
           userId: other.userId,
           brokerAccountId: seed.accountId,
-          postbackId: 'p-1',
-          payload: {},
         }),
         '23503',
         'deposit_events_account_owner_fk',
@@ -1560,16 +1599,44 @@ describe('deposit_events', () => {
     });
   });
 
-  it('rejects a negative amount', async () => {
+  it.each([
+    ['a negative amount', '-500.00'],
+    ['a zero amount', '0'],
+    ['a NaN amount', 'NaN'],
+  ])('rejects %s', async (_label, amount) => {
     await rolledBack(async (tx) => {
       await rejectsWith(
-        tx.insert(depositEvents).values({
-          postbackId: 'p-2',
-          amount: '-500.00' as DecimalString,
-          payload: {},
-        }),
+        tx.insert(depositEvents).values({ ...depositShape(), amount: amount as DecimalString }),
         '23514',
         'deposit_events_amount_check',
+      );
+    });
+  });
+
+  it.each([
+    ['amount', { amount: null }],
+    ['payment_id', { paymentId: null }],
+    ['broker_user_id', { brokerUserId: null }],
+    ['source', { source: null }],
+  ])('rejects a NULL %s', async (column, patch) => {
+    await rolledBack(async (tx) => {
+      const error = await tx
+        .insert(depositEvents)
+        .values({ ...depositShape(), ...(patch as object) })
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column });
+    });
+  });
+
+  it('rejects an unknown source', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(depositEvents).values({ ...depositShape(), source: 'other' as never }),
+        '23514',
+        'deposit_events_source_check',
       );
     });
   });
@@ -1581,9 +1648,8 @@ describe('deposit_events', () => {
       const seed = await seedAccount(tx);
       await rejectsWith(
         tx.insert(depositEvents).values({
+          ...depositShape(),
           userId: seed.userId,
-          postbackId: 'p-pair',
-          payload: {},
           status: 'credited',
         }),
         '23514',
@@ -1593,43 +1659,155 @@ describe('deposit_events', () => {
   });
 
   it.each([
-    ['an unattributed postback', {}],
-    ['an account without a user yet', { withAccount: true }],
-  ])('accepts %s', async (_label, shape) => {
+    ['an unattributed postback', false],
+    ['an account without a user yet', true],
+  ])('accepts %s', async (_label, withAccount) => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);
-      const withAccount = (shape as { withAccount?: boolean }).withAccount === true;
       const [row] = await tx
         .insert(depositEvents)
         .values({
-          postbackId: `p-ok-${++seq}`,
-          payload: {},
-          ...(withAccount ? { brokerAccountId: seed.accountId } : {}),
+          ...depositShape(),
+          ...(withAccount
+            ? { brokerAccountId: seed.accountId, brokerUserId: seed.brokerUserId }
+            : {}),
         })
         .returning();
       expect(row!.status).toBe('received');
     });
   });
 
-  it('rejects a NaN amount', async () => {
+  it('keeps one deposit per payment of a source, whatever the trader', async () => {
     await rolledBack(async (tx) => {
+      const first = depositShape();
+      await tx.insert(depositEvents).values(first);
+      const inserted = await tx
+        .insert(depositEvents)
+        .values({ ...depositShape(), paymentId: first.paymentId })
+        .onConflictDoNothing()
+        .returning({ id: depositEvents.id });
+      expect(inserted).toEqual([]);
+      await rejectsWith(
+        tx.insert(depositEvents).values({ ...depositShape(), paymentId: first.paymentId }),
+        '23505',
+        'deposit_events_source_payment_idx',
+      );
+    });
+  });
+});
+
+// --- Postback deliveries (#141) ----------------------------------------------------------------
+
+describe('postback_deliveries', () => {
+  type DeliveryPatch = Partial<typeof postbackDeliveries.$inferInsert>;
+  const recorded = (depositEventId: string, patch: DeliveryPatch = {}) => ({
+    source: 'binodex' as const,
+    postbackId: `pb-${++seq}`,
+    event: 'deposit' as const,
+    outcome: 'recorded' as const,
+    depositEventId,
+    payload: { id: 'x' },
+    ...patch,
+  });
+  const rejected = (patch: DeliveryPatch = {}) => ({
+    source: 'binodex' as const,
+    outcome: 'rejected' as const,
+    rejectReason: 'missing_postback_id' as const,
+    payload: {},
+    ...patch,
+  });
+  const unattributedDeposit = async (tx: Tx) => {
+    const [row] = await tx
+      .insert(depositEvents)
+      .values(depositShape())
+      .returning({ id: depositEvents.id });
+    return row!.id;
+  };
+
+  it('keeps one recorded delivery per postback id', async () => {
+    await rolledBack(async (tx) => {
+      const deposit = await unattributedDeposit(tx);
+      const first = recorded(deposit);
+      await tx.insert(postbackDeliveries).values(first);
       await rejectsWith(
         tx
-          .insert(depositEvents)
-          .values({ postbackId: 'p-nan', amount: 'NaN' as DecimalString, payload: {} }),
-        '23514',
-        'deposit_events_amount_check',
+          .insert(postbackDeliveries)
+          .values(recorded(deposit, { postbackId: first.postbackId, outcome: 'repeated' })),
+        '23505',
+        'postback_deliveries_source_postback_idx',
       );
     });
   });
 
-  it('dedupes by postback id', async () => {
+  it('lets a rejected delivery take no slot, so a corrected re-send of its id is recorded', async () => {
     await rolledBack(async (tx) => {
-      await tx.insert(depositEvents).values({ postbackId: 'p-3', payload: {} });
+      const deposit = await unattributedDeposit(tx);
+      await tx.insert(postbackDeliveries).values(rejected());
+      const id = { postbackId: `pb-${++seq}`, rejectReason: 'invalid_amount' as const };
+      await tx.insert(postbackDeliveries).values(rejected({ ...id, event: 'ftd' }));
+      await tx.insert(postbackDeliveries).values(rejected({ ...id, event: 'ftd' }));
+      await tx.insert(postbackDeliveries).values(recorded(deposit, { postbackId: id.postbackId }));
+      await tx
+        .insert(postbackDeliveries)
+        .values(rejected({ postbackId: id.postbackId, rejectReason: 'unknown_event' }));
+    });
+  });
+
+  it.each<[string, (deposit: string) => object]>([
+    ['recorded without a deposit', (d) => recorded(d, { depositEventId: null })],
+    ['recorded with a reason', (d) => recorded(d, { rejectReason: 'invalid_amount' })],
+    ['recorded without a postback id', (d) => recorded(d, { postbackId: null })],
+    ['repeated without an event', (d) => recorded(d, { outcome: 'repeated', event: null })],
+    ['rejected with a deposit', (d) => rejected({ depositEventId: d })],
+    ['rejected without a reason', () => rejected({ rejectReason: null })],
+  ])('rejects a row %s', async (_label, row) => {
+    await rolledBack(async (tx) => {
+      const deposit = await unattributedDeposit(tx);
       await rejectsWith(
-        tx.insert(depositEvents).values({ postbackId: 'p-3', payload: {} }),
-        '23505',
-        'deposit_events_postback_id_idx',
+        tx.insert(postbackDeliveries).values(row(deposit) as never),
+        '23514',
+        'postback_deliveries_outcome_shape_check',
+      );
+    });
+  });
+
+  it.each([
+    ['postback_deliveries_source_check', { source: 'other' }],
+    ['postback_deliveries_event_check', { event: 'withdrawal' }],
+    ['postback_deliveries_outcome_check', { outcome: 'duplicate' }],
+    ['postback_deliveries_reject_reason_check', { rejectReason: 'bogus' }],
+  ])('enforces %s', async (constraint, patch) => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(postbackDeliveries).values(rejected(patch as never)),
+        '23514',
+        constraint,
+      );
+    });
+  });
+
+  it('rejects a NULL outcome', async () => {
+    await rolledBack(async (tx) => {
+      const error = await tx
+        .insert(postbackDeliveries)
+        .values(rejected({ outcome: null as never }))
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column: 'outcome' });
+    });
+  });
+
+  it('keeps a deposit a delivery references', async () => {
+    await rolledBack(async (tx) => {
+      const deposit = await unattributedDeposit(tx);
+      await tx.insert(postbackDeliveries).values(recorded(deposit));
+      await rejectsWith(
+        tx.delete(depositEvents).where(eq(depositEvents.id, deposit)),
+        // ON DELETE RESTRICT answers restrict_violation, not 23503
+        '23001',
+        'postback_deliveries_deposit_event_id_deposit_events_id_fk',
       );
     });
   });
@@ -1661,12 +1839,11 @@ describe('foreign keys', () => {
         }),
     ],
     [
-      // no user_id: the ownership composite is skipped, and the owner-pair CHECK allows it
-      'deposit_events_broker_account_id_broker_accounts_id_fk',
+      'postback_deliveries_deposit_event_id_deposit_events_id_fk',
       (tx) =>
-        tx
-          .insert(depositEvents)
-          .values({ brokerAccountId: dangling, postbackId: `pb-fk-${++seq}`, payload: {} }),
+        tx.execute(
+          sql`insert into postback_deliveries (source, postback_id, event, outcome, deposit_event_id, payload) values ('binodex', ${`pb-fk-${++seq}`}, 'deposit', 'recorded', ${dangling}, '{}'::jsonb)`,
+        ),
     ],
     [
       'notification_jobs_user_id_users_id_fk',
@@ -1703,7 +1880,7 @@ describe('foreign keys', () => {
     });
   });
 
-  // These five cannot be violated by an insert while their composite is in place: the composite
+  // These six cannot be violated by an insert while their composite is in place: the composite
   // covers the same columns, so any dangling value fails it too, and which of the two fires is
   // an undocumented trigger order. Dropping the composite to isolate them would be DDL against a
   // shared database (see the top of this file). So, as with the composite FK targets above, the
@@ -1735,6 +1912,14 @@ describe('foreign keys', () => {
         from: 'broker_trades(intent_id)',
         to: 'trade_intents(id)',
         premises: ['broker_trades_intent_account_fk'],
+      },
+      {
+        // broker_user_id is NOT NULL (#141), so a dangling account id always reaches the trader
+        // composite too
+        name: 'deposit_events_broker_account_id_broker_accounts_id_fk',
+        from: 'deposit_events(broker_account_id)',
+        to: 'broker_accounts(id)',
+        premises: ['deposit_events_account_trader_fk'],
       },
       {
         // a user without an account would slip past the composite under MATCH SIMPLE; the

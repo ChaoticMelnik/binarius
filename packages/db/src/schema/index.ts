@@ -9,6 +9,7 @@ export * from './outbox-events';
 export * from './broker-trades';
 export * from './broker-balance-snapshots';
 export * from './deposit-events';
+export * from './postback-deliveries';
 export * from './bonus-rules';
 export * from './notification-jobs';
 export * from './audit-log';

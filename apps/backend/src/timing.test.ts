@@ -113,6 +113,15 @@ describe('backend shutdown timing', () => {
     expect(backend).toMatch(/^\$\{WEB_PUBLIC_URL:-[^}]+\}$/);
     expect(backend).toBe(composeServiceEnvValue(composeYaml, 'web', 'WEB_PUBLIC_URL'));
   });
+
+  // #141: forwarded only when set, so the route is off unless the host sets it; the worker never
+  // receives it (not in the shared broker anchor)
+  it('forwards POSTBACK_URL_SECRET to the backend only, without a default', () => {
+    expect(composeServiceEnvValue(composeYaml, 'backend', 'POSTBACK_URL_SECRET')).toBe('');
+    expect(
+      composeServiceEnvValue(composeYaml, 'trading-worker', 'POSTBACK_URL_SECRET'),
+    ).toBeUndefined();
+  });
 });
 
 describe('broker balance timing', () => {

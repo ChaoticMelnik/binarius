@@ -708,7 +708,7 @@ describe('deposit contracts (#341)', () => {
     userId: U1,
     telegramUserId: '4242',
     brokerAccountId: '00000000-0000-4000-8000-000000000020',
-    postbackId: 'pb-1',
+    brokerUserId: '101962',
     paymentId: 'pay-1',
     amount: '10.50000000',
     currency: 'USD',
@@ -721,15 +721,13 @@ describe('deposit contracts (#341)', () => {
     userId: null,
     telegramUserId: null,
     brokerAccountId: null,
-    paymentId: null,
-    amount: null,
     currency: null,
     status: 'received',
     processedAt: null,
   };
   const list = { me: ME, deposits: [deposit, unowned], nextCursor: CURSOR };
 
-  it('accepts a row and a row with all seven nullables as null', () => {
+  it('accepts a row and a row with all five nullables as null', () => {
     expect(adminDepositViewSchema.safeParse(deposit).success).toBe(true);
     expect(adminDepositViewSchema.safeParse(unowned).success).toBe(true);
   });
@@ -740,7 +738,7 @@ describe('deposit contracts (#341)', () => {
       'userId',
       'telegramUserId',
       'brokerAccountId',
-      'postbackId',
+      'brokerUserId',
       'paymentId',
       'amount',
       'currency',
@@ -754,6 +752,9 @@ describe('deposit contracts (#341)', () => {
     ['an extra key', { ...deposit, extra: 1 }],
     ['the raw payload', { ...deposit, payload: {} }],
     ['a numeric amount', { ...deposit, amount: 10.5 }],
+    ['no amount (#141: NOT NULL)', { ...deposit, amount: null }],
+    ['no payment id (#141: NOT NULL)', { ...deposit, paymentId: null }],
+    ['the old postback id key', { ...deposit, postbackId: 'pb-1' }],
     ['an unknown status', { ...deposit, status: 'bogus' }],
     ['a numeric Telegram id', { ...deposit, telegramUserId: 4242 }],
   ])('refuses a row with %s', (_label, row) => {

@@ -1,10 +1,6 @@
 import * as z from 'zod';
 import { DemoStakeRefusal } from './demo-stake';
-import {
-  NUMERIC_FRACTION_DIGITS,
-  NUMERIC_INTEGER_DIGITS,
-  positiveDecimalStringSchema,
-} from './money';
+import { numericDomainDecimalSchema, positiveDecimalStringSchema } from './money';
 
 export const TradeMode = { Demo: 'demo', Real: 'real' } as const;
 export type TradeMode = (typeof TradeMode)[keyof typeof TradeMode];
@@ -149,15 +145,8 @@ const INT8_MAX = 9_223_372_036_854_775_807n;
 
 const int4PositiveSchema = z.int().positive().max(INT4_MAX);
 
-// trade_intents.amount is numeric(20,8): a longer input would be rounded or rejected by the
-// database, and a rounded value would no longer compare equal on an idempotent replay
-export const tradeAmountSchema = positiveDecimalStringSchema.refine(
-  (value) => {
-    const [integer = '', fraction = ''] = value.split('.');
-    return integer.length <= NUMERIC_INTEGER_DIGITS && fraction.length <= NUMERIC_FRACTION_DIGITS;
-  },
-  { error: 'expected at most 12 integer and 8 fractional digits' },
-);
+// trade_intents.amount is numeric(20,8)
+export const tradeAmountSchema = numericDomainDecimalSchema;
 
 // users.telegram_user_id is bigint; Telegram ids are positive and fit int8. Zod 4 runs every
 // check even after the regex failed, so the refine must not hand BigInt() a non-numeric string.

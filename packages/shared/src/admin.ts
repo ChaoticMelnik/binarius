@@ -338,16 +338,18 @@ export const adminUserLedgerSectionSchema = z.strictObject({
 export type AdminUserLedgerSection = z.infer<typeof adminUserLedgerSectionSchema>;
 
 // The deposit row (#341), declared ahead of the card for the same reason as the ledger row; the
-// page's query and envelope are in the #341 block below. `payload` is not a key: the raw postback
-// never leaves the backend. `amount` is the numeric(20,8) column as PostgreSQL prints it.
+// page's query and envelope are in the #341 block below. The raw postback is not a key: it lives
+// in postback_deliveries (#141), which the admin does not read. `brokerUserId` is the trader id
+// the postback named, what identifies a deposit without an owner. `amount` is the numeric(20,8)
+// column as PostgreSQL prints it.
 export const adminDepositViewSchema = z.strictObject({
   id: z.uuid(),
   userId: z.uuid().nullable(),
   telegramUserId: telegramUserIdSchema.nullable(),
   brokerAccountId: z.uuid().nullable(),
-  postbackId: z.string(),
-  paymentId: z.string().nullable(),
-  amount: decimalStringSchema.nullable(),
+  brokerUserId: z.string(),
+  paymentId: z.string(),
+  amount: decimalStringSchema,
   currency: z.string().nullable(),
   status: depositEventStatusSchema,
   processedAt: isoDateTime.nullable(),

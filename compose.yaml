@@ -131,6 +131,10 @@ services:
       # the link the staff bot sends is <WEB_PUBLIC_URL>/admin/login/link/<token> (#448): the
       # same value and default as `web` below, tied by apps/backend/src/timing.test.ts
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://127.0.0.1:3001}
+      # The broker's postbacks (#141, docs/postbacks.md): the secret path segment of
+      # GET /postbacks/binodex/<secret>. Forwarded only when set; unset, the route does not exist.
+      # Here rather than in the broker anchor: the worker never receives it.
+      POSTBACK_URL_SECRET:
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
     healthcheck:

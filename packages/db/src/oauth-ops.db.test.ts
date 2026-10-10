@@ -1,7 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AccountHaltReason, AuthRevokedReason, type OAuthTokens } from '@binarius/shared';
+import {
+  AccountHaltReason,
+  AuthRevokedReason,
+  PostbackSource,
+  type OAuthTokens,
+} from '@binarius/shared';
 import { brokerAccountRow, createTempDatabase, seedUser, type TempDatabase } from './testing';
 import { createTokenCipher, TokenField } from './crypto';
 import {
@@ -19,7 +24,8 @@ import {
   revokeAccountIfUnchanged,
   toBrokerAccountView,
 } from './oauth-ops';
-import { brokerAccounts, oauthStates, tokenLedger, users } from './schema/index';
+import { recordPostback } from './postback-ops';
+import { brokerAccounts, depositEvents, oauthStates, tokenLedger, users } from './schema/index';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -820,6 +826,110 @@ describe('linkBrokerAccount with activate (the email login, issue #162)', () => 
       }),
     ).toEqual({ ok: false, reason: 'user_blocked' });
     expect(await ledgerOf(user.userId)).toEqual([]);
+  });
+});
+
+describe('late attachment of postbacks at activation (#141)', () => {
+  const postback = async (traderId: string) => {
+    const n = ++seq;
+    const result = await recordPostback(tmp.db, {
+      source: PostbackSource.Binodex,
+      query: {
+        event: 'deposit',
+        id: `att-pb-${n}`,
+        payment_id: `att-pay-${n}`,
+        a: traderId,
+        amount: '5',
+      },
+    });
+    if (result.outcome !== 'recorded') throw new Error(`postback not recorded: ${result.outcome}`);
+    return result.depositEventId;
+  };
+  const ownerOf = async (depositEventId: string) => {
+    const [row] = await tmp.db
+      .select({ userId: depositEvents.userId, accountId: depositEvents.brokerAccountId })
+      .from(depositEvents)
+      .where(eq(depositEvents.id, depositEventId));
+    return row;
+  };
+
+  it('attaches nothing at the OAuth callback and the pending deposits at the confirm', async () => {
+    const telegramUserId = 700_300n;
+    const tokens = brokerTokens();
+    const early = await postback(tokens.user.id);
+    const stranger = await postback(`${tokens.user.id}-other`);
+
+    const pending = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: false,
+    });
+    expect(pending).toMatchObject({
+      ok: true,
+      account: { status: 'pending' },
+      attachedDeposits: 0,
+    });
+    if (!pending.ok) return;
+    // a postback while pending is stored without an owner too
+    const whilePending = await postback(tokens.user.id);
+    expect(await ownerOf(early)).toEqual({ userId: null, accountId: null });
+
+    const confirmed = await confirmBrokerAccount(tmp.db, {
+      telegramUserId,
+      accountId: pending.account.id,
+    });
+    expect(confirmed).toMatchObject({ ok: true, attachedDeposits: 2 });
+    const owned = { userId: pending.account.userId, accountId: pending.account.id };
+    expect(await ownerOf(early)).toEqual(owned);
+    expect(await ownerOf(whilePending)).toEqual(owned);
+    expect(await ownerOf(stranger)).toEqual({ userId: null, accountId: null });
+  });
+
+  it('attaches at the email login that inserts the account active', async () => {
+    const tokens = brokerTokens();
+    const early = await postback(tokens.user.id);
+
+    const linked = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_301n,
+      tokens,
+      cipher,
+      activate: true,
+    });
+    expect(linked).toMatchObject({ ok: true, attachedDeposits: 1 });
+    if (!linked.ok) return;
+    expect(await ownerOf(early)).toEqual({
+      userId: linked.account.userId,
+      accountId: linked.account.id,
+    });
+
+    const again = await linkBrokerAccount(tmp.db, {
+      telegramUserId: 700_301n,
+      tokens,
+      cipher,
+      activate: true,
+    });
+    expect(again).toMatchObject({ ok: true, attachedDeposits: 0 });
+  });
+
+  it("attaches at the email login that activates the user's pending account", async () => {
+    const telegramUserId = 700_302n;
+    const tokens = brokerTokens();
+    await linkBrokerAccount(tmp.db, { telegramUserId, tokens, cipher, activate: false });
+    const early = await postback(tokens.user.id);
+
+    const linked = await linkBrokerAccount(tmp.db, {
+      telegramUserId,
+      tokens,
+      cipher,
+      activate: true,
+    });
+    expect(linked).toMatchObject({ ok: true, account: { status: 'active' }, attachedDeposits: 1 });
+    if (!linked.ok) return;
+    expect(await ownerOf(early)).toEqual({
+      userId: linked.account.userId,
+      accountId: linked.account.id,
+    });
   });
 });
 

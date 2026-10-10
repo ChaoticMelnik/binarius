@@ -1,10 +1,9 @@
-import { DepositEventStatus } from '@binarius/shared';
+import { DepositEventStatus, PostbackSource } from '@binarius/shared';
 import { sql } from 'drizzle-orm';
 import {
   check,
   foreignKey,
   index,
-  jsonb,
   pgTable,
   text,
   timestamp,
@@ -12,13 +11,14 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { createdAt, id, inList, money, nullablePositiveNumeric } from './columns';
+import { createdAt, id, inList, money, positiveNumeric } from './columns';
 import { brokerAccounts } from './broker-accounts';
 import { users } from './users';
 
-// skeleton (#7): the postback contract is confirmed in #12; a postback is stored before it
-// is credited and deduplicated by postback_id and payment_id.
-// Not enforced here, and #12's to enforce at credit time: `status` and `amount` stay mutable
+// One row per payment of a source (#141, docs/postbacks.md): the Deposit and the FTD postback of
+// one payment, and any re-delivery, land on the same row. Each delivery itself — its postback id,
+// event and raw query — is a row of postback_deliveries. Nothing credits yet (#386).
+// Not enforced here, and #386's to enforce at credit time: `status` and `amount` stay mutable
 // after a token_ledger row references the deposit, and a deposit in `failed`/`ignored` can
 // still be credited — the FK keys on (id, user_id), not on status.
 export const depositEvents = pgTable(
@@ -29,15 +29,18 @@ export const depositEvents = pgTable(
     brokerAccountId: uuid('broker_account_id').references(() => brokerAccounts.id, {
       onDelete: 'restrict',
     }),
-    postbackId: text('postback_id').notNull(),
-    paymentId: text('payment_id'),
-    amount: money('amount'),
+    source: text('source').$type<PostbackSource>().notNull(),
+    // the postback's trader id (macro `a`); kept on an unattributed row, which activation of the
+    // account with this broker_user_id attaches (attachDepositsToAccount)
+    brokerUserId: text('broker_user_id').notNull(),
+    paymentId: text('payment_id').notNull(),
+    amount: money('amount').notNull(),
+    // the `coin` macro as delivered, NULL when absent
     currency: text('currency'),
     status: text('status')
       .$type<DepositEventStatus>()
       .notNull()
       .default(DepositEventStatus.Received),
-    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
     processedAt: timestamp('processed_at', { withTimezone: true }),
     createdAt: createdAt(),
   },
@@ -49,7 +52,14 @@ export const depositEvents = pgTable(
       columns: [t.brokerAccountId, t.userId],
       foreignColumns: [brokerAccounts.id, brokerAccounts.userId],
     }),
-    // ...and the FK alone is not enough: it is MATCH SIMPLE, so it is satisfied whenever either
+    // the account must be the one of the trader the postback named: an attributed deposit cannot
+    // sit on a card whose broker_user_id differs from its own
+    foreignKey({
+      name: 'deposit_events_account_trader_fk',
+      columns: [t.brokerAccountId, t.brokerUserId],
+      foreignColumns: [brokerAccounts.id, brokerAccounts.brokerUserId],
+    }),
+    // ...and the FKs alone are not enough: it is MATCH SIMPLE, so it is satisfied whenever either
     // column is NULL. A claimed user must always name the account it was claimed through;
     // the unattributed postback (both NULL) and the account-without-user row stay legal.
     check(
@@ -58,13 +68,13 @@ export const depositEvents = pgTable(
     ),
     // FK target for token_ledger.deposit_event_id
     unique('deposit_events_id_user_key').on(t.id, t.userId),
-    nullablePositiveNumeric('deposit_events_amount_check', t.amount),
-    uniqueIndex('deposit_events_postback_id_idx').on(t.postbackId),
-    uniqueIndex('deposit_events_payment_id_idx')
-      .on(t.paymentId)
-      .where(sql`${t.paymentId} is not null`),
+    positiveNumeric('deposit_events_amount_check', t.amount),
+    inList('deposit_events_source_check', t.source, PostbackSource),
+    // one deposit per payment: the Deposit and the FTD postback of one payment cannot make two
+    uniqueIndex('deposit_events_source_payment_idx').on(t.source, t.paymentId),
     index('deposit_events_user_id_idx').on(t.userId),
     index('deposit_events_broker_account_id_idx').on(t.brokerAccountId),
+    index('deposit_events_broker_user_id_idx').on(t.brokerUserId),
     inList('deposit_events_status_check', t.status, DepositEventStatus),
   ],
 );

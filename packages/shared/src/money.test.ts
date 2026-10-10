@@ -4,6 +4,7 @@ import {
   isDecimalString,
   moneyWireSchema,
   normalizeDecimal,
+  numericDomainDecimalSchema,
   positiveDecimalStringSchema,
 } from './money';
 
@@ -108,4 +109,20 @@ describe('normalizeDecimal', () => {
   ])('%s -> %s', (value, canonical) => {
     expect(normalizeDecimal(value)).toBe(canonical);
   });
+});
+
+describe('numericDomainDecimalSchema', () => {
+  it.each(['10', '10.50', '0.00000001', '999999999999', '999999999999.99999999'])(
+    'accepts %j',
+    (value) => {
+      expect(numericDomainDecimalSchema.parse(value)).toBe(value);
+    },
+  );
+
+  it.each(['0', '0.00', '-1', '1e5', '1,000', '1000000000000', '1.000000001'])(
+    'rejects %j',
+    (value) => {
+      expect(numericDomainDecimalSchema.safeParse(value).success).toBe(false);
+    },
+  );
 });

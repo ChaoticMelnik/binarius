@@ -113,6 +113,10 @@
       "types": "./src/http-body.ts",
       "default": "./src/http-body.ts"
     },
+    "./postback": {
+      "types": "./src/postback.ts",
+      "default": "./src/postback.ts"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"

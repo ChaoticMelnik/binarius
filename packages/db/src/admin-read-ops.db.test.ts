@@ -415,8 +415,11 @@ describe('readUserForAdmin — the deposits section (#341)', () => {
       .values({
         userId: owner.userId ?? null,
         brokerAccountId: owner.brokerAccountId,
-        postbackId: `card-pb-${++seq}`,
-        payload: {},
+        // the account's own trader id (deposit_events_account_trader_fk, #141)
+        brokerUserId: sql`(select broker_user_id from broker_accounts where id = ${owner.brokerAccountId})`,
+        source: 'binodex',
+        paymentId: `card-pay-${++seq}`,
+        amount: '1' as DecimalString,
         createdAt: sql`'2026-10-01T12:00:00.000000Z'::timestamptz - make_interval(secs => ${secondsAgo})`,
       })
       .returning({ id: depositEvents.id });

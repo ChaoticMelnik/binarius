@@ -212,6 +212,29 @@ describe('parseEnv', () => {
   });
 });
 
+describe('POSTBACK_URL_SECRET (#141)', () => {
+  const secret = 'a'.repeat(64);
+
+  it('leaves the route off when absent', () => {
+    expect(parseEnv(valid).postbackUrlSecret).toBeUndefined();
+  });
+
+  it.each([secret, 'A-z_9'.repeat(7).slice(0, 32), 'f'.repeat(128)])('accepts %s', (value) => {
+    expect(parseEnv({ ...valid, POSTBACK_URL_SECRET: value }).postbackUrlSecret).toBe(value);
+  });
+
+  it.each([
+    ['empty', '', 'Env POSTBACK_URL_SECRET must not be empty'],
+    ['31 characters', 'a'.repeat(31), 'Env POSTBACK_URL_SECRET must be 32-128 characters'],
+    ['129 characters', 'a'.repeat(129), 'Env POSTBACK_URL_SECRET must be 32-128 characters'],
+    ['a slash', `${secret}/x`, 'Env POSTBACK_URL_SECRET must be 32-128 characters'],
+    ['whitespace', `${secret} `, 'Env POSTBACK_URL_SECRET must be 32-128 characters'],
+    ['a query character', `${secret}?a=1`, 'Env POSTBACK_URL_SECRET must be 32-128 characters'],
+  ])('refuses %s', (_label, value, message) => {
+    expect(() => parseEnv({ ...valid, POSTBACK_URL_SECRET: value })).toThrow(message);
+  });
+});
+
 describe('INTERNAL_API_TOKEN', () => {
   it.each([
     ['short-token', 'Env INTERNAL_API_TOKEN must be at least 16 characters'],

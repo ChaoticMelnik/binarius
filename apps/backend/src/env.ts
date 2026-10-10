@@ -16,6 +16,7 @@ import {
   type EnvSource,
 } from '@binarius/shared';
 import { OAUTH_CALLBACK_PATH } from '@binarius/shared/oauth';
+import { POSTBACK_URL_SECRET_PATTERN } from '@binarius/shared/postback';
 import {
   DEFAULT_BROKER_PAIRS_TTL_MS,
   MAX_BROKER_PAIRS_TTL_MS,
@@ -73,6 +74,8 @@ export interface Env {
   webPublicUrl: string;
   // the demo-only fuse (#396): read once at start, refuses real intents and real sessions
   demoOnly: boolean;
+  // the postback route's path secret (#141); absent = the route is not registered
+  postbackUrlSecret?: string;
 }
 
 export function parseEnv(source: EnvSource): Env {
@@ -130,6 +133,11 @@ export function parseEnv(source: EnvSource): Env {
     brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),
     webPublicUrl: parseOriginEnv(readEnv(source, 'WEB_PUBLIC_URL'), 'WEB_PUBLIC_URL'),
     demoOnly: parseDemoOnlyEnv(source),
+    // readEnv refuses '', while an absent variable leaves the route off
+    postbackUrlSecret:
+      source.POSTBACK_URL_SECRET === undefined
+        ? undefined
+        : parsePostbackSecret(readEnv(source, 'POSTBACK_URL_SECRET'), 'POSTBACK_URL_SECRET'),
     ...parseBotTokens(source),
     ...parseTokenEncryption(source),
   };
@@ -246,6 +254,15 @@ function parsePartnerCode(raw: string, name: string): string {
     throw new Error(
       `Env ${name} must be the short partner code ([A-Za-z0-9_-], 1-64 chars), not the partner link`,
     );
+  }
+  return raw;
+}
+
+// The cabinet's URL template holds it as typed, so it must need no encoding; the length makes
+// it unguessable (`openssl rand -hex 32` gives 64).
+function parsePostbackSecret(raw: string, name: string): string {
+  if (!POSTBACK_URL_SECRET_PATTERN.test(raw)) {
+    throw new Error(`Env ${name} must be 32-128 characters of [A-Za-z0-9_-]`);
   }
   return raw;
 }
