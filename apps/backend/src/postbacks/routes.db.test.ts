@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { postbackResponseSchema } from '@binarius/shared';
+import { POSTBACK_URL_SECRET_MAX_LENGTH, postbackResponseSchema } from '@binarius/shared';
 import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
 import { depositEvents, postbackDeliveries } from '@binarius/db';
 import { buildApp } from '../app';
@@ -148,7 +148,7 @@ describe('GET /postbacks/binodex/:secret', () => {
     ]);
     const text = JSON.stringify(lines);
     expect(text).not.toContain(SECRET);
-    expect(text).toContain('/postbacks/binodex/redacted?');
+    expect(text).toContain('/postbacks/redacted?');
   });
 
   it('warns about a repeat that disagrees, by field name only', async () => {
@@ -208,20 +208,84 @@ describe('GET /postbacks/binodex/:secret', () => {
     expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
     const notFound = linesOf('route not found');
     expect(notFound).toHaveLength(1);
-    expect(notFound[0]!.url).toContain('/postbacks/binodex/redacted?');
+    expect(notFound[0]!.url).toContain('/postbacks/redacted?');
     expect(JSON.stringify(lines)).not.toContain(SECRET);
   });
 
-  it('answers 429 over the per-minute window', async () => {
+  it('refuses a NUL in the query with 400, not a 500, and journals nothing', async () => {
+    const keys = fresh();
+    const response = await get(`${deliveryUrl(keys)}&sub_id=a%00b`);
+
+    expect([response.statusCode, response.json<unknown>()]).toEqual([400, { error: 'validation' }]);
+    expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
+  });
+
+  // D7': wrong secrets take no slot, so a probe cannot crowd out the broker's deliveries
+  it('counts the window only past the secret', async () => {
     const limited = testApp({ secret: SECRET, maxPerMinute: 2 });
     await limited.ready();
     try {
       const statuses = [];
-      for (let i = 0; i < 3; i += 1)
-        statuses.push((await get(deliveryUrl(fresh()), limited)).statusCode);
-      expect(statuses).toEqual([200, 200, 429]);
+      for (let i = 0; i < 5; i += 1)
+        statuses.push((await get(deliveryUrl(fresh(), {}, `${SECRET}x`), limited)).statusCode);
+      const third = fresh();
+      for (const keys of [fresh(), fresh(), third])
+        statuses.push((await get(deliveryUrl(keys), limited)).statusCode);
+
+      expect(statuses).toEqual([404, 404, 404, 404, 404, 200, 200, 429]);
+      expect(await rowsFor(third.payment_id)).toEqual({ deliveries: [], deposits: [] });
     } finally {
       await limited.close();
+    }
+  });
+
+  it('records a delivery through a secret of the maximum length', async () => {
+    const longest = 'L'.repeat(POSTBACK_URL_SECRET_MAX_LENGTH);
+    const long = testApp({ secret: longest });
+    await long.ready();
+    try {
+      const keys = fresh();
+      const response = await get(deliveryUrl(keys, {}, longest), long);
+
+      expect([response.statusCode, response.json<unknown>()]).toEqual([
+        200,
+        { outcome: 'recorded' },
+      ]);
+      expect((await rowsFor(keys.payment_id)).deposits).toHaveLength(1);
+    } finally {
+      await long.close();
+    }
+  });
+});
+
+// Fastify's router answers an overlong (414) or malformed (400) segment itself, echoing the path;
+// frameworkErrors turns both into the not-found answer, the same whether the route is on or off
+describe('router-level answers, route on and off', () => {
+  const overlong = 'o'.repeat(POSTBACK_URL_SECRET_MAX_LENGTH + 1);
+  const malformed = `${'m'.repeat(40)}%ZZ`;
+
+  it.each([
+    ['an overlong segment', overlong],
+    ['a malformed segment', malformed],
+  ])('answers %s with the not-found 404, on and off alike', async (_label, segment) => {
+    const off = testApp(undefined);
+    await off.ready();
+    try {
+      for (const target of [app, off]) {
+        const keys = fresh();
+        lines.length = 0;
+
+        const response = await get(deliveryUrl(keys, {}, segment), target);
+
+        expect([response.statusCode, response.body]).toEqual([404, '{"error":"not_found"}']);
+        expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
+        const notFound = linesOf('route not found');
+        expect(notFound).toHaveLength(1);
+        expect(notFound[0]!.url).toContain('/postbacks/redacted?');
+        expect(JSON.stringify(lines)).not.toContain(segment.slice(0, 40));
+      }
+    } finally {
+      await off.close();
     }
   });
 });
@@ -243,7 +307,7 @@ describe('without POSTBACK_URL_SECRET', () => {
       expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
       const notFound = linesOf('route not found');
       expect(notFound).toHaveLength(1);
-      expect(notFound[0]!.url).toContain('/postbacks/binodex/redacted?');
+      expect(notFound[0]!.url).toContain('/postbacks/redacted?');
       expect(JSON.stringify(lines)).not.toContain(SECRET);
     } finally {
       await off.close();

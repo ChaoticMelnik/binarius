@@ -219,17 +219,17 @@ describe('POSTBACK_URL_SECRET (#141)', () => {
     expect(parseEnv(valid).postbackUrlSecret).toBeUndefined();
   });
 
-  it.each([secret, 'A-z_9'.repeat(7).slice(0, 32), 'f'.repeat(128)])('accepts %s', (value) => {
+  it.each([secret, 'A-z_9'.repeat(7).slice(0, 32), 'f'.repeat(100)])('accepts %s', (value) => {
     expect(parseEnv({ ...valid, POSTBACK_URL_SECRET: value }).postbackUrlSecret).toBe(value);
   });
 
   it.each([
     ['empty', '', 'Env POSTBACK_URL_SECRET must not be empty'],
-    ['31 characters', 'a'.repeat(31), 'Env POSTBACK_URL_SECRET must be 32-128 characters'],
-    ['129 characters', 'a'.repeat(129), 'Env POSTBACK_URL_SECRET must be 32-128 characters'],
-    ['a slash', `${secret}/x`, 'Env POSTBACK_URL_SECRET must be 32-128 characters'],
-    ['whitespace', `${secret} `, 'Env POSTBACK_URL_SECRET must be 32-128 characters'],
-    ['a query character', `${secret}?a=1`, 'Env POSTBACK_URL_SECRET must be 32-128 characters'],
+    ['31 characters', 'a'.repeat(31), 'Env POSTBACK_URL_SECRET must be 32-100 characters'],
+    ['101 characters', 'a'.repeat(101), 'Env POSTBACK_URL_SECRET must be 32-100 characters'],
+    ['a slash', `${secret}/x`, 'Env POSTBACK_URL_SECRET must be 32-100 characters'],
+    ['whitespace', `${secret} `, 'Env POSTBACK_URL_SECRET must be 32-100 characters'],
+    ['a query character', `${secret}?a=1`, 'Env POSTBACK_URL_SECRET must be 32-100 characters'],
   ])('refuses %s', (_label, value, message) => {
     expect(() => parseEnv({ ...valid, POSTBACK_URL_SECRET: value })).toThrow(message);
   });

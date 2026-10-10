@@ -319,21 +319,25 @@ describe('request logging', () => {
     expect(withoutSecrets('/trading/intents?limit=10')).toBe('/trading/intents?limit=10');
   });
 
-  // #141: the postback route's secret is a path segment
+  // #141: the postback route's secret is a path segment, and a mistyped one 404s with it
   it.each([
     [
-      '/postbacks/binodex/abc?event=deposit&code=x',
-      '/postbacks/binodex/redacted?event=deposit&code=redacted',
+      '/postbacks/binodex/SECRET?event=deposit&code=x',
+      '/postbacks/redacted?event=deposit&code=redacted',
     ],
-    ['/postbacks/binodex/abc', '/postbacks/binodex/redacted'],
-    ['/postbacks/binodex/abc/extra?a=1', '/postbacks/binodex/redacted/extra?a=1'],
-    ['/POSTBACKS/Binodex/abc?a=1', '/POSTBACKS/Binodex/redacted?a=1'],
-  ])('masks the postback secret segment of %s', (url, masked) => {
+    ['/postbacks/binodex/SECRET', '/postbacks/redacted'],
+    ['/postbacks/binodex//SECRET', '/postbacks/redacted'],
+    ['/postbacks//binodex/SECRET?a=1', '/postbacks/redacted?a=1'],
+    ['/postbacks%2Fbinodex/SECRET', '/postbacks/redacted'],
+    ['//postbacks/binodex/SECRET/extra', '//postbacks/redacted'],
+    ['/POSTBACKS/binodex/SECRET?a=1', '/POSTBACKS/redacted?a=1'],
+  ])('masks the postback secret in %s', (url, masked) => {
     expect(withoutSecrets(url)).toBe(masked);
+    expect(withoutSecrets(url)).not.toContain('SECRET');
   });
 
-  it('leaves a path that only resembles the postback prefix as it was', () => {
-    expect(withoutSecrets('/postbacks/abc?id=1')).toBe('/postbacks/abc?id=1');
+  it('leaves a path outside the postback family as it was', () => {
+    expect(withoutSecrets('/admin/users/abc?id=1')).toBe('/admin/users/abc?id=1');
   });
 
   it('answers an unknown route without echoing what it carried', async () => {

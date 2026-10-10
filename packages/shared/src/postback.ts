@@ -57,17 +57,25 @@ export const POSTBACK_MACROS = {
 export const POSTBACK_EVENT_PARAM = 'event';
 
 export const POSTBACK_PATH_PREFIX = '/postbacks/binodex/';
+// Fastify's default `maxParamLength`: a longer segment never reaches the route.
+export const POSTBACK_URL_SECRET_MAX_LENGTH = 100;
 // Path-safe without encoding, so the cabinet's template holds it as typed.
-export const POSTBACK_URL_SECRET_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
+export const POSTBACK_URL_SECRET_PATTERN = new RegExp(
+  `^[A-Za-z0-9_-]{32,${POSTBACK_URL_SECRET_MAX_LENGTH}}$`,
+);
 
 export const POSTBACK_QUERY_MAX_KEYS = 64;
 export const POSTBACK_QUERY_KEY_MAX = 64;
 export const POSTBACK_QUERY_VALUE_MAX = 256;
 
 // A flat map of strings: a repeated key arrives as an array and is refused here, before anything
-// is journaled.
+// is journaled. NUL is refused too: PostgreSQL's text and jsonb cannot hold it.
+const NO_NUL = /^[^\0]*$/;
 export const postbackQuerySchema = z
-  .record(z.string().max(POSTBACK_QUERY_KEY_MAX), z.string().max(POSTBACK_QUERY_VALUE_MAX))
+  .record(
+    z.string().max(POSTBACK_QUERY_KEY_MAX).regex(NO_NUL),
+    z.string().max(POSTBACK_QUERY_VALUE_MAX).regex(NO_NUL),
+  )
   .refine((query) => Object.keys(query).length <= POSTBACK_QUERY_MAX_KEYS, {
     error: `expected at most ${POSTBACK_QUERY_MAX_KEYS} query keys`,
   });

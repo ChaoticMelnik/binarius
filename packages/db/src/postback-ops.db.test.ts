@@ -350,12 +350,21 @@ describe('attachDepositsToAccount', () => {
           brokerUserId: mine.traderId,
         }),
       );
-    expect(await attach()).toBe(1);
-    expect(await attach()).toBe(0);
+    // xmin moves on every UPDATE of the row, even one that writes the same values
+    const version = async () => {
+      const { rows } = await tmp.db.execute<{ xmin: string }>(
+        sql`select xmin::text as xmin from deposit_events where payment_id = ${mine.paymentId}`,
+      );
+      return rows[0]?.xmin;
+    };
+    await attach();
     expect((await depositsOf(mine.paymentId))[0]).toMatchObject({
       userId: owner.userId,
       brokerAccountId: owner.accountId,
     });
+    const attached = await version();
+    await attach();
+    expect(await version()).toBe(attached);
     expect((await depositsOf(theirs.paymentId))[0]).toMatchObject({ userId: null });
   });
 });

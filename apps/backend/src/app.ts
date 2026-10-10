@@ -14,7 +14,6 @@ import {
   logOptions,
   type LogLevel,
 } from '@binarius/shared';
-import { POSTBACK_PATH_PREFIX } from '@binarius/shared/postback';
 import { adminRoutes, type AdminRoutesDeps } from './admin/routes';
 import { authRoutes, type AuthRoutesDeps } from './auth/routes';
 import { pairsRoutes, type PairsRoutesDeps } from './trading/pairs-routes';
@@ -137,6 +136,24 @@ class SafeLogController extends LogController {
   }
 }
 
+function notFound(request: FastifyRequest, reply: FastifyReply) {
+  request.log.info({ method: request.method, url: withoutSecrets(request.url) }, 'route not found');
+  return reply.code(404).send({ error: 'not_found' });
+}
+
+// The router answers an overlong path parameter (414) and a malformed percent-encoding in the
+// path (400) itself, before any hook, the not-found handler or the error handler, and echoes the
+// path in the body. Both become the not-found answer: the postback secret is a path segment, and
+// its route must not be told apart from an absent one by the length or the spelling of a probe
+// (#141). Every other code this hook receives is an opaque 500, as in the error handler.
+function frameworkErrors(error: FastifyError, request: FastifyRequest, reply: FastifyReply) {
+  if (error.code === 'FST_ERR_MAX_PARAM_LENGTH' || error.code === 'FST_ERR_BAD_URL') {
+    return notFound(request, reply);
+  }
+  request.log.error(errorLogFields(error), 'framework error');
+  return reply.code(500).send({ error: 'internal' });
+}
+
 export function buildApp({
   checkPostgres,
   checkRedis,
@@ -174,17 +191,12 @@ export function buildApp({
     // serializer to return `{ type, message, stack }`, which is what the whitelist withholds.
     // Fastify merges its own `res` serializer under these and keeps ours.
     loggerInstance: logger,
+    frameworkErrors,
   });
 
   // Fastify's own not-found log builds its message from the raw url, where no redact path and
   // no serializer can reach it
-  app.setNotFoundHandler((request, reply) => {
-    request.log.info(
-      { method: request.method, url: withoutSecrets(request.url) },
-      'route not found',
-    );
-    return reply.code(404).send({ error: 'not_found' });
-  });
+  app.setNotFoundHandler(notFound);
 
   app.get('/health', async (request, reply) => {
     const [postgres, redis] = await Promise.all([
@@ -251,16 +263,16 @@ export function buildApp({
 // delivery lands.
 const SECRET_QUERY_KEYS = ['code', 'state'];
 
-// The postback route's secret is the path segment after the prefix (#141); case-insensitive,
-// because a mistyped template that 404s still carries the real secret. The prefix holds no
-// regex metacharacter.
-const POSTBACK_SECRET_SEGMENT = new RegExp(`(${POSTBACK_PATH_PREFIX})[^/?#]*`, 'i');
+// The postback route's secret is a path segment (#141). Everything after the first
+// `/postbacks`, in any case, is masked up to the query: a mistyped template (a doubled slash, an
+// encoded separator) that 404s still carries the real secret somewhere in that tail.
+const POSTBACK_PATH_TAIL = /(\/postbacks)[^?#]*/i;
 
 export function withoutSecrets(url: string): string {
   const separator = url.indexOf('?');
   const path = (separator === -1 ? url : url.slice(0, separator)).replace(
-    POSTBACK_SECRET_SEGMENT,
-    '$1redacted',
+    POSTBACK_PATH_TAIL,
+    '$1/redacted',
   );
   if (separator === -1) return path;
   const query = url.slice(separator + 1);
