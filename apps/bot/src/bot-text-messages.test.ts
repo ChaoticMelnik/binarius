@@ -18,6 +18,7 @@ import {
   NoSignalReason,
   plainTextOf,
   RULE_REFUSAL_REASONS,
+  telegramHtml,
   DATA_REFUSAL_REASONS,
   SIGNAL_ALGORITHM_VERSION,
   SignalFeedOutcome,
@@ -61,6 +62,7 @@ import {
   launchText,
   helpText,
   intentStatusText,
+  sessionCardFooter,
   sessionStatusText,
   setBotTextSource,
   settingsText,
@@ -319,6 +321,11 @@ const REAL: Record<string, () => TelegramHtml[]> = {
   sessionCompleted: () =>
     sessionTexts(TradingSessionStatus.Stopped, [TradingSessionStopReason.Completed]),
   sessionStopped: () => sessionTexts(TradingSessionStatus.Stopped, [...STOP_REASONS, null]),
+  // the card's footer (#318): plain text on the image, at each plural and every count tied
+  sessionCardFooter: () =>
+    [N, 992, 991].map(
+      (count) => telegramHtml`${sessionCardFooter(count, { won: N, lost: N, tied: N })}`,
+    ),
   settings: () =>
     Object.values(NotificationLevel).flatMap((level) =>
       [null, STAKE].map((stake) => settingsText(level, stake, NAME)),

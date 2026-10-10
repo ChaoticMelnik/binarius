@@ -80,6 +80,7 @@ function setup({ script, maxEntries }: { script: Answer[]; maxEntries?: number }
     symbol: SYMBOL,
     view: SESSION_VIEW,
     edit: target().edit,
+    card: vi.fn<SessionTrackRequest['card']>(() => Promise.resolve()),
     ...patch,
   });
   return { tracker, readSession, logger, request, target };
@@ -428,5 +429,129 @@ describe('the session tracker', () => {
     expect(tracker.size()).toBe(2);
     await vi.advanceTimersByTimeAsync(FIRST);
     expect(readSession.mock.calls.map((call) => call[0])).toEqual(ids.slice(1));
+  });
+
+  describe('the summary card (#318)', () => {
+    const TRANSIENT = () =>
+      new GrammyError(
+        `Call to 'editMessageText' failed!`,
+        { ok: false, error_code: 429, description: 'Too Many Requests: retry after 1' },
+        'editMessageText',
+        {},
+      );
+    const cardSpy = () => vi.fn<SessionTrackRequest['card']>(() => Promise.resolve());
+
+    it('C1 sends the card once, after the final edit, with the final view', async () => {
+      const order: string[] = [];
+      const { tracker, request } = setup({ script: [trading, stoppedClosed] });
+      const card = vi.fn<SessionTrackRequest['card']>(() => {
+        order.push('card');
+        return Promise.resolve();
+      });
+      const edit = vi.fn<SessionTrackRequest['edit']>(() => {
+        order.push('edit');
+        return Promise.resolve(true);
+      });
+      tracker.track(request({ edit, card }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(card).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(POLL * 3);
+      expect(card).toHaveBeenCalledTimes(1);
+      expect(card).toHaveBeenCalledWith(stoppedClosed);
+      expect(order).toEqual(['edit', 'edit', 'card']);
+      expect(tracker.size()).toBe(0);
+    });
+
+    it('C2 a session already done when tracked (a refresh) gets its card on the first poll', async () => {
+      const { tracker, request, target } = setup({ script: [stoppedClosed] });
+      const { edits, edit } = target();
+      const card = cardSpy();
+      tracker.track(request({ view: stoppedClosed, edit, card }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(edits).toEqual([]);
+      expect(card).toHaveBeenCalledTimes(1);
+      expect(tracker.size()).toBe(0);
+    });
+
+    it('C3 waits for the final edit to land: no card while it fails, one once it lands', async () => {
+      const { tracker, request } = setup({ script: [stoppedClosed] });
+      let failures = 2;
+      const edit = vi.fn<SessionTrackRequest['edit']>(() =>
+        failures-- > 0 ? Promise.reject(TRANSIENT()) : Promise.resolve(true),
+      );
+      const card = cardSpy();
+      tracker.track(request({ edit, card }));
+      await vi.advanceTimersByTimeAsync(FIRST + POLL);
+      expect(edit).toHaveBeenCalledTimes(2);
+      expect(card).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(POLL * 3);
+      expect(card).toHaveBeenCalledTimes(1);
+      expect(tracker.size()).toBe(0);
+    });
+
+    it('C4 a session not done sends no card, through the deadline', async () => {
+      const reviewed = sessionView({
+        ...stoppedWith(live(TradeIntentStatus.ManualReview)),
+        stopReason: TradingSessionStopReason.ManualReview,
+      });
+      for (const view of [trading, stoppedOpen, reviewed]) {
+        const { tracker, request } = setup({ script: [view] });
+        const card = cardSpy();
+        tracker.track(request({ card }));
+        await vi.advanceTimersByTimeAsync(DEADLINE + POLL);
+        expect(tracker.size()).toBe(0);
+        expect(card).not.toHaveBeenCalled();
+      }
+    });
+
+    it('C5 at the deadline, a done session whose final edit lands there gets its card', async () => {
+      const { tracker, request } = setup({ script: [stoppedClosed] });
+      const started = Date.now();
+      const edit = vi.fn<SessionTrackRequest['edit']>(() =>
+        Date.now() - started < DEADLINE ? Promise.reject(TRANSIENT()) : Promise.resolve(true),
+      );
+      const card = cardSpy();
+      tracker.track(request({ edit, card }));
+      await vi.advanceTimersByTimeAsync(DEADLINE - POLL);
+      expect(card).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(POLL * 3);
+      expect(card).toHaveBeenCalledTimes(1);
+      expect(tracker.size()).toBe(0);
+    });
+
+    it('C6 a card that throws still ends the entry, logged as a tracking failure', async () => {
+      const { tracker, request, logger } = setup({ script: [stoppedClosed] });
+      const card = vi.fn<SessionTrackRequest['card']>(() => Promise.reject(new TypeError('bug')));
+      tracker.track(request({ card }));
+      await vi.advanceTimersByTimeAsync(FIRST + POLL * 3);
+      expect(card).toHaveBeenCalledTimes(1);
+      expect(tracker.size()).toBe(0);
+      expect(logger.error.mock.calls.map((call) => call[1])).toEqual([
+        'trading session tracking failed',
+      ]);
+    });
+
+    it('C7 stop() waits for the card in flight', async () => {
+      let release: () => void = () => {};
+      const card = vi.fn<SessionTrackRequest['card']>(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const { tracker, request } = setup({ script: [stoppedClosed] });
+      tracker.track(request({ card }));
+      await vi.advanceTimersByTimeAsync(FIRST);
+      expect(card).toHaveBeenCalledTimes(1);
+      let stopped = false;
+      const stopping = tracker.stop().then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
+      release();
+      await stopping;
+      expect(stopped).toBe(true);
+    });
   });
 });

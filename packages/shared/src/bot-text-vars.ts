@@ -144,6 +144,7 @@ export const BOT_TEXT_VARS = {
   result: shown('Итог сессии', '5 сделок — 3 в плюс, 2 в минус'),
   trades: shown('Число сделок со словом', '5 сделок'),
   action: shown('Направление сделки, с суммой, когда она известна', '⬆️ Вверх'),
+  botUsername: shown('Имя бота в Telegram, без @', 'binarius_bot'),
 } as const;
 
 export type BotTextVars = typeof BOT_TEXT_VARS;

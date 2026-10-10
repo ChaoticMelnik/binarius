@@ -1016,6 +1016,66 @@ describe('stopSession', () => {
   });
 });
 
+describe('claimSessionSummary (#318)', () => {
+  const SUMMARY = {
+    result: '-0.15000000',
+    trades: [
+      { profit: '0.85000000', openPrice: 1.1, closePrice: 1.2 },
+      { profit: '-1.00000000', openPrice: 1.2, closePrice: 1.1 },
+    ],
+  };
+  const claim = (baseUrl: string) =>
+    createBackendClient({ baseUrl, token: TOKEN }).claimSessionSummary(SESSION_ID, '4242');
+
+  it('posts the owner to the summary path and returns the summary', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { summary: SUMMARY });
+    });
+    expect(await claim(baseUrl)).toEqual(SUMMARY);
+    expect(capture.method).toBe('POST');
+    expect(capture.url).toBe(`/trading/sessions/${SESSION_ID}/summary`);
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
+  });
+
+  it('answers null for the 409 summary_unavailable', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 409, { error: 'summary_unavailable' });
+    });
+    expect(await claim(baseUrl)).toBeNull();
+  });
+
+  it('throws any other refusal with its status and code, a 409 of another code included', async () => {
+    for (const [status, error] of [
+      [409, 'session_not_active'],
+      [400, 'validation'],
+      [500, undefined],
+    ] as const) {
+      const { baseUrl } = await serve((_request, reply) => {
+        json(reply, status, error === undefined ? {} : { error });
+      });
+      expect(await rejectionOf(claim(baseUrl))).toMatchObject({
+        code: BackendErrorCode.HttpStatus,
+        status,
+        reason: error,
+      });
+      const running = server;
+      server = undefined;
+      await closeServer(running);
+    }
+  });
+
+  it('reports a broken 2xx as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { summary: { ...SUMMARY, trades: [] } });
+    });
+    expect(await rejectionOf(claim(baseUrl))).toMatchObject({
+      code: BackendErrorCode.ContractViolation,
+      status: 200,
+    });
+  });
+});
+
 describe('emailLogin', () => {
   it('sends the telegram id, the address and the code and returns the grant', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {

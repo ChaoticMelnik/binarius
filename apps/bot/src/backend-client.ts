@@ -11,6 +11,8 @@ import {
   BOT_TEXTS_PATH,
   botTextOverridesResponseSchema,
   type BotTextOverride,
+  safeParseSessionSummaryRefusal,
+  safeParseSessionSummaryResponse,
   safeParseTradeIntentView,
   safeParseTradingAccessResponse,
   safeParseTradingSessionRefusal,
@@ -31,6 +33,8 @@ import {
   type NotificationLevel,
   type NotificationLevelResponse,
   type PairsCatalogResponse,
+  SESSION_SUMMARY_SUFFIX,
+  type SessionSummary,
   type SignalInterval,
   type TelegramChatMemberStatus,
   type TradeIntentView,
@@ -110,6 +114,9 @@ export interface BackendClient {
   // both scoped by the owner like readIntent
   readSession(id: string, telegramUserId: string): Promise<TradingSessionView>;
   stopSession(id: string, telegramUserId: string): Promise<TradingSessionView>;
+  // the finished session's card, claimed at most once (#318): null for the one refusal, which the
+  // backend answers before any write; scoped by the owner like readSession
+  claimSessionSummary(id: string, telegramUserId: string): Promise<SessionSummary | null>;
   // the saved stake, or a bounds refusal with the limits it was checked against (#297); any other
   // failure throws as from every method
   setDemoStake(telegramUserId: string, amount: DecimalString | null): Promise<SetDemoStakeResult>;
@@ -334,6 +341,20 @@ export function createBackendClient({
       return sessionOf(
         await post(`trading/sessions/${encodeURIComponent(id)}/stop`, { telegramUserId }),
       );
+    },
+    async claimSessionSummary(id, telegramUserId) {
+      const { ok, status, payload } = await send(
+        'POST',
+        `trading/sessions/${encodeURIComponent(id)}${SESSION_SUMMARY_SUFFIX}`,
+        { telegramUserId },
+      );
+      if (ok) {
+        const parsed = safeParseSessionSummaryResponse(payload);
+        if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation, { status });
+        return parsed.data.summary;
+      }
+      if (status === 409 && safeParseSessionSummaryRefusal(payload).success) return null;
+      throw httpStatusError(status, payload);
     },
   };
 }

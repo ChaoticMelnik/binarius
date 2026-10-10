@@ -334,6 +334,11 @@ async function observe(branch: Branch): Promise<Calls> {
       backend += 1;
       return (branch.stopSession ?? (() => Promise.resolve(STOPPED_SESSION)))(id, telegramUserId);
     },
+    // the session tracker's call (#318), between updates: no handler claims a card
+    claimSessionSummary: () => {
+      backend += 1;
+      return Promise.reject(new Error('no handler claims a session summary'));
+    },
     setDemoStake: (telegramUserId, amount) => {
       backend += 1;
       return (branch.setDemoStake ?? ((_id, saved) => Promise.resolve({ saved })))(
@@ -2419,8 +2424,11 @@ describe("the demo session tracker's bounds", () => {
     expect(SESSION_MAX_DURATION_MS).toBeLessThan(SESSION_TRACK_DEADLINE_MS);
   });
 
-  it('drains one read and one edit inside the shutdown budget', () => {
-    expect(SESSION_TRACK_DRAIN_MS).toBe(BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS);
+  it("drains a read, an edit and the summary card's claim and photo inside the shutdown budget", () => {
+    // readSession + edit, then the card's claim + sendPhoto (#318)
+    expect(SESSION_TRACK_DRAIN_MS).toBe(
+      2 * BACKEND_REQUEST_TIMEOUT_MS + 2 * TELEGRAM_API_TIMEOUT_MS,
+    );
     expect(SESSION_TRACK_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
   });
 });

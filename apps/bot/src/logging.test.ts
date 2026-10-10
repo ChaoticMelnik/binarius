@@ -122,6 +122,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     startSession: () => Promise.reject(new Error('not used by these scenes')),
     readSession: () => Promise.reject(new Error('not used by these scenes')),
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
+    claimSessionSummary: () => Promise.reject(new Error('not used by these scenes')),
     setDemoStake:
       scenario.setDemoStake ?? (() => Promise.reject(new Error('not used by these scenes'))),
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),

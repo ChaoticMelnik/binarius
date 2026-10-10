@@ -2,7 +2,7 @@
 // oracle that a raw string reaches neither the send seam nor a message constant, and that a
 // caller cannot hand the seam entities in place of parse_mode. If any of them starts compiling,
 // tsc reports TS2578 (unused directive) and `pnpm check` fails.
-import type { Api, Context } from 'grammy';
+import type { Api, Context, InlineKeyboard } from 'grammy';
 import type { TelegramHtml } from '@binarius/shared';
 import {
   editMessageTextByIdHtml,
@@ -11,11 +11,13 @@ import {
   replyHtmlWithoutNextStep,
   replyWithPhotoHtml,
   replyWithVideoHtml,
+  sendPhotoByIdHtml,
 } from './send';
 
 declare const ctx: Context;
 declare const api: Api;
 declare const text: TelegramHtml;
+declare const keyboard: InlineKeyboard;
 // @ts-expect-error the seam takes TelegramHtml, not a string (TS2345)
 export const viaSeam = replyHtml(ctx, 'raw');
 // @ts-expect-error entities replace parse_mode, so the seam does not take them (TS2353)
@@ -32,6 +34,13 @@ export const viaEditByIdEntities = editMessageTextByIdHtml(api, 1, 2, text, { en
 export const viaCaptionEntities = replyWithVideoHtml(ctx, 'id', text, { caption_entities: [] });
 export const viaPhotoCaptionEntities = replyWithPhotoHtml(ctx, 'id', text, {
   // @ts-expect-error the same for the photo's caption (TS2353)
+  caption_entities: [],
+});
+// @ts-expect-error the photo by id takes TelegramHtml as its caption, not a string (TS2345)
+export const viaPhotoById = sendPhotoByIdHtml(api, 1, 'id', 'raw', { reply_markup: keyboard });
+export const viaPhotoByIdEntities = sendPhotoByIdHtml(api, 1, 'id', text, {
+  reply_markup: keyboard,
+  // @ts-expect-error nor caption_entities in place of parse_mode (TS2353)
   caption_entities: [],
 });
 
@@ -55,3 +64,13 @@ export const viaEditNoKeyboard = editMessageTextHtml(ctx, text);
 export const viaEditByIdNoKeyboard = editMessageTextByIdHtml(api, 1, 2, text);
 // @ts-expect-error a reason outside NO_NEXT_STEP_REASONS does not compile (TS2345)
 export const viaUnlistedReason = replyHtmlWithoutNextStep(ctx, text, 'because');
+// @ts-expect-error the photo by id needs one too (TS2554)
+export const viaPhotoByIdNoKeyboard = sendPhotoByIdHtml(api, 1, 'id', text);
+export const viaPhotoByIdUndefinedKeyboard = sendPhotoByIdHtml(api, 1, 'id', text, {
+  // @ts-expect-error nor with reply_markup left undefined (TS2322)
+  reply_markup: undefined,
+});
+export const viaPhotoByIdReplyKeyboard = sendPhotoByIdHtml(api, 1, 'id', text, {
+  // @ts-expect-error nor a reply keyboard (TS2353)
+  reply_markup: { keyboard: [] },
+});

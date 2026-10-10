@@ -129,6 +129,7 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   result: text,
   trades: text,
   action: text,
+  botUsername: text,
 });
 const contextOf = (key: string, text: string): Record<string, unknown> => {
   const inputs = inputsOf(text);

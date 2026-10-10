@@ -1,4 +1,4 @@
-import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
+import { Composer, GrammyError, HttpError, InlineKeyboard, InputFile, type Context } from 'grammy';
 import {
   DEFAULT_SESSION_TRADES,
   errorLogFields,
@@ -32,9 +32,10 @@ import {
 } from './keyboards';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
-import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml } from './send';
-import { SESSION_NOT_FOUND, sessionTrackingDone, type SessionTracker } from './session-tracker';
-import { LABELS, sessionStatusText, TEXTS, textOf } from './texts';
+import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml, sendPhotoByIdHtml } from './send';
+import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
+import { SESSION_NOT_FOUND, type SessionTracker } from './session-tracker';
+import { LABELS, sessionAssetLabel, sessionStatusText, TEXTS, textOf } from './texts';
 
 // The demo session (#284, docs/bot-session.md): the analysis screen's session button starts one
 // through POST /trading/sessions, one status message follows it (session-tracker.ts), and its
@@ -61,21 +62,35 @@ export const sessionKeyboard = (
   if (view.status !== TradingSessionStatus.Stopped) {
     return keyboard.text(LABELS.sessionStopButton, sessionStopCallbackData(view.id));
   }
-  if (view.settings === null) return withMenu(keyboard);
-  const durationSec = durationOf(String(view.settings.durationSec));
+  return appendSessionEnd(keyboard, view.settings);
+};
+
+// A stopped session's next steps under `keyboard`'s rows: the again button while the demo offers
+// its duration, then the end of the path; the menu alone when its settings could not be read.
+function appendSessionEnd(
+  keyboard: InlineKeyboard,
+  settings: TradingSessionView['settings'],
+): InlineKeyboard {
+  if (settings === null) return withMenu(keyboard);
+  const durationSec = durationOf(String(settings.durationSec));
   if (durationSec !== undefined) {
     keyboard
       .row()
-      .text(
-        LABELS.sessionAgainButton,
-        sessionStartCallbackData(view.settings.assetId, durationSec),
-      );
+      .text(LABELS.sessionAgainButton, sessionStartCallbackData(settings.assetId, durationSec));
   }
-  return appendEndOfPath(keyboard, view.settings.assetId, view.settings.durationSec);
-};
+  return appendEndOfPath(keyboard, settings.assetId, settings.durationSec);
+}
+
+// Under the summary card (#318): the stopped status's next steps without «🔄 Обновить», which
+// edits the text of the message it is under, and a photo has a caption instead.
+export const sessionCardKeyboard = (view: Pick<TradingSessionView, 'settings'>): InlineKeyboard =>
+  view.settings === null ? menuKeyboard() : appendSessionEnd(new InlineKeyboard(), view.settings);
 
 export interface TradingSessionDeps {
-  backend: Pick<BackendClient, 'readPairs' | 'startSession' | 'readSession' | 'stopSession'>;
+  backend: Pick<
+    BackendClient,
+    'readPairs' | 'startSession' | 'readSession' | 'stopSession' | 'claimSessionSummary'
+  >;
   logger: Logger;
   sessionTracker: Pick<SessionTracker, 'track'>;
   // the welcome's connect button, for a press with no account to trade on
@@ -324,7 +339,8 @@ export function createTradingSessionComposer<C extends Context>({
   }
 
   // The view in place of the message the button is under, then tracking on whichever message
-  // shows it, unless the session is done: after a restart the button is how tracking resumes.
+  // shows it: after a restart the button is how tracking resumes, and a done session's entry
+  // sends its summary card once and ends (#318).
   async function showInPlace(
     ctx: Context,
     telegramUserId: string,
@@ -366,7 +382,7 @@ export function createTradingSessionComposer<C extends Context>({
     chatId: number,
     messageId: number,
   ): void {
-    if (sessionTrackingDone(view)) return;
+    const botUsername = ctx.me.username;
     sessionTracker.track({
       sessionId: view.id,
       telegramUserId,
@@ -376,7 +392,54 @@ export function createTradingSessionComposer<C extends Context>({
         editMessageTextByIdHtml(ctx.api, chatId, messageId, text, {
           reply_markup: end === 'not_found' ? menuKeyboard() : sessionKeyboard(current),
         }),
+      card: (current) => sendCard(ctx, chatId, telegramUserId, symbol, botUsername, current),
     });
+  }
+
+  // The summary card (#318, docs/bot-session.md → The summary card): claimed once by the backend,
+  // drawn here, sent under the final status. A refused claim sends nothing and says nothing; any
+  // other failure is logged and not retried — a committed claim would answer 409 the second time.
+  async function sendCard(
+    ctx: Context,
+    chatId: number,
+    telegramUserId: string,
+    symbol: string | null,
+    botUsername: string,
+    view: TradingSessionView,
+  ): Promise<void> {
+    try {
+      const summary = await backend.claimSessionSummary(view.id, telegramUserId);
+      if (summary === null) return;
+      // a claimed session has a settled trade, so its last intent names the asset when the
+      // settings could not be read
+      const assetId = view.settings?.assetId ?? view.lastIntent?.assetId;
+      if (assetId === undefined) throw new Error('a claimed session names no asset');
+      const png = renderSessionCard(sessionCardSvg(sessionCardModel(summary, symbol, assetId)));
+      await sendPhotoByIdHtml(
+        ctx.api,
+        chatId,
+        new InputFile(png, 'session.png'),
+        TEXTS.sessionCardCaption({
+          symbol: sessionAssetLabel(symbol, assetId),
+          profit: summary.result,
+          botUsername,
+        }),
+        { reply_markup: sessionCardKeyboard(view) },
+      );
+    } catch (error) {
+      logger.warn(
+        {
+          ...errorLogFields(error),
+          ...(error instanceof BackendError
+            ? backendErrorFields(error)
+            : error instanceof GrammyError || error instanceof HttpError
+              ? telegramErrorFields(error, 'sendPhoto')
+              : {}),
+          sessionId: view.id,
+        },
+        'trading session card not sent',
+      );
+    }
   }
 
   async function answer(ctx: Context): Promise<void> {

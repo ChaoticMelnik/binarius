@@ -1237,6 +1237,43 @@ export const BOT_TEXT_CATALOG = {
     'Сессия остановлена кнопкой пользователя.',
     `⏹ Сессия остановлена по твоей команде.`,
   ),
+  // The summary card (#318, docs/bot-session.md → The summary card): labels drawn on the image,
+  // each limit the width of its slot there; the caption goes under the photo.
+  sessionCardTitle: plain(g.Session, 'Картинка-итог: подпись под активом.', 'СЕССИЯ ЗАВЕРШЕНА', {
+    limit: 24,
+  }),
+  sessionCardResult: plain(g.Session, 'Картинка-итог: подпись над результатом в $.', 'ИТОГ', {
+    limit: 12,
+  }),
+  sessionCardTrade: plain(g.Session, 'Картинка-итог: заголовок колонки сделки.', 'Сделка {count}', {
+    vars: ['count'],
+    limit: 16,
+  }),
+  sessionCardLegendEntry: plain(g.Session, 'Картинка-итог: легенда, точка входа.', 'Вход', {
+    limit: 12,
+  }),
+  sessionCardLegendWin: plain(g.Session, 'Картинка-итог: легенда, сделка в плюс.', 'Плюс', {
+    limit: 12,
+  }),
+  sessionCardLegendLoss: plain(g.Session, 'Картинка-итог: легенда, сделка в минус.', 'Минус', {
+    limit: 12,
+  }),
+  sessionCardLegendTie: plain(g.Session, 'Картинка-итог: легенда, сделка в ноль.', 'Ноль', {
+    limit: 12,
+  }),
+  sessionCardFooter: plain(
+    g.Session,
+    'Картинка-итог: нижняя строка — число сделок и счёт.',
+    '{trades} · {score}',
+    { vars: ['trades', 'score'], limit: 64 },
+  ),
+  sessionCardCaption: html(
+    g.Session,
+    'Картинка-итог: подпись под картинкой; её видят и те, кому картинку переслали.',
+    `🏁 {symbol}: итог сессии {profit}
+🤖 @{botUsername}`,
+    { ...caption, vars: ['symbol', 'profit', 'botUsername'] },
+  ),
 
   // ---- Напоминания (#202, docs/mailing.md) -------------------------------------------------
   // Sent by the backend's mailing engine only, each with the «demoButton» button.

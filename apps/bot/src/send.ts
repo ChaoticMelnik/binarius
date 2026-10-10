@@ -39,6 +39,10 @@ type PhotoExtra = Omit<
   NonNullable<Parameters<Context['replyWithPhoto']>[1]>,
   'parse_mode' | 'caption' | 'caption_entities'
 >;
+type PhotoByIdExtra = Omit<
+  NonNullable<Parameters<Api['sendPhoto']>[2]>,
+  'parse_mode' | 'caption' | 'caption_entities'
+>;
 
 export const replyHtml = (ctx: Context, text: TelegramHtml, extra: WithNextStep<ReplyExtra>) =>
   ctx.reply(text.value, { ...extra, parse_mode: 'HTML' });
@@ -93,3 +97,12 @@ export const replyWithPhotoHtml = (
   caption: TelegramHtml,
   extra: WithNextStep<PhotoExtra>,
 ) => ctx.replyWithPhoto(photo, { ...extra, caption: caption.value, parse_mode: 'HTML' });
+
+// Outside an update (the session tracker's summary card, #318): a photo to the chat named by id.
+export const sendPhotoByIdHtml = (
+  api: Pick<Api, 'sendPhoto'>,
+  chatId: number,
+  photo: Parameters<Api['sendPhoto']>[1],
+  caption: TelegramHtml,
+  extra: WithNextStep<PhotoByIdExtra>,
+) => api.sendPhoto(chatId, photo, { ...extra, caption: caption.value, parse_mode: 'HTML' });

@@ -483,7 +483,8 @@ ${line}`,
   );
 
 // «3 в плюс, 1 в минус», with «в ноль» only when a trade tied
-const scoreOf = ({ won, lost, tied }: TradingSessionView['trades']): string =>
+type SessionScore = Pick<TradingSessionView['trades'], 'won' | 'lost' | 'tied'>;
+const scoreOf = ({ won, lost, tied }: SessionScore): string =>
   [
     plain.sessionWon({ count: String(won) }),
     plain.sessionLost({ count: String(lost) }),
@@ -491,6 +492,28 @@ const scoreOf = ({ won, lost, tied }: TradingSessionView['trades']): string =>
   ].join(', ');
 const resultOf = (trades: TradingSessionView['trades']): string =>
   `${tradesCount(trades.settled)} — ${scoreOf(trades)}`;
+
+// the session's pair as the catalog spells it, or the asset's id when the catalog could not say
+export const sessionAssetLabel = (symbol: string | null, assetId: number): string =>
+  symbol === null
+    ? plain.intentAssetFallback({ assetId: String(assetId) })
+    : symbol.slice(0, INTENT_SYMBOL_LIMIT);
+
+// The summary card's words (#318, session-card.ts), read when the card is drawn so an override
+// reaches the next card. The footer is an assembled message (bot-text-messages.ts →
+// sessionCardFooter): the session's trades and score, «в ноль» only when a trade tied.
+export const sessionCardLabels = () => ({
+  title: plain.sessionCardTitle,
+  result: plain.sessionCardResult,
+  legendEntry: plain.sessionCardLegendEntry,
+  legendWin: plain.sessionCardLegendWin,
+  legendLoss: plain.sessionCardLegendLoss,
+  legendTie: plain.sessionCardLegendTie,
+});
+export const sessionCardTradeLabel = (index: number): string =>
+  plain.sessionCardTrade({ count: String(index) });
+export const sessionCardFooter = (count: number, score: SessionScore): string =>
+  plain.sessionCardFooter({ trades: tradesCount(count), score: scoreOf(score) });
 
 // The demo session's one message (#284, docs/bot-session.md): the header and the settings, then
 // a live session's trade number, score and the last trade's status, or a stopped session's
@@ -506,12 +529,8 @@ export function sessionStatusText(
 
 ${TEXTS.sessionSettingsUnavailable}`;
   }
-  const asset =
-    symbol === null
-      ? plain.intentAssetFallback({ assetId: String(settings.assetId) })
-      : symbol.slice(0, INTENT_SYMBOL_LIMIT);
   const line = [
-    asset,
+    sessionAssetLabel(symbol, settings.assetId),
     durationLabelOf(settings.durationSec),
     plain.intentStake({ amount: formatStake(settings.stake.baseStake) }),
   ].join(' · ');
