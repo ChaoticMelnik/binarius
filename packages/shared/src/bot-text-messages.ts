@@ -590,10 +590,11 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       '\n\n',
       k('launchHeader'),
       '\n',
-      anyOf('launchStake', 'launchStakeMinimum'),
-      '\n',
-      // real mode (#121): the cycle's line gives way to the single trade's
-      anyOf('launchCycle', 'launchRealMode'),
+      // real mode (#121): one line of the single trade in place of the stake and the cycle
+      oneOf(
+        [anyOf('launchStake', 'launchStakeMinimum'), '\n', k('launchCycle')],
+        [k('launchRealMode')],
+      ),
     ],
   },
   {

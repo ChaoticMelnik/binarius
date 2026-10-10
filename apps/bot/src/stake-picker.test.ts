@@ -8,6 +8,7 @@ import {
   UserStatus,
   type DecimalString,
   CONNECT_CALLBACK_DATA,
+  defaultBotTextSource,
   supportUrl,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -53,6 +54,7 @@ import {
 import {
   formatBreakEven,
   LABELS,
+  setBotTextSource,
   settingsText,
   stakePickerText,
   TEXTS,
@@ -399,15 +401,39 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       durationSec: 15,
       firstName: USER.first_name,
       symbol: PAIR_EURUSD.symbol,
-      amount: d('5'),
+      // the broker's minimum the real trade stakes, the saved demo stake only in its own line
+      amount: d('1'),
       saved: { amount: d('5') },
       mode: TradeMode.Real,
     });
     expect(lastPayload(calls)?.text).toBe(screen.text.value);
+    const text = plainTextOf(lastPayload(calls)?.text as string);
+    expect(text).toContain('✅ Демо-ставка сохранена: $5.00');
+    expect(text).not.toContain('💵 Ставка');
+    expect(text.split('$5.00')).toHaveLength(2);
     expect(rowsOf(lastPayload(calls))).toEqual([
       [button(LABELS.modeAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15))],
       [button(LABELS.backToListButton, 'demo:sig:15')],
     ]);
+  });
+
+  // Plan Update 4 (Major 2): `{stake}` of the real launch is the minimum, not the saved demo stake
+  it('gives an overridden launch header the minimum as {stake} in real mode', async () => {
+    setBotTextSource({
+      sourceOf: (key) =>
+        key === 'launchHeader' ? '🎯 {subject} {stake}' : defaultBotTextSource.sourceOf(key),
+    });
+    try {
+      const { press, calls } = setup({
+        readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
+      });
+      await press(stakePresetCallbackData('5', PAIR));
+      expect(plainTextOf(lastPayload(calls)?.text as string)).toContain(
+        `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с $1.00`,
+      );
+    } finally {
+      setBotTextSource(defaultBotTextSource);
+    }
   });
 
   it('keeps the demo launch and warns when the mode is not read', async () => {
@@ -441,7 +467,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       });
       await press(stakePresetCallbackData('5', { ...PAIR, durationSec }));
       expect(plainTextOf(lastPayload(calls)?.text as string)).toBe(
-        `✅ Ставка сохранена: $5.00\n\n🚫 ${PAIR_EURUSD.symbol}: выплата 79% — ниже 80%, цикл на этой паре не запускается. Безубыточность при такой выплате — ${formatBreakEven(79)}% верных прогнозов.`,
+        `✅ Демо-ставка сохранена: $5.00\n\n🚫 ${PAIR_EURUSD.symbol}: выплата 79% — ниже 80%, цикл на этой паре не запускается. Безубыточность при такой выплате — ${formatBreakEven(79)}% верных прогнозов.`,
       );
       expect(rowsOf(lastPayload(calls))).toEqual([
         [button(LABELS.backToListButton, `demo:sig:${String(durationSec)}`)],

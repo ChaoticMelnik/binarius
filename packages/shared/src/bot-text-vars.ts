@@ -97,7 +97,8 @@ export const BOT_TEXT_VARS = {
     format: (level: NotificationLevel, texts) => texts(LEVEL_KEYS[level]),
   }),
   stake: variable({
-    description: 'Сумма демо-сделки; не выбрана — «минимальная ставка брокера»',
+    description:
+      'Сумма сделки в режиме пользователя: демо — сохранённая (не выбрана — «минимальная ставка брокера»), реальный — минимальная ставка брокера',
     sample: '$5.00',
     format: (stake: DecimalString | null, texts) =>
       stake === null ? texts('stakeMinimumLabel') : formatStake(stake),
