@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb } from './client';
 import { runMigrations } from './migrate';
@@ -69,10 +70,15 @@ describe('migration 0044', () => {
       `insert into deposit_events (postback_id, payload) values ('pb-local', '{}'::jsonb)`,
     );
 
-    const error = await runMigrations(tmp.pool).then(
+    // its own pool, ended here: the client the failed migration leaves behind is torn down
+    // long before afterAll's DROP DATABASE … WITH (FORCE), which would otherwise kill it
+    // mid-close as an unhandled error
+    const failing = new Pool({ connectionString: tmp.url, max: 1 });
+    const error = await runMigrations(failing).then(
       () => undefined,
       (e: unknown) => e,
     );
+    await failing.end();
 
     expect(messages(error)).toContain('deposit_events must be empty before 0044_postbacks');
     expect(await columnExists('deposit_events', 'postback_id')).toBe(true);
