@@ -1,6 +1,6 @@
 import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { NotificationLevel, UserStatus } from '@binarius/shared';
+import { NotificationKind, NotificationLevel, UserStatus } from '@binarius/shared';
 import { createTempDatabase, seedUser, type TempDatabase } from './testing';
 import { NotificationJobStatus, notificationJobs, users } from './schema/index';
 import {
@@ -38,7 +38,7 @@ const blockedAt = async (userId: string): Promise<Date | null> => {
 const seedJob = async (userId: string, status: NotificationJobStatus): Promise<string> => {
   const [row] = await tmp.db
     .insert(notificationJobs)
-    .values({ userId, kind: 'test', status })
+    .values({ userId, kind: NotificationKind.FirstSession1h, status })
     .returning({ id: notificationJobs.id });
   if (row === undefined) throw new Error('seedJob: insert returned no row');
   return row.id;
@@ -258,7 +258,7 @@ describe('acceptsMailing', () => {
   ): Promise<void> => {
     await tmp.db.insert(notificationJobs).values({
       userId,
-      kind: 'test',
+      kind: NotificationKind.FirstSession1h,
       status,
       sentAt: sql`now() - make_interval(hours => ${hours})`,
     });

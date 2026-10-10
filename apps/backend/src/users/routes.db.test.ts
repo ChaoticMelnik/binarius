@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   BrokerAccountStatus,
+  NotificationKind,
   NotificationLevel,
   TelegramChatMemberStatus,
   UserErrorCode,
@@ -309,7 +310,7 @@ describe('POST /users/chat-member', () => {
     const { telegramUserId, userId } = await started();
     const [job] = await tmp.db
       .insert(notificationJobs)
-      .values({ userId, kind: 'test' })
+      .values({ userId, kind: NotificationKind.FirstSession1h })
       .returning({ id: notificationJobs.id });
 
     const response = await postChatMember(kicked(telegramUserId));
@@ -430,7 +431,7 @@ describe('POST /users/notification-level', () => {
     const { telegramUserId, userId } = await started();
     const [job] = await tmp.db
       .insert(notificationJobs)
-      .values({ userId, kind: 'test' })
+      .values({ userId, kind: NotificationKind.FirstSession1h })
       .returning({ id: notificationJobs.id });
 
     const off = await postLevel({ telegramUserId, level: NotificationLevel.Off });

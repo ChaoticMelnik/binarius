@@ -7,6 +7,7 @@ import {
   confirmLoginResponseSchema,
   emailLoginResponseSchema,
   INIT_DATA_MAX_LENGTH,
+  NotificationKind,
 } from '@binarius/shared';
 import {
   LINK_BONUS_TOKENS,
@@ -1125,7 +1126,7 @@ describe('a push that fails', () => {
         .returning({ id: users.id });
       const [job] = await tmp.db
         .insert(notificationJobs)
-        .values({ userId: user!.id, kind: 'test' })
+        .values({ userId: user!.id, kind: NotificationKind.FirstSession1h })
         .returning({ id: notificationJobs.id });
       jobId = job!.id;
     });
