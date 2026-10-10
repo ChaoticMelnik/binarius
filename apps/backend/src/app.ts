@@ -263,17 +263,34 @@ export function buildApp({
 // delivery lands.
 const SECRET_QUERY_KEYS = ['code', 'state'];
 
-// The postback route's secret is a path segment (#141). Everything after the first
-// `/postbacks`, in any case, is masked up to the query: a mistyped template (a doubled slash, an
-// encoded separator) that 404s still carries the real secret somewhere in that tail.
-const POSTBACK_PATH_TAIL = /(\/postbacks)[^?#]*/i;
+// The postback route's secret is a path segment (#141). The router decodes escapes in static
+// segments (`/p%6Fstbacks/…` reaches the route) and a mistyped template (a doubled slash, `%2F`)
+// 404s with the secret in it, so the path is decoded until stable and everything after the first
+// `/postbacks`, in any case, is masked — a decoded `?` or `#` included. A path that cannot be
+// decoded, or is still changing after MAX_PATH_DECODE_PASSES, is masked whole.
+const POSTBACK_PATH = /\/postbacks/i;
+const MAX_PATH_DECODE_PASSES = 4;
+
+function maskPostbackPath(raw: string): string {
+  let decoded = raw;
+  for (let pass = 0; ; pass += 1) {
+    let next: string;
+    try {
+      next = decodeURIComponent(decoded);
+    } catch {
+      return '/redacted';
+    }
+    if (next === decoded) break;
+    if (pass === MAX_PATH_DECODE_PASSES) return '/redacted';
+    decoded = next;
+  }
+  const match = POSTBACK_PATH.exec(decoded);
+  return match === null ? raw : `${decoded.slice(0, match.index + match[0].length)}/redacted`;
+}
 
 export function withoutSecrets(url: string): string {
   const separator = url.indexOf('?');
-  const path = (separator === -1 ? url : url.slice(0, separator)).replace(
-    POSTBACK_PATH_TAIL,
-    '$1/redacted',
-  );
+  const path = maskPostbackPath(separator === -1 ? url : url.slice(0, separator));
   if (separator === -1) return path;
   const query = url.slice(separator + 1);
   const params = new URLSearchParams(query);

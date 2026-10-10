@@ -151,6 +151,20 @@ describe('GET /postbacks/binodex/:secret', () => {
     expect(text).toContain('/postbacks/redacted?');
   });
 
+  // the router decodes escapes in static segments, so this spelling reaches the route
+  it('records a delivery through a percent-encoded prefix and keeps the secret out of the log', async () => {
+    const keys = fresh();
+    lines.length = 0;
+
+    const response = await get(deliveryUrl(keys).replace('/postbacks/', '/p%6Fstbacks/'));
+
+    expect([response.statusCode, response.json<unknown>()]).toEqual([200, { outcome: 'recorded' }]);
+    const requestLines = lines.filter((line) => line.req !== undefined);
+    expect(requestLines.length).toBeGreaterThan(0);
+    expect(JSON.stringify(requestLines)).toContain('/postbacks/redacted?');
+    expect(JSON.stringify(lines)).not.toContain(SECRET);
+  });
+
   it('warns about a repeat that disagrees, by field name only', async () => {
     const keys = fresh();
     await get(deliveryUrl(keys));
@@ -265,9 +279,10 @@ describe('router-level answers, route on and off', () => {
   const malformed = `${'m'.repeat(40)}%ZZ`;
 
   it.each([
-    ['an overlong segment', overlong],
-    ['a malformed segment', malformed],
-  ])('answers %s with the not-found 404, on and off alike', async (_label, segment) => {
+    // a path that cannot be decoded is masked whole
+    ['an overlong segment', overlong, '/postbacks/redacted?'],
+    ['a malformed segment', malformed, '/redacted?'],
+  ])('answers %s with the not-found 404, on and off alike', async (_label, segment, logged) => {
     const off = testApp(undefined);
     await off.ready();
     try {
@@ -281,7 +296,7 @@ describe('router-level answers, route on and off', () => {
         expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
         const notFound = linesOf('route not found');
         expect(notFound).toHaveLength(1);
-        expect(notFound[0]!.url).toContain('/postbacks/redacted?');
+        expect(notFound[0]!.url).toMatch(new RegExp(`^${logged.replace('?', '\\?')}`));
         expect(JSON.stringify(lines)).not.toContain(segment.slice(0, 40));
       }
     } finally {
