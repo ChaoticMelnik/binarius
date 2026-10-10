@@ -39,7 +39,7 @@ import {
   unusedAdminDeps,
   type CapturedApi,
 } from '../admin/testing';
-import { createLinkNotifier } from './link-notifier';
+import { createClientPush } from './client-push';
 import { INIT_DATA_MAX_AGE_MS, OAUTH_STATE_TTL_MS } from './oauth-timing';
 import { createInitDataVerifier } from './telegram-init-data';
 import { signInitData } from './testing/init-data';
@@ -98,7 +98,7 @@ beforeAll(async () => {
     clientId: CLIENT_ID,
     redirectUri: REDIRECT_URI,
     partnerRef: PARTNER_REF,
-    linkNotifier: createLinkNotifier({ token: PUSH_BOT_TOKEN }),
+    clientPush: createClientPush({ token: PUSH_BOT_TOKEN }),
     // the one public bot both sends the push and launched the Mini App (until #314), as in
     // production
     initDataVerifier: createInitDataVerifier({
@@ -106,7 +106,7 @@ beforeAll(async () => {
       maxAgeMs: INIT_DATA_MAX_AGE_MS,
     }),
   };
-  pushApi = captureApi(authDeps.linkNotifier);
+  pushApi = captureApi(authDeps.clientPush);
   app = testApp(authDeps);
   await app.ready();
 });
@@ -1037,12 +1037,12 @@ describe('the push after the callback', () => {
 
 describe('a push that fails', () => {
   const failing = async (
-    notifier: AuthRoutesDeps['linkNotifier'],
+    notifier: AuthRoutesDeps['clientPush'],
     prepare?: (telegram: string) => Promise<void>,
   ) => {
     const lines: string[] = [];
     const instance = await own(
-      { linkNotifier: notifier },
+      { clientPush: notifier },
       { write: (line: string) => void lines.push(line) },
     );
     const telegram = telegramId();
@@ -1079,7 +1079,7 @@ describe('a push that fails', () => {
   };
 
   const refusing = (error_code: number, description: string) => {
-    const notifier = createLinkNotifier({ token: PUSH_BOT_TOKEN });
+    const notifier = createClientPush({ token: PUSH_BOT_TOKEN });
     const captured = captureApi(notifier);
     captured.apiErrors.set('sendMessage', { ok: false, error_code, description });
     return { notifier, captured };
@@ -1102,7 +1102,7 @@ describe('a push that fails', () => {
   // that could leak
   it('logs a transport failure by its identity', async () => {
     const { warned, telegram } = await failing(
-      createLinkNotifier({ token: PUSH_BOT_TOKEN, apiRoot: 'http://127.0.0.1:1' }),
+      createClientPush({ token: PUSH_BOT_TOKEN, apiRoot: 'http://127.0.0.1:1' }),
     );
     expect(await blockedAtOf(telegram)).toBeNull();
     expect(warned).toMatchObject({

@@ -62,7 +62,7 @@ const testApp = (logs?: { write(line: string): void }) =>
       clientId: 'client-id',
       redirectUri: 'https://bot.example/oauth/callback',
       partnerRef: 'partner-ref',
-      linkNotifier: {} as never,
+      clientPush: {} as never,
       initDataVerifier: {} as never,
     },
     users: { db: tmp.db, internalApiToken: TOKEN },

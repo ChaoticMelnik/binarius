@@ -2,7 +2,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
-import { BOT_PROFILE_PUBLISH_BUDGET_MS, BOT_TEXTS_REFRESH_MS } from '@binarius/shared';
+import {
+  BOT_PROFILE_PUBLISH_BUDGET_MS,
+  BOT_TEXTS_REFRESH_MS,
+  MAILING_MIN_OFFSET_HOURS,
+} from '@binarius/shared';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import {
   BALANCE_WATCH_WINDOW_MS,
@@ -33,7 +37,11 @@ import {
   BOT_PROFILE_PUBLISH_TIMEOUT_MS,
   BOT_TEXTS_LOAD_BUDGET_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
-  LINK_PUSH_TELEGRAM_API_TIMEOUT_MS,
+  CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
+  MAILING_PLAN_TICK_MS,
+  MAILING_SEND_BATCH,
+  MAILING_SEND_PER_SECOND,
+  MAILING_SEND_TICK_MS,
   MAX_BALANCE_POLL_PER_MINUTE,
   MAX_BALANCE_RECONCILE_INTERVAL_MS,
   MAX_SIGNAL_SCAN_PER_MINUTE,
@@ -51,6 +59,7 @@ import {
   signalScanCapacity,
   signalScanPairs,
   signalScanPerMinute,
+  TELEGRAM_BOT_SENDS_PER_SECOND,
   TRADING_ACCESS_REFRESH_BUDGET_MS,
 } from './timing';
 
@@ -65,7 +74,7 @@ describe('backend shutdown timing', () => {
   it('keeps the publish deadline under phase 1 and both phases under the stop grace period', () => {
     expect(DEFAULT_PUBLISHER_CONFIG.publishTimeoutMs).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(BROKER_HTTP_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
-    expect(BROKER_HTTP_TIMEOUT_MS + LINK_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThanOrEqual(
+    expect(BROKER_HTTP_TIMEOUT_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThanOrEqual(
       OAUTH_CALLBACK_BUDGET_MS,
     );
     expect(OAUTH_CALLBACK_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
@@ -193,6 +202,16 @@ describe('broker balance timing', () => {
       BOT_PROFILE_PUBLISH_BUDGET_MS,
     );
     expect(BOT_PROFILE_PUBLISH_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  it('ends a mailing send inside its tick and phase 1, and keeps the rate under Telegram’s (#202)', () => {
+    expect(CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(MAILING_SEND_TICK_MS);
+    expect((MAILING_SEND_BATCH * 1000) / MAILING_SEND_PER_SECOND).toBeLessThanOrEqual(
+      MAILING_SEND_TICK_MS,
+    );
+    expect(MAILING_SEND_PER_SECOND).toBeLessThan(TELEGRAM_BOT_SENDS_PER_SECOND);
+    expect(MAILING_PLAN_TICK_MS).toBeLessThan(MAILING_MIN_OFFSET_HOURS * 3_600_000);
   });
 
   it.each([

@@ -9,7 +9,7 @@ import {
   supportUrl,
   type TelegramHtml,
 } from '@binarius/shared';
-import { LINK_PUSH_TELEGRAM_API_TIMEOUT_MS } from '../timing';
+import { CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS } from '../timing';
 import { CLIENT_LABELS, CLIENT_TEXTS } from './texts';
 
 // What the push after POST /auth/binodex/callback tells the Telegram user who started the login.
@@ -36,10 +36,6 @@ export type LinkPushOutcome =
 
 // Every push carries its next step, as the bot's own messages do (#350, docs/bot-navigation.md):
 // the buttons are the bot's, built from bot-navigation.ts, so a press lands on its handler.
-export interface LinkPushMessage {
-  text: TelegramHtml;
-  reply_markup: InlineKeyboardMarkup;
-}
 
 // a failed login: connect again, or the menu
 const connectAgain = () =>
@@ -48,7 +44,7 @@ const connectAgain = () =>
     .row()
     .text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA);
 
-export function linkPushMessage(outcome: LinkPushOutcome): LinkPushMessage {
+export function linkPushMessage(outcome: LinkPushOutcome): ClientPushMessage {
   switch (outcome.kind) {
     case LinkPushKind.Pending:
       return {
@@ -76,14 +72,22 @@ export function linkPushMessage(outcome: LinkPushOutcome): LinkPushMessage {
   }
 }
 
-export interface LinkNotifier {
-  // the transport, exposed so tests can intercept it the way they do the staff bot's
-  readonly api: Api;
-  // Throws when Telegram refuses (GrammyError) or the transport fails or times out (HttpError).
-  send(telegramUserId: bigint, outcome: LinkPushOutcome): Promise<void>;
+// A message the backend sends a Telegram user on its own: a link push, or a mailing
+// (apps/backend/src/mailing). It carries its next step, as every message of the bot does.
+export interface ClientPushMessage {
+  text: TelegramHtml;
+  reply_markup: InlineKeyboardMarkup;
 }
 
-export interface CreateLinkNotifierOptions {
+export interface ClientPush {
+  // the transport, exposed so tests can intercept it the way they do the staff bot's
+  readonly api: Api;
+  // Both throw when Telegram refuses (GrammyError) or the transport fails or times out (HttpError).
+  sendLink(telegramUserId: bigint, outcome: LinkPushOutcome): Promise<void>;
+  sendMailing(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
+}
+
+export interface CreateClientPushOptions {
   token: string;
   // the seams the tests need, as for the staff bot
   apiRoot?: string;
@@ -91,30 +95,28 @@ export interface CreateLinkNotifierOptions {
 }
 
 // Sends on the public bot's token without polling it: apps/bot is the one poller, and a bare Api
-// calls nothing until send does — not even getMe.
-export function createLinkNotifier({
+// calls nothing until a send does — not even getMe.
+export function createClientPush({
   token,
   apiRoot,
-  telegramApiTimeoutMs = LINK_PUSH_TELEGRAM_API_TIMEOUT_MS,
-}: CreateLinkNotifierOptions): LinkNotifier {
+  telegramApiTimeoutMs = CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
+}: CreateClientPushOptions): ClientPush {
   const api = new Api(token, {
     ...(apiRoot === undefined ? {} : { apiRoot }),
     // grammY's own default is 500 s
     timeoutSeconds: telegramApiTimeoutMs / 1000,
   });
+  // chat_id as a string: the column is bigint, and a string is the conversion that cannot round.
+  // This is the backend's one send seam for user texts, as apps/bot/src/send.ts is the bot's: the
+  // only place here that sets parse_mode and unwraps TelegramHtml, which is why ESLint allows a
+  // raw sendMessage in this file alone outside tests. The button label is plain: Telegram does
+  // not parse it.
+  const send = async (telegramUserId: bigint, { text, reply_markup }: ClientPushMessage) => {
+    await api.sendMessage(String(telegramUserId), text.value, { parse_mode: 'HTML', reply_markup });
+  };
   return {
     api,
-    async send(telegramUserId, outcome) {
-      const { text, reply_markup } = linkPushMessage(outcome);
-      // chat_id as a string: the column is bigint, and a string is the conversion that cannot
-      // round. This is the backend's one send seam for user texts, as apps/bot/src/send.ts is the
-      // bot's: the only place here that sets parse_mode and unwraps TelegramHtml, which is why
-      // ESLint allows a raw sendMessage in this file alone outside tests. The button label is
-      // plain: Telegram does not parse it.
-      await api.sendMessage(String(telegramUserId), text.value, {
-        parse_mode: 'HTML',
-        reply_markup,
-      });
-    },
+    sendLink: (telegramUserId, outcome) => send(telegramUserId, linkPushMessage(outcome)),
+    sendMailing: send,
   };
 }

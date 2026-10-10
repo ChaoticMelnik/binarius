@@ -41,7 +41,7 @@ const unusedAuth: AuthRoutesDeps = {
   clientId: 'client-id',
   redirectUri: 'https://bot.example/oauth/callback',
   partnerRef: 'partner-ref',
-  linkNotifier: {} as AuthRoutesDeps['linkNotifier'],
+  clientPush: {} as AuthRoutesDeps['clientPush'],
   initDataVerifier: {} as AuthRoutesDeps['initDataVerifier'],
 };
 

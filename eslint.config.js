@@ -120,7 +120,7 @@ const RAW_TELEGRAM_SEND_METHODS = [
 const RAW_TELEGRAM_SEND = {
   selector: `CallExpression[callee.property.name=/^(${RAW_TELEGRAM_SEND_METHODS.join('|')})$/]`,
   message:
-    'send user texts through replyHtml/replyWithVideoHtml/replyWithPhotoHtml/editMessageTextHtml (apps/bot/src/send.ts) or the link notifier: they take TelegramHtml and set parse_mode HTML, so nothing unescaped reaches the user as markup',
+    'send user texts through replyHtml/replyWithVideoHtml/replyWithPhotoHtml/editMessageTextHtml (apps/bot/src/send.ts) or the client push (apps/backend/src/auth/client-push.ts): they take TelegramHtml and set parse_mode HTML, so nothing unescaped reaches the user as markup',
 };
 
 export default tseslint.config(
@@ -152,12 +152,16 @@ export default tseslint.config(
     },
   },
   {
-    // Telegram user texts (#198): the user bot and the backend's push send only TelegramHtml, and
-    // only through their seams. The staff bot (apps/backend/src/admin) stays plain text by the
-    // owner's decision of 2026-10-02 and is outside this block. The seam files are ignored here,
-    // so they fall back to the block above and keep the logging rule.
-    files: ['apps/bot/src/**/*.ts', 'apps/backend/src/auth/**/*.ts'],
-    ignores: ['**/*.test.ts', 'apps/bot/src/send.ts', 'apps/backend/src/auth/link-notifier.ts'],
+    // Telegram user texts (#198): the user bot, the backend's push and its mailings (#202) send only
+    // TelegramHtml, and only through their seams. The staff bot (apps/backend/src/admin) stays
+    // plain text by the owner's decision of 2026-10-02 and is outside this block. The seam files
+    // are ignored here, so they fall back to the block above and keep the logging rule.
+    files: [
+      'apps/bot/src/**/*.ts',
+      'apps/backend/src/auth/**/*.ts',
+      'apps/backend/src/mailing/**/*.ts',
+    ],
+    ignores: ['**/*.test.ts', 'apps/bot/src/send.ts', 'apps/backend/src/auth/client-push.ts'],
     rules: {
       'no-restricted-syntax': ['error', ...LOG_ERROR_RULES, RAW_TELEGRAM_SEND],
     },

@@ -34,6 +34,7 @@ export const BotTextGroup = {
   Analysis: 'analysis',
   Trade: 'trade',
   Session: 'session',
+  Mailing: 'mailing',
   Buttons: 'buttons',
   Commands: 'commands',
   Profile: 'profile',
@@ -52,6 +53,7 @@ export const BOT_TEXT_GROUP_TITLES = {
   [BotTextGroup.Analysis]: 'Анализ',
   [BotTextGroup.Trade]: 'Демо-сделка',
   [BotTextGroup.Session]: 'Демо-сессия',
+  [BotTextGroup.Mailing]: 'Напоминания',
   [BotTextGroup.Buttons]: 'Кнопки',
   [BotTextGroup.Commands]: 'Команды: описания',
   [BotTextGroup.Profile]: 'Профиль бота',
@@ -1216,6 +1218,39 @@ export const BOT_TEXT_CATALOG = {
     `⏹ Сессия остановлена по твоей команде.`,
   ),
 
+  // ---- Напоминания (#202, docs/mailing.md) -------------------------------------------------
+  // Sent by the backend's mailing engine only, each with the «demoButton» button.
+  firstSessionReminder1h: html(
+    g.Mailing,
+    'Напоминание через час после подключения аккаунта, если демо-сессия ещё не запускалась.',
+    `🤖 <b>Аккаунт подключён — осталось запустить демо</b>
+
+🎮 Бот сам проведёт серию демо-сделок по сигналу, а ты посмотришь на результат.
+💡 Это демо: деньги не нужны.
+👇 Нажми «{demoButton}», чтобы начать.`,
+    { fragments: { demoButton: 'demoButton' } },
+  ),
+  firstSessionReminder24h: html(
+    g.Mailing,
+    'Напоминание через сутки после подключения аккаунта, если демо-сессия ещё не запускалась.',
+    `⏳ <b>Одними размышлениями вперёд не сдвинешься</b>
+
+🎮 В демо-сессии бот сам торгует на демо-счёте, а ты смотришь, как он принимает решения.
+💡 Деньги для этого не нужны.
+👇 Нажми «{demoButton}» — и бот начнёт.`,
+    { fragments: { demoButton: 'demoButton' } },
+  ),
+  firstSessionReminder72h: html(
+    g.Mailing,
+    'Напоминание через трое суток после подключения аккаунта, если демо-сессия ещё не запускалась; последнее в цепочке.',
+    `🚦 <b>Этот шаг открывает всё остальное</b>
+
+🎮 Первая демо-сессия покажет, как бот выбирает сделки и ведёт серию.
+💡 Это демо: деньги не нужны.
+👇 Нажми «{demoButton}» — дальше бот всё сделает сам.`,
+    { fragments: { demoButton: 'demoButton' } },
+  ),
+
   // ---- Кнопки -------------------------------------------------------------------------------
   confirmButton: plain(
     g.Buttons,
@@ -1251,7 +1286,7 @@ export const BOT_TEXT_CATALOG = {
   changeEmailButton: plain(g.Buttons, 'Вход по почте: кнопка смены адреса.', '✏️ Изменить адрес'),
   demoButton: plain(
     g.Buttons,
-    'Карточка и /menu: вход в демо — выбор длительности, затем экран «Сигналы сейчас» (#382).',
+    'Карточка, /menu и напоминания: вход в демо — выбор длительности, затем экран «Сигналы сейчас» (#382).',
     '🎮 Демо-торговля',
   ),
   demoSignalsRefreshButton: plain(

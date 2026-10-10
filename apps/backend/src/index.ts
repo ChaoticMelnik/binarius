@@ -16,7 +16,8 @@ import { createAdminBot } from './admin/telegram';
 import { createBotProfileApi } from './bot-texts/publish';
 import { buildApp } from './app';
 import type { TradingRoutesDeps } from './trading/routes';
-import { createLinkNotifier } from './auth/link-notifier';
+import { createClientPush } from './auth/client-push';
+import { createMailingEngine } from './mailing/engine';
 import { setBotTextSource } from './auth/texts';
 import { INIT_DATA_MAX_AGE_MS } from './auth/oauth-timing';
 import { createInitDataVerifier } from './auth/telegram-init-data';
@@ -151,6 +152,10 @@ const adminBot = createAdminBot({
   },
 });
 
+// The public bot's token for what the backend sends a user on its own: the link push and the
+// mailings (auth/client-push.ts).
+const clientPush = createClientPush({ token: env.telegramBotToken });
+
 // One function, two consumers: the worker's token route (#90) and the balance reconciler. The app's
 // logger is read at call time, after buildApp.
 const accessToken: TradingRoutesDeps['accessToken'] = (accountId, options) =>
@@ -199,7 +204,7 @@ const app = buildApp({
     clientId: env.brokerClientId,
     redirectUri: env.brokerOauthRedirectUri,
     partnerRef: env.brokerPartnerRef,
-    linkNotifier: createLinkNotifier({ token: env.telegramBotToken }),
+    clientPush,
     initDataVerifier: createInitDataVerifier({
       botToken: env.telegramBotToken,
       maxAgeMs: INIT_DATA_MAX_AGE_MS,
@@ -218,6 +223,10 @@ const app = buildApp({
 });
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
+
+// docs/mailing.md: the first-session reminders (#202); started with the other loops after
+// listen(), stopped in phase 1
+const mailing = createMailingEngine({ db, push: clientPush, logger: app.log });
 
 // docs/broker-balance.md: refreshed on demand by POST /trading/access and every
 // BALANCE_RECONCILE_INTERVAL_MS over the accounts in work, the latter never exchanging a token
@@ -280,6 +289,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => Promise.all(signalScanners.map((scanner) => scanner.stop())),
       () => balanceReconciler.stop(),
       () => botTexts.stop(),
+      () => mailing.stop(),
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
@@ -321,6 +331,7 @@ if (!shuttingDown) {
   balanceReconciler.start();
   for (const scanner of signalScanners) scanner.start();
   botTexts.start();
+  mailing.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();

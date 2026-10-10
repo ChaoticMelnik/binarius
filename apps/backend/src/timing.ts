@@ -6,7 +6,11 @@ import {
   DEFAULT_BALANCE_POLL_PER_MINUTE,
   DEFAULT_SIGNAL_SCAN_PER_MINUTE,
 } from '@binarius/shared/broker-budget';
-import { BOT_PROFILE_PUBLISH_BUDGET_MS, BOT_TEXTS_REFRESH_MS } from '@binarius/shared';
+import {
+  BOT_PROFILE_PUBLISH_BUDGET_MS,
+  BOT_TEXTS_REFRESH_MS,
+  MAILING_MIN_OFFSET_HOURS,
+} from '@binarius/shared';
 import {
   BALANCE_WATCH_WINDOW_MS,
   BROKER_BALANCE_SLA_MS,
@@ -65,11 +69,30 @@ export const ADMIN_HANDLER_CALLS = {
 export const ADMIN_HANDLER_BUDGET_MS =
   Math.max(...Object.values(ADMIN_HANDLER_CALLS)) * ADMIN_TELEGRAM_API_TIMEOUT_MS;
 
-// --- The link push (#128) --------------------------------------------------------------------
-// The one sendMessage POST /auth/binodex/callback makes after the link commits (grammY's
-// ApiClientOptions.timeoutSeconds). One attempt: a lost push is made up for by the confirm
-// button on the user's next /start.
-export const LINK_PUSH_TELEGRAM_API_TIMEOUT_MS = 3_000;
+// --- The client push (#128, #202) -------------------------------------------------------------
+// Each sendMessage of auth/client-push.ts (grammY's ApiClientOptions.timeoutSeconds): the one
+// POST /auth/binodex/callback makes after the link commits, and each mailing. One attempt: a lost
+// link push is made up for by the confirm button on the user's next /start, and a mailing whose
+// send ended without Telegram's answer is never sent again (docs/mailing.md).
+export const CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS = 3_000;
+
+// --- The mailing engine (#202) -----------------------------------------------------------------
+// docs/mailing.md. The planner's tick: shorter than the earliest step, so no step is planned a
+// whole step late.
+export const MAILING_PLAN_TICK_MS = 60_000;
+// The sender's tick, and how many jobs one tick claims and sends, one after another.
+export const MAILING_SEND_TICK_MS = 5_000;
+export const MAILING_SEND_BATCH = 100;
+// The due jobs one claim looks at: the earliest applying one is sent, those whose scenario no
+// longer applies are canceled.
+export const MAILING_CLAIM_SCAN = 50;
+// The mailings a second, for every kind together, under Telegram's limit for one bot's messages
+// to different users (core.telegram.org/bots/faq, about 30 a second; stated, not measured).
+export const MAILING_SEND_PER_SECOND = 20;
+export const TELEGRAM_BOT_SENDS_PER_SECOND = 30;
+// A send Telegram refused (not 403 or 429) is tried again this much later, up to the attempts.
+export const MAILING_RETRY_MS = 300_000;
+export const MAILING_MAX_ATTEMPTS = 3;
 
 // --- The scrypt queue --------------------------------------------------------------------------
 // One hash is 128 MiB and about 250 ms of a threadpool thread. Without a limit, a burst of
@@ -190,7 +213,7 @@ export const TIMING_CHAIN_HOLDS =
   BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // the callback's longest path: the code exchange, then the push. The contract constant lives
   // in packages/shared because apps/web sizes its forward's timeout above the same number.
-  BROKER_HTTP_TIMEOUT_MS + LINK_PUSH_TELEGRAM_API_TIMEOUT_MS <= OAUTH_CALLBACK_BUDGET_MS &&
+  BROKER_HTTP_TIMEOUT_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <= OAUTH_CALLBACK_BUDGET_MS &&
   OAUTH_CALLBACK_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   ADMIN_POLLING_BATCH_LIMIT === 1 &&
   ADMIN_POLLING_TIMEOUT_S * 1000 < ADMIN_TELEGRAM_API_TIMEOUT_MS &&
@@ -265,7 +288,15 @@ export const TIMING_CHAIN_HOLDS =
   // one publish of the menu and the profile inside its contract constant, which web sizes its
   // request timeout above (the admin routes publish inside a request, #361), and inside phase 1
   BOT_PROFILE_PUBLISH_CALLS * BOT_PROFILE_PUBLISH_TIMEOUT_MS <= BOT_PROFILE_PUBLISH_BUDGET_MS &&
-  BOT_PROFILE_PUBLISH_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS;
+  BOT_PROFILE_PUBLISH_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the mailing engine: stop() waits for the one send in flight, which ends inside its tick;
+  // a tick's batch at the rate fits the tick; the rate is under Telegram's; the planner runs
+  // within the earliest step
+  CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < MAILING_SEND_TICK_MS &&
+  (MAILING_SEND_BATCH * 1000) / MAILING_SEND_PER_SECOND <= MAILING_SEND_TICK_MS &&
+  MAILING_SEND_PER_SECOND < TELEGRAM_BOT_SENDS_PER_SECOND &&
+  MAILING_PLAN_TICK_MS < MAILING_MIN_OFFSET_HOURS * 3_600_000;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
 }

@@ -102,10 +102,22 @@ export const ACTION_LABELS = labelsOf({
 // Messages are Telegram HTML, sent with parse_mode HTML by send.ts only. Every hole is escaped
 // unless it is TelegramHtml already, and every assembled text is checked again
 // (telegramHtmlTemplate); a variable's value is escaped like any string (bot-text-vars.ts). The
-// catalog's html keys but three: cardGreeting branches to cardGreetingNoName, featureLines is a
-// fragment of cardBody and helpAbout, and only the backend's push sends oauthLoginFailed.
-const NOT_IN_TEXTS = ['cardGreetingNoName', 'featureLines', 'oauthLoginFailed'] as const;
-type TextKey = Exclude<BotHtmlKey, (typeof NOT_IN_TEXTS)[number]>;
+// catalog's html keys but three, and the reminders: cardGreeting branches to cardGreetingNoName,
+// featureLines is a fragment of cardBody and helpAbout, and only the backend sends
+// oauthLoginFailed (its push) and the `mailing` group (its mailing engine).
+const NOT_IN_TEXTS = [
+  'cardGreetingNoName',
+  'featureLines',
+  'oauthLoginFailed',
+  ...botTextKeysOf(BotTextGroup.Mailing),
+] as const;
+type TextKey = Exclude<
+  BotHtmlKey,
+  | 'cardGreetingNoName'
+  | 'featureLines'
+  | 'oauthLoginFailed'
+  | BotTextKeyOfGroup<typeof BotTextGroup.Mailing>
+>;
 
 export const TEXTS = facadeOf(
   html,
