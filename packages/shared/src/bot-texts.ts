@@ -1218,7 +1218,7 @@ export const BOT_TEXT_CATALOG = {
     `⏹ Сессия остановлена по твоей команде.`,
   ),
 
-  // ---- Напоминания (#202, docs/mailing.md) -------------------------------------------------
+  // ---- Напоминания (#202, #123, docs/mailing.md) -------------------------------------------
   // Sent by the backend's mailing engine only, each with the «demoButton» button.
   firstSessionReminder1h: html(
     g.Mailing,
@@ -1248,6 +1248,36 @@ export const BOT_TEXT_CATALOG = {
 🎮 Первая демо-сессия покажет, как бот выбирает сделки и ведёт серию.
 💡 Это демо: деньги не нужны.
 👇 Нажми «{demoButton}» — дальше бот всё сделает сам.`,
+    { fragments: { demoButton: 'demoButton' } },
+  ),
+  // #123: the share of the starter pack used, nothing more — no accuracy, learning or model
+  // (the issue's acceptance, apps/backend/src/mailing/messages.test.ts). The numbers are the
+  // thresholds' balances (TOKEN_NUDGES of LINK_BONUS_TOKENS), checked by the same test.
+  tokensHalfUsed: html(
+    g.Mailing,
+    'Использована половина стартового пакета токенов: на балансе 50 токенов или меньше. Один раз.',
+    `🪙 <b>Половина стартового пакета позади</b>
+
+На балансе не больше 50 токенов автоторговли: один токен — одна сделка.
+👇 Нажми «{demoButton}», чтобы продолжить.`,
+    { fragments: { demoButton: 'demoButton' } },
+  ),
+  tokensLow: html(
+    g.Mailing,
+    'Использовано 80 % стартового пакета токенов: на балансе 20 токенов или меньше. Один раз.',
+    `⏳ <b>Токены на исходе</b>
+
+На балансе не больше 20 токенов автоторговли: один токен — одна сделка.
+👇 Нажми «{demoButton}», чтобы продолжить.`,
+    { fragments: { demoButton: 'demoButton' } },
+  ),
+  tokensOut: html(
+    g.Mailing,
+    'Стартовый пакет токенов израсходован: на балансе 0 токенов. Один раз.',
+    `🔋 <b>Токены закончились</b>
+
+На балансе не осталось токенов автоторговли, а каждой сделке нужен один токен.
+👇 «{demoButton}» откроет экран демо-торговли.`,
     { fragments: { demoButton: 'demoButton' } },
   ),
 

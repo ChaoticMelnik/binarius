@@ -11,6 +11,7 @@ import {
 import { until } from '@binarius/shared/testing';
 import {
   LINK_BONUS_RULE_CODE,
+  LINK_BONUS_TOKENS,
   MAILING_OUTCOME_UNKNOWN,
   NotificationJobStatus,
   notificationJobs,
@@ -64,14 +65,15 @@ interface Linked {
   accountId: string;
 }
 
-// connected `minutes` ago: an active account and the starter pack's ledger row, backdated
-async function linked(minutes: number): Promise<Linked> {
-  const user = await seedUser(tmp.db);
+// connected `minutes` ago: an active account and the starter pack's ledger row, backdated; the
+// cached balance is the pack, or `balance` as the trades spent since would leave it
+async function linked(minutes: number, balance = LINK_BONUS_TOKENS): Promise<Linked> {
+  const user = await seedUser(tmp.db, { balance });
   const accountId = await seedBrokerAccount(tmp.db, user.userId, { isPartnerClient: true });
   await tmp.db.insert(tokenLedger).values({
     userId: user.userId,
     kind: TokenLedgerKind.Bonus,
-    balanceDelta: 100n,
+    balanceDelta: LINK_BONUS_TOKENS,
     brokerAccountId: accountId,
     note: LINK_BONUS_RULE_CODE,
     createdAt: sql`now() - make_interval(mins => ${minutes})`,
@@ -150,6 +152,71 @@ describe('the first-session chain through the engine', () => {
       NotificationJobStatus.Canceled,
     ]);
     await mailing.stop();
+  });
+});
+
+// #123
+describe('the low-token nudge through the engine', () => {
+  const sendsOf = async (user: Linked) => {
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    await mailing.sendTick();
+    await mailing.sendTick();
+    await mailing.stop();
+    return sendsTo(captured.calls, user.telegramUserId);
+  };
+
+  it.each([
+    [NotificationKind.TokensHalf, 50n, CLIENT_TEXTS.tokensHalfUsed],
+    [NotificationKind.TokensLow, 20n, CLIENT_TEXTS.tokensLow],
+    [NotificationKind.TokensOut, 0n, CLIENT_TEXTS.tokensOut],
+  ] as const)(
+    'sends %s once at a balance of %s, as Telegram HTML with the demo button',
+    async (kind, balance, text) => {
+      const user = await linked(0, balance);
+      const sends = await sendsOf(user);
+
+      expect(sends).toHaveLength(1);
+      const payload = sends[0]!.payload;
+      expect(payload.text).toBe(text.value);
+      expect(payload.parse_mode).toBe('HTML');
+      expect(inlineButtons(payload)).toEqual([
+        { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
+      ]);
+      expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
+        [kind, NotificationJobStatus.Sent],
+      ]);
+    },
+  );
+
+  it('sends a user who used the whole pack between two ticks the 100 % push only', async () => {
+    const user = await linked(0, 51n);
+    expect(await sendsOf(user)).toEqual([]);
+    await tmp.db.update(users).set({ tokenBalance: 0n }).where(eq(users.id, user.userId));
+
+    const sends = await sendsOf(user);
+    expect(sends.map((send) => send.payload.text)).toEqual([CLIENT_TEXTS.tokensOut.value]);
+    expect((await jobsOf(user.userId)).map((job) => job.kind)).toEqual([
+      NotificationKind.TokensOut,
+    ]);
+  });
+
+  it('sends a push canceled by an adjustment once the balance is back in its band, and once only', async () => {
+    const user = await linked(0, 0n);
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    await tmp.db.update(users).set({ tokenBalance: 80n }).where(eq(users.id, user.userId));
+    await mailing.sendTick();
+    await mailing.stop();
+    expect(sendsTo(captured.calls, user.telegramUserId)).toEqual([]);
+    await tmp.db.update(users).set({ tokenBalance: 0n }).where(eq(users.id, user.userId));
+
+    const sends = await sendsOf(user);
+    expect(sends.map((send) => send.payload.text)).toEqual([CLIENT_TEXTS.tokensOut.value]);
+    expect(await sendsOf(user)).toEqual([]);
+    expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
+      [NotificationKind.TokensOut, NotificationJobStatus.Sent],
+    ]);
   });
 });
 

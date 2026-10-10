@@ -288,6 +288,20 @@
       "when": 1791614497897,
       "tag": "0040_first_session_kinds_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1791622225854,
+      "tag": "0041_tokens_nudge_kinds",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1791622230309,
+      "tag": "0042_tokens_nudge_kinds_seed",
+      "breakpoints": true
     }
   ]
 }
