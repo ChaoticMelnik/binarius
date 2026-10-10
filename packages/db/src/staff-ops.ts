@@ -581,14 +581,15 @@ export async function confirmChallengeFromTelegram(
 /**
  * Records that the code reached Telegram; after this a further button press does nothing. Only
  * for the code that actually arrived: a later press can replace it while this send is in
- * flight, and marking then would close the window on a code nobody was given.
+ * flight, and marking then would close the window on a code nobody was given. Returns whether
+ * the row was marked — false when a later press has already replaced this code.
  */
 export async function markChallengeCodeSent(
   db: Db,
   challengeId: string,
   code: string,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const [row] = await db
     .update(staffLoginChallenges)
     .set({ codeSentAt: sql`now()` })
     .where(
@@ -597,7 +598,9 @@ export async function markChallengeCodeSent(
         sql`${staffLoginChallenges.codeSentAt} is null`,
         eq(staffLoginChallenges.codeHash, hashToken(code)),
       ),
-    );
+    )
+    .returning({ id: staffLoginChallenges.id });
+  return row !== undefined;
 }
 
 /** "Это не я": the same ownership CAS, and an entry that says someone else had the password. */

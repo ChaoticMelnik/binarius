@@ -63,7 +63,10 @@ export const ADMIN_TEXTS = {
       'Никому не сообщайте код: сотрудники Binarius его никогда не спрашивают.',
     ].join('\n'),
 
+  // Button answers: they go out through answerCallbackQuery, whose text the Bot API caps at 200
+  // characters. texts.test.ts lists them by name, so a new one needs a line there too.
   confirmed: 'Код отправлен.',
+  codeFailed: 'Не удалось отправить код. Попытка закрыта — начните вход заново.',
   denied: 'Вход отклонён, событие записано.',
   stale: 'Запрос устарел или уже обработан.',
 } as const;

@@ -61,7 +61,7 @@ export const ADMIN_POLLING_BATCH_LIMIT = 1;
 export const ADMIN_HANDLER_CALLS = {
   // the reply: the login button, or the refusal carrying the sender's own Telegram id
   start: 1,
-  // answerCallbackQuery ∥ sendMessage(code) — the parallel pair is counted as sequential
+  // sendMessage(code), then answerCallbackQuery with the outcome
   confirm: 2,
   // answerCallbackQuery
   deny: 1,

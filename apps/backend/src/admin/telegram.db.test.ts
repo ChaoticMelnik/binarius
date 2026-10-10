@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { GrammyError } from 'grammy';
+import { BotError, GrammyError } from 'grammy';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { AuditAction, LinkState } from '@binarius/shared';
@@ -382,11 +382,22 @@ describe('the confirm button', () => {
   it('issues a code to the account the update came from and records the press', async () => {
     const staff = await seedStaff(tmp.db);
     const challengeId = await openChallenge(staff);
+    // observed, not asserted, inside the seam: a throw there is a refused answerCallbackQuery,
+    // which the handler swallows
+    let sentWhenAnswered: boolean | undefined;
+    api.answers.set('answerCallbackQuery', async () => {
+      sentWhenAnswered = (await challengeRow(challengeId)).codeSentAt !== null;
+      return true;
+    });
 
     await admin.bot.handleUpdate(
       callbackUpdate(confirmCallbackData(challengeId), staffUser(staff.telegramUserId)),
     );
 
+    // the toast promises a code completeLogin will take, so it waits for code_sent_at
+    expect(api.calls.map((call) => call.method)).toEqual(['sendMessage', 'answerCallbackQuery']);
+    expect(sentPayload(api.calls, 'answerCallbackQuery')?.text).toBe(ADMIN_TEXTS.confirmed);
+    expect(sentWhenAnswered).toBe(true);
     const code = codeFrom(sentPayload(api.calls, 'sendMessage')?.text);
     const row = await challengeRow(challengeId);
     expect(String(sentPayload(api.calls, 'sendMessage')?.text)).toContain('Никому не сообщайте');
@@ -447,11 +458,23 @@ describe('the confirm button', () => {
         {},
       ),
     );
+    let statusWhenAnswered: string | undefined;
+    api.answers.set('answerCallbackQuery', async () => {
+      statusWhenAnswered = (await challengeRow(challengeId)).status;
+      return true;
+    });
 
     await admin.bot.handleUpdate(
       callbackUpdate(confirmCallbackData(challengeId), staffUser(staff.telegramUserId)),
     );
 
+    // one answer, after the close: an alert telling them to start over, not "code sent"
+    expect(api.calls.map((call) => call.method)).toEqual(['sendMessage', 'answerCallbackQuery']);
+    expect(sentPayload(api.calls, 'answerCallbackQuery')).toMatchObject({
+      text: ADMIN_TEXTS.codeFailed,
+      show_alert: true,
+    });
+    expect(statusWhenAnswered).toBe(StaffLoginChallengeStatus.Failed);
     const row = await challengeRow(challengeId);
     expect([row.status, row.codeSentAt]).toEqual([StaffLoginChallengeStatus.Failed, null]);
     const failures = await tmp.db
@@ -502,6 +525,9 @@ describe('the confirm button', () => {
       callbackUpdate(confirmCallbackData(challengeId), staffUser(staff.telegramUserId)),
     );
 
+    // the second press is the one that tells them; this one closed nothing and says nothing
+    expect(api.calls.map((call) => call.method)).toEqual(['sendMessage', 'answerCallbackQuery']);
+    expect(sentPayload(api.calls, 'answerCallbackQuery')?.text).toBeUndefined();
     const row = await challengeRow(challengeId);
     expect(row.status).toBe(StaffLoginChallengeStatus.Confirmed);
     expect(row.codeSentAt).not.toBeNull();
@@ -527,6 +553,76 @@ describe('the confirm button', () => {
     expect(failures[0]?.payload).toMatchObject({ reason: 'code_send_failed', closed: false });
   });
 
+  // The mirror of the case above: the older reply arrives, but the code it carried has been
+  // replaced, so it is not marked sent and completeLogin would refuse it.
+  it('says nothing when the delivered code was already replaced by a later press', async () => {
+    const staff = await seedStaff(tmp.db);
+    const challengeId = await openChallenge(staff);
+    let secondCode = '';
+    api.answers.set('sendMessage', async () => {
+      api.answers.delete('sendMessage');
+      const second = await confirmChallengeFromTelegram(tmp.db, {
+        challengeId,
+        telegramUserId: staff.telegramUserId,
+      });
+      if (second === undefined) throw new Error('the second press matched no challenge');
+      await markChallengeCodeSent(tmp.db, challengeId, second.code);
+      secondCode = second.code;
+      return true;
+    });
+
+    await admin.bot.handleUpdate(
+      callbackUpdate(confirmCallbackData(challengeId), staffUser(staff.telegramUserId)),
+    );
+
+    expect(api.calls.map((call) => call.method)).toEqual(['sendMessage', 'answerCallbackQuery']);
+    expect(sentPayload(api.calls, 'answerCallbackQuery')?.text).toBeUndefined();
+    expect((await challengeRow(challengeId)).codeHash).toBe(hashToken(secondCode));
+    expect(
+      await completeLogin(tmp.db, {
+        challengeId,
+        code: secondCode,
+        ip: '203.0.113.7',
+        userAgent: 'Mozilla/5.0',
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  // Accepted risk: with the database down there is nothing true to say, so the button is left
+  // to Telegram's own timeout and the error leaves the handler (bot.catch while polling).
+  it('answers nothing and rethrows when recording the delivery fails', async () => {
+    const staff = await seedStaff(tmp.db);
+    const challengeId = await openChallenge(staff);
+    // confirmChallengeFromTelegram runs in a transaction; markChallengeCodeSent is a bare update
+    const failingDb = new Proxy(tmp.db, {
+      get: (target, property, receiver) =>
+        property === 'update'
+          ? () => {
+              throw new Error('db down');
+            }
+          : Reflect.get(target, property, receiver),
+    });
+    const failing = createAdminBot({
+      token: '1:token',
+      db: failingDb,
+      logger,
+      botInfo: ADMIN_BOT_INFO,
+    });
+    const failingApi = captureApi(failing.bot);
+
+    const handled = failing.bot.handleUpdate(
+      callbackUpdate(confirmCallbackData(challengeId), staffUser(staff.telegramUserId)),
+    );
+
+    await expect(handled).rejects.toBeInstanceOf(BotError);
+    await expect(handled).rejects.toMatchObject({
+      error: expect.objectContaining({ message: 'db down' }),
+    });
+    expect(callsTo(failingApi.calls, 'sendMessage')).toHaveLength(1);
+    expect(callsTo(failingApi.calls, 'answerCallbackQuery')).toEqual([]);
+    expect((await challengeRow(challengeId)).codeSentAt).toBeNull();
+  });
+
   it('keeps delivering the code when only the button spinner fails', async () => {
     const staff = await seedStaff(tmp.db);
     const challengeId = await openChallenge(staff);
@@ -544,6 +640,7 @@ describe('the confirm button', () => {
       callbackUpdate(confirmCallbackData(challengeId), staffUser(staff.telegramUserId)),
     );
 
+    expect(api.calls.map((call) => call.method)).toEqual(['sendMessage', 'answerCallbackQuery']);
     expect(codeFrom(sentPayload(api.calls, 'sendMessage')?.text)).toMatch(/^\d{6}$/);
     expect((await challengeRow(challengeId)).codeSentAt).not.toBeNull();
     expect(logger.warn).toHaveBeenCalled();

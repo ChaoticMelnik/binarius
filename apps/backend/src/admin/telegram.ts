@@ -227,30 +227,33 @@ export function createAdminBot({
       return;
     }
 
-    // independent: the spinner on the button is worth less than the code, so a rejected
-    // answerCallbackQuery ("query is too old" is the usual one) must not skip the message
-    const [answered, sent] = await Promise.allSettled([
-      ctx.answerCallbackQuery(ADMIN_TEXTS.confirmed),
-      ctx.reply(ADMIN_TEXTS.code(confirmed.code)),
-    ]);
-    if (answered.status === 'rejected') {
-      logger.warn(
-        {
-          ...errorLogFields(answered.reason),
-          ...telegramErrorFields(answered.reason, 'answerCallbackQuery'),
-        },
-        'answering the staff login callback failed',
-      );
+    // The send first and the button's answer last, after the row records the outcome: "code
+    // sent" promises a code completeLogin will take, which needs code_sent_at, and whichever
+    // write the outcome needs can find the row already moved on by a later press. Telegram
+    // takes one answer per query, so there is no early one to correct afterwards.
+    let delivery: { ok: true } | { ok: false; error: unknown };
+    try {
+      await ctx.reply(ADMIN_TEXTS.code(confirmed.code));
+      delivery = { ok: true };
+    } catch (error: unknown) {
+      delivery = { ok: false, error };
     }
-    if (sent.status === 'rejected') {
-      const error: unknown = sent.reason;
+
+    // A failed write is not caught: it leaves the handler unanswered (bot.catch logs it), because
+    // with the database down there is nothing true to tell the button.
+    let answer: string | { text: string; show_alert: true } | undefined;
+    if (delivery.ok) {
+      const marked = await markChallengeCodeSent(db, challengeId, confirmed.code);
+      answer = marked ? ADMIN_TEXTS.confirmed : undefined;
+    } else {
+      const { error } = delivery;
       logger.warn(
         { ...errorLogFields(error), ...telegramErrorFields(error, 'sendMessage'), challengeId },
         'the staff login code could not be delivered',
       );
       // the code exists and nobody has it: closing the challenge is what lets the staff member
       // start again now instead of waiting the window out
-      await failChallengeDelivery(db, {
+      const closed = await failChallengeDelivery(db, {
         challengeId,
         staffId: confirmed.staffId,
         from: StaffLoginChallengeStatus.Confirmed,
@@ -259,9 +262,20 @@ export function createAdminBot({
         err: errorIdentity(error),
         telegram: { ...telegramErrorFields(error, 'sendMessage') },
       });
-      return;
+      answer = closed ? { text: ADMIN_TEXTS.codeFailed, show_alert: true } : undefined;
     }
-    await markChallengeCodeSent(db, challengeId, confirmed.code);
+
+    // undefined only stops the spinner: a press whose code was replaced, or whose failure closed
+    // nothing, has been overtaken by a newer press, and the newer code is the one that works. A
+    // refused answer ("query is too old" is the usual one) rolls nothing back.
+    try {
+      await ctx.answerCallbackQuery(answer);
+    } catch (error: unknown) {
+      logger.warn(
+        { ...errorLogFields(error), ...telegramErrorFields(error, 'answerCallbackQuery') },
+        'answering the staff login callback failed',
+      );
+    }
   });
 
   privateChats.callbackQuery(DENY_CALLBACK_PATTERN, async (ctx) => {
