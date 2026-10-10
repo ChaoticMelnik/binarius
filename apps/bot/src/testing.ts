@@ -424,7 +424,6 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     claimSessionSummary: unused,
     stopSessions: unused,
     setDemoStake: unused,
-    setTradingMode: unused,
     readBotTexts: unused,
     ...patch,
   };
@@ -594,9 +593,6 @@ export const WRITE_CALLBACK_PREFIXES = [
   'stk:s:',
   'stk:z:',
   'level:',
-  // the mode switches (#121); `mode` and `mode:r` are reads
-  'mode:r:ok',
-  'mode:d',
 ] as const;
 
 // Every message a scene sends goes through here, so no scene can send a repeat of a write

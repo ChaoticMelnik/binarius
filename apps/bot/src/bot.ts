@@ -52,7 +52,6 @@ import {
 import { showInvite } from './invite';
 import { createDemoTradeComposer } from './demo-trade';
 import { createTradingSessionComposer } from './trading-session';
-import { createTradingModeComposer } from './trading-mode';
 import type { IntentTracker } from './intent-tracker';
 import {
   createLoginDialog,
@@ -473,11 +472,6 @@ export function createBot({
       sessionTracker,
       connectKeyboard: welcomeKeyboard,
     }),
-  );
-
-  // the card's mode button and the mode screen behind it (#121, docs/trading-mode.md)
-  privateChats.use(
-    createTradingModeComposer({ backend, logger, connectKeyboard: welcomeKeyboard }),
   );
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {

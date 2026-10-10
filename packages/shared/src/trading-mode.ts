@@ -10,14 +10,12 @@ export const setTradingModeRequestSchema = z.strictObject({
   telegramUserId: telegramUserIdSchema,
   mode: tradeModeSchema,
 });
-export type SetTradingModeRequest = z.infer<typeof setTradingModeRequestSchema>;
 
 export const setTradingModeResponseSchema = z.strictObject({
   tradingMode: tradeModeSchema,
   // false: the user was in that mode already, nothing was written
   changed: z.boolean(),
 });
-export type SetTradingModeResponse = z.infer<typeof setTradingModeResponseSchema>;
 
 export const TradingModeErrorCode = {
   UserNotFound: 'user_not_found',
@@ -32,7 +30,6 @@ export type TradingModeErrorCode = (typeof TradingModeErrorCode)[keyof typeof Tr
 export const tradingModeRefusalSchema = z.strictObject({
   error: z.enum(TradingModeErrorCode),
 });
-export type TradingModeRefusal = z.infer<typeof tradingModeRefusalSchema>;
 
 export const safeParseSetTradingModeRequest = (input: unknown) =>
   setTradingModeRequestSchema.safeParse(input);

@@ -169,7 +169,6 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   stake: stakeLabel,
   minStake: () => w.stake,
   demoAvailable: () => w.stake,
-  realAvailable: () => w.usd,
   age: () => w.age,
   // stakePickerText: the saved stake, or «label (minimum)»
   amount: (m) =>
@@ -395,26 +394,6 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       ),
       '\n\n',
       anyOf('statusHint', 'statusHintReal'),
-    ],
-  },
-  {
-    // texts.ts → tradingModeScreen (#121): the balance and the minimum only with a snapshot,
-    // the paused line only while the switch is closed
-    id: 'tradingMode',
-    title: 'Экран режима торговли',
-    limit: TELEGRAM_MESSAGE_LIMIT,
-    body: [
-      k('modeHeader'),
-      '\n',
-      k('modeCurrent'),
-      '\n',
-      k('modeRealBalance'),
-      '\n',
-      k('modeMinStake'),
-      '\n\n',
-      k('modeWarning'),
-      '\n\n',
-      k('modePaused'),
     ],
   },
   {

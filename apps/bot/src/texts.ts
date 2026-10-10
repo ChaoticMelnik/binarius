@@ -777,37 +777,6 @@ export function stakePickerText({
 ${joinLines(lines)}`;
 }
 
-// The mode screen (#121, trading-mode.ts): the mode now; with a balance snapshot the real balance
-// and the broker's minimum, the amount a real trade stakes; the warning; the paused line while the
-// switch is closed.
-export function tradingModeScreen({
-  mode,
-  broker,
-  tradingOpen,
-}: {
-  mode: TradeMode;
-  broker: Pick<NonNullable<TradingAccessResponse['broker']>, 'real' | 'minTradeAmount'> | null;
-  tradingOpen: boolean;
-}): TelegramHtml {
-  const lines = [
-    TEXTS.modeCurrent({ mode }),
-    ...(broker === null
-      ? []
-      : [
-          TEXTS.modeRealBalance({ realAvailable: broker.real.available }),
-          TEXTS.modeMinStake({ minStake: broker.minTradeAmount }),
-        ]),
-  ];
-  const paused = tradingOpen ? [] : [telegramHtml`\n\n${TEXTS.modePaused}`];
-  return telegramHtml`${TEXTS.modeHeader}
-${joinLines(lines)}
-
-${TEXTS.modeWarning}${paused}`;
-}
-
-export const tradingModeConfirm = (minTradeAmount: DecimalString): TelegramHtml =>
-  TEXTS.modeConfirm({ minStake: minTradeAmount });
-
 // The command menu (packages/shared/src/bot-commands.ts) with the descriptions in effect now: the
 // menu published at start and /help's lines (#301).
 export const botCommands = (): BotCommand[] => botCommandsOf(plain);

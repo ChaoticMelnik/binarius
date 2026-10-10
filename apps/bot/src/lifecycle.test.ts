@@ -748,7 +748,6 @@ function scene(options: SceneOptions = {}) {
     claimSessionSummary: () => Promise.reject(new Error('not used by these scenes')),
     stopSessions: () => Promise.reject(new Error('not used by these scenes')),
     setDemoStake: () => Promise.reject(new Error('not used by these scenes')),
-    setTradingMode: () => Promise.reject(new Error('not used by these scenes')),
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({

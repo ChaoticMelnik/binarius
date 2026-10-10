@@ -38,7 +38,7 @@ import {
 
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import { SETTINGS_CALLBACK_DATA } from './stake-picker';
-import { INVITE_CALLBACK_DATA, MODE_CALLBACK_DATA } from './keyboards';
+import { INVITE_CALLBACK_DATA } from './keyboards';
 import {
   ACCESS_VIEW,
   ACCOUNT_VIEW,
@@ -151,7 +151,6 @@ function setup(
     claimSessionSummary: vi.fn(() => Promise.reject(new Error('not used here'))),
     stopSessions: vi.fn(() => Promise.reject(new Error('not used here'))),
     setDemoStake: vi.fn(() => Promise.reject(new Error('not used here'))),
-    setTradingMode: vi.fn(() => Promise.reject(new Error('not used here'))),
     readBotTexts: vi.fn(() => Promise.reject(new Error('not used here'))),
   };
   const logger = fakeLogger();
@@ -408,19 +407,14 @@ describe('/start', () => {
 
 describe('the status card', () => {
   const ACTIVE = userView({ hasActiveBrokerAccount: true });
-  // the demo and the mode button (#121), then the invite in a row of its own (#115)
+  // the demo, then the invite in a row of its own (#115)
   const CARD_ROWS = [
-    [
-      { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
-      { text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA },
-    ],
+    [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }],
     [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
   ];
+  // in real mode the entry reads «🚀 Торговать» (#121)
   const REAL_CARD_ROWS = [
-    [
-      { text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA },
-      { text: LABELS.modeBackDemoButton, callback_data: MODE_CALLBACK_DATA },
-    ],
+    [{ text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA }],
     [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
   ];
   // the line's default holds none of its variables
@@ -713,7 +707,6 @@ describe('«🏠 В меню» (#350)', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendPhoto']);
     expect(inlineButtons(sentPayload(calls, 'sendPhoto'))).toEqual([
       { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
-      { text: LABELS.modeButton, callback_data: MODE_CALLBACK_DATA },
       { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
     ]);
   });
@@ -1549,7 +1542,6 @@ describe('the account card', () => {
           claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
           setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
-          setTradingMode: vi.fn(() => Promise.reject(new Error('unused'))),
           readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
@@ -1600,7 +1592,6 @@ describe('the account card', () => {
           claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
           setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
-          setTradingMode: vi.fn(() => Promise.reject(new Error('unused'))),
           readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
         },
         logger,
@@ -2687,7 +2678,6 @@ describe('the Bot API timeout', () => {
         claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
         stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
         setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
-        setTradingMode: vi.fn(() => Promise.reject(new Error('unused'))),
         readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
       },
       logger: fakeLogger(),

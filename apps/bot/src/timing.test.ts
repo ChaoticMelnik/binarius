@@ -159,7 +159,6 @@ interface Branch {
   stopSession?: BackendClient['stopSession'];
   stopSessions?: BackendClient['stopSessions'];
   setDemoStake?: BackendClient['setDemoStake'];
-  setTradingMode?: BackendClient['setTradingMode'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -358,13 +357,6 @@ async function observe(branch: Branch): Promise<Calls> {
         telegramUserId,
         amount,
       );
-    },
-    setTradingMode: (telegramUserId, mode) => {
-      backend += 1;
-      return (
-        branch.setTradingMode ??
-        ((_id, tradingMode) => Promise.resolve({ tradingMode, changed: true }))
-      )(telegramUserId, mode);
     },
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
   };
@@ -1416,137 +1408,6 @@ const STOP_BRANCHES: readonly Branch[] = [
     readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     expected: { backend: 2, telegram: 1 },
   },
-];
-
-// The mode screen (#121, trading-mode.ts): the open sends a new message, the confirm and the
-// switches edit in place; an unknown switch outcome reads access again.
-const modeHttpError = (status: number, reason: string) =>
-  new BackendError(BackendErrorCode.HttpStatus, { status, reason });
-const MODE_OPEN_WORST_CASE: Branch = {
-  label: 'the screen is sent',
-  update: callbackUpdate('mode'),
-  expected: { backend: 1, telegram: 2 },
-};
-const MODE_OPEN_BRANCHES: readonly Branch[] = [
-  {
-    label: 'the chat is not private',
-    update: callbackUpdate('mode', 'group'),
-    expected: { backend: 0, telegram: 0 },
-  },
-  MODE_OPEN_WORST_CASE,
-  {
-    label: 'the access read fails',
-    update: callbackUpdate('mode'),
-    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the user is blocked',
-    update: callbackUpdate('mode'),
-    readTradingAccess: () => Promise.resolve(accessView({ status: UserStatus.Blocked })),
-    expected: { backend: 1, telegram: 2 },
-  },
-];
-const MODE_CONFIRM_WORST_CASE: Branch = {
-  label: 'the edit is refused as gone and the confirm is sent anew',
-  update: callbackUpdate('mode:r'),
-  apiErrors: [['editMessageText', EDIT_REFUSED]],
-  expected: { backend: 1, telegram: 3 },
-};
-const MODE_CONFIRM_BRANCHES: readonly Branch[] = [
-  {
-    label: 'the chat is not private',
-    update: callbackUpdate('mode:r', 'group'),
-    expected: { backend: 0, telegram: 0 },
-  },
-  {
-    label: 'the confirm is edited in',
-    update: callbackUpdate('mode:r'),
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the access read fails',
-    update: callbackUpdate('mode:r'),
-    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 1, telegram: 2 },
-  },
-  MODE_CONFIRM_WORST_CASE,
-];
-// `mode:x` (Plan Update 4): «↩️ Отмена» and «⚙️ Режим» redraw the screen in place
-const MODE_IN_PLACE_WORST_CASE: Branch = {
-  label: 'the edit is refused as gone and the screen is sent anew',
-  update: callbackUpdate('mode:x'),
-  apiErrors: [['editMessageText', EDIT_REFUSED]],
-  expected: { backend: 1, telegram: 3 },
-};
-const MODE_IN_PLACE_BRANCHES: readonly Branch[] = [
-  {
-    label: 'the chat is not private',
-    update: callbackUpdate('mode:x', 'group'),
-    expected: { backend: 0, telegram: 0 },
-  },
-  {
-    label: 'the screen is edited in',
-    update: callbackUpdate('mode:x'),
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the edit fails in transport and nothing more is sent',
-    update: callbackUpdate('mode:x'),
-    apiErrors: [['editMessageText', EDIT_TRANSPORT]],
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the access read fails',
-    update: callbackUpdate('mode:x'),
-    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 1, telegram: 2 },
-  },
-  MODE_IN_PLACE_WORST_CASE,
-];
-const MODE_SET_WORST_CASE: Branch = {
-  label: 'the outcome is unknown, access is read again and the edit is refused as gone',
-  update: callbackUpdate('mode:r:ok'),
-  setTradingMode: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-  apiErrors: [['editMessageText', EDIT_REFUSED]],
-  expected: { backend: 2, telegram: 3 },
-};
-const MODE_SET_BRANCHES: readonly Branch[] = [
-  {
-    label: 'the chat is not private',
-    update: callbackUpdate('mode:r:ok', 'group'),
-    expected: { backend: 0, telegram: 0 },
-  },
-  {
-    label: 'real is switched on',
-    update: callbackUpdate('mode:r:ok'),
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'demo is switched back',
-    update: callbackUpdate('mode:d'),
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the switch back is sent anew',
-    update: callbackUpdate('mode:d'),
-    apiErrors: [['editMessageText', EDIT_REFUSED]],
-    expected: { backend: 1, telegram: 3 },
-  },
-  {
-    label: 'the switch is refused below the minimum',
-    update: callbackUpdate('mode:r:ok'),
-    setTradingMode: () => Promise.reject(modeHttpError(409, 'real_balance_below_minimum')),
-    expected: { backend: 1, telegram: 2 },
-  },
-  {
-    label: 'the outcome is unknown and the access read fails too',
-    update: callbackUpdate('mode:r:ok'),
-    setTradingMode: () => Promise.reject(modeHttpError(500, 'internal')),
-    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 2, telegram: 2 },
-  },
-  MODE_SET_WORST_CASE,
 ];
 
 // #314: the site sign-in button of a message sent before it
@@ -2607,37 +2468,6 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('/stop (#122)', async () => {
     await checkHandler('stop', STOP_BRANCHES, STOP_WORST_CASE, HANDLER_CALLS.stop);
-  });
-
-  it('the mode screen (#121)', async () => {
-    await checkHandler(
-      'modeOpen',
-      MODE_OPEN_BRANCHES,
-      MODE_OPEN_WORST_CASE,
-      HANDLER_CALLS.modeOpen,
-    );
-  });
-
-  it('the mode confirm (#121)', async () => {
-    await checkHandler(
-      'modeConfirm',
-      MODE_CONFIRM_BRANCHES,
-      MODE_CONFIRM_WORST_CASE,
-      HANDLER_CALLS.modeConfirm,
-    );
-  });
-
-  it('the mode screen in place (#121, mode:x)', async () => {
-    await checkHandler(
-      'modeInPlace',
-      MODE_IN_PLACE_BRANCHES,
-      MODE_IN_PLACE_WORST_CASE,
-      HANDLER_CALLS.modeInPlace,
-    );
-  });
-
-  it('the mode switches (#121)', async () => {
-    await checkHandler('modeSet', MODE_SET_BRANCHES, MODE_SET_WORST_CASE, HANDLER_CALLS.modeSet);
   });
 
   it("the session's stop button", async () => {
