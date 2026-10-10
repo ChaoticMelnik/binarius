@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Queue } from 'bullmq';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import pino from 'pino';
@@ -56,6 +56,7 @@ import { createWorker, type ShutdownResult, type TradingWorker, type WorkerTunin
 // wiring) share one Postgres, one Redis prefix and one mock broker; the old one shuts down while
 // the new one runs, as scripts/deploy-worker.sh does with two containers. Every oracle is the
 // persisted state, the mock broker's trades and sockets, or the worker's own log lines.
+// H9 (#131) is a crash, not a deploy: the old worker dies dirty in the middle of a session's step.
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 const redisUrl = process.env.REDIS_URL;
@@ -654,4 +655,77 @@ describe('DEMO_ONLY across the composition (#396)', () => {
     expect(broker.trades.list(account.brokerUserId)).toEqual([]);
     expect(await shutdown(w)).toBe('clean');
   });
+});
+
+describe('a demo session whose worker dies (#131)', () => {
+  it('H9 the old worker dies with a session step in flight: one trade per step, the session completes', async () => {
+    const account = await seedAccount({ snapshot: true });
+    const session = await seedTradingSession(tmp.db, account.brokerAccountId, {
+      settings: sessionSettings({ trades: 2 }),
+    });
+    const stepsOf = () =>
+      tmp.db
+        .select()
+        .from(tradeIntents)
+        .where(eq(tradeIntents.tradingSessionId, session.id))
+        .orderBy(asc(tradeIntents.createdAt));
+    // the catch-up settles a trade whose expiry is behind the database clock
+    const settleStep = async (step: number) => {
+      const intent = (await stepsOf())[step - 1]!;
+      const [trade] = await tmp.db
+        .select()
+        .from(brokerTrades)
+        .where(eq(brokerTrades.intentId, intent.id));
+      broker.trades.settle(Number(trade!.brokerTradeId), { outcome: MockTradeOutcome.Win });
+      await tmp.db
+        .update(brokerTrades)
+        .set({ openTimestampMs: sql`(extract(epoch from now()) * 1000)::bigint - 3600000` })
+        .where(eq(brokerTrades.intentId, intent.id));
+      await until(
+        `step ${step} settled`,
+        async () => (await statusOf(intent.id)) === TradeIntentStatus.Settled,
+      );
+    };
+
+    // armed before A starts, or A's orchestrator may submit step 1 unheld
+    broker.rest.failNext('openTrade', { delayMs: HELD_REST_MS });
+    const a = startWorker('A', { sockets: false, tuning: { phase1BudgetMs: DIRTY_PHASE1_MS } });
+    await until('step 1 held at the broker', async () => {
+      await publishPending();
+      const rows = await stepsOf();
+      return rows.length === 1 && rows[0]!.status === TradeIntentStatus.Submitting;
+    });
+    const step1 = (await stepsOf())[0]!.id;
+    const b = startWorker('B', { sockets: false });
+    expect(await shutdown(a)).toBe('dirty');
+    if (!a.pool.ending) await a.pool.end();
+
+    await until('step 1 resolved through reconciliation', async () => {
+      await publishPending([step1]);
+      return OPEN_OR_SETTLED.includes(await statusOf(step1));
+    });
+    expect(recordedBy(a).has(step1)).toBe(false);
+    expect(await stepsOf()).toHaveLength(1);
+    await settleStep(1);
+    await until('step 2 accepted over B', async () => {
+      await publishPending();
+      const rows = await stepsOf();
+      return rows.length === 2 && rows[1]!.status === TradeIntentStatus.Accepted;
+    });
+    await settleStep(2);
+    const sessionRow = async () =>
+      (await tmp.db.select().from(tradingSessions).where(eq(tradingSessions.id, session.id)))[0]!;
+    await until(
+      'the session completed',
+      async () => (await sessionRow()).status === TradingSessionStatus.Stopped,
+    );
+    expect((await sessionRow()).stopReason).toBe(TradingSessionStopReason.Completed);
+    expect((await stepsOf()).map((i) => i.clientRequestId)).toEqual([
+      `session:${session.id}:1`,
+      `session:${session.id}:2`,
+    ]);
+    expect(broker.trades.list(account.brokerUserId)).toHaveLength(2);
+    expect(await shutdown(b)).toBe('clean');
+    await a.redis.quit();
+  }, 60_000);
 });
