@@ -26,6 +26,28 @@ export const pairViewSchema = z.object({
 });
 export type PairView = z.infer<typeof pairViewSchema>;
 
+// The broker's five types and a bucket for any other, in the order the bot lists them. The
+// scanner shares its pairs among these groups and the signals screen fills its places by them
+// (#460). The broker's own string never enters callback data: a group is one of these.
+export const PAIR_TYPE_GROUPS = [
+  'currency',
+  'commodity',
+  'stock',
+  'cryptocurrency',
+  'index',
+  'other',
+] as const;
+export type PairTypeGroup = (typeof PAIR_TYPE_GROUPS)[number];
+
+export const pairTypeGroupOf = (type: string): PairTypeGroup =>
+  PAIR_TYPE_GROUPS.find((group) => group !== 'other' && group === type) ?? 'other';
+
+// the best pair first: payout desc, then id asc, so an order never depends on the catalog's
+export const comparePairsByPayout = (
+  a: { payout: number; id: number },
+  b: { payout: number; id: number },
+): number => b.payout - a.payout || a.id - b.id;
+
 // The bot's offer and the session start route read a pair the same way (#283). scheduledUntil
 // is the mock broker's reading, which refuses an order only while scheduled_until > now.
 export const isPairOpen = (pair: { scheduledUntil: number }, nowMs: number): boolean =>

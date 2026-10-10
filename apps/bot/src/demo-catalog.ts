@@ -4,8 +4,10 @@ import {
   intervalForDuration,
   pairAcceptsDuration,
   pairPayoutAccepted,
+  pairTypeGroupOf,
   SIGNAL_SCAN_INTERVALS,
   type PairsCatalogResponse,
+  type PairTypeGroup,
   type PairView,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -13,18 +15,6 @@ import { BackendError, BackendErrorCode, type BackendClient } from './backend-cl
 // The demo's choice of a pair and a duration, checked against a catalog read at the press
 // (#125). No Telegram and no texts here: #126 checks before it shows the stake button and #127
 // before it creates the intent, through readDemoTrade, and neither re-implements a check.
-
-// The broker's five types and a bucket for any other, in the order the screen lists them. The
-// broker's own string never enters callback data: a group is one of these.
-export const DEMO_ASSET_GROUPS = [
-  'currency',
-  'commodity',
-  'stock',
-  'cryptocurrency',
-  'index',
-  'other',
-] as const;
-export type DemoAssetGroup = (typeof DEMO_ASSET_GROUPS)[number];
 
 // 5 and 15 s only (owner, 2026-10-07, #313), filtered per pair by its own range; each is analysed
 // on its own sub-minute candle (intervalForDuration).
@@ -47,9 +37,6 @@ export const LEGACY_DEMO_DURATIONS_SEC = [60, 300, 900, 1800, 3600] as const;
 
 export const DEMO_PAGE_SIZE = 12;
 
-export const groupOf = (type: string): DemoAssetGroup =>
-  DEMO_ASSET_GROUPS.find((group) => group !== 'other' && group === type) ?? 'other';
-
 // the session start route reads a pair the same way (#283)
 export const isOpen: (pair: PairView, nowMs: number) => boolean = isPairOpen;
 
@@ -58,14 +45,16 @@ export const durationOptions = (pair: PairView): DemoDurationSec[] =>
 
 // only the pairs that accept a demo duration (#313): a type, a page and a count never show a pair
 // the user could not trade
-export const pairsOf = (catalog: PairsCatalogResponse, group: DemoAssetGroup): PairView[] =>
-  catalog.pairs.filter((pair) => groupOf(pair.type) === group && durationOptions(pair).length > 0);
+export const pairsOf = (catalog: PairsCatalogResponse, group: PairTypeGroup): PairView[] =>
+  catalog.pairs.filter(
+    (pair) => pairTypeGroupOf(pair.type) === group && durationOptions(pair).length > 0,
+  );
 
 // sorted by symbol in code-unit order, ties by id, so a page holds the same pairs on every read
 // of the same catalog
 export const openPairsOf = (
   catalog: PairsCatalogResponse,
-  group: DemoAssetGroup,
+  group: PairTypeGroup,
   nowMs: number,
 ): PairView[] =>
   pairsOf(catalog, group)

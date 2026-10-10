@@ -32,6 +32,7 @@ import {
   type DecimalString,
   type LinkBonusGrantView,
   type LinkedAccountView,
+  type PairTypeGroup,
   type PairView,
   type TelegramHtml,
   type TradeIntentView,
@@ -39,7 +40,7 @@ import {
   type TradingSessionView,
 } from '@binarius/shared';
 import type { BotCommand } from 'grammy/types';
-import type { DemoAssetGroup, DemoDurationSec } from './demo-catalog';
+import type { DemoDurationSec } from './demo-catalog';
 
 // The texts live in the catalog (packages/shared/src/bot-texts.ts, docs/bot-texts.md). This file
 // is the bot's view of it: TEXTS, LABELS, PROFILE and the label maps keep the names they had,
@@ -596,7 +597,7 @@ export const DEMO_GROUP_LABELS = labelsOf({
   cryptocurrency: 'demoGroupCryptocurrency',
   index: 'demoGroupIndex',
   other: 'demoGroupOther',
-} as const satisfies Record<DemoAssetGroup, BotStaticPlainKey>);
+} as const satisfies Record<PairTypeGroup, BotStaticPlainKey>);
 
 export const DEMO_DURATION_LABELS = labelsOf({
   5: 'demoDuration5',
@@ -604,7 +605,7 @@ export const DEMO_DURATION_LABELS = labelsOf({
 } as const satisfies Record<DemoDurationSec, BotStaticPlainKey>);
 
 // a type's button with the count of its open pairs
-export const groupButtonLabel = (group: DemoAssetGroup, openCount: number): string =>
+export const groupButtonLabel = (group: PairTypeGroup, openCount: number): string =>
   `${DEMO_GROUP_LABELS[group]} · ${openCount}`;
 // the analysis screen's button by the signal's direction (#126), with the amount it trades when
 // known (#297)
@@ -620,7 +621,7 @@ export const pairButtonLabel = (symbol: string, payout: number): string =>
 
 // One screen of a type's pairs: the header naming the type, the page line.
 export const demoPairsScreen = (
-  group: DemoAssetGroup,
+  group: PairTypeGroup,
   page: number,
   pageCount: number,
 ): TelegramHtml =>

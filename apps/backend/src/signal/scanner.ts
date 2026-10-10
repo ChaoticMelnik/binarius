@@ -1,9 +1,12 @@
 import {
   BrokerRestErrorCode,
+  comparePairsByPayout,
   errorLogFields,
   isPairOpen,
   pairAcceptsDuration,
   pairPayoutAccepted,
+  PAIR_TYPE_GROUPS,
+  pairTypeGroupOf,
   SIGNAL_CHART_INTERVAL_MS,
   SignalFeedOutcome,
   SignalKind,
@@ -17,8 +20,8 @@ import type { CachedSignalFeed } from '@binarius/signal';
 import type { ScanPacer } from './pacer';
 
 // docs/signal.md -> The scanner (#343). One instance per interval of SIGNAL_SCAN_INTERVALS (#382):
-// on every candle of its interval, SIGNAL_SCAN_SLACK_MS after its boundary, it decides the top
-// pairs of the fresh catalog through the same cached feed as POST /trading/signal, so a manual
+// on every candle of its interval, SIGNAL_SCAN_SLACK_MS after its boundary, it decides the pairs
+// of the fresh catalog chosen across the asset types (scanPairs, #460) through the same cached feed as POST /trading/signal, so a manual
 // analysis of a scanned pair in that candle is a cache hit. Every decision is journalled by the
 // feed itself (`signal decision`). The snapshot is in memory only; GET /trading/signals serves
 // from it (signals-routes.ts).
@@ -51,7 +54,7 @@ export interface SignalScannerDeps {
   pacer: ScanPacer;
   logger: SignalScannerLogger;
   now: () => number;
-  // the top pairs scanned each candle
+  // the pairs scanned each candle (scanPairs)
   maxPairs: number;
   slackMs: number;
   concurrency: number;
@@ -77,9 +80,30 @@ export const eligiblePairs = (
       isPairOpen(pair, nowMs) && pairAcceptsDuration(pair, durationSec) && pairPayoutAccepted(pair),
   );
 
-// payout desc, then id asc, so the choice does not depend on the catalog's order
-export const topPairs = (eligible: readonly BinaryPair[], maxPairs: number): BinaryPair[] =>
-  [...eligible].sort((a, b) => b.payout - a.payout || a.id - b.id).slice(0, maxPairs);
+// docs/signal.md -> The scanner -> Which pairs (#460). The groups of PAIR_TYPE_GROUPS that have an
+// eligible pair take one pair each in turn, the best by payout first, so currencies paying the most
+// do not crowd the other types out; a group that runs out gives its turns to the rest. The turn
+// starts at group (candleIndex x maxPairs) mod G: with fewer places than groups, consecutive
+// candles take consecutive windows, and every group is scanned within ceil(G / maxPairs) candles.
+export function scanPairs(
+  eligible: readonly BinaryPair[],
+  maxPairs: number,
+  candleIndex: number,
+): BinaryPair[] {
+  const groups = PAIR_TYPE_GROUPS.map((group) =>
+    eligible.filter((pair) => pairTypeGroupOf(pair.type) === group).sort(comparePairsByPayout),
+  ).filter((pairs) => pairs.length > 0);
+  if (groups.length === 0) return [];
+  const chosen: BinaryPair[] = [];
+  const total = Math.min(maxPairs, eligible.length);
+  const start = (candleIndex * maxPairs) % groups.length;
+  for (let turn = 0; chosen.length < total; turn += 1) {
+    const round = Math.floor(turn / groups.length);
+    const pair = groups[(start + turn) % groups.length]?.[round];
+    if (pair !== undefined) chosen.push(pair);
+  }
+  return chosen;
+}
 
 interface FreshSignal {
   assetId: number;
@@ -210,7 +234,7 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
   }
 
   // the chosen pairs in order, each with its digits for the decider's tick floor (#379)
-  function choose(nowMs: number): { id: number; digits: number }[] {
+  function choose(nowMs: number, boundary: number): { id: number; digits: number }[] {
     const view = catalog.read();
     if (view === undefined || !view.fresh) {
       if (!staleStreak)
@@ -225,7 +249,10 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     staleStreak = false;
     const eligible = eligiblePairs(view, nowMs, durationSec);
     period.eligible = eligible.length;
-    return topPairs(eligible, maxPairs).map(({ id, digits }) => ({ id, digits }));
+    return scanPairs(eligible, maxPairs, boundary / candleMs).map(({ id, digits }) => ({
+      id,
+      digits,
+    }));
   }
 
   function rateLimited(retryAfterSec: number | undefined): void {
@@ -243,7 +270,7 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
       }
       pacer.onDecided();
       const { decision, nowMs } = result.entry;
-      // a pair that left the top while its call was in flight is not put back
+      // a pair that left the scanned set while its call was in flight is not put back
       if (!scanned.includes(assetId)) return;
       entries.set(assetId, {
         kind: decision.kind,
@@ -267,7 +294,7 @@ export function createSignalScanner(deps: SignalScannerDeps): SignalScanner {
     if (boundary === lastBoundary) return;
     lastBoundary = boundary;
     const candleEnd = boundary + candleMs;
-    const chosen = choose(now());
+    const chosen = choose(now(), boundary);
     scanned = chosen.map((pair) => pair.id);
     for (const assetId of entries.keys()) {
       if (!scanned.includes(assetId)) entries.delete(assetId);
