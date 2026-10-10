@@ -14,8 +14,12 @@ do, and what is written down. Issue #68.
    address, the browser and the time, with **«Подтвердить вход»** and **«Это не я»**. Pressing
    the first issues a six-digit code and sends it; pressing the second closes the attempt and
    records it — and nothing else: the password stays valid (Limits).
-3. **The code.** `POST /admin/login/confirm` sends the code to `POST /admin/auth/confirm`. On a
-   match the backend creates a row in `staff_sessions` and answers with a token, which the web
+3. **The code.** `POST /admin/login/confirm` sends the code to `POST /admin/auth/confirm`. The
+   challenge id travels in a cookie; `web` forwards it only if it matches `UUID_PATTERN`, and the
+   backend's schema reads it with that same pattern, so a value `web` lets through is never
+   refused as malformed. Should the two drift anyway, `web` logs the backend's `400 validation`
+   as an error, drops the cookie and starts the form over with «Подтверждение истекло, войдите
+   снова» — the same as a `410`. On a match the backend creates a row in `staff_sessions` and answers with a token, which the web
    process puts in an `HttpOnly` cookie. The token itself is stored nowhere: the row holds its
    SHA-256.
 4. **Every request after that** re-reads the session row inside the transaction that also does
