@@ -23,7 +23,8 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   from, the offset, the dedupe key and the predicate it holds while it applies.
 - `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs`, `claimMailingJob`,
   `settleMailingJob`.
-- `apps/backend/src/mailing/messages.ts` — `MAILING_MESSAGES`: per kind, the text and the keyboard.
+- `apps/backend/src/mailing/messages.ts` — `MAILING_MESSAGES`: per kind, the text; the keyboard is
+  the demo button (`demoKeyboard`, `client-push.ts`), the same as the link push's re-login.
 - `apps/backend/src/mailing/engine.ts` — the two loops, the pacer and the failure policy;
   `apps/backend/src/auth/client-push.ts` — `sendMailing`, beside the link push.
 - `apps/backend/src/timing.ts` — the `MAILING_*` numbers and their links in `TIMING_CHAIN_HOLDS`.
@@ -31,7 +32,8 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
 `MAILING_SCENARIOS` and `MAILING_MESSAGES` are checked with `satisfies Record<NotificationKind, …>`:
 a kind without either does not compile. The tests named below by their ids are in
 `packages/db/src/mailing-ops.db.test.ts` (C1–C3, M1–M6, CUT), `apps/backend/src/mailing/engine.db.test.ts`
-(M7–M9, M11) and `apps/backend/src/mailing/engine.test.ts` (M10).
+(M7–M11; the engine's own pacing is M10 there) and `apps/backend/src/mailing/engine.test.ts` (M10,
+the pacer alone).
 
 ## The first-session chain
 
@@ -98,26 +100,37 @@ a time, each by one statement (`claimMailingJob`):
 
 Then it sends through the client push and writes the outcome:
 
-| Outcome                                        | The job                                                                                                               |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Telegram accepted                              | `sent`, `last_error` cleared                                                                                          |
-| 403                                            | `failed`, attempt counted; `recordTelegramSendFailure` marks the user unreachable and cancels their pending jobs (M7) |
-| 429                                            | `pending` again after `retry_after`, no attempt counted; the sender pauses for `retry_after` (M8)                     |
-| another refusal, or a text that fails to build | `pending` again after `MAILING_RETRY_MS` (5 min), attempt counted; `failed` at `MAILING_MAX_ATTEMPTS` (3)             |
-| no answer (a timeout, a transport error)       | left `sent` with `outcome_unknown`: it may have been delivered, so it is never sent again (M9)                        |
-| the process died after the claim               | the same: `sent` with `outcome_unknown`, never sent again (M11)                                                       |
+| Outcome                                              | The job                                                                                                               |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Telegram accepted                                    | `sent`, `last_error` cleared                                                                                          |
+| 403                                                  | `failed`, attempt counted; `recordTelegramSendFailure` marks the user unreachable and cancels their pending jobs (M7) |
+| 429                                                  | `pending` again after `retry_after`, no attempt counted; the sender pauses for `retry_after` (M8)                     |
+| another refusal (4xx), or a text that fails to build | `pending` again after `MAILING_RETRY_MS` (5 min), attempt counted; `failed` at `MAILING_MAX_ATTEMPTS` (3)             |
+| no answer (a timeout, a transport error), a 5xx      | left `sent` with `outcome_unknown`: it may have been delivered, so it is never sent again (M9)                        |
+| the process died after the claim                     | the same: `sent` with `outcome_unknown`, never sent again (M11)                                                       |
 
 A lost reminder is preferred to a duplicate. `last_error` holds a name and a code only
 (`GrammyError:403`, rule 8); the log line has the job's id, its kind and the error's identity.
+
+If writing the outcome fails, the job stays as the claim left it, `sent` with `outcome_unknown`,
+and is never sent again; the failure is logged by name and code (`mailing not settled`). What
+Telegram's answer asks of the sender still happens: the pause after a 429, the unreachable mark
+after a 403 (`engine.db.test.ts` → a settle that fails).
 
 **Rate.** One pacer for every kind spaces the sends `1000 / MAILING_SEND_PER_SECOND` ms apart:
 20 a second, under Telegram's limit of about 30 a second for one bot's messages to different
 users (stated, not measured; M10). A batch at that rate fits its tick, so a tick never overlaps the
 next (`TIMING_CHAIN_HOLDS`).
 
-**Stop.** `stop()` ends both loops and waits for the statement or the one send in flight, which
-`CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS` (3 s) bounds inside shutdown phase 1. The jobs not yet claimed
-stay `pending` for the next start.
+**Stop.** `stop()` ends both loops and waits for what is in flight: the planner's tick (one
+statement per kind), and the sender's current step — the pace's gap (`1000 / MAILING_SEND_PER_SECOND`,
+50 ms) if it is sleeping, after which nothing more is claimed, or a job already taken: the claim, the
+one send (`CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS`, 3 s), the settle and, after a 403, the unreachable
+mark. The gap plus the send sit inside shutdown phase 1
+(`TIMING_CHAIN_HOLDS`); the statements are ordinary latency, as phase 1 counts every statement, and
+a database that times out each of them (the pool's `query_timeout`) can push the stop past phase 1
+into `exit(1)`. Nothing is sent twice either way: the claim has already marked the job `sent`. The
+jobs not yet claimed stay `pending` for the next start (M11).
 
 ## Delivery rules
 
@@ -147,6 +160,10 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
   two claims of one `reduced` user at the same instant can both pass the window
   (`acceptsMailing()`'s comment). The first-session chain has one step applicable at a time, so
   it cannot meet the second.
+- An opt-out (`setNotificationLevel('off')`) or a block (`markTelegramBlocked`) that commits
+  after a claim's snapshot does not stop that claim: one message can still go out milliseconds
+  after it, never two — the claimed job is already `sent`, so the cancel passes it by. Closing
+  the gap would mean locking `users` in the claim, against the lock order above (rule 5).
 - An account that is not a partner client gets no starter pack and therefore no chain.
 - The last step has no end: a user who is unreachable or `off` at 72 h and comes back later gets
   it then, if they still have no session.
