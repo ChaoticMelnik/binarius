@@ -35,6 +35,7 @@ import {
   safeParseChangePasswordResponse,
   safeParseOAuthCallbackResponse,
   safeParseAdminConfirmResponse,
+  safeParseAdminLinkInspectResponse,
   safeParseAdminLoginResponse,
   safeParseLogoutResponse,
   safeParseRevokeSessionResponse,
@@ -44,6 +45,8 @@ import {
   type AdminIntentResponse,
   type AdminIntentsQuery,
   type AdminIntentsResponse,
+  type AdminLinkCompleteRequest,
+  type AdminLinkInspectResponse,
   type AdminLoginRequest,
   type AdminLoginResponse,
   type AdminOverviewResponse,
@@ -111,6 +114,10 @@ export class BackendError extends Error {
 export interface BackendClient {
   login(request: AdminLoginRequest): Promise<AdminLoginResponse>;
   confirm(request: AdminConfirmRequest): Promise<AdminConfirmResponse>;
+  /** the login link from the staff bot (#448): read without spending it */
+  inspectLoginLink(token: string): Promise<AdminLinkInspectResponse>;
+  /** the login link spent for a session; the answer is the confirm step's */
+  completeLoginLink(request: AdminLinkCompleteRequest): Promise<AdminConfirmResponse>;
   sessions(token: string): Promise<StaffSessionsResponse>;
   revoke(token: string, sessionId: string): Promise<RevokeSessionResponse>;
   logout(token: string): Promise<LogoutResponse>;
@@ -243,6 +250,19 @@ export function createBackendClient({
       return parsed(
         safeParseAdminConfirmResponse,
         await call('POST', 'admin/auth/confirm', { body: request }),
+      );
+    },
+    // the token in the body, not the path: no request line of this hop carries it
+    async inspectLoginLink(linkToken) {
+      return parsed(
+        safeParseAdminLinkInspectResponse,
+        await call('POST', 'admin/auth/link/inspect', { body: { token: linkToken } }),
+      );
+    },
+    async completeLoginLink(request) {
+      return parsed(
+        safeParseAdminConfirmResponse,
+        await call('POST', 'admin/auth/link/complete', { body: request }),
       );
     },
     async sessions(session) {

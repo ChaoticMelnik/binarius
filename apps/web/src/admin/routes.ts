@@ -10,6 +10,7 @@ import {
   UnexpectedBotTextOutcome,
   CLIENT_USER_AGENT_MAX_LENGTH,
   errorLogFields,
+  LinkState,
   safeParseAdminAuditQuery,
   safeParseAdminBrokerAccountsQuery,
   safeParseAdminChangePasswordRequest,
@@ -20,6 +21,7 @@ import {
   safeParseAdminTradingSessionsQuery,
   safeParseAdminUsersQuery,
   STAFF_PASSWORD_MAX_LENGTH,
+  STAFF_LOGIN_LINK_TOKEN_PATTERN,
   STAFF_SESSION_TOKEN_PATTERN,
   staffLoginCodeSchema,
   TOKEN_ADJUSTMENT_MAX_TOKENS,
@@ -50,6 +52,7 @@ import {
   intentPage,
   intentsHref,
   intentsPage,
+  linkPage,
   loginPage,
   overviewPage,
   PASSWORD_PATH,
@@ -589,6 +592,82 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       if (answered?.status === 429) {
         return sendHtml(reply, 429, confirmPage(TEXTS.tooManyCodeAttempts));
       }
+      return internalFailure(request, reply, error);
+    }
+  });
+
+  // docs/staff-login.md → Logging in by a link from the bot (#448). The token is a path
+  // parameter here and nowhere else in this process: it goes to the backend in a body, and this
+  // app logs no request line (disableRequestLogging).
+  const LINK_PATH = '/admin/login/link/:token';
+
+  /** The link's token, checked for shape before the backend is asked anything. */
+  const linkTokenOf = (request: FastifyRequest): string | undefined => {
+    const token = (request.params as { token?: unknown }).token;
+    return typeof token === 'string' && STAFF_LOGIN_LINK_TOKEN_PATTERN.test(token)
+      ? token
+      : undefined;
+  };
+
+  const linkRefusal = (reply: FastifyReply, status: number, state: LinkState): FastifyReply =>
+    sendHtml(
+      reply,
+      status,
+      noticePage(
+        TEXTS.linkTitle,
+        state === LinkState.Used
+          ? TEXTS.linkUsed
+          : state === LinkState.Expired
+            ? TEXTS.linkExpired
+            : TEXTS.linkUnavailable,
+      ),
+    );
+
+  // Spends nothing: Telegram's preview, a messenger's prefetch and a browser's prerender all
+  // arrive here, and only the POST behind the button creates a session.
+  app.get(LINK_PATH, async (request, reply) => {
+    const token = linkTokenOf(request);
+    if (token === undefined) return linkRefusal(reply, 404, LinkState.Unavailable);
+    try {
+      const { state } = await backend.inspectLoginLink(token);
+      if (state === LinkState.Live) return sendHtml(reply, 200, linkPage());
+      return linkRefusal(reply, 410, state);
+    } catch (error) {
+      if (outcome(error)?.status === 429) {
+        return sendHtml(reply, 429, noticePage(TEXTS.linkTitle, TEXTS.tooManyAttempts));
+      }
+      return internalFailure(request, reply, error);
+    }
+  });
+
+  // The Origin check is the global hook's (app.ts), as on every POST of this process. A session
+  // cookie already in the browser is simply replaced.
+  app.post(LINK_PATH, async (request, reply) => {
+    const token = linkTokenOf(request);
+    if (token === undefined) return linkRefusal(reply, 404, LinkState.Unavailable);
+    try {
+      const session = await backend.completeLoginLink({ token, ...clientFacts(request) });
+      const lifetime = secondsUntil(session.expiresAt);
+      if (lifetime === undefined) return internalFailure(request, reply, new ExpiryInThePast());
+      return reply
+        .setCookie(
+          SESSION_COOKIE,
+          session.sessionToken,
+          cookieOptions(SESSION_COOKIE_PATH, lifetime),
+        )
+        .redirect('/admin/sessions', 303);
+    } catch (error) {
+      const answered = outcome(error);
+      if (answered?.status === 410) {
+        const state =
+          answered.code === AdminErrorCode.LinkUsed
+            ? LinkState.Used
+            : answered.code === AdminErrorCode.LinkExpired
+              ? LinkState.Expired
+              : LinkState.Unavailable;
+        return linkRefusal(reply, 410, state);
+      }
+      if (answered?.status === 429) return sendHtml(reply, 429, linkPage(TEXTS.tooManyAttempts));
       return internalFailure(request, reply, error);
     }
   });
