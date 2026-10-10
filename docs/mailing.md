@@ -5,9 +5,10 @@ in the backend process. A mailing is a row of `notification_jobs`; the engine pl
 facts already in the database and sends the due ones through the client push, the backend's one
 send seam for user texts ([bot-start.md](bot-start.md) → Two seams).
 
-Today it carries one scenario, the **first-session chain**: three reminders that lead a user who
-connected an account but has not started a trading session into the demo. #123 (the low-token
-nudge) and #124 (retention) add their scenarios to the same engine.
+It carries two scenarios: the **first-session chain**, three reminders that lead a user who
+connected an account but has not started a trading session into the demo, and the **low-token
+nudge** (#123), one push as the user's starter pack runs down. #124 (retention) adds its scenarios
+to the same engine.
 
 ```bash
 pnpm test --project unit apps/backend/src/mailing apps/backend/src/auth/client-push.test.ts   # no database or Redis
@@ -17,8 +18,8 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
 ## Files
 
 - `packages/shared/src/mailing.ts` — `NotificationKind` (the kinds, and the CHECK on
-  `notification_jobs.kind` and `notification_kinds.kind`) and `FIRST_SESSION_CHAIN` (the steps and
-  their offsets).
+  `notification_jobs.kind` and `notification_kinds.kind`), `FIRST_SESSION_CHAIN` (the steps and
+  their offsets) and `TOKEN_NUDGES` (the thresholds).
 - `packages/db/src/mailing-scenarios.ts` — `MAILING_SCENARIOS`: per kind, the fact it counts
   from, the offset, the dedupe key and the predicate it holds while it applies.
 - `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs`, `claimMailingJob`,
@@ -33,7 +34,7 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
 a kind without either does not compile. The tests named below by their ids are in
 `packages/db/src/mailing-ops.db.test.ts` (C1–C3, M1–M6, CUT), `apps/backend/src/mailing/engine.db.test.ts`
 (M7–M11; the engine's own pacing is M10 there) and `apps/backend/src/mailing/engine.test.ts` (M10,
-the pacer alone).
+the pacer alone); the low-token nudge's are T1–T6 and its CUT in `mailing-ops.db.test.ts`.
 
 ## The first-session chain
 
@@ -71,8 +72,47 @@ moment the migration runs, the clock `token_ledger.created_at` is written by —
 so the three steps share one cutoff. A kind with no row plans nothing, so a kind added later
 without its seed stays silent rather than mailing everyone's history. Tests:
 `mailing-ops.db.test.ts` CUT (an account a minute before each kind's `plans_from` gets nothing,
-one a minute after gets the step; no row, nothing; a fresh database holds one row per kind, at
-one moment).
+one a minute after gets the step; no row, nothing; a fresh database holds one row per kind, the
+chain's at one moment).
+
+## The low-token nudge
+
+| Kind          | Used of the starter pack | Balance (`users.token_balance`) | Text (`mailing` group) | Button             |
+| ------------- | ------------------------ | ------------------------------- | ---------------------- | ------------------ |
+| `tokens_half` | 50 %                     | 21–50                           | `tokensHalfUsed`       | «🎮 Демо-торговля» |
+| `tokens_low`  | 80 %                     | 1–20                            | `tokensLow`            | «🎮 Демо-торговля» |
+| `tokens_out`  | 100 %                    | 0                               | `tokensOut`            | «🎮 Демо-торговля» |
+
+The owner's numbers (2026-10-08): 50, 80 and 100 % of the starter pack, each once per user, no
+quiet hours. The texts say how many tokens are left and claim no accuracy, learning or model (the
+issue's acceptance; `messages.test.ts` checks the words and that each text's number is its
+threshold's balance).
+
+**The button.** All three carry the demo button — the owner's decision of 2026-10-10, including at
+100 %, where the user has no token for a trade: every client message carries a next step (rule 31)
+and the deposit button does not exist yet. #27 (the deposit CTA) replaces the 80 % and 100 %
+buttons with «💳 Пополнить»; until then the texts promise no way to top up.
+
+- **The measure** is the cached balance (rule 2: equal to the ledger by its writers) against the
+  starter pack, `LINK_BONUS_TOKENS` (100): a threshold is reached once
+  `token_balance * 100 <= LINK_BONUS_TOKENS * (100 - used %)`. The starter pack is the only pack
+  (one per user, `token_ledger_link_bonus_user_idx`), and a manual adjustment (#246) moves the
+  balance like any writer. What a pack is after buying tokens is #117's to decide; until then each
+  push is once per user, by its dedupe key (`tokens:50`, `tokens:80`, `tokens:100`).
+- **It applies** to a user who received the starter pack and is not blocked by the admin, while
+  the balance is in the kind's band, and while no higher kind has a job of any status.
+- **The highest only** (the owner, 2026-10-10). A balance is in one band at most, so a user who
+  passes several thresholds at once — at the deploy, or between two planner ticks (51 → 0) — is
+  planned the highest one only. A lower kind never applies once a higher one has a job, so it is
+  not sent later either, even when an adjustment lifts the balance back into its band (T2, T5). Two
+  kinds planned by the two statements of one tick (the balance crossed a threshold between them)
+  are settled by the claim: the lower one no longer applies and is canceled (T4).
+- **At the deploy.** The fact a nudge counts from is the planning moment (`now()`), not a past
+  event, so `notification_kinds.plans_from` only switches these kinds on: a user already past a
+  threshold when the engine first plans them gets one push, for the highest threshold reached (the
+  owner, 2026-10-10; T2). Migration `0042_tokens_nudge_kinds_seed.sql` seeds the three rows.
+- **A top-up before the send** (a balance back over the threshold) cancels the planned job at the
+  claim (T6). `scheduled_at` is the planning moment.
 
 ## The planner
 
@@ -165,8 +205,9 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
 
 - During a deploy with two backend processes the two senders together may exceed the rate, and
   two claims of one `reduced` user at the same instant can both pass the window
-  (`acceptsMailing()`'s comment). The first-session chain has one step applicable at a time, so
-  it cannot meet the second.
+  (`acceptsMailing()`'s comment). The first-session chain and the low-token nudge each have one
+  kind applicable at a time, so only a `reduced` user with a chain step and a nudge due together
+  can meet the second, during such a deploy.
 - An opt-out (`setNotificationLevel('off')`) or a block (`markTelegramBlocked`) that commits
   after a claim's snapshot does not stop that claim: one message can still go out milliseconds
   after it, never two — the claimed job is already `sent`, so the cancel passes it by. Closing
