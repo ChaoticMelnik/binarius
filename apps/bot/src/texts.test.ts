@@ -13,6 +13,7 @@ import {
   parseBotTextTemplate,
   BrokerBalanceUnavailableReason,
   NotificationLevel,
+  PAIR_TYPE_GROUPS,
   plainTextOf,
   TradeAction,
   TradeIntentFailureReason,
@@ -56,7 +57,7 @@ import {
   demoDurationCallbackData,
   demoPageCallbackData,
 } from './demo';
-import { DEMO_ASSET_GROUPS, DEMO_DURATIONS_SEC } from './demo-catalog';
+import { DEMO_DURATIONS_SEC } from './demo-catalog';
 import {
   ACTION_LABELS,
   accountCard,
@@ -797,7 +798,7 @@ describe('the demo screens', () => {
   });
 
   it('names the groups and the durations by the approved labels', () => {
-    expect(DEMO_ASSET_GROUPS.map((group) => DEMO_GROUP_LABELS[group])).toEqual([
+    expect(PAIR_TYPE_GROUPS.map((group) => DEMO_GROUP_LABELS[group])).toEqual([
       '💱 Валюты',
       '🛢 Сырьё',
       '📈 Акции',
@@ -812,7 +813,7 @@ describe('the demo screens', () => {
 
   // these buttons are not in LABELS, so the LABELS-wide checks above do not see them
   it.each([
-    ...DEMO_ASSET_GROUPS.map((group) => groupButtonLabel(group, 0)),
+    ...PAIR_TYPE_GROUPS.map((group) => groupButtonLabel(group, 0)),
     ...DEMO_DURATIONS_SEC.map((sec) => DEMO_DURATION_LABELS[sec]),
   ])('keeps the demo button %s plain, non-empty and starting with an emoji', (label) => {
     expect(label.trim().length).toBeGreaterThan(0);

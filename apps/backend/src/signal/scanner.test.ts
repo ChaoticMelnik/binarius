@@ -1,6 +1,8 @@
 import { pino } from 'pino';
 import {
   logOptions,
+  PAIR_TYPE_GROUPS,
+  pairTypeGroupOf,
   SIGNAL_ALGORITHM_VERSION,
   SIGNAL_CHART_INTERVAL_MS,
   type BinaryPair,
@@ -18,9 +20,15 @@ import {
 } from '@binarius/signal';
 import { DEFAULT_SIGNAL_SCAN_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { signalScanCapacity, signalScanPerMinute } from '../timing';
+import {
+  MAX_SIGNAL_SCAN_PER_MINUTE,
+  MIN_SIGNAL_SCAN_PER_MINUTE,
+  signalScanCapacity,
+  signalScanPairs,
+  signalScanPerMinute,
+} from '../timing';
 import { createScanPacer, type ScanPacer } from './pacer';
-import { createSignalScanner, eligiblePairs, freshSignals, topPairs } from './scanner';
+import { createSignalScanner, eligiblePairs, freshSignals, scanPairs } from './scanner';
 
 // a 15 s boundary, so a 5 s one too
 const B = 1_760_000_010_000;
@@ -164,6 +172,23 @@ function harness(
   return { state, calls, requests, logger, scanner };
 }
 
+// The broker's types and one it does not list (other). Currencies pay the most, as they do live.
+const TYPES = ['currency', 'commodity', 'stock', 'cryptocurrency', 'index', 'bond'];
+const MIXED: BinaryPair[] = [
+  ...Array.from({ length: 20 }, (_, i) => pair(100 + i, { payout: 95 })),
+  ...TYPES.slice(1).flatMap((type, t) => [
+    pair(201 + t * 50, { type, payout: 85 }),
+    pair(202 + t * 50, { type, payout: 80 }),
+  ]),
+];
+const INDEX_BEST = MIXED.find((p) => p.type === 'index' && p.payout === 85)?.id;
+const byId = (id: number): BinaryPair => {
+  const found = MIXED.find((p) => p.id === id);
+  if (found === undefined) throw new Error(`no pair ${id}`);
+  return found;
+};
+const groupsOf = (pairs: readonly BinaryPair[]) => pairs.map((p) => pairTypeGroupOf(p.type));
+
 // to the scan moment of the candle that starts `candles` boundaries after B
 const toScan = async (candles: number, candleMs = CANDLE_15S_MS) => {
   await vi.advanceTimersByTimeAsync(B + candles * candleMs + SLACK_MS - Date.now());
@@ -223,14 +248,81 @@ describe('signal scanner', () => {
     expect(eligiblePairs(view(pairs), B + 3_000, 15).map((p) => p.id)).toEqual([4, 5]);
   });
 
-  it('S3 the top pairs by payout, then by id', () => {
+  it('S3 inside one type the pairs go by payout, then by id, whatever the catalog order', () => {
     const pairs = [
       pair(7, { payout: 80 }),
       pair(9, { payout: 90 }),
       pair(8, { payout: 90 }),
       pair(6, { payout: 70 }),
     ];
-    expect(topPairs(pairs, 2).map((p) => p.id)).toEqual([8, 9]);
+    const shuffled = [pairs[2]!, pairs[0]!, pairs[3]!, pairs[1]!];
+    for (const input of [pairs, [...pairs].reverse(), shuffled]) {
+      expect(scanPairs(input, 2, 0).map((p) => p.id)).toEqual([8, 9]);
+      expect(scanPairs(input, 3, 5).map((p) => p.id)).toEqual([8, 9, 7]);
+    }
+  });
+
+  it('S21 with places for every type, each type is scanned on every candle (#460)', async () => {
+    for (let k = 0; k < 6; k += 1) {
+      const chosen = scanPairs(MIXED, 13, k);
+      expect(chosen).toHaveLength(13);
+      for (const group of PAIR_TYPE_GROUPS) {
+        expect(groupsOf(chosen).filter((g) => g === group).length).toBeGreaterThanOrEqual(2);
+      }
+      expect(scanPairs([...MIXED].reverse(), 13, k)).toEqual(chosen);
+    }
+    const h = harness({ pairs: MIXED, maxPairs: 13 });
+    h.scanner.start();
+    await toScan(1);
+    expect(h.calls).toHaveLength(13);
+    expect(new Set(groupsOf(h.calls.map(byId)))).toEqual(new Set(PAIR_TYPE_GROUPS));
+    await h.scanner.stop();
+  });
+
+  it('S22 with fewer places than types, two consecutive candles scan every type (#460)', async () => {
+    for (let k = 0; k < 12; k += 1) {
+      const now = groupsOf(scanPairs(MIXED, 4, k));
+      expect(new Set(now).size).toBe(4);
+      const next = groupsOf(scanPairs(MIXED, 4, k + 1));
+      expect(new Set([...now, ...next])).toEqual(new Set(PAIR_TYPE_GROUPS));
+    }
+    const h = harness({ interval: '5s', pairs: MIXED, maxPairs: 4 });
+    h.scanner.start();
+    await toScan(1, CANDLE_5S_MS);
+    await toScan(2, CANDLE_5S_MS);
+    expect(h.calls).toHaveLength(8);
+    expect(new Set(groupsOf(h.calls.slice(0, 4).map(byId))).size).toBe(4);
+    expect(new Set(groupsOf(h.calls.map(byId)))).toEqual(new Set(PAIR_TYPE_GROUPS));
+    await h.scanner.stop();
+  });
+
+  it('S23 a type short of its share gives the rest of its places to the others (#460)', () => {
+    const pairs = MIXED.filter(
+      (p) => pairTypeGroupOf(p.type) !== 'other' && (p.type !== 'index' || p.id === INDEX_BEST),
+    );
+    const chosen = groupsOf(scanPairs(pairs, 13, 0));
+    expect(chosen).toHaveLength(13);
+    expect(chosen.filter((g) => g === 'index')).toHaveLength(1);
+    expect(chosen.filter((g) => g === 'other')).toHaveLength(0);
+    expect(chosen.filter((g) => g === 'currency')).toHaveLength(6);
+    const few = MIXED.filter((p) => p.type !== 'currency').slice(0, 5);
+    expect(new Set(scanPairs(few, 13, 3))).toEqual(new Set(few));
+  });
+
+  it('S24 the scan takes exactly signalScanPairs pairs, so the broker budget is unchanged (#460)', () => {
+    const many = Array.from({ length: 200 }, (_, i) =>
+      pair(1000 + i, { type: TYPES[i % TYPES.length]!, payout: 80 + (i % 15) }),
+    );
+    for (const interval of ['15s', '5s'] as const) {
+      for (const ceiling of [
+        DEFAULT_SIGNAL_SCAN_PER_MINUTE,
+        MIN_SIGNAL_SCAN_PER_MINUTE,
+        MAX_SIGNAL_SCAN_PER_MINUTE,
+      ]) {
+        const maxPairs = signalScanPairs(ceiling, interval);
+        expect(scanPairs(many, maxPairs, 7)).toHaveLength(maxPairs);
+      }
+    }
   });
 
   it("S4 a catalog change between candles changes the next candle's set", async () => {
@@ -380,7 +472,7 @@ describe('signal scanner', () => {
     expect(h.calls).toEqual([1, 2, 3, 4]);
   });
 
-  it('S9 a pair that left the top is gone from the snapshot', async () => {
+  it('S9 a pair that left the scanned set is gone from the snapshot', async () => {
     const h = harness({ pairs: [pair(1, { payout: 90 }), pair(2)], maxPairs: 1 });
     h.scanner.start();
     await toScan(1);

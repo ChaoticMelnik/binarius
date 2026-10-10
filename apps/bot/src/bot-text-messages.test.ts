@@ -36,6 +36,7 @@ import {
   type BotTextSource,
   type LinkBonusGrantView,
   type LinkedAccountView,
+  type PairTypeGroup,
   type PairView,
   type SignalDecision,
   type TelegramHtml,
@@ -43,7 +44,7 @@ import {
   type TradingSignalResponse,
 } from '@binarius/shared';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
-import { DEMO_DURATIONS_SEC, type DemoAssetGroup, type DemoDurationSec } from './demo-catalog';
+import { DEMO_DURATIONS_SEC, type DemoDurationSec } from './demo-catalog';
 import {
   brokerBalance,
   intentView,
@@ -90,7 +91,7 @@ const NAME = x(W.firstName);
 // a payout of six characters whose break-even share is five («100.0»), below the cycle floor so the
 // analysis prints its note too (#379)
 const pair: PairView = { ...PAIR_EURUSD, symbol: x(W.symbol), payout: 0.0001 };
-const GROUPS: DemoAssetGroup[] = [
+const GROUPS: PairTypeGroup[] = [
   'currency',
   'commodity',
   'stock',

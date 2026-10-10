@@ -12,7 +12,6 @@ import {
   DEMO_DURATIONS_SEC,
   DEMO_PAGE_SIZE,
   durationOptions,
-  groupOf,
   isOpen,
   LEGACY_DEMO_DURATIONS_SEC,
   openPairsOf,
@@ -48,20 +47,6 @@ describe('SIGNALS_DURATIONS_SEC (#382)', () => {
     expect(SIGNALS_DURATIONS_SEC).toEqual([15, 5]);
     expect([...SIGNALS_DURATIONS_SEC].sort((a, b) => a - b)).toEqual([...DEMO_DURATIONS_SEC]);
     expect(SIGNALS_DURATIONS_SEC.map(intervalForDuration)).toEqual([...SIGNAL_SCAN_INTERVALS]);
-  });
-});
-
-describe('groupOf', () => {
-  it.each(['currency', 'commodity', 'stock', 'cryptocurrency', 'index'])(
-    'keeps the live type %s as its group',
-    (type) => {
-      expect(groupOf(type)).toBe(type);
-    },
-  );
-
-  it('puts any other type under other', () => {
-    expect(groupOf('bond')).toBe('other');
-    expect(groupOf('')).toBe('other');
   });
 });
 

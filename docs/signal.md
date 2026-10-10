@@ -476,7 +476,7 @@ request in flight) and `SIGNAL_CACHE_MAX_TTL_MS < 60 000`; `timing.test.ts` asse
 
 ## The scanner (#343)
 
-The backend decides the signal of the top pairs in the background, so a later screen (#320) can
+The backend decides the signal of pairs chosen across the asset types in the background, so a later screen (#320) can
 offer only pairs that have one now. It lives in `apps/backend/src/signal/scanner.ts`, one instance
 per interval of `SIGNAL_SCAN_INTERVALS` (`['15s', '5s']`, #382), each with its own pacer, and goes
 through the same cached feed as `POST /trading/signal`. A manual analysis of a scanned pair in the
@@ -486,7 +486,7 @@ own `signal decision` line, so the journal replays it like any other. A cache hi
 **Which pairs.** The `15s` and `5s` intervals (`SIGNAL_SCAN_INTERVALS`), one per duration of the
 bot's main path (#382). Every pair on both would not fit the broker's per-IP budget: 122 pairs on
 every `5s` and `15s` candle would be about 1 950 GETs a minute against 600
-([The budget](#the-budget)), so each interval scans a top-N on its own share of
+([The budget](#the-budget)), so each interval scans `signalScanPairs` pairs on its own share of
 `SIGNAL_SCAN_MAX_PER_MINUTE` (`SIGNAL_SCAN_SHARES_PERCENT` in `apps/backend/src/timing.ts`, owner
 2026-10-09):
 
@@ -508,11 +508,26 @@ interval (`timing.test.ts`).
   pair paying 79 % is never scanned nor served on either instance (S19). Each evaluation carries
   the pair's `digits` from the catalog it was chosen from (S20). On the live catalog of
   2026-10-09, 50 of the 122 pairs accepting 15 s paid ≥ 80, the top 25 ≥ 86.
-- The scan set is the interval's top `signalScanPairs` eligible pairs by `payout` desc, then `id`
-  asc, each decided once a candle of that interval. The two sets overlap but neither contains the
-  other: a `min_timeframe` 15 pair ranks on `15s` only, so when enough of them pay more, the `5s`
-  top 4 holds pairs outside the `15s` top 13. A pair in both has two cache keys and two decisions,
-  each counted in its own share.
+- The scan set is `signalScanPairs` eligible pairs chosen by type (`scanPairs`, #460), each decided
+  once a candle of that interval. Currencies usually pay the most, so a plain payout top would
+  scan almost only currencies. Instead the eligible pairs are split into the groups of
+  `PAIR_TYPE_GROUPS` (`packages/shared/src/catalog.ts`: `currency`, `commodity`, `stock`,
+  `cryptocurrency`, `index`, `other` for any other broker type). Each group is sorted by
+  `comparePairsByPayout` (`payout` desc, then `id` asc). The `G` groups with an eligible pair then
+  take one pair each in turn (round-robin) until `signalScanPairs` pairs are taken. A group that runs
+  out of eligible pairs gives its turns to the others (S23), and the count stays exactly
+  `signalScanPairs`, so the budget does not change (S24). The result depends only on the set of
+  eligible pairs, not on the catalog's order (S3, S21).
+- The turn starts at group `(candle × N) mod G`, with `candle = boundary / L` and `N` =
+  `signalScanPairs`. When `N ≥ G` (`15s` at the default: 13 places, at most 6 groups) every type is
+  scanned on every candle, and the start only moves which groups get the extra places (S21). When
+  `N < G` (`5s` at the default: 4 places), each candle scans `N` distinct groups and consecutive
+  candles take consecutive windows, so every type is scanned within `ceil(G / N)` candles: 2 candles,
+  10 s, at the default (S22). This holds over candles with the same set of groups; a catalog change
+  that adds or removes a group moves the windows.
+- The two sets overlap but neither contains the other: a `min_timeframe` 15 pair is eligible on
+  `15s` only, so the `5s` set can hold pairs outside the `15s` set. A pair in both has two cache
+  keys and two decisions, each counted in its own share.
 - The set is recomputed every candle, so it follows the catalog's refresh. A pair that left the set
   leaves the snapshot at that candle.
 
@@ -610,14 +625,16 @@ One list per scanner, in `SIGNAL_SCAN_INTERVALS` order whatever order the scanne
 A signal whose candle changed without a recompute is not served: a 429, a stale catalog, or a clock
 skew past the slack costs coverage, never a stale answer. This is stricter than the decider's own
 `maxStaleIntervals`. A `no_signal`, a failed call and a pair outside the set never appear.
-`ageMs` is the time since that candle closed; `scanned` is the size of that interval's scan set. Without the bearer the answer is 401
+`ageMs` is the time since that candle closed; `scanned` is the size of that interval's scan set.
+The signals come in the scan's take order (by type, see the scanner's «Which pairs»); the bot
+chooses and orders its own list from them. Without the bearer the answer is 401
 `{ error: 'unauthorized' }`.
 
 The one consumer is the bot's signals screen (#320, `readSignals` in
 `apps/bot/src/backend-client.ts`). It takes the list of the duration the user chose
 (`intervalForDuration`, #382), keeps a pair only if the catalog read at the same press lists it,
-open, accepting that duration and paying at least the cycle floor (`checkDemoCycle`, #379), and
-takes the symbol and payout from there; it never re-reads the
+open, accepting that duration and paying at least the cycle floor (`checkDemoCycle`, #379), keeps
+up to 12 of them by type (`signalsShown`, #460), and takes the symbol and payout from there; it never re-reads the
 signal at a press, since the session asks for one before every trade
 ([bot-demo.md](bot-demo.md#the-signals-screen-320)). A body without that duration's list is a
 deploy mismatch, not «no signals»: the bot answers it as unavailable.

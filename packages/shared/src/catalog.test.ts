@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { BinaryPair } from './broker';
 import {
   breakEvenPct,
+  comparePairsByPayout,
   MIN_CYCLE_PAYOUT_PCT,
+  PAIR_TYPE_GROUPS,
+  pairTypeGroupOf,
   pairPayoutAccepted,
   PairsCatalogErrorCode,
   TRADING_PAIRS_PATH,
@@ -158,5 +161,49 @@ describe('the cycle payout floor (#379)', () => {
 
   it('is not finite at a payout of -100', () => {
     expect(Number.isFinite(breakEvenPct(-100))).toBe(false);
+  });
+});
+
+describe('pairTypeGroupOf (#460)', () => {
+  it('lists the five broker types and other, in the screen order', () => {
+    expect(PAIR_TYPE_GROUPS).toEqual([
+      'currency',
+      'commodity',
+      'stock',
+      'cryptocurrency',
+      'index',
+      'other',
+    ]);
+  });
+
+  it.each(['currency', 'commodity', 'stock', 'cryptocurrency', 'index'])(
+    'keeps the live type %s as its group',
+    (type) => {
+      expect(pairTypeGroupOf(type)).toBe(type);
+    },
+  );
+
+  it('puts any other type under other', () => {
+    expect(pairTypeGroupOf('bond')).toBe('other');
+    expect(pairTypeGroupOf('')).toBe('other');
+  });
+});
+
+describe('comparePairsByPayout (#460)', () => {
+  it('puts the higher payout first, then the lower id, whatever the input order', () => {
+    const items = [
+      { id: 7, payout: 85 },
+      { id: 3, payout: 85 },
+      { id: 9, payout: 92 },
+      { id: 1, payout: 80 },
+    ];
+    const expected = [9, 3, 7, 1];
+    expect([...items].sort(comparePairsByPayout).map((p) => p.id)).toEqual(expected);
+    expect(
+      [...items]
+        .reverse()
+        .sort(comparePairsByPayout)
+        .map((p) => p.id),
+    ).toEqual(expected);
   });
 });

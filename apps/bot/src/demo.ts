@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Composer, GrammyError, HttpError, InlineKeyboard, type Context } from 'grammy';
 import {
   BrokerRestErrorCode,
+  comparePairsByPayout,
   createTradeIntentRequestSchema,
   DEFAULT_SESSION_TRADES,
   errorLogFields,
@@ -10,10 +11,13 @@ import {
   intervalForDuration,
   MIN_CYCLE_PAYOUT_PCT,
   pairPayoutAccepted,
+  PAIR_TYPE_GROUPS,
+  pairTypeGroupOf,
   SignalFeedOutcome,
   TradeAction,
   type DecimalString,
   type PairsCatalogResponse,
+  type PairTypeGroup,
   type PairView,
   type TelegramHtml,
   type TradingAccessResponse,
@@ -30,11 +34,9 @@ import { backendErrorFields, type BackendClient } from './backend-client';
 import {
   checkDemoCycle,
   checkDemoPair,
-  DEMO_ASSET_GROUPS,
   DEMO_DURATIONS_SEC,
   durationOptions,
   LEGACY_DEMO_DURATIONS_SEC,
-  groupOf,
   openPairsOf,
   pageIndexOf,
   pageOf,
@@ -43,7 +45,6 @@ import {
   readDemoCycle,
   readDemoTrade,
   SIGNALS_DURATIONS_SEC,
-  type DemoAssetGroup,
   type DemoCatalogRead,
   type DemoCycleRead,
   type DemoDurationSec,
@@ -92,7 +93,7 @@ export const demoSignalsCallbackData = (durationSec: DemoDurationSec): string =>
 export const demoLaunchCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
   `demo:l:${assetId}:${durationSec}`;
 export const DEMO_GROUPS_CALLBACK_DATA = 'demo:g';
-export const demoPageCallbackData = (group: DemoAssetGroup, page: number): string =>
+export const demoPageCallbackData = (group: PairTypeGroup, page: number): string =>
   `demo:t:${group}:${page}`;
 export const demoAssetCallbackData = (assetId: number): string => `demo:a:${assetId}`;
 export const demoDurationCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
@@ -161,7 +162,7 @@ export const sessionFits = (durationSec: number, trades = DEFAULT_SESSION_TRADES
 // 48 bits: unique among one user's own renders is all it needs, since the key is per user
 export const newStakeNonce = (): string => randomBytes(6).toString('hex');
 
-// A group is matched loosely and checked against DEMO_ASSET_GROUPS in the handler, so a forged
+// A group is matched loosely and checked against PAIR_TYPE_GROUPS in the handler, so a forged
 // one stops the spinner like a forged id; a duration is one of DEMO_DURATIONS_SEC by the pattern.
 // Each duration-carrying shape is built from an alternation, so the legacy patterns (#313) are
 // the same shapes over LEGACY_DEMO_DURATIONS_SEC.
@@ -239,8 +240,8 @@ export const assetIdOf = (raw: string | undefined): number | undefined => {
 };
 export const durationOf = (raw: string | undefined): DemoDurationSec | undefined =>
   DEMO_DURATIONS_SEC.find((sec) => String(sec) === raw);
-const groupOfData = (raw: string | undefined): DemoAssetGroup | undefined =>
-  DEMO_ASSET_GROUPS.find((group) => group === raw);
+const groupOfData = (raw: string | undefined): PairTypeGroup | undefined =>
+  PAIR_TYPE_GROUPS.find((group) => group === raw);
 const actionOf = (raw: string | undefined): TradeAction | undefined =>
   Object.values(TradeAction).find((action) => action === raw);
 
@@ -317,12 +318,55 @@ export function durationsScreen(): DemoScreen {
   };
 }
 
+// Up to SIGNALS_PER_GROUP pairs of every type with a signal, then the free places filled from the
+// rest by payout (#460), so a list on a candle where currencies pay best still shows the other
+// types. 12 places: two of each group.
+export const SIGNALS_PER_GROUP = 2;
+export const SIGNALS_LIST_SIZE = SIGNALS_PER_GROUP * PAIR_TYPE_GROUPS.length;
+
+export interface ShownSignal {
+  pair: PairView;
+  action: TradeAction;
+}
+
+// The list of the signals screen (docs/bot-demo.md -> The signals screen): a pair the catalog does
+// not list, that is closed now, that does not take the duration or that pays less than the cycle
+// floor (#379) takes no place, since the launch would refuse it. The groups follow
+// PAIR_TYPE_GROUPS, a fill sits in its own type's group, and inside a group the best payout comes
+// first (comparePairsByPayout), so the route's order and the catalog's do not matter.
+export function signalsShown(
+  signals: readonly { assetId: number; action: TradeAction }[],
+  catalog: PairsCatalogResponse,
+  durationSec: DemoDurationSec,
+  nowMs: number,
+): ShownSignal[] {
+  const checked: ShownSignal[] = [];
+  for (const signal of signals) {
+    const check = checkDemoCycle(catalog, signal.assetId, durationSec, nowMs);
+    if (check.ok) checked.push({ pair: check.pair, action: signal.action });
+  }
+  const byPayout = (a: ShownSignal, b: ShownSignal) => comparePairsByPayout(a.pair, b.pair);
+  checked.sort(byPayout);
+  const taken = new Set<ShownSignal>();
+  for (const group of PAIR_TYPE_GROUPS) {
+    checked
+      .filter((item) => pairTypeGroupOf(item.pair.type) === group)
+      .slice(0, SIGNALS_PER_GROUP)
+      .forEach((item) => taken.add(item));
+  }
+  for (const item of checked) {
+    if (taken.size >= SIGNALS_LIST_SIZE) break;
+    taken.add(item);
+  }
+  return PAIR_TYPE_GROUPS.flatMap((group) =>
+    checked.filter((item) => taken.has(item) && pairTypeGroupOf(item.pair.type) === group),
+  );
+}
+
 // The pairs with a signal on the last closed candle of the chosen duration's scanner (#320,
-// #382), in the route's order, each joined with the catalog for its symbol and payout. A pair the
-// catalog does not list, that is closed now, that does not take the duration or that pays less
-// than the cycle floor (#379) has no button: the launch would refuse it. The list is a snapshot;
-// the cycle checks the signal again before each trade. Undefined when the body has no list for the
-// duration: a backend scanning other intervals.
+// #382), chosen and ordered by signalsShown, each joined with the catalog for its symbol and
+// payout. The list is a snapshot; the cycle checks the signal again before each trade. Undefined
+// when the body has no list for the duration: a backend scanning other intervals.
 export function signalsScreen(
   signals: TradingSignalsResponse,
   catalog: PairsCatalogResponse,
@@ -333,19 +377,16 @@ export function signalsScreen(
   const list = signals.lists.find((candidate) => candidate.interval === interval);
   if (list === undefined) return undefined;
   const keyboard = new InlineKeyboard();
-  let listed = 0;
-  for (const signal of list.signals) {
-    const checked = checkDemoCycle(catalog, signal.assetId, durationSec, nowMs);
-    if (!checked.ok) continue;
-    const { pair } = checked;
+  const shown = signalsShown(list.signals, catalog, durationSec, nowMs);
+  for (const { pair, action } of shown) {
     keyboard
       .text(
-        signalButtonLabel(pair.symbol, signal.action, pair.payout),
+        signalButtonLabel(pair.symbol, action, pair.payout),
         demoLaunchCallbackData(pair.id, durationSec),
       )
       .row();
-    listed += 1;
   }
+  const listed = shown.length;
   const label = DEMO_DURATION_LABELS[durationSec];
   return {
     text: listed === 0 ? TEXTS.demoSignalsEmpty({ label }) : TEXTS.demoSignalsHeader({ label }),
@@ -875,7 +916,7 @@ export function createDemoComposer<C extends Context>({
   // that accepts a demo duration has no button. An empty catalog has nothing to choose from, so it
   // reads as unavailable; a catalog whose pairs all refuse 5 and 15 s says so (#313).
   function groupsScreen(catalog: PairsCatalogResponse): DemoScreen {
-    const present = DEMO_ASSET_GROUPS.filter((group) => pairsOf(catalog, group).length > 0);
+    const present = PAIR_TYPE_GROUPS.filter((group) => pairsOf(catalog, group).length > 0);
     if (present.length === 0) {
       return {
         text: catalog.pairs.length === 0 ? TEXTS.demoCatalogUnavailable : TEXTS.demoNoShortPairs,
@@ -898,7 +939,7 @@ export function createDemoComposer<C extends Context>({
   // says there is no pair for short trades (#329).
   function pageScreen(
     catalog: PairsCatalogResponse,
-    group: DemoAssetGroup,
+    group: PairTypeGroup,
     requested: number,
   ): DemoScreen {
     if (pairsOf(catalog, group).length === 0) {
@@ -986,7 +1027,7 @@ export function createDemoComposer<C extends Context>({
     catalog: PairsCatalogResponse,
     pair: PairView,
   ): InlineKeyboard {
-    const group = groupOf(pair.type);
+    const group = pairTypeGroupOf(pair.type);
     const page = pageIndexOf(openPairsOf(catalog, group, now()), pair.id);
     return keyboard
       .text(LABELS.demoBackPairsButton, demoPageCallbackData(group, page))
