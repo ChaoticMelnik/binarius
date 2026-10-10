@@ -21,7 +21,8 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   `notification_jobs.kind` and `notification_kinds.kind`), `FIRST_SESSION_CHAIN` (the steps and
   their offsets) and `TOKEN_NUDGES` (the thresholds).
 - `packages/db/src/mailing-scenarios.ts` — `MAILING_SCENARIOS`: per kind, the fact it counts
-  from, the offset, the dedupe key and the predicate it holds while it applies.
+  from, the offset, the dedupe key, the predicate it holds while it applies and whether a canceled
+  job is planned again.
 - `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs`, `claimMailingJob`,
   `settleMailingJob`.
 - `apps/backend/src/mailing/messages.ts` — `MAILING_MESSAGES`: per kind, the text; the keyboard is
@@ -34,7 +35,7 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
 a kind without either does not compile. The tests named below by their ids are in
 `packages/db/src/mailing-ops.db.test.ts` (C1–C3, M1–M6, CUT), `apps/backend/src/mailing/engine.db.test.ts`
 (M7–M11; the engine's own pacing is M10 there) and `apps/backend/src/mailing/engine.test.ts` (M10,
-the pacer alone); the low-token nudge's are T1–T6 and its CUT in `mailing-ops.db.test.ts`.
+the pacer alone); the low-token nudge's are T1–T12 and its CUT in `mailing-ops.db.test.ts`.
 
 ## The first-session chain
 
@@ -100,11 +101,13 @@ buttons with «💳 Пополнить»; until then the texts promise no way to
   balance like any writer. What a pack is after buying tokens is #117's to decide; until then each
   push is once per user, by its dedupe key (`tokens:50`, `tokens:80`, `tokens:100`).
 - **It applies** to a user who received the starter pack and is not blocked by the admin, while
-  the balance is in the kind's band, and while no higher kind has a job of any status.
+  the balance is in the kind's band, and while no higher kind has a job that is not canceled
+  (`pending`, `sent` or `failed`).
 - **The highest only** (the owner, 2026-10-10). A balance is in one band at most, so a user who
   passes several thresholds at once — at the deploy, or between two planner ticks (51 → 0) — is
-  planned the highest one only. A lower kind never applies once a higher one has a job, so it is
-  not sent later either, even when an adjustment lifts the balance back into its band (T2, T5). Two
+  planned the highest one only. A lower kind does not apply while a higher one has a job that is
+  not canceled, so it is not sent later either, even when an adjustment lifts the balance back into
+  its band (T2, T5, T9); a canceled higher job bars nothing (T8, the owner, 2026-10-10). Two
   kinds planned by the two statements of one tick (the balance crossed a threshold between them)
   are settled by the claim: the lower one no longer applies and is canceled (T4).
 - **At the deploy.** The fact a nudge counts from is the planning moment (`now()`), not a past
@@ -113,6 +116,14 @@ buttons with «💳 Пополнить»; until then the texts promise no way to
   owner, 2026-10-10; T2). Migration `0042_tokens_nudge_kinds_seed.sql` seeds the three rows.
 - **A top-up before the send** (a balance back over the threshold) cancels the planned job at the
   claim (T6). `scheduled_at` is the planning moment.
+- **A canceled nudge is planned again** (the owner, 2026-10-10): once the scenario applies again —
+  the balance back in the band, the user reachable — the planner turns the canceled job of that
+  key back to `pending` with a new `scheduled_at` (`replansCanceled`), and it is sent once (T7).
+  Only a canceled job comes back: it never reached Telegram, since only `pending` jobs are
+  canceled, while `sent` and `failed` are final (T10). A user who is `off` or blocked the bot is
+  not planned (T11); one who turns mailing back on while the balance is still in the band gets the
+  push then, as one who never had a job would. The first-session chain keeps a canceled step
+  canceled (T12).
 
 ## The planner
 
@@ -123,7 +134,8 @@ bot may reach (`deliverable()`: not blocked in Telegram, notifications not `off`
 scenario applies. `scheduled_at` is the fact plus the offset. The dedupe key (`first_session:1h`,
 `…:24h`, `…:72h`) makes it idempotent: a second run, a second backend process or a restart
 inserts nothing twice (M1, M2), and a canceled job keeps its key, so a step canceled by `off` is
-not planned again.
+not planned again. The low-token nudge's kinds are the exception: their conflict clause is
+`DO UPDATE … WHERE status = 'canceled'`, which plans a canceled job again (The low-token nudge).
 
 The planner reads facts; no trading or linking path writes a mailing.
 
@@ -197,7 +209,8 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
 2. A custom migration (`pnpm db:generate --custom --name <kind>_seed`) that inserts its
    `notification_kinds` row with `now()`, so it reaches only facts from its deploy on — or an
    explicit earlier `plans_from` if the owner wants history mailed.
-3. Its entry in `MAILING_SCENARIOS` (the fact, the offset, the dedupe key, the predicate) and in
+3. Its entry in `MAILING_SCENARIOS` (the fact, the offset, the dedupe key, the predicate, whether
+   a canceled job is planned again) and in
    `MAILING_MESSAGES` (the text from the catalog's `mailing` group, the keyboard).
 4. Tests in `mailing-ops.db.test.ts` for its planning and stop conditions.
 
@@ -221,6 +234,11 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
   `mailing tick` lines' `unknown` count, the `mailing not delivered` warnings with a
   `transportError` or a 5xx `telegramErrorCode`, and
   `select count(*) from notification_jobs where status = 'sent' and last_error = 'outcome_unknown'`.
+- A backend rolled back to an image older than migrations 0041/0042 does not know the `tokens_*`
+  kinds: its claim finds no scenario for them and cancels every due one it scans, up to
+  `MAILING_CLAIM_SCAN` (50) a tick. The deploy itself does not do this (compose replaces the backend
+  without overlap); only a rollback does. After the re-deploy the planner plans the canceled nudges
+  again for the users still in their band.
 - An account that is not a partner client gets no starter pack and therefore no chain.
 - The last step has no end: a user who is unreachable or `off` at 72 h and comes back later gets
   it then, if they still have no session.
