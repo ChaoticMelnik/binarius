@@ -47,6 +47,7 @@ import {
   type TradingSignalResponse,
   type TradingSignalsResponse,
   type UserAccountView,
+  type UserReferralView,
   type UserStartView,
   BOT_TEXT_CATALOG,
   BotTextKind,
@@ -131,6 +132,12 @@ export const LINK_REVOKED: LinkedAccountView = {
   email: 'old@example.test',
 };
 export const ACCOUNT_VIEW: UserAccountView = { status: UserStatus.Active, accounts: [] };
+// the /invite read (#115)
+export const REFERRAL_VIEW: UserReferralView = {
+  status: UserStatus.Active,
+  code: 'AbC123xY',
+  invited: 2,
+};
 export const accountView = (patch: Partial<UserAccountView> = {}): UserAccountView => ({
   ...ACCOUNT_VIEW,
   ...patch,
@@ -398,6 +405,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
   return {
     recordStart: unused,
     readAccount: unused,
+    readReferral: unused,
     confirmLogin: unused,
     sendEmailCode: unused,
     emailLogin: unused,
@@ -668,6 +676,10 @@ export const inlineButtons = (payload: Record<string, unknown> | undefined) =>
       }[][];
     }
   )?.inline_keyboard?.flat() ?? [];
+
+// the keyboard row by row, where inlineButtons flattens it
+export const inlineRows = (payload: Record<string, unknown> | undefined) =>
+  (payload?.reply_markup as { inline_keyboard?: unknown[][] } | undefined)?.inline_keyboard ?? [];
 
 // An ephemeral loopback server: `listen` returns the base URL the client should be pointed at.
 export async function listen(server: Server): Promise<string> {

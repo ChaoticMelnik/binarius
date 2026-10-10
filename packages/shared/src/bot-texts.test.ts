@@ -177,6 +177,8 @@ describe('the bot texts catalog', () => {
         'demoNextButton',
         'demoPrevButton',
         'demoRetryButton',
+        'inviteButton',
+        'inviteShareButton',
         'loginButton',
         'menuButton',
         'newAnalysisButton',
@@ -201,6 +203,7 @@ describe('the bot texts catalog', () => {
       [
         'accountCommand',
         'helpCommand',
+        'inviteCommand',
         'menuCommand',
         'settingsCommand',
         'startCommand',

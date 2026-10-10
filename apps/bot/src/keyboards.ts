@@ -1,4 +1,5 @@
 import { InlineKeyboard } from 'grammy';
+import type { InlineKeyboardButton } from 'grammy/types';
 import { DEMO_CALLBACK_DATA, MENU_CALLBACK_DATA, supportUrl } from '@binarius/shared';
 import {
   DEMO_SIGNALS_CALLBACK_DATA,
@@ -7,7 +8,7 @@ import {
   durationOf,
 } from './demo';
 import type { DemoDurationSec } from './demo-catalog';
-import { LABELS } from './texts';
+import { inviteShareText, LABELS } from './texts';
 
 // The next steps the bot's screens share (#350, docs/bot-navigation.md). Each builds a new
 // keyboard, so a caller can add rows to it.
@@ -22,6 +23,34 @@ export const withMenu = (keyboard: InlineKeyboard): InlineKeyboard =>
 // the status card's entry, and the account card's since #350
 export const demoKeyboard = (): InlineKeyboard =>
   new InlineKeyboard().text(LABELS.demoButton, DEMO_CALLBACK_DATA);
+
+// «👥 Пригласить друга» (#115, docs/referrals.md): the /invite screen. Only the bot sends it.
+export const INVITE_CALLBACK_DATA = 'invite';
+export const inviteButton = (): InlineKeyboardButton.CallbackButton => ({
+  text: LABELS.inviteButton,
+  callback_data: INVITE_CALLBACK_DATA,
+});
+
+// the status card's: the demo, then the invite (#115); the account card keeps demoKeyboard
+export const statusCardKeyboard = (): InlineKeyboard => demoKeyboard().row().add(inviteButton());
+
+// the invite row, then the menu row, under `keyboard`'s rows; an empty keyboard gets no empty
+// first row
+export const withInvite = (keyboard: InlineKeyboard): InlineKeyboard =>
+  new InlineKeyboard([
+    ...keyboard.inline_keyboard.filter((row) => row.length > 0),
+    [inviteButton()],
+    [button(LABELS.menuButton, MENU_CALLBACK_DATA)],
+  ]);
+
+// /invite: Telegram's share picker with the link and the catalog's text, then the menu
+export const inviteKeyboard = (referralLink: string): InlineKeyboard =>
+  withMenu(
+    new InlineKeyboard().url(
+      LABELS.inviteShareButton,
+      `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent(inviteShareText())}`,
+    ),
+  );
 
 // a blocked user has nowhere to go in the bot but to a person
 export const supportKeyboard = (): InlineKeyboard =>
@@ -45,11 +74,13 @@ export const backToAnalysisKeyboard = (assetId: number, durationSec: DemoDuratio
 // The end of a path: a trade the tracker no longer follows, a stopped session (#350). The
 // analysis of the same pair and duration while the demo still offers it, the signals of that
 // duration (the duration screen when the demo no longer offers it, #382), the menu;
-// each in its own row, under the rows a caller already put in `keyboard` (or none).
+// each in its own row, under the rows a caller already put in `keyboard` (or none). `beforeMenu`
+// rows go right above the menu (the session result's invite, #115).
 export function appendEndOfPath(
   keyboard: InlineKeyboard,
   assetId: number,
   durationSec: number,
+  beforeMenu: readonly InlineKeyboardButton[][] = [],
 ): InlineKeyboard {
   const demoDuration = durationOf(String(durationSec));
   const rows = [
@@ -64,6 +95,7 @@ export function appendEndOfPath(
           : demoSignalsCallbackData(demoDuration),
       ),
     ],
+    ...beforeMenu,
     [button(LABELS.menuButton, MENU_CALLBACK_DATA)],
   ];
   return new InlineKeyboard([...keyboard.inline_keyboard.filter((row) => row.length > 0), ...rows]);

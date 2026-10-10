@@ -30,6 +30,7 @@ export const BotTextGroup = {
   Settings: 'settings',
   Support: 'support',
   Help: 'help',
+  Invite: 'invite',
   Demo: 'demo',
   Analysis: 'analysis',
   Trade: 'trade',
@@ -49,6 +50,7 @@ export const BOT_TEXT_GROUP_TITLES = {
   [BotTextGroup.Settings]: '/settings',
   [BotTextGroup.Support]: '/support',
   [BotTextGroup.Help]: '/help',
+  [BotTextGroup.Invite]: '/invite',
   [BotTextGroup.Demo]: 'Демо: выбор актива',
   [BotTextGroup.Analysis]: 'Анализ',
   [BotTextGroup.Trade]: 'Демо-сделка',
@@ -472,6 +474,28 @@ export const BOT_TEXT_CATALOG = {
     g.Help,
     '/help: заголовок списка команд; строки команд — описания из группы «Команды».',
     `<b>Команды</b>`,
+  ),
+
+  // ---- /invite (#115, docs/referrals.md) ----------------------------------------------------
+  inviteScreen: html(
+    g.Invite,
+    '/invite, кнопка «Пригласить друга»: персональная ссылка и число приглашённых.',
+    `👥 <b>Пригласи друга</b>
+Твоя ссылка:
+{referralLink}
+Приглашено: {count}`,
+    { vars: ['referralLink', 'count'] },
+  ),
+  inviteNeedsStart: html(
+    g.Invite,
+    '/invite до первого /start: бот ещё не знает пользователя.',
+    `Нажми /start, и я пришлю ссылку-приглашение.`,
+  ),
+  inviteShareText: plain(
+    g.Invite,
+    'Текст, который «Поделиться» подставляет к ссылке-приглашению в выбранном чате.',
+    'Торгую в демо с сигналами в Binarius — заходи по моей ссылке',
+    { limit: 200 },
   ),
 
   // ---- Демо: выбор актива -------------------------------------------------------------------
@@ -1440,6 +1464,17 @@ export const BOT_TEXT_CATALOG = {
     '💵 Изменить',
   ),
 
+  inviteButton: plain(
+    g.Buttons,
+    'Карточка статуса и итог сессии: кнопка экрана приглашения.',
+    '👥 Пригласить друга',
+  ),
+  inviteShareButton: plain(
+    g.Buttons,
+    '/invite: кнопка, открывающая выбор чата для ссылки-приглашения.',
+    '📤 Поделиться',
+  ),
+
   // ---- Команды: описания (без emoji) --------------------------------------------------------
   startCommand: plain(g.Commands, 'Описание /start в меню команд и в /help.', 'Начать', {
     limit: COMMAND_LIMIT,
@@ -1462,6 +1497,12 @@ export const BOT_TEXT_CATALOG = {
     g.Commands,
     'Описание /settings в меню команд и в /help.',
     'Настройки уведомлений',
+    { limit: COMMAND_LIMIT },
+  ),
+  inviteCommand: plain(
+    g.Commands,
+    'Описание /invite в меню команд и в /help.',
+    'Пригласить друга',
     { limit: COMMAND_LIMIT },
   ),
   helpCommand: plain(g.Commands, 'Описание /help в меню команд и в /help.', 'Помощь', {

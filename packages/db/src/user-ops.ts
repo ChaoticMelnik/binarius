@@ -1,8 +1,9 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import {
   addressOrNull,
   BrokerAccountStatus,
   decimalStringSchema,
+  referralCodeOf,
   normalizeDecimal,
   type DecimalString,
   type PendingBrokerAccountView,
@@ -10,6 +11,7 @@ import {
 } from '@binarius/shared';
 import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
+import { referralCodes, referrals } from './schema/referrals';
 import { users } from './schema/users';
 
 export type UserStartRow = Pick<
@@ -34,6 +36,8 @@ export interface RecordedUserStart {
   row: UserStartRow;
   hasActiveBrokerAccount: boolean;
   pendingBrokerAccounts: PendingBrokerAccountView[];
+  // this /start created the user from a `ref_<code>` link of another user, and recorded it (#115)
+  referred: boolean;
 }
 
 // What /users/start writes (/start and /settings): one upsert, no read-before-write, so two such
@@ -81,15 +85,42 @@ export async function recordUserStart(
         acquiredAt: users.acquiredAt,
         notificationLevel: users.notificationLevel,
         demoStake: users.demoStake,
+        // PostgreSQL 18: `old` is NULL exactly when the upsert inserted the row
+        inserted: sql<boolean>`old.id is null`,
       });
     if (row === undefined) throw new Error('users upsert returned no row');
+    const { inserted, ...user } = row;
+
+    // Only a user this very /start created is an invitee (#115, docs/referrals.md): the upsert's
+    // own verdict, so no earlier read can disagree with it. An unknown code and the user's own
+    // insert nothing; the unique invitee key with `do nothing` keeps it to one row per invitee.
+    const code = inserted ? referralCodeOf(startPayload) : undefined;
+    const referred =
+      code !== undefined &&
+      (
+        await tx
+          .insert(referrals)
+          .select(
+            tx
+              .select({
+                id: sql<string>`gen_random_uuid()`.as('id'),
+                inviteeUserId: sql<string>`${user.id}::uuid`.as('invitee_user_id'),
+                inviterUserId: referralCodes.userId,
+                createdAt: sql<Date>`now()`.as('created_at'),
+              })
+              .from(referralCodes)
+              .where(and(eq(referralCodes.code, code), ne(referralCodes.userId, user.id))),
+          )
+          .onConflictDoNothing({ target: referrals.inviteeUserId })
+          .returning({ id: referrals.id })
+      ).length > 0;
 
     const [account] = await tx
       .select({ id: brokerAccounts.id })
       .from(brokerAccounts)
       .where(
         and(
-          eq(brokerAccounts.userId, row.id),
+          eq(brokerAccounts.userId, user.id),
           eq(brokerAccounts.status, BrokerAccountStatus.Active),
         ),
       )
@@ -100,15 +131,16 @@ export async function recordUserStart(
       .from(brokerAccounts)
       .where(
         and(
-          eq(brokerAccounts.userId, row.id),
+          eq(brokerAccounts.userId, user.id),
           eq(brokerAccounts.status, BrokerAccountStatus.Pending),
         ),
       )
       .orderBy(desc(brokerAccounts.createdAt), desc(brokerAccounts.id));
     return {
-      row,
+      row: user,
       hasActiveBrokerAccount: account !== undefined,
       pendingBrokerAccounts: pending.map(({ id, email }) => ({ id, email })),
+      referred,
     };
   });
 }

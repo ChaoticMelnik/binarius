@@ -55,7 +55,8 @@ export const HANDLER_CALLS = {
   // «🏠 В меню» (#350): answerCallbackQuery, then /menu's path without the unpin and the pin, which
   // would make it 2 / 5 = 50 s, the shutdown budget itself
   menuButton: { backend: 2, telegram: 3 },
-  // «🔄 Повторить» of /account or /settings (#350): answerCallbackQuery, then the command
+  // «🔄 Повторить» of /account, /settings or /invite (#350, #115): answerCallbackQuery, then the
+  // command
   commandRetry: { backend: 1, telegram: 2 },
   // the status card's button, the main path's duration screen (#382): answerCallbackQuery, then
   // sendMessage; no read
@@ -142,6 +143,10 @@ export const HANDLER_CALLS = {
   account: { backend: 1, telegram: 1 },
   // /settings: recordStart, then sendMessage
   settings: { backend: 1, telegram: 1 },
+  // /invite (#115): readReferral, then sendMessage
+  invite: { backend: 1, telegram: 1 },
+  // «👥 Пригласить друга» (#115): answerCallbackQuery, then /invite's path
+  inviteButton: { backend: 1, telegram: 2 },
   // a level pressed: answerCallbackQuery ∥ setNotificationLevel — counted the same way as confirm —
   // then editMessageText refused by Telegram (GrammyError) → sendMessage
   level: { backend: 1, telegram: 3 },

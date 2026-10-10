@@ -4,6 +4,7 @@ import { createBot } from './bot';
 import { botCommands } from './texts';
 import {
   ACCOUNT_VIEW,
+  REFERRAL_VIEW,
   BOT_INFO,
   USER_VIEW,
   captureApi,
@@ -21,6 +22,7 @@ describe('the command menu', () => {
     const backend: BackendClient = {
       recordStart: () => Promise.resolve(USER_VIEW),
       readAccount: () => Promise.resolve(ACCOUNT_VIEW),
+      readReferral: () => Promise.resolve(REFERRAL_VIEW),
       confirmLogin: () => Promise.reject(new Error('not used here')),
       sendEmailCode: () => Promise.reject(new Error('not used here')),
       emailLogin: () => Promise.reject(new Error('not used here')),

@@ -54,6 +54,7 @@ import {
   sessionStopCallbackData,
   START_REFUSALS,
 } from './trading-session';
+import { INVITE_CALLBACK_DATA } from './keyboards';
 
 const START = sessionStartCallbackData(PAIR_EURUSD.id, 5);
 const REFRESH = sessionRefreshCallbackData(SESSION_ID);
@@ -171,11 +172,14 @@ const MENU = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
 const newAnalysis = (durationSec: 5 | 15) => [
   button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, durationSec)),
 ];
+// «👥 Пригласить друга» right above the menu at every end of a session (#115)
+const INVITE = [button(LABELS.inviteButton, INVITE_CALLBACK_DATA)];
 const STOPPED_ROWS = [
   [button(LABELS.sessionRefreshButton, REFRESH)],
   [AGAIN],
   newAnalysis(15),
   toSignals(15),
+  INVITE,
   MENU,
 ];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
@@ -676,24 +680,27 @@ describe('«🔁 Ещё сессия»', () => {
       [button(LABELS.sessionAgainButton, sessionStartCallbackData(PAIR_EURUSD.id, 5))],
       newAnalysis(5),
       toSignals(5),
+      INVITE,
       MENU,
     ]);
+    // S5: the live session's keyboard has no invite
     expect(rows(SESSION_VIEW)).toEqual(LIVE_ROWS);
     expect(rows(sessionView({ status: TradingSessionStatus.Paused }))).toEqual(LIVE_ROWS);
   });
 
   it('is not drawn without settings or on a duration the demo no longer offers', () => {
     const refresh = [button(LABELS.sessionRefreshButton, REFRESH)];
-    // without settings only the menu follows: no pair to analyse
+    // without settings only the invite and the menu follow: no pair to analyse
     expect(sessionKeyboard({ ...STOPPED, settings: null }).inline_keyboard).toEqual([
       refresh,
+      INVITE,
       MENU,
     ]);
     // an old duration: no «🔁 Ещё сессия» and no «📊 Новый анализ», the signals and the menu stay
     expect(
       sessionKeyboard({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 60 } })
         .inline_keyboard,
-    ).toEqual([refresh, TO_DURATIONS, MENU]);
+    ).toEqual([refresh, TO_DURATIONS, INVITE, MENU]);
   });
 
   it('starts a new session of the same pair and duration through the session button', async () => {
@@ -711,20 +718,21 @@ describe('the summary card (#318)', () => {
     trades: { ...STOPPED.trades, settled: 2, won: 1, lost: 1, profit: SUMMARY.result },
     lastIntent: intentView({ status: TradeIntentStatus.Settled }),
   });
-  const CARD_ROWS = [[AGAIN], newAnalysis(15), toSignals(15), MENU];
+  const CARD_ROWS = [[AGAIN], newAnalysis(15), toSignals(15), INVITE, MENU];
   // the tracker's entry of a refresh on a done session: its card is what the tracker calls
   const entryOf = async (setupResult: ReturnType<typeof setup>) => {
     await setupResult.press(REFRESH);
     return setupResult.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
   };
 
-  it('K1 is the stopped status keyboard without «🔄 Обновить»; the menu alone without settings', () => {
+  it('K1 is the stopped status keyboard without «🔄 Обновить»; the invite and the menu alone without settings', () => {
     const rows = (view: TradingSessionView) => sessionCardKeyboard(view).inline_keyboard;
     expect(rows(DONE)).toEqual(CARD_ROWS);
-    expect(rows(sessionView({ ...DONE, settings: null }))).toEqual([MENU]);
+    // S4: no empty first row
+    expect(rows(sessionView({ ...DONE, settings: null }))).toEqual([INVITE, MENU]);
     expect(
       rows(sessionView({ ...DONE, settings: { ...DONE.settings!, durationSec: 60 } })),
-    ).toEqual([TO_DURATIONS, MENU]);
+    ).toEqual([TO_DURATIONS, INVITE, MENU]);
   });
 
   it('K2 claims, then sends one PNG to the status chat with its caption and keyboard', async () => {
@@ -813,7 +821,7 @@ describe('the summary card (#318)', () => {
     expect(scene.logger.error).not.toHaveBeenCalled();
   });
 
-  it("K6 without settings, the asset is the last trade's and the keyboard the menu", async () => {
+  it("K6 without settings, the asset is the last trade's and the keyboard the invite and the menu", async () => {
     const bare = sessionView({ ...DONE, settings: null });
     const scene = setup({ readSession: () => Promise.resolve(bare) });
     await (await entryOf(scene)).card(bare);
@@ -825,6 +833,6 @@ describe('the summary card (#318)', () => {
         botUsername: BOT_INFO.username,
       }).value,
     );
-    expect(rowsOf(photo)).toEqual([MENU]);
+    expect(rowsOf(photo)).toEqual([INVITE, MENU]);
   });
 });

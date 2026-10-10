@@ -16,7 +16,7 @@ import { createTokenCipher } from './crypto';
 import { setNotificationLevel } from './delivery-ops';
 import { confirmBrokerAccount, linkBrokerAccount } from './oauth-ops';
 import { createTempDatabase, seedBrokerAccount, type TempDatabase } from './testing';
-import { brokerAccounts, users } from './schema/index';
+import { brokerAccounts, referralCodes, referrals, users } from './schema/index';
 import { readDemoStake, recordUserStart, setDemoStake, toUserStartView } from './user-ops';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -459,5 +459,113 @@ describe('setDemoStake / readDemoStake (#297)', () => {
     )[0]!;
     expect({ ...after, demoStake: before.demoStake, updatedAt: before.updatedAt }).toEqual(before);
     expect(after.demoStake).toBe('7.00000000');
+  });
+});
+
+// Personal start links (#115, docs/referrals.md): only a user this /start creates is an invitee.
+describe('recordUserStart: referral (#115)', () => {
+  let codeSeq = 0;
+  // an inviter with a code of its own, as readUserReferral leaves it
+  const seedInviter = async (): Promise<{ userId: string; code: string }> => {
+    const { row } = await start(nextTelegramUserId());
+    const code = `Inv${String(++codeSeq).padStart(5, '0')}`;
+    await tmp.db.insert(referralCodes).values({ userId: row.id, code });
+    return { userId: row.id, code };
+  };
+  const referralsOf = (inviteeUserId: string) =>
+    tmp.db
+      .select({ inviterUserId: referrals.inviterUserId })
+      .from(referrals)
+      .where(eq(referrals.inviteeUserId, inviteeUserId));
+
+  it('R1 records the inviter of a new user’s first /start ref_<code>', async () => {
+    const inviter = await seedInviter();
+    const started = await start(nextTelegramUserId(), { startPayload: `ref_${inviter.code}` });
+    expect(started.referred).toBe(true);
+    expect(await referralsOf(started.row.id)).toEqual([{ inviterUserId: inviter.userId }]);
+    expect(started.row.acquisitionSource).toBe(`ref_${inviter.code}`);
+  });
+
+  it('R2 keeps the first inviter when the same user follows another link', async () => {
+    const [first, second] = [await seedInviter(), await seedInviter()];
+    const telegramUserId = nextTelegramUserId();
+    const started = await start(telegramUserId, { startPayload: `ref_${first.code}` });
+    const again = await start(telegramUserId, { startPayload: `ref_${second.code}` });
+    expect(again.referred).toBe(false);
+    expect(await referralsOf(started.row.id)).toEqual([{ inviterUserId: first.userId }]);
+  });
+
+  it.each([
+    ['a payload-less /start', undefined],
+    ['an organic payload', 'src_organic'],
+  ])(
+    'R3 records nothing for a user created by %s who then follows a link',
+    async (_label, payload) => {
+      const inviter = await seedInviter();
+      const telegramUserId = nextTelegramUserId();
+      const created = await start(telegramUserId, { startPayload: payload });
+      const later = await start(telegramUserId, { startPayload: `ref_${inviter.code}` });
+      expect(later.referred).toBe(false);
+      expect(await referralsOf(created.row.id)).toEqual([]);
+      // first touch still fills an empty slot by its own rule
+      expect(later.row.acquisitionSource).toBe(payload ?? `ref_${inviter.code}`);
+    },
+  );
+
+  it('R4 records nothing for an unknown code and answers the /start as before', async () => {
+    const started = await start(nextTelegramUserId(), { startPayload: 'ref_Unkn0wn1' });
+    expect(started.referred).toBe(false);
+    expect(await referralsOf(started.row.id)).toEqual([]);
+    expect(started.row.acquisitionSource).toBe('ref_Unkn0wn1');
+    expect(started.hasActiveBrokerAccount).toBe(false);
+  });
+
+  it.each(['ref_abc', 'ref_abcdEFG1x', 'ref_'])(
+    'R5 records nothing for the malformed code in %j',
+    async (payload) => {
+      // a code that would match once the malformed tail is cut must not be found either
+      await tmp.db
+        .insert(referralCodes)
+        .values({ userId: (await start(nextTelegramUserId())).row.id, code: 'abcdEFG1' })
+        .onConflictDoNothing();
+      const started = await start(nextTelegramUserId(), { startPayload: payload });
+      expect(started.referred).toBe(false);
+      expect(await referralsOf(started.row.id)).toEqual([]);
+    },
+  );
+
+  it('R6 two racing first /start ref_<code> make one users row and one referral', async () => {
+    const inviter = await seedInviter();
+    const telegramUserId = nextTelegramUserId();
+    const results = await Promise.all([
+      start(telegramUserId, { startPayload: `ref_${inviter.code}` }),
+      start(telegramUserId, { startPayload: `ref_${inviter.code}` }),
+    ]);
+    expect(results[0].row.id).toBe(results[1].row.id);
+    expect(results.filter((result) => result.referred)).toHaveLength(1);
+    expect(await referralsOf(results[0].row.id)).toEqual([{ inviterUserId: inviter.userId }]);
+  });
+
+  it('R7 refuses a forced self row by referrals_not_self_check', async () => {
+    const { row } = await start(nextTelegramUserId());
+    const error = await rejection(
+      tmp.db.insert(referrals).values({ inviteeUserId: row.id, inviterUserId: row.id }),
+    );
+    expect(caught(error)).toMatchObject({
+      code: '23514',
+      constraint: 'referrals_not_self_check',
+    });
+  });
+
+  it('R8 leaves `referred` off the wire', async () => {
+    const inviter = await seedInviter();
+    const started = await start(nextTelegramUserId(), { startPayload: `ref_${inviter.code}` });
+    const view = toUserStartView(
+      started.row,
+      started.hasActiveBrokerAccount,
+      started.pendingBrokerAccounts,
+    );
+    expect(Object.keys(view)).not.toContain('referred');
+    expect(Object.keys(started.row)).not.toContain('inserted');
   });
 });

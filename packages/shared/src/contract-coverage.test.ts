@@ -31,6 +31,7 @@ import type { TradeIntent, TradeIntentView } from './trading';
 import type { AccessTokenRefusal, AccessTokenRequest, AccessTokenResponse } from './access-token';
 import type { AccountHaltReason } from './oauth';
 import type { TradingAccessResponse } from './trading-access';
+import type { UserReferralResponse } from './referral';
 import type {
   SessionSummaryRefusal,
   SessionSummaryResponse,
@@ -65,6 +66,7 @@ import * as money from './money';
 import * as oauth from './oauth';
 import * as partner from './partner';
 import * as processModule from './process';
+import * as referral from './referral';
 import * as signal from './signal';
 import * as socket from './socket';
 import * as telegramHtml from './telegram-html';
@@ -443,6 +445,14 @@ describe('contract coverage (issue #6)', () => {
     >().toEqualTypeOf<TradingSessionView>();
   });
 
+  it('Referral screen (issue #115)', () => {
+    expectTypeOf<UserReferralResponse>().toEqualTypeOf<{
+      user:
+        | { status: 'active'; code: string; invited: number }
+        | { status: 'blocked'; code: null; invited: number };
+    }>();
+  });
+
   it('root index re-exports every module', () => {
     const modules = {
       accessToken,
@@ -463,6 +473,7 @@ describe('contract coverage (issue #6)', () => {
       oauth,
       users,
       partner,
+      referral,
       socket,
       env,
       process: processModule,

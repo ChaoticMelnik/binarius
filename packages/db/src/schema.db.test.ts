@@ -20,6 +20,8 @@ import {
   depositEvents,
   oauthStates,
   outboxEvents,
+  referralCodes,
+  referrals,
   staff,
   staffLoginChallenges,
   staffLoginLinks,
@@ -3015,6 +3017,111 @@ describe('bot_text_overrides (#299)', () => {
         .where(eq(botTextOverrides.key, first!.key))
         .returning();
       expect(second!.version).toBeGreaterThan(first!.version);
+    });
+  });
+});
+
+// Personal start links (#115, docs/referrals.md). One observation of each constraint for the
+// gate below; the behaviour that rests on them is in user-ops.db.test.ts and
+// referral-ops.db.test.ts.
+describe('referral_codes and referrals (#115)', () => {
+  async function seedUser(tx: Tx): Promise<string> {
+    const [user] = await tx
+      .insert(users)
+      .values({ telegramUserId: BigInt(975_000 + ++seq) })
+      .returning({ id: users.id });
+    return user!.id;
+  }
+
+  it('refuses a NULL code by NOT NULL, since the CHECK alone would let it through', async () => {
+    await rolledBack(async (tx) => {
+      const userId = await seedUser(tx);
+      await expect(
+        tx.execute(sql`insert into referral_codes (user_id, code) values (${userId}, null)`),
+      ).rejects.toMatchObject({ cause: { code: '23502', column: 'code' } });
+    });
+  });
+
+  it('takes a code of 8 base62 characters', async () => {
+    await rolledBack(async (tx) => {
+      const userId = await seedUser(tx);
+      await tx.insert(referralCodes).values({ userId, code: 'abcdEFG1' });
+    });
+  });
+
+  it.each(['abcdEFG', 'abcdEFG12', 'abcd-FG1', 'abcd_FG1', ''])(
+    'refuses the code %j by referral_codes_code_check',
+    async (code) => {
+      await rolledBack(async (tx) => {
+        const userId = await seedUser(tx);
+        await rejectsWith(
+          tx.insert(referralCodes).values({ userId, code }),
+          '23514',
+          'referral_codes_code_check',
+        );
+      });
+    },
+  );
+
+  it('enforces referral_codes_code_key', async () => {
+    await rolledBack(async (tx) => {
+      const [first, second] = [await seedUser(tx), await seedUser(tx)];
+      await tx.insert(referralCodes).values({ userId: first, code: 'SameCod1' });
+      await rejectsWith(
+        tx.insert(referralCodes).values({ userId: second, code: 'SameCod1' }),
+        '23505',
+        'referral_codes_code_key',
+      );
+    });
+  });
+
+  it('enforces referrals_invitee_key: one inviter per invitee', async () => {
+    await rolledBack(async (tx) => {
+      const [invitee, inviter, other] = [
+        await seedUser(tx),
+        await seedUser(tx),
+        await seedUser(tx),
+      ];
+      await tx.insert(referrals).values({ inviteeUserId: invitee, inviterUserId: inviter });
+      await rejectsWith(
+        tx.insert(referrals).values({ inviteeUserId: invitee, inviterUserId: other }),
+        '23505',
+        'referrals_invitee_key',
+      );
+    });
+  });
+
+  it('enforces referrals_not_self_check', async () => {
+    await rolledBack(async (tx) => {
+      const userId = await seedUser(tx);
+      await rejectsWith(
+        tx.insert(referrals).values({ inviteeUserId: userId, inviterUserId: userId }),
+        '23514',
+        'referrals_not_self_check',
+      );
+    });
+  });
+
+  it.each<[string, (tx: Tx, userId: string, dangling: string) => Promise<unknown>]>([
+    [
+      'referral_codes_user_fk',
+      (tx, _userId, dangling) =>
+        tx.insert(referralCodes).values({ userId: dangling, code: 'Dangl1ng' }),
+    ],
+    [
+      'referrals_invitee_fk',
+      (tx, userId, dangling) =>
+        tx.insert(referrals).values({ inviteeUserId: dangling, inviterUserId: userId }),
+    ],
+    [
+      'referrals_inviter_fk',
+      (tx, userId, dangling) =>
+        tx.insert(referrals).values({ inviteeUserId: userId, inviterUserId: dangling }),
+    ],
+  ])('rejects a dangling reference through %s', async (constraint, insert) => {
+    await rolledBack(async (tx) => {
+      const userId = await seedUser(tx);
+      await rejectsWith(insert(tx, userId, randomUUID()), '23503', constraint);
     });
   });
 });

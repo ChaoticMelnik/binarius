@@ -12,6 +12,7 @@ export const BOT_COMMANDS = [
   { command: 'stop', key: 'stopCommand' },
   { command: 'account', key: 'accountCommand' },
   { command: 'settings', key: 'settingsCommand' },
+  { command: 'invite', key: 'inviteCommand' },
   { command: 'help', key: 'helpCommand' },
   { command: 'support', key: 'supportCommand' },
 ] as const satisfies readonly { command: string; key: BotCommandKey }[];

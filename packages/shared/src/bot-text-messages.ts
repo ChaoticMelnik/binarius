@@ -1,5 +1,6 @@
 import { USER_ACCOUNT_LIST_LIMIT } from './account';
 import { BOT_COMMANDS } from './bot-commands';
+import { REFERRAL_CODE_LENGTH, REFERRAL_PAYLOAD_PREFIX } from './referral';
 import { MIN_CYCLE_PAYOUT_PCT } from './catalog';
 import { BotTextKind, type BotTextSource } from './bot-text-template';
 import {
@@ -207,6 +208,13 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   // the direction, then the stake when known (texts.ts → stakeButtonLabel)
   action: (m) => m.longest('actionUp', 'actionDown') + SEPARATOR + w.stake,
   botUsername: () => w.botUsername,
+  // referralLinkOf
+  referralLink: () =>
+    'https://t.me/'.length +
+    w.botUsername +
+    '?start='.length +
+    REFERRAL_PAYLOAD_PREFIX.length +
+    REFERRAL_CODE_LENGTH,
 };
 
 // Where a key's real assembly is narrower than a variable's default width.

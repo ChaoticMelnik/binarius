@@ -26,8 +26,10 @@ import {
 import {
   appendEndOfPath,
   backToAnalysisKeyboard,
+  inviteButton,
   menuKeyboard,
   supportKeyboard,
+  withInvite,
   withMenu,
 } from './keyboards';
 import { telegramErrorFields, type Logger } from './logging';
@@ -66,19 +68,20 @@ export const sessionKeyboard = (
 };
 
 // A stopped session's next steps under `keyboard`'s rows: the again button while the demo offers
-// its duration, then the end of the path; the menu alone when its settings could not be read.
+// its duration, then the end of the path with «👥 Пригласить друга» right above the menu (#115);
+// the invite and the menu alone when its settings could not be read.
 function appendSessionEnd(
   keyboard: InlineKeyboard,
   settings: TradingSessionView['settings'],
 ): InlineKeyboard {
-  if (settings === null) return withMenu(keyboard);
+  if (settings === null) return withInvite(keyboard);
   const durationSec = durationOf(String(settings.durationSec));
   if (durationSec !== undefined) {
     keyboard
       .row()
       .text(LABELS.sessionAgainButton, sessionStartCallbackData(settings.assetId, durationSec));
   }
-  return appendEndOfPath(keyboard, settings.assetId, settings.durationSec);
+  return appendEndOfPath(keyboard, settings.assetId, settings.durationSec, [[inviteButton()]]);
 }
 
 // Under the summary card (#318): the stopped status's next steps without «🔄 Обновить», which
@@ -86,8 +89,7 @@ function appendSessionEnd(
 // анализ» and «📡 К сигналам» edit too: a photo's edit is refused as gone and their screen is
 // answered anew (screen.ts).
 export const sessionCardKeyboard = (view: Pick<TradingSessionView, 'settings'>): InlineKeyboard =>
-  // withMenu on an empty keyboard keeps its empty first row; menuKeyboard() has none
-  view.settings === null ? menuKeyboard() : appendSessionEnd(new InlineKeyboard(), view.settings);
+  appendSessionEnd(new InlineKeyboard(), view.settings);
 
 export interface TradingSessionDeps {
   backend: Pick<

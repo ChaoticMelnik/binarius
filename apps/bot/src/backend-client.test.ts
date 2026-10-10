@@ -244,6 +244,44 @@ describe('readAccount', () => {
   });
 });
 
+describe('readReferral (#115)', () => {
+  const view = { status: 'active', code: 'AbC123xY', invited: 2 };
+
+  it('posts the telegram id to /users/referral under the internal bearer', async () => {
+    const { baseUrl, capture } = await serve((_request, response) => {
+      json(response, 200, { user: view });
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).readReferral('4242')).toEqual(view);
+    expect(capture.url).toBe('/users/referral');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
+  });
+
+  it('reports a malformed code as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, response) => {
+      json(response, 200, { user: { ...view, code: 'ref_AbC123xY' } });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readReferral('4242'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('carries user_not_found as the reason of a 404', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 404, { error: UserErrorCode.UserNotFound });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).readReferral('4242'),
+    );
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 404,
+      reason: UserErrorCode.UserNotFound,
+    });
+  });
+});
+
 describe('confirmLogin', () => {
   it('sends both identities and returns the parsed response', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {
