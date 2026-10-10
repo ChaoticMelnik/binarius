@@ -31,19 +31,13 @@ export const inviteButton = (): InlineKeyboardButton.CallbackButton => ({
   callback_data: INVITE_CALLBACK_DATA,
 });
 
-// «⚙️ Режим» and the card's mode button (#121): the mode screen (trading-mode.ts). Only the bot
-// sends it.
-export const MODE_CALLBACK_DATA = 'mode';
-
-// The status card's: the entry and the mode button in one row, then the invite (#115). The entry
-// keeps DEMO_CALLBACK_DATA in both modes: the path is mode-agnostic up to the stake button (#121).
-// The account card keeps demoKeyboard.
+// The status card's: the entry, then the invite (#115). In real mode the entry reads «🚀 Торговать»
+// and keeps DEMO_CALLBACK_DATA: the path is the same up to the stake button (#121). The account
+// card keeps demoKeyboard.
 export const statusCardKeyboard = (mode: TradeMode): InlineKeyboard =>
   (mode === TradeMode.Real
-    ? new InlineKeyboard()
-        .text(LABELS.tradeButton, DEMO_CALLBACK_DATA)
-        .text(LABELS.modeBackDemoButton, MODE_CALLBACK_DATA)
-    : demoKeyboard().text(LABELS.modeButton, MODE_CALLBACK_DATA)
+    ? new InlineKeyboard().text(LABELS.tradeButton, DEMO_CALLBACK_DATA)
+    : demoKeyboard()
   )
     .row()
     .add(inviteButton());

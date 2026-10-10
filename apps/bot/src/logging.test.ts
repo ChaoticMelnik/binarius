@@ -94,7 +94,6 @@ interface Scenario {
   createIntent?: BackendClient['createIntent'];
   readIntent?: BackendClient['readIntent'];
   setDemoStake?: BackendClient['setDemoStake'];
-  setTradingMode?: BackendClient['setTradingMode'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -128,8 +127,6 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     stopSessions: () => Promise.reject(new Error('not used by these scenes')),
     setDemoStake:
       scenario.setDemoStake ?? (() => Promise.reject(new Error('not used by these scenes'))),
-    setTradingMode:
-      scenario.setTradingMode ?? (() => Promise.reject(new Error('not used by these scenes'))),
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
   };
   const loginDialog = createLoginDialog();
@@ -1442,67 +1439,5 @@ describe('what the bot writes about a demo trade', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe('what the bot writes about the trading mode (#121)', () => {
-  // time and pid are numbers that could hold 4242 by chance; every other field is searched
-  const noUserNoAmount = (lines: readonly string[]) => {
-    const fields = lines
-      .map((line) => JSON.stringify({ ...parsed(line), time: undefined, pid: undefined }))
-      .join('');
-    expect(fields).not.toContain(String(USER.id));
-    expect(lines.join('')).not.toContain('$');
-    expect(lines.join('')).not.toContain(ACCESS_VIEW.broker!.minTradeAmount);
-  };
-  const failed = (status: number, reason?: string) =>
-    new BackendError(BackendErrorCode.HttpStatus, {
-      status,
-      ...(reason === undefined ? {} : { reason }),
-    });
-
-  it('names an access read the mode screen could not make by error, code and status', async () => {
-    const { lines } = await linesFrom({
-      update: callbackUpdate('mode'),
-      level: 'trace',
-      readTradingAccess: () => Promise.reject(failed(502)),
-    });
-    expect(lineWith(lines, 'trading access not read for the mode screen')).toMatchObject({
-      level: 40,
-      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
-      backendStatus: 502,
-    });
-    noUserNoAmount(lines);
-  });
-
-  it.each([
-    [404, 'user_not_found', 40],
-    [400, 'validation', 50],
-  ])('names a switch refused %i %s at its level', async (status, reason, level) => {
-    const { lines } = await linesFrom({
-      update: callbackUpdate('mode:r:ok'),
-      level: 'trace',
-      setTradingMode: () => Promise.reject(failed(status, reason)),
-    });
-    expect(lineWith(lines, 'trading mode not changed')).toMatchObject({
-      level,
-      err: { name: 'BackendError', code: BackendErrorCode.HttpStatus },
-      backendStatus: status,
-      backendReason: reason,
-    });
-    noUserNoAmount(lines);
-  });
-
-  it('names a switch of unknown outcome', async () => {
-    const { lines } = await linesFrom({
-      update: callbackUpdate('mode:d'),
-      level: 'trace',
-      setTradingMode: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    });
-    expect(lineWith(lines, 'trading mode outcome unknown')).toMatchObject({
-      level: 40,
-      err: { name: 'BackendError', code: BackendErrorCode.Unreachable },
-    });
-    noUserNoAmount(lines);
   });
 });

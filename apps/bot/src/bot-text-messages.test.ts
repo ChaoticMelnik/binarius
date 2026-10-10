@@ -69,7 +69,6 @@ import {
   settingsText,
   stakePickerText,
   statusCard,
-  tradingModeScreen,
   TEXTS,
   botCommands,
   userContextOf,
@@ -370,14 +369,6 @@ const REAL: Record<string, () => TelegramHtml[]> = {
             ),
           ),
         ),
-      ),
-    ),
-  // the mode screen (#121): both modes, with and without a snapshot, the switch open and closed
-  tradingMode: () =>
-    Object.values(TradeMode).flatMap((mode) =>
-      [null, { real: { available: USD, held: USD, total: USD }, minTradeAmount: STAKE }].flatMap(
-        (broker) =>
-          [true, false].map((tradingOpen) => tradingModeScreen({ mode, broker, tradingOpen })),
       ),
     ),
 };
