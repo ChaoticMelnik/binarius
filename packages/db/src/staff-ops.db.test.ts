@@ -1016,7 +1016,7 @@ describe('the CLI operations', () => {
 
     const counts = await disableStaffAccount(tmp.db, seeded.login.toUpperCase());
 
-    expect(counts).toEqual({ closedChallenges: 1, revokedSessions: 1 });
+    expect(counts).toEqual({ closedChallenges: 1, closedLinks: 0, revokedSessions: 1 });
     expect((await staffRow(seeded.staffId)).status).toBe(StaffStatus.Disabled);
     // the other side of the same column: no staff member is behind a CLI revocation
     const revokedByCli = await tmp.db
@@ -1030,7 +1030,7 @@ describe('the CLI operations', () => {
     const entry = (await entriesFor(seeded.staffId)).at(-1);
     expect(entry).toMatchObject({
       action: AuditAction.StaffDisabled,
-      payload: { via: 'cli', closedChallenges: 1, revokedSessions: 1 },
+      payload: { via: 'cli', closedChallenges: 1, closedLinks: 0, revokedSessions: 1 },
     });
   });
 
@@ -1134,7 +1134,7 @@ describe('the CLI operations racing a completeLogin', () => {
       // both of these are the race itself: a seam that stopped firing leaves no session to
       // revoke, and the case would otherwise pass on no race at all
       expect(login).toMatchObject({ ok: true });
-      expect(counts).toEqual({ closedChallenges: 0, revokedSessions: 1 });
+      expect(counts).toEqual({ closedChallenges: 0, closedLinks: 0, revokedSessions: 1 });
       if (login === undefined || !login.ok) throw new Error('unreachable');
       await staffRowCarriesTheOperation();
       const [row] = await tmp.db
@@ -1161,7 +1161,7 @@ describe('the CLI operations racing a completeLogin', () => {
       expect(entry).toMatchObject({
         actorType: 'system',
         entityType: 'staff',
-        payload: { via: 'cli', closedChallenges: 0, revokedSessions: 1 },
+        payload: { via: 'cli', closedChallenges: 0, closedLinks: 0, revokedSessions: 1 },
       });
     },
   );
@@ -1468,7 +1468,7 @@ describe('changing your own password (#78)', () => {
 
       const result = await change(current, seeded, hash);
 
-      expect(result).toEqual({ ok: true, closedChallenges: 1, revokedSessions: 2 });
+      expect(result).toEqual({ ok: true, closedChallenges: 1, closedLinks: 0, revokedSessions: 2 });
       const row = await staffRow(seeded.staffId);
       expect([row.passwordHash, row.failedPasswordAttempts, row.lockedUntil]).toEqual([
         hash,
@@ -1677,8 +1677,12 @@ describe('changing your own password (#78)', () => {
         }),
       );
 
-      expect(request).toEqual({ ok: { ok: true, closedChallenges: 0, revokedSessions: 1 } });
-      expect(await cli).toEqual({ ok: { closedChallenges: 0, revokedSessions: 1 } });
+      expect(request).toEqual({
+        ok: { ok: true, closedChallenges: 0, closedLinks: 0, revokedSessions: 1 },
+      });
+      expect(await cli).toEqual({
+        ok: { closedChallenges: 0, closedLinks: 0, revokedSessions: 1 },
+      });
       expect((await staffRow(seeded.staffId)).passwordHash).toBe(cliHash);
       expect((await sessionState(await sessionIdFor(current))).revokedAt).not.toBeNull();
       expect((await sessionState(await sessionIdFor(other))).revokedBy).toBe(seeded.staffId);
@@ -1699,7 +1703,9 @@ describe('changing your own password (#78)', () => {
         }),
       );
 
-      expect(early).toEqual({ ok: { ok: true, closedChallenges: 0, revokedSessions: 1 } });
+      expect(early).toEqual({
+        ok: { ok: true, closedChallenges: 0, closedLinks: 0, revokedSessions: 1 },
+      });
       expect(await late).toEqual({ ok: undefined });
       expect((await staffRow(seeded.staffId)).passwordHash).toBe(firstHash);
       expect(await served(first)).toBe('served');
@@ -1720,7 +1726,9 @@ describe('changing your own password (#78)', () => {
         }),
       );
 
-      expect(changed).toEqual({ ok: { ok: true, closedChallenges: 0, revokedSessions: 1 } });
+      expect(changed).toEqual({
+        ok: { ok: true, closedChallenges: 0, closedLinks: 0, revokedSessions: 1 },
+      });
       expect(await revoked).toEqual({ ok: undefined });
       expect((await staffRow(seeded.staffId)).passwordHash).toBe(hash);
       expect(await served(changing)).toBe('served');

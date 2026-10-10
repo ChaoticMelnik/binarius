@@ -22,6 +22,7 @@ import {
   outboxEvents,
   staff,
   staffLoginChallenges,
+  staffLoginLinks,
   staffSessions,
   tokenLedger,
   tradeIntents,
@@ -2103,6 +2104,130 @@ describe('staff_login_challenges', () => {
       await expect(
         tx.insert(staffLoginChallenges).values(challenge(staffId)),
       ).resolves.toBeDefined();
+    });
+  });
+});
+
+const loginLink = (staffId: string, patch: Record<string, unknown> = {}) => ({
+  staffId,
+  tokenHash: `link-${++seq}`,
+  expiresAt: sql`now() + interval '5 minutes'`,
+  ...patch,
+});
+
+// #448: the boundaries each CHECK draws, on the rows the plan's probe ran
+describe('staff_login_links', () => {
+  it('refuses a status outside the list and a missing one', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx.insert(staffLoginLinks).values(loginLink(staffId, { status: 'expired' as never })),
+        '23514',
+        'staff_login_links_status_check',
+      );
+    });
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      const error = await tx
+        .insert(staffLoginLinks)
+        .values(loginLink(staffId, { status: null }))
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column: 'status' });
+    });
+  });
+
+  it('refuses a link that expires the moment it is created, and one with no expiry', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx.insert(staffLoginLinks).values(loginLink(staffId, { expiresAt: sql`now()` })),
+        '23514',
+        'staff_login_links_expires_after_created_check',
+      );
+    });
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      const error = await tx
+        .insert(staffLoginLinks)
+        .values(loginLink(staffId, { expiresAt: null }))
+        .then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+      expect(caught(error)).toMatchObject({ code: '23502', column: 'expires_at' });
+    });
+  });
+
+  it.each([
+    ['used without the moment', { status: 'used', usedAt: null }],
+    ['a moment on a link not used', { status: 'issued', usedAt: sql`now()` }],
+  ])('refuses %s', async (_label, patch) => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx.insert(staffLoginLinks).values(loginLink(staffId, patch)),
+        '23514',
+        'staff_login_links_used_pair_check',
+      );
+    });
+  });
+
+  it('refuses a use before the link existed, and accepts one at that same instant', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await rejectsWith(
+        tx
+          .insert(staffLoginLinks)
+          .values(loginLink(staffId, { status: 'used', usedAt: sql`now() - interval '1 second'` })),
+        '23514',
+        'staff_login_links_used_after_created_check',
+      );
+    });
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await tx
+        .insert(staffLoginLinks)
+        .values(loginLink(staffId, { status: 'used', usedAt: sql`now()` }));
+    });
+  });
+
+  it('holds one live link per staff member, beside any number of closed ones', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      await tx.insert(staffLoginLinks).values(loginLink(staffId, { status: 'superseded' }));
+      await tx.insert(staffLoginLinks).values(loginLink(staffId, { status: 'revoked' }));
+      await tx.insert(staffLoginLinks).values(loginLink(staffId));
+      await rejectsWith(
+        tx.insert(staffLoginLinks).values(loginLink(staffId)),
+        '23505',
+        'staff_login_links_live_idx',
+      );
+    });
+  });
+
+  it('refuses a second row with the same token hash', async () => {
+    await rolledBack(async (tx) => {
+      const staffId = await seedStaffRow(tx);
+      const other = await seedStaffRow(tx);
+      await tx.insert(staffLoginLinks).values(loginLink(staffId, { tokenHash: 'same' }));
+      await rejectsWith(
+        tx.insert(staffLoginLinks).values(loginLink(other, { tokenHash: 'same' })),
+        '23505',
+        'staff_login_links_token_hash_idx',
+      );
+    });
+  });
+
+  it('refuses a link for a staff member that does not exist', async () => {
+    await rolledBack(async (tx) => {
+      await rejectsWith(
+        tx.insert(staffLoginLinks).values(loginLink(randomUUID())),
+        '23503',
+        'staff_login_links_staff_id_staff_id_fk',
+      );
     });
   });
 });

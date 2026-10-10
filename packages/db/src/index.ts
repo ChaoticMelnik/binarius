@@ -18,6 +18,7 @@ export * from './mailing-ops';
 export * from './account-ops';
 export * from './staff-password';
 export * from './staff-ops';
+export * from './staff-link-ops';
 export * from './bot-text-ops';
 export * from './admin-read-ops';
 export * from './admin-trading-ops';

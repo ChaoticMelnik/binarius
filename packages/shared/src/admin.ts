@@ -43,6 +43,10 @@ export const AdminErrorCode = {
   ChallengeUnavailable: 'challenge_unavailable',
   SessionInvalid: 'session_invalid',
   NotFound: 'not_found',
+  // a login link from the bot (#448): opened already, past its five minutes, or never usable
+  LinkUsed: 'link_used',
+  LinkExpired: 'link_expired',
+  LinkUnavailable: 'link_unavailable',
 } as const;
 export type AdminErrorCode = (typeof AdminErrorCode)[keyof typeof AdminErrorCode];
 
@@ -63,6 +67,12 @@ export const staffLoginCodeSchema = z.string().regex(STAFF_LOGIN_CODE_PATTERN, {
 // 32 random bytes as base64url. Checked before the database is asked anything, so a token of
 // the wrong shape costs no query.
 export const STAFF_SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+// The token of a login link from the staff bot (#448): 32 random bytes as base64url, like the
+// session token. One object in both processes, as UUID_PATTERN is: `web` checks the path
+// parameter with it before it forwards, `backend` in the schemas below, so whatever `web` lets
+// through, `backend` parses.
+export const STAFF_LOGIN_LINK_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 // A UUID as PostgreSQL's `uuid` column accepts and prints it: any hex 8-4-4-4-12, any version.
 // An id that arrives from outside in a request of the admin contract — a cookie, a query, a
@@ -112,6 +122,34 @@ export const adminConfirmResponseSchema = z.object({
   expiresAt: z.iso.datetime({ offset: true }),
 });
 export type AdminConfirmResponse = z.infer<typeof adminConfirmResponseSchema>;
+
+// The token travels in the body, never in the backend path, so no request line of the
+// web → backend hop carries the secret.
+export const adminLinkInspectRequestSchema = z.object({
+  token: z.string().regex(STAFF_LOGIN_LINK_TOKEN_PATTERN),
+});
+export type AdminLinkInspectRequest = z.infer<typeof adminLinkInspectRequestSchema>;
+
+// What GET on the link may say without spending it: `live` shows the «Войти» page, the rest a
+// refusal. `unavailable` covers a superseded or revoked link, a disabled owner and a token nobody
+// was issued alike, so the page tells an outsider nothing about who holds an account.
+export const LinkState = {
+  Live: 'live',
+  Used: 'used',
+  Expired: 'expired',
+  Unavailable: 'unavailable',
+} as const;
+export type LinkState = (typeof LinkState)[keyof typeof LinkState];
+
+export const adminLinkInspectResponseSchema = z.strictObject({ state: z.enum(LinkState) });
+export type AdminLinkInspectResponse = z.infer<typeof adminLinkInspectResponseSchema>;
+
+// The answer is the confirm step's: a session token and its expiry.
+export const adminLinkCompleteRequestSchema = z.object({
+  token: z.string().regex(STAFF_LOGIN_LINK_TOKEN_PATTERN),
+  ...clientFacts,
+});
+export type AdminLinkCompleteRequest = z.infer<typeof adminLinkCompleteRequestSchema>;
 
 // Allowlisted projection of a staff_sessions row joined to its owner. The token hash, the
 // staff id and the owner's Telegram id never leave the backend.
@@ -635,6 +673,12 @@ export const safeParseAdminLoginResponse = (input: unknown) =>
   adminLoginResponseSchema.safeParse(input);
 export const safeParseAdminConfirmResponse = (input: unknown) =>
   adminConfirmResponseSchema.safeParse(input);
+export const safeParseAdminLinkInspectRequest = (input: unknown) =>
+  adminLinkInspectRequestSchema.safeParse(input);
+export const safeParseAdminLinkInspectResponse = (input: unknown) =>
+  adminLinkInspectResponseSchema.safeParse(input);
+export const safeParseAdminLinkCompleteRequest = (input: unknown) =>
+  adminLinkCompleteRequestSchema.safeParse(input);
 export const safeParseStaffSessionsResponse = (input: unknown) =>
   staffSessionsResponseSchema.safeParse(input);
 export const safeParseRevokeSessionResponse = (input: unknown) =>
