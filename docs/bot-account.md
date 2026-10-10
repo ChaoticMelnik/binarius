@@ -99,7 +99,7 @@ No token, `brokerUserId`, `users.id`, revocation reason, halt flag or partner fl
 | 200, `accounts: [...]`                                | the rows                                        | `accountStatus` + `accountKeyboard`         |
 | 404 `user_not_found`                                  | no users row (the backend was down on `/start`) | `accountNone` + connect button, no log line |
 | 404 `not_found`, 401, 400 `validation`, any other 4xx | the route refused or is absent                  | `TEXTS.unavailable` + warn                  |
-| 5xx, unreachable, timeout, a broken 2xx body          | unknown                                         | `TEXTS.unavailable` + warn                  |
+| 5xx, unreachable, timeout, a broken 2xx body (not JSON, outside the contract or over `MAX_BACKEND_BODY_BYTES`) | unknown                                         | `TEXTS.unavailable` + warn                  |
 
 The bot tells «no users row» from «no route» by the error code, never by the status: a backend
 without this route answers a bare `404 not_found`, and that is an outage, not «не подключён».

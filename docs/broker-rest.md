@@ -115,7 +115,9 @@ a real pino logger built with `logOptions('info')` and reads the line back. `err
 
 `BROKER_REST_TIMEOUT_MS = 5_000` (`rest.ts`) bounds one request, headers and body together. The
 body is also capped in bytes as it arrives, whatever `content-length` says:
-`MAX_SUCCESS_BODY_BYTES` for a 2xx, `MAX_ERROR_BODY_BYTES` for the error envelope. Each
+`MAX_SUCCESS_BODY_BYTES` for a 2xx, `MAX_ERROR_BODY_BYTES` for the error envelope.
+The reader is `readBody` in `packages/shared/src/http-body.ts`, shared with the OAuth client, the
+bot's, web's and the worker's backend clients (Architecture Rule 26). Each
 process that waits on a call during shutdown orders it below its phase-1 budget, and the link is
 checked where that process's chain lives:
 

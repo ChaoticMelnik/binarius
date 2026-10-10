@@ -337,7 +337,8 @@ defaults pass, so the loop ends.
 
 `createBotTextRefresher` loads at start and then every `BOT_TEXTS_REFRESH_MS` (30 s) from the
 start of the previous load: the bot over `GET /bot-texts` (internal bearer, `{ key, source,
-version }` only) within `BACKEND_REQUEST_TIMEOUT_MS`, the backend from the database within
+version }` only) within `BACKEND_REQUEST_TIMEOUT_MS` and up to `MAX_BOT_TEXTS_BODY_BYTES` (8 MiB) of
+body, a longer one being a failed load, the backend from the database within
 `BOT_TEXTS_LOAD_BUDGET_MS`. A saved text reaches new messages within 35 s in the bot and 33 s in
 the backend's push, without a restart; the CLI and the admin promise
 `BOT_TEXTS_APPLIED_WITHIN_S` (35), which `apps/bot/src/timing.test.ts` holds at least the refresh

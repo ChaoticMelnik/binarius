@@ -475,6 +475,8 @@ logs no request body: no password reaches the HTML or the log of `web`.
 
 The client bot's texts ([bot-texts.md](bot-texts.md)). The wire shapes are in
 `packages/shared/src/admin-bot-texts.ts`, the reads in `packages/db/src/admin-bot-text-ops.ts`.
+web reads the five text routes' answers up to `MAX_BOT_TEXTS_BODY_BYTES` (8 MiB), every other
+backend answer up to `MAX_BACKEND_BODY_BYTES` (1 MiB); `publish` is on the latter (Rule 26).
 
 **The list** shows every catalog key under its group (`BOT_TEXT_GROUP_TITLES`, in catalog order):
 the key (a link to the editor), where the text is shown, and its state — «исходный», or «изменён:

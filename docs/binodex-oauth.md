@@ -15,7 +15,7 @@ the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contra
 | Contract  | `packages/shared/src/oauth.ts`            | wire schemas, the login request/response shapes, the error codes and the four revocation reasons |
 | Storage   | `packages/db/src/oauth-ops.ts`            | state rows, the linking transaction, rotation and revocation                                     |
 | Starter pack | `packages/db/src/link-bonus-ops.ts`    | `LINK_BONUS_TOKENS` and `grantLinkBonus`, called by the confirmation (#10) and by the email login (#162) |
-| Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token`, the refresh on `POST /v1/broker/user-auth/refresh`, and the email `send-code` and `login`, one attempt each, under a real abort; `BROKER_ENDPOINTS` is the one table of paths and statuses |
+| Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token`, the refresh on `POST /v1/broker/user-auth/refresh`, and the email `send-code` and `login`, one attempt each, under a real abort, a 2xx body read up to `MAX_OAUTH_BODY_BYTES` (64 KiB) as it arrives; the error body is released unread; `BROKER_ENDPOINTS` is the one table of paths and statuses |
 | Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`, `POST /auth/binodex/email/send-code`, `POST /auth/binodex/email/login` |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
 | Push      | `apps/backend/src/auth/client-push.ts`    | the one `sendMessage` after the callback (#128), on the public bot's token, without polling it; the mailings send through it too (#202) |
@@ -696,6 +696,7 @@ parsed or logged:
 | other 4xx | `rejected` | `rejected` | `rejected` | `rejected` |
 | 5xx, timeout, network failure | `unavailable` | `unavailable` | `unavailable` | `unavailable` |
 | 2xx that breaks the schema, or `expires_in` outside (0, 30 days] | `contract_violation` | `contract_violation` | `contract_violation` (anything but `status: true`) | `contract_violation` |
+| 2xx longer than `MAX_OAUTH_BODY_BYTES` (64 KiB), counted as it arrives | `contract_violation` | `contract_violation` | `contract_violation` | `contract_violation` |
 
 The routes turn `invalid_grant` into 400 — `invalid_code` on the callback and the email login,
 `invalid_email` on `send-code` — `rejected` and `contract_violation` into 502
