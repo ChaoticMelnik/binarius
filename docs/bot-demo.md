@@ -394,7 +394,7 @@ renders of «🔄 Повторить анализ» did before. The press is #12
 check are in [bot-demo-trade.md → The stake](bot-demo-trade.md#the-stake-297).
 
 The keyboard edit's refusals: «message is not modified» is done (`info`
-`the analysis keyboard already shows this`); «message to edit not found» / «can't be edited» sends
+`the analysis keyboard already shows this`); «message to edit not found» / «can't be edited» (the same class as «there is no text in the message to edit», which a keyboard edit does not get: a photo's markup can be edited) sends
 nothing more, since there is no analysis left to attach a stake button to and a new «📊 Анализ»
 reaches the trade (`warn` `the analysis keyboard was not expanded`); a transport failure sends
 nothing more (`error` `the analysis keyboard edit failed in transport, sending nothing more`); any
@@ -408,7 +408,8 @@ failed expansion changes nothing on screen.
 
 - «message is not modified» (the same screen pressed twice) — done; `info`
   `the demo screen already shows this`.
-- «message to edit not found» / «message can't be edited» — the screen is sent anew with the same
+- «message to edit not found» / «message can't be edited» / «there is no text in the message to
+  edit» (a photo, e.g. the session's summary card, #318) — the screen is sent anew with the same
   keyboard; `warn` `the demo screen was not edited, sending it anew`.
 - any other refusal — to `bot.catch`, nothing sent; the keyboard on screen is the retry.
 - a transport failure — the edit is unknown, nothing more is sent; `error`

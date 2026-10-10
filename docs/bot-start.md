@@ -486,14 +486,14 @@ failure is the unavailable text as a new message with the menu, the keyboard unt
 pressing again is the retry.
 
 Unlike a refused send, a refused edit may mean the message already shows the result, so the
-refusal is classified (`editRefusal` in `bot.ts`), by `error_code` 400 and the lead phrase of
+refusal is classified (`editRefusal` in `screen.ts`), by `error_code` 400 and the lead phrase of
 Telegram's `description` as the Bot API server words it (telegram-bot-api `Client.cpp`); the
 description is compared, never logged.
 
 | Edit outcome | What the bot does |
 | --- | --- |
 | 400 `message is not modified` — a second press of the same level, queued against the keyboard the first edit had not yet replaced | nothing more: the message already shows it; one `info` line |
-| 400 `message to edit not found` or `message can't be edited` — the message is gone or too old | the same text and keyboard as a new message; one `warn` line |
+| 400 `message to edit not found`, `message can't be edited` or `there is no text in the message to edit` — the message is gone, too old, or its text is a caption (a photo, #318) | the same text and keyboard as a new message; one `warn` line |
 | any other refusal (another 400, 403, 429, …) | rethrown into `bot.catch`, nothing sent: the message is most likely still on screen, and its keyboard is the retry |
 | a transport failure (`HttpError`) | nothing more, since the edit may have landed and the keyboard is still there; one `error` line |
 | anything else | rethrown into `bot.catch` |
