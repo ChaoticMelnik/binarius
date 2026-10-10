@@ -1,5 +1,6 @@
 import {
   BrokerRestErrorCode,
+  readBody,
   safeParseBinaryPairs,
   safeParseBrokerError,
   safeParseBrokerUser,
@@ -137,27 +138,6 @@ function statusCode(status: number): BrokerRestErrorCode {
 function retryAfterSecOf(response: Response): number | undefined {
   const raw = response.headers.get('retry-after');
   return raw !== null && /^\d+$/.test(raw) ? Number(raw) : undefined;
-}
-
-// The body as text, or undefined once it passes maxBytes. Counted as the bytes arrive, so a body
-// without content-length, with a false one, or without an end costs at most maxBytes of memory.
-// A failed read (cut mid-flight, our timeout, the caller's abort) is thrown.
-async function readBody(response: Response, maxBytes: number): Promise<string | undefined> {
-  if (response.body === null) return '';
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      return undefined;
-    }
-    chunks.push(value);
-  }
-  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 // Any failure here leaves detail undefined: the status already decided the code.

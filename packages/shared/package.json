@@ -109,6 +109,10 @@
       "types": "./src/trading-session.ts",
       "default": "./src/trading-session.ts"
     },
+    "./http-body": {
+      "types": "./src/http-body.ts",
+      "default": "./src/http-body.ts"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"

@@ -1,8 +1,46 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  BOT_TEXT_CATALOG,
+  botTextOverridesResponseSchema,
+  BrokerAccountStatus,
+  DemoStakeRefusal,
+  INT4_MAX,
+  LinkBonusSkipReason,
+  MAX_SESSION_TRADES,
+  MomentumDirection,
+  NotificationLevel,
   OAuthErrorCode,
   PairsCatalogErrorCode,
+  RULE_REFUSAL_REASONS,
+  safeParseChatMemberResponse,
+  safeParseConfirmLoginResponse,
+  safeParseDemoStakeRefusal,
+  safeParseEmailLoginResponse,
+  safeParseEmailSendCodeResponse,
+  safeParseNotificationLevelResponse,
+  safeParsePairsCatalogResponse,
+  safeParseTradeIntentView,
+  safeParseTradingAccessResponse,
+  safeParseTradingSessionRefusal,
+  safeParseTradingSessionResponse,
+  safeParseTradingSignalResponse,
+  safeParseTradingSignalsResponse,
+  safeParseUserAccountResponse,
+  safeParseUserStartResponse,
+  SIGNAL_ALGORITHM_VERSION,
+  SIGNAL_SCAN_INTERVALS,
+  SignalFeedOutcome,
+  SignalKind,
+  TELEGRAM_MESSAGE_LIMIT,
+  TradeIntentFailureReason,
+  TradeIntentStatus,
+  TradeTransport,
+  TradingSessionStatus,
+  TradingSessionStopReason,
+  TrendDirection,
+  USER_ACCOUNT_LIST_LIMIT,
+  UserStatus,
   TradeAction,
   TradeIntentErrorCode,
   TradeMode,
@@ -14,7 +52,14 @@ import {
   type DecimalString,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
-import { BackendError, BackendErrorCode, createBackendClient } from './backend-client';
+import {
+  BackendError,
+  BackendErrorCode,
+  createBackendClient,
+  MAX_BACKEND_BODY_BYTES,
+  MAX_BOT_TEXTS_BODY_BYTES,
+  type BackendClient,
+} from './backend-client';
 import {
   ACCESS_VIEW,
   BROKER_BALANCE,
@@ -1245,5 +1290,412 @@ describe('BackendError carries no response body', () => {
     expect(JSON.stringify(error)).not.toContain('SECRET-BODY');
     expect(JSON.stringify({ ...error })).not.toContain('SECRET-BODY');
     expect(error.stack ?? '').not.toContain('SECRET-BODY');
+  });
+});
+
+// #234: the client reads at most a ceiling of a body, counted as it arrives
+describe('body size', () => {
+  const noop = (): void => {};
+  const CHUNK = ' '.repeat(64 * 1024);
+
+  // own servers: closeServer does not drop the connections a body still holds open
+  let held: Server | undefined;
+  afterEach(async () => {
+    const running = held;
+    held = undefined;
+    if (running === undefined) return;
+    running.closeAllConnections();
+    await new Promise<void>((resolve) => running.close(() => resolve()));
+  });
+  const hold = async (answer: (response: ServerResponse) => void): Promise<string> => {
+    const started = createServer((incoming, response) => {
+      incoming.resume();
+      incoming.on('end', () => answer(response));
+    });
+    held = started;
+    return listen(started);
+  };
+
+  // `body` as JSON, then whitespace (still valid JSON) until the whole is longer than `atLeast`
+  const padded = (response: ServerResponse, status: number, body: unknown, atLeast: number) => {
+    response.writeHead(status, { 'content-type': 'application/json' });
+    response.on('error', noop);
+    const head = JSON.stringify(body);
+    response.write(head);
+    for (let written = Buffer.byteLength(head); written <= atLeast; written += CHUNK.length) {
+      response.write(CHUNK);
+    }
+    response.end();
+  };
+
+  // a body with no end: written as fast as the client reads it
+  const endless = (response: ServerResponse, status: number, head: string) => {
+    response.writeHead(status, { 'content-type': 'application/json' });
+    response.on('error', noop);
+    response.write(head);
+    const pump = (): void => {
+      let more = true;
+      while (more) more = response.write(CHUNK);
+      response.once('drain', pump);
+    };
+    pump();
+  };
+
+  const OVERRIDES = { overrides: [{ key: 'welcome', source: 'Привет', version: 3 }] };
+
+  it('(a) refuses a 2xx longer than the ceiling as a contract violation with no cause', async () => {
+    const baseUrl = await hold((response) => {
+      padded(response, 200, { user: view }, MAX_BACKEND_BODY_BYTES);
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).recordStart(request),
+    );
+    expect(error).toBeInstanceOf(BackendError);
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+    expect((error as BackendError).cause).toBeUndefined();
+  });
+
+  it('(b) reports an error status whose body never ends by its status, without a reason', async () => {
+    const baseUrl = await hold((response) => {
+      endless(response, 409, '{"error":"user_blocked",');
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN, timeoutMs: 60_000 }).recordStart(request),
+    );
+    expect(error).toBeInstanceOf(BackendError);
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status: 409 });
+    expect((error as BackendError).reason).toBeUndefined();
+  }, 2_000);
+
+  it('(e) reads GET /bot-texts past the common ceiling, up to its own', async () => {
+    const baseUrl = await hold((response) => {
+      padded(response, 200, OVERRIDES, 2 * MAX_BACKEND_BODY_BYTES);
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).readBotTexts()).toEqual(
+      OVERRIDES.overrides,
+    );
+  });
+
+  it('(f) refuses GET /bot-texts longer than its own ceiling as a contract violation', async () => {
+    const baseUrl = await hold((response) => {
+      padded(response, 200, OVERRIDES, MAX_BOT_TEXTS_BODY_BYTES);
+    });
+    const error = await rejectionOf(createBackendClient({ baseUrl, token: TOKEN }).readBotTexts());
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  // (c) The longest answer of every method under named assumptions. A task that adds a
+  // BackendClient method adds its row here; the gate below reds otherwise (Architecture Rule 26).
+  // Every assumption is in UTF-8 BYTES, not characters. A field the schema bounds in characters
+  // holds the most bytes the schema admits: control characters (6 bytes each in JSON) where it
+  // accepts them. A field held to an assumption is filled with 4-byte characters, which JSON
+  // carries unescaped, so its wire size is the assumed bytes.
+  describe('(c) the samples table', () => {
+    // false if a user has 100 pending links: userStartViewSchema.pendingBrokerAccounts is unbounded
+    const ASSUMED_LONGEST_LIST = 100;
+    // false if the broker lists more than 300 binary pairs; the live broker gives 144
+    // (docs/broker-rest.md); also bounds a signals list, one signal per scanned pair
+    const ASSUMED_LONGEST_PAIRS = 300;
+    // false for a string with no max() and no bounding writer that is longer: a pair's symbol and
+    // type, a broker user id, a balance level code, acquisitionSource
+    const ASSUMED_LONGEST_FREE_STRING = 2048;
+    // false for a longer address: the OAuth path stores user.email as any string (oauth-ops.ts)
+    const ASSUMED_LONGEST_EMAIL = 254;
+    // one text in GET /bot-texts; false for a text longer than Telegram's limit in 4-byte
+    // characters: the CHECK allows it, the loader refuses it
+    const ASSUMED_LONGEST_BOT_TEXT_BYTES = 4 * TELEGRAM_MESSAGE_LIMIT;
+
+    const bytesLong = (bytes: number): string =>
+      '\u{1F600}'.repeat(Math.floor(bytes / 4)) + 'x'.repeat(bytes % 4);
+    const controlChars = (units: number): string => '\x01'.repeat(units);
+    const longest = <T extends string>(values: readonly T[]): T =>
+      values.reduce((a, b) => (Buffer.byteLength(b) > Buffer.byteLength(a) ? b : a));
+
+    const UUID = '3f2b0a4c-9d3e-4c1a-8b5e-2a6f7d8c9e01';
+    const DATETIME = '2026-10-07T10:00:00.123456789+14:00';
+    // users.telegram_user_id is bigint
+    const TELEGRAM_ID = '9223372036854775807';
+    // numeric(20,8), the domain of every money column
+    const DECIMAL = '-999999999999.99999999';
+    const AMOUNT = '999999999999.99999999';
+    const TOKENS = '9223372036854775807';
+    const NUMBER = -2.2250738585072014e-308;
+    const NONNEGATIVE_NUMBER = 1.7976931348623157e308;
+    const INT = -Number.MAX_SAFE_INTEGER;
+    const NONNEGATIVE_INT = Number.MAX_SAFE_INTEGER;
+    const FREE = bytesLong(ASSUMED_LONGEST_FREE_STRING);
+    const ADDRESS = bytesLong(ASSUMED_LONGEST_EMAIL);
+
+    const BROKER_ACCOUNT = {
+      id: UUID,
+      brokerUserId: FREE,
+      email: ADDRESS,
+      isPartnerClient: false,
+      status: longest(Object.values(BrokerAccountStatus)),
+      createdAt: DATETIME,
+    };
+    const LOGIN = {
+      account: BROKER_ACCOUNT,
+      grant: { granted: false, reason: longest(Object.values(LinkBonusSkipReason)) },
+    };
+    const INTENT = {
+      id: UUID,
+      brokerAccountId: UUID,
+      telegramUserId: TELEGRAM_ID,
+      mode: longest(Object.values(TradeMode)),
+      assetId: INT4_MAX,
+      amount: AMOUNT,
+      action: longest(Object.values(TradeAction)),
+      durationSec: INT4_MAX,
+      // the writer's max(128) characters (createTradeIntentRequestSchema)
+      clientRequestId: controlChars(128),
+      createdAt: DATETIME,
+      status: longest(Object.values(TradeIntentStatus)),
+      version: NONNEGATIVE_INT,
+      tokensReserved: TOKENS,
+      transport: longest(Object.values(TradeTransport)),
+      submittedAt: DATETIME,
+      lastError: longest(Object.values(TradeIntentFailureReason)),
+      updatedAt: DATETIME,
+    };
+    const SESSION = {
+      id: UUID,
+      mode: longest(Object.values(TradeMode)),
+      status: longest(Object.values(TradingSessionStatus)),
+      stopReason: longest(Object.values(TradingSessionStopReason)),
+      settings: {
+        version: 1,
+        assetId: INT4_MAX,
+        durationSec: INT4_MAX,
+        trades: MAX_SESSION_TRADES,
+        stake: { baseStake: AMOUNT, stakeScale: 8 },
+      },
+      startedAt: DATETIME,
+      endedAt: DATETIME,
+      trades: {
+        planned: NONNEGATIVE_INT,
+        settled: NONNEGATIVE_INT,
+        rejected: NONNEGATIVE_INT,
+        won: NONNEGATIVE_INT,
+        lost: NONNEGATIVE_INT,
+        tied: NONNEGATIVE_INT,
+      },
+      lastIntent: INTENT,
+    };
+    const PAIR = {
+      id: INT,
+      symbol: FREE,
+      isOtc: false,
+      type: FREE,
+      digits: INT,
+      payout: NUMBER,
+      maxPayout: NUMBER,
+      minTimeframe: INT,
+      maxTimeframe: INT,
+      scheduledUntil: NONNEGATIVE_NUMBER,
+    };
+    const FEATURES = {
+      emaFast: NUMBER,
+      emaSlow: NUMBER,
+      emaSlowSlope: NUMBER,
+      rsi: NUMBER,
+      atr: NUMBER,
+      atrPct: NUMBER,
+      lastClose: NUMBER,
+      lastCandleTimestamp: NUMBER,
+      closedCandles: NONNEGATIVE_INT,
+      trend: longest(Object.values(TrendDirection)),
+      momentum: longest(Object.values(MomentumDirection)),
+      atrTicks: NUMBER,
+    };
+    const BALANCE = { available: DECIMAL, held: DECIMAL, total: DECIMAL };
+    const intentOf = (input: unknown) =>
+      safeParseTradeIntentView((input as { intent?: unknown } | null)?.intent);
+
+    type Row = {
+      parse: (input: unknown) => { success: boolean };
+      sample: unknown;
+      limit?: number;
+    };
+    const rows: { [K in keyof BackendClient]: Row } = {
+      recordStart: {
+        parse: safeParseUserStartResponse,
+        sample: {
+          user: {
+            telegramUserId: TELEGRAM_ID,
+            status: longest(Object.values(UserStatus)),
+            acquisitionSource: FREE,
+            acquiredAt: DATETIME,
+            hasActiveBrokerAccount: false,
+            pendingBrokerAccounts: Array.from({ length: ASSUMED_LONGEST_LIST }, () => ({
+              id: UUID,
+              email: ADDRESS,
+            })),
+            notificationLevel: longest(Object.values(NotificationLevel)),
+            demoStake: DECIMAL,
+          },
+        },
+      },
+      readAccount: {
+        parse: safeParseUserAccountResponse,
+        sample: {
+          user: {
+            status: longest(Object.values(UserStatus)),
+            accounts: Array.from({ length: USER_ACCOUNT_LIST_LIMIT }, () => ({
+              status: BrokerAccountStatus.Pending,
+              id: UUID,
+              email: ADDRESS,
+            })),
+          },
+        },
+      },
+      confirmLogin: { parse: safeParseConfirmLoginResponse, sample: LOGIN },
+      sendEmailCode: { parse: safeParseEmailSendCodeResponse, sample: { codeSent: true } },
+      emailLogin: { parse: safeParseEmailLoginResponse, sample: LOGIN },
+      recordChatMember: { parse: safeParseChatMemberResponse, sample: { recorded: false } },
+      setNotificationLevel: {
+        parse: safeParseNotificationLevelResponse,
+        sample: { level: longest(Object.values(NotificationLevel)), demoStake: DECIMAL },
+      },
+      readTradingAccess: {
+        parse: safeParseTradingAccessResponse,
+        sample: {
+          status: longest(Object.values(UserStatus)),
+          tokens: {
+            balance: TOKENS,
+            reserved: '1000000000000000000',
+            available: '8223372036854775807',
+          },
+          broker: {
+            real: BALANCE,
+            demo: BALANCE,
+            minTradeAmount: DECIMAL,
+            level: { code: FREE, rank: NONNEGATIVE_NUMBER },
+            restSnapshotAgeSec: NONNEGATIVE_INT,
+            balanceEventAgeSec: NONNEGATIVE_INT,
+            fresh: false,
+          },
+          brokerUnavailable: null,
+          tradingOpen: false,
+          demoStake: DECIMAL,
+        },
+      },
+      readPairs: {
+        parse: safeParsePairsCatalogResponse,
+        sample: {
+          pairs: Array.from({ length: ASSUMED_LONGEST_PAIRS }, () => PAIR),
+          fetchedAt: NONNEGATIVE_INT,
+          ageMs: NONNEGATIVE_INT,
+          fresh: false,
+        },
+      },
+      evaluateSignal: {
+        parse: safeParseTradingSignalResponse,
+        // a rule refusal: the reason and the features both
+        sample: {
+          outcome: SignalFeedOutcome.Decided,
+          params: {
+            emaFast: NONNEGATIVE_INT,
+            emaSlow: NONNEGATIVE_INT,
+            slopeLookback: NONNEGATIVE_INT,
+            rsiPeriod: NONNEGATIVE_INT,
+            rsiBand: NONNEGATIVE_NUMBER,
+            atrPeriod: NONNEGATIVE_INT,
+            minAtrPct: NONNEGATIVE_NUMBER,
+            maxAtrPct: NONNEGATIVE_NUMBER,
+            minClosedCandles: NONNEGATIVE_INT,
+            maxStaleIntervals: NONNEGATIVE_INT,
+            rsiExtremeBand: NONNEGATIVE_NUMBER,
+            minAtrTicks: NONNEGATIVE_INT,
+          },
+          decision: {
+            kind: SignalKind.NoSignal,
+            version: SIGNAL_ALGORITHM_VERSION,
+            reason: longest(RULE_REFUSAL_REASONS),
+            features: FEATURES,
+          },
+        },
+      },
+      readSignals: {
+        parse: safeParseTradingSignalsResponse,
+        // one list per scanned interval
+        sample: {
+          asOf: NONNEGATIVE_INT,
+          lists: SIGNAL_SCAN_INTERVALS.map((interval) => ({
+            interval,
+            scanned: NONNEGATIVE_INT,
+            signals: Array.from({ length: ASSUMED_LONGEST_PAIRS }, () => ({
+              assetId: INT4_MAX,
+              action: longest(Object.values(TradeAction)),
+              lastCandleTimestamp: NUMBER,
+              decidedAt: NONNEGATIVE_INT,
+              ageMs: NONNEGATIVE_INT,
+            })),
+          })),
+        },
+      },
+      createIntent: { parse: intentOf, sample: { intent: INTENT } },
+      readIntent: { parse: intentOf, sample: { intent: INTENT } },
+      // the 409 active_session_exists body: the 2xx's session plus the error code, so the larger
+      startSession: {
+        parse: safeParseTradingSessionRefusal,
+        sample: { error: TradingSessionErrorCode.ActiveSessionExists, session: SESSION },
+      },
+      readSession: { parse: safeParseTradingSessionResponse, sample: { session: SESSION } },
+      stopSession: { parse: safeParseTradingSessionResponse, sample: { session: SESSION } },
+      // the bounds 409: larger than the 2xx's lone stake
+      setDemoStake: {
+        parse: safeParseDemoStakeRefusal,
+        sample: {
+          error: longest(Object.values(DemoStakeRefusal)),
+          limits: { minTradeAmount: DECIMAL, demoAvailable: DECIMAL, scale: NONNEGATIVE_INT },
+        },
+      },
+      // Reds when the catalog grows to about 500 keys: then the ceiling is revisited, not the
+      // assumption.
+      readBotTexts: {
+        parse: (input) => botTextOverridesResponseSchema.safeParse(input),
+        sample: {
+          overrides: Object.keys(BOT_TEXT_CATALOG).map((key) => ({
+            key,
+            source: bytesLong(ASSUMED_LONGEST_BOT_TEXT_BYTES),
+            version: NONNEGATIVE_INT,
+          })),
+        },
+        limit: MAX_BOT_TEXTS_BODY_BYTES,
+      },
+    };
+    const methods = Object.keys(rows) as (keyof BackendClient)[];
+
+    it('has a row for every client method', () => {
+      const client = createBackendClient({ baseUrl: 'http://127.0.0.1:1', token: TOKEN });
+      expect(Object.keys(rows).sort()).toEqual(Object.keys(client).sort());
+    });
+
+    it.each(methods)('%s: the sample passes the parser the method reads it with', (method) => {
+      const row = rows[method];
+      expect(row.parse(row.sample).success, method).toBe(true);
+    });
+
+    // #234 stop condition, reported to the owner and not tuned away: 300 pairs whose symbol and
+    // type are free strings at 2048 bytes are about 4.4 KB each, 1.3 MB in all, over even the
+    // 1 MiB ceiling. it.fails turns red once the row fits, so the mark cannot outlive the cause.
+    const OVER_CEILING: readonly (keyof BackendClient)[] = ['readPairs'];
+    const sizeOf = (method: keyof BackendClient): void => {
+      const row = rows[method];
+      expect(Buffer.byteLength(JSON.stringify(row.sample)), method).toBeLessThan(
+        row.limit ?? MAX_BACKEND_BODY_BYTES / 4,
+      );
+    };
+
+    it.each(methods.filter((method) => !OVER_CEILING.includes(method)))(
+      '%s: leaves the longest answer under the declared assumptions far below its ceiling',
+      sizeOf,
+    );
+
+    it.fails.each(OVER_CEILING)(
+      '%s: KNOWN OVER the ceiling under the declared assumptions (#234 stop condition)',
+      sizeOf,
+    );
   });
 });

@@ -1,6 +1,7 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import Fastify, { type FastifyReply } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { safeParseOAuthTokenResponse } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { startOAuthStub, type OAuthStub } from './testing/oauth-stub';
 import {
@@ -8,6 +9,7 @@ import {
   BrokerOAuthError,
   BrokerOAuthErrorCode,
   createBrokerOAuthClient,
+  MAX_OAUTH_BODY_BYTES,
   type BrokerOAuthClient,
 } from './oauth-client';
 
@@ -607,4 +609,124 @@ describe('secrecy', () => {
       );
     },
   );
+});
+
+describe('body size', () => {
+  const noop = (): void => undefined;
+
+  // a broker on a bare node:http server, so a body can be written past any ceiling or forever
+  async function withRawBroker(
+    handle: (request: IncomingMessage, response: ServerResponse) => void,
+    run: (probe: BrokerOAuthClient) => Promise<void>,
+  ): Promise<void> {
+    const broker = createServer(handle);
+    await new Promise<void>((resolve) => broker.listen(0, '127.0.0.1', resolve));
+    const address = broker.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    try {
+      await run(
+        createBrokerOAuthClient({
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          clientId: CLIENT_ID,
+          clientSecret: CLIENT_SECRET,
+          timeoutMs: 60_000,
+        }),
+      );
+    } finally {
+      broker.closeAllConnections();
+      await new Promise<void>((resolve) => broker.close(() => resolve()));
+    }
+  }
+
+  it('refuses a 2xx body over MAX_OAUTH_BODY_BYTES as a contract violation', async () => {
+    const tokens = JSON.stringify({
+      access_token: 'a',
+      refresh_token: 'r',
+      token_type: 'Bearer',
+      expires_in: 60,
+      user: { id: '1', email: 'e@example.test', is_partner_client: false },
+    });
+    await withRawBroker(
+      (_request, response) => {
+        response.on('error', noop);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.write(tokens);
+        const padding = ' '.repeat(64 * 1024);
+        for (let written = 0; written <= MAX_OAUTH_BODY_BYTES; written += padding.length) {
+          response.write(padding);
+        }
+        response.end();
+      },
+      async (probe) => {
+        const thrown = await probe.exchangeCode({ code: 'c', redirectUri: REDIRECT_URI }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(thrown).toBeInstanceOf(BrokerOAuthError);
+        expect(thrown).toMatchObject({
+          code: BrokerOAuthErrorCode.ContractViolation,
+          status: 200,
+        });
+      },
+    );
+  });
+
+  it('answers a refusal by its status without reading an endless body', async () => {
+    await withRawBroker(
+      (_request, response) => {
+        response.on('error', noop);
+        response.writeHead(400, { 'content-type': 'application/json' });
+        response.write('{"error":{"message":"');
+        const chunk = 'x'.repeat(16 * 1024);
+        const pump = (): void => {
+          while (!response.destroyed && response.write(chunk));
+          if (!response.destroyed) response.once('drain', pump);
+        };
+        pump();
+      },
+      async (probe) => {
+        const thrown = await probe.exchangeCode({ code: 'c', redirectUri: REDIRECT_URI }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(thrown).toMatchObject({ code: BrokerOAuthErrorCode.InvalidGrant, status: 400 });
+      },
+    );
+  }, 2_000);
+
+  // The stub answers as the live broker did on 2026-10-01: two JWT-shaped tokens and the user.
+  // Assumed: the live answer stays under 4 KiB, so the ceiling holds it with a 16x margin.
+  it('leaves the longest stub answer far below MAX_OAUTH_BODY_BYTES', async () => {
+    const email = 'longest@example.test';
+    stub.registerEmailUser({ email, brokerUserId: 'broker-longest', isPartnerClient: true });
+    await client.sendEmailCode({ email });
+    const login = await fetch(`${stub.url}${EMAIL_LOGIN_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        email,
+        code: stub.codeFor(email),
+        partner_code: PARTNER_CODE,
+      }),
+    });
+    const code = stub.issueCode({ brokerUserId: 'broker-longest-code', isPartnerClient: true });
+    const exchange = await fetch(`${stub.url}${TOKEN_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: REDIRECT_URI,
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+      }).toString(),
+    });
+    for (const response of [login, exchange]) {
+      const text = await response.text();
+      expect(safeParseOAuthTokenResponse(JSON.parse(text)).success).toBe(true);
+      expect(Buffer.byteLength(text)).toBeLessThan(MAX_OAUTH_BODY_BYTES / 16);
+    }
+  });
 });

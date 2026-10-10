@@ -10,6 +10,7 @@ import {
   safeParsePairsCatalogResponse,
   BOT_TEXTS_PATH,
   botTextOverridesResponseSchema,
+  readBody,
   type BotTextOverride,
   safeParseSessionSummaryRefusal,
   safeParseSessionSummaryResponse,
@@ -53,12 +54,19 @@ import {
 } from '@binarius/shared';
 import { BACKEND_REQUEST_TIMEOUT_MS } from './timing';
 
+// bounds one internal-API response body (Architecture Rule 26)
+export const MAX_BACKEND_BODY_BYTES = 1024 * 1024;
+// GET /bot-texts - every override of the catalog; sized for every catalog key at Telegram's
+// message limit in 4-byte characters (#234)
+export const MAX_BOT_TEXTS_BODY_BYTES = 8 * 1024 * 1024;
+
 export const BackendErrorCode = {
   // the request never produced a response: network failure, timeout, or an aborted socket
   Unreachable: 'unreachable',
   // a response arrived with a status outside 2xx
   HttpStatus: 'http_status',
-  // a 2xx body that is not what the contract says it is
+  // a 2xx body that is not what the contract says it is, or is longer than its ceiling
+  // (MAX_BACKEND_BODY_BYTES, MAX_BOT_TEXTS_BODY_BYTES)
   ContractViolation: 'contract_violation',
 } as const;
 export type BackendErrorCode = (typeof BackendErrorCode)[keyof typeof BackendErrorCode];
@@ -161,6 +169,7 @@ export function createBackendClient({
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
+    maxBytes = MAX_BACKEND_BODY_BYTES,
   ): Promise<{ ok: boolean; status: number; payload: unknown }> => {
     const signal = AbortSignal.timeout(timeoutMs);
     let response: Response;
@@ -178,12 +187,12 @@ export function createBackendClient({
       throw new BackendError(BackendErrorCode.Unreachable, { cause: error });
     }
 
-    let payload: unknown;
+    let text: string | undefined;
     try {
-      payload = await response.json();
+      text = await readBody(response, maxBytes);
     } catch (error) {
       // the timeout stays attached through body streaming, so a backend that flushed its
-      // headers and then stalled rejects here with the abort rather than a parse failure:
+      // headers and then stalled rejects here with the abort rather than a read failure:
       // a slow backend, not a route that broke the contract. The status is carried so the
       // operator can see the headers did arrive.
       if (signal.aborted) {
@@ -193,8 +202,24 @@ export function createBackendClient({
         });
       }
       if (response.ok) throw new BackendError(BackendErrorCode.ContractViolation, { cause: error });
-      // an error response whose body is not JSON still has its status to report
+      text = undefined;
+    }
+
+    let payload: unknown;
+    if (text === undefined) {
+      // over the ceiling (or an error body cut short): no cause, there is no body to name
+      if (response.ok) throw new BackendError(BackendErrorCode.ContractViolation);
       payload = undefined;
+    } else {
+      try {
+        payload = JSON.parse(text);
+      } catch (error) {
+        if (response.ok) {
+          throw new BackendError(BackendErrorCode.ContractViolation, { cause: error });
+        }
+        // an error response whose body is not JSON still has its status to report
+        payload = undefined;
+      }
     }
 
     return { ok: response.ok, status: response.status, payload };
@@ -203,13 +228,14 @@ export function createBackendClient({
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
+    maxBytes?: number,
   ): Promise<unknown> => {
-    const { ok, status, payload } = await send(method, path, body);
+    const { ok, status, payload } = await send(method, path, body, maxBytes);
     if (!ok) throw httpStatusError(status, payload);
     return payload;
   };
   const post = (path: string, body: unknown) => request('POST', path, body);
-  const get = (path: string) => request('GET', path);
+  const get = (path: string, maxBytes?: number) => request('GET', path, undefined, maxBytes);
   const sessionOf = (payload: unknown): TradingSessionView => {
     const parsed = safeParseTradingSessionResponse(payload);
     if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
@@ -283,7 +309,9 @@ export function createBackendClient({
       return parsed.data;
     },
     async readBotTexts() {
-      const parsed = botTextOverridesResponseSchema.safeParse(await get(BOT_TEXTS_PATH.slice(1)));
+      const parsed = botTextOverridesResponseSchema.safeParse(
+        await get(BOT_TEXTS_PATH.slice(1), MAX_BOT_TEXTS_BODY_BYTES),
+      );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data.overrides;
     },

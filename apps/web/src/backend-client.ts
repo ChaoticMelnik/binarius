@@ -69,18 +69,28 @@ import {
   type ChangePasswordResponse,
   type LogoutResponse,
   type OAuthCallbackRequest,
+  readBody,
   type OAuthCallbackResponse,
   type RevokeSessionResponse,
   type StaffSessionsResponse,
 } from '@binarius/shared';
 import { BACKEND_REQUEST_TIMEOUT_MS, OAUTH_CALLBACK_REQUEST_TIMEOUT_MS } from './timing';
 
+// bounds one backend response body (Architecture Rule 26)
+export const MAX_BACKEND_BODY_BYTES = 1024 * 1024;
+// the five "Тексты бота" reads and writes under /admin/bot-texts (publish excluded): a version
+// conflict carries 16 fragments and the current source at the schema bound (#234)
+export const MAX_BOT_TEXTS_BODY_BYTES = 8 * 1024 * 1024;
+
 export const BackendErrorCode = {
   /** the request never produced a response: network failure, timeout, or an aborted socket */
   Unreachable: 'unreachable',
   /** a response arrived with a status outside 2xx */
   HttpStatus: 'http_status',
-  /** a 2xx body that is not what the contract says it is */
+  /**
+   * a 2xx body that is not what the contract says it is, or is longer than its ceiling
+   * (MAX_BACKEND_BODY_BYTES, MAX_BOT_TEXTS_BODY_BYTES)
+   */
   ContractViolation: 'contract_violation',
 } as const;
 export type BackendErrorCode = (typeof BackendErrorCode)[keyof typeof BackendErrorCode];
@@ -192,7 +202,13 @@ export function createBackendClient({
   const call = async (
     method: 'GET' | 'POST',
     path: string,
-    options: { body?: unknown; session?: string; bearer?: false; timeoutMs?: number },
+    options: {
+      body?: unknown;
+      session?: string;
+      bearer?: false;
+      timeoutMs?: number;
+      maxBytes?: number;
+    },
   ): Promise<unknown> => {
     const signal = AbortSignal.timeout(options.timeoutMs ?? timeoutMs);
     let response: Response;
@@ -211,12 +227,12 @@ export function createBackendClient({
       throw new BackendError(BackendErrorCode.Unreachable, { cause: error });
     }
 
-    let payload: unknown;
+    let text: string | undefined;
     try {
-      payload = await response.json();
+      text = await readBody(response, options.maxBytes ?? MAX_BACKEND_BODY_BYTES);
     } catch (error) {
       // the timeout stays attached through body streaming, so a backend that flushed its
-      // headers and then stalled rejects here with the abort rather than a parse failure
+      // headers and then stalled rejects here with the abort rather than a short body
       if (signal.aborted) {
         throw new BackendError(BackendErrorCode.Unreachable, {
           status: response.status,
@@ -224,7 +240,23 @@ export function createBackendClient({
         });
       }
       if (response.ok) throw new BackendError(BackendErrorCode.ContractViolation, { cause: error });
+      text = undefined;
+    }
+
+    let payload: unknown;
+    if (text === undefined) {
+      // over the ceiling, or an error body cut short: no cause, there is no body to name
+      if (response.ok) throw new BackendError(BackendErrorCode.ContractViolation);
       payload = undefined;
+    } else {
+      try {
+        payload = JSON.parse(text);
+      } catch (error) {
+        if (response.ok) {
+          throw new BackendError(BackendErrorCode.ContractViolation, { cause: error });
+        }
+        payload = undefined;
+      }
     }
 
     if (!response.ok) {
@@ -349,31 +381,43 @@ export function createBackendClient({
     async botTexts(session) {
       return parsed(
         safeParseAdminBotTextsResponse,
-        await call('GET', 'admin/bot-texts', { session }),
+        await call('GET', 'admin/bot-texts', { session, maxBytes: MAX_BOT_TEXTS_BODY_BYTES }),
       );
     },
     async botText(session, key) {
       return parsed(
         safeParseAdminBotTextResponse,
-        await call('GET', botTextPath(key), { session }),
+        await call('GET', botTextPath(key), { session, maxBytes: MAX_BOT_TEXTS_BODY_BYTES }),
       );
     },
     async previewBotText(session, key, request) {
       return parsed(
         safeParseAdminBotTextPreviewResponse,
-        await call('POST', `${botTextPath(key)}/preview`, { body: request, session }),
+        await call('POST', `${botTextPath(key)}/preview`, {
+          body: request,
+          session,
+          maxBytes: MAX_BOT_TEXTS_BODY_BYTES,
+        }),
       );
     },
     async saveBotText(session, key, request) {
       return parsed(
         safeParseAdminBotTextSaveResponse,
-        await call('POST', `${botTextPath(key)}/save`, { body: request, session }),
+        await call('POST', `${botTextPath(key)}/save`, {
+          body: request,
+          session,
+          maxBytes: MAX_BOT_TEXTS_BODY_BYTES,
+        }),
       );
     },
     async resetBotText(session, key, request) {
       return parsed(
         safeParseAdminBotTextResetResponse,
-        await call('POST', `${botTextPath(key)}/reset`, { body: request, session }),
+        await call('POST', `${botTextPath(key)}/reset`, {
+          body: request,
+          session,
+          maxBytes: MAX_BOT_TEXTS_BODY_BYTES,
+        }),
       );
     },
     async publishBotProfile(session) {

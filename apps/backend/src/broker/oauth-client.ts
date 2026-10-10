@@ -1,4 +1,5 @@
 import {
+  readBody,
   safeParseBrokerEmailSendCodeResponse,
   safeParseOAuthTokenResponse,
   safeParseRefreshTokenResponse,
@@ -12,6 +13,11 @@ import {
 // both the authorization code and the refresh token are single-use, so a repeat after a
 // timeout either loses the pair the broker already issued or looks like a replayed token.
 export const BROKER_HTTP_TIMEOUT_MS = 5_000;
+
+// The ceiling on a 2xx body, read as it arrives (Architecture Rule 26). The longest answer is the
+// token answer: two JWT-shaped tokens and the user, seen live on 2026-10-01; assumed under 4 KiB,
+// so this holds it with a 16x margin. A longer one fails loudly as a contract violation.
+export const MAX_OAUTH_BODY_BYTES = 64 * 1024;
 
 // Told apart by the HTTP status alone (`classify`): the broker's error body is free text, never
 // parsed and never logged.
@@ -27,7 +33,7 @@ export const BrokerOAuthErrorCode = {
   RateLimited: 'rate_limited',
   // timeout, network failure or 5xx — the outcome is unknown, the broker may have consumed it
   Unavailable: 'unavailable',
-  // a 2xx body that does not match the contract
+  // a 2xx body that does not match the contract, or is longer than MAX_OAUTH_BODY_BYTES
   ContractViolation: 'contract_violation',
 } as const;
 export type BrokerOAuthErrorCode = (typeof BrokerOAuthErrorCode)[keyof typeof BrokerOAuthErrorCode];
@@ -113,15 +119,22 @@ export function createBrokerOAuthClient(options: BrokerOAuthClientOptions): Brok
       throw new BrokerOAuthError(classify(endpoint, response.status), response.status);
     }
 
+    let text: string | undefined;
     try {
-      return await response.json();
-    } catch (error) {
+      text = await readBody(response, MAX_OAUTH_BODY_BYTES);
+    } catch {
       // A body that never finished arriving is a transport failure: the broker answered 2xx,
-      // so it has consumed the grant and the outcome is unknown. A body that did arrive and
-      // is not JSON is the broker breaking its contract, which retrying would not fix.
-      if (!(error instanceof SyntaxError)) {
-        throw new BrokerOAuthError(BrokerOAuthErrorCode.Unavailable, response.status);
-      }
+      // so it has consumed the grant and the outcome is unknown.
+      throw new BrokerOAuthError(BrokerOAuthErrorCode.Unavailable, response.status);
+    }
+    // A body over the ceiling, or one that arrived and is not JSON, is the broker breaking its
+    // contract, which retrying would not fix.
+    if (text === undefined) {
+      throw new BrokerOAuthError(BrokerOAuthErrorCode.ContractViolation, response.status);
+    }
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
       throw new BrokerOAuthError(BrokerOAuthErrorCode.ContractViolation, response.status);
     }
   }
