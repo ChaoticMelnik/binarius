@@ -336,8 +336,28 @@ describe('request logging', () => {
     expect(withoutSecrets(url)).not.toContain('SECRET');
   });
 
+  // decoded before matching: the router decodes escapes in static segments
+  const nested = (times: number) => {
+    let encoded = '%6F';
+    for (let i = 0; i < times; i += 1) encoded = encoded.replace('%', '%25');
+    return `/p${encoded}stbacks/binodex/SECRET`;
+  };
+  it.each([
+    ['/p%6Fstbacks/binodex/SECRET', '/postbacks/redacted'],
+    ['/postbacks/%62inodex/SECRET?a=1', '/postbacks/redacted?a=1'],
+    ['/p%256Fstbacks/binodex/SECRET', '/postbacks/redacted'],
+    ['/postbacks/binodex%3F/SECRET', '/postbacks/redacted'],
+    [nested(3), '/postbacks/redacted'],
+    ['/postbacks/binodex/SECRET%ZZ', '/redacted'],
+    [nested(5), '/redacted'],
+  ])('masks the decoded postback path of %s', (url, masked) => {
+    expect(withoutSecrets(url)).toBe(masked);
+    expect(withoutSecrets(url)).not.toContain('SECRET');
+  });
+
   it('leaves a path outside the postback family as it was', () => {
     expect(withoutSecrets('/admin/users/abc?id=1')).toBe('/admin/users/abc?id=1');
+    expect(withoutSecrets('/admin/users/a%20b')).toBe('/admin/users/a%20b');
   });
 
   it('answers an unknown route without echoing what it carried', async () => {
