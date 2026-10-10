@@ -1,3 +1,4 @@
+import { InputFile } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -6,8 +7,10 @@ import {
   TradingSessionStatus,
   TradingSessionStopReason,
   decimalStringSchema,
+  formatSignedUsd,
   plainTextOf,
   telegramHtml,
+  type SessionSummary,
   type TradingSessionView,
   CONNECT_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
@@ -41,8 +44,9 @@ import {
   stubTracker,
   type ApiCall,
 } from './testing';
-import { sessionStatusText, TEXTS, textOf, LABELS } from './texts';
+import { sessionAssetLabel, sessionStatusText, TEXTS, textOf, LABELS } from './texts';
 import {
+  sessionCardKeyboard,
   sessionOutcomeUnknown,
   sessionKeyboard,
   sessionRefreshCallbackData,
@@ -64,6 +68,14 @@ const STOPPED = sessionView({
   stopReason: TradingSessionStopReason.UserStopped,
   endedAt: '2026-10-07T10:05:00.000Z',
 });
+const d = (value: string) => decimalStringSchema.parse(value);
+const SUMMARY: SessionSummary = {
+  result: d('-0.15000000'),
+  trades: [
+    { profit: d('0.85000000'), openPrice: 1.1, closePrice: 1.2 },
+    { profit: d('-1.00000000'), openPrice: 1.2, closePrice: 1.1 },
+  ],
+};
 
 function setup(
   options: {
@@ -71,6 +83,7 @@ function setup(
     startSession?: BackendClient['startSession'];
     readSession?: BackendClient['readSession'];
     stopSession?: BackendClient['stopSession'];
+    claimSessionSummary?: BackendClient['claimSessionSummary'];
   } = {},
 ) {
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
@@ -83,11 +96,20 @@ function setup(
   const stopSession = vi.fn<BackendClient['stopSession']>(
     options.stopSession ?? (() => Promise.resolve(STOPPED)),
   );
+  const claimSessionSummary = vi.fn<BackendClient['claimSessionSummary']>(
+    options.claimSessionSummary ?? (() => Promise.resolve(SUMMARY)),
+  );
   const logger = fakeLogger();
   const sessionTracker = stubSessionTracker();
   const bot = createBot({
     token: '123456:AA-bot-token',
-    backend: fakeBackend({ readPairs, startSession, readSession, stopSession }),
+    backend: fakeBackend({
+      readPairs,
+      startSession,
+      readSession,
+      stopSession,
+      claimSessionSummary,
+    }),
     logger,
     botInfo: BOT_INFO,
     intentTracker: stubTracker(),
@@ -105,6 +127,7 @@ function setup(
     startSession,
     readSession,
     stopSession,
+    claimSessionSummary,
     ...api,
   };
 }
@@ -411,11 +434,12 @@ describe("the session's refresh button", () => {
     });
   });
 
-  it('does not track a session that is done', async () => {
+  it('tracks a session that is done too, so its entry sends the summary card once (#318)', async () => {
     const { press, calls, sessionTracker } = setup({ readSession: () => Promise.resolve(STOPPED) });
     await press(REFRESH);
     expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual(STOPPED_ROWS);
-    expect(sessionTracker.track).not.toHaveBeenCalled();
+    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
+    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: STOPPED });
   });
 
   it('sends the status anew when the message is gone, and tracks the new one', async () => {
@@ -456,7 +480,8 @@ describe("the session's stop button", () => {
     expect(edit?.text).toContain('⏹ Сессия остановлена по твоей команде.');
     expect(edit?.text).not.toContain('доиграет');
     expect(rowsOf(edit)).toEqual(STOPPED_ROWS);
-    expect(sessionTracker.track).not.toHaveBeenCalled();
+    // done at once: tracked all the same, so its entry sends the summary card (#318)
+    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: STOPPED });
   });
 
   it('says an open trade plays out, and keeps following it', async () => {
@@ -555,5 +580,111 @@ describe('«🔁 Ещё сессия»', () => {
     expect(startSession.mock.calls).toEqual([
       [{ telegramUserId: String(USER.id), assetId: PAIR_EURUSD.id, durationSec: 15, trades: 5 }],
     ]);
+  });
+});
+
+describe('the summary card (#318)', () => {
+  const DONE = sessionView({
+    ...STOPPED,
+    trades: { ...STOPPED.trades, settled: 2, won: 1, lost: 1, profit: SUMMARY.result },
+    lastIntent: intentView({ status: TradeIntentStatus.Settled }),
+  });
+  const CARD_ROWS = [[AGAIN], newAnalysis(15), toSignals(15), MENU];
+  // the tracker's entry of a refresh on a done session: its card is what the tracker calls
+  const entryOf = async (setupResult: ReturnType<typeof setup>) => {
+    await setupResult.press(REFRESH);
+    return setupResult.sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
+  };
+
+  it('K1 is the stopped status keyboard without «🔄 Обновить»; the menu alone without settings', () => {
+    const rows = (view: TradingSessionView) => sessionCardKeyboard(view).inline_keyboard;
+    expect(rows(DONE)).toEqual(CARD_ROWS);
+    expect(rows(sessionView({ ...DONE, settings: null }))).toEqual([MENU]);
+    expect(
+      rows(sessionView({ ...DONE, settings: { ...DONE.settings!, durationSec: 60 } })),
+    ).toEqual([TO_DURATIONS, MENU]);
+  });
+
+  it('K2 claims, then sends one PNG to the status chat with its caption and keyboard', async () => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE) });
+    const entry = await entryOf(scene);
+    await entry.card(DONE);
+    expect(scene.claimSessionSummary.mock.calls).toEqual([[SESSION_ID, String(USER.id)]]);
+    const photo = payloadOf(scene.calls, 'sendPhoto');
+    expect(photo?.chat_id).toBe(USER.id);
+    expect(photo?.photo).toBeInstanceOf(InputFile);
+    expect(photo?.parse_mode).toBe('HTML');
+    expect(photo?.caption).toBe(
+      TEXTS.sessionCardCaption({
+        symbol: PAIR_EURUSD.symbol,
+        profit: SUMMARY.result,
+        botUsername: BOT_INFO.username,
+      }).value,
+    );
+    expect(photo?.caption).toContain(`@${BOT_INFO.username}`);
+    expect(photo?.caption).toContain(formatSignedUsd(SUMMARY.result));
+    expect(rowsOf(photo)).toEqual(CARD_ROWS);
+    expect(
+      rowsOf(photo)
+        .flat()
+        .some((key) => key.callback_data === REFRESH),
+    ).toBe(false);
+    expect(scene.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('K3 a refused claim sends nothing and logs nothing', async () => {
+    const scene = setup({
+      readSession: () => Promise.resolve(DONE),
+      claimSessionSummary: () => Promise.resolve(null),
+    });
+    await (await entryOf(scene)).card(DONE);
+    expect(methods(scene.calls)).not.toContain('sendPhoto');
+    expect(scene.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('K4 a failed claim is logged with its backend fields, and nothing is sent', async () => {
+    const scene = setup({
+      readSession: () => Promise.resolve(DONE),
+      claimSessionSummary: () => Promise.reject(httpError(500)),
+    });
+    await (await entryOf(scene)).card(DONE);
+    expect(methods(scene.calls)).not.toContain('sendPhoto');
+    expect(warnings(scene.logger)).toEqual(['trading session card not sent']);
+    expect(scene.logger.warn.mock.calls[0]?.[0]).toMatchObject({
+      backendStatus: 500,
+      sessionId: SESSION_ID,
+    });
+  });
+
+  it('K5 a refused photo is logged with its Telegram fields, once, with no retry', async () => {
+    const scene = setup({ readSession: () => Promise.resolve(DONE) });
+    scene.apiErrors.set('sendPhoto', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: chat not found',
+    });
+    await (await entryOf(scene)).card(DONE);
+    expect(methods(scene.calls).filter((method) => method === 'sendPhoto')).toHaveLength(1);
+    expect(warnings(scene.logger)).toEqual(['trading session card not sent']);
+    expect(scene.logger.warn.mock.calls[0]?.[0]).toMatchObject({
+      method: 'sendPhoto',
+      telegramErrorCode: 400,
+      sessionId: SESSION_ID,
+    });
+  });
+
+  it("K6 without settings, the asset is the last trade's and the keyboard the menu", async () => {
+    const bare = sessionView({ ...DONE, settings: null });
+    const scene = setup({ readSession: () => Promise.resolve(bare) });
+    await (await entryOf(scene)).card(bare);
+    const photo = payloadOf(scene.calls, 'sendPhoto');
+    expect(photo?.caption).toBe(
+      TEXTS.sessionCardCaption({
+        symbol: sessionAssetLabel(null, bare.lastIntent!.assetId),
+        profit: SUMMARY.result,
+        botUsername: BOT_INFO.username,
+      }).value,
+    );
+    expect(rowsOf(photo)).toEqual([MENU]);
   });
 });

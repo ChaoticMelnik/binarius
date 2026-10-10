@@ -197,8 +197,9 @@ export const INTENT_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_T
 export const SESSION_TRACK_FIRST_POLL_MS = 3_000;
 export const SESSION_TRACK_POLL_MS = 10_000;
 export const SESSION_TRACK_DEADLINE_MS = SESSION_MAX_DURATION_MS + 600_000;
-// one readSession plus one edit, what sessionTracker.stop() can be waiting for
-export const SESSION_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS;
+// What sessionTracker.stop() can be waiting for: an attempt's readSession and edit, then for a
+// finished session its summary card's claim and sendPhoto (#318).
+export const SESSION_TRACK_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 2 * TELEGRAM_API_TIMEOUT_MS;
 
 // TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS, TRADING_SESSION_START_BUDGET_MS and
 // TRADING_SESSION_VIEW_BUDGET_MS are the backend's upper estimates of POST /trading/access, POST

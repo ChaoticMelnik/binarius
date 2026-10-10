@@ -120,7 +120,7 @@ const RAW_TELEGRAM_SEND_METHODS = [
 const RAW_TELEGRAM_SEND = {
   selector: `CallExpression[callee.property.name=/^(${RAW_TELEGRAM_SEND_METHODS.join('|')})$/]`,
   message:
-    'send user texts through replyHtml/replyWithVideoHtml/replyWithPhotoHtml/editMessageTextHtml (apps/bot/src/send.ts) or the client push (apps/backend/src/auth/client-push.ts): they take TelegramHtml and set parse_mode HTML, so nothing unescaped reaches the user as markup',
+    'send user texts through replyHtml/replyWithVideoHtml/replyWithPhotoHtml/sendPhotoByIdHtml/editMessageTextHtml (apps/bot/src/send.ts) or the client push (apps/backend/src/auth/client-push.ts): they take TelegramHtml and set parse_mode HTML, so nothing unescaped reaches the user as markup',
 };
 
 export default tseslint.config(

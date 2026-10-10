@@ -35,6 +35,7 @@ describe('the command menu', () => {
       startSession: () => Promise.reject(new Error('not used here')),
       readSession: () => Promise.reject(new Error('not used here')),
       stopSession: () => Promise.reject(new Error('not used here')),
+      claimSessionSummary: () => Promise.reject(new Error('not used here')),
       setDemoStake: () => Promise.reject(new Error('not used here')),
       readBotTexts: () => Promise.reject(new Error('not used here')),
     };

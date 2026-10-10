@@ -75,6 +75,8 @@ export const BOT_TEXT_WIDTHS = {
   accountLines: USER_ACCOUNT_LIST_LIMIT,
   // a session's counters: sessionFitsDeadline starts at most 60 trades
   sessionCount: 3,
+  // a Telegram username, 5-32 characters (stated: Telegram's rule, not a schema of ours)
+  botUsername: 32,
 } as const;
 
 export interface BotTextMeasure {
@@ -204,6 +206,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   trades: (m) => w.sessionCount + 1 + trades(m),
   // the direction, then the stake when known (texts.ts → stakeButtonLabel)
   action: (m) => m.longest('actionUp', 'actionDown') + SEPARATOR + w.stake,
+  botUsername: () => w.botUsername,
 };
 
 // Where a key's real assembly is narrower than a variable's default width.
@@ -237,6 +240,8 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   sessionTied: { count: () => w.sessionCount },
   sessionBalanceDemo: { amount: () => w.usd },
   sessionBalanceReal: { amount: () => w.usd },
+  // the card's column: a trade's number in its session, at most MAX_SESSION_TRADES
+  sessionCardTrade: { count: () => w.sessionCount },
   // shown only with an amount; launchStakeMinimum stands in without one
   launchStake: { stake: () => w.stake },
   // the offer under a finished trade names the session its row starts, always
@@ -537,6 +542,14 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       '\n',
       k('sessionOpenTradePlaysOut'),
     ],
+  },
+  {
+    // the summary card's footer (#318, texts.ts → sessionCardFooter): plain text drawn on the
+    // image, bounded by the key's own limit, the width its line has on the card
+    id: 'sessionCardFooter',
+    title: 'Картинка-итог: нижняя строка',
+    limit: BOT_TEXT_CATALOG.sessionCardFooter.limit,
+    body: [k('sessionCardFooter')],
   },
   {
     id: 'demoLaunch',

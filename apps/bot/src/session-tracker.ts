@@ -42,6 +42,9 @@ export interface SessionTrackRequest {
   // edits the status message; the keyboard follows the view (no stop button once it stopped),
   // or only the menu once the session is gone (#350)
   edit: (text: TelegramHtml, view: TradingSessionView, end?: 'not_found') => Promise<unknown>;
+  // sends the summary card under the final status (#318): called once, as the entry ends on a
+  // done view whose final edit landed; it handles its own failures
+  card: (view: TradingSessionView) => Promise<void>;
 }
 
 export interface SessionTracker {
@@ -225,7 +228,10 @@ export function createSessionTracker({
       const goOn = await editTo(entry, sessionStatusText(entry.symbol, view), key);
       if (!goOn) return;
     }
+    // The card goes once, then the entry ends, whatever the card did: a claim the backend
+    // committed answers 409 the second time, so a retry could only lose it (docs/bot-session.md).
     if (sessionTrackingDone(view) && entry.rendered === key) {
+      await entry.card(view);
       finish(entry);
       return;
     }
@@ -233,7 +239,8 @@ export function createSessionTracker({
   }
 
   // Re-arm, or past the deadline one last edit, not retried, and stop: the hint for a session
-  // still followed, the final status for a done one whose edit never landed.
+  // still followed, the final status for a done one whose edit never landed, and its card once
+  // that edit lands.
   async function next(entry: Entry): Promise<void> {
     if (!live(entry)) return;
     if (now() - entry.startedAt < deadlineMs) {
@@ -241,11 +248,13 @@ export function createSessionTracker({
       return;
     }
     const done = sessionTrackingDone(entry.view);
+    const key = done ? renderKey(entry.view) : 'deadline';
     await editTo(
       entry,
       sessionStatusText(entry.symbol, entry.view, done ? {} : { deadline: true }),
-      done ? renderKey(entry.view) : 'deadline',
+      key,
     );
+    if (done && entry.rendered === key) await entry.card(entry.view);
     finish(entry);
   }
 
