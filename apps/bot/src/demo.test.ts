@@ -10,6 +10,7 @@ import {
   SignalFeedOutcome,
   SignalKind,
   TradeAction,
+  TradeMode,
   type PairsCatalogResponse,
   type PairView,
   DEMO_CALLBACK_DATA,
@@ -284,7 +285,7 @@ describe('the signals screen', () => {
     const edited = payloadOf(calls, 'editMessageText');
     expect(edited?.text).toBe(TEXTS.demoSignalsHeader({ label: '⏱ 15 с' }).value);
     expect(plainTextOf(TEXTS.demoSignalsHeader({ label: '⏱ 15 с' }))).toBe(
-      '📡 Сигналы сейчас · ⏱ 15 с\nВыбери пару — бот запустит цикл сделок. Сигнал держится одну свечу (⏱ 15 с); перед каждой сделкой бот проверяет его заново.',
+      '📡 Сигналы сейчас · ⏱ 15 с\nВыбери пару. Сигнал держится одну свечу (⏱ 15 с), поэтому перед сделкой бот проверяет его заново.',
     );
     expect(rowsOf(edited)).toEqual(ROWS);
     expect(readSignals).toHaveBeenCalledTimes(1);
@@ -510,6 +511,37 @@ describe('the launch screen', () => {
     expect(edited?.text).toContain('EUR/USD OTC · ⏱ 5 с');
   });
 
+  // #121: cycles are demo only; in real mode the launch leads to the pair's analysis, whose «➕ Ещё»
+  // opens the single real trade
+  it('shows a user in real mode the single trade in place of the cycle and the picker', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
+    });
+    await press(LAUNCH);
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(rowsOf(edited)).toEqual([
+      [button(LABELS.modeAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15))],
+      [button(LABELS.backToListButton, demoSignalsCallbackData(15))],
+    ]);
+    expect(plainTextOf(TEXTS.launchRealMode)).toBe(
+      '💼 Циклы — только в демо; в реальном режиме — разовая сделка по анализу.',
+    );
+    expect(edited?.text).toContain(TEXTS.launchRealMode.value);
+    expect(edited?.text).not.toContain('Бот проведёт');
+    // decision 22: no stake line in real mode
+    expect(plainTextOf(edited?.text as string)).toBe(
+      `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с\n${plainTextOf(TEXTS.launchRealMode)}`,
+    );
+  });
+
+  it('keeps the demo launch when access cannot say the mode', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await press(LAUNCH);
+    expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual(LAUNCH_ROWS);
+  });
+
   it('starts a 15 s session of the pair from «🚀 Запустить цикл»', () => {
     const data = LAUNCH_ROWS[0]?.[0]?.callback_data ?? '';
     expect(sessionStartDataOf(SESSION_START_PATTERN.exec(data) ?? '')).toEqual({
@@ -596,6 +628,20 @@ describe('the launch screen', () => {
       ]);
     },
   );
+
+  // Plan 5 (28.3): real mode has no cycle and no cycle floor; the pair goes to the real launch
+  it('launches a pair below the cycle floor for a user in real mode, with the analysis', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
+    });
+    await press(demoLaunchCallbackData(PAIR_OTHER_TYPE.id, 15));
+    const edited = payloadOf(calls, 'editMessageText');
+    expect(edited?.text).toContain(TEXTS.launchRealMode.value);
+    expect(rowsOf(edited)).toEqual([
+      [button(LABELS.modeAnalysisButton, demoAnalysisCallbackData(PAIR_OTHER_TYPE.id, 15))],
+      [button(LABELS.backToListButton, demoSignalsCallbackData(15))],
+    ]);
+  });
 
   it.each([15, 5] as const)(
     'launches a pair paying exactly 80 percent at %i s',
@@ -953,20 +999,30 @@ describe('the analysis', () => {
   const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 5));
   const MORE = button(
     LABELS.analysisMoreButton,
-    analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true),
+    analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Demo),
   );
 
   it('fingerprints the canonical amount, so a spelling never decides a mismatch', () => {
-    expect(stakeFingerprint(decimalStringSchema.parse('5.00000000'))).toBe(
-      stakeFingerprint(decimalStringSchema.parse('5')),
+    expect(stakeFingerprint(decimalStringSchema.parse('5.00000000'), TradeMode.Demo)).toBe(
+      stakeFingerprint(decimalStringSchema.parse('5'), TradeMode.Demo),
     );
-    expect(stakeFingerprint(decimalStringSchema.parse('5'))).not.toBe(
-      stakeFingerprint(decimalStringSchema.parse('5.01')),
+    expect(stakeFingerprint(decimalStringSchema.parse('5'), TradeMode.Demo)).not.toBe(
+      stakeFingerprint(decimalStringSchema.parse('5.01'), TradeMode.Demo),
     );
-    expect(stakeFingerprint(null)).toMatch(/^[0-9a-f]{6}$/);
+    expect(stakeFingerprint(null, TradeMode.Demo)).toMatch(/^[0-9a-f]{6}$/);
+  });
+
+  // #121: a button drawn in one mode never matches a press in the other
+  it('fingerprints the mode with the amount', () => {
+    const one = decimalStringSchema.parse('1');
+    expect(stakeFingerprint(one, TradeMode.Demo)).not.toBe(stakeFingerprint(one, TradeMode.Real));
+    expect(stakeFingerprint(one, TradeMode.Real)).toBe(
+      stakeFingerprint(decimalStringSchema.parse('1.00000000'), TradeMode.Real),
+    );
   });
   const resultOf = (response = SIGNAL_DECIDED) =>
-    analysisScreen({ pair: PAIR_EURUSD, durationSec: 5, response }).text.value;
+    analysisScreen({ mode: TradeMode.Demo, pair: PAIR_EURUSD, durationSec: 5, response }).text
+      .value;
   const edits = (calls: readonly ApiCall[]) =>
     calls.filter((call) => call.method === 'editMessageText');
 
@@ -989,7 +1045,48 @@ describe('the analysis', () => {
     ]);
     expect(readPairs).toHaveBeenCalledTimes(1);
     expect(evaluateSignal.mock.calls).toEqual([[PAIR_EURUSD.id, '5s']]);
-    expect(readTradingAccess).not.toHaveBeenCalled();
+    // the user's mode decides the session row (#121)
+    expect(readTradingAccess.mock.calls).toEqual([['4242']]);
+  });
+
+  // #121: cycles are demo only, so a user in real mode gets «➕ Ещё» and no session row
+  it('draws no session row for a user in real mode', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
+    });
+    await press(DATA);
+    expect(rowsOf(edits(calls).at(-1)?.payload)).toEqual([
+      [
+        button(
+          LABELS.analysisMoreButton,
+          analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Real),
+        ),
+      ],
+      [REPEAT],
+      [BACK_EURUSD_DURATIONS, BACK_GROUPS],
+    ]);
+  });
+
+  // Plan 5 (decision 26): the text speaks of the user's mode
+  it('ends a real analysis with the real disclaimer and no demo wording', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
+    });
+    await press(DATA);
+    const text = edits(calls).at(-1)?.payload.text as string;
+    expect(text).toContain(TEXTS.analysisDisclaimerReal.value);
+    expect(text).not.toContain('Это демо');
+  });
+
+  it('draws the session row when access cannot say the mode, and warns', async () => {
+    const { press, calls, logger } = setup({
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await press(DATA);
+    expect(rowsOf(edits(calls).at(-1)?.payload)[0]).toEqual([SESSION]);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'trading access not read for the stake label',
+    ]);
   });
 
   it('carries the direction of the signal in «➕ Ещё»', async () => {
@@ -1008,7 +1105,7 @@ describe('the analysis', () => {
     expect(rowsOf(edits(calls).at(-1)?.payload)[1]).toEqual([
       button(
         LABELS.analysisMoreButton,
-        analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Down, true),
+        analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Down, true, TradeMode.Demo),
       ),
     ]);
   });
@@ -1037,6 +1134,7 @@ describe('the analysis', () => {
     const result = edits(calls).at(-1)?.payload.text;
     expect(result).toBe(
       analysisScreen({
+        mode: TradeMode.Demo,
         pair: { ...PAIR_EURUSD, payout: 70 },
         durationSec: 5,
         response: SIGNAL_DECIDED,
@@ -1137,20 +1235,28 @@ describe('the analysis', () => {
     await press(DATA);
     const result = edits(calls).at(-1)?.payload;
     expect(result?.text).toBe(
-      analysisScreen({ pair: low, durationSec: 5, response: SIGNAL_DECIDED }).text.value,
+      analysisScreen({ mode: TradeMode.Demo, pair: low, durationSec: 5, response: SIGNAL_DECIDED })
+        .text.value,
     );
     expect(plainTextOf(TEXTS.analysisCycleUnavailable({ payoutFloor: '80' }))).toBe(
       '🚫 Цикл на этой паре не запускается: выплата ниже 80%.',
     );
     // the note closes the payout block, before the disclaimer
     expect(
-      plainTextOf(analysisScreen({ pair: low, durationSec: 5, response: SIGNAL_DECIDED }).text),
+      plainTextOf(
+        analysisScreen({
+          mode: TradeMode.Demo,
+          pair: low,
+          durationSec: 5,
+          response: SIGNAL_DECIDED,
+        }).text,
+      ),
     ).toContain('верных прогнозов.\n🚫 Цикл на этой паре не запускается: выплата ниже 80%.\n\n⚠️');
     expect(rowsOf(result)).toEqual([
       [
         button(
           LABELS.analysisMoreButton,
-          analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, false),
+          analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, false, TradeMode.Demo),
         ),
       ],
       [REPEAT],
@@ -1190,9 +1296,13 @@ describe('the analysis', () => {
       });
       await press(DATA);
       const result = edits(calls).at(-1)?.payload;
-      expect(result?.text).toBe(analysisScreen({ pair, durationSec: 5, response }).text.value);
+      expect(result?.text).toBe(
+        analysisScreen({ mode: TradeMode.Demo, pair, durationSec: 5, response }).text.value,
+      );
       const note = plainTextOf(TEXTS.analysisCycleUnavailable({ payoutFloor: '80' }));
-      const text = plainTextOf(analysisScreen({ pair, durationSec: 5, response }).text);
+      const text = plainTextOf(
+        analysisScreen({ mode: TradeMode.Demo, pair, durationSec: 5, response }).text,
+      );
       if (offered) expect(text).not.toContain(note);
       else expect(text.endsWith(`\n${note}`)).toBe(true);
       expect(rowsOf(result)).toEqual([
@@ -1351,7 +1461,7 @@ describe('the analysis', () => {
 
 // #360: «➕ Ещё» draws the single trade's row in place of the collapsed keyboard
 describe('«➕ Ещё» under the analysis', () => {
-  const DATA = analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true);
+  const DATA = analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Demo);
   const REPEAT = button(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
   const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 5));
   const STAKE_MENU = button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5));
@@ -1394,9 +1504,35 @@ describe('«➕ Ещё» under the analysis', () => {
     expect(evaluateSignal).not.toHaveBeenCalled();
   });
 
+  // #121: the single real trade at the broker's minimum, marked REAL, alone in its row; no
+  // session row and no «💵 Сумма»
+  it('draws a user in real mode the REAL stake button at the minimum and nothing else', async () => {
+    const { press, calls } = setup({
+      readTradingAccess: () =>
+        Promise.resolve(
+          accessView({
+            tradingMode: TradeMode.Real,
+            demoStake: decimalStringSchema.parse('2.5'),
+          }),
+        ),
+    });
+    await press(analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Real));
+    const rows = rowsOf(expandedOf(calls).at(-1)?.payload);
+    const [[stake], ...rest] = rows;
+    expect(rows[0]).toHaveLength(1);
+    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '1.00000000', TradeMode.Real));
+    expect(stake?.text).toBe('🚀 Открыть сделку: ⬆️ Вверх · $1.00 · REAL');
+    expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(
+      stakeFingerprint(decimalStringSchema.parse('1'), TradeMode.Real),
+    );
+    expect(rest).toEqual([[REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
+  });
+
   it('draws the direction the button carries', async () => {
     const { press, calls } = setup();
-    await press(analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Down, true));
+    await press(
+      analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Down, true, TradeMode.Demo),
+    );
     const stake = rowsOf(expandedOf(calls)[0]?.payload)[1]?.[0];
     expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Down, '1.00000000'));
     expect(stakeOf(stake?.callback_data)).toMatchObject({
@@ -1429,7 +1565,7 @@ describe('«➕ Ещё» under the analysis', () => {
     expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '2.5'));
     expect(stake?.text).toContain('$2.50');
     expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(
-      stakeFingerprint(decimalStringSchema.parse('2.5')),
+      stakeFingerprint(decimalStringSchema.parse('2.5'), TradeMode.Demo),
     );
     expect(stakeOf(stake?.callback_data)?.fingerprint).not.toBe(STAKE_FINGERPRINT);
     expect(menu).toEqual(STAKE_MENU);
@@ -1442,7 +1578,7 @@ describe('«➕ Ещё» under the analysis', () => {
     await press(DATA);
     const [stake, menu] = stakeRowOf(calls) ?? [];
     expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up));
-    expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(stakeFingerprint(null));
+    expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(stakeFingerprint(null, TradeMode.Demo));
     expect(menu).toEqual(STAKE_MENU);
     expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
       'trading access not read for the stake label',
@@ -1457,7 +1593,7 @@ describe('«➕ Ещё» under the analysis', () => {
     await press(DATA);
     const stake = stakeRowOf(calls)?.[0];
     expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up));
-    expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(stakeFingerprint(null));
+    expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(stakeFingerprint(null, TradeMode.Demo));
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
@@ -1516,14 +1652,72 @@ describe('«➕ Ещё» under the analysis', () => {
 
   it('keeps the longest datum inside the Bot API limit and reads it back', () => {
     const longest = Math.max(...DEMO_DURATIONS_SEC) as (typeof DEMO_DURATIONS_SEC)[number];
-    const data = analysisMoreCallbackData(2_147_483_647, longest, TradeAction.Down, false);
-    expect(data).toBe('demo:more:2147483647:15:down:n');
-    expect(Buffer.byteLength(data, 'utf8')).toBe(30);
+    const data = analysisMoreCallbackData(
+      2_147_483_647,
+      longest,
+      TradeAction.Down,
+      false,
+      TradeMode.Real,
+    );
+    expect(data).toBe('demo:more:2147483647:15:down:n:r');
+    expect(Buffer.byteLength(data, 'utf8')).toBe(32);
     expect(analysisMoreDataOf(ANALYSIS_MORE_PATTERN.exec(data) ?? '')).toEqual({
       assetId: 2_147_483_647,
       durationSec: 15,
       action: TradeAction.Down,
       payoutAccepted: false,
+      renderedMode: TradeMode.Real,
+    });
+  });
+
+  // Plan 5 (decision 26): «➕ Ещё» draws a stake button only in the mode its analysis was drawn in
+  describe('the mode token', () => {
+    const datum = (token: string) => `demo:more:${PAIR_EURUSD.id}:5:up:s${token}`;
+    const realAccess = () => Promise.resolve(accessView({ tradingMode: TradeMode.Real }));
+    const datas = (calls: readonly ApiCall[]) =>
+      rowsOf(expandedOf(calls).at(-1)?.payload)
+        .flat()
+        .map((b) => b.callback_data ?? '');
+    const TAIL = [[REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]];
+
+    it('marks a real analysis :r and a demo one :d', async () => {
+      const real = setup({ readTradingAccess: realAccess });
+      await real.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
+      const demo = setup();
+      await demo.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
+      const moreOf = (calls: readonly ApiCall[]) =>
+        rowsOf(calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload)
+          .flat()
+          .find((b) => b.text === LABELS.analysisMoreButton)?.callback_data;
+      expect(moreOf(real.calls)).toBe(datum(':r'));
+      expect(moreOf(demo.calls)).toBe(datum(':d'));
+    });
+
+    it('draws the REAL row for :r read in real', async () => {
+      const { press, calls } = setup({ readTradingAccess: realAccess });
+      await press(datum(':r'));
+      expect(datas(calls).some((d) => d.startsWith('demo:stake:'))).toBe(true);
+    });
+
+    it.each([
+      ['a demo analysis read in real', ':d', realAccess],
+      ['a real analysis read in demo', ':r', () => Promise.resolve(ACCESS_VIEW)],
+      [
+        'a real analysis whose read failed',
+        ':r',
+        () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+      ],
+    ])('draws only the tail for %s', async (_case, token, readTradingAccess) => {
+      const { press, calls } = setup({ readTradingAccess });
+      await press(datum(token));
+      expect(rowsOf(expandedOf(calls).at(-1)?.payload)).toEqual(TAIL);
+    });
+
+    it('reads a datum from before #121 as demo', async () => {
+      const { press, calls } = setup();
+      await press(datum(''));
+      expect(datas(calls).some((d) => d.startsWith('demo:stake:'))).toBe(true);
+      expect(datas(calls).some((d) => d.startsWith('demo:sess:'))).toBe(true);
     });
   });
 
@@ -1834,7 +2028,12 @@ describe('a press under the session card (a photo)', () => {
     expect(waiting?.payload.text).toBe(TEXTS.analyzing({ subject: 'EUR/USD OTC · ⏱ 15 с' }).value);
     expect(waiting?.payload.reply_markup).toBeUndefined();
     expect(result?.payload.text).toBe(
-      analysisScreen({ pair: PAIR_EURUSD, durationSec: 15, response: SIGNAL_DECIDED }).text.value,
+      analysisScreen({
+        mode: TradeMode.Demo,
+        pair: PAIR_EURUSD,
+        durationSec: 15,
+        response: SIGNAL_DECIDED,
+      }).text.value,
     );
     expect(rowsOf(result?.payload).flat()).toContainEqual(
       button(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15)),

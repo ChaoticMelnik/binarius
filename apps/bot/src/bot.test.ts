@@ -412,13 +412,18 @@ describe('the status card', () => {
     [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }],
     [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
   ];
+  // in real mode the entry reads «🚀 Торговать» (#121)
+  const REAL_CARD_ROWS = [
+    [{ text: LABELS.tradeButton, callback_data: DEMO_CALLBACK_DATA }],
+    [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
+  ];
   // the line's default holds none of its variables
   const NO_SNAPSHOT = () =>
     TEXTS.statusNoSnapshot(userContextOf(USER.first_name, TradeMode.Demo, ACCESS_VIEW));
   const cardFor = (access = ACCESS_VIEW) =>
     statusCard({
       firstName: USER.first_name,
-      mode: 'demo',
+      mode: access.tradingMode,
       tokens: access.tokens,
       broker: access.broker,
       brokerUnavailable: access.brokerUnavailable,
@@ -459,6 +464,22 @@ describe('the status card', () => {
       expect(logger.warn).not.toHaveBeenCalled();
     },
   );
+
+  // #121: the header, the hint and the buttons follow the user's mode
+  it('draws the card of a user in real mode with REAL, its hint and its buttons', async () => {
+    const real = accessView({ tradingMode: TradeMode.Real });
+    const { calls } = await home({ readTradingAccess: () => Promise.resolve(real) });
+    const photo = sentPayload(calls, 'sendPhoto');
+    expect(photo?.caption).toBe(cardFor(real));
+    expect(photo?.caption).toContain('REAL');
+    expect(photo?.caption).toContain(
+      plainTextOf(TEXTS.statusHintReal(userContextOf(USER.first_name, TradeMode.Real, real))),
+    );
+    expect(photo?.caption).not.toContain(
+      plainTextOf(TEXTS.statusHint(userContextOf(USER.first_name, TradeMode.Demo, real))),
+    );
+    expect(inlineRows(photo)).toEqual(REAL_CARD_ROWS);
+  });
 
   it('sends the card as text with the same button and pins it when the photo is refused', async () => {
     const scene = setup({ user: ACTIVE });

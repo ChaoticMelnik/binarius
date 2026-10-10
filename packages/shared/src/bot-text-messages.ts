@@ -205,8 +205,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   result,
   // «5 сделок»
   trades: (m) => w.sessionCount + 1 + trades(m),
-  // the direction, then the stake when known (texts.ts → stakeButtonLabel)
-  action: (m) => m.longest('actionUp', 'actionDown') + SEPARATOR + w.stake,
+  // the direction, then the stake when known, then the mode in real (texts.ts → stakeButtonLabel)
+  action: (m) => m.longest('actionUp', 'actionDown') + SEPARATOR + w.stake + SEPARATOR + w.mode,
   botUsername: () => w.botUsername,
   // referralLinkOf
   referralLink: () =>
@@ -393,7 +393,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
         [...balances(w.zeroUsd), '\n', anyOf('statusAmbiguous', 'statusNoSnapshot')],
       ),
       '\n\n',
-      k('statusHint'),
+      anyOf('statusHint', 'statusHintReal'),
     ],
   },
   {
@@ -434,11 +434,13 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       ...features(true),
       '\n',
       k('demoPayout'),
-      // a pair paying below the cycle floor: no session row, the note says why (on every
-      // decided answer, #379)
-      oneOf([], ['\n', k('analysisCycleUnavailable')]),
-      '\n\n',
-      k('analysisDisclaimer'),
+      oneOf(
+        // demo: a pair paying below the cycle floor gets no session row, the note says why (on
+        // every decided answer, #379)
+        [oneOf([], ['\n', k('analysisCycleUnavailable')]), '\n\n', k('analysisDisclaimer')],
+        // real mode (#121): no cycle to refuse, its own disclaimer
+        ['\n\n', k('analysisDisclaimerReal')],
+      ),
     ],
   },
   {
@@ -465,8 +467,11 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       '\n\n',
       ...features(false),
       '\n\n',
-      k('analysisNoSignalHint'),
-      oneOf([], ['\n', k('analysisCycleUnavailable')]),
+      oneOf(
+        [k('analysisNoSignalHint'), oneOf([], ['\n', k('analysisCycleUnavailable')])],
+        // real mode (#121): no cycle to refuse
+        [k('analysisNoSignalHintReal')],
+      ),
     ],
   },
   {
@@ -474,7 +479,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     title: 'Статус сделки',
     limit: TELEGRAM_MESSAGE_LIMIT,
     body: [
-      k('intentHeader'),
+      anyOf('intentHeader', 'intentHeaderReal'),
       '\n',
       k('intentTrade'),
       '\n\n',
@@ -569,9 +574,11 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       '\n\n',
       k('launchHeader'),
       '\n',
-      anyOf('launchStake', 'launchStakeMinimum'),
-      '\n',
-      k('launchCycle'),
+      // real mode (#121): one line of the single trade in place of the stake and the cycle
+      oneOf(
+        [anyOf('launchStake', 'launchStakeMinimum'), '\n', k('launchCycle')],
+        [k('launchRealMode')],
+      ),
     ],
   },
   {

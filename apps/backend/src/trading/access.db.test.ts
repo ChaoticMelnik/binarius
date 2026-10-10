@@ -7,6 +7,7 @@ import {
   BrokerAccountStatus,
   TRADING_ACCESS_BUDGET_MS,
   TradeIntentErrorCode,
+  TradeMode,
   UserErrorCode,
   UserStatus,
   safeParseTradingAccessResponse,
@@ -27,6 +28,7 @@ import {
   brokerBalanceSnapshots,
   openTrading,
   setDemoStake,
+  setTradingMode,
   tokenLedger,
   tradingSwitch,
   users,
@@ -160,6 +162,7 @@ describe('POST /trading/access', () => {
       'demoStake',
       'status',
       'tokens',
+      'tradingMode',
       'tradingOpen',
     ]);
     expect(Object.keys(body.tokens).sort()).toEqual(['available', 'balance', 'reserved']);
@@ -171,6 +174,7 @@ describe('POST /trading/access', () => {
       brokerUnavailable: 'broker_unavailable',
       tradingOpen: true,
       demoStake: null,
+      tradingMode: 'demo',
     });
     expect(safeParseTradingAccessResponse(body).success).toBe(true);
 
@@ -196,6 +200,7 @@ describe('POST /trading/access', () => {
       brokerUnavailable: 'no_account',
       tradingOpen: true,
       demoStake: null,
+      tradingMode: 'demo',
     });
   });
 
@@ -274,6 +279,7 @@ describe('POST /trading/access → broker', () => {
       brokerUnavailable: 'no_account',
       tradingOpen: true,
       demoStake: null,
+      tradingMode: 'demo',
     });
     expect(userGets()).toBe(0);
   });
@@ -285,6 +291,16 @@ describe('POST /trading/access → broker', () => {
     expect((await ask()).demoStake).toBeNull();
     await setDemoStake(tmp.db, BigInt(user.telegramUserId), '2.50' as DecimalString);
     expect((await ask()).demoStake).toBe('2.5');
+  });
+
+  // the user's users.trading_mode (#121), not a constant
+  it("answers the user's trading mode", async () => {
+    const user = await seedUser(tmp.db, { balance: 4n });
+    const ask = async () =>
+      (await access({ telegramUserId: user.telegramUserId })).json() as { tradingMode: unknown };
+    expect((await ask()).tradingMode).toBe('demo');
+    await setTradingMode(tmp.db, BigInt(user.telegramUserId), TradeMode.Real);
+    expect((await ask()).tradingMode).toBe('real');
   });
 
   // the field is the trading_switch row (#144), read on every request

@@ -37,6 +37,7 @@ import {
   type TradeIntentRow,
 } from './trade-intent-ops';
 import { openTrading, stopTrading } from './trading-switch-ops';
+import { setTradingMode } from './user-ops';
 import {
   checkTradingSessionStart,
   claimSessionSummary,
@@ -226,6 +227,25 @@ describe('checkTradingSessionStart', () => {
       ok: false,
       code: TradingSessionErrorCode.UserBlocked,
     });
+  });
+
+  // #121: the route creates demo sessions only; a user in real mode gets mode_not_allowed after
+  // the blocked check and before any account read (an unknown account would answer otherwise)
+  it('E9 a user in real mode', async () => {
+    const seed = await seedUser(tmp.db, { tradingMode: TradeMode.Real });
+    expect(await check(seed.telegramUserId)).toEqual({
+      ok: false,
+      code: TradingSessionErrorCode.ModeNotAllowed,
+    });
+    const blocked = await seedUser(tmp.db, { status: 'blocked', tradingMode: TradeMode.Real });
+    expect(await check(blocked.telegramUserId)).toEqual({
+      ok: false,
+      code: TradingSessionErrorCode.UserBlocked,
+    });
+    const withAccount = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    expect((await check(withAccount.telegramUserId)).ok).toBe(false);
+    await setTradingMode(tmp.db, BigInt(withAccount.telegramUserId), TradeMode.Demo);
+    expect((await check(withAccount.telegramUserId)).ok).toBe(true);
   });
 
   it('E6 an active session refuses with its id; a stopped one does not', async () => {
@@ -456,7 +476,8 @@ describe('readTradingSessionView: the profit sum and the balance (#337)', () => 
   });
 
   it("V8 a real session sums its real trades and shows the snapshot's real balance", async () => {
-    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    // its intents pass the real-mode gate only for a user in real mode (#121)
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n, tradingMode: TradeMode.Real });
     const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
       mode: TradeMode.Real,
     });
@@ -509,7 +530,8 @@ describe('readTradingSessionView: the profit sum and the balance (#337)', () => 
   });
 
   it("V9e the mode's own socket event counts as an observation, the other mode's does not", async () => {
-    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    // real mode: the real session's intent passes the gate (#121), the demo one is never gated
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n, tradingMode: TradeMode.Real });
     const demo = await seedTradingSession(tmp.db, seed.brokerAccountId);
     await settle((await sessionIntent(seed, demo.id, 1)).intent, '0.85');
     await stopTradingSession(tmp.db, { id: demo.id, reason: TradingSessionStopReason.Completed });
@@ -586,7 +608,8 @@ describe('claimSessionSummary (#318)', () => {
     stopTradingSession(tmp.db, { id: session.id, reason: TradingSessionStopReason.Completed });
   // a stopped session of `profits`, each step settled at its own prices
   const finished = async (profits: string[], mode: TradeMode = TradeMode.Demo) => {
-    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    // a real session's intents need a user in real mode (#121)
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n, tradingMode: mode });
     const session = await seedTradingSession(tmp.db, seed.brokerAccountId, { mode });
     let step = 1;
     for (const profit of profits) {

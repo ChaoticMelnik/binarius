@@ -42,6 +42,7 @@ import {
   markIntentAccepted,
   openTrading,
   setDemoStake,
+  setTradingMode,
   settleIntent,
   stopTrading,
   stopTradingSession,
@@ -436,6 +437,16 @@ describe('POST /trading/sessions', () => {
       bodyFor(seed),
     );
     expect(response.statusCode).toBe(201);
+  });
+
+  // #121: sessions are demo only; a user in real mode gets none, before any balance refresh
+  it('R21 a user in real mode is 409 mode_not_allowed and no session is written', async () => {
+    const seed = await seedReady();
+    await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
+    const before = await sessionCount();
+    const response = await start(appWith({}), bodyFor(seed));
+    await expectRefusal(response, 409, 'mode_not_allowed', before);
+    expect(refreshCalls).toEqual([]);
   });
 
   it('R8 a pair with a past scheduledUntil is open', async () => {
@@ -971,7 +982,8 @@ describe('POST /trading/sessions/:id/summary (#318)', () => {
     if (sessionId !== undefined) expect(await sentAt(sessionId)).toBeNull();
   };
   const finishedIn = async (mode: TradeMode) => {
-    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    // a real session's intents need a user in real mode (#121)
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n, tradingMode: mode });
     const session = await seedTradingSession(tmp.db, seed.brokerAccountId, { mode });
     await settled(seed, session.id, 1, '0.85', mode);
     await settled(seed, session.id, 2, '-1', mode);

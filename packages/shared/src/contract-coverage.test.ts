@@ -75,6 +75,7 @@ import * as telegramHtml from './telegram-html';
 import * as time from './time';
 import * as trading from './trading';
 import * as tradingAccess from './trading-access';
+import * as tradingMode from './trading-mode';
 import * as tradingSession from './trading-session';
 import * as users from './users';
 
@@ -160,6 +161,7 @@ describe('contract coverage (issue #6)', () => {
         | null;
       tradingOpen: boolean;
       demoStake: DecimalString | null;
+      tradingMode: 'demo' | 'real';
     }>();
   });
 
@@ -469,6 +471,7 @@ describe('contract coverage (issue #6)', () => {
       ids,
       trading,
       tradingAccess,
+      tradingMode,
       broker,
       brokerBalance,
       brokerBudget,

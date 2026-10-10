@@ -2,7 +2,12 @@ import * as z from 'zod';
 import { brokerBalanceUnavailableReasonSchema, brokerBalanceViewSchema } from './broker-balance';
 import { DemoStakeRefusal } from './demo-stake';
 import { decimalStringSchema } from './money';
-import { telegramUserIdSchema, tokenCountSchema, tradeAmountSchema } from './trading';
+import {
+  telegramUserIdSchema,
+  tokenCountSchema,
+  tradeAmountSchema,
+  tradeModeSchema,
+} from './trading';
 import { userStatusSchema } from './users';
 
 // POST /trading/access — what a user may trade with right now: the token side (#136) and the
@@ -47,6 +52,8 @@ export const tradingAccessResponseSchema = z
     tradingOpen: z.boolean(),
     // the user's saved demo stake, canonical; null = the broker's minimum (#297)
     demoStake: decimalStringSchema.nullable(),
+    // users.trading_mode (#121): the mode the user's next single trade goes in
+    tradingMode: tradeModeSchema,
   })
   .refine(({ broker, brokerUnavailable }) => (broker === null) === (brokerUnavailable !== null), {
     error: 'broker is null exactly when brokerUnavailable is set',

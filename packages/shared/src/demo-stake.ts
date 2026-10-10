@@ -67,6 +67,10 @@ export function checkDemoStake(
   return null;
 }
 
+// a < b on two canonical decimals of at most 8 fraction digits, in bigint (Rule 2): the real
+// balance against the broker's minimum when real mode is switched on (#121)
+export const decimalLessThan = (a: DecimalString, b: DecimalString): boolean => units(a) < units(b);
+
 const MAX_UNITS = 10n ** BigInt(NUMERIC_INTEGER_DIGITS) * UNIT_SCALE;
 
 // min × k for every multiplier, canonical, only those positive, <= demoAvailable and inside

@@ -4,7 +4,8 @@ A user with an active Binodex account gets the **status card** (#24) as the bot'
 `/start` (in place of the old «👋 С возвращением!») and on `/menu`. The card is the account card's
 picture with a caption of the trading mode, the real balance, the demo balance, the tokens, a
 status or age line when the broker balance is missing or old, a hint, and two buttons, each in
-its own row: «🎮 Демо-торговля» (#320) and «👥 Пригласить друга» (#115,
+its own row: «🎮 Демо-торговля» (#320; «🚀 Торговать» in real mode, #121,
+[trading-mode.md](trading-mode.md)) and «👥 Пригласить друга» (#115,
 [referrals.md](referrals.md)). It is pinned in place of whatever was pinned before.
 
 ## Components
@@ -22,7 +23,8 @@ its own row: «🎮 Демо-торговля» (#320) and «👥 Приглас
   `userContextOf`, `LABELS.menuCommand`, `LABELS.demoButton`; the texts are
   catalog entries ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/bot.ts` — `/start` and `/menu` on one path (`answerHome`), `sendStatusCard` with
-  `statusCardKeyboard` (`keyboards.ts`: the `demo` button, then the `invite` button, #115),
+  `statusCardKeyboard(mode)` (`keyboards.ts`: the `demo` button by mode, then the `invite`
+  button, #115),
   `pinCard`.
 - `packages/shared/src/bot-commands.ts` — `/menu` «Главное меню», right after `/start`.
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.start`, `.menu`, `.demo`, and the conjunct
@@ -61,10 +63,9 @@ bot caches nothing; every `/start` and `/menu` reads the route again.
 
 At most one of the three status lines is printed.
 
-- **Mode.** `statusHeader`'s `{mode}` prints `MODE_LABELS[mode]` (`bot-text-vars.ts`). The bot passes `TradeMode.Demo`: no
-  user trades on real yet, and `tradingOpen` is the backend's switch, not the user's mode,
-  so it is not read. The issue that brings real mode passes the user's mode and changes nothing
-  in `texts.ts`.
+- **Mode.** `statusHeader`'s `{mode}` prints `MODE_LABELS[mode]` (`bot-text-vars.ts`) of the
+  access read's `tradingMode` (#121); the hint is `statusHintReal` in real mode. `tradingOpen` is
+  the backend's switch, not the user's mode, so the card does not read it.
 - **Balances.** `broker.real.available` and `broker.demo.available` — what can be staked now;
   money held by an open trade is not in it (owner, 2026-10-06). With `broker: null` both print
   `$0.00` and the status line says why: `statusAmbiguous` for `ambiguous_account`,
@@ -154,7 +155,7 @@ budget. `/start` and `/menu` failing offer «🔄 Повторить» with the 
 
 `HANDLER_CALLS.start` and `.menu` are two backend calls (`recordStart`, `readTradingAccess`) and up
 to four Bot API calls (the photo refused, the text, the unpin, the pin): 2 × 5 000 + 4 × 8 000 =
-42 s, under `confirm`'s 45 s, so `HANDLER_BUDGET_MS` and the shutdown budget do not move.
+42 s, under `demoAnalysis`'s 47 s, so `HANDLER_BUDGET_MS` and the shutdown budget do not move.
 `HANDLER_CALLS.demo` is two backend calls (the signals and the catalog, #320) and two Bot API
 calls ([bot-demo.md](bot-demo.md#timing)).
 `HANDLER_CALLS.menuButton` is 2 / 3 (34 s) and `.commandRetry` 1 / 2 (21 s), #350.
@@ -181,8 +182,8 @@ pnpm test --project unit apps/bot/src
   [bot-session.md](bot-session.md)); the callback data stays. Since #360 the hint names the
   autosession as the main scenario.
 - **#201** — levels and their progress on this card.
-- Real mode — the header reads REAL once a user can trade on real; #144's `tradingOpen` is
-  the backend's switch, not a user's mode.
+- **#474** — the mode screen and the card's mode button ([trading-mode.md](trading-mode.md));
+  #144's `tradingOpen` is the backend's switch, not a user's mode.
 - A «🔄 Обновить» button that edits the caption in place — not asked; `/menu` sends a new card.
   The account card carries «🎮 Демо-торговля» since #350 ([bot-navigation.md](bot-navigation.md)).
 - The picture is uploaded on every `/start` and `/menu` (no `file_id` cache), as for the account

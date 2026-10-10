@@ -213,8 +213,9 @@ may save: the stake is a preference, and trades refuse at creation.
 
 - **#138**: the pair catalog, `GET /trading/pairs`.
 - The bot's display and `BackendClient.readTradingAccess`: [bot-menu.md](bot-menu.md).
-- **#121**: may read `tradingOpen` for the start screen; it is one switch for demo and real
-  (#144). **#135** (a revoked grant and running sessions) is separate from it.
+- **#121**: the response carries `tradingMode` (`users.trading_mode`), and `POST /trading/mode`
+  switches it ([trading-mode.md](trading-mode.md)); `tradingOpen` stays one switch for demo and
+  real (#144). **#135** (a revoked grant and running sessions) is separate from it.
 - **#117, ARCH-04**: future ledger writers, bound by the same-transaction rule above; **#246** —
   `adjustTokens`, the admin's manual adjustment ([admin-pages.md](admin-pages.md)).
 - `/users/start` and `/users/account` carry no balance, by design: their views stay allowlists

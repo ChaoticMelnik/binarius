@@ -11,6 +11,7 @@ import {
   brokerTrades,
   createDb,
   createTradeIntent,
+  setTradingMode,
   OutboxStatus,
   OutboxTopic,
   outboxEvents,
@@ -310,6 +311,10 @@ async function seedAccount({ snapshot = false, real = '0.00' } = {}): Promise<Ac
 }
 
 async function newIntent(account: Account, mode: TradeMode = TradeMode.Demo): Promise<string> {
+  // a real intent is created only for a user in real mode (#121)
+  if (mode === TradeMode.Real) {
+    await setTradingMode(tmp.db, BigInt(account.telegramUserId), TradeMode.Real);
+  }
   const { intent } = await createTradeIntent(
     tmp.db,
     intentRequest(account.telegramUserId, {

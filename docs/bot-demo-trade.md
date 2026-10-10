@@ -72,13 +72,15 @@ The checks run in this order, and the first one that fails answers:
    depends on the reason: `no_account` gets `accountNone` with the connect button,
    `ambiguous_account` gets `statusAmbiguous`, and any other reason gets
    «⏳ Баланс Binodex ещё не получен…».
-3. **The fingerprint.** The amount is the user's saved demo stake (`access.demoStake`), or the
-   broker's `minTradeAmount` without one, a string exactly as the backend sent it. The bot never
-   computes it (Rule 2). The button carries the first 6 hex of `sha256` of the amount its label
-   showed. When the amount in effect now has another fingerprint — the stake was saved or reset
-   since the expansion, the broker moved its minimum, the label had no amount, or the button is
-   older than #297 and has none — the bot answers «⚠️ Сумма сделки изменилась — открой анализ
-   заново.» with «↩️ Назад к анализу», and nothing is created.
+3. **The fingerprint.** The amount is the broker's `minTradeAmount` in real mode (#121), in demo
+   the user's saved demo stake (`access.demoStake`) or the broker's `minTradeAmount` without one,
+   a string exactly as the backend sent it. The bot never computes it (Rule 2). The button
+   carries the first 6 hex of `sha256` of the amount its label showed, prefixed by `real:` in real
+   mode. When the amount or the mode in effect now has another fingerprint — the stake was saved
+   or reset since the expansion, the broker moved its minimum, the user switched the mode, the
+   label had no amount, or the button is older than #297 and has none — the bot answers «⚠️
+   Режим или сумма сделки изменились — открой анализ заново.» with «↩️ Назад к анализу», and
+   nothing is created.
 4. **The intent.** `POST /trading/intents` with that amount. The backend checks it against the
    account's stored snapshot (Rule 29). A session's stake comes from the same saved stake
    ([trading-session.md](trading-session.md)); the sizer in the worker sizes each of its trades.
@@ -87,7 +89,8 @@ The checks run in this order, and the first one that fails answers:
 
 The button's nonce is 6 random bytes in hex, drawn once per «➕ Ещё» press (#360; before it, once
 per render of the analysis screen). It is the trade's key: `clientRequestId =
-demo:<telegramUserId>:<nonce>`. Pressing the same button again replays the same intent (200) and
+<mode>:<telegramUserId>:<nonce>` (#121: `demo:` or `real:`, so a demo button never replays as a
+real intent). Pressing the same button again replays the same intent (200) and
 never opens a second trade (`trade_intents_user_request_idx`, Rule 7). That covers a double tap, an
 old message and a press after a restart. A new expansion carries a new nonce, so its button can
 open a new trade; a double tap on «➕ Ещё» draws two, as two renders of «🔄 Повторить анализ» did.
@@ -170,11 +173,11 @@ never`), so a fourth kind fails `tsc` until each of them handles it; the parser 
 the `PICKER` pattern are extended by hand.
 
 **The return to the launch screen (#320).** A save opened from a launch screen (a preset, the
-reset or a typed amount) returns to that screen, not to «✅ Сумма»: «✅ Ставка сохранена: $5.00»
+reset or a typed amount) returns to that screen, not to «✅ Сумма»: «✅ Демо-ставка сохранена: $5.00»
 above the three lines, with «💵 Ставка» at the saved amount (after the reset, «минимальная брокера»)
 and the screen's three buttons. One read gives the symbol and the payout: `readPairs`, any
 catalog, a stale one included, as the session start reads it. A pair in it paying below the cycle
-floor (`!pairPayoutAccepted`, #379) gets, under «✅ Ставка сохранена», the launch press's refusal
+floor (`!pairPayoutAccepted`, #379) gets, under «✅ Демо-ставка сохранена», the launch press's refusal
 `demoPayoutTooLow` with «↩️ К списку» and «🧭 Выбрать пару вручную» instead of «🚀 Запустить цикл»
 (`stake-picker.test.ts`, at 79 and 80 % on 15 and 5 s). Without a catalog the symbol line is
 dropped and `warn` `pairs not read for the launch screen` is logged; without a catalog or without
@@ -192,7 +195,7 @@ What its answer does:
 
 | Answer | Source | Message | The input step |
 | --- | --- | --- | --- |
-| 200 | saved | «✅ Сумма: $5.00» / «✅ Сумма: минимальная ставка брокера» + back | ended |
+| 200 | saved | «✅ Демо-ставка: $5.00» / «✅ Демо-ставка: минимальная ставка брокера» + back | ended |
 | 409 `stake_precision` | refused before the write | «❌ Не больше N знаков после запятой.» (`limits.scale`) + «💵 Сумма» + back | kept, TTL anew |
 | 409 `stake_below_minimum` | refused before the write | «⚠️ Минимальная ставка брокера сейчас $X…» + «💵 Сумма» + back | kept |
 | 409 `insufficient_demo_balance` | refused before the write | «⚠️ На демо-счёте доступно $Y…» + «💵 Сумма» + back | kept |
@@ -306,11 +309,12 @@ gets `warn` and nothing more. This press never starts tracking.
 - `HANDLER_CALLS.intentRefresh` = 2 backend calls and 3 Bot API calls: the edit refused as gone,
   then sent anew. That is 34 s.
 - The picker (#297): `stakePickerOpen` and `settingsShow` are 1 / 3 (29 s), `stakeCustom` 0 / 3
-  (24 s). `stakePreset` and `stakeReset` are 2 / 3 (34 s) and `stakeText` 2 / 1 (18 s) since #320:
-  a save opened from a launch screen reads the catalog for its symbol and payout (#379 adds no read).
-- `HANDLER_CALLS.demoAnalysis` is 2 / 4 = 42 s since #360: the access read for the label (#297)
-  moved to «➕ Ещё», `HANDLER_CALLS.analysisMore` = 1 / 2 = 21 s. The longest path is `confirm`'s
-  45 s; the chain holds below `SHUTDOWN_BUDGET_MS` (50 s), with 5 s to spare.
+  (24 s). `stakePreset` and `stakeReset` are 3 / 3 (39 s) and `stakeText` 3 / 1 (23 s) since #121:
+  a save opened from a launch screen reads the catalog for its symbol and payout (#320) and access
+  for the user's mode (#121).
+- `HANDLER_CALLS.demoAnalysis` is 3 / 4 = 47 s since #121: the access read for the mode, beside
+  the catalog, decides the session row; `HANDLER_CALLS.analysisMore` = 1 / 2 = 21 s. It is the
+  longest path; the chain holds below `SHUTDOWN_BUDGET_MS` (50 s), with 3 s to spare.
 - `INTENT_TRACK_FIRST_POLL_MS` = 1 s, `INTENT_TRACK_POLL_MS` = 3 s, `INTENT_TRACK_DEADLINE_MS` =
   120 s. The deadline is the worker's `INTENT_MAX_AGE_MS` (60 s) plus `SUBMIT_ACK_TIMEOUT_MS`
   (10 s), with room. That relation is stated, not checked, because the worker's constants cannot
@@ -342,6 +346,6 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
 - **#90 / #101 / #29** — the trade's close and result, and the notification after `accepted`. The
   tracker stops at `accepted`.
 - **#284** — the session of five in the bot: [bot-session.md](bot-session.md); its worker half is
-  shipped (#287, [trading-session.md](trading-session.md)). The single trade's stake stays the
-  broker's minimum.
-- **#121** — real mode.
+  shipped (#287, [trading-session.md](trading-session.md)).
+- **#121** — real mode: the press trades in the user's mode, at the broker's minimum in real
+  ([trading-mode.md](trading-mode.md)); **#326** — the real stake.

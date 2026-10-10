@@ -137,6 +137,9 @@ export const TradeIntentErrorCode = {
   // the process runs DEMO_ONLY (#396): a real intent is refused after the replay, before the
   // switch, the account and the reserve
   DemoOnly: 'demo_only',
+  // a real intent for a user whose users.trading_mode is not real (#121), decided by the reserve
+  // UPDATE that locks the users row
+  RealModeOff: 'real_mode_off',
 } as const;
 export type TradeIntentErrorCode = (typeof TradeIntentErrorCode)[keyof typeof TradeIntentErrorCode];
 

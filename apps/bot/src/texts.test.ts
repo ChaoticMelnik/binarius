@@ -780,7 +780,7 @@ describe('the demo screens', () => {
 
   it('lays out the pairs screen: the header with the type, then the page', () => {
     expect(plainTextOf(demoPairsScreen('currency', 1, 4))).toBe(
-      `🎮 Демо-сделка · 💱 Валюты
+      `🧭 Выбор пары · 💱 Валюты
 Выбери актив. Число на кнопке — выплата при верном прогнозе, не вероятность.
 Страница 2 из 4`,
     );
@@ -792,7 +792,7 @@ describe('the demo screens', () => {
 ⏱ Длительность: ⏱ 15 с
 💰 Выплата: 85% — размер выигрыша при верном прогнозе, не вероятность. Безубыточность: 54.1% верных прогнозов.
 
-Дальше — анализ свечей, а за ним кнопка автосессии: бот сам проведёт серию сделок по сигналу.`,
+Дальше — анализ свечей: бот покажет сигнал и что можно сделать по нему.`,
     );
   });
 
@@ -1391,6 +1391,7 @@ describe('the facades over the catalog', () => {
         'helpCommand',
         'loginButton',
         'menuButton',
+        'modeAnalysisButton',
         'newAnalysisButton',
         'menuCommand',
         'oauthButton',
@@ -1411,6 +1412,7 @@ describe('the facades over the catalog', () => {
         'stopCommand',
         'supportButton',
         'toSignalsButton',
+        'tradeButton',
         'supportCommand',
       ].sort(),
     );
@@ -1421,6 +1423,29 @@ describe('the facades over the catalog', () => {
 // module loaded reaches it: one test per map that used to hold the texts themselves (#240).
 describe('the text source', () => {
   afterEach(() => setBotTextSource(defaultBotTextSource));
+
+  // Plan Update 4 (Minor 3): `{stake}` is the amount a trade stakes in the user's mode
+  it('gives the card {stake} as the minimum in real mode and the demo stake in demo', () => {
+    setBotTextSource({
+      sourceOf: (key) =>
+        key === 'statusHint' || key === 'statusHintReal'
+          ? 'ставка {stake}'
+          : defaultBotTextSource.sourceOf(key),
+    });
+    const card = (mode: TradeMode) =>
+      plainTextOf(
+        statusCard({
+          firstName: 'Ада',
+          mode,
+          tokens: ACCESS_VIEW.tokens,
+          broker: brokerBalance({ minTradeAmount: d('1') }),
+          brokerUnavailable: null,
+          demoStake: d('2.5'),
+        }),
+      );
+    expect(card(TradeMode.Real)).toMatch(/ставка \$1\.00$/);
+    expect(card(TradeMode.Demo)).toMatch(/ставка \$2\.50$/);
+  });
 
   it('shows a live status line from the source in place', () => {
     setBotTextSource(stubTextSource('intentAccepted'));

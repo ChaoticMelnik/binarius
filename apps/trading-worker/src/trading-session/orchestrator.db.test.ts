@@ -203,6 +203,9 @@ interface SeedOptions {
   settings?: unknown;
   startedAt?: Date;
   snapshot?: boolean;
+  // the user's users.trading_mode; the session's mode by default, so a real session's intents
+  // pass the real-mode gate (#121)
+  tradingMode?: TradeMode;
 }
 
 async function seedSession({
@@ -214,6 +217,7 @@ async function seedSession({
   settings = sessionSettings(),
   startedAt,
   snapshot = true,
+  tradingMode = mode,
 }: SeedOptions = {}) {
   const id = ++brokerUserId;
   const accessToken = `session-token-${id}`;
@@ -224,7 +228,7 @@ async function seedSession({
     demo: { available: demo },
     real: { available: real },
   });
-  const user = await seedUser(tmp.db, { balance: tokens });
+  const user = await seedUser(tmp.db, { balance: tokens, tradingMode });
   const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId);
   accessTokens.set(brokerAccountId, accessToken);
   if (snapshot) {
@@ -726,6 +730,31 @@ describe('the endings of an attempt (#287)', () => {
         msg: 'trading session stopped',
         reason: 'account_unavailable',
         code: 'demo_only',
+      }),
+    );
+    await orchestrator.stop();
+  });
+
+  it('E9i a real session of a user in demo mode stops as account_unavailable (#121)', async () => {
+    const seed = await seedSession({
+      mode: TradeMode.Real,
+      real: '50.00',
+      demo: '0.00',
+      tradingMode: TradeMode.Demo,
+    });
+    const orchestrator = orchestratorOf();
+    await orchestrator.tick();
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.AccountUnavailable,
+    });
+    expect(await intentsOf(seed.session.id)).toEqual([]);
+    expect(await reservedOf(seed.userId)).toBe(0n);
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({
+        msg: 'trading session stopped',
+        reason: 'account_unavailable',
+        code: 'real_mode_off',
       }),
     );
     await orchestrator.stop();

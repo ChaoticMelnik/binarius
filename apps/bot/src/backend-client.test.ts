@@ -1603,6 +1603,7 @@ describe('body size', () => {
           brokerUnavailable: null,
           tradingOpen: false,
           demoStake: DECIMAL,
+          tradingMode: longest(Object.values(TradeMode)),
         },
       },
       readPairs: {

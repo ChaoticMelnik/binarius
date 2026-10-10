@@ -324,9 +324,9 @@ describe('the session button', () => {
     expect(START_REFUSALS[TradingSessionErrorCode.InsufficientTokens].text).toBe(
       'sessionInsufficientTokens',
     );
+    // #121: a user in real mode pressing a session button of an earlier render, not a bug
     expect(START_REFUSALS[TradingSessionErrorCode.ModeNotAllowed]).toEqual({
-      text: 'unavailable',
-      log: true,
+      text: 'sessionRealMode',
     });
   });
 

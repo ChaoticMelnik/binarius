@@ -129,8 +129,9 @@ export const START_REFUSALS = {
   [TradingSessionErrorCode.AccountHalted]: { text: 'stakeAccountHalted' },
   [TradingSessionErrorCode.InsufficientTokens]: { text: 'sessionInsufficientTokens' },
   [TradingSessionErrorCode.TradingPaused]: { text: 'tradingPaused' },
-  // the bot asks for the backend's default mode, demo, which createTradingSession accepts
-  [TradingSessionErrorCode.ModeNotAllowed]: { text: 'unavailable', log: true },
+  // a user in real mode pressing a session button of an earlier render (#121): sessions are demo
+  // only until #327
+  [TradingSessionErrorCode.ModeNotAllowed]: { text: 'sessionRealMode' },
   // the backend runs DEMO_ONLY (#396): a real session, refused before any write; the bot asks for
   // demo until #327
   [TradingSessionErrorCode.DemoOnly]: { text: 'tradingDemoOnly' },

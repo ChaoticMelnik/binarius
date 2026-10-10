@@ -16,7 +16,6 @@ import {
   OAuthErrorCode,
   startPayloadSchema,
   TelegramChatMemberStatus,
-  TradeMode,
   userStartRequestSchema,
   UserErrorCode,
   UserStatus,
@@ -274,13 +273,13 @@ export function createBot({
     }
     const card = statusCard({
       firstName: from.first_name,
-      mode: TradeMode.Demo,
+      mode: access.tradingMode,
       tokens: access.tokens,
       broker: access.broker,
       brokerUnavailable: access.brokerUnavailable,
       demoStake: access.demoStake,
     });
-    const reply_markup = statusCardKeyboard();
+    const reply_markup = statusCardKeyboard(access.tradingMode);
     const sent = await sendWithTextFallback(
       ctx,
       {

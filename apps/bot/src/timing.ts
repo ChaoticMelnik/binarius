@@ -80,11 +80,12 @@ export const HANDLER_CALLS = {
   // a button with a duration from before #313, or a launch screen's or its picker's from before
   // #382 (no duration): answerCallbackQuery, then editMessageReplyMarkup
   legacyDuration: { backend: 0, telegram: 2 },
-  // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs, the «⏳» edit refused as gone →
-  // sendMessage, evaluateSignal, the result by sendMessage; or «⏳» edited, the signal, the
-  // result's edit refused as gone → sendMessage. Both are 2 / 4: the stake label's access read
-  // moved to «➕ Ещё» (#360).
-  demoAnalysis: { backend: 2, telegram: 4 },
+  // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — the reads counted
+  // as sequential, as in confirm; the access read gives the mode the session row depends on
+  // (#121) — the «⏳» edit refused as gone → sendMessage, evaluateSignal, the result by
+  // sendMessage; or «⏳» edited, the signal, the result's edit refused as gone → sendMessage.
+  // Both are 3 / 4, 47 s: the longest handler, under SHUTDOWN_BUDGET_MS.
+  demoAnalysis: { backend: 3, telegram: 4 },
   // «➕ Ещё» (#360): answerCallbackQuery ∥ readTradingAccess — counted as sequential, as in
   // confirm — then editMessageReplyMarkup; a refused edit sends nothing more
   analysisMore: { backend: 1, telegram: 2 },
@@ -94,16 +95,16 @@ export const HANDLER_CALLS = {
   stake: { backend: 4, telegram: 2 },
   // the stake picker (#297, stake-picker.ts) opened, a preset and the reset: answerCallbackQuery
   // ∥ readTradingAccess or setDemoStake — counted as sequential — then, after a save opened from
-  // a launch screen, readPairs for its symbol (#320), then editMessageText refused as gone →
-  // sendMessage
+  // a launch screen, readPairs for its symbol (#320) ∥ readTradingAccess for the mode (#121) —
+  // counted the same way — then editMessageText refused as gone → sendMessage
   stakePickerOpen: { backend: 1, telegram: 3 },
-  stakePreset: { backend: 2, telegram: 3 },
-  stakeReset: { backend: 2, telegram: 3 },
+  stakePreset: { backend: 3, telegram: 3 },
+  stakeReset: { backend: 3, telegram: 3 },
   // «✏️ Своя сумма»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
   stakeCustom: { backend: 0, telegram: 3 },
-  // a text on the stake step: setDemoStake, readPairs after a save opened from a launch screen,
-  // then sendMessage
-  stakeText: { backend: 2, telegram: 1 },
+  // a text on the stake step: setDemoStake, readPairs ∥ readTradingAccess after a save opened
+  // from a launch screen (#121), then sendMessage
+  stakeText: { backend: 3, telegram: 1 },
   // the picker's way back to /settings: answerCallbackQuery ∥ recordStart — counted as
   // sequential — then editMessageText refused as gone → sendMessage
   settingsShow: { backend: 1, telegram: 3 },

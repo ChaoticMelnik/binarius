@@ -9,6 +9,7 @@ import {
   NotificationLevel,
   OAuthErrorCode,
   TradeAction,
+  TradeMode,
   TradeIntentErrorCode,
   SESSION_MAX_DURATION_MS,
   TRADING_ACCESS_BUDGET_MS,
@@ -858,7 +859,7 @@ const DEMO_ANALYSIS_WORST_CASE: Branch = {
   label: '«⏳» is refused as gone and sent anew, then the result is sent',
   update: analysisUpdate(),
   apiErrors: [['editMessageText', EDIT_REFUSED]],
-  expected: { backend: 2, telegram: 4 },
+  expected: { backend: 3, telegram: 4 },
 };
 const DEMO_ANALYSIS = {
   worst: DEMO_ANALYSIS_WORST_CASE,
@@ -873,28 +874,30 @@ const DEMO_ANALYSIS = {
       update: callbackUpdate('demo:an:0:15'),
       expected: { backend: 0, telegram: 1 },
     },
-    ...catalogBranches(analysisUpdate, 2),
-    ...pairBranches([unsupported]).map((branch): Branch => ({
-      ...branch,
-      update: analysisUpdate(),
-    })),
+    ...catalogBranches(analysisUpdate, 2, 2),
+    ...pairBranches([{ ...unsupported, expected: { backend: 2, telegram: 2 } }], 2).map(
+      (branch): Branch => ({
+        ...branch,
+        update: analysisUpdate(),
+      }),
+    ),
     {
       label: '«⏳» and the result are edited',
       update: analysisUpdate(),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'answering the query is refused and the analysis still goes',
       update: analysisUpdate(),
       apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     DEMO_ANALYSIS_WORST_CASE,
     {
       label: '«⏳» and the result are refused as not modified',
       update: analysisUpdate(),
       apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     // rethrown into bot.catch
     {
@@ -906,49 +909,49 @@ const DEMO_ANALYSIS = {
           { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
         ],
       ],
-      expected: { backend: 1, telegram: 2 },
+      expected: { backend: 2, telegram: 2 },
     },
     {
       label: '«⏳» fails in transport and nothing more is done',
       update: analysisUpdate(),
       apiErrors: [['editMessageText', EDIT_TRANSPORT]],
-      expected: { backend: 1, telegram: 2 },
+      expected: { backend: 2, telegram: 2 },
     },
     {
       label: 'the result edit is refused as gone and the result is sent anew',
       update: analysisUpdate(),
       failSecondEdit: EDIT_REFUSED,
-      expected: { backend: 2, telegram: 4 },
+      expected: { backend: 3, telegram: 4 },
     },
     {
       label: 'the result edit fails in transport',
       update: analysisUpdate(),
       failSecondEdit: EDIT_TRANSPORT,
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the signal call fails',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the broker rate-limits the candles',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the decision is a rule refusal',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the decision is a data refusal',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_DATA_REFUSAL),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
   ] satisfies Branch[],
 };
@@ -956,7 +959,10 @@ const DEMO_ANALYSIS = {
 // «➕ Ещё» (#360): the access read for the stake label, then the keyboard edited in place;
 // a refused edit sends nothing more
 const moreUpdate = (chatType?: string) =>
-  callbackUpdate(analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, true), chatType);
+  callbackUpdate(
+    analysisMoreCallbackData(PAIR_EURUSD.id, 15, TradeAction.Up, true, TradeMode.Demo),
+    chatType,
+  );
 const MARKUP_TRANSPORT = new HttpError(
   "Network request for 'editMessageReplyMarkup' failed!",
   new Error('The operation was aborted due to timeout'),
@@ -2156,24 +2162,25 @@ const STAKE_OPEN = pickerBranches('stk:o:s', 1, {
     ],
   ],
 });
-// A save opened from a launch screen (#320) reads the catalog for the screen it returns to; a
-// refusal or an unknown outcome does not, nor does a save opened elsewhere.
+// A save opened from a launch screen (#320) reads the catalog and the user's mode (#121) for the
+// screen it returns to; a refusal or an unknown outcome does not, nor does a save opened elsewhere.
 const LAUNCH_SAVE_EXTRA = (elsewhere: string): [string, Partial<Branch>][] => [
   ...SAVE_EXTRA.map(([label, patch]): [string, Partial<Branch>] => [
     label,
     { ...patch, expected: { backend: 1, telegram: 2 } },
   ]),
   ['the catalog is not read for the launch screen', { readPairs: CATALOG_UNREACHABLE }],
+  ['the mode is not read for the launch screen', { readTradingAccess: unreachable }],
   [
     'the picker was opened from /settings',
     { update: callbackUpdate(elsewhere), expected: { backend: 1, telegram: 2 } },
   ],
 ];
-const STAKE_PRESET = pickerBranches(`stk:s:5:p:${PAIR_EURUSD.id}:15`, 2, {
+const STAKE_PRESET = pickerBranches(`stk:s:5:p:${PAIR_EURUSD.id}:15`, 3, {
   forged: 'stk:s:0:s',
   extra: LAUNCH_SAVE_EXTRA('stk:s:5:s'),
 });
-const STAKE_RESET = pickerBranches(`stk:z:p:${PAIR_EURUSD.id}:15`, 2, {
+const STAKE_RESET = pickerBranches(`stk:z:p:${PAIR_EURUSD.id}:15`, 3, {
   forged: 'stk:z:a:0:15',
   extra: LAUNCH_SAVE_EXTRA('stk:z:s'),
 });
@@ -2203,7 +2210,7 @@ const ON_LAUNCH_STAKE_STEP: LoginDialogState = {
 const STAKE_TEXT_WORST_CASE: Branch = stakeText(
   'the typed stake is saved from a launch screen',
   '5',
-  { backend: 2, telegram: 1 },
+  { backend: 3, telegram: 1 },
   { dialog: ON_LAUNCH_STAKE_STEP },
 );
 const STAKE_TEXT_BRANCHES: readonly Branch[] = [
