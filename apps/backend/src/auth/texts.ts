@@ -5,9 +5,9 @@ import {
   type BotTextSource,
 } from '@binarius/shared';
 
-// What the backend says to a Telegram user about a login, in the client bot's voice: the push after
-// the OAuth callback (link-notifier.ts). The texts are the bot texts catalog's
-// (docs/bot-texts.md), read through `active` at the moment a push is built.
+// What the backend says to a Telegram user on its own, in the client bot's voice: the push after
+// the OAuth callback and the mailings (client-push.ts, mailing/messages.ts). The texts are the bot
+// texts catalog's (docs/bot-texts.md), read through `active` at the moment a message is built.
 let active: BotTextSource<BotTextKey> = defaultBotTextSource;
 export const setBotTextSource = (source: BotTextSource<BotTextKey>): void => {
   active = source;

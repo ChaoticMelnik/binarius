@@ -88,7 +88,7 @@ export interface CapturedApi {
 
 /**
  * Every outgoing Bot API call is recorded here instead of reaching Telegram — including getMe,
- * which is what `bot.start()` issues first. Takes the staff bot or the link notifier: both carry
+ * which is what `bot.start()` issues first. Takes the staff bot or the client push: both carry
  * the Api they send through. grammY's middleware, its update parsing and
  * handleUpdate are the real ones; only the transport is replaced.
  *

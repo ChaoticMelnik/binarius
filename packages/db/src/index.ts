@@ -13,6 +13,8 @@ export * from './balance-snapshot-ops';
 export * from './session-lease-ops';
 export * from './user-ops';
 export * from './delivery-ops';
+export * from './mailing-scenarios';
+export * from './mailing-ops';
 export * from './account-ops';
 export * from './staff-password';
 export * from './staff-ops';

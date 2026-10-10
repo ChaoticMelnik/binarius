@@ -1,16 +1,16 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { GrammyError, HttpError } from 'grammy';
+import { GrammyError, HttpError, InlineKeyboard } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
-import { defaultBotTextSource } from '@binarius/shared';
+import { defaultBotTextSource, telegramHtml } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { captureApi, inlineButtons, sentPayload } from '../admin/testing';
 import {
-  createLinkNotifier,
+  createClientPush,
   LinkPushKind,
   linkPushMessage,
   type LinkPushOutcome,
-} from './link-notifier';
+} from './client-push';
 import { CLIENT_LABELS, CLIENT_TEXTS, setBotTextSource } from './texts';
 
 const TOKEN = '123456:AA-link-push-token';
@@ -48,9 +48,9 @@ describe('the text source', () => {
 
 describe('the link push message', () => {
   const sent = async (outcome: LinkPushOutcome) => {
-    const notifier = createLinkNotifier({ token: TOKEN });
+    const notifier = createClientPush({ token: TOKEN });
     const { calls } = captureApi(notifier);
-    await notifier.send(TELEGRAM_USER_ID, outcome);
+    await notifier.sendLink(TELEGRAM_USER_ID, outcome);
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     const payload = sentPayload(calls, 'sendMessage');
     expect(payload?.chat_id).toBe('9007199254740993');
@@ -135,6 +135,26 @@ describe('the link push message', () => {
   });
 });
 
+describe('the mailing push', () => {
+  it('sends the message as Telegram HTML with its keyboard, to the chat as a string', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls } = captureApi(push);
+    const reply_markup = new InlineKeyboard().text(CLIENT_LABELS.demoButton, 'demo');
+    await push.sendMailing(TELEGRAM_USER_ID, {
+      text: telegramHtml`<b>a &amp; b</b>`,
+      reply_markup,
+    });
+    expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
+    const payload = sentPayload(calls, 'sendMessage');
+    expect(payload?.chat_id).toBe('9007199254740993');
+    expect(payload?.parse_mode).toBe('HTML');
+    expect(payload?.text).toBe('<b>a &amp; b</b>');
+    expect(inlineButtons(payload)).toEqual([
+      { text: CLIENT_LABELS.demoButton, callback_data: 'demo' },
+    ]);
+  });
+});
+
 describe('the link push transport', () => {
   let server: Server | undefined;
   afterEach(async () => {
@@ -149,11 +169,11 @@ describe('the link push transport', () => {
     // accepts the connection and then says nothing: only the client's own timeout ends the call
     server = createServer(() => {});
     const apiRoot = await listen(server);
-    const notifier = createLinkNotifier({ token: TOKEN, apiRoot, telegramApiTimeoutMs: 500 });
+    const notifier = createClientPush({ token: TOKEN, apiRoot, telegramApiTimeoutMs: 500 });
 
     const at = Date.now();
     const error = await rejectionOf(
-      notifier.send(TELEGRAM_USER_ID, { kind: LinkPushKind.Active, email: null }),
+      notifier.sendLink(TELEGRAM_USER_ID, { kind: LinkPushKind.Active, email: null }),
     );
     const elapsed = Date.now() - at;
     expect(error).toBeInstanceOf(HttpError);
@@ -173,10 +193,10 @@ describe('the link push transport', () => {
       );
     });
     const apiRoot = await listen(server);
-    const notifier = createLinkNotifier({ token: TOKEN, apiRoot });
+    const notifier = createClientPush({ token: TOKEN, apiRoot });
 
     const error = await rejectionOf(
-      notifier.send(TELEGRAM_USER_ID, { kind: LinkPushKind.Active, email: null }),
+      notifier.sendLink(TELEGRAM_USER_ID, { kind: LinkPushKind.Active, email: null }),
     );
     expect(error).toBeInstanceOf(GrammyError);
     expect((error as GrammyError).error_code).toBe(403);

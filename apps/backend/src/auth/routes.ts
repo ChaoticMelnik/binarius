@@ -29,7 +29,7 @@ import {
 import { telegramErrorFields } from '../telegram-logging';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
 import { internalBearerAuth } from './internal';
-import { LinkPushKind, type LinkNotifier, type LinkPushOutcome } from './link-notifier';
+import { LinkPushKind, type ClientPush, type LinkPushOutcome } from './client-push';
 import { createKeyedWindow, createWindow, type RateWindow } from './rate-window';
 import type { InitDataVerifier } from './telegram-init-data';
 
@@ -67,7 +67,7 @@ export interface AuthRoutesDeps {
   redirectUri: string;
   partnerRef: string;
   // the push after the callback; required, so no caller gets a callback that tells nobody
-  linkNotifier: LinkNotifier;
+  clientPush: ClientPush;
   // proves which Telegram user finished the login on the callback
   initDataVerifier: InitDataVerifier;
   // lowered by tests; production runs on the constants above
@@ -87,7 +87,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
     outcome: LinkPushOutcome,
   ): Promise<void> => {
     try {
-      await deps.linkNotifier.send(telegramUserId, outcome);
+      await deps.clientPush.sendLink(telegramUserId, outcome);
     } catch (error) {
       // identity only: grammY's HttpError wraps a message with the token in its URL, and the
       // payload holds the email on the button
