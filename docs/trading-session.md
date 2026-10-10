@@ -25,7 +25,7 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | Settings v1, statuses, stop reasons | `packages/shared/src/trading-session.ts` (`@binarius/shared/trading-session`) | `tradingSessionSettingsSchema`, `TradingSessionStatus`, `TradingSessionStopReason`, `stakeSettingsFor`, `MAX_SESSION_TRADES` 20, `DEFAULT_SESSION_TRADES` 5 |
 | Wire contracts (#283) | the same file | the routes' request, view and refusal schemas, `TradingSessionErrorCode`, `sessionFitsDeadline`, `SESSION_MAX_DURATION_MS`, `TRADING_SESSION_START_BUDGET_MS` |
 | Pair predicates (#283) | `packages/shared/src/catalog.ts` | `isPairOpen`, `pairAcceptsDuration`; the bot's demo checks and the start route both call them |
-| Routes (#283) | `apps/backend/src/trading/session-routes.ts` | `POST /trading/sessions`, `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/:id/summary` (#318) behind the internal bearer |
+| Routes (#283) | `apps/backend/src/trading/session-routes.ts` | `POST /trading/sessions`, `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/:id/summary` (#318), `POST /trading/sessions/stop` (#122) behind the internal bearer |
 | Table | `packages/db/src/schema/trading-sessions.ts`, migration `0018_trading_session_orchestration` | the columns and constraints below |
 | Operations | `packages/db/src/trading-session-ops.ts` | create, the runnable scan, the two stop sweeps, the history, the CAS stop, the decision mark, the session intent; the start check and the owner-scoped view (#283) |
 | Session lock | `packages/db/src/trade-intent-ops.ts` → `createInTransaction` | the session row locked inside the intent's creation transaction |
@@ -101,7 +101,7 @@ sizer steps on. The CLI `session-start` keeps the broker minimum.
 | `pair_unavailable` | the pair left the catalog or refuses the duration | the orchestrator (#287) |
 | `balance_unavailable` | no balance snapshot row for the account | the orchestrator (#287) |
 | `invalid_settings` | settings fail the schema or the sizer's parameter rules | the orchestrator (#287) |
-| `user_stopped` | the stop route | #283 |
+| `user_stopped` | the stop routes | #283, #122 |
 | `kill_switch` | the global trading switch is closed ([kill-switch.md](kill-switch.md)) | `stopPausedSessions` (#144), the tick's first sweep; the attempt on `trading_paused` |
 
 Unchanged by #379: a pair whose payout fell below the floor makes the session wait, it does not
@@ -120,6 +120,7 @@ stop it ([The payout floor](#the-payout-floor-379)).
 | `stopHaltedSessions(db, { limit })` | one UPDATE | the account `trading_halted`, or an intent of the session in `manual_review` → `stopped`/`manual_review` |
 | `stopPausedSessions(db, { limit })` | one UPDATE | every active session while the trading switch is closed (`not tradingOpenSql`) → `stopped`/`kill_switch` (#144); only a person starts one again. The orchestrator's tick runs it first |
 | `stopTradingSession(db, { id, reason })` | one UPDATE | CAS on `status = active`: a second stop finds nothing and the first reason stays |
+| `stopUserSessions(db, { telegramUserId })` | one UPDATE | every `active` session whose account belongs to `users.telegram_user_id` → `stopped`/`user_stopped` (#122); the owner is the predicate (a subquery joining `broker_accounts` and `users`, no lock on them), so another user's id stops nothing; `status = active` is the CAS, so a session another writer stopped first keeps its reason and is not returned. No limit: one active session per account |
 | `markSessionDecision(db, { id, signalAction? })` | one UPDATE | `last_decision_at = now()` on an active session; `signalAction` (#379): absent leaves `last_signal_action`, `null` clears it, an action sets it |
 | `readSessionHistory(db, sessionId, { maxDurationMs })` | two selects | the owner's `telegram_user_id`, `expired` (the same deadline boundary, database clock, at this read) and the session's own intents in creation order with `action`, `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
 | `createSessionIntent(db, input)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below; after the INSERT, `last_signal_action` = the intent's action on the session row the transaction holds (#379, D6) — a replay and a refused session leave it |
@@ -220,7 +221,8 @@ endedAt, trades: { planned, settled, rejected, won, lost, tied, profit }, lastIn
   can settle any more), so a session costs at most one broker GET. A `manual_review` session is
   not finished and is not refreshed.
 - **Time**: under `TRADING_SESSION_VIEW_BUDGET_MS` (4 s), inside the backend's shutdown phase 1
-  and no longer than the bot's request timeout (both chains asserted at import).
+  and no longer than the bot's request timeout (both chains asserted at import). The same bound
+  covers both stop routes.
 
 ### POST /trading/sessions/:id/stop
 
@@ -247,6 +249,24 @@ bad body is 400. No broker call. Terminal intents and a stopped session cannot c
 read after the claim are the ones it checked. Two claims at once: the row lock serialises them and
 the second re-checks `summary_sent_at is null`, so one wins. A lost answer after the commit loses
 the card (accepted, [bot-session.md](bot-session.md#the-summary-card-318)).
+
+### POST /trading/sessions/stop (#122)
+
+Body `{ telegramUserId }` (the same schema as the stop by id); 400 `validation` on any other body,
+401 without the bearer. `stopUserSessions` stops every active session of the user in one UPDATE,
+then each stopped session is read through `viewForReply`, in parallel: 200 `{ sessions }`
+(`tradingSessionsStoppedResponseSchema`). An empty list is an answer, not a refusal: no active
+session, no `users` row, and another user's id all answer `[]` (Rule 13 — the owner is the
+UPDATE's predicate). A row gone between the UPDATE and its read is left out.
+
+- **Nothing is closed at the broker.** The route's deps are `db`, `catalog` and `balance`: a live
+  intent of a stopped session plays out on its own path, and a new one is refused by the session
+  lock (`TradingSessionNotActiveError`). The only broker call is `viewForReply`'s balance GET of a
+  finished session, one per account at most.
+- A thrown refresh is the opaque 500 after the stop committed; a second call answers `[]`.
+- **Time**: the reads run in parallel, one account each under its own
+  `TRADING_ACCESS_REFRESH_BUDGET_MS`, so the route stays under `TRADING_SESSION_VIEW_BUDGET_MS`.
+- `GET /trading/sessions/stop` is the GET by id with `id = 'stop'`: not a uuid, 404 `not_found`.
 
 ### For #284
 
@@ -648,7 +668,8 @@ docker compose logs -f trading-worker | grep -E 'trading session|intent outcome 
 # expect: one intent at a time at min_trade_amount in the signal's direction, or "waits for the
 # next candle"; the session ends "trading session completed" after five settled trades, or
 # "trading session stopped" with its reason
-# to end it early: the stop route (POST /trading/sessions/:id/stop, #283) or kill-switch on
+# to end it early: /stop in the bot (POST /trading/sessions/stop, #122), the stop route
+# (POST /trading/sessions/:id/stop, #283) or kill-switch on
 ```
 
 (REPLACE_WITH_TG_ID: your Telegram id; REPLACE_WITH_PAIR_ID: an open pair from `GET /trading/pairs`
@@ -697,8 +718,8 @@ docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to
 - #287 (shipped): the orchestrator in the worker and the `session-start` CLI. #285: the broker
   socket on the pilot (`BROKER_WS_URL`); until then every session trade goes over REST and settles
   through the settlement catch-up.
-- #283 (shipped): the backend routes (start, status, stop — the writer of `user_stopped`); #284:
-  the bot ([bot-session.md](bot-session.md)).
+- #283 (shipped): the backend routes (start, status, stop — the writer of `user_stopped`, with
+  #122's stop of all); #284: the bot ([bot-session.md](bot-session.md)).
 - #131: restart recovery; #135: `grant_revoked` as a stop reason; #94: the orchestrator under more than
   one worker container (#93's lease covers the broker sockets only).
 - Real sessions: the schema takes `mode`, and `createTradingSession` refuses anything but `demo`
