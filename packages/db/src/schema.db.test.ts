@@ -246,8 +246,19 @@ describe('enum and uniqueness constraints', () => {
       'notification_jobs_status_check',
       (tx: Tx) =>
         tx.execute(
-          sql`insert into notification_jobs (user_id, kind, status) values (gen_random_uuid(), 'k', 'bogus')`,
+          sql`insert into notification_jobs (user_id, kind, status) values (gen_random_uuid(), 'first_session_1h', 'bogus')`,
         ),
+    ],
+    [
+      'notification_jobs_kind_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into notification_jobs (user_id, kind) values (gen_random_uuid(), 'bogus')`,
+        ),
+    ],
+    [
+      'notification_kinds_kind_check',
+      (tx: Tx) => tx.execute(sql`insert into notification_kinds (kind) values ('bogus')`),
     ],
     [
       'broker_accounts_status_check',
@@ -433,7 +444,7 @@ describe('enum and uniqueness constraints', () => {
       'notification_jobs_dedupe_key_idx',
       (tx: Tx, userId: string) =>
         tx.execute(
-          sql`insert into notification_jobs (user_id, kind, dedupe_key) values (${userId}, 'k', 'same')`,
+          sql`insert into notification_jobs (user_id, kind, dedupe_key) values (${userId}, 'first_session_1h', 'same')`,
         ),
     ],
   ])('enforces %s', async (constraint, insert) => {
@@ -465,7 +476,7 @@ describe('enum and uniqueness constraints', () => {
       for (const seed of [first, second]) {
         await tx.execute(
           sql`insert into notification_jobs (user_id, kind, dedupe_key)
-              values (${seed.userId}, 'daily-summary', 'daily-summary-2026-09-22')`,
+              values (${seed.userId}, 'first_session_1h', 'daily-summary-2026-09-22')`,
         );
       }
       const { rows } = await tx.execute<{ count: string }>(
@@ -1657,7 +1668,9 @@ describe('foreign keys', () => {
     [
       'notification_jobs_user_id_users_id_fk',
       (tx) =>
-        tx.execute(sql`insert into notification_jobs (user_id, kind) values (${dangling}, 'k')`),
+        tx.execute(
+          sql`insert into notification_jobs (user_id, kind) values (${dangling}, 'first_session_1h')`,
+        ),
     ],
     [
       'outbox_events_intent_id_trade_intents_id_fk',

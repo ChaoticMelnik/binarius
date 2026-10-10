@@ -5,6 +5,7 @@ export * from './trading';
 export * from './broker';
 export * from './oauth';
 export * from './users';
+export * from './mailing';
 export * from './account';
 export * from './broker-balance';
 export * from './broker-budget';

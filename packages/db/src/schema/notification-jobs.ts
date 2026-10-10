@@ -9,6 +9,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { NotificationKind } from '@binarius/shared';
 import { createdAt, id, inList, updatedAt } from './columns';
 import { users } from './users';
 
@@ -21,7 +22,7 @@ export const NotificationJobStatus = {
 export type NotificationJobStatus =
   (typeof NotificationJobStatus)[keyof typeof NotificationJobStatus];
 
-// skeleton (#7): kinds and payloads are defined by the notifications issue (#29)
+// The mailing engine's queue (#202, docs/mailing.md): the planner inserts, the sender claims.
 export const notificationJobs = pgTable(
   'notification_jobs',
   {
@@ -29,7 +30,7 @@ export const notificationJobs = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    kind: text('kind').notNull(),
+    kind: text('kind').$type<NotificationKind>().notNull(),
     status: text('status')
       .$type<NotificationJobStatus>()
       .notNull()
@@ -56,5 +57,20 @@ export const notificationJobs = pgTable(
     index('notification_jobs_status_scheduled_idx').on(t.status, t.scheduledAt),
     index('notification_jobs_user_id_idx').on(t.userId),
     inList('notification_jobs_status_check', t.status, NotificationJobStatus),
+    inList('notification_jobs_kind_check', t.kind, NotificationKind),
   ],
+);
+
+// The moment from which each kind plans (docs/mailing.md → Cutoff): a scenario plans only for
+// facts at or after plans_from, so a kind added to a running system never reaches the users whose
+// fact is older (#202: no reminders for accounts connected before the engine's deploy). The
+// migration that adds a kind seeds its row from the database clock; a kind with no row plans
+// nothing.
+export const notificationKinds = pgTable(
+  'notification_kinds',
+  {
+    kind: text('kind').$type<NotificationKind>().primaryKey(),
+    plansFrom: timestamp('plans_from', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [inList('notification_kinds_kind_check', t.kind, NotificationKind)],
 );
