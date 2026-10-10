@@ -7,9 +7,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createBrokerRestClient, TradeListStatus } from '@binarius/broker-rest';
 import { MockTradeOutcome, startMockBroker, type MockBroker } from '@binarius/mock-broker';
 import {
+  AccountHaltReason,
   isClosedTrade,
   SESSION_MAX_DURATION_MS,
   TradeAction,
+  TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
   TradingSessionStatus,
@@ -21,12 +23,17 @@ import { until } from '@binarius/shared/testing';
 import {
   brokerAccounts,
   brokerTrades,
+  claimReconciling,
   createDb,
   createSessionIntent,
+  listLinkedBrokerTradeIds,
+  markIntentUnknown,
   openTrading,
   readSessionHistory,
   settleClosedTrades,
+  startReconciling,
   stopTradingSession,
+  takeIntent,
   tradeIntents,
   tradingSessions,
   upsertBalanceSnapshot,
@@ -42,10 +49,22 @@ import {
   sessionSettings,
   type TempDatabase,
 } from '@binarius/db/testing';
+import type { AccessTokenSource } from '../broker/access-token';
 import { noTradeSessions } from '../broker/trade-session';
+import type { BalanceCheck } from '../intents/balance-check';
 import { processIntentJob } from '../intents/processor';
+import { createReconciliationPass, processReconciliationJob } from '../intents/reconciliation';
+import { createRestReconciler } from '../intents/rest-reconciler';
+import { createSettlementCatchup } from '../intents/settlement-catchup';
+import { sweepStaleSubmitting } from '../intents/sweeper';
 import { createTradeCommandExecutor } from '../intents/trade-command-executor';
-import type { PairsOutcome, PairsSource, SignalOutcome, SignalSource } from './backend';
+import {
+  BackendUnavailable,
+  type PairsOutcome,
+  type PairsSource,
+  type SignalOutcome,
+  type SignalSource,
+} from './backend';
 import { TRADING_SESSION_CANDLE_SLACK_MS, type SessionOrchestratorConfig } from './config';
 import { createSessionOrchestrator, pausedDirection } from './orchestrator';
 import { eurUsd, fetchFailedAnswer, noSignalAnswer, signalAnswer } from './testing';
@@ -154,22 +173,18 @@ function orchestratorOf({
 // the access token per account for the REST open; the executor is the production composition
 const accessTokens = new Map<string, string>();
 const rest = () => createBrokerRestClient({ baseUrl: broker.url });
+const tokens: AccessTokenSource = {
+  accessToken: (accountId) => {
+    const accessToken = accessTokens.get(accountId);
+    return Promise.resolve(
+      accessToken === undefined
+        ? { ok: false, reason: 'account_not_found' }
+        : { ok: true, accessToken },
+    );
+  },
+};
 const executor = () =>
-  createTradeCommandExecutor({
-    sessions: noTradeSessions,
-    rest: rest(),
-    tokens: {
-      accessToken: (accountId) => {
-        const accessToken = accessTokens.get(accountId);
-        return Promise.resolve(
-          accessToken === undefined
-            ? { ok: false, reason: 'account_not_found' }
-            : { ok: true, accessToken },
-        );
-      },
-    },
-    logger,
-  });
+  createTradeCommandExecutor({ sessions: noTradeSessions, rest: rest(), tokens, logger });
 
 let brokerUserId = 40_000;
 
@@ -1226,6 +1241,323 @@ describe('failures that write no ending (#287)', () => {
 // The msg table in docs/trading-session.md -> Logs is the contract: every row was produced by the
 // cases above (a row marked "race" cannot be produced on demand), and no warn or error line
 // carries a msg outside it.
+// A worker restart, built in process (#131): "the dead worker" is orchestrator A plus the database
+// writes it made before dying; "the new worker" is a new orchestrator, pass and catch-up over the
+// same database. The crash state is written step by step, not produced by killing a running job.
+// The check after an outcome (#92) never changes it; its own suite is balance-check.db.test.ts.
+const balanceCheck: BalanceCheck = { check: () => Promise.resolve('not_compared') };
+const passOf = () =>
+  createReconciliationPass({
+    db: tmp.db,
+    reconciler: createRestReconciler({
+      rest: rest(),
+      tokens,
+      linkedTradeIds: (brokerAccountId, brokerTradeIds) =>
+        listLinkedBrokerTradeIds(tmp.db, { brokerAccountId, brokerTradeIds }),
+      logger,
+      config: { windowBeforeMs: 60_000, windowAfterMs: 90_000, pageSize: 50, maxPages: 2 },
+    }),
+    balanceCheck,
+    logger,
+    config: {
+      tickMs: 60_000,
+      retryMs: 60_000,
+      attemptTimeoutMs: 5_000,
+      batchSize: 20,
+      balanceCheckTimeoutMs: 1_000,
+    },
+  });
+const catchupOf = () =>
+  createSettlementCatchup({
+    db: tmp.db,
+    rest: rest(),
+    tokens,
+    logger,
+    config: {
+      tickMs: 60_000,
+      graceMs: 5_000,
+      batchSize: 20,
+      pageSize: 50,
+      maxPages: 2,
+      attemptTimeoutMs: 5_000,
+      stalledRetryMs: 60_000,
+    },
+  });
+
+async function runOnce(component: { tick(): Promise<void>; stop(): Promise<void> }) {
+  await component.tick();
+  await component.stop();
+}
+
+const processNow = (intentId: string) =>
+  processIntentJob(
+    {
+      db: tmp.db,
+      executor: executor(),
+      logger,
+      config: {
+        intentMaxAgeMs: 60_000,
+        submitAckTimeoutMs: 2_000,
+        staleSubmittingMs: 0,
+        demoOnly: false,
+      },
+    },
+    { intentId },
+  );
+
+// asked of the broker, not of our rows: "no second trade" is what the broker holds
+async function brokerTradeCount(accessToken: string) {
+  let count = 0;
+  for (const status of [TradeListStatus.Open, TradeListStatus.Closed]) {
+    const trades = await rest().listTrades(
+      { accessToken },
+      { status, isDemo: true, limit: 50, offset: 0 },
+    );
+    count += trades.length;
+  }
+  return count;
+}
+
+const secondsAgo = (seconds: number) => sql`now() - make_interval(secs => ${seconds})`;
+const ageSubmitted = (id: string, seconds: number) =>
+  tmp.db
+    .update(tradeIntents)
+    .set({ submittedAt: secondsAgo(seconds) })
+    .where(eq(tradeIntents.id, id));
+const ageCreated = (id: string, seconds: number) =>
+  tmp.db
+    .update(tradeIntents)
+    .set({ createdAt: secondsAgo(seconds) })
+    .where(eq(tradeIntents.id, id));
+const ageClaim = (id: string, seconds: number) =>
+  tmp.db
+    .update(tradeIntents)
+    .set({ reconcileClaimedAt: secondsAgo(seconds) })
+    .where(eq(tradeIntents.id, id));
+// as settlement-catchup.db.test.ts does: the trade's expiry an hour behind the database clock
+const overdueTrade = (intentId: string) =>
+  tmp.db
+    .update(brokerTrades)
+    .set({ openTimestampMs: sql`(extract(epoch from now()) * 1000)::bigint - 3600000` })
+    .where(eq(brokerTrades.intentId, intentId));
+const intentRow = async (id: string) =>
+  (await tmp.db.select().from(tradeIntents).where(eq(tradeIntents.id, id)))[0]!;
+
+// the dead worker's take and its order at the broker, with the intent's own terms
+async function crashAfterOpen(accessToken: string, intentId: string) {
+  const row = await intentRow(intentId);
+  expect(
+    await takeIntent(tmp.db, { id: intentId, expectedVersion: row.version, maxAgeMs: 60_000 }),
+  ).toBeDefined();
+  return rest().openTrade(
+    { accessToken },
+    {
+      assetId: 101,
+      amount: '1.00' as DecimalString,
+      action: TradeAction.Up,
+      durationSec: 60,
+      isDemo: true,
+    },
+  );
+}
+
+describe('restart recovery (#131)', () => {
+  it.each(['submitting', 'unknown', 'reconciling', 'claimed'] as const)(
+    'R1 crash at %s with the order at the broker: it settles, one trade, the session goes on',
+    async (point) => {
+      const seed = await seedSession();
+      const a = orchestratorOf();
+      await a.tick();
+      const [step1] = await intentsOf(seed.session.id);
+      const trade = await crashAfterOpen(seed.accessToken, step1!.id);
+      if (point !== 'submitting') {
+        await tmp.db.transaction((tx) =>
+          markIntentUnknown(tx, {
+            id: step1!.id,
+            reason: TradeIntentFailureReason.StaleSubmitting,
+            olderThanMs: 0,
+          }),
+        );
+      }
+      if (point === 'reconciling' || point === 'claimed') {
+        const row = await intentRow(step1!.id);
+        expect(
+          await startReconciling(tmp.db, { id: step1!.id, expectedVersion: row.version }),
+        ).toBeDefined();
+      }
+      if (point === 'claimed') {
+        expect(await claimReconciling(tmp.db, { id: step1!.id, retryMs: 60_000 })).toBeDefined();
+      }
+      await a.stop();
+      broker.trades.settle(Number(trade.id), { outcome: MockTradeOutcome.Win });
+
+      const b = orchestratorOf();
+      await b.tick();
+      expect(await intentsOf(seed.session.id)).toHaveLength(1);
+      if (point === 'submitting') expect(await processNow(step1!.id)).toBe('stale_unknown');
+      if (point === 'submitting' || point === 'unknown') {
+        expect(
+          await processReconciliationJob({ db: tmp.db, logger }, { intentId: step1!.id }),
+        ).toBe('reconciling');
+      }
+      await runOnce(passOf());
+      if (point === 'claimed') {
+        // the dead worker's claim is a lease: the new pass waits it out
+        expect((await intentRow(step1!.id)).status).toBe(TradeIntentStatus.Reconciling);
+        await ageClaim(step1!.id, 120);
+        await runOnce(passOf());
+      }
+      expect((await intentRow(step1!.id)).status).toBe(TradeIntentStatus.Settled);
+      await b.tick();
+      const intents = await intentsOf(seed.session.id);
+      expect(intents.map((i) => i.status)).toEqual([
+        TradeIntentStatus.Settled,
+        TradeIntentStatus.Queued,
+      ]);
+      expect(intents[1]!.clientRequestId).toBe(`session:${seed.session.id}:2`);
+      expect(await brokerTradeCount(seed.accessToken)).toBe(1);
+      await b.stop();
+    },
+  );
+
+  it('R1b the job redelivered to the new worker never resends the order', async () => {
+    const seed = await seedSession();
+    const a = orchestratorOf();
+    await a.tick();
+    const [step1] = await intentsOf(seed.session.id);
+    await crashAfterOpen(seed.accessToken, step1!.id);
+    await a.stop();
+    expect(await processNow(step1!.id)).toBe('stale_unknown');
+    expect(await brokerTradeCount(seed.accessToken)).toBe(1);
+  });
+
+  // pinned as today (owner's Q3); #274 replaces the halt with a release on a proven absence
+  it('R2 crash in submitting with nothing at the broker: manual_review, halt, the session stops', async () => {
+    const seed = await seedSession();
+    const a = orchestratorOf();
+    await a.tick();
+    const [step1] = await intentsOf(seed.session.id);
+    const row = await intentRow(step1!.id);
+    expect(
+      await takeIntent(tmp.db, { id: step1!.id, expectedVersion: row.version, maxAgeMs: 60_000 }),
+    ).toBeDefined();
+    await a.stop();
+    await ageSubmitted(step1!.id, 200);
+    expect(
+      await sweepStaleSubmitting(tmp.db, { olderThanMs: 60_000, limit: 50 }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(await processReconciliationJob({ db: tmp.db, logger }, { intentId: step1!.id })).toBe(
+      'reconciling',
+    );
+    await runOnce(passOf());
+    const after = await intentRow(step1!.id);
+    expect(after.status).toBe(TradeIntentStatus.ManualReview);
+    expect(after.lastError).toBe(TradeIntentFailureReason.ReconciliationNotFound);
+    const [account] = await tmp.db
+      .select()
+      .from(brokerAccounts)
+      .where(eq(brokerAccounts.id, seed.brokerAccountId));
+    expect(account!.tradingHalted).toBe(true);
+    expect(account!.haltedReason).toBe(AccountHaltReason.ReconciliationNotFound);
+
+    const b = orchestratorOf();
+    await b.tick();
+    const session = await sessionRow(seed.session.id);
+    expect(session.status).toBe(TradingSessionStatus.Stopped);
+    expect(session.stopReason).toBe(TradingSessionStopReason.ManualReview);
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    expect(await reservedOf(seed.userId)).toBe(1n);
+    expect(await brokerTradeCount(seed.accessToken)).toBe(0);
+    await b.stop();
+  });
+
+  it('R3 a lost job delivered late expires; two in a row stop the session rejected_twice', async () => {
+    const seed = await seedSession();
+    const b = orchestratorOf();
+    for (let step = 1; step <= 2; step += 1) {
+      await b.tick();
+      const intents = await intentsOf(seed.session.id);
+      expect(intents).toHaveLength(step);
+      await ageCreated(intents[step - 1]!.id, 120);
+      expect(await processIntent(intents[step - 1]!.id)).toBe('expired');
+      expect(await reservedOf(seed.userId)).toBe(0n);
+    }
+    await b.tick();
+    const session = await sessionRow(seed.session.id);
+    expect(session.status).toBe(TradingSessionStatus.Stopped);
+    expect(session.stopReason).toBe(TradingSessionStopReason.RejectedTwice);
+    expect(await brokerTradeCount(seed.accessToken)).toBe(0);
+    await b.stop();
+  });
+
+  it('R4 crash with an accepted intent: the catch-up settles it, the session goes on', async () => {
+    const seed = await seedSession();
+    const a = orchestratorOf();
+    await a.tick();
+    const [step1] = await intentsOf(seed.session.id);
+    expect(await processIntent(step1!.id)).toBe('accepted');
+    await a.stop();
+
+    const b = orchestratorOf();
+    await b.tick();
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    const [trade] = await tmp.db
+      .select()
+      .from(brokerTrades)
+      .where(eq(brokerTrades.intentId, step1!.id));
+    broker.trades.settle(Number(trade!.brokerTradeId), { outcome: MockTradeOutcome.Loss });
+    await overdueTrade(step1!.id);
+    await runOnce(catchupOf());
+    expect((await intentRow(step1!.id)).status).toBe(TradeIntentStatus.Settled);
+    await b.tick();
+    expect((await intentsOf(seed.session.id)).map((i) => i.status)).toEqual([
+      TradeIntentStatus.Settled,
+      TradeIntentStatus.Queued,
+    ]);
+    expect(await brokerTradeCount(seed.accessToken)).toBe(1);
+    await b.stop();
+  });
+
+  it('R5 a hold-back is lost with the worker: the new one asks again, one intent', async () => {
+    const seed = await seedSession();
+    const a = orchestratorOf({
+      signals: signalsOf({ ok: false, reason: BackendUnavailable.BackendUnreachable }),
+    });
+    await a.tick();
+    expect(await intentsOf(seed.session.id)).toHaveLength(0);
+    await a.stop();
+
+    const signals = signalsOf();
+    const b = orchestratorOf({ signals });
+    await b.tick();
+    await b.tick();
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    expect(signals.calls.filter((call) => call.assetId === 101)).toHaveLength(1);
+    await b.stop();
+  });
+
+  // one intent per step for concurrent orchestrators only; the other components are
+  // docs/worker-deploy.md → "Why two workers at once are safe"
+  it('R6 two orchestrators in one tick: one intent for the step', async () => {
+    const seed = await seedSession();
+    const a = orchestratorOf();
+    const b = orchestratorOf();
+    await Promise.all([a.tick(), b.tick()]);
+    const intents = await intentsOf(seed.session.id);
+    expect(intents).toHaveLength(1);
+    expect(intents[0]!.clientRequestId).toBe(`session:${seed.session.id}:1`);
+    await Promise.all([a.stop(), b.stop()]);
+  });
+
+  it('R7 a restart adds no limit: a session started 40 min ago with nothing done trades step 1', async () => {
+    const seed = await seedSession({ startedAt: new Date(Date.now() - 40 * 60_000) });
+    const b = orchestratorOf();
+    await b.tick();
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    await b.stop();
+  });
+});
+
 describe('L1 the log lines (#287)', () => {
   const doc = readFileSync(
     fileURLToPath(new URL('../../../../docs/trading-session.md', import.meta.url)),
