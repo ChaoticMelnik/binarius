@@ -17,6 +17,8 @@ import {
   ADMIN_SEARCH_MAX_LENGTH,
   ADMIN_AUDIT_PAYLOAD_PREVIEW_CHARS,
   AdminErrorCode,
+  LinkState,
+  safeParseAdminConfirmResponse,
   adminAuditEntryViewSchema,
   adminAuditResponseSchema,
   AccountHaltReason,
@@ -57,6 +59,8 @@ import {
   staff,
   staffLoginChallenges,
   StaffLoginChallengeStatus,
+  issueLoginLink,
+  staffLoginLinks,
   staffSessions,
   StaffStatus,
   tokenLedger,
@@ -761,6 +765,121 @@ describe('POST /admin/auth/confirm', () => {
   });
 });
 
+// docs/staff-login.md → Logging in by a link from the bot (#448)
+describe('POST /admin/auth/link/inspect and /complete', () => {
+  const inspect = (body: Record<string, unknown>, headers: Record<string, string> = BEARER) =>
+    app.inject({ method: 'POST', url: '/admin/auth/link/inspect', headers, payload: body });
+  const completeLink = (body: Record<string, unknown>, headers: Record<string, string> = BEARER) =>
+    app.inject({ method: 'POST', url: '/admin/auth/link/complete', headers, payload: body });
+
+  const issued = async (seeded: SeededStaff) => {
+    const result = await issueLoginLink(tmp.db, { telegramUserId: seeded.telegramUserId });
+    if (!result.ok) throw new Error(`issueLoginLink refused: ${result.reason}`);
+    return result;
+  };
+
+  it('refuses both without the bearer, before anything is read', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const { token } = await issued(seeded);
+
+    const read = await inspect({ token }, {});
+    const spent = await completeLink({ token, ...CLIENT }, {});
+
+    expect([read.statusCode, spent.statusCode]).toEqual([401, 401]);
+    expect((await inspect({ token })).json()).toEqual({ state: LinkState.Live });
+  });
+
+  it('turns a live link into a session the admin pages accept, and reads it as used after', async () => {
+    const seeded = await seedStaff(tmp.db);
+    const { token } = await issued(seeded);
+
+    expect((await inspect({ token })).json()).toEqual({ state: LinkState.Live });
+    const response = await completeLink({ token, ...CLIENT });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ sessionToken: string; expiresAt: string }>();
+    expect(safeParseAdminConfirmResponse(body).success).toBe(true);
+    expect(Object.keys(body).sort()).toEqual(['expiresAt', 'sessionToken']);
+    expect((await withSession('GET', '/admin/sessions', body.sessionToken)).statusCode).toBe(200);
+    expect((await inspect({ token })).json()).toEqual({ state: LinkState.Used });
+  });
+
+  it.each([
+    ['used', AdminErrorCode.LinkUsed],
+    ['expired', AdminErrorCode.LinkExpired],
+    ['superseded', AdminErrorCode.LinkUnavailable],
+    ['never issued', AdminErrorCode.LinkUnavailable],
+  ])('answers 410 for a %s link', async (kind, code) => {
+    const seeded = await seedStaff(tmp.db);
+    const link = await issued(seeded);
+    let token = link.token;
+    if (kind === 'used') await completeLink({ token, ...CLIENT });
+    if (kind === 'expired') {
+      await tmp.db
+        .update(staffLoginLinks)
+        .set({
+          createdAt: sql`now() - interval '6 minutes'`,
+          expiresAt: sql`now() - interval '1 minute'`,
+        })
+        .where(eq(staffLoginLinks.id, link.linkId));
+    }
+    if (kind === 'superseded') await issued(seeded);
+    if (kind === 'never issued') token = 'z'.repeat(43);
+
+    const response = await completeLink({ token, ...CLIENT });
+
+    expect([response.statusCode, response.json()]).toEqual([410, { error: code }]);
+  });
+
+  it.each([
+    ['too short', 'a'.repeat(42)],
+    ['outside base64url', `${'a'.repeat(42)}=`],
+  ])('answers 400 to a token %s', async (_label, token) => {
+    expect((await inspect({ token })).statusCode).toBe(400);
+    expect((await completeLink({ token, ...CLIENT })).statusCode).toBe(400);
+  });
+
+  // the ceilings are taken before the body is read: a body that would not even parse is refused
+  it.each([
+    ['inspect', { linkInspectMaxPerMinute: 0 }, '/admin/auth/link/inspect'],
+    ['complete', { linkCompleteMaxPerMinute: 0 }, '/admin/auth/link/complete'],
+  ])('refuses everything once the %s ceiling is reached', async (_label, patch, url) => {
+    await app.close();
+    app = build(patch);
+
+    const response = await app.inject({ method: 'POST', url, headers: BEARER, payload: {} });
+
+    expect([response.statusCode, response.json()]).toEqual([
+      429,
+      { error: AdminErrorCode.TooManyAttempts },
+    ]);
+  });
+
+  // the token is the credential: no line of this process may carry it, refused or accepted
+  it('logs the refusal by its state and never the token', async () => {
+    const lines: string[] = [];
+    await app.close();
+    app = build({}, { write: (line) => lines.push(line) }, 'info');
+    const seeded = await seedStaff(tmp.db);
+    const { token } = await issued(seeded);
+    const unknown = 'q'.repeat(43);
+
+    await inspect({ token });
+    await completeLink({ token, ...CLIENT });
+    await completeLink({ token, ...CLIENT });
+    await completeLink({ token: unknown, ...CLIENT });
+
+    const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(
+      logged
+        .filter((line) => line.msg === 'a staff login link was refused')
+        .map((line) => line.linkState),
+    ).toEqual([LinkState.Used, LinkState.Unavailable]);
+    expect(lines.join('')).not.toContain(token);
+    expect(lines.join('')).not.toContain(unknown);
+  });
+});
+
 describe('GET /admin/sessions', () => {
   it('lists the live sessions and names the caller', async () => {
     const seeded = await seedStaff(tmp.db);
@@ -1059,10 +1178,17 @@ describe('POST /admin/auth/password (#78)', () => {
       actorType: AuditActorType.Admin,
       entityType: AuditEntityType.Staff,
       entityId: seeded.staffId,
-      payload: { sessionId, closedChallenges: 0, revokedSessions: 1, ip: CLIENT.ip },
+      payload: {
+        sessionId,
+        closedChallenges: 0,
+        closedLinks: 0,
+        revokedSessions: 1,
+        ip: CLIENT.ip,
+      },
     });
     expect(Object.keys(rows[0]!.payload as object).sort()).toEqual([
       'closedChallenges',
+      'closedLinks',
       'ip',
       'revokedSessions',
       'sessionId',

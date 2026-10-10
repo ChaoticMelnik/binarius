@@ -144,6 +144,7 @@ const signalScanners = SIGNAL_SCAN_INTERVALS.map((interval) => {
 const adminBot = createAdminBot({
   token: env.adminBotToken,
   db,
+  webPublicUrl: env.webPublicUrl,
   // the app's logger does not exist yet, and this one is only used once polling is running
   logger: {
     info: (object, message) => app.log.info(object, message),

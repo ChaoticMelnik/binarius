@@ -18,6 +18,7 @@ const valid = {
   TELEGRAM_BOT_TOKEN: '5678:public-bot-token',
   ADMIN_BOT_TOKEN: '1234:admin-bot-token',
   ADMIN_WEB_TOKEN: 'admin-web-token-for-tests',
+  WEB_PUBLIC_URL: 'https://admin.example',
 };
 
 describe('parseEnv', () => {
@@ -44,6 +45,7 @@ describe('parseEnv', () => {
       telegramBotToken: valid.TELEGRAM_BOT_TOKEN,
       adminBotToken: valid.ADMIN_BOT_TOKEN,
       adminWebToken: valid.ADMIN_WEB_TOKEN,
+      webPublicUrl: valid.WEB_PUBLIC_URL,
       demoOnly: false,
     });
   });
@@ -96,6 +98,7 @@ describe('parseEnv', () => {
     'BROKER_PARTNER_REF',
     'TOKEN_ENCRYPTION_KEY',
     'TOKEN_ENCRYPTION_KEY_ID',
+    'WEB_PUBLIC_URL',
   ])('rejects missing %s', (name) => {
     const source: Record<string, string | undefined> = { ...valid, [name]: undefined };
     expect(() => parseEnv(source)).toThrow(`Missing required env ${name}`);
@@ -431,6 +434,17 @@ describe('the public bot token', () => {
 
   // one value in both is two pollers on one bot: Telegram answers 409 to one of them, and the
   // staff bot would answer in the public bot's chats
+  // the staff bot's login link is <WEB_PUBLIC_URL>/admin/login/link/<token> (#448): the same
+  // parser as apps/web's, so a value web refuses never reaches a Telegram message here
+  it('reads WEB_PUBLIC_URL as apps/web does', () => {
+    expect(parseEnv({ ...valid, WEB_PUBLIC_URL: 'https://Admin.Example:443' }).webPublicUrl).toBe(
+      'https://admin.example',
+    );
+    expect(() => parseEnv({ ...valid, WEB_PUBLIC_URL: 'https://admin.example/' })).toThrow(
+      'Env WEB_PUBLIC_URL must be spelled scheme://host[:port]',
+    );
+  });
+
   it('refuses TELEGRAM_BOT_TOKEN equal to ADMIN_BOT_TOKEN', () => {
     expect(() => parseEnv({ ...valid, TELEGRAM_BOT_TOKEN: valid.ADMIN_BOT_TOKEN })).toThrow(
       'Env TELEGRAM_BOT_TOKEN must differ from ADMIN_BOT_TOKEN',

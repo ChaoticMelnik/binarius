@@ -24,6 +24,9 @@ export const ADMIN_BOT_INFO: UserFromGetMe = {
   supports_join_request_queries: false,
 };
 
+// apps/web's origin as the staff bot sees it (#448)
+export const TEST_WEB_PUBLIC_URL = 'https://admin.example';
+
 export interface FakeLogger {
   info: Mock;
   warn: Mock;

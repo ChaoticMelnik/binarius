@@ -36,11 +36,14 @@ import {
   safeParseAdminConfirmRequest,
   safeParseAdminDepositsQuery,
   safeParseAdminIntentsQuery,
+  safeParseAdminLinkCompleteRequest,
+  safeParseAdminLinkInspectRequest,
   safeParseAdminLoginRequest,
   safeParseAdminTokenAdjustmentRequest,
   safeParseAdminTokensQuery,
   safeParseAdminTradingSessionsQuery,
   safeParseAdminUsersQuery,
+  LinkState,
   STAFF_SESSION_TOKEN_PATTERN,
   UUID_PATTERN,
   type AdminTokenAdjustmentResponse,
@@ -56,6 +59,7 @@ import {
   toAdminBotTextView,
   type StaffAuditDescription,
   classifyUserSearch,
+  completeLinkLogin,
   completeLogin,
   countPasswordFailure,
   DUMMY_PASSWORD_HASH,
@@ -64,6 +68,7 @@ import {
   findStaffForLogin,
   findStaffForPasswordChange,
   hashPassword,
+  inspectLoginLink,
   listIntentsForAdmin,
   listAuditForAdmin,
   listBrokerAccountsForAdmin,
@@ -120,11 +125,14 @@ import {
 } from '../bot-texts/publish';
 import type { AdminTelegram } from './telegram';
 
-// Ceilings on the two unauthenticated routes, taken before the body is read: they bound how
-// much work an anonymous caller can ask this process for. Real staff logins are orders of
-// magnitude rarer, so these only ever catch a flood.
+// Ceilings on the unauthenticated routes, taken before the body is read: they bound how much
+// work an anonymous caller can ask this process for. Real staff logins are orders of magnitude
+// rarer, so these only ever catch a flood. The link's inspect is a read every preview and
+// prefetch can trigger, hence the wider one; its complete creates a session, like login (#448).
 const LOGIN_MAX_PER_MINUTE = 120;
 const CONFIRM_MAX_PER_MINUTE = 300;
+const LINK_INSPECT_MAX_PER_MINUTE = 300;
+const LINK_COMPLETE_MAX_PER_MINUTE = 120;
 const ADMIN_BODY_LIMIT_BYTES = 4 * 1024;
 
 // Per-login attempts at a name that has no live account. The lockout in `staff` covers a real
@@ -146,6 +154,8 @@ export interface AdminRoutesDeps {
   hash?: (password: string) => Promise<string>;
   loginMaxPerMinute?: number;
   confirmMaxPerMinute?: number;
+  linkInspectMaxPerMinute?: number;
+  linkCompleteMaxPerMinute?: number;
   sessionIdleMs?: number;
 }
 
@@ -156,6 +166,12 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   const idleMs = deps.sessionIdleMs ?? STAFF_SESSION_IDLE_MS;
   const loginCeiling = createWindow(deps.loginMaxPerMinute ?? LOGIN_MAX_PER_MINUTE);
   const confirmCeiling = createWindow(deps.confirmMaxPerMinute ?? CONFIRM_MAX_PER_MINUTE);
+  const linkInspectCeiling = createWindow(
+    deps.linkInspectMaxPerMinute ?? LINK_INSPECT_MAX_PER_MINUTE,
+  );
+  const linkCompleteCeiling = createWindow(
+    deps.linkCompleteMaxPerMinute ?? LINK_COMPLETE_MAX_PER_MINUTE,
+  );
   const unknownLogins = createKeyedWindow(
     UNKNOWN_LOGIN_MAX,
     UNKNOWN_LOGIN_WINDOW_MS,
@@ -163,8 +179,8 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
   );
 
   // The narrow bearer covers the whole prefix. It is not the internal token: it opens /admin/*
-  // and nothing else, and every route below it except the two login steps additionally needs a
-  // staff session.
+  // and nothing else, and every route below it except the login steps (the password, the code,
+  // and the link from the bot) additionally needs a staff session.
   app.addHook('onRequest', internalBearerAuth(deps.adminWebToken));
 
   // Never runs the KDF when it refuses: a refusal that cost a derivation would be the thing
@@ -366,6 +382,55 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
       // every other reason — expired, denied, exhausted, failed, completed, a disabled owner,
       // an id nobody was issued — is one answer: this attempt is over, start again
       return reply.code(410).send({ error: AdminErrorCode.ChallengeUnavailable });
+    },
+  );
+
+  // docs/staff-login.md → Logging in by a link from the bot (#448). The token is in the body, so
+  // no request line of this hop carries it; neither route logs it.
+  app.post(
+    '/admin/auth/link/inspect',
+    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      if (linkInspectCeiling.take().over) {
+        return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+      }
+      const parsed = safeParseAdminLinkInspectRequest(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+      }
+      return reply.send({ state: await inspectLoginLink(deps.db, parsed.data.token) });
+    },
+  );
+
+  app.post(
+    '/admin/auth/link/complete',
+    { bodyLimit: ADMIN_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      if (linkCompleteCeiling.take().over) {
+        return reply.code(429).send({ error: AdminErrorCode.TooManyAttempts });
+      }
+      const parsed = safeParseAdminLinkCompleteRequest(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: AdminErrorCode.Validation, issues: parsed.error.issues });
+      }
+      const { token, ip, userAgent } = parsed.data;
+      const completed = await completeLinkLogin(deps.db, { token, ip, userAgent });
+      if (completed.ok) {
+        return reply.send({
+          sessionToken: completed.sessionToken,
+          expiresAt: completed.expiresAt.toISOString(),
+        });
+      }
+      // the refusal left an audit row when the link belongs to someone; this line is for the
+      // rest, and for an operator watching the log
+      request.log.info({ linkState: completed.state }, 'a staff login link was refused');
+      const error =
+        completed.state === LinkState.Used
+          ? AdminErrorCode.LinkUsed
+          : completed.state === LinkState.Expired
+            ? AdminErrorCode.LinkExpired
+            : AdminErrorCode.LinkUnavailable;
+      return reply.code(410).send({ error });
     },
   );
 
@@ -602,6 +667,7 @@ export const adminRoutes: FastifyPluginAsync<AdminRoutesDeps> = async (app, deps
               payload: {
                 sessionId: ctx.sessionId,
                 closedChallenges: changed.closedChallenges,
+                closedLinks: changed.closedLinks,
                 revokedSessions: changed.revokedSessions,
                 ip,
               },

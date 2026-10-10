@@ -132,7 +132,7 @@ describe('staff reset-password', () => {
     expect(code).toBe(0);
     expect(lines.at(-1)).toMatch(PASSWORD_LINE);
     expect(lines[0]).toBe(
-      'Пароль rotate-me сброшен: закрыто запросов на вход 1, отозвано сессий 2',
+      'Пароль rotate-me сброшен: закрыто запросов на вход 1, ссылок 0, отозвано сессий 2',
     );
     const after = lines.at(-1)?.slice('Пароль: '.length) ?? '';
     expect(after).not.toBe(before);
@@ -158,7 +158,9 @@ describe('staff disable', () => {
     const { code, lines } = await run('disable', '--login', 'retiring');
 
     expect(code).toBe(0);
-    expect(lines).toEqual(['Отключена retiring: закрыто запросов на вход 1, отозвано сессий 2']);
+    expect(lines).toEqual([
+      'Отключена retiring: закрыто запросов на вход 1, ссылок 0, отозвано сессий 2',
+    ]);
     expect((await staffRow('retiring'))?.status).toBe('disabled');
   });
 });

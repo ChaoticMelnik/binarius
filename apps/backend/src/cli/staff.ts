@@ -135,7 +135,7 @@ export async function runStaffCli(
         return EXIT_FAILED;
       }
       print(
-        `Отключена ${parsed.login}: закрыто запросов на вход ${counts.closedChallenges}, отозвано сессий ${counts.revokedSessions}`,
+        `Отключена ${parsed.login}: закрыто запросов на вход ${counts.closedChallenges}, ссылок ${counts.closedLinks}, отозвано сессий ${counts.revokedSessions}`,
       );
       return EXIT_OK;
     }
@@ -150,7 +150,7 @@ export async function runStaffCli(
       return EXIT_FAILED;
     }
     print(
-      `Пароль ${parsed.login} сброшен: закрыто запросов на вход ${counts.closedChallenges}, отозвано сессий ${counts.revokedSessions}`,
+      `Пароль ${parsed.login} сброшен: закрыто запросов на вход ${counts.closedChallenges}, ссылок ${counts.closedLinks}, отозвано сессий ${counts.revokedSessions}`,
     );
     print(`Пароль: ${password}`);
     return EXIT_OK;
