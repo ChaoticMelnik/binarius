@@ -173,11 +173,11 @@ never`), so a fourth kind fails `tsc` until each of them handles it; the parser 
 the `PICKER` pattern are extended by hand.
 
 **The return to the launch screen (#320).** A save opened from a launch screen (a preset, the
-reset or a typed amount) returns to that screen, not to «✅ Сумма»: «✅ Ставка сохранена: $5.00»
+reset or a typed amount) returns to that screen, not to «✅ Сумма»: «✅ Демо-ставка сохранена: $5.00»
 above the three lines, with «💵 Ставка» at the saved amount (after the reset, «минимальная брокера»)
 and the screen's three buttons. One read gives the symbol and the payout: `readPairs`, any
 catalog, a stale one included, as the session start reads it. A pair in it paying below the cycle
-floor (`!pairPayoutAccepted`, #379) gets, under «✅ Ставка сохранена», the launch press's refusal
+floor (`!pairPayoutAccepted`, #379) gets, under «✅ Демо-ставка сохранена», the launch press's refusal
 `demoPayoutTooLow` with «↩️ К списку» and «🧭 Выбрать пару вручную» instead of «🚀 Запустить цикл»
 (`stake-picker.test.ts`, at 79 and 80 % on 15 and 5 s). Without a catalog the symbol line is
 dropped and `warn` `pairs not read for the launch screen` is logged; without a catalog or without

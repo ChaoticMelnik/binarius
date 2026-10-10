@@ -232,7 +232,7 @@ compile.
 | `demoBalance`, `realBalance` | `{ amount, fresh }` or `null` | `formatUsd`, fresh only | `balanceUnavailable` |
 | `mode` | `TradeMode` | `MODE_LABELS` | — |
 | `level` | `NotificationLevel` | its button label | — |
-| `stake` | the saved demo stake or `null` | `formatStake` | `stakeMinimumLabel` |
+| `stake` | the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the broker's minimum in real (#121) | `formatStake` | `stakeMinimumLabel` |
 | `minStake`, `demoAvailable` | the broker's bounds | `formatStake` | — |
 | `realAvailable` | `real.available` of the access read, the mode screen (#121) | `formatUsd` | — |
 | `age` | seconds | `formatAge` | — |
