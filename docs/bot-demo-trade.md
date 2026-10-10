@@ -195,7 +195,7 @@ What its answer does:
 
 | Answer | Source | Message | The input step |
 | --- | --- | --- | --- |
-| 200 | saved | «✅ Сумма: $5.00» / «✅ Сумма: минимальная ставка брокера» + back | ended |
+| 200 | saved | «✅ Демо-ставка: $5.00» / «✅ Демо-ставка: минимальная ставка брокера» + back | ended |
 | 409 `stake_precision` | refused before the write | «❌ Не больше N знаков после запятой.» (`limits.scale`) + «💵 Сумма» + back | kept, TTL anew |
 | 409 `stake_below_minimum` | refused before the write | «⚠️ Минимальная ставка брокера сейчас $X…» + «💵 Сумма» + back | kept |
 | 409 `insufficient_demo_balance` | refused before the write | «⚠️ На демо-счёте доступно $Y…» + «💵 Сумма» + back | kept |
