@@ -654,8 +654,9 @@ is missing from the answer; `timing.test.ts` holds the declared calls.
 
 ## Command menu
 
-Telegram's «Меню» button and the hints shown when the user types `/` list six commands, in this
-order: `/start` — «Начать», `/menu` — «Главное меню» ([bot-menu.md](bot-menu.md)), `/account` —
+Telegram's «Меню» button and the hints shown when the user types `/` list seven commands, in this
+order: `/start` — «Начать», `/menu` — «Главное меню» ([bot-menu.md](bot-menu.md)), `/stop` —
+«Остановить сессию» ([bot-session.md](bot-session.md#stop-122)), `/account` —
 «Аккаунт Binodex» ([bot-account.md](bot-account.md)),
 `/settings` — «Настройки уведомлений», `/help` — «Помощь» ([/help](#help-184)) and `/support` —
 «Поддержка» ([Notification level and /support](#notification-level-and-support-120)). The list is `BOT_COMMANDS` in

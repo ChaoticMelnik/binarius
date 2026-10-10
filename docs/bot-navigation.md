@@ -65,6 +65,8 @@ menu), so a lost answer never becomes a second trade or session. `testing.ts` �
 on any message whose «🔄 Повторить» carries one of those prefixes, in every scene of every bot test
 (`WRITE_CALLBACK_PREFIXES`, `testing.test.ts`). «➕ Ещё» (`demo:more:`, #360) is a read that sends
 no message: it gets no «🔄 Повторить» of its own, and its failure leaves the analysis on screen.
+The command `/stop` (#122) is a write too: its failure answers `unavailable` with «🏠 В меню» and
+no repeat.
 
 ## Message → buttons
 
@@ -96,6 +98,8 @@ no message: it gets no «🔄 Повторить» of its own, and its failure l
 | trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 сделок (#360, on a duration the demo still offers) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
 | session status, live | 🔄 Обновить · ⏹ Остановить сессию; a 404 while tracking leaves 🏠 В меню only |
 | session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню; without `settings` only 🔄 Обновить · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |
+| `/stop` (#122), one session stopped | the session's status keyboard (the two rows above) |
+| `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
 | the session's summary card (#318, a photo) | 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`screen.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 
