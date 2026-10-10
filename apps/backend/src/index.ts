@@ -110,10 +110,10 @@ const signalFeed = createCachedSignalFeed(
   { fetchBudgetMs: SIGNAL_FETCH_BUDGET_MS, maxTtlMs: SIGNAL_CACHE_MAX_TTL_MS },
 );
 
-// The background scan of the top pairs (docs/signal.md -> The scanner), one scanner per interval,
-// each on its own pacer and share of the ceiling (#382): through the same cache, so a manual
-// analysis of a scanned pair in that candle costs no second GET. Started with the other loops
-// after listen(), stopped in phase 1.
+// The background scan of pairs chosen across the asset types (docs/signal.md -> The scanner, #460),
+// one scanner per interval, each on its own pacer and share of the ceiling (#382): through the same
+// cache, so a manual analysis of a scanned pair in that candle costs no second GET. Started with
+// the other loops after listen(), stopped in phase 1.
 const signalScanners = SIGNAL_SCAN_INTERVALS.map((interval) => {
   const pairs = signalScanPairs(env.signalScanMaxPerMinute, interval);
   return createSignalScanner({

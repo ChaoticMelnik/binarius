@@ -5,6 +5,7 @@ import {
   BrokerRestErrorCode,
   createTradeIntentRequestSchema,
   decimalStringSchema,
+  PAIR_TYPE_GROUPS,
   PairsCatalogErrorCode,
   plainTextOf,
   SignalFeedOutcome,
@@ -33,6 +34,8 @@ import {
   SESSION_START_PATTERN,
   sessionStartCallbackData,
   sessionStartDataOf,
+  SIGNALS_LIST_SIZE,
+  signalsShown,
   STAKE_CALLBACK_PATTERN,
   stakeCallbackData,
   stakeDataOf,
@@ -257,8 +260,9 @@ describe('the duration screen (#382)', () => {
 });
 
 describe('the signals screen', () => {
-  // the route's order, not the catalog's; a closed pair, one that refuses 15 s, one the catalog
-  // does not list and one paying below the cycle floor (US10Y at 70 %, #379) have no button
+  // by type (#460): EUR/USD's currency before BTC/USD's cryptocurrency, though the route sends
+  // BTC/USD first and it pays more; a closed pair, one that refuses 15 s, one the catalog does not
+  // list and one paying below the cycle floor (US10Y at 70 %, #379) have no button
   const ROUTE = signalsOf(
     [PAIR_SHORT.id, TradeAction.Down],
     [PAIR_CLOSED.id, TradeAction.Up],
@@ -268,8 +272,8 @@ describe('the signals screen', () => {
     [PAIR_OTHER_TYPE.id, TradeAction.Down],
   );
   const ROWS = [
-    [button('BTC/USD OTC · ⬇️ · 90%', demoLaunchCallbackData(PAIR_SHORT.id, 15))],
     [button('EUR/USD OTC · ⬆️ · 85%', demoLaunchCallbackData(PAIR_EURUSD.id, 15))],
+    [button('BTC/USD OTC · ⬇️ · 90%', demoLaunchCallbackData(PAIR_SHORT.id, 15))],
     ...listFooter(15),
   ];
   const LIST_15 = demoSignalsCallbackData(15);
@@ -289,6 +293,115 @@ describe('the signals screen', () => {
     expect(rowsOf(edited)).toEqual(ROWS);
     expect(readSignals).toHaveBeenCalledTimes(1);
     expect(readPairs).toHaveBeenCalledTimes(1);
+  });
+
+  // #460: up to two pairs of each type, the free places filled by payout, grouped by type. The
+  // lists compare pairs, not rows, so a layout of two buttons a row (#419) leaves them standing.
+  describe('the choice of pairs (#460)', () => {
+    // a broker type for each group; `bond` is one the broker does not list, so `other`
+    const BROKER_TYPE = ['currency', 'commodity', 'stock', 'cryptocurrency', 'index', 'bond'];
+    const pairOf = (id: number, type: string, payout: number, patch: Partial<PairView> = {}) => ({
+      ...PAIR_EURUSD,
+      id,
+      symbol: `S${id}`,
+      type,
+      payout,
+      ...patch,
+    });
+    const shownIds = (route: readonly number[], pairs: readonly PairView[]) =>
+      signalsShown(
+        route.map((assetId) => ({ assetId, action: TradeAction.Up })),
+        pairsResponse({ pairs: [...pairs] }),
+        15,
+        NOW,
+      ).map(({ pair }) => pair.id);
+    const shuffle = <T>(items: readonly T[]): T[] =>
+      items
+        .map((item, i) => ({ item, key: (i * 7 + 3) % items.length }))
+        .sort((a, b) => a.key - b.key)
+        .map(({ item }) => item);
+
+    // three of each group, currencies paying the most, the payout falling group by group
+    const SIX = BROKER_TYPE.flatMap((type, g) =>
+      [0, 1, 2].map((j) => pairOf(100 * (g + 1) + j, type, 95 - 2 * g - j)),
+    );
+    const SIX_SHOWN = BROKER_TYPE.flatMap((_, g) => [100 * (g + 1), 100 * (g + 1) + 1]);
+
+    it('L1 takes two of every type, the types in their screen order, the best payout first', () => {
+      expect(SIGNALS_LIST_SIZE).toBe(2 * PAIR_TYPE_GROUPS.length);
+      expect(
+        shownIds(
+          SIX.map((p) => p.id),
+          SIX,
+        ),
+      ).toEqual(SIX_SHOWN);
+    });
+
+    it('L2 fills the places a type leaves free with the best pairs of the others', () => {
+      const currencies = Array.from({ length: 15 }, (_, i) => pairOf(1 + i, 'currency', 96 - i));
+      const stock = pairOf(50, 'stock', 80);
+      expect(shownIds([stock.id, ...currencies.map((p) => p.id)], [...currencies, stock])).toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 50,
+      ]);
+      const few = [pairOf(1, 'currency', 85), pairOf(2, 'currency', 90), pairOf(3, 'currency', 88)];
+      const crypto = pairOf(4, 'cryptocurrency', 95);
+      expect(shownIds([4, 1, 2, 3], [...few, crypto])).toEqual([2, 3, 1, 4]);
+    });
+
+    it("L3 does not depend on the route's order or the catalog's", () => {
+      const ids = SIX.map((p) => p.id);
+      expect(shownIds([...ids].reverse(), shuffle(SIX))).toEqual(SIX_SHOWN);
+      expect(shownIds(shuffle(ids), [...SIX].reverse())).toEqual(SIX_SHOWN);
+    });
+
+    it('L4 a pair the launch would refuse takes no place', () => {
+      const pairs = [
+        pairOf(1, 'currency', 99, { scheduledUntil: PAIR_CLOSED.scheduledUntil }),
+        pairOf(2, 'currency', 95),
+        pairOf(3, 'currency', 94),
+        pairOf(4, 'currency', 70),
+        pairOf(5, 'stock', 81),
+      ];
+      expect(shownIds([1, 2, 3, 4, 5], pairs)).toEqual([2, 3, 5]);
+      // on a full list too: the closed best currency leaves its place to the third one
+      const closedBest = SIX.map((p) =>
+        p.id === 100 ? { ...p, scheduledUntil: PAIR_CLOSED.scheduledUntil } : p,
+      );
+      expect(
+        shownIds(
+          SIX.map((p) => p.id),
+          closedBest,
+        ),
+      ).toEqual([101, 102, ...SIX_SHOWN.slice(2)]);
+    });
+
+    it('L5 an equal payout goes by id, inside a type and in the fill', () => {
+      const ties = Array.from({ length: 13 }, (_, i) => pairOf(13 - i, 'currency', 85));
+      expect(shownIds(shuffle(ties.map((p) => p.id)), ties)).toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+      ]);
+      const two = [pairOf(9, 'stock', 85), pairOf(7, 'stock', 85), pairOf(8, 'stock', 85)];
+      expect(shownIds([9, 8, 1, 7], [...two, pairOf(1, 'index', 80)])).toEqual([7, 8, 9, 1]);
+    });
+
+    it('draws the chosen pairs on the screen, in their order, above the footer', async () => {
+      const { press, calls } = setup({
+        readSignals: () =>
+          Promise.resolve(
+            signalsOf(
+              ...[...SIX].reverse().map((p): [number, TradeAction] => [p.id, TradeAction.Up]),
+            ),
+          ),
+        readPairs: catalogOf(...SIX),
+      });
+      await press(LIST_15);
+
+      const buttons = rowsOf(payloadOf(calls, 'editMessageText')).flat();
+      expect(buttons.slice(-3)).toEqual(listFooter(15).flat());
+      expect(buttons.slice(0, -3).map((b) => b.callback_data)).toEqual(
+        SIX_SHOWN.map((id) => demoLaunchCallbackData(id, 15)),
+      );
+    });
   });
 
   it('labels a pair by its symbol, the arrow of the direction and the payout', () => {
