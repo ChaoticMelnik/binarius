@@ -201,8 +201,8 @@ built when it is published. The tests of the source swap hold one place each (`b
 
 Data and identifiers, not texts (decision on the issue's plan, approved by the owner):
 
-- the command names `/start`, `/menu`, `/account`, `/settings`, `/help`, `/support` — the bot
-  routes by them; only their descriptions are entries. The names and their order are
+- the command names `/start`, `/menu`, `/stop`, `/account`, `/settings`, `/invite`, `/help`, `/support` —
+  the bot routes by them; only their descriptions are entries. The names and their order are
   `BOT_COMMANDS` in `packages/shared/src/bot-commands.ts`;
 - `MODE_LABELS` (DEMO/REAL), now in `bot-text-vars.ts` for `{mode}`;
 - `pairButtonLabel` («symbol · payout%») and `groupButtonLabel`'s ` · N`;
