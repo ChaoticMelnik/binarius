@@ -106,11 +106,16 @@ Then it sends through the client push and writes the outcome:
 | 403                                                  | `failed`, attempt counted; `recordTelegramSendFailure` marks the user unreachable and cancels their pending jobs (M7) |
 | 429                                                  | `pending` again after `retry_after`, no attempt counted; the sender pauses for `retry_after` (M8)                     |
 | another refusal (4xx), or a text that fails to build | `pending` again after `MAILING_RETRY_MS` (5 min), attempt counted; `failed` at `MAILING_MAX_ATTEMPTS` (3)             |
-| no answer (a timeout, a transport error), a 5xx      | left `sent` with `outcome_unknown`: it may have been delivered, so it is never sent again (M9)                        |
+| no answer (a timeout, a transport error), a 5xx      | left `sent` with `outcome_unknown`: never sent again (M9); the batch goes on (Accepted risks)                         |
 | the process died after the claim                     | the same: `sent` with `outcome_unknown`, never sent again (M11)                                                       |
 
-A lost reminder is preferred to a duplicate. `last_error` holds a name and a code only
-(`GrammyError:403`, rule 8); the log line has the job's id, its kind and the error's identity.
+Such a send may have been delivered: a lost reminder is preferred to a duplicate. An unknown
+answer does not stop the batch, so an outage loses every job claimed while it lasts (Accepted
+risks). `last_error` holds a name and a code only (`GrammyError:403`, rule 8); the log line has the
+job's id, its kind and the error's identity. Each tick that claimed or canceled anything logs `mailing tick` with a count per answer:
+`delivered`, `refused` (403), `deferred` (429), `retry` (another refusal, a text that failed to
+build), `unknown` (no answer, a 5xx) and `canceled` (claim-time cancels); only `delivered` is
+known to have reached a user.
 
 If writing the outcome fails, the job stays as the claim left it, `sent` with `outcome_unknown`,
 and is never sent again; the failure is logged by name and code (`mailing not settled`). What
@@ -119,8 +124,10 @@ after a 403 (`engine.db.test.ts` → a settle that fails).
 
 **Rate.** One pacer for every kind spaces the sends `1000 / MAILING_SEND_PER_SECOND` ms apart:
 20 a second, under Telegram's limit of about 30 a second for one bot's messages to different
-users (stated, not measured; M10). A batch at that rate fits its tick, so a tick never overlaps the
-next (`TIMING_CHAIN_HOLDS`).
+users (stated, not measured; M10). A batch at that rate takes its tick exactly (100 × 50 ms = 5 s,
+`TIMING_CHAIN_HOLDS` holds with equality, no headroom), so the claims and sends push a full batch
+past it; the tick that overlaps it is a no-op. The gaps and Telegram's pause run on a monotonic clock
+(`performance.now`): a wall-clock step neither stretches nor cuts them.
 
 **Stop.** `stop()` ends both loops and waits for what is in flight: the planner's tick (one
 statement per kind), and the sender's current step — the pace's gap (`1000 / MAILING_SEND_PER_SECOND`,
@@ -164,6 +171,15 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
   after a claim's snapshot does not stop that claim: one message can still go out milliseconds
   after it, never two — the claimed job is already `sent`, so the cancel passes it by. Closing
   the gap would mean locking `users` in the claim, against the lock order above (rule 5).
+- A send whose outcome is unknown — no answer from Telegram (grammY's `HttpError`: a timeout, DNS,
+  a refused connection) or a 5xx — neither ends the batch nor pauses the sender (the owner's
+  decision of 2026-10-10). During a Telegram outage every job claimed while it lasts is marked
+  `sent` with `outcome_unknown` and never sent again: up to `MAILING_SEND_BATCH` (100) jobs a tick,
+  every `MAILING_SEND_TICK_MS` (5 s), for as long as the outage lasts, so a few seconds can cost the
+  whole due backlog, right after a restart included. Nothing is ever sent twice. To see it: the
+  `mailing tick` lines' `unknown` count, the `mailing not delivered` warnings with a
+  `transportError` or a 5xx `telegramErrorCode`, and
+  `select count(*) from notification_jobs where status = 'sent' and last_error = 'outcome_unknown'`.
 - An account that is not a partner client gets no starter pack and therefore no chain.
 - The last step has no end: a user who is unreachable or `off` at 72 h and comes back later gets
   it then, if they still have no session.

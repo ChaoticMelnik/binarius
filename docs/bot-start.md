@@ -554,7 +554,7 @@ defeats the type, as it defeats any.
 `apps/backend/src/auth/client-push.ts` (the link push and the mailings, #202); a caller's extra can neither override `parse_mode` nor
 pass `entities`. ESLint (`eslint.config.js`, the Telegram block) forbids grammY's send methods by
 name everywhere else in `apps/bot/src` and `apps/backend/src` (the staff bot's
-`apps/backend/src/admin` aside, plain text), outside tests — `clientPush.api.sendMessage(…)` in
+`apps/backend/src/admin/telegram.ts` aside, plain text; the rest of `admin/` is checked), outside tests — `clientPush.api.sendMessage(…)` in
 any backend module included; it does not see a
 method held in a variable. The list is `RAW_TELEGRAM_SEND_METHODS` in `eslint.config.js`: every
 Bot API method that takes parsed text and every grammY alias of one, derived from
