@@ -204,6 +204,7 @@ describe('the bot texts catalog', () => {
         'menuCommand',
         'settingsCommand',
         'startCommand',
+        'stopCommand',
         'supportCommand',
       ].sort(),
     );

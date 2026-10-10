@@ -9,6 +9,7 @@ export type BotCommandKey = BotTextKeyOfGroup<typeof BotTextGroup.Commands>;
 export const BOT_COMMANDS = [
   { command: 'start', key: 'startCommand' },
   { command: 'menu', key: 'menuCommand' },
+  { command: 'stop', key: 'stopCommand' },
   { command: 'account', key: 'accountCommand' },
   { command: 'settings', key: 'settingsCommand' },
   { command: 'help', key: 'helpCommand' },

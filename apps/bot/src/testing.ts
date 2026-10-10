@@ -413,6 +413,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     readSession: unused,
     stopSession: unused,
     claimSessionSummary: unused,
+    stopSessions: unused,
     setDemoStake: unused,
     readBotTexts: unused,
     ...patch,

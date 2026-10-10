@@ -6,6 +6,7 @@ import {
   SESSION_SUMMARY_SUFFIX,
   SessionSummaryErrorCode,
   TRADING_SESSIONS_PATH,
+  TRADING_SESSIONS_STOP_PATH,
   TradeAction,
   TradeIntentStatus,
   TradeMode,
@@ -17,6 +18,7 @@ import {
   safeParseSessionSummaryResponse,
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
+  safeParseTradingSessionsStoppedResponse,
   type BinaryPair,
   type BrokerUser,
   type PairsCatalogView,
@@ -43,6 +45,7 @@ import {
   settleIntent,
   stopTrading,
   stopTradingSession,
+  TradingSessionNotActiveError,
   takeIntent,
   tradeIntents,
   transitionIntent,
@@ -1045,5 +1048,156 @@ describe('POST /trading/sessions/:id/summary (#318)', () => {
         .statusCode,
     ).toBe(401);
     expect(await sentAt(seed.sessionId)).toBeNull();
+  });
+});
+
+describe('POST /trading/sessions/stop (#122)', () => {
+  const stopAll = (target: FastifyInstance, body: object, headers: Record<string, string> = auth) =>
+    target.inject({ method: 'POST', url: TRADING_SESSIONS_STOP_PATH, headers, payload: body });
+
+  function sessionsOf(response: { json: () => unknown }): TradingSessionView[] {
+    const parsed = safeParseTradingSessionsStoppedResponse(response.json());
+    if (!parsed.success) {
+      throw new Error(`not a stopped-sessions response: ${parsed.error.message}`);
+    }
+    return parsed.data.sessions;
+  }
+
+  const sessionRow = async (id: string) =>
+    (await tmp.db.select().from(tradingSessions).where(eq(tradingSessions.id, id)))[0]!;
+  const intentRow = async (id: string) =>
+    (await tmp.db.select().from(tradeIntents).where(eq(tradeIntents.id, id)))[0]!;
+  const tokenReservedOf = async (userId: string) =>
+    (await tmp.db.select({ v: users.tokenReserved }).from(users).where(eq(users.id, userId)))[0]!.v;
+
+  it('A1 the owner stops the one session; no intent can be created on it afterwards', async () => {
+    const seed = await seedSession();
+    const response = await stopAll(appWith(), { telegramUserId: seed.telegramUserId });
+    expect(response.statusCode).toBe(200);
+    const sessions = sessionsOf(response);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      id: seed.sessionId,
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.UserStopped,
+    });
+    expect(sessions[0]!.endedAt).not.toBeNull();
+
+    const reserved = await tokenReservedOf(seed.userId);
+    await expect(sessionIntent(seed, seed.sessionId, 1)).rejects.toBeInstanceOf(
+      TradingSessionNotActiveError,
+    );
+    expect(await tokenReservedOf(seed.userId)).toBe(reserved);
+    expect(refreshCalls).toEqual([]);
+  });
+
+  it('A2 no active session and no users row answers an empty list', async () => {
+    const response = await stopAll(appWith(), { telegramUserId: '987654321012' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ sessions: [] });
+  });
+
+  it('A3 an extra key or a missing telegramUserId is 400; no bearer is 401', async () => {
+    const seed = await seedSession();
+    const target = appWith();
+    const extra = await stopAll(target, { telegramUserId: seed.telegramUserId, sessionId: 'x' });
+    expect(extra.statusCode).toBe(400);
+    expect(extra.json()).toMatchObject({ error: 'validation' });
+    expect((await stopAll(target, {})).statusCode).toBe(400);
+    expect((await stopAll(target, { telegramUserId: seed.telegramUserId }, {})).statusCode).toBe(
+      401,
+    );
+    expect((await sessionRow(seed.sessionId)).status).toBe('active');
+  });
+
+  // the acceptance criterion: the stop does not force-close an open trade
+  it('A4 a queued intent stays as it was, and no broker call is made', async () => {
+    const seed = await seedSession();
+    const { intent } = await sessionIntent(seed, seed.sessionId, 1);
+    const before = await intentRow(intent.id);
+    const response = await stopAll(appWith(), { telegramUserId: seed.telegramUserId });
+    expect(response.statusCode).toBe(200);
+    const [session] = sessionsOf(response);
+    expect(session).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      lastIntent: { id: intent.id, status: TradeIntentStatus.Queued },
+    });
+    expect(await intentRow(intent.id)).toEqual(before);
+    expect(refreshCalls).toEqual([]);
+  });
+
+  it('A4 an accepted trade plays out: the intent stays as it was, and no broker call is made', async () => {
+    const seed = await seedSession();
+    const { intent } = await sessionIntent(seed, seed.sessionId, 1);
+    const taken = await submitted(intent);
+    await tmp.db.transaction((tx) =>
+      markIntentAccepted(tx, {
+        id: taken.id,
+        expectedVersion: taken.version,
+        transport: 'rest_fallback',
+        trade: openTradeFor(intent),
+      }),
+    );
+    const before = await intentRow(intent.id);
+    expect(before.status).toBe(TradeIntentStatus.Accepted);
+    const response = await stopAll(appWith(), { telegramUserId: seed.telegramUserId });
+    expect(response.statusCode).toBe(200);
+    const [session] = sessionsOf(response);
+    expect(session).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.UserStopped,
+      lastIntent: { id: intent.id, status: TradeIntentStatus.Accepted },
+    });
+    expect(await intentRow(intent.id)).toEqual(before);
+    expect(refreshCalls).toEqual([]);
+  });
+
+  it("A5 another user's id stops nothing and answers as no sessions", async () => {
+    const seed = await seedSession();
+    const other = await seedUser(tmp.db);
+    const response = await stopAll(appWith(), { telegramUserId: other.telegramUserId });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ sessions: [] });
+    expect((await sessionRow(seed.sessionId)).status).toBe('active');
+  });
+
+  it('A6 a stop between trades answers the balance refreshed after the last one (#337)', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await snapshotFor(seed.brokerAccountId);
+    await settled(seed, session.id, 1, '0.85');
+    const response = await stopAll(appWith({ refresh: writeAfterSession }), {
+      telegramUserId: seed.telegramUserId,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(sessionsOf(response)).toMatchObject([
+      {
+        id: session.id,
+        stopReason: TradingSessionStopReason.UserStopped,
+        balance: { available: '10000.85000000', current: true },
+      },
+    ]);
+    expect(refreshCalls).toHaveLength(1);
+    expect(refreshCalls[0]!.accountId).toBe(seed.brokerAccountId);
+    expect(Object.keys(refreshCalls[0]!.options!).sort()).toEqual(['mayRefresh', 'signal']);
+    expect(refreshCalls[0]!.options).toMatchObject({ mayRefresh: false });
+    expect(refreshCalls[0]!.options!.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('A7 a refresh that throws answers the opaque 500 with the stop committed', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await snapshotFor(seed.brokerAccountId);
+    await settled(seed, session.id, 1, '0.85');
+    const response = await stopAll(
+      appWith({ refresh: () => Promise.reject(new Error('broker down')) }),
+      { telegramUserId: seed.telegramUserId },
+    );
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: 'internal' });
+    expect(await sessionRow(session.id)).toMatchObject({
+      status: 'stopped',
+      stopReason: 'user_stopped',
+    });
   });
 });

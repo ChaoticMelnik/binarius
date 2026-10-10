@@ -3045,6 +3045,7 @@ describe('the bot texts pages (#300)', () => {
   const menuWithStart = (start: string) => [
     { command: 'start', description: start },
     { command: 'menu', description: 'Главное меню' },
+    { command: 'stop', description: 'Остановить сессию' },
     { command: 'account', description: 'Аккаунт Binodex' },
     { command: 'settings', description: 'Настройки уведомлений' },
     { command: 'help', description: 'Помощь' },

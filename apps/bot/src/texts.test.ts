@@ -1404,6 +1404,7 @@ describe('the facades over the catalog', () => {
         'stakeMenuButton',
         'stakeResetButton',
         'startCommand',
+        'stopCommand',
         'supportButton',
         'toSignalsButton',
         'supportCommand',

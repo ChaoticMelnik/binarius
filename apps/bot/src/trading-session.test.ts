@@ -42,6 +42,7 @@ import {
   sessionView,
   stubSessionTracker,
   stubTracker,
+  textUpdate,
   type ApiCall,
 } from './testing';
 import { sessionAssetLabel, sessionStatusText, TEXTS, textOf, LABELS } from './texts';
@@ -84,6 +85,7 @@ function setup(
     readSession?: BackendClient['readSession'];
     stopSession?: BackendClient['stopSession'];
     claimSessionSummary?: BackendClient['claimSessionSummary'];
+    stopSessions?: BackendClient['stopSessions'];
   } = {},
 ) {
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
@@ -99,6 +101,9 @@ function setup(
   const claimSessionSummary = vi.fn<BackendClient['claimSessionSummary']>(
     options.claimSessionSummary ?? (() => Promise.resolve(SUMMARY)),
   );
+  const stopSessions = vi.fn<BackendClient['stopSessions']>(
+    options.stopSessions ?? (() => Promise.resolve([STOPPED])),
+  );
   const logger = fakeLogger();
   const sessionTracker = stubSessionTracker();
   const bot = createBot({
@@ -109,6 +114,7 @@ function setup(
       readSession,
       stopSession,
       claimSessionSummary,
+      stopSessions,
     }),
     logger,
     botInfo: BOT_INFO,
@@ -119,8 +125,10 @@ function setup(
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   const press = (data: string, chatType?: string) =>
     bot.handleUpdate(callbackUpdate(data, chatType));
+  const send = (text: string, chatType?: string) => bot.handleUpdate(textUpdate(text, chatType));
   return {
     press,
+    send,
     logger,
     sessionTracker,
     readPairs,
@@ -128,6 +136,7 @@ function setup(
     readSession,
     stopSession,
     claimSessionSummary,
+    stopSessions,
     ...api,
   };
 }
@@ -540,6 +549,119 @@ describe("the session's stop button", () => {
     await press(STOP, 'group');
     expect(calls).toEqual([]);
     expect(stopSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('/stop (#122)', () => {
+  const open = sessionView({
+    ...STOPPED,
+    lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
+  });
+  const onlyMessage = (calls: readonly ApiCall[]) => {
+    expect(methods(calls)).toEqual(['sendMessage']);
+    return payloadOf(calls, 'sendMessage');
+  };
+
+  it('B1 one stopped session without a trade: its status and keyboard, tracked for the card', async () => {
+    const { send, calls, sessionTracker } = setup();
+    await send('/stop');
+    const sent = onlyMessage(calls);
+    expect(sent?.text).toBe(statusOf(STOPPED));
+    expect(sent?.parse_mode).toBe('HTML');
+    expect(rowsOf(sent)).toEqual(STOPPED_ROWS);
+    // done at once: tracked all the same, so its entry sends the summary card (#318), as «⏹»
+    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
+    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: STOPPED });
+  });
+
+  // the acceptance criterion: an open trade is not closed, it plays out and is followed
+  it('B2 an open trade plays out: the status says so and tracking moves to the new message', async () => {
+    const { send, calls, sessionTracker, stopSessions, stopSession, readSession } = setup({
+      stopSessions: () => Promise.resolve([open]),
+    });
+    await send('/stop');
+    const sent = onlyMessage(calls);
+    expect(sent?.text).toBe(statusOf(open));
+    expect(sent?.text).toContain(TEXTS.sessionOpenTradePlaysOut.value);
+    expect(stopSessions.mock.calls).toEqual([[String(USER.id)]]);
+    expect(stopSession).not.toHaveBeenCalled();
+    expect(readSession).not.toHaveBeenCalled();
+
+    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
+    const entry = sessionTracker.track.mock.calls[0]?.[0] as SessionTrackRequest;
+    expect(entry).toMatchObject({
+      sessionId: open.id,
+      telegramUserId: String(USER.id),
+      symbol: PAIR_EURUSD.symbol,
+      view: open,
+    });
+    await entry.edit(telegramHtml`edited`, open);
+    expect(payloadOf(calls, 'editMessageText')).toMatchObject({
+      chat_id: USER.id,
+      message_id: TEXT_CARD_MESSAGE_ID,
+    });
+  });
+
+  it('B3 no active session: the text and the menu, nothing tracked', async () => {
+    const { send, calls, sessionTracker } = setup({ stopSessions: () => Promise.resolve([]) });
+    await send('/stop');
+    const sent = onlyMessage(calls);
+    expect(sent?.text).toBe(TEXTS.sessionNoneActive.value);
+    expect(rowsOf(sent)).toEqual([MENU]);
+    expect(sessionTracker.track).not.toHaveBeenCalled();
+  });
+
+  it('B4 two sessions: the count and the menu, nothing tracked', async () => {
+    const { send, calls, sessionTracker } = setup({
+      stopSessions: () => Promise.resolve([open, STOPPED]),
+    });
+    await send('/stop');
+    const sent = onlyMessage(calls);
+    expect(sent?.text).toBe(TEXTS.sessionsStopped({ count: '2' }).value);
+    expect(sent?.text).toContain('2');
+    expect(rowsOf(sent)).toEqual([MENU]);
+    expect(sessionTracker.track).not.toHaveBeenCalled();
+  });
+
+  it('B5 a failed stop: unavailable with the menu only, a warning, no repeat', async () => {
+    for (const error of [
+      new BackendError(BackendErrorCode.Unreachable),
+      httpError(500),
+      new BackendError(BackendErrorCode.ContractViolation),
+    ]) {
+      const { send, calls, logger, stopSessions, sessionTracker } = setup({
+        stopSessions: () => Promise.reject(error),
+      });
+      await send('/stop');
+      const sent = onlyMessage(calls);
+      expect(sent?.text).toBe(TEXTS.unavailable.value);
+      expect(rowsOf(sent)).toEqual([MENU]);
+      expect(warnings(logger)).toEqual(['trading sessions not stopped']);
+      expect(stopSessions).toHaveBeenCalledTimes(1);
+      expect(sessionTracker.track).not.toHaveBeenCalled();
+    }
+  });
+
+  it('B6 a failed catalog names the asset by its id', async () => {
+    const { send, calls } = setup({
+      readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await send('/stop');
+    expect(onlyMessage(calls)?.text).toBe(sessionStatusText(null, STOPPED).value);
+  });
+
+  it('B7 a group is ignored; /stop@bot and a trailing text are the command', async () => {
+    const group = setup();
+    await group.send('/stop', 'group');
+    expect(group.calls).toEqual([]);
+    expect(group.stopSessions).not.toHaveBeenCalled();
+
+    for (const text of [`/stop@${BOT_INFO.username}`, '/stop что-то']) {
+      const { send, calls, stopSessions } = setup();
+      await send(text);
+      expect(onlyMessage(calls)?.text).toBe(statusOf(STOPPED));
+      expect(stopSessions).toHaveBeenCalledTimes(1);
+    }
   });
 });
 
