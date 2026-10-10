@@ -25,6 +25,7 @@ import {
   LinkState,
   MAX_SESSION_TRADES,
   NotificationLevel,
+  POSTBACK_QUERY_VALUE_MAX,
   safeParseAdminAuditResponse,
   safeParseAdminBotProfilePublishResponse,
   safeParseAdminBotTextPreviewResponse,
@@ -887,9 +888,6 @@ describe('body size', () => {
     const ASSUMED_LONGEST_FREE_STRING = 2048;
     // a staff display name: the CLI's --name has no bound; false once one is longer
     const ASSUMED_STAFF_DISPLAY_NAME = 256;
-    // a deposit's postbackId, paymentId and currency: no writer bounds them yet (#12, #141); false
-    // once the postback writer stores a longer one
-    const ASSUMED_DEPOSIT_ID_BYTES = 256;
     // the OAuth path stores the broker's user.email as any string (oauth-ops.ts); false once a
     // broker sends a longer address than RFC 5321 allows
     const ASSUMED_LONGEST_EMAIL = 254;
@@ -983,10 +981,12 @@ describe('body size', () => {
       userId: UUID,
       telegramUserId: INT8,
       brokerAccountId: UUID,
-      postbackId: ofBytes(ASSUMED_DEPOSIT_ID_BYTES),
-      paymentId: ofBytes(ASSUMED_DEPOSIT_ID_BYTES),
+      // the trader id, payment id and coin come from the postback query, whose values the one
+      // writer, recordPostback, takes up to POSTBACK_QUERY_VALUE_MAX units (#141)
+      brokerUserId: controls(POSTBACK_QUERY_VALUE_MAX),
+      paymentId: controls(POSTBACK_QUERY_VALUE_MAX),
       amount: MONEY,
-      currency: ofBytes(ASSUMED_DEPOSIT_ID_BYTES),
+      currency: controls(POSTBACK_QUERY_VALUE_MAX),
       status: longest(DepositEventStatus),
       processedAt: AT,
       createdAt: AT,
