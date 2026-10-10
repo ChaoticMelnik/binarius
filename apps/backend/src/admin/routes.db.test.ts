@@ -720,6 +720,32 @@ describe('POST /admin/auth/confirm', () => {
     ]);
   });
 
+  // the id web forwards from the cookie: PostgreSQL's uuid column takes it, RFC 9562 does not.
+  // Before #152 the schema refused it as malformed, and web looped on the 400
+  it('answers 410 for a challenge id PostgreSQL stores but RFC 9562 does not, and records it (#152)', async () => {
+    const ip = '198.51.100.152';
+    const response = await confirm({
+      challengeId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      code: '123456',
+      ...CLIENT,
+      ip,
+    });
+    expect([response.statusCode, response.json()]).toEqual([
+      410,
+      { error: AdminErrorCode.ChallengeUnavailable },
+    ]);
+    const entries = await tmp.db
+      .select({ actorId: auditLog.actorId, payload: auditLog.payload })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.action, AuditAction.StaffLoginCodeFailed),
+          sql`${auditLog.payload}->>'ip' = ${ip}`,
+        ),
+      );
+    expect(entries).toEqual([{ actorId: null, payload: { reason: 'unknown', ip } }]);
+  });
+
   it('refuses everything once the confirm ceiling is reached', async () => {
     await app.close();
     app = build({ confirmMaxPerMinute: 0 });

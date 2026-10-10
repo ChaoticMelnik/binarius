@@ -14,6 +14,7 @@ import {
   AuditEntityType,
   BrokerAccountStatus,
   adminChangePasswordRequestSchema,
+  adminConfirmRequestSchema,
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
   DepositEventStatus,
@@ -567,6 +568,63 @@ describe('the confirm step', () => {
     ]);
     expect(cookieOf(response, CHALLENGE_COOKIE)?.value).toBe('');
     expect((await get('/admin/login?reason=expired')).body).toContain(TEXTS.expiredChallenge);
+  });
+
+  // every value the gate lets through must parse under the backend's own schema: a cookie the
+  // gate passes and the schema refuses comes back on every retry (#152)
+  it.each([
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    '00000000-0000-0000-0000-000000000001',
+    'AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA',
+  ])('forwards the challenge cookie %s in a body the backend’s schema reads', async (value) => {
+    await post('/admin/login/confirm', { code: '123456' }, { [CHALLENGE_COOKIE]: value });
+
+    expect(calls.confirm).toEqual([expect.objectContaining({ challengeId: value })]);
+    // the forwarded body against the real schema, not against a pattern copied into this file
+    expect(adminConfirmRequestSchema.safeParse(calls.confirm[0]).success).toBe(true);
+  });
+
+  it('drops the challenge cookie and starts over when the backend refuses the forwarded body (#152)', async () => {
+    await app.close();
+    app = build({ confirm: () => Promise.reject(httpFailure(400, AdminErrorCode.Validation)) });
+
+    const response = await post(
+      '/admin/login/confirm',
+      { code: '123456' },
+      { [CHALLENGE_COOKIE]: CHALLENGE_ID },
+    );
+
+    expect([response.statusCode, response.headers.location]).toEqual([
+      303,
+      '/admin/login?reason=expired',
+    ]);
+    expect(cookieOf(response, CHALLENGE_COOKIE)?.value).toBe('');
+    const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(
+      logged.find((line) => line.msg === 'the backend refused the forwarded confirm as malformed'),
+    ).toMatchObject({ level: 50, status: 400, reason: AdminErrorCode.Validation });
+    expect(lines.join('')).not.toContain(CHALLENGE_ID);
+    // without the cookie the form is not offered again: the loop is broken
+    const next = await get('/admin/login/confirm');
+    expect([next.statusCode, next.headers.location]).toEqual([302, '/admin/login']);
+  });
+
+  // the branch is keyed on the pair: any other refusal is our own fault and leaves the cookie
+  it.each([
+    ['a 400 with another code', httpFailure(400, 'something_else')],
+    ['a refused bearer', httpFailure(401, AdminErrorCode.Unauthorized)],
+  ])('answers 500 and keeps the challenge cookie for %s', async (_label, error) => {
+    await app.close();
+    app = build({ confirm: () => Promise.reject(error) });
+
+    const response = await post(
+      '/admin/login/confirm',
+      { code: '123456' },
+      { [CHALLENGE_COOKIE]: CHALLENGE_ID },
+    );
+
+    expect(response.statusCode).toBe(500);
+    expect(cookieOf(response, CHALLENGE_COOKIE)).toBeUndefined();
   });
 
   it('refuses a code that is not six digits before calling the backend', async () => {

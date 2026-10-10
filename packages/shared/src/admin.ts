@@ -64,8 +64,12 @@ export const staffLoginCodeSchema = z.string().regex(STAFF_LOGIN_CODE_PATTERN, {
 // the wrong shape costs no query.
 export const STAFF_SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
-// A UUID as PostgreSQL prints one. Both processes check it: `web` before it forwards a
-// challenge cookie, `backend` before it looks a session id up.
+// A UUID as PostgreSQL's `uuid` column accepts and prints it: any hex 8-4-4-4-12, any version.
+// An id that arrives from outside in a request of the admin contract — a cookie, a query, a
+// path, a request body — is checked with this one object in both processes (`web` before it
+// forwards, `backend` in its schema), so whatever `web` lets through, `backend` parses.
+// `z.uuid()` (RFC 9562: version and variant nibbles fixed) is for view fields read from
+// `defaultRandom()` columns only (#152).
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // A password is bounded before it reaches the KDF: scrypt's cost is in its parameters, not in
@@ -91,7 +95,7 @@ export const adminLoginRequestSchema = z.object({
 export type AdminLoginRequest = z.infer<typeof adminLoginRequestSchema>;
 
 export const adminConfirmRequestSchema = z.object({
-  challengeId: z.uuid(),
+  challengeId: z.string().regex(UUID_PATTERN),
   code: staffLoginCodeSchema,
   ...clientFacts,
 });
