@@ -27,7 +27,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `START_REFUSALS` and `sessionOutcomeUnknown`. `bot.ts` mounts it under its private-chat filter,
   right after the demo trade's composer.
 - `apps/bot/src/session-tracker.ts` — `createSessionTracker({ backend, logger, firstPollMs,
-  pollMs, deadlineMs, maxEntries?, now? })` → `{ track, stop, size }`, and `sessionTrackingDone`.
+  pollMs, deadlineMs, maxEntries?, now? })` → `{ track, stop, size }`, and `sessionTrackingDone`
+  (`isTradingSessionFinished` of `packages/shared/src/trading-session.ts`, #337).
   `index.ts` builds one and hands it to `createBot` and to `runBot`.
 - `apps/bot/src/backend-client.ts` — `startSession(request)` → `{ started }` or `{ active }`,
   `readSession(id, telegramUserId)`, `stopSession(id, telegramUserId)` ([The client](#the-client)).
@@ -36,6 +37,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `sessionRefreshButton`, `sessionStopButton` ([bot-texts.md](bot-texts.md)).
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.sessionStart`, `.sessionRefresh`, `.sessionStop` and
   the four `SESSION_TRACK_*` constants ([Timing](#timing)).
+- `packages/shared/src/bot-text-format.ts` — `formatSignedUsd`, the session's result with its sign
+  (#337), next to `formatUsd`; the catalog's `profit` variable prints through it.
 
 ## Sequence
 
@@ -47,6 +50,8 @@ demo:sess:<assetId>:<sec>          («🚀 Сессия из 5 сделок» un
         (session:stop:<id>)
   tracker: after 3 s, then every 10 s → GET /trading/sessions/<id>?telegramUserId=<id>
            → editMessageText of that message when what it prints changes
+           (a finished session whose balance predates its last trade: the backend asks the
+           broker once more before it answers, #337 — trading-session.md → Routes)
 session:<id>                       («🔄 Обновить»)
   bot → answerCallbackQuery ∥ GET /trading/sessions/<id> ∥ GET /trading/pairs
   bot → editMessageText in place; tracking resumes on this message unless the session is done
@@ -134,20 +139,45 @@ the same 404 `not_found`.
 🎮 Демо-сессия
 📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00
 🔢 Сделка 3 из 5
-📊 Счёт: 1 в плюс, 1 в минус             (from the first settled trade; «в ноль» only when tied > 0)
+📊 Счёт: 1 в плюс, 1 в минус · -$0.50    (from the first settled trade; «в ноль» only when tied > 0)
 
 ✅ Сделка открыта у брокера.             (the last trade's line from the demo trade's texts)
 ```
 
+A finished one (#337):
+
+```text
+🎮 Демо-сессия
+📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00
+
+🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус
+💰 Результат: +$2.50
+🧪 Демобаланс: $10 002.50
+🕒 Баланс Binodex обновлён 1 мин назад.  (only when the balance predates the last trade)
+```
+
+- **The result** is `trades.profit` of the view: the backend's SQL sum of the settled trades'
+  profit, printed by `formatSignedUsd` (`+$2.50`, `-$0.50`; a zero, truncated ones included, is
+  `$0.00` with no sign). The bot adds no money (Rule 2). The live score line carries it after
+  «·»; a stopped session gets it as its own line «💰 Результат: …».
+- **The balance** is `balance.available` of the view in the session's mode, through `formatUsd`:
+  «🧪 Демобаланс» for demo, «💵 Реальный баланс» for real (`sessionBalanceDemo`/
+  `sessionBalanceReal`, the `/menu` card's words). `balance.current === false` (no observation is
+  newer than the session's last settlement) adds the `/menu` card's age line `statusStale`. No
+  snapshot (`balance: null`): the result alone.
+- Both lines appear only once a trade settled (`settled > 0`), under every stop reason.
+
 - **Live** (`status` is not `stopped`): the trade number is `min(settled + 1, planned)`; the last
   line is the last trade's status line when it is live, otherwise «🔎 Ждём сигнал для следующей
   сделки…».
-- **Completed**: «🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус».
-- **Stopped for another reason**: the reason's line, then «📊 Итог: …» when a trade settled, then
-  the last trade's line while it is live, and «⏳ Открытая сделка доиграет до конца.» only when the
+- **Completed**: «🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус», then the result, the
+  balance and its age line (above).
+- **Stopped for another reason**: the reason's line, then «📊 Итог: …» when a trade settled, the
+  result, the balance and its age line, then the last trade's line while it is live, and «⏳ Открытая сделка доиграет до конца.» only when the
   worker carries it to its end without a person (live and not `manual_review`). Under the
   `manual_review` stop a trade on manual review gets no line of its own: the stop line already says
-  it and points at /support (one text for both sources, owner's decision).
+  it and points at /support (one text for both sources, owner's decision). The backend does not
+  refresh such a session's balance (it is not finished), so it shows the stored one with its age.
 - **The deadline hint** («⏳ Сессия ещё идёт…») goes only under a session that is not stopped; a
   stopped one gets its plain final status.
 - **`settings: null`** (a hand-written row): the header and «⚠️ Настройки сессии не прочитаны —
@@ -204,11 +234,14 @@ One entry per session id, in process memory, like the intent tracker
   already sent can still land there, so at most one more edit. The deadline
   keeps counting from the first `track()`.
 - **Done** is `status === stopped` and the last trade can no longer move
-  (`TRADE_INTENT_TRANSITIONS[status]` is empty: settled or rejected, or no trade). A stopped session
+  (`TRADE_INTENT_TRANSITIONS[status]` is empty: settled or rejected, or no trade) —
+  `isTradingSessionFinished`, the predicate the backend refreshes the balance by (#337). A stopped session
   with an open trade is followed until that trade settles, so its counts are final. A last trade
   in `manual_review` still has edges, so that entry runs to the deadline.
-- **The render key** is `status|stopReason|planned|settled|won|lost|tied|lastIntent.id|
-  lastIntent.status|lastIntent.lastError`; the message is edited only when it changes.
+- **The render key** is `status|stopReason|planned|settled|won|lost|tied|profit|
+  balance.available|balance.current|lastIntent.id|lastIntent.status|lastIntent.lastError`; the
+  message is edited only when it changes. `balance.ageSec` is left out: it moves on every poll and
+  would edit a `manual_review` session's message every 10 s to the deadline.
 - Past `SESSION_TRACK_DEADLINE_MS`: one last edit, not retried — «⏳ Сессия ещё идёт — нажми
   «🔄 Обновить», чтобы увидеть ход.» under a session that is not stopped, the final status otherwise
   (a done one whose edit never landed, or a stopped one whose last trade is still on manual review).
@@ -233,7 +266,8 @@ One entry per session id, in process memory, like the intent tracker
   cycle is at least the worker's catch-up grace, 10 s), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
   `SESSION_TRACK_DRAIN_MS` = 5 s + 8 s.
 - The chain at import adds `TRADING_SESSION_START_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
-  link #283 left to the bot), first poll < poll < deadline, `SESSION_MAX_DURATION_MS <
+  link #283 left to the bot), `TRADING_SESSION_VIEW_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
+  read and the stop wait on one balance GET for a finished session, #337), first poll < poll < deadline, `SESSION_MAX_DURATION_MS <
   SESSION_TRACK_DEADLINE_MS` (imported, so checked) and drain < `SHUTDOWN_BUDGET_MS`.
 
 ## Logs
@@ -257,7 +291,22 @@ id or the symbol.
 4. **Retargeting** can leave one more edit on the old message.
 5. **A last trade in `manual_review`** keeps its entry polling to the deadline; the message then
    keeps the stopped session's final status.
-6. **No profit sum**, only won/lost/tied counts: the view has no sum (#283).
+6. **The age line is as of the edit that drew it** (#337): the render key leaves `ageSec` out, so
+   a message showing «🕒 … N назад» keeps that N until something else changes; «🔄 Обновить»
+   redraws it.
+7. **A socket settlement racing the balance GET** (#337). The socket writers are on at the pilot
+   (Rule 27). A `GET /v1/broker/user` the broker answered before it closed the trade, written after
+   the `settle` row commits (`close_trade.success` → `settleClosedTrades`), reads `current: true`
+   with the balance from before the close. The window is the GET's own latency, at most
+   `BROKER_REST_TIMEOUT_MS` (5 s). That the broker sends `update_balance` when a trade closes,
+   which would correct the row on its next event, is stated, not verified (observed live only at
+   open, [broker-socket.md](broker-socket.md)). On the REST path the catch-up grace (10 s) is longer
+   than the GET timeout, so the race cannot happen there. Falsifiable: a final status whose
+   «🧪 Демобаланс» differs from `/menu` read right after, with no «🕒» line.
+8. **A saved override of `sessionScore` without `{profit}`** shows the score without the sum until
+   it is edited; overrides are not migrated (#337).
+9. **One deploy for the backend and the bot** (#337): the view's schema is strict on both sides, so a
+   bot older than the backend answers `ContractViolation` on every session read until redeployed.
 
 ## Running it locally
 
@@ -278,4 +327,6 @@ its own, which no runtime check of this issue used.
 - **#29** — a notification for each trade of the session; this message is only edited.
 - **#297** — choosing the stake; its new start refusals join `START_REFUSALS`.
 - **#360** — the button first on every `decided` analysis, and under a finished single trade.
+- **#318** — the summary card at the session's end takes `formatSignedUsd` from
+  `@binarius/shared` and the same SQL sum (`trades.profit`, #337).
 - **#121** — real mode; **#201** — levels and rewards.

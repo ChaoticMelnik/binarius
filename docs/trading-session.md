@@ -195,15 +195,37 @@ comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 `not_found` with the same body (Rule 13); a missing `telegramUserId` is 400.
 
 The view is an allowlist built key by key: `{ id, mode, status, stopReason, settings, startedAt,
-endedAt, trades: { planned, settled, rejected, won, lost, tied }, lastIntent }` — `planned` is
-`settings.trades`, `lastIntent` the same view `GET /trading/intents/:id` answers, or `null`.
-Bounded: counters, one settings object, one intent; no list.
+endedAt, trades: { planned, settled, rejected, won, lost, tied, profit }, lastIntent, balance }` —
+`planned` is `settings.trades`, `lastIntent` the same view `GET /trading/intents/:id` answers, or
+`null`. Bounded: counters, one settings object, one intent; no list.
+
+- `trades.profit` (#337) is `coalesce(sum(broker_trades.profit) filter (where settled), round(0, 8))`
+  in the same REPEATABLE READ snapshot as the counters: a `DecimalString` at scale 8
+  (`'-0.15000000'`, `'0.00000000'` with no settled trade), never summed in JS (Rule 2).
+- `balance` (#337) is `{ available, ageSec, current }` from the account's
+  `broker_balance_snapshots` row in the session's mode, or `null` with no row. `ageSec` is the age
+  of the newest observation, `greatest(rest_observed_at, <mode>_event_at)`, by the database clock;
+  `current` is true when no `settle` row of `token_ledger` for the session's intents is newer than
+  that observation (true with no settlement at all). The account id stays out of the view.
+- **The refresh** (`viewForReply` in `session-routes.ts`, #337): when the view is finished
+  (`isTradingSessionFinished`: stopped, and the last intent has no transition left), `settled > 0`
+  and `balance.current` is not true, the route reads the session's account
+  (`readTradingSessionAccount`, owner-scoped) and calls `balance.refresh(accountId, { signal:
+  AbortSignal.timeout(TRADING_ACCESS_REFRESH_BUDGET_MS), mayRefresh: false })` — no token exchange
+  from a timer-driven poll (Rule 12), no `requested`. On `'ok'` it reads the view again; any other
+  outcome answers the stored snapshot, which the bot shows with its age. A thrown refresh is the
+  opaque 500. After one `'ok'` the snapshot is current for good (nothing of a finished session
+  can settle any more), so a session costs at most one broker GET. A `manual_review` session is
+  not finished and is not refreshed.
+- **Time**: under `TRADING_SESSION_VIEW_BUDGET_MS` (4 s), inside the backend's shutdown phase 1
+  and no longer than the bot's request timeout (both chains asserted at import).
 
 ### POST /trading/sessions/:id/stop
 
 Body `{ telegramUserId }`. The owner-scoped read first (404 `not_found` as above), then
 `stopTradingSession(id, user_stopped)`: 200 `{ session }` stopped, or 409 `session_not_active` when
-it was no longer active. The CAS is by id: a session's account and the account's user never
+it was no longer active. The final read is the GET's `viewForReply`: a stop between trades is a
+finished session, so its answer carries the balance after the last trade (#337). The CAS is by id: a session's account and the account's user never
 change, so no interleaving lets it stop another user's session. A live intent of the session
 finishes on its own path.
 

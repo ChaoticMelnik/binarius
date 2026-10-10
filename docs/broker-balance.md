@@ -119,6 +119,19 @@ already stopped (`stop()`, the route's budget) skips the report, and one under w
 for another caller's exchange on the row lock
 ([binodex-oauth.md → A refused token](binodex-oauth.md#a-refused-token-is-an-expired-token-281)).
 
+### Callers
+
+- `POST /trading/access` and `POST /trading/sessions` (a missing snapshot): `requested: true`, the
+  route's `TRADING_ACCESS_REFRESH_BUDGET_MS` signal, an exchange allowed.
+- The background tick (below): `mayRefresh: false`.
+- **The session view** (#337): `GET /trading/sessions/:id` and the final read of
+  `POST /trading/sessions/:id/stop` (`viewForReply` in `apps/backend/src/trading/session-routes.ts`).
+  Only for a finished session (`isTradingSessionFinished`) with `settled > 0` whose snapshot is
+  not `current` — older than the session's last `settle` row of `token_ledger` (`readTradingSessionView`).
+  `mayRefresh: false` (the bot's poll is a timer, Rule 12), no `requested` (a poll does not keep the
+  account in work), the same 3 s signal. After an `ok` the snapshot is current for good, so a
+  session costs at most one GET ([trading-session.md](trading-session.md#get-tradingsessionsidtelegramuserid)).
+
 ## The background tick
 
 Every `BALANCE_RECONCILE_INTERVAL_MS` (env, 10 000 to 60 000, default 60 000):
