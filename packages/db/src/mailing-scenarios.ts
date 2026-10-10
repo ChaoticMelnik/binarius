@@ -4,6 +4,7 @@ import {
   FIRST_SESSION_CHAIN,
   NotificationKind,
   TokenLedgerKind,
+  TradeMode,
   UserStatus,
 } from '@binarius/shared';
 import { literal } from './schema/columns';
@@ -34,8 +35,11 @@ const linkedAt = sql`(select ${tokenLedger.createdAt} from ${tokenLedger}
 
 // The user can still act on the button: not blocked by the admin, an active account, and no
 // trading session of any status on any of their accounts (owner, 2026-10-07: the chain leads to
-// the first session, so any session ends it).
+// the first session, so any session ends it), and the user trades demo: the chain leads into the
+// demo, so a user in real mode gets none, and a step planned before the switch is cancelled at the
+// claim (#121).
 const beforeFirstSession = sql`(${users.status} = ${literal(UserStatus.Active)}
+  and ${users.tradingMode} = ${literal(TradeMode.Demo)}
   and exists (select 1 from ${brokerAccounts}
     where ${brokerAccounts.userId} = ${users.id}
       and ${brokerAccounts.status} = ${literal(BrokerAccountStatus.Active)})

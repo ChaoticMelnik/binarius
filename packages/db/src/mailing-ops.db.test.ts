@@ -6,6 +6,7 @@ import {
   NotificationKind,
   NotificationLevel,
   TokenLedgerKind,
+  TradeMode,
   UserStatus,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
@@ -27,6 +28,7 @@ import {
 } from './schema/index';
 import { LINK_BONUS_RULE_CODE } from './link-bonus-ops';
 import { markTelegramBlocked, setNotificationLevel } from './delivery-ops';
+import { setTradingMode } from './user-ops';
 import {
   claimMailingJob,
   MAILING_OUTCOME_UNKNOWN,
@@ -178,6 +180,16 @@ describe('planMailingJobs', () => {
       .from(notificationJobs)
       .where(inArray(notificationJobs.userId, [...ids, noPack.userId]));
     expect(jobs).toEqual([]);
+  });
+
+  // #121: the chain leads into the demo, so a user in real mode gets none of it
+  it('C2r plans nothing for a linked user in real mode, and the step for one in demo', async () => {
+    const real = await linked(hours(1) + 1);
+    await setTradingMode(tmp.db, BigInt(real.telegramUserId), TradeMode.Real);
+    const demo = await linked(hours(1) + 1);
+    await planMailingJobs(tmp.db);
+    expect(await jobsOf(real.userId)).toEqual([]);
+    expect((await jobsOf(demo.userId)).map((job) => job.kind)).toEqual([STEP_1H!.kind]);
   });
 
   // #202, owner 2026-10-10: accounts connected before the engine's deploy get no reminders.
@@ -342,6 +354,14 @@ describe('claimMailingJob', () => {
       });
       expect((await jobRow(planned!.id)).status).toBe(NotificationJobStatus.Canceled);
     }
+  });
+
+  // #121: a step planned while the user traded demo is cancelled once they switched to real
+  it('C3r cancels at the claim a step whose user switched to real after it was planned', async () => {
+    const { jobId, telegramUserId } = await dueJob();
+    await setTradingMode(tmp.db, BigInt(telegramUserId), TradeMode.Real);
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(jobId)).status).toBe(NotificationJobStatus.Canceled);
   });
 
   it('cancels a step that went stale because the next one is due', async () => {

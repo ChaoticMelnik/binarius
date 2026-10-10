@@ -434,11 +434,13 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       ...features(true),
       '\n',
       k('demoPayout'),
-      // a pair paying below the cycle floor: no session row, the note says why (on every
-      // decided answer, #379)
-      oneOf([], ['\n', k('analysisCycleUnavailable')]),
-      '\n\n',
-      k('analysisDisclaimer'),
+      oneOf(
+        // demo: a pair paying below the cycle floor gets no session row, the note says why (on
+        // every decided answer, #379)
+        [oneOf([], ['\n', k('analysisCycleUnavailable')]), '\n\n', k('analysisDisclaimer')],
+        // real mode (#121): no cycle to refuse, its own disclaimer
+        ['\n\n', k('analysisDisclaimerReal')],
+      ),
     ],
   },
   {
@@ -465,8 +467,11 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       '\n\n',
       ...features(false),
       '\n\n',
-      k('analysisNoSignalHint'),
-      oneOf([], ['\n', k('analysisCycleUnavailable')]),
+      oneOf(
+        [k('analysisNoSignalHint'), oneOf([], ['\n', k('analysisCycleUnavailable')])],
+        // real mode (#121): no cycle to refuse
+        [k('analysisNoSignalHintReal')],
+      ),
     ],
   },
   {

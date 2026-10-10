@@ -16,6 +16,7 @@ import {
   SignalKind,
   TELEGRAM_MESSAGE_LIMIT,
   TradeAction,
+  TradeMode,
   TrendDirection,
   type DataRefusalReason,
   type SignalDataRefusal,
@@ -74,10 +75,16 @@ const DATA_DETAILS: { [R in DataRefusalReason]: Extract<SignalDataRefusal, { rea
 const dataRefusalOf = (reason: DataRefusalReason) =>
   signalDecided({ ...head, kind: SignalKind.NoSignal, ...DATA_DETAILS[reason] } as SignalDecision);
 
-const screenOf = (response: TradingSignalResponse, pair = PAIR_EURUSD) =>
-  analysisScreen({ pair, durationSec: 5, response });
-const linesOf = (response: TradingSignalResponse, pair = PAIR_EURUSD) =>
-  plainTextOf(screenOf(response, pair).text).split('\n');
+const screenOf = (
+  response: TradingSignalResponse,
+  pair = PAIR_EURUSD,
+  mode: TradeMode = TradeMode.Demo,
+) => analysisScreen({ mode, pair, durationSec: 5, response });
+const linesOf = (
+  response: TradingSignalResponse,
+  pair = PAIR_EURUSD,
+  mode: TradeMode = TradeMode.Demo,
+) => plainTextOf(screenOf(response, pair, mode).text).split('\n');
 const FEATURE_PREFIXES = ['📐 Тренд по EMA:', '⚡ Импульс по RSI:', '🌊 Волатильность по ATR:'];
 const hasFeatureLines = (lines: string[]) =>
   FEATURE_PREFIXES.every((prefix) => lines.some((line) => line.startsWith(prefix)));
@@ -197,6 +204,33 @@ describe('the analysis screen', () => {
     expect(linesOf(SIGNAL_FETCH_FAILED, low)).not.toContain(note);
   });
 
+  // Plan 5 (decision 26): in real mode the analysis names real money and has no cycle to refuse
+  it('ends a real signal with the real disclaimer and no demo wording', () => {
+    const lines = linesOf(SIGNAL_DECIDED, PAIR_EURUSD, TradeMode.Real);
+    expect(lines.at(-1)).toBe(plainTextOf(TEXTS.analysisDisclaimerReal));
+    expect(lines.join('\n')).not.toMatch(/это демо|деньги не нужны/i);
+  });
+
+  it('ends a real rule refusal with the real hint and a real data refusal with the data hint', () => {
+    expect(linesOf(SIGNAL_NO_SIGNAL, PAIR_EURUSD, TradeMode.Real).at(-1)).toBe(
+      plainTextOf(TEXTS.analysisNoSignalHintReal),
+    );
+    expect(
+      linesOf(dataRefusalOf(DATA_REFUSAL_REASONS[0]), PAIR_EURUSD, TradeMode.Real).at(-1),
+    ).toBe(plainTextOf(TEXTS.analysisDataHint));
+  });
+
+  it('draws no cycle note in real mode on a pair below the cycle floor', () => {
+    const low = { ...PAIR_EURUSD, payout: 79 };
+    for (const response of [
+      SIGNAL_DECIDED,
+      SIGNAL_NO_SIGNAL,
+      dataRefusalOf(DATA_REFUSAL_REASONS[0]),
+    ]) {
+      expect(linesOf(response, low, TradeMode.Real).join('\n')).not.toContain('Цикл на этой паре');
+    }
+  });
+
   it('formats the break-even share to a tenth, a dash where the payout gives none', () => {
     expect(formatBreakEven(80)).toBe('55.6');
     expect(formatBreakEven(68.9)).toBe('59.2');
@@ -314,7 +348,7 @@ describe('the analysis screen', () => {
       SIGNAL_FETCH_FAILED,
     ];
     for (const response of responses) {
-      const { text } = analysisScreen({ pair, durationSec: 15, response });
+      const { text } = analysisScreen({ mode: TradeMode.Demo, pair, durationSec: 15, response });
       expect(telegramTextProblems(text, TELEGRAM_MESSAGE_LIMIT)).toEqual([]);
       expect(plainTextOf(text)).toContain(pair.symbol);
       expect(text.value).not.toContain('&amp;amp;');
@@ -332,7 +366,8 @@ describe('the text source', () => {
 
   const screenWith = (key: BotTextKey, response: TradingSignalResponse) => {
     setBotTextSource(stubTextSource(key));
-    return analysisScreen({ pair: PAIR_EURUSD, durationSec: 5, response }).text.value;
+    return analysisScreen({ mode: TradeMode.Demo, pair: PAIR_EURUSD, durationSec: 5, response })
+      .text.value;
   };
 
   it.each<[string, BotTextKey, TradingSignalResponse]>([
