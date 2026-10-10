@@ -136,7 +136,7 @@ it logs `shutdown: active jobs did not finish within the budget, exiting without
 1 without phase 2. The intent stays `submitting`. The new process resolves it: after
 `STALE_SUBMITTING_MS` (60 s) its sweeper marks it `unknown`, the reconciliation job moves it to
 `reconciling` and the pass finds the one trade at the broker or reports none — never a second send
-(Rule 15, #131). The script prints the warning and still exits 0: the new worker runs.
+(Rule 15; a session's step: H9). The script prints the warning and still exits 0: the new worker runs.
 
 ## Other edges
 
@@ -186,6 +186,9 @@ shortened (`WorkerTestSeams`) and the backend's routes stubbed:
 - **H4**: a demo session of three trades runs across the handoff: three steps
   `session:<id>:1..3`, three trades at the broker, the session `completed`.
 - **H5**: `start()` logs the ready line once, and the script greps that exact text.
+- **H9** (#131): a demo session's old worker dies dirty with step 1's REST submit in flight; the
+  new one resolves it through the sweeper and reconciliation, and the session completes with one
+  trade per step.
 - **W1**: a drain past the budget returns `dirty` and phase 2 does not run (Redis and the pool stay
   open). **W2**: a clean drain returns `clean` and closes them.
 

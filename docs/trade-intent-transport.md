@@ -237,6 +237,9 @@ overdue. Without it there is no session: every intent reaches the broker over RE
 (`rest_fallback`, the trade command executor, [trade-executor.md](trade-executor.md)) and the
 catch-up settles every one.
 
+The intents of a demo session take the same rows; what the session does meanwhile is
+[trading-session.md](trading-session.md) → [Recovery after a restart](trading-session.md#recovery-after-a-restart-131).
+
 ## Reconciliation matching (#90)
 
 **Keys.** A broker trade is a candidate for an intent when its `asset_id`, mode (`is_demo`),

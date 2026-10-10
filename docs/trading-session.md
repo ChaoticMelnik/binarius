@@ -367,7 +367,51 @@ The refusal map is `satisfies Record<TradeIntentErrorCode, …>`, so a code adde
 - **Hold-backs live in memory**, keyed by session id, in one worker container (two during a
   deploy's overlap or until an operator resolves an interrupted run, #95, worker-deploy.md; #94:
   several processes; #93's lease covers the broker sockets only);
-  a restart drops them, and the next attempt is idempotent.
+  a restart drops them, and the next attempt is idempotent
+  ([Recovery after a restart](#recovery-after-a-restart-131)).
+
+## Recovery after a restart (#131)
+
+A worker that dies or restarts mid-session leaves the session `active` and at most one intent of it
+live. The new worker needs nothing from the old one's memory: the step, the pause and the live
+intent are all in the database. What resolves the intent is the transport's table,
+[trade-intent-transport.md](trade-intent-transport.md) → "After a crash or restart"; this section is
+what the session does meanwhile. The cases are `orchestrator.db.test.ts` → "restart recovery
+(#131)" (R1–R7, one orchestrator, pass and catch-up per worker over one database) and
+`worker.handoff.db.test.ts` H9 (the production composition, the old worker dying dirty).
+
+**(a) Per stage of the live intent.** While an intent of the session is live, the scan does not list
+the session (`listRunnableSessions` skips an account with a non-terminal intent), so it waits.
+
+| The intent was left in | The session |
+|---|---|
+| `planned`/`reserved` | cannot happen: created and queued in one transaction |
+| `queued` | waits; a job delivered after `INTENT_MAX_AGE_MS` (60 s) ends `expired`, which counts towards `rejected_twice` like any `rejected` (R3) |
+| `submitting`, `unknown`, `reconciling`, `reconciling` with the dead worker's claim | waits; a redelivered job never sends again (R1b); the claim is a lease of `RECONCILE_RETRY_MS` (60 s) (R1) |
+| …and the pass finds the trade | the intent goes `accepted`/`settled`, then the next step (R1, H9) |
+| …and the pass finds nothing | `manual_review` and the account halted; the next tick stops the session `manual_review`, the reserve kept (R2; #274 replaces the halt with a release on a proven absence) |
+| `accepted` | waits for `close_trade` on the socket or the settlement catch-up (R4) |
+
+A hold-back is lost with the worker's memory; the new worker asks again and the attempt is
+idempotent (R5). The pause after two losses survives, because it is read from the rows (P4, P8).
+
+**(b) No new limit.** A restart adds none: the 1 h deadline (`SESSION_MAX_DURATION_MS`) and every
+normal stop condition apply, so a session that waited 40 minutes trades its next step (R7). A
+session whose deadline passed while the worker was down reads `active` in the bot until a tick
+stops it as `timeout`, at most `TRADING_SESSION_BATCH_SIZE` (200) a tick; the rest are already out
+of the scan (E7, E7b).
+
+**(c) Two workers at once.** When and how long two run, and each component's guard:
+[Accepted risks](#accepted-risks-287) → 4 and [worker-deploy.md](worker-deploy.md) → "Why two
+workers at once are safe". For the session after a crash: two orchestrators in one tick create one
+intent for the step (R6), and an old worker that dies dirty with the step's REST submit in flight
+costs no second trade (H9).
+
+**(d) The socket after a restart.** The new worker rebuilds the sessions for the accounts in work
+under the lease (Rule 32); a dead owner's lease lapses after `SESSION_LEASE_TTL_MS`
+([broker-session.md](broker-session.md) → The lease). Until `user.data` is verified orders go by
+REST (Rules 15, 27). A `close_trade` sent while the worker was down is lost; the catch-up settles
+that trade (R4).
 
 ## The payout floor (#379)
 
@@ -701,7 +745,8 @@ docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to
    second trade on the step. Two workers run for the deploy's overlap, the readiness wait (up to
    `READY_TIMEOUT_S`, 120 s) plus the drain (≤ 40 s), or until an operator resolves an interrupted
    run ([worker-deploy.md](worker-deploy.md) → The overlap's length, #95, `worker.handoff.db.test.ts`
-   H4); several workers are #94 (#93's lease covers the broker sockets only).
+   H4; an old worker dying dirty mid-step: H9); several workers are #94 (#93's lease covers the
+   broker sockets only).
 5. **An intent past the deadline.** The scan and the history read guard the deadline on the
    database clock; a deadline that passes during the attempt's backend calls lets that attempt
    create its intent. The creation starts at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (10 s) late;
@@ -720,8 +765,10 @@ docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to
   through the settlement catch-up.
 - #283 (shipped): the backend routes (start, status, stop — the writer of `user_stopped`, with
   #122's stop of all); #284: the bot ([bot-session.md](bot-session.md)).
-- #131: restart recovery; #135: `grant_revoked` as a stop reason; #94: the orchestrator under more than
-  one worker container (#93's lease covers the broker sockets only).
+- #131 (shipped): restart recovery, [above](#recovery-after-a-restart-131); a process-level kill
+  in the tests is #105, a release on a proven absence instead of the halt is #274. #135:
+  `grant_revoked` as a stop reason; #94: the orchestrator under more than one worker container
+  (#93's lease covers the broker sockets only).
 - Real sessions: the schema takes `mode`, and `createTradingSession` refuses anything but `demo`
   (`mode_not_allowed`); real sessions (#121/#135) lift that refusal with their own fence. The
   `demo_only` refusal above it stays (#396). A real
