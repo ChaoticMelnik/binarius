@@ -2583,3 +2583,33 @@ The owner asked this session (created for writing issues) to carry both issues t
 2. **Tech-lead Phase 0: before spawning the implementer on a plan written by another session or more than a day old, compare its base with `origin/main` (`git log --oneline <plan base>..origin/main`) and send it to the architect for a Plan Update when files it names have moved** — **открыто (2026-10-10, tech-lead)**
 3. **Shared test DB `binarius` holds PR #415's unmerged migration (Step 7 violation by another session); once #415 is renumbered to 0038 it will try to apply the same changes again** — **открыто (2026-10-10, владелец / сессия #415)**
 4. **Remaining Minor** — **вынесено в #422, #426; flaky test → #423; night stands → #421**
+
+## #152 — challengeId: one uuid predicate across web and backend, no 500 loop on confirm (2026-10-10)
+
+Picked by tech-lead on the owner's «Отбери сам следующую задачу»: a real defect on the staff login path, small, with no in-flight session in its files (#391 already had another session's plan; #151/#153 overlap the staff-domain files of #150/#154/#158).
+
+| Issue | PR | Review rounds | Added lines | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #152 challengeId parity + confirm 400 branch | #431 | 1 | 133 | — | skipped (limit until 14.10) | → #433 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Architect | Clarify | Fable: research and 4 questions, all answered by the owner (UUID_PATTERN wins; the whole admin contract as a class; 400 → «Подтверждение истекло»; view PK/FK keep `z.uuid()`). The architect then died on the Fable weekly limit (429) before posting. |
+| Architect | Plan | The owner chose «Архитектора на Opus до сброса»; a new Opus architect got the answers and the previous findings, skipped clarify and posted the plan with a line naming the model. |
+| Implementer | Clarify + code | No questions — the plan left no fork. `pnpm check` 0; M1–M7 + M1b red, only new assertions. |
+| Reviewer | Round 1 | No Blocker/Major, 3 Minor (a vacuous GET assertion, comment and docs wording); the class sweep re-done by grep. |
+| Tech Lead | Merge | Mergeability checked before the reviewer spawn (clean), but #202 (PR #429) merged during the review and the PR turned CONFLICTING right before the merge. The implementer rebased (only the predicted adjacent-hunk conflict in architect Rules 17–19); tech-lead checked `git range-diff` (code commit `=`, docs commit differs only in context lines), the mutation table was re-taken at the new head, and the owner confirmed the merge again for the new head. |
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| A conflict appeared between the review and the merge | Process | env-parity | The pre-review mergeability check cannot see a neighbour merging during the review; the merge relay re-check caught it | — (caught by the relay re-check) |
+| The confirm test's follow-up GET cannot fail (no cookie sent) | Minor | unverified-claim | The assertion re-tests the no-cookie gate; the loop break is pinned by the preceding cookie check | Implementer tests |
+
+### Process improvement proposals
+
+1. **Merge relay: re-check `mergeable` right before `gh pr merge`; on CONFLICTING send the implementer a rebase-only task, verify with `git range-diff`, re-take the mutation table and ask the owner again for the new head** — **применено в этом PR; в tech-lead SKILL.md ещё не внесено — открыто (2026-10-10, tech-lead)**
+2. **Remaining Minor** — **вынесено в #433**
