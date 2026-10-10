@@ -145,6 +145,7 @@ describe('runBot', () => {
         { command: 'stop', description: 'Остановить сессию' },
         { command: 'account', description: 'Аккаунт Binodex' },
         { command: 'settings', description: 'Настройки уведомлений' },
+        { command: 'invite', description: 'Пригласить друга' },
         { command: 'help', description: 'Помощь' },
         { command: 'support', description: 'Поддержка' },
       ],
@@ -729,6 +730,7 @@ function scene(options: SceneOptions = {}) {
   const backend: BackendClient = {
     recordStart: options.recordStart ?? (() => Promise.resolve(USER_VIEW)),
     readAccount: () => Promise.reject(new Error('not used by these scenes')),
+    readReferral: () => Promise.reject(new Error('not used by these scenes')),
     confirmLogin: () => Promise.reject(new Error('not used by these scenes')),
     sendEmailCode: () => Promise.reject(new Error('not used by these scenes')),
     emailLogin: () => Promise.reject(new Error('not used by these scenes')),
@@ -913,6 +915,7 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
         { command: 'stop', description: 'Остановить сессию' },
         { command: 'account', description: 'Аккаунт Binodex' },
         { command: 'settings', description: 'Настройки уведомлений' },
+        { command: 'invite', description: 'Пригласить друга' },
         { command: 'help', description: 'Помощь' },
         { command: 'support', description: 'Поддержка' },
       ],

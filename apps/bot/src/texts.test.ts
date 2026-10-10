@@ -130,6 +130,7 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   trades: text,
   action: text,
   botUsername: text,
+  referralLink: text,
 });
 const contextOf = (key: string, text: string): Record<string, unknown> => {
   const inputs = inputsOf(text);
@@ -1384,6 +1385,9 @@ describe('the facades over the catalog', () => {
         'demoNextButton',
         'demoPrevButton',
         'demoRetryButton',
+        'inviteButton',
+        'inviteCommand',
+        'inviteShareButton',
         'helpCommand',
         'loginButton',
         'menuButton',

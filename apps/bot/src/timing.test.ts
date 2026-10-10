@@ -38,6 +38,7 @@ import {
   createBot,
   levelCallbackData,
 } from './bot';
+import { INVITE_CALLBACK_DATA } from './keyboards';
 import {
   DEMO_GROUPS_CALLBACK_DATA,
   DEMO_SIGNALS_CALLBACK_DATA,
@@ -57,6 +58,7 @@ import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import {
   ACCESS_VIEW,
   ACCOUNT_VIEW,
+  REFERRAL_VIEW,
   BOT_INFO,
   CARD_MESSAGE_ID,
   CODE,
@@ -140,6 +142,7 @@ interface Branch {
   expected: Calls;
   recordStart?: BackendClient['recordStart'];
   readAccount?: BackendClient['readAccount'];
+  readReferral?: BackendClient['readReferral'];
   confirmLogin?: BackendClient['confirmLogin'];
   sendEmailCode?: BackendClient['sendEmailCode'];
   emailLogin?: BackendClient['emailLogin'];
@@ -272,6 +275,10 @@ async function observe(branch: Branch): Promise<Calls> {
     readAccount: (telegramUserId) => {
       backend += 1;
       return (branch.readAccount ?? (() => Promise.resolve(ACCOUNT_VIEW)))(telegramUserId);
+    },
+    readReferral: (telegramUserId) => {
+      backend += 1;
+      return (branch.readReferral ?? (() => Promise.resolve(REFERRAL_VIEW)))(telegramUserId);
     },
     confirmLogin: (telegramUserId, accountId) => {
       backend += 1;
@@ -1920,7 +1927,69 @@ const SETTINGS_BRANCHES: readonly Branch[] = [
   SETTINGS_WORST_CASE,
 ];
 
-// «🔄 Повторить» of /account and /settings (#350): the command's branches after the answer
+// Every terminal branch of /invite (#115): one read, one message, whatever the read said.
+const INVITE_WORST_CASE: Branch = {
+  label: 'the link is shown',
+  update: textUpdate('/invite'),
+  expected: { backend: 1, telegram: 1 },
+};
+
+const INVITE_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the update carries no sender',
+    update: withoutSender(textUpdate('/invite')),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the chat is not private',
+    update: textUpdate('/invite', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  INVITE_WORST_CASE,
+  {
+    label: 'the user is blocked',
+    update: textUpdate('/invite'),
+    readReferral: () => Promise.resolve({ status: UserStatus.Blocked, code: null, invited: 0 }),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the backend has no users row',
+    update: textUpdate('/invite'),
+    readReferral: () =>
+      Promise.reject(
+        new BackendError(BackendErrorCode.HttpStatus, {
+          status: 404,
+          reason: UserErrorCode.UserNotFound,
+        }),
+      ),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the backend is unreachable',
+    update: textUpdate('/invite'),
+    readReferral: unreachable,
+    expected: { backend: 1, telegram: 1 },
+  },
+];
+
+// «👥 Пригласить друга» (#115): /invite's branches after the answer
+const INVITE_BUTTON_BRANCHES: readonly Branch[] = [
+  ...INVITE_BRANCHES.filter((branch) => branch.expected.telegram > 0).map((branch) => ({
+    ...branch,
+    label: `the button: ${branch.label}`,
+    update: callbackUpdate(INVITE_CALLBACK_DATA),
+    expected: { backend: branch.expected.backend, telegram: branch.expected.telegram + 1 },
+  })),
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(INVITE_CALLBACK_DATA, 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+];
+const INVITE_BUTTON_WORST_CASE = INVITE_BUTTON_BRANCHES[0]!;
+
+// «🔄 Повторить» of /account, /settings and /invite (#350, #115): the command's branches after the
+// answer
 const asRetry = (data: string, branches: readonly Branch[]): Branch[] =>
   branches
     .filter((branch) => branch.expected.telegram > 0)
@@ -1933,6 +2002,7 @@ const asRetry = (data: string, branches: readonly Branch[]): Branch[] =>
 const COMMAND_RETRY_BRANCHES: readonly Branch[] = [
   ...asRetry(commandRetryCallbackData('account'), ACCOUNT_BRANCHES),
   ...asRetry(commandRetryCallbackData('settings'), SETTINGS_BRANCHES),
+  ...asRetry(commandRetryCallbackData('invite'), INVITE_BRANCHES),
   {
     label: 'the chat is not private',
     update: callbackUpdate(commandRetryCallbackData('account'), 'group'),
@@ -2438,6 +2508,19 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('/account', async () => {
     await checkHandler('account', ACCOUNT_BRANCHES, ACCOUNT_WORST_CASE, HANDLER_CALLS.account);
+  });
+
+  it('/invite (#115)', async () => {
+    await checkHandler('invite', INVITE_BRANCHES, INVITE_WORST_CASE, HANDLER_CALLS.invite);
+  });
+
+  it('the invite button (#115)', async () => {
+    await checkHandler(
+      'inviteButton',
+      INVITE_BUTTON_BRANCHES,
+      INVITE_BUTTON_WORST_CASE,
+      HANDLER_CALLS.inviteButton,
+    );
   });
 
   it('the confirm button', async () => {

@@ -585,6 +585,9 @@ export const LABELS = facadeOf(
   { confirmButton: (email: string | null): string => confirmButtonLabel(plain, email) },
 );
 
+// what «📤 Поделиться» puts beside the link in the chat the user picks (#115); plain, as a label
+export const inviteShareText = (): string => plain.inviteShareText;
+
 // The demo's asset types (#125); ₿ is not Extended_Pictographic, so the crypto group takes 💠.
 export const DEMO_GROUP_LABELS = labelsOf({
   currency: 'demoGroupCurrency',

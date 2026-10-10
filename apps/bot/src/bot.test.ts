@@ -38,9 +38,11 @@ import {
 
 import { LOGIN_DIALOG_TTL_MS, createLoginDialog, type LoginDialogState } from './login-dialog';
 import { SETTINGS_CALLBACK_DATA } from './stake-picker';
+import { INVITE_CALLBACK_DATA } from './keyboards';
 import {
   ACCESS_VIEW,
   ACCOUNT_VIEW,
+  REFERRAL_VIEW,
   BOT_INFO,
   CARD_MESSAGE_ID,
   CODE,
@@ -60,6 +62,7 @@ import {
   chatMemberUpdate,
   fakeLogger,
   inlineButtons,
+  inlineRows,
   listen,
   messageAnswer,
   rejectionOf,
@@ -111,6 +114,7 @@ function setup(
     user?: UserStartView;
     recordStart?: BackendClient['recordStart'];
     readAccount?: BackendClient['readAccount'];
+    readReferral?: BackendClient['readReferral'];
     confirmLogin?: BackendClient['confirmLogin'];
     sendEmailCode?: BackendClient['sendEmailCode'];
     emailLogin?: BackendClient['emailLogin'];
@@ -125,6 +129,7 @@ function setup(
   const backend: BackendClient = {
     recordStart: options.recordStart ?? vi.fn(() => Promise.resolve(options.user ?? userView())),
     readAccount: options.readAccount ?? vi.fn(() => Promise.resolve(ACCOUNT_VIEW)),
+    readReferral: options.readReferral ?? vi.fn(() => Promise.resolve(REFERRAL_VIEW)),
     confirmLogin: options.confirmLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
     sendEmailCode: options.sendEmailCode ?? vi.fn(() => Promise.resolve(CODE_SENT)),
     emailLogin: options.emailLogin ?? vi.fn(() => Promise.resolve(CONFIRMED)),
@@ -402,7 +407,11 @@ describe('/start', () => {
 
 describe('the status card', () => {
   const ACTIVE = userView({ hasActiveBrokerAccount: true });
-  const DEMO_BUTTON = [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }];
+  // the demo, then the invite in a row of its own (#115)
+  const CARD_ROWS = [
+    [{ text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA }],
+    [{ text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA }],
+  ];
   // the line's default holds none of its variables
   const NO_SNAPSHOT = () =>
     TEXTS.statusNoSnapshot(userContextOf(USER.first_name, TradeMode.Demo, ACCESS_VIEW));
@@ -438,7 +447,7 @@ describe('the status card', () => {
       const photo = sentPayload(calls, 'sendPhoto');
       expect(photo?.caption).toBe(cardFor());
       expect(photo?.photo).toBeInstanceOf(InputFile);
-      expect(inlineButtons(photo)).toEqual(DEMO_BUTTON);
+      expect(inlineRows(photo)).toEqual(CARD_ROWS);
       expect(sentPayload(calls, 'pinChatMessage')).toMatchObject({
         message_id: CARD_MESSAGE_ID,
         disable_notification: true,
@@ -464,7 +473,7 @@ describe('the status card', () => {
     ]);
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(cardFor());
-    expect(inlineButtons(message)).toEqual(DEMO_BUTTON);
+    expect(inlineRows(message)).toEqual(CARD_ROWS);
     expect(sentPayload(calls, 'pinChatMessage')?.message_id).toBe(TEXT_CARD_MESSAGE_ID);
     expect(logger.warn.mock.calls).toEqual([
       [
@@ -677,6 +686,7 @@ describe('«🏠 В меню» (#350)', () => {
     expect(calls.map((call) => call.method)).toEqual(['answerCallbackQuery', 'sendPhoto']);
     expect(inlineButtons(sentPayload(calls, 'sendPhoto'))).toEqual([
       { text: LABELS.demoButton, callback_data: DEMO_CALLBACK_DATA },
+      { text: LABELS.inviteButton, callback_data: INVITE_CALLBACK_DATA },
     ]);
   });
 
@@ -1493,6 +1503,7 @@ describe('the account card', () => {
         backend: {
           recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
           readAccount: vi.fn(() => Promise.reject(new Error('unused'))),
+          readReferral: vi.fn(() => Promise.reject(new Error('unused'))),
           confirmLogin: vi.fn(() => Promise.resolve(CONFIRMED)),
           sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
           emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1542,6 +1553,7 @@ describe('the account card', () => {
         backend: {
           recordStart: vi.fn(() => Promise.resolve(userView({ hasActiveBrokerAccount: true }))),
           readAccount: vi.fn(() => Promise.reject(new Error('unused'))),
+          readReferral: vi.fn(() => Promise.reject(new Error('unused'))),
           confirmLogin: vi.fn(() => Promise.reject(new Error('unused'))),
           sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
           emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -2627,6 +2639,7 @@ describe('the Bot API timeout', () => {
       backend: {
         recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
         readAccount: vi.fn(() => Promise.reject(new Error('unused'))),
+        readReferral: vi.fn(() => Promise.reject(new Error('unused'))),
         confirmLogin: vi.fn(() => Promise.reject(new Error('unused'))),
         sendEmailCode: vi.fn(() => Promise.reject(new Error('unused'))),
         emailLogin: vi.fn(() => Promise.reject(new Error('unused'))),

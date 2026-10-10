@@ -5,11 +5,18 @@ import {
   NotificationKind,
   NotificationLevel,
   TelegramChatMemberStatus,
+  REFERRAL_CODE_PATTERN,
   UserErrorCode,
   UserStatus,
 } from '@binarius/shared';
 import { createTempDatabase, seedBrokerAccount, type TempDatabase } from '@binarius/db/testing';
-import { NotificationJobStatus, brokerAccounts, notificationJobs, users } from '@binarius/db';
+import {
+  NotificationJobStatus,
+  brokerAccounts,
+  notificationJobs,
+  referralCodes,
+  users,
+} from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
 import {
@@ -483,5 +490,145 @@ describe('POST /users/notification-level', () => {
       expect.objectContaining({ level: 30, notificationLevel: 'off', canceledJobs: 0 }),
     ]);
     expect(lines.join('\n')).not.toContain(telegramUserId);
+  });
+});
+
+// --- POST /users/referral (#115) ---------------------------------------------------------------
+
+const postReferral = (
+  payload: unknown,
+  authorization: string | null = `Bearer ${TOKEN}`,
+  instance = app,
+) =>
+  instance.inject({
+    method: 'POST',
+    url: '/users/referral',
+    headers: {
+      'content-type': 'application/json',
+      ...(authorization === null ? {} : { authorization }),
+    },
+    payload: JSON.stringify(payload),
+  });
+
+describe('POST /users/referral authorization', () => {
+  it.each([
+    ['no header', null],
+    ['another bearer', 'Bearer some-other-token'],
+  ])('U1 refuses %s with 401 and creates no code', async (_label, authorization) => {
+    const telegramUserId = nextTelegramUserId();
+    await post(body(telegramUserId));
+    const response = await postReferral({ telegramUserId }, authorization);
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: 'unauthorized' });
+    const [user] = await tmp.db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.telegramUserId, BigInt(telegramUserId)));
+    expect(
+      await tmp.db.select().from(referralCodes).where(eq(referralCodes.userId, user!.id)),
+    ).toEqual([]);
+  });
+});
+
+describe('POST /users/referral', () => {
+  it.each([
+    ['an empty body', {}],
+    ['a non-numeric telegram id', { telegramUserId: 'abc' }],
+    ['a numeric telegram id', { telegramUserId: 600_001 }],
+  ])('U2 refuses %s with 400', async (_label, payload) => {
+    const response = await postReferral(payload);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: 'validation' });
+  });
+
+  it('U3 answers 404 user_not_found for a Telegram id without a row', async () => {
+    const response = await postReferral({ telegramUserId: nextTelegramUserId() });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: UserErrorCode.UserNotFound });
+  });
+
+  it('U4 answers exactly status, code and invited, and the same code twice', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await post(body(telegramUserId));
+    const first = await postReferral({ telegramUserId });
+    expect(first.statusCode).toBe(200);
+    const { user } = first.json<{ user: Record<string, unknown> }>();
+    expect(Object.keys(user).sort()).toEqual(['code', 'invited', 'status']);
+    expect(user).toEqual({
+      status: UserStatus.Active,
+      code: expect.stringMatching(REFERRAL_CODE_PATTERN),
+      invited: 0,
+    });
+    expect((await postReferral({ telegramUserId })).json()).toEqual({ user });
+  });
+
+  it('U5 records a new user’s ref_ link, counts it, and leaves the /start answer as it was', async () => {
+    const inviterId = nextTelegramUserId();
+    await post(body(inviterId));
+    const { code } = (await postReferral({ telegramUserId: inviterId })).json<{
+      user: { code: string };
+    }>().user;
+
+    const inviteeId = nextTelegramUserId();
+    const response = await post(body(inviteeId, { startPayload: `ref_${code}` }));
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      user: {
+        telegramUserId: inviteeId,
+        status: UserStatus.Active,
+        acquisitionSource: `ref_${code}`,
+        acquiredAt: expect.any(String),
+        hasActiveBrokerAccount: false,
+        pendingBrokerAccounts: [],
+        notificationLevel: NotificationLevel.All,
+        demoStake: null,
+      },
+    });
+    expect((await postReferral({ telegramUserId: inviterId })).json()).toEqual({
+      user: { status: UserStatus.Active, code, invited: 1 },
+    });
+  });
+
+  it('gives a blocked user no code', async () => {
+    const telegramUserId = nextTelegramUserId();
+    await post(body(telegramUserId));
+    await tmp.db
+      .update(users)
+      .set({ status: UserStatus.Blocked })
+      .where(eq(users.telegramUserId, BigInt(telegramUserId)));
+    expect((await postReferral({ telegramUserId })).json()).toEqual({
+      user: { status: UserStatus.Blocked, code: null, invited: 0 },
+    });
+  });
+
+  it('logs a recorded referral at info without the Telegram ids or the code', async () => {
+    const inviterId = '7351902468135793';
+    await post(body(inviterId));
+    const { code } = (await postReferral({ telegramUserId: inviterId })).json<{
+      user: { code: string };
+    }>().user;
+    const inviteeId = '7351902468135794';
+    const lines: string[] = [];
+    const instance = testApp({ write: (line: string) => void lines.push(line) });
+    await instance.ready();
+    try {
+      const response = await instance.inject({
+        method: 'POST',
+        url: '/users/start',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+        payload: JSON.stringify(body(inviteeId, { startPayload: `ref_${code}` })),
+      });
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await instance.close();
+    }
+    const parsed = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(parsed.filter((line) => line.msg === 'referral recorded')).toEqual([
+      expect.objectContaining({ level: 30 }),
+    ]);
+    const joined = lines.join('\n');
+    expect(joined).not.toContain(inviteeId);
+    expect(joined).not.toContain(inviterId);
+    expect(joined).not.toContain(code);
   });
 });

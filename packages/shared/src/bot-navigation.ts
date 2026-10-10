@@ -12,8 +12,9 @@ export const CONNECT_CALLBACK_DATA = 'connect';
 // «🏠 В меню» (#350): the status card, as /menu.
 export const MENU_CALLBACK_DATA = 'menu';
 // «🔄 Повторить» under a command's failure (#350): the command again. /start and /menu repeat as
-// «🏠 В меню»; the longest, `cmd:settings`, is 12 bytes.
-export const RETRY_COMMANDS = ['account', 'settings'] as const;
+// «🏠 В меню»; the longest, `cmd:settings`, is 12 bytes. /invite's read creates the user's code
+// on first use, idempotently, so repeating it is a read (#115).
+export const RETRY_COMMANDS = ['account', 'settings', 'invite'] as const;
 export type RetryCommand = (typeof RETRY_COMMANDS)[number];
 export const commandRetryCallbackData = (command: RetryCommand): string => `cmd:${command}`;
 export const COMMAND_RETRY_PATTERN = new RegExp(`^cmd:(${RETRY_COMMANDS.join('|')})$`);

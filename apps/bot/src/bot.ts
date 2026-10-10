@@ -41,7 +41,16 @@ import {
   type BackendClient,
 } from './backend-client';
 import { createDemoComposer, removeLegacyKeyboard } from './demo';
-import { demoKeyboard, menuKeyboard, retryKeyboard, supportKeyboard, withMenu } from './keyboards';
+import {
+  demoKeyboard,
+  INVITE_CALLBACK_DATA,
+  menuKeyboard,
+  retryKeyboard,
+  statusCardKeyboard,
+  supportKeyboard,
+  withMenu,
+} from './keyboards';
+import { showInvite } from './invite';
 import { createDemoTradeComposer } from './demo-trade';
 import { createTradingSessionComposer } from './trading-session';
 import type { IntentTracker } from './intent-tracker';
@@ -188,6 +197,9 @@ export function createBot({
       case 'settings':
         await showSettingsCommand(ctx, ctx.from);
         return;
+      case 'invite':
+        await showInvite(ctx, ctx.from, { backend, logger });
+        return;
       case undefined:
         return;
       default:
@@ -268,7 +280,7 @@ export function createBot({
       brokerUnavailable: access.brokerUnavailable,
       demoStake: access.demoStake,
     });
-    const reply_markup = demoKeyboard();
+    const reply_markup = statusCardKeyboard();
     const sent = await sendWithTextFallback(
       ctx,
       {
@@ -401,6 +413,19 @@ export function createBot({
     await ctx.answerCallbackQuery().catch((error: unknown) => {
       logAnswerFailure(error);
     });
+  });
+
+  // The personal link (#115, invite.ts)
+  privateChats.command('invite', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) return;
+    await showInvite(ctx, from, { backend, logger });
+  });
+
+  // «👥 Пригласить друга» under the status card and the session's result (#115)
+  privateChats.callbackQuery(INVITE_CALLBACK_DATA, async (ctx) => {
+    await ctx.answerCallbackQuery().catch(logAnswerFailure);
+    await showInvite(ctx, ctx.from, { backend, logger });
   });
 
   // No backend call: the way to a person works for a blocked user and during an outage too.

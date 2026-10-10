@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   TelegramChatMemberStatus,
   UserErrorCode,
+  userReferralRequestSchema,
   safeParseChatMemberRequest,
   safeParseNotificationLevelRequest,
   safeParseUserAccountRequest,
@@ -11,6 +12,7 @@ import {
   markTelegramBlocked,
   markTelegramReachable,
   readUserAccounts,
+  readUserReferral,
   recordUserStart,
   setNotificationLevel,
   toUserAccountView,
@@ -38,12 +40,17 @@ export const usersRoutes: FastifyPluginAsync<UsersRoutesDeps> = async (
     if (!parsed.success) {
       return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
     }
-    const { row, hasActiveBrokerAccount, pendingBrokerAccounts } = await recordUserStart(db, {
-      telegramUserId: BigInt(parsed.data.telegramUserId),
-      displayName: parsed.data.displayName,
-      languageCode: parsed.data.languageCode,
-      startPayload: parsed.data.startPayload,
-    });
+    const { row, hasActiveBrokerAccount, pendingBrokerAccounts, referred } = await recordUserStart(
+      db,
+      {
+        telegramUserId: BigInt(parsed.data.telegramUserId),
+        displayName: parsed.data.displayName,
+        languageCode: parsed.data.languageCode,
+        startPayload: parsed.data.startPayload,
+      },
+    );
+    // no ids, as the chat-member line (#115)
+    if (referred) request.log.info('referral recorded');
     return reply.send({
       user: toUserStartView(row, hasActiveBrokerAccount, pendingBrokerAccounts),
     });
@@ -107,5 +114,21 @@ export const usersRoutes: FastifyPluginAsync<UsersRoutesDeps> = async (
       return reply.code(404).send({ error: UserErrorCode.UserNotFound });
     }
     return reply.send({ user: toUserAccountView(snapshot) });
+  });
+
+  // The /invite screen (#115, docs/referrals.md → The route): the caller's own code, created on
+  // the first read, and how many users it brought. Scoped by the Telegram id in the body, as
+  // /users/account; an unknown user is the same 404 of its own code.
+  app.post('/users/referral', async (request, reply) => {
+    const parsed = userReferralRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
+    }
+    const view = await readUserReferral(db, BigInt(parsed.data.telegramUserId));
+    if (view === undefined) {
+      return reply.code(404).send({ error: UserErrorCode.UserNotFound });
+    }
+    // the view is built key by key in readUserReferral; nothing else of the row reaches it
+    return reply.send({ user: view });
   });
 };

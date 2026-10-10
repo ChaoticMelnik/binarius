@@ -24,6 +24,7 @@ import {
   TRADING_SESSIONS_STOP_PATH,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
+  userReferralResponseSchema,
   type ChatMemberResponse,
   type ConfirmLoginResponse,
   type CreateTradeIntentRequest,
@@ -46,6 +47,7 @@ import {
   type TradingSignalsResponse,
   TradingSessionErrorCode,
   type UserAccountView,
+  type UserReferralView,
   type UserStartRequest,
   type UserStartView,
 } from '@binarius/shared';
@@ -88,6 +90,9 @@ export class BackendError extends Error {
 export interface BackendClient {
   recordStart(request: UserStartRequest): Promise<UserStartView>;
   readAccount(telegramUserId: string): Promise<UserAccountView>;
+  // the /invite screen (#115): creates the user's code on the first call; 404 user_not_found
+  // before the first /start
+  readReferral(telegramUserId: string): Promise<UserReferralView>;
   confirmLogin(telegramUserId: string, accountId: string): Promise<ConfirmLoginResponse>;
   sendEmailCode(telegramUserId: string, email: string): Promise<EmailSendCodeResponse>;
   emailLogin(telegramUserId: string, email: string, code: string): Promise<EmailLoginResponse>;
@@ -224,6 +229,13 @@ export function createBackendClient({
     },
     async readAccount(telegramUserId) {
       const parsed = safeParseUserAccountResponse(await post('users/account', { telegramUserId }));
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.user;
+    },
+    async readReferral(telegramUserId) {
+      const parsed = userReferralResponseSchema.safeParse(
+        await post('users/referral', { telegramUserId }),
+      );
       if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
       return parsed.data.user;
     },

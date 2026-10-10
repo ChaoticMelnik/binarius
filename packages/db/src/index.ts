@@ -12,6 +12,7 @@ export * from './token-adjustment-ops';
 export * from './balance-snapshot-ops';
 export * from './session-lease-ops';
 export * from './user-ops';
+export * from './referral-ops';
 export * from './delivery-ops';
 export * from './mailing-scenarios';
 export * from './mailing-ops';

@@ -332,6 +332,7 @@ const DEFAULT_MENU = [
   { command: 'stop', description: 'Остановить сессию' },
   { command: 'account', description: 'Аккаунт Binodex' },
   { command: 'settings', description: 'Настройки уведомлений' },
+  { command: 'invite', description: 'Пригласить друга' },
   { command: 'help', description: 'Помощь' },
   { command: 'support', description: 'Поддержка' },
 ];

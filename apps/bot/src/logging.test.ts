@@ -106,6 +106,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
   const backend: BackendClient = {
     recordStart: scenario.recordStart ?? (() => Promise.resolve(USER_VIEW)),
     readAccount: scenario.readAccount ?? (() => Promise.resolve(ACCOUNT_VIEW)),
+    readReferral: () => Promise.reject(new Error('not used by these scenarios')),
     confirmLogin: scenario.confirmLogin ?? (() => Promise.resolve(CONFIRMED)),
     sendEmailCode: scenario.sendEmailCode ?? (() => Promise.resolve(CODE_SENT)),
     emailLogin: scenario.emailLogin ?? (() => Promise.resolve(CONFIRMED)),

@@ -145,6 +145,10 @@ export const BOT_TEXT_VARS = {
   trades: shown('Число сделок со словом', '5 сделок'),
   action: shown('Направление сделки, с суммой, когда она известна', '⬆️ Вверх'),
   botUsername: shown('Имя бота в Telegram, без @', 'binarius_bot'),
+  referralLink: shown(
+    'Ссылка-приглашение пользователя',
+    'https://t.me/binarius_bot?start=ref_AbC123xY',
+  ),
 } as const;
 
 export type BotTextVars = typeof BOT_TEXT_VARS;
