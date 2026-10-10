@@ -100,6 +100,20 @@ export const confirmPage = (message?: string): SafeHtml =>
       </form>`,
   });
 
+// The page a login link from the staff bot opens (#448). The form has no `action`: it posts back
+// to the link's own path, which is the only place the token is — it never sits in the page body.
+// GET renders this and spends nothing; the POST behind the button is what creates the session.
+export const linkPage = (message?: string): SafeHtml =>
+  layout({
+    title: TEXTS.linkTitle,
+    body: html`<h1>${TEXTS.linkTitle}</h1>
+      <p>${TEXTS.linkBody}</p>
+      ${error(message)}
+      <form class="stack" method="post">
+        <button type="submit">${TEXTS.linkSubmit}</button>
+      </form>`,
+  });
+
 // The timestamps are rendered as the backend sent them. Formatting them for a locale would be
 // this process guessing a timezone; the ISO instant is unambiguous, which matters most for the
 // column an operator reads to decide whether a session is theirs.

@@ -35,6 +35,8 @@ beforeEach(() => {
   const backend: BackendClient = {
     login: unused,
     confirm: unused,
+    inspectLoginLink: unused,
+    completeLoginLink: unused,
     sessions: unused,
     revoke: unused,
     logout: unused,

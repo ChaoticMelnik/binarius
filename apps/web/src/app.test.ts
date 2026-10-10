@@ -15,6 +15,8 @@ import {
   BrokerAccountStatus,
   adminChangePasswordRequestSchema,
   adminConfirmRequestSchema,
+  adminLinkCompleteRequestSchema,
+  adminLinkInspectRequestSchema,
   adminLoginRequestSchema,
   CLIENT_USER_AGENT_MAX_LENGTH,
   DepositEventStatus,
@@ -97,6 +99,8 @@ const httpFailure = (status: number, code?: string) =>
 interface Calls {
   login: unknown[];
   confirm: unknown[];
+  inspectLoginLink: string[];
+  completeLoginLink: unknown[];
   sessions: unknown[];
   revoke: unknown[][];
   logout: unknown[];
@@ -128,6 +132,8 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
   calls = {
     login: [],
     confirm: [],
+    inspectLoginLink: [],
+    completeLoginLink: [],
     sessions: [],
     revoke: [],
     logout: [],
@@ -158,6 +164,14 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     },
     confirm: async (request) => {
       calls.confirm.push(request);
+      return { sessionToken: TOKEN, expiresAt: IN_AN_HOUR() };
+    },
+    inspectLoginLink: async (token) => {
+      calls.inspectLoginLink.push(token);
+      return { state: 'live' };
+    },
+    completeLoginLink: async (request) => {
+      calls.completeLoginLink.push(request);
       return { sessionToken: TOKEN, expiresAt: IN_AN_HOUR() };
     },
     sessions: async (token) => {
@@ -634,6 +648,150 @@ describe('the confirm step', () => {
       { [CHALLENGE_COOKIE]: CHALLENGE_ID },
     );
     expect([response.statusCode, calls.confirm]).toEqual([400, []]);
+  });
+});
+
+// docs/staff-login.md → Logging in by a link from the bot (#448)
+describe('the login link', () => {
+  // `-` and `_` on purpose: a backend schema narrower than the shared pattern refuses these
+  const LINK = 'Ab-_' + 'x'.repeat(39);
+  const LINK_URL = `/admin/login/link/${LINK}`;
+
+  // Telegram's preview, a prefetch or a prerender must not spend the link
+  it('shows the «Войти» page on GET and spends nothing', async () => {
+    const response = await get(LINK_URL);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain(TEXTS.linkSubmit);
+    expect(response.body).toContain('method="post"');
+    // the token stays in the URL; the page does not repeat it
+    expect(response.body).not.toContain(LINK);
+    expect(calls.inspectLoginLink).toEqual([LINK]);
+    expect(calls.completeLoginLink).toEqual([]);
+    expect(cookieOf(response, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it.each([
+    ['used', TEXTS.linkUsed],
+    ['expired', TEXTS.linkExpired],
+    ['unavailable', TEXTS.linkUnavailable],
+  ] as const)('refuses a %s link on GET with 410', async (state, message) => {
+    await app.close();
+    app = build({
+      inspectLoginLink: async (token) => {
+        calls.inspectLoginLink.push(token);
+        return { state };
+      },
+    });
+
+    const response = await get(LINK_URL);
+
+    expect([response.statusCode, response.body.includes(message)]).toEqual([410, true]);
+    expect(response.body).not.toContain(TEXTS.linkSubmit);
+    expect(calls.completeLoginLink).toEqual([]);
+  });
+
+  it.each([
+    ['too short', 'a'.repeat(42)],
+    ['too long', 'a'.repeat(44)],
+    ['outside base64url', `${'a'.repeat(42)}.`],
+  ])('answers 404 to a token %s without calling the backend', async (_label, token) => {
+    const read = await get(`/admin/login/link/${token}`);
+    const spent = await post(`/admin/login/link/${token}`);
+
+    expect([read.statusCode, spent.statusCode]).toEqual([404, 404]);
+    expect(read.body).toContain(TEXTS.linkUnavailable);
+    expect([calls.inspectLoginLink, calls.completeLoginLink]).toEqual([[], []]);
+  });
+
+  it('creates the session on POST, sets the cookie as the code login does, and goes in', async () => {
+    const response = await post(LINK_URL);
+
+    expect([response.statusCode, response.headers.location]).toEqual([303, '/admin/sessions']);
+    const cookie = cookieOf(response, SESSION_COOKIE);
+    expect(cookie).toMatchObject({ value: TOKEN, httpOnly: true, path: '/admin', sameSite: 'Lax' });
+    // the lifetime is the backend's expiry, an hour in this fake
+    expect(cookie?.maxAge).toBeGreaterThan(3_500);
+    expect(cookie?.maxAge).toBeLessThanOrEqual(3_600);
+    expect(calls.completeLoginLink).toEqual([
+      { token: LINK, ip: '127.0.0.1', userAgent: INJECTED_AGENT },
+    ]);
+  });
+
+  // every token the path check lets through must parse under the backend's own schemas — the
+  // shared pattern is one object in both processes (Rule 17), and this is what holds it there
+  it('forwards bodies the backend’s schemas read', async () => {
+    await get(LINK_URL);
+    await post(LINK_URL);
+
+    expect(
+      adminLinkInspectRequestSchema.safeParse({ token: calls.inspectLoginLink[0] }).success,
+    ).toBe(true);
+    expect(adminLinkCompleteRequestSchema.safeParse(calls.completeLoginLink[0]).success).toBe(true);
+  });
+
+  it('refuses a POST from another origin without spending the link', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: LINK_URL,
+      headers: {
+        origin: 'https://evil.example',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: '',
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(calls.completeLoginLink).toEqual([]);
+    expect(cookieOf(response, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it.each([
+    [AdminErrorCode.LinkUsed, TEXTS.linkUsed],
+    [AdminErrorCode.LinkExpired, TEXTS.linkExpired],
+    [AdminErrorCode.LinkUnavailable, TEXTS.linkUnavailable],
+  ])('shows the refusal for 410 %s on POST, with no cookie', async (code, message) => {
+    await app.close();
+    app = build({ completeLoginLink: () => Promise.reject(httpFailure(410, code)) });
+
+    const response = await post(LINK_URL);
+
+    expect([response.statusCode, response.body.includes(message)]).toEqual([410, true]);
+    expect(cookieOf(response, SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it('says to wait on 429', async () => {
+    await app.close();
+    app = build({
+      completeLoginLink: () => Promise.reject(httpFailure(429, AdminErrorCode.TooManyAttempts)),
+    });
+
+    const response = await post(LINK_URL);
+
+    expect([response.statusCode, response.body.includes(TEXTS.tooManyAttempts)]).toEqual([
+      429,
+      true,
+    ]);
+  });
+
+  // the URL is the credential for five minutes: no log line may carry it, on success or failure
+  it('logs neither the token nor the path, on success and on a backend failure', async () => {
+    await post(LINK_URL);
+    const onSuccess = lines.join('');
+    await app.close();
+    app = build({
+      inspectLoginLink: () => Promise.reject(httpFailure(401, AdminErrorCode.Unauthorized)),
+      completeLoginLink: () => Promise.reject(httpFailure(400, AdminErrorCode.Validation)),
+    });
+    const read = await get(LINK_URL);
+    const spent = await post(LINK_URL);
+
+    expect([read.statusCode, spent.statusCode]).toEqual([500, 500]);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const written of [onSuccess, lines.join('')]) {
+      expect(written).not.toContain(LINK);
+      expect(written).not.toContain('/admin/login/link');
+    }
   });
 });
 

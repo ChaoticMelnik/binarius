@@ -19,6 +19,14 @@ export const TEXTS = {
   codeField: 'Код из Telegram',
   confirmSubmit: 'Продолжить',
 
+  // the login link from the staff bot (#448)
+  linkTitle: 'Вход в админку',
+  linkBody: 'Нажмите «Войти», чтобы открыть админку в этом браузере.',
+  linkSubmit: 'Войти',
+  linkUsed: 'Ссылка уже использована. Получите новую в боте.',
+  linkExpired: 'Ссылка истекла. Получите новую в боте.',
+  linkUnavailable: 'Ссылка недействительна. Получите новую в боте.',
+
   sessionsTitle: 'Активные сессии',
   sessionsHeading: 'Активные сессии сотрудников',
   sessionsEmpty: 'Активных сессий нет.',
