@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   POSTBACK_QUERY_MAX_KEYS,
   POSTBACK_QUERY_VALUE_MAX,
+  POSTBACK_URL_SECRET_MAX_LENGTH,
   POSTBACK_URL_SECRET_PATTERN,
   PostbackRejectReason,
   classifyPostback,
@@ -108,6 +109,10 @@ describe('classifyPostback', () => {
 });
 
 describe('postbackQuerySchema', () => {
+  it("pins the secret bound to Fastify's default maxParamLength", () => {
+    expect(POSTBACK_URL_SECRET_MAX_LENGTH).toBe(100);
+  });
+
   it('accepts a flat map at the bounds', () => {
     const query = Object.fromEntries(
       Array.from({ length: POSTBACK_QUERY_MAX_KEYS }, (_, i) => [
@@ -122,6 +127,8 @@ describe('postbackQuerySchema', () => {
     ['an array value', { a: ['1', '2'] }],
     ['a value over the bound', { a: 'v'.repeat(POSTBACK_QUERY_VALUE_MAX + 1) }],
     ['a key over the bound', { ['k'.repeat(65)]: 'v' }],
+    ['a NUL in a value', { id: 'a\u0000b' }],
+    ['a NUL in a key', { ['i\u0000d']: 'v' }],
     [
       'too many keys',
       Object.fromEntries(
@@ -134,13 +141,16 @@ describe('postbackQuerySchema', () => {
 });
 
 describe('POSTBACK_URL_SECRET_PATTERN', () => {
-  it.each(['a'.repeat(32), 'A-z_9'.repeat(10), 'f'.repeat(128)])('accepts %j', (value) => {
-    expect(POSTBACK_URL_SECRET_PATTERN.test(value)).toBe(true);
-  });
+  it.each(['a'.repeat(32), 'A-z_9'.repeat(10), 'f'.repeat(POSTBACK_URL_SECRET_MAX_LENGTH)])(
+    'accepts %j',
+    (value) => {
+      expect(POSTBACK_URL_SECRET_PATTERN.test(value)).toBe(true);
+    },
+  );
 
   it.each([
     'a'.repeat(31),
-    'f'.repeat(129),
+    'f'.repeat(POSTBACK_URL_SECRET_MAX_LENGTH + 1),
     `${'a'.repeat(32)}/`,
     `${'a'.repeat(32)} `,
     `${'a'.repeat(31)}.`,

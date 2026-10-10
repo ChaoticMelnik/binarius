@@ -5,11 +5,24 @@ import {
   PostbackSource,
 } from '@binarius/shared';
 import { sql } from 'drizzle-orm';
-import { check, index, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import {
+  check,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  uniqueIndex,
+  uuid,
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core';
 import { createdAt, id, inList, literal } from './columns';
 import { depositEvents } from './deposit-events';
 
 const rejected = literal(PostbackDeliveryOutcome.Rejected);
+
+// The partial unique index's predicate. recordPostback's `on conflict … where` must repeat it
+// exactly to use the index as its arbiter, so both read this one fragment.
+export const notRejectedDelivery = (outcome: AnyPgColumn) => sql`${outcome} <> ${rejected}`;
 
 // The journal (#141, docs/postbacks.md): one row per delivery that passed the URL secret,
 // including one the parser refused. A repeat of a recorded postback id writes nothing.
@@ -51,7 +64,7 @@ export const postbackDeliveries = pgTable(
     // the same id is recorded
     uniqueIndex('postback_deliveries_source_postback_idx')
       .on(t.source, t.postbackId)
-      .where(sql`${t.outcome} <> ${rejected}`),
+      .where(notRejectedDelivery(t.outcome)),
     index('postback_deliveries_deposit_event_id_idx').on(t.depositEventId),
     index('postback_deliveries_created_at_idx').on(t.createdAt),
   ],

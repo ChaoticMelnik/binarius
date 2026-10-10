@@ -10,8 +10,8 @@ import { recordPostback, type Db } from '@binarius/db';
 import { secretDigest, secretMatches } from '../auth/internal';
 import { createWindow } from '../auth/rate-window';
 
-// The ceiling on everything the public route accepts, past the secret or not. The broker's
-// deliveries are a few a day at pilot volume; this only ever catches a flood or a leaked secret.
+// The ceiling on deliveries past the secret. The broker's are a few a day at pilot volume; this
+// only ever catches a leaked secret.
 export const POSTBACK_MAX_PER_MINUTE = 600;
 
 export interface PostbackRoutesDeps {
@@ -27,11 +27,9 @@ export interface PostbackRoutesDeps {
 // duplicate. The secret is never logged by us, and withoutSecrets masks it in Fastify's lines.
 export const postbackRoutes: FastifyPluginAsync<PostbackRoutesDeps> = async (scope, deps) => {
   const expected = secretDigest(deps.secret);
+  // Taken only past the secret: it bounds the writes a holder of the secret can cause, and a
+  // probe without it can neither fill it nor reach the database.
   const window = createWindow(deps.maxPerMinute ?? POSTBACK_MAX_PER_MINUTE);
-  scope.addHook('onRequest', async (_request, reply) => {
-    if (window.take().over) return reply.code(429).send({ error: 'too_many_requests' });
-    return undefined;
-  });
 
   scope.get<{ Params: { secret: string } }>(
     `${POSTBACK_PATH_PREFIX}:secret`,
@@ -43,8 +41,9 @@ export const postbackRoutes: FastifyPluginAsync<PostbackRoutesDeps> = async (sco
         request.log.warn('postback refused');
         return reply.code(404).send({ error: 'not_found' });
       }
-      // not journaled: a repeated key, an oversized value or too many keys is not a delivery
-      // the cabinet's template can produce
+      if (window.take().over) return reply.code(429).send({ error: 'too_many_requests' });
+      // not journaled: a repeated key, an oversized value, too many keys or a NUL is not a
+      // delivery the cabinet's template can produce
       const query = postbackQuerySchema.safeParse(request.query);
       if (!query.success) return reply.code(400).send({ error: 'validation' });
 

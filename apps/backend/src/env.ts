@@ -16,7 +16,10 @@ import {
   type EnvSource,
 } from '@binarius/shared';
 import { OAUTH_CALLBACK_PATH } from '@binarius/shared/oauth';
-import { POSTBACK_URL_SECRET_PATTERN } from '@binarius/shared/postback';
+import {
+  POSTBACK_URL_SECRET_MAX_LENGTH,
+  POSTBACK_URL_SECRET_PATTERN,
+} from '@binarius/shared/postback';
 import {
   DEFAULT_BROKER_PAIRS_TTL_MS,
   MAX_BROKER_PAIRS_TTL_MS,
@@ -262,7 +265,9 @@ function parsePartnerCode(raw: string, name: string): string {
 // it unguessable (`openssl rand -hex 32` gives 64).
 function parsePostbackSecret(raw: string, name: string): string {
   if (!POSTBACK_URL_SECRET_PATTERN.test(raw)) {
-    throw new Error(`Env ${name} must be 32-128 characters of [A-Za-z0-9_-]`);
+    throw new Error(
+      `Env ${name} must be 32-${POSTBACK_URL_SECRET_MAX_LENGTH} characters of [A-Za-z0-9_-]`,
+    );
   }
   return raw;
 }

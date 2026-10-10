@@ -868,7 +868,6 @@ describe('late attachment of postbacks at activation (#141)', () => {
     expect(pending).toMatchObject({
       ok: true,
       account: { status: 'pending' },
-      attachedDeposits: 0,
     });
     if (!pending.ok) return;
     // a postback while pending is stored without an owner too
@@ -879,7 +878,7 @@ describe('late attachment of postbacks at activation (#141)', () => {
       telegramUserId,
       accountId: pending.account.id,
     });
-    expect(confirmed).toMatchObject({ ok: true, attachedDeposits: 2 });
+    expect(confirmed).toMatchObject({ ok: true });
     const owned = { userId: pending.account.userId, accountId: pending.account.id };
     expect(await ownerOf(early)).toEqual(owned);
     expect(await ownerOf(whilePending)).toEqual(owned);
@@ -896,7 +895,7 @@ describe('late attachment of postbacks at activation (#141)', () => {
       cipher,
       activate: true,
     });
-    expect(linked).toMatchObject({ ok: true, attachedDeposits: 1 });
+    expect(linked).toMatchObject({ ok: true });
     if (!linked.ok) return;
     expect(await ownerOf(early)).toEqual({
       userId: linked.account.userId,
@@ -909,7 +908,11 @@ describe('late attachment of postbacks at activation (#141)', () => {
       cipher,
       activate: true,
     });
-    expect(again).toMatchObject({ ok: true, attachedDeposits: 0 });
+    expect(again).toMatchObject({ ok: true });
+    expect(await ownerOf(early)).toEqual({
+      userId: linked.account.userId,
+      accountId: linked.account.id,
+    });
   });
 
   it("attaches at the email login that activates the user's pending account", async () => {
@@ -924,7 +927,7 @@ describe('late attachment of postbacks at activation (#141)', () => {
       cipher,
       activate: true,
     });
-    expect(linked).toMatchObject({ ok: true, account: { status: 'active' }, attachedDeposits: 1 });
+    expect(linked).toMatchObject({ ok: true, account: { status: 'active' } });
     if (!linked.ok) return;
     expect(await ownerOf(early)).toEqual({
       userId: linked.account.userId,

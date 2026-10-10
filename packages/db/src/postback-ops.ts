@@ -13,10 +13,9 @@ import {
   type PostbackRejectReason,
 } from '@binarius/shared';
 import type { Db } from './client';
-import { literal } from './schema/columns';
 import { brokerAccounts } from './schema/broker-accounts';
 import { depositEvents } from './schema/deposit-events';
-import { postbackDeliveries } from './schema/postback-deliveries';
+import { notRejectedDelivery, postbackDeliveries } from './schema/postback-deliveries';
 import { users } from './schema/users';
 import type { Tx } from './trade-intent-ops';
 
@@ -54,7 +53,7 @@ export type RecordPostbackResult =
 // delivery recorded first; caught below as a duplicate.
 class PostbackIdTaken extends Error {}
 
-const notRejected = sql`${postbackDeliveries.outcome} <> ${literal(PostbackDeliveryOutcome.Rejected)}`;
+const notRejected = notRejectedDelivery(postbackDeliveries.outcome);
 
 // The postback writer (#141, docs/postbacks.md). One transaction; it never credits, never writes
 // users or token_ledger. Every delivery that reaches it is journaled except a repeat of a
@@ -174,8 +173,8 @@ export async function recordPostback(
           depositEventId: result.depositEventId,
           payload: query,
         })
-        // the predicate repeats postback_deliveries_source_postback_idx's: a partial unique
-        // index is an arbiter only when the conflict clause implies its predicate
+        // postback_deliveries_source_postback_idx's own predicate: a partial unique index is an
+        // arbiter only when the conflict clause implies it
         .onConflictDoNothing({
           target: [postbackDeliveries.source, postbackDeliveries.postbackId],
           where: notRejected,
@@ -203,8 +202,8 @@ export async function recordPostback(
 export async function attachDepositsToAccount(
   tx: Tx,
   { accountId, userId, brokerUserId }: { accountId: string; userId: string; brokerUserId: string },
-): Promise<number> {
-  const attached = await tx
+): Promise<void> {
+  await tx
     .update(depositEvents)
     .set({ userId, brokerAccountId: accountId })
     .where(
@@ -214,9 +213,7 @@ export async function attachDepositsToAccount(
         isNull(depositEvents.userId),
         isNull(depositEvents.brokerAccountId),
       ),
-    )
-    .returning({ id: depositEvents.id });
-  return attached.length;
+    );
 }
 
 export type PostbackDeliveryRow = typeof postbackDeliveries.$inferSelect;

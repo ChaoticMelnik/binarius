@@ -92,9 +92,8 @@ export async function consumeOAuthState(
 }
 
 // `grant` is null exactly when `activate` was false: only an activating login pays.
-// `attachedDeposits` counts the trader's postbacks this activation attached (#141), 0 without one.
 export type LinkBrokerAccountResult =
-  | { ok: true; account: BrokerAccountRow; grant: LinkBonusGrant | null; attachedDeposits: number }
+  | { ok: true; account: BrokerAccountRow; grant: LinkBonusGrant | null }
   | { ok: false; reason: 'broker_account_taken' | 'user_blocked' };
 
 export interface LinkBrokerAccountInput {
@@ -148,7 +147,7 @@ export async function linkBrokerAccount(
       .onConflictDoNothing({ target: brokerAccounts.brokerUserId })
       .returning();
     if (inserted !== undefined) {
-      return { ok: true, account: inserted, ...(await grantIf(tx, activate, user.id, inserted)) };
+      return { ok: true, account: inserted, grant: await grantIf(tx, activate, user.id, inserted) };
     }
 
     // the account exists: lock it, check who owns it, then re-encrypt under its real id.
@@ -197,7 +196,7 @@ export async function linkBrokerAccount(
       .where(eq(brokerAccounts.id, existing.id))
       .returning();
     if (updated === undefined) throw new Error('broker account update returned no row');
-    return { ok: true, account: updated, ...(await grantIf(tx, activate, user.id, updated)) };
+    return { ok: true, account: updated, grant: await grantIf(tx, activate, user.id, updated) };
   });
 }
 
@@ -210,14 +209,14 @@ async function grantIf(
   activate: boolean,
   userId: string,
   account: BrokerAccountRow,
-): Promise<{ grant: LinkBonusGrant | null; attachedDeposits: number }> {
-  if (!activate) return { grant: null, attachedDeposits: 0 };
-  const attachedDeposits = await attachDepositsToAccount(tx, {
+): Promise<LinkBonusGrant | null> {
+  if (!activate) return null;
+  await attachDepositsToAccount(tx, {
     accountId: account.id,
     userId,
     brokerUserId: account.brokerUserId,
   });
-  return { grant: await grantLinkBonus(tx, { userId, account }), attachedDeposits };
+  return grantLinkBonus(tx, { userId, account });
 }
 
 // A blocked user does not become active by logging in again; undefined means "blocked".
@@ -368,7 +367,7 @@ export async function revokeAccountIfUnchanged(
 }
 
 export type ConfirmBrokerAccountResult =
-  | { ok: true; account: BrokerAccountRow; grant: LinkBonusGrant; attachedDeposits: number }
+  | { ok: true; account: BrokerAccountRow; grant: LinkBonusGrant }
   | { ok: false; reason: 'user_blocked' | 'not_found' | 'not_pending' };
 
 // The step that turns "someone authorized at the broker" into "this Telegram user owns that
@@ -410,13 +409,13 @@ export async function confirmBrokerAccount(
       .returning();
     if (confirmed === undefined) throw new Error('broker account confirm returned no row');
     // the trader's postbacks that arrived while the account was pending (#141)
-    const attachedDeposits = await attachDepositsToAccount(tx, {
+    await attachDepositsToAccount(tx, {
       accountId: confirmed.id,
       userId: user.id,
       brokerUserId: confirmed.brokerUserId,
     });
     const grant = await grantLinkBonus(tx, { userId: user.id, account });
-    return { ok: true, account: confirmed, grant, attachedDeposits };
+    return { ok: true, account: confirmed, grant };
   });
 }
 
