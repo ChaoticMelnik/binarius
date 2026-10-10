@@ -2580,7 +2580,7 @@ The owner asked this session (created for writing issues) to carry both issues t
 ### Process improvement proposals
 
 1. **Tech-lead Step 7: stop only your own processes, by PID; never `pkill -f`/`killall` by pattern** — **внедрено в этом docs-PR: `.claude/skills/tech-lead/SKILL.md` → Step 7**
-2. **Tech-lead Phase 0: before spawning the implementer on a plan written by another session or more than a day old, compare its base with `origin/main` (`git log --oneline <plan base>..origin/main`) and send it to the architect for a Plan Update when files it names have moved** — **открыто (2026-10-10, tech-lead)**
+2. **Tech-lead Phase 0: before spawning the implementer on a plan written by another session or more than a day old, compare its base with `origin/main` (`git log --oneline <plan base>..origin/main`) and send it to the architect for a Plan Update when files it names have moved** — **внедрено в docs-PR аудита #337 (2026-10-10): `.claude/skills/tech-lead/SKILL.md` → Phase 2 — Implementer**
 3. **Shared test DB `binarius` holds PR #415's unmerged migration (Step 7 violation by another session); once #415 is renumbered to 0038 it will try to apply the same changes again** — **открыто (2026-10-10, владелец / сессия #415)**
 4. **Remaining Minor** — **вынесено в #422, #426; flaky test → #423; night stands → #421**
 
@@ -2645,3 +2645,268 @@ Picked by tech-lead on the owner's «Выбирай следующую … не 
 
 1. **Owner-chosen Minor fixes before a merge: the implementer may take the review findings as the spec when they name the lines and the fix, without a Plan Update; a design change still goes through the architect** — **открыто (2026-10-10, tech-lead); связано с #334**
 2. **Remaining Minor** — **вынесено в #453**
+
+---
+
+## #337 — Бот: итог сессии — финансовый результат и итоговый баланс в сообщении (2026-10-10)
+
+The first of seven issues a `/manager` session (2026-10-10 12:27–19:40 MSK, report https://claude.ai/artifact/4Vpr6eCqGCqPVoyWLuYpf6) carried to In Review and the day tech-lead merged the same evening, in the report's merge order: #436 → #437 → #439 → #441 → #438 → #444 → #446 (#447/#234 and #442/#141 of the same night are not merged yet). Facts common to the seven entries are written here once:
+- **Stale plans.** Every plan was written 2026-10-06..09; each needed a round-0 Plan Update against `143c2dc` before the implementer (#337's plan was 243 commits behind).
+- **Fable cap.** Every Fable architect spawn of the night (11) died with 429 within seconds; each was re-spawned on Opus («план на Opus (лимит Fable HH:MM)»).
+- **Codex.** Skipped on every PR: «Codex пропущен: лимит до 14.10 07:45 (job task-mv28855z-gkb8fv), правило 2026-10-08».
+- **Merges.** `AskUserQuestion` before each merge; remaining Minor → Backlog without a question (standing owner answers, #388).
+
+| Issue | PR | Review rounds | Added lines | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #337 session result and balance | #436 | 1 | 964 | — | skipped (limit until 14.10) | → #451 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Claim | Plan of 2026-10-08 on `a02a749`; files moved (`apps/bot/src/format.ts` removed, variable registry #358) → round-0 Plan Update. |
+| Architect | Plan Update | Opus (Fable 429 at 12:32). Clarify 3 questions, answered by the manager with the recommended options. |
+| Implementer | Code | Clarify 2 questions (manager). Branch from `main`; 2 commits (code, docs); `pnpm check` on `binarius_impl_337`; 32 mutations, all red. |
+| Tech Lead | Phase 3 | Audit comment posted before the reviewer spawn. |
+| Reviewer | Round 1 | No Blocker/Major, 4 Minor (render key holds the balance; refresh without a snapshot undocumented; «one GET per session» holds only after `ok`; one predicate spelled twice). |
+| Tech Lead (day) | Merge | Merged 17:21Z with `--rebase --delete-branch`. Deleting `feat/337-session-result-balance` made GitHub **close** #437 and #439, which targeted it — the skill said GitHub would retarget them. Recovery on the owner's permission: re-push the base branch at `e64b13d`, reopen both, `gh pr edit --base main`, `git rebase --onto origin/main`, `git range-diff` all `=`. |
+
+### Review iterations: 1
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Merging the stacked base with `--delete-branch` closed #437 and #439 instead of retargeting them | Process | unverified-claim | tech-lead «A PR left In Review by a manager session» step 1 stated «GitHub retargets the dependent PR to `main`» that was never checked; on `gh pr merge --delete-branch` GitHub closed both (timeline: `closed` 17:21:16Z, 3 s after the merge) | Tech Lead skill text (#397) |
+| All seven plans were stale at implementation time | Process | preflight | Plans sat 1–4 days while `main` moved; the stale-plan check was an open proposal of the #396/#397 entry | Tech Lead Phase 2 (now in the skill) |
+| m1: the live session's render key holds the balance it never prints (~2 extra edits per trade) | Minor → #451 | other | — | Implementer |
+| m2, m3: Rule 21/docs leave out the refresh without a snapshot; «at most one GET» holds only after `ok` | Minor → #451 | unverified-claim | Docs and comments state more than the code does | Implementer docs |
+| m4: «intent finished» spelled in `texts.ts` and in shared | Minor → #451 | single-source | — | Implementer |
+
+### Process improvement proposals
+
+1. **Stacked merge: retarget every dependent with `gh pr edit <dep> --base main` first, merge the base without `--delete-branch`, rebase the dependents, delete the base branch only when `gh pr list --base <branch>` is empty** — **внедрено в этом docs-PR: `.claude/skills/tech-lead/SKILL.md` → Mode 2 → «A PR left In Review by a manager session», step 1; Mode 1 → Step 3**
+2. **Stale plan check before the implementer spawn** (proposal 2 of the #396/#397 entry) — **внедрено в этом docs-PR: `.claude/skills/tech-lead/SKILL.md` → Phase 2 — Implementer**
+3. **After any rebase onto a moved `main`, the merge question waits for green CI at the new head** (see #154) — **внедрено в этом docs-PR: `.claude/skills/tech-lead/SKILL.md` → «A PR left In Review by a manager session», step 3**
+4. **Remaining Minor** — **вынесено в #451**
+
+---
+
+## #318 — Бот: картинка-итог торговой сессии на графике цены + «поделиться» (2026-10-10)
+
+| Issue | PR | Review rounds | Added lines (without snapshot, fonts, lock) | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #318 session summary card | #437 | 2 | 1 693 (5 421 in total) | 0041 | skipped (limit until 14.10) | → #452 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Claim | Stacked on #436 (Minor-only); plan of 2026-10-07 stale (migration number, formatters, variable registry, the night's ban on the `bot` container). |
+| Architect | Plan Update | Opus (Fable 429 at 13:06). Clarify 4 questions (manager): end-of-path keyboard under the photo without «🔄 Обновить», ИТОГ via a shared SQL fragment, no balance on the card, resvg/fonts proven on the host plus an owner step. ~1 800 lines with a split line. |
+| Implementer | Code | No clarify questions — the reason only in the hand-off (Phase 3 deviation 2). 4 commits; 49 mutations, two survivors closed by tests. |
+| Reviewer | Round 1 | **1 Major**: «📊 Новый анализ» and «📡 К сигналам» under the photo call `editMessageTextHtml` → Telegram 400 «there is no text in the message to edit» → nothing happens. 3 Minor. → Todo. |
+| Architect | Plan Update r1 | Opus (Fable 429 at 13:49). Manager decision: `screen.ts` treats that 400 as «message gone» → the screen comes as a new message; tests press every card button on a photo. |
+| Implementer | Fix | `d1a8eb8`, `a8cb3fb`; mutation table re-taken whole (54, all red). |
+| Reviewer | Round 2 | No Blocker/Major, 2 Minor. |
+| Tech Lead (day) | Merge | Closed by #436's merge, reopened, retargeted, rebased to `653df92` (`range-diff` all `=`), merged 17:30Z. |
+
+### Review iterations: 2
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Two of the card's four buttons do nothing under a photo | Major → fixed in round 2 | instance-vs-class | The plan dropped «🔄 Обновить» because it edits a text the photo lacks, but did not check the other `appendEndOfPath` buttons whose handlers edit text the same way; tests checked only the keyboard's rows | Architect Plan Update (domain rule «Планирование задач», п. 1) / Implementer tests |
+| Implementer without clarify questions gave the reason only in the hand-off | Process | other | No rule asked for the issue comment; applied from #122 on | Implementer Step 0 |
+| r2 m1: comment and docs promise «never overflows», `fitSize` floors at 8 px | Minor → #452 | unverified-claim | — | Implementer docs |
+| r2 m2: three exports without a consumer; r1 m3 simplifications | Minor → #452 | other | — | Implementer |
+
+Process Improvement Report (Phase 5 step 2) posted on #318.
+
+### Process improvement proposals
+
+1. **Implementer with no clarify question writes the reason in one issue comment** — **внедрено в этом docs-PR: `.claude/skills/implementer/SKILL.md` → Step 0**
+2. **Remaining Minor** — **вынесено в #452**
+
+---
+
+## #122 — Real-режим: команда «стоп» (2026-10-10)
+
+| Issue | PR | Review rounds | Added lines | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #122 `/stop` | #439 | 2 | 714 | — | skipped (limit until 14.10) | → #455 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Claim | Stacked on #436 (tech-lead's 2026-10-08 instruction: `/stop` reads sessions through `viewForReply` of #337). |
+| Architect | Plan Update | Opus (Fable 429 at 14:41). Clarify 3 questions (manager): «🏠 В меню» under every answer, no retry on failure; #318's card after `/stop` through the shared `track()`; merge order #436 → #437 → #122. |
+| Implementer | Code | No questions, reason in an issue comment. 2 commits; 12 mutations, each red only on #122's tests. |
+| Reviewer | Round 1 | No Blocker/Major, 3 Minor. |
+| Tech Lead (day) | Rebases | Closed by #436's merge, reopened and retargeted, rebased to `c190404` (`=`); after #437 rebased again to `e14856f` — 13 files of add/add conflicts, both commits `!`; mutation table re-taken. |
+| Reviewer | Round 2 | Whole-feature pass at `e14856f`: conflict resolutions checked, no new findings; the round-1 Minors still open. Merged 18:14Z. |
+
+### Review iterations: 2 (round 2 — after the rebase, no new findings)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| m1: docs call two active sessions unreachable from the bot; the revoked-account window makes them reachable | Minor → #455 | unverified-claim | Docs dropped the plan's own exception (risk 6) | Implementer docs |
+| m2: `docs/bot-texts.md` command list without `/stop` | Minor → #455 | instance-vs-class | `BOT_COMMANDS` and its pins were updated, the prose lists were not; the same Minor came back in #115 (m2) | Implementer |
+| m3: comment over `POST /trading/sessions/stop` restates the code | Minor → #455 | other | — | Implementer |
+
+### Process improvement proposals
+
+1. **The prose command lists in `docs/bot-start.md` and `docs/bot-texts.md` are not pinned to `BOT_COMMANDS` (the same Minor in #122 and #115); a test reading them would close the class** — **открыто (2026-10-10, tech-lead)**
+2. **Remaining Minor** — **вынесено в #455**
+
+---
+
+## #115 — Рефералка: персональные start-ссылки и фиксация приглашения (2026-10-10)
+
+| Issue | PR | Review rounds | Added lines (without snapshot) | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #115 referral links | #441 | 2 | 1 540 (5 182 in total) | 0043 (was 0042 before the rebase over #448) | skipped (limit until 14.10) | → #456 (m2 fixed) |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Claim | Plan of 2026-10-08 stale (#358, Rule 31, #202, migrations up to 0040). Stacked on #437 — the third level (#436 → #437 → #115), allowed by the night's Stacking rule. |
+| Architect | Plan Update | Opus (Fable 429 at 15:17). Clarify 4 questions (manager); follow-up #440 created in Backlog. |
+| Implementer | Code | No questions, reason in the issue. 3 commits; 40 mutations, two survivors closed by `eba8e61` and the table re-taken. Plan defect: the R2 mutation could not fail. |
+| Reviewer | Round 1 | No Blocker/Major, 4 Minor. |
+| Tech Lead (day) | Rebase | Retargeted to `main` right after #437's merge (17:30:39Z, not closed); rebased `--onto origin/main a8cb3fb` to `5e111f9` after #437, #439, #448; migration regenerated as 0043; m2 fixed; mutation table re-taken (39/39). |
+| Reviewer | Round 2 | Whole-feature pass: rebase and migration checked, m2 fixed, no new findings. Merged 18:30Z. |
+| Tech Lead | Phase 5 | #115 was still **OPEN** after the merge: `closingIssuesReferences` of #441 was empty — the PR was opened on `feat/318-session-card` and the `Closes` link did not follow the retarget (#437 and #439, closed and reopened, kept theirs). Closed by hand with a comment. |
+
+### Review iterations: 2 (round 2 — after the rebase)
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| #115 stayed open after its PR merged | Process | other | A PR opened on a non-default base has no closing link; retargeting did not create one | Tech Lead merge relay (now checked in step 1) |
+| The night report's detail blocks are mixed: #122's block carries #441's «PR и ревью» and findings, #115's block carries #141's review history | Process | single-source | The manager edits blocks by position in one long file; the task table is right, the details are not | Manager report update |
+| m1: a failed first `/start ref_…` followed by «🔄 Повторить» loses the invitation | Minor → #456 | other | The plan's edge case «first successful `/start`» was not traced through the retry path | Architect Plan Update |
+| m2: prose command lists without `/invite` | Minor → fixed in the rebase | instance-vs-class | Same as #122 m2 | Implementer |
+| m3: Rule 34 and `docs/referrals.md` claim a single writer and «not for a blocked user» | Minor → #456 | unverified-claim | Check-then-act without a lock | Implementer docs |
+| m4: `/simplify` cleanups | Minor → #456 | other | — | Implementer |
+
+### Process improvement proposals
+
+1. **Limit the night stack depth in `manager/SKILL.md` → Stacking** (e.g. a base must itself target `main`) — **открыто (2026-10-10, tech-lead)**: a policy choice between night throughput and morning rebases; for the owner.
+2. **Check `closingIssuesReferences` of a retargeted PR** — **внедрено в этом docs-PR: `.claude/skills/tech-lead/SKILL.md` → «A PR left In Review by a manager session», step 1**
+3. **Manager report: update a task's detail block by its task id, and check at the final publish that each block's PR links are its own** — **открыто (2026-10-10, tech-lead)**
+4. **Remaining Minor** — **вынесено в #456**
+
+---
+
+## #131 — Восстановление демо-сессии после рестарта worker (2026-10-10)
+
+| Issue | PR | Review rounds | Added lines | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #131 recovery proof and docs | #438 | 1 | 481 (tests and docs only) | — | skipped (limit until 14.10) | → #457 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Claim | Plan of 2026-10-07 named #93/#95 as future work; both merged. |
+| Architect | Plan Update | Opus (Fable 429 at 14:11). **No clarify round** (architect floor: 3 questions): the architect found no new fork and made three choices itself under the owner's earlier answers Q2/Q5, naming them for review. Probes: 11/11 component cases and H9 green, M1–M5 red as planned. |
+| Implementer | Code | Clarify 2 questions (manager). 2 commits; 5 mutations, red sets as in the plan. |
+| Reviewer | Round 1 | No Blocker/Major, 5 Minor (evidence and wording only; no test is the only guard of an invariant). |
+| Tech Lead (day) | Merge | Rebased onto `71017ce` → `6795c66` (code `=`, one docs conflict with #122's line), merged 18:39Z. |
+
+### Review iterations: 1
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| Round-0 Plan Update without an architect clarify round (#337, #318 had one; #131 and #318's round-1 Plan Update did not) | Process | other | No rule says whether a staleness Plan Update runs clarify; the floor of 3 is written for plans | Architect skill / CLAUDE.md floor |
+| m1: L1's lead comment separated from its `describe` | Minor → #457 | other | — | Implementer |
+| m2, m3, m5: `crashAfterOpen` claims the intent's own terms; `expired` written as a status; «deterministic» R6 never shown red | Minor → #457 | unverified-claim | Wording stronger than the code | Implementer / Architect plan (m5) |
+| m4: local `secondsAgo` duplicates `millisecondsAgo` | Minor → #457 | single-source | — | Implementer |
+
+### Process improvement proposals
+
+1. **Architect SKILL.md: state whether a round-0 (staleness) Plan Update runs a clarify round, and with what floor** — **открыто (2026-10-10, tech-lead)**: the floor «architect — не меньше 3» lives in `.claude/CLAUDE.md` → Постоянные ответы владельца, which this docs PR does not edit; the owner decides.
+2. **Remaining Minor** — **вынесено в #457**
+
+---
+
+## #239 — Баланс брокера: блокировка пользователя, пропущенная во время ожидания lock'а аккаунта (2026-10-10)
+
+| Issue | PR | Review rounds | Added lines | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #239 blocked user after the lock wait | #444 | 1 | 232 | — | skipped (limit until 14.10) | → #458 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Claim | Taken at ~2 h 50 min left as the smallest of the pool; plan of 2026-10-06 stale. |
+| Architect | Plan Update | Opus (Fable 429 at 17:38). Clarify 4 questions (manager): shared lock-wait oracle, the fourth exhaustiveness check moves to `assertExhausted`, a 300 ms margin, #239 rebases on a Rule 12 conflict with #436. First publication left Q4 unsubstituted, fixed at once by PATCH. |
+| Implementer | Code | No questions, reason in the issue. Plan defect: `assertExhausted(token.reason, …)` does not compile (TS2339) → called with `token`. M1–M9. |
+| Reviewer | Round 1 | No Blocker/Major, 3 Minor; every token path and the lock order checked, M1 and M4 re-run. |
+| Tech Lead (day) | Merge | Rebased → `f4999ce` (code `=`; Rule 12 merged by hand, the «view сессии» row added per Q4), merged 18:42Z. |
+
+### Review iterations: 1
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| The plan's `assertExhausted(token.reason, …)` does not compile | Plan defect → implementer | unverified-claim | A code snippet in the plan was not type-checked | Architect Plan Update |
+| m1: the unreachable branch would print `[object Object]` | Minor → #458 | other | — | Implementer |
+| m2: the «tick joined the aborted flight» test does not prove the join (`refreshed: 0` missing) | Minor → #458 | unverified-claim | — | Implementer tests |
+| m3: helper order, `runTick` readability | Minor → #458 | other | — | Implementer |
+
+### Process improvement proposals
+
+1. **Remaining Minor** — **вынесено в #458**
+
+---
+
+## #154 — Telegram-тост «Код отправлен.» показывается до того, как отправка кода известна (2026-10-10)
+
+| Issue | PR | Review rounds | Added lines | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #154 confirm button answers after the send | #446 | 1 | 171 | — | skipped (limit until 14.10) | → #461 |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Claim | Taken at ~2 h 18 min left; plan of 2026-10-06 stale (#152 staff login, text registry). |
+| Architect | Plan Update | Opus (Fable 429 at 18:09). Found a plan error by a scratch test (`handleUpdate` throws `BotError` to the caller; `bot.catch` is not called). Clarify 3 questions (manager); the neighbouring callback-id hole → #445 in Backlog. |
+| Implementer | Code | No questions, reason in the issue. New checks first run against `main`'s handler (red), 15 mutations. |
+| Reviewer | Round 1 | No Blocker/Major, 1 Minor. |
+| Tech Lead (day) | Rebase | #448 (PR #449) merged first by the owner's choice, with a rebase note on #446. The textually clean rebase onto `71017ce` failed CI typecheck (`telegram.db.test.ts(605,36): TS2345` — #448 made `webPublicUrl` required); two test-only commits (`ea101db`, `ebba96c`), mutation table re-taken whole. No reviewer round after them; merged 19:50Z. |
+
+### Review iterations: 1
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| A textually clean rebase broke CI (`tsc`); the same day #447's longest-answer gate lacked rows for methods merged meanwhile | Process | other | Semantic conflicts with a moved `main` are invisible to `git rebase` | — (caught by CI before the merge question) |
+| m1: «Код отправлен.» possible for a code `completeLogin` will refuse (`markChallengeCodeSent` lacks `status = confirmed`); comments promise more | Minor → #461 | unverified-claim | — | Architect Plan Update / Implementer |
+| m2: the final `try/catch` duplicates #448's `answerQuietly` (seen at the rebase) | Minor → #461 | single-source | Two PRs added the same helper shape in parallel | — |
+
+### Process improvement proposals
+
+1. **After any rebase onto a moved `main`, wait for green CI before the merge question** — **внедрено в этом docs-PR** (proposal 3 of the #337 entry)
+2. **Remaining Minor** — **вынесено в #461**
+
+### Process proposals of the night's report («Предложения по процессу»)
+
+1. **Stack depth limit** — **открыто (2026-10-10, tech-lead)** (#115 entry, proposal 1)
+2. **Manager: architects straight on Opus after the first Fable 429 of the session** — **открыто (2026-10-10, tech-lead)**: the edit of `manager/SKILL.md` → Substitutions → 4 was refused by the session's permission classifier; the text is ready for the next docs PR.
+3. **Manager: check a fact before a recommended answer rests on it** (#234's «3 Б на символ») — **внедрено в этом docs-PR: `.claude/skills/manager/SKILL.md` → Substitutions → 1**
+4. **Owner step `git pull` in the main checkout before `/manager`** — **открыто (2026-10-10, tech-lead)**: the edit of `manager/SKILL.md` → Launch was refused by the session's permission classifier.
+5. **Architect: clarify rule for a round-0 Plan Update** — **открыто (2026-10-10, tech-lead)** (#131 entry, proposal 1)

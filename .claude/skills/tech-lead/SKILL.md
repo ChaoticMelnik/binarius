@@ -199,6 +199,7 @@ Rules:
   git fetch origin
   git rebase origin/main
   ```
+- If B's PR targets A's branch, retarget it to `main` before A merges and merge A without `--delete-branch`: Mode 2 → "A PR left In Review by a manager session", step 1.
 
 ### Step 4: Announce the merge order
 
@@ -272,6 +273,8 @@ If this repo's CLAUDE.md has waived the commit/PR stop points: no text between p
 
 #### Phase 2 — Implementer
 
+Before the spawn, a plan more than a day old or written by another session is checked against `main`: `git log --oneline <plan's base sha>..origin/main -- <files the plan names>`. Any output → the architect writes a round-0 Plan Update first (all seven plans of 2026-10-06..09 taken on 2026-10-10 needed one; #396 and #397 on 2026-10-09).
+
 Spawn the implementer (`Agent`, `model: "opus"`). Round 1 returns its clarify questions (implementer Step 0) → clarify relay; plan defects among them go to the architect first (continue the architect agent for a Plan Update) → the implementer continues with the answers and the Plan Update. Never perform implementer steps inline.
 
 If a merge-chain base branch (Mode 1, Step 3) has already merged into `main` since the chain was declared, rebase onto `main` before implementation continues — check `gh pr view <base-PR> --json state,mergedAt` first.
@@ -314,17 +317,18 @@ It posted the ready-to-merge comment or returned the classifier's refusal (Merge
    - Any other failure → 2 attempts, then `AskUserQuestion` «Codex: запустить позже / мержить без него». On the second answer, tech-lead posts the owner's skip line as a PR comment.
 
 **A PR left In Review by a manager session.** Start from the night's report: the reviewer's verdict, the Codex job id or skip line and the checks are recorded there, and the Phase 3 audit comment is already posted. In this order:
-1. **A stacked PR** (its base is another open PR, «Merge after #<base>»):
-   - merge its base first (`--rebase --delete-branch`; GitHub retargets the dependent PR to `main`);
-   - then `git rebase --onto origin/main <old base head>` and `git push --force-with-lease` on the dependent;
-   - wait for CI.
+1. **A stacked PR** (its base is another open PR, «Merge after #<base>»). Deleting the base branch on the base's merge (`--delete-branch`) makes GitHub **close** every PR that targets it, not retarget it (#437 and #439 on 2026-10-10; reopening them needed the owner's permission to re-push the base branch). In this order:
+   - before the base's merge, retarget every dependent: `gh pr list --base <base branch> --json number --jq '.[].number'`, then `gh pr edit <dep> --base main` for each;
+   - merge the base with `--rebase` and **without** `--delete-branch` — the one exception to the standing merge method; the merge question says so;
+   - on each dependent: `git rebase --onto origin/main <old base head>`, `git push --force-with-lease`, `git range-diff` against the approved head; then `gh pr view <dep> --json closingIssuesReferences` must name its issue — a PR opened on another PR's branch can lose its `Closes` link when retargeted (#441: #115 stayed open after the merge);
+   - delete the base branch (`git push origin --delete <base branch>`) only when `gh pr list --base <base branch>` is empty.
 2. **Codex, decided once at the current head.** A run is due when the PR has a night skip line, or step 1 moved the head; otherwise go to step 3.
    - **The usage limit is still active at preflight** → no run, no question. If the PR's skip line is not already a usage-limit line at this head, tech-lead posts the usage-limit skip line (preflight's job) as a PR comment.
    - **A night skip line** → `AskUserQuestion` «Codex пропущен ночью — запустить сейчас / мержить без него» (run now recommended):
      - run now → tech-lead's own 6-pre run;
      - «мержить без него» → tech-lead posts the owner's skip line as a PR comment, with `<сбой>` and the job taken from the night's line.
    - **No skip line, and step 1 moved the head** → tech-lead's own 6-pre run, with no question.
-3. **The merge relay**; after each merge, run Phase 5.
+3. **The merge relay**; after each merge, run Phase 5. After any rebase onto a moved `main` — stacked or not, textually clean or not — the merge question waits for green `gh pr checks` at the new head: a clean rebase still broke CI twice on 2026-10-10 (#446: `tsc` after #448 made `webPublicUrl` required; #447: the longest-answer gate lacked rows for methods merged meanwhile).
 
 A PR with open Blocker/Major («Открытые находки на конец цикла задачи (3-й круг) или сессии менеджера»): the owner decides — a Plan Update round (the round count continues from the night's) or close the PR. A PR whose last round was 3 gets no further round: Phase 4 iteration 3 branches instead.
 
