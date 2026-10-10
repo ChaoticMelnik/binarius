@@ -303,8 +303,9 @@ One PNG per finished session, demo and real alike, sent to the status message's 
 final status. Sharing it is Telegram's own forwarding; a share button is #321.
 
 - **When.** The tracker's entry ends on a done view (stopped, the last trade settled or rejected)
-  and the final status is on screen. A last trade on `manual_review` is not done, so no card: an
-  operator settling it later gives one only on the user's «🔄 Обновить». A session with no settled
+  and the final status is on screen. A last trade on `manual_review` is not done, so no card yet:
+  an operator settling it later gives one on the tracker's next poll while its entry lives (until
+  `SESSION_TRACK_DEADLINE_MS`), otherwise on the user's «🔄 Обновить». A session with no settled
   trade gets none.
 - **At most once.** `POST /trading/sessions/:id/summary` ([trading-session.md](trading-session.md#routes))
   sets `trading_sessions.summary_sent_at` by one CAS UPDATE and answers the card's rows; every
@@ -327,6 +328,10 @@ final status. Sharing it is Telegram's own forwarding; a share button is #321.
 - **The keyboard** is the stopped status's without «🔄 Обновить» (which edits a message's text, and
   a photo has a caption): «🔁 Ещё сессия» while the demo offers the duration, «📊 Новый анализ»,
   «📡 К сигналам», «🏠 В меню»; «🏠 В меню» alone without `settings` (`sessionCardKeyboard`).
+  «📊 Новый анализ» and «📡 К сигналам» edit the pressed message; under the card Telegram refuses
+  that with «there is no text in the message to edit», `editRefusal` (`screen.ts`) reads it as
+  gone, and the screen comes as a new message under the card (the analysis: «⏳», then its
+  result), with one `warn` `the demo screen was not edited, sending it anew` per press.
 - **The renderer.** `@resvg/resvg-js` 2.6.2 (MPL-2.0), a prebuilt native module per platform, about
   30 ms per card on the bot's event loop. It loads only `apps/bot/fonts/Inter-*.ttf`
   (`loadSystemFonts: false`): the alpine image has no fonts, and without a font resvg drops the
@@ -372,6 +377,15 @@ final status. Sharing it is Telegram's own forwarding; a share button is #321.
     Falsifiable: the owner's container command above does not print `ok`.
 13. **Render cost** (#318): about 30 ms per finished session on the bot's event loop. Falsifiable:
     a render over 200 ms on the pilot.
+14. **Warn noise under the card** (#318): every press of «📊 Новый анализ» or «📡 К сигналам» under
+    a card logs one `warn` `the demo screen was not edited, sending it anew`; a separate outcome
+    for "no text" would be a third answer in every caller of `editRefusal`. Falsifiable: that
+    line's rate after #318 is roughly the rate of those two presses.
+15. **A leftover «⏳»** (#318): «⏳ Анализирую…» stays as a message without a keyboard above the
+    analysis result sent under the card, as on any gone edit since #126.
+16. **Telegram's wording is taken from public reports** (#318): «there is no text in the message
+    to edit» has not been observed live here. Falsifiable by the owner's check in the PR: a press
+    under the card that logs `update handler failed` means the description differs.
 
 ## Running it locally
 
