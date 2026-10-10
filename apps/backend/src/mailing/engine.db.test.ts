@@ -385,53 +385,66 @@ describe('the rate', () => {
   });
 });
 
-// Date.now stepped by `stepMs` more on every read, the way NTP steps a wall clock
-async function withWallClockStepping<T>(stepMs: number, run: () => Promise<T>): Promise<T> {
+// Date.now under the case's control, the way NTP steps a wall clock: moved by `offset`, and by
+// `perRead` more on every read. Installed before the engine is built, so a clock the engine takes
+// by reference is this one too.
+function mockWallClock() {
   const start = Date.now();
+  const wall = { offset: 0, perRead: 0 };
   let reads = 0;
-  const spy = vi.spyOn(Date, 'now').mockImplementation(() => start + stepMs * ++reads);
-  try {
-    return await run();
-  } finally {
-    spy.mockRestore();
-  }
+  const spy = vi
+    .spyOn(Date, 'now')
+    .mockImplementation(() => start + wall.offset + wall.perRead * ++reads);
+  return { wall, restore: () => spy.mockRestore() };
 }
 
 describe('the clock', () => {
   it('spaces the sends on a monotonic clock: a wall clock stepped back stretches no gap', async () => {
     await dueUser();
     await dueUser();
-    const slept: number[] = [];
-    const { mailing, captured } = engine({}, 'default', async (ms) => {
-      slept.push(ms);
-    });
-    await mailing.planTick();
-    await withWallClockStepping(-60_000, () => mailing.sendTick());
-    expect(callsTo(captured.calls, 'sendMessage').length).toBeGreaterThanOrEqual(2);
-    // the sleep returns at once, so each gap adds to the next: the n-th wait is at most n gaps,
-    // where a wall clock stepped back 60 s on every read would ask for a minute more each time
-    const gap = 1000 / MAILING_SEND_PER_SECOND;
-    slept.forEach((ms, index) => expect(ms).toBeLessThanOrEqual((index + 1) * gap));
-    await mailing.stop();
+    const { wall, restore } = mockWallClock();
+    try {
+      const slept: number[] = [];
+      const { mailing, captured } = engine({}, 'default', async (ms) => {
+        slept.push(ms);
+      });
+      await mailing.planTick();
+      wall.perRead = -60_000;
+      await mailing.sendTick();
+      expect(callsTo(captured.calls, 'sendMessage').length).toBeGreaterThanOrEqual(2);
+      // the sleep returns at once, so each gap adds to the next: the n-th wait is at most n gaps,
+      // where a wall clock stepped back 60 s on every read would ask for a minute more each time
+      const gap = 1000 / MAILING_SEND_PER_SECOND;
+      slept.forEach((ms, index) => expect(ms).toBeLessThanOrEqual((index + 1) * gap));
+      await mailing.stop();
+    } finally {
+      restore();
+    }
   });
 
   it('holds Telegram’s pause on a monotonic clock: a wall clock stepped on does not end it', async () => {
     await dueUser();
-    const { mailing, captured } = engine({}, 'default');
-    await mailing.planTick();
-    captured.apiErrors.set('sendMessage', {
-      ok: false,
-      error_code: 429,
-      description: 'Too Many Requests: retry after 30',
-      parameters: { retry_after: 30 },
-    });
-    await mailing.sendTick();
-    captured.apiErrors.delete('sendMessage');
-    await dueUser();
-    await mailing.planTick();
-    await withWallClockStepping(600_000, () => mailing.sendTick());
-    expect(callsTo(captured.calls, 'sendMessage')).toHaveLength(1);
-    await mailing.stop();
+    const { wall, restore } = mockWallClock();
+    try {
+      const { mailing, captured } = engine({}, 'default');
+      await mailing.planTick();
+      captured.apiErrors.set('sendMessage', {
+        ok: false,
+        error_code: 429,
+        description: 'Too Many Requests: retry after 30',
+        parameters: { retry_after: 30 },
+      });
+      await mailing.sendTick();
+      captured.apiErrors.delete('sendMessage');
+      await dueUser();
+      await mailing.planTick();
+      wall.offset = 600_000;
+      await mailing.sendTick();
+      expect(callsTo(captured.calls, 'sendMessage')).toHaveLength(1);
+      await mailing.stop();
+    } finally {
+      restore();
+    }
   });
 });
 
