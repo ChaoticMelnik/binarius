@@ -83,8 +83,9 @@ back, see the tick), and a joined second bot request falls back to the stored sn
 signal starts no flight. The steps:
 
 1. The access token: `ensureFreshAccessToken(…, { mayRefresh })`
-   ([binodex-oauth.md](binodex-oauth.md) → Refresh). It reads the user's status in the statement
-   that locks the account, and a blocked user gets no token.
+   ([binodex-oauth.md](binodex-oauth.md) → Refresh). It reads the user's status in its own
+   statement right after the account lock, and again after a token exchange; a blocked user gets
+   no token.
 2. The account's `broker_user_id`; a missing account spends no call.
 3. `GET /v1/broker/user`, with the caller's signal and `stop()`'s.
 4. The owner check: the answer's `id` must be the account's `broker_user_id`.
@@ -140,8 +141,9 @@ Every `BALANCE_RECONCILE_INTERVAL_MS` (env, 10 000 to 60 000, default 60 000):
 1. **Accounts in work** (`listBalanceRefreshCandidates`): an active account of an active user,
    with a non-terminal intent or one the bot asked about within `BALANCE_WATCH_WINDOW_MS`
    (10 min), whose access token outlives `now() + ACCESS_SKEW_MS` by the database clock. This
-   filter is an optimisation: the user's status is read again under the account lock when the
-   token is taken (`user_blocked`: nothing written, counted `skipped`, held back).
+   filter is an optimisation: the user's status is read again in its own statement under the
+   account lock when the token is taken (`user_blocked`: nothing written, counted `skipped`, held
+   back).
 2. **Order.** Never-observed accounts come first. After them, the account that has gone longest
    since its last attempt (`greatest(rest_observed_at, last_refresh_failed_at)`), so a recorded
    failure moves an account to the back of the queue.
@@ -264,9 +266,11 @@ on top of #99's socket client, which writes nothing itself:
 - An account in work with an expired access token gets a snapshot only when its user acts; its
   age shows in the tick summary.
 - `rest_observed_at` is the time of the write, milliseconds after the broker answered.
-- The token is handed out inside a transaction, and the GET goes out after its COMMIT. A block
-  committed in those milliseconds does not stop a request already sent. Nothing sets a block
-  today. Future code that needs a hard guarantee revokes the user's accounts in the same
+- The last read of `users.status` is after the account lock (after the exchange on that path);
+  the GET goes out after the COMMIT. A block committed in those milliseconds does not stop a
+  request already sent; one committed while the lock was waited for is seen (#239). The worker's
+  callers: [binodex-oauth.md](binodex-oauth.md) → The window after the last read. Nothing sets a
+  block today. Future code that needs a hard guarantee revokes the user's accounts in the same
   transaction, in the order `users → broker_accounts`.
 - The worker's check after a reconciliation (#92) writes the row outside the backend's single
   flight: the last write wins, and both are the broker's answer. A socket event that lands during
