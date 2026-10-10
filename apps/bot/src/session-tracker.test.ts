@@ -504,17 +504,22 @@ describe('the session tracker', () => {
       }
     });
 
-    it('C5 at the deadline, a done session whose final edit lands there gets its card', async () => {
+    // the poll past the deadline fails its edit too; the deadline's own last edit then lands
+    it('C5 at the deadline, a done session whose last edit lands there gets its card', async () => {
       const { tracker, request } = setup({ script: [stoppedClosed] });
       const started = Date.now();
-      const edit = vi.fn<SessionTrackRequest['edit']>(() =>
-        Date.now() - started < DEADLINE ? Promise.reject(TRANSIENT()) : Promise.resolve(true),
-      );
+      let late = 0;
+      const edit = vi.fn<SessionTrackRequest['edit']>(() => {
+        if (Date.now() - started < DEADLINE) return Promise.reject(TRANSIENT());
+        late += 1;
+        return late === 1 ? Promise.reject(TRANSIENT()) : Promise.resolve(true);
+      });
       const card = cardSpy();
       tracker.track(request({ edit, card }));
       await vi.advanceTimersByTimeAsync(DEADLINE - POLL);
       expect(card).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(POLL * 3);
+      expect(late).toBe(2);
       expect(card).toHaveBeenCalledTimes(1);
       expect(tracker.size()).toBe(0);
     });

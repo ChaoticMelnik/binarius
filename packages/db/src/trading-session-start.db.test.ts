@@ -705,6 +705,31 @@ describe('claimSessionSummary (#318)', () => {
     expect(summary?.result).toBe('1.08456789');
   });
 
+  // no CHECK ties a broker trade to its intent's status: a closed trade on a rejected intent is a
+  // row the schema allows, and neither the list nor the sum may take it
+  it('S13 a closed broker trade on a rejected step is left out of the trades and the sum', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    const { intent: won } = await sessionIntent(seed, session.id, 1);
+    await settle(won, '0.85', { open: 1, close: 2 });
+    const { intent: rejected } = await sessionIntent(seed, session.id, 2);
+    await reject(rejected);
+    await tmp.db.execute(sql`
+      insert into broker_trades (broker_account_id, intent_id, broker_trade_id, mode, asset_id,
+        action, amount, payout, open_price, open_timestamp_ms, close_price, close_timestamp_ms,
+        profit, status, raw)
+      select broker_account_id, ${rejected.id}, broker_trade_id || '-copy', mode, asset_id,
+        action, amount, payout, 5, open_timestamp_ms, 6, close_timestamp_ms, 100, status, raw
+        from broker_trades where intent_id = ${won.id}`);
+    await stop(session);
+    const view = await viewOf(session, seed);
+    expect(await claim(session, seed)).toEqual({
+      result: '0.85000000',
+      trades: [{ profit: '0.85000000', openPrice: 1, closePrice: 2 }],
+    });
+    expect(view.trades.profit).toBe('0.85000000');
+  });
+
   it('S12 two claims at once: exactly one wins', async () => {
     const { seed, session } = await finished(['0.85']);
     const results = await Promise.all([claim(session, seed), claim(session, seed)]);
