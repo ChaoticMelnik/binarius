@@ -468,12 +468,14 @@ the broker balance refresh (`apps/backend/src/broker/balance-reconciler.ts`): `P
 fingerprint `refusedToken` ([A refused token](#a-refused-token-is-an-expired-token-281)). The route answers `{ accessToken }` or `{ error }` with
 the refusal code alone (404 `account_not_found`, 409 the rest; `revokedReason` stays here), and
 neither side logs either body. `refresh_rate_limited` is the one refusal that is temporary (#275):
-the broker's rate limit refused the exchange, and asking again later may succeed.
+the broker's rate limit refused the exchange, and asking again later may succeed. A token already
+handed out is not taken back by a later block; how long each caller goes on using it is
+[The window after the last read](#the-window-after-the-last-read-239).
 
 | Step                                                        | Outcome                                                                                                           |
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | account missing                                             | `account_not_found`                                                                                               |
-| user `blocked`                                              | `user_blocked`: nothing decrypted, exchanged or revoked. `users.status` is read in the statement that locks the account, without locking `users` (lock order, Rule 5) |
+| user `blocked`                                              | `user_blocked`: nothing decrypted, exchanged or revoked. `users.status` is read in its own statement right after the account row is locked — a block committed while the lock was waited for is seen (#239) — without locking `users` (lock order, Rule 5) |
 | `status = pending`                                          | `account_pending` — nobody has confirmed it, so it may not act on the user's behalf                               |
 | `status = revoked`                                          | `account_revoked` — checked **before** the expiry, so a revoked account never hands out the token it still stores |
 | `token_key_id ≠ the process's key id`                       | `key_unavailable`, and **nothing is written** (see below)                                                         |
@@ -484,6 +486,7 @@ the broker's rate limit refused the exchange, and asking again later may succeed
 | `mayRefresh: false`                                         | `refresh_needed`: nothing exchanged and nothing revoked, the 90-day rule below included                           |
 | `coalesce(token_rotated_at, created_at)` older than 90 days | revoke `refresh_expired`, without asking the broker                                                               |
 | otherwise                                                   | exactly one refresh exchange                                                                                      |
+| user `blocked` by the time the exchange answered (read again before the token is returned) | `user_blocked`; the rotated pair is stored — the old one is spent — and nothing is revoked |
 
 **A timer never exchanges a token.** A failed exchange whose outcome may have spent the pair
 revokes the account (a 429 does not, see below), and the background
@@ -552,6 +555,32 @@ If the second transaction itself fails, the account stays active holding a token
 refuse, the failure is logged, and `ensureFreshAccessToken` **throws** rather than returning a
 result — callers such as ARCH-01 (#40) see an exception, not an `AccessTokenResult`. The next
 refresh gets a 401 and revokes it there with `refresh_invalid_grant`.
+
+### The window after the last read (#239)
+
+`users.status` is read twice at most: in its own statement right after the account lock — a
+statement that joined `users` while it waited would keep the row of its own snapshot — and, on the
+exchange path, again after the rotated pair is stored, because the exchange holds the lock for up
+to `BROKER_HTTP_TIMEOUT_MS` (`token-service.db.test.ts` B1, B2). No caller gets a new token for a
+blocked user. A token already handed out is not taken back: a block committed after the last read
+does not stop what the caller does with it (stated). The window, from the last read to the last
+broker call made with that token:
+
+| Caller | `mayRefresh` | Window after the token is handed out |
+| --- | --- | --- |
+| backend balance reconciler — `POST /trading/access`, `POST /trading/sessions` (no snapshot), the background tick, `reportRefused` | routes `true`; tick and report `false` | the COMMIT and one `GET /v1/broker/user`, milliseconds |
+| session view (`viewForReply`, #337) through the balance reconciler — `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/stop` (#122); only a finished session whose snapshot predates its last settlement | `false` | the COMMIT and one `GET /v1/broker/user`, at most `TRADING_ACCESS_REFRESH_BUDGET_MS` |
+| `rate-limit-probe` (backend CLI) | `false` | two GETs |
+| executor (`trade-command-executor.ts`, the REST path) | `true` (default) | the route's answer and one `openTrade` POST |
+| REST reconciler (`rest-reconciler.ts`) | `true` | the pages of both windows, at most `RECONCILE_ATTEMPT_TIMEOUT_MS` |
+| settlement catch-up (`settlement-catchup.ts`) | `false` | the `closed` pages, at most `CATCHUP_ATTEMPT_TIMEOUT_MS` |
+| balance check after a reconciliation (`balance-check.ts`, #92) | `false` | one GET, at most `BALANCE_CHECK_TIMEOUT_MS` |
+| session manager (`session-manager.ts`, start and `refresh()`) | `false` | `user.auth` and the whole connection: a blocked user's session closes only through the candidates, at most `SESSION_TICK_MS + SESSION_IDLE_GRACE_MS` (65 s) — [broker-session.md](broker-session.md), Accepted risks 6; the executor's socket commands on that session fall in the same window |
+| `socket-probe` (worker CLI) | `false` | one probe socket |
+| refused-token report (`reportRefusedToken`, worker) | as its caller | the token does not go back into use |
+
+Nothing sets a block today. Future code that needs a hard guarantee revokes the user's accounts in
+the same transaction that sets `blocked`, in the order `users → broker_accounts`.
 
 ### Live check: a 429 on `user-auth/refresh` (owner, after #275)
 
