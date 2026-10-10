@@ -197,6 +197,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   // «3 из 5»
   step: () => w.sessionCount + ' из '.length + w.sessionCount,
   score,
+  // a session's result: '-$999 999 999 999.99' or '+$…', both w.usd (formatSignedUsd)
+  profit: () => w.usd,
   result,
   // «5 сделок»
   trades: (m) => w.sessionCount + 1 + trades(m),
@@ -233,6 +235,8 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   sessionWon: { count: () => w.sessionCount },
   sessionLost: { count: () => w.sessionCount },
   sessionTied: { count: () => w.sessionCount },
+  sessionBalanceDemo: { amount: () => w.usd },
+  sessionBalanceReal: { amount: () => w.usd },
   // shown only with an amount; launchStakeMinimum stands in without one
   launchStake: { stake: () => w.stake },
   // the offer under a finished trade names the session its row starts, always
@@ -336,6 +340,16 @@ const sessionStopLines = [
   'tradingPaused',
 ] as const satisfies readonly BotHtmlKey[];
 const sessionHead = [k('sessionHeader'), '\n', k('sessionSettings')];
+// a finished session's result and the balance after it, by mode, with the age when it predates
+// the last trade (#337, texts.ts → outcomeLines)
+const sessionOutcome = [
+  '\n',
+  k('sessionResult'),
+  '\n',
+  anyOf('sessionBalanceDemo', 'sessionBalanceReal'),
+  '\n',
+  k('statusStale'),
+];
 
 const ASSEMBLED: readonly BotTextMessage[] = [
   {
@@ -505,7 +519,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     id: 'sessionCompleted',
     title: 'Сессия завершена',
     limit: TELEGRAM_MESSAGE_LIMIT,
-    body: [...sessionHead, '\n\n', k('sessionCompleted')],
+    body: [...sessionHead, '\n\n', k('sessionCompleted'), ...sessionOutcome],
   },
   {
     id: 'sessionStopped',
@@ -517,6 +531,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       anyOf(...sessionStopLines, 'sessionStatusUnavailable'),
       '\n',
       k('sessionTotal'),
+      ...sessionOutcome,
       '\n',
       anyOf(...liveIntentLines),
       '\n',

@@ -1,7 +1,7 @@
 import { GrammyError, HttpError } from 'grammy';
 import {
   errorLogFields,
-  TradingSessionStatus,
+  isTradingSessionFinished,
   type TelegramHtml,
   type TradingSessionView,
 } from '@binarius/shared';
@@ -13,7 +13,7 @@ import {
 } from './backend-client';
 import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
-import { sessionIntentLive, sessionStatusText, TEXTS } from './texts';
+import { sessionStatusText, TEXTS } from './texts';
 
 // The demo session's status message follows its session (#284, docs/bot-session.md): the bot
 // polls GET /trading/sessions/:id and edits the message as the session moves. In-process memory,
@@ -28,9 +28,9 @@ const SESSION_TRACKER_MAX_ENTRIES = 10_000;
 
 // Where following a session ends: stopped, and its last trade can no longer move the counters. A
 // stopped session whose trade is still open is followed until that trade settles; a last trade in
-// manual_review has edges left, so such an entry runs to the deadline.
-export const sessionTrackingDone = (view: Pick<TradingSessionView, 'status' | 'lastIntent'>) =>
-  view.status === TradingSessionStatus.Stopped && !sessionIntentLive(view.lastIntent);
+// manual_review has edges left, so such an entry runs to the deadline. The backend refreshes the
+// balance for the same predicate (#337), so the two cannot drift.
+export const sessionTrackingDone = isTradingSessionFinished;
 
 export interface SessionTrackRequest {
   sessionId: string;
@@ -74,7 +74,15 @@ interface Entry extends SessionTrackRequest {
 }
 
 // Every field the message prints from the view; the edit happens only when one of them changes.
-const renderKey = ({ status, stopReason, trades, lastIntent }: TradingSessionView): string =>
+// The balance's age is left out: it moves every poll, and a manual_review session would be edited
+// every poll to the deadline; the age line is as of the edit that drew it (#337).
+const renderKey = ({
+  status,
+  stopReason,
+  trades,
+  lastIntent,
+  balance,
+}: TradingSessionView): string =>
   [
     status,
     stopReason,
@@ -83,6 +91,9 @@ const renderKey = ({ status, stopReason, trades, lastIntent }: TradingSessionVie
     trades.won,
     trades.lost,
     trades.tied,
+    trades.profit,
+    balance?.available,
+    balance?.current,
     lastIntent?.id,
     lastIntent?.status,
     lastIntent?.lastError,

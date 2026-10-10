@@ -28,6 +28,7 @@ import {
   type LinkBonusGrantView,
   type LinkedAccountView,
   type TelegramHtml,
+  type TradingSessionView,
   DEMO_CALLBACK_DATA,
   SUPPORT_TELEGRAM_USERNAME,
   supportUrl,
@@ -124,6 +125,7 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   digits: text,
   step: text,
   score: text,
+  profit: d('-1.5'),
   result: text,
   trades: text,
   action: text,
@@ -1054,9 +1056,9 @@ describe('the demo session status', () => {
   const plainOf = (...args: Parameters<typeof sessionStatusText>) =>
     plainTextOf(sessionStatusText(...args));
 
-  it('lays out a live session with its trade number, score and the last trade', () => {
+  it('T1 lays out a live session with its trade number, score with the result and the last trade', () => {
     const view = sessionView({
-      trades: settled({ settled: 2, won: 1, lost: 1 }),
+      trades: settled({ settled: 2, won: 1, lost: 1, profit: d('-0.5') }),
       lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
     });
     expect(plainOf('EUR/USD OTC', view)).toBe(
@@ -1064,7 +1066,7 @@ describe('the demo session status', () => {
         '🎮 Демо-сессия',
         '📈 EUR/USD OTC · ⏱ 15 с · ставка $1.00',
         '🔢 Сделка 3 из 5',
-        '📊 Счёт: 1 в плюс, 1 в минус',
+        '📊 Счёт: 1 в плюс, 1 в минус · -$0.50',
         '',
         '✅ Сделка открыта у брокера.',
       ].join('\n'),
@@ -1104,12 +1106,13 @@ describe('the demo session status', () => {
 
   it("shows a stopped session's reason, its result, and an open trade that plays out", () => {
     const view = stopped(TradingSessionStopReason.UserStopped, {
-      trades: settled({ settled: 2, won: 2 }),
+      trades: settled({ settled: 2, won: 2, profit: d('1.7') }),
       lastIntent: intentView({ status: TradeIntentStatus.Accepted }),
     });
     expect(plainOf('X', view).split('\n').slice(3)).toEqual([
       '⏹ Сессия остановлена по твоей команде.',
       '📊 Итог: 2 сделки — 2 в плюс, 0 в минус',
+      '💰 Результат: +$1.70',
       '✅ Сделка открыта у брокера.',
       '⏳ Открытая сделка доиграет до конца.',
     ]);
@@ -1118,6 +1121,74 @@ describe('the demo session status', () => {
     });
     expect(plainOf('X', closed).split('\n').slice(3)).toEqual([
       '⏹ Сессия остановлена по твоей команде.',
+    ]);
+  });
+
+  // #337: the result and the balance after the session, in the /menu card's words by mode
+  // formatUsd groups the digits with a no-break space
+  const nbsp = (text: string) => text.replace(/(\d) (\d)/g, '$1\u00a0$2');
+  const finished = (patch: Partial<TradingSessionView> = {}) =>
+    stopped(TradingSessionStopReason.Completed, {
+      trades: settled({ settled: 5, won: 3, lost: 2, profit: d('2.5') }),
+      lastIntent: intentView({ status: TradeIntentStatus.Settled }),
+      balance: { available: d('10002.5'), ageSec: 0, current: true },
+      ...patch,
+    });
+
+  it('T2 a completed demo session shows its result and the demo balance, with no age', () => {
+    expect(plainOf('X', finished()).split('\n').slice(3)).toEqual([
+      '🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус',
+      '💰 Результат: +$2.50',
+      nbsp('🧪 Демобаланс: $10 002.50'),
+    ]);
+  });
+
+  it('T3 a balance read before the last trade carries its age', () => {
+    const view = finished({ balance: { available: d('10002.5'), ageSec: 75, current: false } });
+    expect(plainOf('X', view).split('\n').slice(-2)).toEqual([
+      nbsp('🧪 Демобаланс: $10 002.50'),
+      '🕒 Баланс Binodex обновлён 1 мин назад.',
+    ]);
+  });
+
+  it('T4 an account without a snapshot shows the result only', () => {
+    expect(
+      plainOf('X', finished({ balance: null }))
+        .split('\n')
+        .slice(3),
+    ).toEqual(['🏁 Сессия завершена: 5 сделок — 3 в плюс, 2 в минус', '💰 Результат: +$2.50']);
+  });
+
+  it('T5 a real session shows the real balance', () => {
+    const text = plainOf('X', finished({ mode: TradeMode.Real }));
+    expect(text).toContain(nbsp('💵 Реальный баланс: $10 002.50'));
+    expect(text).not.toContain('Демобаланс');
+  });
+
+  it('T6 a session stopped before its first closed trade shows neither line', () => {
+    const view = stopped(TradingSessionStopReason.RejectedTwice, {
+      trades: settled({ settled: 0, rejected: 2 }),
+      lastIntent: intentView({ status: TradeIntentStatus.Rejected }),
+      balance: { available: d('10000'), ageSec: 75, current: false },
+    });
+    const text = plainOf('X', view);
+    expect(text).not.toContain('Результат');
+    expect(text).not.toContain('Демобаланс');
+    expect(text).not.toContain('🕒');
+  });
+
+  it('T7 manual review shows the result and the stored balance with its age, no trade line', () => {
+    const view = stopped(TradingSessionStopReason.ManualReview, {
+      trades: settled({ settled: 2, won: 1, lost: 1, profit: d('-0.15') }),
+      lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
+      balance: { available: d('9999.85'), ageSec: 30, current: false },
+    });
+    expect(plainOf('X', view).split('\n').slice(3)).toEqual([
+      '🛠 Сессия остановлена: нужна ручная проверка — напиши в поддержку: /support',
+      '📊 Итог: 2 сделки — 1 в плюс, 1 в минус',
+      '💰 Результат: -$0.15',
+      nbsp('🧪 Демобаланс: $9 999.85'),
+      '🕒 Баланс Binodex обновлён 30 с назад.',
     ]);
   });
 
@@ -1209,7 +1280,16 @@ describe('the demo session status', () => {
           trades: 20,
           stake: { baseStake: '999999999999.99999999', stakeScale: 8 },
         },
-        trades: { planned: 20, settled: 20, rejected: 20, won: 20, lost: 20, tied: 20 },
+        trades: {
+          planned: 20,
+          settled: 20,
+          rejected: 20,
+          won: 20,
+          lost: 20,
+          tied: 20,
+          profit: d('-999999999999.99999999'),
+        },
+        balance: { available: d('999999999999.99999999'), ageSec: 2_147_483_647, current: false },
         lastIntent: intentView({ status: TradeIntentStatus.ManualReview }),
       });
       for (const deadline of [false, true]) {
@@ -1221,7 +1301,15 @@ describe('the demo session status', () => {
 
   it('renders a live session with the longest rejected line as valid Telegram HTML', () => {
     const view = sessionView({
-      trades: { planned: 20, settled: 19, rejected: 20, won: 19, lost: 0, tied: 0 },
+      trades: {
+        planned: 20,
+        settled: 19,
+        rejected: 20,
+        won: 19,
+        lost: 0,
+        tied: 0,
+        profit: d('-999999999999.99999999'),
+      },
       lastIntent: intentView({
         status: TradeIntentStatus.Rejected,
         lastError: TradeIntentFailureReason.ExecutorNotConfigured,

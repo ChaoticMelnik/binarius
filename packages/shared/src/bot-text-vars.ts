@@ -1,4 +1,4 @@
-import { formatAge, formatCount, formatStake, formatUsd } from './bot-text-format';
+import { formatAge, formatCount, formatSignedUsd, formatStake, formatUsd } from './bot-text-format';
 import type { BotTextVariable } from './bot-text-template';
 import { MIN_CYCLE_PAYOUT_PCT } from './catalog';
 import type { DecimalString } from './money';
@@ -136,6 +136,11 @@ export const BOT_TEXT_VARS = {
   digits: shown('Допустимое число знаков после запятой', '2'),
   step: shown('Номер сделки из всех', '3 из 5'),
   score: shown('Счёт сессии', '1 в плюс, 1 в минус, 1 в ноль'),
+  profit: variable({
+    description: 'Результат сессии в $, со знаком',
+    sample: formatSignedUsd('2.5'),
+    format: (amount: DecimalString) => formatSignedUsd(amount),
+  }),
   result: shown('Итог сессии', '5 сделок — 3 в плюс, 2 в минус'),
   trades: shown('Число сделок со словом', '5 сделок'),
   action: shown('Направление сделки, с суммой, когда она известна', '⬆️ Вверх'),

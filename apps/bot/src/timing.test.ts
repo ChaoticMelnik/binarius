@@ -13,6 +13,7 @@ import {
   SESSION_MAX_DURATION_MS,
   TRADING_ACCESS_BUDGET_MS,
   TRADING_SESSION_START_BUDGET_MS,
+  TRADING_SESSION_VIEW_BUDGET_MS,
   BOT_TEXTS_APPLIED_WITHIN_S,
   BOT_TEXTS_REFRESH_MS,
   TradingSessionErrorCode,
@@ -2449,6 +2450,11 @@ describe('the bounds shared with the backend', () => {
   // outage and be retried
   it('waits for /trading/sessions at least as long as the backend budgets the route', () => {
     expect(TRADING_SESSION_START_BUDGET_MS).toBeLessThanOrEqual(BACKEND_REQUEST_TIMEOUT_MS);
+  });
+
+  // GET /trading/sessions/:id and its stop refresh a finished session's balance (#337)
+  it('waits for a session view at least as long as the backend budgets the route', () => {
+    expect(TRADING_SESSION_VIEW_BUDGET_MS).toBeLessThanOrEqual(BACKEND_REQUEST_TIMEOUT_MS);
   });
 
   // the backend's upper estimate of POST /trading/access: a shorter wait here would read a broker

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatAge, formatCount, formatStake, formatUsd } from './bot-text-format';
+import { formatAge, formatCount, formatSignedUsd, formatStake, formatUsd } from './bot-text-format';
 
 const NBSP = ' ';
 const spaced = (text: string) => text.replaceAll(' ', NBSP);
@@ -32,6 +32,21 @@ describe('formatUsd', () => {
   it('keeps every digit of the widest stored amount (12 integer, 8 fraction digits)', () => {
     expect(formatUsd('999999999999.99999999')).toBe(spaced('$999 999 999 999.99'));
     expect(formatUsd('999999999999.99999999')).toHaveLength(19);
+  });
+});
+
+// F1 (#337): a session's result carries its sign, a zero none
+describe('formatSignedUsd', () => {
+  it.each([
+    ['1.5', '+$1.50'],
+    ['-1.5', '-$1.50'],
+    ['0', '$0.00'],
+    ['0.001', '$0.00'],
+    ['-0.001', '$0.00'],
+    ['-0.15000000', '-$0.15'],
+    ['999999999999.99999999', '+$999 999 999 999.99'],
+  ])('F1 prints %s as %s', (amount, printed) => {
+    expect(formatSignedUsd(amount)).toBe(spaced(printed));
   });
 });
 

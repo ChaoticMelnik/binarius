@@ -382,8 +382,9 @@ export const SESSION_VIEW: TradingSessionView = tradingSessionViewSchema.parse({
   },
   startedAt: '2026-10-07T10:00:00.000Z',
   endedAt: null,
-  trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0 },
+  trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0, profit: '0.00000000' },
   lastIntent: null,
+  balance: null,
 });
 export const sessionView = (patch: Partial<TradingSessionView> = {}): TradingSessionView => ({
   ...SESSION_VIEW,

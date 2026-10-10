@@ -7,6 +7,7 @@ import {
   TradingSessionStopReason,
   errorLogFields,
   isPairOpen,
+  isTradingSessionFinished,
   pairAcceptsDuration,
   pairPayoutAccepted,
   safeParseCreateTradingSessionRequest,
@@ -25,6 +26,7 @@ import {
   readActiveTradingSessionView,
   readBalanceSnapshot,
   readDemoStake,
+  readTradingSessionAccount,
   readTradingSessionView,
   stopTradingSession,
   touchBalanceRequested,
@@ -113,6 +115,33 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       error: TradingSessionErrorCode.ActiveSessionExists,
       session: (await readActiveTradingSessionView(db, brokerAccountId, telegramUserId)) ?? null,
     });
+
+  // The status the bot prints as final must carry the balance after the last trade (#337): once
+  // nothing of the session can move and the stored snapshot predates its last settlement, the
+  // broker is asked once more inside TRADING_ACCESS_REFRESH_BUDGET_MS. mayRefresh: false - the
+  // bot's poll is a timer, and a timer exchanges no token (Rule 12); no `requested` - a poll does
+  // not keep the account in work. After one 'ok' the snapshot is current for good, so a session
+  // costs at most one broker GET. A thrown refresh reaches the opaque 500, as in /trading/access.
+  const viewForReply = async (id: string, telegramUserId: string) => {
+    const view = await readTradingSessionView(db, id, telegramUserId);
+    if (
+      view === undefined ||
+      !isTradingSessionFinished(view) ||
+      view.trades.settled === 0 ||
+      view.balance?.current === true
+    ) {
+      return view;
+    }
+    const account = await readTradingSessionAccount(db, id, telegramUserId);
+    if (account === undefined) return view;
+    const outcome = await balance.refresh(account.brokerAccountId, {
+      signal: AbortSignal.timeout(TRADING_ACCESS_REFRESH_BUDGET_MS),
+      mayRefresh: false,
+    });
+    return outcome === 'ok'
+      ? ((await readTradingSessionView(db, id, telegramUserId)) ?? view)
+      : view;
+  };
 
   app.post(TRADING_SESSIONS_PATH, async (request, reply) => {
     const parsed = safeParseCreateTradingSessionRequest(request.body);
@@ -233,7 +262,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       return reply.code(400).send({ error: 'validation', issues: query.error.issues });
     }
     // another user's id answers exactly as a missing one (Rule 13)
-    const session = await readTradingSessionView(db, id.data, query.data.telegramUserId);
+    const session = await viewForReply(id.data, query.data.telegramUserId);
     if (session === undefined) return refuse(reply, TradingSessionErrorCode.NotFound);
     return reply.send({ session });
   });
@@ -255,6 +284,6 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       reason: TradingSessionStopReason.UserStopped,
     });
     if (stopped === undefined) return refuse(reply, TradingSessionErrorCode.SessionNotActive);
-    return reply.send({ session: await readTradingSessionView(db, id.data, telegramUserId) });
+    return reply.send({ session: await viewForReply(id.data, telegramUserId) });
   });
 };

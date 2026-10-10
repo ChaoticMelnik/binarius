@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PairsCatalogErrorCode } from './catalog';
 import { decimalStringSchema } from './money';
+import { TradeIntentStatus, type TradeIntentView } from './trading';
 import {
   DEFAULT_SESSION_TRADES,
   MAX_SESSION_TRADES,
@@ -14,6 +15,7 @@ import {
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   safeParseTradingSessionSettings,
+  isTradingSessionFinished,
   sessionFitsDeadline,
   stakeSettingsFor,
   tradingSessionStopReasonSchema,
@@ -163,8 +165,9 @@ const view = {
   settings,
   startedAt: '2026-10-07T10:00:00.000Z',
   endedAt: null,
-  trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0 },
+  trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0, profit: '0.00000000' },
   lastIntent: null,
+  balance: null,
 };
 
 describe('tradingSessionViewSchema', () => {
@@ -193,6 +196,58 @@ describe('tradingSessionViewSchema', () => {
     delete withoutTied.tied;
     expect(
       safeParseTradingSessionResponse({ session: { ...view, trades: withoutTied } }).success,
+    ).toBe(false);
+  });
+
+  it('carries the profit sum and the balance, both required (#337)', () => {
+    const balance = { available: '10002.50000000', ageSec: 0, current: true };
+    expect(safeParseTradingSessionResponse({ session: { ...view, balance } }).success).toBe(true);
+    const withoutBalance: Partial<typeof view> = { ...view };
+    delete withoutBalance.balance;
+    expect(safeParseTradingSessionResponse({ session: withoutBalance }).success).toBe(false);
+    const withoutProfit: Partial<typeof view.trades> = { ...view.trades };
+    delete withoutProfit.profit;
+    expect(
+      safeParseTradingSessionResponse({ session: { ...view, trades: withoutProfit } }).success,
+    ).toBe(false);
+    expect(
+      safeParseTradingSessionResponse({
+        session: { ...view, balance: { ...balance, ageSec: -1 } },
+      }).success,
+    ).toBe(false);
+    expect(
+      safeParseTradingSessionResponse({ session: { ...view, balance: { ...balance, extra: 1 } } })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe('isTradingSessionFinished', () => {
+  const intent = (status: TradeIntentStatus) => ({ status }) as TradeIntentView;
+  const stopped = TradingSessionStatus.Stopped;
+
+  it('is true for a stopped session whose last trade has no edge left', () => {
+    expect(isTradingSessionFinished({ status: stopped, lastIntent: null })).toBe(true);
+    expect(
+      isTradingSessionFinished({ status: stopped, lastIntent: intent(TradeIntentStatus.Settled) }),
+    ).toBe(true);
+    expect(
+      isTradingSessionFinished({ status: stopped, lastIntent: intent(TradeIntentStatus.Rejected) }),
+    ).toBe(true);
+  });
+
+  it('is false while a trade can still move or the session runs', () => {
+    expect(
+      isTradingSessionFinished({
+        status: stopped,
+        lastIntent: intent(TradeIntentStatus.ManualReview),
+      }),
+    ).toBe(false);
+    expect(
+      isTradingSessionFinished({ status: stopped, lastIntent: intent(TradeIntentStatus.Accepted) }),
+    ).toBe(false);
+    expect(
+      isTradingSessionFinished({ status: TradingSessionStatus.Active, lastIntent: null }),
     ).toBe(false);
   });
 });

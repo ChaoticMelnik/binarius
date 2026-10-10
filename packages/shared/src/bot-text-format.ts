@@ -20,6 +20,13 @@ export function formatUsd(amount: string): string {
   return `${negative && !zero ? '-' : ''}$${groupDigits(whole)}.${cents}`;
 }
 
+// A session's result (#337): '1.5' → '+$1.50', '-1.5' → '-$1.50'; a zero, truncated ones
+// included, keeps no sign, as in formatUsd
+export function formatSignedUsd(amount: string): string {
+  const formatted = formatUsd(amount);
+  return formatted.startsWith('$') && formatted !== '$0.00' ? `+${formatted}` : formatted;
+}
+
 // A stake (#297): every fraction digit it has, at least two, so a stake of 0.005 is not shown
 // as $0.00. '5' → '$5.00', '0.005' → '$0.005', '1000.5' → '$1 000.50'
 export function formatStake(amount: string): string {

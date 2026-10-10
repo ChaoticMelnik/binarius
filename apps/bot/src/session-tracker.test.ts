@@ -4,6 +4,7 @@ import {
   TradeIntentStatus,
   TradingSessionStatus,
   TradingSessionStopReason,
+  type DecimalString,
   type TelegramHtml,
   type TradingSessionView,
 } from '@binarius/shared';
@@ -89,6 +90,7 @@ const shown = (view: TradingSessionView, deadline = false) =>
 const texts = (edits: readonly TelegramHtml[]) => edits.map((text) => text.value);
 
 const live = (status: TradeIntentStatus) => intentView({ status });
+const money = (value: string) => value as DecimalString;
 const trading = sessionView({ lastIntent: live(TradeIntentStatus.Accepted) });
 const stoppedWith = (lastIntent: TradingSessionView['lastIntent']) =>
   sessionView({
@@ -142,6 +144,30 @@ describe('the session tracker', () => {
     expect(tracker.size()).toBe(0);
     await vi.advanceTimersByTimeAsync(DEADLINE);
     expect(readSession).toHaveBeenCalledTimes(4);
+  });
+
+  // #337: a session on manual review is followed to the deadline and shows its balance's age
+  it('K1 edits when the balance changes and not when only its age moves', async () => {
+    const onReview = (available: string, ageSec: number) =>
+      sessionView({
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.ManualReview,
+        endedAt: '2026-10-07T10:05:00.000Z',
+        trades: { ...SESSION_VIEW.trades, settled: 1, won: 1, profit: money('0.85') },
+        lastIntent: live(TradeIntentStatus.ManualReview),
+        balance: { available: money(available), ageSec, current: false },
+      });
+    const older = onReview('10000', 50);
+    const moved = onReview('10000.85', 50);
+    const { tracker, request, target } = setup({
+      script: [onReview('10000', 5), older, moved],
+    });
+    const { edits, edit } = target();
+    tracker.track(request({ view: onReview('10000', 5), edit }));
+    await vi.advanceTimersByTimeAsync(FIRST + POLL);
+    expect(edits).toEqual([]);
+    await vi.advanceTimersByTimeAsync(POLL);
+    expect(texts(edits)).toEqual([shown(moved)]);
   });
 
   it('hands the edit the view it draws, so the keyboard can follow it', async () => {

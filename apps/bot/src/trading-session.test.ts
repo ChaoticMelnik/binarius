@@ -5,6 +5,7 @@ import {
   TradingSessionErrorCode,
   TradingSessionStatus,
   TradingSessionStopReason,
+  decimalStringSchema,
   plainTextOf,
   telegramHtml,
   type TradingSessionView,
@@ -475,7 +476,15 @@ describe("the session's stop button", () => {
     const completed = sessionView({
       ...STOPPED,
       stopReason: TradingSessionStopReason.Completed,
-      trades: { planned: 5, settled: 5, rejected: 0, won: 3, lost: 2, tied: 0 },
+      trades: {
+        planned: 5,
+        settled: 5,
+        rejected: 0,
+        won: 3,
+        lost: 2,
+        tied: 0,
+        profit: decimalStringSchema.parse('0.7'),
+      },
     });
     const { press, calls, readSession } = setup({
       stopSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.SessionNotActive)),

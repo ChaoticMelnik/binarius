@@ -453,8 +453,26 @@ const intentPlaysOut = (intent: TradeIntentView | null): intent is TradeIntentVi
 // What the session message shows of a session; nothing else of the view.
 type SessionStatusView = Pick<
   TradingSessionView,
-  'status' | 'stopReason' | 'settings' | 'trades' | 'lastIntent'
+  'mode' | 'status' | 'stopReason' | 'settings' | 'trades' | 'lastIntent' | 'balance'
 >;
+
+const SESSION_BALANCE_LINES = {
+  [TradeMode.Demo]: 'sessionBalanceDemo',
+  [TradeMode.Real]: 'sessionBalanceReal',
+} as const satisfies Record<TradeMode, keyof typeof TEXTS>;
+
+// A stopped session's result and the balance after it (#337): nothing before the first closed
+// trade. The balance is the snapshot's in the session's mode, with its age when the backend could
+// not read it after the last trade.
+const outcomeLines = ({ mode, trades, balance }: SessionStatusView): TelegramHtml[] => {
+  if (trades.settled === 0) return [];
+  const lines = [TEXTS.sessionResult({ profit: trades.profit })];
+  if (balance !== null) {
+    lines.push(TEXTS[SESSION_BALANCE_LINES[mode]]({ amount: formatUsd(balance.available) }));
+    if (!balance.current) lines.push(TEXTS.statusStale({ age: balance.ageSec }));
+  }
+  return lines;
+};
 
 // a hole holding an array is joined without a separator, so the newlines are written here
 const joinLines = ([first, ...rest]: readonly TelegramHtml[]): TelegramHtml =>
@@ -502,15 +520,18 @@ ${TEXTS.sessionSettingsUnavailable}`;
   if (view.status !== TradingSessionStatus.Stopped) {
     const step = Math.min(trades.settled + 1, trades.planned);
     head.push(TEXTS.sessionStep({ step: `${String(step)} из ${String(trades.planned)}` }));
-    if (trades.settled > 0) head.push(TEXTS.sessionScore({ score: scoreOf(trades) }));
+    if (trades.settled > 0) {
+      head.push(TEXTS.sessionScore({ score: scoreOf(trades), profit: trades.profit }));
+    }
     body.push(
       sessionIntentLive(lastIntent) ? statusLineOfIntent(lastIntent) : TEXTS.sessionWaitingSignal,
     );
   } else if (view.stopReason === TradingSessionStopReason.Completed) {
-    body.push(TEXTS.sessionCompleted({ result: resultOf(trades) }));
+    body.push(TEXTS.sessionCompleted({ result: resultOf(trades) }), ...outcomeLines(view));
   } else {
     if (view.stopReason !== null) body.push(textOf(SESSION_STOP_LINES[view.stopReason]));
     if (trades.settled > 0) body.push(TEXTS.sessionTotal({ result: resultOf(trades) }));
+    body.push(...outcomeLines(view));
     // manual_review's stop line already says it and points at /support: one text for both of its
     // sources (owner, #284 clarify), so the trade's own review line is not repeated under it
     const reviewRepeated =

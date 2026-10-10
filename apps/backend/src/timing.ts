@@ -23,7 +23,10 @@ import {
   TRADING_SIGNAL_BUDGET_MS,
   type ScanInterval,
 } from '@binarius/shared/signal';
-import { TRADING_SESSION_START_BUDGET_MS } from '@binarius/shared/trading-session';
+import {
+  TRADING_SESSION_START_BUDGET_MS,
+  TRADING_SESSION_VIEW_BUDGET_MS,
+} from '@binarius/shared/trading-session';
 import { BROKER_HTTP_TIMEOUT_MS } from './broker/oauth-client';
 import { DEFAULT_PUBLISHER_CONFIG } from './outbox/publisher';
 
@@ -248,6 +251,9 @@ export const TIMING_CHAIN_HOLDS =
   // the session start route (#283) waits on the same GET when the account has no snapshot
   TRADING_ACCESS_REFRESH_BUDGET_MS < TRADING_SESSION_START_BUDGET_MS &&
   TRADING_SESSION_START_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // a finished session's view refreshes the balance with the same GET (#337)
+  TRADING_ACCESS_REFRESH_BUDGET_MS < TRADING_SESSION_VIEW_BUDGET_MS &&
+  TRADING_SESSION_VIEW_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // the chart GET inside the signal route, the route inside what the bot waits for (#126), and
   // inside phase 1; the hold's cap below the 1m candle
   SIGNAL_FETCH_BUDGET_MS < BROKER_REST_TIMEOUT_MS &&
