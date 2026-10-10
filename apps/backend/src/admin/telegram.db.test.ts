@@ -607,6 +607,7 @@ describe('the confirm button', () => {
       db: failingDb,
       logger,
       botInfo: ADMIN_BOT_INFO,
+      webPublicUrl: TEST_WEB_PUBLIC_URL,
     });
     const failingApi = captureApi(failing.bot);
 
