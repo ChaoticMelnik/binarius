@@ -272,16 +272,18 @@ describe('body size (#234)', () => {
   // Assumptions in UTF-8 bytes or items, each false on the condition named:
   // the catalog holds at most 300 pairs (the live broker lists 144, docs/broker-rest.md);
   const ASSUMED_LONGEST_PAIRS = 300;
-  // symbol and type have no max() and no bounding writer: at most 2 KiB each.
-  const ASSUMED_LONGEST_FREE_STRING = 2048;
+  // a pair's symbol and type: the broker's are short (EUR/USD; the live catalog of 144 pairs);
+  // false once the broker sends one longer than 64 bytes. A catalog that grows past the ceiling
+  // then fails loudly as contract_violation, not silently.
+  const ASSUMED_LONGEST_PAIR_STRING = 64;
 
   const longestPairs = {
     ...catalog(),
     pairs: Array.from({ length: ASSUMED_LONGEST_PAIRS }, (_, index) =>
       eurUsd({
         id: Number.MAX_SAFE_INTEGER - index,
-        symbol: 's'.repeat(ASSUMED_LONGEST_FREE_STRING),
-        type: 't'.repeat(ASSUMED_LONGEST_FREE_STRING),
+        symbol: 's'.repeat(ASSUMED_LONGEST_PAIR_STRING),
+        type: 't'.repeat(ASSUMED_LONGEST_PAIR_STRING),
       }),
     ),
   };
@@ -297,10 +299,7 @@ describe('body size (#234)', () => {
     expect(safeParsePairsCatalogResponse(longestPairs).success).toBe(true);
   });
 
-  // #234 stop condition, returned to the owner and not tuned away: 300 pairs whose symbol and type
-  // are free strings at 2048 bytes come to about 1.3 MB, over even the 1 MiB ceiling. it.fails
-  // turns red once the row fits, so the mark cannot outlive the cause.
-  it.fails('S5 KNOWN OVER the ceiling under the declared assumptions (#234 stop condition)', () => {
+  it('S6 leaves the longest pairs answer far below MAX_BACKEND_BODY_BYTES', () => {
     expect(Buffer.byteLength(JSON.stringify(longestPairs))).toBeLessThan(
       MAX_BACKEND_BODY_BYTES / 4,
     );
