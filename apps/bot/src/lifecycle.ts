@@ -12,6 +12,9 @@ export const ALLOWED_UPDATES = [
   'message',
   'callback_query',
   'my_chat_member',
+  // the card shared through «📤 Поделиться» (#321): the query, and the chosen result's log line
+  'inline_query',
+  'chosen_inline_result',
 ] as const satisfies NonNullable<PollingOptions['allowed_updates']>;
 
 // the parts of a grammY Bot this module drives: start, stop and the profile calls; a fake with

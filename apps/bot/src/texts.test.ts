@@ -76,6 +76,7 @@ import {
   levelLabel,
   PROFILE,
   pluralTrades,
+  sessionShareCaption,
   sessionStartButtonLabel,
   sessionStatusText,
   setBotTextSource,
@@ -1347,6 +1348,33 @@ describe('the demo session status', () => {
   });
 });
 
+describe('the shared card caption (#321)', () => {
+  const trades = { ...SESSION_VIEW.trades, settled: 5, won: 3, lost: 2, profit: d('1.40000000') };
+
+  it('names the pair, the score without the $ sum, and the link with the payload share', () => {
+    expect(
+      plainTextOf(sessionShareCaption('EUR/USD OTC', PAIR_EURUSD.id, trades, 'binarius_bot')),
+    ).toBe(
+      [
+        '🏁 EUR/USD OTC: 5 сделок — 3 в плюс, 2 в минус',
+        '🤖 https://t.me/binarius_bot?start=share',
+      ].join('\n'),
+    );
+  });
+
+  it('names the asset by its id when the catalog cannot say, and «в ноль» when a trade tied', () => {
+    const caption = plainTextOf(
+      sessionShareCaption(null, 77, { ...trades, lost: 1, tied: 1 }, 'binarius_bot'),
+    );
+    expect(caption).toBe(
+      [
+        '🏁 актив #77: 5 сделок — 3 в плюс, 1 в минус, 1 в ноль',
+        '🤖 https://t.me/binarius_bot?start=share',
+      ].join('\n'),
+    );
+  });
+});
+
 // TEXTS and LABELS are views of the catalog that keep the names they had before it (#240): a
 // key added to them is a text or a label the bot never had under that name.
 describe('the facades over the catalog', () => {
@@ -1398,6 +1426,7 @@ describe('the facades over the catalog', () => {
         'repeatAnalysisButton',
         'resendButton',
         'sessionRefreshButton',
+        'sessionShareButton',
         'sessionStopButton',
         'settingsCommand',
         'settingsStakeButton',

@@ -515,6 +515,20 @@ export const sessionCardTradeLabel = (index: number): string =>
 export const sessionCardFooter = (count: number, score: SessionScore): string =>
   plain.sessionCardFooter({ trades: tradesCount(count), score: scoreOf(score) });
 
+// The caption of the card shared through «📤 Поделиться» (#321, session-share.ts): the score
+// without the $ sum, which the image itself shows, and the bot's link.
+export const sessionShareCaption = (
+  symbol: string | null,
+  assetId: number,
+  trades: TradingSessionView['trades'],
+  botUsername: string,
+): TelegramHtml =>
+  TEXTS.sessionShareCaption({
+    symbol: sessionAssetLabel(symbol, assetId),
+    result: resultOf(trades),
+    botUsername,
+  });
+
 // The demo session's one message (#284, docs/bot-session.md): the header and the settings, then
 // a live session's trade number, score and the last trade's status, or a stopped session's
 // reason and result. `symbol` is null when the catalog could not say.
