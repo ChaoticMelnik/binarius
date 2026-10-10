@@ -11,6 +11,8 @@ describe('the staff bot’s button answers', () => {
     ['codeFailed', ADMIN_TEXTS.codeFailed],
     ['denied', ADMIN_TEXTS.denied],
     ['stale', ADMIN_TEXTS.stale],
+    ['linkFailed', ADMIN_TEXTS.linkFailed],
+    ['linkRateLimited', ADMIN_TEXTS.linkRateLimited],
   ] as const)('keeps %s non-empty and inside the limit', (_key, text) => {
     expect(text.trim().length).toBeGreaterThan(0);
     expect(text.length).toBeLessThanOrEqual(CALLBACK_ANSWER_LIMIT);
