@@ -2611,7 +2611,7 @@ Picked by tech-lead on the owner's «Отбери сам следующую за
 
 ### Process improvement proposals
 
-1. **Merge relay: re-check `mergeable` right before `gh pr merge`; on CONFLICTING send the implementer a rebase-only task, verify with `git range-diff`, re-take the mutation table and ask the owner again for the new head** — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Merge relay («Mergeability right before the merge»)** (принято владельцем 2026-10-10)
+1. **Merge relay: re-check `mergeable` right before `gh pr merge`; on CONFLICTING send the implementer a rebase-only task, verify with `git range-diff`, re-take the mutation table and ask the owner again for the new head** — **внедрено в #467: `.claude/skills/tech-lead/SKILL.md` → Merge relay («Mergeability right before the merge»)** (принято владельцем 2026-10-10)
 2. **Remaining Minor** — **вынесено в #433**
 
 ## #448 — admin login by a one-time link from the staff bot (2026-10-10)
@@ -2798,9 +2798,9 @@ Process Improvement Report (Phase 5 step 2) posted on #318.
 
 ### Process improvement proposals
 
-1. **Limit the night stack depth in `manager/SKILL.md` → Stacking** (e.g. a base must itself target `main`) — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Task selection → Stacking (глубина до 3)** (принято владельцем 2026-10-10)
+1. **Limit the night stack depth in `manager/SKILL.md` → Stacking** (e.g. a base must itself target `main`) — **внедрено в #467: `.claude/skills/manager/SKILL.md` → Task selection → Stacking (глубина до 3)** (принято владельцем 2026-10-10)
 2. **Check `closingIssuesReferences` of a retargeted PR** — **внедрено в этом docs-PR: `.claude/skills/tech-lead/SKILL.md` → «A PR left In Review by a manager session», step 1**
-3. **Manager report: update a task's detail block by its task id, and check at the final publish that each block's PR links are its own** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Report** (принято владельцем 2026-10-10)
+3. **Manager report: update a task's detail block by its task id, and check at the final publish that each block's PR links are its own** — **внедрено в #467: `.claude/skills/manager/SKILL.md` → Report** (принято владельцем 2026-10-10)
 4. **Remaining Minor** — **вынесено в #456**
 
 ---
@@ -2834,7 +2834,7 @@ Process Improvement Report (Phase 5 step 2) posted on #318.
 
 ### Process improvement proposals
 
-1. **Architect SKILL.md: state whether a round-0 (staleness) Plan Update runs a clarify round, and with what floor** — **внедрено в #<PR>: `.claude/CLAUDE.md` → Постоянные ответы владельца → «Пол `/clarify`»; `.claude/skills/architect/SKILL.md` → Step 5 (пол 1, только новые развилки)** (принято владельцем 2026-10-10)
+1. **Architect SKILL.md: state whether a round-0 (staleness) Plan Update runs a clarify round, and with what floor** — **внедрено в #467: `.claude/CLAUDE.md` → Постоянные ответы владельца → «Пол `/clarify`»; `.claude/skills/architect/SKILL.md` → Step 5 (пол 1, только новые развилки)** (принято владельцем 2026-10-10)
 2. **Remaining Minor** — **вынесено в #457**
 
 ---
@@ -2905,11 +2905,11 @@ Process Improvement Report (Phase 5 step 2) posted on #318.
 
 ### Process proposals of the night's report («Предложения по процессу»)
 
-1. **Stack depth limit** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Task selection → Stacking (глубина до 3)** (принято владельцем 2026-10-10) (#115 entry, proposal 1)
-2. **Manager: architects straight on Opus after the first Fable 429 of the session** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Substitutions → 4** (принято владельцем 2026-10-10)
+1. **Stack depth limit** — **внедрено в #467: `.claude/skills/manager/SKILL.md` → Task selection → Stacking (глубина до 3)** (принято владельцем 2026-10-10) (#115 entry, proposal 1)
+2. **Manager: architects straight on Opus after the first Fable 429 of the session** — **внедрено в #467: `.claude/skills/manager/SKILL.md` → Substitutions → 4** (принято владельцем 2026-10-10)
 3. **Manager: check a fact before a recommended answer rests on it** (#234's «3 Б на символ») — **внедрено в этом docs-PR: `.claude/skills/manager/SKILL.md` → Substitutions → 1**
-4. **Owner step `git pull` in the main checkout before `/manager`** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Launch** (принято владельцем 2026-10-10)
-5. **Architect: clarify rule for a round-0 Plan Update** — **внедрено в #<PR>: `.claude/CLAUDE.md` → Постоянные ответы владельца → «Пол `/clarify`»; `.claude/skills/architect/SKILL.md` → Step 5** (принято владельцем 2026-10-10) (#131 entry, proposal 1)
+4. **Owner step `git pull` in the main checkout before `/manager`** — **внедрено в #467: `.claude/skills/manager/SKILL.md` → Launch** (принято владельцем 2026-10-10)
+5. **Architect: clarify rule for a round-0 Plan Update** — **внедрено в #467: `.claude/CLAUDE.md` → Постоянные ответы владельца → «Пол `/clarify`»; `.claude/skills/architect/SKILL.md` → Step 5** (принято владельцем 2026-10-10) (#131 entry, proposal 1)
 
 ---
 
@@ -2949,7 +2949,7 @@ The eighth issue of the 2026-10-10 manager night (wave facts — the #337 entry)
 ### Process improvement proposals
 
 1. **Manager checks a fact before a recommended answer rests on it** — **внедрено в этом docs-PR: `.claude/skills/manager/SKILL.md` → Substitutions → 1**
-2. **After a rebase, new commits that add an assumption or change test oracles (not just conflict resolution) get a reviewer pass before the merge question; disclosure alone is the current practice (#154, #234)** — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Phase 4 → «A PR left In Review by a manager session», step 3** (принято владельцем 2026-10-10)
+2. **After a rebase, new commits that add an assumption or change test oracles (not just conflict resolution) get a reviewer pass before the merge question; disclosure alone is the current practice (#154, #234)** — **внедрено в #467: `.claude/skills/tech-lead/SKILL.md` → Phase 4 → «A PR left In Review by a manager session», step 3** (принято владельцем 2026-10-10)
 3. **Remaining Minor** — **вынесено в #462**
 
 ---
@@ -2993,6 +2993,6 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ### Process improvement proposals
 
-1. **After a rebase, new commits that add an assumption or change test oracles get a reviewer pass before the merge question** — **внедрено в #<PR>: `.claude/skills/tech-lead/SKILL.md` → Phase 4 → «A PR left In Review by a manager session», step 3** (принято владельцем 2026-10-10) (#234 entry, proposal 2; second case)
-2. **Manager: build each phase spawn prompt from tech-lead's items plus the night additions in one template, and check the night lines are present before the spawn** — **внедрено в #<PR>: `.claude/skills/manager/SKILL.md` → Task cycle → Night additions** (принято владельцем 2026-10-10)
+1. **After a rebase, new commits that add an assumption or change test oracles get a reviewer pass before the merge question** — **внедрено в #467: `.claude/skills/tech-lead/SKILL.md` → Phase 4 → «A PR left In Review by a manager session», step 3** (принято владельцем 2026-10-10) (#234 entry, proposal 2; second case)
+2. **Manager: build each phase spawn prompt from tech-lead's items plus the night additions in one template, and check the night lines are present before the spawn** — **внедрено в #467: `.claude/skills/manager/SKILL.md` → Task cycle → Night additions** (принято владельцем 2026-10-10)
 3. **Remaining Minor** — **вынесено в #465; CLI → #443**
