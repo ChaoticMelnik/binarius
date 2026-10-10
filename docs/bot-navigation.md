@@ -6,7 +6,7 @@ user never has to type `/menu` or `/start` to go on. A success leads further, a 
 offers the same read again and the menu, a refusal leads where it can be fixed.
 
 ```bash
-pnpm test --project unit apps/bot/src apps/backend/src/auth/link-notifier.test.ts   # no database or Redis
+pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts   # no database or Redis
 ```
 
 ## The rule, by type
@@ -18,7 +18,8 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/link-notifier.test.t
 - A message without one goes only through `replyHtmlWithoutNextStep` or
   `editMessageTextHtmlWithoutNextStep`, which take a `NoNextStepReason` from `NO_NEXT_STEP_REASONS`
   (the exception list below). The reason is not sent; its type makes every such call name an entry.
-- `apps/backend/src/auth/link-notifier.ts`: `LinkPushMessage.reply_markup` is required.
+- `apps/backend/src/auth/client-push.ts`: `ClientPushMessage.reply_markup` is required, for the link
+  push and for every mailing ([mailing.md](mailing.md)).
 - `send.typecheck.ts` holds the rule: a call without `reply_markup`, with it `undefined`, with a
   reply keyboard, and a reason outside the list each fail `tsc` (an `@ts-expect-error` that starts
   compiling fails `pnpm check`).
@@ -118,7 +119,8 @@ call: the keyboards ride on the messages already sent.
 
 ## Boundaries
 
-- **#202** — reminders to a user who connected and never started the demo.
+- **#202** — reminders to a user who connected and never started the demo: sent through
+  `client-push.ts` with the demo button ([mailing.md](mailing.md)).
 - **#121 / #326 / #327** — the real-mode screens: the seam types make them comply.
 - **#337 / #318 / #321** — the session's result card and «Поделиться». A card sent before its
   keyboard is attached gets a reason of its own in the exception list.

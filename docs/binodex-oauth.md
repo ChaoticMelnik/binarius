@@ -18,7 +18,7 @@ the live broker on 2026-10-01 (#102, #163); see [Broker contract](#broker-contra
 | Client    | `apps/backend/src/broker/oauth-client.ts` | the code exchange on `POST /v1/broker/oauth/token`, the refresh on `POST /v1/broker/user-auth/refresh`, and the email `send-code` and `login`, one attempt each, under a real abort; `BROKER_ENDPOINTS` is the one table of paths and statuses |
 | Routes    | `apps/backend/src/auth/routes.ts`         | `POST /auth/binodex/callback`, `POST /auth/binodex/confirm`, `POST /auth/binodex/email/send-code`, `POST /auth/binodex/email/login` |
 | Refresh   | `apps/backend/src/auth/token-service.ts`  | `ensureFreshAccessToken(accountId)`                                                              |
-| Push      | `apps/backend/src/auth/link-notifier.ts`  | the one `sendMessage` after the callback (#128), on the public bot's token, without polling it   |
+| Push      | `apps/backend/src/auth/client-push.ts`    | the one `sendMessage` after the callback (#128), on the public bot's token, without polling it; the mailings send through it too (#202) |
 | Telegram proof | `apps/backend/src/auth/telegram-init-data.ts` | the signature and age check of the Mini App's `initData` the callback carries (#113); its limits live in `apps/backend/src/auth/oauth-timing.ts` |
 | Link texts | `packages/shared/src/link-confirmation.ts` | the texts and the confirm button's callback data the bot and the push both send               |
 | Mini App pages | `apps/web/src/oauth/` | `GET /oauth/login`, `GET /oauth/callback`, `POST /oauth/callback` (the forward to the backend) and the page script (#114); [The Mini App pages](#the-mini-app-pages-114) |
@@ -331,15 +331,15 @@ to the chat.
 | a database failure | 500 | none: the outcome is unknown |
 
 One attempt, after `linkBrokerAccount` has committed and outside any transaction, bounded by
-`LINK_PUSH_TELEGRAM_API_TIMEOUT_MS` (3 s, `apps/backend/src/timing.ts`; the code exchange plus
+`CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS` (3 s, `apps/backend/src/timing.ts`; the code exchange plus
 the push stay inside shutdown phase 1, which the timing chain checks at import). The route
 awaits it, so the page can wait up to those 3 s longer (plus, after a 403, one database write),
 but its response does not depend on it: the status and body are the ones in the table whatever
 Telegram answers, and nothing is written about the push, with one exception: a 403 marks the
 user as having blocked the bot (#119,
 [bot-start.md → Blocking the bot](bot-start.md#blocking-the-bot-119)) — their pending
-`notification_jobs` are canceled, and every sender is to skip the user until they unblock or
-send `/start` (a rule for senders that do not exist yet, not yet enforced by one). A push that does not arrive — Telegram refused it (403 when the user blocked the bot), was slow,
+`notification_jobs` are canceled, and the mailing engine skips the user until they unblock or
+send `/start` ([mailing.md](mailing.md)). A push that does not arrive — Telegram refused it (403 when the user blocked the bot), was slow,
 or was unreachable — is made up for by the button on the user's next `/start`; there is no queue
 and no retry.
 
