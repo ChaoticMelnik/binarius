@@ -1115,9 +1115,9 @@ const depositRow = (deposit: AdminDepositView): SafeHtml =>
     <td>${when(deposit.createdAt)}</td>
     <td>${depositOwner(deposit)}</td>
     <td>${code(deposit.brokerAccountId)}</td>
-    <td>${code(deposit.postbackId)}</td>
+    <td>${code(deposit.brokerUserId)}</td>
     <td>${code(deposit.paymentId)}</td>
-    <td class="num">${orNone(deposit.amount)}</td>
+    <td class="num">${deposit.amount}</td>
     <td>${orNone(deposit.currency)}</td>
     <td>${code(deposit.status)}</td>
     <td>${whenOrNone(deposit.processedAt)}</td>
@@ -1131,7 +1131,7 @@ const depositsTable = (deposits: readonly AdminDepositView[]): SafeHtml =>
         <th>${TEXTS.columnDepositAt}</th>
         <th>${TEXTS.columnTelegramId}</th>
         <th>${TEXTS.columnAccountId}</th>
-        <th>${TEXTS.columnPostbackId}</th>
+        <th>${TEXTS.columnTraderId}</th>
         <th>${TEXTS.columnPaymentId}</th>
         <th>${TEXTS.columnAmount}</th>
         <th>${TEXTS.columnCurrency}</th>

@@ -14,6 +14,7 @@ import {
   logOptions,
   type LogLevel,
 } from '@binarius/shared';
+import { POSTBACK_PATH_PREFIX } from '@binarius/shared/postback';
 import { adminRoutes, type AdminRoutesDeps } from './admin/routes';
 import { authRoutes, type AuthRoutesDeps } from './auth/routes';
 import { pairsRoutes, type PairsRoutesDeps } from './trading/pairs-routes';
@@ -23,6 +24,7 @@ import { signalRoutes, type SignalRoutesDeps } from './trading/signal-routes';
 import { signalsRoutes, type SignalsRoutesDeps } from './trading/signals-routes';
 import { usersRoutes, type UsersRoutesDeps } from './users/routes';
 import { botTextsRoutes } from './bot-texts/routes';
+import { postbackRoutes, type PostbackRoutesDeps } from './postbacks/routes';
 
 type DependencyCheck = () => Promise<unknown>;
 
@@ -39,6 +41,9 @@ export interface AppDeps {
   auth: AuthRoutesDeps;
   users: UsersRoutesDeps;
   admin: AdminRoutesDeps;
+  // the broker's postbacks (#141): present only while POSTBACK_URL_SECRET is set, so the route
+  // does not exist otherwise and its path answers the not-found handler's 404
+  postbacks?: PostbackRoutesDeps;
   // Where the logger writes. Production omits it and pino uses its own destination; the tests
   // pass a sink, because what this app keeps out of its log lines is only provable by reading
   // them, and pino writes to a file descriptor that stubbing `process.stdout` does not reach.
@@ -145,6 +150,7 @@ export function buildApp({
   auth,
   users,
   admin,
+  postbacks,
   logDestination,
 }: AppDeps): FastifyInstance {
   // Typed as Fastify's logger: left to inference, pino's Logger becomes the instance's logger
@@ -208,6 +214,7 @@ export function buildApp({
   void app.register(usersRoutes, users);
   void app.register(botTextsRoutes, users);
   void app.register(adminRoutes, admin);
+  if (postbacks !== undefined) void app.register(postbackRoutes, postbacks);
 
   // Fastify's default handler echoes error.message; for a DrizzleQueryError that is the SQL
   // text plus bound parameters. A 4xx error (validation, body parsing, a thrown http error)
@@ -244,10 +251,20 @@ export function buildApp({
 // delivery lands.
 const SECRET_QUERY_KEYS = ['code', 'state'];
 
+// The postback route's secret is the path segment after the prefix (#141); case-insensitive,
+// because a mistyped template that 404s still carries the real secret. The prefix holds no
+// regex metacharacter.
+const POSTBACK_SECRET_SEGMENT = new RegExp(`(${POSTBACK_PATH_PREFIX})[^/?#]*`, 'i');
+
 export function withoutSecrets(url: string): string {
   const separator = url.indexOf('?');
-  if (separator === -1) return url;
-  const params = new URLSearchParams(url.slice(separator + 1));
+  const path = (separator === -1 ? url : url.slice(0, separator)).replace(
+    POSTBACK_SECRET_SEGMENT,
+    '$1redacted',
+  );
+  if (separator === -1) return path;
+  const query = url.slice(separator + 1);
+  const params = new URLSearchParams(query);
   let redacted = false;
   for (const key of SECRET_QUERY_KEYS) {
     if (!params.has(key)) continue;
@@ -256,7 +273,7 @@ export function withoutSecrets(url: string): string {
     params.set(key, 'redacted');
     redacted = true;
   }
-  return redacted ? `${url.slice(0, separator)}?${params.toString()}` : url;
+  return `${path}?${redacted ? params.toString() : query}`;
 }
 
 function serializeRequest(request: FastifyRequest) {

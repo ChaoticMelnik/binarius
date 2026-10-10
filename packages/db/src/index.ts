@@ -7,6 +7,7 @@ export * from './trading-session-ops';
 export * from './trading-switch-ops';
 export * from './oauth-ops';
 export * from './link-bonus-ops';
+export * from './postback-ops';
 export * from './token-balance-ops';
 export * from './token-adjustment-ops';
 export * from './balance-snapshot-ops';

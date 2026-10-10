@@ -221,6 +221,8 @@ const app = buildApp({
     telegram: adminBot,
     botProfileApi: createBotProfileApi({ token: env.telegramBotToken }),
   },
+  postbacks:
+    env.postbackUrlSecret === undefined ? undefined : { db, secret: env.postbackUrlSecret },
 });
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
@@ -326,6 +328,7 @@ if (!shuttingDown) {
   await app.listen({ port: env.port, host: '0.0.0.0' });
   // #397's manager greps this line for "demoOnly":true before it drives a stand
   app.log.info({ demoOnly: env.demoOnly }, 'backend started');
+  app.log.info({ enabled: env.postbackUrlSecret !== undefined }, 'postback route');
 }
 if (!shuttingDown) {
   publisher.start();

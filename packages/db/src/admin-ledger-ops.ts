@@ -83,14 +83,14 @@ export function toAdminLedgerEntry(row: AdminLedgerRow): AdminLedgerEntry {
 
 // --- Deposits (#341) ----------------------------------------------------------------------------
 
-// `payload` is not in the type: the raw postback is never selected, so it cannot leave the
-// database, let alone the backend.
+// The raw postback is not on this table (#141): it lives in postback_deliveries, which no admin
+// read selects, so it cannot leave the database, let alone the backend.
 export type AdminDepositRow = Pick<
   typeof depositEvents.$inferSelect,
   | 'id'
   | 'userId'
   | 'brokerAccountId'
-  | 'postbackId'
+  | 'brokerUserId'
   | 'paymentId'
   | 'amount'
   | 'currency'
@@ -110,12 +110,13 @@ export interface AdminDepositsPage {
   nextCursor: string | null;
 }
 
-// An explicit projection, not getTableColumns: that would select `payload`.
+// An explicit projection, not getTableColumns: a column added to the table later reaches the
+// page only when it is named here.
 const depositWithOwner = {
   id: depositEvents.id,
   userId: depositEvents.userId,
   brokerAccountId: depositEvents.brokerAccountId,
-  postbackId: depositEvents.postbackId,
+  brokerUserId: depositEvents.brokerUserId,
   paymentId: depositEvents.paymentId,
   amount: depositEvents.amount,
   currency: depositEvents.currency,
@@ -164,7 +165,7 @@ export function toAdminDepositView(row: AdminDepositRow): AdminDepositView {
     userId: row.userId,
     telegramUserId: row.telegramUserId === null ? null : row.telegramUserId.toString(),
     brokerAccountId: row.brokerAccountId,
-    postbackId: row.postbackId,
+    brokerUserId: row.brokerUserId,
     paymentId: row.paymentId,
     amount: row.amount,
     currency: row.currency,

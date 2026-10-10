@@ -54,6 +54,8 @@ export const brokerAccounts = pgTable(
     uniqueIndex('broker_accounts_broker_user_id_idx').on(t.brokerUserId),
     // target of the composite ownership FKs (trade_intents)
     unique('broker_accounts_id_user_id_key').on(t.id, t.userId),
+    // target of deposit_events_account_trader_fk (#141): a deposit names the account of its trader
+    unique('broker_accounts_id_broker_user_id_key').on(t.id, t.brokerUserId),
     index('broker_accounts_user_id_idx').on(t.userId),
     inList('broker_accounts_status_check', t.status, BrokerAccountStatus),
     inList('broker_accounts_auth_revoked_reason_check', t.authRevokedReason, AuthRevokedReason),

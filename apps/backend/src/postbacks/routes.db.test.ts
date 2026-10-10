@@ -1,0 +1,252 @@
+import { eq, sql } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { postbackResponseSchema } from '@binarius/shared';
+import { createTempDatabase, type TempDatabase } from '@binarius/db/testing';
+import { depositEvents, postbackDeliveries } from '@binarius/db';
+import { buildApp } from '../app';
+import { unusedAdminDeps } from '../admin/testing';
+import {
+  unusedAccessTokenDeps,
+  unusedBalanceDeps,
+  unusedPairsDeps,
+  unusedSignalDeps,
+  unusedSessionDeps,
+  unusedSignalsDeps,
+} from '../trading/testing';
+import type { PostbackRoutesDeps } from './routes';
+
+const baseUrl = process.env.TEST_DATABASE_URL;
+if (baseUrl === undefined || baseUrl === '') {
+  throw new Error(
+    'TEST_DATABASE_URL is required for apps/backend integration tests (see README → Test database)',
+  );
+}
+
+const TOKEN = 'internal-token-for-tests';
+const SECRET = 's3cret-postback-path-segment-0123456789';
+let tmp: TempDatabase;
+let app: ReturnType<typeof buildApp>;
+
+const lines: Record<string, unknown>[] = [];
+const sink = { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) };
+const linesOf = (msg: string) => lines.filter((line) => line.msg === msg);
+
+const testApp = (postbacks: Omit<PostbackRoutesDeps, 'db'> | undefined) =>
+  buildApp({
+    pairs: unusedPairsDeps(),
+    sessions: unusedSessionDeps(),
+    signal: unusedSignalDeps(),
+    signals: unusedSignalsDeps(),
+    admin: unusedAdminDeps(),
+    checkPostgres: () => Promise.resolve(),
+    checkRedis: () => Promise.resolve(),
+    logLevel: 'trace',
+    logDestination: sink,
+    checkTimeoutMs: 20,
+    trading: {
+      db: tmp.db,
+      internalApiToken: TOKEN,
+      onIntentQueued: () => {},
+      balance: unusedBalanceDeps(),
+      accessToken: unusedAccessTokenDeps(),
+      demoOnly: false,
+    },
+    auth: {
+      db: tmp.db,
+      cipher: {} as never,
+      broker: {} as never,
+      internalApiToken: TOKEN,
+      authorizeUrl: 'https://binodex.app/oauth/authorize',
+      clientId: 'client-id',
+      redirectUri: 'https://bot.example/oauth/callback',
+      partnerRef: 'partner-ref',
+      clientPush: {} as never,
+      initDataVerifier: {} as never,
+    },
+    users: { db: tmp.db, internalApiToken: TOKEN },
+    ...(postbacks === undefined ? {} : { postbacks: { db: tmp.db, ...postbacks } }),
+  });
+
+beforeAll(async () => {
+  tmp = await createTempDatabase(baseUrl);
+  app = testApp({ secret: SECRET });
+  await app.ready();
+});
+afterAll(async () => {
+  await app.close();
+  await tmp.drop();
+});
+
+let seq = 0;
+const fresh = () => {
+  const n = ++seq;
+  return { id: `route-pb-${n}`, payment_id: `route-pay-${n}`, a: `route-trader-${n}` };
+};
+const deliveryUrl = (
+  keys: { id: string; payment_id: string; a: string },
+  patch: Record<string, string> = {},
+  secret = SECRET,
+) =>
+  `/postbacks/binodex/${secret}?${new URLSearchParams({
+    event: 'deposit',
+    amount: '10.50',
+    coin: 'USD',
+    ...keys,
+    ...patch,
+  }).toString()}`;
+const get = (url: string, target = app) => target.inject({ method: 'GET', url });
+const rowsFor = async (paymentId: string) => ({
+  deliveries: await tmp.db
+    .select()
+    .from(postbackDeliveries)
+    .where(sql`${postbackDeliveries.payload} ->> 'payment_id' = ${paymentId}`),
+  deposits: await tmp.db.select().from(depositEvents).where(eq(depositEvents.paymentId, paymentId)),
+});
+
+describe('GET /postbacks/binodex/:secret', () => {
+  it('records a delivery and answers each outcome with 200', async () => {
+    const keys = fresh();
+
+    const recorded = await get(deliveryUrl(keys));
+    const duplicate = await get(deliveryUrl(keys));
+    const repeated = await get(deliveryUrl({ ...keys, id: `${keys.id}-ftd` }, { event: 'ftd' }));
+    const rejected = await get(deliveryUrl({ ...keys, id: `${keys.id}-bad` }, { amount: '1e5' }));
+
+    expect(
+      [recorded, duplicate, repeated, rejected].map((r) => [r.statusCode, r.json<unknown>()]),
+    ).toEqual([
+      [200, { outcome: 'recorded' }],
+      [200, { outcome: 'duplicate' }],
+      [200, { outcome: 'repeated' }],
+      [200, { outcome: 'rejected', reason: 'invalid_amount' }],
+    ]);
+    for (const response of [recorded, duplicate, repeated, rejected]) {
+      expect(postbackResponseSchema.safeParse(response.json()).success).toBe(true);
+    }
+    const rows = await rowsFor(keys.payment_id);
+    expect(rows.deposits).toHaveLength(1);
+    expect(rows.deliveries.map((d) => d.outcome).sort()).toEqual([
+      'recorded',
+      'rejected',
+      'repeated',
+    ]);
+  });
+
+  it('logs one line per delivery with the outcome, never the secret or the url', async () => {
+    const keys = fresh();
+    lines.length = 0;
+
+    await get(deliveryUrl(keys));
+
+    expect(linesOf('postback received')).toEqual([
+      expect.objectContaining({
+        level: 30,
+        outcome: 'recorded',
+        event: 'deposit',
+        postbackId: keys.id,
+      }),
+    ]);
+    const text = JSON.stringify(lines);
+    expect(text).not.toContain(SECRET);
+    expect(text).toContain('/postbacks/binodex/redacted?');
+  });
+
+  it('warns about a repeat that disagrees, by field name only', async () => {
+    const keys = fresh();
+    await get(deliveryUrl(keys));
+    lines.length = 0;
+
+    const response = await get(
+      deliveryUrl({ ...keys, id: `${keys.id}-ftd` }, { event: 'ftd', amount: '987.65' }),
+    );
+
+    expect(response.json()).toEqual({ outcome: 'repeated' });
+    const [deposit] = (await rowsFor(keys.payment_id)).deposits;
+    const warned = linesOf('postback repeated with different fields');
+    expect(warned).toEqual([
+      expect.objectContaining({
+        level: 40,
+        depositEventId: deposit!.id,
+        postbackId: `${keys.id}-ftd`,
+        mismatch: ['amount'],
+      }),
+    ]);
+    expect(JSON.stringify(warned)).not.toContain('987.65');
+    expect(JSON.stringify(lines)).not.toContain(SECRET);
+  });
+
+  it.each([
+    ['a wrong secret', `${SECRET}x`],
+    ['a short secret', 'abc'],
+  ])('answers %s with the not-found body and writes nothing', async (_label, secret) => {
+    const keys = fresh();
+    lines.length = 0;
+
+    const response = await get(deliveryUrl(keys, {}, secret));
+
+    expect([response.statusCode, response.json<unknown>()]).toEqual([404, { error: 'not_found' }]);
+    expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
+    expect(linesOf('postback refused')).toHaveLength(1);
+    expect(JSON.stringify(lines)).not.toContain(secret);
+  });
+
+  it('refuses a repeated query key with 400 and journals nothing', async () => {
+    const keys = fresh();
+    const response = await get(`${deliveryUrl(keys)}&a=second`);
+
+    expect([response.statusCode, response.json<unknown>()]).toEqual([400, { error: 'validation' }]);
+    expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
+  });
+
+  it('answers HEAD with the right secret through the not-found handler and writes nothing', async () => {
+    const keys = fresh();
+    lines.length = 0;
+
+    const response = await app.inject({ method: 'HEAD', url: deliveryUrl(keys) });
+
+    expect(response.statusCode).toBe(404);
+    expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
+    const notFound = linesOf('route not found');
+    expect(notFound).toHaveLength(1);
+    expect(notFound[0]!.url).toContain('/postbacks/binodex/redacted?');
+    expect(JSON.stringify(lines)).not.toContain(SECRET);
+  });
+
+  it('answers 429 over the per-minute window', async () => {
+    const limited = testApp({ secret: SECRET, maxPerMinute: 2 });
+    await limited.ready();
+    try {
+      const statuses = [];
+      for (let i = 0; i < 3; i += 1)
+        statuses.push((await get(deliveryUrl(fresh()), limited)).statusCode);
+      expect(statuses).toEqual([200, 200, 429]);
+    } finally {
+      await limited.close();
+    }
+  });
+});
+
+describe('without POSTBACK_URL_SECRET', () => {
+  it('has no route: the right path answers 404 and its log line masks the segment', async () => {
+    const off = testApp(undefined);
+    await off.ready();
+    try {
+      const keys = fresh();
+      lines.length = 0;
+
+      const response = await get(deliveryUrl(keys), off);
+
+      expect([response.statusCode, response.json<unknown>()]).toEqual([
+        404,
+        { error: 'not_found' },
+      ]);
+      expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
+      const notFound = linesOf('route not found');
+      expect(notFound).toHaveLength(1);
+      expect(notFound[0]!.url).toContain('/postbacks/binodex/redacted?');
+      expect(JSON.stringify(lines)).not.toContain(SECRET);
+    } finally {
+      await off.close();
+    }
+  });
+});

@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { GrammyError } from 'grammy';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  PostbackSource,
   ADMIN_BOT_TEXT_BODY_LIMIT_BYTES,
   adminBotTextOverrideViewSchema,
   adminBotTextPreviewResponseSchema,
@@ -52,6 +53,8 @@ import { until } from '@binarius/shared/testing';
 import {
   auditLog,
   botTextOverrides,
+  brokerAccounts,
+  recordPostback,
   saveBotTextOverride,
   confirmChallengeFromTelegram,
   depositEvents,
@@ -2363,22 +2366,43 @@ describe('the deposits page and the card section (#341)', () => {
   const DEPOSIT_KEYS = Object.keys(adminDepositViewSchema.shape);
   let seq = 0;
 
-  // no writer yet (#141/#142): written directly, with a payload that must never come back
+  // Through the writer (#141), with a marker in the delivery's payload that must never come
+  // back: the raw postback lives in postback_deliveries, which no admin read selects. The row is
+  // then shaped by hand where the writer cannot produce it (a status #386 will write, an
+  // account-only row).
+  const PAYLOAD_MARKER = 'payloadSecret';
   const insertDeposit = async (
     row: { userId?: string; brokerAccountId?: string; status?: DepositEventStatus } = {},
   ) => {
-    const [inserted] = await tmp.db
-      .insert(depositEvents)
-      .values({
+    const n = ++seq;
+    const [account] =
+      row.brokerAccountId === undefined
+        ? [undefined]
+        : await tmp.db
+            .select({ brokerUserId: brokerAccounts.brokerUserId })
+            .from(brokerAccounts)
+            .where(eq(brokerAccounts.id, row.brokerAccountId));
+    const recorded = await recordPostback(tmp.db, {
+      source: PostbackSource.Binodex,
+      query: {
+        event: 'deposit',
+        id: `route-pb-${n}`,
+        payment_id: `route-pay-${n}`,
+        a: account?.brokerUserId ?? `route-trader-${n}`,
+        amount: '10.5',
+        sub_id: PAYLOAD_MARKER,
+      },
+    });
+    if (recorded.outcome !== 'recorded') throw new Error('insertDeposit: postback not recorded');
+    await tmp.db
+      .update(depositEvents)
+      .set({
         userId: row.userId ?? null,
         brokerAccountId: row.brokerAccountId ?? null,
-        postbackId: `route-pb-${++seq}`,
         status: row.status ?? DepositEventStatus.Received,
-        payload: { payloadSecret: 'raw postback' },
       })
-      .returning({ id: depositEvents.id });
-    if (inserted === undefined) throw new Error('insertDeposit: insert returned no row');
-    return inserted.id;
+      .where(eq(depositEvents.id, recorded.depositEventId));
+    return recorded.depositEventId;
   };
 
   const ownedDeposit = async (status?: DepositEventStatus) => {
@@ -2410,7 +2434,7 @@ describe('the deposits page and the card section (#341)', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).not.toContain('payload');
-    expect(response.body).not.toContain('payloadSecret');
+    expect(response.body).not.toContain(PAYLOAD_MARKER);
     const raw = response.json<{ deposits: Record<string, unknown>[] }>();
     expect(Object.keys(raw)).toEqual(['me', 'deposits', 'nextCursor']);
     const unowned = raw.deposits.find((d) => d.id === unownedId);
@@ -2422,7 +2446,6 @@ describe('the deposits page and the card section (#341)', () => {
       userId: null,
       telegramUserId: null,
       brokerAccountId: null,
-      amount: null,
       processedAt: null,
     });
     expect(body.deposits.find((d) => d.id === owned.id)).toMatchObject({
@@ -2508,7 +2531,7 @@ describe('the deposits page and the card section (#341)', () => {
     const response = await readOnce(seeded.staffId, `/admin/users/${owned.userId}`, token);
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).not.toContain('payloadSecret');
+    expect(response.body).not.toContain(PAYLOAD_MARKER);
     const raw = response.json<{ deposits: { recent: object[] } }>();
     expect(Object.keys(raw.deposits)).toEqual(['recent']);
     for (const deposit of raw.deposits.recent) expect(Object.keys(deposit)).toEqual(DEPOSIT_KEYS);

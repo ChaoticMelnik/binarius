@@ -1,6 +1,6 @@
 import * as z from 'zod';
 
-// numeric(20,8), the domain of every money column and of tradeAmountSchema (trading.ts)
+// numeric(20,8), the domain of every money column (numericDomainDecimalSchema below)
 export const NUMERIC_INTEGER_DIGITS = 12;
 export const NUMERIC_FRACTION_DIGITS = 8;
 
@@ -49,6 +49,17 @@ export const moneyWireSchema = z.union([
 export const positiveDecimalStringSchema = decimalStringSchema.refine(
   (value) => !value.startsWith('-') && /[1-9]/.test(value),
   { error: 'expected a positive amount' },
+);
+
+// A positive amount that fits numeric(20,8): a longer input would be rounded or rejected by the
+// database, and a rounded value would no longer compare equal on a replay. The trade amount
+// (trading.ts) and the postback amount (postback.ts) both read through it.
+export const numericDomainDecimalSchema = positiveDecimalStringSchema.refine(
+  (value) => {
+    const [integer = '', fraction = ''] = value.split('.');
+    return integer.length <= NUMERIC_INTEGER_DIGITS && fraction.length <= NUMERIC_FRACTION_DIGITS;
+  },
+  { error: 'expected at most 12 integer and 8 fractional digits' },
 );
 
 // numeric(20,8) comes back as '10.00000000' while a request said '10.00': compare the values,

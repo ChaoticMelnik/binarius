@@ -319,6 +319,23 @@ describe('request logging', () => {
     expect(withoutSecrets('/trading/intents?limit=10')).toBe('/trading/intents?limit=10');
   });
 
+  // #141: the postback route's secret is a path segment
+  it.each([
+    [
+      '/postbacks/binodex/abc?event=deposit&code=x',
+      '/postbacks/binodex/redacted?event=deposit&code=redacted',
+    ],
+    ['/postbacks/binodex/abc', '/postbacks/binodex/redacted'],
+    ['/postbacks/binodex/abc/extra?a=1', '/postbacks/binodex/redacted/extra?a=1'],
+    ['/POSTBACKS/Binodex/abc?a=1', '/POSTBACKS/Binodex/redacted?a=1'],
+  ])('masks the postback secret segment of %s', (url, masked) => {
+    expect(withoutSecrets(url)).toBe(masked);
+  });
+
+  it('leaves a path that only resembles the postback prefix as it was', () => {
+    expect(withoutSecrets('/postbacks/abc?id=1')).toBe('/postbacks/abc?id=1');
+  });
+
   it('answers an unknown route without echoing what it carried', async () => {
     const app = buildApp({
       pairs: unusedPairsDeps(),

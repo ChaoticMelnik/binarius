@@ -210,7 +210,7 @@ export const TEXTS = {
   depositsBadFilter: 'Фильтр не подходит: статус — из списка, ID пользователя — в формате UUID',
   columnDepositAt: 'Время',
   columnAccountId: 'ID аккаунта',
-  columnPostbackId: 'ID постбэка',
+  columnTraderId: 'ID трейдера',
   columnPaymentId: 'ID платежа',
   columnCurrency: 'Валюта',
   columnProcessedAt: 'Обработан',
