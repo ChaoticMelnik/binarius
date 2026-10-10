@@ -11,7 +11,7 @@ invitee is #116; this part only records who invited whom and shows the link.
   (a code only for `ref_` plus a valid code), `referralLinkOf`, and the contract of
   `POST /users/referral`.
 - `packages/db/src/schema/referrals.ts` — the tables `referral_codes` and `referrals`, migration
-  `0042_referrals`.
+  `0043_referrals`.
 - `packages/db/src/user-ops.ts` → `recordUserStart` — records the invitation.
 - `packages/db/src/referral-ops.ts` → `readUserReferral` — the code and the count.
 - `apps/backend/src/users/routes.ts` → `POST /users/referral`.
