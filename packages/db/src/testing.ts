@@ -132,12 +132,17 @@ export async function brokerAccountRow(db: Db, id: string): Promise<BrokerAccoun
 
 export async function seedUser(
   db: Db,
-  { balance = 5n, status = UserStatus.Active }: { balance?: bigint; status?: UserStatus } = {},
+  {
+    balance = 5n,
+    status = UserStatus.Active,
+    tradingMode,
+  }: { balance?: bigint; status?: UserStatus; tradingMode?: TradeMode } = {},
 ): Promise<SeededUser> {
   const telegramUserId = BigInt(100_000 + ++seq);
   const [user] = await db
     .insert(users)
-    .values({ telegramUserId, tokenBalance: balance, status })
+    // without tradingMode the column's default, demo (#121)
+    .values({ telegramUserId, tokenBalance: balance, status, tradingMode })
     .returning({ id: users.id });
   if (user === undefined) throw new Error('seedUser: insert returned no row');
   return { userId: user.id, telegramUserId: telegramUserId.toString() };
@@ -176,7 +181,7 @@ export async function seedBrokerAccount(
 
 export async function seedUserWithAccount(
   db: Db,
-  options: { balance?: bigint; status?: UserStatus } = {},
+  options: { balance?: bigint; status?: UserStatus; tradingMode?: TradeMode } = {},
 ): Promise<SeededAccount> {
   const user = await seedUser(db, options);
   const brokerAccountId = await seedBrokerAccount(db, user.userId);
@@ -204,7 +209,8 @@ export async function seedQueuedIntent(
   db: Db,
   patch: Partial<CreateTradeIntentRequest> = {},
 ): Promise<SeededAccount & { intent: TradeIntentRow }> {
-  const seed = await seedUserWithAccount(db);
+  // a real intent needs a user in real mode (#121)
+  const seed = await seedUserWithAccount(db, { tradingMode: patch.mode });
   const { intent } = await createTradeIntent(db, intentRequest(seed.telegramUserId, patch));
   return { ...seed, intent };
 }
@@ -225,7 +231,8 @@ export async function seedBalanceSnapshot(
   {
     minTradeAmount = '1',
     demoAvailable = '10000',
-  }: { minTradeAmount?: string; demoAvailable?: string } = {},
+    realAvailable = '100',
+  }: { minTradeAmount?: string; demoAvailable?: string; realAvailable?: string } = {},
 ): Promise<void> {
   const money = (value: string) => value as DecimalString;
   const written = await upsertBalanceSnapshot(db, {
@@ -235,7 +242,11 @@ export async function seedBalanceSnapshot(
       id: 'broker-user',
       level: { code: 'standard', rank: 1 },
       minTradeAmount: money(minTradeAmount),
-      real: { available: money('100'), held: money('0'), total: money('100') },
+      real: {
+        available: money(realAvailable),
+        held: money('0'),
+        total: money(realAvailable),
+      },
       demo: { available: money(demoAvailable), held: money('0'), total: money(demoAvailable) },
     },
   });

@@ -167,6 +167,10 @@ async function createInTransaction(
     if (refusal !== null) throw new TradeIntentError(refusal);
   }
 
+  // A real intent only while the user is in real mode (#121, Rule 36): the predicate sits in the
+  // statement that locks the users row, so a setTradingMode to demo either committed before it or
+  // waits for this creation to commit — there is no window. One-directional: a demo intent is
+  // never refused by the mode.
   const reserved = await tx
     .update(users)
     .set({ tokenReserved: sql`${users.tokenReserved} + ${tokens}` })
@@ -175,18 +179,21 @@ async function createInTransaction(
         eq(users.id, user.id),
         eq(users.status, UserStatus.Active),
         sql`${users.tokenBalance} - ${users.tokenReserved} >= ${tokens}`,
+        input.mode === TradeMode.Real ? eq(users.tradingMode, TradeMode.Real) : undefined,
       ),
     )
     .returning({ id: users.id });
   if (reserved.length === 0) {
     const [fresh] = await tx
-      .select({ status: users.status })
+      .select({ status: users.status, tradingMode: users.tradingMode })
       .from(users)
       .where(eq(users.id, user.id));
     throw new TradeIntentError(
       fresh?.status === UserStatus.Blocked
         ? TradeIntentErrorCode.UserBlocked
-        : TradeIntentErrorCode.InsufficientTokens,
+        : input.mode === TradeMode.Real && fresh?.tradingMode !== TradeMode.Real
+          ? TradeIntentErrorCode.RealModeOff
+          : TradeIntentErrorCode.InsufficientTokens,
     );
   }
 

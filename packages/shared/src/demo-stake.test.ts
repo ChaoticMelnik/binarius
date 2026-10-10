@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   checkDemoStake,
+  decimalLessThan,
   DemoStakeRefusal,
   demoStakePresets,
   demoStakeScale,
@@ -187,5 +188,18 @@ describe('POST /trading/demo-stake contracts', () => {
     expect(safeParseDemoStakeRefusal({ error: 'balance_unavailable' }).success).toBe(true);
     expect(safeParseDemoStakeRefusal({ error: 'user_not_found' }).success).toBe(true);
     expect(safeParseDemoStakeRefusal({ error: 'validation' }).success).toBe(false);
+  });
+});
+
+describe('decimalLessThan', () => {
+  it.each([
+    ['0.99', '1', true],
+    ['1', '1.00000000', false],
+    ['1.00000001', '1', false],
+    ['0.00000001', '0.00000002', true],
+    ['10', '9.99999999', false],
+    ['123456789012.5', '123456789012.50000001', true],
+  ])('%s < %s is %s', (a, b, expected) => {
+    expect(decimalLessThan(d(a), d(b))).toBe(expected);
   });
 });

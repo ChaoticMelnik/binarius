@@ -1,6 +1,6 @@
 import { InlineKeyboard } from 'grammy';
 import type { InlineKeyboardButton } from 'grammy/types';
-import { DEMO_CALLBACK_DATA, MENU_CALLBACK_DATA, supportUrl } from '@binarius/shared';
+import { DEMO_CALLBACK_DATA, MENU_CALLBACK_DATA, supportUrl, TradeMode } from '@binarius/shared';
 import {
   DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
@@ -31,8 +31,22 @@ export const inviteButton = (): InlineKeyboardButton.CallbackButton => ({
   callback_data: INVITE_CALLBACK_DATA,
 });
 
-// the status card's: the demo, then the invite (#115); the account card keeps demoKeyboard
-export const statusCardKeyboard = (): InlineKeyboard => demoKeyboard().row().add(inviteButton());
+// «⚙️ Режим» and the card's mode button (#121): the mode screen (trading-mode.ts). Only the bot
+// sends it.
+export const MODE_CALLBACK_DATA = 'mode';
+
+// The status card's: the entry and the mode button in one row, then the invite (#115). The entry
+// keeps DEMO_CALLBACK_DATA in both modes: the path is mode-agnostic up to the stake button (#121).
+// The account card keeps demoKeyboard.
+export const statusCardKeyboard = (mode: TradeMode = TradeMode.Demo): InlineKeyboard =>
+  (mode === TradeMode.Real
+    ? new InlineKeyboard()
+        .text(LABELS.tradeButton, DEMO_CALLBACK_DATA)
+        .text(LABELS.modeBackDemoButton, MODE_CALLBACK_DATA)
+    : demoKeyboard().text(LABELS.modeButton, MODE_CALLBACK_DATA)
+  )
+    .row()
+    .add(inviteButton());
 
 // the invite row, then the menu row, under `keyboard`'s rows; an empty keyboard gets no empty
 // first row

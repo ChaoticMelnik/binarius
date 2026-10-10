@@ -1,7 +1,11 @@
 import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import {
   addressOrNull,
+  AuditAction,
+  AuditActorType,
+  AuditEntityType,
   BrokerAccountStatus,
+  TradeMode,
   decimalStringSchema,
   referralCodeOf,
   normalizeDecimal,
@@ -10,6 +14,7 @@ import {
   type UserStartView,
 } from '@binarius/shared';
 import type { Db } from './client';
+import { auditLog } from './schema/audit-log';
 import { brokerAccounts } from './schema/broker-accounts';
 import { referralCodes, referrals } from './schema/referrals';
 import { users } from './schema/users';
@@ -199,4 +204,44 @@ export async function readDemoStake(
     .from(users)
     .where(eq(users.telegramUserId, telegramUserId));
   return row === undefined ? undefined : canonicalStake(row.demoStake);
+}
+
+export interface SetTradingModeResult {
+  tradingMode: TradeMode;
+  // false: the user was in that mode already; nothing was written and no audit row added
+  changed: boolean;
+}
+
+// The one writer of users.trading_mode (#121, Rule 36). The UPDATE carries `trading_mode <> $mode`,
+// so two concurrent switches serialize on the row lock and exactly one audit row is written per
+// actual change, in the same transaction. Locks only the users row (Rule 5). undefined = no users
+// row. The balance check of a switch to real is the route's (POST /trading/mode), not this one's.
+export async function setTradingMode(
+  db: Db,
+  telegramUserId: bigint,
+  mode: TradeMode,
+): Promise<SetTradingModeResult | undefined> {
+  return db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(users)
+      .set({ tradingMode: mode, updatedAt: sql`now()` })
+      .where(and(eq(users.telegramUserId, telegramUserId), ne(users.tradingMode, mode)))
+      .returning({ id: users.id });
+    if (updated !== undefined) {
+      await tx.insert(auditLog).values({
+        actorType: AuditActorType.User,
+        actorId: telegramUserId.toString(),
+        action: AuditAction.TradingModeChanged,
+        entityType: AuditEntityType.User,
+        entityId: updated.id,
+        payload: { from: mode === TradeMode.Real ? TradeMode.Demo : TradeMode.Real, to: mode },
+      });
+      return { tradingMode: mode, changed: true };
+    }
+    const [row] = await tx
+      .select({ tradingMode: users.tradingMode })
+      .from(users)
+      .where(eq(users.telegramUserId, telegramUserId));
+    return row === undefined ? undefined : { tradingMode: row.tradingMode, changed: false };
+  });
 }

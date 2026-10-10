@@ -67,7 +67,7 @@ export const INTENT_CALLBACK_PATTERN =
 // tracker stops following it, the session offer (#360, not below the cycle floor, #379) and the
 // end of the path (#350): a new analysis, the signals, the menu.
 export function intentKeyboard(
-  view: Pick<TradeIntentView, 'id' | 'status' | 'assetId' | 'durationSec'>,
+  view: Pick<TradeIntentView, 'id' | 'mode' | 'status' | 'assetId' | 'durationSec'>,
   payoutAccepted: boolean,
 ): InlineKeyboard {
   const keyboard =
@@ -125,9 +125,11 @@ const CREATE_REFUSALS = {
   [TradeIntentErrorCode.ClientRequestIdConflict]: { text: 'stakeButtonUsed' },
   // the global trading switch is closed (#144): demo and real alike
   [TradeIntentErrorCode.TradingPaused]: { text: 'tradingPaused' },
-  // the backend runs DEMO_ONLY (#396): a real press, refused before any write; the bot sends demo
-  // until #121
+  // the backend runs DEMO_ONLY (#396): a real press, refused before any write
   [TradeIntentErrorCode.DemoOnly]: { text: 'tradingDemoOnly' },
+  // a real press whose user went back to demo between the access read and the POST (#121); an
+  // older render is refused by the fingerprint first
+  [TradeIntentErrorCode.RealModeOff]: { text: 'stakeRealModeOff' },
   // the demo-stake bounds against the account's snapshot (#297); stake_below_minimum names the
   // minimum when this press's access read had it (replyCreateFailure)
   [TradeIntentErrorCode.BalanceUnavailable]: { text: 'stakeBalanceMissing' },
@@ -167,12 +169,14 @@ export function createDemoTradeComposer<C extends Context>({
   const composer = new Composer<C>();
 
   // The order of the checks: the catalog read at this press (the pair can close or vanish
-  // between the analysis and the press), the access (the amount is the saved demo stake, or the
-  // broker's minimum from its snapshot without one, a string as the backend sent it — never
-  // computed, Rule 2), the button's fingerprint against that amount (#297), then the POST.
-  // The key is the button's own nonce: the same button pressed again — a double tap, an old
-  // message, a press after a restart — replays the same intent and never opens a second trade
-  // (trade_intents_user_request_idx), while every analysis render draws a new nonce.
+  // between the analysis and the press), the access (the user's mode, #121; the amount is the
+  // broker's minimum in real mode, in demo the saved demo stake or the broker's minimum without
+  // one, a string as the backend sent it — never computed, Rule 2), the button's fingerprint
+  // against that amount and mode (#297, #121), then the POST in that mode.
+  // The key is the mode and the button's own nonce: the same button pressed again — a double tap,
+  // an old message, a press after a restart — replays the same intent and never opens a second
+  // trade (trade_intents_user_request_idx), while every analysis render draws a new nonce; the
+  // mode in the key keeps a demo button from replaying as a real intent.
   composer.callbackQuery(STAKE_CALLBACK_PATTERN, async (ctx) => {
     const stake = stakeDataOf(ctx.match);
     if (stake === undefined) {
@@ -191,9 +195,9 @@ export function createDemoTradeComposer<C extends Context>({
     }
     const amount = await amountOf(ctx, access, stake);
     if (amount === undefined) return;
-    // a button drawn for another amount, or before the fingerprint existed: the user would trade
-    // an amount the label did not show
-    if (stake.fingerprint !== stakeFingerprint(amount.amount)) {
+    // a button drawn for another amount or the other mode, or before the fingerprint existed: the
+    // user would trade an amount or in a mode the label did not show
+    if (stake.fingerprint !== stakeFingerprint(amount.amount, amount.mode)) {
       await replyHtml(ctx, TEXTS.stakeAmountChanged, {
         reply_markup: new InlineKeyboard().text(
           LABELS.stakeBackAnalysisButton,
@@ -205,12 +209,12 @@ export function createDemoTradeComposer<C extends Context>({
 
     const request: CreateTradeIntentRequest = {
       telegramUserId,
-      mode: TradeMode.Demo,
+      mode: amount.mode,
       assetId: stake.assetId,
       amount: amount.amount,
       action: stake.action,
       durationSec: stake.durationSec,
-      clientRequestId: `demo:${telegramUserId}:${stake.nonce}`,
+      clientRequestId: `${amount.mode}:${telegramUserId}:${stake.nonce}`,
     };
     // one more ask with the same key on an unknown outcome: a replay returns the row if it
     // exists and creates it once if not — the user pressed once and meant it
@@ -276,13 +280,15 @@ export function createDemoTradeComposer<C extends Context>({
     }
   }
 
-  // The stake and the broker's minimum it is checked against, or undefined once the refusal was
-  // sent. The press is a write, so a refusal leads back to the analysis, never the press again.
+  // The stake, the broker's minimum it is checked against and the user's mode, or undefined once
+  // the refusal was sent. The press is a write, so a refusal leads back to the analysis, never the press again.
   async function amountOf(
     ctx: Context,
     access: Settled<TradingAccessResponse>,
     stake: StakeData,
-  ): Promise<{ amount: DecimalString; minTradeAmount: DecimalString } | undefined> {
+  ): Promise<
+    { amount: DecimalString; minTradeAmount: DecimalString; mode: TradeMode } | undefined
+  > {
     const back = () => backToAnalysisKeyboard(stake.assetId, stake.durationSec);
     if (!access.ok) {
       logger.warn(
@@ -299,7 +305,7 @@ export function createDemoTradeComposer<C extends Context>({
     }
     const amount = effectiveStake(access.value);
     if (broker !== null && amount !== null) {
-      return { amount, minTradeAmount: broker.minTradeAmount };
+      return { amount, minTradeAmount: broker.minTradeAmount, mode: access.value.tradingMode };
     }
     if (brokerUnavailable === BrokerBalanceUnavailableReason.NoAccount) {
       await replyHtml(ctx, TEXTS.accountNone, { reply_markup: connectKeyboard() });

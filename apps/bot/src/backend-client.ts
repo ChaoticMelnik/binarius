@@ -19,6 +19,10 @@ import {
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   safeParseTradingSessionsStoppedResponse,
+  safeParseSetTradingModeResponse,
+  TRADING_MODE_PATH,
+  type SetTradingModeResponse,
+  type TradeMode,
   safeParseTradingSignalResponse,
   safeParseTradingSignalsResponse,
   TRADING_SIGNALS_PATH,
@@ -137,6 +141,9 @@ export interface BackendClient {
   // the saved stake, or a bounds refusal with the limits it was checked against (#297); any other
   // failure throws as from every method
   setDemoStake(telegramUserId: string, amount: DecimalString | null): Promise<SetDemoStakeResult>;
+  // the user's trading mode (#121); a refusal (409 demo_only, balance_unavailable,
+  // real_balance_below_minimum, 404 user_not_found) throws as from every method, with its code
+  setTradingMode(telegramUserId: string, mode: TradeMode): Promise<SetTradingModeResponse>;
   // every text override, as stored: the refresher resolves them (#299)
   readBotTexts(): Promise<BotTextOverride[]>;
 }
@@ -399,6 +406,13 @@ export function createBackendClient({
       }
       if (status === 409 && safeParseSessionSummaryRefusal(payload).success) return null;
       throw httpStatusError(status, payload);
+    },
+    async setTradingMode(telegramUserId, mode) {
+      const parsed = safeParseSetTradingModeResponse(
+        await post(TRADING_MODE_PATH.slice(1), { telegramUserId, mode }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data;
     },
     async stopSessions(telegramUserId) {
       const parsed = safeParseTradingSessionsStoppedResponse(

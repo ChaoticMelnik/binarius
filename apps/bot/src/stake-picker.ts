@@ -328,7 +328,7 @@ export function createStakePicker<C extends Context>({
             keyboard: backKeyboard(origin),
           };
         case 'pair':
-          return savedLaunchScreen(origin, saved.value.saved, firstName);
+          return savedLaunchScreen(origin, saved.value.saved, from);
         default:
           return origin satisfies never;
       }
@@ -378,12 +378,24 @@ export function createStakePicker<C extends Context>({
   // cycle floor gets the launch press's refusal under the saved line rather than a cycle button
   // the session start would refuse (#379). Without a catalog, or without the pair in it, the
   // screen drops its symbol line and the launch stays, since the session start checks the pair.
+  // The access read gives the user's mode (#121): a save from a launch screen drawn before a switch
+  // to real draws the real launch screen; a failed read draws the demo one, whose cycle press the
+  // backend refuses for a real-mode user (mode_not_allowed).
   async function savedLaunchScreen(
     { assetId, durationSec }: { assetId: number; durationSec: DemoDurationSec },
     amount: DecimalString | null,
-    firstName: string,
+    { id, first_name: firstName }: { id: number; first_name: string },
   ): Promise<Screen> {
-    const catalog = await settle(backend.readPairs());
+    const [catalog, access] = await Promise.all([
+      settle(backend.readPairs()),
+      settle(backend.readTradingAccess(String(id))),
+    ]);
+    if (!access.ok) {
+      logger.warn(
+        { ...errorLogFields(access.error), ...backendErrorFields(access.error) },
+        'trading access not read for the launch screen',
+      );
+    }
     if (!catalog.ok) {
       logger.warn(
         { ...errorLogFields(catalog.error), ...backendErrorFields(catalog.error) },
@@ -409,6 +421,7 @@ ${refusal.text}`,
       symbol: pair?.symbol ?? null,
       amount,
       saved: { amount },
+      mode: access.ok ? access.value.tradingMode : TradeMode.Demo,
     });
   }
 

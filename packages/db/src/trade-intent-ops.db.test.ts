@@ -5,6 +5,7 @@ import {
   TradeIntentFailureReason,
   TradeIntentStatus,
   TradeMode,
+  UserStatus,
   type ClosedTrade,
   type DecimalString,
   type OpenTrade,
@@ -67,6 +68,7 @@ import {
   users,
 } from './schema/index';
 import { openTrading } from './trading-switch-ops';
+import { setTradingMode } from './user-ops';
 
 // Integration tests on a temporary migrated database (README → Database). Rows are committed
 // for real: concurrency cases need separate connections, and token_ledger is append-only.
@@ -723,7 +725,7 @@ describe('createTradeIntent: the global trading switch (#144)', () => {
 
   it('P4 creates demo and real intents while open', async () => {
     const demo = await seedUserWithAccount(tmp.db);
-    const realSeed = await seedUserWithAccount(tmp.db);
+    const realSeed = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
     expect((await createTradeIntent(tmp.db, intentRequest(demo.telegramUserId))).intent).toMatchObject(
       { mode: 'demo', status: 'queued' },
     );
@@ -801,7 +803,7 @@ describe('createTradeIntent: the demo-stake bounds (#297)', () => {
   );
 
   it('B5 does not check a real intent', async () => {
-    const s = await seedUserWithAccount(tmp.db);
+    const s = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
     const input = intentRequest(s.telegramUserId, { mode: TradeMode.Real });
     expect((await createTradeIntent(tmp.db, input, undefined, checked)).created).toBe(true);
   });
@@ -878,8 +880,8 @@ describe('createTradeIntent: DEMO_ONLY (#396)', () => {
   });
 
   it('F3 creates a real intent with the flag off or absent', async () => {
-    const off = await seedUserWithAccount(tmp.db);
-    const absent = await seedUserWithAccount(tmp.db);
+    const off = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    const absent = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
     const created = await createTradeIntent(tmp.db, real(off.telegramUserId), undefined, {
       demoOnly: false,
     });
@@ -888,10 +890,58 @@ describe('createTradeIntent: DEMO_ONLY (#396)', () => {
   });
 
   it('F4 replays a real intent created without the flag', async () => {
-    const s = await seedUserWithAccount(tmp.db);
+    const s = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
     const input = real(s.telegramUserId);
     const first = await createTradeIntent(tmp.db, input, undefined, { demoOnly: false });
     const again = await createTradeIntent(tmp.db, input, undefined, demoOnly);
+    expect(again.created).toBe(false);
+    expect(again.intent.id).toBe(first.intent.id);
+  });
+});
+
+// The real-mode gate in the reserve UPDATE (#121, Rule 36): a real intent only for a user whose
+// users.trading_mode is real; a demo intent is never refused by the mode.
+describe('createTradeIntent: the user\'s trading mode (#121)', () => {
+  const real = (telegramUserId: string) => intentRequest(telegramUserId, { mode: TradeMode.Real });
+  const intentsOf = (userId: string) =>
+    tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, userId));
+
+  it('M1 refuses a real intent for a user in demo mode and leaves no trace', async () => {
+    const s = await seedUserWithAccount(tmp.db);
+    await failsWith(createTradeIntent(tmp.db, real(s.telegramUserId)), 'real_mode_off');
+    expect(await intentsOf(s.userId)).toEqual([]);
+    expect(await tokenReservedOf(s.userId)).toBe(0n);
+    expect(await tmp.db.select().from(tokenLedger).where(eq(tokenLedger.userId, s.userId))).toEqual(
+      [],
+    );
+  });
+
+  it('M2 creates a real intent for a user in real mode, and a demo one in either mode', async () => {
+    const s = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    const { intent } = await createTradeIntent(tmp.db, real(s.telegramUserId));
+    expect(intent).toMatchObject({ mode: 'real', status: 'queued' });
+    const demo = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    expect(
+      (await createTradeIntent(tmp.db, intentRequest(demo.telegramUserId))).intent,
+    ).toMatchObject({ mode: 'demo', status: 'queued' });
+  });
+
+  it('M3 answers user_blocked before real_mode_off', async () => {
+    const s = await seedUserWithAccount(tmp.db, { status: UserStatus.Blocked });
+    await failsWith(createTradeIntent(tmp.db, real(s.telegramUserId)), 'user_blocked');
+  });
+
+  it('M3b answers insufficient_tokens for a real-mode user without tokens', async () => {
+    const s = await seedUserWithAccount(tmp.db, { balance: 0n, tradingMode: TradeMode.Real });
+    await failsWith(createTradeIntent(tmp.db, real(s.telegramUserId)), 'insufficient_tokens');
+  });
+
+  it('M4 replays a real intent after the user went back to demo', async () => {
+    const s = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    const input = real(s.telegramUserId);
+    const first = await createTradeIntent(tmp.db, input);
+    await setTradingMode(tmp.db, BigInt(s.telegramUserId), TradeMode.Demo);
+    const again = await createTradeIntent(tmp.db, input);
     expect(again.created).toBe(false);
     expect(again.intent.id).toBe(first.intent.id);
   });

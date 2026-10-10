@@ -92,8 +92,9 @@ afterAll(async () => {
 
 let seq = 0;
 // with a snapshot (min 1, demo 10000): the route checks a demo amount against it (#297)
-const seed = async (balance = 5n) => {
-  const seeded = await seedUserWithAccount(tmp.db, { balance });
+// `tradingMode` real: a real intent passes the real-mode gate (#121)
+const seed = async (balance = 5n, tradingMode: 'demo' | 'real' = 'demo') => {
+  const seeded = await seedUserWithAccount(tmp.db, { balance, tradingMode });
   await seedBalanceSnapshot(tmp.db, seeded.brokerAccountId);
   return seeded;
 };
@@ -307,10 +308,24 @@ describe('POST /trading/intents: the global trading switch (#144)', () => {
   );
 
   it('creates a real intent while open', async () => {
-    const s = await seed();
+    const s = await seed(5n, 'real');
     const response = await post(body(s.telegramUserId, { mode: 'real' }));
     expect(response.statusCode).toBe(201);
     expect(response.json().intent.mode).toBe('real');
+  });
+
+  // #121: the user's mode, in the reserve UPDATE
+  it('answers 409 real_mode_off for a real intent of a user in demo mode and creates nothing', async () => {
+    const s = await seed();
+    wakes = [];
+    const response = await post(body(s.telegramUserId, { mode: 'real' }));
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'real_mode_off' });
+    expect(
+      await tmp.db.select().from(tradeIntents).where(eq(tradeIntents.userId, s.userId)),
+    ).toEqual([]);
+    expect(await reservedOf(s.userId)).toBe(0n);
+    expect(wakes).toEqual([]);
   });
 
   it('replays while closed what was created while open', async () => {
@@ -364,7 +379,7 @@ describe('POST /trading/intents: DEMO_ONLY (#396)', () => {
   });
 
   it('replays a real intent created without the flag', async () => {
-    const s = await seed();
+    const s = await seed(5n, 'real');
     const payload = body(s.telegramUserId, { mode: 'real' });
     const created = await post(payload);
     expect(created.statusCode).toBe(201);

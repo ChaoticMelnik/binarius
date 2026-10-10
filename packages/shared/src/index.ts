@@ -11,6 +11,7 @@ export * from './referral';
 export * from './broker-balance';
 export * from './broker-budget';
 export * from './trading-access';
+export * from './trading-mode';
 export * from './access-token';
 export * from './admin';
 export * from './admin-trading';

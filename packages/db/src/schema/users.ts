@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { bigint, check, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
-import { NotificationLevel, START_PAYLOAD_PATTERN, UserStatus } from '@binarius/shared';
+import { NotificationLevel, START_PAYLOAD_PATTERN, TradeMode, UserStatus } from '@binarius/shared';
 import {
   createdAt,
   id,
@@ -45,6 +45,10 @@ export const users = pgTable(
     // The user's demo stake (#297): NULL = the broker's minimum at each trade. Written only by
     // setDemoStake; its bounds are checked by checkDemoStake (@binarius/shared), not here.
     demoStake: money('demo_stake'),
+    // The mode of the user's next single trade (#121, docs/trading-mode.md). Written only by
+    // setTradingMode; a real intent is created only while it is `real` (createInTransaction's
+    // reserve UPDATE), a session only while it is `demo` (checkTradingSessionStart).
+    tradingMode: text('trading_mode').$type<TradeMode>().notNull().default(TradeMode.Demo),
     tokenBalance: tokenAmount('token_balance'),
     tokenReserved: tokenAmount('token_reserved'),
     createdAt: createdAt(),
@@ -54,6 +58,7 @@ export const users = pgTable(
     uniqueIndex('users_telegram_user_id_idx').on(t.telegramUserId),
     inList('users_status_check', t.status, UserStatus),
     inList('users_notification_level_check', t.notificationLevel, NotificationLevel),
+    inList('users_trading_mode_check', t.tradingMode, TradeMode),
     // The CHECK spells the same rule as startPayloadSchema, from the same regex source rather
     // than from a copy of it: PostgreSQL's POSIX engine and JavaScript's are not the same
     // engine, so the two verdicts are compared row by row over one corpus in
