@@ -25,7 +25,7 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | Settings v1, statuses, stop reasons | `packages/shared/src/trading-session.ts` (`@binarius/shared/trading-session`) | `tradingSessionSettingsSchema`, `TradingSessionStatus`, `TradingSessionStopReason`, `stakeSettingsFor`, `MAX_SESSION_TRADES` 20, `DEFAULT_SESSION_TRADES` 5 |
 | Wire contracts (#283) | the same file | the routes' request, view and refusal schemas, `TradingSessionErrorCode`, `sessionFitsDeadline`, `SESSION_MAX_DURATION_MS`, `TRADING_SESSION_START_BUDGET_MS` |
 | Pair predicates (#283) | `packages/shared/src/catalog.ts` | `isPairOpen`, `pairAcceptsDuration`; the bot's demo checks and the start route both call them |
-| Routes (#283) | `apps/backend/src/trading/session-routes.ts` | `POST /trading/sessions`, `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop` behind the internal bearer |
+| Routes (#283) | `apps/backend/src/trading/session-routes.ts` | `POST /trading/sessions`, `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/:id/summary` (#318) behind the internal bearer |
 | Table | `packages/db/src/schema/trading-sessions.ts`, migration `0018_trading_session_orchestration` | the columns and constraints below |
 | Operations | `packages/db/src/trading-session-ops.ts` | create, the runnable scan, the two stop sweeps, the history, the CAS stop, the decision mark, the session intent; the start check and the owner-scoped view (#283) |
 | Session lock | `packages/db/src/trade-intent-ops.ts` → `createInTransaction` | the session row locked inside the intent's creation transaction |
@@ -43,6 +43,7 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | `stop_reason` | one of `TradingSessionStopReason` (CHECK `trading_sessions_stop_reason_check`) |
 | `started_at`, `ended_at` | the insert's `now()`; the stop's `now()` |
 | `last_decision_at` | the runnable scan's order key; NULL until the orchestrator first reached an ending |
+| `summary_sent_at` | NULL until the session's summary card is claimed (#318): set once by `claimSessionSummary`'s CAS, never cleared; no CHECK and no index (the claim updates by primary key) |
 | `last_signal_action` | `up`/`down` (CHECK `trading_sessions_last_signal_action_check` from `TradeAction`) or NULL: the direction the last deciding attempt saw — the traded action, the paused one — and NULL after a `no_signal` or before any decision ([The pause after two losses](#the-pause-after-two-losses-379), #379) |
 
 - **One active session per account:** `trading_sessions_active_account_idx`, unique on
@@ -146,10 +147,11 @@ account and mode.
 
 ## Routes
 
-All three sit behind the internal bearer (`internalBearerAuth`, an encapsulated plugin like
+All four sit behind the internal bearer (`internalBearerAuth`, an encapsulated plugin like
 `pairsRoutes`); a refusal body is `{ error }` with a `TradingSessionErrorCode`, except
-`active_session_exists` (`{ error, session }`) and a 400 (`{ error: 'validation', issues }`).
-`safeParseTradingSessionResponse` and `safeParseTradingSessionRefusal` read them.
+`active_session_exists` (`{ error, session }`), the summary's `summary_unavailable` and a 400
+(`{ error: 'validation', issues }`). `safeParseTradingSessionResponse` and
+`safeParseTradingSessionRefusal` read them; the summary's own `safeParseSessionSummary*`.
 
 ### POST /trading/sessions
 
@@ -228,6 +230,23 @@ it was no longer active. The final read is the GET's `viewForReply`: a stop betw
 finished session, so its answer carries the balance after the last trade (#337). The CAS is by id: a session's account and the account's user never
 change, so no interleaving lets it stop another user's session. A live intent of the session
 finishes on its own path.
+
+### POST /trading/sessions/:id/summary (#318)
+
+Body `{ telegramUserId }` (`stopTradingSessionRequestSchema`). `claimSessionSummary` runs one
+`UPDATE trading_sessions SET summary_sent_at = now() … RETURNING` whose WHERE holds: the owner
+(`broker_accounts` → `users.telegram_user_id`, Rule 13), `status = 'stopped'`,
+`summary_sent_at is null`, no intent of the session outside `TERMINAL_TRADE_INTENT_STATUSES`, and at
+least one `settled` intent with its broker trade. In the same transaction it reads the settled
+intents' trades in creation order (`profit`, `open_price`, `close_price`) and their sum by
+`sessionProfitSumSql` — the fragment the view's `trades.profit` is — over the same rows. 200
+`{ summary: { result, trades: [{ profit, openPrice, closePrice }] } }`, built field by field. Every
+miss — not the owner's or missing, not stopped, a trade still able to move, no settled trade, sent
+already — and a non-uuid id are one 409 `{ error: 'summary_unavailable' }` that writes nothing. A
+bad body is 400. No broker call. Terminal intents and a stopped session cannot change, so the rows
+read after the claim are the ones it checked. Two claims at once: the row lock serialises them and
+the second re-checks `summary_sent_at is null`, so one wins. A lost answer after the commit loses
+the card (accepted, [bot-session.md](bot-session.md#the-summary-card-318)).
 
 ### For #284
 

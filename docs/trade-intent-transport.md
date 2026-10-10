@@ -537,7 +537,8 @@ spellings) that refuses real intents and sessions in it, read at start
   the route's and the bot's single trades keep `NULL`. The orchestrator that calls it is
   `apps/trading-worker/src/trading-session/orchestrator.ts` (#287).
   A session is started, read and stopped through `POST /trading/sessions`,
-  `GET /trading/sessions/:id` and `POST /trading/sessions/:id/stop` (#283,
+  `GET /trading/sessions/:id` and `POST /trading/sessions/:id/stop` (#283), and its summary card
+  claimed through `POST /trading/sessions/:id/summary` (#318,
   [trading-session.md → Routes](trading-session.md#routes)), behind the same internal bearer.
 
 ## Running it locally

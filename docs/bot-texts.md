@@ -235,7 +235,8 @@ compile.
 | `stake` | the saved demo stake or `null` | `formatStake` | `stakeMinimumLabel` |
 | `minStake`, `demoAvailable` | the broker's bounds | `formatStake` | — |
 | `age` | seconds | `formatAge` | — |
-| `profit` | `trades.profit` of the session view, the SQL sum (#337) | `formatSignedUsd` | — |
+| `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318) | `formatSignedUsd` | — |
+| `botUsername` | the bot's `ctx.me.username`, without `@` (#318) | as is | — |
 
 The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, …) are a line's value the
 caller has already put into words from the catalog and its data, printed as is; their description
@@ -427,7 +428,8 @@ queue — the last call wins — and «Опубликовать заново» m
 A key's limit is checked with its variables' samples. `BOT_TEXT_MESSAGES` describes what that
 cannot bound: each message the bot builds from several keys (the account and status cards,
 `/help`, `/account`, the analysis screens, the trade and session status, the demo screens,
-`/settings` with the stake line and the stake picker), and each html key with variables in no such
+`/settings` with the stake line and the stake picker, the summary card's footer — plain text drawn
+on the image, bounded by its key's limit, #318), and each html key with variables in no such
 message. `estimateBotTextMessage` adds up the parts with every placeholder the text holds at its
 widest — the key's width in `BOT_TEXT_VAR_WIDTHS`, else the variable's in
 `BOT_TEXT_VAR_DEFAULT_WIDTHS` — and labels read from the texts in effect, so a longer override of a
@@ -440,6 +442,6 @@ stake 25 (`formatStake` over an unsigned `numeric(20,8)`: the demo stake, the br
 the demo balance), a count 25, an int4 asset id or duration, and the `/account` list, which the
 backend answers with at most `USER_ACCOUNT_LIST_LIMIT` (10) links. The rest are stated
 assumptions in `BOT_TEXT_WIDTHS`: a broker's address ≤ 254, a symbol ≤ 64, a session's counters
-≤ 999, the analysis numbers. A value past one of them lengthens a message by a few characters,
+≤ 999, the analysis numbers, a bot's username ≤ 32 (Telegram's rule). A value past one of them lengthens a message by a few characters,
 and Telegram refuses the message only if that crosses its limit. A plain label is measured as
 written, markup and entities included: it is escaped and shown literally.

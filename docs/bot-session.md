@@ -1,4 +1,4 @@
-# The demo session in the bot: the button, the status and the stop (issues #284, #320)
+# The demo session in the bot: the button, the status, the stop and the summary card (issues #284, #320, #318)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» as its
 first row on every `decided` answer, a signal or none (#360); a finished single trade's message
@@ -9,7 +9,8 @@ session's message «🔁 Ещё сессия». All four carry the same data. Pr
 `POST /trading/sessions` ([trading-session.md](trading-session.md#routes)) and sends one status
 message. The message follows the session through `GET /trading/sessions/:id` and carries
 «🔄 Обновить» and «⏹ Остановить сессию». The trades themselves are opened by the worker's
-orchestrator (#287): the bot only starts, reads and stops the session.
+orchestrator (#287): the bot only starts, reads and stops the session. When the session is over,
+one picture of its trades follows the final status ([The summary card](#the-summary-card-318)).
 
 ```bash
 pnpm test --project unit apps/bot/src   # needs no database or Redis
@@ -31,7 +32,11 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   (`isTradingSessionFinished` of `packages/shared/src/trading-session.ts`, #337).
   `index.ts` builds one and hands it to `createBot` and to `runBot`.
 - `apps/bot/src/backend-client.ts` — `startSession(request)` → `{ started }` or `{ active }`,
-  `readSession(id, telegramUserId)`, `stopSession(id, telegramUserId)` ([The client](#the-client)).
+  `readSession(id, telegramUserId)`, `stopSession(id, telegramUserId)` ([The client](#the-client)),
+  `claimSessionSummary(id, telegramUserId)` → the summary or `null` (#318).
+- `apps/bot/src/session-card.ts` — `sessionCardModel`, `sessionCardSvg` and `renderSessionCard`
+  (#318): the card's words and counts, its SVG, its PNG through `@resvg/resvg-js` and the fonts in
+  `apps/bot/fonts/` (Inter 4.1, OFL, `OFL.txt` beside them).
 - `apps/bot/src/texts.ts` — `sessionStatusText`, `pluralTrades`, `sessionStartButtonLabel` and the
   stop-reason map; the texts are the `session` group of the catalog and the two buttons
   `sessionRefreshButton`, `sessionStopButton` ([bot-texts.md](bot-texts.md)).
@@ -54,7 +59,10 @@ demo:sess:<assetId>:<sec>          («🚀 Сессия из 5 сделок» un
            broker once more before it answers, #337 — trading-session.md → Routes)
 session:<id>                       («🔄 Обновить»)
   bot → answerCallbackQuery ∥ GET /trading/sessions/<id> ∥ GET /trading/pairs
-  bot → editMessageText in place; tracking resumes on this message unless the session is done
+  bot → editMessageText in place; tracking resumes on this message, a done session's included
+  tracker, once the session is done and its final status is on screen:
+        POST /trading/sessions/<id>/summary { telegramUserId }   (#318, at most once)
+        → sendPhoto to the status's chat: the card, its caption, «🔁 Ещё сессия» and the end of path
 session:stop:<id>                  («⏹ Остановить сессию»)
   bot → answerCallbackQuery ∥ POST /trading/sessions/<id>/stop ∥ GET /trading/pairs
         (409 session_not_active → GET /trading/sessions/<id>)
@@ -213,9 +221,9 @@ refresh or stop offers the refresh and the menu, never the stop again.
 ## The refresh and the stop
 
 - **Refresh** reads the session and edits it in place («not modified» is done; gone sends it anew;
-  a transport failure gets `warn` `trading session message not edited`). A session that is not done
-  is tracked again on the message that shows it: after a restart this button is how tracking
-  resumes. 404 → «⚠️ Статус сессии недоступен.»; any other failure → `unavailable` and `warn`
+  a transport failure gets `warn` `trading session message not edited`). The session is tracked
+  again on the message that shows it: after a restart this button is how tracking resumes, and a
+  done session's entry sends its summary card, if it was never sent, and ends (#318). 404 → «⚠️ Статус сессии недоступен.»; any other failure → `unavailable` and `warn`
   `trading session status not read`.
 - **Stop** stops at once, with no confirmation (owner's decision); the reply is the stopped view in
   place, with «⏳ Открытая сделка доиграет до конца.» while its trade is open and not on manual
@@ -248,6 +256,9 @@ One entry per session id, in process memory, like the intent tracker
 - 404 `not_found` → «⚠️ Статус сессии недоступен.», stop. Any other read failure: `warn` once per
   entry, retried until the deadline. Gone → stop. Anything else thrown → `error` `trading session
   tracking failed`, stop.
+- **The card** (#318): an entry calls it as it ends on a done view whose final edit landed — on the
+  poll that sees it, or at the deadline — so once. A failed edit means no card yet; a card that
+  failed is not tried again: the entry has ended ([The summary card](#the-summary-card-318)).
 - `SESSION_TRACKER_MAX_ENTRIES` (10 000): the oldest entry goes first. `stop()` clears every timer,
   refuses new entries and waits for every attempt in flight; `runBot` drains it as its
   `session tracker` step.
@@ -264,7 +275,8 @@ One entry per session id, in process memory, like the intent tracker
   budget do not move. `timing.test.ts` runs every terminal branch of the three.
 - `SESSION_TRACK_FIRST_POLL_MS` = 3 s, `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
   cycle is at least the worker's catch-up grace, 10 s), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
-  `SESSION_TRACK_DRAIN_MS` = 5 s + 8 s.
+  `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 2 × 8 s = 26 s: an attempt's read and edit, then the card's
+  claim and `sendPhoto` (#318).
 - The chain at import adds `TRADING_SESSION_START_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
   link #283 left to the bot), `TRADING_SESSION_VIEW_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
   read and the stop wait on one balance GET for a finished session, #337), first poll < poll < deadline, `SESSION_MAX_DURATION_MS <
@@ -281,6 +293,51 @@ id or the symbol.
 - `trading session not stopped`
 - `trading session message not edited`
 - `trading session tracking failed` (`error`)
+- `trading session card not sent` (#318): the claim failed (`backendStatus`, `backendReason`), the
+  photo failed (`method: sendPhoto`, `telegramErrorCode`), or the render threw; with `sessionId`.
+  A refused claim (409 `summary_unavailable`) logs nothing.
+
+## The summary card (#318)
+
+One PNG per finished session, demo and real alike, sent to the status message's chat under its
+final status. Sharing it is Telegram's own forwarding; a share button is #321.
+
+- **When.** The tracker's entry ends on a done view (stopped, the last trade settled or rejected)
+  and the final status is on screen. A last trade on `manual_review` is not done, so no card: an
+  operator settling it later gives one only on the user's «🔄 Обновить». A session with no settled
+  trade gets none.
+- **At most once.** `POST /trading/sessions/:id/summary` ([trading-session.md](trading-session.md#routes))
+  sets `trading_sessions.summary_sent_at` by one CAS UPDATE and answers the card's rows; every
+  other answer is 409 `summary_unavailable`, and the bot then sends nothing. Two entries of one
+  session (a refresh while it is tracked, a start's 409) race the claim and one wins.
+- **The numbers.** Each trade's result is its `broker_trades.profit`, the total the same SQL sum
+  the status prints (`sessionProfitSumSql`, #337); the bot formats them (`formatSignedUsd`) and
+  adds nothing. Win, loss and tie go by the exact decimal's sign, as the view counts them, so
+  `0.001` is a win that prints `+$0.00`. The prices are `broker_trades.open_price`/`close_price`:
+  the line runs through each trade's entry (a quarter into its column) and exit (three quarters),
+  scaled between the lowest and the highest price, in the middle when all are equal. It is not the
+  market path between them. No balance: the card is made to be forwarded, the balance stays in the
+  status.
+- **The layout.** 1200 × 675, dark. The pair (or «актив #N»), «СЕССИЯ ЗАВЕРШЕНА», «ИТОГ» and the
+  signed total; a column per trade, «Сделка N» and its result; blue entry markers, exits green,
+  red or grey; the legend; the footer «5 сделок · 3 в плюс, 2 в минус», «в ноль» only when a trade
+  tied. Every word is the catalog's (`sessionCard*`), XML-escaped, and shrinks to fit its slot.
+- **The caption** is `sessionCardCaption`: «🏁 {symbol}: итог сессии {profit}» and «🤖 @{botUsername}»,
+  the bot's `ctx.me.username` from the press that started tracking.
+- **The keyboard** is the stopped status's without «🔄 Обновить» (which edits a message's text, and
+  a photo has a caption): «🔁 Ещё сессия» while the demo offers the duration, «📊 Новый анализ»,
+  «📡 К сигналам», «🏠 В меню»; «🏠 В меню» alone without `settings` (`sessionCardKeyboard`).
+- **The renderer.** `@resvg/resvg-js` 2.6.2 (MPL-2.0), a prebuilt native module per platform, about
+  30 ms per card on the bot's event loop. It loads only `apps/bot/fonts/Inter-*.ttf`
+  (`loadSystemFonts: false`): the alpine image has no fonts, and without a font resvg drops the
+  text without an error. `pnpm check` renders on the host's build and holds that the lockfile has
+  the `linux-x64-musl` and `linux-arm64-musl` builds (`lockfile-musl.test.ts`); that the musl build
+  loads in the image is the owner's check:
+
+  ```bash
+  docker compose build bot
+  docker compose run --rm --no-deps -w /app/apps/bot bot node --input-type=module -e "import('@resvg/resvg-js').then(({ Resvg }) => { const png = new Resvg('<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"/>').render().asPng(); console.log(png.length > 0 ? 'ok' : 'empty') })"
+  ```
 
 ## Accepted risks
 
@@ -307,11 +364,20 @@ id or the symbol.
    it is edited; overrides are not migrated (#337).
 9. **One deploy for the backend and the bot** (#337): the view's schema is strict on both sides, so a
    bot older than the backend answers `ContractViolation` on every session read until redeployed.
+10. **At most once, not exactly once** (#318, owner 2026-10-07): a crash or a lost answer between
+    the claim and `sendPhoto` loses the card, and nothing retries it.
+11. **Sessions that ended before #318** have no mark and get their card on their next
+    «🔄 Обновить» — still one.
+12. **The musl build is not loaded by `pnpm check`** (#318): CI and the host install other builds.
+    Falsifiable: the owner's container command above does not print `ok`.
+13. **Render cost** (#318): about 30 ms per finished session on the bot's event loop. Falsifiable:
+    a render over 200 ms on the pilot.
 
 ## Running it locally
 
 The bot's presses are covered by `trading-session.test.ts`, `session-tracker.test.ts`,
-`demo.test.ts` and `timing.test.ts` against the real handlers; they need no services. The routes
+`demo.test.ts` and `timing.test.ts` against the real handlers; they need no services. The summary
+card is drawn and rendered by `session-card.test.ts` on the host's resvg build. The routes
 the bot calls are run end to end by [trading-session.md → Running it locally](trading-session.md#running-it-locally).
 That a started session trades and its counters move needs #287's orchestrator in the worker.
 The steps in Telegram — «🎮 Демо-торговля», «🧭 Выбрать пару вручную», a pair, 15 s, «📊 Анализ»,
@@ -327,6 +393,5 @@ its own, which no runtime check of this issue used.
 - **#29** — a notification for each trade of the session; this message is only edited.
 - **#297** — choosing the stake; its new start refusals join `START_REFUSALS`.
 - **#360** — the button first on every `decided` analysis, and under a finished single trade.
-- **#318** — the summary card at the session's end takes `formatSignedUsd` from
-  `@binarius/shared` and the same SQL sum (`trades.profit`, #337).
+- **#321** — «📤 Поделиться» under the summary card, added to `sessionCardKeyboard`'s rows.
 - **#121** — real mode; **#201** — levels and rewards.
