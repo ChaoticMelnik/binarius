@@ -128,6 +128,9 @@ services:
       # one a deployment inherits by accident.
       ADMIN_BOT_TOKEN: ${ADMIN_BOT_TOKEN:?set it in .env; see .env.example}
       ADMIN_WEB_TOKEN: ${ADMIN_WEB_TOKEN:?set it in .env; see .env.example}
+      # the link the staff bot sends is <WEB_PUBLIC_URL>/admin/login/link/<token> (#448): the
+      # same value and default as `web` below, tied by apps/backend/src/timing.test.ts
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://127.0.0.1:3001}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
     healthcheck:

@@ -10,6 +10,7 @@ import {
   parseLogLevelEnv,
   parseLoopbackOrHttpsUrlEnv,
   parseNoWhitespaceEnv,
+  parseOriginEnv,
   parseUrlEnv,
   readEnv,
   type EnvSource,
@@ -68,6 +69,8 @@ export interface Env {
   telegramBotToken: string;
   adminBotToken: string;
   adminWebToken: string;
+  // the origin of apps/web: the staff bot sends a login link under it (#448)
+  webPublicUrl: string;
   // the demo-only fuse (#396): read once at start, refuses real intents and real sessions
   demoOnly: boolean;
 }
@@ -125,6 +128,7 @@ export function parseEnv(source: EnvSource): Env {
     ),
     brokerOauthRedirectUri: parseRedirectUri(source),
     brokerPartnerRef: parsePartnerCode(readEnv(source, 'BROKER_PARTNER_REF'), 'BROKER_PARTNER_REF'),
+    webPublicUrl: parseOriginEnv(readEnv(source, 'WEB_PUBLIC_URL'), 'WEB_PUBLIC_URL'),
     demoOnly: parseDemoOnlyEnv(source),
     ...parseBotTokens(source),
     ...parseTokenEncryption(source),

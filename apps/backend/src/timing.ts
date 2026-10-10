@@ -59,12 +59,14 @@ export const ADMIN_POLLING_BATCH_LIMIT = 1;
 // What each handler does on its longest path. The budget below is computed from these and
 // admin/timing.test.ts compares them against the calls the handlers actually make.
 export const ADMIN_HANDLER_CALLS = {
-  // the reply carrying the sender's own Telegram id
+  // the reply: the login button, or the refusal carrying the sender's own Telegram id
   start: 1,
   // answerCallbackQuery ∥ sendMessage(code) — the parallel pair is counted as sequential
   confirm: 2,
   // answerCallbackQuery
   deny: 1,
+  // sendMessage(link or refusal), then answerCallbackQuery (#448)
+  link: 2,
 } as const;
 
 // The longest declared handler path. The database work inside a handler is ordinary latency by

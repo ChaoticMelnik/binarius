@@ -5,8 +5,12 @@ import {
   confirmChallengeFromTelegram,
   denyChallengeFromTelegram,
   failChallengeDelivery,
+  findStaffByTelegram,
+  issueLoginLink,
   markChallengeCodeSent,
+  recordStaffBotRefusal,
   StaffLoginChallengeStatus,
+  StaffStatus,
   type Db,
 } from '@binarius/db';
 import {
@@ -26,6 +30,10 @@ const CONFIRM_CALLBACK_PATTERN = /^sl:c:([0-9a-f-]{36})$/;
 const DENY_CALLBACK_PATTERN = /^sl:d:([0-9a-f-]{36})$/;
 export const confirmCallbackData = (challengeId: string): string => `sl:c:${challengeId}`;
 export const denyCallbackData = (challengeId: string): string => `sl:d:${challengeId}`;
+// No id at all: the link is for whoever pressed, decided by the account the update came from.
+export const LOGIN_LINK_CALLBACK = 'sl:l';
+// the web page a link opens (apps/web/src/admin/routes.ts)
+export const LOGIN_LINK_PATH = '/admin/login/link/';
 
 export type Logger = {
   info(object: unknown, message?: string): void;
@@ -60,6 +68,8 @@ export interface CreateAdminBotOptions {
   token: string;
   db: Db;
   logger: Logger;
+  /** apps/web's origin, already normalised by parseOriginEnv; the login link lives under it */
+  webPublicUrl: string;
   // the seams the tests need: a bot that must not call getMe, and a client pointed somewhere
   // local so the configured timeout can be observed rather than assumed
   botInfo?: UserFromGetMe;
@@ -71,6 +81,7 @@ export function createAdminBot({
   token,
   db,
   logger,
+  webPublicUrl,
   botInfo,
   apiRoot,
   telegramApiTimeoutMs = ADMIN_TELEGRAM_API_TIMEOUT_MS,
@@ -88,11 +99,111 @@ export function createAdminBot({
   // this bot's whole authority argument rests on that being unambiguous.
   const privateChats = bot.chatType('private');
 
+  // "query is too old" is the usual refusal: the message has gone either way
+  const answerQuietly = async (answer: () => Promise<unknown>): Promise<void> => {
+    try {
+      await answer();
+    } catch (error) {
+      logger.warn(
+        {
+          ...errorLogFields(error),
+          ...telegramErrorFields(error, 'answerCallbackQuery'),
+        },
+        'answering the staff login callback failed',
+      );
+    }
+  };
+
+  // The refusal for anyone who is not an active staff member: one text for all of them, the
+  // sender's own id in it (how the operator learns the id to create an account with). The audit
+  // row for a known disabled account is written after the reply has gone, success or failure, so
+  // the reply does not wait on it; a stranger gets no row (owner's answer В5, docs/staff-login.md).
+  // Only the sender's own account can be asked about, so this tells nobody about anyone else.
+  const refuse = async (
+    reply: () => Promise<unknown>,
+    disabledStaffId: string | undefined,
+    via: 'start' | 'button',
+  ): Promise<void> => {
+    try {
+      await reply();
+    } catch (error) {
+      logger.warn(
+        { ...errorLogFields(error), ...telegramErrorFields(error, 'sendMessage') },
+        'the staff bot refusal could not be delivered',
+      );
+    }
+    if (disabledStaffId === undefined) {
+      logger.info({ via }, 'the staff bot refused a sender with no staff account');
+      return;
+    }
+    try {
+      await recordStaffBotRefusal(db, { staffId: disabledStaffId, via });
+    } catch (error) {
+      // the reply has gone already; there is nothing left to answer with
+      logger.warn(
+        { ...errorLogFields(error), staffId: disabledStaffId },
+        'the staff bot refusal could not be recorded',
+      );
+    }
+  };
+
   privateChats.command('start', async (ctx) => {
     if (ctx.from === undefined) return;
-    // ctx.from.id, not the staff row: this answers before anyone has an account, which is what
-    // makes it useful — it is how the operator learns the id to create the account with.
-    await ctx.reply(ADMIN_TEXTS.start(String(ctx.from.id)));
+    const owner = await findStaffByTelegram(db, BigInt(ctx.from.id));
+    if (owner?.status === StaffStatus.Active) {
+      await ctx.reply(ADMIN_TEXTS.start, {
+        reply_markup: new InlineKeyboard().text(ADMIN_TEXTS.linkButton, LOGIN_LINK_CALLBACK),
+      });
+      return;
+    }
+    const text = ADMIN_TEXTS.noAccess(String(ctx.from.id));
+    await refuse(() => ctx.reply(text), owner?.id, 'start');
+  });
+
+  // The login link (#448). The order is the message, then the button's answer: the spinner is
+  // worth less than the link, and an answer sent first would say "done" about a message that
+  // may still fail.
+  privateChats.callbackQuery(LOGIN_LINK_CALLBACK, async (ctx) => {
+    const issued = await issueLoginLink(db, { telegramUserId: BigInt(ctx.from.id) });
+    if (!issued.ok && issued.reason === 'rate_limited') {
+      await ctx.answerCallbackQuery({ text: ADMIN_TEXTS.linkRateLimited, show_alert: true });
+      return;
+    }
+    if (!issued.ok) {
+      const text = ADMIN_TEXTS.noAccess(String(ctx.from.id));
+      const disabledStaffId = issued.reason === 'disabled' ? issued.staffId : undefined;
+      await refuse(
+        async () => {
+          await ctx.reply(text);
+          await answerQuietly(() => ctx.answerCallbackQuery());
+        },
+        disabledStaffId,
+        'button',
+      );
+      return;
+    }
+
+    try {
+      // the URL is the token: it goes into this message and into no log line
+      await ctx.reply(ADMIN_TEXTS.link(`${webPublicUrl}${LOGIN_LINK_PATH}${issued.token}`), {
+        link_preview_options: { is_disabled: true },
+      });
+    } catch (error) {
+      logger.warn(
+        {
+          ...errorLogFields(error),
+          ...telegramErrorFields(error, 'sendMessage'),
+          linkId: issued.linkId,
+        },
+        'the staff login link could not be delivered',
+      );
+      // the link stays issued and unreachable; the next press supersedes it
+      await answerQuietly(() =>
+        ctx.answerCallbackQuery({ text: ADMIN_TEXTS.linkFailed, show_alert: true }),
+      );
+      return;
+    }
+    await answerQuietly(() => ctx.answerCallbackQuery());
   });
 
   privateChats.callbackQuery(CONFIRM_CALLBACK_PATTERN, async (ctx) => {

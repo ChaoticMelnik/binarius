@@ -1,16 +1,23 @@
 import { and, eq } from 'drizzle-orm';
 import { GrammyError } from 'grammy';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AuditAction } from '@binarius/shared';
+import { sql } from 'drizzle-orm';
+import { AuditAction, LinkState } from '@binarius/shared';
 import {
   auditLog,
   completeLogin,
   confirmChallengeFromTelegram,
   failChallengeDelivery,
   hashToken,
+  inspectLoginLink,
+  issueLoginLink,
   markChallengeCodeSent,
+  STAFF_LOGIN_LINK_MAX_PER_WINDOW,
   staffLoginChallenges,
   StaffLoginChallengeStatus,
+  staffLoginLinks,
+  StaffLoginLinkStatus,
+  StaffStatus,
   startLoginChallenge,
 } from '@binarius/db';
 import {
@@ -28,12 +35,20 @@ import {
   codeFrom,
   commandUpdate,
   fakeLogger,
+  inlineButtons,
   sentPayload,
   staffUser,
+  TEST_WEB_PUBLIC_URL,
   type CapturedApi,
   type FakeLogger,
 } from './testing';
-import { confirmCallbackData, createAdminBot, denyCallbackData, type AdminBot } from './telegram';
+import {
+  confirmCallbackData,
+  createAdminBot,
+  denyCallbackData,
+  LOGIN_LINK_CALLBACK,
+  type AdminBot,
+} from './telegram';
 import { ADMIN_TEXTS } from './texts';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -55,7 +70,13 @@ let logger: FakeLogger;
 
 beforeEach(() => {
   logger = fakeLogger();
-  admin = createAdminBot({ token: '1:token', db: tmp.db, logger, botInfo: ADMIN_BOT_INFO });
+  admin = createAdminBot({
+    token: '1:token',
+    db: tmp.db,
+    logger,
+    botInfo: ADMIN_BOT_INFO,
+    webPublicUrl: TEST_WEB_PUBLIC_URL,
+  });
   api = captureApi(admin.bot);
 });
 
@@ -87,19 +108,228 @@ const actionsFor = async (staffId: string) =>
       .where(eq(auditLog.actorId, staffId))
   ).map((row) => row.action);
 
-describe('/start', () => {
-  // the only way a staff member learns the id their account has to be created with
-  it('answers with the sender’s own Telegram id', async () => {
-    const from = staffUser(4242);
-    await admin.bot.handleUpdate(commandUpdate('/start', from));
+const auditCount = async () =>
+  (await tmp.db.select({ n: sql<number>`count(*)::int` }).from(auditLog))[0]?.n ?? 0;
 
-    expect(sentPayload(api.calls, 'sendMessage')?.text).toBe(ADMIN_TEXTS.start('4242'));
+const refusalsFor = (staffId: string) =>
+  tmp.db
+    .select({ payload: auditLog.payload })
+    .from(auditLog)
+    .where(
+      and(eq(auditLog.actorId, staffId), eq(auditLog.action, AuditAction.StaffLoginLinkRefused)),
+    );
+
+// a stranger's id: no staff row carries it
+const STRANGER = 4242;
+
+describe('/start', () => {
+  it('offers an active staff member the login button', async () => {
+    const staff = await seedStaff(tmp.db);
+    await admin.bot.handleUpdate(commandUpdate('/start', staffUser(staff.telegramUserId)));
+
+    const payload = sentPayload(api.calls, 'sendMessage');
+    expect(payload?.text).toBe(ADMIN_TEXTS.start);
+    expect(inlineButtons(payload)).toEqual([
+      { text: ADMIN_TEXTS.linkButton, callback_data: LOGIN_LINK_CALLBACK },
+    ]);
     expect(api.calls).toHaveLength(ADMIN_HANDLER_CALLS.start);
+  });
+
+  // one template for everyone else, carrying the sender's own id: the first-setup step that
+  // learns the id to create the account with keeps working, and the answer says nothing about
+  // whether an account exists
+  it('answers a stranger and a disabled account with the same refusal and no button', async () => {
+    const disabled = await seedStaff(tmp.db, { status: StaffStatus.Disabled });
+    const before = await auditCount();
+
+    await admin.bot.handleUpdate(commandUpdate('/start', staffUser(STRANGER)));
+    const strangerCalls = api.calls.splice(0);
+    expect(await auditCount()).toBe(before);
+    await admin.bot.handleUpdate(commandUpdate('/start', staffUser(disabled.telegramUserId)));
+
+    const stranger = sentPayload(strangerCalls, 'sendMessage');
+    const known = sentPayload(api.calls, 'sendMessage');
+    expect(stranger?.text).toBe(ADMIN_TEXTS.noAccess(String(STRANGER)));
+    expect(known?.text).toBe(ADMIN_TEXTS.noAccess(String(disabled.telegramUserId)));
+    expect(String(known?.text).replace(String(disabled.telegramUserId), '<id>')).toBe(
+      String(stranger?.text).replace(String(STRANGER), '<id>'),
+    );
+    expect([stranger?.reply_markup, known?.reply_markup]).toEqual([undefined, undefined]);
+    expect([strangerCalls.length, api.calls.length]).toEqual([
+      ADMIN_HANDLER_CALLS.start,
+      ADMIN_HANDLER_CALLS.start,
+    ]);
+    // owner's answer В5: a row for the known account only
+    expect((await refusalsFor(disabled.staffId)).map((row) => row.payload)).toEqual([
+      { reason: 'disabled', via: 'start' },
+    ]);
+  });
+
+  // the row is written after the reply has gone, so the reply does not wait on it
+  it('writes the disabled account’s row only after the reply was sent', async () => {
+    const disabled = await seedStaff(tmp.db, { status: StaffStatus.Disabled });
+    const rowsDuringSend: number[] = [];
+    api.answers.set('sendMessage', async () => {
+      rowsDuringSend.push((await refusalsFor(disabled.staffId)).length);
+      return true;
+    });
+
+    await admin.bot.handleUpdate(commandUpdate('/start', staffUser(disabled.telegramUserId)));
+
+    expect(rowsDuringSend).toEqual([0]);
+    expect(await refusalsFor(disabled.staffId)).toHaveLength(1);
+  });
+
+  // a reply Telegram refused changes nothing about what happened: the row is still written
+  it('records the disabled account’s refusal even when the reply fails', async () => {
+    const disabled = await seedStaff(tmp.db, { status: StaffStatus.Disabled });
+    api.apiErrors.set('sendMessage', {
+      ok: false,
+      error_code: 403,
+      description: 'bot was blocked',
+    });
+
+    await admin.bot.handleUpdate(commandUpdate('/start', staffUser(disabled.telegramUserId)));
+
+    expect(await refusalsFor(disabled.staffId)).toHaveLength(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.objectContaining({ name: 'GrammyError' }) }),
+      'the staff bot refusal could not be delivered',
+    );
   });
 
   it('ignores a group chat, where one update cannot name one person', async () => {
     await admin.bot.handleUpdate(commandUpdate('/start', staffUser(4242), 'supergroup'));
     expect(api.calls).toEqual([]);
+  });
+});
+
+// docs/staff-login.md → Logging in by a link from the bot (#448)
+describe('the login link button', () => {
+  const LINK_PREFIX = `${TEST_WEB_PUBLIC_URL}/admin/login/link/`;
+  const tokenIn = (text: unknown): string => {
+    const at = String(text).indexOf(LINK_PREFIX);
+    const token =
+      at < 0
+        ? undefined
+        : /^[A-Za-z0-9_-]{43}/.exec(String(text).slice(at + LINK_PREFIX.length))?.[0];
+    if (token === undefined) throw new Error(`no login link in: ${String(text)}`);
+    return token;
+  };
+  const allLogged = () =>
+    JSON.stringify([logger.info.mock.calls, logger.warn.mock.calls, logger.error.mock.calls]);
+
+  it('sends the link without a preview, then answers the button', async () => {
+    const staff = await seedStaff(tmp.db);
+
+    await admin.bot.handleUpdate(
+      callbackUpdate(LOGIN_LINK_CALLBACK, staffUser(staff.telegramUserId)),
+    );
+
+    expect(api.calls.map((call) => call.method)).toEqual(['sendMessage', 'answerCallbackQuery']);
+    expect(api.calls).toHaveLength(ADMIN_HANDLER_CALLS.link);
+    const payload = sentPayload(api.calls, 'sendMessage');
+    expect(payload?.link_preview_options).toEqual({ is_disabled: true });
+    const token = tokenIn(payload?.text);
+    expect(payload?.text).toBe(ADMIN_TEXTS.link(`${LINK_PREFIX}${token}`));
+    // the token in the message is the one whose hash was stored, and it is live
+    expect(await inspectLoginLink(tmp.db, token)).toBe(LinkState.Live);
+    const [row] = await tmp.db
+      .select({ staffId: staffLoginLinks.staffId })
+      .from(staffLoginLinks)
+      .where(eq(staffLoginLinks.tokenHash, hashToken(token)));
+    expect(row?.staffId).toBe(staff.staffId);
+    expect(allLogged()).not.toContain(token);
+  });
+
+  it('refuses a stranger with the /start refusal and records nothing', async () => {
+    const before = await auditCount();
+
+    await admin.bot.handleUpdate(callbackUpdate(LOGIN_LINK_CALLBACK, staffUser(STRANGER)));
+
+    expect(sentPayload(api.calls, 'sendMessage')?.text).toBe(
+      ADMIN_TEXTS.noAccess(String(STRANGER)),
+    );
+    expect(api.calls.map((call) => call.method)).toEqual(['sendMessage', 'answerCallbackQuery']);
+    expect(await auditCount()).toBe(before);
+  });
+
+  // a button left in an old message after the account was disabled
+  it('refuses a disabled account, records it after the reply and issues nothing', async () => {
+    const disabled = await seedStaff(tmp.db, { status: StaffStatus.Disabled });
+    const rowsDuringSend: number[] = [];
+    api.answers.set('sendMessage', async () => {
+      rowsDuringSend.push((await refusalsFor(disabled.staffId)).length);
+      return true;
+    });
+
+    await admin.bot.handleUpdate(
+      callbackUpdate(LOGIN_LINK_CALLBACK, staffUser(disabled.telegramUserId)),
+    );
+
+    expect(sentPayload(api.calls, 'sendMessage')?.text).toBe(
+      ADMIN_TEXTS.noAccess(String(disabled.telegramUserId)),
+    );
+    expect(sentPayload(api.calls, 'sendMessage')?.reply_markup).toBeUndefined();
+    expect(rowsDuringSend).toEqual([0]);
+    expect((await refusalsFor(disabled.staffId)).map((row) => row.payload)).toEqual([
+      { reason: 'disabled', via: 'button' },
+    ]);
+    expect(
+      await tmp.db
+        .select()
+        .from(staffLoginLinks)
+        .where(eq(staffLoginLinks.staffId, disabled.staffId)),
+    ).toEqual([]);
+  });
+
+  it('answers the rate limit with an alert and sends no message', async () => {
+    const staff = await seedStaff(tmp.db);
+    for (let press = 1; press <= STAFF_LOGIN_LINK_MAX_PER_WINDOW; press += 1) {
+      await issueLoginLink(tmp.db, { telegramUserId: staff.telegramUserId });
+    }
+
+    await admin.bot.handleUpdate(
+      callbackUpdate(LOGIN_LINK_CALLBACK, staffUser(staff.telegramUserId)),
+    );
+
+    expect(callsTo(api.calls, 'sendMessage')).toEqual([]);
+    expect(sentPayload(api.calls, 'answerCallbackQuery')).toMatchObject({
+      text: ADMIN_TEXTS.linkRateLimited,
+      show_alert: true,
+    });
+  });
+
+  // the URL is the credential for five minutes: the failure line names the link by id only
+  it('says so when the link cannot be delivered, and logs neither the token nor the URL', async () => {
+    const staff = await seedStaff(tmp.db);
+    api.apiErrors.set('sendMessage', {
+      ok: false,
+      error_code: 403,
+      description: 'bot was blocked by the user',
+    });
+
+    await admin.bot.handleUpdate(
+      callbackUpdate(LOGIN_LINK_CALLBACK, staffUser(staff.telegramUserId)),
+    );
+
+    expect(sentPayload(api.calls, 'answerCallbackQuery')).toMatchObject({
+      text: ADMIN_TEXTS.linkFailed,
+      show_alert: true,
+    });
+    const token = tokenIn(sentPayload(api.calls, 'sendMessage')?.text);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ linkId: expect.any(String) }),
+      'the staff login link could not be delivered',
+    );
+    expect(allLogged()).not.toContain(token);
+    expect(allLogged()).not.toContain('/admin/login/link/');
+    // issued and unreachable; the next press supersedes it
+    const [row] = await tmp.db
+      .select({ status: staffLoginLinks.status })
+      .from(staffLoginLinks)
+      .where(eq(staffLoginLinks.tokenHash, hashToken(token)));
+    expect(row?.status).toBe(StaffLoginLinkStatus.Issued);
   });
 });
 
@@ -356,6 +586,7 @@ describe('polling', () => {
       db: tmp.db,
       logger: fakeLogger(),
       botInfo: ADMIN_BOT_INFO,
+      webPublicUrl: TEST_WEB_PUBLIC_URL,
     });
     const captured = captureApi(running.bot);
     // the real transport waits ADMIN_POLLING_TIMEOUT_S for updates; a long poll that answered
@@ -376,7 +607,12 @@ describe('polling', () => {
 
   // the same path production takes on a bad token: getMe, not getUpdates
   it('survives a token Telegram refuses, and stop() still resolves', async () => {
-    const failing = createAdminBot({ token: '1:bad', db: tmp.db, logger });
+    const failing = createAdminBot({
+      token: '1:bad',
+      db: tmp.db,
+      logger,
+      webPublicUrl: TEST_WEB_PUBLIC_URL,
+    });
     const captured = captureApi(failing.bot);
     captured.apiErrors.set('getMe', {
       ok: false,

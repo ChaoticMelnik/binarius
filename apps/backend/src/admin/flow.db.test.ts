@@ -13,6 +13,7 @@ import {
   callbackUpdate,
   captureApi,
   codeFrom,
+  commandUpdate,
   fakeLogger,
   inlineButtons,
   sentPayload,
@@ -60,6 +61,7 @@ beforeAll(async () => {
     db: tmp.db,
     logger: fakeLogger(),
     botInfo: ADMIN_BOT_INFO,
+    webPublicUrl: ORIGIN,
   });
   api = captureApi(adminBot.bot);
 
@@ -330,6 +332,56 @@ describe('a staff member logs in, looks at the sessions and logs out', () => {
       cookies: { admin_session: ownerSession },
     });
     expect([ownerNow.statusCode, ownerNow.headers.location]).toEqual([302, '/admin/login']);
+  });
+});
+
+// #448: the bot's link, opened in a browser, through web and a listening backend
+describe('a staff member logs in by the link from the bot', () => {
+  it('walks /start, the button, the page and the POST, and the link is dead after', async () => {
+    const staff = await seedStaff(tmp.db);
+    const before = api.calls.length;
+
+    await adminBot.bot.handleUpdate(commandUpdate('/start', staffUser(staff.telegramUserId)));
+    const [button] = inlineButtons(sentPayload(api.calls.slice(before), 'sendMessage'));
+    expect(button?.callback_data).toBe('sl:l');
+
+    const pressed = api.calls.length;
+    await adminBot.bot.handleUpdate(
+      callbackUpdate(button?.callback_data ?? '', staffUser(staff.telegramUserId)),
+    );
+    const text = String(sentPayload(api.calls.slice(pressed), 'sendMessage')?.text);
+    const url = new URL(/https?:\/\/\S+/.exec(text)?.[0] ?? 'http://missing');
+    // the link names the origin web checks a POST's Origin against
+    expect(url.origin).toBe(ORIGIN);
+
+    // the preview or a prefetch: nothing is spent
+    const page = await web.inject({ method: 'GET', url: url.pathname });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain('Войти');
+    expect(await entries(staff.staffId)).toHaveLength(1);
+
+    const spent = await web.inject({ method: 'POST', url: url.pathname, ...form({}) });
+    expect([spent.statusCode, spent.headers.location]).toEqual([303, '/admin/sessions']);
+    const session = cookieValue(spent, 'admin_session');
+    expect(session).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+    const sessions = await web.inject({
+      method: 'GET',
+      url: '/admin/sessions',
+      cookies: { admin_session: session ?? '' },
+    });
+    expect(sessions.statusCode).toBe(200);
+    expect(sessions.body).toContain(staff.login);
+
+    const again = await web.inject({ method: 'GET', url: url.pathname });
+    expect(again.statusCode).toBe(410);
+    expect(again.body).toContain('Ссылка уже использована');
+
+    expect((await entries(staff.staffId)).map((entry) => entry.action)).toEqual([
+      AuditAction.StaffLoginLinkIssued,
+      AuditAction.StaffLoginLinkCompleted,
+      AuditAction.StaffSessionsViewed,
+    ]);
   });
 });
 

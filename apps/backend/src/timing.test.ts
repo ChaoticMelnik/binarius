@@ -105,6 +105,14 @@ describe('backend shutdown timing', () => {
   it('no longer forwards REAL_TRADING_ENABLED to the backend', () => {
     expect(composeServiceEnvValue(composeYaml, 'backend', 'REAL_TRADING_ENABLED')).toBeUndefined();
   });
+
+  // the staff bot's login link (#448) must name the origin `web` checks a POST's Origin against:
+  // two defaults that drift apart make every link a 403
+  it('gives the backend the same WEB_PUBLIC_URL as web', () => {
+    const backend = composeServiceEnvValue(composeYaml, 'backend', 'WEB_PUBLIC_URL');
+    expect(backend).toMatch(/^\$\{WEB_PUBLIC_URL:-[^}]+\}$/);
+    expect(backend).toBe(composeServiceEnvValue(composeYaml, 'web', 'WEB_PUBLIC_URL'));
+  });
 });
 
 describe('broker balance timing', () => {
