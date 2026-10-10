@@ -333,6 +333,8 @@ describe('a settle that fails', () => {
     ]);
     const failed = notSettled(logs());
     expect(failed).toHaveLength(1);
+    // identity only: neither the failed SQL nor the database's message
+    expect(JSON.stringify(failed)).not.toContain('notification_jobs');
     expect(JSON.stringify(failed)).not.toContain('settle refused');
     await mailing.stop();
   });
