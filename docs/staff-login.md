@@ -28,14 +28,70 @@ do, and what is written down. Issue #68.
 
 A session lives **24 hours** at most, and dies after **60 minutes** with no admin request.
 
+## Logging in by a link from the bot (#448)
+
+A second way in, beside the password and the code — not instead of it (owner's decision
+2026-10-10): the password flow stays as the fallback for when the bot is unreachable.
+
+1. **`/start`.** The staff bot looks the sender up by the Telegram account the update came from
+   (`findStaffByTelegram`, one index lookup). An active staff member gets «Войти в админку».
+   Everyone else — nobody's account, or a disabled one — gets one refusal, «Доступа нет», with
+   the sender's own Telegram id and no button: the same text for both, so the answer says
+   nothing about whether an account exists, and the id is still how the first setup learns it
+   (Bringing it up the first time, step 5).
+2. **The button** (`sl:l`, no id in it). `issueLoginLink` takes the `staff` row of the account
+   the update came from `FOR NO KEY UPDATE`, supersedes the staff member's previous unused link,
+   and inserts a new row in `staff_login_links`: 32 random bytes as base64url, of which only the
+   SHA-256 is stored, valid for **5 minutes** by the database's clock. The bot sends
+   `<WEB_PUBLIC_URL>/admin/login/link/<token>` as a plain-text message with the link preview
+   disabled, then answers the button. A password lockout (`locked_until`) does not shut this
+   path (owner's answer В4).
+3. **Opening it.** `GET /admin/login/link/<token>` on `web` checks the token against
+   `STAFF_LOGIN_LINK_TOKEN_PATTERN` and asks `POST /admin/auth/link/inspect`: a single SELECT
+   that spends nothing and writes no row, so Telegram's preview, a messenger's prefetch or a
+   browser's prerender cannot use the link up. A live link shows a page with «Войти»; a used, an
+   expired or an otherwise dead one shows its refusal (410).
+4. **«Войти».** The page's form posts back to the same path. The POST passes the `Origin` check
+   every POST of `web` passes (#241), and `POST /admin/auth/link/complete` spends the link in one
+   CAS: the link is still `issued`, inside its five minutes, and its owner is active. On a match
+   the backend creates a `staff_sessions` row — the same writer as the code login
+   (`insertStaffSession`), the same 24 hours / 60 minutes — and `web` sets the same cookie and
+   goes to `/admin/sessions`. The token reaches the backend in the request body, never in a path.
+
+A link is single-use: the second open of a link that logged someone in says «Ссылка уже
+использована» however late it is. A press of the button supersedes the previous link
+(«Ссылка недействительна»); the CLI's `disable` and `reset-password` and a staff member's own
+password change revoke an unused one in the same transaction as the rest (Accounts). Revoking one
+session from the sessions page does not touch links: that is one session, not the credentials.
+
+Accepted:
+
+- The link is one factor — the staff member's Telegram account — without the password (owner's
+  decisions 1–2). Whoever holds that Telegram session can log in within five minutes of a press;
+  `staff disable` is the way to stop it.
+- The link stays in the Telegram chat and passes Telegram's servers. After a login or five
+  minutes it is dead.
+- A reverse proxy's access log, if it is on (Caddy on the pilot), records the path with the
+  token. `web` logs no request line (`disableRequestLogging`); the repository has no proxy
+  configuration, so turning that log off or filtering it is the deployer's step. A logged token is
+  dead after its use or its five minutes.
+- `staff_login_link_issued` is written before the message is sent. When the send fails the row
+  is there and nobody got the link: the `warn` line says so, and the next press supersedes it.
+- Rows are not swept: their number is the number of presses. Falsifiable: fewer than 1000 presses
+  a day across the staff; above that, a sweep like the challenges' `CHALLENGE_RETENTION`.
+- A timeout between `web` and the backend after the commit leaves the link used and no cookie set:
+  a retry answers «уже использована» and the staff member presses the button again; the orphan
+  session dies after 60 minutes idle — as with `completeLogin`.
+
 ## Trust boundaries
 
 | Boundary | What crosses it | What is checked |
 |---|---|---|
-| browser → `apps/web` | the form, the cookies | zod on every field; `Origin` on every POST — the pages send `Referrer-Policy: same-origin`, under which the browser puts the real Origin on its own form POSTs (under `no-referrer` it sends `Origin: null`, which is refused — #241); `SameSite=Lax`, `HttpOnly`, `Secure` when the origin is https |
+| browser → `apps/web` | the form, the cookies, the login link's token in the path | zod on every field; the link's token by `STAFF_LOGIN_LINK_TOKEN_PATTERN` before the backend is asked, and its GET spends nothing — only the POST behind «Войти» does; `Origin` on every POST — the pages send `Referrer-Policy: same-origin`, under which the browser puts the real Origin on its own form POSTs (under `no-referrer` it sends `Origin: null`, which is refused — #241); `SameSite=Lax`, `HttpOnly`, `Secure` when the origin is https |
 | `apps/web` → `apps/backend` | `Authorization: Bearer $ADMIN_WEB_TOKEN`, `X-Staff-Session` | the bearer opens `/admin/*` and nothing else; the session is checked in the database on every request |
-| `apps/backend` → Telegram | the invitation and the code | a bounded call; a refusal closes the challenge, so nobody waits out the window |
+| `apps/backend` → Telegram | the invitation, the code, the login link | a bounded call; a refusal closes the challenge, so nobody waits out the window |
 | Telegram → `apps/backend` | the button press | a CAS that joins `staff` on the Telegram account the update came from — the id in the button authorises nothing |
+| Telegram → `apps/backend` | `/start`, the login link button (#448) | the staff member is the one whose `telegram_user_id` is the update's sender; nothing in the button names anyone. Only the sender's own account can be asked about, and every refusal is one text |
 
 `ip` and `userAgent` are what the web process saw, and the backend records them as given. Behind
 a reverse proxy that is the proxy's address until `trustProxy` is configured (#4).
@@ -50,7 +106,7 @@ query from there would be a read with no audit row behind it. `no-db-access.test
 |---|---|---|
 | `ADMIN_BOT_TOKEN` | `backend` | **A second bot**, from @BotFather. Not `TELEGRAM_BOT_TOKEN`: the backend reads both — it sends the push after an OAuth login (#128) on the public bot's token without polling it — and refuses to start when they are equal. What that check prevents: one value in both is two pollers on one bot — Telegram answers `getUpdates` with 409 to the one it terminates, grammY rethrows 409 instead of retrying it (`grammy/out/bot.js`), and that poller stays dead; which of the two it is, is Telegram's to decide, and the two outcomes differ. If the loser is the public bot, its process logs the failure — the error's name, not its 409, is what `errorLogFields` carries there — and calls `exit(1)` (`apps/bot/src/lifecycle.ts`; under compose's `tsx watch` the container stays up anyway, #65), while the staff poller goes on working on the public bot's token and out of the public bot's chats: that branch does not fail closed. If the loser is the staff poller, the backend logs `the staff login bot stopped polling` with the 409, stays healthy with `isPolling()` false, and every admin login answers `503 telegram_unavailable` with a `polling_down` row — closed, and indistinguishable from a bad token (see «When Telegram is not reachable»). Either way the whole symptom is one line in one of the two logs. |
 | `ADMIN_WEB_TOKEN` | `backend`, `web` | The narrow shared secret between them. The backend refuses to start when it equals `INTERNAL_API_TOKEN`: the bearer comparator is the same on both sides, so one value in both would open the whole internal API to `web`. |
-| `WEB_PUBLIC_URL` | `web` | The origin the pages are served from — these and the Mini App login pages (#114, binodex-oauth.md → The Mini App pages). Checked against the `Origin` header on every POST, and decides whether the cookie may be `Secure`; compose also derives the default `BROKER_OAUTH_REDIRECT_URI` from it, so it is spelled exactly `scheme://host[:port]` — no whitespace, control or invisible format characters (a CRLF `.env` leaves a `\r`), `/`, `?`, `#`, `\`, `%`, `@` or dot-segments (compose appends `/oauth/callback` to it; `web` refuses to start otherwise). Scheme and host case, a default or zero-padded port, IPv4 shorthand and IDNA mapping of the host are accepted and normalised. Default `http://127.0.0.1:3001`. Called `ADMIN_PUBLIC_URL` before #114: compose refuses to start while the old name is still set in `.env` (the `init` guard on `web` in compose.yaml), so a stale name cannot fall back to the loopback default silently. |
+| `WEB_PUBLIC_URL` | `web`, `backend` | The origin the pages are served from — these and the Mini App login pages (#114, binodex-oauth.md → The Mini App pages). The backend reads it with the same parser for the login link its staff bot sends (#448), and refuses to start without it; compose gives both services the same value and default, tied by a test. Checked against the `Origin` header on every POST, and decides whether the cookie may be `Secure`; compose also derives the default `BROKER_OAUTH_REDIRECT_URI` from it, so it is spelled exactly `scheme://host[:port]` — no whitespace, control or invisible format characters (a CRLF `.env` leaves a `\r`), `/`, `?`, `#`, `\`, `%`, `@` or dot-segments (compose appends `/oauth/callback` to it; `web` refuses to start otherwise). Scheme and host case, a default or zero-padded port, IPv4 shorthand and IDNA mapping of the host are accepted and normalised. Default `http://127.0.0.1:3001`. Called `ADMIN_PUBLIC_URL` before #114: compose refuses to start while the old name is still set in `.env` (the `init` guard on `web` in compose.yaml), so a stale name cannot fall back to the loopback default silently. |
 | `WEB_PORT` | compose | Host port for the pages, `127.0.0.1` only. Change it together with `WEB_PUBLIC_URL` — a test ties the two defaults, because a mismatch makes every form submission a 403. |
 
 Both tokens are REQUIRED: compose refuses to start while either is empty, and a CI step checks
@@ -72,13 +128,14 @@ docker compose exec backend pnpm --filter @binarius/backend staff disable --logi
 ```
 
 `disable` and `reset-password` invalidate everything issued under the old credentials in one
-transaction, in the order `staff → challenges → sessions`: open challenges are closed and live
-sessions revoked, so a challenge created a moment earlier cannot still walk through to a session.
+transaction, in the order `staff → challenges → links → sessions`: open challenges are closed,
+unused login links (#448) revoked and live sessions revoked, so a challenge or a link issued a
+moment earlier cannot still walk through to a session. The CLI prints the three counts.
 
 A login already in flight neither slips past that nor breaks it. The two serialize on the
-challenge row `completeLogin` holds until it commits: either the CLI closes that challenge first
-and the login, once it stops waiting, finds it closed under it, or the CLI waits there and
-afterwards sees the session the login committed. The revocation is stamped with
+challenge row `completeLogin` holds until it commits — or the link row `completeLinkLogin` holds:
+either the CLI closes that row first and the login, once it stops waiting, finds it closed under
+it, or the CLI waits there and afterwards sees the session the login committed. The revocation is stamped with
 `clock_timestamp()` rather than `now()` for that second case: `now()` is the transaction's start,
 a session committed by a login that began later carries a `created_at` after it, and
 `staff_sessions_revoked_after_created_check` would reject that, aborting the whole operation and
@@ -119,7 +176,8 @@ schema for the backend and for the web page that calls it (#79). Three phases, a
 3. **A transaction** (`runAsStaff` with `lockStaff`) that takes the `staff` row first, then touches
    the session, then runs `applyStaffPasswordChange`: a CAS on the hash the KDF verified, with the
    account active and not locked. On success the new hash is written, the failure counter and the
-   lockout are cleared, open challenges are closed, and every other session of the staff member
+   lockout are cleared, open challenges are closed, unused login links are revoked, and every other
+session of the staff member
    that is not revoked and still within its absolute lifetime — idle-expired ones included, the
    CLI's definition — is revoked with `revoked_by_staff_id` set to the staff member. The session
    that made the change stays, so its cookie stays valid. The answer is
@@ -153,14 +211,20 @@ backend is asked, and never renders or logs the values.
 Every login attempt that reached the password check, every button press that matched a challenge,
 and every admin request performed under a live session writes a row in `audit_log`, in the same
 transaction as the thing it records: no row, no data (`runAsStaff`, `startLoginChallenge`,
-`completeLogin`, the Telegram CASes). Refusals before that point leave no row: a route ceiling
+`completeLogin`, the Telegram CASes, `issueLoginLink`, `completeLinkLogin`). Refusals before that
+point leave no row: a route ceiling
 (429), a malformed body (400), a full scrypt queue (429), a session token of the wrong shape or a
 session that is not live (401), a password change refused before its transaction (a token of the
 wrong shape, a session the pre-read finds not live, a body outside the schema, a full scrypt
 queue), a session id, or a user or intent card id, that is not a uuid,
 or a password form whose two entries differ or fail the schema (400),
 which `apps/web` refuses before the backend is asked, and a search query, a list filter or an
-audit filter outside its schema (400), which `apps/web` also refuses before asking. The actions are a closed list (`AuditAction`, enforced
+audit filter outside its schema (400), which `apps/web` also refuses before asking. The login link
+(#448) adds to those: its GET (inspect), a link token of the wrong shape (404 at `web`, 400 at the
+backend), a token nobody was issued, and the bot's refusal of a sender who is nobody's account —
+those go to the process log only (owner's answer В5: rows are about known staff members). The
+bot's refusal of a known disabled account is written after its reply has gone, so the reply takes
+the same time either way. The actions are a closed list (`AuditAction`, enforced
 by `audit_log_action_check`), and the payloads hold only named keys — never a password, a code,
 a token, a raw error object, or the login someone typed for an account that does not exist.
 
@@ -191,6 +255,9 @@ a token, a raw error object, or the login someone typed for an account that does
 | audit log listed or filtered | `audit_log_viewed` |
 | own password changed | `staff_password_changed` |
 | own password change refused: wrong current password, locked out, state changed under the KDF | `staff_password_change_failed` |
+| login link sent by the bot (#448) | `staff_login_link_issued` |
+| login link refused: the bot to a disabled account, the per-staff limit, or a used, expired, superseded or revoked link opened | `staff_login_link_refused` |
+| session created from a login link | `staff_login_link_completed` |
 
 The read pages behind the session, and what each of their rows carries, are in
 [admin-pages.md](admin-pages.md).
@@ -200,7 +267,10 @@ The read pages behind the session, and what each of their rows carries, are in
 Per process, because one backend replica is what the deployment runs; the lockout is per account
 and lives in the database.
 
-- 120 login requests and 300 confirm requests per minute, taken before the body is read.
+- 120 login requests and 300 confirm requests per minute, taken before the body is read; for
+  the login link, 300 inspect and 120 complete requests per minute, the same way.
+- 5 login links per staff member per 15 minutes; the sixth press answers with an alert and a
+  `rate_limited` row.
 - 5 attempts per unknown login name per 15 minutes.
 - 5 wrong passwords — at login or in the change form — lock the account for 15 minutes. The
   counter is written after the derivation, not before it: `PASSWORD_VERIFY_CONCURRENCY +
@@ -280,7 +350,8 @@ real Telegram. The first person to deploy it should walk this through once.
    (#75), so on a volume that has never been migrated — a fresh clone, a new deployment — step 6
    would otherwise fail with `relation "staff" does not exist`. The command is idempotent, so
    running it on an already-migrated volume is a no-op.
-5. **Learn your Telegram ID.** Send `/start` to the new bot. It answers with your own id.
+5. **Learn your Telegram ID.** Send `/start` to the new bot. It answers «Доступа нет» with your
+   own id.
 6. **Create an account**, with that id:
    ```bash
    docker compose exec backend pnpm --filter @binarius/backend staff create \
@@ -291,7 +362,10 @@ real Telegram. The first person to deploy it should walk this through once.
    bot should send the invitation naming your login and address.
 8. **Press «Подтвердить вход».** The bot sends a six-digit code; enter it. The sessions page
    should open and list your own session as «текущая».
-9. **Check the refusal path.** Log out, start a login again, and this time press **«Это не я»**.
+9. **Log in by the link** (#448). Log out, send `/start` again — the bot now offers «Войти в
+   админку». Press it: the bot sends a link without a preview. Open it, press «Войти», and the
+   sessions page opens. Open the same link again: «Ссылка уже использована».
+10. **Check the refusal path.** Log out, start a login again, and this time press **«Это не я»**.
    The code page should send you back to the login form saying the confirmation expired, and
    `audit_log` should hold a `staff_login_denied` row:
    ```bash
