@@ -588,10 +588,10 @@ describe('the Telegram side', () => {
     const second = await press();
     if (first === undefined || second === undefined) throw new Error('unreachable');
 
-    await markChallengeCodeSent(tmp.db, started.challengeId, first.code);
+    expect(await markChallengeCodeSent(tmp.db, started.challengeId, first.code)).toBe(false);
     expect((await challengeRow(started.challengeId)).codeSentAt).toBeNull();
 
-    await markChallengeCodeSent(tmp.db, started.challengeId, second.code);
+    expect(await markChallengeCodeSent(tmp.db, started.challengeId, second.code)).toBe(true);
     expect((await challengeRow(started.challengeId)).codeSentAt).not.toBeNull();
   });
 });
