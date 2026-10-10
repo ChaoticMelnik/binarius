@@ -52,6 +52,7 @@ import {
   tokenDeltaSchema,
   safeParseAdminTokenAdjustmentRequest,
   safeParseAdminTokenAdjustmentResponse,
+  UUID_PATTERN,
 } from './admin';
 import {
   checkTokenAdjustment,
@@ -163,6 +164,28 @@ describe('adminConfirmRequestSchema', () => {
     });
     expect(parsed.success).toBe(false);
   });
+
+  // `web` forwards the challenge cookie when it matches UUID_PATTERN; the schema must read the
+  // same set, or such a cookie loops through a 500 (#152)
+  it.each([
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    '00000000-0000-0000-0000-000000000001',
+    'AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA',
+  ])('accepts %s, which the web gate lets through, as a challenge id', (challengeId) => {
+    expect(UUID_PATTERN.test(challengeId)).toBe(true);
+    expect(
+      adminConfirmRequestSchema.safeParse({ ...base, challengeId, code: '123456' }).success,
+    ).toBe(true);
+  });
+
+  it.each(['000000000000400080000000000000000a', '{00000000-0000-4000-8000-00000000000a}'])(
+    'rejects %s as a challenge id',
+    (challengeId) => {
+      expect(
+        adminConfirmRequestSchema.safeParse({ ...base, challengeId, code: '123456' }).success,
+      ).toBe(false);
+    },
+  );
 });
 
 describe('wire views', () => {

@@ -235,7 +235,8 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
   // the staff member did: a rejected bearer, a body the contract forbids, an unreachable
   // backend. It is logged by identity and answered with an opaque 500, and no cookie is
   // touched — the session on the server is untouched too, so dropping it here would log
-  // someone out over our own bug.
+  // someone out over our own bug. The one exception is the confirm step's `400 validation`,
+  // whose input is the challenge cookie itself (#152).
   const internalFailure = (request: FastifyRequest, reply: FastifyReply, error: unknown): FastifyReply => {
     request.log.error(errorLogFields(error), 'the admin backend call could not be used');
     return sendHtml(reply, 500, noticePage(TEXTS.errorTitle, TEXTS.errorBody));
@@ -573,6 +574,16 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       if (answered?.status === 410) {
         // this attempt is over: the cookie points at nothing, and keeping it would loop the
         // staff member through a form that can only fail
+        return clearChallenge(reply).redirect('/admin/login?reason=expired', 303);
+      }
+      if (answered?.status === 400 && answered.code === AdminErrorCode.Validation) {
+        // the backend refused our own body: the two processes disagree on its shape (#152). The
+        // challenge cookie is the one input that comes back unchanged on every retry, so keeping
+        // it would loop the staff member through a form that can only fail
+        request.log.error(
+          { ...errorLogFields(error), status: 400, reason: AdminErrorCode.Validation },
+          'the backend refused the forwarded confirm as malformed',
+        );
         return clearChallenge(reply).redirect('/admin/login?reason=expired', 303);
       }
       if (answered?.status === 429) {
