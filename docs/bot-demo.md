@@ -21,8 +21,7 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
 ## Components
 
 - `apps/bot/src/demo-catalog.ts` — the check, with no Telegram and no texts:
-  `DEMO_ASSET_GROUPS`, `DEMO_DURATIONS_SEC`, `SIGNALS_DURATIONS_SEC` (#382), `DEMO_PAGE_SIZE`,
-  `groupOf`, `isOpen`, `pairsOf`,
+  `DEMO_DURATIONS_SEC`, `SIGNALS_DURATIONS_SEC` (#382), `DEMO_PAGE_SIZE`, `isOpen`, `pairsOf`,
   `openPairsOf`, `pageOf`, `pageIndexOf`, `durationOptions`, `checkDemoPair`, `checkDemoTrade`,
   `checkDemoCycle` (#379),
   `readDemoCatalog`, `readDemoTrade`, `readDemoCycle` (#379).
@@ -109,7 +108,7 @@ The callback data is at most 49 bytes (`demo:stake:2147483647:15:down:0123456789
 the Bot API 64.
 `demo:sig` is 8 bytes, `demo:sig:15` 11, `demo:l:2147483647:15` 20 and
 `demo:more:2147483647:15:down:n` 30 (#360, #379).
-`<group>` is one of `DEMO_ASSET_GROUPS`, never the broker's own string; `<page>` is up to four
+`<group>` is one of `PAIR_TYPE_GROUPS`, never the broker's own string; `<page>` is up to four
 digits; `<assetId>` is up to ten digits, parsed by `createTradeIntentRequestSchema.shape.assetId`
 (a positive int4, what #127 sends); `<sec>` is one of `DEMO_DURATIONS_SEC`, written into the
 pattern, so `demo:an:101:120`, `demo:more:101:60:up` and `demo:stake:101:120:up:0123456789ab`
@@ -160,8 +159,15 @@ no symbol or payout (#343), so the catalog gives both. A signal gets a button on
 `checkDemoCycle(catalog, assetId, sec, now)` is `ok` — the pair is listed, open on the bot's clock,
 takes that duration and pays at least the cycle floor (`MIN_CYCLE_PAYOUT_PCT` 80, #379; the
 scanners skip such pairs already, this is the press's own read), so the launch would not refuse it
-(a `min_timeframe` 15 pair has no button at 5 s). The order is the route's (the scanner's payout
-order, then id), not re-sorted. Each button is «EUR/USD OTC · ⬆️ · 85%» (`demo:l:<assetId>:<sec>`):
+(a `min_timeframe` 15 pair has no button at 5 s). Of those, `signalsShown` (#460) keeps at most
+`SIGNALS_LIST_SIZE` = 12 (2 × the six groups): first up to `SIGNALS_PER_GROUP` (2) of every group
+of `PAIR_TYPE_GROUPS`, the best by `comparePairsByPayout` (payout desc, then id), then the free
+places filled from the rest of all groups together by the same order. The list is grouped by type
+in `PAIR_TYPE_GROUPS` order (💱 currencies first), a fill pair sits in its own type's group, and
+inside a group the best payout comes first. Neither the route's order nor the catalog's matters
+(`demo.test.ts` → the choice of pairs, L1–L5). A pair that would be refused takes no place: its
+place goes to the next pair of its type. On `5s` the scanner covers at most 4 pairs a candle
+([signal.md → The scanner](signal.md#the-scanner-343)), so its list never fills. Each button is «EUR/USD OTC · ⬆️ · 85%» (`demo:l:<assetId>:<sec>`):
 the symbol, the scanner's direction as an arrow (a data mark like the payout, not a catalog text)
 and the payout; one per row, then «🔄 Обновить» (`demo:sig:<sec>`), «↩️ Длительность» (`demo:sig`)
 and «🧭 Выбрать пару вручную» (`demo:g`), each in its own row.
@@ -174,7 +180,7 @@ direction, since the session decides it per trade.
 
 | Outcome | What the bot shows |
 |---|---|
-| one or more pairs left after the join | `demoSignalsHeader` with the duration's label + the rows + refresh + durations + manual |
+| one or more pairs left after the join | `demoSignalsHeader` with the duration's label + up to 12 rows (`signalsShown`) + refresh + durations + manual |
 | none left (no signal, every one closed or delisted, the scanner's first candle after a start) | `demoSignalsEmpty` («📡 Для ⏱ 5 с сигналов сейчас нет — …») + refresh + durations + manual |
 | the catalog's three failures ([The check](#the-check)) | that row's text + «🔄 Повторить» (the pressed data) + manual; a stale catalog draws no list |
 | `readSignals` threw (unreachable, a non-2xx, a broken body) | «⚠️ Сервис временно недоступен…» + «🔄 Повторить» + manual; `warn` `trading signals not read` |
@@ -261,7 +267,7 @@ not a fresh catalog.
 ## Keyboards
 
 - **Types.** One button per type the catalog holds, two per row, in the order of
-  `DEMO_ASSET_GROUPS`: 💱 Валюты, 🛢 Сырьё, 📈 Акции, 💠 Криптовалюты, 📊 Индексы, 📁 Другие (any
+  `PAIR_TYPE_GROUPS` (`packages/shared/src/catalog.ts`, shared with the scanner, #460): 💱 Валюты, 🛢 Сырьё, 📈 Акции, 💠 Криптовалюты, 📊 Индексы, 📁 Другие (any
   broker type outside the five). A type with no pair that accepts a demo duration has no button; a
   type with such pairs but none open shows «· 0» and its press says «🔒 {type}: сейчас всё закрыто
   по расписанию».
