@@ -311,7 +311,9 @@ A payload is usable when it matches `START_PAYLOAD_PATTERN` (`^[A-Za-z0-9_-]{1,6
 Telegram documents for start parameters). Anything else — too long, a space, a plus sign,
 Cyrillic — is treated as no payload at all, without an error message: the user did not compose
 the link. The bot stores the string as it arrived; splitting it into campaign fields belongs to
-whoever generates the links. Referral prefixes are #31.
+whoever generates the links. A `ref_<code>` payload is a personal invite link (#115): it is stored
+here like any other, and when the same `/start` created the user it also records the inviter
+([referrals.md](referrals.md)).
 
 The same rule is enforced twice, in `startPayloadSchema` and in the CHECK constraint
 `users_acquisition_source_check`, which is generated from the same regex source. The two engines
@@ -858,8 +860,8 @@ written only when a step really did run out of time.
 - The bot's name and avatar — set by hand in @BotFather; `setMyName`/`setMyProfilePhoto` are not
   called (owner, 2026-10-02).
 - The staff bot's profile (`apps/backend/src/admin`, `ADMIN_BOT_TOKEN`) — not registered.
-- **#31** — referral start links; they take their own payload prefix, and the format is not
-  fixed here.
+- **#115** — personal start links `ref_<code>` and the invitation they record:
+  [referrals.md](referrals.md); the reward for an invitee is **#116**.
 - **#114** — the Mini App login and callback pages in `apps/web` behind the `web_app` button the
   bot no longer sends (#314); the `initData` check they rely on is the backend's (#113,
   binodex-oauth.md).

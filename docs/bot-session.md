@@ -216,7 +216,8 @@ because its last trade can still settle, and under it «🔁 Ещё сессия
 duration — drawn only when the view has `settings` and its duration is one the demo still offers
 (`durationOf`), so a session of before #313 gets none — then the end of the path (#350,
 ([bot-navigation.md](bot-navigation.md))): «📊 Новый анализ» on the same pair and duration (when the demo still offers
-it), «📡 К сигналам», «🏠 В меню»; without `settings` only «🏠 В меню». The tracker's edits redraw
+it), «📡 К сигналам», «👥 Пригласить друга» (#115, [referrals.md](referrals.md)), «🏠 В меню»;
+without `settings` only «👥 Пригласить друга» and «🏠 В меню». The tracker's edits redraw
 the keyboard from the view they show, so the stop button goes away and the rest appears when the
 session stops. A failed start, `sessionJustEnded`, leads back to the analysis and the menu; a failed
 refresh or stop offers the refresh and the menu, never the stop again.
@@ -359,7 +360,8 @@ final status. Sharing it is Telegram's own forwarding; a share button is #321.
   the bot's `ctx.me.username` from the press that started tracking.
 - **The keyboard** is the stopped status's without «🔄 Обновить» (which edits a message's text, and
   a photo has a caption): «🔁 Ещё сессия» while the demo offers the duration, «📊 Новый анализ»,
-  «📡 К сигналам», «🏠 В меню»; «🏠 В меню» alone without `settings` (`sessionCardKeyboard`).
+  «📡 К сигналам», «👥 Пригласить друга» (#115), «🏠 В меню»; «👥 Пригласить друга» and «🏠 В меню»
+  alone without `settings` (`sessionCardKeyboard`).
   «📊 Новый анализ» and «📡 К сигналам» edit the pressed message; under the card Telegram refuses
   that with «there is no text in the message to edit», `editRefusal` (`screen.ts`) reads it as
   gone, and the screen comes as a new message under the card (the analysis: «⏳», then its

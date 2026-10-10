@@ -38,11 +38,13 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
 
 - `packages/shared/src/bot-navigation.ts`: `DEMO_CALLBACK_DATA` (`demo`), `CONNECT_CALLBACK_DATA`
   (`connect`), `MENU_CALLBACK_DATA` (`menu`), `commandRetryCallbackData` (`cmd:account`,
-  `cmd:settings`) and its pattern, and `supportUrl()`. The bot and the backend's push build their
+  `cmd:settings`, `cmd:invite` since #115) and its pattern, and `supportUrl()`. The bot and the backend's push build their
   buttons from it, so a pushed button lands on the bot's handler.
 - `apps/bot/src/keyboards.ts`: `menuKeyboard`, `withMenu`, `demoKeyboard`, `supportKeyboard`,
   `retryKeyboard`, `backToAnalysisKeyboard`, `appendEndOfPath` (its «📡 К сигналам» carries the
-  path's duration, `demo:sig:<sec>`, since #382).
+  path's duration, `demo:sig:<sec>`, since #382; its `beforeMenu` rows go right above the menu);
+  since #115 `inviteButton` (`invite`), `statusCardKeyboard`, `withInvite` and `inviteKeyboard`
+  ([referrals.md](referrals.md)).
 - The labels are catalog entries: `menuButton` «🏠 В меню», `newAnalysisButton` «📊 Новый анализ»,
   `toSignalsButton` «📡 К сигналам»; reused: `demoRetryButton` «🔄 Повторить»,
   `stakeBackAnalysisButton` «↩️ Назад к анализу», `supportButton`, `demoButton`.
@@ -52,7 +54,9 @@ active account, the waiting link, the welcome. It does not unpin and pin the car
 that path is 2 backend and 5 Bot API calls, 50 s, the shutdown budget itself (`timing.ts`,
 `HANDLER_CALLS.menuButton` = 2 / 3). The card pinned stays the last `/start` or `/menu`.
 
-**«🔄 Повторить» of a command** (`cmd:account`, `cmd:settings`) runs the command again. `/start` and
+**«🔄 Повторить» of a command** (`cmd:account`, `cmd:settings`, `cmd:invite`) runs the command
+again. `/invite`'s read creates the user's code on first use and is idempotent, so it repeats as a
+read (#115). `/start` and
 `/menu` repeat as the menu (`menu`); a repeated `/start` does not carry its payload.
 
 ## The repeat
@@ -74,18 +78,20 @@ no repeat.
 |---|---|
 | welcome, `accountNone` | 🔗 Подключить (unchanged) |
 | `confirmPrompt`, push `Pending` | ✅ Подтвердить (unchanged) |
-| status card | 🎮 Демо-торговля (unchanged) |
+| status card | 🎮 Демо-торговля · 👥 Пригласить друга (#115) |
 | account card (`sendAccountCard`: the code, the confirm, the recheck) | 🎮 Демо-торговля |
 | push `Active` | 🎮 Демо-торговля |
 | push `Taken`, `ExchangeFailed`, `Mismatch` | 🔗 Подключить · 🏠 В меню |
 | `blocked` (bot, push, a confirm or login refusal, a trade or session refusal) | the support URL; in the stake picker the picker's way back under it |
 | `unavailable` after `/start`, `/menu`, «🏠 В меню» | 🔄 Повторить (`menu`) |
-| `unavailable` after `/account`, `/settings` | 🔄 Повторить (`cmd:…`) · 🏠 В меню |
+| `unavailable` after `/account`, `/settings`, `/invite` | 🔄 Повторить (`cmd:…`) · 🏠 В меню |
 | `unavailable` after the picker's way back (`settings`) | 🔄 Повторить (`settings`) · 🏠 В меню |
 | `unavailable` after a level set (a write) | 🏠 В меню |
 | `/account` with an active link | 🎮 Демо-торговля · 🏠 В меню |
 | `/support` | the support URL · 🏠 В меню |
 | `/help` | 🏠 В меню |
+| `/invite`, «👥 Пригласить друга» (#115) | 📤 Поделиться (a URL) · 🏠 В меню |
+| `inviteNeedsStart` (`/invite` before the first `/start`) | 🏠 В меню |
 | login: `emailPrompt`, `emailInvalid`, `codeRequestStale`, a refusal without the code buttons, `unavailable` | 🏠 В меню (the dialog is left as `/menu` leaves it) |
 | login: `codeSent`, `codeSentUnknown`, `codeInvalid`, a refusal with them | 📨 / ✏️ (unchanged) |
 | demo screens, the signals and launch screens (#320), the picker | their own keyboards (unchanged) |
@@ -97,10 +103,10 @@ no repeat.
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить статус while the tracker follows the message; its last edit at the deadline, and the message «🔄 Обновить статус» redraws (no tracker follows that one), add 🏠 В меню; a 404 while tracking leaves 🏠 В меню only |
 | trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 сделок (#360, on a duration the demo still offers) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
 | session status, live | 🔄 Обновить · ⏹ Остановить сессию; a 404 while tracking leaves 🏠 В меню only |
-| session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню; without `settings` only 🔄 Обновить · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |
+| session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 👥 Пригласить друга (#115) · 🏠 В меню; without `settings` only 🔄 Обновить · 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |
 | `/stop` (#122), one session stopped | the session's status keyboard (the two rows above) |
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
-| the session's summary card (#318, a photo) | 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`screen.ts`) |
+| the session's summary card (#318, a photo) | 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 👥 Пригласить друга (#115) · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 👥 Пригласить друга · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ». «📊 Новый анализ» and «📡 К сигналам» answer with a new message under the card: the photo's edit is refused as gone (`screen.ts`) |
 | `stakeInputInvalid` | the picker's way back |
 
 «📊 Новый анализ» opens the analysis of the same pair and duration (`demo:an:<assetId>:<sec>`), never
@@ -118,8 +124,8 @@ applies to what is sent after the deploy.
 ## Timing
 
 `HANDLER_CALLS.menuButton` = 2 / 3 (34 s): the answer, `recordStart`, `readTradingAccess`, the photo
-refused and the text card. `.commandRetry` = 1 / 2 (21 s): the answer, then `/account`'s or
-`/settings`' one read and one message. Neither moves `HANDLER_BUDGET_MS`. No other handler gains a
+refused and the text card. `.commandRetry` = 1 / 2 (21 s): the answer, then `/account`'s,
+`/settings`' or `/invite`'s one read and one message. Neither moves `HANDLER_BUDGET_MS`. No other handler gains a
 call: the keyboards ride on the messages already sent.
 
 ## Boundaries
