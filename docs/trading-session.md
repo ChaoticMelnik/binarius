@@ -772,7 +772,9 @@ docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to
   `grant_revoked` as a stop reason; #94: the orchestrator under more than one worker container
   (#93's lease covers the broker sockets only).
 - Real sessions: the schema takes `mode`, and `createTradingSession` refuses anything but `demo`
-  (`mode_not_allowed`); real sessions (#121/#135) lift that refusal with their own fence. The
+  (`mode_not_allowed`), and the start route refuses a user in real mode with the same code before
+  any account read (#121, [trading-mode.md](trading-mode.md)); real sessions (#327) lift that
+  refusal with their own fence. The
   `demo_only` refusal above it stays (#396). A real
   session row can only be written by hand (`seedTradingSession` in the tests).
 - The invariant is Architecture Rules → "Торговая сессия" in `.claude/skills/architect/SKILL.md`.
