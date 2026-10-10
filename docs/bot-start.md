@@ -311,7 +311,9 @@ A payload is usable when it matches `START_PAYLOAD_PATTERN` (`^[A-Za-z0-9_-]{1,6
 Telegram documents for start parameters). Anything else — too long, a space, a plus sign,
 Cyrillic — is treated as no payload at all, without an error message: the user did not compose
 the link. The bot stores the string as it arrived; splitting it into campaign fields belongs to
-whoever generates the links. A `ref_<code>` payload is a personal invite link (#115): it is stored
+whoever generates the links. The payload `share` comes from the link in the caption of a session
+card shared through «📤 Поделиться» (#321, [bot-session.md](bot-session.md#sharing-the-card-321)):
+it is stored like any other. A `ref_<code>` payload is a personal invite link (#115): it is stored
 here like any other, and when the same `/start` created the user it also records the inviter
 ([referrals.md](referrals.md)).
 
@@ -388,7 +390,8 @@ a send is refused with 403 (the link push after the callback, a mailing)
   back → recordTelegramSendFailure → markTelegramBlocked, as above
 ```
 
-The bot asks Telegram for `my_chat_member` (`ALLOWED_UPDATES` in `lifecycle.ts`), handles it in
+The bot asks Telegram for `my_chat_member` (`ALLOWED_UPDATES` in `lifecycle.ts`, beside `message`,
+`callback_query` and, since #321, `inline_query` and `chosen_inline_result`), handles it in
 private chats only, forwards `kicked` and `member` as Telegram spells them and ignores any other
 status; it decides nothing and sends nothing — a blocked chat could not receive it anyway. A
 repeated `kicked` keeps the first time and runs the cancel again, so a job created between two
