@@ -3,6 +3,8 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountHaltReason,
+  SESSION_SUMMARY_SUFFIX,
+  SessionSummaryErrorCode,
   TRADING_SESSIONS_PATH,
   TradeAction,
   TradeIntentStatus,
@@ -11,6 +13,8 @@ import {
   TradingSessionStatus,
   TradingSessionStopReason,
   decimalStringSchema,
+  safeParseSessionSummaryRefusal,
+  safeParseSessionSummaryResponse,
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   type BinaryPair,
@@ -670,13 +674,18 @@ describe('GET /trading/sessions/:id', () => {
 });
 
 // #337: the final status carries the balance after the last trade
-const sessionIntent = (seed: SeededAccount, sessionId: string, step: number) =>
+const sessionIntent = (
+  seed: SeededAccount,
+  sessionId: string,
+  step: number,
+  mode: TradeMode = TradeMode.Demo,
+) =>
   createSessionIntent(tmp.db, {
     sessionId,
     step,
     telegramUserId: seed.telegramUserId,
     brokerAccountId: seed.brokerAccountId,
-    mode: TradeMode.Demo,
+    mode,
     assetId: ASSET,
     amount: decimalStringSchema.parse('1'),
     action: TradeAction.Up,
@@ -691,8 +700,14 @@ async function submitted(intent: TradeIntentRow): Promise<TradeIntentRow> {
   }))!;
 }
 
-async function settled(seed: SeededAccount, sessionId: string, step: number, profit: string) {
-  const { intent } = await sessionIntent(seed, sessionId, step);
+async function settled(
+  seed: SeededAccount,
+  sessionId: string,
+  step: number,
+  profit: string,
+  mode: TradeMode = TradeMode.Demo,
+) {
+  const { intent } = await sessionIntent(seed, sessionId, step, mode);
   const taken = await submitted(intent);
   const open = openTradeFor(intent);
   await tmp.db.transaction((tx) =>
@@ -918,5 +933,117 @@ describe('POST /trading/sessions/:id/stop', () => {
       .from(tradeIntents)
       .where(eq(tradeIntents.id, intent.id));
     expect(row!.status).toBe(TradeIntentStatus.Queued);
+  });
+});
+
+describe('POST /trading/sessions/:id/summary (#318)', () => {
+  const summary = (
+    target: FastifyInstance,
+    id: string,
+    body: object,
+    headers: Record<string, string> = auth,
+  ) =>
+    target.inject({
+      method: 'POST',
+      url: `${TRADING_SESSIONS_PATH}/${id}${SESSION_SUMMARY_SUFFIX}`,
+      headers,
+      payload: body,
+    });
+  const sentAt = async (sessionId: string) =>
+    (
+      await tmp.db
+        .select({ at: tradingSessions.summarySentAt })
+        .from(tradingSessions)
+        .where(eq(tradingSessions.id, sessionId))
+    )[0]?.at;
+  const expectUnavailable = async (
+    response: { statusCode: number; json: () => unknown },
+    sessionId?: string,
+  ) => {
+    expect({ status: response.statusCode, body: response.json() }).toEqual({
+      status: 409,
+      body: { error: SessionSummaryErrorCode.Unavailable },
+    });
+    expect(safeParseSessionSummaryRefusal(response.json()).success).toBe(true);
+    if (sessionId !== undefined) expect(await sentAt(sessionId)).toBeNull();
+  };
+  const finishedIn = async (mode: TradeMode) => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, { mode });
+    await settled(seed, session.id, 1, '0.85', mode);
+    await settled(seed, session.id, 2, '-1', mode);
+    await stopTradingSession(tmp.db, {
+      id: session.id,
+      reason: TradingSessionStopReason.Completed,
+    });
+    return { ...seed, sessionId: session.id };
+  };
+
+  it.each([TradeMode.Demo, TradeMode.Real])(
+    'U1 the owner claims a finished %s session once, with no broker call',
+    async (mode) => {
+      const seed = await finishedIn(mode);
+      const target = appWith();
+      const response = await summary(target, seed.sessionId, {
+        telegramUserId: seed.telegramUserId,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(safeParseSessionSummaryResponse(response.json()).success).toBe(true);
+      expect(response.json()).toEqual({
+        summary: {
+          result: '-0.15000000',
+          trades: [
+            { profit: '0.85000000', openPrice: 1.08765, closePrice: 1.08712 },
+            { profit: '-1.00000000', openPrice: 1.08765, closePrice: 1.08712 },
+          ],
+        },
+      });
+      expect(refreshCalls).toHaveLength(0);
+      // U2: sent already
+      await expectUnavailable(
+        await summary(target, seed.sessionId, { telegramUserId: seed.telegramUserId }),
+      );
+    },
+  );
+
+  it("U3 another user's session answers as a missing one and stays unclaimed", async () => {
+    const seed = await finishedIn(TradeMode.Demo);
+    const other = await seedUser(tmp.db);
+    const target = appWith();
+    const foreign = await summary(target, seed.sessionId, {
+      telegramUserId: other.telegramUserId,
+    });
+    await expectUnavailable(foreign, seed.sessionId);
+    const missing = await summary(target, '00000000-0000-4000-8000-000000000000', {
+      telegramUserId: seed.telegramUserId,
+    });
+    expect(missing.json()).toEqual(foreign.json());
+  });
+
+  it('U4 a session not ready (active, then stopped with a live trade) is 409 and unclaimed', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settled(seed, session.id, 1, '0.85');
+    const target = appWith();
+    const body = { telegramUserId: seed.telegramUserId };
+    await expectUnavailable(await summary(target, session.id, body), session.id);
+    await sessionIntent(seed, session.id, 2);
+    await stopTradingSession(tmp.db, {
+      id: session.id,
+      reason: TradingSessionStopReason.UserStopped,
+    });
+    await expectUnavailable(await summary(target, session.id, body), session.id);
+  });
+
+  it('U5 a non-uuid id is 409, a bad body 400, no bearer 401', async () => {
+    const seed = await finishedIn(TradeMode.Demo);
+    const target = appWith();
+    await expectUnavailable(await summary(target, 'nope', { telegramUserId: seed.telegramUserId }));
+    expect((await summary(target, seed.sessionId, {})).statusCode).toBe(400);
+    expect(
+      (await summary(target, seed.sessionId, { telegramUserId: seed.telegramUserId }, {}))
+        .statusCode,
+    ).toBe(401);
+    expect(await sentAt(seed.sessionId)).toBeNull();
   });
 });

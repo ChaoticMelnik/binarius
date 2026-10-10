@@ -31,7 +31,12 @@ import type { TradeIntent, TradeIntentView } from './trading';
 import type { AccessTokenRefusal, AccessTokenRequest, AccessTokenResponse } from './access-token';
 import type { AccountHaltReason } from './oauth';
 import type { TradingAccessResponse } from './trading-access';
-import type { TradingSessionRefusal, TradingSessionView } from './trading-session';
+import type {
+  SessionSummaryRefusal,
+  SessionSummaryResponse,
+  TradingSessionRefusal,
+  TradingSessionView,
+} from './trading-session';
 import * as accessToken from './access-token';
 import * as account from './account';
 import * as admin from './admin';
@@ -419,6 +424,15 @@ describe('contract coverage (issue #6)', () => {
       | 'stake_below_minimum'
       | 'insufficient_demo_balance'
     >();
+  });
+
+  it('Session summary card (issue #318)', () => {
+    expectTypeOf<keyof SessionSummaryResponse>().toEqualTypeOf<'summary'>();
+    expectTypeOf<SessionSummaryResponse['summary']>().toEqualTypeOf<{
+      result: DecimalString;
+      trades: { profit: DecimalString; openPrice: number; closePrice: number }[];
+    }>();
+    expectTypeOf<SessionSummaryRefusal['error']>().toEqualTypeOf<'summary_unavailable'>();
   });
 
   it('root index re-exports every module', () => {

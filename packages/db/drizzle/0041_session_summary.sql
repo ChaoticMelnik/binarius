@@ -1,0 +1,1 @@
+ALTER TABLE "trading_sessions" ADD COLUMN "summary_sent_at" timestamp with time zone;
