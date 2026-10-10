@@ -321,14 +321,6 @@ failed publish, for example). The bot also publishes them at every start. What t
 The broker's Deposit and FTD postbacks arrive on `GET /postbacks/binodex/<secret>`, a route the
 backend registers only while `POSTBACK_URL_SECRET` is set. Each delivery is journaled and each
 payment becomes one deposit; nothing is credited yet (#386). Deposits are on the admin page
-«Депозиты»; what each delivery carried is read with the CLI, on the same migrated database as
-above:
-
-```bash
-docker compose exec backend pnpm --filter @binarius/backend deposit list
-docker compose exec backend pnpm --filter @binarius/backend deposit list --limit 100
-docker compose exec backend pnpm --filter @binarius/backend deposit show <payment_id>
-```
-
-The route, its answers, the cabinet setup and the migration's precondition are in
+«Депозиты»; what each delivery carried is in the `postback_deliveries` journal. The route, its
+answers, how to read the journal, the cabinet setup and the migration's precondition are in
 [docs/postbacks.md](docs/postbacks.md).

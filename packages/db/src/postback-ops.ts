@@ -1,13 +1,11 @@
-import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
   PostbackDeliveryOutcome,
   PostbackResponseOutcome,
-  POSTBACK_MACROS,
   PostbackSource,
   classifyPostback,
   normalizeDecimal,
-  type DecimalString,
   type PostbackEvent,
   type PostbackQuery,
   type PostbackRejectReason,
@@ -16,7 +14,6 @@ import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
 import { depositEvents } from './schema/deposit-events';
 import { notRejectedDelivery, postbackDeliveries } from './schema/postback-deliveries';
-import { users } from './schema/users';
 import type { Tx } from './trade-intent-ops';
 
 // What a repeated delivery disagreed on with the stored deposit; names only, never the values.
@@ -214,71 +211,4 @@ export async function attachDepositsToAccount(
         isNull(depositEvents.brokerAccountId),
       ),
     );
-}
-
-export type PostbackDeliveryRow = typeof postbackDeliveries.$inferSelect;
-
-// The journal, newest first, rejected rows included (the `deposit list` CLI).
-export async function listRecentPostbackDeliveries(
-  db: Db,
-  limit: number,
-): Promise<PostbackDeliveryRow[]> {
-  return db
-    .select()
-    .from(postbackDeliveries)
-    .orderBy(desc(postbackDeliveries.createdAt), desc(postbackDeliveries.id))
-    .limit(limit);
-}
-
-export interface DepositByPayment {
-  deposit:
-    | {
-        id: string;
-        brokerUserId: string;
-        amount: DecimalString;
-        currency: string | null;
-        status: string;
-        brokerAccountId: string | null;
-        telegramUserId: bigint | null;
-        createdAt: Date;
-      }
-    | undefined;
-  // the deposit's deliveries and the rejected ones that named this payment id, oldest first
-  deliveries: PostbackDeliveryRow[];
-}
-
-// One payment with every delivery that named it (the `deposit show` CLI).
-export async function readDepositByPayment(
-  db: Db,
-  { source, paymentId }: { source: PostbackSource; paymentId: string },
-): Promise<DepositByPayment> {
-  const [deposit] = await db
-    .select({
-      id: depositEvents.id,
-      brokerUserId: depositEvents.brokerUserId,
-      amount: depositEvents.amount,
-      currency: depositEvents.currency,
-      status: depositEvents.status,
-      brokerAccountId: depositEvents.brokerAccountId,
-      telegramUserId: users.telegramUserId,
-      createdAt: depositEvents.createdAt,
-    })
-    .from(depositEvents)
-    .leftJoin(users, eq(users.id, depositEvents.userId))
-    .where(and(eq(depositEvents.source, source), eq(depositEvents.paymentId, paymentId)));
-  const rejectedForPayment = and(
-    eq(postbackDeliveries.source, source),
-    eq(postbackDeliveries.outcome, PostbackDeliveryOutcome.Rejected),
-    sql`${postbackDeliveries.payload} ->> ${POSTBACK_MACROS.paymentId} = ${paymentId}`,
-  );
-  const deliveries = await db
-    .select()
-    .from(postbackDeliveries)
-    .where(
-      deposit === undefined
-        ? rejectedForPayment
-        : or(eq(postbackDeliveries.depositEventId, deposit.id), rejectedForPayment),
-    )
-    .orderBy(postbackDeliveries.createdAt, postbackDeliveries.id);
-  return { deposit, deliveries };
 }
