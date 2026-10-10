@@ -84,12 +84,32 @@ the broker's deliveries; it bounds the writes of a holder of the secret.
 
 Logs: one `info` `postback received` per delivery with the outcome, the reason, the event and the
 postback id. The secret never enters our lines; Fastify's own lines (the request line, the
-not-found line) carry the url through `withoutSecrets` (`apps/backend/src/app.ts`), which replaces
-everything after the first `/postbacks` (any case) up to the query with `/redacted`: a logged url
-of this family reads `/postbacks/redacted?…`, whatever the template's typo (a doubled slash, an
-encoded `%2F`). A wrong-secret request writes one `warn` line and no row; a flood of them is
+not-found line, the proxy guard's line) carry the url through `withoutSecrets`
+(`apps/backend/src/app.ts`). It splits the url at the first raw `?`, decodes the path until it is
+stable (at most 4 passes) and replaces everything after the first `/postbacks` (any case) with
+`/redacted`, a decoded `?` or `#` included: a logged url of this family reads
+`/postbacks/redacted?…` for any spelling of the path, percent-encoding (`/p%6Fstbacks/…`, which the
+router does route here), doubled slashes and `%2F` included. A path that cannot be decoded, or is
+still changing after 4 passes, is logged as `/redacted`. A secret that lands in the query string
+(a template typo) is not masked. A wrong-secret request writes one `warn` line and no row; a flood of them is
 bounded only by Caddy and the host (accepted: at pilot traffic under 1 MB of log a day — if the
 log shows more, a refusal counter that logs once per window is the fix).
+
+### The proxy guard
+
+The backend answers a request that came through a reverse proxy only on the postback route.
+`buildApp` registers a root `onRequest` hook ahead of every route plugin: a request carrying any of
+`X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto` or `Forwarded` gets the not-found answer
+(404 `{"error":"not_found"}`, one `warn` `proxied request refused`) on every route except the one
+marked `config: { publicThroughProxy: true }` — `GET /postbacks/binodex/:secret`, the only such
+route. Why: Caddy's path matcher sees the decoded, cleaned path while the backend routes the raw
+one, so a `/postbacks/*` matcher let `/admin/users/..%2F..%2F..%2Fpostbacks%2Fx` through to
+`/admin/users/:id` (review round 2 of PR #442). Whatever a matcher lets through, only the
+postback route answers. Caddy sets `X-Forwarded-For` on every request it forwards and replaces a
+client's value (probed on 2.6.2, 2026-10-10); no internal caller (bot, web, worker, the compose
+healthcheck) sends any of these headers. A future internal caller that forwards one would be
+refused; the fix then is a decision about that header, not removing the guard.
+`apps/backend/src/postbacks/routes.db.test.ts` → «the proxy guard» runs every registered route.
 
 ## Attribution
 
@@ -147,12 +167,15 @@ A leaked secret lets anyone write journal rows at up to 600 a minute and `receiv
 ### The Caddy route (owner's step on the host)
 
 The pilot's Caddy proxies the domain to `web` only; the backend listens on 127.0.0.1:3000. The
-site block gains a `handle` for `/postbacks/*` (validated with `caddy validate` on the host's
-version, 2.6.2):
+site block gains a named matcher on the **raw** request URI:
 
 ```
 binarius.salescreativesads.com {
-    handle /postbacks/* {
+    @postback {
+        method GET
+        expression `{http.request.orig_uri}.matches("^/postbacks/binodex/[A-Za-z0-9_-]+([?].*)?$")`
+    }
+    handle @postback {
         reverse_proxy 127.0.0.1:3000
     }
     handle {
@@ -161,12 +184,33 @@ binarius.salescreativesads.com {
 }
 ```
 
-then `sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl
-reload caddy`. The backend becomes public for `/postbacks/*` only:
-`curl -s https://binarius.salescreativesads.com/postbacks/binodex/wrong` prints
-`{"error":"not_found"}` (the backend's JSON; web's 404 is an HTML page), and
-`curl -s -o /dev/null -w '%{http_code}\n' https://binarius.salescreativesads.com/health` stays
-web's 404. When `deploy/Caddyfile` exists (#146), the same `handle` block goes there.
+Why not `handle /postbacks/*`: `path` and `path_regexp` match Caddy's unescaped, cleaned path,
+while `reverse_proxy` forwards the raw URI, so `/admin/users/..%2F..%2F..%2Fpostbacks%2Fx` matched
+`/postbacks/*` and reached `/admin/users/:id`. `{http.request.orig_uri}` is the raw request target:
+the expression admits only the exact prefix, one segment of the secret's alphabet and an optional
+query, so `%`, `.`, `/` and another case never reach the backend; `method GET` keeps HEAD and every
+other method on web. The length bound stays the backend's (32-100). Probed on a `caddy:2.6.2`
+container against a Fastify 5.12.5 echo upstream (2026-10-10): the traversals through
+`/admin/users/:id`, `/trading/intents/:id` and `POST /admin/sessions/:id/revoke`, `%2f` lower case,
+`/p%6Fstbacks/…`, `//postbacks/…`, `/POSTBACKS/…`, `..` and `%2e%2e` forms, absolute-form targets,
+HEAD and POST all went to web; `/postbacks/binodex/<secret>` with and without a query went to the
+backend. The backend's proxy guard (above) holds even where a matcher would not.
+
+Then `sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl
+reload caddy`, and the checks (each `curl` from anywhere):
+
+```bash
+curl -s https://binarius.salescreativesads.com/postbacks/binodex/wrong
+# {"error":"not_found"} - the backend's JSON
+curl -s --path-as-is 'https://binarius.salescreativesads.com/admin/users/..%2F..%2F..%2Fpostbacks%2Fx' | grep -c '"error"'
+# 0 - web's page; a backend JSON {"error":...} means exposed: revert the Caddy edit and report
+curl -s --path-as-is 'https://binarius.salescreativesads.com/p%6Fstbacks/binodex/wrong' | grep -c '"error"'
+# 0
+curl -s -o /dev/null -w '%{http_code}\n' https://binarius.salescreativesads.com/health
+# web's 404
+```
+
+When `deploy/Caddyfile` exists (#146), the same block goes there.
 
 ### The cabinet setup (owner's step)
 
