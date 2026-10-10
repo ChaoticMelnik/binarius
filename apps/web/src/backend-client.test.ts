@@ -22,6 +22,7 @@ import {
   CLIENT_USER_AGENT_MAX_LENGTH,
   DepositEventStatus,
   INT4_MAX,
+  LinkState,
   MAX_SESSION_TRADES,
   NotificationLevel,
   safeParseAdminAuditResponse,
@@ -36,6 +37,7 @@ import {
   safeParseAdminDepositsResponse,
   safeParseAdminIntentResponse,
   safeParseAdminIntentsResponse,
+  safeParseAdminLinkInspectResponse,
   safeParseAdminLoginResponse,
   safeParseAdminOverviewResponse,
   safeParseAdminTokenAdjustmentResponse,
@@ -1054,6 +1056,15 @@ describe('body size', () => {
     } = {
       login: { parse: safeParseAdminLoginResponse, sample: { challengeId: UUID, expiresAt: AT } },
       confirm: {
+        parse: safeParseAdminConfirmResponse,
+        sample: { sessionToken: 'a'.repeat(43), expiresAt: AT },
+      },
+      inspectLoginLink: {
+        parse: safeParseAdminLinkInspectResponse,
+        sample: { state: longest(LinkState) },
+      },
+      // the confirm step's answer
+      completeLoginLink: {
         parse: safeParseAdminConfirmResponse,
         sample: { sessionToken: 'a'.repeat(43), expiresAt: AT },
       },

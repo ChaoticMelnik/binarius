@@ -12,6 +12,7 @@ import {
   NotificationLevel,
   OAuthErrorCode,
   PairsCatalogErrorCode,
+  REFERRAL_CODE_LENGTH,
   RULE_REFUSAL_REASONS,
   safeParseChatMemberResponse,
   safeParseConfirmLoginResponse,
@@ -20,10 +21,12 @@ import {
   safeParseEmailSendCodeResponse,
   safeParseNotificationLevelResponse,
   safeParsePairsCatalogResponse,
+  safeParseSessionSummaryResponse,
   safeParseTradeIntentView,
   safeParseTradingAccessResponse,
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
+  safeParseTradingSessionsStoppedResponse,
   safeParseTradingSignalResponse,
   safeParseTradingSignalsResponse,
   safeParseUserAccountResponse,
@@ -41,6 +44,7 @@ import {
   TrendDirection,
   USER_ACCOUNT_LIST_LIMIT,
   UserStatus,
+  userReferralResponseSchema,
   TradeAction,
   TradeIntentErrorCode,
   TradeMode,
@@ -1405,6 +1409,10 @@ describe('body size', () => {
     const ASSUMED_LONGEST_PAIR_STRING = 64;
     // false for a longer address: the OAuth path stores user.email as any string (oauth-ops.ts)
     const ASSUMED_LONGEST_EMAIL = 254;
+    // the sessions POST /trading/sessions/stop returns, one active session per account at most
+    // (trading_sessions_active_account_idx); false if a user has more than 10 linked accounts:
+    // broker_accounts bounds no count per user
+    const ASSUMED_USER_BROKER_ACCOUNTS = 10;
     // one text in GET /bot-texts; false for a text longer than Telegram's limit in 4-byte
     // characters: the CHECK allows it, the loader refuses it
     const ASSUMED_LONGEST_BOT_TEXT_BYTES = 4 * TELEGRAM_MESSAGE_LIMIT;
@@ -1483,8 +1491,10 @@ describe('body size', () => {
         won: NONNEGATIVE_INT,
         lost: NONNEGATIVE_INT,
         tied: NONNEGATIVE_INT,
+        profit: DECIMAL,
       },
       lastIntent: INTENT,
+      balance: { available: DECIMAL, ageSec: NONNEGATIVE_INT, current: false },
     };
     const PAIR = {
       id: INT,
@@ -1537,6 +1547,17 @@ describe('body size', () => {
             })),
             notificationLevel: longest(Object.values(NotificationLevel)),
             demoStake: DECIMAL,
+          },
+        },
+      },
+      // an active user's: a code where a blocked one has null
+      readReferral: {
+        parse: (input) => userReferralResponseSchema.safeParse(input),
+        sample: {
+          user: {
+            status: UserStatus.Active,
+            code: 'A'.repeat(REFERRAL_CODE_LENGTH),
+            invited: NONNEGATIVE_INT,
           },
         },
       },
@@ -1647,6 +1668,24 @@ describe('body size', () => {
       },
       readSession: { parse: safeParseTradingSessionResponse, sample: { session: SESSION } },
       stopSession: { parse: safeParseTradingSessionResponse, sample: { session: SESSION } },
+      stopSessions: {
+        parse: safeParseTradingSessionsStoppedResponse,
+        sample: { sessions: Array.from({ length: ASSUMED_USER_BROKER_ACCOUNTS }, () => SESSION) },
+      },
+      // the 2xx: the 409 summary_unavailable carries its code alone
+      claimSessionSummary: {
+        parse: safeParseSessionSummaryResponse,
+        sample: {
+          summary: {
+            result: DECIMAL,
+            trades: Array.from({ length: MAX_SESSION_TRADES }, () => ({
+              profit: DECIMAL,
+              openPrice: NUMBER,
+              closePrice: NUMBER,
+            })),
+          },
+        },
+      },
       // the bounds 409: larger than the 2xx's lone stake
       setDemoStake: {
         parse: safeParseDemoStakeRefusal,
