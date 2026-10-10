@@ -33,7 +33,7 @@ Spawn prompt — every phase gets these, in this order:
 
 **Failed or stalled phase.** When a phase agent fails or stalls (e.g. the stream watchdog), first make sure it has ended — its task notification reports `completed` or `failed`; if it is still running, stop it (`TaskStop`) or continue it, never run a second agent beside it, since a live agent can still post after the check. Then check on GitHub what it already did — issue comments, Pipeline Status, pushed commits, PR state — against what it was supposed to return. Only the missing part is redone: continue the agent, or spawn a fresh one with the done parts named as done. A blind re-spawn duplicates a posted plan or a status change (#56: the architect stalled after posting its Plan Update).
 
-**Merge relay.** The reviewer never merges when spawned; it returns its verdict and a merge request (PR, approved head, the id of the 6-pre Codex job or its skip line, the ready-to-merge comment URL or the classifier's refusal, checks, allowed methods). Tech-lead asks via `AskUserQuestion` immediately before this specific merge, runs `gh pr merge <N>` with the chosen allowed method only on an explicit yes — never `--admin` or another bypass — and then confirms `gh pr view <N> --json state,mergedAt` shows `MERGED`. After a Codex skip the reviewer posts the ready-to-merge comment with the skip line itself (reviewer Step 6b). When it returns that the permission classifier refused the comment (#258, 2026-10-06: a sub-agent's comment after a relayed skip was refused as a CI bypass), tech-lead posts the returned body from the main context. After the owner's explicit skip by day (Timeout policy), tech-lead continues the reviewer with the answer, and the reviewer posts the ready-to-merge comment with the owner's skip line (reviewer Step 6-pre item 4) the same way. The merge question names the skip, or the Codex job, and the open Minors.
+**Merge relay.** The reviewer never merges when spawned; it returns its verdict and a merge request (PR, approved head, the id of the 6-pre Codex job or its skip line, the ready-to-merge comment URL or the classifier's refusal, checks, allowed methods). Tech-lead asks via `AskUserQuestion` immediately before this specific merge, runs `gh pr merge <N>` with the chosen allowed method only on an explicit yes — never `--admin` or another bypass — and then confirms `gh pr view <N> --json state,mergedAt` shows `MERGED`. After a Codex skip the reviewer posts the ready-to-merge comment with the skip line itself (reviewer Step 6b). When it returns that the permission classifier refused the comment (#258, 2026-10-06: a sub-agent's comment after a relayed skip was refused as a CI bypass), tech-lead posts the returned body from the main context. After the owner's explicit skip by day (Timeout policy), tech-lead continues the reviewer with the answer, and the reviewer posts the ready-to-merge comment with the owner's skip line (reviewer Step 6-pre item 4); on a classifier refusal, tech-lead posts the returned body. The merge question names the skip, or the Codex job, and the open Minors.
 
 ---
 
@@ -63,7 +63,7 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 
 - [ ] Review comments are specific and actionable, not vague
 - [ ] Blockers/Majors were noted before any approval
-- [ ] Codex ran only at 6-pre (rounds with no Blocker/Major from 3b-3d and the checklist, and round 3); the last completed run is at the merged head, or the usage-limit skip line is in the review or ready-to-merge comment
+- [ ] Codex ran only where reviewer Step 6-pre and tech-lead's own 6-pre run say. The last completed run is at the merged head, or a skip line is accepted ("Whole-feature pass — check", by kind).
 - [ ] If a Blocker/Major was found: reviewer returned the issue to **Todo** before any re-implementation started; a Minor-only review did not
 - [ ] If clean: the ready-to-merge comment is posted (by the reviewer, or by the spawner after a classifier refusal), carries the skip line when Codex was skipped, and the reviewer did not self-approve
 - [ ] Every review round reviewed `gh pr diff` (the whole feature), never an iteration delta
@@ -71,9 +71,9 @@ After an issue moves to In Review or Done, or when asked to audit the process.
 
 ### Whole-feature pass — check
 
-The reviewer's final Codex pass (Step 6-pre, `Whole-feature pass` marker) covered exactly the approved diff. A skip line instead of a run (in the review, the ready-to-merge comment, or the docs PR body; texts in reviewer Step 6-pre item 4), by kind:
+The reviewer's final Codex pass (Step 6-pre, `Whole-feature pass` marker) covered exactly the approved diff. A skip line instead of a run (in the review, the ready-to-merge comment, the docs PR body, or tech-lead's PR comment from its own 6-pre run or the morning step; texts in reviewer Step 6-pre item 4), by kind:
 - **Usage limit:** `node "$COMPANION" status <id> --json | jq -r '.job.status, .job.summary'` prints `failed` and a summary matching `hit your usage limit`. If `status` answers "No job found" (the job was started from a review worktree that is gone, and jobs are keyed by working directory): `jq -r --arg id <id> '.jobs[]? | select(.id == $id) | .status, .summary' ~/.claude/plugins/data/codex-openai-codex/state/*/state.json`.
-- **The owner's skip** (by day, or the morning's «мержить без него»): recorded as an owner-approved deviation, not a Major; its source is the `AskUserQuestion` answer in this session.
+- **The owner's skip** (by day, the morning's «мержить без него», or after the failures of tech-lead's own 6-pre run): recorded as an owner-approved deviation, not a Major; its source is the `AskUserQuestion` answer in this session.
 
 Anything else is a Major audit finding. Otherwise find the newest completed job with the marker and re-hash:
 
@@ -91,7 +91,7 @@ git diff --no-color --no-ext-diff <b> <h> | shasum -a 256        # must equal <x
 gh pr view $PR --repo ChaoticMelnik/binarius --json headRefOid --jq .headRefOid   # must equal <h>
 ```
 
-`<h>` must be the head the LGTM comment approved — at the round limit, the head round 3 reviewed or, after a round-3 Blocker fix, the head of tech-lead's 6-pre rerun (Phase 4, iteration 3); for a stacked manager PR, the head of tech-lead's 6-pre rerun after the morning rebase — and the one that merged (the last line), and `<b>` a `main` commit that `<h>` descends from. No marker, a different head, or a different hash is a Major audit finding. `status` lists only this Claude session's jobs and the companion keeps the newest 50 per workspace, so run this check in the session that ran the pipeline. Jobs are also keyed by working directory: a run started from a review worktree is listed only by `status` run from that worktree's path (or its state directory under `~/.claude/plugins/data/codex-openai-codex/state/`), so the reviewer returns the job id and tech-lead re-hashes from the marker (#306, 2026-10-07).
+`<h>` must be the head the LGTM comment approved — at the round limit, the head round 3 reviewed; after tech-lead's own 6-pre run, that run's head — and the one that merged (the last line), and `<b>` a `main` commit that `<h>` descends from. No marker, a different head, or a different hash is a Major audit finding. `status` lists only this Claude session's jobs and the companion keeps the newest 50 per workspace, so run this check in the session that ran the pipeline. Jobs are also keyed by working directory: a run started from a review worktree is listed only by `status` run from that worktree's path (or its state directory under `~/.claude/plugins/data/codex-openai-codex/state/`), so the reviewer returns the job id and tech-lead re-hashes from the marker (#306, 2026-10-07).
 
 ### Audit proposals — check
 
@@ -256,7 +256,7 @@ Confirm: working tree clean; local `main` not behind `origin/main` (else `git pu
 
 **Preflight checks (mandatory, same phase):**
 
-1. **Codex** — `node "$COMPANION" setup --json` (companion path as in "Whole-feature pass — check"): `ready`, `auth.loggedIn`. Not ready → `Skill(skill: "codex:setup")` once; still not ready → STOP and ask the owner. Then the budget: `node "$COMPANION" status --all --json` — a recent job whose summary matches `hit your usage limit` (reviewer Step 6-pre item 4) does not stop or delay the pipeline: record `until <ДД.ММ HH:MM> (job <id>)` for the reviewer's spawn-prompt item 7 (the rule: `.claude/CLAUDE.md` → Codex — только финальное ревью перед мержем). An issue needs one run per round that reaches 6-pre (a clean round, and round 3 whatever it found), at most 3, plus tech-lead's rerun after a round-3 Blocker fix.
+1. **Codex** — `node "$COMPANION" setup --json` (companion path as in "Whole-feature pass — check"): `ready`, `auth.loggedIn`. Not ready → `Skill(skill: "codex:setup")` once; still not ready → STOP and ask the owner. Then the budget: `node "$COMPANION" status --all --json` — a recent job whose summary matches `hit your usage limit` (reviewer Step 6-pre item 4) does not stop or delay the pipeline: record `until <ДД.ММ HH:MM> (job <id>)` for the reviewer's spawn-prompt item 7 (the rule: `.claude/CLAUDE.md` → Codex — только финальное ревью перед мержем). An issue needs one run per review round that reaches 6-pre (at most 3), plus one per tech-lead's own 6-pre run, which repeats for every new head.
 2. **GitHub** — `gh auth status`; if stale, ask the owner to `gh auth login` / refresh. If the plan's files include `.github/workflows/*`: the token needs the `workflow` scope, or `origin` must be an SSH remote (`git remote -v`) — otherwise the push fails at the end of implementation.
 3. **Project CLAUDE.md on main** — `git diff origin/main -- .claude/CLAUDE.md` must be empty: the harness loads whatever is checked out, and a waiver living only on an unmerged branch was once acted on for a day.
 4. **Runtimes** — every runtime the acceptance criteria exercise is available locally at CI's version: Node from `.node-version` (`eval "$(fnm env)" && fnm use`), Postgres/Redis (`docker compose ps`), Docker/Compose/buildx if the issue touches images or compose; CLI plugins match what CI uses.
@@ -296,7 +296,7 @@ Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (
    - (b) re-plan from scratch: the architect writes a new plan against the current branch.
    Do not spawn the implementer until the owner picked one. Round 3 is the last one; say so in the question.
 3. Iteration 3 → no further round. Round 3 always runs the reviewer's 6-pre pass, whatever 3b-3d found; its findings join the round's, and its job id or skip line goes into the merge question and the audit. The remaining findings do not go into a follow-up list — they go into **one new separate issue**:
-   - Any **Blocker** left → the merge is held; ask the owner via `AskUserQuestion` what to do (fix it in this PR outside the round count / close the PR / other). Nothing is merged without that answer. A fix in this PR (a round-3 Blocker fix) moves the head: tech-lead runs the reviewer's Step 6-pre command itself from the main context at the new head, as Phase 5 does, before the merge question. This is not a review round. A Blocker/Major from it goes back to the owner via `AskUserQuestion` with the same options; a usage limit gives the skip line (reviewer Step 6-pre item 4).
+   - Any **Blocker** left → the merge is held; ask the owner via `AskUserQuestion` what to do (fix it in this PR outside the round count / close the PR / other). Nothing is merged without that answer. A fix in this PR (a round-3 Blocker fix) moves the head: tech-lead's own 6-pre run (below) at the new head, before the merge question.
    - Only Minor left → create the new issue in Backlog without a question, as for a Minor-only verdict above, then the merge relay below — the merge question names the findings left open and the new issue.
    - A Major among them → ask the owner via `AskUserQuestion` to confirm the new issue: its draft title and the full list of findings it carries (each with severity and the PR comment link). Only on a yes: create it with `/github` ("Create an issue" + "Add issue to Project #2"), body with `Refs #<N>` and the PR link. Then the merge relay below, as for a clean PR — the merge question names the findings left open and the new issue. A no → ask what the owner wants instead; do not merge before that.
    The reviewer does not post LGTM for such a PR; the audit records it as "merged at the round limit, findings in #<new>".
@@ -304,7 +304,29 @@ Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (
 **If the reviewer reports the PR is clean:**
 It posted the ready-to-merge comment or returned the classifier's refusal (Merge relay), and returned a merge request. Merge relay: `AskUserQuestion` immediately before this merge, `gh pr merge` only on an explicit yes, then confirm `state == "MERGED"`. **Do not move the issue to Done before that** — a clean review isn't merged work. Then move the issue to **Done** via `/github` skill, then run Phase 5.
 
-**A PR left In Review by a manager session.** Start from the night's report: the reviewer's verdict, the Codex job id or skip line and the checks are recorded there, and the Phase 3 audit comment is already posted. A Codex skip line in the PR or the report: a usage-limit skip whose limit preflight still shows active → nothing to ask, the merge question names the skip; otherwise (the limit has reset, or the night's non-limit skip) ask via `AskUserQuestion` «Codex пропущен ночью — запустить сейчас / мержить без него» (run now recommended). Run now → tech-lead runs the reviewer's 6-pre command from the main context, as Phase 5 does; a Blocker/Major from it → the open-findings branch at the end of this paragraph; clean → the merge relay with the job id. «Мержить без него» → tech-lead posts the owner's skip line (reviewer Step 6-pre item 4) as a PR comment before the merge question. No skip line → the merge relay. A stacked PR (its base is another open PR, «Merge after #<base>»): merge its base first (`--rebase --delete-branch`; GitHub retargets the dependent PR to `main`), then `git rebase --onto origin/main <old base head>` and `git push --force-with-lease` on the dependent, wait for CI; the rebase moved the head past the night's Codex run, so tech-lead runs the reviewer's Step 6-pre command itself at the new head (a usage limit gives the skip line, a Blocker/Major goes to the owner), then its merge relay. After each merge run Phase 5. A PR with open Blocker/Major («Открытые находки на конец цикла задачи (3-й круг) или сессии менеджера»): the owner decides — a Plan Update round (the round count continues from the night's) or close the PR.
+**Tech-lead's own 6-pre run** (Phase 4 iteration 3 after a round-3 Blocker fix; a PR left In Review by a manager session). Not a review round.
+1. `gh pr checks <N>` at the current head: wait while running. Red → report it to the owner; no run, no merge question.
+2. The reviewer's Step 6-pre command, from the main context, at the current head.
+3. Outcome:
+   - Clean → the job id goes into the merge question.
+   - Blocker/Major → post it as a PR comment. On a PR whose last review round was 3, go to the Phase 4 iteration 3 branches (a Blocker holds the merge; a Major goes into the new issue on the owner's yes). Otherwise the owner decides via `AskUserQuestion`: a Plan Update round (the count continues) or close the PR.
+   - Usage limit → tech-lead posts the usage-limit skip line (reviewer Step 6-pre item 4) as a PR comment, and the merge question names it.
+   - Any other failure → 2 attempts, then `AskUserQuestion` «Codex: запустить позже / мержить без него». On the second answer, tech-lead posts the owner's skip line as a PR comment.
+
+**A PR left In Review by a manager session.** Start from the night's report: the reviewer's verdict, the Codex job id or skip line and the checks are recorded there, and the Phase 3 audit comment is already posted. In this order:
+1. **A stacked PR** (its base is another open PR, «Merge after #<base>»):
+   - merge its base first (`--rebase --delete-branch`; GitHub retargets the dependent PR to `main`);
+   - then `git rebase --onto origin/main <old base head>` and `git push --force-with-lease` on the dependent;
+   - wait for CI.
+2. **Codex, decided once at the current head.** A run is due when the PR has a night skip line, or step 1 moved the head; otherwise go to step 3.
+   - **The usage limit is still active at preflight** → no run, no question. If the PR's skip line is not already a usage-limit line at this head, tech-lead posts the usage-limit skip line (preflight's job) as a PR comment.
+   - **A night skip line** → `AskUserQuestion` «Codex пропущен ночью — запустить сейчас / мержить без него» (run now recommended):
+     - run now → tech-lead's own 6-pre run;
+     - «мержить без него» → tech-lead posts the owner's skip line as a PR comment, with `<сбой>` and the job taken from the night's line.
+   - **No skip line, and step 1 moved the head** → tech-lead's own 6-pre run, with no question.
+3. **The merge relay**; after each merge, run Phase 5.
+
+A PR with open Blocker/Major («Открытые находки на конец цикла задачи (3-й круг) или сессии менеджера»): the owner decides — a Plan Update round (the round count continues from the night's) or close the PR. A PR whose last round was 3 gets no further round: Phase 4 iteration 3 branches instead.
 
 #### Phase 5 — Post-Done housekeeping
 
@@ -374,7 +396,7 @@ Run once the merge is confirmed and the issue is Done.
 - Never push to `main` or merge a PR without whatever confirmation this repo's CLAUDE.md currently requires.
 - Never move an issue to Done without explicit confirmation that the PR was merged (`state == "MERGED"`).
 - Never edit files in another agent's/developer's active domain without flagging the conflict.
-- Never execute Architect, Implementer or Reviewer steps inline — always as an `Agent` spawn with the policy `model` whose first action invokes the role's Skill, even for trivial one-line issues — except the reviewer's Step 6-pre command, which tech-lead runs itself in exactly four places: Phase 4 iteration 3 after a round-3 Blocker fix, a PR left In Review by a manager session (the morning Codex run, and after a stacked rebase), and the Phase 5 docs PR.
+- Never execute Architect, Implementer or Reviewer steps inline — always as an `Agent` spawn with the policy `model` whose first action invokes the role's Skill, even for trivial one-line issues — except the reviewer's Step 6-pre command, which tech-lead runs itself as tech-lead's own 6-pre run (Phase 4 iteration 3 after a round-3 Blocker fix; a PR left In Review by a manager session, once at its current head) and in the Phase 5 docs PR.
 - Never write text output between pipeline phases where this repo's CLAUDE.md has waived stop points — an inter-phase recap forces the user to say "continue" unnecessarily.
 - Never waive a missing Codex final pass silently: a usage-limit skip is recorded with its skip line where the run would have been, any other missing pass is a process deviation.
 - Any question to the owner goes through `AskUserQuestion`, never plain text — including the questions a spawned phase returns.
