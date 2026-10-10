@@ -10,8 +10,6 @@ import {
 import { until } from '@binarius/shared/testing';
 import {
   attachDepositsToAccount,
-  listRecentPostbackDeliveries,
-  readDepositByPayment,
   recordPostback,
   type RecordPostbackResult,
 } from './postback-ops';
@@ -366,46 +364,5 @@ describe('attachDepositsToAccount', () => {
     await attach();
     expect(await version()).toBe(attached);
     expect((await depositsOf(theirs.paymentId))[0]).toMatchObject({ userId: null });
-  });
-});
-
-describe('the readers', () => {
-  it('lists the journal newest first, refusals included', async () => {
-    const keys = fresh();
-    await record(query(keys, { amount: 'x' }));
-    await record(query(keys));
-
-    const rows = await listRecentPostbackDeliveries(tmp.db, 2);
-    expect(rows.map((r) => [r.postbackId, r.outcome])).toEqual([
-      [keys.postbackId, 'recorded'],
-      [keys.postbackId, 'rejected'],
-    ]);
-  });
-
-  it('reads a payment with its deliveries and the refused ones that named it', async () => {
-    const keys = fresh();
-    const owner = await account(BrokerAccountStatus.Active, keys.traderId);
-    await record(query(keys, { a: '' }));
-    await record(query(keys));
-    await record(query({ ...keys, postbackId: `${keys.postbackId}-ftd` }, { event: 'ftd' }));
-
-    const read = await readDepositByPayment(tmp.db, {
-      source: PostbackSource.Binodex,
-      paymentId: keys.paymentId,
-    });
-    expect(read.deposit).toMatchObject({
-      brokerUserId: keys.traderId,
-      amount: '10.50000000',
-      brokerAccountId: owner.accountId,
-      telegramUserId: BigInt(owner.telegramUserId),
-    });
-    expect(read.deliveries.map((d) => [d.event, d.outcome])).toEqual([
-      ['deposit', 'rejected'],
-      ['deposit', 'recorded'],
-      ['ftd', 'repeated'],
-    ]);
-    expect(
-      await readDepositByPayment(tmp.db, { source: PostbackSource.Binodex, paymentId: 'nope' }),
-    ).toEqual({ deposit: undefined, deliveries: [] });
   });
 });

@@ -51,7 +51,7 @@ the indexes, not by the pre-check read (`postback-ops.db.test.ts` P3).
 
 Reasons: `missing_postback_id`, `unknown_event`, `missing_payment_id`, `missing_trader_id`,
 `invalid_amount`. A refused row keeps the query as received, so a misconfigured cabinet template
-shows up in `deposit list`, not only in a log.
+shows up in the journal (`postback_deliveries`, see Visibility), not only in a log.
 
 A `repeated` delivery whose amount (compared as decimals: `10.5` equals `10.50000000`) or trader
 id differs from the stored deposit keeps the stored row as it is and logs one `warn`
@@ -122,20 +122,17 @@ its trader id, and is attached by hand or by #386's tooling.
 
 - Deposits: the admin page «Депозиты» and the user card's «Депозиты» section
   ([admin-pages.md](admin-pages.md)); the trader id column identifies an unowned deposit.
-- The journal, with every refusal and every payload, is read with the CLI (read-only):
+- Each delivery writes one `postback received` line to the backend's log (outcome, reason,
+  event, postback id): `docker compose logs backend | grep 'postback received'`.
+- The journal, with every refusal and every payload, is read with `psql` — the newest deliveries,
+  then every delivery that named one payment:
 
 ```bash
-docker compose exec backend pnpm --filter @binarius/backend deposit list
-docker compose exec backend pnpm --filter @binarius/backend deposit list --limit 100
-docker compose exec backend pnpm --filter @binarius/backend deposit show <payment_id>
+docker compose exec postgres psql -U binarius -d binarius -c "select created_at, event, postback_id, outcome, reject_reason, payload->>'payment_id' as payment_id, payload->>'a' as trader_id, payload->>'amount' as amount from postback_deliveries order by created_at desc limit 20"
+docker compose exec postgres psql -U binarius -d binarius -c "select created_at, outcome, reject_reason, payload from postback_deliveries where payload->>'payment_id' = '<payment_id>' order by created_at"
 ```
 
-`list` prints the newest deliveries (1-200, default 20): time, event, postback id, outcome and
-reason, and the payment id, trader id and amount as delivered. On an empty journal it prints
-«Доставок нет. Депозиты — на странице /admin/deposits.». `show` prints the payment's deposit
-(trader, amount, currency, status, the owner's Telegram id, the account) and each of its deliveries
-— refused ones that named the payment included — with every query key and value. A control
-character in a value prints as `?`. An unknown payment exits 1; a usage error exits 2.
+A read-only CLI for the journal comes back with #443.
 
 ## Configuration
 
@@ -211,7 +208,8 @@ was; G2: an empty table migrates).
 ## Observed live
 
 Pending the first live postback (owner's step after the cabinet setup): a small deposit on the
-test account, then `deposit list` and `deposit show <payment_id>`. To record here: the outcome and
+test account, then «Депозиты», the `postback received` lines and the two selects of
+Visibility. To record here: the outcome and
 reason of each delivery, whether the owner was filled (that `a` is the `broker_user_id` the OAuth
 exchange stores is an assumption until then), which macros arrived, whether both actions fired for
 one payment, and the HTTP method if the cabinet shows it.
@@ -223,3 +221,4 @@ one payment, and the HTTP method if the cabinet shows it.
   crediting stays off.
 - Reconciliation of deposits with the broker — #140; end-to-end duplicate scenarios — #106.
 - A Caddyfile in the repository — #146.
+- A CLI for the journal — #443.
