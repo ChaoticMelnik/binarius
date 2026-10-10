@@ -550,7 +550,7 @@ defeats the type, as it defeats any.
 
 **Two seams.** `parse_mode` is set and `TelegramHtml` is unwrapped in two places only:
 `apps/bot/src/send.ts` (`replyHtml`, `replyWithVideoHtml`, `replyWithPhotoHtml`,
-`editMessageTextHtml`) and
+`sendPhotoByIdHtml`, `editMessageTextHtml`, `editMessageTextByIdHtml`) and
 `apps/backend/src/auth/client-push.ts` (the link push and the mailings, #202); a caller's extra can neither override `parse_mode` nor
 pass `entities`. ESLint (`eslint.config.js`, the Telegram block) forbids grammY's send methods by
 name everywhere else in `apps/bot/src` and `apps/backend/src` (the staff bot's

@@ -12,7 +12,7 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
 ## The rule, by type
 
 - `apps/bot/src/send.ts`: `replyHtml`, `editMessageTextHtml`, `editMessageTextByIdHtml`,
-  `replyWithVideoHtml` and `replyWithPhotoHtml` require `reply_markup`, and only an inline keyboard
+  `replyWithVideoHtml`, `replyWithPhotoHtml` and `sendPhotoByIdHtml` (#318) require `reply_markup`, and only an inline keyboard
   (`InlineKeyboard` or `InlineKeyboardMarkup`) is accepted. A reply keyboard, `ForceReply` or
   `ReplyKeyboardRemove` does not compile.
 - A message without one goes only through `replyHtmlWithoutNextStep` or
@@ -96,6 +96,7 @@ no message: it gets no «🔄 Повторить» of its own, and its failure l
 | trade status, where the tracker stops (accepted, every terminal status) | 🔄 Обновить статус while it can still move (accepted), then 🚀 Сессия из 5 сделок (#360, on a duration the demo still offers) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню |
 | session status, live | 🔄 Обновить · ⏹ Остановить сессию; a 404 while tracking leaves 🏠 В меню only |
 | session status, stopped | 🔄 Обновить · 🔁 Ещё сессия (#320) · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню; without `settings` only 🔄 Обновить · 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |
+| the session's summary card (#318, a photo) | 🔁 Ещё сессия · 📊 Новый анализ · 📡 К сигналам · 🏠 В меню — the stopped status's without 🔄 Обновить, which edits a message's text; without `settings` only 🏠 В меню, on a duration the demo no longer offers no «Ещё сессия» and no «Новый анализ» |
 | `stakeInputInvalid` | the picker's way back |
 
 «📊 Новый анализ» opens the analysis of the same pair and duration (`demo:an:<assetId>:<sec>`), never
@@ -122,5 +123,5 @@ call: the keyboards ride on the messages already sent.
 - **#202** — reminders to a user who connected and never started the demo: sent through
   `client-push.ts` with the demo button ([mailing.md](mailing.md)).
 - **#121 / #326 / #327** — the real-mode screens: the seam types make them comply.
-- **#337 / #318 / #321** — the session's result card and «Поделиться». A card sent before its
-  keyboard is attached gets a reason of its own in the exception list.
+- **#321** — «📤 Поделиться» under the session's summary card (#318), added to
+  `sessionCardKeyboard`'s rows: the card is sent with its keyboard, so it needs no exception.
