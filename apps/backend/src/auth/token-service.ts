@@ -3,6 +3,7 @@ import {
   AuthRevokedReason,
   BrokerAccountStatus,
   UserStatus,
+  assertExhausted,
   errorLogFields,
 } from '@binarius/shared';
 import {
@@ -11,6 +12,7 @@ import {
   hashToken,
   lockAccountForRefresh,
   markAccessTokenExpired,
+  readUserStatus,
   revokeAccount,
   revokeAccountIfUnchanged,
   TokenCipherError,
@@ -34,7 +36,9 @@ export const ACCESS_SKEW_MS = 60_000;
 export type AccessTokenResult =
   | { ok: true; accessToken: string }
   | { ok: false; reason: 'account_not_found' }
-  // the user is blocked: nothing is decrypted, exchanged or revoked (Rule 12)
+  // blocked under the lock: nothing decrypted, exchanged or revoked; blocked by the time the
+  // exchange answered: the rotated pair is stored (the old one is spent), no token handed out,
+  // nothing revoked (Rule 12)
   | { ok: false; reason: 'user_blocked' }
   // linked but not confirmed in the bot yet, so it may not act on the user's behalf
   | { ok: false; reason: 'account_pending' }
@@ -228,6 +232,11 @@ async function refreshUnderLock(
   // decrypted from this account's row (the row id is in the AAD) and matched the stored hash, and
   // the answer goes back into the same locked row.
   await applyRotatedTokens(tx, { account, tokens, cipher });
+  // the exchange can take up to BROKER_HTTP_TIMEOUT_MS under the lock; a block committed
+  // meanwhile is caught here, after the pair is stored, because the old one is already spent
+  if ((await readUserStatus(tx, account.userId)) === UserStatus.Blocked) {
+    return { ok: false, reason: 'user_blocked' };
+  }
   return { ok: true, accessToken: tokens.accessToken };
 }
 
@@ -319,10 +328,6 @@ function pairMayBeSpent(reason: AuthRevokedReason): boolean {
     case AuthRevokedReason.RefreshOutcomeUnknown:
       return true;
     default:
-      return assertExhausted(reason);
+      return assertExhausted(reason, 'revocation reason');
   }
-}
-
-function assertExhausted(reason: never): never {
-  throw new Error(`unhandled revocation reason: ${String(reason)}`);
 }

@@ -6,6 +6,7 @@ import {
   BALANCE_WATCH_WINDOW_MS,
   BROKER_BALANCE_SLA_SEC,
   BrokerRestErrorCode,
+  assertExhausted,
   errorLogFields,
 } from '@binarius/shared';
 import {
@@ -173,7 +174,7 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
         case AccessTokenRefusal.RefreshRateLimited:
           return fail(accountId, BalanceRefreshError.RateLimited);
         default:
-          return assertExhausted(token);
+          return assertExhausted(token, 'access token refusal');
       }
     }
     // before the GET: a missing account must not spend a call counted against the rate limit
@@ -282,19 +283,17 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
     async function worker(): Promise<void> {
       while (!rateLimited && !stopped && next < candidates.length) {
         const accountId = candidates[next++];
-        let result: Attempt;
+        // a throw left nothing in the row, so its queue key did not move: held back like any
+        // attempt that left nothing
+        let outcome: BalanceRefreshOutcome | 'threw';
+        let marked = false;
         try {
-          result = await fly(accountId, { mayRefresh: false });
+          ({ outcome, marked } = await fly(accountId, { mayRefresh: false }));
         } catch (error) {
           // a database error carries the statement and the row's values: name and code only
           logger.error({ accountId, ...errorLogFields(error) }, 'balance refresh threw');
-          // nothing reached the row, so its queue key did not move: held back like any attempt
-          // that left nothing
-          stalled.set(accountId, Date.now() + stalledRetryMs);
-          counts.failed += 1;
-          continue;
+          outcome = 'threw';
         }
-        const { outcome, marked } = result;
         if (outcome === 'ok') counts.refreshed += 1;
         else if (
           outcome === 'refresh_needed' ||
@@ -349,8 +348,4 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
       await Promise.allSettled([running, ...[...flights.values()].map((flight) => flight.promise)]);
     },
   };
-}
-
-function assertExhausted(value: never): never {
-  throw new Error(`unhandled access token result: ${JSON.stringify(value)}`);
 }

@@ -589,6 +589,30 @@ describe('tick', () => {
     },
   );
 
+  // aborted is our own limit, not the account's: the tick joins a route's flight that the route's
+  // budget cuts short, and the account stays in the queue
+  it('does not hold back an account whose joined flight was aborted', async () => {
+    const account = await withIntent();
+    const balance = reconciler(own.db, { maxPerMinute: 1, stalledRetryMs: 60_000 });
+    broker.rest.failNext('user', { hang: true });
+    const routed = balance.refresh(account.accountId, { signal: AbortSignal.timeout(300) });
+    await until('the hanging request', () => broker.rest.pendingHangs === 1);
+    const ticking = balance.tick();
+    expect(await routed).toBe('aborted');
+    await ticking;
+    expect(logsAt(INFO).find((entry) => entry.msg === 'balance tick')).toMatchObject({
+      candidates: 1,
+      failed: 0,
+      skipped: 0,
+    });
+    await until('the aborted request to close', () => broker.rest.pendingHangs === 0);
+    tokenCalls.length = 0;
+
+    await balance.tick();
+    expect(tokenCalls.map((call) => call.accountId)).toEqual([account.accountId]);
+    await balance.stop();
+  });
+
   it('logs an unexpected throw by name and code only, and goes on with the next account', async () => {
     const throwing = await withIntent();
     const next = await withIntent();

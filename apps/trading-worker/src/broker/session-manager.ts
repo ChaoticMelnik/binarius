@@ -7,6 +7,7 @@ import {
 } from '@binarius/db';
 import {
   AccessTokenRefusal,
+  assertExhausted,
   errorLogFields,
   TradeMode,
   type BrokerBalance,
@@ -319,10 +320,8 @@ export function createBrokerSessionManager(deps: BrokerSessionManagerDeps): Brok
       case AccessTokenRefusal.KeyUnavailable:
         logger.warn({ accountId, refusal: reason }, 'broker session token refused');
         return config.refusalRetryMs;
-      default: {
-        const unhandled: never = reason;
-        throw new Error(`unhandled access token answer ${String(unhandled)}`);
-      }
+      default:
+        return assertExhausted(reason, 'access token answer');
     }
   }
 

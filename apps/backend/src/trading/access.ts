@@ -5,6 +5,7 @@ import {
   TradeIntentErrorCode,
   UserErrorCode,
   UserStatus,
+  assertExhausted,
   errorLogFields,
   safeParseTradingAccessRequest,
   type BrokerBalanceView,
@@ -67,11 +68,7 @@ function reasonFor(outcome: BalanceRefreshOutcome): BrokerBalanceUnavailableReas
     case BalanceRefreshError.KeyUnavailable:
       return BrokerBalanceUnavailableReason.BrokerUnavailable;
   }
-  return assertExhausted(outcome);
-}
-
-function assertExhausted(value: never): never {
-  throw new Error(`unhandled balance refresh outcome: ${String(value)}`);
+  return assertExhausted(outcome, 'balance refresh outcome');
 }
 
 async function brokerSection(
