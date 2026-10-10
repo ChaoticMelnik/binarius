@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BOT_TEXT_MESSAGES,
+  BOT_TEXT_VAR_DEFAULT_WIDTHS,
   BOT_TEXT_VAR_WIDTHS,
   BOT_TEXT_WIDTHS,
   botTextMessageKeys,
@@ -9,6 +10,7 @@ import {
 } from './bot-text-messages';
 import { BotTextKind } from './bot-text-template';
 import { BOT_TEXT_CATALOG, defaultBotTextSource, type BotTextKey } from './bot-texts';
+import { REFERRAL_CODE_LENGTH, referralLinkOf } from './referral';
 
 const message = (id: string) => {
   const found = BOT_TEXT_MESSAGES.find((m) => m.id === id);
@@ -17,6 +19,17 @@ const message = (id: string) => {
 };
 const withTexts = (texts: Partial<Record<BotTextKey, string>>) => ({
   sourceOf: (key: BotTextKey) => texts[key] ?? BOT_TEXT_CATALOG[key].source,
+});
+
+describe('the widths of the variables', () => {
+  // #115: the widest link is the longest bot username's
+  it('bounds referralLink by the link of a 32-character username', () => {
+    const widest = referralLinkOf(
+      'u'.repeat(BOT_TEXT_WIDTHS.botUsername),
+      'C'.repeat(REFERRAL_CODE_LENGTH),
+    );
+    expect(BOT_TEXT_VAR_DEFAULT_WIDTHS.referralLink({} as never)).toBe(widest.length);
+  });
 });
 
 describe('the assembled messages', () => {
