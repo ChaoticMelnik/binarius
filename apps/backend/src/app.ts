@@ -136,6 +136,31 @@ class SafeLogController extends LogController {
   }
 }
 
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    // the route answers requests that came through the public reverse proxy (#141)
+    publicThroughProxy?: boolean;
+  }
+}
+
+// Caddy sets X-Forwarded-For on every request it forwards and replaces a client's value; no
+// internal caller (bot, web, worker, the compose healthcheck) sends any of these.
+const PROXY_HEADERS = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded'];
+
+// Caddy's path matcher sees the decoded, cleaned path while the backend routes the raw one, so
+// `/admin/users/..%2F..%2F..%2Fpostbacks%2Fx` passes a `/postbacks/*` matcher and lands on
+// `/admin/users/:id` (#141, review round 2). Whatever a matcher lets through, a proxied request
+// reaches only a route marked publicThroughProxy; anything else gets the not-found answer.
+async function refuseProxied(request: FastifyRequest, reply: FastifyReply) {
+  if (request.routeOptions.config.publicThroughProxy === true) return undefined;
+  if (!PROXY_HEADERS.some((name) => request.headers[name] !== undefined)) return undefined;
+  request.log.warn(
+    { method: request.method, url: withoutSecrets(request.url) },
+    'proxied request refused',
+  );
+  return reply.code(404).send({ error: 'not_found' });
+}
+
 function notFound(request: FastifyRequest, reply: FastifyReply) {
   request.log.info({ method: request.method, url: withoutSecrets(request.url) }, 'route not found');
   return reply.code(404).send({ error: 'not_found' });
@@ -197,6 +222,8 @@ export function buildApp({
   // Fastify's own not-found log builds its message from the raw url, where no redact path and
   // no serializer can reach it
   app.setNotFoundHandler(notFound);
+  // registered on the root before any route plugin, so it runs ahead of their own hooks
+  app.addHook('onRequest', refuseProxied);
 
   app.get('/health', async (request, reply) => {
     const [postgres, redis] = await Promise.all([
