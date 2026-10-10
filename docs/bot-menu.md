@@ -3,8 +3,9 @@
 A user with an active Binodex account gets the **status card** (#24) as the bot's home: on
 `/start` (in place of the old «👋 С возвращением!») and on `/menu`. The card is the account card's
 picture with a caption of the trading mode, the real balance, the demo balance, the tokens, a
-status or age line when the broker balance is missing or old, a hint, and one button
-«🎮 Демо-торговля» (#320). It is pinned in place of whatever was pinned before.
+status or age line when the broker balance is missing or old, a hint, and two buttons, each in
+its own row: «🎮 Демо-торговля» (#320) and «👥 Пригласить друга» (#115,
+[referrals.md](referrals.md)). It is pinned in place of whatever was pinned before.
 
 ## Components
 
@@ -20,8 +21,9 @@ status or age line when the broker balance is missing or old, a hint, and one bu
 - `apps/bot/src/texts.ts` — the `status*` entries, `StatusCardInput`, `statusCard`,
   `userContextOf`, `LABELS.menuCommand`, `LABELS.demoButton`; the texts are
   catalog entries ([bot-texts.md](bot-texts.md)).
-- `apps/bot/src/bot.ts` — `/start` and `/menu` on one path (`answerHome`), `sendStatusCard`, the
-  `demo` button's keyboard (`DEMO_CALLBACK_DATA` from `demo.ts`), `pinCard`.
+- `apps/bot/src/bot.ts` — `/start` and `/menu` on one path (`answerHome`), `sendStatusCard` with
+  `statusCardKeyboard` (`keyboards.ts`: the `demo` button, then the `invite` button, #115),
+  `pinCard`.
 - `packages/shared/src/bot-commands.ts` — `/menu` «Главное меню», right after `/start`.
 - `apps/bot/src/timing.ts` — `HANDLER_CALLS.start`, `.menu`, `.demo`, and the conjunct
   `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS`.
