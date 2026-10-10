@@ -1162,6 +1162,13 @@ export const BOT_TEXT_CATALOG = {
     'Сессия: статус недоступен.',
     `⚠️ Статус сессии недоступен.`,
   ),
+  sessionNoneActive: html(g.Session, '/stop: активных сессий нет.', `Активных сессий нет.`),
+  sessionsStopped: html(
+    g.Session,
+    '/stop: остановлено больше одной сессии.',
+    `⏹ Остановлено сессий: {count}. Открытые сделки доиграют до конца.`,
+    { vars: ['count'] },
+  ),
   sessionJustEnded: html(
     g.Session,
     'Кнопка сессии: прошлая сессия закончилась в момент нажатия.',
@@ -1234,7 +1241,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   sessionStopUserStopped: html(
     g.Session,
-    'Сессия остановлена кнопкой пользователя.',
+    'Сессия остановлена пользователем: кнопкой или /stop.',
     `⏹ Сессия остановлена по твоей команде.`,
   ),
   // The summary card (#318, docs/bot-session.md → The summary card): labels drawn on the image,
@@ -1438,6 +1445,9 @@ export const BOT_TEXT_CATALOG = {
     limit: COMMAND_LIMIT,
   }),
   menuCommand: plain(g.Commands, 'Описание /menu в меню команд и в /help.', 'Главное меню', {
+    limit: COMMAND_LIMIT,
+  }),
+  stopCommand: plain(g.Commands, 'Описание /stop в меню команд и в /help.', 'Остановить сессию', {
     limit: COMMAND_LIMIT,
   }),
   accountCommand: plain(

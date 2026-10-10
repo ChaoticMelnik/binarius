@@ -61,6 +61,7 @@ const withOverride = (key: BotTextKey, text: string) => ({
 const DEFAULT_MENU = [
   { command: 'start', description: 'Начать' },
   { command: 'menu', description: 'Главное меню' },
+  { command: 'stop', description: 'Остановить сессию' },
   { command: 'account', description: 'Аккаунт Binodex' },
   { command: 'settings', description: 'Настройки уведомлений' },
   { command: 'help', description: 'Помощь' },

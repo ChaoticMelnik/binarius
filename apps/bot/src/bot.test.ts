@@ -144,6 +144,7 @@ function setup(
     readSession: vi.fn(() => Promise.reject(new Error('not used here'))),
     stopSession: vi.fn(() => Promise.reject(new Error('not used here'))),
     claimSessionSummary: vi.fn(() => Promise.reject(new Error('not used here'))),
+    stopSessions: vi.fn(() => Promise.reject(new Error('not used here'))),
     setDemoStake: vi.fn(() => Promise.reject(new Error('not used here'))),
     readBotTexts: vi.fn(() => Promise.reject(new Error('not used here'))),
   };
@@ -1507,6 +1508,7 @@ describe('the account card', () => {
           readSession: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
           claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
+          stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
           setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
           readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
         },
@@ -1555,6 +1557,7 @@ describe('the account card', () => {
           readSession: vi.fn(() => Promise.reject(new Error('unused'))),
           stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
           claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
+          stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
           setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
           readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
         },
@@ -2583,6 +2586,24 @@ describe('/help', () => {
   });
 });
 
+describe('/stop (#122)', () => {
+  it('B8 answers /stop in the middle of the dialog without ending it', async () => {
+    const { bot, backend, calls, dialog } = setup({ dialog: ON_CODE_STEP });
+    await bot.handleUpdate(textUpdate('/stop'));
+    // the setup's stub refuses the stop, so the answer is the failure's: what matters is that the
+    // command answered and the step stayed
+    const sends = calls.filter((call) => call.method === 'sendMessage');
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.payload.text).toBe(TEXTS.unavailable.value);
+    expect(backend.stopSessions).toHaveBeenCalledWith('4242');
+    expect(backend.emailLogin).not.toHaveBeenCalled();
+    expect(dialog.get(USER.id)).toEqual(ON_CODE_STEP);
+
+    await bot.handleUpdate(textUpdate(CODE));
+    expect(backend.emailLogin).toHaveBeenCalledWith('4242', EMAIL, CODE);
+  });
+});
+
 describe('the Bot API timeout', () => {
   let server: Server | undefined;
   afterEach(async () => {
@@ -2621,6 +2642,7 @@ describe('the Bot API timeout', () => {
         readSession: vi.fn(() => Promise.reject(new Error('unused'))),
         stopSession: vi.fn(() => Promise.reject(new Error('unused'))),
         claimSessionSummary: vi.fn(() => Promise.reject(new Error('unused'))),
+        stopSessions: vi.fn(() => Promise.reject(new Error('unused'))),
         setDemoStake: vi.fn(() => Promise.reject(new Error('unused'))),
         readBotTexts: vi.fn(() => Promise.reject(new Error('unused'))),
       },

@@ -92,7 +92,12 @@ export const sessionCardKeyboard = (view: Pick<TradingSessionView, 'settings'>):
 export interface TradingSessionDeps {
   backend: Pick<
     BackendClient,
-    'readPairs' | 'startSession' | 'readSession' | 'stopSession' | 'claimSessionSummary'
+    | 'readPairs'
+    | 'startSession'
+    | 'readSession'
+    | 'stopSession'
+    | 'claimSessionSummary'
+    | 'stopSessions'
   >;
   logger: Logger;
   sessionTracker: Pick<SessionTracker, 'track'>;
@@ -274,6 +279,45 @@ export function createTradingSessionComposer<C extends Context>({
       return;
     }
     await showInPlace(ctx, telegramUserId, symbolOf(catalog, view), view);
+  });
+
+  // /stop (#122): every active session of the user, one message whatever the count. No
+  // confirmation and no retry, as the stop button: an unknown outcome shows in the session's own
+  // status message, and a second /stop is harmless («Активных сессий нет.»). Every answer carries
+  // «🏠 В меню» or the session's keyboard (Rule 31).
+  composer.command('stop', async (ctx) => {
+    const from = ctx.from;
+    if (from === undefined) return;
+    const telegramUserId = String(from.id);
+    const [stopped, catalog] = await Promise.all([
+      settle(backend.stopSessions(telegramUserId)),
+      settle(backend.readPairs()),
+    ]);
+    if (!stopped.ok) {
+      logger.warn(
+        { ...errorLogFields(stopped.error), ...backendErrorFields(stopped.error) },
+        'trading sessions not stopped',
+      );
+      await replyHtml(ctx, TEXTS.unavailable, { reply_markup: menuKeyboard() });
+      return;
+    }
+    const sessions = stopped.value;
+    const [view] = sessions;
+    if (view === undefined) {
+      await replyHtml(ctx, TEXTS.sessionNoneActive, { reply_markup: menuKeyboard() });
+      return;
+    }
+    if (sessions.length > 1) {
+      await replyHtml(ctx, TEXTS.sessionsStopped({ count: String(sessions.length) }), {
+        reply_markup: menuKeyboard(),
+      });
+      return;
+    }
+    const symbol = symbolOf(catalog, view);
+    const sent = await replyHtml(ctx, sessionStatusText(symbol, view), {
+      reply_markup: sessionKeyboard(view),
+    });
+    track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
   });
 
   async function start(request: CreateTradingSessionRequest): Promise<StartOutcome> {

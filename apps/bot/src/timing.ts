@@ -147,6 +147,9 @@ export const HANDLER_CALLS = {
   level: { backend: 1, telegram: 3 },
   // the selected level pressed: answerCallbackQuery only
   levelCurrent: { backend: 0, telegram: 1 },
+  // /stop (#122): stopSessions ∥ readPairs — counted as sequential, as in confirm — then
+  // sendMessage
+  stop: { backend: 2, telegram: 1 },
   // /support: sendMessage; no backend call
   support: { backend: 0, telegram: 1 },
   // /help: sendMessage; no backend call

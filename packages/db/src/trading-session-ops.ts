@@ -384,6 +384,33 @@ export async function stopTradingSession(
   return row;
 }
 
+// Every active session of the owner in one statement (#122): owner scope is the predicate
+// (Rule 13), so another user's id stops nothing; `status = active` is the CAS (Rule 28), so a
+// session another writer stopped first keeps its reason and is not returned. No limit: a user has
+// at most one active session per account (trading_sessions_active_account_idx).
+export async function stopUserSessions(
+  db: Db,
+  { telegramUserId }: { telegramUserId: string },
+): Promise<StoppedSession[]> {
+  const active = eq(tradingSessions.status, TradingSessionStatus.Active);
+  return db
+    .update(tradingSessions)
+    .set(stoppedBy(TradingSessionStopReason.UserStopped))
+    .where(
+      and(
+        active,
+        sql`${tradingSessions.id} in (
+          select ${tradingSessions.id} from ${tradingSessions}
+            join ${brokerAccounts} on ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
+            join ${users} on ${users.id} = ${brokerAccounts.userId}
+           where ${active}
+             and ${users.telegramUserId} = ${BigInt(telegramUserId)}
+        )`,
+      ),
+    )
+    .returning(stoppedColumns);
+}
+
 // Moves the scan's order key of a session that stays active. signalAction: undefined leaves the
 // column, null clears it, an action sets it (#379, the pause after two losses).
 export async function markSessionDecision(

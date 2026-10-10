@@ -17,9 +17,11 @@ import {
   safeParseTradingAccessResponse,
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
+  safeParseTradingSessionsStoppedResponse,
   safeParseTradingSignalResponse,
   safeParseTradingSignalsResponse,
   TRADING_SIGNALS_PATH,
+  TRADING_SESSIONS_STOP_PATH,
   safeParseUserAccountResponse,
   safeParseUserStartResponse,
   type ChatMemberResponse,
@@ -117,6 +119,8 @@ export interface BackendClient {
   // the finished session's card, claimed at most once (#318): null for the one refusal, which the
   // backend answers before any write; scoped by the owner like readSession
   claimSessionSummary(id: string, telegramUserId: string): Promise<SessionSummary | null>;
+  // every active session of the user, stopped (#122); empty when there was none
+  stopSessions(telegramUserId: string): Promise<TradingSessionView[]>;
   // the saved stake, or a bounds refusal with the limits it was checked against (#297); any other
   // failure throws as from every method
   setDemoStake(telegramUserId: string, amount: DecimalString | null): Promise<SetDemoStakeResult>;
@@ -355,6 +359,13 @@ export function createBackendClient({
       }
       if (status === 409 && safeParseSessionSummaryRefusal(payload).success) return null;
       throw httpStatusError(status, payload);
+    },
+    async stopSessions(telegramUserId) {
+      const parsed = safeParseTradingSessionsStoppedResponse(
+        await post(TRADING_SESSIONS_STOP_PATH.slice(1), { telegramUserId }),
+      );
+      if (!parsed.success) throw new BackendError(BackendErrorCode.ContractViolation);
+      return parsed.data.sessions;
     },
   };
 }

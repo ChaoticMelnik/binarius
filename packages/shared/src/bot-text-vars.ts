@@ -118,7 +118,7 @@ export const BOT_TEXT_VARS = {
     format: (seconds: number) => formatAge(seconds),
   }),
   amount: shown('Сумма этой строки, как в исходном тексте', formatUsd('10000')),
-  count: shown('Число этой строки (свечи, сделки)', '12'),
+  count: shown('Число этой строки (свечи, сделки, сессии)', '12'),
   symbol: shown('Актив, как его пишет брокер', 'EUR/USD OTC'),
   group: shown('Тип актива', '💱 Валюты'),
   page: shown('Страница списка', '2 из 4'),

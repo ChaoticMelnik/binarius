@@ -61,7 +61,7 @@ export const TradingSessionStopReason = {
   BalanceUnavailable: 'balance_unavailable',
   // settings fail the schema or the sizer's parameter rules
   InvalidSettings: 'invalid_settings',
-  // the stop route of #283; nothing in the worker writes it
+  // the stop routes of #283 and #122; nothing in the worker writes it
   UserStopped: 'user_stopped',
   // the global trading switch is closed (#144, stopPausedSessions)
   KillSwitch: 'kill_switch',
@@ -116,11 +116,14 @@ export const sessionFitsDeadline = (trades: number, durationSec: number): boolea
 // upper estimate of POST /trading/sessions: one bounded broker balance request plus statements;
 // the bot's request timeout must not be shorter (#284)
 export const TRADING_SESSION_START_BUDGET_MS = 4_000;
-// upper estimate of GET /trading/sessions/:id and POST /trading/sessions/:id/stop: one bounded
-// broker balance request for a finished session plus statements (#337)
+// upper estimate of GET /trading/sessions/:id, POST /trading/sessions/:id/stop and
+// POST /trading/sessions/stop: one bounded broker balance request for a finished session plus
+// statements (#337); the stop of all reads its sessions in parallel, one request per account (#122)
 export const TRADING_SESSION_VIEW_BUDGET_MS = 4_000;
 
 export const TRADING_SESSIONS_PATH = '/trading/sessions';
+// every active session of the user (#122); a uuid never equals 'stop', so the id routes keep theirs
+export const TRADING_SESSIONS_STOP_PATH = `${TRADING_SESSIONS_PATH}/stop`;
 
 export const TradingSessionErrorCode = {
   UserNotFound: 'user_not_found',
@@ -166,6 +169,7 @@ export const createTradingSessionRequestSchema = z.strictObject({
 export type CreateTradingSessionRequest = z.infer<typeof createTradingSessionRequestSchema>;
 
 export const readTradingSessionQuerySchema = z.object({ telegramUserId: telegramUserIdSchema });
+// the body of both stop routes: one session by id, and all of the user's (#122)
 export const stopTradingSessionRequestSchema = z.strictObject({
   telegramUserId: telegramUserIdSchema,
 });
@@ -220,6 +224,12 @@ export const isTradingSessionFinished = (
 export const tradingSessionResponseSchema = z.strictObject({ session: tradingSessionViewSchema });
 export type TradingSessionResponse = z.infer<typeof tradingSessionResponseSchema>;
 
+// the sessions POST /trading/sessions/stop stopped; an empty list is an answer, not a refusal
+export const tradingSessionsStoppedResponseSchema = z.strictObject({
+  sessions: z.array(tradingSessionViewSchema),
+});
+export type TradingSessionsStoppedResponse = z.infer<typeof tradingSessionsStoppedResponseSchema>;
+
 const { ActiveSessionExists, ...plainRefusals } = TradingSessionErrorCode;
 
 // active_session_exists carries the account's active session, so a retry after a timeout learns
@@ -241,6 +251,8 @@ export const safeParseStopTradingSessionRequest = (input: unknown) =>
   stopTradingSessionRequestSchema.safeParse(input);
 export const safeParseTradingSessionResponse = (input: unknown) =>
   tradingSessionResponseSchema.safeParse(input);
+export const safeParseTradingSessionsStoppedResponse = (input: unknown) =>
+  tradingSessionsStoppedResponseSchema.safeParse(input);
 export const safeParseTradingSessionRefusal = (input: unknown) =>
   tradingSessionRefusalSchema.safeParse(input);
 

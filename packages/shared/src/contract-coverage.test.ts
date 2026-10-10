@@ -35,6 +35,7 @@ import type {
   SessionSummaryRefusal,
   SessionSummaryResponse,
   TradingSessionRefusal,
+  TradingSessionsStoppedResponse,
   TradingSessionView,
 } from './trading-session';
 import * as accessToken from './access-token';
@@ -433,6 +434,13 @@ describe('contract coverage (issue #6)', () => {
       trades: { profit: DecimalString; openPrice: number; closePrice: number }[];
     }>();
     expectTypeOf<SessionSummaryRefusal['error']>().toEqualTypeOf<'summary_unavailable'>();
+  });
+
+  it('Stop of every session of the user (issue #122)', () => {
+    expectTypeOf<keyof TradingSessionsStoppedResponse>().toEqualTypeOf<'sessions'>();
+    expectTypeOf<
+      TradingSessionsStoppedResponse['sessions'][number]
+    >().toEqualTypeOf<TradingSessionView>();
   });
 
   it('root index re-exports every module', () => {

@@ -1076,6 +1076,57 @@ describe('claimSessionSummary (#318)', () => {
   });
 });
 
+describe('stopSessions (#122)', () => {
+  const stopped = {
+    ...SESSION_VIEW,
+    status: 'stopped',
+    stopReason: 'user_stopped',
+    endedAt: SESSION_VIEW.startedAt,
+  };
+
+  it('posts the owner to the stop-all path under the bearer and returns the views', async () => {
+    const { baseUrl, capture } = await serve((_request, reply) => {
+      json(reply, 200, { sessions: [stopped, { ...stopped, id: INTENT_ID }] });
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).stopSessions('4242')).toEqual([
+      stopped,
+      { ...stopped, id: INTENT_ID },
+    ]);
+    expect(capture.method).toBe('POST');
+    expect(capture.url).toBe('/trading/sessions/stop');
+    expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(capture.body ?? '')).toEqual({ telegramUserId: '4242' });
+  });
+
+  it('returns an empty list as it is', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { sessions: [] });
+    });
+    expect(await createBackendClient({ baseUrl, token: TOKEN }).stopSessions('4242')).toEqual([]);
+  });
+
+  it('reports a broken body as a contract violation', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 200, { session: stopped });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).stopSessions('4242'),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  it('carries a 500 as its status, without the body', async () => {
+    const { baseUrl } = await serve((_request, reply) => {
+      json(reply, 500, { error: 'internal' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).stopSessions('4242'),
+    );
+    expect(error).toBeInstanceOf(BackendError);
+    expect(error).toMatchObject({ code: BackendErrorCode.HttpStatus, status: 500 });
+  });
+});
+
 describe('emailLogin', () => {
   it('sends the telegram id, the address and the code and returns the grant', async () => {
     const { baseUrl, capture } = await serve((_request, reply) => {

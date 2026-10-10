@@ -154,6 +154,7 @@ interface Branch {
   startSession?: BackendClient['startSession'];
   readSession?: BackendClient['readSession'];
   stopSession?: BackendClient['stopSession'];
+  stopSessions?: BackendClient['stopSessions'];
   setDemoStake?: BackendClient['setDemoStake'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
@@ -338,6 +339,10 @@ async function observe(branch: Branch): Promise<Calls> {
     claimSessionSummary: () => {
       backend += 1;
       return Promise.reject(new Error('no handler claims a session summary'));
+    },
+    stopSessions: (telegramUserId) => {
+      backend += 1;
+      return (branch.stopSessions ?? (() => Promise.resolve([STOPPED_SESSION])))(telegramUserId);
     },
     setDemoStake: (telegramUserId, amount) => {
       backend += 1;
@@ -1350,6 +1355,52 @@ const SESSION_STOP_BRANCHES: readonly Branch[] = [
   SESSION_STOP_WORST_CASE,
 ];
 
+// /stop (#122): one message whatever the count, so every path is stopSessions ∥ readPairs and
+// one sendMessage
+const stopUpdate = (chatType?: string) => textUpdate('/stop', chatType);
+const STOP_WORST_CASE: Branch = {
+  label: 'one session is stopped and its status is sent',
+  update: stopUpdate(),
+  expected: { backend: 2, telegram: 1 },
+};
+const STOP_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the update carries no sender',
+    update: withoutSender(stopUpdate()),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the chat is not private',
+    update: stopUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  STOP_WORST_CASE,
+  {
+    label: 'no session was active',
+    update: stopUpdate(),
+    stopSessions: () => Promise.resolve([]),
+    expected: { backend: 2, telegram: 1 },
+  },
+  {
+    label: 'two sessions are stopped',
+    update: stopUpdate(),
+    stopSessions: () => Promise.resolve([STOPPED_SESSION, STOPPED_SESSION]),
+    expected: { backend: 2, telegram: 1 },
+  },
+  {
+    label: 'the stop fails',
+    update: stopUpdate(),
+    stopSessions: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 2, telegram: 1 },
+  },
+  {
+    label: 'the catalog fails',
+    update: stopUpdate(),
+    readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 2, telegram: 1 },
+  },
+];
+
 // #314: the site sign-in button of a message sent before it
 const OAUTH_WORST_CASE: Branch = {
   label: 'the query is answered and the keyboard is removed',
@@ -2340,6 +2391,10 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
       SESSION_REFRESH_WORST_CASE,
       HANDLER_CALLS.sessionRefresh,
     );
+  });
+
+  it('/stop (#122)', async () => {
+    await checkHandler('stop', STOP_BRANCHES, STOP_WORST_CASE, HANDLER_CALLS.stop);
   });
 
   it("the session's stop button", async () => {

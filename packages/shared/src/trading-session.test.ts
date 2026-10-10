@@ -15,9 +15,12 @@ import {
   safeParseTradingSessionRefusal,
   safeParseTradingSessionResponse,
   safeParseTradingSessionSettings,
+  safeParseTradingSessionsStoppedResponse,
   isTradingSessionFinished,
   sessionFitsDeadline,
   stakeSettingsFor,
+  TRADING_SESSIONS_PATH,
+  TRADING_SESSIONS_STOP_PATH,
   tradingSessionStopReasonSchema,
 } from './trading-session';
 
@@ -273,5 +276,27 @@ describe('tradingSessionRefusalSchema', () => {
 
   it('spells catalog_unavailable as the pairs route does', () => {
     expect(TradingSessionErrorCode.CatalogUnavailable).toBe(PairsCatalogErrorCode.Unavailable);
+  });
+});
+
+describe('tradingSessionsStoppedResponseSchema (#122)', () => {
+  it('accepts an empty list and a list of views', () => {
+    expect(safeParseTradingSessionsStoppedResponse({ sessions: [] }).success).toBe(true);
+    expect(safeParseTradingSessionsStoppedResponse({ sessions: [view, view] }).success).toBe(true);
+  });
+
+  it('refuses an extra key, a missing list and an element that is not a view', () => {
+    expect(safeParseTradingSessionsStoppedResponse({ sessions: [], stopped: 0 }).success).toBe(
+      false,
+    );
+    expect(safeParseTradingSessionsStoppedResponse({}).success).toBe(false);
+    expect(
+      safeParseTradingSessionsStoppedResponse({ sessions: [{ ...view, userId: 'x' }] }).success,
+    ).toBe(false);
+    expect(safeParseTradingSessionsStoppedResponse({ session: view }).success).toBe(false);
+  });
+
+  it('sits under the sessions path', () => {
+    expect(TRADING_SESSIONS_STOP_PATH).toBe(`${TRADING_SESSIONS_PATH}/stop`);
   });
 });

@@ -49,6 +49,7 @@ import {
   stopHaltedSessions,
   stopPausedSessions,
   stopTradingSession,
+  stopUserSessions,
   type CreateSessionIntentInput,
   type CreateTradingSessionInput,
 } from './trading-session-ops';
@@ -690,6 +691,51 @@ describe('stopPausedSessions (#144)', () => {
     });
     // a session another writer stopped first keeps its reason
     expect((await sessionOf(done.session.id))!.stopReason).toBe('completed');
+  });
+});
+
+describe('stopUserSessions (#122)', () => {
+  it('A1 stops every active session of the owner across accounts, no one else, once', async () => {
+    const owner = await seedUserWithAccount(tmp.db);
+    const secondAccount = await seedBrokerAccount(tmp.db, owner.userId);
+    const first = await seedTradingSession(tmp.db, owner.brokerAccountId);
+    const second = await seedTradingSession(tmp.db, secondAccount);
+    const other = await seedSessionAccount();
+
+    const stopped = await stopUserSessions(tmp.db, { telegramUserId: owner.telegramUserId });
+
+    expect(new Set(stopped.map((s) => s.id))).toEqual(new Set([first.id, second.id]));
+    expect(stopped).toContainEqual({ id: second.id, brokerAccountId: secondAccount });
+    for (const id of [first.id, second.id]) {
+      expect(await sessionOf(id)).toMatchObject({
+        status: 'stopped',
+        stopReason: 'user_stopped',
+        endedAt: expect.any(Date),
+        lastDecisionAt: expect.any(Date),
+      });
+    }
+    expect((await sessionOf(other.session.id))!.status).toBe('active');
+    expect(await stopUserSessions(tmp.db, { telegramUserId: owner.telegramUserId })).toEqual([]);
+  });
+
+  it('A2 an unknown telegramUserId stops nothing', async () => {
+    const bystander = await seedSessionAccount();
+    expect(await stopUserSessions(tmp.db, { telegramUserId: '999999999999' })).toEqual([]);
+    expect(await sessionOf(bystander.session.id)).toMatchObject({
+      status: 'active',
+      stopReason: null,
+      endedAt: null,
+    });
+  });
+
+  it('A3 a session stopped earlier keeps its reason and is not returned', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const earlier = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await stopTradingSession(tmp.db, { id: earlier.id, reason: 'timeout' });
+    const before = await sessionOf(earlier.id);
+
+    expect(await stopUserSessions(tmp.db, { telegramUserId: seed.telegramUserId })).toEqual([]);
+    expect(await sessionOf(earlier.id)).toEqual(before);
   });
 });
 
