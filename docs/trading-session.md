@@ -479,7 +479,9 @@ is an answer, never a throw. Neither client logs; the orchestrator logs the outc
 
 Both: a fetch error, the timeout or the caller's abort → `backend_unreachable` (its cause dropped:
 it may name the URL); any other status → `backend_status` with the status; a body the schema
-refuses → `contract_violation`. The body text never enters a result (`backend.test.ts` B6).
+refuses → `contract_violation`. The body is read up to `MAX_BACKEND_BODY_BYTES` (1 MiB); over it, a
+200 (or the pairs' 503) answers `contract_violation`, any other status `backend_status`
+(`backend.test.ts` → body size). The body text never enters a result (`backend.test.ts` B6).
 
 ## Constants and the chain
 
