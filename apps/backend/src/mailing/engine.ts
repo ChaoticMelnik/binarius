@@ -37,7 +37,7 @@ export interface MailingConfig {
   maxAttempts: number;
 }
 
-export const DEFAULT_MAILING_CONFIG: MailingConfig = {
+const DEFAULT_MAILING_CONFIG: MailingConfig = {
   planTickMs: MAILING_PLAN_TICK_MS,
   sendTickMs: MAILING_SEND_TICK_MS,
   sendBatch: MAILING_SEND_BATCH,
@@ -61,7 +61,8 @@ export interface MailingEngine {
   planTick(): Promise<void>;
   sendTick(): Promise<void>;
   start(): void;
-  // Ends both loops and waits for the statement or the send in flight: at most one send.
+  // Ends both loops and waits for the planner tick and the sender's job in flight: at most one
+  // send, with its pace, claim, settle and 403 bookkeeping (docs/mailing.md → Stop).
   stop(): Promise<void>;
 }
 
@@ -116,34 +117,52 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
     }
   }
 
+  const retryOutcome = (error: unknown): MailingOutcome => ({
+    kind: 'retry',
+    lastError: lastErrorOf(error),
+    afterMs: config.retryMs,
+    maxAttempts: config.maxAttempts,
+  });
+
   // What the send's failure means for the job. A send that ended without Telegram's answer is
-  // left as the claim wrote it, `sent` with an unknown outcome: it may have been delivered.
+  // left as the claim wrote it, `sent` with an unknown outcome: it may have been delivered. A 5xx
+  // is the same: Telegram may have delivered the message before it failed to answer.
   function outcomeOf(error: unknown): MailingOutcome | undefined {
     if (!(error instanceof GrammyError)) return undefined;
+    if (error.error_code >= 500) return undefined;
     const lastError = lastErrorOf(error);
     if (error.error_code === 403) return { kind: 'refused', lastError };
     if (error.error_code === 429) {
       return { kind: 'deferred', lastError, afterMs: (error.parameters.retry_after ?? 1) * 1000 };
     }
-    return { kind: 'retry', lastError, afterMs: config.retryMs, maxAttempts: config.maxAttempts };
+    return retryOutcome(error);
+  }
+
+  // A settle that fails leaves the job as the claim wrote it, `sent` with an unknown outcome, so
+  // it is never sent again; what the answer asks of the sender (the pause, the 403 mark) still
+  // happens.
+  async function settle(job: ClaimedMailingJob, outcome: MailingOutcome): Promise<void> {
+    try {
+      await settleMailingJob(db, job.id, outcome);
+    } catch (error) {
+      logger.error(
+        { jobId: job.id, kind: job.kind, ...errorLogFields(error) },
+        'mailing not settled',
+      );
+    }
   }
 
   // Resolves to the pause Telegram asked for, if it did.
   async function deliver(job: ClaimedMailingJob): Promise<number | undefined> {
     let message: ClientPushMessage;
     try {
-      message = mailingMessage(job.kind, job.payload);
+      message = mailingMessage(job.kind);
     } catch (error) {
       logger.error(
         { jobId: job.id, kind: job.kind, ...errorLogFields(error) },
         'mailing not built',
       );
-      await settleMailingJob(db, job.id, {
-        kind: 'retry',
-        lastError: lastErrorOf(error),
-        afterMs: config.retryMs,
-        maxAttempts: config.maxAttempts,
-      });
+      await settle(job, retryOutcome(error));
       return undefined;
     }
     try {
@@ -161,13 +180,13 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
       );
       const outcome = outcomeOf(error);
       if (outcome === undefined) return undefined;
-      await settleMailingJob(db, job.id, outcome);
+      await settle(job, outcome);
       if (outcome.kind === 'refused') {
         await recordTelegramSendFailure({ db, log: logger }, job.telegramUserId, error);
       }
       return outcome.kind === 'deferred' ? outcome.afterMs : undefined;
     }
-    await settleMailingJob(db, job.id, { kind: 'delivered' });
+    await settle(job, { kind: 'delivered' });
     return undefined;
   }
 

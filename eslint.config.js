@@ -152,16 +152,18 @@ export default tseslint.config(
     },
   },
   {
-    // Telegram user texts (#198): the user bot, the backend's push and its mailings (#202) send only
-    // TelegramHtml, and only through their seams. The staff bot (apps/backend/src/admin) stays
-    // plain text by the owner's decision of 2026-10-02 and is outside this block. The seam files
-    // are ignored here, so they fall back to the block above and keep the logging rule.
-    files: [
-      'apps/bot/src/**/*.ts',
-      'apps/backend/src/auth/**/*.ts',
-      'apps/backend/src/mailing/**/*.ts',
+    // Telegram user texts (#198): the user bot and the whole backend (its push, its mailings #202,
+    // and any module that holds the push's `api`) send only TelegramHtml, and only through their
+    // seams. The staff bot (apps/backend/src/admin) stays plain text by the owner's decision of
+    // 2026-10-02 and is outside this block. The seam files are ignored here, so they fall back to
+    // the block above and keep the logging rule.
+    files: ['apps/bot/src/**/*.ts', 'apps/backend/src/**/*.ts'],
+    ignores: [
+      '**/*.test.ts',
+      'apps/bot/src/send.ts',
+      'apps/backend/src/auth/client-push.ts',
+      'apps/backend/src/admin/**',
     ],
-    ignores: ['**/*.test.ts', 'apps/bot/src/send.ts', 'apps/backend/src/auth/client-push.ts'],
     rules: {
       'no-restricted-syntax': ['error', ...LOG_ERROR_RULES, RAW_TELEGRAM_SEND],
     },

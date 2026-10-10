@@ -55,6 +55,7 @@ beforeEach(async () => {
 
 const PUSH_TOKEN = '123456:AA-mailing-push-token';
 const WARN = 40;
+const ERROR = 50;
 
 interface Linked {
   userId: string;
@@ -80,7 +81,11 @@ async function linked(minutes: number): Promise<Linked> {
 // a user whose last step is due
 const dueUser = () => linked(72 * 60 + 1);
 
-function engine(config: Partial<MailingConfig> = {}, clock = { now: 0 }) {
+function engine(
+  config: Partial<MailingConfig> = {},
+  clock = { now: 0 },
+  sleep: (ms: number) => Promise<void> = async () => {},
+) {
   const push = createClientPush({ token: PUSH_TOKEN });
   const captured = captureApi(push);
   const lines: string[] = [];
@@ -90,7 +95,7 @@ function engine(config: Partial<MailingConfig> = {}, clock = { now: 0 }) {
     logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
     config,
     now: () => clock.now,
-    sleep: async () => {},
+    sleep,
   });
   const logs = () => lines.map((line) => JSON.parse(line) as Record<string, unknown>);
   return { mailing, captured, push, logs };
@@ -240,6 +245,27 @@ describe('the sender’s failures', () => {
     await mailing.stop();
   });
 
+  it('never sends again a job Telegram answered with a 5xx: it may have been delivered', async () => {
+    const user = await dueUser();
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    captured.apiErrors.set('sendMessage', {
+      ok: false,
+      error_code: 502,
+      description: 'Bad Gateway',
+    });
+    await mailing.sendTick();
+    captured.apiErrors.delete('sendMessage');
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    expect(sendsTo(captured.calls, user.telegramUserId)).toHaveLength(1);
+    expect(await jobsOf(user.userId)).toMatchObject([
+      { status: NotificationJobStatus.Sent, attempts: 0, lastError: MAILING_OUTCOME_UNKNOWN },
+    ]);
+    await mailing.stop();
+  });
+
   it('tries a job Telegram refused otherwise again later, counting the attempt', async () => {
     const user = await dueUser();
     const { mailing, captured } = engine();
@@ -259,6 +285,102 @@ describe('the sender’s failures', () => {
   });
 });
 
+// Fails every update of a `sent` row, which is what settleMailingJob writes, and nothing else the
+// sender does: the claim updates `pending` rows, the 403 mark `users` and `pending` rows.
+async function failingSettles<T>(run: () => Promise<T>): Promise<T> {
+  await tmp.db.execute(sql`
+    create function test_fail_settle() returns trigger language plpgsql as $$
+    begin raise exception 'settle refused by the test'; end $$`);
+  await tmp.db.execute(sql`
+    create trigger test_fail_settle before update on notification_jobs
+    for each row when (old.status = 'sent') execute function test_fail_settle()`);
+  try {
+    return await run();
+  } finally {
+    await tmp.db.execute(sql`drop trigger test_fail_settle on notification_jobs`);
+    await tmp.db.execute(sql`drop function test_fail_settle()`);
+  }
+}
+
+const notSettled = (logs: Record<string, unknown>[]) =>
+  logs.filter((entry) => entry.level === ERROR && entry.msg === 'mailing not settled');
+
+describe('a settle that fails', () => {
+  it('still pauses for Telegram’s 429 and never sends the job again', async () => {
+    const clock = { now: 1_000_000 };
+    const first = await dueUser();
+    const { mailing, captured, logs } = engine({}, clock);
+    await mailing.planTick();
+    captured.apiErrors.set('sendMessage', {
+      ok: false,
+      error_code: 429,
+      description: 'Too Many Requests: retry after 30',
+      parameters: { retry_after: 30 },
+    });
+    await failingSettles(() => mailing.sendTick());
+    captured.apiErrors.delete('sendMessage');
+
+    const second = await dueUser();
+    await mailing.planTick();
+    await mailing.sendTick();
+    expect(callsTo(captured.calls, 'sendMessage')).toHaveLength(1);
+    clock.now += 30_000;
+    await mailing.sendTick();
+    expect(sendsTo(captured.calls, second.telegramUserId)).toHaveLength(1);
+    expect(sendsTo(captured.calls, first.telegramUserId)).toHaveLength(1);
+    expect(await jobsOf(first.userId)).toMatchObject([
+      { status: NotificationJobStatus.Sent, lastError: MAILING_OUTCOME_UNKNOWN },
+    ]);
+    const failed = notSettled(logs());
+    expect(failed).toHaveLength(1);
+    expect(JSON.stringify(failed)).not.toContain('settle refused');
+    await mailing.stop();
+  });
+
+  it('still marks a user who blocked the bot on 403', async () => {
+    const user = await dueUser();
+    const { mailing, captured, logs } = engine();
+    await mailing.planTick();
+    captured.apiErrors.set('sendMessage', {
+      ok: false,
+      error_code: 403,
+      description: 'Forbidden: bot was blocked by the user',
+    });
+    await failingSettles(() => mailing.sendTick());
+
+    const [row] = await tmp.db
+      .select({ at: users.telegramBlockedAt })
+      .from(users)
+      .where(eq(users.id, user.userId));
+    expect(row?.at).toBeInstanceOf(Date);
+    expect(await jobsOf(user.userId)).toMatchObject([
+      { status: NotificationJobStatus.Sent, lastError: MAILING_OUTCOME_UNKNOWN },
+    ]);
+    expect(notSettled(logs())).toHaveLength(1);
+    await mailing.stop();
+  });
+});
+
+describe('the rate', () => {
+  it('M10 spaces the engine’s own sends 1000 / perSecond apart', async () => {
+    for (let index = 0; index < 3; index += 1) await dueUser();
+    const clock = { now: 0 };
+    const { mailing, captured } = engine({ perSecond: 2 }, clock, async (ms) => {
+      clock.now += ms;
+    });
+    const sentAt: number[] = [];
+    captured.answers.set('sendMessage', () => {
+      sentAt.push(clock.now);
+      return { message_id: 1 };
+    });
+    await mailing.planTick();
+    await mailing.sendTick();
+    expect(sentAt.length).toBeGreaterThanOrEqual(3);
+    expect(sentAt.map((at, index) => at - index * 500)).toEqual(sentAt.map(() => 0));
+    await mailing.stop();
+  });
+});
+
 describe('a restart', () => {
   it('M11 sends every step once across a stop in the middle of a batch and a new engine', async () => {
     const users = [await dueUser(), await dueUser(), await dueUser()];
@@ -274,9 +396,23 @@ describe('a restart', () => {
     });
     const tick = first.mailing.sendTick();
     await until('the first send to start', () => first.captured.calls.length === 1);
-    const stopped = first.mailing.stop();
+    let stopReturned = false;
+    const stopped = first.mailing.stop().then(() => {
+      stopReturned = true;
+    });
+    // a stop that did not wait would have returned by the time the check phase runs
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(stopReturned).toBe(false);
     release();
-    await Promise.all([tick, stopped]);
+    await stopped;
+    // stop() returned after the settle, not only after the send
+    const target = users.find(
+      (user) => user.telegramUserId === first.captured.calls[0]!.payload.chat_id,
+    );
+    expect(await jobsOf(target!.userId)).toMatchObject([
+      { status: NotificationJobStatus.Sent, lastError: null },
+    ]);
+    await tick;
     expect(callsTo(first.captured.calls, 'sendMessage')).toHaveLength(1);
 
     const second = engine();
