@@ -57,7 +57,7 @@ export const TradingSessionDbErrorCode = {
   ActiveSessionExists: 'active_session_exists',
   // the global trading switch is closed (#144)
   TradingPaused: 'trading_paused',
-  // sessions are demo only: nothing else fences a real session's intents (#144 review m1)
+  // sessions are demo only until #327: createTradingSession refuses another mode (#144 review m1)
   ModeNotAllowed: 'mode_not_allowed',
   // a real session on a DEMO_ONLY process (#396), before mode_not_allowed
   DemoOnly: 'demo_only',
@@ -476,7 +476,8 @@ export type TradingSessionStartRefusal =
   | typeof TradingSessionErrorCode.AccountHalted
   | typeof TradingSessionErrorCode.ActiveSessionExists
   | typeof TradingSessionErrorCode.InsufficientTokens
-  | typeof TradingSessionErrorCode.TradingPaused;
+  | typeof TradingSessionErrorCode.TradingPaused
+  | typeof TradingSessionErrorCode.ModeNotAllowed;
 
 export type TradingSessionStartCheck =
   | { ok: true; brokerAccountId: string; accessTokenExpiresAt: Date }
@@ -504,11 +505,16 @@ export async function checkTradingSessionStart(
       status: users.status,
       balance: users.tokenBalance,
       reserved: users.tokenReserved,
+      tradingMode: users.tradingMode,
     })
     .from(users)
     .where(eq(users.telegramUserId, BigInt(telegramUserId)));
   if (user === undefined) return refused(TradingSessionErrorCode.UserNotFound);
   if (user.status === UserStatus.Blocked) return refused(TradingSessionErrorCode.UserBlocked);
+  // the route creates demo sessions only (#121, Rule 36): a user in real mode gets none, before
+  // any account read. Not re-read in createTradingSession's transaction: a switch to real between
+  // the two reads leaves a demo session trading demo money (docs/trading-session.md -> Routes).
+  if (user.tradingMode !== TradeMode.Demo) return refused(TradingSessionErrorCode.ModeNotAllowed);
 
   const resolved = await resolveTradingAccount(db, user.id, brokerAccountId);
   if (!resolved.ok) return refused(resolved.code);

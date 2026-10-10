@@ -12,6 +12,7 @@ import {
   pairPayoutAccepted,
   SignalFeedOutcome,
   TradeAction,
+  TradeMode,
   type DecimalString,
   type PairsCatalogResponse,
   type PairView,
@@ -114,7 +115,8 @@ export const analysisMoreCallbackData = (
 // The stake button behind «➕ Ещё» (#126, #360); the press opens the trade (#127, demo-trade.ts).
 // The nonce is drawn once per expansion and is the trade's idempotency key: the same button
 // pressed again replays its intent, a new expansion allows a new trade. The fingerprint is the amount the
-// label shows (#297): the press refuses when the amount in effect now is another one. The longest,
+// label shows (#297) and its mode (#121): the press refuses when the amount or the mode in effect
+// now is another one. The longest,
 // `demo:stake:2147483647:15:down:0123456789ab:0a1b2c`, is 49 bytes.
 const STAKE_CALLBACK_PREFIX = 'demo:stake:';
 export const stakeCallbackData = (
@@ -124,19 +126,32 @@ export const stakeCallbackData = (
   nonce: string,
   fingerprint: string,
 ): string => `${STAKE_CALLBACK_PREFIX}${assetId}:${durationSec}:${action}:${nonce}:${fingerprint}`;
-// 24 bits of the canonical amount; null (no amount to show) hashes '', so a button drawn without
-// an amount never matches one with it
-export const stakeFingerprint = (amount: DecimalString | null): string =>
+// 24 bits of the canonical amount, prefixed by the mode in real mode (#121), so a button drawn in
+// one mode never matches a press in the other; a demo amount hashes as before #121, so a demo
+// button drawn before it still trades. null (no amount to show) hashes '', so a button drawn
+// without an amount never matches one with it.
+export const stakeFingerprint = (amount: DecimalString | null, mode: TradeMode): string =>
   createHash('sha256')
-    .update(amount === null ? '' : normalizeDecimal(amount))
+    .update(
+      amount === null
+        ? ''
+        : mode === TradeMode.Real
+          ? `${TradeMode.Real}:${normalizeDecimal(amount)}`
+          : normalizeDecimal(amount),
+    )
     .digest('hex')
     .slice(0, 6);
-// The amount a stake press trades (#297): the saved demo stake, or the broker's minimum without
-// one; null when access has no broker snapshot to say it.
+// The amount a stake press trades: in real mode always the broker's minimum (#121, owner's
+// decision 8); in demo the saved demo stake, or the broker's minimum without one (#297). null when
+// access has no broker snapshot to say it.
 export const effectiveStake = (
-  access: Pick<TradingAccessResponse, 'broker' | 'demoStake'>,
+  access: Pick<TradingAccessResponse, 'broker' | 'demoStake' | 'tradingMode'>,
 ): DecimalString | null =>
-  access.broker === null ? null : (access.demoStake ?? access.broker.minTradeAmount);
+  access.broker === null
+    ? null
+    : access.tradingMode === TradeMode.Real
+      ? access.broker.minTradeAmount
+      : (access.demoStake ?? access.broker.minTradeAmount);
 // «💵 Сумма» beside the stake button, and under the stake refusals: the picker (stake-picker.ts)
 // opened from the analysis, whose way back is that analysis
 export const STAKE_PICKER_PREFIX = 'stk:';
@@ -361,7 +376,8 @@ export function signalsScreen(
 // The launch of a cycle of DEFAULT_SESSION_TRADES on a pair at the chosen duration (#320, #382):
 // the session start of the analysis screen (#284), the picker with its way back here, the list.
 // The picker draws it too, after a save, unless the pair pays below the cycle floor
-// (stake-picker.ts).
+// (stake-picker.ts). In real mode (#121) cycles are demo only: the analysis of the pair, whose
+// «➕ Ещё» opens the single real trade, in place of the cycle and the picker.
 export function launchScreen({
   assetId,
   durationSec,
@@ -369,6 +385,7 @@ export function launchScreen({
   symbol,
   amount,
   saved,
+  mode = TradeMode.Demo,
 }: {
   assetId: number;
   durationSec: DemoDurationSec;
@@ -376,16 +393,28 @@ export function launchScreen({
   symbol: string | null;
   amount: DecimalString | null;
   saved?: { amount: DecimalString | null };
+  mode?: TradeMode;
 }): DemoScreen {
+  const text = launchText({
+    firstName,
+    durationSec,
+    symbol,
+    amount,
+    trades: DEFAULT_SESSION_TRADES,
+    saved,
+    mode,
+  });
+  if (mode === TradeMode.Real) {
+    return {
+      text,
+      keyboard: new InlineKeyboard()
+        .text(LABELS.modeAnalysisButton, demoAnalysisCallbackData(assetId, durationSec))
+        .row()
+        .text(LABELS.backToListButton, demoSignalsCallbackData(durationSec)),
+    };
+  }
   return {
-    text: launchText({
-      firstName,
-      durationSec,
-      symbol,
-      amount,
-      trades: DEFAULT_SESSION_TRADES,
-      saved,
-    }),
+    text,
     keyboard: new InlineKeyboard()
       .text(LABELS.launchCycleButton, sessionStartCallbackData(assetId, durationSec))
       .row()
@@ -463,7 +492,7 @@ export function createDemoComposer<C extends Context>({
       await answerOnly(ctx);
       return;
     }
-    const [read, amount] = await answerAnd(
+    const [read, stake] = await answerAnd(
       ctx,
       Promise.all([readDemoCycle(backend, assetId, durationSec, now), stakeAmount(ctx.from.id)]),
     );
@@ -473,7 +502,8 @@ export function createDemoComposer<C extends Context>({
           durationSec,
           firstName: ctx.from.first_name,
           symbol: read.pair.symbol,
-          amount,
+          amount: stake.amount,
+          mode: stake.mode,
         })
       : launchFailure(ctx, read, assetId, durationSec);
     await editOrReply(ctx, screen.text, screen.keyboard);
@@ -541,7 +571,13 @@ export function createDemoComposer<C extends Context>({
       await answerOnly(ctx);
       return;
     }
-    const read = await answerAnd(ctx, readDemoTrade(backend, assetId, durationSec, now));
+    // the mode decides the session row (#121): a user in real mode gets none, cycles being demo
+    // only; a failed access read draws the demo keyboard, whose session press the backend refuses
+    // for a real-mode user (mode_not_allowed)
+    const [read, stake] = await answerAnd(
+      ctx,
+      Promise.all([readDemoTrade(backend, assetId, durationSec, now), stakeAmount(ctx.from.id)]),
+    );
     if (!read.ok) {
       const screen = tradeFailure(ctx, read, assetId);
       await editOrReply(ctx, screen.text, screen.keyboard);
@@ -554,7 +590,7 @@ export function createDemoComposer<C extends Context>({
     );
     if (waiting === 'unknown') return;
     const screen = await evaluate(read.pair, durationSec);
-    const keyboard = analysisKeyboard(assetId, durationSec, screen, read.pair);
+    const keyboard = analysisKeyboard(assetId, durationSec, screen, read.pair, stake.mode);
     // «⏳» went as a new message: the result follows it rather than editing the summary again
     if (waiting === 'sent') await replyHtml(ctx, screen.text, { reply_markup: keyboard });
     else await editOrReply(ctx, screen.text, keyboard);
@@ -569,10 +605,17 @@ export function createDemoComposer<C extends Context>({
       await answerOnly(ctx);
       return;
     }
-    const amount = await answerAnd(ctx, stakeAmount(ctx.from.id));
+    const { amount, mode } = await answerAnd(ctx, stakeAmount(ctx.from.id));
     await editKeyboard(
       ctx,
-      expandedKeyboard(data.assetId, data.durationSec, data.action, amount, data.payoutAccepted),
+      expandedKeyboard(
+        data.assetId,
+        data.durationSec,
+        data.action,
+        amount,
+        data.payoutAccepted,
+        mode,
+      ),
     );
   });
 
@@ -634,33 +677,40 @@ export function createDemoComposer<C extends Context>({
     }
   }
 
-  // The amount for the stake button's label (#297), drawn by «➕ Ещё» (#360), and the launch
-  // screen (#320). A failed read only drops the amount: the signal or the pair decides the screen,
-  // and the press reads access again anyway.
-  async function stakeAmount(telegramUserId: number): Promise<DecimalString | null> {
+  // The amount for the stake button's label (#297) and the user's mode (#121), drawn by «➕ Ещё»
+  // (#360), the analysis (its session row) and the launch screen (#320). A failed read drops the
+  // amount and reads as demo: the signal or the pair decides the screen, and the press reads
+  // access again anyway.
+  async function stakeAmount(
+    telegramUserId: number,
+  ): Promise<{ amount: DecimalString | null; mode: TradeMode }> {
     try {
-      return effectiveStake(await backend.readTradingAccess(String(telegramUserId)));
+      const access = await backend.readTradingAccess(String(telegramUserId));
+      return { amount: effectiveStake(access), mode: access.tradingMode };
     } catch (error) {
       logger.warn(
         { ...errorLogFields(error), ...backendErrorFields(error) },
         'trading access not read for the stake label',
       );
-      return null;
+      return { amount: null, mode: TradeMode.Demo };
     }
   }
 
   // The session row first on every `decided` answer (#360) of a pair paying at least the cycle
-  // floor (#379, the screen says why otherwise), «➕ Ещё» on a signal, then «🔄 Повторить анализ»
-  // and the way back
+  // floor (#379, the screen says why otherwise) in demo mode (#121), «➕ Ещё» on a signal, then
+  // «🔄 Повторить анализ» and the way back
   function analysisKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
     screen: AnalysisScreen,
     pair: PairView,
+    mode: TradeMode,
   ): InlineKeyboard {
     const keyboard = new InlineKeyboard();
     const payoutAccepted = pairPayoutAccepted(pair);
-    if (screen.session) appendSessionRow(keyboard, assetId, durationSec, payoutAccepted);
+    if (screen.session && mode === TradeMode.Demo) {
+      appendSessionRow(keyboard, assetId, durationSec, payoutAccepted);
+    }
     if (screen.stake !== null) {
       keyboard
         .text(
@@ -672,21 +722,32 @@ export function createDemoComposer<C extends Context>({
     return appendAnalysisTail(keyboard, assetId, durationSec);
   }
 
-  // what «➕ Ещё» draws in place of the collapsed keyboard: the stake row joins it
+  // What «➕ Ещё» draws in place of the collapsed keyboard: the stake row joins it. In real mode
+  // (#121) the stake button alone, at the broker's minimum and marked REAL: no session row (cycles
+  // are demo only, #327) and no «💵 Сумма» (the amount is fixed, #326).
   function expandedKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
     action: TradeAction,
     amount: DecimalString | null,
     payoutAccepted: boolean,
+    mode: TradeMode,
   ): InlineKeyboard {
-    const keyboard = appendSessionRow(new InlineKeyboard(), assetId, durationSec, payoutAccepted)
-      .text(
-        stakeButtonLabel(action, amount),
-        stakeCallbackData(assetId, durationSec, action, newStakeNonce(), stakeFingerprint(amount)),
-      )
-      .text(LABELS.stakeMenuButton, stakeMenuCallbackData(assetId, durationSec))
-      .row();
+    const stakeData = stakeCallbackData(
+      assetId,
+      durationSec,
+      action,
+      newStakeNonce(),
+      stakeFingerprint(amount, mode),
+    );
+    const label = stakeButtonLabel(action, amount, mode);
+    const keyboard =
+      mode === TradeMode.Real
+        ? new InlineKeyboard().text(label, stakeData).row()
+        : appendSessionRow(new InlineKeyboard(), assetId, durationSec, payoutAccepted)
+            .text(label, stakeData)
+            .text(LABELS.stakeMenuButton, stakeMenuCallbackData(assetId, durationSec))
+            .row();
     return appendAnalysisTail(keyboard, assetId, durationSec);
   }
 

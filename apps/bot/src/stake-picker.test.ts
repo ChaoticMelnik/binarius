@@ -387,6 +387,38 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     expect(loginDialog.get(USER.id)).toBeUndefined();
   });
 
+  // #121: a save from a launch screen drawn before the user switched to real draws the real launch
+  it('returns a user in real mode to the real launch screen', async () => {
+    const { press, calls, readTradingAccess } = setup({
+      readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
+    });
+    await press(stakePresetCallbackData('5', PAIR));
+    expect(readTradingAccess.mock.calls).toEqual([[String(USER.id)]]);
+    const screen = launchScreen({
+      assetId: PAIR_EURUSD.id,
+      durationSec: 15,
+      firstName: USER.first_name,
+      symbol: PAIR_EURUSD.symbol,
+      amount: d('5'),
+      saved: { amount: d('5') },
+      mode: TradeMode.Real,
+    });
+    expect(lastPayload(calls)?.text).toBe(screen.text.value);
+    expect(rowsOf(lastPayload(calls))).toEqual([
+      [button(LABELS.modeAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15))],
+      [button(LABELS.backToListButton, 'demo:sig:15')],
+    ]);
+  });
+
+  it('keeps the demo launch and warns when the mode is not read', async () => {
+    const { press, calls, logger } = setup({
+      readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    });
+    await press(stakePresetCallbackData('5', PAIR));
+    expect(lastPayload(calls)?.text).toBe(savedLaunch(d('5')).text.value);
+    expect(warnings(logger)).toEqual(['trading access not read for the launch screen']);
+  });
+
   it('drops the symbol line, keeps the launch and warns when the catalog is not read', async () => {
     const { press, calls, logger } = setup({
       readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),

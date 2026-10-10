@@ -181,6 +181,13 @@ describe('the bot texts catalog', () => {
         'inviteShareButton',
         'loginButton',
         'menuButton',
+        'modeAnalysisButton',
+        'modeBackDemoButton',
+        'modeButton',
+        'modeCancelButton',
+        'modeConfirmButton',
+        'modeEnableButton',
+        'modeScreenButton',
         'newAnalysisButton',
         'oauthButton',
         'refreshIntentButton',
@@ -197,6 +204,7 @@ describe('the bot texts catalog', () => {
         'stakeResetButton',
         'supportButton',
         'toSignalsButton',
+        'tradeButton',
       ].sort(),
     );
     expect(botTextKeysOf(BotTextGroup.Commands).sort()).toEqual(

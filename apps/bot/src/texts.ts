@@ -11,6 +11,7 @@ import {
   formatStake,
   formatUsd,
   isPendingLink,
+  MODE_LABELS,
   LinkBonusSkipReason,
   BrokerBalanceUnavailableReason,
   NotificationLevel,
@@ -23,6 +24,8 @@ import {
   TradingSessionStatus,
   TradingSessionStopReason,
   type BotHtmlKey,
+  type BotHtmlTexts,
+  type BotPlainTexts,
   type BotStaticHtmlKey,
   type BotStaticPlainKey,
   type BotTextBalance,
@@ -119,19 +122,24 @@ type TextKey = Exclude<
   | BotTextKeyOfGroup<typeof BotTextGroup.Mailing>
 >;
 
-export const TEXTS = facadeOf(
-  html,
-  (Object.keys(html) as BotHtmlKey[]).filter(
-    (key): key is TextKey => !(NOT_IN_TEXTS as readonly string[]).includes(key),
-  ),
-  {
-    // The name is Telegram's first_name: the Bot API guarantees it non-empty, not non-blank.
-    cardGreeting: (context: { firstName: string; email: string | null }): TelegramHtml =>
-      context.firstName.trim() === ''
-        ? html.cardGreetingNoName({ email: context.email })
-        : html.cardGreeting(context),
-  },
-);
+interface TextOverrides {
+  cardGreeting: (context: { firstName: string; email: string | null }) => TelegramHtml;
+}
+// annotated: the inferred type of the whole catalog is past what tsc serializes into a .d.ts
+export const TEXTS: Omit<Pick<BotHtmlTexts, TextKey>, keyof TextOverrides> & TextOverrides =
+  facadeOf(
+    html,
+    (Object.keys(html) as BotHtmlKey[]).filter(
+      (key): key is TextKey => !(NOT_IN_TEXTS as readonly string[]).includes(key),
+    ),
+    {
+      // The name is Telegram's first_name: the Bot API guarantees it non-empty, not non-blank.
+      cardGreeting: (context: { firstName: string; email: string | null }): TelegramHtml =>
+        context.firstName.trim() === ''
+          ? html.cardGreetingNoName({ email: context.email })
+          : html.cardGreeting(context),
+    },
+  );
 
 // What a handler holding the access read and the user's first_name gives the texts of the status
 // card and the stake picker (docs/bot-texts.md → Variables). Nothing here is read for a text.
@@ -154,7 +162,8 @@ export const balanceOf = (
 ): BotTextBalance =>
   broker === null ? null : { amount: broker[side].available, fresh: broker.fresh };
 
-// `mode` is the card's: DEMO until a user can trade on real
+// `mode` is the user's trading mode (#121) where the caller read it, DEMO for the stake picker,
+// which saves the demo stake whatever the mode
 export const userContextOf = (
   firstName: string,
   mode: TradeMode,
@@ -253,7 +262,8 @@ function bonusOf(
 }
 
 // Only what the card prints reaches it: `status` is branched on before a card exists, and
-// tradingOpen is the backend's switch, not the user's mode.
+// tradingOpen is the backend's switch, not the user's mode. `mode` is the access read's
+// tradingMode (#121): the header and the hint follow it.
 export type StatusCardInput = Pick<
   TradingAccessResponse,
   'tokens' | 'broker' | 'brokerUnavailable' | 'demoStake'
@@ -289,7 +299,7 @@ ${real}
 ${demo}
 ${TEXTS.statusTokens(context)}${reserved}${statusTail}
 
-${TEXTS.statusHint(context)}`;
+${input.mode === TradeMode.Real ? TEXTS.statusHintReal(context) : TEXTS.statusHint(context)}`;
 }
 
 function statusLineOf(
@@ -353,7 +363,7 @@ export const INTENT_SYMBOL_LIMIT = 64;
 // What the status message shows of an intent: its trade and its status; nothing else of the view.
 export type IntentStatusView = Pick<
   TradeIntentView,
-  'assetId' | 'action' | 'durationSec' | 'amount' | 'status' | 'lastError'
+  'mode' | 'assetId' | 'action' | 'durationSec' | 'amount' | 'status' | 'lastError'
 >;
 
 const durationLabelOf = (durationSec: number): string =>
@@ -402,7 +412,8 @@ ${TEXTS.intentSessionOffer({ trades: tradesCount(DEFAULT_SESSION_TRADES) })}`,
         ]
       : []),
   ];
-  return telegramHtml`${TEXTS.intentHeader}
+  const header = view.mode === TradeMode.Real ? TEXTS.intentHeaderReal : TEXTS.intentHeader;
+  return telegramHtml`${header}
 ${TEXTS.intentTrade({ line: trade })}
 
 ${statusLineOfIntent(view)}${tail}`;
@@ -577,13 +588,17 @@ type LabelKey = Exclude<
   BotTextKeyOfGroup<typeof BotTextGroup.Buttons | typeof BotTextGroup.Commands>,
   'confirmButtonNoEmail'
 >;
-export const LABELS = facadeOf(
-  plain,
-  botTextKeysOf(BotTextGroup.Buttons, BotTextGroup.Commands).filter(
-    (key): key is LabelKey => key !== 'confirmButtonNoEmail',
-  ),
-  { confirmButton: (email: string | null): string => confirmButtonLabel(plain, email) },
-);
+interface LabelOverrides {
+  confirmButton: (email: string | null) => string;
+}
+export const LABELS: Omit<Pick<BotPlainTexts, LabelKey>, keyof LabelOverrides> & LabelOverrides =
+  facadeOf(
+    plain,
+    botTextKeysOf(BotTextGroup.Buttons, BotTextGroup.Commands).filter(
+      (key): key is LabelKey => key !== 'confirmButtonNoEmail',
+    ),
+    { confirmButton: (email: string | null): string => confirmButtonLabel(plain, email) },
+  );
 
 // what «📤 Поделиться» puts beside the link in the chat the user picks (#115); plain, as a label
 export const inviteShareText = (): string => plain.inviteShareText;
@@ -607,11 +622,19 @@ export const DEMO_DURATION_LABELS = labelsOf({
 export const groupButtonLabel = (group: DemoAssetGroup, openCount: number): string =>
   `${DEMO_GROUP_LABELS[group]} · ${openCount}`;
 // the analysis screen's button by the signal's direction (#126), with the amount it trades when
-// known (#297)
-export const stakeButtonLabel = (action: TradeAction, amount: string | null = null): string =>
+// known (#297), and the mode's label in real mode (#121), so a real trade never looks like a demo
+// one; MODE_LABELS is data, not a text
+export const stakeButtonLabel = (
+  action: TradeAction,
+  amount: string | null = null,
+  mode: TradeMode = TradeMode.Demo,
+): string =>
   plain.stakeButton({
-    action:
-      amount === null ? ACTION_LABELS[action] : `${ACTION_LABELS[action]} · ${formatStake(amount)}`,
+    action: [
+      ACTION_LABELS[action],
+      ...(amount === null ? [] : [formatStake(amount)]),
+      ...(mode === TradeMode.Real ? [MODE_LABELS[TradeMode.Real]] : []),
+    ].join(' · '),
   });
 // a data label, like the confirm button's address: no emoji, the symbol as the broker spells it
 // (it already carries «OTC»), the payout printed as it arrives
@@ -665,7 +688,8 @@ export const signalButtonLabel = (symbol: string, action: TradeAction, payout: n
 // The launch screen (#320): the pair at the chosen duration (#382), the amount the cycle trades,
 // what the cycle does. A symbol the catalog did not give drops its line, an amount access did not
 // give reads as the broker's minimum; `saved` is what the picker has just saved, null for the reset
-// to the minimum.
+// to the minimum. In real mode (#121) the cycle's line gives way to the single trade's: cycles are
+// demo only.
 export function launchText({
   firstName,
   durationSec,
@@ -673,6 +697,7 @@ export function launchText({
   amount,
   trades,
   saved,
+  mode = TradeMode.Demo,
 }: {
   firstName: string;
   durationSec: DemoDurationSec;
@@ -680,6 +705,7 @@ export function launchText({
   amount: DecimalString | null;
   trades: number;
   saved?: { amount: DecimalString | null };
+  mode?: TradeMode;
 }): TelegramHtml {
   const context = { firstName, stake: amount };
   const lines = [
@@ -694,7 +720,9 @@ export function launchText({
     amount === null
       ? TEXTS.launchStakeMinimum(context)
       : TEXTS.launchStake({ ...context, stake: amount }),
-    TEXTS.launchCycle({ ...context, trades: tradesCount(trades) }),
+    mode === TradeMode.Real
+      ? TEXTS.launchRealMode
+      : TEXTS.launchCycle({ ...context, trades: tradesCount(trades) }),
   ];
   if (saved === undefined) return joinLines(lines);
   return telegramHtml`${TEXTS.stakeSavedLine({ firstName, stake: saved.amount })}
@@ -743,6 +771,37 @@ export function stakePickerText({
   return telegramHtml`${TEXTS.stakePickerHeader(context)}
 ${joinLines(lines)}`;
 }
+
+// The mode screen (#121, trading-mode.ts): the mode now; with a balance snapshot the real balance
+// and the broker's minimum, the amount a real trade stakes; the warning; the paused line while the
+// switch is closed.
+export function tradingModeScreen({
+  mode,
+  broker,
+  tradingOpen,
+}: {
+  mode: TradeMode;
+  broker: Pick<NonNullable<TradingAccessResponse['broker']>, 'real' | 'minTradeAmount'> | null;
+  tradingOpen: boolean;
+}): TelegramHtml {
+  const lines = [
+    TEXTS.modeCurrent({ mode }),
+    ...(broker === null
+      ? []
+      : [
+          TEXTS.modeRealBalance({ realAvailable: broker.real.available }),
+          TEXTS.modeMinStake({ minStake: broker.minTradeAmount }),
+        ]),
+  ];
+  const paused = tradingOpen ? [] : [telegramHtml`\n\n${TEXTS.modePaused}`];
+  return telegramHtml`${TEXTS.modeHeader}
+${joinLines(lines)}
+
+${TEXTS.modeWarning}${paused}`;
+}
+
+export const tradingModeConfirm = (minTradeAmount: DecimalString): TelegramHtml =>
+  TEXTS.modeConfirm({ minStake: minTradeAmount });
 
 // The command menu (packages/shared/src/bot-commands.ts) with the descriptions in effect now: the
 // menu published at start and /help's lines (#301).

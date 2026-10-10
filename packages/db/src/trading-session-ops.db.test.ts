@@ -54,6 +54,7 @@ import {
   type CreateTradingSessionInput,
 } from './trading-session-ops';
 import { openTrading } from './trading-switch-ops';
+import { setTradingMode } from './user-ops';
 
 // Integration tests on a temporary migrated database (README → Database), rows committed for
 // real: the lock cases need separate connections.
@@ -906,6 +907,9 @@ describe('createSessionIntent', () => {
 
   it('I4 an intent in another mode than the session’s is refused: no row, no reserve', async () => {
     const seed = await seedSessionAccount();
+    // the user in real mode, so the reserve passes the real-mode gate (#121) and the session lock
+    // is what refuses: the gate runs first, the session lock after it
+    await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
     const error = await thrown(
       createSessionIntent(tmp.db, intentInput(seed, { mode: TradeMode.Real })),
     );

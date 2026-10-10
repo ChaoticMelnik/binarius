@@ -136,8 +136,8 @@ export const TradingSessionErrorCode = {
   InsufficientTokens: 'insufficient_tokens',
   // the global trading switch is closed (#144, docs/kill-switch.md)
   TradingPaused: 'trading_paused',
-  // createTradingSession refuses a non-demo mode; the start route only creates demo sessions,
-  // so it answers this only if that changes
+  // sessions are demo only until #327: createTradingSession refuses a non-demo session, and the
+  // start route refuses a user whose trading mode is real (#121, checkTradingSessionStart)
   ModeNotAllowed: 'mode_not_allowed',
   // a real session on a DEMO_ONLY process (#396), before mode_not_allowed
   DemoOnly: 'demo_only',

@@ -165,6 +165,7 @@ export const ACCESS_VIEW: TradingAccessResponse = {
   brokerUnavailable: null,
   tradingOpen: true,
   demoStake: null,
+  tradingMode: TradeMode.Demo,
 };
 export const accessView = (patch: Partial<TradingAccessResponse> = {}): TradingAccessResponse => ({
   ...ACCESS_VIEW,
@@ -347,7 +348,7 @@ export const SIGNAL_FETCH_FAILED: TradingSignalResponse = tradingSignalResponseS
 export const INTENT_ID = '7c1e9f2a-4b3d-4e5f-8a6b-9c0d1e2f3a4b';
 export const STAKE_NONCE = '0123456789ab';
 // the fingerprint of the amount ACCESS_VIEW trades: no saved stake, the broker's minimum (#297)
-export const STAKE_FINGERPRINT = stakeFingerprint(BROKER_BALANCE.minTradeAmount);
+export const STAKE_FINGERPRINT = stakeFingerprint(BROKER_BALANCE.minTradeAmount, TradeMode.Demo);
 export const INTENT_VIEW: TradeIntentView = {
   id: INTENT_ID,
   brokerAccountId: '5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a',
@@ -423,6 +424,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     claimSessionSummary: unused,
     stopSessions: unused,
     setDemoStake: unused,
+    setTradingMode: unused,
     readBotTexts: unused,
     ...patch,
   };
@@ -592,6 +594,9 @@ export const WRITE_CALLBACK_PREFIXES = [
   'stk:s:',
   'stk:z:',
   'level:',
+  // the mode switches (#121); `mode` and `mode:r` are reads
+  'mode:r:ok',
+  'mode:d',
 ] as const;
 
 // Every message a scene sends goes through here, so no scene can send a repeat of a write

@@ -30,8 +30,8 @@ const variable = <I>(definition: BotTextVar<I>): BotTextVar<I> => definition;
 const shown = (description: string, sample: string): BotTextVar<string> =>
   variable({ description, sample, format: (value: string) => value });
 
-// The status card's header (#24): DEMO until a user can trade on real. Data, not a text: it
-// stays out of the catalog.
+// The user's trading mode as the card's header, the mode screen and the stake button print it
+// (#24, #121). Data, not a text: it stays out of the catalog.
 export const MODE_LABELS = {
   [TradeMode.Demo]: 'DEMO',
   [TradeMode.Real]: 'REAL',
@@ -111,6 +111,11 @@ export const BOT_TEXT_VARS = {
     description: 'Доступно на демо-счёте, как на экране суммы',
     sample: formatStake('9990'),
     format: (amount: DecimalString) => formatStake(amount),
+  }),
+  realAvailable: variable({
+    description: 'Доступно на реальном счёте, как на экране режима',
+    sample: formatUsd('1234.56'),
+    format: (amount: DecimalString) => formatUsd(amount),
   }),
   age: variable({
     description: 'Возраст снимка баланса',

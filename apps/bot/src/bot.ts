@@ -16,7 +16,6 @@ import {
   OAuthErrorCode,
   startPayloadSchema,
   TelegramChatMemberStatus,
-  TradeMode,
   userStartRequestSchema,
   UserErrorCode,
   UserStatus,
@@ -53,6 +52,7 @@ import {
 import { showInvite } from './invite';
 import { createDemoTradeComposer } from './demo-trade';
 import { createTradingSessionComposer } from './trading-session';
+import { createTradingModeComposer } from './trading-mode';
 import type { IntentTracker } from './intent-tracker';
 import {
   createLoginDialog,
@@ -274,13 +274,13 @@ export function createBot({
     }
     const card = statusCard({
       firstName: from.first_name,
-      mode: TradeMode.Demo,
+      mode: access.tradingMode,
       tokens: access.tokens,
       broker: access.broker,
       brokerUnavailable: access.brokerUnavailable,
       demoStake: access.demoStake,
     });
-    const reply_markup = statusCardKeyboard();
+    const reply_markup = statusCardKeyboard(access.tradingMode);
     const sent = await sendWithTextFallback(
       ctx,
       {
@@ -473,6 +473,11 @@ export function createBot({
       sessionTracker,
       connectKeyboard: welcomeKeyboard,
     }),
+  );
+
+  // the card's mode button and the mode screen behind it (#121, docs/trading-mode.md)
+  privateChats.use(
+    createTradingModeComposer({ backend, logger, connectKeyboard: welcomeKeyboard }),
   );
 
   privateChats.callbackQuery(CONNECT_CALLBACK_DATA, async (ctx) => {

@@ -9,6 +9,7 @@ const body = (tokens: Record<string, unknown>, status: unknown = UserStatus.Acti
   brokerUnavailable: 'no_account',
   tradingOpen: false,
   demoStake: null,
+  tradingMode: 'demo',
 });
 
 const view = {
@@ -124,6 +125,7 @@ describe('the broker section', () => {
       brokerUnavailable: null,
       tradingOpen: false,
       demoStake: null,
+      tradingMode: 'demo',
     };
     const parsed = safeParseTradingAccessResponse(input);
     expect(parsed.success && parsed.data).toEqual(input);
@@ -138,6 +140,7 @@ describe('the broker section', () => {
       tokens,
       tradingOpen: false,
       demoStake: null,
+      tradingMode: 'demo',
       ...section,
     });
     expect(parsed.success).toBe(false);
@@ -156,6 +159,7 @@ describe('the broker section', () => {
       brokerUnavailable: null,
       tradingOpen: false,
       demoStake: null,
+      tradingMode: 'demo',
     });
     expect(parsed.success && parsed.data.broker).toEqual(view);
   });
@@ -192,5 +196,21 @@ describe('demoStake', () => {
     ['a number', 2.5],
   ])('refuses a body with it %s', (_label, demoStake) => {
     expect(safeParseTradingAccessResponse({ ...body(canonical), demoStake }).success).toBe(false);
+  });
+});
+
+describe('tradingMode', () => {
+  it.each(['demo', 'real'])('accepts %s', (tradingMode) => {
+    const input = { ...body(canonical), tradingMode };
+    const parsed = safeParseTradingAccessResponse(input);
+    expect(parsed.success && parsed.data).toEqual(input);
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['upper case', 'REAL'],
+    ['unknown', 'paper'],
+  ])('refuses a body with it %s', (_label, tradingMode) => {
+    expect(safeParseTradingAccessResponse({ ...body(canonical), tradingMode }).success).toBe(false);
   });
 });

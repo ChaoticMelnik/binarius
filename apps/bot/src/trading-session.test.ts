@@ -87,6 +87,7 @@ function setup(
     stopSession?: BackendClient['stopSession'];
     claimSessionSummary?: BackendClient['claimSessionSummary'];
     stopSessions?: BackendClient['stopSessions'];
+    setTradingMode?: BackendClient['setTradingMode'];
   } = {},
 ) {
   const readPairs = vi.fn(options.readPairs ?? (() => Promise.resolve(PAIRS_RESPONSE)));
@@ -105,6 +106,10 @@ function setup(
   const stopSessions = vi.fn<BackendClient['stopSessions']>(
     options.stopSessions ?? (() => Promise.resolve([STOPPED])),
   );
+  // /stop's reset to demo (#121): by default a user already in demo, so nothing more is sent
+  const setTradingMode = vi.fn<BackendClient['setTradingMode']>(
+    options.setTradingMode ?? (() => Promise.resolve({ tradingMode: 'demo', changed: false })),
+  );
   const logger = fakeLogger();
   const sessionTracker = stubSessionTracker();
   const bot = createBot({
@@ -116,6 +121,7 @@ function setup(
       stopSession,
       claimSessionSummary,
       stopSessions,
+      setTradingMode,
     }),
     logger,
     botInfo: BOT_INFO,
@@ -138,6 +144,7 @@ function setup(
     stopSession,
     claimSessionSummary,
     stopSessions,
+    setTradingMode,
     ...api,
   };
 }
@@ -324,9 +331,9 @@ describe('the session button', () => {
     expect(START_REFUSALS[TradingSessionErrorCode.InsufficientTokens].text).toBe(
       'sessionInsufficientTokens',
     );
+    // #121: a user in real mode pressing a session button of an earlier render, not a bug
     expect(START_REFUSALS[TradingSessionErrorCode.ModeNotAllowed]).toEqual({
-      text: 'unavailable',
-      log: true,
+      text: 'sessionRealMode',
     });
   });
 
@@ -652,6 +659,56 @@ describe('/stop (#122)', () => {
     });
     await send('/stop');
     expect(onlyMessage(calls)?.text).toBe(sessionStatusText(null, STOPPED).value);
+  });
+
+  // #121: /stop also returns the user to demo; a line says so only when the mode did change
+  it('B9 a user in real mode: the mode line first, then the sessions message', async () => {
+    const { send, calls, setTradingMode } = setup({
+      stopSessions: () => Promise.resolve([]),
+      setTradingMode: () => Promise.resolve({ tradingMode: 'demo', changed: true }),
+    });
+    await send('/stop');
+    expect(setTradingMode.mock.calls).toEqual([[String(USER.id), 'demo']]);
+    const sends = calls.filter((call) => call.method === 'sendMessage');
+    expect(sends.map((call) => call.payload.text)).toEqual([
+      TEXTS.modeStopReset.value,
+      TEXTS.sessionNoneActive.value,
+    ]);
+    expect(rowsOf(sends[0]?.payload)).toEqual([MENU]);
+  });
+
+  it("B10 a user already in demo gets #122's message alone", async () => {
+    const { send, calls, setTradingMode } = setup({ stopSessions: () => Promise.resolve([]) });
+    await send('/stop');
+    expect(setTradingMode).toHaveBeenCalledTimes(1);
+    expect(onlyMessage(calls)?.text).toBe(TEXTS.sessionNoneActive.value);
+  });
+
+  it('B11 a failed switch: the warning line, a warn, and the sessions are stopped all the same', async () => {
+    for (const error of [new BackendError(BackendErrorCode.Unreachable), httpError(500)]) {
+      const { send, calls, logger, stopSessions } = setup({
+        setTradingMode: () => Promise.reject(error),
+      });
+      await send('/stop');
+      const sends = calls.filter((call) => call.method === 'sendMessage');
+      expect(sends.map((call) => call.payload.text)).toEqual([
+        TEXTS.modeNotReset.value,
+        statusOf(STOPPED),
+      ]);
+      expect(rowsOf(sends[0]?.payload)).toEqual([MENU]);
+      expect(warnings(logger)).toEqual(['trading mode not reset']);
+      expect(stopSessions).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('B12 no users row has no mode to reset: nothing more is said or logged', async () => {
+    const { send, calls, logger } = setup({
+      stopSessions: () => Promise.resolve([]),
+      setTradingMode: () => Promise.reject(httpError(404, 'user_not_found')),
+    });
+    await send('/stop');
+    expect(onlyMessage(calls)?.text).toBe(TEXTS.sessionNoneActive.value);
+    expect(warnings(logger)).toEqual([]);
   });
 
   it('B7 a group is ignored; /stop@bot and a trailing text are the command', async () => {

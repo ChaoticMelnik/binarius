@@ -169,6 +169,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   stake: stakeLabel,
   minStake: () => w.stake,
   demoAvailable: () => w.stake,
+  realAvailable: () => w.usd,
   age: () => w.age,
   // stakePickerText: the saved stake, or «label (minimum)»
   amount: (m) =>
@@ -205,8 +206,8 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   result,
   // «5 сделок»
   trades: (m) => w.sessionCount + 1 + trades(m),
-  // the direction, then the stake when known (texts.ts → stakeButtonLabel)
-  action: (m) => m.longest('actionUp', 'actionDown') + SEPARATOR + w.stake,
+  // the direction, then the stake when known, then the mode in real (texts.ts → stakeButtonLabel)
+  action: (m) => m.longest('actionUp', 'actionDown') + SEPARATOR + w.stake + SEPARATOR + w.mode,
   botUsername: () => w.botUsername,
   // referralLinkOf
   referralLink: () =>
@@ -393,7 +394,27 @@ const ASSEMBLED: readonly BotTextMessage[] = [
         [...balances(w.zeroUsd), '\n', anyOf('statusAmbiguous', 'statusNoSnapshot')],
       ),
       '\n\n',
-      k('statusHint'),
+      anyOf('statusHint', 'statusHintReal'),
+    ],
+  },
+  {
+    // texts.ts → tradingModeScreen (#121): the balance and the minimum only with a snapshot,
+    // the paused line only while the switch is closed
+    id: 'tradingMode',
+    title: 'Экран режима торговли',
+    limit: TELEGRAM_MESSAGE_LIMIT,
+    body: [
+      k('modeHeader'),
+      '\n',
+      k('modeCurrent'),
+      '\n',
+      k('modeRealBalance'),
+      '\n',
+      k('modeMinStake'),
+      '\n\n',
+      k('modeWarning'),
+      '\n\n',
+      k('modePaused'),
     ],
   },
   {
@@ -474,7 +495,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     title: 'Статус сделки',
     limit: TELEGRAM_MESSAGE_LIMIT,
     body: [
-      k('intentHeader'),
+      anyOf('intentHeader', 'intentHeaderReal'),
       '\n',
       k('intentTrade'),
       '\n\n',
@@ -571,7 +592,8 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       '\n',
       anyOf('launchStake', 'launchStakeMinimum'),
       '\n',
-      k('launchCycle'),
+      // real mode (#121): the cycle's line gives way to the single trade's
+      anyOf('launchCycle', 'launchRealMode'),
     ],
   },
   {

@@ -159,6 +159,7 @@ interface Branch {
   stopSession?: BackendClient['stopSession'];
   stopSessions?: BackendClient['stopSessions'];
   setDemoStake?: BackendClient['setDemoStake'];
+  setTradingMode?: BackendClient['setTradingMode'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -357,6 +358,13 @@ async function observe(branch: Branch): Promise<Calls> {
         telegramUserId,
         amount,
       );
+    },
+    setTradingMode: (telegramUserId, mode) => {
+      backend += 1;
+      return (
+        branch.setTradingMode ??
+        ((_id, tradingMode) => Promise.resolve({ tradingMode, changed: true }))
+      )(telegramUserId, mode);
     },
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
   };
@@ -858,7 +866,7 @@ const DEMO_ANALYSIS_WORST_CASE: Branch = {
   label: '«⏳» is refused as gone and sent anew, then the result is sent',
   update: analysisUpdate(),
   apiErrors: [['editMessageText', EDIT_REFUSED]],
-  expected: { backend: 2, telegram: 4 },
+  expected: { backend: 3, telegram: 4 },
 };
 const DEMO_ANALYSIS = {
   worst: DEMO_ANALYSIS_WORST_CASE,
@@ -873,28 +881,30 @@ const DEMO_ANALYSIS = {
       update: callbackUpdate('demo:an:0:15'),
       expected: { backend: 0, telegram: 1 },
     },
-    ...catalogBranches(analysisUpdate, 2),
-    ...pairBranches([unsupported]).map((branch): Branch => ({
-      ...branch,
-      update: analysisUpdate(),
-    })),
+    ...catalogBranches(analysisUpdate, 2, 2),
+    ...pairBranches([{ ...unsupported, expected: { backend: 2, telegram: 2 } }], 2).map(
+      (branch): Branch => ({
+        ...branch,
+        update: analysisUpdate(),
+      }),
+    ),
     {
       label: '«⏳» and the result are edited',
       update: analysisUpdate(),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'answering the query is refused and the analysis still goes',
       update: analysisUpdate(),
       apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     DEMO_ANALYSIS_WORST_CASE,
     {
       label: '«⏳» and the result are refused as not modified',
       update: analysisUpdate(),
       apiErrors: [['editMessageText', EDIT_NOT_MODIFIED]],
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     // rethrown into bot.catch
     {
@@ -906,49 +916,49 @@ const DEMO_ANALYSIS = {
           { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' },
         ],
       ],
-      expected: { backend: 1, telegram: 2 },
+      expected: { backend: 2, telegram: 2 },
     },
     {
       label: '«⏳» fails in transport and nothing more is done',
       update: analysisUpdate(),
       apiErrors: [['editMessageText', EDIT_TRANSPORT]],
-      expected: { backend: 1, telegram: 2 },
+      expected: { backend: 2, telegram: 2 },
     },
     {
       label: 'the result edit is refused as gone and the result is sent anew',
       update: analysisUpdate(),
       failSecondEdit: EDIT_REFUSED,
-      expected: { backend: 2, telegram: 4 },
+      expected: { backend: 3, telegram: 4 },
     },
     {
       label: 'the result edit fails in transport',
       update: analysisUpdate(),
       failSecondEdit: EDIT_TRANSPORT,
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the signal call fails',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the broker rate-limits the candles',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_FETCH_FAILED),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the decision is a rule refusal',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
     {
       label: 'the decision is a data refusal',
       update: analysisUpdate(),
       evaluateSignal: () => Promise.resolve(SIGNAL_DATA_REFUSAL),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 3, telegram: 3 },
     },
   ] satisfies Branch[],
 };
@@ -1362,13 +1372,14 @@ const SESSION_STOP_BRANCHES: readonly Branch[] = [
   SESSION_STOP_WORST_CASE,
 ];
 
-// /stop (#122): one message whatever the count, so every path is stopSessions ∥ readPairs and
-// one sendMessage
+// /stop (#122): one message whatever the count, so every path is stopSessions ∥ readPairs ∥
+// setTradingMode (#121) and one sendMessage, after the mode line when the mode changed (the stub's
+// default)
 const stopUpdate = (chatType?: string) => textUpdate('/stop', chatType);
 const STOP_WORST_CASE: Branch = {
   label: 'one session is stopped and its status is sent',
   update: stopUpdate(),
-  expected: { backend: 2, telegram: 1 },
+  expected: { backend: 3, telegram: 2 },
 };
 const STOP_BRANCHES: readonly Branch[] = [
   {
@@ -1386,26 +1397,137 @@ const STOP_BRANCHES: readonly Branch[] = [
     label: 'no session was active',
     update: stopUpdate(),
     stopSessions: () => Promise.resolve([]),
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 3, telegram: 2 },
   },
   {
     label: 'two sessions are stopped',
     update: stopUpdate(),
     stopSessions: () => Promise.resolve([STOPPED_SESSION, STOPPED_SESSION]),
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 3, telegram: 2 },
   },
   {
     label: 'the stop fails',
     update: stopUpdate(),
     stopSessions: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 3, telegram: 2 },
   },
   {
     label: 'the catalog fails',
     update: stopUpdate(),
     readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-    expected: { backend: 2, telegram: 1 },
+    expected: { backend: 3, telegram: 2 },
   },
+  {
+    label: 'the user was in demo already',
+    update: stopUpdate(),
+    setTradingMode: (_id, tradingMode) => Promise.resolve({ tradingMode, changed: false }),
+    expected: { backend: 3, telegram: 1 },
+  },
+  {
+    label: 'the switch to demo fails',
+    update: stopUpdate(),
+    setTradingMode: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 3, telegram: 2 },
+  },
+];
+
+// The mode screen (#121, trading-mode.ts): the open sends a new message, the confirm and the
+// switches edit in place; an unknown switch outcome reads access again.
+const modeHttpError = (status: number, reason: string) =>
+  new BackendError(BackendErrorCode.HttpStatus, { status, reason });
+const MODE_OPEN_WORST_CASE: Branch = {
+  label: 'the screen is sent',
+  update: callbackUpdate('mode'),
+  expected: { backend: 1, telegram: 2 },
+};
+const MODE_OPEN_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate('mode', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  MODE_OPEN_WORST_CASE,
+  {
+    label: 'the access read fails',
+    update: callbackUpdate('mode'),
+    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the user is blocked',
+    update: callbackUpdate('mode'),
+    readTradingAccess: () => Promise.resolve(accessView({ status: UserStatus.Blocked })),
+    expected: { backend: 1, telegram: 2 },
+  },
+];
+const MODE_CONFIRM_WORST_CASE: Branch = {
+  label: 'the edit is refused as gone and the confirm is sent anew',
+  update: callbackUpdate('mode:r'),
+  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  expected: { backend: 1, telegram: 3 },
+};
+const MODE_CONFIRM_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate('mode:r', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the confirm is edited in',
+    update: callbackUpdate('mode:r'),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the access read fails',
+    update: callbackUpdate('mode:r'),
+    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 1, telegram: 2 },
+  },
+  MODE_CONFIRM_WORST_CASE,
+];
+const MODE_SET_WORST_CASE: Branch = {
+  label: 'the outcome is unknown, access is read again and the edit is refused as gone',
+  update: callbackUpdate('mode:r:ok'),
+  setTradingMode: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+  apiErrors: [['editMessageText', EDIT_REFUSED]],
+  expected: { backend: 2, telegram: 3 },
+};
+const MODE_SET_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate('mode:r:ok', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'real is switched on',
+    update: callbackUpdate('mode:r:ok'),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'demo is switched back',
+    update: callbackUpdate('mode:d'),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the switch back is sent anew',
+    update: callbackUpdate('mode:d'),
+    apiErrors: [['editMessageText', EDIT_REFUSED]],
+    expected: { backend: 1, telegram: 3 },
+  },
+  {
+    label: 'the switch is refused below the minimum',
+    update: callbackUpdate('mode:r:ok'),
+    setTradingMode: () => Promise.reject(modeHttpError(409, 'real_balance_below_minimum')),
+    expected: { backend: 1, telegram: 2 },
+  },
+  {
+    label: 'the outcome is unknown and the access read fails too',
+    update: callbackUpdate('mode:r:ok'),
+    setTradingMode: () => Promise.reject(modeHttpError(500, 'internal')),
+    readTradingAccess: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    expected: { backend: 2, telegram: 2 },
+  },
+  MODE_SET_WORST_CASE,
 ];
 
 // #314: the site sign-in button of a message sent before it
@@ -2156,24 +2278,25 @@ const STAKE_OPEN = pickerBranches('stk:o:s', 1, {
     ],
   ],
 });
-// A save opened from a launch screen (#320) reads the catalog for the screen it returns to; a
-// refusal or an unknown outcome does not, nor does a save opened elsewhere.
+// A save opened from a launch screen (#320) reads the catalog and the user's mode (#121) for the
+// screen it returns to; a refusal or an unknown outcome does not, nor does a save opened elsewhere.
 const LAUNCH_SAVE_EXTRA = (elsewhere: string): [string, Partial<Branch>][] => [
   ...SAVE_EXTRA.map(([label, patch]): [string, Partial<Branch>] => [
     label,
     { ...patch, expected: { backend: 1, telegram: 2 } },
   ]),
   ['the catalog is not read for the launch screen', { readPairs: CATALOG_UNREACHABLE }],
+  ['the mode is not read for the launch screen', { readTradingAccess: unreachable }],
   [
     'the picker was opened from /settings',
     { update: callbackUpdate(elsewhere), expected: { backend: 1, telegram: 2 } },
   ],
 ];
-const STAKE_PRESET = pickerBranches(`stk:s:5:p:${PAIR_EURUSD.id}:15`, 2, {
+const STAKE_PRESET = pickerBranches(`stk:s:5:p:${PAIR_EURUSD.id}:15`, 3, {
   forged: 'stk:s:0:s',
   extra: LAUNCH_SAVE_EXTRA('stk:s:5:s'),
 });
-const STAKE_RESET = pickerBranches(`stk:z:p:${PAIR_EURUSD.id}:15`, 2, {
+const STAKE_RESET = pickerBranches(`stk:z:p:${PAIR_EURUSD.id}:15`, 3, {
   forged: 'stk:z:a:0:15',
   extra: LAUNCH_SAVE_EXTRA('stk:z:s'),
 });
@@ -2203,7 +2326,7 @@ const ON_LAUNCH_STAKE_STEP: LoginDialogState = {
 const STAKE_TEXT_WORST_CASE: Branch = stakeText(
   'the typed stake is saved from a launch screen',
   '5',
-  { backend: 2, telegram: 1 },
+  { backend: 3, telegram: 1 },
   { dialog: ON_LAUNCH_STAKE_STEP },
 );
 const STAKE_TEXT_BRANCHES: readonly Branch[] = [
@@ -2465,6 +2588,28 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
 
   it('/stop (#122)', async () => {
     await checkHandler('stop', STOP_BRANCHES, STOP_WORST_CASE, HANDLER_CALLS.stop);
+  });
+
+  it('the mode screen (#121)', async () => {
+    await checkHandler(
+      'modeOpen',
+      MODE_OPEN_BRANCHES,
+      MODE_OPEN_WORST_CASE,
+      HANDLER_CALLS.modeOpen,
+    );
+  });
+
+  it('the mode confirm (#121)', async () => {
+    await checkHandler(
+      'modeConfirm',
+      MODE_CONFIRM_BRANCHES,
+      MODE_CONFIRM_WORST_CASE,
+      HANDLER_CALLS.modeConfirm,
+    );
+  });
+
+  it('the mode switches (#121)', async () => {
+    await checkHandler('modeSet', MODE_SET_BRANCHES, MODE_SET_WORST_CASE, HANDLER_CALLS.modeSet);
   });
 
   it("the session's stop button", async () => {

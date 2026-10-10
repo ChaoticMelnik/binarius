@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   TradeIntentFailureReason,
   TradeIntentStatus,
+  TradeMode,
   type TelegramHtml,
   type TradeIntentView,
 } from '@binarius/shared';
@@ -160,23 +161,40 @@ describe('the intent tracker', () => {
   // #360: the line and the session row follow the status, never the moment
   it('offers the session on a stop status of a duration the demo still takes, and only then', () => {
     for (const status of TRACKER_STOP_STATUSES) {
-      expect(sessionOfferOf({ status, durationSec: 5 }, true)).toBe(5);
-      expect(sessionOfferOf({ status, durationSec: 15 }, true)).toBe(15);
+      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 }, true)).toBe(5);
+      expect(sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 15 }, true)).toBe(15);
       // a trade from before #313
-      expect(sessionOfferOf({ status, durationSec: 60 }, true)).toBeUndefined();
+      expect(
+        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 60 }, true),
+      ).toBeUndefined();
     }
     for (const status of Object.values(TradeIntentStatus).filter(
       (status) => !TRACKER_STOP_STATUSES.has(status),
     )) {
-      expect(sessionOfferOf({ status, durationSec: 5 }, true)).toBeUndefined();
+      expect(
+        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 }, true),
+      ).toBeUndefined();
+    }
+  });
+
+  // #121: sessions are demo only, so a real trade gets no offer on any status
+  it('offers no session under a real trade', () => {
+    for (const status of Object.values(TradeIntentStatus)) {
+      expect(
+        sessionOfferOf({ mode: TradeMode.Real, status, durationSec: 5 }, true),
+      ).toBeUndefined();
     }
   });
 
   // #379: a pair paying below the cycle floor gets no offer on any stop status
   it('offers no session on a pair below the cycle floor', () => {
     for (const status of TRACKER_STOP_STATUSES) {
-      expect(sessionOfferOf({ status, durationSec: 5 }, false)).toBeUndefined();
-      expect(sessionOfferOf({ status, durationSec: 15 }, false)).toBeUndefined();
+      expect(
+        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 }, false),
+      ).toBeUndefined();
+      expect(
+        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 15 }, false),
+      ).toBeUndefined();
     }
   });
 

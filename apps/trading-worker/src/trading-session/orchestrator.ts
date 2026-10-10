@@ -132,6 +132,9 @@ const CREATE_REFUSALS = {
   // the process runs DEMO_ONLY and the session is real (#396): durable for this process;
   // reachable only for a real session row (#327)
   [TradeIntentErrorCode.DemoOnly]: accountUnavailable,
+  // the user is not in real mode (#121): durable until the user switches; reachable only for a
+  // real session row (#327 decides what a real session needs)
+  [TradeIntentErrorCode.RealModeOff]: accountUnavailable,
 } as const satisfies Record<TradeIntentErrorCode, CreateRefusal>;
 
 const TERMINAL = new Set<string>(TERMINAL_TRADE_INTENT_STATUSES);
