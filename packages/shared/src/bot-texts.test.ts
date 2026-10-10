@@ -187,6 +187,7 @@ describe('the bot texts catalog', () => {
         'repeatAnalysisButton',
         'resendButton',
         'sessionRefreshButton',
+        'sessionShareButton',
         'sessionStopButton',
         'settingsStakeButton',
         'stakeBackAnalysisButton',

@@ -1,4 +1,4 @@
-# The demo session in the bot: the button, the status, the stop and the summary card (issues #284, #320, #318, #122)
+# The demo session in the bot: the button, the status, the stop and the summary card (issues #284, #320, #318, #122, #321)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» as its
 first row on every `decided` answer, a signal or none (#360); a finished single trade's message
@@ -10,7 +10,9 @@ session's message «🔁 Ещё сессия». All four carry the same data. Pr
 message. The message follows the session through `GET /trading/sessions/:id` and carries
 «🔄 Обновить» and «⏹ Остановить сессию». The trades themselves are opened by the worker's
 orchestrator (#287): the bot only starts, reads and stops the session. When the session is over,
-one picture of its trades follows the final status ([The summary card](#the-summary-card-318)).
+one picture of its trades follows the final status ([The summary card](#the-summary-card-318)), and
+«📤 Поделиться» under it sends that picture into a chat the user picks
+([Sharing the card](#sharing-the-card-321)).
 The command `/stop` (#122) stops every active session of the user at once ([/stop](#stop-122)).
 
 ```bash
@@ -37,13 +39,19 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `readSession(id, telegramUserId)`, `stopSession(id, telegramUserId)`, `stopSessions(telegramUserId)`
   (#122, `POST /trading/sessions/stop`) ([The client](#the-client)),
   `claimSessionSummary(id, telegramUserId)` → the summary or `null` (#318).
+- `apps/bot/src/session-share.ts` (#321) — `shareQuery`, `SHARE_PATTERN`, `INLINE_QUERY_LIMIT`,
+  `shareButton`, `attachShareButton` (the card's edit after the send) and
+  `createSessionShareComposer({ backend, logger })`: the inline query and the chosen result.
+  `bot.ts` mounts it on the bot itself, not under the private-chat filter: inline updates carry
+  no chat.
 - `apps/bot/src/session-card.ts` — `sessionCardModel`, `sessionCardSvg` and `renderSessionCard`
   (#318): the card's words and counts, its SVG, its PNG through `@resvg/resvg-js` and the fonts in
   `apps/bot/fonts/` (Inter 4.1, OFL, `OFL.txt` beside them).
 - `apps/bot/src/texts.ts` — `sessionStatusText`, `pluralTrades`, `sessionStartButtonLabel` and the
   stop-reason map; the texts are the `session` group of the catalog and the two buttons
   `sessionRefreshButton`, `sessionStopButton` ([bot-texts.md](bot-texts.md)).
-- `apps/bot/src/timing.ts` — `HANDLER_CALLS.sessionStart`, `.sessionRefresh`, `.sessionStop`, `.stop` and
+- `apps/bot/src/timing.ts` — `HANDLER_CALLS.sessionStart`, `.sessionRefresh`, `.sessionStop`, `.stop`,
+  `.sessionShare`, `.sessionShared` (#321) and
   the four `SESSION_TRACK_*` constants ([Timing](#timing)).
 - `packages/shared/src/bot-text-format.ts` — `formatSignedUsd`, the session's result with its sign
   (#337), next to `formatUsd`; the catalog's `profit` variable prints through it.
@@ -66,6 +74,13 @@ session:<id>                       («🔄 Обновить»)
   tracker, once the session is done and its final status is on screen:
         POST /trading/sessions/<id>/summary { telegramUserId }   (#318, at most once)
         → sendPhoto to the status's chat: the card, its caption, «🔁 Ещё сессия» and the end of path
+        → editMessageReplyMarkup of the card: «📤 Поделиться» on top of those rows (#321)
+inline query share:<sessionId>:<fileId>   («📤 Поделиться» → a chat picked, #321)
+  bot → GET /trading/sessions/<id>?telegramUserId=<from.id> ∥ GET /trading/pairs
+  bot → answerInlineQuery: the cached card with its caption for the owner's finished session;
+        an empty answer for everything else
+chosen_inline_result               (the user tapped the result, /setinlinefeedback)
+  bot → one info line, no call
 session:stop:<id>                  («⏹ Остановить сессию»)
   bot → answerCallbackQuery ∥ POST /trading/sessions/<id>/stop ∥ GET /trading/pairs
         (409 session_not_active → GET /trading/sessions/<id>)
@@ -302,13 +317,15 @@ One entry per session id, in process memory, like the intent tracker
   gone and sent anew: 39 s.
 - `HANDLER_CALLS.stop` = 2 / 1 (#122): `stopSessions` beside `readPairs` (counted as sequential),
   then the message: 18 s.
+- `HANDLER_CALLS.sessionShare` = 2 / 1 (#321): `readSession` beside `readPairs` (counted as
+  sequential), then `answerInlineQuery`: 18 s. `HANDLER_CALLS.sessionShared` = 0 / 0: a log line.
 - All stay below the longest path (`confirm`, 45 s; `demoAnalysis` is 42 s since #360 —
   [bot-demo-trade.md](bot-demo-trade.md#timing)), so `HANDLER_BUDGET_MS` and the shutdown
-  budget do not move. `timing.test.ts` runs every terminal branch of the four.
+  budget do not move. `timing.test.ts` runs every terminal branch of the six.
 - `SESSION_TRACK_FIRST_POLL_MS` = 3 s, `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
   cycle is at least the worker's catch-up grace, 10 s), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
-  `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 2 × 8 s = 26 s: an attempt's read and edit, then the card's
-  claim and `sendPhoto` (#318).
+  `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 3 × 8 s = 34 s: an attempt's read and edit, then the card's
+  claim and `sendPhoto` (#318) and the `editMessageReplyMarkup` that adds «📤 Поделиться» (#321).
 - The chain at import adds `TRADING_SESSION_START_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
   link #283 left to the bot), `TRADING_SESSION_VIEW_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` (the
   read and the stop wait on one balance GET for a finished session, #337), first poll < poll < deadline, `SESSION_MAX_DURATION_MS <
@@ -329,11 +346,23 @@ id or the symbol.
 - `trading session card not sent` (#318): the claim failed (`backendStatus`, `backendReason`), the
   photo failed (`method: sendPhoto`, `telegramErrorCode`), or the render threw; with `sessionId`.
   A refused claim (409 `summary_unavailable`) logs nothing.
+- `trading session share button not attached` (#321): the card is sent but has no «📤 Поделиться»:
+  `reason: no_file_id` (the send's result named no size), `reason: query_too_long` (the query would
+  pass 256 characters), or the edit failed (`method: editMessageReplyMarkup`, `telegramErrorCode`);
+  with `sessionId`.
+- `trading session not shared` (#321): the inline handler's read failed other than 404
+  (`backendStatus`, `backendReason`, `sessionId`). A 404 — another user's or a missing session —
+  logs nothing.
+- `inline query not answered` (#321): `answerInlineQuery` failed (`method`, `telegramErrorCode`,
+  `sessionId` when the query named one); a forged file id ends here, refused by Telegram.
+- `trading session card shared` (#321, `info`): a chosen result, `sessionId` = its `result_id`.
+  Neither the query nor the file id is logged.
 
 ## The summary card (#318)
 
 One PNG per finished session, demo and real alike, sent to the status message's chat under its
-final status. Sharing it is Telegram's own forwarding; a share button is #321.
+final status. Sharing it is «📤 Поделиться» ([Sharing the card](#sharing-the-card-321)) or
+Telegram's own forwarding.
 
 - **When.** The tracker's entry ends on a done view (stopped, the last trade settled or rejected)
   and the final status is on screen. A last trade on `manual_review` is not done, so no card yet:
@@ -361,7 +390,8 @@ final status. Sharing it is Telegram's own forwarding; a share button is #321.
 - **The keyboard** is the stopped status's without «🔄 Обновить» (which edits a message's text, and
   a photo has a caption): «🔁 Ещё сессия» while the demo offers the duration, «📊 Новый анализ»,
   «📡 К сигналам», «👥 Пригласить друга» (#115), «🏠 В меню»; «👥 Пригласить друга» and «🏠 В меню»
-  alone without `settings` (`sessionCardKeyboard`).
+  alone without `settings` (`sessionCardKeyboard`). «📤 Поделиться» comes on top of these rows by
+  an edit right after the send (#321).
   «📊 Новый анализ» and «📡 К сигналам» edit the pressed message; under the card Telegram refuses
   that with «there is no text in the message to edit», `editRefusal` (`screen.ts`) reads it as
   gone, and the screen comes as a new message under the card (the analysis: «⏳», then its
@@ -377,6 +407,40 @@ final status. Sharing it is Telegram's own forwarding; a share button is #321.
   docker compose build bot
   docker compose run --rm --no-deps -w /app/apps/bot bot node --input-type=module -e "import('@resvg/resvg-js').then(({ Resvg }) => { const png = new Resvg('<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"/>').render().asPng(); console.log(png.length > 0 ? 'ok' : 'empty') })"
   ```
+
+## Sharing the card (#321)
+
+«📤 Поделиться» opens Telegram's chat picker (people, groups and channels; no chats with bots) and
+posts the card there with its own caption, «via @bot». Nothing is stored: the button's query
+carries the card's `file_id`, and the owner proof is the backend's read of the session.
+
+- **The button.** The `file_id` exists only once `sendPhoto` returns, so the card is sent with its
+  #318 keyboard and then gets the row `switch_inline_query_chosen_chat` = `share:<sessionId>:<fileId>`
+  on top, by one `editMessageReplyMarkup` that sets the whole keyboard again (the share row, then
+  every row of `sessionCardKeyboard`). The `file_id` is the largest size's (`photo.at(-1)`). No
+  `file_id`, a query over 256 characters (`INLINE_QUERY_LIMIT`) or a failed edit → no button, one
+  `warn`, no retry; the card keeps its #318 keyboard, and the card's own `trading session card not
+  sent` does not fire.
+- **The answer.** `SHARE_PATTERN` parses the query (a lower-case uuid, a file id of 1–213
+  non-space characters); anything else is answered empty with no backend call. A matching query
+  reads `GET /trading/sessions/:id?telegramUserId=<from.id>` beside `GET /trading/pairs`: the route
+  is scoped by the owner, so another user's id is the same 404 as a missing session and gets the
+  empty answer (Rule 13). A session that is not done (`sessionTrackingDone`: stopped, the last trade
+  settled or rejected) gets the empty answer too, so the counts in the caption are final; the same
+  button works once the last trade settles. The asset is the settings', or the last trade's when the
+  settings could not be read — the card's own rule; with neither, the empty answer.
+- **The result** is `InlineQueryResultCachedPhoto` with `id` = the session's id, the query's
+  `file_id`, and the caption `sessionShareCaption` through `answerInlineQueryPhotoHtml`
+  (`send.ts`): «🏁 {symbol}: {result}» and «🤖 https://t.me/{botUsername}?start=share». No $ sum
+  (it is on the image), no keyboard (docs/bot-navigation.md → Exceptions). The URL is plain text,
+  which Telegram turns into a link; the payload `share` is recorded as `acquisition_source` by the
+  first `/start` of a new user ([bot-start.md](bot-start.md)). The found answer is
+  `is_personal`, cached by Telegram for its default 300 s; the empty one `cache_time: 0`.
+- **The file id is Telegram's to check.** It is this bot's own identifier of the user's own card;
+  a forged or foreign one makes `answerInlineQuery` fail with 400 (`inline query not answered`).
+- **Owner steps.** BotFather, the client bot: `/setinline` with a placeholder («Поделиться итогом
+  сессии»), `/setinlinefeedback` → Enabled. Until `/setinline` is set, inline mode is off for the
+  bot and Telegram delivers no inline queries.
 
 ## Accepted risks
 
@@ -427,6 +491,21 @@ final status. Sharing it is Telegram's own forwarding; a share button is #321.
 18. **No repeat on an unknown outcome of `/stop`** (#122): the stop may have committed; the truth is
     in the session's status message (tracker or «🔄 Обновить»), and a second `/stop` answers
     «Активных сессий нет.».
+19. **One more Bot API call per card** (#321): a failed `editMessageReplyMarkup` leaves the card
+    without «📤 Поделиться», and nothing retries it — a done session sends no second card.
+20. **The `file_id` is visible in the input field** for a moment after the press (#321): it is this
+    bot's identifier of the user's own card, and Telegram refuses any other value.
+21. **A public inline surface** (#321): anyone can send the bot inline queries; each one that does
+    not match costs one empty answer and nothing else. Falsifiable: inline-query volume above the
+    bot's other update volume on the pilot.
+22. **Telegram caches the found answer** for 300 s per user and query (#321): a text override of
+    `sessionShareCaption` reaches an already-answered query after that.
+23. **`switch_inline_query_chosen_chat` is Bot API 6.7+** (#321): that it opens the picker on the
+    owner's clients is the owner's check.
+24. **Cards sent before #321** have no «📤 Поделиться» and get none: a done session's claim answers
+    409, so no new card is sent.
+25. **Two «📤 Поделиться» buttons** (#321): the URL button on `/invite` (`inviteShareButton`) and the
+    one under the card (`sessionShareButton`); different screens, separate keys.
 
 ## Running it locally
 
@@ -448,5 +527,6 @@ its own, which no runtime check of this issue used.
 - **#29** — a notification for each trade of the session; this message is only edited.
 - **#297** — choosing the stake; its new start refusals join `START_REFUSALS`.
 - **#360** — the button first on every `decided` analysis, and under a finished single trade.
-- **#321** — «📤 Поделиться» under the summary card, added to `sessionCardKeyboard`'s rows.
+- **#321** — «📤 Поделиться» under the summary card ([Sharing the card](#sharing-the-card-321)); a
+  referral link in its caption in place of `?start=share` is the owner's open question.
 - **#121** — real mode; it extends `/stop` with the switch of the mode. **#201** — levels and rewards.

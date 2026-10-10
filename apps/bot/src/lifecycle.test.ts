@@ -130,7 +130,13 @@ describe('runBot', () => {
     expect(fake.options[0]).toMatchObject({
       timeout: 5,
       limit: 1,
-      allowed_updates: ['message', 'callback_query', 'my_chat_member'],
+      allowed_updates: [
+        'message',
+        'callback_query',
+        'my_chat_member',
+        'inline_query',
+        'chosen_inline_result',
+      ],
     });
     expect(signalSource.listenerCount('SIGTERM')).toBe(1);
     expect(signalSource.listenerCount('SIGINT')).toBe(1);
@@ -942,7 +948,13 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     expect(s.longPolls()[0]?.payload).toMatchObject({
       limit: 1,
       timeout: 5,
-      allowed_updates: ['message', 'callback_query', 'my_chat_member'],
+      allowed_updates: [
+        'message',
+        'callback_query',
+        'my_chat_member',
+        'inline_query',
+        'chosen_inline_result',
+      ],
     });
   });
 

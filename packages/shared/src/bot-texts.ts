@@ -1305,6 +1305,13 @@ export const BOT_TEXT_CATALOG = {
 🤖 @{botUsername}`,
     { ...caption, vars: ['symbol', 'profit', 'botUsername'] },
   ),
+  sessionShareCaption: html(
+    g.Session,
+    'Картинка-итог, которой делятся кнопкой «📤 Поделиться»: подпись в выбранном чате. Без суммы в $ — она на самой картинке; ссылка — простым текстом, Telegram сделает её ссылкой.',
+    `🏁 {symbol}: {result}
+🤖 https://t.me/{botUsername}?start=share`,
+    { ...caption, vars: ['symbol', 'result', 'botUsername'] },
+  ),
 
   // ---- Напоминания (#202, docs/mailing.md) -------------------------------------------------
   // Sent by the backend's mailing engine only, each with the «demoButton» button.
@@ -1472,6 +1479,11 @@ export const BOT_TEXT_CATALOG = {
   inviteShareButton: plain(
     g.Buttons,
     '/invite: кнопка, открывающая выбор чата для ссылки-приглашения.',
+    '📤 Поделиться',
+  ),
+  sessionShareButton: plain(
+    g.Buttons,
+    'Кнопка под картинкой-итогом сессии: выбор чата, куда отправить картинку.',
     '📤 Поделиться',
   ),
 
