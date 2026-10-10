@@ -10,6 +10,7 @@ import {
   TradingSessionStatus,
   TradingSessionStopReason,
   decimalStringSchema,
+  safeParseSessionSummaryResponse,
   safeParseTradingSessionResponse,
   type BrokerUser,
   type DecimalString,
@@ -38,6 +39,7 @@ import {
 import { openTrading, stopTrading } from './trading-switch-ops';
 import {
   checkTradingSessionStart,
+  claimSessionSummary,
   createSessionIntent,
   readActiveTradingSessionView,
   readTradingSessionAccount,
@@ -59,7 +61,43 @@ beforeAll(async () => {
 });
 afterAll(() => tmp.drop());
 
-async function settle(intent: TradeIntentRow, profit: string): Promise<void> {
+async function accept(intent: TradeIntentRow, openPrice?: number) {
+  const taken = (await takeIntent(tmp.db, {
+    id: intent.id,
+    expectedVersion: intent.version,
+    maxAgeMs: 60_000,
+  }))!;
+  const open = openTradeFor(intent, openPrice === undefined ? {} : { openPrice });
+  await tmp.db.transaction((tx) =>
+    markIntentAccepted(tx, {
+      id: taken.id,
+      expectedVersion: taken.version,
+      transport: 'rest_fallback',
+      trade: open,
+    }),
+  );
+  return open;
+}
+
+async function settle(
+  intent: TradeIntentRow,
+  profit: string,
+  prices?: { open: number; close: number },
+): Promise<void> {
+  if (prices !== undefined) {
+    const open = await accept(intent, prices.open);
+    await tmp.db.transaction((tx) =>
+      settleIntent(tx, {
+        id: intent.id,
+        from: TradeIntentStatus.Accepted,
+        trade: closedTradeFor(open, {
+          profit: profit as DecimalString,
+          closePrice: prices.close,
+        }),
+      }),
+    );
+    return;
+  }
   const taken = (await takeIntent(tmp.db, {
     id: intent.id,
     expectedVersion: intent.version,
@@ -530,5 +568,146 @@ describe('readActiveTradingSessionView', () => {
     expect(
       await readActiveTradingSessionView(tmp.db, seed.brokerAccountId, seed.telegramUserId),
     ).toBeUndefined();
+  });
+});
+
+describe('claimSessionSummary (#318)', () => {
+  type Seed = Awaited<ReturnType<typeof seedUserWithAccount>>;
+  const claim = (session: { id: string }, seed: { telegramUserId: string }) =>
+    claimSessionSummary(tmp.db, { id: session.id, telegramUserId: seed.telegramUserId });
+  const sentAt = async (session: { id: string }) =>
+    (
+      await tmp.db
+        .select({ at: tradingSessions.summarySentAt })
+        .from(tradingSessions)
+        .where(eq(tradingSessions.id, session.id))
+    )[0]?.at;
+  const stop = (session: { id: string }) =>
+    stopTradingSession(tmp.db, { id: session.id, reason: TradingSessionStopReason.Completed });
+  // a stopped session of `profits`, each step settled at its own prices
+  const finished = async (profits: string[], mode: TradeMode = TradeMode.Demo) => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, { mode });
+    let step = 1;
+    for (const profit of profits) {
+      const { intent } = await sessionIntent(seed, session.id, step, mode);
+      await settle(intent, profit, { open: step, close: step + 0.5 });
+      step += 1;
+    }
+    await stop(session);
+    return { seed, session };
+  };
+
+  it('S1 a mixed session: its trades in creation order and the exact sum, once', async () => {
+    const { seed, session } = await finished(['0.85', '-1', '0']);
+    const summary = await claim(session, seed);
+    expect(summary).toEqual({
+      result: '-0.15000000',
+      trades: [
+        { profit: '0.85000000', openPrice: 1, closePrice: 1.5 },
+        { profit: '-1.00000000', openPrice: 2, closePrice: 2.5 },
+        { profit: '0.00000000', openPrice: 3, closePrice: 3.5 },
+      ],
+    });
+    expect(safeParseSessionSummaryResponse({ summary }).success).toBe(true);
+    expect(await sentAt(session)).toBeInstanceOf(Date);
+    // S4: the second claim of the same session
+    expect(await claim(session, seed)).toBeUndefined();
+  });
+
+  it('S2 losses only sum negative', async () => {
+    const { seed, session } = await finished(['-1', '-2.5']);
+    expect((await claim(session, seed))?.result).toBe('-3.50000000');
+  });
+
+  it('S3 a real session is claimed as a demo one', async () => {
+    const { seed, session } = await finished(['0.85', '-1'], TradeMode.Real);
+    expect(await claim(session, seed)).toMatchObject({ result: '-0.15000000' });
+  });
+
+  it('S5 an active session is not claimed and keeps NULL', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settle((await sessionIntent(seed, session.id, 1)).intent, '0.85');
+    expect(await claim(session, seed)).toBeUndefined();
+    expect(await sentAt(session)).toBeNull();
+  });
+
+  it.each([
+    ['queued', async (_seed: Seed, intent: TradeIntentRow) => void intent],
+    ['accepted', async (_seed: Seed, intent: TradeIntentRow) => void (await accept(intent))],
+  ])(
+    'S6 a stopped session whose last trade is %s is not claimed and keeps NULL',
+    async (_name, move) => {
+      const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+      const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+      await settle((await sessionIntent(seed, session.id, 1)).intent, '0.85');
+      await move(seed, (await sessionIntent(seed, session.id, 2)).intent);
+      await stop(session);
+      expect(await claim(session, seed)).toBeUndefined();
+      expect(await sentAt(session)).toBeNull();
+    },
+  );
+
+  it('S7 a stopped session with no settled trade (only rejected) is not claimed', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await reject((await sessionIntent(seed, session.id, 1)).intent);
+    await stop(session);
+    expect(await claim(session, seed)).toBeUndefined();
+    expect(await sentAt(session)).toBeNull();
+  });
+
+  it('S7b a stopped session with no intent at all is not claimed', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await stop(session);
+    expect(await claim(session, seed)).toBeUndefined();
+    expect(await sentAt(session)).toBeNull();
+  });
+
+  it('S8 rejected steps are left out of the trades and do not block the claim', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await reject((await sessionIntent(seed, session.id, 1)).intent);
+    await settle((await sessionIntent(seed, session.id, 2)).intent, '0.85', {
+      open: 7,
+      close: 8,
+    });
+    await reject((await sessionIntent(seed, session.id, 3)).intent);
+    // the bot's own trade on the same account is no step of the session
+    const { intent: botIntent } = await createTradeIntent(
+      tmp.db,
+      intentRequest(seed.telegramUserId),
+    );
+    await settle(botIntent, '5');
+    await stop(session);
+    expect(await claim(session, seed)).toEqual({
+      result: '0.85000000',
+      trades: [{ profit: '0.85000000', openPrice: 7, closePrice: 8 }],
+    });
+  });
+
+  it("S9 another user's telegram id claims nothing and keeps NULL", async () => {
+    const { seed, session } = await finished(['0.85']);
+    const other = await seedUser(tmp.db);
+    expect(await claim(session, other)).toBeUndefined();
+    expect(await sentAt(session)).toBeNull();
+    expect(await claim(session, seed)).toBeDefined();
+  });
+
+  it("S10 the result equals the view's profit over the same finished session", async () => {
+    const { seed, session } = await finished(['0.85', '-1', '0', '1.23456789']);
+    const view = await viewOf(session, seed);
+    const summary = await claim(session, seed);
+    expect(summary?.result).toBe(view.trades.profit);
+    // S11: exact at scale 8, no float on the way
+    expect(summary?.result).toBe('1.08456789');
+  });
+
+  it('S12 two claims at once: exactly one wins', async () => {
+    const { seed, session } = await finished(['0.85']);
+    const results = await Promise.all([claim(session, seed), claim(session, seed)]);
+    expect(results.filter((result) => result !== undefined)).toHaveLength(1);
   });
 });

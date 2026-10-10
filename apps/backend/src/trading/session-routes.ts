@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import * as z from 'zod';
 import {
+  SESSION_SUMMARY_SUFFIX,
+  SessionSummaryErrorCode,
   TRADING_SESSIONS_PATH,
   TradeMode,
   TradingSessionErrorCode,
@@ -22,6 +24,7 @@ import {
 import {
   TradingSessionError,
   checkTradingSessionStart,
+  claimSessionSummary,
   createTradingSession,
   readActiveTradingSessionView,
   readBalanceSnapshot,
@@ -285,5 +288,33 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     });
     if (stopped === undefined) return refuse(reply, TradingSessionErrorCode.SessionNotActive);
     return reply.send({ session: await viewForReply(id.data, telegramUserId) });
+  });
+
+  // The finished session's card, at most once (#318). Every refusal is one 409: not the owner's
+  // or missing (Rule 13), not stopped, a trade still able to move, no settled trade, or sent
+  // already; the bot draws nothing for any of them. A non-uuid id is a missing one.
+  app.post(`${TRADING_SESSIONS_PATH}/:id${SESSION_SUMMARY_SUFFIX}`, async (request, reply) => {
+    const unavailable = () => reply.code(409).send({ error: SessionSummaryErrorCode.Unavailable });
+    const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
+    if (!id.success) return unavailable();
+    const body = safeParseStopTradingSessionRequest(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'validation', issues: body.error.issues });
+    }
+    const summary = await claimSessionSummary(db, {
+      id: id.data,
+      telegramUserId: body.data.telegramUserId,
+    });
+    if (summary === undefined) return unavailable();
+    return reply.send({
+      summary: {
+        result: summary.result,
+        trades: summary.trades.map(({ profit, openPrice, closePrice }) => ({
+          profit,
+          openPrice,
+          closePrice,
+        })),
+      },
+    });
   });
 };

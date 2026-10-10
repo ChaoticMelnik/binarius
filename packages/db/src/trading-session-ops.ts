@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, notInArray, sql } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
   TokenLedgerKind,
@@ -9,6 +9,7 @@ import {
   TradingSessionStopReason,
   UserStatus,
   type DecimalString,
+  type SessionSummary,
   type TradeAction,
   type TradeIntentFailureReason,
   type TradingSessionSettings,
@@ -535,6 +536,11 @@ const SETTLED = literal(TradeIntentStatus.Settled);
 // the aggregate always returns a row; this only satisfies the destructuring's undefined
 const ZERO_PROFIT = '0.00000000' as DecimalString;
 
+// The session's result, over trade_intents joined to broker_trades: summed by Postgres at the
+// column's scale, never in JS (Rule 2), '0.00000000' with none. The view's counters and the
+// summary card's result are this one fragment (#337, #318).
+const sessionProfitSumSql = sql<DecimalString>`coalesce(sum(${brokerTrades.profit}) filter (where ${tradeIntents.status} = ${SETTLED}), round(0, ${sql.raw(String(MONEY_SCALE))}))`;
+
 // The account's balance in the session's mode (#337): the newest observation is the REST read or
 // that mode's socket event, whichever is later (greatest() skips a NULL event). It is current
 // when no settle row of this session's intents in token_ledger - the database clock of a
@@ -592,8 +598,7 @@ export async function readTradingSessionView(
           won: sql<number>`count(*) filter (where ${tradeIntents.status} = ${SETTLED} and ${brokerTrades.profit} > 0)::int`,
           lost: sql<number>`count(*) filter (where ${tradeIntents.status} = ${SETTLED} and ${brokerTrades.profit} < 0)::int`,
           tied: sql<number>`count(*) filter (where ${tradeIntents.status} = ${SETTLED} and ${brokerTrades.profit} = 0)::int`,
-          // summed by Postgres at the column's scale, never in JS (Rule 2): '0.00000000' with none
-          profit: sql<DecimalString>`coalesce(sum(${brokerTrades.profit}) filter (where ${tradeIntents.status} = ${SETTLED}), round(0, ${sql.raw(String(MONEY_SCALE))}))`,
+          profit: sessionProfitSumSql,
         })
         .from(tradeIntents)
         .leftJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
@@ -634,6 +639,81 @@ export async function readTradingSessionView(
     },
     { isolationLevel: 'repeatable read', accessMode: 'read only' },
   );
+}
+
+// The finished session's summary card, claimed at most once (#318, docs/bot-session.md → The
+// summary card). One CAS UPDATE sets summary_sent_at only when every condition holds: the
+// owner's session (Rule 13, a foreign id reads as a missing one), stopped, not sent before, no
+// intent of it outside the terminal statuses, and at least one settled intent with its broker
+// trade. Any miss is undefined and writes nothing. The rows the card draws are read after it in
+// the same transaction; they cannot change any more: terminal intents have no edges and a
+// stopped session never runs again.
+export async function claimSessionSummary(
+  db: Db,
+  { id, telegramUserId }: { id: string; telegramUserId: string },
+): Promise<SessionSummary | undefined> {
+  return db.transaction(async (tx) => {
+    const settled = and(
+      eq(tradeIntents.tradingSessionId, id),
+      eq(tradeIntents.status, TradeIntentStatus.Settled),
+    );
+    const [claimed] = await tx
+      .update(tradingSessions)
+      .set({ summarySentAt: sql`now()` })
+      .where(
+        and(
+          eq(tradingSessions.id, id),
+          eq(tradingSessions.status, TradingSessionStatus.Stopped),
+          isNull(tradingSessions.summarySentAt),
+          sql`exists (
+            select 1 from ${brokerAccounts}
+              join ${users} on ${users.id} = ${brokerAccounts.userId}
+             where ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
+               and ${users.telegramUserId} = ${BigInt(telegramUserId)}
+          )`,
+          sql`not exists (
+            select 1 from ${tradeIntents}
+             where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
+               and ${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})
+          )`,
+          sql`exists (
+            select 1 from ${tradeIntents}
+              join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
+             where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
+               and ${tradeIntents.status} = ${SETTLED}
+          )`,
+        ),
+      )
+      .returning({ id: tradingSessions.id });
+    if (claimed === undefined) return undefined;
+
+    // broker_trades_settlement_check: close_price and profit are set exactly on a closed trade,
+    // and a settled intent's trade is closed (settleIntent writes both)
+    const rows = await tx
+      .select({
+        profit: brokerTrades.profit,
+        openPrice: brokerTrades.openPrice,
+        closePrice: brokerTrades.closePrice,
+      })
+      .from(tradeIntents)
+      .innerJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+      .where(settled)
+      .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id));
+    const [sum] = await tx
+      .select({ result: sessionProfitSumSql })
+      .from(tradeIntents)
+      .innerJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+      .where(settled);
+    return {
+      result: sum?.result ?? ZERO_PROFIT,
+      trades: rows.map((row) => {
+        if (row.profit === null || row.closePrice === null) {
+          throw new Error(`settled intent of session ${id} has an open broker trade`);
+        }
+        return { profit: row.profit, openPrice: row.openPrice, closePrice: row.closePrice };
+      }),
+    };
+  });
 }
 
 // The account a session trades on, read by its owner only (Rule 13): the view route refreshes its

@@ -46,6 +46,9 @@ export const tradingSessions = pgTable(
     // the direction of the last attempt that decided anything, NULL after a no_signal or before
     // any decision: the pause after two losses holds while it stays the losing direction (#379)
     lastSignalAction: text('last_signal_action').$type<TradeAction>(),
+    // the summary card's at-most-once mark (#318): set by claimSessionSummary's one CAS, never
+    // cleared; NULL on every session that has not sent its card
+    summarySentAt: timestamp('summary_sent_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

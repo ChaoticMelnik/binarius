@@ -243,3 +243,41 @@ export const safeParseTradingSessionResponse = (input: unknown) =>
   tradingSessionResponseSchema.safeParse(input);
 export const safeParseTradingSessionRefusal = (input: unknown) =>
   tradingSessionRefusalSchema.safeParse(input);
+
+// POST /trading/sessions/:id/summary (#318): the finished session's card, claimed at most once.
+// The request body is stopTradingSessionRequestSchema's. Its own code, not a TradingSessionErrorCode:
+// every refusal of the claim is one answer, and the bot's action on it is one (no card).
+export const SESSION_SUMMARY_SUFFIX = '/summary';
+
+export const SessionSummaryErrorCode = { Unavailable: 'summary_unavailable' } as const;
+export type SessionSummaryErrorCode =
+  (typeof SessionSummaryErrorCode)[keyof typeof SessionSummaryErrorCode];
+
+// A settled trade of the session in creation order. profit is the broker trade's (Rule 2); the
+// prices are not money and only place the card's line.
+export const sessionSummaryTradeSchema = z.strictObject({
+  profit: decimalStringSchema,
+  // zod 4 refuses Infinity and NaN in z.number()
+  openPrice: z.number(),
+  closePrice: z.number(),
+});
+
+// result is the sum of the trades' profit by SQL at scale 8, the view's own fragment
+export const sessionSummarySchema = z.strictObject({
+  result: decimalStringSchema,
+  trades: z.array(sessionSummaryTradeSchema).min(1).max(MAX_SESSION_TRADES),
+});
+export type SessionSummary = z.infer<typeof sessionSummarySchema>;
+
+export const sessionSummaryResponseSchema = z.strictObject({ summary: sessionSummarySchema });
+export type SessionSummaryResponse = z.infer<typeof sessionSummaryResponseSchema>;
+
+export const sessionSummaryRefusalSchema = z.strictObject({
+  error: z.literal(SessionSummaryErrorCode.Unavailable),
+});
+export type SessionSummaryRefusal = z.infer<typeof sessionSummaryRefusalSchema>;
+
+export const safeParseSessionSummaryResponse = (input: unknown) =>
+  sessionSummaryResponseSchema.safeParse(input);
+export const safeParseSessionSummaryRefusal = (input: unknown) =>
+  sessionSummaryRefusalSchema.safeParse(input);

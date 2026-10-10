@@ -288,6 +288,13 @@
       "when": 1791614497897,
       "tag": "0040_first_session_kinds_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1791627428075,
+      "tag": "0041_session_summary",
+      "breakpoints": true
     }
   ]
 }
