@@ -12,6 +12,7 @@ import {
   staffLoginChallenges,
   StaffLoginChallengeStatus,
 } from './schema/staff-login-challenges';
+import { staffLoginLinks, StaffLoginLinkStatus } from './schema/staff-login-links';
 import { staffSessions } from './schema/staff-sessions';
 
 // --- Policy ------------------------------------------------------------------------------------
@@ -78,7 +79,8 @@ export interface AuditEntry {
   payload?: Record<string, unknown>;
 }
 
-async function writeAuditEntry(executor: DbExecutor, entry: AuditEntry): Promise<void> {
+// Exported for staff-link-ops.ts (#448), the other writer of this domain's rows.
+export async function writeAuditEntry(executor: DbExecutor, entry: AuditEntry): Promise<void> {
   await executor.insert(auditLog).values({
     actorType: entry.actorType,
     actorId: entry.actorId ?? null,
@@ -701,18 +703,12 @@ export async function completeLogin(
       return { ok: false, reason: 'wrong_code', exhausted };
     }
 
-    const sessionToken = randomBytes(SESSION_TOKEN_BYTES).toString('base64url');
-    const [session] = await tx
-      .insert(staffSessions)
-      .values({
-        staffId: row.staff_id,
-        tokenHash: hashToken(sessionToken),
-        ip: input.ip,
-        userAgent: input.userAgent,
-        expiresAt: millisecondsFromNow(ttlMs),
-      })
-      .returning({ id: staffSessions.id, expiresAt: staffSessions.expiresAt });
-    if (session === undefined) throw new Error('staff_sessions insert returned no row');
+    const session = await insertStaffSession(tx, {
+      staffId: row.staff_id,
+      ip: input.ip,
+      userAgent: input.userAgent,
+      ttlMs,
+    });
     await writeAuditEntry(tx, {
       action: AuditAction.StaffLoginCompleted,
       actorType: AuditActorType.Admin,
@@ -723,11 +719,41 @@ export async function completeLogin(
     });
     return {
       ok: true,
-      sessionToken,
+      sessionToken: session.token,
       expiresAt: session.expiresAt,
       staffId: row.staff_id,
     };
   });
+}
+
+export interface InsertedStaffSession {
+  id: string;
+  token: string;
+  expiresAt: Date;
+}
+
+/**
+ * The one writer of a session's shape for both ways in — the code (completeLogin) and the link
+ * from the bot (completeLinkLogin, #448) — so the token, its hash and the lifetime cannot drift
+ * between them. The expiry is by the database's clock.
+ */
+export async function insertStaffSession(
+  tx: Tx,
+  input: { staffId: string; ip: string; userAgent: string; ttlMs?: number },
+): Promise<InsertedStaffSession> {
+  const token = randomBytes(SESSION_TOKEN_BYTES).toString('base64url');
+  const [session] = await tx
+    .insert(staffSessions)
+    .values({
+      staffId: input.staffId,
+      tokenHash: hashToken(token),
+      ip: input.ip,
+      userAgent: input.userAgent,
+      expiresAt: millisecondsFromNow(input.ttlMs ?? STAFF_SESSION_TTL_MS),
+    })
+    .returning({ id: staffSessions.id, expiresAt: staffSessions.expiresAt });
+  if (session === undefined) throw new Error('staff_sessions insert returned no row');
+  return { id: session.id, token, expiresAt: session.expiresAt };
 }
 
 // Zero rows from the CAS: the reason is read back so the caller can answer 409 (wait for
@@ -1076,25 +1102,27 @@ export async function createStaffAccount(
 
 export interface StaffInvalidation {
   closedChallenges: number;
+  closedLinks: number;
   revokedSessions: number;
 }
 
-// staff → staff_login_challenges → staff_sessions, the lock order these three tables are
-// written in everywhere. Changing the credentials or the status has to invalidate everything
+// staff → staff_login_challenges → staff_login_links → staff_sessions, the lock order these
+// tables are written in everywhere. Changing the credentials or the status has to invalidate everything
 // issued under the old ones in the same transaction, or a challenge created a moment earlier
 // would still walk through to a session.
 //
 // That order is about the locks a statement takes on purpose. FK KEY SHARE locks on `staff` are
-// taken after a session or challenge lock by design — `endStaffSession` and `revokeStaffSession`
-// write `revoked_by_staff_id` under a session lock, `completeLogin` inserts a session under a
-// challenge lock — and that is safe only while no writer takes `FOR UPDATE` on `staff`: KEY SHARE
+// taken after a session, challenge or link lock by design — `endStaffSession` and
+// `revokeStaffSession` write `revoked_by_staff_id` under a session lock, `completeLogin` inserts a
+// session under a challenge lock and `completeLinkLogin` under a link lock — and that is safe only while no writer takes `FOR UPDATE` on `staff`: KEY SHARE
 // conflicts with that mode and with nothing else any writer here uses. Take `FOR NO KEY UPDATE`,
 // as `startLoginChallenge` does.
 //
-// Those locks serialize a concurrent `completeLogin` against this tail, but they do not keep its
-// session out of it: the login holds its own challenge row until it commits, so either this
-// transaction closes the challenge first and the login, once it stops waiting, finds it closed
-// under it, or this one waits there and afterwards sees the session already committed. A session
+// Those locks serialize a concurrent `completeLogin` or `completeLinkLogin` against this tail, but
+// they do not keep its session out of it: the login holds its own challenge or link row until it
+// commits, so either this transaction closes that row first and the login, once it stops waiting,
+// finds it closed under it, or this one waits there and afterwards sees the session already
+// committed. A session
 // committed by a transaction that began after this one is therefore ordinary here, and that is
 // what the revocation timestamp below has to survive (#149).
 //
@@ -1117,6 +1145,18 @@ async function invalidateIssued(
       ),
     )
     .returning({ id: staffLoginChallenges.id });
+  // an issued link is closed whether or not its five minutes are up: expiry is the clock's, and a
+  // row that is past it is closed all the same
+  const links = await tx
+    .update(staffLoginLinks)
+    .set({ status: StaffLoginLinkStatus.Revoked })
+    .where(
+      and(
+        eq(staffLoginLinks.staffId, staffId),
+        eq(staffLoginLinks.status, StaffLoginLinkStatus.Issued),
+      ),
+    )
+    .returning({ id: staffLoginLinks.id });
   // clock_timestamp(), not now(): now() is the transaction's start, and under READ COMMITTED this
   // UPDATE still matches a session committed by a completeLogin that began later. That row's
   // created_at is after our now(), and staff_sessions_revoked_after_created_check then aborts the
@@ -1138,7 +1178,11 @@ async function invalidateIssued(
       ),
     )
     .returning({ id: staffSessions.id });
-  return { closedChallenges: closed.length, revokedSessions: revoked.length };
+  return {
+    closedChallenges: closed.length,
+    closedLinks: links.length,
+    revokedSessions: revoked.length,
+  };
 }
 
 export type StaffPasswordChangeResult =

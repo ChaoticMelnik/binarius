@@ -295,6 +295,13 @@
       "when": 1791627428075,
       "tag": "0041_session_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1791653502150,
+      "tag": "0042_staff_login_links",
+      "breakpoints": true
     }
   ]
 }

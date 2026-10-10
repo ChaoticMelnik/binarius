@@ -63,6 +63,10 @@ export const AuditAction = {
   BrokerAccountsViewed: 'broker_accounts_viewed',
   // the manual token adjustment (#246)
   TokenAdjusted: 'token_adjusted',
+  // staff login by a link from the bot (#448)
+  StaffLoginLinkIssued: 'staff_login_link_issued',
+  StaffLoginLinkRefused: 'staff_login_link_refused',
+  StaffLoginLinkCompleted: 'staff_login_link_completed',
 } as const;
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];
 export const auditActionSchema = z.enum(AuditAction);
@@ -73,6 +77,7 @@ export const auditActionSchema = z.enum(AuditAction);
 export const AuditEntityType = {
   Staff: 'staff',
   StaffLoginChallenge: 'staff_login_challenge',
+  StaffLoginLink: 'staff_login_link',
   StaffSession: 'staff_session',
   TradingSwitch: 'trading_switch',
   BotText: 'bot_text',
