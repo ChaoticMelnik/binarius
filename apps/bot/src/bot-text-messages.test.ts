@@ -38,6 +38,7 @@ import {
   type PairView,
   type SignalDecision,
   type TelegramHtml,
+  type TradingSessionView,
   type TradingSignalResponse,
 } from '@binarius/shared';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
@@ -197,6 +198,12 @@ const intentViews = [
 ];
 
 const N = 999;
+// none, one read before the last trade at the widest age statusCards uses, one read after (#337)
+const SESSION_BALANCES: TradingSessionView['balance'][] = [
+  null,
+  { available: USD, ageSec: 99_999 * 60, current: false },
+  { available: USD, ageSec: 0, current: true },
+];
 const sessionTexts = (
   status: TradingSessionStatus,
   stopReasons: (TradingSessionStopReason | null)[],
@@ -205,23 +212,37 @@ const sessionTexts = (
     [...DEMO_DURATIONS_SEC, INT4_MAX].flatMap((durationSec) =>
       stopReasons.flatMap((stopReason) =>
         [0, 1, 2, N].flatMap((settled) =>
-          [null, ...Object.values(TradeIntentStatus).map((s) => intentView({ status: s }))].map(
+          [null, ...Object.values(TradeIntentStatus).map((s) => intentView({ status: s }))].flatMap(
             (lastIntent) =>
-              sessionStatusText(
-                symbol,
-                sessionView({
-                  status,
-                  stopReason,
-                  settings: {
-                    ...SESSION_VIEW.settings!,
-                    assetId: INT4_MAX,
-                    durationSec,
-                    stake: { baseStake: STAKE, stakeScale: 8 },
-                  },
-                  trades: { planned: N, settled, rejected: 0, won: N, lost: N, tied: N },
-                  lastIntent,
-                }),
-                { deadline: true },
+              Object.values(TradeMode).flatMap((mode) =>
+                SESSION_BALANCES.map((balance) =>
+                  sessionStatusText(
+                    symbol,
+                    sessionView({
+                      mode,
+                      status,
+                      stopReason,
+                      settings: {
+                        ...SESSION_VIEW.settings!,
+                        assetId: INT4_MAX,
+                        durationSec,
+                        stake: { baseStake: STAKE, stakeScale: 8 },
+                      },
+                      trades: {
+                        planned: N,
+                        settled,
+                        rejected: 0,
+                        won: N,
+                        lost: N,
+                        tied: N,
+                        profit: USD,
+                      },
+                      lastIntent,
+                      balance,
+                    }),
+                    { deadline: true },
+                  ),
+                ),
               ),
           ),
         ),

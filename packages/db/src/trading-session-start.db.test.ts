@@ -11,10 +11,12 @@ import {
   TradingSessionStopReason,
   decimalStringSchema,
   safeParseTradingSessionResponse,
+  type BrokerUser,
   type DecimalString,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
-import { tradingSessions, users } from './schema/index';
+import { applyBalanceEvent, upsertBalanceSnapshot } from './balance-snapshot-ops';
+import { brokerBalanceSnapshots, tradingSessions, users } from './schema/index';
 import {
   createTempDatabase,
   intentRequest,
@@ -38,6 +40,7 @@ import {
   checkTradingSessionStart,
   createSessionIntent,
   readActiveTradingSessionView,
+  readTradingSessionAccount,
   readTradingSessionView,
   stopTradingSession,
 } from './trading-session-ops';
@@ -229,13 +232,14 @@ const sessionIntent = (
   seed: { telegramUserId: string; brokerAccountId: string },
   sessionId: string,
   step: number,
+  mode: TradeMode = TradeMode.Demo,
 ) =>
   createSessionIntent(tmp.db, {
     sessionId,
     step,
     telegramUserId: seed.telegramUserId,
     brokerAccountId: seed.brokerAccountId,
-    mode: TradeMode.Demo,
+    mode,
     assetId: 101,
     amount: decimalStringSchema.parse('1'),
     action: TradeAction.Up,
@@ -267,6 +271,7 @@ describe('readTradingSessionView', () => {
       won: 1,
       lost: 1,
       tied: 1,
+      profit: '-0.15000000',
     });
     expect(view!.lastIntent).toMatchObject({ id: queued.id, status: 'queued' });
     expect(view).toMatchObject({
@@ -311,8 +316,17 @@ describe('readTradingSessionView', () => {
     const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
     const view = await readTradingSessionView(tmp.db, session.id, seed.telegramUserId);
     expect(view).toMatchObject({
-      trades: { planned: 5, settled: 0, rejected: 0, won: 0, lost: 0, tied: 0 },
+      trades: {
+        planned: 5,
+        settled: 0,
+        rejected: 0,
+        won: 0,
+        lost: 0,
+        tied: 0,
+        profit: '0.00000000',
+      },
       lastIntent: null,
+      balance: null,
     });
   });
 
@@ -344,6 +358,161 @@ describe('readTradingSessionView', () => {
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );
     expect(rows[0]).toEqual({ ro: 'on', iso: 'repeatable read' });
+  });
+});
+
+const money = (value: string) => value as DecimalString;
+const brokerUser = (demo: string, real: string): BrokerUser => ({
+  id: 'broker-1',
+  level: { code: 'standard', rank: 1 },
+  minTradeAmount: money('1'),
+  real: { available: money(real), held: money('0'), total: money(real) },
+  demo: { available: money(demo), held: money('0'), total: money(demo) },
+});
+const snapshot = (brokerAccountId: string, demo = '10002.5', real = '250') =>
+  upsertBalanceSnapshot(tmp.db, {
+    brokerAccountId,
+    user: brokerUser(demo, real),
+    requested: false,
+  });
+// the REST read an hour ago: older than any settlement a test writes after it
+const backdate = (brokerAccountId: string) =>
+  tmp.db
+    .update(brokerBalanceSnapshots)
+    .set({ restObservedAt: sql`now() - interval '1 hour'` })
+    .where(eq(brokerBalanceSnapshots.brokerAccountId, brokerAccountId));
+const viewOf = async (session: { id: string }, seed: { telegramUserId: string }) =>
+  (await readTradingSessionView(tmp.db, session.id, seed.telegramUserId))!;
+
+describe('readTradingSessionView: the profit sum and the balance (#337)', () => {
+  it.each([
+    ['wins only', ['0.85', '0.9'], '1.75000000'],
+    ['losses only', ['-1', '-1'], '-2.00000000'],
+    ['a mix with a tie', ['0.85', '-1', '0'], '-0.15000000'],
+    ['a tie only', ['0'], '0.00000000'],
+  ])('V7 sums the settled trades in SQL: %s', async (_name, profits, sum) => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    let step = 1;
+    for (const profit of profits) {
+      await settle((await sessionIntent(seed, session.id, step++)).intent, profit);
+    }
+    // neither a rejected step nor the bot's own trade on the account counts
+    await reject((await sessionIntent(seed, session.id, step)).intent);
+    const { intent: botIntent } = await createTradeIntent(
+      tmp.db,
+      intentRequest(seed.telegramUserId),
+    );
+    await settle(botIntent, '5');
+    const view = await viewOf(session, seed);
+    expect(view.trades.profit).toBe(sum);
+    expect(safeParseTradingSessionResponse({ session: view }).success).toBe(true);
+  });
+
+  it('V7 a session with no settled trade sums to zero at scale 8', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await reject((await sessionIntent(seed, session.id, 1)).intent);
+    await sessionIntent(seed, session.id, 2);
+    expect((await viewOf(session, seed)).trades.profit).toBe('0.00000000');
+  });
+
+  it("V8 a real session sums its real trades and shows the snapshot's real balance", async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
+      mode: TradeMode.Real,
+    });
+    await settle((await sessionIntent(seed, session.id, 1, TradeMode.Real)).intent, '0.85');
+    await settle((await sessionIntent(seed, session.id, 2, TradeMode.Real)).intent, '-1');
+    await snapshot(seed.brokerAccountId, '10002.5', '250.75');
+    const view = await viewOf(session, seed);
+    expect(view.trades.profit).toBe('-0.15000000');
+    expect(view.balance).toEqual({ available: '250.75000000', ageSec: 0, current: true });
+    expect(safeParseTradingSessionResponse({ session: view }).success).toBe(true);
+  });
+
+  it('V9a an account without a snapshot has no balance', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settle((await sessionIntent(seed, session.id, 1)).intent, '0.85');
+    expect((await viewOf(session, seed)).balance).toBeNull();
+  });
+
+  it('V9b a snapshot written after the settlements is current', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settle((await sessionIntent(seed, session.id, 1)).intent, '0.85');
+    await snapshot(seed.brokerAccountId);
+    expect((await viewOf(session, seed)).balance).toEqual({
+      available: '10002.50000000',
+      ageSec: 0,
+      current: true,
+    });
+  });
+
+  it('V9c a snapshot taken between the reserve and the settlement is not current', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    const { intent } = await sessionIntent(seed, session.id, 1);
+    await snapshot(seed.brokerAccountId);
+    await settle(intent, '0.85');
+    expect((await viewOf(session, seed)).balance).toMatchObject({ current: false });
+  });
+
+  it('V9d an old snapshot with no settlement of the session is current, with its age', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await reject((await sessionIntent(seed, session.id, 1)).intent);
+    await snapshot(seed.brokerAccountId);
+    await backdate(seed.brokerAccountId);
+    const { balance } = await viewOf(session, seed);
+    expect(balance).toMatchObject({ current: true });
+    expect(balance!.ageSec).toBeGreaterThanOrEqual(3600);
+  });
+
+  it("V9e the mode's own socket event counts as an observation, the other mode's does not", async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const demo = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await settle((await sessionIntent(seed, demo.id, 1)).intent, '0.85');
+    await stopTradingSession(tmp.db, { id: demo.id, reason: TradingSessionStopReason.Completed });
+    const real = await seedTradingSession(tmp.db, seed.brokerAccountId, { mode: TradeMode.Real });
+    await settle((await sessionIntent(seed, real.id, 1, TradeMode.Real)).intent, '-1');
+    await snapshot(seed.brokerAccountId);
+    await backdate(seed.brokerAccountId);
+    await applyBalanceEvent(tmp.db, {
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Demo,
+      balance: { available: money('10003'), held: money('0'), total: money('10003') },
+    });
+    expect((await viewOf(demo, seed)).balance).toEqual({
+      available: '10003.00000000',
+      ageSec: 0,
+      current: true,
+    });
+    const realBalance = (await viewOf(real, seed)).balance!;
+    expect(realBalance).toMatchObject({ available: '250.00000000', current: false });
+    expect(realBalance.ageSec).toBeGreaterThanOrEqual(3600);
+  });
+});
+
+describe('readTradingSessionAccount', () => {
+  it("V10 reads the session's account for its owner only", async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const other = await seedUser(tmp.db);
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    expect(await readTradingSessionAccount(tmp.db, session.id, seed.telegramUserId)).toEqual({
+      brokerAccountId: seed.brokerAccountId,
+    });
+    expect(
+      await readTradingSessionAccount(tmp.db, session.id, other.telegramUserId),
+    ).toBeUndefined();
+    expect(
+      await readTradingSessionAccount(
+        tmp.db,
+        '00000000-0000-4000-8000-000000000000',
+        seed.telegramUserId,
+      ),
+    ).toBeUndefined();
   });
 });
 

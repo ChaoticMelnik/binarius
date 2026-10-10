@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatAge, formatCount, formatStake, formatUsd } from './bot-text-format';
+import { formatAge, formatCount, formatSignedUsd, formatStake, formatUsd } from './bot-text-format';
 import { BOT_TEXT_WIDTHS } from './bot-text-messages';
 import { BOT_TEXT_VARS, MODE_LABELS, type BotTextVarFallbackKey } from './bot-text-vars';
 import type { DecimalString } from './money';
@@ -46,9 +46,16 @@ describe('BOT_TEXT_VARS', () => {
     expect(BOT_TEXT_VARS.bonusTokens.format('100', texts)).toBe('100');
   });
 
+  it('V3 prints the session result with its sign (#337)', () => {
+    expect(BOT_TEXT_VARS.profit.format(money('-0.15000000'), texts)).toBe('-$0.15');
+    expect(BOT_TEXT_VARS.profit.format(money('2.5'), texts)).toBe('+$2.50');
+    expect(BOT_TEXT_VARS.profit.format(money('0.00000000'), texts)).toBe('$0.00');
+  });
+
   // the defaults of BOT_TEXT_VAR_DEFAULT_WIDTHS rest on these (docs/bot-texts.md → Assumptions)
   it('V2 takes the widths of the formatters at the edge of their domains', () => {
     expect(formatUsd('-999999999999.99999999')).toHaveLength(W.usd);
+    expect(formatSignedUsd('999999999999.99999999')).toHaveLength(W.usd);
     expect(formatStake('999999999999.99999999')).toHaveLength(W.stake);
     expect(formatUsd('0')).toHaveLength(W.zeroUsd);
     expect(formatCount(COUNT)).toHaveLength(W.count);

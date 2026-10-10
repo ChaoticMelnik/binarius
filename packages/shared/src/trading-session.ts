@@ -3,6 +3,7 @@ import { decimalScale, DEMO_STAKE_MIN_SCALE, DemoStakeRefusal } from './demo-sta
 import { decimalStringSchema, normalizeDecimal, type DecimalString } from './money';
 import {
   createTradeIntentRequestSchema,
+  TRADE_INTENT_TRANSITIONS,
   telegramUserIdSchema,
   tradeAmountSchema,
   tradeIntentViewSchema,
@@ -115,6 +116,9 @@ export const sessionFitsDeadline = (trades: number, durationSec: number): boolea
 // upper estimate of POST /trading/sessions: one bounded broker balance request plus statements;
 // the bot's request timeout must not be shorter (#284)
 export const TRADING_SESSION_START_BUDGET_MS = 4_000;
+// upper estimate of GET /trading/sessions/:id and POST /trading/sessions/:id/stop: one bounded
+// broker balance request for a finished session plus statements (#337)
+export const TRADING_SESSION_VIEW_BUDGET_MS = 4_000;
 
 export const TRADING_SESSIONS_PATH = '/trading/sessions';
 
@@ -176,6 +180,16 @@ export const tradingSessionTradesSchema = z.strictObject({
   won: countSchema,
   lost: countSchema,
   tied: countSchema,
+  // the sum of the settled trades' profit, by SQL at scale 8 (#337); '0.00000000' with none
+  profit: decimalStringSchema,
+});
+
+// The account's balance in the session's mode, as stored (#337): ageSec of the newest
+// observation, current when no settlement of the session is newer than it
+export const tradingSessionBalanceSchema = z.strictObject({
+  available: decimalStringSchema,
+  ageSec: z.int().nonnegative(),
+  current: z.boolean(),
 });
 
 export const tradingSessionViewSchema = z.strictObject({
@@ -189,8 +203,19 @@ export const tradingSessionViewSchema = z.strictObject({
   endedAt: z.iso.datetime({ offset: true }).nullable(),
   trades: tradingSessionTradesSchema,
   lastIntent: tradeIntentViewSchema.nullable(),
+  // null while the account has no snapshot
+  balance: tradingSessionBalanceSchema.nullable(),
 });
 export type TradingSessionView = z.infer<typeof tradingSessionViewSchema>;
+
+// Nothing of the session can move any more: stopped, and its last trade has no edge left in the
+// shared graph. The backend refreshes the balance for such a view and the bot stops following it
+// (#337); a last trade in manual_review keeps edges, so such a session is not finished.
+export const isTradingSessionFinished = (
+  view: Pick<TradingSessionView, 'status' | 'lastIntent'>,
+): boolean =>
+  view.status === TradingSessionStatus.Stopped &&
+  (view.lastIntent === null || TRADE_INTENT_TRANSITIONS[view.lastIntent.status].length === 0);
 
 export const tradingSessionResponseSchema = z.strictObject({ session: tradingSessionViewSchema });
 export type TradingSessionResponse = z.infer<typeof tradingSessionResponseSchema>;

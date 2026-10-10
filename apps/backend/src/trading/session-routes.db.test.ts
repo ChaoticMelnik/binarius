@@ -18,7 +18,7 @@ import {
   type PairsCatalogView,
   type TradingSessionView,
 } from '@binarius/shared';
-import { until } from '@binarius/shared/testing';
+import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
   createTempDatabase,
   seedBrokerAccount,
@@ -31,20 +31,28 @@ import {
 import {
   brokerAccounts,
   brokerBalanceSnapshots,
+  createSessionIntent,
   createTradeIntent,
+  markIntentAccepted,
   openTrading,
   setDemoStake,
+  settleIntent,
   stopTrading,
+  stopTradingSession,
+  takeIntent,
   tradeIntents,
+  transitionIntent,
   tradingSessions,
   upsertBalanceSnapshot,
   users,
+  type TradeIntentRow,
 } from '@binarius/db';
 import { buildApp } from '../app';
 import { unusedAdminDeps } from '../admin/testing';
 import type { AuthRoutesDeps } from '../auth/routes';
 import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
+import type { BalanceRefreshOutcome } from '../broker/balance-reconciler';
 import type { TradingSessionRoutesDeps } from './session-routes';
 import {
   PAIRS_TEST_TOKEN,
@@ -124,13 +132,15 @@ function appWith(
   options: {
     catalog?: PairsCatalogView | undefined;
     refresh?: (accountId: string) => Promise<unknown>;
+    // what the refresh answers once the stub ran
+    outcome?: BalanceRefreshOutcome;
   } = {},
 ): FastifyInstance {
   const catalog = 'catalog' in options ? options.catalog : freshCatalog();
   const refresh: Refresh = (accountId, refreshOptions) => {
     refreshCalls.push({ accountId, options: refreshOptions });
     if (options.refresh === undefined) throw new Error('unexpected balance refresh');
-    return options.refresh(accountId).then(() => 'ok' as const);
+    return options.refresh(accountId).then(() => options.outcome ?? ('ok' as const));
   };
   app = buildApp({
     checkPostgres: () => Promise.resolve(),
@@ -626,11 +636,17 @@ async function seedSession(): Promise<SeededAccount & { sessionId: string }> {
 }
 
 describe('GET /trading/sessions/:id', () => {
-  it('G1 the owner reads the view', async () => {
+  it('G1 the owner reads the view, with no balance refresh for an active session', async () => {
     const seed = await seedSession();
     const response = await read(appWith(), seed.sessionId, seed.telegramUserId);
     expect(response.statusCode).toBe(200);
-    expect(sessionOf(response)).toMatchObject({ id: seed.sessionId, status: 'active' });
+    expect(sessionOf(response)).toMatchObject({
+      id: seed.sessionId,
+      status: 'active',
+      trades: { profit: '0.00000000' },
+      balance: null,
+    });
+    expect(refreshCalls).toEqual([]);
   });
 
   it("G2/G3 another user's session answers as a missing one", async () => {
@@ -653,7 +669,183 @@ describe('GET /trading/sessions/:id', () => {
   });
 });
 
+// #337: the final status carries the balance after the last trade
+const sessionIntent = (seed: SeededAccount, sessionId: string, step: number) =>
+  createSessionIntent(tmp.db, {
+    sessionId,
+    step,
+    telegramUserId: seed.telegramUserId,
+    brokerAccountId: seed.brokerAccountId,
+    mode: TradeMode.Demo,
+    assetId: ASSET,
+    amount: decimalStringSchema.parse('1'),
+    action: TradeAction.Up,
+    durationSec: 60,
+  });
+
+async function submitted(intent: TradeIntentRow): Promise<TradeIntentRow> {
+  return (await takeIntent(tmp.db, {
+    id: intent.id,
+    expectedVersion: intent.version,
+    maxAgeMs: 60_000,
+  }))!;
+}
+
+async function settled(seed: SeededAccount, sessionId: string, step: number, profit: string) {
+  const { intent } = await sessionIntent(seed, sessionId, step);
+  const taken = await submitted(intent);
+  const open = openTradeFor(intent);
+  await tmp.db.transaction((tx) =>
+    markIntentAccepted(tx, {
+      id: taken.id,
+      expectedVersion: taken.version,
+      transport: 'rest_fallback',
+      trade: open,
+    }),
+  );
+  await tmp.db.transaction((tx) =>
+    settleIntent(tx, {
+      id: intent.id,
+      from: TradeIntentStatus.Accepted,
+      trade: closedTradeFor(open, { profit: decimalStringSchema.parse(profit) }),
+    }),
+  );
+}
+
+// a session whose snapshot was written before its one trade settled
+async function finishedSession(
+  reason: TradingSessionStopReason = TradingSessionStopReason.Completed,
+): Promise<SeededAccount & { sessionId: string }> {
+  const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+  const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+  await snapshotFor(seed.brokerAccountId);
+  await settled(seed, session.id, 1, '0.85');
+  await stopTradingSession(tmp.db, { id: session.id, reason });
+  return { ...seed, sessionId: session.id };
+}
+
+const afterSession: BrokerUser = {
+  ...brokerUser,
+  demo: { ...brokerUser.demo, available: decimalStringSchema.parse('10000.85') },
+};
+const writeAfterSession = (brokerAccountId: string) =>
+  upsertBalanceSnapshot(tmp.db, { brokerAccountId, user: afterSession, requested: false });
+
+describe('GET /trading/sessions/:id: the balance after a finished session (#337)', () => {
+  it('G5 refreshes once without an exchange and answers the new balance; a second read does not', async () => {
+    const seed = await finishedSession();
+    const target = appWith({ refresh: writeAfterSession });
+    const response = await read(target, seed.sessionId, seed.telegramUserId);
+    expect(response.statusCode).toBe(200);
+    expect(sessionOf(response)).toMatchObject({
+      trades: { settled: 1, profit: '0.85000000' },
+      balance: { available: '10000.85000000', ageSec: 0, current: true },
+    });
+    expect(refreshCalls).toHaveLength(1);
+    expect(refreshCalls[0]!.accountId).toBe(seed.brokerAccountId);
+    expect(Object.keys(refreshCalls[0]!.options!).sort()).toEqual(['mayRefresh', 'signal']);
+    expect(refreshCalls[0]!.options).toMatchObject({ mayRefresh: false });
+    expect(refreshCalls[0]!.options!.signal).toBeInstanceOf(AbortSignal);
+
+    await read(target, seed.sessionId, seed.telegramUserId);
+    expect(refreshCalls).toHaveLength(1);
+  });
+
+  it('G6 a refresh that does not write answers the stored balance as not current', async () => {
+    const seed = await finishedSession();
+    const response = await read(
+      appWith({ refresh: () => Promise.resolve(), outcome: 'refresh_needed' }),
+      seed.sessionId,
+      seed.telegramUserId,
+    );
+    expect(response.statusCode).toBe(200);
+    expect(sessionOf(response).balance).toMatchObject({
+      available: '10000.00000000',
+      current: false,
+    });
+    expect(refreshCalls).toHaveLength(1);
+  });
+
+  it('G7 a snapshot already newer than the last settlement is not refreshed', async () => {
+    const seed = await finishedSession();
+    await writeAfterSession(seed.brokerAccountId);
+    const response = await read(appWith(), seed.sessionId, seed.telegramUserId);
+    expect(sessionOf(response).balance).toMatchObject({ current: true });
+    expect(refreshCalls).toEqual([]);
+  });
+
+  it('G8 a session stopped for manual review with its trade on review is not refreshed', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await snapshotFor(seed.brokerAccountId);
+    await settled(seed, session.id, 1, '0.85');
+    let row = await submitted((await sessionIntent(seed, session.id, 2)).intent);
+    for (const [from, to] of [
+      [TradeIntentStatus.Submitting, TradeIntentStatus.Unknown],
+      [TradeIntentStatus.Unknown, TradeIntentStatus.Reconciling],
+      [TradeIntentStatus.Reconciling, TradeIntentStatus.ManualReview],
+    ] as const) {
+      row = (await transitionIntent(tmp.db, {
+        id: row.id,
+        from,
+        to,
+        expectedVersion: row.version,
+      }))!;
+    }
+    await stopTradingSession(tmp.db, {
+      id: session.id,
+      reason: TradingSessionStopReason.ManualReview,
+    });
+    const response = await read(appWith(), session.id, seed.telegramUserId);
+    expect(sessionOf(response)).toMatchObject({
+      trades: { settled: 1 },
+      balance: { current: false },
+      lastIntent: { status: TradeIntentStatus.ManualReview },
+    });
+    expect(refreshCalls).toEqual([]);
+  });
+
+  it('G9 a stopped session with no settled trade and no snapshot is not refreshed', async () => {
+    const seed = await seedSession();
+    await stopTradingSession(tmp.db, {
+      id: seed.sessionId,
+      reason: TradingSessionStopReason.UserStopped,
+    });
+    const response = await read(appWith(), seed.sessionId, seed.telegramUserId);
+    expect(sessionOf(response)).toMatchObject({ trades: { settled: 0 }, balance: null });
+    expect(refreshCalls).toEqual([]);
+  });
+
+  it('G11 a refresh that throws answers the opaque 500', async () => {
+    const seed = await finishedSession();
+    const response = await read(
+      appWith({ refresh: () => Promise.reject(new Error('broker down')) }),
+      seed.sessionId,
+      seed.telegramUserId,
+    );
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: 'internal' });
+  });
+});
+
 describe('POST /trading/sessions/:id/stop', () => {
+  it('G10 a stop between trades answers the balance refreshed after the last one', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 10n });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+    await snapshotFor(seed.brokerAccountId);
+    await settled(seed, session.id, 1, '0.85');
+    const response = await stop(appWith({ refresh: writeAfterSession }), session.id, {
+      telegramUserId: seed.telegramUserId,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(sessionOf(response)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.UserStopped,
+      balance: { available: '10000.85000000', current: true },
+    });
+    expect(refreshCalls).toHaveLength(1);
+  });
+
   it('S1 the owner stops the session with user_stopped', async () => {
     const seed = await seedSession();
     const response = await stop(appWith(), seed.sessionId, {

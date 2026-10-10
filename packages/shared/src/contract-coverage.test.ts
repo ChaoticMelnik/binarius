@@ -376,6 +376,7 @@ describe('contract coverage (issue #6)', () => {
       | 'endedAt'
       | 'trades'
       | 'lastIntent'
+      | 'balance'
     >();
     expectTypeOf<TradingSessionView['status']>().toEqualTypeOf<'active' | 'paused' | 'stopped'>();
     expectTypeOf<TradingSessionView['trades']>().toEqualTypeOf<{
@@ -385,7 +386,14 @@ describe('contract coverage (issue #6)', () => {
       won: number;
       lost: number;
       tied: number;
+      profit: DecimalString;
     }>();
+    // #337: the account's balance in the session's mode, null with no snapshot
+    expectTypeOf<TradingSessionView['balance']>().toEqualTypeOf<{
+      available: DecimalString;
+      ageSec: number;
+      current: boolean;
+    } | null>();
     expectTypeOf<TradingSessionView['lastIntent']>().toEqualTypeOf<TradeIntentView | null>();
     expectTypeOf<TradingSessionRefusal['error']>().toEqualTypeOf<
       | 'user_not_found'

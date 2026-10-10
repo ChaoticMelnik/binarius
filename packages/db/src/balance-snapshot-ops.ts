@@ -221,7 +221,7 @@ export async function touchBalanceRequested(db: Db, brokerAccountId: string): Pr
 // Whole seconds since a timestamp by the database clock; a future timestamp (clock step) is 0.
 const ageSecOf = (at: SQL) => sql`greatest(0, floor(extract(epoch from now() - ${at})))::int`;
 // NULL stays NULL: greatest(0, NULL) would be 0, a missing time read as a fresh one
-const nullableAgeSec = (at: SQL): SQL<number | null> =>
+export const nullableAgeSec = (at: SQL): SQL<number | null> =>
   sql<number | null>`case when ${at} is null then null else ${ageSecOf(at)} end`;
 
 // greatest() skips NULLs, so this is NULL only while neither mode has seen an event

@@ -374,7 +374,7 @@ export const BOT_TEXT_CATALOG = {
   ),
   statusStale: html(
     g.Menu,
-    '/menu: баланс устарел, с возрастом снимка.',
+    '/menu и итог сессии: баланс устарел, с возрастом снимка.',
     `🕒 Баланс Binodex обновлён {age} назад.`,
     { ...caption, vars: ['age'] },
   ),
@@ -1073,10 +1073,10 @@ export const BOT_TEXT_CATALOG = {
   }),
   sessionScore: html(
     g.Session,
-    'Сессия: счёт закрытых сделок, пока сессия идёт.',
-    `📊 Счёт: {score}`,
+    'Сессия: счёт закрытых сделок и результат в $, пока сессия идёт.',
+    `📊 Счёт: {score} · {profit}`,
     {
-      vars: ['score'],
+      vars: ['score', 'profit'],
     },
   ),
   sessionWon: plain(g.Session, 'Сессия: число сделок в плюс, в счёте и итоге.', '{count} в плюс', {
@@ -1121,6 +1121,26 @@ export const BOT_TEXT_CATALOG = {
   sessionTotal: html(g.Session, 'Сессия: итог под причиной остановки.', `📊 Итог: {result}`, {
     vars: ['result'],
   }),
+  sessionResult: html(
+    g.Session,
+    'Сессия: результат закрытых сделок в $, в итоге.',
+    `💰 Результат: {profit}`,
+    { vars: ['profit'] },
+  ),
+  sessionBalanceDemo: html(
+    g.Session,
+    'Сессия: демобаланс после сессии.',
+    `🧪 Демобаланс: {amount}`,
+    {
+      vars: ['amount'],
+    },
+  ),
+  sessionBalanceReal: html(
+    g.Session,
+    'Сессия: реальный баланс после сессии.',
+    `💵 Реальный баланс: {amount}`,
+    { vars: ['amount'] },
+  ),
   sessionOpenTradePlaysOut: html(
     g.Session,
     'Сессия остановлена, а последняя сделка ещё идёт.',

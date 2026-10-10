@@ -3,6 +3,7 @@ import {
   SESSION_MAX_DURATION_MS,
   TRADING_ACCESS_BUDGET_MS,
   TRADING_SESSION_START_BUDGET_MS,
+  TRADING_SESSION_VIEW_BUDGET_MS,
   TRADING_SIGNAL_BUDGET_MS,
 } from '@binarius/shared';
 
@@ -199,15 +200,16 @@ export const SESSION_TRACK_DEADLINE_MS = SESSION_MAX_DURATION_MS + 600_000;
 // one readSession plus one edit, what sessionTracker.stop() can be waiting for
 export const SESSION_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS;
 
-// TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS and TRADING_SESSION_START_BUDGET_MS are the
-// backend's upper estimates of POST /trading/access, POST /trading/signal (#126) and POST
-// /trading/sessions (#283): waiting at least that long keeps a broker GET
-// inside its budget from reading as an outage here.
+// TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS, TRADING_SESSION_START_BUDGET_MS and
+// TRADING_SESSION_VIEW_BUDGET_MS are the backend's upper estimates of POST /trading/access, POST
+// /trading/signal (#126), POST /trading/sessions (#283) and a session's view and stop (#337):
+// waiting at least that long keeps a broker GET inside its budget from reading as an outage here.
 export const TIMING_CHAIN_HOLDS =
   POLLING_BATCH_LIMIT === 1 &&
   TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   TRADING_SESSION_START_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
+  TRADING_SESSION_VIEW_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   POLLING_TIMEOUT_S * 1000 < TELEGRAM_API_TIMEOUT_MS &&
   HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
   TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&

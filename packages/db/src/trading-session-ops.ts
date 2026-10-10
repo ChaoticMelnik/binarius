@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, notInArray, sql } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
+  TokenLedgerKind,
   TradingSessionErrorCode,
   TradeIntentStatus,
   TradeMode,
@@ -14,10 +15,13 @@ import {
   type TradingSessionView,
   safeParseTradingSessionSettings,
 } from '@binarius/shared';
+import { nullableAgeSec } from './balance-snapshot-ops';
 import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
+import { brokerBalanceSnapshots } from './schema/broker-balance-snapshots';
 import { brokerTrades } from './schema/broker-trades';
-import { literal, sqlLiteralList } from './schema/columns';
+import { MONEY_SCALE, literal, sqlLiteralList } from './schema/columns';
+import { tokenLedger } from './schema/token-ledger';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
@@ -528,6 +532,23 @@ async function activeSessionOf(exec: DbExecutor, brokerAccountId: string) {
 }
 
 const SETTLED = literal(TradeIntentStatus.Settled);
+// the aggregate always returns a row; this only satisfies the destructuring's undefined
+const ZERO_PROFIT = '0.00000000' as DecimalString;
+
+// The account's balance in the session's mode (#337): the newest observation is the REST read or
+// that mode's socket event, whichever is later (greatest() skips a NULL event). It is current
+// when no settle row of this session's intents in token_ledger - the database clock of a
+// settlement - is newer than it; with no settlement at all it is current.
+const isRealSession = sql`${tradingSessions.mode} = ${literal(TradeMode.Real)}`;
+const sessionAvailable = sql<DecimalString | null>`case when ${isRealSession} then ${brokerBalanceSnapshots.realAvailable} else ${brokerBalanceSnapshots.demoAvailable} end`;
+const sessionObservedAt = sql`greatest(${brokerBalanceSnapshots.restObservedAt}, case when ${isRealSession} then ${brokerBalanceSnapshots.realEventAt} else ${brokerBalanceSnapshots.demoEventAt} end)`;
+const sessionBalanceCurrent = sql<boolean>`not exists (
+  select 1 from ${tokenLedger}
+    join ${tradeIntents} on ${tradeIntents.id} = ${tokenLedger.intentId}
+   where ${tradeIntents.tradingSessionId} = ${tradingSessions.id}
+     and ${tokenLedger.kind} = ${literal(TokenLedgerKind.Settle)}
+     and ${tokenLedger.createdAt} > ${sessionObservedAt}
+)`;
 
 // The session as the owner's bot sees it (#283). Scoped by the owner: another user's session and
 // a missing id are both undefined (Rule 13). The row, the counters and the last intent come from
@@ -548,10 +569,17 @@ export async function readTradingSessionView(
           settings: sql<unknown>`${tradingSessions.settings}`,
           startedAt: tradingSessions.startedAt,
           endedAt: tradingSessions.endedAt,
+          available: sessionAvailable,
+          ageSec: nullableAgeSec(sessionObservedAt),
+          current: sessionBalanceCurrent,
         })
         .from(tradingSessions)
         .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
         .innerJoin(users, eq(users.id, brokerAccounts.userId))
+        .leftJoin(
+          brokerBalanceSnapshots,
+          eq(brokerBalanceSnapshots.brokerAccountId, tradingSessions.brokerAccountId),
+        )
         .where(and(eq(tradingSessions.id, id), eq(users.telegramUserId, BigInt(telegramUserId))));
       if (session === undefined) return undefined;
 
@@ -564,6 +592,8 @@ export async function readTradingSessionView(
           won: sql<number>`count(*) filter (where ${tradeIntents.status} = ${SETTLED} and ${brokerTrades.profit} > 0)::int`,
           lost: sql<number>`count(*) filter (where ${tradeIntents.status} = ${SETTLED} and ${brokerTrades.profit} < 0)::int`,
           tied: sql<number>`count(*) filter (where ${tradeIntents.status} = ${SETTLED} and ${brokerTrades.profit} = 0)::int`,
+          // summed by Postgres at the column's scale, never in JS (Rule 2): '0.00000000' with none
+          profit: sql<DecimalString>`coalesce(sum(${brokerTrades.profit}) filter (where ${tradeIntents.status} = ${SETTLED}), round(0, ${sql.raw(String(MONEY_SCALE))}))`,
         })
         .from(tradeIntents)
         .leftJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
@@ -593,12 +623,33 @@ export async function readTradingSessionView(
           won: counts?.won ?? 0,
           lost: counts?.lost ?? 0,
           tied: counts?.tied ?? 0,
+          profit: counts?.profit ?? ZERO_PROFIT,
         },
         lastIntent: last === undefined ? null : toTradeIntentView(last, telegramUserId),
+        balance:
+          session.available === null || session.ageSec === null
+            ? null
+            : { available: session.available, ageSec: session.ageSec, current: session.current },
       };
     },
     { isolationLevel: 'repeatable read', accessMode: 'read only' },
   );
+}
+
+// The account a session trades on, read by its owner only (Rule 13): the view route refreshes its
+// balance (#337). A foreign telegram id and a missing session both read undefined.
+export async function readTradingSessionAccount(
+  db: Db,
+  id: string,
+  telegramUserId: string,
+): Promise<{ brokerAccountId: string } | undefined> {
+  const [row] = await db
+    .select({ brokerAccountId: tradingSessions.brokerAccountId })
+    .from(tradingSessions)
+    .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .where(and(eq(tradingSessions.id, id), eq(users.telegramUserId, BigInt(telegramUserId))));
+  return row;
 }
 
 // the account's active session as its owner sees it; undefined when none, or when it ended
