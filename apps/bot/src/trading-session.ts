@@ -82,8 +82,11 @@ function appendSessionEnd(
 }
 
 // Under the summary card (#318): the stopped status's next steps without «🔄 Обновить», which
-// edits the text of the message it is under, and a photo has a caption instead.
+// edits the text of the message it is under, and a photo has a caption instead. «📊 Новый
+// анализ» and «📡 К сигналам» edit too: a photo's edit is refused as gone and their screen is
+// answered anew (screen.ts).
 export const sessionCardKeyboard = (view: Pick<TradingSessionView, 'settings'>): InlineKeyboard =>
+  // withMenu on an empty keyboard keeps its empty first row; menuKeyboard() has none
   view.settings === null ? menuKeyboard() : appendSessionEnd(new InlineKeyboard(), view.settings);
 
 export interface TradingSessionDeps {

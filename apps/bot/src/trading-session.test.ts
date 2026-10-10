@@ -673,6 +673,24 @@ describe('the summary card (#318)', () => {
     });
   });
 
+  // the card is a photo: an edit of it is refused (demo.test.ts → a press under the session card)
+  it('K7 «🔁 Ещё сессия» under the card starts a session by a reply, never an edit', async () => {
+    const scene = setup();
+    scene.apiErrors.set('editMessageText', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: there is no text in the message to edit',
+    });
+    const again = sessionCardKeyboard(DONE)
+      .inline_keyboard.flat()
+      .find((key) => key.text === LABELS.sessionAgainButton);
+    await scene.press((again as Button | undefined)?.callback_data ?? '');
+    expect(methods(scene.calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(payloadOf(scene.calls, 'sendMessage')?.text).toBe(statusOf(SESSION_VIEW));
+    expect(scene.startSession).toHaveBeenCalledTimes(1);
+    expect(scene.logger.error).not.toHaveBeenCalled();
+  });
+
   it("K6 without settings, the asset is the last trade's and the keyboard the menu", async () => {
     const bare = sessionView({ ...DONE, settings: null });
     const scene = setup({ readSession: () => Promise.resolve(bare) });
