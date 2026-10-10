@@ -493,19 +493,21 @@ describe('the low-token nudge', () => {
   const [HALF, LOW, OUT] = TOKEN_NUDGES;
   const TOKEN_KINDS: readonly NotificationKind[] = TOKEN_NUDGES.map((nudge) => nudge.kind);
 
-  const cancelPending = () =>
+  // `failed`, not `canceled`: the planner takes a canceled nudge back, and a set-aside job must not
+  // come back into a later case's claim
+  const setAsidePending = () =>
     tmp.db
       .update(notificationJobs)
-      .set({ status: NotificationJobStatus.Canceled })
+      .set({ status: NotificationJobStatus.Failed })
       .where(eq(notificationJobs.status, NotificationJobStatus.Pending));
 
   // the earlier cases' users are planned and set aside once, so a claim here takes this block's own
   beforeAll(async () => {
     await plansFromMinutesAgo(hours(200));
     await planMailingJobs(tmp.db);
-    await cancelPending();
+    await setAsidePending();
   });
-  beforeEach(cancelPending);
+  beforeEach(setAsidePending);
 
   const tokenJobsOf = async (userId: string) =>
     (await jobsOf(userId)).filter((job) => TOKEN_KINDS.includes(job.kind));
@@ -565,7 +567,7 @@ describe('the low-token nudge', () => {
     for (const kind of TOKEN_KINDS) expect(again[kind]).toBe(0);
   });
 
-  it('T2 gives a user past several thresholds at the deploy one push, the highest, and never a lower one later', async () => {
+  it('T2 gives a user past several thresholds at the deploy one push, the highest, and no lower one while it waits', async () => {
     // connected long before the kinds were switched on, as at the deploy
     const at90 = await linked(hours(100), 10n);
     const at100 = await linked(hours(100), 0n);
@@ -586,7 +588,7 @@ describe('the low-token nudge', () => {
     }
   });
 
-  it('T3 plans nothing for a user without the starter pack, blocked by the admin, or unreachable', async () => {
+  it('T3 plans nothing for a user without the starter pack, blocked by the admin, off, or who blocked the bot', async () => {
     const noPack = await seedUser(tmp.db, { balance: 0n });
     await seedBrokerAccount(tmp.db, noPack.userId);
     const adminBlocked = await linked(0, 0n);
@@ -596,10 +598,12 @@ describe('the low-token nudge', () => {
       .where(eq(users.id, adminBlocked.userId));
     const off = await linked(0, 0n);
     await setNotificationLevel(tmp.db, off.telegramUserId, NotificationLevel.Off);
+    const botBlocked = await linked(0, 0n);
+    await markTelegramBlocked(tmp.db, botBlocked.telegramUserId);
 
     await planMailingJobs(tmp.db);
 
-    for (const userId of [noPack.userId, adminBlocked.userId, off.userId]) {
+    for (const userId of [noPack.userId, adminBlocked.userId, off.userId, botBlocked.userId]) {
       expect(await tokenJobsOf(userId)).toEqual([]);
     }
   });
@@ -634,6 +638,112 @@ describe('the low-token nudge', () => {
 
     expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 1 });
     expect((await jobRow(planned!.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('T7 plans a canceled nudge again once the balance is back in its band, and sends it once', async () => {
+    const user = await linked(0, 0n);
+    await planMailingJobs(tmp.db);
+    const [planned] = await tokenJobsOf(user.userId);
+    expect(planned?.kind).toBe(OUT.kind);
+    // an adjustment lifts the balance before the send; the user spends it again
+    await setBalance(user.userId, 80n);
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 1 });
+    await setBalance(user.userId, 0n);
+    // the spending took an hour: the job comes back for the moment it is planned again
+    await tmp.db
+      .update(notificationJobs)
+      .set({ scheduledAt: sql`now() - interval '1 hour'` })
+      .where(eq(notificationJobs.id, planned!.id));
+    const replanStarted = (await tmp.db.execute<{ at: string }>(sql`select now()::text as at`))
+      .rows[0]!.at;
+
+    expect((await planMailingJobs(tmp.db))[OUT.kind]).toBe(1);
+    const [replanned] = await tokenJobsOf(user.userId);
+    expect(replanned).toMatchObject({ id: planned!.id, status: NotificationJobStatus.Pending });
+    expect(replanned!.scheduledAt.getTime()).toBeGreaterThanOrEqual(
+      new Date(replanStarted).getTime(),
+    );
+
+    const { job } = await claimMailingJob(tmp.db, { scan: SCAN });
+    expect(job?.id).toBe(planned!.id);
+    await settleMailingJob(tmp.db, job!.id, { kind: 'delivered' });
+    expect((await planMailingJobs(tmp.db))[OUT.kind]).toBe(0);
+    expect(await claimMailingJob(tmp.db, { scan: SCAN })).toEqual({ job: undefined, canceled: 0 });
+    expect((await tokenJobsOf(user.userId)).map((j) => [j.kind, j.status, j.lastError])).toEqual([
+      [OUT.kind, NotificationJobStatus.Sent, null],
+    ]);
+  });
+
+  it('T8 lets a canceled higher nudge bar no lower one, at planning and at the claim', async () => {
+    const user = await linked(0, 30n);
+    await insertJob(user.userId, OUT.kind, NotificationJobStatus.Canceled);
+    await insertJob(user.userId, LOW.kind, NotificationJobStatus.Canceled);
+
+    await planMailingJobs(tmp.db);
+    const half = (await tokenJobsOf(user.userId)).find((job) => job.kind === HALF.kind);
+    expect(half?.status).toBe(NotificationJobStatus.Pending);
+
+    const { job, canceled } = await claimMailingJob(tmp.db, { scan: SCAN });
+    expect(job?.id).toBe(half!.id);
+    expect(canceled).toBe(0);
+  });
+
+  it.each([
+    NotificationJobStatus.Sent,
+    NotificationJobStatus.Failed,
+    NotificationJobStatus.Pending,
+  ])('T9 a %s higher nudge still bars a lower one at planning', async (status) => {
+    const user = await linked(0, 30n);
+    await insertJob(user.userId, LOW.kind, status);
+
+    await planMailingJobs(tmp.db);
+
+    expect((await tokenJobsOf(user.userId)).map((job) => job.kind)).toEqual([LOW.kind]);
+  });
+
+  it.each([
+    NotificationJobStatus.Sent,
+    NotificationJobStatus.Failed,
+    NotificationJobStatus.Pending,
+  ])('T10 never takes back a %s nudge: only a canceled one is planned again', async (status) => {
+    const user = await linked(0, 0n);
+    const id = await insertJob(user.userId, OUT.kind, status);
+    const before = await jobRow(id);
+
+    expect((await planMailingJobs(tmp.db))[OUT.kind]).toBe(0);
+
+    expect(await jobRow(id)).toEqual(before);
+  });
+
+  it('T11 does not take a canceled nudge back for a user who is off or blocked the bot', async () => {
+    const off = await linked(0, 0n);
+    const botBlocked = await linked(0, 0n);
+    await planMailingJobs(tmp.db);
+    await setNotificationLevel(tmp.db, off.telegramUserId, NotificationLevel.Off);
+    await markTelegramBlocked(tmp.db, botBlocked.telegramUserId);
+
+    await planMailingJobs(tmp.db);
+
+    for (const user of [off, botBlocked]) {
+      expect((await tokenJobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
+        [OUT.kind, NotificationJobStatus.Canceled],
+      ]);
+    }
+  });
+
+  it('T12 leaves a canceled first-session step canceled: only the nudges are planned again', async () => {
+    const user = await linked(hours(72) + 1);
+    await planMailingJobs(tmp.db);
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Canceled })
+      .where(eq(notificationJobs.userId, user.userId));
+
+    expect((await planMailingJobs(tmp.db))[STEP_72H.kind]).toBe(0);
+
+    expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
+      [STEP_72H.kind, NotificationJobStatus.Canceled],
+    ]);
   });
 
   it('CUT plans nothing for a nudge without its notification_kinds row', async () => {

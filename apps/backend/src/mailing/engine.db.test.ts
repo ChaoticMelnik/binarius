@@ -200,6 +200,24 @@ describe('the low-token nudge through the engine', () => {
       NotificationKind.TokensOut,
     ]);
   });
+
+  it('sends a push canceled by an adjustment once the balance is back in its band, and once only', async () => {
+    const user = await linked(0, 0n);
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    await tmp.db.update(users).set({ tokenBalance: 80n }).where(eq(users.id, user.userId));
+    await mailing.sendTick();
+    await mailing.stop();
+    expect(sendsTo(captured.calls, user.telegramUserId)).toEqual([]);
+    await tmp.db.update(users).set({ tokenBalance: 0n }).where(eq(users.id, user.userId));
+
+    const sends = await sendsOf(user);
+    expect(sends.map((send) => send.payload.text)).toEqual([CLIENT_TEXTS.tokensOut.value]);
+    expect(await sendsOf(user)).toEqual([]);
+    expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
+      [NotificationKind.TokensOut, NotificationJobStatus.Sent],
+    ]);
+  });
 });
 
 describe('the sender’s failures', () => {

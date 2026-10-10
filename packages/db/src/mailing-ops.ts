@@ -22,14 +22,23 @@ export const MAILING_OUTCOME_UNKNOWN = 'outcome_unknown';
 
 const KINDS = Object.values(NotificationKind);
 
+// A scenario with replansCanceled takes a canceled job of its key back. Only a canceled one: a
+// canceled job never reached Telegram (only pending jobs are canceled, and a pending one was never
+// handed over), while a sent or failed one is final and a pending one already waits.
+const replanCanceled = sql`do update set status = ${literal(NotificationJobStatus.Pending)},
+    scheduled_at = excluded.scheduled_at, sent_at = null, attempts = 0, last_error = null,
+    updated_at = now()
+  where ${notificationJobs.status} = ${literal(NotificationJobStatus.Canceled)}`;
+
 // One INSERT … SELECT per kind, idempotent through notification_jobs_dedupe_key_idx: a second
 // planner, a restart or a slow tick inserts nothing twice. A job is planned only once due, for a
 // fact at or after the kind's plans_from, to a user the bot may reach, while the scenario applies.
-// Returns how many jobs each kind gained.
+// Returns how many jobs each kind gained, re-planned ones included.
 export async function planMailingJobs(db: Db): Promise<Record<NotificationKind, number>> {
   const planned = {} as Record<NotificationKind, number>;
   for (const kind of KINDS) {
-    const { factAt, afterHours, dedupeKey, stillApplies } = MAILING_SCENARIOS[kind];
+    const { factAt, afterHours, dedupeKey, stillApplies, replansCanceled } =
+      MAILING_SCENARIOS[kind];
     const result = await db.execute(sql`
       insert into ${notificationJobs} (user_id, kind, dedupe_key, scheduled_at)
       select ${users.id}, ${literal(kind)}, ${dedupeKey}, fact.at + make_interval(hours => ${afterHours})
@@ -40,7 +49,8 @@ export async function planMailingJobs(db: Db): Promise<Record<NotificationKind, 
         and fact.at + make_interval(hours => ${afterHours}) <= now()
         and ${deliverable()}
         and ${stillApplies}
-      on conflict (user_id, dedupe_key) where dedupe_key is not null do nothing`);
+      on conflict (user_id, dedupe_key) where dedupe_key is not null
+      ${replansCanceled ? replanCanceled : sql`do nothing`}`);
     planned[kind] = result.rowCount ?? 0;
   }
   return planned;

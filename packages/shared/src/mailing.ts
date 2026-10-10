@@ -21,7 +21,8 @@ export const FIRST_SESSION_CHAIN = [
 ] as const satisfies readonly { kind: NotificationKind; afterHours: number }[];
 
 // The low-token nudge (#123, owner 2026-10-08 and 2026-10-10): the share of the starter pack used,
-// lowest first. A user gets one push for the highest threshold reached, never a lower one later.
+// lowest first. A user gets one push for the highest threshold reached, and no lower one while the
+// higher one's job is not canceled.
 export const TOKEN_NUDGES = [
   { kind: NotificationKind.TokensHalf, usedPercent: 50 },
   { kind: NotificationKind.TokensLow, usedPercent: 80 },
