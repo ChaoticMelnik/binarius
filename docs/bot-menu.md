@@ -64,7 +64,8 @@ bot caches nothing; every `/start` and `/menu` reads the route again.
 At most one of the three status lines is printed.
 
 - **Mode.** `statusHeader`'s `{mode}` prints `MODE_LABELS[mode]` (`bot-text-vars.ts`) of the
-  access read's `tradingMode` (#121); the hint is `statusHintReal` in real mode. `tradingOpen` is
+  access read's `tradingMode` (#121); the hint is `statusHintReal` in real mode, naming the real
+  stake in force — the saved `realStake`, the broker's minimum without one (#326). `tradingOpen` is
   the backend's switch, not the user's mode, so the card does not read it.
 - **Balances.** `broker.real.available` and `broker.demo.available` — what can be staked now;
   money held by an open trade is not in it (owner, 2026-10-06). With `broker: null` both print

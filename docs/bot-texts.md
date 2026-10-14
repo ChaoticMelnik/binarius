@@ -232,9 +232,8 @@ compile.
 | `demoBalance`, `realBalance` | `{ amount, fresh }` or `null` | `formatUsd`, fresh only | `balanceUnavailable` |
 | `mode` | `TradeMode` | `MODE_LABELS` | — |
 | `level` | `NotificationLevel` | its button label | — |
-| `stake` | the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the broker's minimum in real (#121) | `formatStake` | `stakeMinimumLabel` |
-| `minStake`, `demoAvailable` | the broker's bounds | `formatStake` | — |
-| `realAvailable` | `real.available` of the access read, the mode screen (#121) | `formatUsd` | — |
+| `stake` | on the card and the launch screen the amount a trade stakes in the user's mode: the saved demo stake or `null` in demo, the saved real stake or the broker's minimum in real (#121, #326); in the stake picker, the saved lines and /settings the stake of that screen's or line's own mode, `null` without one | `formatStake` | `stakeMinimumLabel` |
+| `minStake`, `demoAvailable`, `realAvailable` | the broker's bounds: the minimum, `demo.available` and `real.available` of the access read or of a save's refusal (`realAvailable` #326) | `formatStake` | — |
 | `age` | seconds | `formatAge` | — |
 | `profit` | `trades.profit` of the session view, the SQL sum (#337); the summary card's `result` (#318) | `formatSignedUsd` | — |
 | `botUsername` | the bot's `ctx.me.username`, without `@` (#318) | as is | — |
@@ -441,8 +440,8 @@ width. `apps/bot/src/bot-text-messages.test.ts` holds every description equal to
 on the defaults and to the keys it reads.
 
 Widths from a schema are enforced there: an address entered by the user 254, a USD amount 20, a
-stake 25 (`formatStake` over an unsigned `numeric(20,8)`: the demo stake, the broker's minimum and
-the demo balance), a count 25, an int4 asset id or duration, and the `/account` list, which the
+stake 25 (`formatStake` over an unsigned `numeric(20,8)`: either saved stake, the broker's minimum
+and either balance), a count 25, an int4 asset id or duration, and the `/account` list, which the
 backend answers with at most `USER_ACCOUNT_LIST_LIMIT` (10) links. The rest are stated
 assumptions in `BOT_TEXT_WIDTHS`: a broker's address ≤ 254, a symbol ≤ 64, a session's counters
 ≤ 999, the analysis numbers, a bot's username ≤ 32 (Telegram's rule). A value past one of them lengthens a message by a few characters,

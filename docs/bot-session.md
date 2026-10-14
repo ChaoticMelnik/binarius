@@ -109,7 +109,8 @@ session:stop:<id>                  («⏹ Остановить сессию»)
   `demo:sess:<assetId>:<sec>` at the duration chosen on the main path (#382), and «🔁 Ещё сессия» on a stopped session the view's own
   `settings.assetId` and `settings.durationSec`. Neither adds a handler or a datum: the start, its
   refusals and the active session's 409 are the same. A refusal's «💵 Сумма» opens the picker with
-  the analysis origin (`stk:o:a:<assetId>:<sec>`), whose way back is that pair's analysis, not the
+  the analysis origin (`stk:o:d:a:<assetId>:<sec>`, the demo picker: sessions are demo only until
+  #327), whose way back is that pair's analysis, not the
   launch screen: one datum serves every door (accepted).
 - **A third door (#360).** A single trade's status message, once the trade is `accepted`, `settled`
   or `rejected`, draws «🚀 Сессия из 5 сделок» with `demo:sess:<assetId>:<sec>` of that trade, above
@@ -135,7 +136,7 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 | 409 `balance_unavailable` | the same (no snapshot, or a zero minimum) | «⏳ Баланс Binodex ещё не получен — попробуй через минуту.» |
 | 409 `pair_unavailable` | the same | «⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.» |
 | 409 `payout_too_low` | the same: the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80, #379) — an old analysis message or «🔁 Ещё сессия» on a pair whose payout fell; the bot's own screens offer no session there | «🚫 Выплата по паре сейчас ниже порога — сессия на ней не запускается. Открой анализ заново.» (`sessionPayoutTooLow`) + the way back to the analysis, which, re-read, shows the note and no session button |
-| 409 `stake_precision`, `stake_below_minimum`, `insufficient_demo_balance` | the same: the saved demo stake against the snapshot (#297) | the single trade's texts, without naming the minimum (this press reads no access), + «💵 Сумма» → `stk:o:a:<assetId>:<sec>` |
+| 409 `stake_precision`, `stake_below_minimum`, `insufficient_balance` | the same: the saved demo stake against the snapshot (#297) | the single trade's demo texts, without naming the minimum (this press reads no access), + «💵 Сумма» → `stk:o:d:a:<assetId>:<sec>` |
 | 503 `catalog_unavailable` | the same: the route reads the catalog before it creates anything | `demoCatalogUnavailable`, **no retry** |
 | 409 `mode_not_allowed` | the user is in real mode (#121): a session button of an earlier render; sessions are demo only | «Сессии пока доступны только в демо-режиме.» (`sessionRealMode`), no log |
 | 404 `user_not_found`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |

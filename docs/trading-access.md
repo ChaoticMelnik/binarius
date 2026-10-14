@@ -23,8 +23,8 @@ side may refresh the snapshot.
 bot  → POST /trading/access { telegramUserId, brokerAccountId? }   (Authorization: Bearer INTERNAL_API_TOKEN)
 back → SELECT status, token_balance, token_reserved FROM users WHERE telegram_user_id = $1
 back → the account and its snapshot; at most one GET /v1/broker/user (Broker balance below)
-back → 200 { status, tokens: { balance, reserved, available }, broker, brokerUnavailable, tradingOpen,
-             demoStake }
+back → 200 { status, tokens: { balance, reserved, available }, tradingMode, broker, brokerUnavailable,
+             tradingOpen, demoStake, realStake }
        or 404 { error: 'user_not_found' } / 404 { error: 'broker_account_not_found' }
 ```
 
@@ -48,7 +48,8 @@ The bot reads it through `BackendClient.readTradingAccess` and shows it on the s
 | `tokens.available` | unsigned decimal string | `balance - reserved`, computed in `bigint` from the same row |
 | `broker` | object or null | the broker balance snapshot (below); null exactly when `brokerUnavailable` is set |
 | `brokerUnavailable` | string or null | why `broker` is null |
-| `demoStake` | decimal string or null | the user's saved demo stake (#297, `users.demo_stake`), canonical (`"2.5"`, not `"2.50000000"`); `null` = the broker's minimum at each trade. Read with `readDemoStake` beside the token balance; what the analysis screen's stake button shows and what the stake press trades |
+| `demoStake` | decimal string or null | the user's saved demo stake (#297, `users.demo_stake`), canonical (`"2.5"`, not `"2.50000000"`); `null` = the broker's minimum at each trade. Read with `readStakes` beside the token balance; what a demo stake button shows and what a demo press trades |
+| `realStake` | decimal string or null | the user's saved real stake (#326, `users.real_stake`), canonical, read with `demoStake`; `null` = the broker's minimum. What a real stake button shows and what a real press trades |
 | `tradingOpen` | boolean | the global trading switch (#144, `trading_switch`, read on every request; a missing row reads `false`): whether `createTradeIntent` accepts any intent, demo or real. Not a property of the user or the account — the per-user refusals stay the 409 codes of `POST /trading/intents` ([kill-switch.md](kill-switch.md)) |
 
 The response schema refuses a body where `available` is not `balance - reserved`. The backend never
@@ -132,7 +133,7 @@ access /trading/access '{"telegramUserId":"1"}'
 # {"error":"user_not_found"}  HTTP 404 — no users row yet
 access /users/start '{"telegramUserId":"1","displayName":"Ada"}' >/dev/null   # what /start sends
 access /trading/access '{"telegramUserId":"1"}'
-# {"status":"active","tokens":{"balance":"0","reserved":"0","available":"0"},"broker":null,"brokerUnavailable":"no_account","tradingOpen":true,"demoStake":null}  HTTP 200
+# {"status":"active","tokens":{"balance":"0","reserved":"0","available":"0"},"tradingMode":"demo","broker":null,"brokerUnavailable":"no_account","tradingOpen":true,"demoStake":null,"realStake":null}  HTTP 200
 dc down -v   # removes this project's containers and its volume only
 ```
 
@@ -182,32 +183,38 @@ The bot's request timeout sits above it (`BACKEND_REQUEST_TIMEOUT_MS`, checked a
 With a snapshot, a failure never empties `broker`. The snapshot comes back with its real age and
 `fresh: false`. The internal account id is never in the view.
 
-## POST /trading/demo-stake (#297)
+## POST /trading/stake (#297, #326)
 
-Saves the user's demo stake. Registered beside `/trading/access` in `tradingRoutes`
-(`apps/backend/src/trading/demo-stake.ts`), so the same bearer hook covers it. The contract is in
-`packages/shared/src/trading-access.ts` (`setDemoStakeRequestSchema`, `setDemoStakeResponseSchema`,
-`demoStakeRefusalSchema`), the bounds in `packages/shared/src/demo-stake.ts` (`checkDemoStake`).
+Saves the user's stake of one mode: the demo stake (#297) or the real stake (#326). Registered
+beside `/trading/access` in `tradingRoutes` (`apps/backend/src/trading/stake.ts`), so the same
+bearer hook covers it. The contract is in `packages/shared/src/trading-access.ts` (`STAKE_PATH`,
+`setStakeRequestSchema`, `setStakeResponseSchema`, `stakeRefusalSchema`), the bounds in
+`packages/shared/src/stake.ts` (`checkStake`), which knows no mode: the route puts the request
+mode's balance into `available`.
 
 ```text
-bot  → POST /trading/demo-stake { telegramUserId, amount: "2.50" | null }   (strict, tradeAmountSchema)
-back → amount null: setDemoStake(NULL) → 200 { demoStake: null }, never refused
+bot  → POST /trading/stake { telegramUserId, mode: "demo" | "real", amount: "2.50" | null }   (strict)
+back → amount null: setStake(mode, NULL) → 200 { mode, stake: null }, never refused
 back → resolveBalanceAccount → readBalanceSnapshot (stored, any age, no broker call)
-back → checkDemoStake(amount, { minTradeAmount, demoAvailable }) → setDemoStake → 200 { demoStake: "2.5" }
+back → checkStake(amount, { minTradeAmount, available: real ? real.available : demo.available })
+     → setStake(mode, amount) → 200 { mode, stake: "2.5" }
 ```
 
 | Answer | When |
 | --- | --- |
-| 200 `{ demoStake }` | saved (canonical) or reset (`null`) |
-| 409 `{ error, limits: { minTradeAmount, demoAvailable, scale } }` | `stake_precision` (more fraction digits than `max(2, scale(minimum))`), `stake_below_minimum`, `insufficient_demo_balance`; `limits` canonical, so the bot words the refusal with no second request |
+| 200 `{ mode, stake }` | saved (canonical) or reset (`null`) in the column of `mode` (`users.demo_stake` or `users.real_stake`); the other column is untouched |
+| 409 `{ error, limits: { minTradeAmount, available, scale } }` | `stake_precision` (more fraction digits than `max(2, scale(minimum))`), `stake_below_minimum`, `insufficient_balance` (above the balance of `mode`); `limits` canonical, `available` the balance of `mode`, so the bot words the refusal with no second request |
 | 409 `{ error: 'balance_unavailable' }` | no single account (none, or two active) or no snapshot; nothing saved |
 | 404 `{ error: 'user_not_found' }` | no users row |
-| 400 `{ error: 'validation', issues }` | the body |
+| 400 `{ error: 'validation', issues }` | the body: no `mode` or an unknown one, a bad amount, an unknown key |
 
 The read and the write are not one transaction, by choice: the bound is checked again at every
-trade (`createTradeIntent`'s `checkDemoStake` option) and every session start, so a save a moving
+trade (`createTradeIntent`'s `checkStake` option) and every session start, so a save a moving
 snapshot made stale costs one refusal at press time and nothing reaches the broker. A blocked user
-may save: the stake is a preference, and trades refuse at creation.
+may save, and so may a user in either trading mode: the stake is a preference, and trades refuse
+at creation. `DEMO_ONLY` is not read (#326): a real stake saved on a demo-only backend is a column
+of `users` and nothing else, and a real trade on that backend still answers `demo_only` before its
+stake bound (`docs/trade-intent-transport.md` → Creation transaction).
 
 ## Boundaries
 
