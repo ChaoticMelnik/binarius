@@ -102,6 +102,9 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   tokens: '12',
   reservedTokens: '3',
   bonusTokens: text,
+  purchasedTokens: '150',
+  tokenBalance: '162',
+  stars: '250',
   demoBalance: { amount: d('10000'), fresh: true },
   realBalance: null,
   mode: TradeMode.Demo,
@@ -1440,6 +1443,7 @@ describe('the facades over the catalog', () => {
       [
         'analysisMoreButton',
         'backToListButton',
+        'buyButton',
         'demoManualButton',
         'demoSignalsRefreshButton',
         'launchCycleButton',

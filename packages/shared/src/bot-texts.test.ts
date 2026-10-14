@@ -159,6 +159,7 @@ describe('the bot texts catalog', () => {
       [
         'analysisMoreButton',
         'backToListButton',
+        'buyButton',
         'demoManualButton',
         'demoSignalsRefreshButton',
         'launchCycleButton',

@@ -78,6 +78,21 @@ export const BOT_TEXT_VARS = {
     format: (count: string) => formatCount(count),
   }),
   bonusTokens: shown('Начисленные стартовые токены', '100'),
+  purchasedTokens: variable({
+    description: 'Токены пакета покупки',
+    sample: '150',
+    format: (count: string) => formatCount(count),
+  }),
+  tokenBalance: variable({
+    description: 'Баланс токенов после начисления',
+    sample: '162',
+    format: (count: string) => formatCount(count),
+  }),
+  stars: variable({
+    description: 'Цена пакета в Telegram Stars',
+    sample: '250',
+    format: (count: string) => formatCount(count),
+  }),
   demoBalance: balance(
     'Демобаланс Binodex; без свежего снимка — «нет свежих данных»',
     formatUsd('10000'),

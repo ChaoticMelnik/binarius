@@ -31,6 +31,7 @@ export const BotTextGroup = {
   Support: 'support',
   Help: 'help',
   Invite: 'invite',
+  Stars: 'stars',
   Demo: 'demo',
   Analysis: 'analysis',
   Trade: 'trade',
@@ -52,6 +53,7 @@ export const BOT_TEXT_GROUP_TITLES = {
   [BotTextGroup.Support]: '/support',
   [BotTextGroup.Help]: '/help',
   [BotTextGroup.Invite]: '/invite',
+  [BotTextGroup.Stars]: 'Покупка токенов',
   [BotTextGroup.Demo]: 'Демо: выбор актива',
   [BotTextGroup.Analysis]: 'Анализ',
   [BotTextGroup.Trade]: 'Демо-сделка',
@@ -511,6 +513,76 @@ export const BOT_TEXT_CATALOG = {
     'Текст, который «Поделиться» подставляет к ссылке-приглашению в выбранном чате.',
     'Торгую в демо с сигналами в Binarius — заходи по моей ссылке',
     { limit: 200 },
+  ),
+
+  // ---- Покупка токенов (#117, docs/stars.md) ------------------------------------------------
+  buyScreen: html(
+    g.Stars,
+    '/buy и кнопка «Купить токены»: выбор пакета.',
+    `⭐ <b>Купить токены</b>
+Токены оплачивают сделки автоторговли. Выбери пакет — оплата в Telegram Stars.`,
+  ),
+  buyNeedsAccount: html(
+    g.Stars,
+    'Покупка без подключённого аккаунта Binodex: под текстом кнопка подключения.',
+    `Купить токены можно после подключения аккаунта Binodex — кнопка ниже.`,
+  ),
+  buyPackageGone: html(
+    g.Stars,
+    'Нажат пакет, который больше не продаётся: под текстом актуальные пакеты.',
+    `Этот пакет больше не продаётся. Выбери другой.`,
+  ),
+  starsCredited: html(
+    g.Stars,
+    'После оплаты: токены начислены. Также push, когда начисление сделала фоновая сверка.',
+    `⭐ Начислено {purchasedTokens} токенов. Баланс: {tokenBalance}`,
+    { vars: ['purchasedTokens', 'tokenBalance'] },
+  ),
+  starsHeld: html(
+    g.Stars,
+    'После оплаты: платёж не прошёл проверку при начислении (сумма, пакет, плательщик).',
+    `Платёж получен, начисление проверит поддержка.`,
+  ),
+  starsPending: html(
+    g.Stars,
+    'После оплаты: бот не получил ответ о начислении; фоновая сверка начислит токены.',
+    `Платёж получен, токены начислятся в течение нескольких минут.`,
+  ),
+  starsInvoiceTitle: plain(
+    g.Stars,
+    'Счёт на оплату: название (Telegram показывает без разметки, до 32 символов).',
+    'Токены Binarius',
+    { limit: 32 },
+  ),
+  starsInvoiceDescription: plain(
+    g.Stars,
+    'Счёт на оплату: описание (без разметки, до 255 символов).',
+    '{purchasedTokens} токенов для автоторговли в Binarius',
+    { limit: 255, vars: ['purchasedTokens'] },
+  ),
+  buyPackageButton: plain(
+    g.Stars,
+    'Экран покупки: кнопка пакета.',
+    '🪙 {purchasedTokens} токенов — {stars} ⭐',
+    { vars: ['purchasedTokens', 'stars'] },
+  ),
+  starsPayButton: plain(
+    g.Stars,
+    'Счёт на оплату: кнопка оплаты, первая под счётом (Telegram заменяет ⭐ значком звезды).',
+    '⭐ Оплатить {stars}',
+    { vars: ['stars'] },
+  ),
+  starsPreCheckoutRefused: plain(
+    g.Stars,
+    'Telegram показывает при отказе в оплате: пакет, цена или аккаунт не прошли проверку.',
+    'Покупка недоступна. Открой /buy и выбери пакет заново.',
+    { limit: 255 },
+  ),
+  starsPreCheckoutFailed: plain(
+    g.Stars,
+    'Telegram показывает при отказе в оплате: бот не смог проверить покупку.',
+    'Не удалось проверить покупку, попробуй ещё раз.',
+    { limit: 255 },
   ),
 
   // ---- Демо: выбор актива -------------------------------------------------------------------
@@ -1604,6 +1676,11 @@ export const BOT_TEXT_CATALOG = {
     g.Buttons,
     '/invite: кнопка, открывающая выбор чата для ссылки-приглашения.',
     '📤 Поделиться',
+  ),
+  buyButton: plain(
+    g.Buttons,
+    'Карточка статуса и отказ «не хватает токенов»: экран покупки токенов.',
+    '⭐ Купить токены',
   ),
   sessionShareButton: plain(
     g.Buttons,
