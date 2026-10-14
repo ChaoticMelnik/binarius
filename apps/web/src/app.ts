@@ -13,6 +13,7 @@ import { TEXTS } from './admin/texts';
 import { sendHtml } from './html';
 import { noticePage } from './pages';
 import type { BackendClient } from './backend-client';
+import { cashierRoutes } from './cashier/routes';
 import { oauthRoutes } from './oauth/routes';
 
 export interface WebAppDeps {
@@ -22,6 +23,9 @@ export interface WebAppDeps {
   /** the broker's authorize page, the only place the Mini App login page navigates to */
   brokerAuthorizeUrl: string;
   secureCookies: boolean;
+  /** DEPOSIT_WIDGET_ORIGINS (#111): the cashier page's frame-src and the check of the backend's
+   *  answer; no default here, the env parser gives one */
+  depositWidgetOrigins: readonly string[];
   logLevel: LogLevel;
   // where the logger writes; production omits it. What these pages keep out of their log
   // lines is only provable by reading them, and pino writes to a file descriptor that
@@ -47,6 +51,7 @@ export function buildWebApp({
   publicOrigin,
   brokerAuthorizeUrl,
   secureCookies,
+  depositWidgetOrigins,
   logLevel,
   logDestination,
 }: WebAppDeps): FastifyInstance {
@@ -62,6 +67,13 @@ export function buildWebApp({
     // An instance rather than `logger` options: Fastify's option type requires an `err`
     // serializer to return `{ type, message, stack }`, which is what the whitelist withholds.
     loggerInstance: logger,
+    // The pilot runs Caddy on the host in front of 127.0.0.1:3001, so the peer this process sees is
+    // loopback or the compose bridge's gateway (a private range), and Caddy replaces any
+    // X-Forwarded-For a client sent with the address it saw. A list of addresses, never a hop
+    // count: Fastify 5.12.5 reads a number as "trust nothing" (proxy-addr cannot check the peer
+    // with it), and `true` would believe a header from anyone who reaches the port. A peer outside
+    // the list keeps request.ip its own address and the cashier forwards no clientIp (#111).
+    trustProxy: 'loopback, uniquelocal',
   });
 
   void app.register(cookie);
@@ -80,8 +92,9 @@ export function buildWebApp({
     return sendHtml(reply, 403, noticePage(TEXTS.forbiddenTitle, TEXTS.forbiddenBody));
   });
 
-  // The Mini App pages set a policy of their own (oauth/routes.ts), one that lets Telegram Web
-  // frame them; every other reply gets the admin pages' policy and may not be framed at all.
+  // The Mini App pages set a policy of their own (oauth/routes.ts, cashier/routes.ts), one that
+  // lets Telegram Web frame them; every other reply gets the admin pages' policy and may not be
+  // framed at all.
   app.addHook('onSend', async (_request, reply, payload) => {
     if (reply.getHeader('content-security-policy') === undefined) {
       void reply.header('content-security-policy', ADMIN_CSP);
@@ -103,6 +116,7 @@ export function buildWebApp({
 
   void app.register(adminRoutes, { backend, secureCookies });
   void app.register(oauthRoutes, { backend, publicOrigin, brokerAuthorizeUrl });
+  void app.register(cashierRoutes, { backend, widgetOrigins: depositWidgetOrigins });
 
   app.setNotFoundHandler(async (_request, reply) =>
     sendHtml(reply, 404, noticePage(TEXTS.notFoundTitle, TEXTS.notFoundBody)),

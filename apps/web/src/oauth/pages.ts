@@ -1,8 +1,7 @@
 import { html, layout, type SafeHtml } from '../html';
+import { TELEGRAM_SDK_URL } from '../mini-app';
 import { OAUTH_TEXTS } from './texts';
 
-// the line core.telegram.org/bots/webapps gives (fetched 2026-10-01); in <head>, before our script
-export const TELEGRAM_SDK_URL = 'https://telegram.org/js/telegram-web-app.js?63';
 export const OAUTH_SCRIPT_PATH = '/oauth/static/app.js';
 
 export const CallbackOutcome = {

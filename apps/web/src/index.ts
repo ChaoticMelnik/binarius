@@ -11,6 +11,7 @@ const app = buildWebApp({
   publicOrigin: env.publicOrigin,
   brokerAuthorizeUrl: env.brokerAuthorizeUrl,
   secureCookies: env.secureCookies,
+  depositWidgetOrigins: env.depositWidgetOrigins,
   logLevel: env.logLevel,
 });
 

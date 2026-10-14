@@ -4,7 +4,7 @@ import { OAUTH_CALLBACK_BODY_LIMIT_BYTES, type OAuthCallbackRequest } from '@bin
 import { buildWebApp } from '../app';
 import { BackendError, BackendErrorCode, type BackendClient } from '../backend-client';
 import { OAUTH_CLIENT_JS } from './client';
-import { TELEGRAM_SDK_URL } from './pages';
+import { TELEGRAM_SDK_URL } from '../mini-app';
 import { OAUTH_TEXTS } from './texts';
 
 const ORIGIN = 'https://binarius.example';
@@ -62,12 +62,14 @@ beforeEach(() => {
       forwarded.push(request);
       return answer();
     },
+    depositWidgetSession: unused,
   };
   app = buildWebApp({
     backend,
     publicOrigin: ORIGIN,
     brokerAuthorizeUrl: BROKER_AUTHORIZE_URL,
     secureCookies: true,
+    depositWidgetOrigins: ['https://binodex.app'],
     logLevel: 'info',
     logDestination: { write: (line) => lines.push(line) },
   });

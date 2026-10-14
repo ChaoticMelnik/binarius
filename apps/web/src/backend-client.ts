@@ -34,6 +34,7 @@ import {
   safeParseAdminUsersResponse,
   safeParseChangePasswordResponse,
   safeParseOAuthCallbackResponse,
+  safeParseDepositWidgetSessionResponse,
   safeParseAdminConfirmResponse,
   safeParseAdminLinkInspectResponse,
   safeParseAdminLoginResponse,
@@ -69,12 +70,18 @@ import {
   type ChangePasswordResponse,
   type LogoutResponse,
   type OAuthCallbackRequest,
+  type DepositWidgetSessionRequest,
+  type DepositWidgetSessionResponse,
   readBody,
   type OAuthCallbackResponse,
   type RevokeSessionResponse,
   type StaffSessionsResponse,
 } from '@binarius/shared';
-import { BACKEND_REQUEST_TIMEOUT_MS, OAUTH_CALLBACK_REQUEST_TIMEOUT_MS } from './timing';
+import {
+  BACKEND_REQUEST_TIMEOUT_MS,
+  DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS,
+  OAUTH_CALLBACK_REQUEST_TIMEOUT_MS,
+} from './timing';
 
 // bounds one backend response body (Architecture Rule 26)
 export const MAX_BACKEND_BODY_BYTES = 1024 * 1024;
@@ -178,6 +185,8 @@ export interface BackendClient {
   publishBotProfile(token: string): Promise<AdminBotProfilePublishResponse>;
   /** the backend's public OAuth callback; carries no bearer */
   oauthCallback(request: OAuthCallbackRequest): Promise<OAuthCallbackResponse>;
+  /** the backend's public cashier widget session (#11, #111); carries no bearer */
+  depositWidgetSession(request: DepositWidgetSessionRequest): Promise<DepositWidgetSessionResponse>;
 }
 
 export interface BackendClientOptions {
@@ -185,6 +194,7 @@ export interface BackendClientOptions {
   token: string;
   timeoutMs?: number;
   oauthCallbackTimeoutMs?: number;
+  depositWidgetSessionTimeoutMs?: number;
 }
 
 type Parse<T> = (input: unknown) => { success: true; data: T } | { success: false };
@@ -194,6 +204,7 @@ export function createBackendClient({
   token,
   timeoutMs = BACKEND_REQUEST_TIMEOUT_MS,
   oauthCallbackTimeoutMs = OAUTH_CALLBACK_REQUEST_TIMEOUT_MS,
+  depositWidgetSessionTimeoutMs = DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS,
 }: BackendClientOptions): BackendClient {
   // a trailing slash, so a base URL with a path prefix keeps it: `new URL('/x', 'http://h/api')`
   // would drop `/api`
@@ -435,6 +446,17 @@ export function createBackendClient({
           body: request,
           bearer: false,
           timeoutMs: oauthCallbackTimeoutMs,
+        }),
+      );
+    },
+    // public on the backend as the callback is: the signed initData is the whole authorization
+    async depositWidgetSession(request) {
+      return parsed(
+        safeParseDepositWidgetSessionResponse,
+        await call('POST', 'deposit/widget-session', {
+          body: request,
+          bearer: false,
+          timeoutMs: depositWidgetSessionTimeoutMs,
         }),
       );
     },

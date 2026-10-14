@@ -273,6 +273,9 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     oauthCallback: async () => {
       throw new Error('the admin pages never forward an OAuth callback');
     },
+    depositWidgetSession: async () => {
+      throw new Error('the admin pages never mint a cashier session');
+    },
     ...backend,
   };
   return buildWebApp({
@@ -280,6 +283,7 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     publicOrigin: ORIGIN,
     brokerAuthorizeUrl: 'https://binodex.app/oauth/authorize',
     secureCookies,
+    depositWidgetOrigins: ['https://binodex.app'],
     logLevel: 'info',
     logDestination: { write: (line) => lines.push(line) },
   });
@@ -386,6 +390,27 @@ describe('the response headers', () => {
 });
 
 describe('POST /admin/login', () => {
+  // trustProxy (#111): Caddy on the host reaches web from loopback or the compose bridge, and
+  // replaces X-Forwarded-For with the address it saw; any other peer's header is not believed
+  it.each([
+    ['loopback', '127.0.0.1', '203.0.113.7'],
+    ['the compose bridge gateway', '172.18.0.1', '203.0.113.7'],
+    ['a public peer', '198.51.100.9', '198.51.100.9'],
+  ])('records the client address forwarded through %s', async (_label, peer, recorded) => {
+    await app.inject({
+      method: 'POST',
+      url: '/admin/login',
+      remoteAddress: peer,
+      headers: {
+        origin: ORIGIN,
+        'content-type': 'application/x-www-form-urlencoded',
+        'x-forwarded-for': '203.0.113.7',
+      },
+      payload: new URLSearchParams({ login: 'ada', password: 'secret' }).toString(),
+    });
+    expect(calls.login).toEqual([expect.objectContaining({ ip: recorded })]);
+  });
+
   it('passes what the browser showed us and sets the challenge cookie', async () => {
     const response = await post('/admin/login', { login: 'ada', password: 'secret' });
 

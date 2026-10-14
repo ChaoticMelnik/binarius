@@ -11,23 +11,13 @@ import {
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from '../backend-client';
 import { sendHtml } from '../html';
+import { miniAppCsp } from '../mini-app';
 import { noticePage } from '../pages';
 import { OAUTH_CLIENT_JS } from './client';
 import { callbackPage, CallbackOutcome, loginPage, OAUTH_SCRIPT_PATH } from './pages';
 import { OAUTH_TEXTS } from './texts';
 
-// The admin pages' policy plus what a Mini App needs: Telegram's SDK, a fetch to this origin, and
-// being framed by Telegram Web — the one parent origin the SDK itself trusts. No X-Frame-Options
-// beside it: a browser that honours both would let DENY override frame-ancestors.
-const MINI_APP_CSP = [
-  "default-src 'none'",
-  "script-src 'self' https://telegram.org",
-  "connect-src 'self'",
-  "style-src 'self'",
-  "form-action 'none'",
-  'frame-ancestors https://web.telegram.org',
-  "base-uri 'none'",
-].join('; ');
+const MINI_APP_CSP = miniAppCsp();
 
 // the broker's own URL is a few hundred characters; anything far longer is not one it built
 const AUTHORIZE_MAX_LENGTH = 2048;
