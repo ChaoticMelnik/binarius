@@ -4,7 +4,8 @@ A user trades either demo or real, one mode at a time (#121). The mode is a pers
 state, `users.trading_mode`, switched only by `POST /trading/mode`: the bot's mode screen is #474,
 `/stop` returning the user to demo is #473. In real mode the bot's single trade goes to the
 broker with real money at the user's real stake (#326: the saved real stake, the broker's minimum
-without one); sessions stay demo only.
+without one), and a session runs in the user's mode (#327): a real session trades real money at
+the real stake.
 
 ## Components
 
@@ -47,14 +48,21 @@ The gate is one-directional: a demo intent is never refused by the mode. «One m
 for the bot's own buttons is held by the access read and the fingerprint (below). Tests:
 `trade-intent-ops.db.test.ts` M1–M4, `routes.db.test.ts`.
 
-The orchestrator maps `real_mode_off` to a stop `account_unavailable` with `code:
-real_mode_off`; it is reachable only for a real session row, which nothing creates until #327
-(`orchestrator.db.test.ts` E9i).
+Sessions (#327): a session runs only in its user's mode. `POST /trading/sessions` carries `mode`;
+`checkTradingSessionStart` refuses `mode_not_allowed` when it is not the user's, after the blocked
+check and before any account read (`trading-session-start.db.test.ts` E9,
+`session-routes.db.test.ts` R21, R23), and `createTradingSession` compares it again in the
+statement that locks the `users` row (`trading-session-ops.db.test.ts` C6, C6b, C8, C5c;
+`session-routes.db.test.ts` R26). A switch of the mode stops the user's active sessions
+`user_stopped` in its own transaction (below), so a session never outlives its mode: a switch
+committed before the creation's lock is seen by the comparison, one after it waits and then stops
+the new session.
 
-Sessions: `checkTradingSessionStart` refuses `mode_not_allowed` for a user whose mode is not
-`demo`, after the blocked check and before any account read (`trading-session-start.db.test.ts`
-E9, `session-routes.db.test.ts` R21). It is not re-read inside `createTradingSession`'s
-transaction: a switch to real between the two reads leaves a demo session trading demo money.
+The orchestrator maps `real_mode_off` to a stop `account_unavailable` with `code:
+real_mode_off` (`orchestrator.db.test.ts` E9i: a `trading_mode` written by hand under a real
+session). A switch through `setTradingMode` during an attempt stops the session `user_stopped`
+first; the attempt's reserve then meets `real_mode_off`, whose stop finds the row already stopped
+and logs nothing (E9j). A demo session after a switch to real is ended by the switch itself.
 
 ## The route
 
@@ -63,19 +71,25 @@ internal bearer hook.
 
 | Request | Answer |
 | --- | --- |
-| `mode: demo` | 200 `{ tradingMode: 'demo', changed }`; 404 `user_not_found` only |
+| `mode: demo` | 200 `{ tradingMode: 'demo', changed, stoppedSessions }`; 404 `user_not_found` only |
 | `mode: real` on a `DEMO_ONLY` process | 409 `demo_only`, before any read (Rule 33) |
 | `mode: real`, no users row | 404 `user_not_found` |
 | `mode: real`, no single active account, or no balance snapshot | 409 `balance_unavailable` |
 | `mode: real`, `real.available < minTradeAmount` (bigint, `decimalLessThan`) | 409 `real_balance_below_minimum` |
-| `mode: real` otherwise | 200 `{ tradingMode: 'real', changed }` |
+| `mode: real` otherwise | 200 `{ tradingMode: 'real', changed, stoppedSessions }` |
 | a body with another key or mode | 400 |
 
 The snapshot is the stored one of any age; there is no broker call. The read and the write are
 not one transaction, as for `POST /trading/stake`: the bound is a UX gate, and the broker
 refuses a real order above the balance (`broker_rejected`, the token returned). `users.status` and
 the kill-switch are not read: a blocked user's trades and a closed switch are refused at creation.
-Tests: `trading-mode.db.test.ts` T1–T8.
+
+`stoppedSessions` (#327, required in `setTradingModeResponseSchema`) counts the user's active
+sessions the switch stopped: `setTradingMode` calls `stopUserSessions` in its transaction after the
+`users` UPDATE returned a row (lock order `users` → `trading_sessions`, Rule 5), so the new mode
+and the stopped sessions commit together; `0` when the user was in that mode already. No bot reads
+it yet: the mode screen (#474) prints «⏹ Активная сессия остановлена.» on `stoppedSessions >= 1`.
+Tests: `trading-mode.db.test.ts` T1–T10, `user-ops.db.test.ts` U-mode 6–8.
 
 ## The bot
 
@@ -104,28 +118,33 @@ button under `/account`, the account card and the re-login push stays for a real
 after it says REAL).
 
 **The single trade.** `effectiveStake` is the saved real stake in real mode, or
-`broker.minTradeAmount` without one (#326), whatever the demo stake. The analysis reads access for the mode: in real mode no session row, «➕ Ещё» on a signal,
-the real disclaimer and hint, no cycle-floor note ([bot-demo.md](bot-demo.md) → Keyboards). «➕ Ещё»
+`broker.minTradeAmount` without one (#326), whatever the demo stake. The analysis reads access for the mode: in real mode the session row marked `· REAL` (#327),
+«➕ Ещё» on a signal, the real disclaimer, and the cycle-floor note as in demo
+([bot-demo.md](bot-demo.md) → Keyboards). «➕ Ещё»
 carries the mode its text was drawn in and draws a stake button only when the expansion's read
 gives the same mode.
 The expansion in real mode draws the stake button, labelled `… · $Y · REAL`, and «💵 Сумма» of the
-real picker (`stk:o:r:a:…`, #326); no session row (#327). The fingerprint hashes `real:<amount>` in real mode and the bare
+real picker (`stk:o:r:a:…`, #326), under the real session row (#327). The fingerprint hashes `real:<amount>` in real mode and the bare
 amount in demo (as before #121, so an older demo button still trades): a button drawn in one mode
 and pressed in the other is refused with «⚠️ Режим или сумма сделки изменились — открой анализ
 заново.» and nothing is created. The press sends `mode: tradingMode` and the key
 `<mode>:<telegramUserId>:<nonce>`. `real_mode_off` (the mode went demo between the read and the
 POST) → «⚠️ Реальный режим выключен — открой анализ заново.». The status
-message's header is «💼 Реальная сделка» for a real view, and a real trade gets no session offer.
+message's header is «💼 Реальная сделка» for a real view, and a finished real trade offers a real
+session («🚀 Сессия из 5 сделок · REAL», #327).
 
-**The launch screen** in real mode keeps the pair's line, has no stake line, and shows «💼 Циклы —
-только в демо; в реальном режиме — разовая сделка по анализу.» with «📊 Анализ пары» (the analysis)
-and «↩️ К списку», also on a pair below the cycle floor (real mode has no cycle); its `{stake}`
-is the real stake in force. A stake saved from a launch screen reads
-the mode the same way and draws the same screen under the saved line of the saved stake's mode
-(«✅ Демо-ставка сохранена: $X» from the launch screen's own demo picker). The card's `{stake}` is
-the real stake in force in real mode too. A failed access read
-keeps the demo screen: its cycle press gets `mode_not_allowed` → «Сессии пока доступны только в
-демо-режиме.».
+**The launch screen** in real mode (#327) is the demo one drawn by the mode: «💵 Ставка: $X» with
+the real stake in force, «🤖 Бот проведёт 5 сделок подряд… Реальный режим: сделки идут на реальные
+деньги.» (`launchCycleReal`), «🚀 Запустить цикл · REAL» (`real:sess:…`), «💵 Изменить ставку» of
+the real picker (`stk:o:r:p:…`) and «↩️ К списку»; a pair below the cycle floor gets the floor's
+refusal as in demo. The single real trade stays on the manual path. A stake saved from a launch
+screen reads the mode the same way and draws the same screen under the saved line of the saved
+stake's mode. A failed access read keeps the demo screen: a real user's cycle press there gets
+`mode_not_allowed` → «⚠️ Режим или сумма сделки изменились — открой анализ заново.».
+
+**Sessions** (#327): every session door carries the mode it was drawn in (`<mode>:sess:…`,
+[bot-session.md](bot-session.md)), its label `· REAL` in real mode, and the status message is
+headed «💼 Реальная сессия» for a real session.
 
 **`/stop`** (#122) is unchanged: it stops the sessions and leaves the mode. Returning the user to
 demo from it is #473 (part 2 of #121, split off by the size rule).
@@ -147,24 +166,28 @@ Against the mock broker only, `DEMO_ONLY` unset, with the stand of
 
 1. Switch the user to real with the `access` helper of trading-access.md (the internal bearer):
    `access /trading/mode '{"telegramUserId":"<id>","mode":"real"}'` → 200
-   `{"tradingMode":"real","changed":true}`.
+   `{"tradingMode":"real","changed":true,"stoppedSessions":0}`.
 2. `/menu` shows REAL, the real hint and «🚀 Торговать»; «Сигналы сейчас» has no «запустит цикл».
-3. A pair opens the launch screen with «💼 Циклы — только в демо…» and «📊 Анализ пары»; the
-   analysis ends with «Реальный режим: сделка идёт на реальные деньги»; «➕ Ещё» shows
+3. A pair opens the launch screen with «🚀 Запустить цикл · REAL» and the real stake; the press
+   starts a real session («💼 Реальная сессия», the worker's `trading session intent created`
+   lines with `mode: real`, the mock broker's trades `is_demo: false`). The analysis ends with «Реальный режим: сделка идёт на реальные деньги»; «➕ Ещё» shows
    «… · $1.00 · REAL» and «💵 Сумма»; the press gives «💼 Реальная сделка». The manual choice
    reads «🧭 Выбор пары». The real stake (#326): «💵 Сумма» or «💼 Реал» in `/settings` opens the
    real picker («💼 Сумма реальной сделки», «Реальный баланс»); after `$5` is saved the hint reads
    «на сумму $5.00», «➕ Ещё» shows «… · $5.00 · REAL» and the press trades `$5`
    (`trade_intents.amount`).
-4. Switch back with `"mode":"demo"`: the card is DEMO, and the old REAL button answers «Режим или
-   сумма сделки изменились». With `DEMO_ONLY=true`, `"mode":"real"` → 409 `demo_only`.
+4. Switch back with `"mode":"demo"` → `"stoppedSessions":1` while the real session runs, the
+   session `user_stopped`: the card is DEMO, and the old REAL buttons (stake and session) answer
+   «Режим или сумма сделки изменились». With `DEMO_ONLY=true`, `"mode":"real"` → 409 `demo_only`,
+   and a session button pressed by a user left in real answers «Реальные сделки на этом сервере
+   отключены».
 
 ## Boundaries
 
 - **#474** — the mode screen in the bot; then **#473** — `/stop` returning the user to demo.
 - **#326** — the real stake and its picker ([bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326));
-  the mode screen's stake line and confirm amount are #474's. **#327** — real sessions: lifting
-  `mode_not_allowed`, the session route in the user's mode.
+  the mode screen's stake line and confirm amount are #474's. **#327** (shipped) — real sessions;
+  the line «⏹ Активная сессия остановлена.» on the mode screen is #474's, `/stop` → demo #473's.
 - **#37** — the grant for real trades with Binodex. The real branch of `open_trade` was not
   observed live ([broker-rest.md](broker-rest.md) → Observed live: one demo trade); the mock
   broker holds both modes.

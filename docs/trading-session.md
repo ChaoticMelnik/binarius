@@ -4,7 +4,8 @@ A trading session is a run of up to `settings.trades` trades on one broker accou
 a time, in the session's `mode`. #130 lays the data layer: the `trading_sessions` table with its
 constraints, the `settings` contract and the stop reasons in `packages/shared`, and the database
 operations the session orchestrator calls. #283 adds the backend routes that start, read and stop
-a session ([Routes](#routes)); they create demo sessions only. #287 adds the orchestrator in the
+a session ([Routes](#routes)); since #327 a session runs in the user's trading mode, demo or real
+([trading-mode.md](trading-mode.md)). #287 adds the orchestrator in the
 worker ([The orchestrator](#the-orchestrator)): every tick it stops the sessions the kill switch,
 the deadline or a halt ends, then asks the backend for the pair and the signal, sizes the stake
 and creates the session's next intent, which the existing intent path sends to the broker. The
@@ -82,13 +83,14 @@ stored minimum of 0 is valid in the snapshot but gives `baseStake '0'`, which v1
 route answers `balance_unavailable` and the CLI `zero_min_trade_amount`, both before writing (#130
 review n1).
 
-The start route takes the user's saved demo stake (#297, `users.demo_stake`, read with
-`readStakes`) through `stakeSettingsFrom(demoStake, minTradeAmount)`: `NULL` gives
+The start route takes the user's saved stake of the session's mode (#297 demo, `users.demo_stake`;
+#327 real, `users.real_stake`; read with `readStakes`) through `stakeSettingsFrom(savedStake,
+minTradeAmount)`: `NULL` gives
 `stakeSettingsFor(minTradeAmount)` exactly as before; a saved stake gives `{ baseStake: its
 canonical spelling, stakeScale: max(2, scale(minimum)) }` (`stakeScale`, the minimum's grid). The
 route ran `checkStake` against the same minimum first (step 6a), so a saved stake never has more
-fraction digits than that grid and stays on the grid the sizer steps on. Real sessions take the
-real stake the same way with #327. The CLI `session-start` keeps the broker minimum.
+fraction digits than that grid and stays on the grid the sizer steps on. The CLI `session-start`
+keeps the broker minimum.
 
 ## Stop reasons
 
@@ -103,7 +105,7 @@ real stake the same way with #327. The CLI `session-start` keeps the broker mini
 | `pair_unavailable` | the pair left the catalog or refuses the duration | the orchestrator (#287) |
 | `balance_unavailable` | no balance snapshot row for the account | the orchestrator (#287) |
 | `invalid_settings` | settings fail the schema or the sizer's parameter rules | the orchestrator (#287) |
-| `user_stopped` | the stop routes | #283, #122 |
+| `user_stopped` | the stop routes; a switch of the user's trading mode (`setTradingMode`) | #283, #122, #327 |
 | `kill_switch` | the global trading switch is closed ([kill-switch.md](kill-switch.md)) | `stopPausedSessions` (#144), the tick's first sweep; the attempt on `trading_paused` |
 
 Unchanged by #379: a pair whose payout fell below the floor makes the session wait, it does not
@@ -113,7 +115,7 @@ stop it ([The payout floor](#the-payout-floor-379)).
 
 | Operation | Statement | Notes |
 |---|---|---|
-| `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings }, { demoOnly })` | one transaction | with `demoOnly` (required: the process's `DEMO_ONLY`, #396) refuses a `real` session first (`demo_only`); refuses any mode but `demo` before it reads anything (`mode_not_allowed`, #144 review m1: since #144 nothing else fences a real session's intents); reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`), then `broker_accounts` `FOR NO KEY UPDATE` (`account_revoked`, `account_not_confirmed` for `pending`, `account_halted`), then reads the trading switch without a lock (`trading_paused` while it is closed or its row is missing, #144); the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a `TradingSessionDbErrorCode`, not a wire contract: the start route maps each one ([Routes](#routes)) |
+| `createTradingSession(db, { telegramUserId, brokerAccountId, mode, settings }, { demoOnly })` | one transaction | with `demoOnly` (required: the process's `DEMO_ONLY`, #396) refuses a `real` session first, before any read (`demo_only`); reads the account of that owner (an unknown id or another user's account → `account_not_found`), locks `users` `FOR NO KEY UPDATE` with `status = active` (`user_not_active`) and compares the session's mode with `users.trading_mode` in the same statement's row (`mode_not_allowed`, #327: a switch committed before the lock is seen, one after it waits for the creation and then stops the session), then `broker_accounts` `FOR NO KEY UPDATE` (`account_revoked`, `account_not_confirmed` for `pending`, `account_halted`), then reads the trading switch without a lock (`trading_paused` while it is closed or its row is missing, #144); the active-session index → `active_session_exists`. Errors are `TradingSessionError` with a `TradingSessionDbErrorCode`, not a wire contract: the start route maps each one ([Routes](#routes)) |
 | `checkTradingSessionStart(db, { telegramUserId, brokerAccountId? })` | plain selects, no lock | the start route's refusals, the first that applies wins: the trading switch (`trading_paused` while it is closed, #144), the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
 | `readTradingSessionView(db, id, telegramUserId)` | three selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined`; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`. `settings` that fail v1 read as `null` with `planned: 0` |
 | `readActiveTradingSessionView(db, brokerAccountId, telegramUserId)` | two reads | the account's active session as its owner sees it; `undefined` when none, or when it ended between the reads |
@@ -122,7 +124,7 @@ stop it ([The payout floor](#the-payout-floor-379)).
 | `stopHaltedSessions(db, { limit })` | one UPDATE | the account `trading_halted`, or an intent of the session in `manual_review` → `stopped`/`manual_review` |
 | `stopPausedSessions(db, { limit })` | one UPDATE | every active session while the trading switch is closed (`not tradingOpenSql`) → `stopped`/`kill_switch` (#144); only a person starts one again. The orchestrator's tick runs it first |
 | `stopTradingSession(db, { id, reason })` | one UPDATE | CAS on `status = active`: a second stop finds nothing and the first reason stays |
-| `stopUserSessions(db, { telegramUserId })` | one UPDATE | every `active` session whose account belongs to `users.telegram_user_id` → `stopped`/`user_stopped` (#122); the owner is the predicate (a subquery joining `broker_accounts` and `users`, no lock on them), so another user's id stops nothing; `status = active` is the CAS, so a session another writer stopped first keeps its reason and is not returned. No limit: one active session per account |
+| `stopUserSessions(exec, { telegramUserId })` | one UPDATE | the stop routes pass `db`, `setTradingMode` its transaction (#327); every `active` session whose account belongs to `users.telegram_user_id` → `stopped`/`user_stopped` (#122); the owner is the predicate (a subquery joining `broker_accounts` and `users`, no lock on them), so another user's id stops nothing; `status = active` is the CAS, so a session another writer stopped first keeps its reason and is not returned. No limit: one active session per account |
 | `markSessionDecision(db, { id, signalAction? })` | one UPDATE | `last_decision_at = now()` on an active session; `signalAction` (#379): absent leaves `last_signal_action`, `null` clears it, an action sets it |
 | `readSessionHistory(db, sessionId, { maxDurationMs })` | two selects | the owner's `telegram_user_id`, `expired` (the same deadline boundary, database clock, at this read) and the session's own intents in creation order with `action`, `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
 | `createSessionIntent(db, input)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below; after the INSERT, `last_signal_action` = the intent's action on the session row the transaction holds (#379, D6) — a replay and a refused session leave it |
@@ -158,24 +160,25 @@ All four sit behind the internal bearer (`internalBearerAuth`, an encapsulated p
 
 ### POST /trading/sessions
 
-Body `{ telegramUserId, brokerAccountId?, assetId, durationSec, trades? }` (strict; `trades`
-defaults to `DEFAULT_SESSION_TRADES`, 1–20 like settings v1). The steps in order; every refusal
+Body `{ telegramUserId, brokerAccountId?, mode, assetId, durationSec, trades? }` (strict; `mode`
+is required, `demo` or `real`, the mode the bot's button was drawn in, #327; `trades` defaults to
+`DEFAULT_SESSION_TRADES`, 1–20 like settings v1). The steps in order; every refusal
 comes before `createTradingSession`, so no 4xx leaves a `trading_sessions` row:
 
 | # | Step | Refusal |
 |---|---|---|
 | 1 | the body | 400 `validation` |
 | 2 | `sessionFitsDeadline(trades, durationSec)`: `trades × (durationSec + 120 s)` within `SESSION_MAX_DURATION_MS` (1 h) | 409 `session_too_long` |
-| 3 | `checkTradingSessionStart` | 409 `trading_paused` first; 404 `user_not_found` / `broker_account_not_found`; 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_revoked`, `account_halted`, `insufficient_tokens`, `active_session_exists` |
+| 3 | `checkTradingSessionStart({ mode })` | 409 `trading_paused` first; 404 `user_not_found`; 409 `user_blocked`; 409 `mode_not_allowed` when `mode` is not the user's `trading_mode` (#327, before any account read); 404 `broker_account_not_found`; 409 `ambiguous_broker_account`, `account_not_confirmed`, `account_revoked`, `account_halted`, `insufficient_tokens`, `active_session_exists` |
 | 4 | the pairs cache: missing or not `fresh` | 503 `catalog_unavailable` (the string `GET /trading/pairs` answers) |
 | 4 | the pair absent, `!isPairOpen(pair, now)`, or `!pairAcceptsDuration(pair, durationSec)` | 409 `pair_unavailable` |
 | 4b | `!pairPayoutAccepted(pair)`: the payout below `MIN_CYCLE_PAYOUT_PCT` (#379) | 409 `payout_too_low` (R19; exactly 80 starts, R20) |
 | 5 | `touchBalanceRequested`, then the stored balance snapshot, of any age (the sizer checks the balance before every trade) | — |
 | 5a | no snapshot and the access token expires within `ACCESS_SKEW_MS`: the refresh runs in the background | 409 `balance_unavailable` at once; the caller retries |
 | 5b | no snapshot: `balance.refresh` awaited for at most `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s), then a re-read | 409 `balance_unavailable` when still none |
-| 6a | `checkStake(demoStake ?? minTradeAmount, { minTradeAmount, available: demoAvailable })` on the same snapshot (#297) | 409 `stake_precision`, `stake_below_minimum` or `insufficient_balance`; without a saved stake, a minimum above the demo balance is refused here rather than as `stake_stop` on the first trade |
-| 6 | settings v1 with `stake = stakeSettingsFrom(demoStake, minTradeAmount)` | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which v1 refuses), with a `warn` line |
-| 7 | `createTradingSession(…, mode: demo)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` and `demo_only` (409, #396; both unreachable: the route passes `demo`) |
+| 6a | `checkStake(savedStake ?? minTradeAmount, { minTradeAmount, available })` on the same snapshot (#297): the saved stake and `available` of the session's mode, `demo_stake`/`demo.available` or `real_stake`/`real.available` (#327) | 409 `stake_precision`, `stake_below_minimum` or `insufficient_balance`; without a saved stake, a minimum above that mode's balance is refused here rather than as `stake_stop` on the first trade |
+| 6 | settings v1 with `stake = stakeSettingsFrom(savedStake, minTradeAmount)` | 409 `balance_unavailable` when the stored minimum is 0 (a valid snapshot value that gives `baseStake '0'`, which v1 refuses), with a `warn` line |
+| 7 | `createTradingSession(…, mode)` | its refusal mapped: `account_not_found` → 404 `broker_account_not_found`; `account_revoked`, `account_not_confirmed`, `account_halted`; `user_not_active` → `user_blocked`; `active_session_exists`; `trading_paused`; `mode_not_allowed` (409: a switch of the mode between step 3 and the users lock, #327); `demo_only` (409, #396: a real session on a `DEMO_ONLY` backend from a user whose `trading_mode` is `real` — set before the flag or by hand) |
 | 8 | 201 `{ session }` | — |
 
 - **The view on `active_session_exists`.** A second start — a double press, or a retry after a
@@ -555,7 +558,7 @@ with one of pnpm. (REPLACE_WITH_TG_ID: the user's Telegram id; REPLACE_WITH_PAIR
 | `ASSET_ID` | required, 1 – int4 max |
 | `DURATION_SEC` | default 15 (#313: the demo's set is 5 and 15 s), 1 – int4 max |
 | `TRADES` | default `DEFAULT_SESSION_TRADES` (5), 1 – 20 |
-| `DEMO_ONLY` | optional, `true` or `false` (default `false`), as the worker reads it (#396); passed to `createTradingSession`. The CLI creates demo sessions only, so it refuses nothing today |
+| `DEMO_ONLY` | optional, `true` or `false` (default `false`), as the worker reads it (#396); passed to `createTradingSession`. The CLI creates demo sessions only, so the flag refuses nothing; a user in real mode is refused `mode_not_allowed` (#327) |
 
 Steps: the user's accounts (`readUserAccounts`); with `ACCOUNT_ID` that one if it is in the list,
 else `account_not_found`; without it the only active one, two or more → refused with each `<id> <status>` on stderr (no email); the balance snapshot (none → refused:
@@ -566,7 +569,9 @@ exit 0. Every refusal goes to stderr with exit 1 and writes nothing: one Russian
 two-accounts refusal (a Russian line, then one `<id> <status>` line per account) and an env error
 (one English line naming the variable, as every env check of the repository prints). A
 `TradingSessionError` is mapped by `SESSION_START_REFUSALS`
-(`satisfies Record<TradingSessionDbErrorCode, string>`). Any other failure is the one door:
+(`satisfies Record<TradingSessionDbErrorCode, string>`); a user in real mode gets `mode_not_allowed`
+from the users lock (#327): «Пользователь в реальном режиме: CLI создаёт только demo-сессии —
+запустите сессию из бота или верните пользователя в demo». Any other failure is the one door:
 `Не удалось создать сессию: <name> <code>`, with the query to re-read the account's sessions,
 because a commit whose acknowledgement was lost leaves the state unknown. The pair and the
 duration are checked by the first attempt, which stops a wrong `ASSET_ID` as `pair_unavailable`.
@@ -773,10 +778,9 @@ docker compose logs --since 1h trading-worker | grep -E 'waits for the signal to
   in the tests is #105, a release on a proven absence instead of the halt is #274. #135:
   `grant_revoked` as a stop reason; #94: the orchestrator under more than one worker container
   (#93's lease covers the broker sockets only).
-- Real sessions: the schema takes `mode`, and `createTradingSession` refuses anything but `demo`
-  (`mode_not_allowed`), and the start route refuses a user in real mode with the same code before
-  any account read (#121, [trading-mode.md](trading-mode.md)); real sessions (#327) lift that
-  refusal with their own fence. The
-  `demo_only` refusal above it stays (#396). A real
-  session row can only be written by hand (`seedTradingSession` in the tests).
+- Real sessions (#327): a session runs only in its user's mode — the start route's pre-check and
+  `createTradingSession` under the users lock refuse another (`mode_not_allowed`), and a switch of
+  the mode stops the user's active sessions in its transaction ([trading-mode.md](trading-mode.md)).
+  The `demo_only` refusal (#396) comes before both. The CLI `session-start` creates demo sessions
+  only. A loss limit or a daily cap for real sessions is a later issue.
 - The invariant is Architecture Rules → "Торговая сессия" in `.claude/skills/architect/SKILL.md`.

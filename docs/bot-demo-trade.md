@@ -53,7 +53,7 @@ demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
   bot → sendMessage: the status, with «🔄 Обновить статус» (intent:<id>)
   tracker: after 1 s, then every 3 s → GET /trading/intents/<id>?telegramUserId=<id>
            → editMessageText of that message when the status changes; on accepted, settled or
-             rejected the session offer and «🚀 Сессия из 5 сделок» (demo:sess:<assetId>:<sec>, #360)
+             rejected the session offer and «🚀 Сессия из 5 сделок» (<mode>:sess:<assetId>:<sec>, #360, #327)
 intent:<id>                («🔄 Обновить статус»)
   bot → answerCallbackQuery ∥ GET /trading/intents/<id>?telegramUserId=<presser> ∥ GET /trading/pairs
   bot → editMessageText: the status in place
@@ -133,8 +133,8 @@ a write, so it is never offered again; the same holds for the access read's refu
 
 The user has a stake of each mode: the demo stake `users.demo_stake` (#297) and the real stake
 `users.real_stake` (#326). `NULL` means the broker's minimum at each trade, which is what every
-user had before. The demo stake serves the single demo trade and the session; the real stake the
-single real trade (real sessions are #327). Either is a preference: it is saved in any trading
+user had before. The demo stake serves the single demo trade and the demo session; the real stake
+the single real trade and the real session (#327). Either is a preference: it is saved in any trading
 mode, and a save reads no `DEMO_ONLY` ([trading-access.md](trading-access.md#post-tradingstake-297-326)).
 `effectiveStake` gives the amount a press trades in the user's mode: that mode's saved stake, or
 the broker's minimum without one.
@@ -258,8 +258,8 @@ status has an edge out of it in the shared graph (accepted until it settles); on
 
 **The session offer (#360).** On `accepted`, `settled` and `rejected` alike, the message ends with
 «🤖 Дальше бот может торговать сам: сессия из 5 сделок на этой паре, сигнал он проверяет перед
-каждой сделкой.» and the keyboard carries «🚀 Сессия из 5 сделок» with `demo:sess:<assetId>:<sec>`
-of that trade — the session button's own data, so its press is the start handler with its
+каждой сделкой.» and the keyboard carries «🚀 Сессия из 5 сделок» with `<mode>:sess:<assetId>:<sec>`
+of that trade (a real trade offers a real session, labelled « · REAL», #327) — the session button's own data, so its press is the start handler with its
 refusals and its `{ active }` answer: a press while a session runs shows the running one and starts
 none ([bot-session.md](bot-session.md#the-button)). One predicate decides the line and the row,
 `sessionOfferOf(view, payoutAccepted)`: the status is a stop status, the duration is one of
@@ -365,4 +365,5 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
 - **#284** — the session of five in the bot: [bot-session.md](bot-session.md); its worker half is
   shipped (#287, [trading-session.md](trading-session.md)).
 - **#121** — real mode: the press trades in the user's mode ([trading-mode.md](trading-mode.md));
-  **#326** — the real stake, the broker's minimum while none is saved; **#327** — real sessions.
+  **#326** — the real stake, the broker's minimum while none is saved; **#327** (shipped) — real
+  sessions.
