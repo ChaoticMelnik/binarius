@@ -18,7 +18,7 @@ Tech Lead also owns enforcement of the Codex checkpoint: `.claude/CLAUDE.md` →
 
 ### Phases run as spawned agents
 
-Every phase is an `Agent` spawn with an explicit `model` (`.claude/CLAUDE.md` → Модели по ролям pipeline): architect `fable`, implementer and reviewer `opus`, `subagent_type: "general-purpose"`. The spawn's `model` is what sets the phase's model; a skill's frontmatter does not survive a `Skill()` call inside one turn (#42). Never ask the owner to switch `/model` between phases.
+Every phase is an `Agent` spawn with an explicit `model` (`.claude/CLAUDE.md` → Модели по ролям pipeline): architect `fable` for a first plan and `opus` for every Plan Update (`.claude/CLAUDE.md` → Экономия токенов), implementer and reviewer `opus`, `subagent_type: "general-purpose"`. The spawn's `model` is what sets the phase's model; a skill's frontmatter does not survive a `Skill()` call inside one turn (#42). Never ask the owner to switch `/model` between phases.
 
 Spawn prompt — every phase gets these, in this order:
 1. Role and issue: "You are the <ROLE> phase for GitHub issue #<N> (ChaoticMelnik/binarius, working dir <path>)."
@@ -140,7 +140,7 @@ Per row, comparing ids up to the first `[` (`[1m]` names the context-window vari
 - (b) when `resolved` is an id, it is that alias's id in `.claude/CLAUDE.md` → Модели по ролям pipeline;
 - (c) `ran` is exactly one id, and it is the table's id for the requested alias. `<synthetic>` is not a model: it is the harness's placeholder on an API error message (a usage limit, a 429). Drop it before judging (c), and record what the row shows instead: the agent died, and whether it had posted anything (#132, #136, #138 and #236 on 2026-10-03/04: Fable and Opus weekly limits).
 
-Depth 1 gets all three when a result came back; a phase continued through `SendMessage` has no result record and is judged by (a) + (c). Depth ≥ 2 (the reviewer's 3b-3d) is judged by (a) + (c). A depth-3 row with no requested model is a sub-tool's own fork: it is judged only by (c) against its parent's `ran`. Severity: Major if the architect did not run on Fable; Minor if another phase ran above its policy model (cost only).
+Depth 1 gets all three when a result came back; a phase continued through `SendMessage` has no result record and is judged by (a) + (c). Depth ≥ 2 (the reviewer's 3b-3d) is judged by (a) + (c). A depth-3 row with no requested model is a sub-tool's own fork: it is judged only by (c) against its parent's `ran`. Severity: Major if a first-plan architect did not run on Fable without the «план на Opus (лимит Fable …)» header line; a Plan Update on Opus is the policy, not a deviation; Minor if another phase ran above its policy model (cost only).
 
 ### Report format
 
@@ -264,12 +264,13 @@ Confirm: working tree clean; local `main` not behind `origin/main` (else `git pu
 3. **Project CLAUDE.md on main** — `git diff origin/main -- .claude/CLAUDE.md` must be empty: the harness loads whatever is checked out, and a waiver living only on an unmerged branch was once acted on for a day.
 4. **Runtimes** — every runtime the acceptance criteria exercise is available locally at CI's version: Node from `.node-version` (`eval "$(fnm env)" && fnm use`), Postgres/Redis (`docker compose ps`), Docker/Compose/buildx if the issue touches images or compose; CLI plugins match what CI uses.
 5. **Previous audit** — every proposal of the latest `audits.md` entry has a status (Phase 5 format). An unmarked proposal, or `открыто` without a date and owner, is reported to the owner as a warning before the pipeline starts; it does not stop the pipeline.
+6. **Model limits** — before a Fable spawn, the check in `.claude/CLAUDE.md` → Экономия токенов → «Лимиты до спавна»: a Fable limit seen in the last 7 days and no reset reported by the owner → the first plan goes to `opus` directly.
 
 **Timeout policy (every checkpoint):** usage limit — `.claude/CLAUDE.md` → Codex — только финальное ревью перед мержем. Any other failure: at most 2 attempts per Codex run; after the second, stop and ask the owner — no third attempt by default. The owner may choose to skip a checkpoint only by an explicit answer; the line is the owner's skip line (reviewer Step 6-pre item 4).
 
 #### Phase 1 — Architect
 
-Spawn the architect (`Agent`, `model: "fable"`, prompt per "Phases run as spawned agents"). Round 1 returns clarify questions → clarify relay → the same agent drafts the plan and posts it (no Codex — planning has none). Never perform architect steps inline, regardless of how small the issue looks.
+Spawn the architect (`Agent`, `model: "fable"` — or `opus` under preflight item 6 — prompt per "Phases run as spawned agents"). Round 1 returns clarify questions → clarify relay → the same agent drafts the plan and posts it (no Codex — planning has none). Never perform architect steps inline, regardless of how small the issue looks.
 
 If this repo's CLAUDE.md has waived the commit/PR stop points: no text between phases — spawn the implementer next. If not waived: report the plan to the owner and follow whatever stop behavior the unwaived pipeline default implies before continuing.
 
@@ -277,7 +278,7 @@ If this repo's CLAUDE.md has waived the commit/PR stop points: no text between p
 
 Before the spawn, a plan more than a day old or written by another session is checked against `main`: `git log --oneline <plan's base sha>..origin/main -- <files the plan names>`. Any output → the architect writes a round-0 Plan Update first (all seven plans of 2026-10-06..09 taken on 2026-10-10 needed one; #396 and #397 on 2026-10-09).
 
-Spawn the implementer (`Agent`, `model: "opus"`). Round 1 returns its clarify questions (implementer Step 0) → clarify relay; plan defects among them go to the architect first (continue the architect agent for a Plan Update) → the implementer continues with the answers and the Plan Update. Never perform implementer steps inline.
+Spawn the implementer (`Agent`, `model: "opus"`). Round 1 returns its clarify questions (implementer Step 0) → clarify relay; plan defects among them go to the architect first (a fresh architect spawn on `opus` for the Plan Update, with the plan URL and the defects) → the implementer continues with the answers and the Plan Update. Never perform implementer steps inline.
 
 If a merge-chain base branch (Mode 1, Step 3) has already merged into `main` since the chain was declared, rebase onto `main` before implementation continues — check `gh pr view <base-PR> --json state,mergedAt` first.
 
@@ -295,7 +296,7 @@ Track the iteration count (starts at 1 for the first review). **Hard limit: 3 re
 Only a Blocker or Major counts as "finds issues" and returns the issue to Todo (reviewer → Severity Guide). A Minor-only verdict goes to the merge relay below as a clean PR; the merge question names the open Minors, and the owner decides whether they are fixed in another round first. Minors still open at the merge go, without a question, into one new Backlog issue (`/github`: "Create an issue" + "Add issue to Project #2", body with `Refs #<N>`, the PR link and each finding with severity and comment link); its number goes into the report (`.claude/CLAUDE.md` → Постоянные ответы владельца).
 
 **If the reviewer finds a Blocker or Major:**
-1. Iteration 1 → the architect first (Plan Update; the issue returns to In Progress), then the implementer, then the reviewer again for this issue. When the architect's model is unavailable (the Fable weekly limit), the owner is asked: a Plan Update on Opus, or the findings straight to the implementer with "исправления без Plan Update архитектора" recorded as a deviation — never the latter by default (#130, #287, #284 on 2026-10-07).
+1. Iteration 1 → the architect first (Plan Update on `opus`; the issue returns to In Progress), then the implementer, then the reviewer again for this issue. The fix round's implementer is a **fresh spawn**, not a `SendMessage` continuation of the first one: its prompt carries the PR, the review comment URLs, the Plan Update URL, the branch and the worktree, and it reads them anew — a continued implementer drags its whole first-round context into every call (`.claude/CLAUDE.md` → Экономия токенов).
 2. Iteration 2 → stop: this starts a **new cycle**. Ask the owner via `AskUserQuestion` for a **change of approach** — the same loop again is not among the options:
    - (a) split part of the issue into a separate issue (created and added to the board via `/github`), and narrow this PR;
    - (b) re-plan from scratch: the architect writes a new plan against the current branch.

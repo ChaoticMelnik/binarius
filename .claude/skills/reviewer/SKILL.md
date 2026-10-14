@@ -39,13 +39,15 @@ Check diff size first: `gh pr diff <N> | wc -l`.
 
 **Small-diff rule:** full PR diff < 50 lines → run only the code-review agent (3c), skip security/simplify.
 
+**Which agents by the diff's content** (owner 2026-10-14, `.claude/CLAUDE.md` → Экономия токенов): 3c always. **3b** only when the diff touches a security surface — authentication, sessions, OAuth, staff login, the bearer between services; money, tokens, stakes, balances; the DB schema or migrations; HTTP routes or their validation; env, compose, CI or secrets; anything that sends to the broker — and not on a diff of tests, docs, `.claude/**` or bot texts alone. **3d** only when the diff adds more than ~300 lines of code (tests and docs not counted). The review comment names which agents ran and why the others did not.
+
 **Order of launch.** One message carries the `Agent` spawns 3b-3d, so they run in parallel. Spawn them with `run_in_background: false`: calls in one message still run concurrently, and the message returns only when all three have reported — background spawns let the harness end the reviewer's turn first and force a hand-back without a verdict (#163, #10: twice each). Then wait for 3b-3d to finish. Only then Step 4. Never run the check command while the spawned agents are working — the `/code-review` recipe runs `pnpm typecheck` on the same tree regardless of the brief.
 
-**3b. Security review agent** *(skip on small diff)* — spawn `Agent` with `model: "opus"` and the full `/security-review` prompt.
+**3b. Security review agent** *(by the diff's content, above)* — spawn `Agent` with `model: "opus"` and the full `/security-review` prompt.
 
 **3c. Code review agent** *(always)* — spawn `Agent` with `model: "opus"` and the full `/code-review high` prompt. The forked `Skill("code-review")` ignores the target it is given and reviews the main checkout's recent commits (#97, #98, #119, #185, #104: every time): the prompt says not to invoke the Skill, and to apply its recipe by hand to the saved PR diff file and the review worktree.
 
-**3d. Simplification agent** *(skip on small diff)* — spawn `Agent` with `model: "sonnet"` and the full `/simplify` prompt, with two explicit instructions: **report only — no file edits** (`~/.claude/CLAUDE.md` → Reviewer sub-tools → File-mutation coordination) and **no nested agents** (it otherwise fans out and gets cut off).
+**3d. Simplification agent** *(by the diff's content, above)* — spawn `Agent` with `model: "sonnet"` and the full `/simplify` prompt, with two explicit instructions: **report only — no file edits** (`~/.claude/CLAUDE.md` → Reviewer sub-tools → File-mutation coordination) and **no nested agents** (it otherwise fans out and gets cut off).
 
 If a spawn dies on an API error for its model, relaunch it once with the same explicit model, then stop and return to tech-lead. A sub-agent's output file is not a liveness signal — it stays at its header until the agent finishes; trust `ListAgents` and the completion notification.
 
