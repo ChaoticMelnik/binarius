@@ -19,4 +19,8 @@ export const CASHIER_TEXTS = {
     'К вашему Telegram подключено несколько аккаунтов Binodex. Напишите в поддержку: команда /support в боте.',
   blocked: 'Доступ ограничен.',
   relogin: 'Войдите в Binodex заново через бота, затем откройте кассу ещё раз.',
+
+  // notices above the widget after its events (#112); the widget stays on screen
+  credited: 'Пополнение получено — баланс в боте обновится.',
+  widgetError: 'В кассе произошла ошибка. Если платёж не прошёл, попробуйте ещё раз в кассе.',
 } as const;

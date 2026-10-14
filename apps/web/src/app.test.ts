@@ -276,6 +276,9 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     depositWidgetSession: async () => {
       throw new Error('the admin pages never mint a cashier session');
     },
+    depositCredited: async () => {
+      throw new Error('the admin pages never forward a credited event');
+    },
     ...backend,
   };
   return buildWebApp({

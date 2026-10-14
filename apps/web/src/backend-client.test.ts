@@ -19,6 +19,7 @@ import {
   BOT_TEXT_OVERRIDES_MAX,
   BOT_TEXT_SOURCE_MAX,
   BrokerAccountStatus,
+  DepositCreditedOutcome,
   CLIENT_USER_AGENT_MAX_LENGTH,
   DepositEventStatus,
   INT4_MAX,
@@ -49,6 +50,7 @@ import {
   safeParseChangePasswordResponse,
   safeParseLogoutResponse,
   safeParseOAuthCallbackResponse,
+  safeParseDepositCreditedResponse,
   safeParseDepositWidgetSessionResponse,
   safeParseRevokeSessionResponse,
   safeParseStaffSessionsResponse,
@@ -275,6 +277,60 @@ describe('depositWidgetSession (#111)', () => {
       depositWidgetSessionTimeoutMs: 50,
     });
     const error = await rejectionOf(client.depositWidgetSession(REQUEST));
+    expect(error).toMatchObject({ code: BackendErrorCode.Unreachable });
+  });
+});
+
+describe('depositCredited (#112)', () => {
+  const REQUEST = { initData: INIT_DATA };
+
+  it('posts initData alone to the public route, without the admin bearer', async () => {
+    const { baseUrl, captured } = await serve((response) => {
+      json(response, 200, { outcome: 'refreshed' });
+    });
+    const answer = await createBackendClient({ baseUrl, token: TOKEN }).depositCredited(REQUEST);
+
+    expect(answer).toEqual({ outcome: 'refreshed' });
+    expect(captured.url).toBe('/deposit/credited');
+    expect(captured.headers?.authorization).toBeUndefined();
+    expect(captured.body).toBe(JSON.stringify(REQUEST));
+  });
+
+  it('carries the backend error code and status of a refusal', async () => {
+    const { baseUrl } = await serve((response) => {
+      json(response, 429, { error: 'too_many_requests' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).depositCredited(REQUEST),
+    );
+    expect(error).toMatchObject({
+      code: BackendErrorCode.HttpStatus,
+      status: 429,
+      reason: 'too_many_requests',
+    });
+  });
+
+  it('refuses a 2xx body outside the contract', async () => {
+    const { baseUrl } = await serve((response) => {
+      json(response, 200, { outcome: 'refreshed', amount: '100' });
+    });
+    const error = await rejectionOf(
+      createBackendClient({ baseUrl, token: TOKEN }).depositCredited(REQUEST),
+    );
+    expect(error).toMatchObject({ code: BackendErrorCode.ContractViolation });
+  });
+
+  // its own timeout, sized against DEPOSIT_CREDITED_BUDGET_MS (timing.ts)
+  it('gives up on a backend that never answers after its own timeout', async () => {
+    const { baseUrl } = await serve(() => {});
+    const client = createBackendClient({
+      baseUrl,
+      token: TOKEN,
+      timeoutMs: 60_000,
+      depositWidgetSessionTimeoutMs: 60_000,
+      depositCreditedTimeoutMs: 50,
+    });
+    const error = await rejectionOf(client.depositCredited(REQUEST));
     expect(error).toMatchObject({ code: BackendErrorCode.Unreachable });
   });
 });
@@ -1343,6 +1399,10 @@ describe('body size', () => {
           widgetUrl: `https://${ofBytes(ASSUMED_LONGEST_FREE_STRING - 'https://'.length)}`,
           widgetOrigin: `https://${ofBytes(ASSUMED_LONGEST_FREE_STRING - 'https://'.length)}`,
         },
+      },
+      depositCredited: {
+        parse: safeParseDepositCreditedResponse,
+        sample: { outcome: longest(DepositCreditedOutcome) },
       },
     };
 
