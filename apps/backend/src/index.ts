@@ -1,3 +1,4 @@
+import { Api } from 'grammy';
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import {
@@ -18,6 +19,7 @@ import { buildApp } from './app';
 import type { TradingRoutesDeps } from './trading/routes';
 import { createClientPush } from './auth/client-push';
 import { createMailingEngine } from './mailing/engine';
+import { createStarReconciler } from './payments/star-reconciler';
 import { setBotTextSource } from './auth/texts';
 import { DEPOSIT_INIT_DATA_MAX_AGE_MS, INIT_DATA_MAX_AGE_MS } from './auth/oauth-timing';
 import { createInitDataVerifier } from './auth/telegram-init-data';
@@ -43,6 +45,7 @@ import {
   signalScanCapacity,
   signalScanPairs,
   signalScanPerMinute,
+  STARS_TELEGRAM_API_TIMEOUT_MS,
 } from './timing';
 
 const env = parseEnv(process.env);
@@ -248,6 +251,20 @@ const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
 // listen(), stopped in phase 1
 const mailing = createMailingEngine({ db, push: clientPush, logger: app.log });
 
+// docs/stars.md → Reconciliation (#117): credits a Stars payment whose successful_payment the bot
+// lost; the public bot's token, read-only on Telegram's side (getStarTransactions), and pushes
+// through the client push. Started with the other loops after listen(), stopped in phase 1.
+const starsApi = new Api(env.telegramBotToken, {
+  timeoutSeconds: STARS_TELEGRAM_API_TIMEOUT_MS / 1000,
+});
+const starReconciler = createStarReconciler({
+  db,
+  readTransactions: async (offset, limit) =>
+    (await starsApi.getStarTransactions({ offset, limit })).transactions,
+  push: clientPush,
+  logger: app.log,
+});
+
 // docs/broker-balance.md: refreshed on demand by POST /trading/access and every
 // BALANCE_RECONCILE_INTERVAL_MS over the accounts in work, the latter never exchanging a token
 const balanceReconciler = createBalanceReconciler({
@@ -310,6 +327,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       () => balanceReconciler.stop(),
       () => botTexts.stop(),
       () => mailing.stop(),
+      () => starReconciler.stop(),
     ],
     SHUTDOWN_PHASE1_BUDGET_MS,
   );
@@ -353,6 +371,7 @@ if (!shuttingDown) {
   for (const scanner of signalScanners) scanner.start();
   botTexts.start();
   mailing.start();
+  starReconciler.start();
   // A failed start is logged and leaves isPolling() false; it does not stop the process, and
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();

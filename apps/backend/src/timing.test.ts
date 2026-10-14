@@ -6,6 +6,7 @@ import {
   BOT_PROFILE_PUBLISH_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
   MAILING_MIN_OFFSET_HOURS,
+  STARS_PRECHECKOUT_BUDGET_MS,
 } from '@binarius/shared';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import {
@@ -64,6 +65,11 @@ import {
   SIGNAL_SCAN_BACKOFF_MIN_MS,
   SIGNAL_SCAN_SHARES_PERCENT,
   SIGNAL_SCAN_SLACK_MS,
+  STARS_RECONCILE_MAX_PAGES,
+  STARS_RECONCILE_PAGE_SIZE,
+  STARS_RECONCILE_TICK_MS,
+  STARS_RECONCILE_WINDOW_S,
+  STARS_TELEGRAM_API_TIMEOUT_MS,
   scanDecisionsPerMinute,
   signalScanCapacity,
   signalScanPairs,
@@ -266,6 +272,19 @@ describe('broker balance timing', () => {
       BOT_PROFILE_PUBLISH_BUDGET_MS,
     );
     expect(BOT_PROFILE_PUBLISH_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  // S9 (#117): restated so a change to the chain's conjuncts shows in review next to its test
+  it('keeps the pre-checkout route and a reconciler stop inside phase 1, a tick inside its interval and the window over many ticks (#117)', () => {
+    expect(STARS_PRECHECKOUT_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(STARS_TELEGRAM_API_TIMEOUT_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(
+      SHUTDOWN_PHASE1_BUDGET_MS,
+    );
+    expect(STARS_RECONCILE_MAX_PAGES * STARS_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(
+      STARS_RECONCILE_TICK_MS,
+    );
+    expect(STARS_RECONCILE_TICK_MS).toBeLessThan(STARS_RECONCILE_WINDOW_S * 1000);
+    expect(STARS_RECONCILE_PAGE_SIZE).toBeLessThanOrEqual(100);
   });
 
   it('ends a mailing stop inside phase 1 and a send inside its tick, and keeps the rate under Telegram’s (#202)', () => {
