@@ -297,8 +297,9 @@ export const adminUserDetailSchema = z.strictObject({
   acquiredAt: isoDateTime.nullable(),
   telegramBlockedAt: isoDateTime.nullable(),
   notificationLevel: notificationLevelSchema,
-  // null = the broker's minimum (#297)
+  // null = the broker's minimum (#297, #326)
   demoStake: decimalStringSchema.nullable(),
+  realStake: decimalStringSchema.nullable(),
   tokens: tokenBalanceViewSchema,
   createdAt: isoDateTime,
   updatedAt: isoDateTime,

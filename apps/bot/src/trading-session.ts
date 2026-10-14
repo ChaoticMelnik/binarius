@@ -2,6 +2,7 @@ import { Composer, GrammyError, HttpError, InlineKeyboard, InputFile, type Conte
 import {
   DEFAULT_SESSION_TRADES,
   errorLogFields,
+  TradeMode,
   TradingSessionErrorCode,
   TradingSessionStatus,
   type BotStaticHtmlKey,
@@ -152,7 +153,7 @@ export const START_REFUSALS = {
   // session press reads no access, so the minimum is not named — the picker shows it
   [TradingSessionErrorCode.StakePrecision]: { text: 'stakePrecision', stakeMenu: true },
   [TradingSessionErrorCode.StakeBelowMinimum]: { text: 'stakeBelowBrokerMinimum', stakeMenu: true },
-  [TradingSessionErrorCode.InsufficientDemoBalance]: {
+  [TradingSessionErrorCode.InsufficientBalance]: {
     text: 'stakeAboveAvailable',
     stakeMenu: true,
   },
@@ -360,7 +361,8 @@ export function createTradingSessionComposer<C extends Context>({
           : refusal.stakeMenu === true
             ? new InlineKeyboard().text(
                 LABELS.stakeMenuButton,
-                stakeMenuCallbackData(assetId, durationSec),
+                // sessions are demo only until #327
+                stakeMenuCallbackData(TradeMode.Demo, assetId, durationSec),
               )
             : backToAnalysisKeyboard(assetId, durationSec);
     await replyHtml(ctx, textOf(refusal.text), { reply_markup });

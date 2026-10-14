@@ -36,8 +36,9 @@ export const BOT_TEXT_WIDTHS = {
   usd: 20,
   // formatUsd('0'), both amounts of a card with no balance
   zeroUsd: 5,
-  // formatStake over an unsigned numeric(20,8): $999 999 999 999.99999999 — the demo stake, the
-  // broker's minimum and the demo balance are all money() columns their writers keep unsigned (#297)
+  // formatStake over an unsigned numeric(20,8): $999 999 999 999.99999999 — either saved stake, the
+  // broker's minimum and either balance are all money() columns their writers keep unsigned (#297,
+  // #326)
   stake: 25,
   // the broker's stake scale: at most numeric(20,8)'s 8 fraction digits
   stakeDigits: 1,
@@ -169,6 +170,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   stake: stakeLabel,
   minStake: () => w.stake,
   demoAvailable: () => w.stake,
+  realAvailable: () => w.stake,
   age: () => w.age,
   // stakePickerText: the saved stake, or «label (minimum)»
   amount: (m) =>
@@ -492,23 +494,24 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     id: 'settings',
     title: '/settings',
     limit: TELEGRAM_MESSAGE_LIMIT,
-    body: [k('settings'), '\n\n', k('settingsStake')],
+    body: [k('settings'), '\n\n', k('settingsStake'), '\n', k('settingsStakeReal')],
   },
   {
     id: 'stakePicker',
     title: 'Экран суммы',
     limit: TELEGRAM_MESSAGE_LIMIT,
     body: [
-      k('stakePickerHeader'),
+      // by the picker's mode (#326)
+      anyOf('stakePickerHeader', 'stakePickerHeaderReal'),
       '\n',
       k('stakePickerCurrent'),
       '\n',
       k('stakePickerMinimum'),
       '\n',
-      k('stakePickerAvailable'),
+      anyOf('stakePickerAvailable', 'stakePickerAvailableReal'),
       // only when no preset fits the bounds
       '\n',
-      k('stakePickerNoPresets'),
+      anyOf('stakePickerNoPresets', 'stakePickerNoPresetsReal'),
     ],
   },
   {
@@ -569,8 +572,8 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     title: 'Демо: запуск цикла',
     limit: TELEGRAM_MESSAGE_LIMIT,
     body: [
-      // only after a saved stake
-      k('stakeSavedLine'),
+      // only after a saved stake, in the saved stake's mode (#326)
+      anyOf('stakeSavedLine', 'stakeSavedLineReal'),
       '\n\n',
       k('launchHeader'),
       '\n',

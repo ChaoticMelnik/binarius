@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { DemoStakeRefusal } from './demo-stake';
+import { StakeRefusal } from './stake';
 import { numericDomainDecimalSchema, positiveDecimalStringSchema } from './money';
 
 export const TradeMode = { Demo: 'demo', Real: 'real' } as const;
@@ -128,12 +128,12 @@ export const TradeIntentErrorCode = {
   ClientRequestIdConflict: 'client_request_id_conflict',
   // the global trading switch is closed (#144, createInTransaction): any mode, nothing reserved
   TradingPaused: 'trading_paused',
-  // the demo-stake bounds (#297), checked only for POST /trading/intents; balance_unavailable:
-  // the account has no balance snapshot to check against
+  // the stake bounds of either mode (#297, #326), checked only for POST /trading/intents;
+  // balance_unavailable: the account has no balance snapshot to check against
   BalanceUnavailable: 'balance_unavailable',
-  StakePrecision: DemoStakeRefusal.Precision,
-  StakeBelowMinimum: DemoStakeRefusal.BelowMinimum,
-  InsufficientDemoBalance: DemoStakeRefusal.AboveAvailable,
+  StakePrecision: StakeRefusal.Precision,
+  StakeBelowMinimum: StakeRefusal.BelowMinimum,
+  InsufficientBalance: StakeRefusal.AboveAvailable,
   // the process runs DEMO_ONLY (#396): a real intent is refused after the replay, before the
   // switch, the account and the reserve
   DemoOnly: 'demo_only',

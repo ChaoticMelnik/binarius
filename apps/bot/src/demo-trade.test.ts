@@ -154,7 +154,7 @@ const OFFER_END_ROWS = [SESSION_ROW, ...END_ROWS];
 const OFFER = '🤖 Дальше бот может торговать сам';
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
 const STAKE_MENU_ROWS = [
-  [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5))],
+  [button(LABELS.stakeMenuButton, stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5))],
 ];
 const BACK_DURATIONS = button(
   LABELS.demoBackDurationsButton,
@@ -356,7 +356,7 @@ describe('the stake button', () => {
       TEXTS.stakeBelowMinimum({ minStake: decimalStringSchema.parse('1') }),
       STAKE_MENU_ROWS,
     ],
-    [TradeIntentErrorCode.InsufficientDemoBalance, 409, TEXTS.stakeAboveAvailable, STAKE_MENU_ROWS],
+    [TradeIntentErrorCode.InsufficientBalance, 409, TEXTS.stakeAboveAvailable, STAKE_MENU_ROWS],
   ] as const)(
     'answers %s with its text, asks once, and logs nothing',
     async (reason, status, text: TelegramHtml, rows: readonly Button[][]) => {
@@ -491,6 +491,58 @@ describe('the stake button', () => {
       await press(data);
       expect(createIntent).not.toHaveBeenCalled();
       expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.stakeAmountChanged.value);
+    });
+
+    // #326: the saved real stake in place of the minimum
+    describe('with a saved real stake', () => {
+      const SAVED = decimalStringSchema.parse('5');
+      const savedAccess = () => Promise.resolve(accessView({ ...REAL_ACCESS, realStake: SAVED }));
+      const SAVED_STAKE = stakeCallbackData(
+        PAIR_EURUSD.id,
+        5,
+        TradeAction.Up,
+        STAKE_NONCE,
+        stakeFingerprint(SAVED, TradeMode.Real),
+      );
+
+      it('trades the saved real stake, not the demo one', async () => {
+        const { press, createIntent } = setup({
+          readTradingAccess: savedAccess,
+          createIntent: () => Promise.resolve(realView),
+        });
+        await press(SAVED_STAKE);
+        expect(createIntent.mock.calls[0]?.[0]).toMatchObject({
+          mode: TradeMode.Real,
+          amount: SAVED,
+        });
+      });
+
+      it('refuses a real button drawn at the minimum and creates nothing', async () => {
+        const { press, calls, createIntent } = setup({ readTradingAccess: savedAccess });
+        await press(REAL_STAKE);
+        expect(createIntent).not.toHaveBeenCalled();
+        expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.stakeAmountChanged.value);
+      });
+
+      it('answers insufficient_balance with the real text and the real picker', async () => {
+        const { press, calls, logger } = setup({
+          readTradingAccess: savedAccess,
+          createIntent: () =>
+            Promise.reject(httpError(409, TradeIntentErrorCode.InsufficientBalance)),
+        });
+        await press(SAVED_STAKE);
+        const sent = payloadOf(calls, 'sendMessage');
+        expect(sent?.text).toBe(TEXTS.stakeAboveAvailableReal.value);
+        expect(rowsOf(sent)).toEqual([
+          [
+            button(
+              LABELS.stakeMenuButton,
+              stakeMenuCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
+            ),
+          ],
+        ]);
+        expect(warnings(logger)).toEqual([]);
+      });
     });
 
     it('answers real_mode_off with its text and the way back, and logs nothing', async () => {

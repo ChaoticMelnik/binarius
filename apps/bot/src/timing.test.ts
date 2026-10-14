@@ -162,7 +162,7 @@ interface Branch {
   readSession?: BackendClient['readSession'];
   stopSession?: BackendClient['stopSession'];
   stopSessions?: BackendClient['stopSessions'];
-  setDemoStake?: BackendClient['setDemoStake'];
+  setStake?: BackendClient['setStake'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -305,10 +305,10 @@ async function observe(branch: Branch): Promise<Calls> {
     },
     setNotificationLevel: (telegramUserId, level) => {
       backend += 1;
-      return (branch.setNotificationLevel ?? (() => Promise.resolve({ level, demoStake: null })))(
-        telegramUserId,
-        level,
-      );
+      return (
+        branch.setNotificationLevel ??
+        (() => Promise.resolve({ level, demoStake: null, realStake: null }))
+      )(telegramUserId, level);
     },
     readTradingAccess: (telegramUserId) => {
       backend += 1;
@@ -355,10 +355,11 @@ async function observe(branch: Branch): Promise<Calls> {
       backend += 1;
       return (branch.stopSessions ?? (() => Promise.resolve([STOPPED_SESSION])))(telegramUserId);
     },
-    setDemoStake: (telegramUserId, amount) => {
+    setStake: (telegramUserId, mode, amount) => {
       backend += 1;
-      return (branch.setDemoStake ?? ((_id, saved) => Promise.resolve({ saved })))(
+      return (branch.setStake ?? ((_id, _mode, saved) => Promise.resolve({ saved })))(
         telegramUserId,
+        mode,
         amount,
       );
     },
@@ -2204,17 +2205,17 @@ const stakeRefused = () =>
       error: 'stake_below_minimum' as const,
       limits: {
         minTradeAmount: decimalStringSchema.parse('10'),
-        demoAvailable: decimalStringSchema.parse('100'),
+        available: decimalStringSchema.parse('100'),
         scale: 2,
       },
     },
   });
 const SAVE_EXTRA: [string, Partial<Branch>][] = [
-  ['the stake is refused with its limits', { setDemoStake: stakeRefused }],
-  ['the outcome is unknown', { setDemoStake: unreachable }],
+  ['the stake is refused with its limits', { setStake: stakeRefused }],
+  ['the outcome is unknown', { setStake: unreachable }],
 ];
-const STAKE_OPEN = pickerBranches('stk:o:s', 1, {
-  forged: 'stk:o:a:0:15',
+const STAKE_OPEN = pickerBranches('stk:o:r:s', 1, {
+  forged: 'stk:o:d:a:0:15',
   extra: [
     ['the access read fails', { readTradingAccess: unreachable }],
     [
@@ -2237,15 +2238,15 @@ const LAUNCH_SAVE_EXTRA = (elsewhere: string): [string, Partial<Branch>][] => [
     { update: callbackUpdate(elsewhere), expected: { backend: 1, telegram: 2 } },
   ],
 ];
-const STAKE_PRESET = pickerBranches(`stk:s:5:p:${PAIR_EURUSD.id}:15`, 3, {
-  forged: 'stk:s:0:s',
-  extra: LAUNCH_SAVE_EXTRA('stk:s:5:s'),
+const STAKE_PRESET = pickerBranches(`stk:s:5:d:p:${PAIR_EURUSD.id}:15`, 3, {
+  forged: 'stk:s:0:d:s',
+  extra: LAUNCH_SAVE_EXTRA('stk:s:5:r:s'),
 });
-const STAKE_RESET = pickerBranches(`stk:z:p:${PAIR_EURUSD.id}:15`, 3, {
-  forged: 'stk:z:a:0:15',
-  extra: LAUNCH_SAVE_EXTRA('stk:z:s'),
+const STAKE_RESET = pickerBranches(`stk:z:r:p:${PAIR_EURUSD.id}:15`, 3, {
+  forged: 'stk:z:r:a:0:15',
+  extra: LAUNCH_SAVE_EXTRA('stk:z:d:s'),
 });
-const STAKE_CUSTOM = pickerBranches('stk:c:s', 0, { forged: 'stk:c:a:0:15' });
+const STAKE_CUSTOM = pickerBranches('stk:c:r:s', 0, { forged: 'stk:c:d:a:0:15' });
 const SETTINGS_SHOW = pickerBranches('settings', 1, {
   extra: [
     ['the read fails', { recordStart: unreachable }],
@@ -2256,7 +2257,11 @@ const SETTINGS_SHOW = pickerBranches('settings', 1, {
   ],
 });
 
-const ON_STAKE_STEP: LoginDialogState = { step: 'stake', origin: { kind: 'settings' } };
+const ON_STAKE_STEP: LoginDialogState = {
+  step: 'stake',
+  mode: TradeMode.Real,
+  origin: { kind: 'settings' },
+};
 const stakeText = (label: string, text: string, expected: Calls, patch: Partial<Branch> = {}) => ({
   label,
   update: textUpdate(text),
@@ -2266,6 +2271,7 @@ const stakeText = (label: string, text: string, expected: Calls, patch: Partial<
 });
 const ON_LAUNCH_STAKE_STEP: LoginDialogState = {
   step: 'stake',
+  mode: TradeMode.Demo,
   origin: { kind: 'pair', assetId: PAIR_EURUSD.id, durationSec: 15 },
 };
 const STAKE_TEXT_WORST_CASE: Branch = stakeText(
@@ -2276,7 +2282,7 @@ const STAKE_TEXT_WORST_CASE: Branch = stakeText(
 );
 const STAKE_TEXT_BRANCHES: readonly Branch[] = [
   stakeText('the text is not an amount', 'abc', { backend: 0, telegram: 1 }),
-  stakeText('the save fails', '5', { backend: 1, telegram: 1 }, { setDemoStake: unreachable }),
+  stakeText('the save fails', '5', { backend: 1, telegram: 1 }, { setStake: unreachable }),
   stakeText('the typed stake is saved', '5', { backend: 1, telegram: 1 }),
   STAKE_TEXT_WORST_CASE,
 ];
@@ -2338,6 +2344,11 @@ const LEGACY_DURATION_BRANCHES: Branch[] = [
   {
     label: 'a launch picker datum from before #382',
     update: callbackUpdate('stk:o:p:101'),
+    expected: { backend: 0, telegram: 2 },
+  },
+  {
+    label: 'a picker datum without a mode, from before #326',
+    update: callbackUpdate('stk:o:s'),
     expected: { backend: 0, telegram: 2 },
   },
   {

@@ -791,13 +791,16 @@ describe('trade_intents', () => {
   });
 });
 
-describe('users.demo_stake (#297)', () => {
+describe.each([
+  ['demo_stake', 'demoStake', 'users_demo_stake_check'],
+  ['real_stake', 'realStake', 'users_real_stake_check'],
+] as const)('users.%s (#297, #326)', (_column, field, constraint) => {
   it.each([['0'], ['-1'], ['NaN'], ['0.000000001']])('rejects %s', async (value) => {
     await rolledBack(async (tx) => {
       await rejectsWith(
-        tx.insert(users).values({ telegramUserId: 990_101n, demoStake: value as DecimalString }),
+        tx.insert(users).values({ telegramUserId: 990_101n, [field]: value as DecimalString }),
         '23514',
-        'users_demo_stake_check',
+        constraint,
       );
     });
   });
@@ -806,9 +809,9 @@ describe('users.demo_stake (#297)', () => {
     await rolledBack(async (tx) => {
       const [row] = await tx
         .insert(users)
-        .values({ telegramUserId: 990_102n, demoStake: value as DecimalString | null })
-        .returning({ demoStake: users.demoStake });
-      expect(row?.demoStake ?? null).toBe(value === null ? null : value);
+        .values({ telegramUserId: 990_102n, [field]: value as DecimalString | null })
+        .returning({ stake: users[field] });
+      expect(row?.stake ?? null).toBe(value === null ? null : value);
     });
   });
 
@@ -817,8 +820,8 @@ describe('users.demo_stake (#297)', () => {
       const [row] = await tx
         .insert(users)
         .values({ telegramUserId: 990_103n })
-        .returning({ demoStake: users.demoStake });
-      expect(row?.demoStake).toBeNull();
+        .returning({ stake: users[field] });
+      expect(row?.stake).toBeNull();
     });
   });
 });

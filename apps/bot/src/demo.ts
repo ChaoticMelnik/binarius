@@ -108,10 +108,11 @@ export const demoAnalysisCallbackData = (assetId: number, durationSec: DemoDurat
 // the demo disclaimer, nor a demo one under the real. The longest,
 // `demo:more:2147483647:15:down:n:r`, is 32 bytes.
 const ANALYSIS_MORE_PREFIX = 'demo:more:';
-const MODE_TOKENS = { [TradeMode.Demo]: 'd', [TradeMode.Real]: 'r' } as const satisfies Record<
-  TradeMode,
-  string
->;
+// also the stake picker's mode segment (#326, stake-picker.ts)
+export const MODE_TOKENS = {
+  [TradeMode.Demo]: 'd',
+  [TradeMode.Real]: 'r',
+} as const satisfies Record<TradeMode, string>;
 export const analysisMoreCallbackData = (
   assetId: number,
   durationSec: DemoDurationSec,
@@ -149,25 +150,30 @@ export const stakeFingerprint = (amount: DecimalString | null, mode: TradeMode):
     )
     .digest('hex')
     .slice(0, 6);
-// The amount a stake press trades: in real mode always the broker's minimum (#121, owner's
-// decision 8); in demo the saved demo stake, or the broker's minimum without one (#297). null when
-// access has no broker snapshot to say it.
+// The amount a stake press trades in the user's mode: the saved stake of that mode, or the
+// broker's minimum without one (#297 demo, #326 real). null when access has no broker snapshot
+// to say it.
 export const effectiveStake = (
-  access: Pick<TradingAccessResponse, 'broker' | 'demoStake' | 'tradingMode'>,
+  access: Pick<TradingAccessResponse, 'broker' | 'demoStake' | 'realStake' | 'tradingMode'>,
 ): DecimalString | null =>
   access.broker === null
     ? null
-    : access.tradingMode === TradeMode.Real
-      ? access.broker.minTradeAmount
-      : (access.demoStake ?? access.broker.minTradeAmount);
+    : ((access.tradingMode === TradeMode.Real ? access.realStake : access.demoStake) ??
+      access.broker.minTradeAmount);
 // «💵 Сумма» beside the stake button, and under the stake refusals: the picker (stake-picker.ts)
-// opened from the analysis, whose way back is that analysis
+// of that mode opened from the analysis, whose way back is that analysis
 export const STAKE_PICKER_PREFIX = 'stk:';
-export const stakeMenuCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
-  `${STAKE_PICKER_PREFIX}o:a:${assetId}:${durationSec}`;
+export const stakeMenuCallbackData = (
+  mode: TradeMode,
+  assetId: number,
+  durationSec: DemoDurationSec,
+): string => `${STAKE_PICKER_PREFIX}o:${MODE_TOKENS[mode]}:a:${assetId}:${durationSec}`;
 // the launch screen's «💵 Изменить ставку»: the picker whose way back is that launch screen
-export const launchStakeCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
-  `${STAKE_PICKER_PREFIX}o:p:${assetId}:${durationSec}`;
+export const launchStakeCallbackData = (
+  mode: TradeMode,
+  assetId: number,
+  durationSec: DemoDurationSec,
+): string => `${STAKE_PICKER_PREFIX}o:${MODE_TOKENS[mode]}:p:${assetId}:${durationSec}`;
 // The session button (#284, trading-session.ts) of the analysis screen, of a finished single trade
 // (#360, demo-trade.ts) and of the launch screen (#320). No nonce, by the owner's
 // decision: an old button starts a new session once the previous one has ended, and while one is
@@ -448,7 +454,7 @@ export function launchScreen({
   firstName: string;
   symbol: string | null;
   amount: DecimalString | null;
-  saved?: { amount: DecimalString | null };
+  saved?: { amount: DecimalString | null; mode: TradeMode };
   mode?: TradeMode;
 }): DemoScreen {
   const text = launchText({
@@ -474,7 +480,8 @@ export function launchScreen({
     keyboard: new InlineKeyboard()
       .text(LABELS.launchCycleButton, sessionStartCallbackData(assetId, durationSec))
       .row()
-      .text(LABELS.stakeChangeButton, launchStakeCallbackData(assetId, durationSec))
+      // the cycle's stake: cycles are demo only (#121)
+      .text(LABELS.stakeChangeButton, launchStakeCallbackData(TradeMode.Demo, assetId, durationSec))
       .row()
       .text(LABELS.backToListButton, demoSignalsCallbackData(durationSec)),
   };
@@ -791,9 +798,9 @@ export function createDemoComposer<C extends Context>({
     return appendAnalysisTail(keyboard, assetId, durationSec);
   }
 
-  // What «➕ Ещё» draws in place of the collapsed keyboard: the stake row joins it. In real mode
-  // (#121) the stake button alone, at the broker's minimum and marked REAL: no session row (cycles
-  // are demo only, #327) and no «💵 Сумма» (the amount is fixed, #326).
+  // What «➕ Ещё» draws in place of the collapsed keyboard: the stake row joins it, with «💵 Сумма»
+  // opening the picker of the same mode (#326). In real mode (#121) the stake button is marked REAL
+  // and there is no session row (cycles are demo only, #327).
   function expandedKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
@@ -810,13 +817,14 @@ export function createDemoComposer<C extends Context>({
       stakeFingerprint(amount, mode),
     );
     const label = stakeButtonLabel(action, amount, mode);
-    const keyboard =
+    const keyboard = (
       mode === TradeMode.Real
-        ? new InlineKeyboard().text(label, stakeData).row()
+        ? new InlineKeyboard()
         : appendSessionRow(new InlineKeyboard(), assetId, durationSec, payoutAccepted)
-            .text(label, stakeData)
-            .text(LABELS.stakeMenuButton, stakeMenuCallbackData(assetId, durationSec))
-            .row();
+    )
+      .text(label, stakeData)
+      .text(LABELS.stakeMenuButton, stakeMenuCallbackData(mode, assetId, durationSec))
+      .row();
     return appendAnalysisTail(keyboard, assetId, durationSec);
   }
 

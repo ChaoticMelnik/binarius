@@ -41,7 +41,7 @@ import {
   createTradeIntent,
   markIntentAccepted,
   openTrading,
-  setDemoStake,
+  setStake,
   setTradingMode,
   settleIntent,
   stopTrading,
@@ -558,9 +558,14 @@ describe('POST /trading/sessions', () => {
     );
   });
 
-  it('R16 takes the saved demo stake and widens the scale (#297)', async () => {
+  it("R16 takes the saved demo stake on the minimum's grid (#297)", async () => {
     const seed = await seedReady();
-    await setDemoStake(tmp.db, BigInt(seed.telegramUserId), decimalStringSchema.parse('2.50'));
+    await setStake(
+      tmp.db,
+      BigInt(seed.telegramUserId),
+      TradeMode.Demo,
+      decimalStringSchema.parse('2.50'),
+    );
     const response = await start(appWith(), bodyFor(seed));
     expect(response.statusCode).toBe(201);
     expect(sessionOf(response).settings?.stake).toEqual({ baseStake: '2.5', stakeScale: 2 });
@@ -568,11 +573,16 @@ describe('POST /trading/sessions', () => {
 
   it.each([
     ['0.5', 'stake_below_minimum'],
-    ['10000.01', 'insufficient_demo_balance'],
+    ['10000.01', 'insufficient_balance'],
     ['1.001', 'stake_precision'],
   ])('R17 a saved stake of %s is 409 %s and writes no session (#297)', async (stake, error) => {
     const seed = await seedReady();
-    await setDemoStake(tmp.db, BigInt(seed.telegramUserId), decimalStringSchema.parse(stake));
+    await setStake(
+      tmp.db,
+      BigInt(seed.telegramUserId),
+      TradeMode.Demo,
+      decimalStringSchema.parse(stake),
+    );
     const before = await sessionCount();
     await expectRefusal(await start(appWith(), bodyFor(seed)), 409, error, before);
   });
@@ -588,12 +598,7 @@ describe('POST /trading/sessions', () => {
       requested: false,
     });
     const before = await sessionCount();
-    await expectRefusal(
-      await start(appWith(), bodyFor(seed)),
-      409,
-      'insufficient_demo_balance',
-      before,
-    );
+    await expectRefusal(await start(appWith(), bodyFor(seed)), 409, 'insufficient_balance', before);
   });
 
   it('R13 a closed trading switch is 409 trading_paused before any broker call', async () => {

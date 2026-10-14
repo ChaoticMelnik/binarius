@@ -27,7 +27,7 @@ import {
 import {
   brokerBalanceSnapshots,
   openTrading,
-  setDemoStake,
+  setStake,
   setTradingMode,
   tokenLedger,
   tradingSwitch,
@@ -160,6 +160,7 @@ describe('POST /trading/access', () => {
       'broker',
       'brokerUnavailable',
       'demoStake',
+      'realStake',
       'status',
       'tokens',
       'tradingMode',
@@ -174,6 +175,7 @@ describe('POST /trading/access', () => {
       brokerUnavailable: 'broker_unavailable',
       tradingOpen: true,
       demoStake: null,
+      realStake: null,
       tradingMode: 'demo',
     });
     expect(safeParseTradingAccessResponse(body).success).toBe(true);
@@ -200,6 +202,7 @@ describe('POST /trading/access', () => {
       brokerUnavailable: 'no_account',
       tradingOpen: true,
       demoStake: null,
+      realStake: null,
       tradingMode: 'demo',
     });
   });
@@ -279,18 +282,24 @@ describe('POST /trading/access → broker', () => {
       brokerUnavailable: 'no_account',
       tradingOpen: true,
       demoStake: null,
+      realStake: null,
       tradingMode: 'demo',
     });
     expect(userGets()).toBe(0);
   });
 
-  it('answers the saved demo stake canonically, null without one (#297)', async () => {
+  it('answers each saved stake canonically, null without one (#297, #326)', async () => {
     const user = await seedUser(tmp.db, { balance: 4n });
     const ask = async () =>
-      (await access({ telegramUserId: user.telegramUserId })).json() as { demoStake: unknown };
-    expect((await ask()).demoStake).toBeNull();
-    await setDemoStake(tmp.db, BigInt(user.telegramUserId), '2.50' as DecimalString);
-    expect((await ask()).demoStake).toBe('2.5');
+      (await access({ telegramUserId: user.telegramUserId })).json() as {
+        demoStake: unknown;
+        realStake: unknown;
+      };
+    expect(await ask()).toMatchObject({ demoStake: null, realStake: null });
+    await setStake(tmp.db, BigInt(user.telegramUserId), TradeMode.Demo, '2.50' as DecimalString);
+    expect(await ask()).toMatchObject({ demoStake: '2.5', realStake: null });
+    await setStake(tmp.db, BigInt(user.telegramUserId), TradeMode.Real, '7.000' as DecimalString);
+    expect(await ask()).toMatchObject({ demoStake: '2.5', realStake: '7' });
   });
 
   // the user's users.trading_mode (#121), not a constant

@@ -63,6 +63,8 @@ export const userStartViewSchema = z.object({
   notificationLevel: notificationLevelSchema,
   // the saved demo stake, canonical; null = the broker's minimum at each trade (#297)
   demoStake: decimalStringSchema.nullable(),
+  // the saved real stake, the same way (#326)
+  realStake: decimalStringSchema.nullable(),
 });
 export type UserStartView = z.infer<typeof userStartViewSchema>;
 
@@ -105,10 +107,11 @@ export const notificationLevelRequestSchema = z.object({
 });
 export type NotificationLevelRequest = z.infer<typeof notificationLevelRequestSchema>;
 
-// demoStake: /settings re-renders its stake line from this answer (#297)
+// demoStake, realStake: /settings re-renders its two stake lines from this answer (#297, #326)
 export const notificationLevelResponseSchema = z.object({
   level: notificationLevelSchema,
   demoStake: decimalStringSchema.nullable(),
+  realStake: decimalStringSchema.nullable(),
 });
 export type NotificationLevelResponse = z.infer<typeof notificationLevelResponseSchema>;
 

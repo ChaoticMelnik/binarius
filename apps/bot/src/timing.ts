@@ -94,7 +94,7 @@ export const HANDLER_CALLS = {
   // outcome, then sendMessage; a fingerprint mismatch (#297) sends one message instead
   stake: { backend: 4, telegram: 2 },
   // the stake picker (#297, stake-picker.ts) opened, a preset and the reset: answerCallbackQuery
-  // ∥ readTradingAccess or setDemoStake — counted as sequential — then, after a save opened from
+  // ∥ readTradingAccess or setStake — counted as sequential — then, after a save opened from
   // a launch screen, readPairs for its symbol (#320) ∥ readTradingAccess for the mode (#121) —
   // counted the same way — then editMessageText refused as gone → sendMessage
   stakePickerOpen: { backend: 1, telegram: 3 },
@@ -102,7 +102,7 @@ export const HANDLER_CALLS = {
   stakeReset: { backend: 3, telegram: 3 },
   // «✏️ Своя сумма»: answerCallbackQuery, then the prompt's edit refused as gone → sendMessage
   stakeCustom: { backend: 0, telegram: 3 },
-  // a text on the stake step: setDemoStake, readPairs ∥ readTradingAccess after a save opened
+  // a text on the stake step: setStake, readPairs ∥ readTradingAccess after a save opened
   // from a launch screen (#121), then sendMessage
   stakeText: { backend: 3, telegram: 1 },
   // the picker's way back to /settings: answerCallbackQuery ∥ recordStart — counted as

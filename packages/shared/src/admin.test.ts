@@ -375,6 +375,7 @@ describe('admin read responses', () => {
     telegramBlockedAt: AT,
     notificationLevel: 'all',
     demoStake: '1.5',
+    realStake: '2.5',
     tokens: { balance: '5', reserved: '2', available: '3' },
     createdAt: AT,
     updatedAt: AT,
@@ -412,6 +413,7 @@ describe('admin read responses', () => {
       acquiredAt: null,
       telegramBlockedAt: null,
       demoStake: null,
+      realStake: null,
     };
     const fresh = {
       ...account,
@@ -1249,6 +1251,7 @@ describe('token adjustment contracts (#246)', () => {
     telegramBlockedAt: null,
     notificationLevel: 'all',
     demoStake: null,
+    realStake: null,
     tokens: { balance: '5', reserved: '0', available: '5' },
     createdAt: AT,
     updatedAt: AT,

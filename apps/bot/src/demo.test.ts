@@ -27,6 +27,7 @@ import {
   DEMO_SIGNALS_CALLBACK_DATA,
   demoLaunchCallbackData,
   demoSignalsCallbackData,
+  effectiveStake,
   launchStakeCallbackData,
   demoAnalysisCallbackData,
   demoAssetCallbackData,
@@ -554,7 +555,7 @@ describe('the launch screen', () => {
   const LAUNCH = demoLaunchCallbackData(PAIR_EURUSD.id, 15);
   const LAUNCH_ROWS = [
     [button(LABELS.launchCycleButton, sessionStartCallbackData(PAIR_EURUSD.id, 15))],
-    [button(LABELS.stakeChangeButton, launchStakeCallbackData(PAIR_EURUSD.id, 15))],
+    [button(LABELS.stakeChangeButton, launchStakeCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15))],
     [button(LABELS.backToListButton, demoSignalsCallbackData(15))],
   ];
 
@@ -605,7 +606,7 @@ describe('the launch screen', () => {
     const edited = payloadOf(calls, 'editMessageText');
     expect(rowsOf(edited)).toEqual([
       [button(LABELS.launchCycleButton, `demo:sess:${String(PAIR_EURUSD.id)}:5`)],
-      [button(LABELS.stakeChangeButton, `stk:o:p:${String(PAIR_EURUSD.id)}:5`)],
+      [button(LABELS.stakeChangeButton, `stk:o:d:p:${String(PAIR_EURUSD.id)}:5`)],
       [button(LABELS.backToListButton, 'demo:sig:5')],
     ]);
     expect(
@@ -767,7 +768,12 @@ describe('the launch screen', () => {
 
       expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
         [button(LABELS.launchCycleButton, sessionStartCallbackData(PAIR_EURUSD.id, durationSec))],
-        [button(LABELS.stakeChangeButton, launchStakeCallbackData(PAIR_EURUSD.id, durationSec))],
+        [
+          button(
+            LABELS.stakeChangeButton,
+            launchStakeCallbackData(TradeMode.Demo, PAIR_EURUSD.id, durationSec),
+          ),
+        ],
         [button(LABELS.backToListButton, demoSignalsCallbackData(durationSec))],
       ]);
     },
@@ -784,7 +790,7 @@ describe('the launch screen', () => {
   it('keeps its data inside the Bot API 64 bytes', () => {
     const MAX_ID = 2_147_483_647;
     expect(Buffer.byteLength(demoLaunchCallbackData(MAX_ID, 15))).toBe(20);
-    expect(Buffer.byteLength(launchStakeCallbackData(MAX_ID, 15))).toBe(21);
+    expect(Buffer.byteLength(launchStakeCallbackData(TradeMode.Real, MAX_ID, 15))).toBe(23);
     expect(Buffer.byteLength(demoSignalsCallbackData(15))).toBe(11);
     expect(Buffer.byteLength(DEMO_SIGNALS_CALLBACK_DATA)).toBe(8);
   });
@@ -1577,7 +1583,10 @@ describe('«➕ Ещё» under the analysis', () => {
   const DATA = analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Demo);
   const REPEAT = button(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
   const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 5));
-  const STAKE_MENU = button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5));
+  const STAKE_MENU = button(
+    LABELS.stakeMenuButton,
+    stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
+  );
   const expandedOf = (calls: readonly ApiCall[]) =>
     calls.filter((call) => call.method === 'editMessageReplyMarkup');
   const stakeRowOf = (calls: readonly ApiCall[]) => rowsOf(expandedOf(calls).at(-1)?.payload)[1];
@@ -1617,29 +1626,44 @@ describe('«➕ Ещё» under the analysis', () => {
     expect(evaluateSignal).not.toHaveBeenCalled();
   });
 
-  // #121: the single real trade at the broker's minimum, marked REAL, alone in its row; no
-  // session row and no «💵 Сумма»
-  it('draws a user in real mode the REAL stake button at the minimum and nothing else', async () => {
-    const { press, calls } = setup({
-      readTradingAccess: () =>
-        Promise.resolve(
-          accessView({
-            tradingMode: TradeMode.Real,
-            demoStake: decimalStringSchema.parse('2.5'),
-          }),
-        ),
-    });
-    await press(analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Real));
-    const rows = rowsOf(expandedOf(calls).at(-1)?.payload);
-    const [[stake], ...rest] = rows;
-    expect(rows[0]).toHaveLength(1);
-    expect(stake?.text).toBe(stakeButtonLabel(TradeAction.Up, '1.00000000', TradeMode.Real));
-    expect(stake?.text).toBe('🚀 Открыть сделку: ⬆️ Вверх · $1.00 · REAL');
-    expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(
-      stakeFingerprint(decimalStringSchema.parse('1'), TradeMode.Real),
-    );
-    expect(rest).toEqual([[REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
-  });
+  // #121: the single real trade, marked REAL; no session row (cycles are demo only). #326: at the
+  // saved real stake, with «💵 Сумма» opening the real picker
+  it.each([
+    ['the minimum without a saved real stake', null, '1.00000000', '$1.00'],
+    ['the saved real stake', decimalStringSchema.parse('5'), '5', '$5.00'],
+  ])(
+    'draws a user in real mode the REAL stake button at %s and «💵 Сумма» of the real mode',
+    async (_case, realStake, amount, shown) => {
+      const { press, calls } = setup({
+        readTradingAccess: () =>
+          Promise.resolve(
+            accessView({
+              tradingMode: TradeMode.Real,
+              demoStake: decimalStringSchema.parse('2.5'),
+              realStake,
+            }),
+          ),
+      });
+      await press(
+        analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Real),
+      );
+      const rows = rowsOf(expandedOf(calls).at(-1)?.payload);
+      const [[stake, menu], ...rest] = rows;
+      expect(rows[0]).toHaveLength(2);
+      expect(stake?.text).toBe(
+        stakeButtonLabel(TradeAction.Up, decimalStringSchema.parse(amount), TradeMode.Real),
+      );
+      expect(stake?.text).toBe(`🚀 Открыть сделку: ⬆️ Вверх · ${shown} · REAL`);
+      expect(stakeOf(stake?.callback_data)?.fingerprint).toBe(
+        stakeFingerprint(decimalStringSchema.parse(amount), TradeMode.Real),
+      );
+      expect(menu).toEqual(
+        button(LABELS.stakeMenuButton, stakeMenuCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5)),
+      );
+      expect(menu?.callback_data).toBe(`stk:o:r:a:${PAIR_EURUSD.id}:5`);
+      expect(rest).toEqual([[REPEAT], [BACK_EURUSD_DURATIONS, BACK_GROUPS]]);
+    },
+  );
 
   it('draws the direction the button carries', async () => {
     const { press, calls } = setup();
@@ -2164,5 +2188,26 @@ describe('a press under the session card (a photo)', () => {
     expect(sent?.text).toBe(edited?.text);
     expect(sent?.reply_markup).toEqual(edited?.reply_markup);
     expect(evaluateSignal).not.toHaveBeenCalled();
+  });
+});
+
+// #297, #326: the amount a stake press trades, in the user's mode
+describe('effectiveStake', () => {
+  const d = (value: string) => decimalStringSchema.parse(value);
+  const saved = { demoStake: d('2.5'), realStake: d('7') };
+
+  it.each([
+    [TradeMode.Demo, saved, '2.5'],
+    [TradeMode.Real, saved, '7'],
+    [TradeMode.Demo, { demoStake: null, realStake: d('7') }, '1.00000000'],
+    [TradeMode.Real, { demoStake: d('2.5'), realStake: null }, '1.00000000'],
+  ])('in %s mode with %o trades %s', (tradingMode, stakes, amount) => {
+    expect(effectiveStake(accessView({ tradingMode, ...stakes }))).toBe(amount);
+  });
+
+  it('is null without a broker snapshot', () => {
+    expect(
+      effectiveStake(accessView({ tradingMode: TradeMode.Real, ...saved, broker: null })),
+    ).toBeNull();
   });
 });

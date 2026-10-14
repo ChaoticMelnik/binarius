@@ -3,6 +3,7 @@ import type { ApiError } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   TradeIntentStatus,
+  TradeMode,
   TradingSessionErrorCode,
   TradingSessionStatus,
   TradingSessionStopReason,
@@ -200,7 +201,7 @@ const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
 // a failed read of the session, after the refresh or the stop: its refresh, never the stop again
 const SESSION_REFRESH_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)], MENU_ROW];
 const STAKE_MENU_ROWS = [
-  [button(LABELS.stakeMenuButton, stakeMenuCallbackData(PAIR_EURUSD.id, 5))],
+  [button(LABELS.stakeMenuButton, stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5))],
 ];
 const EDIT_GONE: ApiError = {
   ok: false,
@@ -308,11 +309,11 @@ describe('the session button', () => {
     for (const code of [
       TradingSessionErrorCode.StakePrecision,
       TradingSessionErrorCode.StakeBelowMinimum,
-      TradingSessionErrorCode.InsufficientDemoBalance,
+      TradingSessionErrorCode.InsufficientBalance,
     ]) {
       expect(START_REFUSALS[code], code).toMatchObject({ stakeMenu: true });
     }
-    expect(STAKE_MENU_ROWS[0]?.[0]?.callback_data).toMatch(/^stk:o:a:\d+:\d+$/);
+    expect(STAKE_MENU_ROWS[0]?.[0]?.callback_data).toMatch(/^stk:o:d:a:\d+:\d+$/);
   });
 
   // #379: an old analysis message or «🔁 Ещё сессия» on a pair whose payout fell below the floor

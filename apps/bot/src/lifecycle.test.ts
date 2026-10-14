@@ -753,7 +753,7 @@ function scene(options: SceneOptions = {}) {
     stopSession: () => Promise.reject(new Error('not used by these scenes')),
     claimSessionSummary: () => Promise.reject(new Error('not used by these scenes')),
     stopSessions: () => Promise.reject(new Error('not used by these scenes')),
-    setDemoStake: () => Promise.reject(new Error('not used by these scenes')),
+    setStake: () => Promise.reject(new Error('not used by these scenes')),
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
   };
   const bot = createBot({

@@ -85,17 +85,33 @@ export async function setNotificationLevel(
   telegramUserId: bigint,
   level: NotificationLevel,
 ): Promise<
-  { level: NotificationLevel; demoStake: DecimalString | null; canceledJobs: number } | undefined
+  | {
+      level: NotificationLevel;
+      demoStake: DecimalString | null;
+      realStake: DecimalString | null;
+      canceledJobs: number;
+    }
+  | undefined
 > {
   return db.transaction(async (tx) => {
     const [row] = await tx
       .update(users)
       .set({ notificationLevel: level })
       .where(eq(users.telegramUserId, telegramUserId))
-      .returning({ id: users.id, level: users.notificationLevel, demoStake: users.demoStake });
+      .returning({
+        id: users.id,
+        level: users.notificationLevel,
+        demoStake: users.demoStake,
+        realStake: users.realStake,
+      });
     if (row === undefined) return undefined;
     const canceledJobs =
       level === NotificationLevel.Off ? await cancelPendingNotificationJobs(tx, row.id) : 0;
-    return { level: row.level, demoStake: canonicalStake(row.demoStake), canceledJobs };
+    return {
+      level: row.level,
+      demoStake: canonicalStake(row.demoStake),
+      realStake: canonicalStake(row.realStake),
+      canceledJobs,
+    };
   });
 }

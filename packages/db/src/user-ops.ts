@@ -28,6 +28,7 @@ export type UserStartRow = Pick<
   | 'acquiredAt'
   | 'notificationLevel'
   | 'demoStake'
+  | 'realStake'
 >;
 
 export interface RecordUserStartInput {
@@ -90,6 +91,7 @@ export async function recordUserStart(
         acquiredAt: users.acquiredAt,
         notificationLevel: users.notificationLevel,
         demoStake: users.demoStake,
+        realStake: users.realStake,
         // PostgreSQL 18: `old` is NULL exactly when the upsert inserted the row
         inserted: sql<boolean>`old.id is null`,
       });
@@ -169,6 +171,7 @@ export function toUserStartView(
     })),
     notificationLevel: row.notificationLevel,
     demoStake: canonicalStake(row.demoStake),
+    realStake: canonicalStake(row.realStake),
   };
 }
 
@@ -176,34 +179,39 @@ export function toUserStartView(
 export const canonicalStake = (value: DecimalString | null): DecimalString | null =>
   value === null ? null : decimalStringSchema.parse(normalizeDecimal(value));
 
-// The user's demo stake (#297), the only writer of users.demo_stake: one autocommit UPDATE of
-// the users row, no other table and no lock beyond the row's own, so the lock order is untouched.
-// The bounds are the caller's (POST /trading/demo-stake, checkDemoStake); the column's CHECK only
-// refuses a value <= 0. users.status is not read: the stake is a preference, and a blocked
-// user's trades are refused at creation. No users row → undefined.
-export async function setDemoStake(
+// The user's stake of one mode (#297 demo, #326 real), the only writer of users.demo_stake and
+// users.real_stake: one autocommit UPDATE of the users row, no other table and no lock beyond the
+// row's own, so the lock order is untouched. The bounds are the caller's (POST /trading/stake,
+// checkStake); the column's CHECK only refuses a value <= 0. users.status and
+// users.trading_mode are not read: the stake is a preference, and a blocked user's trades are
+// refused at creation. No users row → undefined.
+export async function setStake(
   db: Db,
   telegramUserId: bigint,
+  mode: TradeMode,
   amount: DecimalString | null,
-): Promise<{ demoStake: DecimalString | null } | undefined> {
+): Promise<{ mode: TradeMode; stake: DecimalString | null } | undefined> {
+  const column = mode === TradeMode.Real ? users.realStake : users.demoStake;
   const [row] = await db
     .update(users)
-    .set({ demoStake: amount })
+    .set(mode === TradeMode.Real ? { realStake: amount } : { demoStake: amount })
     .where(eq(users.telegramUserId, telegramUserId))
-    .returning({ demoStake: users.demoStake });
-  return row === undefined ? undefined : { demoStake: canonicalStake(row.demoStake) };
+    .returning({ stake: column });
+  return row === undefined ? undefined : { mode, stake: canonicalStake(row.stake) };
 }
 
 // canonical; null = the broker's minimum; undefined = no users row
-export async function readDemoStake(
+export async function readStakes(
   db: Db,
   telegramUserId: bigint,
-): Promise<DecimalString | null | undefined> {
+): Promise<{ demoStake: DecimalString | null; realStake: DecimalString | null } | undefined> {
   const [row] = await db
-    .select({ demoStake: users.demoStake })
+    .select({ demoStake: users.demoStake, realStake: users.realStake })
     .from(users)
     .where(eq(users.telegramUserId, telegramUserId));
-  return row === undefined ? undefined : canonicalStake(row.demoStake);
+  return row === undefined
+    ? undefined
+    : { demoStake: canonicalStake(row.demoStake), realStake: canonicalStake(row.realStake) };
 }
 
 export interface SetTradingModeResult {

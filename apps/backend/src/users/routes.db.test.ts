@@ -164,6 +164,7 @@ describe('POST /users/start', () => {
         pendingBrokerAccounts: [],
         notificationLevel: NotificationLevel.All,
         demoStake: null,
+        realStake: null,
       },
     });
   });
@@ -443,7 +444,7 @@ describe('POST /users/notification-level', () => {
 
     const off = await postLevel({ telegramUserId, level: NotificationLevel.Off });
     expect(off.statusCode).toBe(200);
-    expect(off.json()).toEqual({ level: NotificationLevel.Off, demoStake: null });
+    expect(off.json()).toEqual({ level: NotificationLevel.Off, demoStake: null, realStake: null });
     expect(await levelOf(telegramUserId)).toBe(NotificationLevel.Off);
     const [after] = await tmp.db
       .select({ status: notificationJobs.status })
@@ -452,13 +453,17 @@ describe('POST /users/notification-level', () => {
     expect(after?.status).toBe(NotificationJobStatus.Canceled);
 
     const reduced = await postLevel({ telegramUserId, level: NotificationLevel.Reduced });
-    expect(reduced.json()).toEqual({ level: NotificationLevel.Reduced, demoStake: null });
+    expect(reduced.json()).toEqual({
+      level: NotificationLevel.Reduced,
+      demoStake: null,
+      realStake: null,
+    });
     expect((await post(body(telegramUserId))).json().user).toMatchObject({
       notificationLevel: NotificationLevel.Reduced,
     });
 
     const all = await postLevel({ telegramUserId, level: NotificationLevel.All });
-    expect(all.json()).toEqual({ level: NotificationLevel.All, demoStake: null });
+    expect(all.json()).toEqual({ level: NotificationLevel.All, demoStake: null, realStake: null });
     expect(await levelOf(telegramUserId)).toBe(NotificationLevel.All);
   });
 
@@ -582,6 +587,7 @@ describe('POST /users/referral', () => {
         pendingBrokerAccounts: [],
         notificationLevel: NotificationLevel.All,
         demoStake: null,
+        realStake: null,
       },
     });
     expect((await postReferral({ telegramUserId: inviterId })).json()).toEqual({

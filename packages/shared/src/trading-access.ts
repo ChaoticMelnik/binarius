@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { brokerBalanceUnavailableReasonSchema, brokerBalanceViewSchema } from './broker-balance';
-import { DemoStakeRefusal } from './demo-stake';
 import { decimalStringSchema } from './money';
+import { StakeRefusal } from './stake';
 import {
   telegramUserIdSchema,
   tokenCountSchema,
@@ -52,6 +52,8 @@ export const tradingAccessResponseSchema = z
     tradingOpen: z.boolean(),
     // the user's saved demo stake, canonical; null = the broker's minimum (#297)
     demoStake: decimalStringSchema.nullable(),
+    // the user's saved real stake, canonical; null = the broker's minimum (#326)
+    realStake: decimalStringSchema.nullable(),
     // users.trading_mode (#121): the mode the user's next single trade goes in
     tradingMode: tradeModeSchema,
   })
@@ -65,49 +67,50 @@ export const safeParseTradingAccessRequest = (input: unknown) =>
 export const safeParseTradingAccessResponse = (input: unknown) =>
   tradingAccessResponseSchema.safeParse(input);
 
-// POST /trading/demo-stake (#297): save the user's demo stake, checked against the account's
-// stored balance snapshot; null resets it to the broker's minimum and is never refused.
-export const DEMO_STAKE_PATH = '/trading/demo-stake';
+// POST /trading/stake (#297 demo, #326 real): save the user's stake of one mode, checked against
+// that mode's balance in the account's stored snapshot; null resets it to the broker's minimum
+// and is never refused.
+export const STAKE_PATH = '/trading/stake';
 
-export const setDemoStakeRequestSchema = z.strictObject({
+export const setStakeRequestSchema = z.strictObject({
   telegramUserId: telegramUserIdSchema,
+  mode: tradeModeSchema,
   amount: tradeAmountSchema.nullable(),
 });
-export type SetDemoStakeRequest = z.infer<typeof setDemoStakeRequestSchema>;
+export type SetStakeRequest = z.infer<typeof setStakeRequestSchema>;
 
-export const setDemoStakeResponseSchema = z.strictObject({
-  demoStake: decimalStringSchema.nullable(),
+export const setStakeResponseSchema = z.strictObject({
+  mode: tradeModeSchema,
+  stake: decimalStringSchema.nullable(),
 });
-export type SetDemoStakeResponse = z.infer<typeof setDemoStakeResponseSchema>;
+export type SetStakeResponse = z.infer<typeof setStakeResponseSchema>;
 
-export const DemoStakeErrorCode = {
-  ...DemoStakeRefusal,
+export const StakeErrorCode = {
+  ...StakeRefusal,
   UserNotFound: 'user_not_found',
   // no single account with a snapshot to check the stake against
   BalanceUnavailable: 'balance_unavailable',
 } as const;
-export type DemoStakeErrorCode = (typeof DemoStakeErrorCode)[keyof typeof DemoStakeErrorCode];
+export type StakeErrorCode = (typeof StakeErrorCode)[keyof typeof StakeErrorCode];
 
 // a bounds refusal carries the limits it was checked against, canonical, so the bot words it
-// with no second request
-export const demoStakeRefusalSchema = z.union([
+// with no second request; available is the balance of the request's mode
+export const stakeRefusalSchema = z.union([
   z.strictObject({
-    error: z.enum(DemoStakeRefusal),
+    error: z.enum(StakeRefusal),
     limits: z.strictObject({
       minTradeAmount: decimalStringSchema,
-      demoAvailable: decimalStringSchema,
+      available: decimalStringSchema,
       scale: z.int().min(0),
     }),
   }),
   z.strictObject({
-    error: z.enum([DemoStakeErrorCode.UserNotFound, DemoStakeErrorCode.BalanceUnavailable]),
+    error: z.enum([StakeErrorCode.UserNotFound, StakeErrorCode.BalanceUnavailable]),
   }),
 ]);
-export type DemoStakeRefusalBody = z.infer<typeof demoStakeRefusalSchema>;
+export type StakeRefusalBody = z.infer<typeof stakeRefusalSchema>;
 
-export const safeParseSetDemoStakeRequest = (input: unknown) =>
-  setDemoStakeRequestSchema.safeParse(input);
-export const safeParseSetDemoStakeResponse = (input: unknown) =>
-  setDemoStakeResponseSchema.safeParse(input);
-export const safeParseDemoStakeRefusal = (input: unknown) =>
-  demoStakeRefusalSchema.safeParse(input);
+export const safeParseSetStakeRequest = (input: unknown) => setStakeRequestSchema.safeParse(input);
+export const safeParseSetStakeResponse = (input: unknown) =>
+  setStakeResponseSchema.safeParse(input);
+export const safeParseStakeRefusal = (input: unknown) => stakeRefusalSchema.safeParse(input);
