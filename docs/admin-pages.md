@@ -95,7 +95,7 @@ The page prints that instant and the moment of the answer.
 it received. What writes `users.updated_at`:
 
 - `recordUserStart` — `/start` and `/settings` (`user-ops.ts`);
-- `setDemoStake` (`user-ops.ts`);
+- `setStake` (`user-ops.ts`), either mode's stake;
 - `markTelegramBlocked`, `markTelegramReachable`, `setNotificationLevel` (`delivery-ops.ts`);
 - the token reserve on a new intent (`createInTransaction`), `releaseTokens` and `consumeTokens` —
   the settlement of a trade, which the worker runs, trading sessions included
@@ -141,8 +141,8 @@ parameter.
 The `users` row and its `broker_accounts`, newest first. Sections:
 
 - **Основное** — Telegram id, name, language, status, acquisition source and time, since when the
-  bot cannot reach the user, notification level, demo stake (empty = «минимальная ставка
-  брокера»), created and updated. The card only shows the notification level and the blocked
+  bot cannot reach the user, notification level, demo stake and real stake (#326; each empty =
+  «минимальная ставка брокера»), created and updated. The card only shows the notification level and the blocked
   time; what decides a send is still `deliverable()` (Rule 19).
 - **Токены** — balance, reserved, available (`balance - reserved`, computed in `bigint`), and under
   them the «Корректировка» form (#246, its own section below).

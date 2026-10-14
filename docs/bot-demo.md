@@ -92,7 +92,7 @@ demo:more:<assetId>:<sec>:<up|down>:<s|n>     («➕ Ещё», #360; the floor's
   bot  → editMessageReplyMarkup: the keyboard expanded in place: the stake button and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>  (the stake button) → the trade, bot-demo-trade.md
 demo:sess:<assetId>:<sec>                     (the session button, «🚀 Запустить цикл», «🔁 Ещё сессия», the row under a finished trade) → the session, bot-session.md
-stk:o:p:<assetId>:<sec>                       («💵 Изменить ставку») → the picker, bot-demo-trade.md
+stk:o:d:p:<assetId>:<sec>                     («💵 Изменить ставку») → the demo picker, bot-demo-trade.md
 demo:d|an|stake|sess and stk:… with a <sec> of before #313 → the keyboard removed, nothing sent
 demo:l:<assetId> and stk:…:p:<assetId> from before #382 → the keyboard removed, nothing sent
 ```
@@ -198,8 +198,8 @@ the saved demo stake, or the broker's minimum). Three lines — «🎯 {symbol} 
 «💵 Ставка: $X», «🤖 Бот проведёт 5 сделок подряд…» — and three rows: «🚀 Запустить цикл»
 (`demo:sess:<assetId>:<sec>`, the session button's own data, so the start handler and its refusals
 are unchanged, [bot-session.md](bot-session.md#the-button)), «💵 Изменить ставку»
-(`stk:o:p:<assetId>:<sec>`, the picker whose way back is this screen,
-[bot-demo-trade.md](bot-demo-trade.md#the-stake-297)), «↩️ К списку» (`demo:sig:<sec>`). A failed access read draws «💵 Ставка: минимальная брокера» and logs
+(`stk:o:d:p:<assetId>:<sec>`, the demo picker whose way back is this screen,
+[bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)), «↩️ К списку» (`demo:sig:<sec>`). A failed access read draws «💵 Ставка: минимальная брокера» and logs
 `warn` `trading access not read for the stake label`; access's refusals (no account, blocked) are
 left to the start, which answers them. A pair refused by the check is the table below, as on the
 manual path; a pair whose payout fell below the floor since the list was drawn (`payout_too_low`,
@@ -227,7 +227,7 @@ check. A cycle's entries — the signals list, the launch and the analysis's ses
 | `pair_missing` | the id is not in the catalog (delisted, or forged data) | «❌ Этот актив больше не доступен…» + «↩️ Типы» |
 | `pair_closed` | `scheduledUntil > now` on the bot's clock | «🔒 {symbol} сейчас закрыт по расписанию…» + «↩️ Активы» + «↩️ Типы» |
 | `duration_unsupported` | the duration is not one of `DEMO_DURATIONS_SEC` (#125 review m5: it arrives from callback data), or is outside `[minTimeframe, maxTimeframe]` | «❌ Эта длительность не подходит для {symbol}…» + «↩️ Длительность» + «↩️ Типы» |
-| `payout_too_low` (`checkDemoCycle` only, #379) | the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80) | the launch, and the launch screen after a stake save (`pairPayoutAccepted` on the save's catalog, [bot-demo-trade.md](bot-demo-trade.md#the-stake-297)): `demoPayoutTooLow` + «↩️ К списку» + «🧭 Выбрать пару вручную»; the signals list: no button |
+| `payout_too_low` (`checkDemoCycle` only, #379) | the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80) | the launch, and the launch screen after a stake save (`pairPayoutAccepted` on the save's catalog, [bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)): `demoPayoutTooLow` + «↩️ К списку» + «🧭 Выбрать пару вручную»; the signals list: no button |
 
 «🔄 Повторить» carries the pressed data again, so a retry after `demo:d:…` lands on the summary
 once the catalog is back. A retry is always safe: nothing in the demo writes anything.
@@ -306,9 +306,10 @@ not a fresh catalog.
   cycle to refuse). A failed read draws the demo text and keyboard. «➕ Ещё» carries the mode the
   text was drawn in (`:d`/`:r`; a datum without it is from before #121 and reads as `d`); the
   expansion draws a stake button only when its own access read gives that mode, otherwise just
-  «🔄 Повторить анализ» and the way back. In real mode the expansion draws only «🚀 Открыть
-  сделку: ⬆️ Вверх · $1.00 · REAL» at the broker's minimum, its fingerprint over `real:<amount>`;
-  no «💵 Сумма». The launch screen in real mode has no stake line: `launchRealMode` with «📊 Анализ
+  «🔄 Повторить анализ» and the way back. In real mode the expansion draws «🚀 Открыть
+  сделку: ⬆️ Вверх · $1.00 · REAL» at the real stake in force (the saved real stake, the broker's
+  minimum without one, #326), its fingerprint over `real:<amount>`, and «💵 Сумма» of the real
+  picker (`stk:o:r:a:<assetId>:<sec>`), with no session row. The launch screen in real mode has no stake line: `launchRealMode` with «📊 Анализ
   пары» and «↩️ К списку», also on a pair below the cycle floor (real mode has no cycle).
 - **The shared screens** — the signals, the types, a type's pairs and the summary — read no mode,
   so their default texts hold in both (#121): «📡 Сигналы сейчас … Выбери пару.», «🧭 Выбор
@@ -400,9 +401,10 @@ every session button drawn before #379 does.
 **«➕ Ещё» (#360).** The press answers the query beside `POST /trading/access` and edits only the
 keyboard of the same message (`editMessageReplyMarkup`, no text): the session row stays first
 where the datum's token is `s`,
-then «🚀 Открыть сделку: ⬆️ Вверх · $5.00» and «💵 Сумма» (`stk:o:a:<assetId>:<sec>`) in one row,
-then the repeat and the way back. The label names the amount the press would trade, the saved demo
-stake or the broker's minimum (#297), read at this press; a failed read only drops the amount from
+then «🚀 Открыть сделку: ⬆️ Вверх · $5.00» and «💵 Сумма» (`stk:o:d:a:<assetId>:<sec>`, the picker
+of the expansion's mode, `r` in real mode, #326) in one row, then the repeat and the way back. The
+label names the amount the press would trade, the saved stake of the user's mode or the broker's
+minimum (#297, #326), read at this press; a failed read only drops the amount from
 the label (`warn` `trading access not read for the stake label`), and an access with no broker
 snapshot draws none either, with no log. The stake data is
 `demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>`, parsed with
@@ -413,7 +415,7 @@ button of a new expansion opens a new one — a double tap on «➕ Ещё» dra
 renders of «🔄 Повторить анализ» did before. The press is #127's
 ([bot-demo-trade.md](bot-demo-trade.md)); data the schema refuses
 (`demo:stake:0:60:up:0123456789ab`) only stops the spinner. The picker and the press's fingerprint
-check are in [bot-demo-trade.md → The stake](bot-demo-trade.md#the-stake-297).
+check are in [bot-demo-trade.md → The stake](bot-demo-trade.md#the-stake-297-326).
 
 The keyboard edit's refusals: «message is not modified» is done (`info`
 `the analysis keyboard already shows this`); «message to edit not found» / «can't be edited» (the same class as «there is no text in the message to edit», which a keyboard edit does not get: a photo's markup can be edited) sends
@@ -505,7 +507,7 @@ and the old-button line, which `demo.test.ts` and `bot.test.ts` read from the ha
   ([bot-demo-trade.md](bot-demo-trade.md#the-status-message)).
 - **#127** — the stake button's press, the intent and its status (`intent:` buttons):
   [bot-demo-trade.md](bot-demo-trade.md). It runs `readDemoTrade` again at the press, with the
-  saved demo stake or `broker.minTradeAmount` (#297).
+  saved stake of the user's mode or `broker.minTradeAmount` (#297, #326).
 - **#284** — the demo session of five trades in the bot: the button, status and stop
   ([bot-session.md](bot-session.md)); the worker half is shipped (#287,
   [trading-session.md](trading-session.md)).

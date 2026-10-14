@@ -2,7 +2,7 @@
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «➕ Ещё» on a signal; its
 press (#360) draws «🚀 Открыть сделку: ⬆️ Вверх · $1.00» in place, with «💵 Сумма» beside it
-([The stake](#the-stake-297)). Pressing it creates a demo intent through `POST /trading/intents`
+([The stake](#the-stake-297-326)). Pressing it creates a demo intent through `POST /trading/intents`
 ([trade-intent-transport.md](trade-intent-transport.md)) and sends one status message. The message
 follows the intent's real status, read through `GET /trading/intents/:id`. It never marks the trade
 open because the button was pressed: «✅ Сделка открыта у брокера.» comes only from `accepted`.
@@ -47,9 +47,9 @@ demo:more:<assetId>:<sec>:<up|down>:<s|n>   («➕ Ещё» under the analysis, 
   bot → editMessageReplyMarkup: the stake button (a new nonce, the amount's fingerprint) and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
   bot → answerCallbackQuery ∥ GET /trading/pairs (readDemoTrade) ∥ POST /trading/access
-  bot → POST /trading/intents { telegramUserId, mode: demo, assetId,
-                                amount: demoStake ?? broker.minTradeAmount, action, durationSec,
-                                clientRequestId: demo:<telegramUserId>:<nonce> }
+  bot → POST /trading/intents { telegramUserId, mode: tradingMode, assetId,
+                                amount: (demoStake | realStake by mode) ?? broker.minTradeAmount,
+                                action, durationSec, clientRequestId: <mode>:<telegramUserId>:<nonce> }
   bot → sendMessage: the status, with «🔄 Обновить статус» (intent:<id>)
   tracker: after 1 s, then every 3 s → GET /trading/intents/<id>?telegramUserId=<id>
            → editMessageText of that message when the status changes; on accepted, settled or
@@ -72,8 +72,9 @@ The checks run in this order, and the first one that fails answers:
    depends on the reason: `no_account` gets `accountNone` with the connect button,
    `ambiguous_account` gets `statusAmbiguous`, and any other reason gets
    «⏳ Баланс Binodex ещё не получен…».
-3. **The fingerprint.** The amount is the broker's `minTradeAmount` in real mode (#121), in demo
-   the user's saved demo stake (`access.demoStake`) or the broker's `minTradeAmount` without one,
+3. **The fingerprint.** The amount is the user's saved stake of the mode in effect
+   (`access.demoStake` in demo, `access.realStake` in real, #326) or the broker's
+   `minTradeAmount` without one,
    a string exactly as the backend sent it. The bot never computes it (Rule 2). The button
    carries the first 6 hex of `sha256` of the amount its label showed, prefixed by `real:` in real
    mode. When the amount or the mode in effect now has another fingerprint — the stake was saved
@@ -118,7 +119,7 @@ Every 4xx is answered before a row is committed, so a 4xx means nothing was crea
 | 409 `demo_only` | «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» (the backend runs `DEMO_ONLY`, #396; unreachable while the bot sends `demo`) |
 | 409 `balance_unavailable` | «⏳ Баланс Binodex ещё не получен…» (no snapshot to check the amount against) |
 | 409 `stake_below_minimum` | «⚠️ Минимальная ставка брокера сейчас $X…», X from this press's access read, + «💵 Сумма» |
-| 409 `insufficient_demo_balance` | «⚠️ На демо-счёте недостаточно средств для этой суммы…» + «💵 Сумма» |
+| 409 `insufficient_balance` | demo press: «⚠️ На демо-счёте недостаточно средств для этой суммы…»; real press: «⚠️ На реальном счёте недостаточно средств для этой суммы…» (the table's `real` override, #326); + «💵 Сумма» of the press's mode |
 | 409 `stake_precision` | «⚠️ В сумме слишком много знаков после запятой…» + «💵 Сумма» (the minimum's scale changed after the save) |
 | 404 `user_not_found`, 400 `validation`, any other 4xx | `unavailable`; `warn` `trade intent not created` |
 | 5xx, no answer, a broken 2xx body | the outcome is unknown: one more `createIntent` with the same key; if that also fails this way, «⚠️ Не удалось узнать, принята ли заявка…» and `warn` `trade intent not created` |
@@ -128,56 +129,67 @@ fails `tsc` in `demo-trade.ts`. A row with no button of its own gets «↩️ Н
 «🏠 В меню» (#350, [bot-navigation.md](bot-navigation.md)), `blocked` the support link: the press is
 a write, so it is never offered again; the same holds for the access read's refusals before it.
 
-## The stake (#297)
+## The stake (#297, #326)
 
-The user's demo stake is `users.demo_stake`: `NULL` means the broker's minimum at each trade,
-which is what every user had before. One stake serves the single trade and the session.
+The user has a stake of each mode: the demo stake `users.demo_stake` (#297) and the real stake
+`users.real_stake` (#326). `NULL` means the broker's minimum at each trade, which is what every
+user had before. The demo stake serves the single demo trade and the session; the real stake the
+single real trade (real sessions are #327). Either is a preference: it is saved in any trading
+mode, and a save reads no `DEMO_ONLY` ([trading-access.md](trading-access.md#post-tradingstake-297-326)).
+`effectiveStake` gives the amount a press trades in the user's mode: that mode's saved stake, or
+the broker's minimum without one.
 
-**The picker** (`stake-picker.ts`) opens from «💵 Сумма» beside the stake button (drawn by
-«➕ Ещё», #360), from «💵 Изменить»
-in /settings ([bot-menu.md](bot-menu.md)), from «💵 Изменить ставку» on the launch screen (#320,
-[bot-demo.md](bot-demo.md#the-launch-screen-320)) and from the stake refusals. It edits the message it was
-opened from:
+**The picker** (`stake-picker.ts`) is the picker of one mode, carried in its data, not of the
+user's trading mode. It opens from «💵 Сумма» beside the stake button (drawn by «➕ Ещё», #360,
+in the mode of the expansion: demo or REAL), from «💵 Демо» and «💼 Реал» in /settings
+([bot-menu.md](bot-menu.md)), from «💵 Изменить ставку» on the launch screen (#320, the demo
+cycle's stake, [bot-demo.md](bot-demo.md#the-launch-screen-320)) and from the stake refusals, in
+the refused press's mode. It edits the message it was opened from:
 
 ```text
-💵 Сумма демо-сделки
+💵 Сумма демо-сделки                  real: 💼 Сумма реальной сделки
 Сейчас: $5.00                         (or «минимальная ставка брокера ($1.00)»)
 Минимум брокера: $1.00
-Доступно: $9 990.00
-[$1.00] [$2.00] [$5.00 ✅] [$10.00]    minTradeAmount × 1, 2, 5, 10, only those <= available
+Доступно: $9 990.00                   real: Реальный баланс: $100.00
+[$1.00] [$2.00] [$5.00 ✅] [$10.00]    minTradeAmount × 1, 2, 5, 10, only those <= that balance
 [✏️ Своя сумма]
-[🔁 Минимальная брокера]               only while a stake is saved
+[🔁 Минимальная брокера]               only while that mode's stake is saved
 [↩️ Назад к анализу | ↩️ Назад к настройкам | ↩️ К запуску]
 ```
 
-The presets and the input syntax come from `packages/shared/src/demo-stake.ts`, bigint at scale 8.
-No preset fits → «На демо-счёте недостаточно средств даже для минимальной ставки.», custom and back
-only. An access refusal shows the stake press's texts (blocked, no account with the connect
-buttons, two accounts, no balance yet) with the way back.
+The presets and the input syntax come from `packages/shared/src/stake.ts`, bigint at scale 8; the
+picker puts `broker.real.available` or `broker.demo.available` into `available` by its mode.
+No preset fits → «На демо-счёте недостаточно средств даже для минимальной ставки.» (real: «На
+реальном счёте…»), custom and back only. An access refusal shows the stake press's texts
+(blocked, no account with the connect buttons, two accounts, no balance yet) with the way back, the
+same in both modes.
 
 | Callback (≤ 45 bytes) | Action |
 | --- | --- |
-| `stk:o:<origin>` | open: read access, edit to the picker; also ends a stake input step |
-| `stk:s:<amount>:<origin>` | a preset: save exactly this amount |
-| `stk:z:<origin>` | reset to the broker minimum (`amount: null`) |
-| `stk:c:<origin>` | custom: the input step, the prompt in place with «↩️ Назад» → `stk:o:<origin>` |
+| `stk:o:<m>:<origin>` | open: read access, edit to the picker of mode `<m>`; also ends a stake input step |
+| `stk:s:<amount>:<m>:<origin>` | a preset: save exactly this amount as the stake of `<m>` |
+| `stk:z:<m>:<origin>` | reset the stake of `<m>` to the broker minimum (`amount: null`) |
+| `stk:c:<m>:<origin>` | custom: the input step of `<m>`, the prompt in place with «↩️ Назад» → `stk:o:<m>:<origin>` |
+| `stk:o:<origin>`, `stk:s:<amount>:<origin>`, `stk:z:<origin>`, `stk:c:<origin>` | from before #326, no mode: the press removes the keyboard and saves nothing (`removeLegacyKeyboard`) |
 
-`<origin>` is `s` (/settings, way back `settings`), `a:<assetId>:<sec>` (way back
-`demo:an:<assetId>:<sec>`, a fresh analysis with a new nonce) or `p:<assetId>:<sec>` (#320, the
-launch screen, way back `demo:l:<assetId>:<sec>`; the duration since #382, and `p:<assetId>` from
-before it is a legacy origin whose press removes the keyboard). The longest datum is
-`stk:s:999999999999.99999999:a:2147483647:15`, 43 bytes, and the launch origin's is the same
-length. The three
-switches over the origin (`originData`, `backTo`, `savedScreen`) are exhaustive (`satisfies
-never`), so a fourth kind fails `tsc` until each of them handles it; the parser `stakeOriginOf` and
-the `PICKER` pattern are extended by hand.
+`<m>` is `d` (demo) or `r` (real), the tokens of `MODE_TOKENS` in `demo.ts`; anything else is
+forged and gets only the answer. `<origin>` is `s` (/settings, way back `settings`),
+`a:<assetId>:<sec>` (way back `demo:an:<assetId>:<sec>`, a fresh analysis with a new nonce) or
+`p:<assetId>:<sec>` (#320, the launch screen, way back `demo:l:<assetId>:<sec>`; the duration
+since #382, and `p:<assetId>` from before it is a legacy origin whose press removes the keyboard).
+The longest datum is `stk:s:999999999999.99999999:r:a:2147483647:15`, 45 bytes, and the launch
+origin's is the same length. The three switches over the origin (`originData`, `backTo`,
+`savedScreen`) are exhaustive (`satisfies never`), so a fourth kind fails `tsc` until each of them
+handles it; the parser `stakeOriginOf` and the `PICKER` pattern are extended by hand.
 
 **The return to the launch screen (#320).** A save opened from a launch screen (a preset, the
-reset or a typed amount) returns to that screen, not to «✅ Сумма»: «✅ Демо-ставка сохранена: $5.00»
-above the three lines, with «💵 Ставка» at the saved amount (after the reset, «минимальная брокера»)
-and the screen's three buttons. One read gives the symbol and the payout: `readPairs`, any
+reset or a typed amount) returns to that screen, not to «✅ Сумма»: the saved line in the saved
+stake's mode — «✅ Демо-ставка сохранена: $5.00», or «✅ Реальная ставка сохранена: $5.00» for a
+real save (#326) — above the three lines, with «💵 Ставка» at the demo stake (after the reset,
+«минимальная брокера») and the screen's three buttons; a user in real mode gets the real launch,
+whose amount is the real stake in force. One read gives the symbol and the payout: `readPairs`, any
 catalog, a stale one included, as the session start reads it. A pair in it paying below the cycle
-floor (`!pairPayoutAccepted`, #379) gets, under «✅ Демо-ставка сохранена», the launch press's refusal
+floor (`!pairPayoutAccepted`, #379) gets, under the saved line, the launch press's refusal
 `demoPayoutTooLow` with «↩️ К списку» and «🧭 Выбрать пару вручную» instead of «🚀 Запустить цикл»
 (`stake-picker.test.ts`, at 79 and 80 % on 15 and 5 s). Without a catalog the symbol line is
 dropped and `warn` `pairs not read for the launch screen` is logged; without a catalog or without
@@ -185,24 +197,29 @@ the pair in it the launch stays, since the start checks the pair itself. A prese
 refusal keeps the picker's texts with «💵 Сумма» and «↩️ К запуску», and reads no catalog.
 
 **The custom input** is a step of the login dialog store (`login-dialog.ts`): one entry per user,
-so the email login and the stake input replace each other. `parseDemoStakeInput` takes digits with
-one `,` or `.` («2,50», «1.5», «01.5» → `1.5`); «abc», «-5», «0», «1 000», «1e3» get «❌ Введи
-сумму числом…» and the step stays. A restart drops the step, as for the login. The result of a
-typed amount is a new message.
+so the email login and the stake input replace each other. The step carries the picker's mode, and
+the typed amount is saved in it. `parseStakeInput` takes digits with one `,` or `.` («2,50», «1.5»,
+«01.5» → `1.5`); «abc», «-5», «0», «1 000», «1e3» get «❌ Введи сумму числом…» and the step stays.
+A restart drops the step, as for the login. The result of a typed amount is a new message.
 
-**The save** is `POST /trading/demo-stake` ([trading-access.md](trading-access.md#post-tradingdemo-stake-297)).
-What its answer does:
+**The save** is `POST /trading/stake { mode }` ([trading-access.md](trading-access.md#post-tradingstake-297-326)),
+`BackendClient.setStake(telegramUserId, mode, amount)`. What its answer does (the real texts in
+brackets):
 
 | Answer | Source | Message | The input step |
 | --- | --- | --- | --- |
-| 200 | saved | «✅ Демо-ставка: $5.00» / «✅ Демо-ставка: минимальная ставка брокера» + back | ended |
+| 200 | saved | «✅ Демо-ставка: $5.00» («✅ Реальная ставка: $5.00») / «… минимальная ставка брокера» + back | ended |
 | 409 `stake_precision` | refused before the write | «❌ Не больше N знаков после запятой.» (`limits.scale`) + «💵 Сумма» + back | kept, TTL anew |
 | 409 `stake_below_minimum` | refused before the write | «⚠️ Минимальная ставка брокера сейчас $X…» + «💵 Сумма» + back | kept |
-| 409 `insufficient_demo_balance` | refused before the write | «⚠️ На демо-счёте доступно $Y…» + «💵 Сумма» + back | kept |
+| 409 `insufficient_balance` | refused before the write | «⚠️ На демо-счёте доступно $Y…» («⚠️ На реальном счёте доступно $Y…»), Y = `limits.available` + «💵 Сумма» + back | kept |
 | 409 `balance_unavailable` | refused before the write | «⏳ Баланс Binodex ещё не получен…» + back | kept |
-| 404 `user_not_found` | no users row | `unavailable`, `warn` `demo stake not saved` | ended |
-| 400 `validation`, any other 4xx | the bot's own bug | `unavailable`, `error` `demo stake not saved` | ended |
-| no answer, 5xx, a broken body | unknown: the UPDATE may have committed | «⚠️ Не удалось сохранить сумму…» + «💵 Сумма» + back, `warn` `demo stake save outcome unknown` | kept |
+| 404 `user_not_found` | no users row | `unavailable`, `warn` `stake not saved` | ended |
+| 400 `validation`, any other 4xx | the bot's own bug | `unavailable`, `error` `stake not saved` | ended |
+| no answer, 5xx, a broken body | unknown: the UPDATE may have committed | «⚠️ Не удалось сохранить сумму…» + «💵 Сумма» + back, `warn` `stake save outcome unknown` | kept |
+
+Both log lines carry the save's `mode` beside `err`, `backendStatus` and `backendReason`, never the
+amount or the Telegram id. A refusal names only the balance of its own mode (`limits.available`),
+so its precision text is a key of its own in real mode (`stakePrecisionDigitsReal`).
 
 The save overwrites with the same value, so a retry is harmless, and the picker's «Сейчас:» line
 shows what is saved. The bot never infers the saved state from a failure.
@@ -333,8 +350,8 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
 - `trade intent status not read` (with `intentId` when the tracker writes it)
 - `trading access not read for the stake label` (written by «➕ Ещё» since #360), `trading access
   not read for the stake picker`,
-  `demo stake save outcome unknown` (`warn`), `demo stake not saved` (`warn` for
-  `user_not_found`, `error` otherwise) — #297
+  `stake save outcome unknown` (`warn`), `stake not saved` (`warn` for
+  `user_not_found`, `error` otherwise), both with the save's `mode` — #297, #326
 - `pairs not read for the launch screen` (`warn`) — #320
 - `trade intent message not edited` (with `intentId` when the tracker writes it)
 
@@ -347,5 +364,5 @@ the amount or the nonce. `logging.test.ts` reads them back from the pino sink.
   tracker stops at `accepted`.
 - **#284** — the session of five in the bot: [bot-session.md](bot-session.md); its worker half is
   shipped (#287, [trading-session.md](trading-session.md)).
-- **#121** — real mode: the press trades in the user's mode, at the broker's minimum in real
-  ([trading-mode.md](trading-mode.md)); **#326** — the real stake.
+- **#121** — real mode: the press trades in the user's mode ([trading-mode.md](trading-mode.md));
+  **#326** — the real stake, the broker's minimum while none is saved; **#327** — real sessions.
