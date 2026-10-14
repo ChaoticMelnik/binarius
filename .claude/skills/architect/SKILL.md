@@ -27,7 +27,7 @@ Use the `/github` skill's "Read Issue + Comments" template — one filtered `gh 
 
 ### Step 2: Explore the codebase
 
-If CodeGraph is configured for this project (`~/.claude/CLAUDE.md` → CodeGraph): `codegraph_context`/`codegraph_search`/`codegraph_explore`/`codegraph_files`. Otherwise grep/read directly.
+CodeGraph first, always (`.claude/CLAUDE.md` → CodeGraph → «Приоритет — codegraph»): `codegraph_context` for the issue's area, then one `codegraph_explore` for the symbols it surfaces; `codegraph_search`/`codegraph_files` for the rest. grep/Read only for literal text, the two shapes codegraph loses, and code outside the indexed tree. The plan names the codegraph calls it rested on.
 
 **Scope rule:** cover the entire affected domain, not just explicitly mentioned entities. If the issue touches an architectural constraint, apply it to every entity in that domain — missed entities get caught at review, expensively.
 
@@ -38,7 +38,7 @@ For every function/symbol the issue mentions:
 codegraph_callers(<symbol>)   — who calls it, may need the same fix
 codegraph_impact(<symbol>)    — what breaks if this changes
 ```
-(Grep-based equivalents if CodeGraph isn't set up yet.)
+Then the grep cross-check the same section requires: `obj.method()` calls and functions passed by reference, which `codegraph_callers`/`codegraph_impact` can under-report down to zero (confirmed on `trade_intents`).
 
 Produce a domain coverage table:
 

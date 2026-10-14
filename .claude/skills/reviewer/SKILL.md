@@ -145,7 +145,7 @@ Either way: before moving to Done, confirm the merge actually happened — `gh p
 
 ### Step A: Understand the codebase structure
 
-`codegraph_context` if configured, otherwise a structured grep/read pass over the module layout — what domains exist (`apps/bot`, `apps/backend`, `apps/web`, `apps/trading-worker`, `packages/db`, `packages/shared`), key entry points, architecturally significant areas.
+`codegraph_context` first (`.claude/CLAUDE.md` → CodeGraph → «Приоритет — codegraph»), then grep/Read only for what it cannot answer — over the module layout — what domains exist (`apps/bot`, `apps/backend`, `apps/web`, `apps/trading-worker`, `packages/db`, `packages/shared`), key entry points, architecturally significant areas.
 
 ### Steps B-D: Security, code, simplification review
 
