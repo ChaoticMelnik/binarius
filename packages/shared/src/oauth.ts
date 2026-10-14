@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { idWireSchema, toId } from './ids';
-import { telegramUserIdSchema, tradeModeSchema, type TradeMode } from './trading';
+import { telegramUserIdSchema } from './trading';
 
 // --- Token responses ---------------------------------------------------------------------------
 // POST /v1/broker/user-auth/refresh answers with the pair alone; POST /v1/broker/oauth/token adds
@@ -78,37 +78,64 @@ export const safeParseBrokerEmailSendCodeResponse = (input: unknown) =>
   emailSendCodeResponseWireSchema.safeParse(input);
 
 // --- Widget session (POST /v1/broker/widget-sessions) -----------------------------------------
+// The broker's cashier widget (#11, docs/deposit.md). `mode` is the cashier's direction, not the
+// trading mode: the broker takes `deposit | withdraw`, and this project sends only `deposit`
+// (withdraw is out of scope, owner 2026-09-21). Contract from the broker's own cashier,
+// binodex/broker-web (src/app/api/widget-session/route.ts, src/lib/types.ts).
 
 export interface WidgetSessionRequest {
+  // the public origin of the page that embeds the widget
   origin: string;
-  mode: TradeMode;
+  mode: 'deposit';
+  userIp?: string;
 }
 
 export const widgetSessionRequestWireSchema = z.object({
   origin: z.string().min(1),
-  mode: tradeModeSchema,
+  mode: z.literal('deposit'),
+  user_ip: z.string().min(1).optional(),
 });
 export type WidgetSessionRequestWire = z.infer<typeof widgetSessionRequestWireSchema>;
 
 export function toWidgetSessionRequestWire(
   request: WidgetSessionRequest,
 ): WidgetSessionRequestWire {
-  return { origin: request.origin, mode: request.mode };
+  return {
+    origin: request.origin,
+    mode: request.mode,
+    ...(request.userIp === undefined ? {} : { user_ip: request.userIp }),
+  };
 }
 
+// null and absent mean the same: the field was not sent
 export const widgetSessionResponseWireSchema = z.looseObject({
   session: z.string().min(1),
-  expires_in: z.int().nonnegative(),
+  expires_in: z.int().positive(),
+  widget_url: z.string().min(1).nullish(),
+  widget_origin: z.string().min(1).nullish(),
+  region: z.string().min(1).nullish(),
 });
 export type WidgetSessionResponseWire = z.infer<typeof widgetSessionResponseWireSchema>;
 
 export interface WidgetSession {
   session: string;
   expiresInSec: number;
+  widgetUrl?: string;
+  widgetOrigin?: string;
+  region?: string;
 }
 
 export function toWidgetSession(wire: WidgetSessionResponseWire): WidgetSession {
-  return { session: wire.session, expiresInSec: wire.expires_in };
+  const widgetUrl = wire.widget_url ?? undefined;
+  const widgetOrigin = wire.widget_origin ?? undefined;
+  const region = wire.region ?? undefined;
+  return {
+    session: wire.session,
+    expiresInSec: wire.expires_in,
+    ...(widgetUrl === undefined ? {} : { widgetUrl }),
+    ...(widgetOrigin === undefined ? {} : { widgetOrigin }),
+    ...(region === undefined ? {} : { region }),
+  };
 }
 
 export const parseWidgetSessionResponse = (input: unknown): WidgetSession =>

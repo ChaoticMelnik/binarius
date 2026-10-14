@@ -17,6 +17,7 @@ export * from './admin';
 export * from './admin-trading';
 export * from './ledger';
 export * from './postback';
+export * from './deposit';
 export * from './audit';
 export * from './partner';
 export * from './socket';

@@ -23,6 +23,7 @@ import {
   safeParseRefreshTokenResponse,
   safeParseWidgetSessionResponse,
   toWidgetSessionRequestWire,
+  widgetSessionRequestWireSchema,
 } from './oauth';
 
 const tokenWire = {
@@ -110,23 +111,68 @@ describe('refresh token response', () => {
 });
 
 describe('Widget session', () => {
-  it('encodes the request and maps the response', () => {
-    expect(toWidgetSessionRequestWire({ origin: 'https://app.example', mode: 'real' })).toEqual({
-      origin: 'https://app.example',
-      mode: 'real',
-    });
-    expect(parseWidgetSessionResponse({ session: 's', expires_in: 60 })).toEqual({
+  it('encodes the request with the cashier direction and the optional user IP', () => {
+    expect(
+      toWidgetSessionRequestWire({ origin: 'https://app.example', mode: 'deposit' }),
+    ).toStrictEqual({ origin: 'https://app.example', mode: 'deposit' });
+    expect(
+      toWidgetSessionRequestWire({
+        origin: 'https://app.example',
+        mode: 'deposit',
+        userIp: '203.0.113.7',
+      }),
+    ).toStrictEqual({ origin: 'https://app.example', mode: 'deposit', user_ip: '203.0.113.7' });
+  });
+
+  it('refuses a trading mode or withdraw as the request mode', () => {
+    for (const mode of ['demo', 'real', 'withdraw']) {
+      expect(
+        widgetSessionRequestWireSchema.safeParse({ origin: 'https://app.example', mode }).success,
+      ).toBe(false);
+    }
+  });
+
+  it('maps the response, with the widget fields only when the broker sent them', () => {
+    expect(parseWidgetSessionResponse({ session: 's', expires_in: 60 })).toStrictEqual({
       session: 's',
       expiresInSec: 60,
     });
+    expect(
+      parseWidgetSessionResponse({
+        session: 's',
+        expires_in: 60,
+        widget_url: null,
+        widget_origin: null,
+        region: null,
+      }),
+    ).toStrictEqual({ session: 's', expiresInSec: 60 });
+    expect(
+      parseWidgetSessionResponse({
+        session: 's',
+        expires_in: 60,
+        widget_url: 'https://pay.example/embed',
+        widget_origin: 'https://pay.example',
+        region: 'ru',
+      }),
+    ).toStrictEqual({
+      session: 's',
+      expiresInSec: 60,
+      widgetUrl: 'https://pay.example/embed',
+      widgetOrigin: 'https://pay.example',
+      region: 'ru',
+    });
   });
 
-  it.each([{ session: '', expires_in: 60 }, { session: 's' }, { session: 's', expires_in: 1.5 }])(
-    'rejects %j',
-    (value) => {
-      expect(safeParseWidgetSessionResponse(value).success).toBe(false);
-    },
-  );
+  it.each([
+    { session: '', expires_in: 60 },
+    { session: 's' },
+    { session: 's', expires_in: 1.5 },
+    { session: 's', expires_in: 0 },
+    { session: 's', expires_in: 60, widget_url: '' },
+    { session: 's', expires_in: 60, widget_origin: 7 },
+  ])('rejects %j', (value) => {
+    expect(safeParseWidgetSessionResponse(value).success).toBe(false);
+  });
 });
 
 describe('login flow contract (issue #9)', () => {
