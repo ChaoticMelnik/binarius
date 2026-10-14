@@ -1218,6 +1218,9 @@ describe('the analysis', () => {
       [REPEAT],
       [BACK_EURUSD_DURATIONS, BACK_GROUPS],
     ]);
+    expect(rowsOf(edits(calls).at(-1)?.payload)[0]?.[0]?.callback_data).toBe(
+      `real:sess:${String(PAIR_EURUSD.id)}:5`,
+    );
   });
 
   // Plan 5 (decision 26): the text speaks of the user's mode
