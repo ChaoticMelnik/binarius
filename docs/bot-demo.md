@@ -71,7 +71,7 @@ demo                      (the card's button)
 demo:sig                  («↩️ Длительность»; every old «🔄 Обновить», «↩️ К списку», «📡 К сигналам») → the same screen, edited in place
 demo:sig:<sec>            (a duration, «🔄 Обновить», «↩️ К списку», «📡 К сигналам»)
   bot  → answerCallbackQuery ∥ GET /trading/signals ∥ GET /trading/pairs
-  bot  → editMessageText: «Сигналы сейчас · ⏱ <sec> с», a pair with a signal a row, «🔄 Обновить», «↩️ Длительность», «🧭 Выбрать пару вручную»
+  bot  → editMessageText: «Сигналы сейчас · ⏱ <sec> с», the pairs with a signal two a row, «🔄 Обновить» «↩️ Длительность» in one row, «🧭 Выбрать пару вручную»
 demo:l:<assetId>:<sec>    (a pair of the list, «↩️ К запуску»)
   bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoCycle(<sec>) ∥ POST /trading/access
   bot  → editMessageText: the launch screen
@@ -167,10 +167,11 @@ in `PAIR_TYPE_GROUPS` order (💱 currencies first), a fill pair sits in its own
 inside a group the best payout comes first. Neither the route's order nor the catalog's matters
 (`demo.test.ts` → the choice of pairs, L1–L5). A pair that would be refused takes no place: its
 place goes to the next pair of its type. On `5s` the scanner covers at most 4 pairs a candle
-([signal.md → The scanner](signal.md#the-scanner-343)), so its list never fills. Each button is «EUR/USD OTC · ⬆️ · 85%» (`demo:l:<assetId>:<sec>`):
+([signal.md → The scanner](signal.md#the-scanner-343)), so its list never fills. Each button is «EUR/USD OTC ⬆️ 85%» (`demo:l:<assetId>:<sec>`):
 the symbol, the scanner's direction as an arrow (a data mark like the payout, not a catalog text)
-and the payout; one per row, then «🔄 Обновить» (`demo:sig:<sec>`), «↩️ Длительность» (`demo:sig`)
-and «🧭 Выбрать пару вручную» (`demo:g`), each in its own row.
+and the payout; two per row in the list's order, across the types, the last alone when their
+number is odd (#419); then «🔄 Обновить» (`demo:sig:<sec>`) and «↩️ Длительность» (`demo:sig`) in
+one row, and «🧭 Выбрать пару вручную» (`demo:g`) in its own.
 
 The list is a snapshot of the duration's candle that closed last: «Сигнал держится одну свечу
 (⏱ 15 с); перед каждой сделкой бот проверяет его заново». A press never reads the signal again — the session's
@@ -180,8 +181,8 @@ direction, since the session decides it per trade.
 
 | Outcome | What the bot shows |
 |---|---|
-| one or more pairs left after the join | `demoSignalsHeader` with the duration's label + up to 12 rows (`signalsShown`) + refresh + durations + manual |
-| none left (no signal, every one closed or delisted, the scanner's first candle after a start) | `demoSignalsEmpty` («📡 Для ⏱ 5 с сигналов сейчас нет — …») + refresh + durations + manual |
+| one or more pairs left after the join | `demoSignalsHeader` with the duration's label + up to 12 pairs two a row (`signalsShown`) + [refresh · durations] + manual |
+| none left (no signal, every one closed or delisted, the scanner's first candle after a start) | `demoSignalsEmpty` («📡 Для ⏱ 5 с сигналов сейчас нет — …») + [refresh · durations] + manual |
 | the catalog's three failures ([The check](#the-check)) | that row's text + «🔄 Повторить» (the pressed data) + manual; a stale catalog draws no list |
 | `readSignals` threw (unreachable, a non-2xx, a broken body) | «⚠️ Сервис временно недоступен…» + «🔄 Повторить» + manual; `warn` `trading signals not read` |
 | the body has no list for the duration (a backend scanning other intervals: a deploy mismatch) | the same unavailable screen, never an empty list; `warn` `trading signals list missing` with `interval` |
@@ -275,7 +276,7 @@ not a fresh catalog.
   type with such pairs but none open shows «· 0» and its press says «🔒 {type}: сейчас всё закрыто
   по расписанию».
 - **Pairs.** `DEMO_PAGE_SIZE` = 12 open pairs, two per row, sorted by symbol in code-unit order
-  (ties by id), each «EUR/USD OTC · 85%» — the broker's symbol (it carries «OTC» itself) and its
+  (ties by id), each «EUR/USD OTC 85%» — the broker's symbol (it carries «OTC» itself) and its
   payout as it arrives. Then one row: «◀️» when a page before exists, «↩️ Типы», «▶️» when a page
   after exists. A page beyond the end (the catalog shrank) is the last page. Closed pairs are not
   listed.
@@ -284,9 +285,10 @@ not a fresh catalog.
   the two back buttons.
 - **Durations of the main path (#382).** «⏱ 15 с» and «⏱ 5 с» in one row, then «🧭 Выбрать пару
   вручную».
-- **Signals (#320).** A pair with a signal a row, then «🔄 Обновить», «↩️ Длительность» and
-  «🧭 Выбрать пару вручную»; the scanners scan 13 pairs at 15 s and 4 at 5 s by default, so at most
-  16 buttons (26 + 3 at the maximum ceiling; Telegram allows 100).
+- **Signals (#320).** The pairs with a signal two a row, the last alone when odd (#419); then
+  «🔄 Обновить» and «↩️ Длительность» in one row and «🧭 Выбрать пару вручную» in its own. At most
+  `SIGNALS_LIST_SIZE` = 12 pairs (#460) — 6 + 2 rows; at 5 s the scanner covers 4 pairs by
+  default — 2 + 2 (Telegram allows 100 buttons, 8 a row).
 - **Launch (#320).** «🚀 Запустить цикл», «💵 Изменить ставку», «↩️ К списку», one a row; each carries
   the duration. The screen is deleted after the start, once the session's status is sent (#418).
 - **Summary.** «📊 Анализ», then «↩️ Длительность» and «↩️ Типы».

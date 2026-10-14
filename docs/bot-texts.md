@@ -205,7 +205,8 @@ Data and identifiers, not texts (decision on the issue's plan, approved by the o
   the bot routes by them; only their descriptions are entries. The names and their order are
   `BOT_COMMANDS` in `packages/shared/src/bot-commands.ts`;
 - `MODE_LABELS` (DEMO/REAL), now in `bot-text-vars.ts` for `{mode}`;
-- `pairButtonLabel` («symbol · payout%») and `groupButtonLabel`'s ` · N`;
+- `pairButtonLabel` («symbol payout%»), `signalButtonLabel` («symbol ⬆️ payout%», #419) and
+  `groupButtonLabel`'s ` · N`;
 - the ` ✅` after the selected level (`currentLevelLabel`);
 - the fallback duration `⏱ N с` (`durationLabelOf`), `formatAge`'s `с`/`мин`, `formatUsd`'s `$`
   and digit grouping (`bot-text-format.ts`);
