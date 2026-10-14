@@ -23,6 +23,7 @@ import {
   type TempDatabase,
 } from '@binarius/db/testing';
 import { startMockBroker, type MockBroker } from '@binarius/mock-broker';
+import { until } from '@binarius/shared/testing';
 import { buildApp } from '../app';
 import { captureApi, callsTo, inlineButtons, sentPayload, unusedAdminDeps } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
@@ -471,7 +472,12 @@ describe('POST /deposit/credited', () => {
   it('K9 pushes once per user within the push interval, and again after it', async () => {
     const { push, captured: pushes } = recordedPush();
     const { balance } = stubBalance(() => Promise.resolve('ok'));
-    const stubbed = await extraApp({ balance, clientPush: push, pushMinIntervalMs: 300 });
+    const stubbed = await extraApp({
+      balance,
+      clientPush: push,
+      pushMinIntervalMs: 300,
+      creditedPerUserPerMinute: 1_000,
+    });
     const user = await payer();
     await seedBalanceSnapshot(tmp.db, user.accountId, { realAvailable: '100' });
 
@@ -480,8 +486,16 @@ describe('POST /deposit/credited', () => {
     expect(sendsTo(pushes.calls, user.telegramUserId)).toHaveLength(1);
     expect(sentPayload(pushes.calls, 'sendMessage')?.text).toContain(formatUsd('100'));
 
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    expectOutcome(await creditedFor(user.telegramUserId, stubbed), 'refreshed');
+    const started = Date.now();
+    await until(
+      'a push after the interval',
+      async () => {
+        expectOutcome(await creditedFor(user.telegramUserId, stubbed), 'refreshed');
+        return sendsTo(pushes.calls, user.telegramUserId).length > 1;
+      },
+      { intervalMs: 50 },
+    );
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
     expect(sendsTo(pushes.calls, user.telegramUserId)).toHaveLength(2);
   });
 
