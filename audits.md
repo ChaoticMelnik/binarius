@@ -3001,7 +3001,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 ## #460, #321, #121 — ночь manager 2026-10-10 и утренний разбор 2026-10-14
 
-Ночная сессия `/manager` 2026-10-10 23:44 – 11.10 07:44 (дедлайн). Архитекторы — на Opus с первого спавна: Fable 429 в 23:49. Codex — пропуски по лимиту до 14.10 07:45. Около 03:00 11.10 упёрлись в недельный лимит Opus: ревьюер круга 3 #121 упал, ничего не опубликовав, а главный контекст manager'а остановился. Финальный отчёт и `ended` записаны только 14.10 по «продолжай» владельца. Утренний разбор прошёл 14.10 (tech-lead): #469 (#464) владелец закрыл без мержа, так как постановка #464 заменена; остальные смержены. Отчёт ночи: https://claude.ai/artifact/4eL9ibQjXp81iuDhfXrRjS
+Ночная сессия `/manager` 2026-10-10 23:44 – 11.10 07:44 (дедлайн). Первый спавн архитектора на Fable упал на 429 в 23:49; его повтор и все следующие архитекторы — на Opus (замена 4). Codex — пропуски по лимиту до 14.10 07:45. Около 03:00 11.10 упёрлись в недельный лимит Opus: ревьюер круга 3 #121 упал, ничего не опубликовав, а главный контекст manager'а остановился. Финальный отчёт и `ended` записаны только 14.10 по «продолжай» владельца. Утренний разбор прошёл 14.10 (tech-lead): #469 (#464) владелец закрыл без мержа, так как постановка #464 заменена; остальные смержены. Отчёт ночи: https://claude.ai/artifact/4eL9ibQjXp81iuDhfXrRjS
 
 | Issue | PR | Review rounds | Added lines | Migration | Codex (final pass) | Remaining Minor |
 |------|----|-----------|---------|----------|--------------|-------------|
@@ -3014,7 +3014,7 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 
 | Role | Step | Result |
 |------|------|--------|
-| Manager | Phase 0 | The preflight did not show the Codex limit; the first run at 00:15 hit it (until 14.10). The shared test DB was 39 of 45 migrations behind, with foreign 0037/0038 records, so every phase ran on its own DB. |
+| Manager | Phase 0 | The preflight did not show the Codex limit; the first run at 00:15 hit it (until 14.10). The shared test DB was at 39 of 45 migrations, with foreign 0037/0038 records, so every phase ran on its own DB. |
 | Architect | #460, #464 | Plans on Opus; clarify answered by the manager (recommended options). |
 | Architect | #321 round 0 | A Plan Update of the 07.10 plan. Answer 2 was **not** the recommended one: the manager kept the owner's 07.10 `?start=share` rather than the referral link, and put the fork in the report. |
 | Implementer | #460 | Reverting mutations with `git checkout --` over uncommitted work wiped three files; they were restored and the checks re-run. |
