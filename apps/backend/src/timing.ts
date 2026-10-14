@@ -16,7 +16,10 @@ import {
   BROKER_BALANCE_SLA_MS,
   TRADING_ACCESS_BUDGET_MS,
 } from '@binarius/shared/broker-balance';
-import { DEPOSIT_WIDGET_SESSION_BUDGET_MS } from '@binarius/shared/deposit';
+import {
+  DEPOSIT_CREDITED_BUDGET_MS,
+  DEPOSIT_WIDGET_SESSION_BUDGET_MS,
+} from '@binarius/shared/deposit';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import {
   SIGNAL_CHART_INTERVAL_MS,
@@ -151,6 +154,12 @@ export const TRADING_ACCESS_REFRESH_BUDGET_MS = 3_000;
 // it ends before the REST client's own timeout and reads as aborted, not as the broker's outage.
 // The token exchange before it is bounded by BROKER_HTTP_TIMEOUT_MS.
 export const DEPOSIT_BROKER_CALL_BUDGET_MS = 3_000;
+
+// --- POST /deposit/credited (#112) --------------------------------------------------------------
+// docs/deposit.md -> After a deposit. How long the route waits for the balance refresh (its
+// signal); a flight it joined or started goes on by the reconciler's own rules. The push after it
+// is bounded by CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS.
+export const DEPOSIT_CREDITED_REFRESH_BUDGET_MS = 3_000;
 
 // --- POST /trading/signal (#258) ---------------------------------------------------------------
 // docs/signal.md -> Budgets. The one chart GET the route may wait for: the cache's own deadline on
@@ -302,6 +311,11 @@ export const TIMING_CHAIN_HOLDS =
   BROKER_HTTP_TIMEOUT_MS + DEPOSIT_BROKER_CALL_BUDGET_MS <= DEPOSIT_WIDGET_SESSION_BUDGET_MS &&
   DEPOSIT_BROKER_CALL_BUDGET_MS < BROKER_REST_TIMEOUT_MS &&
   DEPOSIT_WIDGET_SESSION_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the cashier's credited event (#112): the refresh the route waits for, then the push, inside the
+  // contract constant web sizes its forward above, and inside phase 1
+  DEPOSIT_CREDITED_REFRESH_BUDGET_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <=
+    DEPOSIT_CREDITED_BUDGET_MS &&
+  DEPOSIT_CREDITED_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // a load ends before the next one starts, and inside phase 1
   BOT_TEXTS_LOAD_BUDGET_MS < BOT_TEXTS_REFRESH_MS &&
   BOT_TEXTS_LOAD_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&

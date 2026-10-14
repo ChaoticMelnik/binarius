@@ -12,15 +12,16 @@ import {
 } from '@binarius/shared';
 import { resolveBalanceAccount, type Db } from '@binarius/db';
 import type { InitDataVerifier } from '../auth/telegram-init-data';
+import { registerDepositCredited, type DepositCreditedDeps } from './credited';
 import {
   depositErrorFor,
   mintDepositWidgetSession,
   type DepositWidgetDeps,
 } from './widget-session';
 
-// The ceiling on everything the public route accepts, taken before the body is parsed: what bounds
+// The ceiling on everything the public routes accept, taken before the body is parsed: what bounds
 // the work an anonymous request can trigger. A real cashier mints a session per open and per
-// reauth (#112), far below this.
+// reauth and sends a credited event per deposit (#112), far below this.
 const DEPOSIT_SESSION_MAX_PER_MINUTE = 600;
 // Per Telegram user, taken after initData and never given back: one session per 6 s on average,
 // above the widget's reauth cadence, below a loop.
@@ -28,7 +29,7 @@ const DEPOSIT_SESSION_PER_USER_PER_MINUTE = 10;
 const PER_USER_WINDOW_MS = 60_000;
 const PER_USER_MAX_KEYS = 10_000;
 
-export interface DepositRoutesDeps extends Omit<DepositWidgetDeps, 'logger'> {
+export interface DepositRoutesDeps extends Omit<DepositWidgetDeps, 'logger'>, DepositCreditedDeps {
   db: Db;
   // proves which Telegram user opened the cashier; its own max age (DEPOSIT_INIT_DATA_MAX_AGE_MS)
   initDataVerifier: InitDataVerifier;
@@ -39,7 +40,7 @@ export interface DepositRoutesDeps extends Omit<DepositWidgetDeps, 'logger'> {
   perUserPerMinute?: number;
 }
 
-// POST /deposit/widget-session (#11, docs/deposit.md). Public, like the OAuth callback: apps/web
+// POST /deposit/widget-session (#11, docs/deposit.md) and POST /deposit/credited (#112). Public, like the OAuth callback: apps/web
 // forwards it on the internal network without a bearer, and the signed initData is the whole
 // authorization. Not publicThroughProxy, so a request through Caddy gets the not-found answer.
 export const depositRoutes: FastifyPluginAsync<DepositRoutesDeps> = async (app, deps) => {
@@ -114,6 +115,8 @@ export const depositRoutes: FastifyPluginAsync<DepositRoutesDeps> = async (app, 
       return refuse(brokerSide(error) ? 502 : 409, error);
     },
   );
+
+  registerDepositCredited(app, deps);
 };
 
 const brokerSide = (error: DepositErrorCode): boolean =>

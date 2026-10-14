@@ -1418,13 +1418,18 @@ describe('the shared card caption (#321)', () => {
 // TEXTS and LABELS are views of the catalog that keep the names they had before it (#240): a
 // key added to them is a text or a label the bot never had under that name.
 describe('the facades over the catalog', () => {
-  it('gives TEXTS every html key of the catalog but the three it reaches through other entries and the reminders', () => {
+  it('gives TEXTS every html key of the catalog but the four it reaches through other entries or never sends, and the reminders', () => {
     const htmlKeys = (Object.keys(BOT_TEXT_CATALOG) as BotTextKey[]).filter(
       (key) => BOT_TEXT_CATALOG[key].kind === BotTextKind.Html,
     );
     expect(Object.keys(TEXTS).sort()).toEqual(
       htmlKeys
-        .filter((key) => !['cardGreetingNoName', 'featureLines', 'oauthLoginFailed'].includes(key))
+        .filter(
+          (key) =>
+            !['cardGreetingNoName', 'featureLines', 'oauthLoginFailed', 'depositCredited'].includes(
+              key,
+            ),
+        )
         .filter((key) => BOT_TEXT_CATALOG[key].group !== BotTextGroup.Mailing)
         .sort(),
     );

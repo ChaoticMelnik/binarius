@@ -229,6 +229,9 @@ const app = buildApp({
       botToken: env.telegramBotToken,
       maxAgeMs: DEPOSIT_INIT_DATA_MAX_AGE_MS,
     }),
+    // the reconciler is created after the app, as for trading
+    balance: { refresh: (accountId, options) => balanceReconciler.refresh(accountId, options) },
+    clientPush,
     demoOnly: env.demoOnly,
     webOrigin: env.webPublicUrl,
     platformOrigin: new URL(env.brokerOauthAuthorizeUrl).origin,

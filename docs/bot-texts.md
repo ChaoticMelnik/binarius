@@ -60,8 +60,10 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
   never escaped.
 - **group** — the screen or scenario the admin section lists it under: `start`, `card`,
   `account`, `menu`, `settings`, `support`, `help`, `demo`, `analysis`, `trade`, `session`,
-  `mailing`, `buttons`, `commands`, `profile`. `mailing` holds the texts only the backend's
-  mailing engine sends (#202), so the bot's `TEXTS` leaves the group out. `buttons` is exactly
+  `deposit`, `mailing`, `buttons`, `commands`, `profile`. `mailing` holds the texts only the
+  backend's mailing engine sends (#202), so the bot's `TEXTS` leaves the group out. `deposit`
+  holds the backend's push after a deposit in the cashier (`depositCredited`, #112), left out of
+  `TEXTS` by name. `buttons` is exactly
   the bot's `LABELS` buttons plus
   `confirmButtonNoEmail`, `commands` the `*Command` descriptions; a label shown on one screen
   only (the levels, the asset types, the durations, the directions) sits in that screen's group.
@@ -182,7 +184,7 @@ The bot's `texts.ts` and the backend's `auth/texts.ts` each hold a source, the c
 until `setBotTextSource` replaces it (the refresher does, every 30 s: [Loading](#loading)), and
 build their views over it.
 The bot's views keep the names they had before the catalog: `TEXTS` is every html key but
-`cardGreetingNoName`, `featureLines` and `oauthLoginFailed`, with `cardGreeting` falling back to
+`cardGreetingNoName`, `featureLines`, `oauthLoginFailed` and `depositCredited`, with `cardGreeting` falling back to
 `cardGreetingNoName` for a blank name; `LABELS` is the `buttons` and `commands` groups but
 `confirmButtonNoEmail`, with `confirmButton(email | null)`. The status card and the stake picker
 build their context once (`userContextOf` in `texts.ts`). Both bot and backend label the confirm button through

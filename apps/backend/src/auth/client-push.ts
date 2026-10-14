@@ -7,6 +7,7 @@ import {
   DEMO_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
   supportUrl,
+  type BotTextBalance,
   type TelegramHtml,
 } from '@binarius/shared';
 import { CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS } from '../timing';
@@ -73,6 +74,13 @@ export function linkPushMessage(outcome: LinkPushOutcome): ClientPushMessage {
   }
 }
 
+// After the cashier's credited event (#112, docs/deposit.md -> After a deposit): the real balance
+// from the snapshot the route has just written, never an amount from the widget, and the menu.
+export const depositCreditedMessage = (balance: BotTextBalance): ClientPushMessage => ({
+  text: CLIENT_TEXTS.depositCredited({ realBalance: balance }),
+  reply_markup: new InlineKeyboard().text(CLIENT_LABELS.menuButton, MENU_CALLBACK_DATA),
+});
+
 // A message the backend sends a Telegram user on its own: a link push, or a mailing
 // (apps/backend/src/mailing). It carries its next step, as every message of the bot does (#350,
 // docs/bot-navigation.md): the buttons are the bot's, built from bot-navigation.ts, so a press
@@ -85,9 +93,10 @@ export interface ClientPushMessage {
 export interface ClientPush {
   // the transport, exposed so tests can intercept it the way they do the staff bot's
   readonly api: Api;
-  // Both throw when Telegram refuses (GrammyError) or the transport fails or times out (HttpError).
+  // Each throws when Telegram refuses (GrammyError) or the transport fails or times out (HttpError).
   sendLink(telegramUserId: bigint, outcome: LinkPushOutcome): Promise<void>;
   sendMailing(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
+  sendDepositCredited(telegramUserId: bigint, balance: BotTextBalance): Promise<void>;
 }
 
 export interface CreateClientPushOptions {
@@ -121,5 +130,7 @@ export function createClientPush({
     api,
     sendLink: (telegramUserId, outcome) => send(telegramUserId, linkPushMessage(outcome)),
     sendMailing: send,
+    sendDepositCredited: (telegramUserId, balance) =>
+      send(telegramUserId, depositCreditedMessage(balance)),
   };
 }

@@ -13,7 +13,12 @@ import type { BrokerBalanceView } from './broker-balance';
 import type { PairsCatalogView, PairView } from './catalog';
 import type { DecimalString } from './money';
 import type { OAuthTokens, RefreshedTokens, WidgetSession, WidgetSessionRequest } from './oauth';
-import type { DepositWidgetSessionRequest, DepositWidgetSessionResponse } from './deposit';
+import type {
+  DepositCreditedRequest,
+  DepositCreditedResponse,
+  DepositWidgetSessionRequest,
+  DepositWidgetSessionResponse,
+} from './deposit';
 import type {
   PartnerErrorWire,
   PartnerPositions,
@@ -238,6 +243,8 @@ describe('contract coverage (issue #6)', () => {
       widgetUrl: string;
       widgetOrigin: string;
     }>();
+    expectTypeOf<DepositCreditedRequest>().toEqualTypeOf<{ initData: string }>();
+    expectTypeOf<DepositCreditedResponse>().toEqualTypeOf<{ outcome: 'refreshed' | 'pending' }>();
   });
 
   it('Broker trading DTOs', () => {

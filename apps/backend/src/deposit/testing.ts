@@ -3,7 +3,7 @@
 
 import type { DepositRoutesDeps } from './routes';
 
-// for suites that never call POST /deposit/widget-session
+// for suites that never call the deposit routes
 export const unusedDepositDeps = (): DepositRoutesDeps => ({
   db: {} as DepositRoutesDeps['db'],
   accessToken: () => {
@@ -16,6 +16,16 @@ export const unusedDepositDeps = (): DepositRoutesDeps => ({
   },
   initDataVerifier: {
     verify: () => {
+      throw new Error('the deposit route is not wired in this test');
+    },
+  },
+  balance: {
+    refresh: () => {
+      throw new Error('the deposit route is not wired in this test');
+    },
+  },
+  clientPush: {
+    sendDepositCredited: () => {
       throw new Error('the deposit route is not wired in this test');
     },
   },
