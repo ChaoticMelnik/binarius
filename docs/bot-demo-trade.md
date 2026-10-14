@@ -112,7 +112,7 @@ Every 4xx is answered before a row is committed, so a 4xx means nothing was crea
 | 409 `ambiguous_broker_account` | `statusAmbiguous` |
 | 409 `account_not_confirmed` | «⏳ Привязка Binodex ждёт подтверждения — открой /account.» |
 | 409 `account_halted` | «⛔ Торговля по аккаунту остановлена — напиши в поддержку: /support» |
-| 409 `insufficient_tokens` | «🪙 Не хватает токенов для сделки.» |
+| 409 `insufficient_tokens` | «🪙 Не хватает токенов для сделки.»; «⭐ Купить токены» (#117, [stars.md](stars.md)) above the way back |
 | 409 `active_intent_exists` | «⏳ Предыдущая сделка ещё не завершена…» |
 | 409 `client_request_id_conflict` | «⚠️ Эта кнопка уже использована…» (the same button with a changed amount; the fingerprint normally refuses it first) |
 | 409 `trading_paused` | «⏸ Торговля временно приостановлена, попробуйте позже.» (the global switch, [kill-switch.md](kill-switch.md)) |
