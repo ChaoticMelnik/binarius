@@ -32,6 +32,8 @@ const SECRET_KEYS = [
   'sessionToken',
   'x-staff-session',
   'cookie',
+  // the broker's cashier widget session (#11): it opens the user's deposit form while it lives
+  'session',
 ] as const;
 const MAX_DEPTH = 5;
 

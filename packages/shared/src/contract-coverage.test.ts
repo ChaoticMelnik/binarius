@@ -13,6 +13,7 @@ import type { BrokerBalanceView } from './broker-balance';
 import type { PairsCatalogView, PairView } from './catalog';
 import type { DecimalString } from './money';
 import type { OAuthTokens, RefreshedTokens, WidgetSession, WidgetSessionRequest } from './oauth';
+import type { DepositWidgetSessionRequest, DepositWidgetSessionResponse } from './deposit';
 import type {
   PartnerErrorWire,
   PartnerPositions,
@@ -215,8 +216,28 @@ describe('contract coverage (issue #6)', () => {
       expiresInSec: number;
     }>();
     expectTypeOf<RefreshedTokens>().not.toHaveProperty('user');
-    expectTypeOf<WidgetSessionRequest>().toEqualTypeOf<{ origin: string; mode: 'demo' | 'real' }>();
-    expectTypeOf<WidgetSession>().toEqualTypeOf<{ session: string; expiresInSec: number }>();
+    expectTypeOf<WidgetSessionRequest>().toEqualTypeOf<{
+      origin: string;
+      mode: 'deposit';
+      userIp?: string;
+    }>();
+    expectTypeOf<WidgetSession>().toEqualTypeOf<{
+      session: string;
+      expiresInSec: number;
+      widgetUrl?: string;
+      widgetOrigin?: string;
+      region?: string;
+    }>();
+    expectTypeOf<DepositWidgetSessionRequest>().toEqualTypeOf<{
+      initData: string;
+      clientIp?: string | undefined;
+    }>();
+    expectTypeOf<DepositWidgetSessionResponse>().toEqualTypeOf<{
+      session: string;
+      expiresInSec: number;
+      widgetUrl: string;
+      widgetOrigin: string;
+    }>();
   });
 
   it('Broker trading DTOs', () => {

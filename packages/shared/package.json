@@ -117,6 +117,10 @@
       "types": "./src/postback.ts",
       "default": "./src/postback.ts"
     },
+    "./deposit": {
+      "types": "./src/deposit.ts",
+      "default": "./src/deposit.ts"
+    },
     "./testing": {
       "types": "./src/testing.ts",
       "default": "./src/testing.ts"
