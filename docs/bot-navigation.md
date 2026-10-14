@@ -70,7 +70,7 @@ read (#115). `/start` and
 
 «🔄 Повторить» carries the pressed data again **only after a read**: a demo screen, the signals
 screen, the picker's way back to /settings, the trade's and the session's refresh. A press that
-writes — `demo:stake:`, `demo:sess:`, `session:stop:`, `confirm:`, `resend`, `stk:s:`, `stk:z:`,
+writes — `demo:stake:`, `demo:sess:`, `real:sess:` (#327), `session:stop:`, `confirm:`, `resend`, `stk:s:`, `stk:z:`,
 `level:` — never gets it: its failure leads back to where it was pressed (the analysis, the
 menu), so a lost answer never becomes a second trade or session. `testing.ts` → `captureApi` throws
 on any message whose «🔄 Повторить» carries one of those prefixes, in every scene of every bot test

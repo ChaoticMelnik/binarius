@@ -91,7 +91,7 @@ demo:more:<assetId>:<sec>:<up|down>:<s|n>     («➕ Ещё», #360; the floor's
   bot  → answerCallbackQuery ∥ POST /trading/access
   bot  → editMessageReplyMarkup: the keyboard expanded in place: the stake button and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>  (the stake button) → the trade, bot-demo-trade.md
-demo:sess:<assetId>:<sec>                     (the session button, «🚀 Запустить цикл», «🔁 Ещё сессия», the row under a finished trade) → the session, bot-session.md
+<mode>:sess:<assetId>:<sec>                   (the session button, «🚀 Запустить цикл», «🔁 Ещё сессия», the row under a finished trade; <mode> demo or real, #327) → the session, bot-session.md
 stk:o:d:p:<assetId>:<sec>                     («💵 Изменить ставку») → the demo picker, bot-demo-trade.md
 demo:d|an|stake|sess and stk:… with a <sec> of before #313 → the keyboard removed, nothing sent
 demo:l:<assetId> and stk:…:p:<assetId> from before #382 → the keyboard removed, nothing sent
@@ -121,7 +121,7 @@ optional: a button drawn between #360 and #379 has none and reads as `s` (below)
 
 **Old duration buttons (#313).** The set was 60/300/900/1800/3600 s before #313
 (`LEGACY_DEMO_DURATIONS_SEC`). Every shape that carries a duration — `demo:d`, `demo:an`,
-`demo:stake` with or without its fingerprint, `demo:sess`, and the picker's `stk:o|s|z|c` with an
+`demo:stake` with or without its fingerprint, `<mode>:sess`, and the picker's `stk:o|s|z|c` with an
 `a:<assetId>:<sec>` origin — has a legacy pattern built from the same builder over that list.
 Pressing one answers the query and removes the message's keyboard (`editMessageReplyMarkup` with
 no markup), so the old screen cannot be pressed again; no text is sent. A refused removal (the
@@ -193,12 +193,13 @@ missing or stale snapshot itself.
 ## The launch screen (#320)
 
 `demo:l:<assetId>:<sec>` reads the catalog and access together: `readDemoCycle(backend, assetId,
-sec, now)` on the catalog read at this press, and the amount the cycle trades (`effectiveStake`:
-the saved demo stake, or the broker's minimum). Three lines — «🎯 {symbol} · ⏱ {sec} с»,
-«💵 Ставка: $X», «🤖 Бот проведёт 5 сделок подряд…» — and three rows: «🚀 Запустить цикл»
-(`demo:sess:<assetId>:<sec>`, the session button's own data, so the start handler and its refusals
-are unchanged, [bot-session.md](bot-session.md#the-button)), «💵 Изменить ставку»
-(`stk:o:d:p:<assetId>:<sec>`, the demo picker whose way back is this screen,
+sec, now)` on the catalog read at this press, and the user's mode with the amount the cycle trades
+(`effectiveStake`: the saved stake of the user's mode, or the broker's minimum). Three lines —
+«🎯 {symbol} · ⏱ {sec} с», «💵 Ставка: $X», «🤖 Бот проведёт 5 сделок подряд…» — and three rows:
+«🚀 Запустить цикл» (`<mode>:sess:<assetId>:<sec>`, the session button's own data, so the start
+handler and its refusals are unchanged, [bot-session.md](bot-session.md#the-button)), «💵 Изменить
+ставку» (`stk:o:<d|r>:p:<assetId>:<sec>`, the picker of the user's mode whose way back is this
+screen,
 [bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)), «↩️ К списку» (`demo:sig:<sec>`). A failed access read draws «💵 Ставка: минимальная брокера» and logs
 `warn` `trading access not read for the stake label`; access's refusals (no account, blocked) are
 left to the start, which answers them. A pair refused by the check is the table below, as on the
@@ -300,17 +301,20 @@ not a fresh catalog.
   $5.00» (or «⬇️ Вниз») and «💵 Сумма» in one row, then the repeat and the way back — the same
   message, only its keyboard edited. «🔄 Повторить анализ» draws the collapsed form again.
 - **Real mode (#121, [trading-mode.md](trading-mode.md)).** The analysis reads access for the
-  user's mode beside the catalog: in real mode no session row (sessions are demo only), the
-  disclaimer is `analysisDisclaimerReal` («…Реальный режим: сделка идёт на реальные деньги.»), the
-  rule refusal's hint is `analysisNoSignalHintReal`, and no `analysisCycleUnavailable` line (no
-  cycle to refuse). A failed read draws the demo text and keyboard. «➕ Ещё» carries the mode the
+  user's mode beside the catalog: in real mode the session row is «🚀 Сессия из 5 сделок · REAL»
+  with `real:sess:<assetId>:<sec>` (#327), the disclaimer is `analysisDisclaimerReal` («…Реальный
+  режим: сделка идёт на реальные деньги.»), and the hint and the `analysisCycleUnavailable` line
+  are the demo ones (the floor is the session's, #327). A failed read draws the demo text and
+  keyboard. «➕ Ещё» carries the mode the
   text was drawn in (`:d`/`:r`; a datum without it is from before #121 and reads as `d`); the
   expansion draws a stake button only when its own access read gives that mode, otherwise just
   «🔄 Повторить анализ» and the way back. In real mode the expansion draws «🚀 Открыть
   сделку: ⬆️ Вверх · $1.00 · REAL» at the real stake in force (the saved real stake, the broker's
   minimum without one, #326), its fingerprint over `real:<amount>`, and «💵 Сумма» of the real
-  picker (`stk:o:r:a:<assetId>:<sec>`), with no session row. The launch screen in real mode has no stake line: `launchRealMode` with «📊 Анализ
-  пары» and «↩️ К списку», also on a pair below the cycle floor (real mode has no cycle).
+  picker (`stk:o:r:a:<assetId>:<sec>`), under the real session row (#327). The launch screen in
+  real mode (#327) is the demo one by the mode: the real stake in force, `launchCycleReal`
+  («…Реальный режим: сделки идут на реальные деньги.»), «🚀 Запустить цикл · REAL» and the real
+  picker; a pair below the cycle floor gets the floor's refusal as in demo.
 - **The shared screens** — the signals, the types, a type's pairs and the summary — read no mode,
   so their default texts hold in both (#121): «📡 Сигналы сейчас … Выбери пару.», «🧭 Выбор
   пары», «Дальше — анализ свечей: бот покажет сигнал и что можно сделать по нему.». The demo note
@@ -508,7 +512,7 @@ and the old-button line, which `demo.test.ts` and `bot.test.ts` read from the ha
 - **#127** — the stake button's press, the intent and its status (`intent:` buttons):
   [bot-demo-trade.md](bot-demo-trade.md). It runs `readDemoTrade` again at the press, with the
   saved stake of the user's mode or `broker.minTradeAmount` (#297, #326).
-- **#284** — the demo session of five trades in the bot: the button, status and stop
+- **#284** — the session of five trades in the bot (real sessions #327): the button, status and stop
   ([bot-session.md](bot-session.md)); the worker half is shipped (#287,
   [trading-session.md](trading-session.md)).
 - **#24** — the status card and its button ([bot-menu.md](bot-menu.md)).

@@ -1,11 +1,13 @@
-# The demo session in the bot: the button, the status, the stop and the summary card (issues #284, #320, #318, #122, #321)
+# The session in the bot: the button, the status, the stop and the summary card (issues #284, #320, #318, #122, #321, #327)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» as its
 first row on every `decided` answer, a signal or none (#360); a finished single trade's message
 draws the same button under its result (#360,
 [bot-demo-trade.md](bot-demo-trade.md#the-status-message)); the launch screen of the signals list
 (#320, [bot-demo.md](bot-demo.md#the-launch-screen-320)) draws «🚀 Запустить цикл», and a stopped
-session's message «🔁 Ещё сессия». All four carry the same data. Pressing one starts a demo session of `DEFAULT_SESSION_TRADES` trades through
+session's message «🔁 Ещё сессия». All four carry the same data, with the mode they were drawn in
+(#327). Pressing one starts a session of that mode — demo, or real for a user in real mode
+([trading-mode.md](trading-mode.md)) — of `DEFAULT_SESSION_TRADES` trades through
 `POST /trading/sessions` ([trading-session.md](trading-session.md#routes)) and sends one status
 message. The message follows the session through `GET /trading/sessions/:id` and carries
 «🔄 Обновить» and «⏹ Остановить сессию». The trades themselves are opened by the worker's
@@ -21,7 +23,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 
 ## Components
 
-- `apps/bot/src/demo.ts` — the button's data `demo:sess:<assetId>:<sec>`
+- `apps/bot/src/demo.ts` — the button's data `<mode>:sess:<assetId>:<sec>` (#327; the demo datum
+  is byte for byte the one before)
   (`sessionStartCallbackData`, `SESSION_START_PATTERN`, `sessionStartDataOf`), the predicate
   `sessionFits(durationSec)` = `sessionFitsDeadline(DEFAULT_SESSION_TRADES, durationSec)`, the
   button's row in the analysis keyboard, and `launchScreen`'s «🚀 Запустить цикл» (#320).
@@ -59,7 +62,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
-demo:sess:<assetId>:<sec>          («🚀 Сессия из 5 сделок» under the analysis or a finished trade, «🚀 Запустить цикл», «🔁 Ещё сессия»)
+<mode>:sess:<assetId>:<sec>        («🚀 Сессия из 5 сделок» under the analysis or a finished trade, «🚀 Запустить цикл», «🔁 Ещё сессия»; <mode> demo or real, #327; the longest, real:sess:2147483647:15, 23 bytes)
   bot → answerCallbackQuery ∥ GET /trading/pairs (for the symbol only)
   bot → POST /trading/sessions { telegramUserId, assetId, durationSec, trades: 5 }
   bot → sendMessage: the status, with «🔄 Обновить» (session:<id>) and «⏹ Остановить сессию»
@@ -97,7 +100,11 @@ session:stop:<id>                  («⏹ Остановить сессию»)
   after #313 every duration of the set has the button; the guard stays, in the keyboard and in
   `sessionStartDataOf`, so a datum that does not fit starts nothing. The label is built from `DEFAULT_SESSION_TRADES` with
   `pluralTrades`, and the request sends the same number, so the label, the check and the request
-  cannot disagree.
+  cannot disagree. In real mode every door's label ends with « · REAL» (`sessionStartButtonLabel`,
+  `launchCycleButtonLabel`, `sessionAgainButtonLabel`; `MODE_LABELS`, as the real stake button):
+  a real session never starts from a button that looks like a demo one (#327).
+- The mode in the data is the mode the screen was drawn in; the handler sends it as `mode` and the
+  backend compares it with the user's `trading_mode` (`mode_not_allowed` on a mismatch, below).
 - The session's trades do not follow this screen's direction: the orchestrator asks for a signal
   before each trade (#130 decision 2). The button sits on its own row for that reason.
 - The data carries no nonce (owner's decision). After a session has ended, an old button starts a
@@ -106,14 +113,15 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 - The handler checks the duration again: a forged datum or one for a duration that does not fit
   (`demo:sess:101:900`) only stops the spinner, with no backend call.
 - **Two more doors (#320).** «🚀 Запустить цикл» on the launch screen carries
-  `demo:sess:<assetId>:<sec>` at the duration chosen on the main path (#382), and «🔁 Ещё сессия» on a stopped session the view's own
-  `settings.assetId` and `settings.durationSec`. Neither adds a handler or a datum: the start, its
-  refusals and the active session's 409 are the same. A refusal's «💵 Сумма» opens the picker with
-  the analysis origin (`stk:o:d:a:<assetId>:<sec>`, the demo picker: sessions are demo only until
-  #327), whose way back is that pair's analysis, not the
-  launch screen: one datum serves every door (accepted).
+  `<mode>:sess:<assetId>:<sec>` at the duration chosen on the main path (#382), and «🔁 Ещё сессия» on a stopped session the view's own
+  `settings.assetId`, `settings.durationSec` and `mode`. Neither adds a handler or a datum: the
+  start, its refusals and the active session's 409 are the same. A refusal's «💵 Сумма» opens the
+  picker of the press's mode with the analysis origin (`stk:o:<d|r>:a:<assetId>:<sec>`, #327),
+  whose way back is that pair's analysis, not the launch screen: one datum serves every door
+  (accepted).
 - **A third door (#360).** A single trade's status message, once the trade is `accepted`, `settled`
-  or `rejected`, draws «🚀 Сессия из 5 сделок» with `demo:sess:<assetId>:<sec>` of that trade, above
+  or `rejected`, draws «🚀 Сессия из 5 сделок» with `<mode>:sess:<assetId>:<sec>` of that trade (a
+  real trade offers a real session, #327), above
   the end of the path, by the tracker's edits and by «🔄 Обновить статус» (`sessionOfferOf`,
   [bot-demo-trade.md](bot-demo-trade.md#the-status-message)), and only when the pair paid at least
   the cycle floor (#379) as the catalog had it at the press or at the refresh; unknown — the read
@@ -131,14 +139,14 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 | 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_halted` | the same | the single trade's texts |
 | 409 `insufficient_tokens` | the same | «🪙 Не хватает токенов: на каждую сделку сессии нужен один токен.» |
 | 409 `trading_paused` | the same ([kill-switch.md](kill-switch.md)) | «⏸ Торговля временно приостановлена, попробуйте позже.» |
-| 409 `demo_only` | the backend runs `DEMO_ONLY` and the session is real (#396; unreachable while the bot asks for demo) | «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» |
+| 409 `demo_only` | the backend runs `DEMO_ONLY` and the session is real (#396): a real door pressed by a user left in real mode; the bot does not know the flag | «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» |
 | 409 `session_too_long` | the same; reachable only if `sessionFits` and the backend drift apart | «⏱ Сессия на этой длительности не уложится в час.» |
 | 409 `balance_unavailable` | the same (no snapshot, or a zero minimum) | «⏳ Баланс Binodex ещё не получен — попробуй через минуту.» |
 | 409 `pair_unavailable` | the same | «⚠️ Пара сейчас недоступна для сессии. Открой анализ заново.» |
 | 409 `payout_too_low` | the same: the pair pays less than `MIN_CYCLE_PAYOUT_PCT` (80, #379) — an old analysis message or «🔁 Ещё сессия» on a pair whose payout fell; the bot's own screens offer no session there | «🚫 Выплата по паре сейчас ниже порога — сессия на ней не запускается. Открой анализ заново.» (`sessionPayoutTooLow`) + the way back to the analysis, which, re-read, shows the note and no session button |
-| 409 `stake_precision`, `stake_below_minimum`, `insufficient_balance` | the same: the saved demo stake against the snapshot (#297) | the single trade's demo texts, without naming the minimum (this press reads no access), + «💵 Сумма» → `stk:o:d:a:<assetId>:<sec>` |
+| 409 `stake_precision`, `stake_below_minimum`, `insufficient_balance` | the same: the saved stake of the press's mode against that mode's balance of the snapshot (#297, #327) | the single trade's texts, without naming the minimum (this press reads no access); `insufficient_balance` of a real press names the real account (`stakeAboveAvailableReal`); + «💵 Сумма» → `stk:o:<d\|r>:a:<assetId>:<sec>` of the press's mode |
 | 503 `catalog_unavailable` | the same: the route reads the catalog before it creates anything | `demoCatalogUnavailable`, **no retry** |
-| 409 `mode_not_allowed` | the user is in real mode (#121): a session button of an earlier render; sessions are demo only | «Сессии пока доступны только в демо-режиме.» (`sessionRealMode`), no log |
+| 409 `mode_not_allowed` | the press's mode is not the user's (#327): a button drawn in the other mode, or a switch between the render and the press | «⚠️ Режим или сумма сделки изменились — открой анализ заново.» (`stakeAmountChanged`), no log |
 | 404 `user_not_found`, any code of the read and stop routes, 400 `validation`, any other 4xx | a bug, or a backend this bot does not know | `unavailable`; `warn` `trading session not started` |
 | any other 5xx, no answer, a broken body (a 409 `active_session_exists` whose body is not the contract's included) | unknown: the session may have been committed | one more `startSession` with the same request. A committed first attempt answers 409 with its session; otherwise the session is created once. Still unknown → «⚠️ Не удалось узнать, запущена ли сессия…» and `warn` `trading session not started` |
 
@@ -161,7 +169,9 @@ the same 404 `not_found`.
 
 ## The status message
 
-`sessionStatusText(symbol, view, { deadline? })`:
+`sessionStatusText(symbol, view, { deadline? })`; the header is «💼 Реальная сессия»
+(`sessionHeaderReal`) for a real session, «🎮 Демо-сессия» for a demo one, settings unavailable
+included (#327):
 
 ```text
 🎮 Демо-сессия
@@ -530,6 +540,7 @@ its own, which no runtime check of this issue used.
 - **#360** — the button first on every `decided` analysis, and under a finished single trade.
 - **#321** — «📤 Поделиться» under the summary card ([Sharing the card](#sharing-the-card-321)); a
   referral link in its caption in place of `?start=share` is the owner's open question.
-- **#121** — real mode: a session button pressed in real mode answers `sessionRealMode`
-  ([trading-mode.md](trading-mode.md)); **#473** extends `/stop` with the switch back to demo.
+- **#121**, **#327** — real mode and real sessions ([trading-mode.md](trading-mode.md)); **#473**
+  extends `/stop` with the switch back to demo, **#474**'s mode screen tells the sessions a switch
+  stopped.
   **#201** — levels and rewards.

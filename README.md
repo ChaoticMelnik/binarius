@@ -36,7 +36,7 @@ launch of a cycle, and behind «🧭 Выбрать пару вручную» th
 fresh catalog and the analysis screen — is in
 [docs/bot-demo.md](docs/bot-demo.md); how the stake button opens a demo trade and its status
 message follows the intent is in [docs/bot-demo-trade.md](docs/bot-demo-trade.md); how the session
-button starts a demo session of five trades, follows it in one message and stops it is in
+button starts a session of five trades in the user's mode, follows it in one message and stops it is in
 [docs/bot-session.md](docs/bot-session.md); where every
 client bot text is written, the registry of variables a text can print, how its template and
 validator work and what stays in code is in [docs/bot-texts.md](docs/bot-texts.md);

@@ -181,7 +181,7 @@ The readers and what each does with the flag on:
 | Reader | What it does |
 |---|---|
 | `POST /trading/intents` (backend) | a real intent answers 409 `demo_only`. The check runs after the replay (a retry still gets a real intent an earlier process created) and before the switch, the account and the reserve: nothing is read, reserved or woken |
-| `POST /trading/sessions` (backend) | `createTradingSession` refuses a real session `demo_only` before `mode_not_allowed` and before its transaction; the route sends demo today, so this guards #327's real sessions |
+| `POST /trading/sessions` (backend) | `createTradingSession` refuses a real session `demo_only` before `mode_not_allowed` and before its transaction: a real session of a user whose `trading_mode` is `real` (set before the flag, or by hand) reaches it (#327, `session-routes.db.test.ts` R27) |
 | the intent job (worker) | a queued real intent is rejected before `takeIntent`: `queued → rejected`, `last_error = demo_only`, the token released, the executor never called (it never becomes `submitting`). This holds however the intent got into the queue, including one an earlier process without the flag created. The flag wins over the age: an old real intent is `demo_only`, not `expired`. A `submitting` intent left by an earlier process goes the stale path as before (`unknown` → reconciliation, which only reads) |
 | the session orchestrator (worker) | the attempt's intent creation refuses `demo_only` and the session stops as `account_unavailable`, logged `trading session stopped` with `code: demo_only`; no intent, no reserve |
 | the CLI `session-start` (worker) | reads the flag and passes it to `createTradingSession`; it creates demo sessions only, so the refusal is unreachable today |
