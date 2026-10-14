@@ -1,5 +1,6 @@
 import {
   openTradeRequestWireSchema,
+  widgetSessionRequestWireSchema,
   type BinaryPairWire,
   type BrokerUserWireInput,
 } from '@binarius/shared';
@@ -27,6 +28,7 @@ import {
   type MockSettleInput,
   type MockTradeFilter,
   type MockTradeWire,
+  type MockWidgetSessionRecord,
 } from './state';
 
 export interface MockBroker {
@@ -55,6 +57,10 @@ export interface MockBroker {
     journal: readonly MockRequestRecord[];
     clearJournal(): void;
   };
+  // what each widget-session request asked for (#11); the sessions themselves are not kept
+  widgetSessions: {
+    list(): readonly MockWidgetSessionRecord[];
+  };
   socket: MockSocket;
   priceAt(assetId: number, atMs: number): number;
   // rejects with an AggregateError when an onChange listener threw and the test did not clear it
@@ -67,6 +73,7 @@ const ROUTES: Record<MockRestEndpoint, { method: 'GET' | 'POST'; url: string; au
   tradesList: { method: 'GET', url: '/v1/broker/user/trades', auth: true },
   openTrade: { method: 'POST', url: '/v1/broker/user/trades', auth: true },
   chart: { method: 'GET', url: '/v1/broker/chart', auth: false },
+  widgetSession: { method: 'POST', url: '/v1/broker/widget-sessions', auth: true },
 };
 
 // a body that is not JSON: broken, empty, or another content type (Fastify answers that one 415)
@@ -359,6 +366,23 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
     return result.trade;
   });
 
+  // The live answer to a bad body was not observed; the fixture refuses it like a bad trade.
+  // widget_url, widget_origin and region come only from failNext scripts.
+  app.post(ROUTES.widgetSession.url, async (request, reply) => {
+    const body = request.body;
+    const input: Record<string, unknown> = isPlainObject(body) ? body : {};
+    const parsed = widgetSessionRequestWireSchema.safeParse(input);
+    if (!parsed.success) {
+      const field = String(parsed.error.issues[0]?.path[0] ?? 'origin');
+      const message =
+        input[field] === undefined
+          ? FIXTURE_MESSAGES.required(field)
+          : FIXTURE_MESSAGES.invalid(field);
+      return reply.code(400).send(brokerError(message));
+    }
+    return state.createWidgetSession(userIdOf(request), parsed.data);
+  });
+
   app.get(ROUTES.chart.url, async (request, reply) => {
     const query = validateChartQuery(request.query as Record<string, unknown>, state.findPair);
     if (!query.ok) return reply.code(400).send(brokerError(query.message));
@@ -394,6 +418,9 @@ export async function startMockBroker(options: MockBrokerOptions = {}): Promise<
       clearJournal: () => {
         journal.length = 0;
       },
+    },
+    widgetSessions: {
+      list: () => [...state.widgetSessions],
     },
     socket: socketLayer.socket,
     priceAt: (assetId, atMs) => state.priceAt(assetId, atMs),

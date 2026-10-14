@@ -48,6 +48,8 @@ const chartRequest = () => ({
   startTime: Date.now() - 10 * 60_000,
 });
 
+const widgetRequest = { origin: 'https://cashier.example', mode: 'deposit' } as const;
+
 let broker: MockBroker;
 let client: BrokerRestClient;
 
@@ -78,6 +80,7 @@ const calls: Record<MockRestEndpoint, (c: BrokerRestClient) => Promise<unknown>>
   tradesList: (c) => c.listTrades(auth),
   openTrade: (c) => c.openTrade(auth, openRequest),
   chart: (c) => c.getChart(chartRequest()),
+  widgetSession: (c) => c.createWidgetSession(auth, widgetRequest),
 };
 const endpoints = Object.keys(calls) as MockRestEndpoint[];
 
@@ -197,6 +200,54 @@ describe('happy paths', () => {
       startTime: Math.floor(Date.now() / 1000),
     });
     expect(candles).toEqual([]);
+  });
+});
+
+describe('the widget session (#11)', () => {
+  it('posts the origin, the direction and the user IP, and maps the answer', async () => {
+    const session = await client.createWidgetSession(auth, {
+      ...widgetRequest,
+      userIp: '203.0.113.7',
+    });
+    expect(session.session).toMatch(/^wss_/);
+    expect(session).toMatchObject({ expiresInSec: 60 });
+    expect(session).not.toHaveProperty('widgetUrl');
+    expect(broker.rest.journal[0]?.bodyKeys).toEqual(['mode', 'origin', 'user_ip']);
+    expect(broker.widgetSessions.list()).toEqual([
+      { userId: 1, origin: 'https://cashier.example', mode: 'deposit', userIp: '203.0.113.7' },
+    ]);
+  });
+
+  it('sends no user_ip when it has none', async () => {
+    await client.createWidgetSession(auth, widgetRequest);
+    expect(broker.rest.journal[0]?.bodyKeys).toEqual(['mode', 'origin']);
+  });
+
+  it('passes the widget URL, origin and region the broker answers with', async () => {
+    broker.rest.failNext('widgetSession', {
+      status: 200,
+      body: {
+        session: 'wss_x',
+        expires_in: 45,
+        widget_url: 'https://pay.example/w',
+        widget_origin: 'https://pay.example',
+        region: 'global',
+      },
+    });
+    expect(await client.createWidgetSession(auth, widgetRequest)).toStrictEqual({
+      session: 'wss_x',
+      expiresInSec: 45,
+      widgetUrl: 'https://pay.example/w',
+      widgetOrigin: 'https://pay.example',
+      region: 'global',
+    });
+  });
+
+  it('reads an answer without expires_in as a contract violation', async () => {
+    broker.rest.failNext('widgetSession', { status: 200, body: { session: 'wss_x' } });
+    expect((await caught(client.createWidgetSession(auth, widgetRequest))).code).toBe(
+      BrokerRestErrorCode.ContractViolation,
+    );
   });
 });
 

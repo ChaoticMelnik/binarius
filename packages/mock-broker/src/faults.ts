@@ -1,6 +1,7 @@
 import { FIXTURE_MESSAGES } from './messages';
 
-export type MockRestEndpoint = 'user' | 'pairs' | 'tradesList' | 'openTrade' | 'chart';
+export type MockRestEndpoint =
+  'user' | 'pairs' | 'tradesList' | 'openTrade' | 'chart' | 'widgetSession';
 
 // one scripted answer to the next request on an endpoint, consumed before auth and validation.
 // The shapes exclude each other in the type as well as at runtime (assertScript): a mixed

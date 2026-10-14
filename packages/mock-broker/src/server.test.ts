@@ -5,11 +5,13 @@ import {
   safeParseCandles,
   safeParseClosedTrade,
   safeParseOpenTrade,
+  safeParseWidgetSessionResponse,
 } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS, until } from '@binarius/shared/testing';
 import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockRequestRecord, MockRestEndpoint, MockScript } from './faults';
+import { FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
 import { startMockBroker, type MockBroker } from './server';
 
 const TOKEN = 'access-token-of-user-1';
@@ -71,6 +73,10 @@ const tradeBody = (overrides: Record<string, unknown> = {}) => ({
 
 const openTrade = (overrides: Record<string, unknown> = {}) =>
   call('/v1/broker/user/trades', { method: 'POST', body: tradeBody(overrides) });
+
+const widgetBody = { origin: 'https://cashier.example', mode: 'deposit' };
+const createWidgetSession = (options: CallOptions = {}) =>
+  call('/v1/broker/widget-sessions', { method: 'POST', body: widgetBody, ...options });
 
 function expectError(response: { status: number; body: unknown }, status: number, message: string) {
   expect(response.status).toBe(status);
@@ -769,7 +775,14 @@ describe('the facade', () => {
     );
   });
 
-  const endpoints: MockRestEndpoint[] = ['user', 'pairs', 'tradesList', 'openTrade', 'chart'];
+  const endpoints: MockRestEndpoint[] = [
+    'user',
+    'pairs',
+    'tradesList',
+    'openTrade',
+    'chart',
+    'widgetSession',
+  ];
   it.each(endpoints)('scripts endpoint %s', async (endpoint) => {
     broker.rest.failNext(endpoint, { status: 503 });
     const paths: Record<MockRestEndpoint, () => Promise<{ status: number }>> = {
@@ -778,7 +791,41 @@ describe('the facade', () => {
       tradesList: () => call('/v1/broker/user/trades'),
       openTrade: () => openTrade(),
       chart: () => call('/v1/broker/chart'),
+      widgetSession: () => createWidgetSession(),
     };
     expect((await paths[endpoint]()).status).toBe(503);
+  });
+});
+
+describe('POST /v1/broker/widget-sessions', () => {
+  it('mints a session and journals the request without it', async () => {
+    const response = await createWidgetSession({
+      body: { ...widgetBody, user_ip: '203.0.113.7' },
+    });
+    expect(response.status).toBe(200);
+    const parsed = safeParseWidgetSessionResponse(response.body);
+    expect(parsed.success && parsed.data.expires_in).toBe(60);
+    expect(parsed.success && parsed.data.session).toMatch(/^wss_/);
+    expect(broker.widgetSessions.list()).toEqual([
+      { userId: 1, origin: 'https://cashier.example', mode: 'deposit', userIp: '203.0.113.7' },
+    ]);
+    expect(JSON.stringify(broker.widgetSessions.list())).not.toContain(
+      parsed.success ? parsed.data.session : 'unparsed',
+    );
+  });
+
+  it('needs a bearer of a known user', async () => {
+    expectError(await createWidgetSession({ token: null }), 401, LIVE_MESSAGES.missingBearer);
+    expectError(await createWidgetSession({ token: 'nope' }), 401, LIVE_MESSAGES.invalidToken);
+    expect(broker.widgetSessions.list()).toEqual([]);
+  });
+
+  it.each([
+    [{ mode: 'deposit' }, FIXTURE_MESSAGES.required('origin')],
+    [{ origin: 'https://cashier.example', mode: 'real' }, FIXTURE_MESSAGES.invalid('mode')],
+    [{ origin: 'https://cashier.example' }, FIXTURE_MESSAGES.required('mode')],
+  ])('refuses the body %j', async (body, message) => {
+    expectError(await createWidgetSession({ body }), 400, message);
+    expect(broker.widgetSessions.list()).toEqual([]);
   });
 });
