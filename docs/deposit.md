@@ -14,7 +14,8 @@ so that no button opens a page that does not work yet.
 ```
 bot (#27): «💳 Пополнить» web_app button → WEB_PUBLIC_URL/cashier
 web (#111): GET /cashier — Mini App page; the widget in an iframe; postMessage handshake
-web (#111/#112): POST /cashier/session, POST /cashier/credited — same-origin, forward initData to backend
+web (#111): POST /cashier/session — same-origin, per-IP window, forwards {initData, clientIp?} to backend
+web (#112): POST /cashier/credited — same-origin, forwards initData to backend
 backend (#11): POST /deposit/widget-session {initData, clientIp?} → DEMO_ONLY → initData → user
                → the single active account → ensureFreshAccessToken(mayRefresh: true)
                → broker POST /v1/broker/widget-sessions {origin: WEB_PUBLIC_URL, mode: deposit}
@@ -121,21 +122,124 @@ own account for that hour — a payment form for the victim's account, nothing m
 `DEPOSIT_WIDGET_SESSION_BUDGET_MS` (8 s, `packages/shared/src/deposit.ts`) is what the route may
 take: one token exchange under the account's row lock (`BROKER_HTTP_TIMEOUT_MS`, 5 s) and the broker
 call (`DEPOSIT_BROKER_CALL_BUDGET_MS`, 3 s, `apps/backend/src/timing.ts`), passed as the call's
-signal so it ends before the REST client's own 5 s and reads as `aborted`. `web`'s forward (#111)
-has to wait longer than the budget; the budget is inside the backend's shutdown phase 1. Lock waits and
+signal so it ends before the REST client's own 5 s and reads as `aborted`. `web`'s forward (#111,
+`DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS`, 10 s) waits longer than the budget; the budget is inside the backend's shutdown phase 1. Lock waits and
 statements are ordinary latency, as on the other routes. The links are in `TIMING_CHAIN_HOLDS`.
 
 ## Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DEPOSIT_WIDGET_ORIGINS` | the origin of `BROKER_OAUTH_AUTHORIZE_URL` | comma-separated https origins the widget may be served from; each spelled as `WEB_PUBLIC_URL` is, no empty item, no repeats; an empty value stops the backend at start |
+| `DEPOSIT_WIDGET_ORIGINS` | the origin of `BROKER_OAUTH_AUTHORIZE_URL` | read by `backend` and `web`: comma-separated https origins the widget may be served from; each spelled as `WEB_PUBLIC_URL` is, no empty item, no repeats; an empty value stops either process at start |
 | `WEB_PUBLIC_URL` | — (already required) | the `origin` sent to the broker |
 | `BROKER_CLIENT_ID` | — (already required) | the `client_id` of the fallback widget URL |
 
-The cashier page's CSP `frame-src` and its `postMessage` check (#111) name these origins in
-advance, which is why a widget the broker serves from anywhere else is refused here rather than
-framed. `compose.yaml` forwards `DEPOSIT_WIDGET_ORIGINS` to `backend` only, without a default.
+The cashier page's CSP `frame-src` and `web`'s check of the backend's answer (#111) name these
+origins in advance, which is why a widget the broker serves from anywhere else is refused here
+rather than framed. Both processes read the one variable through one parser
+(`parseDepositWidgetOriginsEnv`, `packages/shared/src/env.ts`), each with the origin of its own
+`BROKER_OAUTH_AUTHORIZE_URL` (one compose anchor) as the default. `compose.yaml` forwards
+`DEPOSIT_WIDGET_ORIGINS` to `backend` and `web`, without a default; both `timing.test.ts` pin it.
+
+## The page (#111)
+
+`apps/web/src/cashier/`, the Mini App the bot's button opens (#27):
+
+| Route | What |
+|---|---|
+| `GET /cashier` | the page: Telegram's SDK, `/cashier/static/app.js`, one hidden block per state, «Повторить», «Вернуться в Telegram», and `<iframe id="widget" allow="payment *; clipboard-write *">` without a `src` |
+| `GET /cashier/static/app.js` | the page script (`cashier/client.ts`), `public, max-age=3600` |
+| `POST /cashier/session` | same-origin (the app's `Origin` check); the per-IP window; a strict `{ initData }` body up to `DEPOSIT_BODY_LIMIT_BYTES`; forwards `{ initData, clientIp? }` to `POST /deposit/widget-session` without a bearer, timed out at `DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS` (10 s, `apps/web/src/timing.ts`, above the route's 8 s budget, below the 11 s shutdown) |
+
+**The handshake** follows broker-web's `pay-embed.tsx`. The script attaches its `message` listener
+first, then mints a session and sets `iframe.src` to the `widgetUrl` the backend answered — the
+page builds no URL and picks no origin. Every message is accepted only when
+`event.source === iframe.contentWindow && event.origin === widgetOrigin`, and only then is its
+`data` read (a non-null object with a string `type`); anything else is ignored silently, Telegram
+Web's own messages from `window.parent` included.
+
+| Message | Page |
+|---|---|
+| `binodex-embed:ready` | the **first** `ready` takes the session minted on load while it is younger than `min(45 s, expiresInSec)` and clears it; otherwise, and on every later `ready` (the widget reloaded itself), a fresh `POST /cashier/session`. Then `{ type: 'binodex-embed:init', session }` is posted with target origin `widgetOrigin`, never `'*'`. A failed fresh mint shows its state and posts nothing |
+| `binodex-embed:resize` | `iframe.style.height` = `height` clamped to 520–900 px, only for a finite number (initial 720 px) |
+| `binodex-embed:close` | `Telegram.WebApp.close()` |
+| `credited`, `error`, `reauth-required` | recognised, nothing done until #112 |
+
+The session lives in the script's closure, the POST answer and `postMessage` only: never in a URL,
+`localStorage`, `sessionStorage` or a cookie, and never in a log line (`session` and `initData` are
+redacted keys; the route logs neither).
+
+**Headers.** `content-security-policy` is the OAuth pages' Mini App policy with
+`frame-src <DEPOSIT_WIDGET_ORIGINS in order>` (`miniAppCsp`, `apps/web/src/mini-app.ts`), set in the
+plugin's `onRequest`, so Fastify's error answers on these routes carry it too; no
+`X-Frame-Options`. `referrer-policy: strict-origin`, not the OAuth pages' `no-referrer`: the cashier
+URL carries no secret (Telegram's launch data is in the fragment), and the widget may read
+`document.referrer` to learn its embedder, as it can under the browser default broker-web runs
+with. No `sandbox` on the iframe (the broker's own cashier sets none).
+
+**The origin re-check.** Before answering the page, `web` checks `new URL(widgetUrl).origin` and
+`widgetOrigin` against its own `DEPOSIT_WIDGET_ORIGINS`; outside it → state `rejected` and one
+`error` line `the backend returned a widget origin outside DEPOSIT_WIDGET_ORIGINS` with the origin.
+With one variable for both processes this fires only on drift (one container restarted with a new
+value).
+
+**The client address and the per-IP window.** `web` runs with
+`trustProxy: 'loopback, uniquelocal'`: Caddy on the host reaches it from loopback or the compose
+bridge's gateway and replaces any client `X-Forwarded-For` with the address it saw (docs/postbacks.md
+→ The Caddy route). Not a hop count: Fastify 5.12.5 reads a number as "trust nothing". `clientIp` is
+forwarded only when the request came through a trusted proxy (`request.ips.length > 1`) and
+`request.ip` parses as an IP. The window — 60 requests a minute per address, an IPv6 address by its
+/64, an IPv4-mapped one as its IPv4 (`cashier/ip-key.ts`) — is taken in the route's `onRequest`,
+after the `Origin` check and before the body is read, and never given back: over → 429 `busy`, no
+forward. A peer outside the trusted list is keyed by its own address whatever header it sends.
+
+**Page states** (`POST /cashier/session` answers `200 { outcome: 'ready', session, expiresInSec,
+widgetUrl, widgetOrigin }` or `{ outcome: <state> }`; each row has a test in
+`cashier/routes.test.ts` W5 and the state's display in `cashier/client.test.ts` C11):
+
+| # | Source | Web answer | Page state | «Повторить» |
+|---|---|---|---|---|
+| 1 | no `Telegram.WebApp.initData` | — (no request) | `open_from_telegram` | no |
+| 2 | the per-IP window | 429 `busy` | `busy` | yes |
+| 3 | a body that is not a strict `{ initData }`, not JSON, or over 8 KiB | 400 `unavailable` (+ `warn`) | `unavailable` | yes |
+| 4 | backend 200, both origins in the web list | 200 `ready` | the widget | — |
+| 5 | backend 200, an origin outside the web list | 200 `rejected` (+ `error`) | `rejected` | no |
+| 6 | backend 2xx outside the contract | 500 `unavailable` (+ `error`) | `unavailable` | yes |
+| 7 | 400 `validation` (our body refused: drift) | 500 `unavailable` (+ `error`) | `unavailable` | yes |
+| 8 | 429 `too_many_requests` | 200 `busy` | `busy` | yes |
+| 9 | 409 `demo_only` | 200 `demo_only` | «Пополнение на этом сервере отключено» | no |
+| 10 | 401 `invalid_telegram_auth` | 200 `open_from_telegram` | `open_from_telegram` | no |
+| 11 | 409 `no_active_account` | 200 `connect_first` | `connect_first` | no |
+| 12 | 409 `ambiguous_account` | 200 `ambiguous` | `ambiguous` (support) | no |
+| 13 | 409 `user_blocked` | 200 `blocked` | `blocked` | no |
+| 14 | 409 `token_unavailable` | 200 `relogin` | `relogin` | no |
+| 15 | 502 `broker_unavailable` | 200 `unavailable` | `unavailable` | yes |
+| 16 | 502 `broker_rejected` | 200 `rejected` | `rejected` | no |
+| 17 | any other status or code (500 `internal`, 404 from a backend without #11, 413, an unknown code) | 500 `unavailable` (+ `error` with status and reason) | `unavailable` | yes |
+| 18 | no answer (network, the 10 s timeout) | 500 `unavailable` (+ `error`) | `unavailable` | yes |
+| 19 | the app's `Origin` check | 403 HTML | `unavailable` | yes |
+
+The script maps an unknown outcome, a non-JSON body and a rejected fetch to `unavailable`.
+«Повторить» re-runs the load (mint, then `src`); every state without it except
+`open_from_telegram` offers «Вернуться в Telegram» (`WebApp.close()`).
+
+**Owner checks** (need the deployed `backend` and `web`; not run by the pipeline):
+
+1. `curl -sI https://binarius.salescreativesads.com/cashier | grep -i '^content-security-policy'` →
+   `frame-src` lists the `DEPOSIT_WIDGET_ORIGINS` value (default `https://binodex.app`).
+2. Log in to the admin pages and open «Сессии»: the new session's IP is your public address, not
+   `127.x`/`172.x`. A `172.x` there means `web` did not get Caddy's header: the per-IP window would
+   then be one window for everybody.
+3. End to end in Telegram (with #27's button, or a Mini App link to `WEB_PUBLIC_URL/cashier` set in
+   BotFather): the widget loads, the payment form and a payment method's next screen open, and the
+   webview console shows no CSP violation. With `DEMO_ONLY=true` the page says «Пополнение на этом
+   сервере отключено» — expected.
+
+Accepted: a browser may check the widget frame's own navigations against this page's `frame-src`;
+if the widget navigates its frame to another origin (3-D Secure, a payment provider) instead of a
+popup, that origin has to be added to `DEPOSIT_WIDGET_ORIGINS` (check 3 shows it). The per-IP
+window is per process and in memory, and false once more than ~20 people behind one address open
+the cashier in the same minute (they see «busy» and retry).
 
 ## The probe
 
@@ -176,18 +280,19 @@ Exit code 0 on `ok`, 1 otherwise.
 
 ## Contracts for the next parts
 
-- #111: show texts for every code above, `demo_only` and `ambiguous_account` included; forward
-  `initData` and optionally `clientIp`, nothing else (the body is strict); time the forward out
-  above `DEPOSIT_WIDGET_SESSION_BUDGET_MS`; the CSP `frame-src` names `DEPOSIT_WIDGET_ORIGINS` —
-  `web` needs the same list (its own variable with a parity check, or one source; #111 decides).
-- #112: re-mint through this route unchanged; `broker_unavailable` after a 401 means "retry once".
-- #27: offer the button whatever the user's `trading_mode`.
+- #111 (done, The page above): one variable and one parser for both processes.
+- #112: re-mint through `POST /cashier/session` unchanged; `broker_unavailable` after a 401 means
+  "retry once"; the page script's mint-and-`init` path serves `reauth-required`; a
+  `POST /cashier/credited` takes the same per-IP window object; the dispatcher's three no-op
+  branches (`cashier/client.ts`) are where the handlers go.
+- #27: offer the button whatever the user's `trading_mode`; it opens `WEB_PUBLIC_URL/cashier` (no
+  query).
 
 ## Boundaries
 
 - One attempt per request: a retry is the user's (the page's retry button), bounded by the per-user
   window.
-- The windows are per process, as the callback's (`rate-window.ts`).
+- The windows are per process, as the callback's (`packages/shared/src/rate-window.ts`).
 - Rule 12's residual window: a block committed after the token was read does not stop that one
   widget call (stated, as for every caller).
 - `region: "ru"` without a `widget_url`: the fallback is the global platform; whether that is
