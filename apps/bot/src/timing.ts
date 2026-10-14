@@ -84,7 +84,7 @@ export const HANDLER_CALLS = {
   // as sequential, as in confirm; the access read gives the mode the session row depends on
   // (#121) — the «⏳» edit refused as gone → sendMessage, evaluateSignal, the result by
   // sendMessage; or «⏳» edited, the signal, the result's edit refused as gone → sendMessage.
-  // Both are 3 / 4, 47 s: the longest handler, under SHUTDOWN_BUDGET_MS.
+  // Both are 3 / 4, 47 s: the longest handler, with sessionStart (#418), under SHUTDOWN_BUDGET_MS.
   demoAnalysis: { backend: 3, telegram: 4 },
   // «➕ Ещё» (#360): answerCallbackQuery ∥ readTradingAccess — counted as sequential, as in
   // confirm — then editMessageReplyMarkup; a refused edit sends nothing more
@@ -112,9 +112,12 @@ export const HANDLER_CALLS = {
   // way — then editMessageText refused as gone → sendMessage
   intentRefresh: { backend: 2, telegram: 3 },
   // «🚀 Сессия из 5 сделок» (#284; the analysis, the row under a finished trade #360, «🔁 Ещё
-  // сессия» #320 all land here): answerCallbackQuery ∥ readPairs — counted as sequential, as
-  // in confirm — then startSession and its one retry on an unknown outcome, then sendMessage
-  sessionStart: { backend: 3, telegram: 2 },
+  // сессия» #320 and the launch screen's «🚀 Запустить цикл» all land here): answerCallbackQuery ∥
+  // readPairs — counted as sequential, as in confirm — then startSession and its one retry on an
+  // unknown outcome, then sendMessage; after it, the launch screen's deleteMessage refused as
+  // forbidden and editMessageReplyMarkup (#418), so the status is never withheld by them. 47 s,
+  // equal to demoAnalysis.
+  sessionStart: { backend: 3, telegram: 4 },
   // the session's «🔄 Обновить»: answerCallbackQuery ∥ readSession ∥ readPairs — counted the same
   // way — then editMessageText refused as gone → sendMessage
   sessionRefresh: { backend: 2, telegram: 3 },

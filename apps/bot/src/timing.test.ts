@@ -1198,11 +1198,20 @@ const STOPPED_SESSION = sessionView({
 });
 const sessionStartUpdate = (chatType?: string) =>
   callbackUpdate(sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5), chatType);
+// the launch screen's «🚀 Запустить цикл» (#418): deleted after the status
+const launchStartUpdate = () =>
+  callbackUpdate(sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5, true));
+const DELETE_FORBIDDEN: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: "Bad Request: message can't be deleted",
+};
 const sessionHttpError = (status: number, reason: string) =>
   new BackendError(BackendErrorCode.HttpStatus, { status, reason });
 const SESSION_START_WORST_CASE: Branch = {
-  label: 'the outcome is unknown, the retry learns the session, and the status is sent',
-  update: sessionStartUpdate(),
+  label:
+    'the outcome is unknown, the retry learns the session, the status is sent, the launch screen is stripped',
+  update: launchStartUpdate(),
   startSession: (() => {
     let first = true;
     return () => {
@@ -1211,7 +1220,8 @@ const SESSION_START_WORST_CASE: Branch = {
       return Promise.reject(new BackendError(BackendErrorCode.Unreachable));
     };
   })(),
-  expected: { backend: 3, telegram: 2 },
+  apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+  expected: { backend: 3, telegram: 4 },
 };
 const SESSION_START_BRANCHES: readonly Branch[] = [
   {
@@ -1267,6 +1277,46 @@ const SESSION_START_BRANCHES: readonly Branch[] = [
     label: 'answering the query is refused and the status still goes',
     update: sessionStartUpdate(),
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
+    expected: { backend: 2, telegram: 2 },
+  },
+  {
+    label: 'the launch screen is deleted after the status',
+    update: launchStartUpdate(),
+    expected: { backend: 2, telegram: 3 },
+  },
+  {
+    label: 'the launch screen was already gone',
+    update: launchStartUpdate(),
+    apiErrors: [
+      [
+        'deleteMessage',
+        { ok: false, error_code: 400, description: 'Bad Request: message to delete not found' },
+      ],
+    ],
+    expected: { backend: 2, telegram: 3 },
+  },
+  {
+    label: 'the delete fails in transport',
+    update: launchStartUpdate(),
+    apiErrors: [
+      [
+        'deleteMessage',
+        new HttpError("Network request for 'deleteMessage' failed!", new Error('socket hang up')),
+      ],
+    ],
+    expected: { backend: 2, telegram: 3 },
+  },
+  {
+    label: 'the keyboard is stripped after a forbidden delete',
+    update: launchStartUpdate(),
+    apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+    expected: { backend: 2, telegram: 4 },
+  },
+  {
+    label: 'a refused start keeps the launch screen',
+    update: launchStartUpdate(),
+    startSession: () =>
+      Promise.reject(sessionHttpError(409, TradingSessionErrorCode.InsufficientTokens)),
     expected: { backend: 2, telegram: 2 },
   },
 ];

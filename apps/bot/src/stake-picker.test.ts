@@ -383,7 +383,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     await press(stakePresetCallbackData('5', TradeMode.Demo, at5));
     expect(lastPayload(calls)?.text).toContain(`${PAIR_EURUSD.symbol} · ⏱ 5 с`);
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.launchCycleButton, `demo:sess:${String(PAIR_EURUSD.id)}:5`)],
+      [button(LABELS.launchCycleButton, `demo:sess:${String(PAIR_EURUSD.id)}:5:l`)],
       [button(LABELS.stakeChangeButton, `stk:o:d:p:${String(PAIR_EURUSD.id)}:5`)],
       [button(LABELS.backToListButton, 'demo:sig:5')],
     ]);
@@ -436,7 +436,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
       [
         button(
           '🚀 Запустить цикл · REAL',
-          sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+          sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15, true),
         ),
       ],
       [
@@ -547,7 +547,7 @@ describe('the stake picker opened from a launch screen (#320)', () => {
         firstRow: [
           button(
             LABELS.launchCycleButton,
-            `demo:sess:${String(PAIR_EURUSD.id)}:${String(durationSec)}`,
+            `demo:sess:${String(PAIR_EURUSD.id)}:${String(durationSec)}:l`,
           ),
         ],
       });

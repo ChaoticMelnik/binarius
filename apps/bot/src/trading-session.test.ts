@@ -1,5 +1,5 @@
-import { InputFile } from 'grammy';
-import type { ApiError } from 'grammy/types';
+import { HttpError, InputFile } from 'grammy';
+import type { ApiError, Update } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   TradeIntentStatus,
@@ -136,8 +136,11 @@ function setup(
   const press = (data: string, chatType?: string) =>
     bot.handleUpdate(callbackUpdate(data, chatType));
   const send = (text: string, chatType?: string) => bot.handleUpdate(textUpdate(text, chatType));
+  // the launch screen's scenes (#418) read the pressed message's id from the update they built
+  const pressUpdate = (update: Update) => bot.handleUpdate(update);
   return {
     press,
+    pressUpdate,
     send,
     logger,
     sessionTracker,
@@ -1001,5 +1004,158 @@ describe('the summary card (#318)', () => {
       INVITE,
       MENU,
     ]);
+  });
+});
+
+// #418: «🚀 Запустить цикл» carries the launch token; once the session's status is sent the start
+// deletes the launch screen, and only then
+describe('the launch screen after the start (#418)', () => {
+  const LAUNCH = sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5, true);
+  const REAL_LAUNCH = sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5, true);
+  const refusal = (error_code: number, description: string): ApiError => ({
+    ok: false,
+    error_code,
+    description,
+  });
+  const DELETE_FORBIDDEN = refusal(400, "Bad Request: message can't be deleted");
+  const infos = (logger: ReturnType<typeof fakeLogger>) =>
+    logger.info.mock.calls.map((call) => call[1] as string);
+  const deleted = (calls: readonly ApiCall[]) =>
+    calls.filter((call) => call.method === 'deleteMessage').length;
+
+  async function launch(
+    data = LAUNCH,
+    options: Parameters<typeof setup>[0] = {},
+    errors: readonly (readonly [string, ApiError | HttpError])[] = [],
+  ) {
+    const scene = setup(options);
+    for (const [method, error] of errors) scene.apiErrors.set(method, error);
+    const update = callbackUpdate(data);
+    await scene.pressUpdate(update);
+    const pressed = { chat_id: USER.id, message_id: update.callback_query?.message?.message_id };
+    return { ...scene, pressed };
+  }
+
+  it('deletes the pressed launch screen after the status is sent and tracked', async () => {
+    const { calls, pressed, sessionTracker, logger } = await launch();
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'deleteMessage']);
+    expect(payloadOf(calls, 'deleteMessage')).toEqual(pressed);
+    expect(payloadOf(calls, 'sendMessage')?.text).toBe(statusOf(SESSION_VIEW));
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(LIVE_ROWS);
+    expect(sessionTracker.track).toHaveBeenCalledTimes(1);
+    expect(sessionTracker.track.mock.calls[0]?.[0]).toMatchObject({ view: SESSION_VIEW });
+    expect(warnings(logger)).toEqual([]);
+  });
+
+  it('deletes the real launch screen after the real status (#327)', async () => {
+    const realView = sessionView({ mode: TradeMode.Real });
+    const { calls, pressed, startSession } = await launch(REAL_LAUNCH, {
+      startSession: () => Promise.resolve({ started: realView }),
+    });
+    expect(startSession.mock.calls[0]?.[0]).toMatchObject({ mode: TradeMode.Real });
+    expect(payloadOf(calls, 'sendMessage')?.text).toMatch(/^💼 <b>Реальная сессия<\/b>/);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'deleteMessage']);
+    expect(payloadOf(calls, 'deleteMessage')).toEqual(pressed);
+  });
+
+  it('deletes it after the status of a session already running', async () => {
+    const { calls, pressed } = await launch(LAUNCH, {
+      startSession: () => Promise.resolve({ active: SESSION_VIEW }),
+    });
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'deleteMessage']);
+    expect(payloadOf(calls, 'deleteMessage')).toEqual(pressed);
+  });
+
+  it('keeps it when the active session ended before the backend read it', async () => {
+    const { calls } = await launch(LAUNCH, {
+      startSession: () => Promise.resolve({ active: null }),
+    });
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.sessionJustEnded.value);
+    expect(rowsOf(payloadOf(calls, 'sendMessage'))).toEqual(BACK_ROWS);
+  });
+
+  it.each([
+    ['payout_too_low', LAUNCH, TradingSessionErrorCode.PayoutTooLow],
+    ['mode_not_allowed', REAL_LAUNCH, TradingSessionErrorCode.ModeNotAllowed],
+    ['demo_only', REAL_LAUNCH, TradingSessionErrorCode.DemoOnly],
+  ])('keeps it on the refusal %s', async (_case, data, code) => {
+    const { calls } = await launch(data, {
+      startSession: () => Promise.reject(httpError(409, code)),
+    });
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
+    expect(deleted(calls)).toBe(0);
+  });
+
+  it('keeps it when the outcome stays unknown after the retry', async () => {
+    const { calls } = await launch(LAUNCH, {
+      startSession: () => Promise.reject(httpError(500)),
+    });
+    expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.sessionOutcomeUnknown.value);
+    expect(deleted(calls)).toBe(0);
+  });
+
+  it.each([
+    ["the server's spelling", DELETE_FORBIDDEN],
+    ["tdlib's spelling", refusal(400, "Bad Request: Message can't be deleted for everyone")],
+  ])('strips the keyboard when the delete is forbidden, %s', async (_case, error) => {
+    const { calls, pressed, logger } = await launch(LAUNCH, {}, [['deleteMessage', error]]);
+    expect(methods(calls)).toEqual([
+      'answerCallbackQuery',
+      'sendMessage',
+      'deleteMessage',
+      'editMessageReplyMarkup',
+    ]);
+    expect(payloadOf(calls, 'editMessageReplyMarkup')).toEqual(pressed);
+    expect(warnings(logger)).toEqual([]);
+  });
+
+  it('does nothing more when the launch screen is already gone', async () => {
+    const { calls, logger } = await launch(LAUNCH, {}, [
+      ['deleteMessage', refusal(400, 'Bad Request: message to delete not found')],
+    ]);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'deleteMessage']);
+    expect(infos(logger)).toContain('the launch screen was already gone');
+    expect(warnings(logger)).toEqual([]);
+  });
+
+  it.each([
+    ['another refusal', refusal(429, 'Too Many Requests: retry after 1')],
+    [
+      'a transport failure',
+      new HttpError("Network request for 'deleteMessage' failed!", new Error('socket hang up')),
+    ],
+  ])('warns and does nothing more on %s of the delete', async (_case, error) => {
+    const { calls, logger } = await launch(LAUNCH, {}, [['deleteMessage', error]]);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'deleteMessage']);
+    expect(warnings(logger)).toEqual(['the launch screen was not deleted']);
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('retry after');
+  });
+
+  it.each([
+    ['refused', refusal(400, "Bad Request: message can't be edited")],
+    [
+      'failed in transport',
+      new HttpError("Network request for 'editMessageReplyMarkup' failed!", new Error('reset')),
+    ],
+  ])('warns when the strip after a forbidden delete is %s', async (_case, error) => {
+    const { calls, logger } = await launch(LAUNCH, {}, [
+      ['deleteMessage', DELETE_FORBIDDEN],
+      ['editMessageReplyMarkup', error],
+    ]);
+    expect(methods(calls).at(-1)).toBe('editMessageReplyMarkup');
+    expect(warnings(logger)).toEqual(['the launch screen keyboard was not removed']);
+  });
+
+  it('deletes nothing for the plain session button, demo or real', async () => {
+    for (const data of [START, REAL_START]) {
+      const { calls } = await launch(data, {
+        startSession: () =>
+          Promise.resolve({
+            started: data === REAL_START ? sessionView({ mode: TradeMode.Real }) : SESSION_VIEW,
+          }),
+      });
+      expect(methods(calls), data).toEqual(['answerCallbackQuery', 'sendMessage']);
+    }
   });
 });
