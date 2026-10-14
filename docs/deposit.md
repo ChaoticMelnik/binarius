@@ -15,12 +15,14 @@ so that no button opens a page that does not work yet.
 bot (#27): «💳 Пополнить» web_app button → WEB_PUBLIC_URL/cashier
 web (#111): GET /cashier — Mini App page; the widget in an iframe; postMessage handshake
 web (#111): POST /cashier/session — same-origin, per-IP window, forwards {initData, clientIp?} to backend
-web (#112): POST /cashier/credited — same-origin, forwards initData to backend
+web (#112): POST /cashier/credited — same-origin, the same per-IP window, forwards {initData} to backend
 backend (#11): POST /deposit/widget-session {initData, clientIp?} → DEMO_ONLY → initData → user
                → the single active account → ensureFreshAccessToken(mayRefresh: true)
                → broker POST /v1/broker/widget-sessions {origin: WEB_PUBLIC_URL, mode: deposit}
                → {session, expiresInSec, widgetUrl, widgetOrigin}
-backend (#112): POST /deposit/credited {initData} → balance refresh → «Реальный баланс: $X»
+backend (#112): POST /deposit/credited {initData} → DEMO_ONLY → initData → per-user window
+               → the single active account → balance refresh (requested, mayRefresh: true)
+               → on a write: push «Реальный баланс: $X» with «🏠 В меню», once a minute per user
 ```
 
 The session reaches the iframe only through `postMessage` (`binodex-embed:ready` → `init`), never
@@ -150,6 +152,7 @@ rather than framed. Both processes read the one variable through one parser
 | `GET /cashier` | the page: Telegram's SDK, `/cashier/static/app.js`, one hidden block per state, «Повторить», «Вернуться в Telegram», and `<iframe id="widget" allow="payment *; clipboard-write *">` without a `src` |
 | `GET /cashier/static/app.js` | the page script (`cashier/client.ts`), `public, max-age=3600` |
 | `POST /cashier/session` | same-origin (the app's `Origin` check); the per-IP window; a strict `{ initData }` body up to `DEPOSIT_BODY_LIMIT_BYTES`; forwards `{ initData, clientIp? }` to `POST /deposit/widget-session` without a bearer, timed out at `DEPOSIT_WIDGET_SESSION_REQUEST_TIMEOUT_MS` (10 s, `apps/web/src/timing.ts`, above the route's 8 s budget, below the 11 s shutdown) |
+| `POST /cashier/credited` (#112) | same-origin; the **same** per-IP window object; a strict `{ initData }` body up to 8 KiB (else 400, no forward); forwards `{ initData }` — no `clientIp` — to `POST /deposit/credited` without a bearer, timed out at `DEPOSIT_CREDITED_REQUEST_TIMEOUT_MS` (10 s, above the route's 8 s budget); answers 204 whatever the forward did — [After a deposit](#after-a-deposit--post-depositcredited-112) |
 
 **The handshake** follows broker-web's `pay-embed.tsx`. The script attaches its `message` listener
 first, then mints a session and sets `iframe.src` to the `widgetUrl` the backend answered — the
@@ -161,9 +164,33 @@ Web's own messages from `window.parent` included.
 | Message | Page |
 |---|---|
 | `binodex-embed:ready` | the **first** `ready` takes the session minted on load while it is younger than `min(45 s, expiresInSec)` and clears it; otherwise, and on every later `ready` (the widget reloaded itself), a fresh `POST /cashier/session`. Then `{ type: 'binodex-embed:init', session }` is posted with target origin `widgetOrigin`, never `'*'`. A failed fresh mint shows its state and posts nothing |
+| `binodex-embed:reauth-required` (#112) | the load session is dropped and a fresh `POST /cashier/session` is posted as `init` to the same frame: no reload, `src` untouched (C18) |
 | `binodex-embed:resize` | `iframe.style.height` = `height` clamped to 520–900 px, only for a finite number (initial 720 px) |
 | `binodex-embed:close` | `Telegram.WebApp.close()` |
-| `credited`, `error`, `reauth-required` | recognised, nothing done until #112 |
+| `binodex-embed:credited` (#112) | the `credited` notice above the widget, which stays (the user may pay again; `close` is the widget's); `POST /cashier/credited` with `{ initData }` only — the event's payload (amount, currency) is never read, and the POST's answer or failure changes nothing on the page (C15, C16) |
+| `binodex-embed:error` (#112) | the `widget_error` notice above the widget, which stays; the event's `message` is never read, shown, sent or logged (C17) |
+
+**The order of mint results** (#112; closes #492's review m1). The script keeps a `generation`,
+bumped by every load (the first one and «Повторить»), which also clears the held session, the
+fresh-mint flag and `widgetOrigin` (so the old frame's messages are ignored during a reload):
+
+- a result of an older generation is dropped whole — no state, no `init` (C21a, C21b);
+- at most one fresh mint (`ready`, `reauth-required`) is in flight; an event of either kind while
+  it is coalesces into it: one POST, one `init` (C19);
+- a successful fresh mint brings the widget back — state blocks, «Повторить» and «Вернуться»
+  hidden, the iframe shown — before it posts `init`, so a widget an earlier failure hid returns
+  (C21c);
+- **one more mint on `unavailable`** (manager's decision Q2 on #112): every mint — the load, a fresh
+  `ready`, `reauth-required` — that answers `unavailable` (the route's state, or the script's own
+  mapping of a non-JSON body or a rejected fetch) is repeated once at once, in the same generation;
+  the second answer is applied as it is (C20). The page cannot tell a broker 401 (#11's row 11: the
+  next call exchanges) from an outage, so any `unavailable` gets the one retry. No retry on any other
+  state, `busy` included (C22). Bounded by the per-user (10/min) and per-IP (60/min) windows.
+
+**Notices.** `credited` and `error` show one of two server-rendered blocks (`<p data-notice="credited"
+role="status" hidden>`, `<p data-notice="widget_error" …>`) above the iframe; the latest event's
+notice is shown and the other hidden; a load and every state hide both. The script still holds no
+text and writes no `textContent`/`innerHTML`.
 
 The session lives in the script's closure, the POST answer and `postMessage` only: never in a URL,
 `localStorage`, `sessionStorage` or a cookie, and never in a log line (`session` and `initData` are
@@ -219,7 +246,8 @@ widgetUrl, widgetOrigin }` or `{ outcome: <state> }`; each row has a test in
 | 18 | no answer (network, the 10 s timeout) | 500 `unavailable` (+ `error`) | `unavailable` | yes |
 | 19 | the app's `Origin` check | 403 HTML | `unavailable` | yes |
 
-The script maps an unknown outcome, a non-JSON body and a rejected fetch to `unavailable`.
+The script maps an unknown outcome, a non-JSON body and a rejected fetch to `unavailable`; an
+`unavailable` from any source but an unknown outcome is shown after the second answer (C20, C11).
 «Повторить» re-runs the load (mint, then `src`); every state without it except
 `open_from_telegram` offers «Вернуться в Telegram» (`WebApp.close()`).
 
@@ -240,6 +268,109 @@ if the widget navigates its frame to another origin (3-D Secure, a payment provi
 popup, that origin has to be added to `DEPOSIT_WIDGET_ORIGINS` (check 3 shows it). The per-IP
 window is per process and in memory, and false once more than ~20 people behind one address open
 the cashier in the same minute (they see «busy» and retry).
+
+## After a deposit — `POST /deposit/credited` (#112)
+
+The widget's `binodex-embed:credited` is a **trigger, not data**: the page sends `{ initData }`
+only, both schemas are strict (an `amount` key is a 400 at `web` and at the backend), and the only
+effect is a broker balance read of the caller's own account. A forged `credited` — the user owns
+their `initData` and can call the route — refreshes their own balance, within the per-user window.
+Nothing is credited anywhere: crediting deposits is #386.
+
+Public as `widget-session` is, in the same plugin (`apps/backend/src/deposit/credited.ts`,
+registered by `deposit/routes.ts`), so it shares the plugin's ceiling and is not
+`publicThroughProxy` (the proxy guard `postbacks/routes.db.test.ts` G1 covers it through `onRoute`).
+
+Steps, each before the next:
+
+1. the plugin's ceiling, 600 a minute, shared with `widget-session`;
+2. the strict `{ initData }` body (`depositCreditedRequestSchema`, 8 KiB);
+3. **DEMO_ONLY** → 409 `demo_only`, before any read: no widget session exists on such a server, so
+   a `credited` there is stale or forged (K1);
+4. `initData`: the deposit verifier, 1 h + skew;
+5. the per-user window: `DEPOSIT_CREDITED_PER_USER_PER_MINUTE` = 3 per Telegram user, taken after
+   `initData`, never given back — a burst of the widget's events is one refresh (K3);
+6. the account: `resolveBalanceAccount`, as `widget-session`; a blocked user stops here;
+7. `touchBalanceRequested`, as `POST /trading/access` does, so the tick watches the account even if
+   this refresh writes nothing;
+8. `balance.refresh(accountId, { signal: AbortSignal.timeout(DEPOSIT_CREDITED_REFRESH_BUDGET_MS),
+   requested: true, mayRefresh: true })` — a user action (Rule 12), one flight per account; the
+   route's wait ends at the signal, a flight it joined or started goes on by the reconciler's rules;
+9. on `ok` only: the push.
+
+Answer `{ outcome: 'refreshed' | 'pending' }` (`depositCreditedResponseSchema`). `pending` is
+"nothing written within the budget": the tick refreshes the watched account within its interval
+(docs/broker-balance.md).
+
+### Error table — `POST /deposit/credited`
+
+The outcome table is `CREDITED_ANSWERS` (`satisfies Record<BalanceRefreshOutcome, …>`); each row
+has a test in `deposit/credited.db.test.ts`.
+
+| # | Source | Answer | Push |
+|---|---|---|---|
+| 1 | body not a strict `{ initData }` | 400 `validation` | no |
+| 2 | the plugin's ceiling | 429 `too_many_requests` | no |
+| 3 | DEMO_ONLY | 409 `demo_only` | no |
+| 4 | `initData` malformed, forged, stale | 401 `invalid_telegram_auth` | no |
+| 5 | the per-user window (the 4th in a minute) | 429 `too_many_requests` | no |
+| 6 | no user, no account, no active account | 409 `no_active_account` | no |
+| 7 | two or more active accounts | 409 `ambiguous_account` | no |
+| 8 | the resolved user is blocked; refresh `user_blocked` | 409 `user_blocked` | no |
+| 9 | refresh `account_not_found` (the row went between the resolution and the lock) | 409 `no_active_account` | no |
+| 10 | refresh `account_pending`, `account_revoked` | 409 `token_unavailable` | no |
+| 11 | refresh `ok` | 200 `refreshed` | yes, unless one went to this user within 60 s |
+| 12 | refresh `aborted` (our budget), `refresh_needed`, `unauthorized` (the reconciler has reported the token), `rate_limited`, `rejected`, `unavailable`, `contract_violation`, `account_mismatch`, `key_unavailable` | 200 `pending`, logged `info` with the outcome | no |
+| 13 | a throw (the database, the reconciler) | 500 `internal` | no |
+
+`web`'s `POST /cashier/credited` answers the page 204 whatever happens here and logs: nothing for a
+200; `warn` with status and reason for a 401/409/429 carrying a `DepositErrorCode`; `error` for
+anything else (no answer, a 2xx outside the contract, 400 `validation`, 5xx, an unknown code). Its
+own refusals: the per-IP window → 429, a body that is not a strict `{ initData }` → 400, a
+cross-origin POST → 403 — none forwarded.
+
+### The push
+
+After `ok` the route reads the snapshot it has just written (`readBalanceSnapshot` →
+`toBrokerBalanceView`) and sends `ClientPush.sendDepositCredited(telegramUserId, { amount:
+real.available, fresh })` (`apps/backend/src/auth/client-push.ts`), which builds the catalog's
+`depositCredited` («💳 Пополнение получено / Реальный баланс: {realBalance}», group `deposit`,
+[bot-texts.md](bot-texts.md)) with the «🏠 В меню» button (`MENU_CALLBACK_DATA`). The amount is the
+broker's, formatted by the `realBalance` variable from its `DecimalString` (Rule 2); nothing of the
+request or the widget's event reaches it. If the broker's ledger has not moved yet, the message says
+what the broker reported (owner's decision 2026-10-08).
+
+At most one push per Telegram user per `DEPOSIT_PUSH_MIN_INTERVAL_MS` (60 s): a keyed window of 1,
+taken just before the send and never given back, so a failed send does not invite a retry storm
+(K9). A send failure is logged `warn` by name and code (`errorLogFields` + `telegramErrorFields`,
+`push: 'deposit'`) and handed to `recordTelegramSendFailure` (a 403 marks the user unreachable); it
+never changes the answer (K10). The push answers the user's own action, like the push after the
+site login: `notification_level` does not apply (K11), and `telegram_blocked_at` is not read before
+the send.
+
+No push on `pending` (accepted): a broker slower than 3 s, a token exchange inside the budget or a
+429 leaves the user with the page's notice and no bot message; the tick writes the snapshot within
+its interval and the next `/menu` shows it.
+
+### Budgets
+
+`DEPOSIT_CREDITED_BUDGET_MS` (8 s, `packages/shared/src/deposit.ts`) is what the route may take:
+the refresh wait (`DEPOSIT_CREDITED_REFRESH_BUDGET_MS`, 3 s, `apps/backend/src/timing.ts`) and the
+push (`CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS`, 3 s); it is inside the backend's shutdown phase 1, and
+`web`'s forward (`DEPOSIT_CREDITED_REQUEST_TIMEOUT_MS`, 10 s) waits longer. Statements are ordinary
+latency. The links are in both processes' `TIMING_CHAIN_HOLDS`.
+
+**Owner checks** (need the deployed `backend` and `web` with this part, the live widget and a
+non-demo-only stand — the owner's decision each time; not run by the pipeline):
+
+1. In the cashier (Telegram), make a test deposit: the page shows «Пополнение получено — баланс в
+   боте обновится», the widget stays; within a few seconds the bot sends «💳 Пополнение получено /
+   Реальный баланс: $X» with «🏠 В меню», and X matches the broker's cabinet.
+2. Leave the cashier open past the widget session's lifetime (`expiresInSec`, 60 s by the probe)
+   and continue: the widget's `reauth-required` is answered without a reload (no «Открываем
+   кассу…», the form keeps its state).
+3. `docker compose logs web | grep cashier` and `docker compose logs backend | grep -i credited`:
+   no `initData`, no session string, no widget `message`.
 
 ## The probe
 
@@ -281,10 +412,9 @@ Exit code 0 on `ok`, 1 otherwise.
 ## Contracts for the next parts
 
 - #111 (done, The page above): one variable and one parser for both processes.
-- #112: re-mint through `POST /cashier/session` unchanged; `broker_unavailable` after a 401 means
-  "retry once"; the page script's mint-and-`init` path serves `reauth-required`; a
-  `POST /cashier/credited` takes the same per-IP window object; the dispatcher's three no-op
-  branches (`cashier/client.ts`) are where the handlers go.
+- #112 (done, After a deposit above): `reauth-required` re-mints through `POST /cashier/session`
+  unchanged; every `unavailable` mint is retried once; `POST /cashier/credited` takes the same
+  per-IP window object.
 - #27: offer the button whatever the user's `trading_mode`; it opens `WEB_PUBLIC_URL/cashier` (no
   query).
 
@@ -292,7 +422,8 @@ Exit code 0 on `ok`, 1 otherwise.
 
 - One attempt per request: a retry is the user's (the page's retry button), bounded by the per-user
   window.
-- The windows are per process, as the callback's (`packages/shared/src/rate-window.ts`).
+- The windows are per process and in memory, as the callback's (`packages/shared/src/rate-window.ts`):
+  the per-user session and credited windows and the deposit push window (#112) reset on a restart.
 - Rule 12's residual window: a block committed after the token was read does not stop that one
   widget call (stated, as for every caller).
 - `region: "ru"` without a `widget_url`: the fallback is the global platform; whether that is

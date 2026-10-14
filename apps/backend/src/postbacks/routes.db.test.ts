@@ -357,6 +357,7 @@ describe('the proxy guard', () => {
       '/admin/sessions/:id/revoke',
       // public by initData, but reached from web on the internal network only (#11)
       '/deposit/widget-session',
+      '/deposit/credited',
       '/postbacks/binodex/:secret',
     ]) {
       expect(urls).toContain(url);
