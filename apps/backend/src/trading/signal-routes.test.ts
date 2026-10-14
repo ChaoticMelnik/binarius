@@ -34,6 +34,7 @@ import {
   unusedSessionDeps,
   unusedSignalsDeps,
 } from './testing';
+import { unusedDepositDeps } from '../deposit/testing';
 
 const I = SIGNAL_CHART_INTERVAL_MS['1m'];
 const B = Math.floor(1_760_000_000_000 / I) * I;
@@ -96,6 +97,7 @@ function appWith(
 ): FastifyInstance {
   lines = [];
   app = buildApp({
+    deposit: unusedDepositDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'info',

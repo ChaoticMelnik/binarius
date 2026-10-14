@@ -17,6 +17,7 @@ import {
   BROKER_RATE_LIMIT_PER_MINUTE,
   DEFAULT_SIGNAL_SCAN_PER_MINUTE,
 } from '@binarius/shared/broker-budget';
+import { DEPOSIT_WIDGET_SESSION_BUDGET_MS } from '@binarius/shared/deposit';
 import { OAUTH_CALLBACK_BUDGET_MS } from '@binarius/shared/oauth';
 import {
   SIGNAL_CHART_INTERVAL_MS,
@@ -40,6 +41,7 @@ import {
   BOT_PROFILE_PUBLISH_TIMEOUT_MS,
   BOT_TEXTS_LOAD_BUDGET_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
+  DEPOSIT_BROKER_CALL_BUDGET_MS,
   CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
   MAILING_PLAN_TICK_MS,
   MAILING_SEND_BATCH,
@@ -120,6 +122,28 @@ describe('backend shutdown timing', () => {
     expect(composeServiceEnvValue(composeYaml, 'backend', 'POSTBACK_URL_SECRET')).toBe('');
     expect(
       composeServiceEnvValue(composeYaml, 'trading-worker', 'POSTBACK_URL_SECRET'),
+    ).toBeUndefined();
+  });
+});
+
+describe('the cashier widget session timing (#11)', () => {
+  it('fits an exchange and the broker call inside the route budget, inside phase 1', () => {
+    expect(BROKER_HTTP_TIMEOUT_MS + DEPOSIT_BROKER_CALL_BUDGET_MS).toBeLessThanOrEqual(
+      DEPOSIT_WIDGET_SESSION_BUDGET_MS,
+    );
+    expect(DEPOSIT_WIDGET_SESSION_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  // the route's signal fires first, so a slow broker reads as our budget (aborted)
+  it('ends the broker call before the REST client times out', () => {
+    expect(DEPOSIT_BROKER_CALL_BUDGET_MS).toBeLessThan(BROKER_REST_TIMEOUT_MS);
+  });
+
+  // forwarded only when the host sets it: the default is the broker platform's origin (env.ts)
+  it('forwards DEPOSIT_WIDGET_ORIGINS to the backend only, without a default', () => {
+    expect(composeServiceEnvValue(composeYaml, 'backend', 'DEPOSIT_WIDGET_ORIGINS')).toBe('');
+    expect(
+      composeServiceEnvValue(composeYaml, 'trading-worker', 'DEPOSIT_WIDGET_ORIGINS'),
     ).toBeUndefined();
   });
 });

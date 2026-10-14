@@ -11,3 +11,9 @@ export const INIT_DATA_CLOCK_SKEW_MS = 60_000;
 // the state existed (until #314), and the callback has to arrive before the state expires, so a
 // real login's initData is never older than the state's TTL; the skew covers the two clocks.
 export const INIT_DATA_MAX_AGE_MS = OAUTH_STATE_TTL_MS + INIT_DATA_CLOCK_SKEW_MS;
+
+// The cashier (#11, docs/deposit.md): the Mini App stays open while the user pays, and every
+// session renewal after the widget's reauth (#112) re-sends the initData it was opened with. What
+// it grants is a deposit session for the user's own account, so an hour is the accepted window.
+export const DEPOSIT_INIT_DATA_SESSION_MS = 3_600_000;
+export const DEPOSIT_INIT_DATA_MAX_AGE_MS = DEPOSIT_INIT_DATA_SESSION_MS + INIT_DATA_CLOCK_SKEW_MS;

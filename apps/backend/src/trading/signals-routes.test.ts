@@ -19,6 +19,7 @@ import {
   unusedSessionDeps,
   unusedSignalDeps,
 } from './testing';
+import { unusedDepositDeps } from '../deposit/testing';
 
 // a 15 s boundary, so a 5 s one too; the candle before it opened at CLOSED (15s) or CLOSED_5S (5s)
 const B = 1_760_000_010_000;
@@ -44,6 +45,7 @@ const of15s = (scanned: number[], entries: [number, ScanEntry][]): ScanSnapshot 
 function appWith(snapshots: ScanSnapshot[], now = NOW): FastifyInstance {
   let read = 0;
   app = buildApp({
+    deposit: unusedDepositDeps(),
     checkPostgres: () => Promise.resolve(),
     checkRedis: () => Promise.resolve(),
     logLevel: 'silent',

@@ -14,6 +14,7 @@ import {
   unusedSessionDeps,
   unusedSignalsDeps,
 } from './trading/testing';
+import { unusedDepositDeps } from './deposit/testing';
 
 const ok = () => Promise.resolve();
 const down = () => Promise.reject(new Error('down'));
@@ -52,6 +53,7 @@ const unusedUsers: UsersRoutesDeps = {
 
 async function health(deps: Pick<AppDeps, 'checkPostgres' | 'checkRedis'>) {
   const app = buildApp({
+    deposit: unusedDepositDeps(),
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),
@@ -134,6 +136,7 @@ describe('what reaches the log', () => {
   ) {
     const logs = captureLogs();
     const app = buildApp({
+      deposit: unusedDepositDeps(),
       pairs: unusedPairsDeps(),
       sessions: unusedSessionDeps(),
       signal: unusedSignalDeps(),
@@ -362,6 +365,7 @@ describe('request logging', () => {
 
   it('answers an unknown route without echoing what it carried', async () => {
     const app = buildApp({
+      deposit: unusedDepositDeps(),
       pairs: unusedPairsDeps(),
       sessions: unusedSessionDeps(),
       signal: unusedSignalDeps(),
@@ -392,6 +396,7 @@ describe('request logging', () => {
 describe('error handler', () => {
   async function withApp(run: (app: ReturnType<typeof buildApp>) => Promise<void>) {
     const app = buildApp({
+      deposit: unusedDepositDeps(),
       pairs: unusedPairsDeps(),
       sessions: unusedSessionDeps(),
       signal: unusedSignalDeps(),

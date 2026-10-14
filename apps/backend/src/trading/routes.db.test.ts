@@ -26,6 +26,7 @@ import {
   unusedSessionDeps,
   unusedSignalsDeps,
 } from './testing';
+import { unusedDepositDeps } from '../deposit/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -44,6 +45,7 @@ let app: ReturnType<typeof buildApp>;
 
 const appWith = (demoOnly = false) =>
   buildApp({
+    deposit: unusedDepositDeps(),
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),

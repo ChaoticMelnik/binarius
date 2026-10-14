@@ -97,6 +97,7 @@ import {
   unusedSignalsDeps,
   unusedSessionDeps,
 } from '../trading/testing';
+import { unusedDepositDeps } from '../deposit/testing';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -131,6 +132,7 @@ const build = (
   derivations = 0;
   hashCalls = 0;
   return buildApp({
+    deposit: unusedDepositDeps(),
     pairs: unusedPairsDeps(),
     sessions: unusedSessionDeps(),
     signal: unusedSignalDeps(),

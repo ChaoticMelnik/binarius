@@ -135,6 +135,9 @@ services:
       # GET /postbacks/binodex/<secret>. Forwarded only when set; unset, the route does not exist.
       # Here rather than in the broker anchor: the worker never receives it.
       POSTBACK_URL_SECRET:
+      # The cashier widget's origins (#11, docs/deposit.md). Forwarded only when set; unset, the
+      # backend allows the origin of BROKER_OAUTH_AUTHORIZE_URL alone.
+      DEPOSIT_WIDGET_ORIGINS:
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:3000"
     healthcheck:
