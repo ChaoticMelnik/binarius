@@ -462,7 +462,9 @@ warn line. The first live email login after a deploy is what checks it.
 transaction holding the account row, which makes it single-flight per account. Its callers are
 the broker balance refresh (`apps/backend/src/broker/balance-reconciler.ts`): `POST
 /trading/access` with the default `mayRefresh: true`, and the background tick with
-`mayRefresh: false`; and the trading worker's token route `POST /trading/accounts/:id/access-token`
+`mayRefresh: false`; the cashier's `POST /deposit/widget-session` (#11) with `mayRefresh: true`, a
+user action, and the owner's `deposit-probe` with `false` ([deposit.md](deposit.md)); and the trading
+worker's token route `POST /trading/accounts/:id/access-token`
 (#90, internal bearer), which passes `mayRefresh` from its body — the caller names its policy
 (`accessTokenRequestSchema`, no default) — and, when the broker has just refused a token, its
 fingerprint `refusedToken` ([A refused token](#a-refused-token-is-an-expired-token-281)). The route answers `{ accessToken }` or `{ error }` with
@@ -707,6 +709,14 @@ A 400 on the code exchange is also what our own malformed request gets (`Validat
 such a bug reaches the browser as `invalid_code`, and the callback's warn line cannot tell it from
 an expired code either. That is the accepted cost of not reading the body; the client tests pin
 the map, so a change to what we send is caught there rather than in production.
+
+### The cashier widget session (#11, not verified live)
+
+`POST /v1/broker/widget-sessions` is a user-bearer REST call (`@binarius/broker-rest`,
+`createWidgetSession`), not part of the OAuth client above: Bearer = the user's access token, JSON
+`{origin, mode: "deposit", user_ip?}`, answer `{session, expires_in, widget_url?, widget_origin?,
+region?}`. The shape is the broker's own cashier (`binodex/broker-web`), not a live observation:
+the owner's `deposit-probe` is the first live call ([deposit.md](deposit.md) → The probe).
 
 ### Live check: OAuth tokens on `user-auth/refresh`
 

@@ -51,7 +51,8 @@ how a user switches between demo and real, and what real mode changes, is in
 where the broker balance snapshot comes from and how fresh it is kept is in
 [docs/broker-balance.md](docs/broker-balance.md); how the broker's Deposit and FTD postbacks are
 received, journaled and deduplicated (nothing is credited yet) is in
-[docs/postbacks.md](docs/postbacks.md).
+[docs/postbacks.md](docs/postbacks.md); how the cashier gets a session of the broker's deposit
+widget, and the owner's probe of it, is in [docs/deposit.md](docs/deposit.md).
 
 ## Requirements
 

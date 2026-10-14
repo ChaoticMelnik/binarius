@@ -195,8 +195,10 @@ processes, which the compose anchor does from one `.env` value, and the check be
 The bot does not know the flag: it shows
 the refusal as «⚠️ Реальные сделки на этом сервере отключены — доступен только демо-режим.» and the
 rejection as «⚠️ Сделка отклонена: реальные сделки на этом сервере отключены. Токен возвращён.»;
-the cashier (#11) must refuse `POST /deposit/widget-session` with 409 `demo_only` before it
-exchanges a token (a requirement on #11, not code yet).
+the cashier (#11) refuses `POST /deposit/widget-session` with 409 `demo_only` before it reads the
+database, exchanges a token or calls the broker (`deposit/routes.db.test.ts` D10), and
+`deposit-probe` refuses the same way (`cli/deposit-probe.test.ts` P2; [deposit.md](deposit.md) →
+DEMO_ONLY).
 
 Not covered by a second check: the executor itself. Its only caller is `submitWithDeadline`
 (`processor.ts`), which runs after a successful take; the breaker's decorator (#96,
