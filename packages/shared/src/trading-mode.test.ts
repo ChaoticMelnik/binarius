@@ -24,16 +24,18 @@ describe('safeParseSetTradingModeRequest', () => {
 });
 
 describe('safeParseSetTradingModeResponse', () => {
-  it('accepts the mode and whether it changed', () => {
-    const input = { tradingMode: 'real', changed: true };
+  it('accepts the mode, whether it changed and the sessions it stopped', () => {
+    const input = { tradingMode: 'real', changed: true, stoppedSessions: 1 };
     const parsed = safeParseSetTradingModeResponse(input);
     expect(parsed.success && parsed.data).toEqual(input);
   });
 
   it.each([
-    ['without changed', { tradingMode: 'demo' }],
-    ['an unknown mode', { tradingMode: 'paper', changed: false }],
-    ['an unknown key', { tradingMode: 'demo', changed: false, extra: 1 }],
+    ['without changed', { tradingMode: 'demo', stoppedSessions: 0 }],
+    ['without stoppedSessions', { tradingMode: 'demo', changed: false }],
+    ['a negative stoppedSessions', { tradingMode: 'demo', changed: true, stoppedSessions: -1 }],
+    ['an unknown mode', { tradingMode: 'paper', changed: false, stoppedSessions: 0 }],
+    ['an unknown key', { tradingMode: 'demo', changed: false, stoppedSessions: 0, extra: 1 }],
   ])('refuses a body %s', (_label, input) => {
     expect(safeParseSetTradingModeResponse(input).success).toBe(false);
   });

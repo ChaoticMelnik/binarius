@@ -422,7 +422,7 @@ ${TEXTS.intentTrade({ line: trade })}
 ${statusLineOfIntent(view)}${tail}`;
 }
 
-// A demo session's stop reasons but completed, by key (#284). kill_switch reads the single
+// A session's stop reasons but completed, by key (#284). kill_switch reads the single
 // trade's own refusal of the closed switch.
 const SESSION_STOP_LINES = {
   [TradingSessionStopReason.ManualReview]: 'sessionStopManualReview',
@@ -450,10 +450,19 @@ export function pluralTrades(count: number): string {
 }
 const tradesCount = (count: number): string => `${String(count)} ${pluralTrades(count)}`;
 
+// A session door's label in real mode carries the mode's label (#327), as the stake button does
+// (#121), so a real session never starts from a button that looks like a demo one
+const withModeLabel = (label: string, mode: TradeMode): string =>
+  mode === TradeMode.Real ? `${label} · ${MODE_LABELS[TradeMode.Real]}` : label;
 // the session button of the analysis screen and of a finished trade (#360), with the number of
 // trades it starts
-export const sessionStartButtonLabel = (trades: number): string =>
-  plain.sessionStartButton({ trades: tradesCount(trades) });
+export const sessionStartButtonLabel = (trades: number, mode: TradeMode): string =>
+  withModeLabel(plain.sessionStartButton({ trades: tradesCount(trades) }), mode);
+// the launch screen's cycle button (#320) and «🔁 Ещё сессия» under a finished session (#318)
+export const launchCycleButtonLabel = (mode: TradeMode): string =>
+  withModeLabel(LABELS.launchCycleButton, mode);
+export const sessionAgainButtonLabel = (mode: TradeMode): string =>
+  withModeLabel(LABELS.sessionAgainButton, mode);
 
 // A trade with an outgoing edge in the shared graph: it can still settle or be rejected, so the
 // session's counters can still move (manual_review included).
@@ -543,7 +552,8 @@ export const sessionShareCaption = (
     botUsername,
   });
 
-// The demo session's one message (#284, docs/bot-session.md): the header and the settings, then
+// The session's one message (#284, docs/bot-session.md): the header by mode (#327) and the
+// settings, then
 // a live session's trade number, score and the last trade's status, or a stopped session's
 // reason and result. `symbol` is null when the catalog could not say.
 export function sessionStatusText(
@@ -552,8 +562,9 @@ export function sessionStatusText(
   { deadline = false }: { deadline?: boolean } = {},
 ): TelegramHtml {
   const { settings, trades, lastIntent } = view;
+  const header = view.mode === TradeMode.Real ? TEXTS.sessionHeaderReal : TEXTS.sessionHeader;
   if (settings === null) {
-    return telegramHtml`${TEXTS.sessionHeader}
+    return telegramHtml`${header}
 
 ${TEXTS.sessionSettingsUnavailable}`;
   }
@@ -562,7 +573,7 @@ ${TEXTS.sessionSettingsUnavailable}`;
     durationLabelOf(settings.durationSec),
     plain.intentStake({ amount: formatStake(settings.stake.baseStake) }),
   ].join(' · ');
-  const head = [TEXTS.sessionHeader, TEXTS.sessionSettings({ line })];
+  const head = [header, TEXTS.sessionSettings({ line })];
   const body: TelegramHtml[] = [];
   if (view.status !== TradingSessionStatus.Stopped) {
     const step = Math.min(trades.settled + 1, trades.planned);
@@ -705,8 +716,8 @@ export const signalButtonLabel = (symbol: string, action: TradeAction, payout: n
 // The launch screen (#320): the pair at the chosen duration (#382), the amount the cycle trades,
 // what the cycle does. A symbol the catalog did not give drops its line, an amount access did not
 // give reads as the broker's minimum; `saved` is what the picker has just saved and in which mode,
-// null for the reset to the minimum. In real mode (#121) the stake and cycle lines give way to the
-// single trade's: cycles are demo only.
+// null for the reset to the minimum. In real mode (#327) the cycle line says the trades use real
+// money.
 export function launchText({
   firstName,
   durationSec,
@@ -734,15 +745,13 @@ export function launchText({
             subject: `${symbol} · ${DEMO_DURATION_LABELS[durationSec]}`,
           }),
         ]),
-    // real mode: no stake line, the single trade's line in place of the cycle's (decision 22)
-    ...(mode === TradeMode.Real
-      ? [TEXTS.launchRealMode]
-      : [
-          amount === null
-            ? TEXTS.launchStakeMinimum(context)
-            : TEXTS.launchStake({ ...context, stake: amount }),
-          TEXTS.launchCycle({ ...context, trades: tradesCount(trades) }),
-        ]),
+    amount === null
+      ? TEXTS.launchStakeMinimum(context)
+      : TEXTS.launchStake({ ...context, stake: amount }),
+    (mode === TradeMode.Real ? TEXTS.launchCycleReal : TEXTS.launchCycle)({
+      ...context,
+      trades: tradesCount(trades),
+    }),
   ];
   if (saved === undefined) return joinLines(lines);
   return telegramHtml`${stakeSavedLine(saved.mode, { firstName, stake: saved.amount })}

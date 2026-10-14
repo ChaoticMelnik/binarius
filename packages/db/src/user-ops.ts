@@ -18,6 +18,7 @@ import { auditLog } from './schema/audit-log';
 import { brokerAccounts } from './schema/broker-accounts';
 import { referralCodes, referrals } from './schema/referrals';
 import { users } from './schema/users';
+import { stopUserSessions } from './trading-session-ops';
 
 export type UserStartRow = Pick<
   typeof users.$inferSelect,
@@ -218,12 +219,15 @@ export interface SetTradingModeResult {
   tradingMode: TradeMode;
   // false: the user was in that mode already; nothing was written and no audit row added
   changed: boolean;
+  // the user's active sessions the switch stopped (user_stopped), 0 when nothing changed (#327)
+  stoppedSessions: number;
 }
 
 // The one writer of users.trading_mode (#121, Rule 36). The UPDATE carries `trading_mode <> $mode`,
 // so two concurrent switches serialize on the row lock and exactly one audit row is written per
-// actual change, in the same transaction. Locks only the users row (Rule 5). undefined = no users
-// row. The balance check of a switch to real is the route's (POST /trading/mode), not this one's.
+// actual change, in the same transaction. A change also stops the user's active sessions in that
+// transaction (#327): a session runs only in its user's mode. Locks the users row, then those
+// sessions (Rule 5). undefined = no users row. The balance check of a switch to real is the route's (POST /trading/mode), not this one's.
 export async function setTradingMode(
   db: Db,
   telegramUserId: bigint,
@@ -244,12 +248,15 @@ export async function setTradingMode(
         entityId: updated.id,
         payload: { from: mode === TradeMode.Real ? TradeMode.Demo : TradeMode.Real, to: mode },
       });
-      return { tradingMode: mode, changed: true };
+      const stopped = await stopUserSessions(tx, { telegramUserId: telegramUserId.toString() });
+      return { tradingMode: mode, changed: true, stoppedSessions: stopped.length };
     }
     const [row] = await tx
       .select({ tradingMode: users.tradingMode })
       .from(users)
       .where(eq(users.telegramUserId, telegramUserId));
-    return row === undefined ? undefined : { tradingMode: row.tradingMode, changed: false };
+    return row === undefined
+      ? undefined
+      : { tradingMode: row.tradingMode, changed: false, stoppedSessions: 0 };
   });
 }

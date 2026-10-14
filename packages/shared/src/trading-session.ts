@@ -133,10 +133,11 @@ export const TradingSessionErrorCode = {
   InsufficientTokens: 'insufficient_tokens',
   // the global trading switch is closed (#144, docs/kill-switch.md)
   TradingPaused: 'trading_paused',
-  // sessions are demo only until #327: createTradingSession refuses a non-demo session, and the
-  // start route refuses a user whose trading mode is real (#121, checkTradingSessionStart)
+  // the request's mode is not the user's trading mode (#327): the start route's pre-check
+  // (checkTradingSessionStart) and createTradingSession under the users lock
   ModeNotAllowed: 'mode_not_allowed',
-  // a real session on a DEMO_ONLY process (#396), before mode_not_allowed
+  // a real session on a DEMO_ONLY process (#396): createTradingSession refuses it before its
+  // transaction, so before mode_not_allowed of the lock
   DemoOnly: 'demo_only',
   ActiveSessionExists: 'active_session_exists',
   SessionTooLong: 'session_too_long',
@@ -159,6 +160,8 @@ export type TradingSessionErrorCode =
 export const createTradingSessionRequestSchema = z.strictObject({
   telegramUserId: telegramUserIdSchema,
   brokerAccountId: z.uuid().optional(),
+  // required (#327): the bot's button carries the mode it was drawn in
+  mode: tradeModeSchema,
   assetId: tradingSessionSettingsSchema.shape.assetId,
   durationSec: tradingSessionSettingsSchema.shape.durationSec,
   trades: tradingSessionSettingsSchema.shape.trades.default(DEFAULT_SESSION_TRADES),

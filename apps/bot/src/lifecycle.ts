@@ -29,7 +29,7 @@ export interface RunBotOptions {
   bot: PollingLoop;
   // the demo trades' status tracker (#127): stopped with the bot, its attempt in flight drained
   tracker: Pick<IntentTracker, 'stop'>;
-  // the demo sessions' status tracker (#284), drained the same way
+  // the sessions' status tracker (#284), drained the same way
   sessionTracker: Pick<SessionTracker, 'stop'>;
   // the text overrides' refresher (#299): its load in flight waited for, and its first load
   // awaited before the menu and the profile are published (#301)

@@ -119,7 +119,7 @@ export interface CreateBotOptions {
   now?: () => number;
   // follows each demo trade's status message (#127); required, so no test arms timers unasked
   intentTracker: Pick<IntentTracker, 'track'>;
-  // follows each demo session's status message (#284); required for the same reason
+  // follows each session's status message (#284); required for the same reason
   sessionTracker: Pick<SessionTracker, 'track'>;
 }
 

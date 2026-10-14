@@ -12,11 +12,12 @@ import {
   createTempDatabase,
   seedBalanceSnapshot,
   seedBrokerAccount,
+  seedTradingSession,
   seedUser,
   seedUserWithAccount,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { auditLog, setTradingMode, users } from '@binarius/db';
+import { auditLog, setTradingMode, tradingSessions, users } from '@binarius/db';
 import { tradingRoutes } from './routes';
 import { unusedAccessTokenDeps, unusedBalanceDeps } from './testing';
 
@@ -76,6 +77,14 @@ const modeOf = async (telegramUserId: string) =>
       .where(eq(users.telegramUserId, BigInt(telegramUserId)))
   )[0]?.tradingMode;
 
+const sessionOf = async (id: string) =>
+  (
+    await tmp.db
+      .select({ status: tradingSessions.status, stopReason: tradingSessions.stopReason })
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, id))
+  )[0];
+
 async function ready(snapshot: { minTradeAmount?: string; realAvailable?: string } = {}) {
   const seed = await seedUserWithAccount(tmp.db);
   await seedBalanceSnapshot(tmp.db, seed.brokerAccountId, snapshot);
@@ -110,19 +119,31 @@ describe('POST /trading/mode (#121)', () => {
     const user = await seedUser(tmp.db, { tradingMode: TradeMode.Real });
     const response = await switchTo({ telegramUserId: user.telegramUserId, mode: TradeMode.Demo });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ tradingMode: TradeMode.Demo, changed: true });
+    expect(response.json()).toEqual({
+      tradingMode: TradeMode.Demo,
+      changed: true,
+      stoppedSessions: 0,
+    });
     expect(safeParseSetTradingModeResponse(response.json()).success).toBe(true);
     expect(await modeOf(user.telegramUserId)).toBe(TradeMode.Demo);
 
     const again = await switchTo({ telegramUserId: user.telegramUserId, mode: TradeMode.Demo });
-    expect(again.json()).toEqual({ tradingMode: TradeMode.Demo, changed: false });
+    expect(again.json()).toEqual({
+      tradingMode: TradeMode.Demo,
+      changed: false,
+      stoppedSessions: 0,
+    });
   });
 
   it('T2 switches to real with real.available equal to the minimum, writing one audit row', async () => {
     const seed = await ready({ minTradeAmount: '5', realAvailable: '5.00000000' });
     const response = await switchTo({ telegramUserId: seed.telegramUserId, mode: TradeMode.Real });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ tradingMode: TradeMode.Real, changed: true });
+    expect(response.json()).toEqual({
+      tradingMode: TradeMode.Real,
+      changed: true,
+      stoppedSessions: 0,
+    });
     expect(await modeOf(seed.telegramUserId)).toBe(TradeMode.Real);
     const rows = await tmp.db
       .select({ payload: auditLog.payload })
@@ -195,7 +216,39 @@ describe('POST /trading/mode (#121)', () => {
       demoOnlyApp,
     );
     expect(back.statusCode).toBe(200);
-    expect(back.json()).toEqual({ tradingMode: TradeMode.Demo, changed: true });
+    expect(back.json()).toEqual({ tradingMode: TradeMode.Demo, changed: true, stoppedSessions: 0 });
+  });
+
+  // #327: a session runs only in its user's mode
+  it('T9 a switch to demo stops the active real session and counts it', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
+      mode: TradeMode.Real,
+    });
+    const response = await switchTo({ telegramUserId: seed.telegramUserId, mode: TradeMode.Demo });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      tradingMode: TradeMode.Demo,
+      changed: true,
+      stoppedSessions: 1,
+    });
+    expect(safeParseSetTradingModeResponse(response.json()).success).toBe(true);
+    expect(await sessionOf(session.id)).toEqual({ status: 'stopped', stopReason: 'user_stopped' });
+  });
+
+  it('T10 the mode the user is in already stops nothing', async () => {
+    const seed = await ready();
+    await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
+      mode: TradeMode.Real,
+    });
+    const response = await switchTo({ telegramUserId: seed.telegramUserId, mode: TradeMode.Real });
+    expect(response.json()).toEqual({
+      tradingMode: TradeMode.Real,
+      changed: false,
+      stoppedSessions: 0,
+    });
+    expect(await sessionOf(session.id)).toEqual({ status: 'active', stopReason: null });
   });
 
   it('allows real for a blocked user: their trades refuse at creation', async () => {

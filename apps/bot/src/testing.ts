@@ -433,7 +433,7 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
 
 // a tracker that arms no timer: what every bot built in a test gets unless it asserts on tracking
 export const stubTracker = (): { track: Mock<IntentTracker['track']> } => ({ track: vi.fn() });
-// the same for the demo sessions' tracker (#284)
+// the same for the sessions' tracker (#284)
 export const stubSessionTracker = (): { track: Mock<SessionTracker['track']> } => ({
   track: vi.fn(),
 });
@@ -611,6 +611,7 @@ export interface CapturedApi {
 export const WRITE_CALLBACK_PREFIXES = [
   'demo:stake:',
   'demo:sess:',
+  'real:sess:',
   'session:stop:',
   'confirm:',
   'resend',

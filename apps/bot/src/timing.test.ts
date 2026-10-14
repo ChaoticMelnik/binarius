@@ -1197,7 +1197,7 @@ const STOPPED_SESSION = sessionView({
   endedAt: '2026-10-07T10:05:00.000Z',
 });
 const sessionStartUpdate = (chatType?: string) =>
-  callbackUpdate(sessionStartCallbackData(PAIR_EURUSD.id, 5), chatType);
+  callbackUpdate(sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5), chatType);
 const sessionHttpError = (status: number, reason: string) =>
   new BackendError(BackendErrorCode.HttpStatus, { status, reason });
 const SESSION_START_WORST_CASE: Branch = {

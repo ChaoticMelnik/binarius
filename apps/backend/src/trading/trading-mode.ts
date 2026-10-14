@@ -14,8 +14,9 @@ import { readBalanceSnapshot, resolveBalanceAccount, setTradingMode, type Db } f
 // any age (no broker call) with real.available at least the broker's minimum. Read, then write,
 // not atomic by choice, as POST /trading/stake: the bound is a UX gate, and the broker refuses
 // a real order above the balance. users.status and the kill-switch are not read: a blocked user's
-// trades and a closed switch are refused at creation. Registered inside tradingRoutes, whose
-// bearer hook covers it.
+// trades and a closed switch are refused at creation. A change stops the user's active sessions
+// in the switch's transaction, counted in stoppedSessions (#327). Registered inside
+// tradingRoutes, whose bearer hook covers it.
 export function registerTradingMode(
   app: FastifyInstance,
   { db, demoOnly }: { db: Db; demoOnly: boolean },
@@ -44,6 +45,10 @@ export function registerTradingMode(
 
     const result = await setTradingMode(db, telegramUserId, mode);
     if (result === undefined) return userNotFound();
-    return reply.send({ tradingMode: result.tradingMode, changed: result.changed });
+    return reply.send({
+      tradingMode: result.tradingMode,
+      changed: result.changed,
+      stoppedSessions: result.stoppedSessions,
+    });
   });
 }

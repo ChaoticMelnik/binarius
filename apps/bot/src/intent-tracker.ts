@@ -3,7 +3,6 @@ import {
   errorLogFields,
   TRADE_INTENT_TRANSITIONS,
   TradeIntentStatus,
-  TradeMode,
   type TelegramHtml,
   type TradeIntentFailureReason,
   type TradeIntentView,
@@ -39,15 +38,13 @@ export const TRACKER_STOP_STATUSES: ReadonlySet<TradeIntentStatus> = new Set([
 ]);
 
 // The session offer under a finished single trade (#360): the line and the row are drawn on a stop
-// status of a demo trade (#121: sessions are demo only, and a user who traded real is in real
-// mode) whose duration a session of today's set takes, on a pair paying at least the cycle floor
-// (#379), and only then. The duration is the row's datum; a trade from before #313 (60 s) gets
-// neither.
+// status of a trade of either mode (#327: the row starts a session of the trade's mode) whose
+// duration a session of today's set takes, on a pair paying at least the cycle floor (#379), and
+// only then. The duration is the row's datum; a trade from before #313 (60 s) gets neither.
 export const sessionOfferOf = (
   view: Pick<TradeIntentView, 'mode' | 'status' | 'durationSec'>,
   payoutAccepted: boolean,
 ): DemoDurationSec | undefined => {
-  if (view.mode !== TradeMode.Demo) return undefined;
   if (!payoutAccepted || !TRACKER_STOP_STATUSES.has(view.status)) return undefined;
   const durationSec = durationOf(String(view.durationSec));
   return durationSec !== undefined && sessionFits(durationSec) ? durationSec : undefined;

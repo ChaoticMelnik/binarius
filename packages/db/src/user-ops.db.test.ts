@@ -13,12 +13,25 @@ import {
   type DecimalString,
   type OAuthTokens,
 } from '@binarius/shared';
-import { START_PAYLOAD_CORPUS } from '@binarius/shared/testing';
+import { START_PAYLOAD_CORPUS, until } from '@binarius/shared/testing';
 import { createTokenCipher } from './crypto';
 import { setNotificationLevel } from './delivery-ops';
 import { confirmBrokerAccount, linkBrokerAccount } from './oauth-ops';
-import { createTempDatabase, seedBrokerAccount, type TempDatabase } from './testing';
-import { auditLog, brokerAccounts, referralCodes, referrals, users } from './schema/index';
+import {
+  createTempDatabase,
+  seedBrokerAccount,
+  seedTradingSession,
+  seedUser,
+  type TempDatabase,
+} from './testing';
+import {
+  auditLog,
+  brokerAccounts,
+  referralCodes,
+  referrals,
+  tradingSessions,
+  users,
+} from './schema/index';
 import { readStakes, recordUserStart, setStake, setTradingMode, toUserStartView } from './user-ops';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
@@ -518,6 +531,7 @@ describe('setTradingMode (#121)', () => {
     expect(await setTradingMode(tmp.db, telegramUserId, TradeMode.Real)).toEqual({
       tradingMode: TradeMode.Real,
       changed: true,
+      stoppedSessions: 0,
     });
     expect((await modeOf(telegramUserId))!.tradingMode).toBe(TradeMode.Real);
     expect(await auditRowsOf(id)).toEqual([
@@ -534,6 +548,7 @@ describe('setTradingMode (#121)', () => {
     expect(await setTradingMode(tmp.db, telegramUserId, TradeMode.Demo)).toEqual({
       tradingMode: TradeMode.Demo,
       changed: true,
+      stoppedSessions: 0,
     });
     expect((await auditRowsOf(id)).map((row) => row.payload)).toEqual([
       { from: 'demo', to: 'real' },
@@ -548,11 +563,13 @@ describe('setTradingMode (#121)', () => {
     expect(await setTradingMode(tmp.db, telegramUserId, TradeMode.Demo)).toEqual({
       tradingMode: TradeMode.Demo,
       changed: false,
+      stoppedSessions: 0,
     });
     await setTradingMode(tmp.db, telegramUserId, TradeMode.Real);
     expect(await setTradingMode(tmp.db, telegramUserId, TradeMode.Real)).toEqual({
       tradingMode: TradeMode.Real,
       changed: false,
+      stoppedSessions: 0,
     });
     expect(await auditRowsOf(id)).toHaveLength(1);
   });
@@ -588,6 +605,98 @@ describe('setTradingMode (#121)', () => {
       await tmp.pool.query('alter table audit_log drop constraint audit_log_no_mode_check');
     }
     expect((await modeOf(telegramUserId))!.tradingMode).toBe(TradeMode.Demo);
+  });
+
+  // #327: a session runs only in its user's mode, so a switch stops the user's sessions
+  const sessionStateOf = async (id: string) =>
+    (
+      await tmp.db
+        .select({
+          status: tradingSessions.status,
+          stopReason: tradingSessions.stopReason,
+          endedAt: tradingSessions.endedAt,
+        })
+        .from(tradingSessions)
+        .where(eq(tradingSessions.id, id))
+    )[0]!;
+  const seedRealUserWithSessions = async (accounts: number) => {
+    const user = await seedUser(tmp.db, { tradingMode: TradeMode.Real });
+    const sessions = [];
+    for (let i = 0; i < accounts; i++) {
+      const brokerAccountId = await seedBrokerAccount(tmp.db, user.userId);
+      sessions.push(await seedTradingSession(tmp.db, brokerAccountId, { mode: TradeMode.Real }));
+    }
+    return { telegramUserId: BigInt(user.telegramUserId), sessions };
+  };
+
+  it("U-mode 6 a switch stops the user's active sessions on every account, no one else's", async () => {
+    const seed = await seedRealUserWithSessions(2);
+    const other = await seedRealUserWithSessions(1);
+    expect(await setTradingMode(tmp.db, seed.telegramUserId, TradeMode.Demo)).toEqual({
+      tradingMode: TradeMode.Demo,
+      changed: true,
+      stoppedSessions: 2,
+    });
+    for (const session of seed.sessions) {
+      const state = await sessionStateOf(session.id);
+      expect(state).toMatchObject({ status: 'stopped', stopReason: 'user_stopped' });
+      expect(state.endedAt).toBeInstanceOf(Date);
+    }
+    expect(await sessionStateOf(other.sessions[0]!.id)).toMatchObject({
+      status: 'active',
+      stopReason: null,
+    });
+  });
+
+  it('U-mode 7 the mode the user is in already stops nothing', async () => {
+    const seed = await seedRealUserWithSessions(1);
+    expect(await setTradingMode(tmp.db, seed.telegramUserId, TradeMode.Real)).toEqual({
+      tradingMode: TradeMode.Real,
+      changed: false,
+      stoppedSessions: 0,
+    });
+    expect(await sessionStateOf(seed.sessions[0]!.id)).toMatchObject({ status: 'active' });
+  });
+
+  it("U-mode 8 the stop is in the switch's transaction: the mode commits with it", async () => {
+    const seed = await seedRealUserWithSessions(1);
+    const sessionId = seed.sessions[0]!.id;
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let taken!: () => void;
+    const lockTaken = new Promise<void>((resolve) => (taken = resolve));
+    const holder = tmp.db.transaction(async (tx) => {
+      await tx
+        .select()
+        .from(tradingSessions)
+        .where(eq(tradingSessions.id, sessionId))
+        .for('update');
+      taken();
+      await released;
+    });
+    await lockTaken;
+    let settled = false;
+    const switching = setTradingMode(tmp.db, seed.telegramUserId, TradeMode.Demo).finally(
+      () => (settled = true),
+    );
+    await until('the switch to queue behind the session lock or finish', async () => {
+      const { rows } = await tmp.db.execute<{ waiting: number }>(
+        sql`select count(*)::int as waiting from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+      );
+      return settled || (rows[0]?.waiting ?? 0) > 0;
+    });
+    const modeWhileWaiting = (
+      await tmp.db
+        .select({ tradingMode: users.tradingMode })
+        .from(users)
+        .where(eq(users.telegramUserId, seed.telegramUserId))
+    )[0]!.tradingMode;
+    release();
+    await holder;
+    expect(settled).toBe(false);
+    expect(modeWhileWaiting).toBe(TradeMode.Real);
+    expect(await switching).toMatchObject({ changed: true, stoppedSessions: 1 });
+    expect(await sessionStateOf(sessionId)).toMatchObject({ stopReason: 'user_stopped' });
   });
 
   it('touches only trading_mode and updated_at', async () => {

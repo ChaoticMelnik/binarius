@@ -79,8 +79,8 @@ export function intentKeyboard(
     keyboard
       .row()
       .text(
-        sessionStartButtonLabel(DEFAULT_SESSION_TRADES),
-        sessionStartCallbackData(view.assetId, offer),
+        sessionStartButtonLabel(DEFAULT_SESSION_TRADES, view.mode),
+        sessionStartCallbackData(view.mode, view.assetId, offer),
       );
   }
   return TRACKER_STOP_STATUSES.has(view.status)

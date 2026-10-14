@@ -118,7 +118,18 @@ describe('stakeSettingsFor', () => {
 });
 
 describe('createTradingSessionRequestSchema', () => {
-  const request = { telegramUserId: '42', assetId: 101, durationSec: 60 };
+  const request = { telegramUserId: '42', mode: 'demo', assetId: 101, durationSec: 60 };
+
+  it.each(['demo', 'real'])('parses mode %s', (mode) => {
+    const parsed = safeParseCreateTradingSessionRequest({ ...request, mode });
+    expect(parsed.success && parsed.data.mode).toBe(mode);
+  });
+
+  it('refuses a request without a mode or with an unknown one', () => {
+    const withoutMode = { telegramUserId: '42', assetId: 101, durationSec: 60 };
+    expect(safeParseCreateTradingSessionRequest(withoutMode).success).toBe(false);
+    expect(safeParseCreateTradingSessionRequest({ ...request, mode: 'bogus' }).success).toBe(false);
+  });
 
   it('defaults trades to DEFAULT_SESSION_TRADES and keeps an explicit value', () => {
     const parsed = safeParseCreateTradingSessionRequest(request);
@@ -132,7 +143,7 @@ describe('createTradingSessionRequestSchema', () => {
       safeParseCreateTradingSessionRequest(input).success === false;
     expect(refusedRequest({ ...request, trades: 0 })).toBe(true);
     expect(refusedRequest({ ...request, trades: MAX_SESSION_TRADES + 1 })).toBe(true);
-    expect(refusedRequest({ ...request, mode: 'demo' })).toBe(true);
+    expect(refusedRequest({ ...request, stake: '1' })).toBe(true);
     expect(refusedRequest({ ...request, brokerAccountId: 'nope' })).toBe(true);
     expect(refusedRequest({ ...request, assetId: 1.5 })).toBe(true);
     expect(refusedRequest({ ...request, telegramUserId: 42 })).toBe(true);

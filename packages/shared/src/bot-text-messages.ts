@@ -354,7 +354,7 @@ const sessionStopLines = [
   'sessionStopUserStopped',
   'tradingPaused',
 ] as const satisfies readonly BotHtmlKey[];
-const sessionHead = [k('sessionHeader'), '\n', k('sessionSettings')];
+const sessionHead = [anyOf('sessionHeader', 'sessionHeaderReal'), '\n', k('sessionSettings')];
 // a finished session's result and the balance after it, by mode, with the age when it predates
 // the last trade (#337, texts.ts → outcomeLines)
 const sessionOutcome = [
@@ -436,13 +436,12 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       ...features(true),
       '\n',
       k('demoPayout'),
-      oneOf(
-        // demo: a pair paying below the cycle floor gets no session row, the note says why (on
-        // every decided answer, #379)
-        [oneOf([], ['\n', k('analysisCycleUnavailable')]), '\n\n', k('analysisDisclaimer')],
-        // real mode (#121): no cycle to refuse, its own disclaimer
-        ['\n\n', k('analysisDisclaimerReal')],
-      ),
+      // a pair paying below the cycle floor gets no session row, the note says why (on every
+      // decided answer, #379; in both modes, #327)
+      oneOf([], ['\n', k('analysisCycleUnavailable')]),
+      '\n\n',
+      // real mode (#121): its own disclaimer
+      anyOf('analysisDisclaimer', 'analysisDisclaimerReal'),
     ],
   },
   {
@@ -469,11 +468,8 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       '\n\n',
       ...features(false),
       '\n\n',
-      oneOf(
-        [k('analysisNoSignalHint'), oneOf([], ['\n', k('analysisCycleUnavailable')])],
-        // real mode (#121): no cycle to refuse
-        [k('analysisNoSignalHintReal')],
-      ),
+      k('analysisNoSignalHint'),
+      oneOf([], ['\n', k('analysisCycleUnavailable')]),
     ],
   },
   {
@@ -518,7 +514,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     id: 'sessionNoSettings',
     title: 'Сессия: настройки не прочитаны',
     limit: TELEGRAM_MESSAGE_LIMIT,
-    body: [k('sessionHeader'), '\n\n', k('sessionSettingsUnavailable')],
+    body: [anyOf('sessionHeader', 'sessionHeaderReal'), '\n\n', k('sessionSettingsUnavailable')],
   },
   {
     id: 'sessionRunning',
@@ -577,11 +573,10 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       '\n\n',
       k('launchHeader'),
       '\n',
-      // real mode (#121): one line of the single trade in place of the stake and the cycle
-      oneOf(
-        [anyOf('launchStake', 'launchStakeMinimum'), '\n', k('launchCycle')],
-        [k('launchRealMode')],
-      ),
+      anyOf('launchStake', 'launchStakeMinimum'),
+      '\n',
+      // real mode (#327): the cycle trades real money
+      anyOf('launchCycle', 'launchCycleReal'),
     ],
   },
   {

@@ -15,7 +15,7 @@ import { telegramErrorFields, type Logger } from './logging';
 import { editRefusal } from './screen';
 import { sessionStatusText, TEXTS } from './texts';
 
-// The demo session's status message follows its session (#284, docs/bot-session.md): the bot
+// The session's status message follows its session (#284, docs/bot-session.md): the bot
 // polls GET /trading/sessions/:id and edits the message as the session moves. In-process memory,
 // like the intent tracker: a restart leaves each message at its last state, and its «🔄 Обновить»
 // is the recovery — a refresh of a live session tracks it again on that message.

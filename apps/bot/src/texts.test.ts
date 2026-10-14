@@ -78,7 +78,9 @@ import {
   PROFILE,
   pluralTrades,
   sessionShareCaption,
+  sessionAgainButtonLabel,
   sessionStartButtonLabel,
+  launchCycleButtonLabel,
   sessionStatusText,
   setBotTextSource,
   settingsText,
@@ -1096,6 +1098,15 @@ describe('the demo session status', () => {
     );
   });
 
+  // #327: the header by the session's mode, the settings unavailable included
+  it('heads a real session «💼 Реальная сессия» and a demo one «🎮 Демо-сессия»', () => {
+    const real = sessionView({ mode: TradeMode.Real });
+    expect(plainOf('X', real).split('\n')[0]).toBe('💼 Реальная сессия');
+    expect(plainOf('X', { ...real, settings: null }).split('\n')[0]).toBe('💼 Реальная сессия');
+    expect(plainOf('X', SESSION_VIEW).split('\n')[0]).toBe('🎮 Демо-сессия');
+    expect(plainOf('X', { ...SESSION_VIEW, settings: null }).split('\n')[0]).toBe('🎮 Демо-сессия');
+  });
+
   it('waits for a signal while no trade is open, with no score before the first settle', () => {
     expect(plainOf('X', SESSION_VIEW)).toBe(
       [
@@ -1361,10 +1372,19 @@ describe('the demo session status', () => {
 
   // not in LABELS, so the LABELS-wide checks above do not see it
   it('labels the session button plain and emoji-led, with the number of trades', () => {
-    const label = sessionStartButtonLabel(5);
+    const label = sessionStartButtonLabel(5, TradeMode.Demo);
     expect(label).toBe('🚀 Сессия из 5 сделок');
     expect(label).not.toMatch(MARKUP_OR_ENTITY);
     expect(label).toMatch(/^\p{Extended_Pictographic}/u);
+  });
+
+  // #327: a real session's doors are marked as the real stake button is
+  it('marks every session door REAL in real mode only', () => {
+    expect(sessionStartButtonLabel(5, TradeMode.Real)).toBe('🚀 Сессия из 5 сделок · REAL');
+    expect(launchCycleButtonLabel(TradeMode.Real)).toBe('🚀 Запустить цикл · REAL');
+    expect(launchCycleButtonLabel(TradeMode.Demo)).toBe('🚀 Запустить цикл');
+    expect(sessionAgainButtonLabel(TradeMode.Real)).toBe('🔁 Ещё сессия · REAL');
+    expect(sessionAgainButtonLabel(TradeMode.Demo)).toBe('🔁 Ещё сессия');
   });
 });
 
@@ -1439,7 +1459,6 @@ describe('the facades over the catalog', () => {
         'helpCommand',
         'loginButton',
         'menuButton',
-        'modeAnalysisButton',
         'newAnalysisButton',
         'menuCommand',
         'oauthButton',

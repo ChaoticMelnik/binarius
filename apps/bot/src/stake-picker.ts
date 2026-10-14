@@ -442,8 +442,8 @@ export function createStakePicker<C extends Context>({
   // the session start would refuse (#379). Without a catalog, or without the pair in it, the
   // screen drops its symbol line and the launch stays, since the session start checks the pair.
   // The access read gives the user's mode (#121): a save from a launch screen drawn before a switch
-  // to real draws the real launch screen; a failed read draws the demo one, whose cycle press the
-  // backend refuses for a real-mode user (mode_not_allowed).
+  // draws the launch screen of the mode now (#327); a failed read draws the demo one, whose cycle
+  // press the backend refuses for a real-mode user (mode_not_allowed).
   async function savedLaunchScreen(
     { assetId, durationSec }: { assetId: number; durationSec: DemoDurationSec },
     saved: { amount: DecimalString | null; mode: TradeMode },
@@ -470,8 +470,8 @@ export function createStakePicker<C extends Context>({
     const pair = catalog.ok
       ? catalog.value.pairs.find((listed) => listed.id === assetId)
       : undefined;
-    // the cycle floor is a demo cycle's: real mode has no cycle (#121)
-    if (real === undefined && pair !== undefined && !pairPayoutAccepted(pair)) {
+    // the cycle floor holds in either mode (#379, #327)
+    if (pair !== undefined && !pairPayoutAccepted(pair)) {
       const refusal = payoutTooLowScreen(pair, durationSec);
       return {
         text: telegramHtml`${stakeSavedLine(saved.mode, { firstName, stake: saved.amount })}
@@ -485,7 +485,7 @@ ${refusal.text}`,
       durationSec,
       firstName,
       symbol: pair?.symbol ?? null,
-      // the amount of the user's mode: in real the real trade's stake; in demo the demo stake,
+      // the amount of the user's mode: in real the real cycle's stake; in demo the demo stake,
       // which a real save (#326) did not change
       amount:
         real !== undefined

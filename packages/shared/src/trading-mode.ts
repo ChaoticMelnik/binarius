@@ -15,6 +15,8 @@ export const setTradingModeResponseSchema = z.strictObject({
   tradingMode: tradeModeSchema,
   // false: the user was in that mode already, nothing was written
   changed: z.boolean(),
+  // the user's active sessions this switch stopped, user_stopped in its transaction (#327)
+  stoppedSessions: z.int().min(0),
 });
 
 export const TradingModeErrorCode = {

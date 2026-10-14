@@ -126,6 +126,32 @@ describe('the assembled messages', () => {
     expect(estimateBotTextMessage(intent, entities) - base).toBe(60 - widest);
   });
 
+  // #327: sessions in both modes
+  it('measures the cycle floor note under the real disclaimer of a signal', () => {
+    const analysis = message('analysisSignal');
+    const texts = { analysisDisclaimer: 'я', analysisDisclaimerReal: 'я'.repeat(300) };
+    const note = BOT_TEXT_CATALOG.analysisCycleUnavailable.source;
+    expect(
+      estimateBotTextMessage(
+        analysis,
+        withTexts({ ...texts, analysisCycleUnavailable: note + 'я'.repeat(100) }),
+      ) - estimateBotTextMessage(analysis, withTexts(texts)),
+    ).toBe(100);
+  });
+
+  it('assembles the session header and the launch cycle line of either mode', () => {
+    for (const id of ['sessionRunning', 'sessionNoSettings']) {
+      const keys = botTextMessageKeys(message(id));
+      expect(keys, id).toContain('sessionHeader');
+      expect(keys, id).toContain('sessionHeaderReal');
+    }
+    const launch = botTextMessageKeys(message('demoLaunch'));
+    for (const key of ['launchStake', 'launchStakeMinimum', 'launchCycle', 'launchCycleReal']) {
+      expect(launch, key).toContain(key);
+    }
+    expect(botTextMessageKeys(message('analysisNoSignal'))).toContain('analysisCycleUnavailable');
+  });
+
   it('reads the labels a width is made of as keys of the message', () => {
     expect(botTextMessageKeys(message('intentStatus'))).toContain('actionUp');
     expect(botTextMessageKeys(message('settings'))).toEqual(

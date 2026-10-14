@@ -278,7 +278,14 @@ describe('createTradingSession', () => {
     );
   });
 
-  it('C6 refuses a real session before it reads anything, and writes no row', async () => {
+  // #327: a session only in its user's mode, compared under the users lock
+  const sessionsOfAccount = (brokerAccountId: string) =>
+    tmp.db
+      .select()
+      .from(tradingSessions)
+      .where(eq(tradingSessions.brokerAccountId, brokerAccountId));
+
+  it('C6 refuses a real session of a user in demo mode, and writes no row', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     await sessionFailsWith(
       createSessionRow({
@@ -289,12 +296,61 @@ describe('createTradingSession', () => {
       }),
       TradingSessionDbErrorCode.ModeNotAllowed,
     );
-    expect(
-      await tmp.db
-        .select()
-        .from(tradingSessions)
-        .where(eq(tradingSessions.brokerAccountId, seed.brokerAccountId)),
-    ).toEqual([]);
+    expect(await sessionsOfAccount(seed.brokerAccountId)).toEqual([]);
+  });
+
+  it('C6b refuses a demo session of a user in real mode, and writes no row', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
+    await sessionFailsWith(
+      createSessionRow({
+        telegramUserId: seed.telegramUserId,
+        brokerAccountId: seed.brokerAccountId,
+        mode: TradeMode.Demo,
+        settings: sessionSettings(),
+      }),
+      TradingSessionDbErrorCode.ModeNotAllowed,
+    );
+    expect(await sessionsOfAccount(seed.brokerAccountId)).toEqual([]);
+  });
+
+  it('C8 creates a real session for a user in real mode, with the settings as given', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
+    const settings = sessionSettings({ trades: 4 });
+    const row = await createSessionRow({
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Real,
+      settings,
+    });
+    expect(row).toMatchObject({ mode: 'real', status: 'active' });
+    expect((await sessionOf(row.id))!.settings).toEqual(settings);
+  });
+
+  it('C5c waits on a held user row; a switch to demo committed meanwhile refuses a real session', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    const holder = holdLock(async (tx) => {
+      await tx.select().from(users).where(eq(users.id, seed.userId)).for('no key update');
+      await tx.update(users).set({ tradingMode: TradeMode.Demo }).where(eq(users.id, seed.userId));
+    });
+    await holder.lockTaken;
+    const creating = thrown(
+      createSessionRow({
+        telegramUserId: seed.telegramUserId,
+        brokerAccountId: seed.brokerAccountId,
+        mode: TradeMode.Real,
+        settings: sessionSettings(),
+      }),
+    );
+    const queued = await queuedBehindLock(creating);
+    holder.release();
+    await holder.done;
+    expect(queued).toBe(true);
+    const error = await creating;
+    expect(error).toBeInstanceOf(TradingSessionError);
+    expect((error as TradingSessionError).code).toBe(TradingSessionDbErrorCode.ModeNotAllowed);
+    expect(await sessionsOfAccount(seed.brokerAccountId)).toEqual([]);
   });
 
   it('C4 refuses a halted account, a blocked user and an unknown id', async () => {
@@ -414,7 +470,7 @@ describe('createTradingSession', () => {
 });
 
 describe('createTradingSession: DEMO_ONLY (#396)', () => {
-  it('F1 refuses a real session before it reads anything, ahead of mode_not_allowed', async () => {
+  it('F1 refuses a real session before it reads anything; without the flag the read answers', async () => {
     const seed = await seedUserWithAccount(tmp.db);
     // an unknown account: a guard that read the account first would answer account_not_found
     const input = {
@@ -429,7 +485,7 @@ describe('createTradingSession: DEMO_ONLY (#396)', () => {
     );
     await sessionFailsWith(
       createTradingSession(tmp.db, input, { demoOnly: false }),
-      TradingSessionDbErrorCode.ModeNotAllowed,
+      TradingSessionDbErrorCode.AccountNotFound,
     );
     expect(
       await tmp.db

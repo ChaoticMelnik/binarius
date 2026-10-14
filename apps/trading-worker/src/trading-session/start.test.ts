@@ -106,4 +106,11 @@ describe('SESSION_START_REFUSALS (#287)', () => {
       expect(SESSION_START_REFUSALS[code]).toMatch(/[а-яА-Я]/);
     }
   });
+
+  // #327: the CLI creates demo sessions only, and a session only in its user's mode
+  it('names the way out for a user in real mode', () => {
+    expect(SESSION_START_REFUSALS[TradingSessionDbErrorCode.ModeNotAllowed]).toBe(
+      'Пользователь в реальном режиме: CLI создаёт только demo-сессии — запустите сессию из бота или верните пользователя в demo',
+    );
+  });
 });

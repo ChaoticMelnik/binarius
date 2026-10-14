@@ -149,7 +149,9 @@ const END_ROWS = [
   MENU_ROW,
 ];
 // #360: under a finished trade, the session on the same pair and duration before the end of the path
-const SESSION_ROW = [button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 15))];
+const SESSION_ROW = [
+  button('🚀 Сессия из 5 сделок', sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15)),
+];
 const OFFER_END_ROWS = [SESSION_ROW, ...END_ROWS];
 const OFFER = '🤖 Дальше бот может торговать сам';
 const BACK_GROUPS = button(LABELS.demoBackGroupsButton, DEMO_GROUPS_CALLBACK_DATA);
@@ -471,7 +473,8 @@ describe('the stake button', () => {
       expect(sent?.text).toContain('💼 <b>Реальная сделка</b>');
     });
 
-    it('offers no session under a settled real trade', async () => {
+    // #327: a real session of the trade's pair and duration
+    it('offers a real session under a settled real trade', async () => {
       const settled = intentView({ mode: TradeMode.Real, status: TradeIntentStatus.Settled });
       const { press, calls } = setup({
         readTradingAccess: real,
@@ -479,8 +482,16 @@ describe('the stake button', () => {
       });
       await press(REAL_STAKE);
       const sent = payloadOf(calls, 'sendMessage');
-      expect(sent?.text).not.toContain(OFFER);
-      expect(rowsOf(sent)).toEqual(END_ROWS);
+      expect(sent?.text).toContain(OFFER);
+      expect(rowsOf(sent)).toEqual([
+        [
+          button(
+            '🚀 Сессия из 5 сделок · REAL',
+            sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+          ),
+        ],
+        ...END_ROWS,
+      ]);
     });
 
     it.each([
@@ -995,7 +1006,16 @@ describe('intentKeyboard', () => {
   it('starts the session of the trade pair and duration', () => {
     const view = intentView({ status: TradeIntentStatus.Settled, assetId: 77, durationSec: 5 });
     expect(intentKeyboard(view, true).inline_keyboard[0]).toEqual([
-      button('🚀 Сессия из 5 сделок', sessionStartCallbackData(77, 5)),
+      button('🚀 Сессия из 5 сделок', sessionStartCallbackData(TradeMode.Demo, 77, 5)),
+    ]);
+    const real = intentView({
+      mode: TradeMode.Real,
+      status: TradeIntentStatus.Settled,
+      assetId: 77,
+      durationSec: 5,
+    });
+    expect(intentKeyboard(real, true).inline_keyboard[0]).toEqual([
+      button('🚀 Сессия из 5 сделок · REAL', sessionStartCallbackData(TradeMode.Real, 77, 5)),
     ]);
   });
 

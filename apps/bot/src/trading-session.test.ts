@@ -60,7 +60,8 @@ import {
 import { INVITE_CALLBACK_DATA } from './keyboards';
 import { INLINE_QUERY_LIMIT, shareQuery } from './session-share';
 
-const START = sessionStartCallbackData(PAIR_EURUSD.id, 5);
+const START = sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5);
+const REAL_START = sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5);
 // the sizes of the card's sendPhoto result, smallest first (#321)
 const SMALL_FILE_ID = 'AgACAgIAAxkBAAIBsmall';
 const CARD_FILE_ID = 'AgACAgIAAxkBAAIBlarge';
@@ -169,7 +170,10 @@ const LIVE_ROWS = [
   [button(LABELS.sessionRefreshButton, REFRESH), button(LABELS.sessionStopButton, STOP)],
 ];
 // SESSION_VIEW's own pair and duration
-const AGAIN = button(LABELS.sessionAgainButton, sessionStartCallbackData(PAIR_EURUSD.id, 15));
+const AGAIN = button(
+  LABELS.sessionAgainButton,
+  sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15),
+);
 // #350: the end of the path under a stopped session, after its refresh and «🔁 Ещё сессия»
 // the list of the session's duration; the duration screen for one the demo no longer offers (#382)
 const toSignals = (durationSec: 5 | 15) => [
@@ -216,7 +220,15 @@ describe('the session button', () => {
 
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
     expect(startSession.mock.calls).toEqual([
-      [{ telegramUserId: String(USER.id), assetId: PAIR_EURUSD.id, durationSec: 5, trades: 5 }],
+      [
+        {
+          telegramUserId: String(USER.id),
+          mode: TradeMode.Demo,
+          assetId: PAIR_EURUSD.id,
+          durationSec: 5,
+          trades: 5,
+        },
+      ],
     ]);
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(statusOf(SESSION_VIEW));
@@ -332,9 +344,49 @@ describe('the session button', () => {
     expect(START_REFUSALS[TradingSessionErrorCode.InsufficientTokens].text).toBe(
       'sessionInsufficientTokens',
     );
-    // #121: a user in real mode pressing a session button of an earlier render, not a bug
+    // #327: a button drawn in the other mode, or a switch since the render: not a bug
     expect(START_REFUSALS[TradingSessionErrorCode.ModeNotAllowed]).toEqual({
-      text: 'sessionRealMode',
+      text: 'stakeAmountChanged',
+    });
+  });
+
+  // #327: a real press sends its mode, its stake refusal names the real account and opens the
+  // real picker
+  describe('in real mode', () => {
+    it('sends mode real for a real button and shows the real header', async () => {
+      const realView = sessionView({ mode: TradeMode.Real });
+      const { press, calls, startSession } = setup({
+        startSession: () => Promise.resolve({ started: realView }),
+      });
+      await press(REAL_START);
+      expect(startSession.mock.calls[0]?.[0]).toMatchObject({ mode: TradeMode.Real });
+      const text = payloadOf(calls, 'sendMessage')?.text;
+      expect(text).toBe(statusOf(realView));
+      expect(text).toMatch(/^💼 <b>Реальная сессия<\/b>/);
+    });
+
+    it('answers insufficient_balance with the real text and the real picker', async () => {
+      const { press, calls, logger } = setup({
+        startSession: () =>
+          Promise.reject(httpError(409, TradingSessionErrorCode.InsufficientBalance)),
+      });
+      await press(REAL_START);
+      const sent = payloadOf(calls, 'sendMessage');
+      expect(sent?.text).toBe(TEXTS.stakeAboveAvailableReal.value);
+      expect(rowsOf(sent)).toEqual([
+        [button(LABELS.stakeMenuButton, stakeMenuCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5))],
+      ]);
+      expect(warnings(logger)).toEqual([]);
+    });
+
+    it('answers mode_not_allowed as «режим изменился», once, without a warning', async () => {
+      const { press, calls, startSession, logger } = setup({
+        startSession: () => Promise.reject(httpError(409, TradingSessionErrorCode.ModeNotAllowed)),
+      });
+      await press(REAL_START);
+      expect(payloadOf(calls, 'sendMessage')?.text).toBe(TEXTS.stakeAmountChanged.value);
+      expect(startSession).toHaveBeenCalledTimes(1);
+      expect(warnings(logger)).toEqual([]);
     });
   });
 
@@ -685,7 +737,12 @@ describe('«🔁 Ещё сессия»', () => {
       rows(sessionView({ ...STOPPED, settings: { ...STOPPED.settings!, durationSec: 5 } })),
     ).toEqual([
       [button(LABELS.sessionRefreshButton, REFRESH)],
-      [button(LABELS.sessionAgainButton, sessionStartCallbackData(PAIR_EURUSD.id, 5))],
+      [
+        button(
+          LABELS.sessionAgainButton,
+          sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
+        ),
+      ],
       newAnalysis(5),
       toSignals(5),
       INVITE,
@@ -715,8 +772,30 @@ describe('«🔁 Ещё сессия»', () => {
     const { press, startSession } = setup();
     await press(AGAIN.callback_data ?? '');
     expect(startSession.mock.calls).toEqual([
-      [{ telegramUserId: String(USER.id), assetId: PAIR_EURUSD.id, durationSec: 15, trades: 5 }],
+      [
+        {
+          telegramUserId: String(USER.id),
+          mode: TradeMode.Demo,
+          assetId: PAIR_EURUSD.id,
+          durationSec: 15,
+          trades: 5,
+        },
+      ],
     ]);
+  });
+
+  // #327: a stopped real session's again button is marked REAL and starts a real one
+  it('starts a real session again from a stopped real one', async () => {
+    const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });
+    const realAgain = button(
+      '🔁 Ещё сессия · REAL',
+      sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+    );
+    expect(sessionKeyboard(realStopped).inline_keyboard[1]).toEqual([realAgain]);
+    expect(sessionCardKeyboard(realStopped).inline_keyboard[0]).toEqual([realAgain]);
+    const { press, startSession } = setup();
+    await press(realAgain.callback_data ?? '');
+    expect(startSession.mock.calls[0]?.[0]).toMatchObject({ mode: TradeMode.Real });
   });
 });
 

@@ -5,7 +5,10 @@ import {
   TradeIntentStatus,
   TradeMode,
   TradingSessionErrorCode,
+  TradingSessionStatus,
+  TradingSessionStopReason,
   type TradingAccessResponse,
+  type TradingSessionView,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode } from './backend-client';
 import { createBot } from './bot';
@@ -23,6 +26,7 @@ import {
   stakeMenuCallbackData,
 } from './demo';
 import { intentCallbackData } from './demo-trade';
+import { sessionRefreshCallbackData } from './trading-session';
 import {
   stakeCustomCallbackData,
   stakePresetCallbackData,
@@ -49,6 +53,8 @@ import {
   fakeLogger,
   intentView,
   messageAnswer,
+  SESSION_ID,
+  sessionView,
   signalsResponse,
   stubSessionTracker,
   stubTracker,
@@ -60,9 +66,9 @@ import {
 // The real path (#121, Plan 5 decision 29): every screen a user in real mode can reach, rendered
 // through the real handlers on the catalog's default texts, must not call the trade a demo. One
 // oracle for the class rather than a list of instances: a new screen reachable in real mode is
-// added to SCENES. Staff overrides of the texts are not covered (Rule 36, stated).
-const DEMO_WORDING =
-  /деньги не нужны|это демо|демо-сделк|демо-торговл|демо-сесси|автосесси|цикл сделок|запустит цикл|запустить цикл|цикл на этой паре|сессия из/i;
+// added to SCENES. Staff overrides of the texts are not covered (Rule 36, stated). Sessions run in
+// real mode too (#327): the words of a cycle and a session are no longer demo words.
+const DEMO_WORDING = /деньги не нужны|это демо|демо-сделк|демо-торговл|демо-сесси|на демо-сч/i;
 
 const NOW = 1_790_000_000_000;
 const REAL = accessView({ tradingMode: TradeMode.Real });
@@ -75,7 +81,14 @@ interface Scene {
   evaluateSignal?: typeof SIGNAL_DECIDED;
   signals?: ReturnType<typeof signalsResponse>;
   access?: TradingAccessResponse;
+  // #327: what the session routes answer; the start refuses mode_not_allowed by default
+  startSession?: () => Promise<{ started: TradingSessionView }>;
+  readSession?: () => Promise<TradingSessionView>;
 }
+
+const sessionRefusal = (reason: TradingSessionErrorCode) => () =>
+  Promise.reject(new BackendError(BackendErrorCode.HttpStatus, { status: 409, reason }));
+const REAL_SESSION = sessionView({ mode: TradeMode.Real });
 
 const press = (name: string, data: string, patch: Partial<Scene> = {}): Scene => ({
   name,
@@ -138,7 +151,30 @@ const SCENES: Scene[] = [
     ),
   ),
   press('the refresh of a settled real trade', intentCallbackData(INTENT_ID)),
-  press('a session button of an earlier render', sessionStartCallbackData(PAIR_EURUSD.id, 15)),
+  press(
+    'a demo session button of an earlier render',
+    sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15),
+  ),
+  // #327: a real session's start, its refusal for the balance and its end
+  press('a real session start', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15), {
+    startSession: () => Promise.resolve({ started: REAL_SESSION }),
+  }),
+  press(
+    'a real session refused for the balance',
+    sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+    { startSession: sessionRefusal(TradingSessionErrorCode.InsufficientBalance) },
+  ),
+  press('a stopped real session', sessionRefreshCallbackData(SESSION_ID), {
+    readSession: () =>
+      Promise.resolve(
+        sessionView({
+          ...REAL_SESSION,
+          status: TradingSessionStatus.Stopped,
+          stopReason: TradingSessionStopReason.StakeStop,
+          endedAt: '2026-10-07T10:30:00.000Z',
+        }),
+      ),
+  }),
   // #326: the real picker opened from a real expansion, without and with a saved real stake.
   // /settings is no scene: it names both modes by the owner's decision 1.
   ...[null, decimalStringSchema.parse('5')].flatMap((realStake) => {
@@ -176,13 +212,8 @@ async function shown(scene: Scene, access: TradingAccessResponse): Promise<strin
       createIntent: (request) => Promise.resolve(intentView({ mode: request.mode })),
       readIntent: () =>
         Promise.resolve(intentView({ mode: TradeMode.Real, status: TradeIntentStatus.Settled })),
-      startSession: () =>
-        Promise.reject(
-          new BackendError(BackendErrorCode.HttpStatus, {
-            status: 409,
-            reason: TradingSessionErrorCode.ModeNotAllowed,
-          }),
-        ),
+      startSession: scene.startSession ?? sessionRefusal(TradingSessionErrorCode.ModeNotAllowed),
+      readSession: scene.readSession ?? (() => Promise.resolve(REAL_SESSION)),
     }),
     logger: fakeLogger(),
     botInfo: BOT_INFO,
@@ -210,6 +241,23 @@ describe('the real path (#121)', () => {
     const words = await shown(scene, scene.access ?? REAL);
     expect(words.length, 'the scene sent or edited nothing').toBeGreaterThan(0);
     for (const word of words) expect(word).not.toMatch(DEMO_WORDING);
+  });
+
+  // #327: what a real session shows in place of the demo words
+  it.each([
+    ['a real session start', 'Реальная сессия'],
+    ['a real session refused for the balance', 'На реальном счёте недостаточно средств'],
+    ['a stopped real session', '🔁 Ещё сессия · REAL'],
+    ['a stopped real session', 'проверь баланс в /account'],
+    ['a demo session button of an earlier render', 'Режим или сумма сделки изменились'],
+    ['the launch', '🚀 Запустить цикл · REAL'],
+    ['the analysis, a signal', '🚀 Сессия из 5 сделок · REAL'],
+    ['«➕ Ещё»', '🚀 Сессия из 5 сделок · REAL'],
+    ['the refresh of a settled real trade', '🚀 Сессия из 5 сделок · REAL'],
+  ])('%s shows «%s»', async (name, expected) => {
+    const scene = SCENES.find((candidate) => candidate.name === name)!;
+    const words = await shown(scene, scene.access ?? REAL);
+    expect(words.some((word) => word.includes(expected))).toBe(true);
   });
 
   // the control: the same oracle on a demo launch does match, so the pattern cannot go dead

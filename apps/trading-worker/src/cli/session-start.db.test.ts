@@ -157,6 +157,14 @@ describe('session-start (#287)', () => {
     },
   );
 
+  it('refuses a user in real mode: the CLI creates demo sessions only (#327)', async () => {
+    const user = await seedUser(tmp.db, { tradingMode: TradeMode.Real });
+    const brokerAccountId = await account(user.userId);
+    const result = await run({ TELEGRAM_USER_ID: user.telegramUserId });
+    expect(result).toMatchObject({ code: 1, err: [SESSION_START_REFUSALS.mode_not_allowed] });
+    expect(await sessionsOf(brokerAccountId)).toEqual([]);
+  });
+
   it('refuses while trading is paused', async () => {
     const user = await seedUser(tmp.db);
     const brokerAccountId = await account(user.userId);

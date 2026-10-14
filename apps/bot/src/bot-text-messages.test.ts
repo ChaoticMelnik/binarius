@@ -322,7 +322,11 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     ),
   demoPairs: () => GROUPS.map((group) => demoPairsScreen(group, 998, 999)),
   demoDurations: () => [demoDurationsScreen(pair)],
-  sessionNoSettings: () => [sessionStatusText(null, sessionView({ settings: null }))],
+  // the header by the session's mode (#327)
+  sessionNoSettings: () =>
+    Object.values(TradeMode).map((mode) =>
+      sessionStatusText(null, sessionView({ mode, settings: null })),
+    ),
   sessionRunning: () =>
     [TradingSessionStatus.Active, TradingSessionStatus.Paused].flatMap((status) =>
       sessionTexts(status, [null]),
@@ -379,7 +383,7 @@ const REAL: Record<string, () => TelegramHtml[]> = {
       [null, STAKE].flatMap((amount) =>
         [999, 992, 991].flatMap((trades) =>
           DEMO_DURATIONS_SEC.flatMap((durationSec: DemoDurationSec) =>
-            // real mode (#121): the single trade's line in place of the cycle's
+            // the cycle's line by mode (#327)
             Object.values(TradeMode).map((mode) =>
               launchText({
                 firstName: NAME,
