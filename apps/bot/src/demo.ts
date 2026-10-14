@@ -425,8 +425,10 @@ export function signalsShown(
 
 // The pairs with a signal on the last closed candle of the chosen duration's scanner (#320,
 // #382), chosen and ordered by signalsShown, each joined with the catalog for its symbol and
-// payout. The list is a snapshot; the cycle checks the signal again before each trade. Undefined
-// when the body has no list for the duration: a backend scanning other intervals.
+// payout. Two a row in signalsShown's order, across the types, the last alone when odd; the
+// footer's two rows under the list and the empty text alike (#419). The list is a snapshot; the
+// cycle checks the signal again before each trade. Undefined when the body has no list for the
+// duration: a backend scanning other intervals.
 export function signalsScreen(
   signals: TradingSignalsResponse,
   catalog: PairsCatalogResponse,
@@ -438,21 +440,21 @@ export function signalsScreen(
   if (list === undefined) return undefined;
   const keyboard = new InlineKeyboard();
   const shown = signalsShown(list.signals, catalog, durationSec, nowMs);
-  for (const { pair, action } of shown) {
-    keyboard
-      .text(
-        signalButtonLabel(pair.symbol, action, pair.payout),
-        demoLaunchCallbackData(pair.id, durationSec),
-      )
-      .row();
-  }
+  shown.forEach(({ pair, action }, index) => {
+    if (index > 0 && index % 2 === 0) keyboard.row();
+    keyboard.text(
+      signalButtonLabel(pair.symbol, action, pair.payout),
+      demoLaunchCallbackData(pair.id, durationSec),
+    );
+  });
   const listed = shown.length;
+  // grammY's row() pushes an empty row: unguarded, the empty screen would lead with [].
+  if (listed > 0) keyboard.row();
   const label = DEMO_DURATION_LABELS[durationSec];
   return {
     text: listed === 0 ? TEXTS.demoSignalsEmpty({ label }) : TEXTS.demoSignalsHeader({ label }),
     keyboard: keyboard
       .text(LABELS.demoSignalsRefreshButton, demoSignalsCallbackData(durationSec))
-      .row()
       .text(LABELS.demoBackDurationsButton, DEMO_SIGNALS_CALLBACK_DATA)
       .row()
       .text(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA),

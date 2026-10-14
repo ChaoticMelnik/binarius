@@ -665,9 +665,10 @@ export const stakeButtonLabel = (
     ].join(' · '),
   });
 // a data label, like the confirm button's address: no emoji, the symbol as the broker spells it
-// (it already carries «OTC»), the payout printed as it arrives
+// (it already carries «OTC»), the payout printed as it arrives; no separators, so it fits a
+// half-width button (#419)
 export const pairButtonLabel = (symbol: string, payout: number): string =>
-  `${symbol} · ${String(payout)}%`;
+  `${symbol} ${String(payout)}%`;
 
 // One screen of a type's pairs: the header naming the type, the page line.
 export const demoPairsScreen = (
@@ -704,14 +705,14 @@ ${TEXTS.demoNext}`;
 export const atrTicksText = (count: string): string => plain.analysisAtrTicks({ count });
 
 // The signals screen's arrow (#320): a data mark like the pair's payout, so it stays out of the
-// catalog, and the word labels would not fit a row of pairs.
+// catalog, and the word labels would not fit a row of pairs, two buttons wide since #419.
 const SIGNAL_ARROWS = {
   [TradeAction.Up]: '⬆️',
   [TradeAction.Down]: '⬇️',
 } as const satisfies Record<TradeAction, string>;
 // a pair with a signal: the symbol, the scanner's direction at the last closed candle, the payout
 export const signalButtonLabel = (symbol: string, action: TradeAction, payout: number): string =>
-  `${symbol} · ${SIGNAL_ARROWS[action]} · ${String(payout)}%`;
+  `${symbol} ${SIGNAL_ARROWS[action]} ${String(payout)}%`;
 
 // The launch screen (#320): the pair at the chosen duration (#382), the amount the cycle trades,
 // what the cycle does. A symbol the catalog did not give drops its line, an amount access did not

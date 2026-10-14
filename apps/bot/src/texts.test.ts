@@ -830,7 +830,7 @@ describe('the demo screens', () => {
     ]);
     expect(DEMO_DURATIONS_SEC.map((sec) => DEMO_DURATION_LABELS[sec])).toEqual(['⏱ 5 с', '⏱ 15 с']);
     expect(groupButtonLabel('currency', 46)).toBe('💱 Валюты · 46');
-    expect(pairButtonLabel('EUR/USD OTC', 85)).toBe('EUR/USD OTC · 85%');
+    expect(pairButtonLabel('EUR/USD OTC', 85)).toBe('EUR/USD OTC 85%');
   });
 
   // these buttons are not in LABELS, so the LABELS-wide checks above do not see them
