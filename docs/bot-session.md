@@ -1,4 +1,4 @@
-# The session in the bot: the button, the status, the stop and the summary card (issues #284, #320, #318, #122, #321, #327)
+# The session in the bot: the button, the status, the stop and the summary card (issues #284, #320, #318, #122, #321, #327, #418)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 сделок» as its
 first row on every `decided` answer, a signal or none (#360); a finished single trade's message
@@ -6,7 +6,9 @@ draws the same button under its result (#360,
 [bot-demo-trade.md](bot-demo-trade.md#the-status-message)); the launch screen of the signals list
 (#320, [bot-demo.md](bot-demo.md#the-launch-screen-320)) draws «🚀 Запустить цикл», and a stopped
 session's message «🔁 Ещё сессия». All four carry the same data, with the mode they were drawn in
-(#327). Pressing one starts a session of that mode — demo, or real for a user in real mode
+(#327); the launch screen's adds the token `:l` (#418), by which the start deletes that screen once
+the session's status is sent ([The launch screen after the start](#the-launch-screen-after-the-start-418)).
+Pressing one starts a session of that mode — demo, or real for a user in real mode
 ([trading-mode.md](trading-mode.md)) — of `DEFAULT_SESSION_TRADES` trades through
 `POST /trading/sessions` ([trading-session.md](trading-session.md#routes)) and sends one status
 message. The message follows the session through `GET /trading/sessions/:id` and carries
@@ -24,7 +26,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Components
 
 - `apps/bot/src/demo.ts` — the button's data `<mode>:sess:<assetId>:<sec>` (#327; the demo datum
-  is byte for byte the one before)
+  is byte for byte the one before), `:l` (`SESSION_START_LAUNCH_TOKEN`) appended on the launch
+  screen's (#418)
   (`sessionStartCallbackData`, `SESSION_START_PATTERN`, `sessionStartDataOf`), the predicate
   `sessionFits(durationSec)` = `sessionFitsDeadline(DEFAULT_SESSION_TRADES, durationSec)`, the
   button's row in the analysis keyboard, and `launchScreen`'s «🚀 Запустить цикл» (#320).
@@ -62,11 +65,13 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
-<mode>:sess:<assetId>:<sec>        («🚀 Сессия из 5 сделок» under the analysis or a finished trade, «🚀 Запустить цикл», «🔁 Ещё сессия»; <mode> demo or real, #327; the longest, real:sess:2147483647:15, 23 bytes)
+<mode>:sess:<assetId>:<sec>[:l]    («🚀 Сессия из 5 сделок» under the analysis or a finished trade, «🚀 Запустить цикл» with :l (#418), «🔁 Ещё сессия»; <mode> demo or real, #327; the longest, real:sess:2147483647:15:l, 25 bytes)
   bot → answerCallbackQuery ∥ GET /trading/pairs (for the symbol only)
   bot → POST /trading/sessions { telegramUserId, assetId, durationSec, trades: 5 }
   bot → sendMessage: the status, with «🔄 Обновить» (session:<id>) and «⏹ Остановить сессию»
         (session:stop:<id>)
+  bot → deleteMessage of the pressed launch screen when the datum carries :l; refused as can't be
+        deleted → editMessageReplyMarkup without a keyboard (#418)
   tracker: after 3 s, then every 10 s → GET /trading/sessions/<id>?telegramUserId=<id>
            → editMessageText of that message when what it prints changes
            (a finished session whose balance predates its last trade: the backend asks the
@@ -114,10 +119,11 @@ session:stop:<id>                  («⏹ Остановить сессию»)
   (`demo:sess:101:900`) only stops the spinner, with no backend call.
 - **Two more doors (#320).** «🚀 Запустить цикл» on the launch screen carries
   `<mode>:sess:<assetId>:<sec>` at the duration chosen on the main path (#382), and «🔁 Ещё сессия» on a stopped session the view's own
-  `settings.assetId`, `settings.durationSec` and `mode`. Neither adds a handler or a datum: the
-  start, its refusals and the active session's 409 are the same. A refusal's «💵 Сумма» opens the
+  `settings.assetId`, `settings.durationSec` and `mode`. Neither adds a handler; the launch
+  screen's datum adds `:l` (#418): the start, its refusals and the active session's 409 are the
+  same, and once the status is sent the start deletes the launch screen. A refusal's «💵 Сумма» opens the
   picker of the press's mode with the analysis origin (`stk:o:<d|r>:a:<assetId>:<sec>`, #327),
-  whose way back is that pair's analysis, not the launch screen: one datum serves every door
+  whose way back is that pair's analysis, not the launch screen: one handler serves every door
   (accepted).
 - **A third door (#360).** A single trade's status message, once the trade is `accepted`, `settled`
   or `rejected`, draws «🚀 Сессия из 5 сделок» with `<mode>:sess:<assetId>:<sec>` of that trade (a
@@ -132,8 +138,8 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 
 | Answer | Source | What the bot shows |
 | --- | --- | --- |
-| 201 `{ session }` | created | the status message, tracked |
-| 409 `active_session_exists` with a session | the account's active session: another press, or our own first attempt whose answer was lost | that session's status as a new message; tracking moves to it, and the old message keeps its «🔄 Обновить» |
+| 201 `{ session }` | created | the status message, tracked; a launch screen (`:l`) is deleted after it (#418) |
+| 409 `active_session_exists` with a session | the account's active session: another press, or our own first attempt whose answer was lost | that session's status as a new message; tracking moves to it, and the old message keeps its «🔄 Обновить»; a launch screen (`:l`) is deleted after it (#418) |
 | 409 `active_session_exists` with `null` | that session ended between the backend's check and its read | «⏳ Предыдущая сессия только что завершилась. Нажми кнопку ещё раз.» |
 | 404 `broker_account_not_found`, 409 `account_revoked` | refusal before the side effect | `accountNone` / `accountRevoked` + the connect button |
 | 409 `user_blocked`, `ambiguous_broker_account`, `account_not_confirmed`, `account_halted` | the same | the single trade's texts |
@@ -154,6 +160,36 @@ session:stop:<id>                  («⏹ Остановить сессию»)
 contract fails `tsc` in `trading-session.ts`; the lookup is `Object.hasOwn`, so `__proto__` as a
 reason is `unavailable`. `sessionOutcomeUnknown` is `demo-trade.ts`'s rule minus the 503
 `catalog_unavailable`.
+
+## The launch screen after the start (#418)
+
+«🚀 Запустить цикл» on the launch screen ([bot-demo.md](bot-demo.md#the-launch-screen-320)), demo
+or real, carries `<mode>:sess:<assetId>:<sec>:l`. The bot keeps no state, so the token is how the
+start learns the pressed message is a launch screen. Only when the session's status was sent — 201
+and 409 with a session — does the start delete that message, and only after the status was sent
+and tracked, so a slow or refused delete never withholds it (`removeLaunchScreen`,
+`trading-session.ts`). A refusal, «⏳ Предыдущая сессия только что завершилась…» and an unknown
+outcome send no status, and the screen stays with its buttons: «🚀 Запустить цикл» is the retry,
+«💵 Изменить ставку» the fix. The analysis, the row under a finished trade and «🔁 Ещё сессия»
+carry the plain datum and keep their messages (owner's decision 2026-10-10).
+
+| `deleteMessage` | Class (`deleteRefusal`, `screen.ts`) | Then | Log |
+| --- | --- | --- | --- |
+| `true` | deleted | — | — |
+| 400 «message to delete not found» (the user or an earlier press deleted it) | `gone` | nothing | `info` `the launch screen was already gone` |
+| 400 «message can't be deleted» / «Message can't be deleted [for everyone]» (older than 48 h, or otherwise forbidden; compared by their common «can't be deleted») | `forbidden` | `editMessageReplyMarkup()` — the keyboard goes, the text stays | the strip's own failure → `warn` `the launch screen keyboard was not removed` |
+| any other Telegram refusal (429, 403, 400 «chat not found», …) | unknown | nothing | `warn` `the launch screen was not deleted` |
+| a transport failure (`HttpError`) | unknown | nothing | the same `warn` |
+| anything else thrown | a bug | rethrown to `bot.catch` | — |
+
+- A second press before the first delete landed: 409 → the status anew, tracking moves, and the
+  second delete finds the message gone → `info`.
+- A launch screen drawn before #418 carries no token: pressed, it starts the session and stays.
+- A token on a duration the demo no longer offers (`demo:sess:101:120:l`) lands in the legacy
+  handler, as the plain datum does: the keyboard goes, nothing is sent.
+- A real launch screen pressed after the user went demo, or on a `DEMO_ONLY` backend, is refused
+  (`mode_not_allowed`, `demo_only`): no status, the screen stays.
+- The description of a refusal is never logged: the lines carry the method and the Telegram code.
 
 ## The client
 
@@ -322,8 +358,10 @@ One entry per session id, in process memory, like the intent tracker
 
 ## Timing
 
-- `HANDLER_CALLS.sessionStart` = 3 backend calls and 2 Bot API calls: the catalog read beside the
-  answer (counted as sequential, as in `confirm`), `startSession` and its retry, the message: 31 s.
+- `HANDLER_CALLS.sessionStart` = 3 backend calls and 4 Bot API calls: the catalog read beside the
+  answer (counted as sequential, as in `confirm`), `startSession` and its retry, the status, then
+  the launch screen's `deleteMessage` refused as forbidden and `editMessageReplyMarkup` (#418):
+  47 s, equal to `demoAnalysis`.
 - `HANDLER_CALLS.sessionRefresh` = 2 / 3: the edit refused as gone, then sent anew: 34 s.
 - `HANDLER_CALLS.sessionStop` = 3 / 3: `stopSession`, the read after a 409, the edit refused as
   gone and sent anew: 39 s.
@@ -331,7 +369,7 @@ One entry per session id, in process memory, like the intent tracker
   then the message: 18 s.
 - `HANDLER_CALLS.sessionShare` = 2 / 1 (#321): `readSession` beside `readPairs` (counted as
   sequential), then `answerInlineQuery`: 18 s. `HANDLER_CALLS.sessionShared` = 0 / 0: a log line.
-- All stay below the longest path (`demoAnalysis`, 47 s since #121 —
+- All stay at or below the longest path (`demoAnalysis` and, since #418, `sessionStart`, 47 s —
   [bot-demo-trade.md](bot-demo-trade.md#timing)), inside the shutdown budget. `timing.test.ts` runs every terminal branch of the six.
 - `SESSION_TRACK_FIRST_POLL_MS` = 3 s, `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
   cycle is at least the worker's catch-up grace, 10 s), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
@@ -353,6 +391,11 @@ id or the symbol.
 - `trading session not stopped`
 - `trading sessions not stopped` (`/stop`, #122)
 - `trading session message not edited`
+- `the launch screen was not deleted` (#418): the delete refused other than gone or forbidden, or
+  failed in transport (`method: deleteMessage`, `telegramErrorCode` or `transportError`, `updateId`)
+- `the launch screen keyboard was not removed` (#418): the strip after a forbidden delete failed
+  (`method: editMessageReplyMarkup`, `updateId`)
+- `the launch screen was already gone` (#418, `info`): the delete found no message
 - `trading session tracking failed` (`error`)
 - `trading session card not sent` (#318): the claim failed (`backendStatus`, `backendReason`), the
   photo failed (`method: sendPhoto`, `telegramErrorCode`), or the render threw; with `sessionId`.

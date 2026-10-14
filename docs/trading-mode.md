@@ -151,8 +151,8 @@ demo from it is #473 (part 2 of #121, split off by the size rule).
 
 ## Timing
 
-`HANDLER_CALLS`: `demoAnalysis` 3 / 4 (47 s, the longest handler, under the 50 s
-shutdown budget), `stakePreset` and `stakeReset` 3 / 3, `stakeText` 3 / 1. `timing.test.ts` runs
+`HANDLER_CALLS`: `demoAnalysis` 3 / 4 (47 s, the longest handler with `sessionStart` since #418,
+under the 50 s shutdown budget), `stakePreset` and `stakeReset` 3 / 3, `stakeText` 3 / 1. `timing.test.ts` runs
 every terminal branch.
 
 ## Logs

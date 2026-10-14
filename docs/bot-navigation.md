@@ -24,7 +24,8 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
   reply keyboard, and a reason outside the list each fail `tsc` (an `@ts-expect-error` that starts
   compiling fails `pnpm check`).
 - Not covered: `editMessageReplyMarkup` (it sets a keyboard, it cannot strip one by accident, and
-  removing an old duration's keyboard is deliberate, docs/bot-demo.md), callback-query toasts
+  removing an old duration's keyboard is deliberate, docs/bot-demo.md, as is stripping the launch
+  screen's after a refused delete, #418, docs/bot-session.md), callback-query toasts
   (not messages), and the staff bot (`apps/backend/src/admin`, plain text by the owner's decision
   2026-10-02). A send method used outside the two seams is ESLint's to refuse (Rule 18).
 
@@ -101,7 +102,7 @@ no repeat.
 | `inviteNeedsStart` (`/invite` before the first `/start`) | 🏠 В меню |
 | login: `emailPrompt`, `emailInvalid`, `codeRequestStale`, a refusal without the code buttons, `unavailable` | 🏠 В меню (the dialog is left as `/menu` leaves it) |
 | login: `codeSent`, `codeSentUnknown`, `codeInvalid`, a refusal with them | 📨 / ✏️ (unchanged) |
-| demo screens, the signals and launch screens (#320), the picker | their own keyboards (unchanged) |
+| demo screens, the signals and launch screens (#320), the picker | their own keyboards (unchanged); the launch screen is deleted once the session's status is sent (#418) |
 | the analysis (#360) | 🚀 Сессия из 5 сделок on every `decided` answer · ➕ Ещё on a signal · 🔄 Повторить анализ · ↩️ Длительность ↩️ Типы; «➕ Ещё» expands it in place: the session, 🚀 Открыть сделку · 💵 Сумма, the repeat, the way back |
 | the stake press refused or failed before or at the create (`unavailable`, `stakeOutcomeUnknown`, `statusAmbiguous`, `stakeBalanceMissing`, a refusal without its own button) | ↩️ Назад к анализу · 🏠 В меню |
 | the session start refused or failed, `sessionJustEnded` | ↩️ Назад к анализу · 🏠 В меню |
