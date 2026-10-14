@@ -180,13 +180,18 @@ export const launchStakeCallbackData = (
 // (#360, demo-trade.ts), of the launch screen (#320) and «🔁 Ещё сессия». It carries the mode it
 // was drawn in (#327), which the backend compares with the user's: a demo button is byte for byte
 // the one before #327. No nonce, by the owner's decision: an old button starts a new session once
-// the previous one has ended, and while one is active the backend answers with it. The longest,
-// `real:sess:2147483647:15`, is 23 bytes.
+// the previous one has ended, and while one is active the backend answers with it. The launch
+// screen's adds SESSION_START_LAUNCH_TOKEN (#418): the bot keeps no state, so the token is how the
+// start learns the pressed message is a launch screen, which it deletes once the session's status
+// is sent. The longest, `real:sess:2147483647:15:l`, is 25 bytes.
+export const SESSION_START_LAUNCH_TOKEN = 'l';
 export const sessionStartCallbackData = (
   mode: TradeMode,
   assetId: number,
   durationSec: DemoDurationSec,
-): string => `${mode}:sess:${assetId}:${durationSec}`;
+  launch = false,
+): string =>
+  `${mode}:sess:${assetId}:${durationSec}${launch ? `:${SESSION_START_LAUNCH_TOKEN}` : ''}`;
 // The button shows only where a session of DEFAULT_SESSION_TRADES fits the worker's deadline
 // (after #313 every duration of DEMO_DURATIONS_SEC: 5 × (15 + 120) s ≤ 1 h); the handler checks
 // again, so an old or forged datum starts nothing. The count is a parameter so a test can reach
@@ -215,7 +220,9 @@ const stakeCallbackPattern = (durations: string) =>
     `^${STAKE_CALLBACK_PREFIX}(\\d{1,10}):(${durations}):(${Object.values(TradeAction).join('|')}):([0-9a-f]{12})(?::([0-9a-f]{6}))?$`,
   );
 const sessionStartPattern = (durations: string) =>
-  new RegExp(`^(${Object.values(TradeMode).join('|')}):sess:(\\d{1,10}):(${durations})$`);
+  new RegExp(
+    `^(${Object.values(TradeMode).join('|')}):sess:(\\d{1,10}):(${durations})(?::(${SESSION_START_LAUNCH_TOKEN}))?$`,
+  );
 const DEMO_SIGNALS_PATTERN = new RegExp(`^demo:sig:(${DURATIONS})$`);
 const DEMO_LAUNCH_PATTERN = new RegExp(`^demo:l:(\\d{1,10}):(${DURATIONS})$`);
 // the floor's token is optional: a button #360 drew before #379 has none
@@ -337,7 +344,7 @@ export function analysisMoreDataOf(match: RegExpMatchArray | string):
 export function sessionStartDataOf(
   match: RegExpMatchArray | string,
   trades = DEFAULT_SESSION_TRADES,
-): { mode: TradeMode; assetId: number; durationSec: DemoDurationSec } | undefined {
+): { mode: TradeMode; assetId: number; durationSec: DemoDurationSec; launch: boolean } | undefined {
   if (typeof match === 'string') return undefined;
   const mode = tradeModeSchema.safeParse(match[1]);
   const assetId = assetIdOf(match[2]);
@@ -350,7 +357,12 @@ export function sessionStartDataOf(
   ) {
     return undefined;
   }
-  return { mode: mode.data, assetId, durationSec };
+  return {
+    mode: mode.data,
+    assetId,
+    durationSec,
+    launch: match[4] === SESSION_START_LAUNCH_TOKEN,
+  };
 }
 
 // The main path's first screen (#382): the durations of SIGNALS_DURATIONS_SEC in one row, then the
@@ -481,7 +493,10 @@ export function launchScreen({
   return {
     text,
     keyboard: new InlineKeyboard()
-      .text(launchCycleButtonLabel(mode), sessionStartCallbackData(mode, assetId, durationSec))
+      .text(
+        launchCycleButtonLabel(mode),
+        sessionStartCallbackData(mode, assetId, durationSec, true),
+      )
       .row()
       .text(LABELS.stakeChangeButton, launchStakeCallbackData(mode, assetId, durationSec))
       .row()

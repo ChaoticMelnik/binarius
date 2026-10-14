@@ -557,7 +557,7 @@ describe('the launch screen', () => {
     [
       button(
         LABELS.launchCycleButton,
-        sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15),
+        sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15, true),
       ),
     ],
     [button(LABELS.stakeChangeButton, launchStakeCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15))],
@@ -610,7 +610,7 @@ describe('the launch screen', () => {
 
     const edited = payloadOf(calls, 'editMessageText');
     expect(rowsOf(edited)).toEqual([
-      [button(LABELS.launchCycleButton, `demo:sess:${String(PAIR_EURUSD.id)}:5`)],
+      [button(LABELS.launchCycleButton, `demo:sess:${String(PAIR_EURUSD.id)}:5:l`)],
       [button(LABELS.stakeChangeButton, `stk:o:d:p:${String(PAIR_EURUSD.id)}:5`)],
       [button(LABELS.backToListButton, 'demo:sig:5')],
     ]);
@@ -648,7 +648,7 @@ describe('the launch screen', () => {
       [
         button(
           '🚀 Запустить цикл · REAL',
-          sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+          sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15, true),
         ),
       ],
       [button(LABELS.stakeChangeButton, `stk:o:r:p:${String(PAIR_EURUSD.id)}:15`)],
@@ -678,6 +678,7 @@ describe('the launch screen', () => {
       mode: TradeMode.Demo,
       assetId: PAIR_EURUSD.id,
       durationSec: 15,
+      launch: true,
     });
   });
 
@@ -790,7 +791,7 @@ describe('the launch screen', () => {
         [
           button(
             LABELS.launchCycleButton,
-            sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, durationSec),
+            sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, durationSec, true),
           ),
         ],
         [
@@ -1474,13 +1475,23 @@ describe('the analysis', () => {
     expect(sessionStartCallbackData(TradeMode.Demo, 2_147_483_647, 15)).toBe(
       'demo:sess:2147483647:15',
     );
-    const data = sessionStartCallbackData(TradeMode.Real, 2_147_483_647, 15);
-    expect(data).toBe('real:sess:2147483647:15');
-    expect(Buffer.byteLength(data, 'utf8')).toBe(23);
+    const plain = sessionStartCallbackData(TradeMode.Real, 2_147_483_647, 15);
+    expect(plain).toBe('real:sess:2147483647:15');
+    expect(sessionStartDataOf(SESSION_START_PATTERN.exec(plain) ?? '')).toEqual({
+      mode: TradeMode.Real,
+      assetId: 2_147_483_647,
+      durationSec: 15,
+      launch: false,
+    });
+    // #418: the launch screen's, with its token, is the longest
+    const data = sessionStartCallbackData(TradeMode.Real, 2_147_483_647, 15, true);
+    expect(data).toBe('real:sess:2147483647:15:l');
+    expect(Buffer.byteLength(data, 'utf8')).toBe(25);
     expect(sessionStartDataOf(SESSION_START_PATTERN.exec(data) ?? '')).toEqual({
       mode: TradeMode.Real,
       assetId: 2_147_483_647,
       durationSec: 15,
+      launch: true,
     });
     expect(SESSION_START_PATTERN.exec(`bogus:sess:${String(PAIR_EURUSD.id)}:15`)).toBeNull();
     // a datum from before #313 is not a session datum: the legacy handler takes it
@@ -1498,6 +1509,7 @@ describe('the analysis', () => {
       mode: TradeMode.Demo,
       assetId: PAIR_EURUSD.id,
       durationSec: 15,
+      launch: false,
     });
   });
 
@@ -2031,6 +2043,10 @@ describe('demo data the bot did not draw', () => {
     'demo:stake:101:5:sideways:0123456789ab',
     'demo:stake:101:5:up',
     'demo:sess:101:120',
+    // #418: only the one launch token, in its own case
+    'demo:sess:101:5:x',
+    'real:sess:101:5:L',
+    'demo:sess:101:5:l:l',
     'demo:sig:60',
     'demo:sig:',
     'demo:l:101:60',
@@ -2061,6 +2077,7 @@ describe('a button with a duration the demo no longer offers', () => {
     `demo:stake:101:${String(sec)}:up:0123456789ab`,
     `demo:stake:101:${String(sec)}:down:0123456789ab:a0b1c2`,
     `demo:sess:101:${String(sec)}`,
+    `demo:sess:101:${String(sec)}:l`,
     `stk:o:a:101:${String(sec)}`,
     `stk:s:2.5:a:101:${String(sec)}`,
     `stk:z:a:101:${String(sec)}`,

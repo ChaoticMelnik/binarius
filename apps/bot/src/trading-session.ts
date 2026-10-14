@@ -34,7 +34,7 @@ import {
   withMenu,
 } from './keyboards';
 import { telegramErrorFields, type Logger } from './logging';
-import { editRefusal } from './screen';
+import { deleteRefusal, editRefusal } from './screen';
 import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml, sendPhotoByIdHtml } from './send';
 import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
 import { attachShareButton } from './session-share';
@@ -51,7 +51,7 @@ import {
 // The session (#284, docs/bot-session.md), demo or real by the button's mode (#327): the session
 // buttons start one through POST /trading/sessions, one status message follows it
 // (session-tracker.ts), and its buttons read the session again or stop it. The trades themselves
-// are the worker's (#287).
+// are the worker's (#287). The launch screen's button (#418) is deleted once the status is sent.
 
 const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 // `session:<uuid>` is 44 bytes and `session:stop:<uuid>` 49, inside the Bot API 64.
@@ -257,6 +257,7 @@ export function createTradingSessionComposer<C extends Context>({
       reply_markup: sessionKeyboard(view),
     });
     track(ctx, telegramUserId, symbol, view, sent.chat.id, sent.message_id);
+    if (data.launch) await removeLaunchScreen(ctx);
   });
 
   composer.callbackQuery(SESSION_REFRESH_PATTERN, async (ctx) => {
@@ -441,6 +442,54 @@ export function createTradingSessionComposer<C extends Context>({
     }
     if (chatId !== undefined && messageId !== undefined) {
       track(ctx, telegramUserId, symbol, view, chatId, messageId);
+    }
+  }
+
+  // The launch screen after the session's status was sent (#418, docs/bot-session.md → The launch
+  // screen after the start): after, so a slow or refused delete never withholds the status.
+  //   deleted                                   → nothing more
+  //   400 «message to delete not found»         → nothing, info
+  //   400 «…can't be deleted…» (48 h)          → the keyboard stripped, the text stays
+  //   any other GrammyError or HttpError        → nothing, warn
+  //   anything else                             → a bug, rethrown to bot.catch
+  async function removeLaunchScreen(ctx: Context): Promise<void> {
+    try {
+      await ctx.deleteMessage();
+      return;
+    } catch (error) {
+      if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
+      const refusal = error instanceof GrammyError ? deleteRefusal(error) : undefined;
+      if (refusal === 'gone') {
+        logger.info(
+          { ...telegramErrorFields(error, 'deleteMessage') },
+          'the launch screen was already gone',
+        );
+        return;
+      }
+      if (refusal !== 'forbidden') {
+        logger.warn(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error, 'deleteMessage'),
+            updateId: ctx.update.update_id,
+          },
+          'the launch screen was not deleted',
+        );
+        return;
+      }
+    }
+    try {
+      await ctx.editMessageReplyMarkup();
+    } catch (error) {
+      if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
+      logger.warn(
+        {
+          ...errorLogFields(error),
+          ...telegramErrorFields(error, 'editMessageReplyMarkup'),
+          updateId: ctx.update.update_id,
+        },
+        'the launch screen keyboard was not removed',
+      );
     }
   }
 
