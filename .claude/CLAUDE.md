@@ -59,7 +59,8 @@
 |---|---|---|
 | `/tech-lead` (оркестрация, clarify- и merge-relay) | модель сессии | главный контекст; frontmatter `model: inherit` |
 | `/clarify` | вопросы готовит фаза на своей модели, задаёт tech-lead | implementer Step 0, architect Step 5 |
-| `/architect` (план, Plan Update) | `fable` → `claude-fable-5-1` (Claude Fable 5.1), самая мощная | параметр `model` Agent-спавна tech-lead'а |
+| `/architect` — первичный план | `fable` → `claude-fable-5-1` (Claude Fable 5.1), самая мощная | параметр `model` Agent-спавна tech-lead'а |
+| `/architect` — Plan Update (после ревью, сверка устаревшего плана, дефекты плана от implementer'а) | `opus` → `claude-opus-5-5` (решение владельца 2026-10-14, экономия лимита Fable) | параметр `model` Agent-спавна tech-lead'а |
 | `/implementer` | `opus` → `claude-opus-5-5` | параметр `model` Agent-спавна tech-lead'а |
 | `/reviewer` (оркестрация, консолидация, ручной чеклист) | `opus` → `claude-opus-5-5` | параметр `model` Agent-спавна tech-lead'а |
 | субагенты `/code-review high`, `/security-review` | `opus` → `claude-opus-5-5` | параметр `model` вложенного спавна, reviewer Step 3c / 3b |
@@ -77,6 +78,15 @@
 - Если организация запретила модель через `availableModels`, Claude Code может молча оставить другую — поэтому фактическая модель проверяется по транскрипту: `.claude/skills/tech-lead/SKILL.md` → Mode 1 → Model policy — check (`resolvedModel` спавна для глубины 1, `subagents/*.meta.json` + транскрипт агента для любой глубины). id сравниваются до первой `[`: `resolvedModel` может нести суффикс варианта контекстного окна (`claude-opus-5-5[1m]` у reviewer'а #56).
 
 При расхождении этого файла с глобальным `~/.claude/CLAUDE.md` (например, `/clarify` через `AskUserQuestion` самой фазы, Codex MCP, модель сессии) правит проектная секция; текст правок глобального файла tech-lead предлагает владельцу отдельно.
+
+### Экономия токенов (решение владельца 2026-10-14)
+
+Основание — подсчёт по транскриптам 2026-10-14: больше всего прочитанного из кэша дают главные контексты долгих сессий (~3,4 млрд токенов) и implementer'ы (~27,6 млн на агента — больше всех ролей); связывающий лимит — недельный кап Fable.
+- **Короткие сессии.** Одна сессия tech-lead — на задачу или волну задач; после мержа и аудита работа продолжается в новой сессии, а не в той же. Сессия постановки задач — тоже не марафон. Когда сессия длиннее суток или после трёх смерженных задач, tech-lead предлагает владельцу начать новую.
+- **Лимиты до спавна.** Перед спавном архитектора на Fable: если за последние 7 дней в транскриптах проекта был отказ лимита Fable (`find ~/.claude/projects/-Users-user-Documents-Binarius -name '*.jsonl' -mtime -7 -exec grep -l "reached your Fable limit" {} + | head -1` что-то печатает) и владелец не сообщил о сбросе — первичный план сразу на `opus` со строкой «план на Opus (лимит Fable <дата>)», без попытки на Fable и без вопроса (так владелец решал каждый раз: 2026-10-07, 2026-10-10). Не больше трёх Opus-фаз одновременно (tech-lead Step 7).
+- **Plan Update — на Opus** (таблица моделей выше): Fable — только первичный план.
+- **Тихие прогоны и свежий implementer на круг исправлений** — `.claude/skills/implementer/SKILL.md` → Step 5, tech-lead Phase 4.
+- **Агенты ревью — по содержанию diff** — `.claude/skills/reviewer/SKILL.md` → Step 3.
 
 ### Режим manager — ночная автономная сессия (решения владельца 2026-10-09, #397)
 

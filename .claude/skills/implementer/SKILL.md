@@ -71,6 +71,8 @@ pnpm check
 
 The one check command (`.claude/CLAUDE.md` → CI): `tsc -b --clean` first, so the tests run on a tree without `dist/`, then the tests, the build and lint. It can run before `git add`: the manifest test also counts files that are not staged yet, as long as they are not ignored. Its **exit code is the verdict**: never pipe it through `grep`/`tail` in front of `&& git commit` — a pipeline exits with the last command's status, and a commit once landed on a red suite that way. The same goes for joining the check and the commit with `;` instead of `&&`: `;` runs the commit whatever the check returned (#200: commit 2 was made on a red check that way, caught before the push). Fix all new errors before proceeding.
 
+**Quiet runs** (`.claude/CLAUDE.md` → Экономия токенов): the full output goes to a file in your scratch dir, only the verdict enters the context — `pnpm check > "$SCRATCH/check.log" 2>&1; echo "exit=$?"`; on a non-zero exit read `grep -nE 'FAIL|Error|✗' "$SCRATCH/check.log" | head -40` and the tail, not the whole log. The same for targeted vitest runs. Mutation evidence is produced by a script that applies each mutation, runs its test into a per-mutation log, records `mutation | expected test | result | first failing line` in one table file and reverts; the PR comment is built from that file, so hundreds of runs never pass through the conversation.
+
 ### Step 5.5: Self-review checklist
 
 Run before committing. Every item traces to a review finding (`audits.md`):
@@ -144,7 +146,7 @@ Via `/github` skill. Include the PR URL in the comment.
 
 ### Step 0: Clarify (relay)
 
-Same as the initial workflow's Step 0, after reading the review and the Plan Update.
+Same as the initial workflow's Step 0, after reading the review and the Plan Update. A fix round is a fresh spawn (tech-lead Phase 4): read the PR diff, the review comments and the Plan Update anew instead of relying on a previous round's memory.
 
 ### Step 1: Read all PR review comments before writing any code
 
