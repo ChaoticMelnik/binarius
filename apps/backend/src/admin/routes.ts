@@ -1,5 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  createKeyedWindow,
+  createWindow,
   ADMIN_ACTIVE_WINDOW_MINUTES,
   ADMIN_BOT_TEXT_BODY_LIMIT_BYTES,
   adminBotProfileIdentity,
@@ -114,7 +116,6 @@ import {
   type Tx,
 } from '@binarius/db';
 import { internalBearerAuth } from '../auth/internal';
-import { createKeyedWindow, createWindow } from '../auth/rate-window';
 import { createPasswordQueue, PasswordQueueOverflow, type PasswordQueue } from './password-queue';
 import { telegramErrorFields } from '../telegram-logging';
 import {

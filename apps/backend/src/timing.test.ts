@@ -139,9 +139,11 @@ describe('the cashier widget session timing (#11)', () => {
     expect(DEPOSIT_BROKER_CALL_BUDGET_MS).toBeLessThan(BROKER_REST_TIMEOUT_MS);
   });
 
-  // forwarded only when the host sets it: the default is the broker platform's origin (env.ts)
-  it('forwards DEPOSIT_WIDGET_ORIGINS to the backend only, without a default', () => {
+  // forwarded only when the host sets it: the default is the broker platform's origin (env.ts);
+  // web's cashier page names the same list in its frame-src (#111), so one .env line feeds both
+  it('forwards DEPOSIT_WIDGET_ORIGINS to the backend and web only, without a default', () => {
     expect(composeServiceEnvValue(composeYaml, 'backend', 'DEPOSIT_WIDGET_ORIGINS')).toBe('');
+    expect(composeServiceEnvValue(composeYaml, 'web', 'DEPOSIT_WIDGET_ORIGINS')).toBe('');
     expect(
       composeServiceEnvValue(composeYaml, 'trading-worker', 'DEPOSIT_WIDGET_ORIGINS'),
     ).toBeUndefined();
