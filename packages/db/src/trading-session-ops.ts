@@ -118,8 +118,9 @@ export async function createTradingSession(
         .from(users)
         .where(and(eq(users.id, account.userId), eq(users.status, UserStatus.Active)))
         .for('no key update');
-      if (user === undefined)
+      if (user === undefined) {
         throw new TradingSessionError(TradingSessionDbErrorCode.UserNotActive);
+      }
       if (user.tradingMode !== input.mode) {
         throw new TradingSessionError(TradingSessionDbErrorCode.ModeNotAllowed);
       }

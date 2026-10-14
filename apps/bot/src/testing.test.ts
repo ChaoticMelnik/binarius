@@ -80,6 +80,16 @@ describe('refuseWriteRetried', () => {
     ).toThrow('sendMessage repeats a write');
   });
 
+  // #327: a real session's datum is a write as the demo one is
+  it.each(['demo:sess:101:15', 'real:sess:101:15'])(
+    'refuses «🔄 Повторить» carrying %s',
+    (data) => {
+      expect(() =>
+        refuseWriteRetried('sendMessage', keyboard(LABELS.demoRetryButton, data)),
+      ).toThrow('sendMessage repeats a write');
+    },
+  );
+
   it('passes a repeat of a read and a write under its own label', () => {
     expect(() =>
       refuseWriteRetried('sendMessage', keyboard(LABELS.demoRetryButton, 'intent:x')),
