@@ -39,11 +39,19 @@ import { editMessageTextByIdHtml, editMessageTextHtml, replyHtml, sendPhotoByIdH
 import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
 import { attachShareButton } from './session-share';
 import { SESSION_NOT_FOUND, type SessionTracker } from './session-tracker';
-import { LABELS, sessionAssetLabel, sessionStatusText, TEXTS, textOf } from './texts';
+import {
+  LABELS,
+  sessionAgainButtonLabel,
+  sessionAssetLabel,
+  sessionStatusText,
+  TEXTS,
+  textOf,
+} from './texts';
 
-// The demo session (#284, docs/bot-session.md): the analysis screen's session button starts one
-// through POST /trading/sessions, one status message follows it (session-tracker.ts), and its
-// buttons read the session again or stop it. The trades themselves are the worker's (#287).
+// The session (#284, docs/bot-session.md), demo or real by the button's mode (#327): the session
+// buttons start one through POST /trading/sessions, one status message follows it
+// (session-tracker.ts), and its buttons read the session again or stop it. The trades themselves
+// are the worker's (#287).
 
 const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 // `session:<uuid>` is 44 bytes and `session:stop:<uuid>` 49, inside the Bot API 64.
@@ -53,11 +61,11 @@ export const SESSION_REFRESH_PATTERN = new RegExp(`^session:${UUID}$`);
 export const SESSION_STOP_PATTERN = new RegExp(`^session:stop:${UUID}$`);
 
 // A live session gets both buttons; a stopped one the refresh, since its last trade can still
-// settle and move the counters, and «🔁 Ещё сессия» on its own pair and duration (#320), the
-// session button's data, so the start handler checks it as any other. A duration the demo no
-// longer offers has no such button.
+// settle and move the counters, and «🔁 Ещё сессия» on its own pair, duration and mode (#320,
+// #327), the session button's data, so the start handler checks it as any other. A duration the
+// demo no longer offers has no such button.
 export const sessionKeyboard = (
-  view: Pick<TradingSessionView, 'id' | 'status' | 'settings'>,
+  view: Pick<TradingSessionView, 'id' | 'mode' | 'status' | 'settings'>,
 ): InlineKeyboard => {
   const keyboard = new InlineKeyboard().text(
     LABELS.sessionRefreshButton,
@@ -66,7 +74,7 @@ export const sessionKeyboard = (
   if (view.status !== TradingSessionStatus.Stopped) {
     return keyboard.text(LABELS.sessionStopButton, sessionStopCallbackData(view.id));
   }
-  return appendSessionEnd(keyboard, view.settings);
+  return appendSessionEnd(keyboard, view);
 };
 
 // A stopped session's next steps under `keyboard`'s rows: the again button while the demo offers
@@ -74,14 +82,17 @@ export const sessionKeyboard = (
 // the invite and the menu alone when its settings could not be read.
 function appendSessionEnd(
   keyboard: InlineKeyboard,
-  settings: TradingSessionView['settings'],
+  { mode, settings }: Pick<TradingSessionView, 'mode' | 'settings'>,
 ): InlineKeyboard {
   if (settings === null) return withInvite(keyboard);
   const durationSec = durationOf(String(settings.durationSec));
   if (durationSec !== undefined) {
     keyboard
       .row()
-      .text(LABELS.sessionAgainButton, sessionStartCallbackData(settings.assetId, durationSec));
+      .text(
+        sessionAgainButtonLabel(mode),
+        sessionStartCallbackData(mode, settings.assetId, durationSec),
+      );
   }
   return appendEndOfPath(keyboard, settings.assetId, settings.durationSec, [[inviteButton()]]);
 }
@@ -90,8 +101,9 @@ function appendSessionEnd(
 // edits the text of the message it is under, and a photo has a caption instead. «📊 Новый
 // анализ» and «📡 К сигналам» edit too: a photo's edit is refused as gone and their screen is
 // answered anew (screen.ts).
-export const sessionCardKeyboard = (view: Pick<TradingSessionView, 'settings'>): InlineKeyboard =>
-  appendSessionEnd(new InlineKeyboard(), view.settings);
+export const sessionCardKeyboard = (
+  view: Pick<TradingSessionView, 'mode' | 'settings'>,
+): InlineKeyboard => appendSessionEnd(new InlineKeyboard(), view);
 
 export interface TradingSessionDeps {
   backend: Pick<
@@ -111,6 +123,8 @@ export interface TradingSessionDeps {
 
 interface Refusal {
   text: BotStaticHtmlKey;
+  // the text for a real session's press, where the default names the demo account (#327)
+  real?: BotStaticHtmlKey;
   connect?: true;
   // «💵 Сумма» under the text: a refusal of the saved stake itself (#297)
   stakeMenu?: true;
@@ -131,11 +145,11 @@ export const START_REFUSALS = {
   [TradingSessionErrorCode.AccountHalted]: { text: 'stakeAccountHalted' },
   [TradingSessionErrorCode.InsufficientTokens]: { text: 'sessionInsufficientTokens' },
   [TradingSessionErrorCode.TradingPaused]: { text: 'tradingPaused' },
-  // a user in real mode pressing a session button of an earlier render (#121): sessions are demo
-  // only until #327
-  [TradingSessionErrorCode.ModeNotAllowed]: { text: 'sessionRealMode' },
-  // the backend runs DEMO_ONLY (#396): a real session, refused before any write; the bot asks for
-  // demo until #327
+  // a button drawn in the other mode, or a switch between the render and the press (#327): refused
+  // before any write, the analysis drawn anew carries the user's mode
+  [TradingSessionErrorCode.ModeNotAllowed]: { text: 'stakeAmountChanged' },
+  // the backend runs DEMO_ONLY (#396): a real session, refused before any write; the bot does not
+  // know the flag and draws the real doors as for the real stake button
   [TradingSessionErrorCode.DemoOnly]: { text: 'tradingDemoOnly' },
   // reachable only if the bot's sessionFits and the backend's check drift apart
   [TradingSessionErrorCode.SessionTooLong]: { text: 'sessionTooLong' },
@@ -155,6 +169,7 @@ export const START_REFUSALS = {
   [TradingSessionErrorCode.StakeBelowMinimum]: { text: 'stakeBelowBrokerMinimum', stakeMenu: true },
   [TradingSessionErrorCode.InsufficientBalance]: {
     text: 'stakeAboveAvailable',
+    real: 'stakeAboveAvailableReal',
     stakeMenu: true,
   },
 } as const satisfies Record<TradingSessionErrorCode, Refusal>;
@@ -213,6 +228,7 @@ export function createTradingSessionComposer<C extends Context>({
     // trades sent explicitly, so the button's label, its check and the request use one number
     const request: CreateTradingSessionRequest = {
       telegramUserId,
+      mode: data.mode,
       assetId: data.assetId,
       durationSec: data.durationSec,
       trades: DEFAULT_SESSION_TRADES,
@@ -336,7 +352,7 @@ export function createTradingSessionComposer<C extends Context>({
   async function replyStartFailure(
     ctx: Context,
     failure: Extract<StartOutcome, { ok: false }>,
-    { assetId, durationSec }: NonNullable<ReturnType<typeof sessionStartDataOf>>,
+    { mode, assetId, durationSec }: NonNullable<ReturnType<typeof sessionStartDataOf>>,
   ): Promise<void> {
     const reason = failure.error instanceof BackendError ? failure.error.reason : undefined;
     const known =
@@ -361,11 +377,12 @@ export function createTradingSessionComposer<C extends Context>({
           : refusal.stakeMenu === true
             ? new InlineKeyboard().text(
                 LABELS.stakeMenuButton,
-                // sessions are demo only until #327
-                stakeMenuCallbackData(TradeMode.Demo, assetId, durationSec),
+                stakeMenuCallbackData(mode, assetId, durationSec),
               )
             : backToAnalysisKeyboard(assetId, durationSec);
-    await replyHtml(ctx, textOf(refusal.text), { reply_markup });
+    const text =
+      mode === TradeMode.Real && refusal.real !== undefined ? refusal.real : refusal.text;
+    await replyHtml(ctx, textOf(text), { reply_markup });
   }
 
   // A missing or foreign id is told as such and has nothing to read again; anything else is

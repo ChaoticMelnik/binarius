@@ -133,9 +133,14 @@ async function reject(intent: TradeIntentRow): Promise<void> {
   );
 }
 
-const check = (telegramUserId: string, brokerAccountId?: string) =>
+const check = (
+  telegramUserId: string,
+  brokerAccountId?: string,
+  mode: TradeMode = TradeMode.Demo,
+) =>
   checkTradingSessionStart(tmp.db, {
     telegramUserId,
+    mode,
     ...(brokerAccountId === undefined ? {} : { brokerAccountId }),
   });
 
@@ -229,22 +234,34 @@ describe('checkTradingSessionStart', () => {
     });
   });
 
-  // #121: the route creates demo sessions only; a user in real mode gets mode_not_allowed after
-  // the blocked check and before any account read (an unknown account would answer otherwise)
-  it('E9 a user in real mode', async () => {
-    const seed = await seedUser(tmp.db, { tradingMode: TradeMode.Real });
-    expect(await check(seed.telegramUserId)).toEqual({
+  // #327: a session only in the user's mode; mode_not_allowed after the blocked check and before
+  // any account read (a user without an account would answer otherwise)
+  it("E9 a request in another mode than the user's", async () => {
+    const realUser = await seedUser(tmp.db, { tradingMode: TradeMode.Real });
+    expect(await check(realUser.telegramUserId, undefined, TradeMode.Demo)).toEqual({
       ok: false,
       code: TradingSessionErrorCode.ModeNotAllowed,
     });
     const blocked = await seedUser(tmp.db, { status: 'blocked', tradingMode: TradeMode.Real });
-    expect(await check(blocked.telegramUserId)).toEqual({
+    expect(await check(blocked.telegramUserId, undefined, TradeMode.Demo)).toEqual({
       ok: false,
       code: TradingSessionErrorCode.UserBlocked,
     });
+    const demoUser = await seedUser(tmp.db);
+    expect(await check(demoUser.telegramUserId, undefined, TradeMode.Real)).toEqual({
+      ok: false,
+      code: TradingSessionErrorCode.ModeNotAllowed,
+    });
     const withAccount = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
-    expect((await check(withAccount.telegramUserId)).ok).toBe(false);
+    expect(await check(withAccount.telegramUserId, undefined, TradeMode.Real)).toMatchObject({
+      ok: true,
+      brokerAccountId: withAccount.brokerAccountId,
+    });
     await setTradingMode(tmp.db, BigInt(withAccount.telegramUserId), TradeMode.Demo);
+    expect(await check(withAccount.telegramUserId, undefined, TradeMode.Real)).toEqual({
+      ok: false,
+      code: TradingSessionErrorCode.ModeNotAllowed,
+    });
     expect((await check(withAccount.telegramUserId)).ok).toBe(true);
   });
 

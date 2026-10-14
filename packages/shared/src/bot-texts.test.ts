@@ -181,7 +181,6 @@ describe('the bot texts catalog', () => {
         'inviteShareButton',
         'loginButton',
         'menuButton',
-        'modeAnalysisButton',
         'newAnalysisButton',
         'oauthButton',
         'refreshIntentButton',

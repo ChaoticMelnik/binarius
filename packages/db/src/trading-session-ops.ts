@@ -57,9 +57,9 @@ export const TradingSessionDbErrorCode = {
   ActiveSessionExists: 'active_session_exists',
   // the global trading switch is closed (#144)
   TradingPaused: 'trading_paused',
-  // sessions are demo only until #327: createTradingSession refuses another mode (#144 review m1)
+  // the session's mode is not the user's trading mode, compared under the users lock (#327)
   ModeNotAllowed: 'mode_not_allowed',
-  // a real session on a DEMO_ONLY process (#396), before mode_not_allowed
+  // a real session on a DEMO_ONLY process (#396), before the transaction and mode_not_allowed
   DemoOnly: 'demo_only',
 } as const;
 export type TradingSessionDbErrorCode =
@@ -91,12 +91,9 @@ export async function createTradingSession(
   input: CreateTradingSessionInput,
   options: CreateTradingSessionOptions,
 ): Promise<TradingSessionRow> {
-  // before mode_not_allowed, so the guard outlives the demo-only rule of sessions (#327)
+  // before any read, so a real session on a DEMO_ONLY process is refused whatever the user's mode
   if (options.demoOnly && input.mode === TradeMode.Real) {
     throw new TradingSessionError(TradingSessionDbErrorCode.DemoOnly);
-  }
-  if (input.mode !== TradeMode.Demo) {
-    throw new TradingSessionError(TradingSessionDbErrorCode.ModeNotAllowed);
   }
   try {
     return await db.transaction(async (tx) => {
@@ -113,14 +110,19 @@ export async function createTradingSession(
       if (account === undefined) {
         throw new TradingSessionError(TradingSessionDbErrorCode.AccountNotFound);
       }
-      // a lock, not a read: a block committed between a read and the insert would leave an
-      // active session for a blocked user
-      const user = await tx
-        .select({ id: users.id })
+      // a lock, not a read: a block or a mode switch (setTradingMode updates this row) committed
+      // between a read and the insert would leave an active session for a blocked user or in the
+      // other mode (#327)
+      const [user] = await tx
+        .select({ tradingMode: users.tradingMode })
         .from(users)
         .where(and(eq(users.id, account.userId), eq(users.status, UserStatus.Active)))
         .for('no key update');
-      if (user.length === 0) throw new TradingSessionError(TradingSessionDbErrorCode.UserNotActive);
+      if (user === undefined)
+        throw new TradingSessionError(TradingSessionDbErrorCode.UserNotActive);
+      if (user.tradingMode !== input.mode) {
+        throw new TradingSessionError(TradingSessionDbErrorCode.ModeNotAllowed);
+      }
       const [locked] = await tx
         .select({ status: brokerAccounts.status, tradingHalted: brokerAccounts.tradingHalted })
         .from(brokerAccounts)
@@ -387,13 +389,14 @@ export async function stopTradingSession(
 // Every active session of the owner in one statement (#122): owner scope is the predicate
 // (Rule 13), so another user's id stops nothing; `status = active` is the CAS (Rule 28), so a
 // session another writer stopped first keeps its reason and is not returned. No limit: a user has
-// at most one active session per account (trading_sessions_active_account_idx).
+// at most one active session per account (trading_sessions_active_account_idx). An executor, so
+// setTradingMode stops the sessions in its own transaction (#327).
 export async function stopUserSessions(
-  db: Db,
+  exec: DbExecutor,
   { telegramUserId }: { telegramUserId: string },
 ): Promise<StoppedSession[]> {
   const active = eq(tradingSessions.status, TradingSessionStatus.Active);
-  return db
+  return exec
     .update(tradingSessions)
     .set(stoppedBy(TradingSessionStopReason.UserStopped))
     .where(
@@ -489,12 +492,17 @@ const refused = (code: TradingSessionStartRefusal): TradingSessionStartCheck => 
 });
 
 // The start route's refusals before it calls the broker for a balance (#283). Plain reads with no
-// lock, the first refusal wins; createTradingSession re-checks the switch, the user, the account
-// and the one active session, the tokens only here (docs/trading-session.md -> Routes).
+// lock, the first refusal wins; createTradingSession re-checks the switch, the user and their
+// mode, the account and the one active session, the tokens only here
+// (docs/trading-session.md -> Routes).
 // The closed switch first, as createInTransaction checks it before the user's account.
 export async function checkTradingSessionStart(
   db: Db,
-  { telegramUserId, brokerAccountId }: { telegramUserId: string; brokerAccountId?: string },
+  {
+    telegramUserId,
+    brokerAccountId,
+    mode,
+  }: { telegramUserId: string; brokerAccountId?: string; mode: TradeMode },
 ): Promise<TradingSessionStartCheck> {
   if (!isTradingOpen(await readTradingSwitch(db))) {
     return refused(TradingSessionErrorCode.TradingPaused);
@@ -511,10 +519,9 @@ export async function checkTradingSessionStart(
     .where(eq(users.telegramUserId, BigInt(telegramUserId)));
   if (user === undefined) return refused(TradingSessionErrorCode.UserNotFound);
   if (user.status === UserStatus.Blocked) return refused(TradingSessionErrorCode.UserBlocked);
-  // the route creates demo sessions only (#121, Rule 36): a user in real mode gets none, before
-  // any account read. Not re-read in createTradingSession's transaction: a switch to real between
-  // the two reads leaves a demo session trading demo money (docs/trading-session.md -> Routes).
-  if (user.tradingMode !== TradeMode.Demo) return refused(TradingSessionErrorCode.ModeNotAllowed);
+  // a session only in the user's mode (#327, Rule 36), before any account read; a switch after
+  // this read is caught by createTradingSession under the users lock
+  if (user.tradingMode !== mode) return refused(TradingSessionErrorCode.ModeNotAllowed);
 
   const resolved = await resolveTradingAccount(db, user.id, brokerAccountId);
   if (!resolved.ok) return refused(resolved.code);

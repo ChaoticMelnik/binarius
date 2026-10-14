@@ -979,6 +979,7 @@ describe('readIntent', () => {
 describe('startSession', () => {
   const sessionRequest: CreateTradingSessionRequest = {
     telegramUserId: '4242',
+    mode: TradeMode.Demo,
     assetId: 101,
     durationSec: 60,
     trades: 5,

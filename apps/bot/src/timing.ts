@@ -203,7 +203,7 @@ export const INTENT_TRACK_DEADLINE_MS = 120_000;
 // by this constant.
 export const INTENT_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_TIMEOUT_MS;
 
-// The demo session's status tracker (#284, session-tracker.ts), polling between updates like the
+// The session's status tracker (#284, session-tracker.ts), polling between updates like the
 // intent tracker. A trade's open-to-settle cycle is at least the worker's catch-up grace (10 s),
 // so a poll every 10 s is enough to follow it and bounds the load. The deadline is the worker's
 // session deadline, imported and so checked below, plus the last trade's settle

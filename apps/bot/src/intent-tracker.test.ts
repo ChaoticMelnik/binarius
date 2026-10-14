@@ -177,13 +177,19 @@ describe('the intent tracker', () => {
     }
   });
 
-  // #121: sessions are demo only, so a real trade gets no offer on any status
-  it('offers no session under a real trade', () => {
+  // #327: a real trade offers a real session, on the same stop statuses as a demo one
+  it('offers a session under a real trade as under a demo one', () => {
     for (const status of Object.values(TradeIntentStatus)) {
-      expect(
-        sessionOfferOf({ mode: TradeMode.Real, status, durationSec: 5 }, true),
-      ).toBeUndefined();
+      expect(sessionOfferOf({ mode: TradeMode.Real, status, durationSec: 5 }, true)).toBe(
+        sessionOfferOf({ mode: TradeMode.Demo, status, durationSec: 5 }, true),
+      );
     }
+    expect(
+      sessionOfferOf(
+        { mode: TradeMode.Real, status: TradeIntentStatus.Settled, durationSec: 5 },
+        true,
+      ),
+    ).toBe(5);
   });
 
   // #379: a pair paying below the cycle floor gets no offer on any stop status

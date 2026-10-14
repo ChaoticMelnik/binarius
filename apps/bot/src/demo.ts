@@ -16,6 +16,7 @@ import {
   SignalFeedOutcome,
   TradeAction,
   TradeMode,
+  tradeModeSchema,
   type DecimalString,
   type PairsCatalogResponse,
   type PairTypeGroup,
@@ -69,6 +70,7 @@ import {
   formatBreakEven,
   groupButtonLabel,
   LABELS,
+  launchCycleButtonLabel,
   launchText,
   pairButtonLabel,
   sessionStartButtonLabel,
@@ -175,12 +177,16 @@ export const launchStakeCallbackData = (
   durationSec: DemoDurationSec,
 ): string => `${STAKE_PICKER_PREFIX}o:${MODE_TOKENS[mode]}:p:${assetId}:${durationSec}`;
 // The session button (#284, trading-session.ts) of the analysis screen, of a finished single trade
-// (#360, demo-trade.ts) and of the launch screen (#320). No nonce, by the owner's
-// decision: an old button starts a new session once the previous one has ended, and while one is
-// active the backend answers with it. The longest, `demo:sess:2147483647:15`, is 23 bytes.
-const SESSION_START_PREFIX = 'demo:sess:';
-export const sessionStartCallbackData = (assetId: number, durationSec: DemoDurationSec): string =>
-  `${SESSION_START_PREFIX}${assetId}:${durationSec}`;
+// (#360, demo-trade.ts), of the launch screen (#320) and «🔁 Ещё сессия». It carries the mode it
+// was drawn in (#327), which the backend compares with the user's: a demo button is byte for byte
+// the one before #327. No nonce, by the owner's decision: an old button starts a new session once
+// the previous one has ended, and while one is active the backend answers with it. The longest,
+// `real:sess:2147483647:15`, is 23 bytes.
+export const sessionStartCallbackData = (
+  mode: TradeMode,
+  assetId: number,
+  durationSec: DemoDurationSec,
+): string => `${mode}:sess:${assetId}:${durationSec}`;
 // The button shows only where a session of DEFAULT_SESSION_TRADES fits the worker's deadline
 // (after #313 every duration of DEMO_DURATIONS_SEC: 5 × (15 + 120) s ≤ 1 h); the handler checks
 // again, so an old or forged datum starts nothing. The count is a parameter so a test can reach
@@ -209,7 +215,7 @@ const stakeCallbackPattern = (durations: string) =>
     `^${STAKE_CALLBACK_PREFIX}(\\d{1,10}):(${durations}):(${Object.values(TradeAction).join('|')}):([0-9a-f]{12})(?::([0-9a-f]{6}))?$`,
   );
 const sessionStartPattern = (durations: string) =>
-  new RegExp(`^${SESSION_START_PREFIX}(\\d{1,10}):(${durations})$`);
+  new RegExp(`^(${Object.values(TradeMode).join('|')}):sess:(\\d{1,10}):(${durations})$`);
 const DEMO_SIGNALS_PATTERN = new RegExp(`^demo:sig:(${DURATIONS})$`);
 const DEMO_LAUNCH_PATTERN = new RegExp(`^demo:l:(\\d{1,10}):(${DURATIONS})$`);
 // the floor's token is optional: a button #360 drew before #379 has none
@@ -331,14 +337,20 @@ export function analysisMoreDataOf(match: RegExpMatchArray | string):
 export function sessionStartDataOf(
   match: RegExpMatchArray | string,
   trades = DEFAULT_SESSION_TRADES,
-): { assetId: number; durationSec: DemoDurationSec } | undefined {
+): { mode: TradeMode; assetId: number; durationSec: DemoDurationSec } | undefined {
   if (typeof match === 'string') return undefined;
-  const assetId = assetIdOf(match[1]);
-  const durationSec = durationOf(match[2]);
-  if (assetId === undefined || durationSec === undefined || !sessionFits(durationSec, trades)) {
+  const mode = tradeModeSchema.safeParse(match[1]);
+  const assetId = assetIdOf(match[2]);
+  const durationSec = durationOf(match[3]);
+  if (
+    !mode.success ||
+    assetId === undefined ||
+    durationSec === undefined ||
+    !sessionFits(durationSec, trades)
+  ) {
     return undefined;
   }
-  return { assetId, durationSec };
+  return { mode: mode.data, assetId, durationSec };
 }
 
 // The main path's first screen (#382): the durations of SIGNALS_DURATIONS_SEC in one row, then the
@@ -438,8 +450,8 @@ export function signalsScreen(
 // The launch of a cycle of DEFAULT_SESSION_TRADES on a pair at the chosen duration (#320, #382):
 // the session start of the analysis screen (#284), the picker with its way back here, the list.
 // The picker draws it too, after a save, unless the pair pays below the cycle floor
-// (stake-picker.ts). In real mode (#121) cycles are demo only: the analysis of the pair, whose
-// «➕ Ещё» opens the single real trade, in place of the cycle and the picker.
+// (stake-picker.ts). Drawn in the user's mode (#327): in real mode the cycle button is marked REAL
+// and starts a real session, the picker is the real one.
 export function launchScreen({
   assetId,
   durationSec,
@@ -466,22 +478,12 @@ export function launchScreen({
     saved,
     mode,
   });
-  if (mode === TradeMode.Real) {
-    return {
-      text,
-      keyboard: new InlineKeyboard()
-        .text(LABELS.modeAnalysisButton, demoAnalysisCallbackData(assetId, durationSec))
-        .row()
-        .text(LABELS.backToListButton, demoSignalsCallbackData(durationSec)),
-    };
-  }
   return {
     text,
     keyboard: new InlineKeyboard()
-      .text(LABELS.launchCycleButton, sessionStartCallbackData(assetId, durationSec))
+      .text(launchCycleButtonLabel(mode), sessionStartCallbackData(mode, assetId, durationSec))
       .row()
-      // the cycle's stake: cycles are demo only (#121)
-      .text(LABELS.stakeChangeButton, launchStakeCallbackData(TradeMode.Demo, assetId, durationSec))
+      .text(LABELS.stakeChangeButton, launchStakeCallbackData(mode, assetId, durationSec))
       .row()
       .text(LABELS.backToListButton, demoSignalsCallbackData(durationSec)),
   };
@@ -568,12 +570,8 @@ export function createDemoComposer<C extends Context>({
         amount: stake.amount,
         mode: stake.mode,
       });
-    // real mode has no cycle and so no cycle floor (#121): a pair below it gets the real launch
-    const screen = read.ok
-      ? launch(read.pair)
-      : stake.mode === TradeMode.Real && read.reason === 'payout_too_low'
-        ? launch(read.pair)
-        : launchFailure(ctx, read, assetId, durationSec);
+    // a pair below the cycle floor gets the floor's refusal in either mode (#327)
+    const screen = read.ok ? launch(read.pair) : launchFailure(ctx, read, assetId, durationSec);
     await editOrReply(ctx, screen.text, screen.keyboard);
   });
 
@@ -639,9 +637,9 @@ export function createDemoComposer<C extends Context>({
       await answerOnly(ctx);
       return;
     }
-    // the mode decides the session row (#121): a user in real mode gets none, cycles being demo
-    // only; a failed access read draws the demo keyboard, whose session press the backend refuses
-    // for a real-mode user (mode_not_allowed)
+    // the mode decides the session row's data and label (#327); a failed access read draws the
+    // demo keyboard, whose session press the backend refuses for a real-mode user
+    // (mode_not_allowed)
     const [read, stake] = await answerAnd(
       ctx,
       Promise.all([readDemoTrade(backend, assetId, durationSec, now), stakeAmount(ctx.from.id)]),
@@ -773,8 +771,8 @@ export function createDemoComposer<C extends Context>({
   }
 
   // The session row first on every `decided` answer (#360) of a pair paying at least the cycle
-  // floor (#379, the screen says why otherwise) in demo mode (#121), «➕ Ещё» on a signal, then
-  // «🔄 Повторить анализ» and the way back
+  // floor (#379, the screen says why otherwise), in the user's mode (#327), «➕ Ещё» on a signal,
+  // then «🔄 Повторить анализ» and the way back
   function analysisKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
@@ -784,9 +782,7 @@ export function createDemoComposer<C extends Context>({
   ): InlineKeyboard {
     const keyboard = new InlineKeyboard();
     const payoutAccepted = pairPayoutAccepted(pair);
-    if (screen.session && mode === TradeMode.Demo) {
-      appendSessionRow(keyboard, assetId, durationSec, payoutAccepted);
-    }
+    if (screen.session) appendSessionRow(keyboard, assetId, durationSec, payoutAccepted, mode);
     if (screen.stake !== null) {
       keyboard
         .text(
@@ -799,8 +795,8 @@ export function createDemoComposer<C extends Context>({
   }
 
   // What «➕ Ещё» draws in place of the collapsed keyboard: the stake row joins it, with «💵 Сумма»
-  // opening the picker of the same mode (#326). In real mode (#121) the stake button is marked REAL
-  // and there is no session row (cycles are demo only, #327).
+  // opening the picker of the same mode (#326). In real mode (#121) the stake button and the
+  // session row (#327) are marked REAL.
   function expandedKeyboard(
     assetId: number,
     durationSec: DemoDurationSec,
@@ -817,10 +813,12 @@ export function createDemoComposer<C extends Context>({
       stakeFingerprint(amount, mode),
     );
     const label = stakeButtonLabel(action, amount, mode);
-    const keyboard = (
-      mode === TradeMode.Real
-        ? new InlineKeyboard()
-        : appendSessionRow(new InlineKeyboard(), assetId, durationSec, payoutAccepted)
+    const keyboard = appendSessionRow(
+      new InlineKeyboard(),
+      assetId,
+      durationSec,
+      payoutAccepted,
+      mode,
     )
       .text(label, stakeData)
       .text(LABELS.stakeMenuButton, stakeMenuCallbackData(mode, assetId, durationSec))
@@ -835,12 +833,13 @@ export function createDemoComposer<C extends Context>({
     assetId: number,
     durationSec: DemoDurationSec,
     payoutAccepted: boolean,
+    mode: TradeMode,
   ): InlineKeyboard {
     if (!sessionFits(durationSec) || !payoutAccepted) return keyboard;
     return keyboard
       .text(
-        sessionStartButtonLabel(DEFAULT_SESSION_TRADES),
-        sessionStartCallbackData(assetId, durationSec),
+        sessionStartButtonLabel(DEFAULT_SESSION_TRADES, mode),
+        sessionStartCallbackData(mode, assetId, durationSec),
       )
       .row();
   }

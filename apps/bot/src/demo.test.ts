@@ -554,7 +554,12 @@ describe('the signals screen', () => {
 describe('the launch screen', () => {
   const LAUNCH = demoLaunchCallbackData(PAIR_EURUSD.id, 15);
   const LAUNCH_ROWS = [
-    [button(LABELS.launchCycleButton, sessionStartCallbackData(PAIR_EURUSD.id, 15))],
+    [
+      button(
+        LABELS.launchCycleButton,
+        sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15),
+      ),
+    ],
     [button(LABELS.stakeChangeButton, launchStakeCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15))],
     [button(LABELS.backToListButton, demoSignalsCallbackData(15))],
   ];
@@ -625,27 +630,38 @@ describe('the launch screen', () => {
     expect(edited?.text).toContain('EUR/USD OTC · ⏱ 5 с');
   });
 
-  // #121: cycles are demo only; in real mode the launch leads to the pair's analysis, whose «➕ Ещё»
-  // opens the single real trade
-  it('shows a user in real mode the single trade in place of the cycle and the picker', async () => {
+  // #327 (manager's decision 1): the demo launch drawn by the mode, a real cycle at the real stake
+  it('shows a user in real mode the real cycle, its stake and the real picker', async () => {
     const { press, calls } = setup({
-      readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
+      readTradingAccess: () =>
+        Promise.resolve(
+          accessView({
+            tradingMode: TradeMode.Real,
+            demoStake: decimalStringSchema.parse('2.5'),
+            realStake: decimalStringSchema.parse('3'),
+          }),
+        ),
     });
     await press(LAUNCH);
     const edited = payloadOf(calls, 'editMessageText');
     expect(rowsOf(edited)).toEqual([
-      [button(LABELS.modeAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15))],
+      [
+        button(
+          '🚀 Запустить цикл · REAL',
+          sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+        ),
+      ],
+      [button(LABELS.stakeChangeButton, `stk:o:r:p:${String(PAIR_EURUSD.id)}:15`)],
       [button(LABELS.backToListButton, demoSignalsCallbackData(15))],
     ]);
-    expect(plainTextOf(TEXTS.launchRealMode)).toBe(
-      '💼 Циклы — только в демо; в реальном режиме — разовая сделка по анализу.',
-    );
-    expect(edited?.text).toContain(TEXTS.launchRealMode.value);
-    expect(edited?.text).not.toContain('Бот проведёт');
-    // decision 22: no stake line in real mode
     expect(plainTextOf(edited?.text as string)).toBe(
-      `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с\n${plainTextOf(TEXTS.launchRealMode)}`,
+      `🎯 ${PAIR_EURUSD.symbol} · ⏱ 15 с\n💵 Ставка: $3.00\n🤖 Бот проведёт 5 сделок подряд и перед каждой проверит сигнал. Реальный режим: сделки идут на реальные деньги.`,
     );
+    expect(
+      rowsOf(edited)
+        .flat()
+        .map((b) => b.text),
+    ).not.toContain('📊 Анализ пары');
   });
 
   it('keeps the demo launch when access cannot say the mode', async () => {
@@ -659,6 +675,7 @@ describe('the launch screen', () => {
   it('starts a 15 s session of the pair from «🚀 Запустить цикл»', () => {
     const data = LAUNCH_ROWS[0]?.[0]?.callback_data ?? '';
     expect(sessionStartDataOf(SESSION_START_PATTERN.exec(data) ?? '')).toEqual({
+      mode: TradeMode.Demo,
       assetId: PAIR_EURUSD.id,
       durationSec: 15,
     });
@@ -743,17 +760,20 @@ describe('the launch screen', () => {
     },
   );
 
-  // Plan 5 (28.3): real mode has no cycle and no cycle floor; the pair goes to the real launch
-  it('launches a pair below the cycle floor for a user in real mode, with the analysis', async () => {
-    const { press, calls } = setup({
+  // #327: the floor is the session's, and a real session meets it too
+  it('refuses a pair below the cycle floor for a user in real mode as in demo', async () => {
+    const real = setup({
       readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
     });
-    await press(demoLaunchCallbackData(PAIR_OTHER_TYPE.id, 15));
-    const edited = payloadOf(calls, 'editMessageText');
-    expect(edited?.text).toContain(TEXTS.launchRealMode.value);
-    expect(rowsOf(edited)).toEqual([
-      [button(LABELS.modeAnalysisButton, demoAnalysisCallbackData(PAIR_OTHER_TYPE.id, 15))],
+    await real.press(demoLaunchCallbackData(PAIR_OTHER_TYPE.id, 15));
+    const demo = setup();
+    await demo.press(demoLaunchCallbackData(PAIR_OTHER_TYPE.id, 15));
+    const realEdit = payloadOf(real.calls, 'editMessageText');
+    expect(realEdit?.text).toBe(payloadOf(demo.calls, 'editMessageText')?.text);
+    expect(realEdit?.text).toContain('цикл на этой паре не запускается');
+    expect(rowsOf(realEdit)).toEqual([
       [button(LABELS.backToListButton, demoSignalsCallbackData(15))],
+      [MANUAL],
     ]);
   });
 
@@ -767,7 +787,12 @@ describe('the launch screen', () => {
       await press(demoLaunchCallbackData(PAIR_EURUSD.id, durationSec));
 
       expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
-        [button(LABELS.launchCycleButton, sessionStartCallbackData(PAIR_EURUSD.id, durationSec))],
+        [
+          button(
+            LABELS.launchCycleButton,
+            sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, durationSec),
+          ),
+        ],
         [
           button(
             LABELS.stakeChangeButton,
@@ -1115,7 +1140,10 @@ describe('the summary and «📊 Анализ»', () => {
 describe('the analysis', () => {
   const DATA = demoAnalysisCallbackData(PAIR_EURUSD.id, 5);
   const REPEAT = button(LABELS.repeatAnalysisButton, DATA);
-  const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 5));
+  const SESSION = button(
+    '🚀 Сессия из 5 сделок',
+    sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
+  );
   const MORE = button(
     LABELS.analysisMoreButton,
     analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Demo),
@@ -1168,13 +1196,19 @@ describe('the analysis', () => {
     expect(readTradingAccess.mock.calls).toEqual([['4242']]);
   });
 
-  // #121: cycles are demo only, so a user in real mode gets «➕ Ещё» and no session row
-  it('draws no session row for a user in real mode', async () => {
+  // #327: a user in real mode gets the session row marked REAL, with the real mode in its data
+  it('draws the real session row for a user in real mode', async () => {
     const { press, calls } = setup({
       readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
     });
     await press(DATA);
     expect(rowsOf(edits(calls).at(-1)?.payload)).toEqual([
+      [
+        button(
+          '🚀 Сессия из 5 сделок · REAL',
+          sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
+        ),
+      ],
       [
         button(
           LABELS.analysisMoreButton,
@@ -1337,8 +1371,8 @@ describe('the analysis', () => {
     const { press, calls } = setup();
     await press(demoAnalysisCallbackData(PAIR_EURUSD.id, durationSec));
     const session = button(
-      sessionStartButtonLabel(5),
-      sessionStartCallbackData(PAIR_EURUSD.id, durationSec),
+      sessionStartButtonLabel(5, TradeMode.Demo),
+      sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, durationSec),
     );
     const rows = rowsOf(edits(calls).at(-1)?.payload);
     expect(rows.some((row) => row.length === 1 && row[0]?.text === session.text)).toBe(shown);
@@ -1433,13 +1467,19 @@ describe('the analysis', () => {
   );
 
   it('keeps the longest session datum inside the Bot API limit and reads it back', () => {
-    const data = sessionStartCallbackData(2_147_483_647, 15);
-    expect(data).toBe('demo:sess:2147483647:15');
+    // the demo datum is byte for byte the one before #327
+    expect(sessionStartCallbackData(TradeMode.Demo, 2_147_483_647, 15)).toBe(
+      'demo:sess:2147483647:15',
+    );
+    const data = sessionStartCallbackData(TradeMode.Real, 2_147_483_647, 15);
+    expect(data).toBe('real:sess:2147483647:15');
     expect(Buffer.byteLength(data, 'utf8')).toBe(23);
     expect(sessionStartDataOf(SESSION_START_PATTERN.exec(data) ?? '')).toEqual({
+      mode: TradeMode.Real,
       assetId: 2_147_483_647,
       durationSec: 15,
     });
+    expect(SESSION_START_PATTERN.exec(`bogus:sess:${String(PAIR_EURUSD.id)}:15`)).toBeNull();
     // a datum from before #313 is not a session datum: the legacy handler takes it
     expect(SESSION_START_PATTERN.exec(`demo:sess:${String(PAIR_EURUSD.id)}:300`)).toBeNull();
   });
@@ -1447,9 +1487,15 @@ describe('the analysis', () => {
   // the guard of the #313 addendum: every duration of the set fits DEFAULT_SESSION_TRADES, so
   // the count is passed in to reach it
   it('starts nothing when the session does not fit the hour', () => {
-    const match = SESSION_START_PATTERN.exec(sessionStartCallbackData(PAIR_EURUSD.id, 15)) ?? '';
+    const match =
+      SESSION_START_PATTERN.exec(sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 15)) ??
+      '';
     expect(sessionStartDataOf(match, 100)).toBeUndefined();
-    expect(sessionStartDataOf(match)).toEqual({ assetId: PAIR_EURUSD.id, durationSec: 15 });
+    expect(sessionStartDataOf(match)).toEqual({
+      mode: TradeMode.Demo,
+      assetId: PAIR_EURUSD.id,
+      durationSec: 15,
+    });
   });
 
   // #360: no signal still offers the session, which waits for a signal itself; candles not read
@@ -1582,7 +1628,10 @@ describe('the analysis', () => {
 describe('«➕ Ещё» under the analysis', () => {
   const DATA = analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Demo);
   const REPEAT = button(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
-  const SESSION = button('🚀 Сессия из 5 сделок', sessionStartCallbackData(PAIR_EURUSD.id, 5));
+  const SESSION = button(
+    '🚀 Сессия из 5 сделок',
+    sessionStartCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
+  );
   const STAKE_MENU = button(
     LABELS.stakeMenuButton,
     stakeMenuCallbackData(TradeMode.Demo, PAIR_EURUSD.id, 5),
@@ -1626,7 +1675,7 @@ describe('«➕ Ещё» under the analysis', () => {
     expect(evaluateSignal).not.toHaveBeenCalled();
   });
 
-  // #121: the single real trade, marked REAL; no session row (cycles are demo only). #326: at the
+  // #121: the single real trade, marked REAL, under the real session row (#327). #326: at the
   // saved real stake, with «💵 Сумма» opening the real picker
   it.each([
     ['the minimum without a saved real stake', null, '1.00000000', '$1.00'],
@@ -1648,8 +1697,14 @@ describe('«➕ Ещё» under the analysis', () => {
         analysisMoreCallbackData(PAIR_EURUSD.id, 5, TradeAction.Up, true, TradeMode.Real),
       );
       const rows = rowsOf(expandedOf(calls).at(-1)?.payload);
-      const [[stake, menu], ...rest] = rows;
-      expect(rows[0]).toHaveLength(2);
+      const [session, [stake, menu], ...rest] = rows;
+      expect(session).toEqual([
+        button(
+          '🚀 Сессия из 5 сделок · REAL',
+          sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
+        ),
+      ]);
+      expect(rows[1]).toHaveLength(2);
       expect(stake?.text).toBe(
         stakeButtonLabel(TradeAction.Up, decimalStringSchema.parse(amount), TradeMode.Real),
       );

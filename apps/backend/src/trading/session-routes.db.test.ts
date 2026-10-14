@@ -142,6 +142,7 @@ function appWith(
     refresh?: (accountId: string) => Promise<unknown>;
     // what the refresh answers once the stub ran
     outcome?: BalanceRefreshOutcome;
+    demoOnly?: boolean;
   } = {},
 ): FastifyInstance {
   const catalog = 'catalog' in options ? options.catalog : freshCatalog();
@@ -175,7 +176,7 @@ function appWith(
       },
       balance: { refresh },
       internalApiToken: PAIRS_TEST_TOKEN,
-      demoOnly: false,
+      demoOnly: options.demoOnly ?? false,
       now: () => NOW,
     },
     signal: unusedSignalDeps(),
@@ -226,6 +227,7 @@ async function seedReady(options: { balance?: bigint } = {}): Promise<SeededAcco
 
 const bodyFor = (seed: { telegramUserId: string }, patch: object = {}) => ({
   telegramUserId: seed.telegramUserId,
+  mode: TradeMode.Demo,
   assetId: ASSET,
   durationSec: 60,
   ...patch,
@@ -439,14 +441,124 @@ describe('POST /trading/sessions', () => {
     expect(response.statusCode).toBe(201);
   });
 
-  // #121: sessions are demo only; a user in real mode gets none, before any balance refresh
-  it('R21 a user in real mode is 409 mode_not_allowed and no session is written', async () => {
+  // #327: a session only in the user's mode, refused before any balance refresh
+  it('R21 a user in real mode asking a demo session is 409 mode_not_allowed', async () => {
     const seed = await seedReady();
     await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
     const before = await sessionCount();
     const response = await start(appWith({}), bodyFor(seed));
     await expectRefusal(response, 409, 'mode_not_allowed', before);
     expect(refreshCalls).toEqual([]);
+  });
+
+  it('R22 a user in real mode starts a real session with the saved real stake', async () => {
+    const seed = await seedReady();
+    await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Real);
+    await setStake(
+      tmp.db,
+      BigInt(seed.telegramUserId),
+      TradeMode.Real,
+      decimalStringSchema.parse('2.50'),
+    );
+    const response = await start(appWith(), bodyFor(seed, { mode: TradeMode.Real }));
+    expect(response.statusCode).toBe(201);
+    const session = sessionOf(response);
+    expect(session.mode).toBe(TradeMode.Real);
+    expect(session.settings?.stake).toEqual({ baseStake: '2.5', stakeScale: 2 });
+    const [row] = await tmp.db
+      .select()
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, session.id));
+    expect(row).toMatchObject({ brokerAccountId: seed.brokerAccountId, mode: 'real' });
+  });
+
+  it('R23 a user in demo mode asking a real session is 409 mode_not_allowed before the catalog', async () => {
+    const seed = await seedReady();
+    const before = await sessionCount();
+    const response = await start(appWith(), bodyFor(seed, { mode: TradeMode.Real }));
+    await expectRefusal(response, 409, 'mode_not_allowed', before);
+    expect(refreshCalls).toEqual([]);
+    expect(catalogReads).toBe(0);
+  });
+
+  it('R24 a body without a mode is 400 validation', async () => {
+    const seed = await seedReady();
+    const before = await sessionCount();
+    const response = await start(appWith(), {
+      telegramUserId: seed.telegramUserId,
+      assetId: ASSET,
+      durationSec: 60,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: 'validation' });
+    expect(await sessionCount()).toBe(before);
+  });
+
+  it("R25 a real session's stake is bounded by the real balance, not the demo one", async () => {
+    const above = await seedReady();
+    await setTradingMode(tmp.db, BigInt(above.telegramUserId), TradeMode.Real);
+    // the real balance is 100, the demo one 10000
+    await setStake(
+      tmp.db,
+      BigInt(above.telegramUserId),
+      TradeMode.Real,
+      decimalStringSchema.parse('150'),
+    );
+    const before = await sessionCount();
+    await expectRefusal(
+      await start(appWith(), bodyFor(above, { mode: TradeMode.Real })),
+      409,
+      'insufficient_balance',
+      before,
+    );
+
+    const noDemo = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    await upsertBalanceSnapshot(tmp.db, {
+      brokerAccountId: noDemo.brokerAccountId,
+      user: {
+        ...brokerUser,
+        demo: { ...brokerUser.demo, available: decimalStringSchema.parse('0') },
+      },
+      requested: false,
+    });
+    const response = await start(appWith(), bodyFor(noDemo, { mode: TradeMode.Real }));
+    expect(response.statusCode).toBe(201);
+    expect(sessionOf(response).mode).toBe(TradeMode.Real);
+  });
+
+  it('R26 a switch to demo between the check and the insert answers mode_not_allowed from the transaction', async () => {
+    const seed = await seedUserWithAccount(tmp.db, { tradingMode: TradeMode.Real });
+    let racerRows = 0;
+    const response = await start(
+      appWith({
+        refresh: async (accountId) => {
+          await snapshotFor(accountId);
+          await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Demo);
+          racerRows = await sessionCount();
+        },
+      }),
+      bodyFor(seed, { mode: TradeMode.Real }),
+    );
+    await expectRefusal(response, 409, 'mode_not_allowed', racerRows);
+  });
+
+  // #396: a user left in real mode (set before the flag) passes the checks and is refused by
+  // createTradingSession before its transaction
+  it('R27 DEMO_ONLY: a real session is 409 demo_only, a demo one starts', async () => {
+    const real = await seedReady();
+    await setTradingMode(tmp.db, BigInt(real.telegramUserId), TradeMode.Real);
+    const target = appWith({ demoOnly: true });
+    const before = await sessionCount();
+    await expectRefusal(
+      await start(target, bodyFor(real, { mode: TradeMode.Real })),
+      409,
+      'demo_only',
+      before,
+    );
+    const demo = await seedReady();
+    const response = await start(target, bodyFor(demo));
+    expect(response.statusCode).toBe(201);
+    expect(sessionOf(response).mode).toBe(TradeMode.Demo);
   });
 
   it('R8 a pair with a past scheduledUntil is open', async () => {

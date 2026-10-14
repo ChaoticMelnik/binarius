@@ -288,7 +288,7 @@ export function createWorker({
     },
   });
 
-  // the demo sessions (docs/trading-session.md): their signal and pairs come from the backend
+  // the trading sessions (docs/trading-session.md): their signal and pairs come from the backend
   const backend = { baseUrl: env.backendUrl, token: env.internalApiToken };
   const tradingSessions = createSessionOrchestrator({
     db,

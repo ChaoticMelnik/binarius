@@ -153,13 +153,14 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     if (!parsed.success) {
       return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
     }
-    const { telegramUserId, assetId, durationSec, trades } = parsed.data;
+    const { telegramUserId, mode, assetId, durationSec, trades } = parsed.data;
     if (!sessionFitsDeadline(trades, durationSec)) {
       return refuse(reply, TradingSessionErrorCode.SessionTooLong);
     }
 
     const eligible = await checkTradingSessionStart(db, {
       telegramUserId,
+      mode,
       ...(parsed.data.brokerAccountId === undefined
         ? {}
         : { brokerAccountId: parsed.data.brokerAccountId }),
@@ -216,12 +217,14 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       if (snapshot === undefined) return refuse(reply, TradingSessionErrorCode.BalanceUnavailable);
     }
 
-    // the user's saved stake, or the broker's minimum without one (#297), checked against the
-    // same snapshot before any row is written
-    const demoStake = (await readStakes(db, BigInt(telegramUserId)))?.demoStake ?? null;
-    const stakeRefusal = checkStake(demoStake ?? snapshot.minTradeAmount, {
+    // the user's saved stake of the session's mode, or the broker's minimum without one (#297,
+    // #327), checked against that mode's balance of the same snapshot before any row is written
+    const stakes = await readStakes(db, BigInt(telegramUserId));
+    const savedStake = (mode === TradeMode.Real ? stakes?.realStake : stakes?.demoStake) ?? null;
+    const available = mode === TradeMode.Real ? snapshot.real.available : snapshot.demo.available;
+    const stakeRefusal = checkStake(savedStake ?? snapshot.minTradeAmount, {
       minTradeAmount: snapshot.minTradeAmount,
-      available: snapshot.demo.available,
+      available,
     });
     if (stakeRefusal !== null) return refuse(reply, stakeRefusal);
 
@@ -232,7 +235,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       assetId,
       durationSec,
       trades,
-      stake: stakeSettingsFrom(demoStake, snapshot.minTradeAmount),
+      stake: stakeSettingsFrom(savedStake, snapshot.minTradeAmount),
     });
     if (!stakeSettings.success) {
       request.log.warn({ accountId: brokerAccountId }, 'balance snapshot gives no session stake');
@@ -244,7 +247,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     try {
       created = await createTradingSession(
         db,
-        { telegramUserId, brokerAccountId, mode: TradeMode.Demo, settings },
+        { telegramUserId, brokerAccountId, mode, settings },
         { demoOnly },
       );
     } catch (error) {

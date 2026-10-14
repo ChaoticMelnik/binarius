@@ -42,7 +42,7 @@ import { createStakeSizer, type SessionTrade, type StakeSizer } from '../stake/s
 import type { PairsSource, SignalSource } from './backend';
 import type { SessionOrchestratorConfig } from './config';
 
-// The demo-session orchestrator (#287, docs/trading-session.md -> The orchestrator): every tick
+// The session orchestrator (#287, real sessions #327, docs/trading-session.md -> The orchestrator): every tick
 // stops the sessions the kill switch, the deadline and a halt end, then makes one attempt per
 // runnable session. An attempt either writes an ending (a stop, or last_decision_at moved) or
 // holds the session back in memory; the step comes from the database's history, never from memory.
@@ -129,11 +129,11 @@ const CREATE_REFUSALS = {
     kind: 'stop',
     reason: TradingSessionStopReason.StakeStop,
   },
-  // the process runs DEMO_ONLY and the session is real (#396): durable for this process;
-  // reachable only for a real session row (#327)
+  // the process runs DEMO_ONLY and the session is real (#396): durable for this process
   [TradeIntentErrorCode.DemoOnly]: accountUnavailable,
-  // the user is not in real mode (#121): durable until the user switches; reachable only for a
-  // real session row (#327 decides what a real session needs)
+  // the user is not in real mode (#121): a switch to demo stops the user's sessions itself
+  // (setTradingMode, #327), so this is the race with that switch, whose stop wins the CAS, or a
+  // trading_mode written by hand
   [TradeIntentErrorCode.RealModeOff]: accountUnavailable,
 } as const satisfies Record<TradeIntentErrorCode, CreateRefusal>;
 

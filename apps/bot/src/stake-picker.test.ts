@@ -18,6 +18,7 @@ import {
   demoLaunchCallbackData,
   launchScreen,
   launchStakeCallbackData,
+  sessionStartCallbackData,
   stakeMenuCallbackData,
 } from './demo';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
@@ -427,10 +428,23 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     expect(lastPayload(calls)?.text).toBe(screen.text.value);
     const text = plainTextOf(lastPayload(calls)?.text as string);
     expect(text).toContain('✅ Демо-ставка сохранена: $5.00');
-    expect(text).not.toContain('💵 Ставка');
+    // #327: the real launch names the real stake in force and starts a real cycle
+    expect(text).toContain('💵 Ставка: $1.00');
+    expect(text).toContain('Реальный режим: сделки идут на реальные деньги.');
     expect(text.split('$5.00')).toHaveLength(2);
     expect(rowsOf(lastPayload(calls))).toEqual([
-      [button(LABELS.modeAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15))],
+      [
+        button(
+          '🚀 Запустить цикл · REAL',
+          sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+        ),
+      ],
+      [
+        button(
+          LABELS.stakeChangeButton,
+          launchStakeCallbackData(TradeMode.Real, PAIR_EURUSD.id, 15),
+        ),
+      ],
       [button(LABELS.backToListButton, 'demo:sig:15')],
     ]);
   });
@@ -477,8 +491,8 @@ describe('the stake picker opened from a launch screen (#320)', () => {
   });
 
   // #379: the screen a save returns to offers no cycle the session start would refuse
-  // Plan 5 (28.3): a real-mode user below the cycle floor gets the real launch, not the refusal
-  it('returns a user in real mode to the real launch on a pair below the cycle floor', async () => {
+  // #327: in real mode too, the floor being the session's
+  it('returns a user in real mode to the cycle floor refusal on a pair below it', async () => {
     const { press, calls } = setup({
       readPairs: () => Promise.resolve(pairsResponse({ pairs: [{ ...PAIR_EURUSD, payout: 79 }] })),
       readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
@@ -486,9 +500,10 @@ describe('the stake picker opened from a launch screen (#320)', () => {
     await press(stakePresetCallbackData('5', TradeMode.Demo, PAIR));
     const text = plainTextOf(lastPayload(calls)?.text as string);
     expect(text).toContain('✅ Демо-ставка сохранена: $5.00');
-    expect(text).toContain(plainTextOf(TEXTS.launchRealMode));
-    expect(rowsOf(lastPayload(calls))[0]).toEqual([
-      button(LABELS.modeAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 15)),
+    expect(text).toContain('цикл на этой паре не запускается');
+    expect(rowsOf(lastPayload(calls))).toEqual([
+      [button(LABELS.backToListButton, 'demo:sig:15')],
+      [button(LABELS.demoManualButton, 'demo:g')],
     ]);
   });
 

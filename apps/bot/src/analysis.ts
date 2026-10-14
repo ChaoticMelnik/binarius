@@ -106,8 +106,7 @@ export interface AnalysisScreenInput {
   pair: PairView;
   durationSec: DemoDurationSec;
   response: TradingSignalResponse;
-  // the user's mode as the analysis's access read gave it (#121): the disclaimer and the hint
-  // follow it, and real mode has no cycle to refuse
+  // the user's mode as the analysis's access read gave it (#121): the disclaimer follows it
   mode: TradeMode;
 }
 
@@ -118,10 +117,10 @@ export function analysisScreen({
   mode,
 }: AnalysisScreenInput): AnalysisScreen {
   const real = mode === TradeMode.Real;
-  // Every `decided` answer of a demo pair below the cycle floor gets no session row (demo.ts,
-  // #379): the note under the block that would precede it says why
+  // Every `decided` answer of a pair below the cycle floor gets no session row (demo.ts, #379), in
+  // either mode (#327): the note under the block that would precede it says why
   const withCycleNote = (block: TelegramHtml): TelegramHtml =>
-    real || pairPayoutAccepted(pair)
+    pairPayoutAccepted(pair)
       ? block
       : telegramHtml`${block}
 ${TEXTS.analysisCycleUnavailable({ payoutFloor: String(MIN_CYCLE_PAYOUT_PCT) })}`;
@@ -172,7 +171,7 @@ ${headline}
 
 ${featureLines(decision.features, params, pair, volatility)}
 
-${withCycleNote(real ? TEXTS.analysisNoSignalHintReal : TEXTS.analysisNoSignalHint)}`,
+${withCycleNote(TEXTS.analysisNoSignalHint)}`,
     stake: null,
     session: true,
   };

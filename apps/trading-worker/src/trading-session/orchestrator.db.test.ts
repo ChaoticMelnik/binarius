@@ -30,6 +30,8 @@ import {
   markIntentUnknown,
   openTrading,
   readSessionHistory,
+  readTradingSessionView,
+  setTradingMode,
   settleClosedTrades,
   startReconciling,
   stopTradingSession,
@@ -246,8 +248,11 @@ async function seedSession({
     mode,
     ...(startedAt === undefined ? {} : { startedAt }),
   });
-  return { ...user, brokerAccountId, accessToken, session };
+  return { ...user, brokerUserId: id, brokerAccountId, accessToken, session };
 }
+
+// #327: a real session runs the same way as a demo one; the user is in the session's mode
+const MODES = [TradeMode.Demo, TradeMode.Real] as const;
 
 const intentsOf = (sessionId: string) =>
   tmp.db
@@ -320,8 +325,9 @@ async function tradeOnce(
 }
 
 describe('the attempt and the sequence (#287)', () => {
-  it('E1 trades five times one after another, then completes', async () => {
-    const seed = await seedSession();
+  it.each(MODES)('E1 trades five times one after another, then completes (%s)', async (mode) => {
+    const seed = await seedSession({ mode, real: '50.00' });
+    const startBalances = broker.users.get(seed.brokerUserId);
     const signals = signalsOf();
     const orchestrator = orchestratorOf({ signals });
 
@@ -332,7 +338,7 @@ describe('the attempt and the sequence (#287)', () => {
       status: TradeIntentStatus.Queued,
       amount: '1.00000000',
       action: TradeAction.Up,
-      mode: TradeMode.Demo,
+      mode,
       clientRequestId: `session:${seed.session.id}:1`,
     });
     // a live intent holds the session: no second one, accepted or not
@@ -357,7 +363,20 @@ describe('the attempt and the sequence (#287)', () => {
       stopReason: TradingSessionStopReason.Completed,
     });
     expect(row.endedAt).not.toBeNull();
-    expect(await intentsOf(seed.session.id)).toHaveLength(5);
+    expect((await intentsOf(seed.session.id)).map((intent) => intent.mode)).toEqual(
+      Array(5).fill(mode),
+    );
+    // the broker's side: five trades of the session's mode, its balance moved by five wins
+    expect(broker.trades.list(seed.brokerUserId).map((trade) => trade.is_demo)).toEqual(
+      Array(5).fill(mode === TradeMode.Demo),
+    );
+    const endBalances = broker.users.get(seed.brokerUserId);
+    const other = mode === TradeMode.Real ? TradeMode.Demo : TradeMode.Real;
+    expect(endBalances[mode]).not.toEqual(startBalances[mode]);
+    expect(endBalances[other]).toEqual(startBalances[other]);
+    expect(
+      (await readTradingSessionView(tmp.db, seed.session.id, seed.telegramUserId))?.trades,
+    ).toMatchObject({ settled: 5, won: 5 });
     expect(signals.calls).toEqual(Array(5).fill({ assetId: 101, interval: '1m' }));
     expect(lines.filter((line) => line.code === 'active_intent_exists')).toEqual([]);
     await orchestrator.stop();
@@ -525,50 +544,60 @@ describe('the attempt and the sequence (#287)', () => {
     await orchestrator.stop();
   });
 
-  it('E6 a halted account stops the session before any backend call', async () => {
-    const seed = await seedSession();
-    await tmp.db
-      .update(brokerAccounts)
-      .set({ tradingHalted: true, haltedReason: 'trade_mismatch' })
-      .where(eq(brokerAccounts.id, seed.brokerAccountId));
-    const signals = signalsOf();
-    const orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.ManualReview,
-    });
-    expect(signals.calls).toHaveLength(0);
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ level: 50, msg: 'trading session stopped for manual review' }),
-    );
-    await orchestrator.stop();
-  });
+  it.each(MODES)(
+    'E6 a halted account stops the session before any backend call (%s)',
+    async (mode) => {
+      const seed = await seedSession({ mode, real: '50.00' });
+      await tmp.db
+        .update(brokerAccounts)
+        .set({ tradingHalted: true, haltedReason: 'trade_mismatch' })
+        .where(eq(brokerAccounts.id, seed.brokerAccountId));
+      const signals = signalsOf();
+      const orchestrator = orchestratorOf({ signals });
+      await orchestrator.tick();
+      expect(await sessionRow(seed.session.id)).toMatchObject({
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.ManualReview,
+      });
+      expect(signals.calls).toHaveLength(0);
+      expect(linesOf(seed.session.id)).toContainEqual(
+        expect.objectContaining({ level: 50, msg: 'trading session stopped for manual review' }),
+      );
+      await orchestrator.stop();
+    },
+  );
 
-  it('E7 the deadline stops a session even while its intent is live', async () => {
-    const seed = await seedSession({ startedAt: new Date(Date.now() - 61 * 60_000) });
-    await createSessionIntent(tmp.db, {
-      sessionId: seed.session.id,
-      step: 1,
-      telegramUserId: seed.telegramUserId,
-      brokerAccountId: seed.brokerAccountId,
-      mode: TradeMode.Demo,
-      assetId: 101,
-      amount: '1' as DecimalString,
-      action: TradeAction.Up,
-      durationSec: 60,
-    });
-    const orchestrator = orchestratorOf();
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.Timeout,
-    });
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ level: 40, msg: 'trading session stopped', reason: 'timeout' }),
-    );
-    await orchestrator.stop();
-  });
+  it.each(MODES)(
+    'E7 the deadline stops a session even while its intent is live (%s)',
+    async (mode) => {
+      const seed = await seedSession({
+        mode,
+        real: '50.00',
+        startedAt: new Date(Date.now() - 61 * 60_000),
+      });
+      await createSessionIntent(tmp.db, {
+        sessionId: seed.session.id,
+        step: 1,
+        telegramUserId: seed.telegramUserId,
+        brokerAccountId: seed.brokerAccountId,
+        mode,
+        assetId: 101,
+        amount: '1' as DecimalString,
+        action: TradeAction.Up,
+        durationSec: 60,
+      });
+      const orchestrator = orchestratorOf();
+      await orchestrator.tick();
+      expect(await sessionRow(seed.session.id)).toMatchObject({
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.Timeout,
+      });
+      expect(linesOf(seed.session.id)).toContainEqual(
+        expect.objectContaining({ level: 40, msg: 'trading session stopped', reason: 'timeout' }),
+      );
+      await orchestrator.stop();
+    },
+  );
 
   it('E7b sessions past the deadline beyond the sweep cap get no trade (review M1)', async () => {
     const startedAt = new Date(Date.now() - 61 * 60_000);
@@ -757,6 +786,27 @@ describe('the endings of an attempt (#287)', () => {
         code: 'real_mode_off',
       }),
     );
+    await orchestrator.stop();
+  });
+
+  // #327: the switch stops the session itself; the attempt's reserve then meets real_mode_off,
+  // whose stop finds the row stopped already and logs nothing
+  it('E9j a switch to demo during the attempt of a real session stops it as user_stopped', async () => {
+    const seed = await seedSession({ mode: TradeMode.Real, real: '50.00', demo: '0.00' });
+    const signals = signalsOf(async () => {
+      await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Demo);
+      return { ok: true, response: signalAnswer(TradeAction.Up) };
+    });
+    const orchestrator = orchestratorOf({ signals });
+    await orchestrator.tick();
+    expect(signals.calls).toHaveLength(1);
+    expect(await sessionRow(seed.session.id)).toMatchObject({
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.UserStopped,
+    });
+    expect(await intentsOf(seed.session.id)).toEqual([]);
+    expect(await reservedOf(seed.userId)).toBe(0n);
+    expect(msgsOf(seed.session.id)).not.toContain('trading session stopped');
     await orchestrator.stop();
   });
 
@@ -1180,23 +1230,30 @@ describe('a stop that races the attempt (#287)', () => {
 });
 
 describe('the kill switch (#144, #287)', () => {
-  it('K1 a closed switch stops the session before any backend call', async () => {
-    const seed = await seedSession();
-    await closeTradingSwitch(tmp.db);
-    const signals = signalsOf();
-    const orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.KillSwitch,
-    });
-    expect(signals.calls).toHaveLength(0);
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ level: 40, msg: 'trading session stopped', reason: 'kill_switch' }),
-    );
-    await orchestrator.stop();
-  });
+  it.each(MODES)(
+    'K1 a closed switch stops the session before any backend call (%s)',
+    async (mode) => {
+      const seed = await seedSession({ mode, real: '50.00' });
+      await closeTradingSwitch(tmp.db);
+      const signals = signalsOf();
+      const orchestrator = orchestratorOf({ signals });
+      await orchestrator.tick();
+      expect(await sessionRow(seed.session.id)).toMatchObject({
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.KillSwitch,
+      });
+      expect(signals.calls).toHaveLength(0);
+      expect(await intentsOf(seed.session.id)).toEqual([]);
+      expect(linesOf(seed.session.id)).toContainEqual(
+        expect.objectContaining({
+          level: 40,
+          msg: 'trading session stopped',
+          reason: 'kill_switch',
+        }),
+      );
+      await orchestrator.stop();
+    },
+  );
 
   it('K2 a switch closed during the attempt stops the session as kill_switch, nothing reserved', async () => {
     const signals = signalsOf(async () => {
