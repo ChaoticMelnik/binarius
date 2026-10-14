@@ -176,10 +176,10 @@ const signalsOf = (...signals: [number, TradeAction][]) => signalsResponse(NOW, 
 
 const MANUAL = button(LABELS.demoManualButton, DEMO_GROUPS_CALLBACK_DATA);
 const BACK_DURATIONS = button(LABELS.demoBackDurationsButton, DEMO_SIGNALS_CALLBACK_DATA);
-// «🔄 Обновить», «↩️ Длительность» and the manual choice under a list of that duration (#382)
+// «🔄 Обновить» and «↩️ Длительность» in one row, the manual choice in its own, under a list of
+// that duration (#382, #419)
 const listFooter = (durationSec: 5 | 15) => [
-  [button(LABELS.demoSignalsRefreshButton, demoSignalsCallbackData(durationSec))],
-  [BACK_DURATIONS],
+  [button(LABELS.demoSignalsRefreshButton, demoSignalsCallbackData(durationSec)), BACK_DURATIONS],
   [MANUAL],
 ];
 
@@ -274,8 +274,10 @@ describe('the signals screen', () => {
     [PAIR_OTHER_TYPE.id, TradeAction.Down],
   );
   const ROWS = [
-    [button('EUR/USD OTC · ⬆️ · 85%', demoLaunchCallbackData(PAIR_EURUSD.id, 15))],
-    [button('BTC/USD OTC · ⬇️ · 90%', demoLaunchCallbackData(PAIR_SHORT.id, 15))],
+    [
+      button('EUR/USD OTC ⬆️ 85%', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
+      button('BTC/USD OTC ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 15)),
+    ],
     ...listFooter(15),
   ];
   const LIST_15 = demoSignalsCallbackData(15);
@@ -404,11 +406,59 @@ describe('the signals screen', () => {
         SIX_SHOWN.map((id) => demoLaunchCallbackData(id, 15)),
       );
     });
+
+    // #419: two pairs a row in the list's order, across the types, the last alone when odd
+    const screenRows = async (pairs: readonly PairView[], route: readonly number[]) => {
+      const { press, calls } = setup({
+        readSignals: () =>
+          Promise.resolve(
+            signalsOf(...route.map((id): [number, TradeAction] => [id, TradeAction.Up])),
+          ),
+        readPairs: catalogOf(...pairs),
+      });
+      await press(LIST_15);
+      return rowsOf(payloadOf(calls, 'editMessageText'));
+    };
+    const pairButton = (id: number, payout: number) =>
+      button(`S${String(id)} ⬆️ ${String(payout)}%`, demoLaunchCallbackData(id, 15));
+
+    it('T2 an odd number of pairs leaves the last one alone in its row', async () => {
+      const pairs = [
+        pairOf(1, 'currency', 90),
+        pairOf(2, 'currency', 88),
+        pairOf(3, 'currency', 85),
+      ];
+      expect(await screenRows(pairs, [3, 1, 2])).toEqual([
+        [pairButton(1, 90), pairButton(2, 88)],
+        [pairButton(3, 85)],
+        ...listFooter(15),
+      ]);
+    });
+
+    it('T2b a row holds two types when the fill puts them side by side', async () => {
+      const few = [pairOf(1, 'currency', 85), pairOf(2, 'currency', 90), pairOf(3, 'currency', 88)];
+      const crypto = pairOf(4, 'cryptocurrency', 95);
+      expect(await screenRows([...few, crypto], [4, 1, 2, 3])).toEqual([
+        [pairButton(2, 90), pairButton(3, 88)],
+        [pairButton(1, 85), pairButton(4, 95)],
+        ...listFooter(15),
+      ]);
+    });
+
+    it('T2c a full list is six rows of two above the footer', async () => {
+      const rows = await screenRows(
+        SIX,
+        SIX.map((p) => p.id),
+      );
+      expect(rows).toHaveLength(SIGNALS_LIST_SIZE / 2 + 2);
+      expect(rows.slice(0, 6).map((row) => row.length)).toEqual([2, 2, 2, 2, 2, 2]);
+      expect(rows.slice(-2)).toEqual(listFooter(15));
+    });
   });
 
   it('labels a pair by its symbol, the arrow of the direction and the payout', () => {
-    expect(signalButtonLabel('EUR/USD OTC', TradeAction.Up, 85)).toBe('EUR/USD OTC · ⬆️ · 85%');
-    expect(signalButtonLabel('EUR/USD OTC', TradeAction.Down, 85)).toBe('EUR/USD OTC · ⬇️ · 85%');
+    expect(signalButtonLabel('EUR/USD OTC', TradeAction.Up, 85)).toBe('EUR/USD OTC ⬆️ 85%');
+    expect(signalButtonLabel('EUR/USD OTC', TradeAction.Down, 85)).toBe('EUR/USD OTC ⬇️ 85%');
   });
 
   // a pair with a signal on one interval only appears on that duration's list; a pair that
@@ -437,7 +487,7 @@ describe('the signals screen', () => {
       const edited = payloadOf(calls, 'editMessageText');
       expect(edited?.text).toBe(TEXTS.demoSignalsHeader({ label: '⏱ 5 с' }).value);
       expect(rowsOf(edited)).toEqual([
-        [button('BTC/USD OTC · ⬇️ · 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5))],
+        [button('BTC/USD OTC ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5))],
         ...listFooter(5),
       ]);
     });
@@ -459,7 +509,7 @@ describe('the signals screen', () => {
       await press(demoSignalsCallbackData(5));
 
       expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
-        [button('BTC/USD OTC · ⬇️ · 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5))],
+        [button('BTC/USD OTC ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5))],
         ...listFooter(5),
       ]);
     });
@@ -472,8 +522,10 @@ describe('the signals screen', () => {
       await press(LIST_15);
 
       expect(rowsOf(payloadOf(calls, 'editMessageText'))).toEqual([
-        [button('EUR/USD OTC · ⬆️ · 85%', demoLaunchCallbackData(PAIR_EURUSD.id, 15))],
-        [button('NZD/USD OTC · ⬇️ · 83%', demoLaunchCallbackData(PAIR_15S_ONLY.id, 15))],
+        [
+          button('EUR/USD OTC ⬆️ 85%', demoLaunchCallbackData(PAIR_EURUSD.id, 15)),
+          button('NZD/USD OTC ⬇️ 83%', demoLaunchCallbackData(PAIR_15S_ONLY.id, 15)),
+        ],
         ...listFooter(15),
       ]);
     });
@@ -980,10 +1032,10 @@ describe('the types and their pages', () => {
     expect(rows).toHaveLength(7);
     expect(rows.slice(0, 6).every((row) => row.length === 2)).toBe(true);
     expect(rows[0]).toEqual([
-      button('P00 · 85%', demoAssetCallbackData(1000)),
-      button('P01 · 85%', demoAssetCallbackData(1001)),
+      button('P00 85%', demoAssetCallbackData(1000)),
+      button('P01 85%', demoAssetCallbackData(1001)),
     ]);
-    expect(rows.flat().map((entry) => entry.text)).not.toContain('GBP/USD · 80%');
+    expect(rows.flat().map((entry) => entry.text)).not.toContain('GBP/USD 80%');
     expect(rows[6]).toEqual([
       BACK_GROUPS,
       button(LABELS.demoNextButton, demoPageCallbackData('currency', 1)),
@@ -1002,7 +1054,7 @@ describe('the types and their pages', () => {
       button(LABELS.demoNextButton, demoPageCallbackData('currency', 2)),
     ]);
     expect(rowsOf(last?.payload)).toEqual([
-      [button('P24 · 85%', demoAssetCallbackData(1024))],
+      [button('P24 85%', demoAssetCallbackData(1024))],
       [button(LABELS.demoPrevButton, demoPageCallbackData('currency', 1)), BACK_GROUPS],
     ]);
   });
