@@ -91,7 +91,7 @@ demo:more:<assetId>:<sec>:<up|down>:<s|n>     («➕ Ещё», #360; the floor's
   bot  → answerCallbackQuery ∥ POST /trading/access
   bot  → editMessageReplyMarkup: the keyboard expanded in place: the stake button and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>  (the stake button) → the trade, bot-demo-trade.md
-<mode>:sess:<assetId>:<sec>                   (the session button, «🚀 Запустить цикл», «🔁 Ещё сессия», the row under a finished trade; <mode> demo or real, #327) → the session, bot-session.md
+<mode>:sess:<assetId>:<sec>[:l]              (the session button, «🚀 Запустить цикл» with :l (#418), «🔁 Ещё сессия», the row under a finished trade; <mode> demo or real, #327) → the session, bot-session.md
 stk:o:d:p:<assetId>:<sec>                     («💵 Изменить ставку») → the demo picker, bot-demo-trade.md
 demo:d|an|stake|sess and stk:… with a <sec> of before #313 → the keyboard removed, nothing sent
 demo:l:<assetId> and stk:…:p:<assetId> from before #382 → the keyboard removed, nothing sent
@@ -196,8 +196,10 @@ missing or stale snapshot itself.
 sec, now)` on the catalog read at this press, and the user's mode with the amount the cycle trades
 (`effectiveStake`: the saved stake of the user's mode, or the broker's minimum). Three lines —
 «🎯 {symbol} · ⏱ {sec} с», «💵 Ставка: $X», «🤖 Бот проведёт 5 сделок подряд…» — and three rows:
-«🚀 Запустить цикл» (`<mode>:sess:<assetId>:<sec>`, the session button's own data, so the start
-handler and its refusals are unchanged, [bot-session.md](bot-session.md#the-button)), «💵 Изменить
+«🚀 Запустить цикл» (`<mode>:sess:<assetId>:<sec>:l`, the session button's data with the launch
+token: the start, its refusals and the 409 are the same, and once the session's status is sent the
+start deletes this screen,
+[bot-session.md](bot-session.md#the-launch-screen-after-the-start-418)), «💵 Изменить
 ставку» (`stk:o:<d|r>:p:<assetId>:<sec>`, the picker of the user's mode whose way back is this
 screen,
 [bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)), «↩️ К списку» (`demo:sig:<sec>`). A failed access read draws «💵 Ставка: минимальная брокера» and logs
@@ -286,7 +288,7 @@ not a fresh catalog.
   «🧭 Выбрать пару вручную»; the scanners scan 13 pairs at 15 s and 4 at 5 s by default, so at most
   16 buttons (26 + 3 at the maximum ceiling; Telegram allows 100).
 - **Launch (#320).** «🚀 Запустить цикл», «💵 Изменить ставку», «↩️ К списку», one a row; each carries
-  the duration.
+  the duration. The screen is deleted after the start, once the session's status is sent (#418).
 - **Summary.** «📊 Анализ», then «↩️ Длительность» and «↩️ Типы».
 - **Analysis (#360).** On every `decided` answer — a signal or «сигнала нет» — «🚀 Сессия из 5
   сделок» alone in the first row where `sessionFitsDeadline(5, sec)` holds, at every duration of
@@ -461,7 +463,8 @@ anew, the result sent; or the answer, «⏳» edited, the result's edit refused 
 2 × 5 000 + 4 × 8 000 = 42 s; since #121 the access read for the mode beside the catalog makes
 it 3 × 5 000 + 4 × 8 000 = 47 s. `.analysisMore` (#360) is one backend call (access beside the
 answer) and two Bot API calls (the answer, the keyboard's edit; a refused edit sends nothing
-more): 21 s. The longest declared path is `demoAnalysis`'s 47 s, so `HANDLER_BUDGET_MS` is 47 s
+more): 21 s. The longest declared path is `demoAnalysis`'s and, since #418, `sessionStart`'s 47 s,
+so `HANDLER_BUDGET_MS` is 47 s
 ([bot-demo-trade.md](bot-demo-trade.md#timing));
 `HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS` (50 s) `< COMPOSE_STOP_GRACE_PERIOD_MS` (55 s) is
 checked at import (`TIMING_CHAIN_HOLDS`). `.legacyDuration` (#313, an old duration button) is

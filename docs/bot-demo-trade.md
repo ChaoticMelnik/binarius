@@ -331,7 +331,8 @@ gets `warn` and nothing more. This press never starts tracking.
   for the user's mode (#121).
 - `HANDLER_CALLS.demoAnalysis` is 3 / 4 = 47 s since #121: the access read for the mode, beside
   the catalog, decides the session row; `HANDLER_CALLS.analysisMore` = 1 / 2 = 21 s. It is the
-  longest path; the chain holds below `SHUTDOWN_BUDGET_MS` (50 s), with 3 s to spare.
+  longest path, tied since #418 with `sessionStart` (3 / 4: the launch screen's delete and strip
+  after the status, bot-session.md → Timing); the chain holds below `SHUTDOWN_BUDGET_MS` (50 s), with 3 s to spare.
 - `INTENT_TRACK_FIRST_POLL_MS` = 1 s, `INTENT_TRACK_POLL_MS` = 3 s, `INTENT_TRACK_DEADLINE_MS` =
   120 s. The deadline is the worker's `INTENT_MAX_AGE_MS` (60 s) plus `SUBMIT_ACK_TIMEOUT_MS`
   (10 s), with room. That relation is stated, not checked, because the worker's constants cannot
