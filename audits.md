@@ -2996,3 +2996,52 @@ The ninth issue of the 2026-10-10 manager night (wave facts — the #337 entry).
 1. **After a rebase, new commits that add an assumption or change test oracles get a reviewer pass before the merge question** — **внедрено в #467: `.claude/skills/tech-lead/SKILL.md` → Phase 4 → «A PR left In Review by a manager session», step 3** (принято владельцем 2026-10-10) (#234 entry, proposal 2; second case)
 2. **Manager: build each phase spawn prompt from tech-lead's items plus the night additions in one template, and check the night lines are present before the spawn** — **внедрено в #467: `.claude/skills/manager/SKILL.md` → Task cycle → Night additions** (принято владельцем 2026-10-10)
 3. **Remaining Minor** — **вынесено в #465; CLI → #443**
+
+---
+
+## #460, #321, #121 — ночь manager 2026-10-10 и утренний разбор 2026-10-14
+
+Ночная сессия `/manager` 2026-10-10 23:44 – 11.10 07:44 (дедлайн). Архитекторы — на Opus с первого спавна: Fable 429 в 23:49. Codex — пропуски по лимиту до 14.10 07:45. Около 03:00 11.10 упёрлись в недельный лимит Opus: ревьюер круга 3 #121 упал, ничего не опубликовав, а главный контекст manager'а остановился. Финальный отчёт и `ended` записаны только 14.10 по «продолжай» владельца. Утренний разбор прошёл 14.10 (tech-lead): #469 (#464) владелец закрыл без мержа, так как постановка #464 заменена; остальные смержены. Отчёт ночи: https://claude.ai/artifact/4eL9ibQjXp81iuDhfXrRjS
+
+| Issue | PR | Review rounds | Added lines | Migration | Codex (final pass) | Remaining Minor |
+|------|----|-----------|---------|----------|--------------|-------------|
+| #460 signal pair types | #470 | 1 | 447 | — | skipped by owner 14.10 (night limit) | → #477 |
+| #321 share the session card | #471 | 1 | 898 | — | skipped by owner 14.10 (night limit) | → #478 |
+| #121 real mode, launch screen | #472 | 3 | ≈ 2 266 without snapshot | 0045_trading_mode | job `task-mv8d1ah4-bvjfwj` at 35fd353 | → #479; splits #473, #474 |
+| #464 trade list in the session message | #469 | 1 | 497 | — | — | PR closed by owner (task replaced) |
+
+### Process audit
+
+| Role | Step | Result |
+|------|------|--------|
+| Manager | Phase 0 | The preflight did not show the Codex limit; the first run at 00:15 hit it (until 14.10). The shared test DB was 39 of 45 migrations behind, with foreign 0037/0038 records, so every phase ran on its own DB. |
+| Architect | #460, #464 | Plans on Opus; clarify answered by the manager (recommended options). |
+| Architect | #321 round 0 | A Plan Update of the 07.10 plan. Answer 2 was **not** the recommended one: the manager kept the owner's 07.10 `?start=share` rather than the referral link, and put the fork in the report. |
+| Implementer | #460 | Reverting mutations with `git checkout --` over uncommitted work wiped three files; they were restored and the checks re-run. |
+| Reviewer | #470, #471 | Round 1 Minor-only. |
+| Reviewer | #472 r1 | 2 Major: Cancel on the real confirm did not cancel; the real launch screen after a stake save showed the demo stake. → Plan Update 4, a split (`/stop` → #473, 3110 > 3000). |
+| Reviewer | #472 r2 | Major: the analysis screen with the REAL button said «Это демо: деньги не нужны»; the same class in 4 shared texts. → a re-plan from scratch (night rule), Plan 5 with a full inventory of the real path and one oracle test; a split (mode screen → #474). |
+| Reviewer | #472 r3 | Not run at night (Opus limit). Run 14.10 on the head rebased onto #470/#471: no Blocker/Major, 10 Minor; Codex Major 2 and 3 were lowered to Minor (both refuse safely). |
+| Tech Lead (day) | Merge | Codex for #470/#471 was skipped by the owner. #471 got a server rebase (`gh pr update-branch`); range-diff was identical and CI green. #472 got a rebase-only implementer pass with conflict resolutions, then round 3. Local `pnpm check` ran without Redis (owner's choice); the verdict is CI. The shared test DB was recreated from scratch (owner's yes) and holds 46 of 46. |
+
+### Review iterations: #470 — 1, #471 — 1, #472 — 3
+
+### Findings
+
+| Finding | Severity | Класс | Root cause | Missed at step |
+|---------|----------|-------|------------|-----------------|
+| #472 r1: Cancel on the real confirm kept a live «✅ Подтверждаю» | Major → fixed | other | The plan's decision 8 had cancel send a new message | Architect plan |
+| #472 r1: the real launch screen after a stake save showed the demo stake | Major → fixed | instance-vs-class | Two paths to one screen (`demo.ts`, `stake-picker.ts`) | Architect Plan Update 3 / implementer |
+| #472 r2: demo wording on the real path («Это демо: деньги не нужны» above the REAL button) | Major → fixed (Plan 5) | instance-vs-class | The real path reused demo screens and texts with no inventory | Architect plan (fixed by a full inventory and an oracle) |
+| #472 r3: 10 Minor, including `inviteShareText`, split leftovers, docs, and Codex's `min_trade_amount = 0` | Minor → #479 | instance-vs-class (1), other | `inviteShareText` sits in a button URL that the oracle does not read | Architect Plan 5 |
+| Shared test DB 39/45 with foreign records | Process | preflight | Migrations were not applied after the 10.10 merges, and foreign ones were applied by hand | Tech Lead after merges (Step 7) |
+| Mutations reverted with `git checkout --` over uncommitted work | Process | other | No rule about the revert method | Implementer |
+| The Opus limit stopped the manager's main context: no final report or `ended` until the owner returned | Process | other | The manager and its phases share one model budget | Manager (substitution 4 does not cover the main context) |
+
+### Process improvement proposals
+
+1. **Manager Phase 0: compare the shared test DB's `drizzle.__drizzle_migrations` (count and hash) with `packages/db/drizzle/*.sql`; a mismatch → an owner step in the report** — **открыто (2026-10-14, владелец)**
+2. **Implementer → «Доказательства мутаций»: mutations only on committed work, each reverted by restoring that one file; never `git checkout --` over uncommitted changes** — **открыто (2026-10-14, владелец)**
+3. **Manager Phase 0: probe the Codex limit with a short `task` call, not only `status` — the limit was found at the first final pass** — **открыто (2026-10-14, владелец)**
+4. **Manager: an Opus limit that stops the main context leaves the night without a final report; publish the report after every transition (done) and write the expected owner step «если отчёт не завершён — `/manager продолжить` после сброса лимита» in the report header at the start** — **открыто (2026-10-14, владелец)**
+5. **Remaining Minor** — **вынесено в #477 (#470), #478 (#471), #479 (#472); splits #473, #474**
