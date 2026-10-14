@@ -7,6 +7,7 @@ import {
   safeParseCandles,
   safeParseOpenTrade,
   safeParseTradesList,
+  safeParseWidgetSessionResponse,
   toBinaryPair,
   toBrokerTrade,
   toBrokerUser,
@@ -14,6 +15,8 @@ import {
   toChartRequestWire,
   toOpenTrade,
   toOpenTradeRequestWire,
+  toWidgetSession,
+  toWidgetSessionRequestWire,
   type BinaryPair,
   type BrokerTrade,
   type BrokerUser,
@@ -21,6 +24,8 @@ import {
   type ChartRequest,
   type OpenTrade,
   type OpenTradeRequest,
+  type WidgetSession,
+  type WidgetSessionRequest,
 } from '@binarius/shared';
 
 // One REST call's deadline when the caller passes none. Every process that waits on a call in a
@@ -75,6 +80,8 @@ export const BROKER_REST_ENDPOINTS = {
   tradesList: { method: 'GET', path: '/v1/broker/user/trades', bearer: true },
   openTrade: { method: 'POST', path: '/v1/broker/user/trades', bearer: true },
   chart: { method: 'GET', path: '/v1/broker/chart', bearer: false },
+  // the cashier widget (#11, docs/deposit.md)
+  widgetSession: { method: 'POST', path: '/v1/broker/widget-sessions', bearer: true },
 } as const;
 export type BrokerRestEndpoint = keyof typeof BROKER_REST_ENDPOINTS;
 
@@ -110,6 +117,12 @@ export interface BrokerRestClient {
     options?: BrokerCallOptions,
   ): Promise<OpenTrade>;
   getChart(request: ChartRequest, options?: BrokerCallOptions): Promise<Candle[]>;
+  // one attempt: a retry is the user's, and every session the broker mints is a new one
+  createWidgetSession(
+    auth: BrokerAuth,
+    request: WidgetSessionRequest,
+    options?: BrokerCallOptions,
+  ): Promise<WidgetSession>;
 }
 
 export interface BrokerRestClientOptions {
@@ -288,5 +301,15 @@ export function createBrokerRestClient(options: BrokerRestClientOptions): Broker
           parse: safeParseCandles,
         })
       ).map(toCandle),
+    createWidgetSession: async (auth, request, callOptions) =>
+      toWidgetSession(
+        await send({
+          endpoint: 'widgetSession',
+          auth,
+          body: toWidgetSessionRequestWire(request),
+          signal: callOptions?.signal,
+          parse: safeParseWidgetSessionResponse,
+        }),
+      ),
   };
 }

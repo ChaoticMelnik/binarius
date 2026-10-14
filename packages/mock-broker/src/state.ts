@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   BrokerTradeSource,
   TradeAction,
@@ -8,6 +9,8 @@ import {
   type OpenTradeRequestWire,
   type OpenTradeWireInput,
   type UnixMs,
+  type WidgetSessionRequestWire,
+  type WidgetSessionResponseWire,
 } from '@binarius/shared';
 import type { MockSocketPayload } from './encoding';
 import { FIXTURE_MESSAGES, LIVE_MESSAGES } from './messages';
@@ -70,6 +73,18 @@ export interface MockSettleInput {
   closePrice?: number;
   closeTimestamp?: number;
 }
+
+// what a widget-session request asked for, without the session it was answered with: a test proves
+// what the client sent without the journal holding the secret
+export interface MockWidgetSessionRecord {
+  userId: number;
+  origin: string;
+  mode: string;
+  userIp?: string;
+}
+
+// the lifetime the live broker's own cashier is built around (binodex/broker-web)
+export const MOCK_WIDGET_SESSION_TTL_SEC = 60;
 
 export type OpenTradeResult =
   { ok: true; trade: MockOpenTradeWire } | { ok: false; message: string };
@@ -174,6 +189,8 @@ export interface BrokerState {
   listTrades(userId: number, filter: MockTradeFilter): MockTradeWire[];
   settle(tradeId: number, input: MockSettleInput): MockClosedTradeWire;
   priceAt(assetId: number, atMs: number): number;
+  createWidgetSession(userId: number, request: WidgetSessionRequestWire): WidgetSessionResponseWire;
+  readonly widgetSessions: readonly MockWidgetSessionRecord[];
   // every balance or trade change goes through the store and is announced here (#104's socket)
   onChange(listener: (change: MockChange) => void): () => void;
   // A listener runs after the change is committed, so its throw cannot undo the change or reach
@@ -252,6 +269,7 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
   const tokens = new Map<string, number>();
   const trades = new Map<number, TradeRecord>();
   const listeners = new Set<(change: MockChange) => void>();
+  const widgetSessions: MockWidgetSessionRecord[] = [];
   let lastTradeId = 0;
 
   const listenerErrors: Error[] = [];
@@ -420,6 +438,19 @@ export function createBrokerState(options: MockBrokerOptions = {}): BrokerState 
       const pair = pairRecord(assetId);
       return roundTo(rawPriceAt(pair.id, atMs), pair.digits);
     },
+
+    createWidgetSession(userId, request) {
+      userRecord(userId);
+      widgetSessions.push({
+        userId,
+        origin: request.origin,
+        mode: request.mode,
+        ...(request.user_ip === undefined ? {} : { userIp: request.user_ip }),
+      });
+      return { session: `wss_${randomUUID()}`, expires_in: MOCK_WIDGET_SESSION_TTL_SEC };
+    },
+
+    widgetSessions,
 
     listenerErrors,
 

@@ -6,6 +6,7 @@ export {
   createBrokerState,
   DEFAULT_PAIRS,
   DEFAULT_RATE_LIMIT,
+  MOCK_WIDGET_SESSION_TTL_SEC,
   MockChangeType,
   MockTradeOutcome,
   MockTradeStatus,
@@ -17,6 +18,7 @@ export {
   type MockSettleInput,
   type MockTradeWire,
   type MockUserSeed,
+  type MockWidgetSessionRecord,
 } from './state';
 export { startMockBroker, type MockBroker } from './server';
 export {

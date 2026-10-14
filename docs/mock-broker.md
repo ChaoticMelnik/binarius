@@ -73,6 +73,7 @@ does the fixture.
 | `GET /v1/broker/user/trades` | bearer | `{ trades: [...] }`, open and closed trades together, newest first by `open_timestamp`; query `status=open\|closed`, `is_demo=true\|false`, `limit` (default 20), `offset` (default 0) |
 | `POST /v1/broker/user/trades` | bearer | body `{ asset_id, amount, action, duration, is_demo }`, validated by shared's `openTradeRequestWireSchema`; answers 200 with the open trade |
 | `GET /v1/broker/chart` | none | `[ts_ms, open, high, low, close][]`; query `asset_id`, `interval`, `start_time`, `limit` |
+| `POST /v1/broker/widget-sessions` | bearer | body `{ origin, mode, user_ip? }`, validated by shared's `widgetSessionRequestWireSchema` (`mode` is `deposit` only); answers `{ session: "wss_<uuid>", expires_in: 60 }`. `widgetSessions.list()` records `{ userId, origin, mode, userIp? }` per minted session, never the session; `widget_url`, `widget_origin` and `region` come only from a `failNext` script (#11) |
 
 Opening a trade moves the stake from `available` to `held` in the trade's mode.
 `potential_profit = floor(amount * payout / 100)`, in cents. `settle` releases the stake from
