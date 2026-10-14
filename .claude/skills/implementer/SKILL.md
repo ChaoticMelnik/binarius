@@ -55,7 +55,7 @@ Branch naming: `feat/<N>-description`, `fix/<N>-description`, `refactor/descript
 
 ### Step 3: Read files before editing
 
-Never assume file contents — Read first. If CodeGraph is set up, use it for signatures/call sites in files you're not editing rather than grep.
+Never assume file contents — Read first. For anything structural — signatures, call sites, where a symbol lives, what a change affects — CodeGraph comes first (`.claude/CLAUDE.md` → CodeGraph → «Приоритет — codegraph»), grep only for literal text, the two shapes codegraph loses, and your own branch's changes (the index is the main checkout, not your worktree).
 
 ### Step 4: Implement
 

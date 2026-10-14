@@ -24,7 +24,7 @@ Spawn prompt — every phase gets these, in this order:
 1. Role and issue: "You are the <ROLE> phase for GitHub issue #<N> (ChaoticMelnik/binarius, working dir <path>)."
 2. "First action: `Skill(skill: \"<role>\")`, then follow it."
 3. "You have no `AskUserQuestion`. Return every question for the owner in your final message: ≥3 for an architect clarify round (≥1 for a round-0 Plan Update, only on new forks — architect Step 5), ≥1 for an implementer one, none on a topic with a standing answer (`.claude/CLAUDE.md` → Постоянные ответы владельца), each with 2-4 options, the recommended one first, in Russian. Make no edits in a clarify round."
-4. Node: `eval "$(fnm env)" && fnm use`.
+4. Node: `eval "$(fnm env)" && fnm use`. Code search: CodeGraph first for every structural question, grep only for what it cannot answer (`.claude/CLAUDE.md` → CodeGraph → «Приоритет — codegraph»).
 5. What to return: the role's own hand-off (plan comment URL / PR URL and commit list / review verdict with merge request) plus deviations and anything unfinished.
 6. For an architect Plan Update: the review round it follows.
 7. For a reviewer: the review round (1-3), and the Codex usage limit preflight saw — `until <ДД.ММ HH:MM> (job <id>)` or `none`.
