@@ -472,7 +472,7 @@ describe('POST /cashier/credited (#112)', () => {
       50,
     ],
     ['a throw', () => Promise.reject(new Error(INIT_DATA)), 50],
-  ])('backend %s -> 204, logged at level %s', async (_label, outcome, level) => {
+  ])('backend %s -> 204 and its log level', async (_label, outcome, level) => {
     creditedAnswer = outcome as () => Promise<DepositCreditedResponse>;
     const response = await credited();
     expect(response.statusCode).toBe(204);
