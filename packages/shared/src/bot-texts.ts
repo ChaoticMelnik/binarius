@@ -1718,6 +1718,9 @@ export const BOT_TEXT_CATALOG = {
     'Пригласить друга',
     { limit: COMMAND_LIMIT },
   ),
+  buyCommand: plain(g.Commands, 'Описание /buy в меню команд и в /help.', 'Купить токены', {
+    limit: COMMAND_LIMIT,
+  }),
   helpCommand: plain(g.Commands, 'Описание /help в меню команд и в /help.', 'Помощь', {
     limit: COMMAND_LIMIT,
   }),

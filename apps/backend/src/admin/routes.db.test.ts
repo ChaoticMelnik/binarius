@@ -3074,6 +3074,7 @@ describe('the bot texts pages (#300)', () => {
     { command: 'menu', description: 'Главное меню' },
     { command: 'stop', description: 'Остановить сессию' },
     { command: 'account', description: 'Аккаунт Binodex' },
+    { command: 'buy', description: 'Купить токены' },
     { command: 'settings', description: 'Настройки уведомлений' },
     { command: 'invite', description: 'Пригласить друга' },
     { command: 'help', description: 'Помощь' },

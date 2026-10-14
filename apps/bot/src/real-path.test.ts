@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BUY_CALLBACK_DATA,
+  buyPackageCallbackData,
   decimalStringSchema,
   TradeAction,
   TradeIntentStatus,
@@ -44,9 +46,12 @@ import {
   SIGNAL_DECIDED,
   SIGNAL_FETCH_FAILED,
   SIGNAL_NO_SIGNAL,
+  LINK_ACTIVE,
   STAKE_NONCE,
+  STARS_INVOICE,
   TEXT_CARD_MESSAGE_ID,
   accessView,
+  accountView,
   callbackUpdate,
   captureApi,
   fakeBackend,
@@ -195,6 +200,10 @@ const SCENES: Scene[] = [
       }),
     ];
   }),
+  // the purchase (#117): the same screens in both modes
+  { name: '/buy', update: textUpdate('/buy') },
+  press('the buy button', BUY_CALLBACK_DATA),
+  press('a package', buyPackageCallbackData('p150')),
 ];
 
 async function shown(scene: Scene, access: TradingAccessResponse): Promise<string[]> {
@@ -209,6 +218,8 @@ async function shown(scene: Scene, access: TradingAccessResponse): Promise<strin
       readSignals: () => Promise.resolve(scene.signals ?? signalsResponse(NOW)),
       evaluateSignal: () => Promise.resolve(scene.evaluateSignal ?? SIGNAL_DECIDED),
       setStake: (_id, _mode, amount) => Promise.resolve({ saved: amount }),
+      readAccount: () => Promise.resolve(accountView({ accounts: [LINK_ACTIVE] })),
+      createStarsInvoice: () => Promise.resolve(STARS_INVOICE),
       createIntent: (request) => Promise.resolve(intentView({ mode: request.mode })),
       readIntent: () =>
         Promise.resolve(intentView({ mode: TradeMode.Real, status: TradeIntentStatus.Settled })),

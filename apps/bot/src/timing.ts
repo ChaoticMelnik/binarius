@@ -1,6 +1,7 @@
 import {
   BOT_TEXTS_REFRESH_MS,
   SESSION_MAX_DURATION_MS,
+  STARS_PRECHECKOUT_BUDGET_MS,
   TRADING_ACCESS_BUDGET_MS,
   TRADING_SESSION_START_BUDGET_MS,
   TRADING_SESSION_VIEW_BUDGET_MS,
@@ -28,6 +29,14 @@ export const POLLING_BATCH_LIMIT = 1;
 export const TELEGRAM_API_TIMEOUT_MS = 8_000;
 // One call to the backend's internal API (AbortSignal.timeout in backend-client.ts).
 export const BACKEND_REQUEST_TIMEOUT_MS = 5_000;
+
+// The Stars pre-checkout (#117, docs/stars.md → Timing). Telegram fails the payment unless the bot
+// answers the pre_checkout_query within 10 s. The backend call has its own timeout, above the
+// route's budget, and leaves a reserve for the answer itself. A query that waited behind another
+// handler past the reserve is lost (accepted risk 1 of the plan): Telegram charges nothing.
+export const TELEGRAM_PRECHECKOUT_DEADLINE_MS = 10_000;
+export const STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS = 3_000;
+export const PRECHECKOUT_ANSWER_RESERVE_MS = 2_000;
 
 // The Bot API calls onStart makes one after another before the first getUpdates: the command
 // menu, the description, the short description (lifecycle.ts). Not a handler path — no update is
@@ -164,6 +173,18 @@ export const HANDLER_CALLS = {
   // /stop (#122): stopSessions ∥ readPairs — counted as sequential, as in confirm — then
   // sendMessage
   stop: { backend: 2, telegram: 1 },
+  // /buy (#117): readAccount, then sendMessage — the package screen, or the refusal
+  buy: { backend: 1, telegram: 1 },
+  // «⭐ Купить токены»: answerCallbackQuery, then /buy's path
+  buyButton: { backend: 1, telegram: 2 },
+  // a package: answerCallbackQuery ∥ createStarsInvoice — counted as sequential, as in confirm —
+  // then sendInvoice or the refusal's sendMessage
+  buyPackage: { backend: 1, telegram: 2 },
+  // pre_checkout_query: checkStarsPreCheckout (its own shorter timeout, counted at the full one),
+  // then answerPreCheckoutQuery
+  preCheckout: { backend: 1, telegram: 1 },
+  // successful_payment: reportStarsPaid, then sendMessage
+  paid: { backend: 1, telegram: 1 },
   // /support: sendMessage; no backend call
   support: { backend: 0, telegram: 1 },
   // /help: sendMessage; no backend call
@@ -241,6 +262,11 @@ export const TIMING_CHAIN_HOLDS =
   SESSION_TRACK_POLL_MS < SESSION_TRACK_DEADLINE_MS &&
   SESSION_MAX_DURATION_MS < SESSION_TRACK_DEADLINE_MS &&
   SESSION_TRACK_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
+  // the pre-checkout: the route inside the call, the call and the answer inside Telegram's 10 s
+  STARS_PRECHECKOUT_BUDGET_MS <= STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS &&
+  STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
+  STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS + PRECHECKOUT_ANSWER_RESERVE_MS <
+    TELEGRAM_PRECHECKOUT_DEADLINE_MS &&
   // a texts load ends before the next one starts (#299), and inside the shutdown budget
   BACKEND_REQUEST_TIMEOUT_MS < BOT_TEXTS_REFRESH_MS &&
   BACKEND_REQUEST_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&

@@ -16,6 +16,7 @@ import {
   CONNECT_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
   supportUrl,
+  BUY_CALLBACK_DATA,
 } from '@binarius/shared';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
@@ -205,6 +206,8 @@ const BACK_ROWS = [
   MENU_ROW,
 ];
 const SUPPORT_ROWS = [[{ text: LABELS.supportButton, url: supportUrl() }]];
+// for want of tokens, the purchase above the way back (#117)
+const BUY_ROWS = [[button(LABELS.buyButton, BUY_CALLBACK_DATA)], ...BACK_ROWS];
 // a failed read of the session, after the refresh or the stop: its refresh, never the stop again
 const SESSION_REFRESH_ROWS = [[button(LABELS.sessionRefreshButton, REFRESH)], MENU_ROW];
 const STAKE_MENU_ROWS = [
@@ -301,6 +304,7 @@ describe('the session button', () => {
       text: Parameters<typeof textOf>[0];
       connect?: true;
       stakeMenu?: true;
+      buy?: true;
       log?: true;
     } = START_REFUSALS[code];
     const sent = payloadOf(calls, 'sendMessage');
@@ -312,8 +316,16 @@ describe('the session button', () => {
           ? CONNECT_ROWS
           : refusal.stakeMenu === true
             ? STAKE_MENU_ROWS
-            : BACK_ROWS,
+            : refusal.buy === true
+              ? BUY_ROWS
+              : BACK_ROWS,
     );
+    // only the refusal for want of tokens offers the purchase (#117)
+    expect(
+      rowsOf(sent)
+        .flat()
+        .some((row) => row.callback_data === BUY_CALLBACK_DATA),
+    ).toBe(code === TradingSessionErrorCode.InsufficientTokens);
     expect(startSession).toHaveBeenCalledTimes(1);
     expect(sessionTracker.track).not.toHaveBeenCalled();
     expect(warnings(logger)).toEqual(refusal.log === true ? ['trading session not started'] : []);

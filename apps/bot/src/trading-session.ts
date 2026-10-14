@@ -30,6 +30,7 @@ import {
   inviteButton,
   menuKeyboard,
   supportKeyboard,
+  withBuy,
   withInvite,
   withMenu,
 } from './keyboards';
@@ -126,6 +127,8 @@ interface Refusal {
   // the text for a real session's press, where the default names the demo account (#327)
   real?: BotStaticHtmlKey;
   connect?: true;
+  // «⭐ Купить токены» above the way back: a refusal for want of tokens (#117)
+  buy?: true;
   // «💵 Сумма» under the text: a refusal of the saved stake itself (#297)
   stakeMenu?: true;
   // a refusal the bot never provokes: a bug, or a backend this bot does not know
@@ -143,7 +146,7 @@ export const START_REFUSALS = {
   [TradingSessionErrorCode.AccountRevoked]: { text: 'accountRevoked', connect: true },
   [TradingSessionErrorCode.AccountNotConfirmed]: { text: 'stakeAccountNotConfirmed' },
   [TradingSessionErrorCode.AccountHalted]: { text: 'stakeAccountHalted' },
-  [TradingSessionErrorCode.InsufficientTokens]: { text: 'sessionInsufficientTokens' },
+  [TradingSessionErrorCode.InsufficientTokens]: { text: 'sessionInsufficientTokens', buy: true },
   [TradingSessionErrorCode.TradingPaused]: { text: 'tradingPaused' },
   // a button drawn in the other mode, or a switch between the render and the press (#327): refused
   // before any write, the analysis drawn anew carries the user's mode
@@ -380,7 +383,9 @@ export function createTradingSessionComposer<C extends Context>({
                 LABELS.stakeMenuButton,
                 stakeMenuCallbackData(mode, assetId, durationSec),
               )
-            : backToAnalysisKeyboard(assetId, durationSec);
+            : refusal.buy === true
+              ? withBuy(backToAnalysisKeyboard(assetId, durationSec))
+              : backToAnalysisKeyboard(assetId, durationSec);
     const text =
       mode === TradeMode.Real && refusal.real !== undefined ? refusal.real : refusal.text;
     await replyHtml(ctx, textOf(text), { reply_markup });

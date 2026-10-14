@@ -11,6 +11,7 @@ export const BOT_COMMANDS = [
   { command: 'menu', key: 'menuCommand' },
   { command: 'stop', key: 'stopCommand' },
   { command: 'account', key: 'accountCommand' },
+  { command: 'buy', key: 'buyCommand' },
   { command: 'settings', key: 'settingsCommand' },
   { command: 'invite', key: 'inviteCommand' },
   { command: 'help', key: 'helpCommand' },

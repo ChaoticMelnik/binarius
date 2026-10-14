@@ -41,6 +41,9 @@ describe('the command menu', () => {
       stopSessions: () => Promise.reject(new Error('not used here')),
       setStake: () => Promise.reject(new Error('not used here')),
       readBotTexts: () => Promise.reject(new Error('not used here')),
+      createStarsInvoice: () => Promise.reject(new Error('not used here')),
+      checkStarsPreCheckout: () => Promise.reject(new Error('not used here')),
+      reportStarsPaid: () => Promise.reject(new Error('not used here')),
     };
     const bot = createBot({
       intentTracker: stubTracker(),

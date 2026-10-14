@@ -16,6 +16,7 @@ import {
   TRADING_SESSION_START_BUDGET_MS,
   TRADING_SESSION_VIEW_BUDGET_MS,
   BOT_TEXTS_APPLIED_WITHIN_S,
+  STARS_PRECHECKOUT_BUDGET_MS,
   BOT_TEXTS_REFRESH_MS,
   TradingSessionErrorCode,
   TradingSessionStatus,
@@ -29,6 +30,10 @@ import {
   CONNECT_CALLBACK_DATA,
   MENU_CALLBACK_DATA,
   DEMO_CALLBACK_DATA,
+  BUY_CALLBACK_DATA,
+  buyPackageCallbackData,
+  StarsErrorCode,
+  StarsPreCheckoutRefusal,
 } from '@binarius/shared';
 import { composeDurationMs, composeServiceValue } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -61,6 +66,9 @@ import {
   ACCESS_VIEW,
   ACCOUNT_VIEW,
   REFERRAL_VIEW,
+  STARS_INVOICE,
+  preCheckoutUpdate,
+  successfulPaymentUpdate,
   BOT_INFO,
   CARD_MESSAGE_ID,
   CODE,
@@ -122,6 +130,9 @@ import {
   STARTUP_BUDGET_MS,
   STARTUP_CALLS,
   TELEGRAM_API_TIMEOUT_MS,
+  PRECHECKOUT_ANSWER_RESERVE_MS,
+  STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS,
+  TELEGRAM_PRECHECKOUT_DEADLINE_MS,
 } from './timing';
 
 // HANDLER_BUDGET_MS is computed from HANDLER_CALLS, so nothing here recomputes it: what this
@@ -163,6 +174,9 @@ interface Branch {
   stopSession?: BackendClient['stopSession'];
   stopSessions?: BackendClient['stopSessions'];
   setStake?: BackendClient['setStake'];
+  createStarsInvoice?: BackendClient['createStarsInvoice'];
+  checkStarsPreCheckout?: BackendClient['checkStarsPreCheckout'];
+  reportStarsPaid?: BackendClient['reportStarsPaid'];
   welcomeVideoFileId?: string;
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   answers?: readonly (readonly [string, ApiAnswer])[];
@@ -364,6 +378,26 @@ async function observe(branch: Branch): Promise<Calls> {
       );
     },
     readBotTexts: () => Promise.reject(new Error('not used by these scenes')),
+    createStarsInvoice: (telegramUserId, packageCode) => {
+      backend += 1;
+      return (branch.createStarsInvoice ?? (() => Promise.resolve(STARS_INVOICE)))(
+        telegramUserId,
+        packageCode,
+      );
+    },
+    checkStarsPreCheckout: (request) => {
+      backend += 1;
+      return (branch.checkStarsPreCheckout ?? (() => Promise.resolve({ ok: true as const })))(
+        request,
+      );
+    },
+    reportStarsPaid: (request) => {
+      backend += 1;
+      return (
+        branch.reportStarsPaid ??
+        (() => Promise.resolve({ outcome: 'credited' as const, tokens: '150', balance: '162' }))
+      )(request);
+    },
   };
   const loginDialog = createLoginDialog();
   if (branch.dialog !== undefined) loginDialog.set(USER.id, branch.dialog);
@@ -1978,6 +2012,158 @@ const ACCOUNT_BRANCHES: readonly Branch[] = [
   },
 ];
 
+// The Stars purchase (#117). /buy: one read, one message, whatever the read said.
+
+const BUY_WORST_CASE: Branch = {
+  label: 'the packages are shown',
+  update: textUpdate('/buy'),
+  readAccount: () => Promise.resolve(accountView({ accounts: [LINK_ACTIVE] })),
+  expected: { backend: 1, telegram: 1 },
+};
+
+const BUY_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the update carries no sender',
+    update: withoutSender(textUpdate('/buy')),
+    expected: { backend: 0, telegram: 0 },
+  },
+  {
+    label: 'the chat is not private',
+    update: textUpdate('/buy', 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  BUY_WORST_CASE,
+  {
+    label: 'no link is active',
+    update: textUpdate('/buy'),
+    readAccount: () => Promise.resolve(accountView({ accounts: [LINK_PENDING] })),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the user is blocked',
+    update: textUpdate('/buy'),
+    readAccount: () =>
+      Promise.resolve(accountView({ status: UserStatus.Blocked, accounts: [LINK_ACTIVE] })),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the backend has no users row',
+    update: textUpdate('/buy'),
+    readAccount: refusedWith(404, UserErrorCode.UserNotFound),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the backend is unreachable',
+    update: textUpdate('/buy'),
+    readAccount: unreachable,
+    expected: { backend: 1, telegram: 1 },
+  },
+];
+
+// «⭐ Купить токены»: /buy's branches after the answer
+const BUY_BUTTON_BRANCHES: readonly Branch[] = [
+  ...BUY_BRANCHES.filter((branch) => branch.expected.telegram > 0).map((branch) => ({
+    ...branch,
+    label: `the button: ${branch.label}`,
+    update: callbackUpdate(BUY_CALLBACK_DATA),
+    expected: { backend: branch.expected.backend, telegram: branch.expected.telegram + 1 },
+  })),
+  {
+    label: 'the chat is not private',
+    update: callbackUpdate(BUY_CALLBACK_DATA, 'group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+];
+const BUY_BUTTON_WORST_CASE = BUY_BUTTON_BRANCHES[0]!;
+
+const packageUpdate = (chatType?: string) =>
+  callbackUpdate(buyPackageCallbackData('p150'), chatType);
+const BUY_PACKAGE_WORST_CASE: Branch = {
+  label: 'the invoice is sent',
+  update: packageUpdate(),
+  expected: { backend: 1, telegram: 2 },
+};
+const BUY_PACKAGE_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: packageUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  BUY_PACKAGE_WORST_CASE,
+  ...[
+    StarsErrorCode.UserBlocked,
+    StarsErrorCode.NoActiveAccount,
+    StarsErrorCode.UserNotFound,
+    StarsErrorCode.PackageUnknown,
+  ].map((reason) => ({
+    label: `the backend refuses with ${reason}`,
+    update: packageUpdate(),
+    createStarsInvoice: refusedWith(409, reason),
+    expected: { backend: 1, telegram: 2 },
+  })),
+  {
+    label: 'the backend is unreachable',
+    update: packageUpdate(),
+    createStarsInvoice: unreachable,
+    expected: { backend: 1, telegram: 2 },
+  },
+];
+
+// no chat: answered in every chat type, by the backend's word or by a refusal
+const PRE_CHECKOUT_WORST_CASE: Branch = {
+  label: 'the backend says yes',
+  update: preCheckoutUpdate(),
+  expected: { backend: 1, telegram: 1 },
+};
+const PRE_CHECKOUT_BRANCHES: readonly Branch[] = [
+  PRE_CHECKOUT_WORST_CASE,
+  {
+    label: 'the backend refuses',
+    update: preCheckoutUpdate(),
+    checkStarsPreCheckout: () =>
+      Promise.resolve({ ok: false as const, reason: StarsPreCheckoutRefusal.Amount }),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the backend is unreachable',
+    update: preCheckoutUpdate(),
+    checkStarsPreCheckout: unreachable,
+    expected: { backend: 1, telegram: 1 },
+  },
+];
+
+const PAID_WORST_CASE: Branch = {
+  label: 'the tokens are credited',
+  update: successfulPaymentUpdate(),
+  expected: { backend: 1, telegram: 1 },
+};
+const PAID_BRANCHES: readonly Branch[] = [
+  {
+    label: 'the chat is not private',
+    update: successfulPaymentUpdate('group'),
+    expected: { backend: 0, telegram: 0 },
+  },
+  PAID_WORST_CASE,
+  {
+    label: 'the payment is held',
+    update: successfulPaymentUpdate(),
+    reportStarsPaid: () => Promise.resolve({ outcome: 'held' as const }),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the payload is not ours',
+    update: successfulPaymentUpdate(),
+    reportStarsPaid: refusedWith(409, StarsErrorCode.PayloadUnknown),
+    expected: { backend: 1, telegram: 1 },
+  },
+  {
+    label: 'the backend is unreachable',
+    update: successfulPaymentUpdate(),
+    reportStarsPaid: unreachable,
+    expected: { backend: 1, telegram: 1 },
+  },
+];
+
 // «🏠 В меню» (#350): /menu's branches after the answer, the card never pinned.
 const menuButton = (label: string, expected: Calls, patch: Partial<Branch> = {}): Branch => ({
   label,
@@ -2670,6 +2856,41 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     );
   });
 
+  it('/buy (#117)', async () => {
+    await checkHandler('buy', BUY_BRANCHES, BUY_WORST_CASE, HANDLER_CALLS.buy);
+  });
+
+  it('the buy button (#117)', async () => {
+    await checkHandler(
+      'buyButton',
+      BUY_BUTTON_BRANCHES,
+      BUY_BUTTON_WORST_CASE,
+      HANDLER_CALLS.buyButton,
+    );
+  });
+
+  it('a package of the buy screen (#117)', async () => {
+    await checkHandler(
+      'buyPackage',
+      BUY_PACKAGE_BRANCHES,
+      BUY_PACKAGE_WORST_CASE,
+      HANDLER_CALLS.buyPackage,
+    );
+  });
+
+  it('the pre-checkout query (#117)', async () => {
+    await checkHandler(
+      'preCheckout',
+      PRE_CHECKOUT_BRANCHES,
+      PRE_CHECKOUT_WORST_CASE,
+      HANDLER_CALLS.preCheckout,
+    );
+  });
+
+  it('successful_payment (#117)', async () => {
+    await checkHandler('paid', PAID_BRANCHES, PAID_WORST_CASE, HANDLER_CALLS.paid);
+  });
+
   it('the confirm button', async () => {
     await checkHandler('confirm', CONFIRM_BRANCHES, CONFIRM_WORST_CASE, HANDLER_CALLS.confirm);
   });
@@ -2739,6 +2960,15 @@ describe('the text overrides (#299)', () => {
 });
 
 describe('the bounds shared with the backend', () => {
+  // S9 (#117): the route inside the call, the call and the answer inside Telegram's 10 s
+  it('answers a pre-checkout query inside Telegram’s deadline', () => {
+    expect(STARS_PRECHECKOUT_BUDGET_MS).toBeLessThanOrEqual(STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS);
+    expect(STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS).toBeLessThanOrEqual(BACKEND_REQUEST_TIMEOUT_MS);
+    expect(STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS + PRECHECKOUT_ANSWER_RESERVE_MS).toBeLessThan(
+      TELEGRAM_PRECHECKOUT_DEADLINE_MS,
+    );
+  });
+
   // the same for POST /trading/sessions (#283): a start inside its budget must not read as an
   // outage and be retried
   it('waits for /trading/sessions at least as long as the backend budgets the route', () => {

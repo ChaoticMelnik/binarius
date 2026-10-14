@@ -427,6 +427,9 @@ export const fakeBackend = (patch: Partial<BackendClient> = {}): BackendClient =
     stopSessions: unused,
     setStake: unused,
     readBotTexts: unused,
+    createStarsInvoice: unused,
+    checkStarsPreCheckout: unused,
+    reportStarsPaid: unused,
     ...patch,
   };
 };
@@ -574,6 +577,47 @@ export const chosenInlineResultUpdate = (resultId: string, query: string): Updat
   ({
     update_id: ++updateId,
     chosen_inline_result: { result_id: resultId, from: USER, query },
+  }) as unknown as Update;
+
+// The Stars purchase (#117): the payload of USER's 150-token invoice, its pre-checkout query and
+// the successful_payment that follows
+export const STARS_USER_ID = '6c1f6a2e-3b7d-4c55-9a51-2f6b8e7d9a10';
+export const STARS_PAYLOAD = `stars:p150:${STARS_USER_ID}`;
+export const STARS_INVOICE = {
+  payload: STARS_PAYLOAD,
+  package: { code: 'p150', tokens: '150', stars: 250 },
+};
+
+export const preCheckoutUpdate = (
+  patch: { from?: User; payload?: string; totalAmount?: number } = {},
+): Update =>
+  ({
+    update_id: ++updateId,
+    pre_checkout_query: {
+      id: `pre-checkout-${String(updateId)}`,
+      from: patch.from ?? USER,
+      currency: 'XTR',
+      total_amount: patch.totalAmount ?? 250,
+      invoice_payload: patch.payload ?? STARS_PAYLOAD,
+    },
+  }) as unknown as Update;
+
+export const successfulPaymentUpdate = (chatType = 'private'): Update =>
+  ({
+    update_id: ++updateId,
+    message: {
+      message_id: ++updateId,
+      date: 1_790_000_000,
+      chat: { id: USER.id, type: chatType, first_name: USER.first_name },
+      from: USER,
+      successful_payment: {
+        currency: 'XTR',
+        total_amount: 250,
+        invoice_payload: STARS_PAYLOAD,
+        telegram_payment_charge_id: 'charge-1',
+        provider_payment_charge_id: '',
+      },
+    },
   }) as unknown as Update;
 
 export interface ApiCall {

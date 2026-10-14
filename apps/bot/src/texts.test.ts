@@ -1451,6 +1451,7 @@ describe('the facades over the catalog', () => {
         'stakeBackLaunchButton',
         'stakeChangeButton',
         'accountCommand',
+        'buyCommand',
         'changeEmailButton',
         'confirmButton',
         'connectButton',

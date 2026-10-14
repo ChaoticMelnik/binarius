@@ -1,6 +1,14 @@
 import { InlineKeyboard } from 'grammy';
 import type { InlineKeyboardButton } from 'grammy/types';
-import { DEMO_CALLBACK_DATA, MENU_CALLBACK_DATA, supportUrl, TradeMode } from '@binarius/shared';
+import {
+  BUY_CALLBACK_DATA,
+  buyPackageCallbackData,
+  DEMO_CALLBACK_DATA,
+  MENU_CALLBACK_DATA,
+  STAR_PACKAGES,
+  supportUrl,
+  TradeMode,
+} from '@binarius/shared';
 import {
   DEMO_SIGNALS_CALLBACK_DATA,
   demoAnalysisCallbackData,
@@ -8,7 +16,7 @@ import {
   durationOf,
 } from './demo';
 import type { DemoDurationSec } from './demo-catalog';
-import { inviteShareText, LABELS } from './texts';
+import { buyPackageLabel, inviteShareText, LABELS } from './texts';
 
 // The next steps the bot's screens share (#350, docs/bot-navigation.md). Each builds a new
 // keyboard, so a caller can add rows to it.
@@ -31,16 +39,37 @@ export const inviteButton = (): InlineKeyboardButton.CallbackButton => ({
   callback_data: INVITE_CALLBACK_DATA,
 });
 
-// The status card's: the entry, then the invite (#115). In real mode the entry reads «🚀 Торговать»
-// and keeps DEMO_CALLBACK_DATA: the path is the same up to the stake button (#121). The account
-// card keeps demoKeyboard.
+// «⭐ Купить токены» (#117, docs/stars.md): the package screen
+export const buyButton = (): InlineKeyboardButton.CallbackButton => ({
+  text: LABELS.buyButton,
+  callback_data: BUY_CALLBACK_DATA,
+});
+
+// The status card's: the entry, then the invite (#115), then the purchase (#117). In real mode the
+// entry reads «🚀 Торговать» and keeps DEMO_CALLBACK_DATA: the path is the same up to the stake
+// button (#121). The account card keeps demoKeyboard.
 export const statusCardKeyboard = (mode: TradeMode): InlineKeyboard =>
   (mode === TradeMode.Real
     ? new InlineKeyboard().text(LABELS.tradeButton, DEMO_CALLBACK_DATA)
     : demoKeyboard()
   )
     .row()
-    .add(inviteButton());
+    .add(inviteButton())
+    .row()
+    .add(buyButton());
+
+// The purchase above `keyboard`'s rows: the `insufficient_tokens` refusals (#117)
+export const withBuy = (keyboard: InlineKeyboard): InlineKeyboard =>
+  new InlineKeyboard([[buyButton()], ...keyboard.inline_keyboard.filter((row) => row.length > 0)]);
+
+// /buy's screen: a row per package, then the menu
+export const buyPackagesKeyboard = (): InlineKeyboard => {
+  const keyboard = new InlineKeyboard();
+  for (const pack of STAR_PACKAGES) {
+    keyboard.text(buyPackageLabel(pack), buyPackageCallbackData(pack.code)).row();
+  }
+  return keyboard.text(LABELS.menuButton, MENU_CALLBACK_DATA);
+};
 
 // the invite row, then the menu row, under `keyboard`'s rows; an empty keyboard gets no empty
 // first row
